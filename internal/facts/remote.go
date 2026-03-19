@@ -3,6 +3,7 @@ package facts
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +83,9 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if resPartial {
 		partial = true
 	}
+
+	// Network addresses
+	facts.Addresses = c.remoteAddresses(ctx)
 
 	// Tools
 	facts.Tools = c.remoteTools(ctx)
@@ -175,6 +179,38 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 	}
 
 	return r, partial
+}
+
+func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkAddress {
+	var addrs []models.NetworkAddress
+	// Fallback script that tries `ip` first, then `ifconfig`
+	cmd := `if command -v ip >/dev/null 2>&1; then ip addr show scope global | awk '/inet/ {print $2}' | cut -d/ -f1; else ifconfig | awk '/inet / && !/127.0.0.1/ {print $2}; /inet6 / && !/::1/ && !/fe80/ {print $2}' | cut -d% -f1 | cut -d/ -f1; fi`
+	
+	out, err := c.Exec.Run(ctx, cmd)
+	if err != nil {
+		return addrs
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		ipStr := strings.TrimSpace(line)
+		if ipStr == "" {
+			continue
+		}
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		
+		kind := "ipv4"
+		if ip.To4() == nil {
+			kind = "ipv6"
+		}
+		addrs = append(addrs, models.NetworkAddress{
+			Kind:    kind,
+			Address: ip.String(),
+		})
+	}
+	return addrs
 }
 
 func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {

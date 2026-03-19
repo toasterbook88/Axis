@@ -181,13 +181,21 @@ func localRAM() (int64, int64, error) {
 }
 
 func parseDarwinFreeRAM(vmstat string) int64 {
-	pageSize := int64(16384) // arm64
-	if runtime.GOARCH == "amd64" {
-		pageSize = 4096
-	}
+	pageSize := int64(16384) // fallback for arm64
+
 	var free, inactive int64
 	for _, line := range strings.Split(vmstat, "\n") {
-		if strings.HasPrefix(line, "Pages free:") {
+		// e.g. "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+		if strings.HasPrefix(line, "Mach Virtual Memory Statistics:") {
+			if idx := strings.Index(line, "page size of "); idx != -1 {
+				parts := strings.Fields(line[idx+13:])
+				if len(parts) > 0 {
+					if size, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
+						pageSize = size
+					}
+				}
+			}
+		} else if strings.HasPrefix(line, "Pages free:") {
 			free = parseVMStatVal(line)
 		} else if strings.HasPrefix(line, "Pages inactive:") {
 			inactive = parseVMStatVal(line)
