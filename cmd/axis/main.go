@@ -32,7 +32,7 @@ func main() {
 
 			fmt.Fprint(out, logo)
 			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
-			
+
 			chat := chatCmd()
 			return chat.RunE(chat, args)
 		},
@@ -43,9 +43,12 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(taskCmd())
 	root.AddCommand(mcpCmd())
+	root.AddCommand(serveCmd())
 	root.AddCommand(chatCmd())
 	root.AddCommand(discoverCmd())
 	root.AddCommand(contextCmd())
+	root.AddCommand(scriptsCmd())
+	root.AddCommand(skillsCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(ExitErrGeneric)

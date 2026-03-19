@@ -41,7 +41,7 @@ type ollamaResponse struct {
 // GenerateStream streams the inference response to an io.Writer
 func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.Writer) error {
 	if err := c.ensureRunning(ctx, w); err != nil {
-		return fmt.Errorf("failed to auto-start ollama or pull model: %w", err)
+		return fmt.Errorf("ollama not ready: %w", err)
 	}
 
 	reqBody := ollamaRequest{
@@ -49,7 +49,7 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 		Prompt: prompt,
 		Stream: true,
 	}
-	
+
 	bodyData, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
@@ -84,7 +84,7 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 		}
 
 		fmt.Fprint(w, chunk.Response)
-		
+
 		if chunk.Done {
 			break
 		}
@@ -95,7 +95,11 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 
 func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
 	// 1. Check if daemon is responsive
-	resp, err := c.client.Get(c.Endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("create ollama readiness request: %w", err)
+	}
+	resp, err := c.client.Do(req)
 	if err == nil {
 		resp.Body.Close()
 	} else {
@@ -106,7 +110,7 @@ func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("could not start ollama serve: %w", err)
 		}
-		
+
 		// Wait for it to come up
 		up := false
 		for i := 0; i < 10; i++ {
@@ -122,31 +126,25 @@ func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
 		}
 	}
 
-	// 2. Check if model is pulled
-	checkReq, _ := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/api/show", bytes.NewBufferString(fmt.Sprintf(`{"model":"%s"}`, c.Model)))
+	// 2. Check if model is available locally.
+	checkReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+"/api/show", bytes.NewBufferString(fmt.Sprintf(`{"model":"%s"}`, c.Model)))
+	if err != nil {
+		return fmt.Errorf("create model readiness request: %w", err)
+	}
 	checkReq.Header.Set("Content-Type", "application/json")
 	checkResp, err := c.client.Do(checkReq)
-	if err == nil {
-		defer checkResp.Body.Close()
-		if checkResp.StatusCode == http.StatusOK {
-			return nil // Model is ready
-		}
+	if err != nil {
+		return fmt.Errorf("check model %q: %w", c.Model, err)
+	}
+	defer checkResp.Body.Close()
+
+	if checkResp.StatusCode == http.StatusOK {
+		return nil
 	}
 
-	// If we're here, model isn't found. Let's pull it.
-	fmt.Fprintf(w, "[AXIS] Auto-pulling model %q (this may take a minute)...\n", c.Model)
-	
-	pullReq := fmt.Sprintf(`{"name":"%s", "stream": false}`, c.Model)
-	resp, err = c.client.Post(c.Endpoint+"/api/pull", "application/json", bytes.NewBufferString(pullReq))
-	if err != nil {
-		return fmt.Errorf("failed to issue pull command: %w", err)
+	if checkResp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("model %q is not available locally; run: ollama pull %s", c.Model, c.Model)
 	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("pull failed with status: %s", resp.Status)
-	}
-	
-	fmt.Fprintf(w, "[AXIS] Model pulled successfully!\n\n")
-	return nil
+
+	return fmt.Errorf("model check for %q failed with status: %s", c.Model, checkResp.Status)
 }

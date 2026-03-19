@@ -11,8 +11,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/safety"
+	"github.com/toasterbook88/axis/internal/scripts"
+	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
@@ -53,21 +57,11 @@ func taskPlaceCmd() *cobra.Command {
 			nodes := discovery.Discover(ctx, cfg)
 			snap := snapshot.Build(nodes)
 
-			st, _ := state.Load()
-
 			// Infer requirements from description
 			reqs := placement.InferRequirements(desc)
-			if st != nil && len(st.Decisions) > 0 {
-				reqs.Description += " | context: " + st.Decisions[len(st.Decisions)-1]
-			}
 
 			// Run placement
-			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
-
-			if decision.OK && st != nil {
-				st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, desc)
-				st.Save()
-			}
+			decision := placement.SelectBestNode(reqs, snap.Nodes, nil)
 
 			if format == "json" {
 				return printOutput(decision, "json")
@@ -102,6 +96,67 @@ func taskPlaceCmd() *cobra.Command {
 	return cmd
 }
 
+type taskRunIntent struct {
+	command              string
+	label                string
+	matchedScript        *scripts.Script
+	matchedSkill         *skills.LearnedSkill
+	requiresConfirmation bool
+}
+
+func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *skills.Store) (taskRunIntent, error) {
+	if execFlag && scriptFlag {
+		return taskRunIntent{}, fmt.Errorf("use either --exec for a raw command or --script for a known script/skill, not both")
+	}
+
+	var intent taskRunIntent
+	if skillStore != nil {
+		if skill, ok := skillStore.BestMatch(input); ok {
+			skillCopy := skill
+			intent.matchedSkill = &skillCopy
+		}
+	}
+	if script, ok := scripts.GetBestScript(input); ok {
+		scriptCopy := script
+		intent.matchedScript = &scriptCopy
+	}
+
+	if execFlag {
+		intent.command = input
+		intent.label = "raw command"
+		return intent, nil
+	}
+
+	if scriptFlag {
+		if intent.matchedScript != nil {
+			intent.command = intent.matchedScript.Command
+			intent.label = fmt.Sprintf("fallback script %q", intent.matchedScript.Name)
+			return intent, nil
+		}
+		if intent.matchedSkill != nil {
+			intent.command = intent.matchedSkill.Command
+			intent.label = fmt.Sprintf("learned skill %q", intent.matchedSkill.ID)
+			return intent, nil
+		}
+		return taskRunIntent{}, fmt.Errorf("no known script or learned skill matches %q", input)
+	}
+
+	if intent.matchedScript != nil {
+		intent.command = intent.matchedScript.Command
+		intent.label = fmt.Sprintf("fallback script %q", intent.matchedScript.Name)
+		intent.requiresConfirmation = true
+		return intent, nil
+	}
+	if intent.matchedSkill != nil {
+		intent.command = intent.matchedSkill.Command
+		intent.label = fmt.Sprintf("learned skill %q", intent.matchedSkill.ID)
+		intent.requiresConfirmation = true
+		return intent, nil
+	}
+
+	return taskRunIntent{}, fmt.Errorf("refusing to execute implicitly: use --exec for a raw command or --script for a known script/skill")
+}
+
 func taskRunCmd() *cobra.Command {
 	var execFlag, scriptFlag bool
 	cmd := &cobra.Command{
@@ -110,6 +165,11 @@ func taskRunCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
+			skillStore := skills.Load()
+			intent, err := resolveTaskRunIntent(input, execFlag, scriptFlag, skillStore)
+			if err != nil {
+				return err
+			}
 
 			// 1. placement (reuse existing)
 			cfgPath := config.DefaultConfigPath()
@@ -119,17 +179,22 @@ func taskRunCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			
+
 			nodes := discovery.Discover(ctx, cfg)
 			snap := snapshot.Build(nodes)
-			
-			st, _ := state.Load()
 
+			st, _ := state.Load()
 			reqs := placement.InferRequirements(input)
-			if st != nil && len(st.Decisions) > 0 {
-				reqs.Description += " | context: " + st.Decisions[len(st.Decisions)-1]
+
+			if intent.matchedScript != nil {
+				if len(intent.matchedScript.RequiredTools) > 0 && reqs.RequiredTool == "" {
+					reqs.RequiredTool = intent.matchedScript.RequiredTools[0]
+				}
+				if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
+					reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
+				}
 			}
-			
+
 			// Always bypass strict requirement for purely explicit runs if user just says "df -h"
 			if execFlag && reqs.RequiredTool == "ollama" {
 				reqs.RequiredTool = ""
@@ -137,9 +202,11 @@ func taskRunCmd() *cobra.Command {
 
 			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
 
-			if decision.OK && st != nil {
-				st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, input)
-				st.Save()
+			if !decision.OK {
+				for _, r := range decision.Reasoning {
+					fmt.Printf("  - %s\n", r)
+				}
+				Fatal(ExitErrNoNodesFit, "no suitable node found")
 			}
 
 			fmt.Printf("Selected node: %s (fit %d/100)\n", decision.Node, decision.FitScore)
@@ -147,17 +214,17 @@ func taskRunCmd() *cobra.Command {
 				fmt.Printf("  - %s\n", r)
 			}
 
-			if !decision.OK {
-				Fatal(ExitErrNoNodesFit, "no suitable node found")
+			// 2. require an explicit execution opt-in for any script/skill suggestion.
+			if intent.requiresConfirmation {
+				fmt.Printf("\nSuggested %s for %q:\n%s\n", intent.label, input, intent.command)
+				return fmt.Errorf("refusing to execute implicitly; re-run with --script to execute the suggestion or --exec to run a raw command")
 			}
 
-			// 2. explicit command only
-			commandToRun := input
-			if scriptFlag {
-				// future multi-line support
-			}
-			if !execFlag && !scriptFlag {
-				return fmt.Errorf("use --exec \"command\" or --script (safety gate enforces conscious execution)")
+			commandToRun := intent.command
+			if intent.matchedSkill != nil && scriptFlag {
+				fmt.Printf("\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
+			} else if intent.matchedScript != nil && scriptFlag {
+				fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
 			}
 
 			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", decision.Node, commandToRun)
@@ -172,11 +239,46 @@ func taskRunCmd() *cobra.Command {
 				}
 			}
 
+			// knowledge injection
+			k := knowledge.Build(snap, st, decision.Node)
+			axisKnowsJSON := k.JSON()
+
+			// Safety blocker applies only once the user has explicitly opted into execution.
+			if block := safety.Check(k, commandToRun, skillStore.IsKnownBad); block.Blocked {
+				if out, err := exec.Command("toilet", "-f", "mono12", "-F", "metal", "BULLSHIT BLOCKED").Output(); err == nil {
+					fmt.Print("\n", string(out), "\n")
+				} else {
+					fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
+				}
+				fmt.Printf("Reason: %s\n", block.Reason)
+				fmt.Printf("Dumb score: %d/100\n", block.Score)
+				fmt.Println("Nothing was executed. Fix your request.")
+				return nil
+			}
+
 			if models.IsLocalNode(targetNode) {
-				c := exec.CommandContext(ctx, "bash", "-c", commandToRun)
+				os.WriteFile("/tmp/axis-knows.json", []byte(axisKnowsJSON), 0644)
+				c := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf("export BEST_NODE=%s; %s", shellescape.Quote(decision.Node), commandToRun))
 				c.Stdout = os.Stdout
 				c.Stderr = os.Stderr
-				return c.Run()
+				runErr := c.Run()
+				if runErr == nil {
+					st, _ := state.Load()
+					if st != nil {
+						st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, input)
+						st.Save()
+					}
+					skillStore.RecordSuccess(input, commandToRun, decision.Node)
+					skillStore.Save()
+				} else {
+					exitCode := 1
+					if err, ok := runErr.(*exec.ExitError); ok {
+						exitCode = err.ExitCode()
+					}
+					skillStore.RecordFailure(input, "failed with code "+fmt.Sprint(exitCode))
+					skillStore.Save()
+				}
+				return runErr
 			} else {
 				// Find config for SSH transport
 				var targetConfig config.NodeConfig
@@ -186,13 +288,32 @@ func taskRunCmd() *cobra.Command {
 						break
 					}
 				}
-				
-				executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.SSHPort, targetConfig.SSHUser, targetConfig.TimeoutSec)
+
+				executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
 				defer executor.Close()
-				
-				quotedCmd := "bash -c " + shellescape.Quote(commandToRun)
-				if err := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr); err != nil {
-					return fmt.Errorf("remote execution failed: %w", err)
+
+				writeJsonCmd := fmt.Sprintf("cat > /tmp/axis-knows.json << 'EOF'\n%s\nEOF\n", axisKnowsJSON)
+				executor.Run(ctx, writeJsonCmd)
+
+				quotedCmd := fmt.Sprintf("export BEST_NODE=%s; bash -c %s", shellescape.Quote(decision.Node), shellescape.Quote(commandToRun))
+				runErr := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr)
+				if runErr == nil {
+					st, _ := state.Load()
+					if st != nil {
+						st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, input)
+						st.Save()
+					}
+					skillStore.RecordSuccess(input, commandToRun, decision.Node)
+					skillStore.Save()
+				}
+				if runErr != nil {
+					exitCode := 1
+					if err, ok := runErr.(*exec.ExitError); ok {
+						exitCode = err.ExitCode()
+					}
+					skillStore.RecordFailure(input, "failed with code "+fmt.Sprint(exitCode))
+					skillStore.Save()
+					return fmt.Errorf("remote execution failed: %w", runErr)
 				}
 			}
 			return nil
@@ -269,8 +390,7 @@ func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (
 
 	// Keep the context block broad: prefer a capable node even if the exact tool is absent.
 	reqs.RequiredTool = ""
-	st, _ := state.Load()
-	ranked := placement.RankCandidates(placement.FilterCandidates(reqs, nodes, st), reqs, st)
+	ranked := placement.RankCandidates(placement.FilterCandidates(reqs, nodes, nil), reqs, nil)
 	if len(ranked) > 0 {
 		return ranked[0], true
 	}

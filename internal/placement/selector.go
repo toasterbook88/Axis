@@ -107,15 +107,15 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 		}
 		if reqs.MinFreeRAMMB > 0 {
 			actual := int64(0)
-			adjusted := int64(0)
+			effective := int64(0)
 			if n.Resources != nil {
 				actual = n.Resources.RAMFreeMB
-				adjusted = freeRAMWithState(n, st)
+				effective = freeRAMWithState(n, st)
 			}
-			if adjusted < reqs.MinFreeRAMMB {
+			if effective < reqs.MinFreeRAMMB {
 				d.Reasoning = append(d.Reasoning,
 					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB effective (base %dMB, short %dMB)",
-						n.Name, reqs.MinFreeRAMMB, adjusted, actual, reqs.MinFreeRAMMB-adjusted))
+						n.Name, reqs.MinFreeRAMMB, effective, actual, reqs.MinFreeRAMMB-effective))
 				continue
 			}
 		}
@@ -131,8 +131,10 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 		}
 	}
 
-	// If heavy RAM was required, explain AXIS scope
-	if reqs.MinFreeRAMMB >= 4096 {
+	if reqs.RequiredTool == "ollama" {
+		d.Reasoning = append(d.Reasoning,
+			"note: AXIS can bootstrap Ollama on partial nodes when tool is ollama")
+	} else if reqs.MinFreeRAMMB >= 4096 {
 		d.Reasoning = append(d.Reasoning,
 			"note: AXIS targets small assistive models, not 70B+ inference")
 	}

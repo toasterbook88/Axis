@@ -1,0 +1,412 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"al.essio.dev/pkg/shellescape"
+	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/safety"
+	"github.com/toasterbook88/axis/internal/scripts"
+	"github.com/toasterbook88/axis/internal/skills"
+	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/state"
+	"github.com/toasterbook88/axis/internal/transport"
+)
+
+const DefaultAddr = "127.0.0.1:42425"
+
+type ToolDef struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+type ToolsResponse struct {
+	Tools []ToolDef `json:"tools"`
+}
+
+type KnowledgeResponse struct {
+	Knowledge *knowledge.ClusterKnowledge `json:"knowledge"`
+	Skills    []skills.LearnedSkill       `json:"skills"`
+	Failures  []skills.LearnedFailure     `json:"failures"`
+}
+
+type RunRequest struct {
+	Description string `json:"description"`
+	Mode        string `json:"mode,omitempty"`
+}
+
+type RunResponse struct {
+	OK             bool                   `json:"ok"`
+	Description    string                 `json:"description"`
+	Mode           string                 `json:"mode,omitempty"`
+	Intent         string                 `json:"intent,omitempty"`
+	Command        string                 `json:"command,omitempty"`
+	Node           string                 `json:"node,omitempty"`
+	FitScore       int                    `json:"fit_score,omitempty"`
+	IsLocal        bool                   `json:"is_local,omitempty"`
+	Reasoning      []string               `json:"reasoning,omitempty"`
+	Blocked        bool                   `json:"blocked,omitempty"`
+	BlockReason    string                 `json:"block_reason,omitempty"`
+	DumbScore      int                    `json:"dumb_score,omitempty"`
+	Output         string                 `json:"output,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	ExitCode       int                    `json:"exit_code,omitempty"`
+	SnapshotStatus models.SnapshotStatus  `json:"snapshot_status,omitempty"`
+	Summary        *models.ClusterSummary `json:"summary,omitempty"`
+}
+
+type runIntent struct {
+	command       string
+	label         string
+	matchedScript *scripts.Script
+	matchedSkill  *skills.LearnedSkill
+}
+
+type runnerContext struct {
+	cfg        *config.Config
+	snap       *models.ClusterSnapshot
+	st         *state.ClusterState
+	skillStore *skills.Store
+}
+
+func Serve(addr string) error {
+	mux := http.NewServeMux()
+	registerRoutes(mux)
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	return srv.ListenAndServe()
+}
+
+func registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "ok",
+			"name":   "axis",
+		})
+	})
+
+	mux.HandleFunc("/mcp/tools", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		tools := []ToolDef{
+			{
+				Name:        "axis_execute",
+				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Use mode=auto for known task intents, mode=script for matched scripts/skills only, or mode=exec for explicit raw commands.",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"description": map[string]any{"type": "string", "description": "Natural language task description or raw command"},
+						"mode":        map[string]any{"type": "string", "description": "Execution mode: auto, script, or exec"},
+					},
+					"required": []string{"description"},
+				},
+			},
+			{
+				Name:        "axis_knowledge",
+				Description: "Return live cluster state, Ollama status, learned skills, and recent placement state.",
+				InputSchema: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		}
+		writeJSON(w, http.StatusOK, ToolsResponse{Tools: tools})
+	})
+
+	mux.HandleFunc("/knowledge", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		rc, err := loadRunnerContext(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		payload := KnowledgeResponse{
+			Knowledge: knowledge.Build(rc.snap, rc.st, ""),
+			Skills:    rc.skillStore.Skills,
+			Failures:  rc.skillStore.Failures,
+		}
+		writeJSON(w, http.StatusOK, payload)
+	})
+
+	mux.HandleFunc("/run", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		var req RunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		req.Description = strings.TrimSpace(req.Description)
+		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+		if req.Description == "" {
+			writeError(w, http.StatusBadRequest, "description is required")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+		defer cancel()
+
+		resp, err := runTask(ctx, req)
+		if err != nil {
+			resp.OK = false
+			if resp.Error == "" {
+				resp.Error = err.Error()
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+	})
+}
+
+func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
+	cfg, err := config.Load(config.DefaultConfigPath())
+	if err != nil {
+		return nil, err
+	}
+
+	discoveryCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	nodes := discovery.Discover(discoveryCtx, cfg)
+	snap := snapshot.Build(nodes)
+
+	st, err := state.Load()
+	if err != nil {
+		return nil, err
+	}
+
+	return &runnerContext{
+		cfg:        cfg,
+		snap:       snap,
+		st:         st,
+		skillStore: skills.Load(),
+	}, nil
+}
+
+func resolveIntent(description, mode string, skillStore *skills.Store) (runIntent, error) {
+	if mode == "" {
+		mode = "auto"
+	}
+
+	var intent runIntent
+	if skillStore != nil {
+		if skill, ok := skillStore.BestMatch(description); ok {
+			skillCopy := skill
+			intent.matchedSkill = &skillCopy
+		}
+	}
+	if script, ok := scripts.GetBestScript(description); ok {
+		scriptCopy := script
+		intent.matchedScript = &scriptCopy
+	}
+
+	switch mode {
+	case "auto", "script":
+		if intent.matchedScript != nil {
+			intent.command = intent.matchedScript.Command
+			intent.label = fmt.Sprintf("fallback script %q", intent.matchedScript.Name)
+			return intent, nil
+		}
+		if intent.matchedSkill != nil {
+			intent.command = intent.matchedSkill.Command
+			intent.label = fmt.Sprintf("learned skill %q", intent.matchedSkill.ID)
+			return intent, nil
+		}
+		return runIntent{}, fmt.Errorf("no known script or learned skill matches %q", description)
+	case "exec":
+		intent.command = description
+		intent.label = "raw command"
+		return intent, nil
+	default:
+		return runIntent{}, fmt.Errorf("unsupported mode %q", mode)
+	}
+}
+
+func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
+	resp := RunResponse{
+		Description: req.Description,
+		Mode:        req.Mode,
+	}
+
+	rc, err := loadRunnerContext(ctx)
+	if err != nil {
+		resp.Error = err.Error()
+		return resp, err
+	}
+	resp.SnapshotStatus = rc.snap.Status
+	resp.Summary = &rc.snap.Summary
+
+	intent, err := resolveIntent(req.Description, req.Mode, rc.skillStore)
+	if err != nil {
+		resp.Error = err.Error()
+		return resp, err
+	}
+	resp.Intent = intent.label
+	resp.Command = intent.command
+
+	reqs := placement.InferRequirements(req.Description)
+	if intent.matchedScript != nil {
+		if len(intent.matchedScript.RequiredTools) > 0 && reqs.RequiredTool == "" {
+			reqs.RequiredTool = intent.matchedScript.RequiredTools[0]
+		}
+		if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
+			reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
+		}
+	}
+	if req.Mode == "exec" && reqs.RequiredTool == "ollama" {
+		reqs.RequiredTool = ""
+	}
+
+	decision := placement.SelectBestNode(reqs, rc.snap.Nodes, rc.st)
+	resp.Reasoning = decision.Reasoning
+	resp.Node = decision.Node
+	resp.FitScore = decision.FitScore
+	resp.IsLocal = decision.IsLocal
+
+	if !decision.OK {
+		resp.Error = "no suitable node found"
+		return resp, fmt.Errorf("no suitable node found")
+	}
+
+	var targetNode models.NodeFacts
+	for _, n := range rc.snap.Nodes {
+		if n.Name == decision.Node {
+			targetNode = n
+			break
+		}
+	}
+
+	k := knowledge.Build(rc.snap, rc.st, decision.Node)
+	if block := safety.Check(k, intent.command, rc.skillStore.IsKnownBad); block.Blocked {
+		resp.Blocked = true
+		resp.BlockReason = block.Reason
+		resp.DumbScore = block.Score
+		resp.Error = block.Reason
+		return resp, nil
+	}
+
+	axisKnowsJSON := k.JSON()
+
+	if models.IsLocalNode(targetNode) {
+		if err := os.WriteFile("/tmp/axis-knows.json", []byte(axisKnowsJSON), 0644); err != nil {
+			resp.Error = err.Error()
+			return resp, err
+		}
+		cmd := exec.CommandContext(ctx, "bash", "-lc", fmt.Sprintf("export BEST_NODE=%s; %s", shellescape.Quote(decision.Node), intent.command))
+		out, err := cmd.CombinedOutput()
+		resp.Output = string(out)
+		resp.ExitCode = exitCode(err)
+		if err != nil {
+			resp.Error = err.Error()
+			rc.skillStore.RecordFailure(req.Description, fmt.Sprintf("failed with code %d", resp.ExitCode))
+			_ = rc.skillStore.Save()
+			return resp, err
+		}
+		recordSuccess(rc, decision.Node, reqs.MinFreeRAMMB+1024, req.Description, intent.command)
+		resp.OK = true
+		return resp, nil
+	}
+
+	targetConfig, ok := findNodeConfig(rc.cfg, decision.Node)
+	if !ok {
+		resp.Error = fmt.Sprintf("node %q not found in config", decision.Node)
+		return resp, fmt.Errorf("%s", resp.Error)
+	}
+
+	executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
+	defer executor.Close()
+
+	writeJSONCmd := fmt.Sprintf("cat > /tmp/axis-knows.json << 'EOF'\n%s\nEOF\n", axisKnowsJSON)
+	if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
+		resp.Error = err.Error()
+		resp.ExitCode = 1
+		return resp, err
+	}
+
+	quotedCmd := fmt.Sprintf("export BEST_NODE=%s; bash -lc %s", shellescape.Quote(decision.Node), shellescape.Quote(intent.command))
+	out, err := executor.Run(ctx, quotedCmd)
+	resp.Output = out
+	resp.ExitCode = exitCode(err)
+	if err != nil {
+		resp.Error = err.Error()
+		rc.skillStore.RecordFailure(req.Description, fmt.Sprintf("failed with code %d", resp.ExitCode))
+		_ = rc.skillStore.Save()
+		return resp, err
+	}
+
+	recordSuccess(rc, decision.Node, reqs.MinFreeRAMMB+1024, req.Description, intent.command)
+	resp.OK = true
+	return resp, nil
+}
+
+func recordSuccess(rc *runnerContext, node string, estRAMMB int64, description, command string) {
+	if rc.st != nil {
+		rc.st.RecordPlacement(node, estRAMMB, description)
+		_ = rc.st.Save()
+	}
+	rc.skillStore.RecordSuccess(description, command, node)
+	_ = rc.skillStore.Save()
+}
+
+func findNodeConfig(cfg *config.Config, name string) (config.NodeConfig, bool) {
+	for _, n := range cfg.Nodes {
+		if strings.EqualFold(n.Name, name) {
+			return n, true
+		}
+	}
+	return config.NodeConfig{}, false
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]any{
+		"ok":    false,
+		"error": message,
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
