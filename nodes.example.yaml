@@ -1,0 +1,14 @@
+# Generic 2-node seed config for AXIS.
+# Copy to ~/.axis/nodes.yaml and adjust for your environment.
+nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+    role: primary
+
+  - name: node-b
+    hostname: node-b.local
+    ssh_user: user
+    role: worker
+    # ssh_port: 22      # default
+    # timeout_sec: 10   # default

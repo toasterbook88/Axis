@@ -1,0 +1,82 @@
+// Package snapshot assembles a ClusterSnapshot from collected NodeFacts.
+package snapshot
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/toasterbook88/axis/internal/models"
+)
+
+// Build assembles a ClusterSnapshot from node facts.
+// Computes cluster-level aggregates, generates warnings, assigns snapshot status.
+// Rule: any node with status != complete → snapshot is degraded.
+func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Status:    models.SnapshotHealthy,
+		Nodes:     nodes,
+	}
+
+	var totalRAM, freeRAM int64
+	reachable := 0
+
+	for _, n := range nodes {
+		// Count reachable and aggregate resources
+		if n.Status == models.StatusComplete || n.Status == models.StatusPartial {
+			reachable++
+			if n.Resources != nil {
+				totalRAM += n.Resources.RAMTotalMB
+				freeRAM += n.Resources.RAMFreeMB
+			}
+		}
+
+		// Any non-complete node → snapshot is degraded
+		if n.Status != models.StatusComplete {
+			snap.Status = models.SnapshotDegraded
+		}
+
+		// Generate per-node warnings
+		switch n.Status {
+		case models.StatusUnreachable:
+			snap.Warnings = append(snap.Warnings, models.Warning{
+				Node:    n.Name,
+				Kind:    "unreachable",
+				Message: "node unreachable: " + n.Error,
+			})
+		case models.StatusPartial:
+			snap.Warnings = append(snap.Warnings, models.Warning{
+				Node:    n.Name,
+				Kind:    "partial",
+				Message: "some facts failed to collect",
+			})
+		case models.StatusError:
+			snap.Warnings = append(snap.Warnings, models.Warning{
+				Node:    n.Name,
+				Kind:    "error",
+				Message: "collector error: " + n.Error,
+			})
+		}
+
+		// RAM pressure warning (separate from status warning)
+		if n.Resources != nil && n.Resources.RAMTotalMB > 0 {
+			pct := float64(n.Resources.RAMFreeMB) / float64(n.Resources.RAMTotalMB)
+			if pct < 0.10 {
+				snap.Warnings = append(snap.Warnings, models.Warning{
+					Node:    n.Name,
+					Kind:    "ram_pressure",
+					Message: fmt.Sprintf("RAM pressure: %dMB/%dMB free (%.0f%%)", n.Resources.RAMFreeMB, n.Resources.RAMTotalMB, pct*100),
+				})
+			}
+		}
+	}
+
+	snap.Summary = models.ClusterSummary{
+		TotalNodes:     len(nodes),
+		ReachableNodes: reachable,
+		TotalRAMMB:     totalRAM,
+		TotalFreeRAMMB: freeRAM,
+	}
+
+	return snap
+}
