@@ -23,6 +23,7 @@ describing available compute — without requiring a daemon, server, or persiste
 state.
 
 AXIS is intentionally minimal:
+
 - Single binary, no installation beyond `go build`
 - No daemon or background process
 - No proprietary wire protocol — SSH for transport, YAML for config, JSON for output
@@ -30,7 +31,7 @@ AXIS is intentionally minimal:
 
 ## Architecture
 
-```
+```text
 axis facts          (local)
 axis status         (fan-out over SSH)
        │
@@ -47,7 +48,7 @@ axis status         (fan-out over SSH)
 ### Core Packages
 
 | Package | Responsibility |
-|---|---|
+| --- | --- |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` |
 | `internal/transport` | SSH session management |
 | `internal/facts` | Local and remote collectors, tool discovery |
@@ -72,6 +73,7 @@ Phase 1 is the observability layer. It answers the question: *what compute do I
 have right now?*
 
 What it produces:
+
 - Per-node: OS, arch, CPU, RAM (with pressure), disk, GPUs, network addresses,
   installed tool inventory
 - Cluster-wide: reachable node count, total/free RAM, degraded status, warnings
@@ -84,6 +86,7 @@ This is the data foundation for later phases.
 Given a task description and a snapshot, AXIS selects the most appropriate node.
 
 Implemented features:
+
 - `axis task place "<description>"` — advisory-only placement command
 - LLM Fit score (0-100): RAM, pressure, GPU, CPU, local-node bonus
 - Keyword inference: extracts tool and RAM requirements from description
@@ -92,6 +95,7 @@ Implemented features:
 - Scope-aware: tasks too large for the cluster fail gracefully
 
 Longer-term directions under consideration:
+
 - A lightweight daemon (`axisd`) for periodic background collection
 - Structured context export suitable for injection into LLM system prompts
 - Multi-hop or mesh node discovery (beyond a static YAML seed file)

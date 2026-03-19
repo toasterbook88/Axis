@@ -25,7 +25,7 @@ axis task place "run ollama inference on a 7b model"
 ## Features
 
 | Feature | Details |
-|---|---|
+| --- | --- |
 | **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + pressure), disk, GPU list, network addresses |
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc` |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
@@ -109,7 +109,7 @@ Placement uses keyword matching against the task description (no ML). It infers 
 `~/.axis/nodes.yaml` fields:
 
 | Field | Required | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `name` | yes | — | Logical node name |
 | `hostname` | yes | — | Resolvable hostname or IP |
 | `ssh_user` | yes | — | SSH username |
@@ -119,7 +119,7 @@ Placement uses keyword matching against the task description (no ML). It infers 
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │  axis CLI  (cmd/axis)                           │
 │  facts · status · task place · version          │
@@ -149,7 +149,7 @@ Placement uses keyword matching against the task description (no ML). It infers 
 **Package map:**
 
 | Package | Responsibility |
-|---|---|
+| --- | --- |
 | `cmd/axis` | CLI commands; cobra wiring |
 | `internal/config` | Load & validate `~/.axis/nodes.yaml` |
 | `internal/transport` | SSH connection and remote command execution |
