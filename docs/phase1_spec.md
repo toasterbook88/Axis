@@ -31,11 +31,12 @@ Prints the version string (e.g. `axis 0.1.0`).
 
 Collects facts from the **local** machine and prints them as JSON (default) or YAML.
 
-```
+```bash
 axis facts [--format json|yaml]
 ```
 
 Collected per run:
+
 - OS (darwin / linux) and kernel version
 - Architecture
 - CPU core count and model string
@@ -52,7 +53,7 @@ Collected per run:
 Reads `~/.axis/nodes.yaml`, fans out SSH-based fact collection to all configured
 nodes, and emits a `ClusterSnapshot`.
 
-```
+```bash
 axis status [--format json|yaml]
 ```
 
@@ -75,6 +76,7 @@ returning an error. The collector never returns a hard error.
 and parses the output. Uses `golang.org/x/crypto/ssh` with key-based auth.
 
 Failure policy:
+
 - SSH connection failure → `status: unreachable`
 - Connected but some commands fail → `status: partial`
 
@@ -84,7 +86,7 @@ Failure policy:
 For each found tool it also attempts a version query:
 
 | Tool | Class | Version Command |
-|---|---|---|
+| --- | --- | --- |
 | `go` | build | `go version` |
 | `python3` | runtime | `python3 --version` |
 | `git` | vcs | `git --version` |
@@ -107,6 +109,7 @@ Principal per-node result. Contains assigned state (name, role from config)
 and observed state (hardware, OS, tools, addresses).
 
 Node status values:
+
 - `complete` — all facts collected
 - `partial` — node reachable but some facts failed
 - `unreachable` — SSH/connect failure
@@ -115,6 +118,7 @@ Node status values:
 ### `ClusterSnapshot`
 
 Top-level output of `axis status`. Contains:
+
 - `timestamp` — UTC collection time
 - `status` — `healthy` (all nodes complete) or `degraded` (any node non-complete)
 - `nodes` — array of `NodeFacts`
@@ -126,6 +130,7 @@ RAM pressure warning threshold: free RAM < 10% of total.
 ### `Resources`
 
 Per-node hardware metrics:
+
 - `cpu_cores`, `cpu_model`
 - `ram_total_mb`, `ram_free_mb`
 - `disk_total_gb`, `disk_free_gb`
@@ -133,6 +138,7 @@ Per-node hardware metrics:
 - `pressure`: `none` / `low` / `medium` / `high`
 
 Pressure thresholds (free/total):
+
 - `high`: < 5%
 - `medium`: < 10%
 - `low`: < 20%
