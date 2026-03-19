@@ -298,7 +298,7 @@ func localAddresses() []models.NetworkAddress {
 				continue
 			}
 			ip := ipNet.IP
-			if ip.IsLinkLocalMulticast() {
+			if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
 				continue
 			}
 			kind := "ipv4"
