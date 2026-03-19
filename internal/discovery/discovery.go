@@ -3,8 +3,6 @@ package discovery
 
 import (
 	"context"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +17,6 @@ import (
 // Remote nodes use SSH-based RemoteCollector.
 // Never fails hard — unreachable nodes return StatusUnreachable.
 func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
-	hostname, _ := os.Hostname()
 	results := make([]models.NodeFacts, len(cfg.Nodes))
 
 	var wg sync.WaitGroup
@@ -29,7 +26,7 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 			defer wg.Done()
 
 			var collector facts.Collector
-			if isLocal(nc, hostname) {
+			if models.IsLocalConfig(nc.Name, nc.Hostname) {
 				collector = facts.NewLocalCollector(nc.Name, nc.Role)
 			} else {
 				exec := transport.NewSSHExecutor(
@@ -60,14 +57,3 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 	return results
 }
 
-// isLocal checks whether a config entry refers to this machine.
-func isLocal(nc config.NodeConfig, hostname string) bool {
-	h := strings.ToLower(hostname)
-	n := strings.ToLower(nc.Name)
-	hn := strings.ToLower(nc.Hostname)
-
-	return n == h ||
-		hn == h ||
-		hn == h+".local" ||
-		strings.TrimSuffix(hn, ".local") == h
-}

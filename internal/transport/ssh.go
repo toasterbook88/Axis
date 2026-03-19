@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // Executor abstracts command execution on a target node.
@@ -113,11 +114,30 @@ func (e *SSHExecutor) sshConfig() (*ssh.ClientConfig, error) {
 		return nil, fmt.Errorf("no SSH keys or agent available")
 	}
 
-	// Phase 1: accept all host keys. TODO: known_hosts verification.
+	// Opt-in insecure mode
+	insecure := os.Getenv("AXIS_SSH_INSECURE") == "1"
+	var hostKeyCallback ssh.HostKeyCallback
+
+	if insecure {
+		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+	} else {
+		home, _ := os.UserHomeDir()
+		knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
+
+		cb, err := knownhosts.New(knownHostsPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("~/.ssh/known_hosts not found. Run 'ssh-keyscan <host> >> ~/.ssh/known_hosts' or set AXIS_SSH_INSECURE=1")
+			}
+			return nil, fmt.Errorf("failed to load known_hosts (set AXIS_SSH_INSECURE=1 to bypass): %w", err)
+		}
+		hostKeyCallback = cb
+	}
+
 	return &ssh.ClientConfig{
 		User:            e.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         time.Duration(e.TimeoutSec) * time.Second,
 	}, nil
 }
