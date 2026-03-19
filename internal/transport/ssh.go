@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -119,6 +120,32 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 		}
 		return stdout.String(), nil
 	}
+}
+
+// Stream runs a command with realtime output to the provided writers.
+// Used for long-running tasks. Same SSH setup as Run().
+func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.Writer) error {
+	if e.client == nil {
+		if err := e.Connect(ctx); err != nil {
+			return err
+		}
+	}
+
+	session, err := e.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("ssh session: %w", err)
+	}
+	defer session.Close()
+
+	// Connect context cancellation to SSH signal if needed
+	go func() {
+		<-ctx.Done()
+		session.Signal(ssh.SIGKILL)
+	}()
+
+	session.Stdout = stdout
+	session.Stderr = stderr
+	return session.Run(cmd)
 }
 
 func (e *SSHExecutor) sshConfig() (*ssh.ClientConfig, error) {
