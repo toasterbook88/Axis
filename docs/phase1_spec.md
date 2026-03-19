@@ -16,9 +16,8 @@ It is the foundation that later phases will build on.
 ## Non-Goals for Phase 1
 
 - Daemon process or persistent state
-- Automatic task placement or scheduling
+- Task execution (advisory placement is implemented in Phase 2)
 - Mesh networking, Tailscale, or peer discovery
-- Phase 2+ coordinator features
 
 ---
 
