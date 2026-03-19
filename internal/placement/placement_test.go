@@ -343,3 +343,27 @@ func names(nodes []models.NodeFacts) []string {
 	}
 	return out
 }
+
+func TestInferRequirements(t *testing.T) {
+	tests := []struct {
+		desc      string
+		wantTool  string
+		wantRAM   int64
+	}{
+		{"Run a 70b inference model", "ollama", 4096},
+		{"clone this repo and analyze it", "git", 0},
+		{"compile the go binary", "go", 0},
+		{"spin up a docker container", "docker", 0},
+		{"just a simple task", "", 0},
+		{"deploy using gpu", "ollama", 0},
+	}
+	for _, tt := range tests {
+		got := InferRequirements(tt.desc)
+		if got.RequiredTool != tt.wantTool {
+			t.Errorf("InferRequirements(%q) TOOL = %q, want %q", tt.desc, got.RequiredTool, tt.wantTool)
+		}
+		if got.MinFreeRAMMB != tt.wantRAM {
+			t.Errorf("InferRequirements(%q) RAM = %d, want %d", tt.desc, got.MinFreeRAMMB, tt.wantRAM)
+		}
+	}
+}

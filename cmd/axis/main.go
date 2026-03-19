@@ -17,6 +17,18 @@ func main() {
 	root := &cobra.Command{
 		Use:   "axis",
 		Short: "AXIS — cluster-aware AI execution substrate",
+		Run: func(cmd *cobra.Command, args []string) {
+			const logo = `
+    ___   _  __ _____ 
+   /   | | |/ //_  _/ ____
+  / /| | |   /  / /  / __/
+ / ___ |/   | _/ /_ _\ \  
+/_/  |_/_/|_|/____//___/  
+`
+			fmt.Print(logo)
+			fmt.Printf("\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
+			cmd.Usage()
+		},
 	}
 
 	root.AddCommand(versionCmd())
@@ -25,7 +37,7 @@ func main() {
 	root.AddCommand(taskCmd())
 
 	if err := root.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(ExitErrGeneric)
 	}
 }
 
