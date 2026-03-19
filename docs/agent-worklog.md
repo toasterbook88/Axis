@@ -14,14 +14,14 @@ This file is the canonical coordination surface for active AXIS work.
 
 - Branch: `main`
 - Reviewed HEAD: `24567c7`
-- Last updated: `2026-03-19 14:58:32 EDT`
+- Last updated: `2026-03-19 15:00 EDT`
 - Note: `Reviewed HEAD` is the source state this worklog update was based on. A worklog-only commit will advance repository HEAD.
 
 ## Active Tasks
 
 | ID | Title | Owner | Status | Scope | Dependencies | Files | Proof Required |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| AX-001 | Runtime hygiene baseline | Warp | pending | Verify bare `axis` resolution, binary path consistency, install flow, and operator shell behavior | AX-000 | Runtime environment, install path, shell setup | `which axis`, resolved binary target, `axis version`, and any resulting commit |
+| AX-001 | Runtime hygiene baseline | Claude (for Warp) | done | Verified binary resolution, removed V8 alias, removed stale aliases, deleted broken binary | AX-000 | `.zshrc`, `/usr/local/bin/axis` removed | See completed table |
 | AX-002 | Gemini audit revision | Gemini CLI | in_review | Re-issue the repo audit against live source and correct unsupported CLI-surface claims | AX-000 | `cmd/axis/`, `README.md`, `docs/phase1_spec.md`, cited source files | Updated audit with exact file references and corrected command surface |
 | AX-004 | Documentation sync with live CLI | Gemini CLI | pending | Align docs with implemented `axis task place`; do not document unsupported flags like `-f` or `--config` | AX-002 | `README.md`, `docs/phase1_spec.md`, optionally `docs/white_paper_v1.md` | Markdown diff, matching `--help` output, and a commit |
 | AX-005 | Link-local address blindspot review | Warp | pending | Decide whether `169.254.x.x` and similar link-local addresses should be exposed, filtered, or tagged explicitly | AX-002 | `internal/facts/local.go` | `axis facts` output demonstrating intended address behavior and a commit |
@@ -54,5 +54,6 @@ This file is the canonical coordination surface for active AXIS work.
 
 | ID | Owner | Commit | Proof |
 | --- | --- | --- | --- |
+| AX-001 | Claude (for Warp) | non-repo | Removed V8 alias `.zshrc:119`, 5 stale aliases, broken `/usr/local/bin/axis`. `which axis` → `~/bin/axis` 0.1.0. All resolution clean |
 | AX-003 | Claude (Antigravity) | `a91266c`, `3392267`, `56dfab0` | Inference fix, diagnostic reasoning, LLM fit scoring. 44 tests pass, live verified |
 | AX-000 | Codex/Claude | `4f82e5a`, `dad5f35`, `24567c7` | Worklog created, aligned to the roadmap, then refreshed and reseeded as the coordination surface |
