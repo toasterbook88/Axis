@@ -4,6 +4,8 @@
 
 # Go
 /vendor/
+*.test
+coverage.out
 
 # IDE
 .idea/
