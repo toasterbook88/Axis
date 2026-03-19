@@ -160,23 +160,120 @@ func TestSelectBestNode(t *testing.T) {
 	}
 }
 
-func TestSelectEmptyCandidates(t *testing.T) {
+// --- Failure Reasoning Tests ---
+
+func TestSelectFailure_RAMGap(t *testing.T) {
 	nodes := []models.NodeFacts{
-		nodeUnreachable("a"),
-		nodeUnreachable("b"),
+		nodeComplete("m3", 900, "low"),
+		nodeComplete("m1", 1400, "low"),
 	}
-	reqs := models.TaskRequirements{Description: "anything"}
+	reqs := models.TaskRequirements{
+		Description:  "run a 70b model",
+		MinFreeRAMMB: 4096,
+	}
 
 	d := SelectBestNode(reqs, nodes)
 	if d.OK {
-		t.Fatal("expected OK=false when all nodes unreachable")
+		t.Fatal("expected OK=false")
 	}
-	if len(d.Reasoning) == 0 {
-		t.Error("expected reasoning for failure")
+	// Should explain the RAM shortfall for each node
+	foundM3 := false
+	foundM1 := false
+	for _, r := range d.Reasoning {
+		if contains(r, "m3") && contains(r, "short") {
+			foundM3 = true
+		}
+		if contains(r, "m1") && contains(r, "short") {
+			foundM1 = true
+		}
+	}
+	if !foundM3 {
+		t.Errorf("expected RAM gap reasoning for m3, got: %v", d.Reasoning)
+	}
+	if !foundM1 {
+		t.Errorf("expected RAM gap reasoning for m1, got: %v", d.Reasoning)
+	}
+}
+
+func TestSelectFailure_MissingTool(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("m3", 5000, "none", "git", "go"),
+	}
+	reqs := models.TaskRequirements{
+		Description:  "inference with ollama",
+		RequiredTool: "ollama",
+	}
+
+	d := SelectBestNode(reqs, nodes)
+	if d.OK {
+		t.Fatal("expected OK=false")
+	}
+	foundToolGap := false
+	for _, r := range d.Reasoning {
+		if contains(r, "missing") && contains(r, "ollama") {
+			foundToolGap = true
+		}
+	}
+	if !foundToolGap {
+		t.Errorf("expected missing-tool reasoning, got: %v", d.Reasoning)
+	}
+}
+
+func TestSelectSuccess_RunnerUpComparison(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("m3", 2000, "none", "git"),
+		nodeComplete("m1", 5000, "none", "git"),
+	}
+	reqs := models.TaskRequirements{RequiredTool: "git"}
+
+	d := SelectBestNode(reqs, nodes)
+	if !d.OK || d.Node != "m1" {
+		t.Fatalf("expected OK=true, node=m1, got OK=%v node=%s", d.OK, d.Node)
+	}
+	foundRunnerUp := false
+	for _, r := range d.Reasoning {
+		if contains(r, "runner-up") && contains(r, "m3") {
+			foundRunnerUp = true
+		}
+	}
+	if !foundRunnerUp {
+		t.Errorf("expected runner-up comparison, got: %v", d.Reasoning)
+	}
+}
+
+func TestSelectSuccess_SingleCandidate(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("solo", 4000, "none", "git"),
+		nodeUnreachable("down"),
+	}
+	reqs := models.TaskRequirements{RequiredTool: "git"}
+
+	d := SelectBestNode(reqs, nodes)
+	if !d.OK || d.Node != "solo" {
+		t.Fatalf("expected OK=true node=solo, got OK=%v node=%s", d.OK, d.Node)
+	}
+	// Single candidate: should NOT have runner-up line
+	for _, r := range d.Reasoning {
+		if contains(r, "runner-up") {
+			t.Errorf("single candidate should not have runner-up line: %v", d.Reasoning)
+		}
 	}
 }
 
 // --- Helpers ---
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
 
 func names(nodes []models.NodeFacts) []string {
 	var out []string
