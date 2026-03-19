@@ -1,11 +1,13 @@
 # Binaries
 /axis
+/axis.exe
 *.exe
 
 # Go
 /vendor/
 *.test
 coverage.out
+*.prof
 
 # IDE
 .idea/
@@ -18,5 +20,6 @@ coverage.out
 .DS_Store
 Thumbs.db
 
-# Build
+# Build artifacts
 /dist/
+/bin/
