@@ -120,44 +120,37 @@ Placement uses keyword matching against the task description (no ML). It infers 
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────┐
-│  axis CLI  (cmd/axis)                           │
-│  facts · status · task place · version          │
-└────────────────────┬────────────────────────────┘
-                     │
-       ┌─────────────▼─────────────┐
-       │  discovery                │  concurrent SSH fan-out
-       │  (internal/discovery)     │
-       └──┬──────────────────┬─────┘
-          │                  │
-   ┌──────▼──────┐    ┌──────▼──────┐
-   │  facts      │    │  transport  │  SSH session
-   │  local +    │    │  (internal/ │
-   │  remote     │    │  transport) │
-   └──────┬──────┘    └─────────────┘
-          │
-   ┌──────▼──────┐    ┌─────────────┐
-   │  snapshot   │───►│  placement  │  node scoring
-   │  (assembly) │    │  (advisory) │
-   └─────────────┘    └─────────────┘
-          │
-   ┌──────▼──────┐
-   │  models     │  NodeFacts · ClusterSnapshot
-   └─────────────┘  TaskRequirements · PlacementDecision
+┌─────────────────────┬─────────────────────────────────────────────────────────────────────────────────┐
+│       Package       │                                      Role                                       │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ cmd/axis/           │ Cobra CLI entry — chat, facts, status, task, exit codes                         │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/config/    │ Loads ~/.axis/nodes.yaml (node list, SSH user/port/timeout)                     │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/facts/     │ SSH into each node, collects RAM/CPU/GPU/tools                                  │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/placement/ │ Filter + rank nodes by free RAM, pressure, GPU, locality; ComputeFitScore 0–100 │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/chat/      │ Streams via local Ollama (localhost:11434), graceful fallback message           │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/snapshot/  │ Persists node facts to disk                                                     │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/transport/ │ Raw SSH execution layer                                                         │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/discovery/ │ Node discovery                                                                  │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/models/    │ Shared types: NodeFacts, TaskRequirements, Locality                             │
+└─────────────────────┴─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Package map:**
+### Key design notes:
+- Config lives at `~/.axis/nodes.yaml` — no cluster IPs hardcoded in code
+- Placement is deterministic: RAM pressure → free RAM → name (stable tiebreak)
+- ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
+- Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
+- No Cortex/MCP integration — fully standalone from the rest of the AXIS stack
 
-| Package | Responsibility |
-| --- | --- |
-| `cmd/axis` | CLI commands; cobra wiring |
-| `internal/config` | Load & validate `~/.axis/nodes.yaml` |
-| `internal/transport` | SSH connection and remote command execution |
-| `internal/facts` | `LocalCollector`, `RemoteCollector`, tool discovery |
-| `internal/discovery` | Concurrent fan-out across nodes |
-| `internal/snapshot` | Assemble `ClusterSnapshot` with aggregates & warnings |
-| `internal/placement` | Score and select the best node for a task |
-| `internal/models` | Shared data types; no external dependencies |
+**Phase boundary:** This is Phase 1 — facts collection and advisory placement only. No task execution, no remote dispatch.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 
