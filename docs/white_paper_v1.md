@@ -53,6 +53,7 @@ axis status         (fan-out over SSH)
 | `internal/facts` | Local and remote collectors, tool discovery |
 | `internal/discovery` | Concurrent fan-out across configured nodes |
 | `internal/snapshot` | Assemble `ClusterSnapshot` from `[]NodeFacts` |
+| `internal/placement` | Deterministic task placement with LLM fit scoring |
 | `internal/models` | Shared data types; no external dependencies |
 
 ### Data Flow
@@ -77,22 +78,24 @@ What it produces:
 
 This is the data foundation for later phases.
 
-## Planned Direction
+## Phase 2: Advisory Task Placement (Active)
 
-*The following describes project intent, not current implementation.*
+**Phase 2** uses the `ClusterSnapshot` as input to a deterministic placement layer.
+Given a task description and a snapshot, AXIS selects the most appropriate node.
 
-**Phase 2** aims to use the `ClusterSnapshot` as input to a placement layer:
-given a task and a snapshot, select the most appropriate node. Initial heuristics
-will be RAM-based (avoid high-pressure nodes; prefer nodes with required tools
-already installed). This is the "RAM-aware task placement" referenced in the
-project description.
+Implemented features:
+- `axis task place "<description>"` — advisory-only placement command
+- LLM Fit score (0-100): RAM, pressure, GPU, CPU, local-node bonus
+- Keyword inference: extracts tool and RAM requirements from description
+- Failure diagnostics: per-node exclusion reasons (RAM gap, missing tool, status)
+- Runner-up comparison with fit score delta
+- Scope-aware: tasks too large for the cluster fail gracefully
 
 Longer-term directions under consideration:
 - A lightweight daemon (`axisd`) for periodic background collection
 - Structured context export suitable for injection into LLM system prompts
 - Multi-hop or mesh node discovery (beyond a static YAML seed file)
-
-None of the Phase 2+ features are implemented in the current codebase.
+- Task execution (currently advisory only)
 
 ## Design Principles
 
