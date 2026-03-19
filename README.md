@@ -1,90 +1,69 @@
 # AXIS
 
-**A lightweight, local-first coordination substrate for cluster-aware AI execution.**
+[![CI](https://github.com/toasterbook88/axis/actions/workflows/ci.yml/badge.svg)](https://github.com/toasterbook88/axis/actions/workflows/ci.yml)
+[![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-AXIS collects hardware facts and tool inventories from a configured set of nodes,
-assembles them into a compact `ClusterSnapshot`, and emits the result as structured
-JSON or YAML. The snapshot gives models and operators a single, accurate document
-describing available compute — without requiring a daemon, server, or persistent state.
+**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, and gives deterministic advisory task placement — no daemon, no server, no persistent state.**
 
-## Why AXIS?
+## Quick Start
 
-When running AI workloads across multiple machines, tools and models repeatedly
-re-discover the same facts: available RAM, installed runtimes, reachable nodes.
-AXIS collects this information once and emits a single structured document,
-reducing redundant probing and providing a stable context for task placement decisions.
+```bash
+# Install
+go install github.com/toasterbook88/axis/cmd/axis@latest
 
-AXIS is local-first — no daemon, no server, no persistent state.
-It runs as a single binary on demand.
+# Inspect the local machine
+axis facts
 
-## Current Status
+# Inspect the full cluster (requires ~/.axis/nodes.yaml)
+axis status
 
-**Phase 1 — CLI bootstrap & node discovery.**
+# Ask where to run a task
+axis task place "run ollama inference on a 7b model"
+```
 
-Phase 1 delivers the CLI binary, local fact collection, SSH-based remote collection,
-and `ClusterSnapshot` assembly. It is the observability foundation that later phases
-will build on.
+## Features
 
-## What Works Today
-
-- `axis version` — print version string
-- `axis facts` — collect hardware facts and tool inventory from the local machine; output as JSON or YAML
-- `axis status` — SSH into each configured node, collect facts, assemble a `ClusterSnapshot`
-
-**Collected per node:**
-- OS (darwin / linux), kernel version, architecture
-- CPU core count and model
-- Total and free RAM (MB), with pressure classification (`none` / `low` / `medium` / `high`)
-- Total and free disk space (GB)
-- GPU list (best-effort)
-- Network addresses (IPv4/IPv6, non-loopback)
-- Installed tool inventory: `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc`
-
-**`ClusterSnapshot` output includes:**
-- Per-node `NodeFacts` with status (`complete`, `partial`, `unreachable`, `error`)
-- Cluster-level summary: total/reachable node count, total/free RAM
-- Per-node warnings: unreachable, partial, error, RAM pressure
-
-## Not Yet Implemented
-
-The following are project direction — not current functionality:
-- Daemon / background coordinator (`axisd`)
-- RAM-aware automatic task placement
-- Mesh networking or peer discovery beyond a static seed file
-- Phase 2+ features (see [white paper](docs/white_paper_v1.md))
-
-## Requirements
-
-- Go 1.22+
-- SSH key-based authentication configured for remote nodes (for `axis status`)
+| Feature | Details |
+|---|---|
+| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + pressure), disk, GPU list, network addresses |
+| **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc` |
+| **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
+| **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
+| **Advisory task placement** | `axis task place` scores nodes by free RAM and tool availability; deterministic, no ML |
+| **Zero runtime deps** | Single static binary; no daemon, no database, no background process |
+| **JSON & YAML output** | All commands support `--format yaml` |
 
 ## Installation
+
+**Using `go install` (recommended):**
+
+```bash
+go install github.com/toasterbook88/axis/cmd/axis@latest
+```
+
+**Build from source:**
 
 ```bash
 git clone https://github.com/toasterbook88/axis.git
 cd axis
 go build -o axis ./cmd/axis/
-```
-
-Move the binary to your `$PATH` if needed:
-
-```bash
+# Optional: move to $PATH
 mv axis /usr/local/bin/axis
 ```
 
-## Quick Start
+**Requirements:** Go 1.22+, SSH key-based auth for remote nodes.
 
-### Local facts
+## Usage
+
+### `axis facts` — local machine snapshot
 
 ```bash
-# JSON output (default)
-axis facts
-
-# YAML output
-axis facts --format yaml
+axis facts               # JSON (default)
+axis facts --format yaml # YAML
 ```
 
-### Cluster snapshot
+### `axis status` — cluster snapshot
 
 Create `~/.axis/nodes.yaml` (see [nodes.example.yaml](nodes.example.yaml)):
 
@@ -99,19 +78,31 @@ nodes:
     hostname: node-b.local
     ssh_user: alice
     role: worker
-    # ssh_port: 22      # default
-    # timeout_sec: 10   # default
+    # ssh_port: 22
+    # timeout_sec: 10
 ```
 
 Then:
 
 ```bash
-# JSON output (default)
-axis status
-
-# YAML output
+axis status              # JSON cluster snapshot
 axis status --format yaml
 ```
+
+### `axis task place` — advisory placement
+
+```bash
+axis task place "analyze a git repo"
+# → Selected node: node-b (remote, fit 82/100)
+#   Tool: git
+#   Reason:
+#     - has required tool: git
+#     - free RAM: 14336 MB
+
+axis task place "run ollama inference on a 7b model" --format json
+```
+
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement; free RAM breaks ties.
 
 ## Configuration Reference
 
@@ -126,36 +117,61 @@ axis status --format yaml
 | `ssh_port` | no | `22` | SSH port |
 | `timeout_sec` | no | `10` | Per-node collection timeout (seconds) |
 
-## Repository Layout
-
-```
-axis/
-├── cmd/axis/          # CLI entry point (main, facts, status commands)
-├── internal/
-│   ├── config/        # Config file parsing and validation
-│   ├── discovery/     # Node discovery and concurrent fan-out
-│   ├── facts/         # Local and remote fact collectors, tool discovery
-│   ├── models/        # Core data types (NodeFacts, ClusterSnapshot, etc.)
-│   ├── snapshot/      # ClusterSnapshot assembly and aggregation
-│   └── transport/     # SSH transport layer
-├── docs/              # Architecture documentation
-├── nodes.example.yaml # Example cluster seed config
-├── go.mod
-└── README.md
-```
-
 ## Architecture
 
-AXIS is organized as a thin CLI layer over a set of pure internal packages:
+```
+┌─────────────────────────────────────────────────┐
+│  axis CLI  (cmd/axis)                           │
+│  facts · status · task place · version          │
+└────────────────────┬────────────────────────────┘
+                     │
+       ┌─────────────▼─────────────┐
+       │  discovery                │  concurrent SSH fan-out
+       │  (internal/discovery)     │
+       └──┬──────────────────┬─────┘
+          │                  │
+   ┌──────▼──────┐    ┌──────▼──────┐
+   │  facts      │    │  transport  │  SSH session
+   │  local +    │    │  (internal/ │
+   │  remote     │    │  transport) │
+   └──────┬──────┘    └─────────────┘
+          │
+   ┌──────▼──────┐    ┌─────────────┐
+   │  snapshot   │───►│  placement  │  node scoring
+   │  (assembly) │    │  (advisory) │
+   └─────────────┘    └─────────────┘
+          │
+   ┌──────▼──────┐
+   │  models     │  NodeFacts · ClusterSnapshot
+   └─────────────┘  TaskRequirements · PlacementDecision
+```
 
-1. **config** — loads and validates `~/.axis/nodes.yaml`
-2. **transport** — establishes SSH connections and runs remote commands
-3. **facts** — local (`LocalCollector`) and remote (`RemoteCollector`) fact collection; tool discovery
-4. **discovery** — fans out collection across all configured nodes concurrently
-5. **snapshot** — assembles per-node `NodeFacts` into a `ClusterSnapshot` with aggregates and warnings
-6. **models** — shared data types; no external dependencies
+**Package map:**
+
+| Package | Responsibility |
+|---|---|
+| `cmd/axis` | CLI commands; cobra wiring |
+| `internal/config` | Load & validate `~/.axis/nodes.yaml` |
+| `internal/transport` | SSH connection and remote command execution |
+| `internal/facts` | `LocalCollector`, `RemoteCollector`, tool discovery |
+| `internal/discovery` | Concurrent fan-out across nodes |
+| `internal/snapshot` | Assemble `ClusterSnapshot` with aggregates & warnings |
+| `internal/placement` | Score and select the best node for a task |
+| `internal/models` | Shared data types; no external dependencies |
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
+
+## Roadmap
+
+The following are planned directions, not current functionality:
+
+- Background coordinator (`axisd`)
+- Mesh networking / peer discovery beyond a static seed file
+- Phase 2+ features — see [white paper](docs/white_paper_v1.md)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an issue before adding Phase 2+ features.
 
 ## License
 
