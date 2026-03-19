@@ -2,14 +2,15 @@ package placement
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
 )
 
 // SelectBestNode runs the full placement pipeline: filter → rank → select.
-// Returns a PlacementDecision with OK=false if no nodes qualify.
 // Reasoning is diagnostic: on failure it explains why each node was excluded;
-// on success it explains why the winner was chosen and how it compares.
+// on success it explains fit score, locality, and runner-up comparison.
 func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) models.PlacementDecision {
 	candidates := FilterCandidates(reqs, nodes)
 	if len(candidates) == 0 {
@@ -18,13 +19,28 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 
 	ranked := RankCandidates(candidates)
 	best := ranked[0]
+	local := isLocalNode(best)
 
 	decision := models.PlacementDecision{
-		Node: best.Name,
-		OK:   true,
+		Node:     best.Name,
+		OK:       true,
+		FitScore: ComputeFitScore(best, local),
+		IsLocal:  local,
 	}
 
-	// Resource reasoning
+	// Fit score summary
+	fitLabel := fitLabel(decision.FitScore)
+	decision.Reasoning = append(decision.Reasoning,
+		fmt.Sprintf("LLM fit: %d/100 (%s)", decision.FitScore, fitLabel))
+
+	// Locality
+	if local {
+		decision.Reasoning = append(decision.Reasoning, "local node (no SSH hop)")
+	} else {
+		decision.Reasoning = append(decision.Reasoning, "remote node (via SSH)")
+	}
+
+	// Resource details
 	if best.Resources != nil {
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("%dMB free RAM (of %dMB total)", best.Resources.RAMFreeMB, best.Resources.RAMTotalMB))
@@ -32,12 +48,16 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 			fmt.Sprintf("pressure: %s", best.Resources.Pressure))
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("%d CPU cores", best.Resources.CPUCores))
+		if len(best.Resources.GPUs) > 0 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("GPU: %s", strings.Join(best.Resources.GPUs, ", ")))
+		}
 	}
 
 	// Tool match
 	if reqs.RequiredTool != "" {
 		for _, t := range best.Tools {
-			if t.Name == reqs.RequiredTool {
+			if strings.EqualFold(t.Name, reqs.RequiredTool) {
 				decision.Tool = t.Name
 				ver := t.Version
 				if ver == "" {
@@ -50,21 +70,15 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 		}
 	}
 
-	// Comparative: runner-up delta
+	// Runner-up comparison
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
+		ruLocal := isLocalNode(runnerUp)
+		ruScore := ComputeFitScore(runnerUp, ruLocal)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
-		if runnerUp.Resources != nil && best.Resources != nil {
-			delta := best.Resources.RAMFreeMB - runnerUp.Resources.RAMFreeMB
-			if delta > 0 {
-				decision.Reasoning = append(decision.Reasoning,
-					fmt.Sprintf("runner-up %q has %dMB less free RAM", runnerUp.Name, delta))
-			} else if delta == 0 {
-				decision.Reasoning = append(decision.Reasoning,
-					fmt.Sprintf("tied with %q on RAM; won by name ordering", runnerUp.Name))
-			}
-		}
+		decision.Reasoning = append(decision.Reasoning,
+			fmt.Sprintf("runner-up %q scored %d/100", runnerUp.Name, ruScore))
 	}
 
 	return decision
@@ -87,7 +101,6 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 				fmt.Sprintf("  %s: excluded (status: %s)", n.Name, n.Status))
 			continue
 		}
-		// Node is complete but failed filter
 		if reqs.MinFreeRAMMB > 0 && (n.Resources == nil || n.Resources.RAMFreeMB < reqs.MinFreeRAMMB) {
 			actual := int64(0)
 			if n.Resources != nil {
@@ -110,6 +123,39 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 		}
 	}
 
+	// If heavy RAM was required, explain AXIS scope
+	if reqs.MinFreeRAMMB >= 4096 {
+		d.Reasoning = append(d.Reasoning,
+			"note: AXIS targets small assistive models, not 70B+ inference")
+	}
+
 	return d
 }
 
+// isLocalNode checks if a node matches the machine running axis.
+func isLocalNode(n models.NodeFacts) bool {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return false
+	}
+	hostname = strings.ToLower(hostname)
+	nodeName := strings.ToLower(n.Name)
+	nodeHostname := strings.ToLower(n.Hostname)
+
+	return nodeName == hostname || nodeHostname == hostname ||
+		strings.HasPrefix(hostname, nodeName+".") ||
+		strings.HasPrefix(hostname, nodeName)
+}
+
+func fitLabel(score int) string {
+	switch {
+	case score >= 75:
+		return "excellent for small models"
+	case score >= 50:
+		return "good for small models"
+	case score >= 25:
+		return "adequate"
+	default:
+		return "limited"
+	}
+}

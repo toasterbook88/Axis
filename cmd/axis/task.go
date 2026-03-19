@@ -67,7 +67,11 @@ func taskPlaceCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Selected node: %s\n", decision.Node)
+			locality := "remote"
+			if decision.IsLocal {
+				locality = "local"
+			}
+			fmt.Printf("Selected node: %s (%s, fit %d/100)\n", decision.Node, locality, decision.FitScore)
 			if decision.Tool != "" {
 				fmt.Printf("Tool: %s\n", decision.Tool)
 			}

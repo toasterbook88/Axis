@@ -260,6 +260,67 @@ func TestSelectSuccess_SingleCandidate(t *testing.T) {
 	}
 }
 
+// --- Fit Score Tests ---
+
+func TestFitScore_GPUNodeScoresHigher(t *testing.T) {
+	noGPU := nodeComplete("cpu-only", 4000, "none")
+	withGPU := nodeComplete("gpu-node", 4000, "none")
+	withGPU.Resources.GPUs = []string{"MX250 4GB"}
+
+	scoreNoGPU := ComputeFitScore(noGPU, false)
+	scoreGPU := ComputeFitScore(withGPU, false)
+
+	if scoreGPU <= scoreNoGPU {
+		t.Errorf("GPU node (%d) should score higher than non-GPU (%d)", scoreGPU, scoreNoGPU)
+	}
+	// GPU bonus is 25
+	if scoreGPU-scoreNoGPU != 25 {
+		t.Errorf("GPU delta should be 25, got %d", scoreGPU-scoreNoGPU)
+	}
+}
+
+func TestFitScore_LocalBonus(t *testing.T) {
+	n := nodeComplete("test", 2000, "low")
+	remote := ComputeFitScore(n, false)
+	local := ComputeFitScore(n, true)
+
+	if local-remote != 10 {
+		t.Errorf("local bonus should be 10, got %d", local-remote)
+	}
+}
+
+func TestFitScore_NilResources(t *testing.T) {
+	n := models.NodeFacts{Name: "empty", Status: models.StatusComplete}
+	score := ComputeFitScore(n, false)
+	if score != 0 {
+		t.Errorf("nil resources should score 0, got %d", score)
+	}
+}
+
+func TestSelectFailure_HeavyRAMScopeNote(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("m3", 900, "low"),
+	}
+	reqs := models.TaskRequirements{
+		Description:  "run 70b model",
+		MinFreeRAMMB: 4096,
+	}
+
+	d := SelectBestNode(reqs, nodes)
+	if d.OK {
+		t.Fatal("expected OK=false")
+	}
+	foundScope := false
+	for _, r := range d.Reasoning {
+		if contains(r, "assistive") && contains(r, "70B") {
+			foundScope = true
+		}
+	}
+	if !foundScope {
+		t.Errorf("expected AXIS scope note about small models, got: %v", d.Reasoning)
+	}
+}
+
 // --- Helpers ---
 
 func contains(s, sub string) bool {

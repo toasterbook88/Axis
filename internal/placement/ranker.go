@@ -102,3 +102,59 @@ func freeRAM(n models.NodeFacts) int64 {
 	}
 	return n.Resources.RAMFreeMB
 }
+
+// ComputeFitScore returns 0-100 indicating small-model suitability.
+// Scoring breakdown:
+//   - Free RAM:    up to 30 pts (1 pt per 256MB, capped at 30)
+//   - Pressure:    up to 25 pts (none=25, low=20, medium=10, high=0)
+//   - GPU present: +25 pts
+//   - CPU cores:   up to 10 pts (1 pt per core, capped at 10)
+//   - Local node:  +10 pts (no SSH hop = lower latency)
+//
+// Max: 30+25+25+10+10 = 100
+func ComputeFitScore(n models.NodeFacts, isLocal bool) int {
+	if n.Resources == nil {
+		return 0
+	}
+
+	score := 0
+
+	// Free RAM: 1pt per 256MB, cap 30
+	ramPts := int(n.Resources.RAMFreeMB / 256)
+	if ramPts > 30 {
+		ramPts = 30
+	}
+	score += ramPts
+
+	// Pressure
+	switch strings.ToLower(n.Resources.Pressure) {
+	case "none":
+		score += 25
+	case "low":
+		score += 20
+	case "medium":
+		score += 10
+	}
+
+	// GPU
+	if len(n.Resources.GPUs) > 0 {
+		score += 25
+	}
+
+	// CPU: 1pt per core, cap 10
+	cpuPts := n.Resources.CPUCores
+	if cpuPts > 10 {
+		cpuPts = 10
+	}
+	score += cpuPts
+
+	// Local bonus
+	if isLocal {
+		score += 10
+	}
+
+	if score > 100 {
+		score = 100
+	}
+	return score
+}

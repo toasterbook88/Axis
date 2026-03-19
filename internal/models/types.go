@@ -137,6 +137,8 @@ type TaskRequirements struct {
 type PlacementDecision struct {
 	Node      string   `json:"node" yaml:"node"`
 	Tool      string   `json:"tool,omitempty" yaml:"tool,omitempty"`
+	FitScore  int      `json:"fit_score" yaml:"fit_score"`
+	IsLocal   bool     `json:"is_local" yaml:"is_local"`
 	Reasoning []string `json:"reasoning" yaml:"reasoning"`
 	OK        bool     `json:"ok" yaml:"ok"`
 }
