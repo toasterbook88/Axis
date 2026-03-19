@@ -19,14 +19,18 @@ func main() {
 		Short: "AXIS — cluster-aware AI execution substrate",
 		Run: func(cmd *cobra.Command, args []string) {
 			const logo = `
-    ___   _  __ _____ 
-   /   | | |/ //_  _/ ____
-  / /| | |   /  / /  / __/
- / ___ |/   | _/ /_ _\ \  
-/_/  |_/_/|_|/____//___/  
+    A     X   X  IIIII  SSSS
+   A A     X X     I   S
+  AAAAA     X      I    SSS
+ A     A   X X     I       S
+A       A X   X  IIIII SSSS
 `
-			fmt.Print(logo)
-			fmt.Printf("\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
+			out := cmd.OutOrStdout()
+			cmd.SetOut(out)
+			cmd.SetErr(out)
+
+			fmt.Fprint(out, logo)
+			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
 			cmd.Usage()
 		},
 	}
