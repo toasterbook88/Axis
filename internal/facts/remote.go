@@ -39,14 +39,19 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		CollectedAt: time.Now().UTC(),
 	}
 
-	partial := false
-
-	// Detect OS — if this fails, the node is unreachable at command level
-	osOut, err := c.Exec.Run(ctx, "uname -s")
-	if err != nil {
+	if err := c.Exec.Connect(ctx); err != nil {
 		facts.Status = models.StatusUnreachable
 		facts.Error = err.Error()
 		return facts, nil
+	}
+	defer c.Exec.Close()
+
+	partial := false
+
+	// Detect OS
+	osOut, err := c.Exec.Run(ctx, "uname -s")
+	if err != nil {
+		partial = true
 	}
 	osName := strings.ToLower(strings.TrimSpace(osOut))
 	facts.OS = osName
