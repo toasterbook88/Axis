@@ -36,9 +36,18 @@ func (n *NodeConfig) EffectiveTimeout() int {
 	return n.TimeoutSec
 }
 
+// DiscoveryConfig describes the UDP discovery properties.
+type DiscoveryConfig struct {
+	Enabled        bool   `yaml:"enabled,omitempty"`
+	UDPPort        int    `yaml:"udp_port,omitempty"`
+	BeaconInterval int    `yaml:"beacon_interval_sec,omitempty"`
+	Secret         string `yaml:"secret,omitempty"`
+}
+
 // Config is the top-level AXIS configuration.
 type Config struct {
-	Nodes []NodeConfig `yaml:"nodes"`
+	Nodes     []NodeConfig     `yaml:"nodes"`
+	Discovery *DiscoveryConfig `yaml:"discovery,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.
