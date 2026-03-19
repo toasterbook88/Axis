@@ -21,6 +21,10 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts, st *
 	best := ranked[0]
 	local := models.IsLocalNode(best)
 
+	return buildSuccessDecision(best, ranked, reqs, local, st)
+}
+
+func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs models.TaskRequirements, local bool, st *state.ClusterState) models.PlacementDecision {
 	decision := models.PlacementDecision{
 		Node:     best.Name,
 		OK:       true,
