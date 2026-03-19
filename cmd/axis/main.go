@@ -22,6 +22,7 @@ func main() {
 	root.AddCommand(versionCmd())
 	root.AddCommand(factsCmd())
 	root.AddCommand(statusCmd())
+	root.AddCommand(taskCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)

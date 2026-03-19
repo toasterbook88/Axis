@@ -121,3 +121,31 @@ type ClusterSnapshot struct {
 	Summary   ClusterSummary `json:"summary" yaml:"summary"`
 	Warnings  []Warning      `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
+
+// --- Phase 2: Task Placement ---
+
+// TaskRequirements describes what a task needs to run.
+// Inferred from task description by keyword matching in the CLI layer.
+type TaskRequirements struct {
+	Description  string `json:"description" yaml:"description"`
+	RequiredTool string `json:"required_tool,omitempty" yaml:"required_tool,omitempty"`
+	MinFreeRAMMB int64  `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+}
+
+// PlacementDecision is the output of the placement engine.
+// OK is false when no node qualifies.
+type PlacementDecision struct {
+	Node      string   `json:"node" yaml:"node"`
+	Tool      string   `json:"tool,omitempty" yaml:"tool,omitempty"`
+	Reasoning []string `json:"reasoning" yaml:"reasoning"`
+	OK        bool     `json:"ok" yaml:"ok"`
+}
+
+// PlacementError describes why placement failed.
+type PlacementError struct {
+	Message string `json:"message" yaml:"message"`
+}
+
+func (e *PlacementError) Error() string {
+	return e.Message
+}
