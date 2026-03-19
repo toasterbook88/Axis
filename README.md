@@ -143,7 +143,8 @@ Placement uses keyword matching against the task description (no ML). It infers 
 └─────────────────────┴─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Key design notes:
+### Key design notes
+
 - Config lives at `~/.axis/nodes.yaml` — no cluster IPs hardcoded in code
 - Placement is deterministic: RAM pressure → free RAM → name (stable tiebreak)
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
