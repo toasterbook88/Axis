@@ -2,7 +2,6 @@ package placement
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -19,7 +18,7 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 
 	ranked := RankCandidates(candidates)
 	best := ranked[0]
-	local := isLocalNode(best)
+	local := models.IsLocalNode(best)
 
 	decision := models.PlacementDecision{
 		Node:     best.Name,
@@ -73,7 +72,7 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 	// Runner-up comparison
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
-		ruLocal := isLocalNode(runnerUp)
+		ruLocal := models.IsLocalNode(runnerUp)
 		ruScore := ComputeFitScore(runnerUp, ruLocal)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
@@ -130,21 +129,6 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 	}
 
 	return d
-}
-
-// isLocalNode checks if a node matches the machine running axis.
-func isLocalNode(n models.NodeFacts) bool {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return false
-	}
-	hostname = strings.ToLower(hostname)
-	nodeName := strings.ToLower(n.Name)
-	nodeHostname := strings.ToLower(n.Hostname)
-
-	return nodeName == hostname || nodeHostname == hostname ||
-		strings.HasPrefix(hostname, nodeName+".") ||
-		strings.HasPrefix(hostname, nodeName)
 }
 
 func fitLabel(score int) string {
