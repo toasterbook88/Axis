@@ -17,7 +17,7 @@ func main() {
 	root := &cobra.Command{
 		Use:   "axis",
 		Short: "AXIS — cluster-aware AI execution substrate",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			const logo = `
  █████╗ ██╗  ██╗██╗███████╗
 ██╔══██╗╚██╗██╔╝██║██╔════╝
@@ -32,7 +32,9 @@ func main() {
 
 			fmt.Fprint(out, logo)
 			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
-			cmd.Usage()
+			
+			chat := chatCmd()
+			return chat.RunE(chat, args)
 		},
 	}
 
