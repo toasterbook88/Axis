@@ -11,6 +11,7 @@ const (
 	ExitErrGeneric     = 1
 	ExitErrConfigLoad  = 2
 	ExitErrNoNodesFit  = 3
+	ExitErrCommandFail = 4
 )
 
 // Fatal exits the program with the given code and prints an optional error message to stderr.
