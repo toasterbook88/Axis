@@ -21,7 +21,6 @@ import (
 
 const (
 	clusterSnapshotURI = "cluster://snapshot"
-	defaultToolTimeout = 20 * time.Second
 )
 
 type commandResult struct {
@@ -196,14 +195,18 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest) (*
 }
 
 func ipAddrTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-	return toolResultJSON(runFirstAvailableCommand(withTimeout(ctx, 5*time.Second),
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return toolResultJSON(runFirstAvailableCommand(ctx,
 		[]string{"ip", "addr"},
 		[]string{"ifconfig"},
 	))
 }
 
 func tailscaleStatusTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-	return toolResultJSON(runCommand(withTimeout(ctx, 10*time.Second), "tailscale", "status", "--json"))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return toolResultJSON(runCommand(ctx, "tailscale", "status", "--json"))
 }
 
 func tailscalePingTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
@@ -211,15 +214,21 @@ func tailscalePingTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpp
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
-	return toolResultJSON(runCommand(withTimeout(ctx, 10*time.Second), "tailscale", "ping", peer))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return toolResultJSON(runCommand(ctx, "tailscale", "ping", peer))
 }
 
 func wireguardStatusTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-	return toolResultJSON(runCommand(withTimeout(ctx, 10*time.Second), "wg", "show"))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return toolResultJSON(runCommand(ctx, "wg", "show"))
 }
 
 func dockerPSTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-	return toolResultJSON(runCommand(withTimeout(ctx, 10*time.Second), "docker", "ps", "--format", "{{json .}}"))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return toolResultJSON(runCommand(ctx, "docker", "ps", "--format", "{{json .}}"))
 }
 
 func sshConnectivityTestTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
@@ -241,7 +250,10 @@ func sshConnectivityTestTool(ctx context.Context, req mcpproto.CallToolRequest) 
 	exec := transport.NewSSHExecutor(nc.Hostname, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveTimeout())
 	defer exec.Close()
 
-	out, runErr := exec.Run(withTimeout(ctx, time.Duration(nc.EffectiveTimeout()+2)*time.Second), "printf axis-ok")
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveTimeout()+2)*time.Second)
+	defer cancel()
+
+	out, runErr := exec.Run(runCtx, "printf axis-ok")
 	result := sshConnectivityResult{
 		Node:   nc.Name,
 		Host:   nc.Hostname,
@@ -261,18 +273,11 @@ func currentSnapshot(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return nil, err
 	}
 
-	toolCtx := withTimeout(ctx, 60*time.Second)
+	toolCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 	nodes := discovery.Discover(toolCtx, cfg)
 	snap := snapshot.Build(nodes)
 	return snap, nil
-}
-
-func withTimeout(ctx context.Context, d time.Duration) context.Context {
-	if _, ok := ctx.Deadline(); ok {
-		return ctx
-	}
-	child, _ := context.WithTimeout(ctx, d)
-	return child
 }
 
 func findNodeConfig(cfg *config.Config, name string) (config.NodeConfig, bool) {
