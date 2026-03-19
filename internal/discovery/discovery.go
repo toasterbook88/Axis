@@ -24,6 +24,9 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 		wg.Add(1)
 		go func(idx int, nc config.NodeConfig) {
 			defer wg.Done()
+			
+			nodeCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveTimeout())*time.Second)
+			defer cancel()
 
 			var collector facts.Collector
 			if models.IsLocalConfig(nc.Name, nc.Hostname) {
@@ -38,7 +41,7 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 				collector = facts.NewRemoteCollector(nc.Name, nc.Role, nc.Hostname, exec)
 			}
 
-			nf, err := collector.Collect(ctx)
+			nf, err := collector.Collect(nodeCtx)
 			if err != nil {
 				// Collector itself failed (should not happen, but guard)
 				nf = &models.NodeFacts{

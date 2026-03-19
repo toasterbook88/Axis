@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -19,7 +20,9 @@ import (
 // Executor abstracts command execution on a target node.
 // This is the seam where axisd-based collection will later plug in.
 type Executor interface {
+	Connect(ctx context.Context) error
 	Run(ctx context.Context, cmd string) (stdout string, err error)
+	Close() error
 }
 
 // SSHExecutor executes commands on a remote node via SSH.
@@ -29,6 +32,7 @@ type SSHExecutor struct {
 	Port       int
 	User       string
 	TimeoutSec int
+	client     *ssh.Client
 }
 
 // NewSSHExecutor creates an SSH executor for a remote node.
@@ -36,21 +40,24 @@ func NewSSHExecutor(host string, port int, user string, timeoutSec int) *SSHExec
 	return &SSHExecutor{Host: host, Port: port, User: user, TimeoutSec: timeoutSec}
 }
 
-// Run executes a command via SSH and returns stdout.
-func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
-	config, err := e.sshConfig()
-	if err != nil {
-		return "", fmt.Errorf("ssh config: %w", err)
+// Connect establishes the SSH client connection.
+func (e *SSHExecutor) Connect(ctx context.Context) error {
+	if e.client != nil {
+		return nil
 	}
 
-	addr := fmt.Sprintf("%s:%d", e.Host, e.Port)
+	config, err := e.sshConfig()
+	if err != nil {
+		return fmt.Errorf("ssh config: %w", err)
+	}
+
+	addr := net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
 	timeout := time.Duration(e.TimeoutSec) * time.Second
 
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
-		return "", fmt.Errorf("ssh dial %s: %w", addr, err)
+		return fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
-	defer conn.Close()
 
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -60,12 +67,33 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
-		return "", fmt.Errorf("ssh handshake %s: %w", addr, err)
+		conn.Close()
+		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
-	client := ssh.NewClient(sshConn, chans, reqs)
-	defer client.Close()
+	e.client = ssh.NewClient(sshConn, chans, reqs)
+	
+	return nil
+}
 
-	session, err := client.NewSession()
+// Close terminates the SSH client connection.
+func (e *SSHExecutor) Close() error {
+	if e.client != nil {
+		err := e.client.Close()
+		e.client = nil
+		return err
+	}
+	return nil
+}
+
+// Run executes a command via SSH and returns stdout.
+func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
+	if e.client == nil {
+		if err := e.Connect(ctx); err != nil {
+			return "", err
+		}
+	}
+
+	session, err := e.client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("ssh session: %w", err)
 	}
@@ -75,11 +103,22 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
-	if err := session.Run(cmd); err != nil {
-		return stdout.String(), fmt.Errorf("ssh run %q on %s: %w (stderr: %s)",
-			cmd, e.Host, err, stderr.String())
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(cmd)
+	}()
+
+	select {
+	case <-ctx.Done():
+		session.Signal(ssh.SIGKILL)
+		return "", ctx.Err()
+	case err := <-done:
+		if err != nil {
+			return stdout.String(), fmt.Errorf("ssh run %q on %s: %w (stderr: %s)",
+				cmd, e.Host, err, stderr.String())
+		}
+		return stdout.String(), nil
 	}
-	return stdout.String(), nil
 }
 
 func (e *SSHExecutor) sshConfig() (*ssh.ClientConfig, error) {

@@ -57,3 +57,5 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-001 | Claude (for Warp) | non-repo | Removed V8 alias `.zshrc:119`, 5 stale aliases, broken `/usr/local/bin/axis`. `which axis` → `~/bin/axis` 0.1.0. All resolution clean |
 | AX-003 | Claude (Antigravity) | `a91266c`, `3392267`, `56dfab0` | Inference fix, diagnostic reasoning, LLM fit scoring. 44 tests pass, live verified |
 | AX-000 | Codex/Claude | `4f82e5a`, `dad5f35`, `24567c7` | Worklog created, aligned to the roadmap, then refreshed and reseeded as the coordination surface |
+| AX-008 | Claude (Antigravity) | `45ee292` | Day 1: security+locality. `knownhosts` SSH check, `IsLocalNode` unified. 43 tests pass, `axis task place` live verified. |
+| AX-009 | Claude (Antigravity) | `9ba1a37` | Day 2-3: transport reuse. `SSHExecutor` holds persistent `*ssh.Client`. Discovery respects `EffectiveTimeout`. |
