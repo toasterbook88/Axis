@@ -45,6 +45,7 @@ func main() {
 	root.AddCommand(mcpCmd())
 	root.AddCommand(chatCmd())
 	root.AddCommand(discoverCmd())
+	root.AddCommand(contextCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(ExitErrGeneric)

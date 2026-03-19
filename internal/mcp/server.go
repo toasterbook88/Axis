@@ -15,6 +15,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
@@ -189,7 +190,8 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest) (*
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 
-	decision := placement.SelectBestNode(placement.InferRequirements(desc), snap.Nodes)
+	st, _ := state.Load()
+	decision := placement.SelectBestNode(placement.InferRequirements(desc), snap.Nodes, st)
 	return mcpproto.NewToolResultJSON(decision)
 }
 

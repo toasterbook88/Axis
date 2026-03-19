@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 // pressureRank maps pressure strings to sort-order integers.
@@ -31,14 +32,15 @@ func pressureRank(p string) int {
 //   - Status must be complete
 //   - If MinFreeRAMMB > 0, node must have resources with enough free RAM
 //   - If RequiredTool is set, node must have a tool with that name
-func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts) []models.NodeFacts {
+func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
 	for _, n := range nodes {
 		if n.Status != models.StatusComplete {
 			continue
 		}
 		if reqs.MinFreeRAMMB > 0 {
-			if n.Resources == nil || n.Resources.RAMFreeMB < reqs.MinFreeRAMMB {
+			adjustedFree := freeRAMWithState(n, st)
+			if n.Resources == nil || adjustedFree < reqs.MinFreeRAMMB {
 				continue
 			}
 		}
@@ -57,7 +59,7 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts) []
 //  1. Lowest RAM pressure (none < low < medium < high)
 //  2. Highest free RAM
 //  3. Node name ascending (stable tiebreak)
-func RankCandidates(candidates []models.NodeFacts) []models.NodeFacts {
+func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
 
@@ -66,6 +68,12 @@ func RankCandidates(candidates []models.NodeFacts) []models.NodeFacts {
 		pj := pressureOf(ranked[j])
 		if pi != pj {
 			return pressureRank(pi) < pressureRank(pj)
+		}
+
+		hi := headroom(ranked[i], st, reqs)
+		hj := headroom(ranked[j], st, reqs)
+		if hi != hj {
+			return hi > hj
 		}
 
 		ri := freeRAM(ranked[i])
@@ -112,7 +120,7 @@ func freeRAM(n models.NodeFacts) int64 {
 //   - Local node:  +10 pts (no SSH hop = lower latency)
 //
 // Max: 30+25+25+10+10 = 100
-func ComputeFitScore(n models.NodeFacts, isLocal bool) int {
+func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) int {
 	if n.Resources == nil {
 		return 0
 	}
@@ -120,7 +128,8 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool) int {
 	score := 0
 
 	// Free RAM: 1pt per 256MB, cap 30
-	ramPts := int(n.Resources.RAMFreeMB / 256)
+	adjusted := freeRAMWithState(n, st)
+	ramPts := int(adjusted / 256)
 	if ramPts > 30 {
 		ramPts = 30
 	}
@@ -157,4 +166,21 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool) int {
 		score = 100
 	}
 	return score
+}
+
+func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
+	if n.Resources == nil {
+		return 0
+	}
+	committed := int64(0)
+	if st != nil && st.Nodes != nil {
+		if ns, ok := st.Nodes[n.Name]; ok {
+			committed = ns.ReservedMB
+		}
+	}
+	return n.Resources.RAMFreeMB - committed
+}
+
+func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
+	return freeRAMWithState(n, st) - reqs.MinFreeRAMMB
 }

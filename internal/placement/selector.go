@@ -5,25 +5,26 @@ import (
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 // SelectBestNode runs the full placement pipeline: filter → rank → select.
 // Reasoning is diagnostic: on failure it explains why each node was excluded;
 // on success it explains fit score, locality, and runner-up comparison.
-func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) models.PlacementDecision {
-	candidates := FilterCandidates(reqs, nodes)
+func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) models.PlacementDecision {
+	candidates := FilterCandidates(reqs, nodes, st)
 	if len(candidates) == 0 {
-		return buildFailureDecision(reqs, nodes)
+		return buildFailureDecision(reqs, nodes, st)
 	}
 
-	ranked := RankCandidates(candidates)
+	ranked := RankCandidates(candidates, reqs, st)
 	best := ranked[0]
 	local := models.IsLocalNode(best)
 
 	decision := models.PlacementDecision{
 		Node:     best.Name,
 		OK:       true,
-		FitScore: ComputeFitScore(best, local),
+		FitScore: ComputeFitScore(best, local, st),
 		IsLocal:  local,
 	}
 
@@ -73,7 +74,7 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
 		ruLocal := models.IsLocalNode(runnerUp)
-		ruScore := ComputeFitScore(runnerUp, ruLocal)
+		ruScore := ComputeFitScore(runnerUp, ruLocal, st)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
 		decision.Reasoning = append(decision.Reasoning,
@@ -84,7 +85,7 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 }
 
 // buildFailureDecision explains why every node was excluded.
-func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts) models.PlacementDecision {
+func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) models.PlacementDecision {
 	d := models.PlacementDecision{OK: false}
 
 	if len(nodes) == 0 {
@@ -100,15 +101,19 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 				fmt.Sprintf("  %s: excluded (status: %s)", n.Name, n.Status))
 			continue
 		}
-		if reqs.MinFreeRAMMB > 0 && (n.Resources == nil || n.Resources.RAMFreeMB < reqs.MinFreeRAMMB) {
+		if reqs.MinFreeRAMMB > 0 {
 			actual := int64(0)
+			adjusted := int64(0)
 			if n.Resources != nil {
 				actual = n.Resources.RAMFreeMB
+				adjusted = freeRAMWithState(n, st)
 			}
-			d.Reasoning = append(d.Reasoning,
-				fmt.Sprintf("  %s: need %dMB free RAM, have %dMB (short %dMB)",
-					n.Name, reqs.MinFreeRAMMB, actual, reqs.MinFreeRAMMB-actual))
-			continue
+			if adjusted < reqs.MinFreeRAMMB {
+				d.Reasoning = append(d.Reasoning,
+					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB effective (base %dMB, short %dMB)",
+						n.Name, reqs.MinFreeRAMMB, adjusted, actual, reqs.MinFreeRAMMB-adjusted))
+				continue
+			}
 		}
 		if reqs.RequiredTool != "" && !hasTool(n, reqs.RequiredTool) {
 			available := make([]string, 0, len(n.Tools))
