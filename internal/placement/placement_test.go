@@ -45,7 +45,7 @@ func TestFilterExcludesUnreachable(t *testing.T) {
 		nodeUnreachable("b"),
 	}
 	reqs := models.TaskRequirements{}
-	result := FilterCandidates(reqs, nodes)
+	result := FilterCandidates(reqs, nodes, nil)
 	if len(result) != 1 || result[0].Name != "a" {
 		t.Errorf("expected [a], got %v", names(result))
 	}
@@ -57,7 +57,7 @@ func TestFilterExcludesLowRAM(t *testing.T) {
 		nodeComplete("b", 5000, "none"),
 	}
 	reqs := models.TaskRequirements{MinFreeRAMMB: 4096}
-	result := FilterCandidates(reqs, nodes)
+	result := FilterCandidates(reqs, nodes, nil)
 	if len(result) != 1 || result[0].Name != "b" {
 		t.Errorf("expected [b], got %v", names(result))
 	}
@@ -69,7 +69,7 @@ func TestFilterExcludesMissingTool(t *testing.T) {
 		nodeComplete("b", 4000, "none", "git", "go"),
 	}
 	reqs := models.TaskRequirements{RequiredTool: "git"}
-	result := FilterCandidates(reqs, nodes)
+	result := FilterCandidates(reqs, nodes, nil)
 	if len(result) != 1 || result[0].Name != "b" {
 		t.Errorf("expected [b], got %v", names(result))
 	}
@@ -81,7 +81,7 @@ func TestFilterPassesAllQualified(t *testing.T) {
 		nodeComplete("b", 6000, "none", "git"),
 	}
 	reqs := models.TaskRequirements{RequiredTool: "git", MinFreeRAMMB: 4096}
-	result := FilterCandidates(reqs, nodes)
+	result := FilterCandidates(reqs, nodes, nil)
 	if len(result) != 2 {
 		t.Errorf("expected 2 candidates, got %d", len(result))
 	}
@@ -94,7 +94,7 @@ func TestRankByPressure(t *testing.T) {
 		nodeComplete("high-node", 4000, "high"),
 		nodeComplete("none-node", 4000, "none"),
 	}
-	ranked := RankCandidates(candidates)
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	if ranked[0].Name != "none-node" {
 		t.Errorf("expected none-node first, got %s", ranked[0].Name)
 	}
@@ -105,7 +105,7 @@ func TestRankByFreeRAM(t *testing.T) {
 		nodeComplete("low-ram", 2000, "none"),
 		nodeComplete("high-ram", 6000, "none"),
 	}
-	ranked := RankCandidates(candidates)
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	if ranked[0].Name != "high-ram" {
 		t.Errorf("expected high-ram first, got %s", ranked[0].Name)
 	}
@@ -117,13 +117,13 @@ func TestRankDeterministicTiebreak(t *testing.T) {
 		nodeComplete("alpha", 4000, "none"),
 		nodeComplete("mike", 4000, "none"),
 	}
-	ranked := RankCandidates(candidates)
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	if ranked[0].Name != "alpha" || ranked[1].Name != "mike" || ranked[2].Name != "zulu" {
 		t.Errorf("expected [alpha, mike, zulu], got %v", names(ranked))
 	}
 
 	// Run again to confirm determinism
-	ranked2 := RankCandidates(candidates)
+	ranked2 := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	for i := range ranked {
 		if ranked[i].Name != ranked2[i].Name {
 			t.Fatalf("non-deterministic: run1[%d]=%s, run2[%d]=%s",
@@ -145,7 +145,7 @@ func TestSelectBestNode(t *testing.T) {
 		RequiredTool: "git",
 	}
 
-	d := SelectBestNode(reqs, nodes)
+	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK {
 		t.Fatal("expected OK=true")
 	}
@@ -172,7 +172,7 @@ func TestSelectFailure_RAMGap(t *testing.T) {
 		MinFreeRAMMB: 4096,
 	}
 
-	d := SelectBestNode(reqs, nodes)
+	d := SelectBestNode(reqs, nodes, nil)
 	if d.OK {
 		t.Fatal("expected OK=false")
 	}
@@ -204,7 +204,7 @@ func TestSelectFailure_MissingTool(t *testing.T) {
 		RequiredTool: "ollama",
 	}
 
-	d := SelectBestNode(reqs, nodes)
+	d := SelectBestNode(reqs, nodes, nil)
 	if d.OK {
 		t.Fatal("expected OK=false")
 	}
@@ -226,7 +226,7 @@ func TestSelectSuccess_RunnerUpComparison(t *testing.T) {
 	}
 	reqs := models.TaskRequirements{RequiredTool: "git"}
 
-	d := SelectBestNode(reqs, nodes)
+	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK || d.Node != "m1" {
 		t.Fatalf("expected OK=true, node=m1, got OK=%v node=%s", d.OK, d.Node)
 	}
@@ -248,7 +248,7 @@ func TestSelectSuccess_SingleCandidate(t *testing.T) {
 	}
 	reqs := models.TaskRequirements{RequiredTool: "git"}
 
-	d := SelectBestNode(reqs, nodes)
+	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK || d.Node != "solo" {
 		t.Fatalf("expected OK=true node=solo, got OK=%v node=%s", d.OK, d.Node)
 	}
@@ -267,8 +267,8 @@ func TestFitScore_GPUNodeScoresHigher(t *testing.T) {
 	withGPU := nodeComplete("gpu-node", 4000, "none")
 	withGPU.Resources.GPUs = []string{"MX250 4GB"}
 
-	scoreNoGPU := ComputeFitScore(noGPU, false)
-	scoreGPU := ComputeFitScore(withGPU, false)
+	scoreNoGPU := ComputeFitScore(noGPU, false, nil)
+	scoreGPU := ComputeFitScore(withGPU, false, nil)
 
 	if scoreGPU <= scoreNoGPU {
 		t.Errorf("GPU node (%d) should score higher than non-GPU (%d)", scoreGPU, scoreNoGPU)
@@ -281,8 +281,8 @@ func TestFitScore_GPUNodeScoresHigher(t *testing.T) {
 
 func TestFitScore_LocalBonus(t *testing.T) {
 	n := nodeComplete("test", 2000, "low")
-	remote := ComputeFitScore(n, false)
-	local := ComputeFitScore(n, true)
+	remote := ComputeFitScore(n, false, nil)
+	local := ComputeFitScore(n, true, nil)
 
 	if local-remote != 10 {
 		t.Errorf("local bonus should be 10, got %d", local-remote)
@@ -291,7 +291,7 @@ func TestFitScore_LocalBonus(t *testing.T) {
 
 func TestFitScore_NilResources(t *testing.T) {
 	n := models.NodeFacts{Name: "empty", Status: models.StatusComplete}
-	score := ComputeFitScore(n, false)
+	score := ComputeFitScore(n, false, nil)
 	if score != 0 {
 		t.Errorf("nil resources should score 0, got %d", score)
 	}
@@ -306,7 +306,7 @@ func TestSelectFailure_HeavyRAMScopeNote(t *testing.T) {
 		MinFreeRAMMB: 4096,
 	}
 
-	d := SelectBestNode(reqs, nodes)
+	d := SelectBestNode(reqs, nodes, nil)
 	if d.OK {
 		t.Fatal("expected OK=false")
 	}

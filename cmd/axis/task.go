@@ -14,6 +14,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
@@ -52,11 +53,21 @@ func taskPlaceCmd() *cobra.Command {
 			nodes := discovery.Discover(ctx, cfg)
 			snap := snapshot.Build(nodes)
 
+			st, _ := state.Load()
+
 			// Infer requirements from description
 			reqs := placement.InferRequirements(desc)
+			if st != nil && len(st.Decisions) > 0 {
+				reqs.Description += " | context: " + st.Decisions[len(st.Decisions)-1]
+			}
 
 			// Run placement
-			decision := placement.SelectBestNode(reqs, snap.Nodes)
+			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
+
+			if decision.OK && st != nil {
+				st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, desc)
+				st.Save()
+			}
 
 			if format == "json" {
 				return printOutput(decision, "json")
@@ -111,14 +122,25 @@ func taskRunCmd() *cobra.Command {
 			
 			nodes := discovery.Discover(ctx, cfg)
 			snap := snapshot.Build(nodes)
+			
+			st, _ := state.Load()
+
 			reqs := placement.InferRequirements(input)
+			if st != nil && len(st.Decisions) > 0 {
+				reqs.Description += " | context: " + st.Decisions[len(st.Decisions)-1]
+			}
 			
 			// Always bypass strict requirement for purely explicit runs if user just says "df -h"
 			if execFlag && reqs.RequiredTool == "ollama" {
 				reqs.RequiredTool = ""
 			}
 
-			decision := placement.SelectBestNode(reqs, snap.Nodes)
+			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
+
+			if decision.OK && st != nil {
+				st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, input)
+				st.Save()
+			}
 
 			fmt.Printf("Selected node: %s (fit %d/100)\n", decision.Node, decision.FitScore)
 			for _, r := range decision.Reasoning {
@@ -247,7 +269,8 @@ func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (
 
 	// Keep the context block broad: prefer a capable node even if the exact tool is absent.
 	reqs.RequiredTool = ""
-	ranked := placement.RankCandidates(placement.FilterCandidates(reqs, nodes))
+	st, _ := state.Load()
+	ranked := placement.RankCandidates(placement.FilterCandidates(reqs, nodes, st), reqs, st)
 	if len(ranked) > 0 {
 		return ranked[0], true
 	}
