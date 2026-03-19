@@ -27,24 +27,23 @@ gofmt -w .
 
 ## Scope Discipline
 
-AXIS is in **Phase 1**: CLI bootstrap and node discovery. Contributions should
-be scoped to what Phase 1 is — not to what the project might eventually become.
+AXIS is intentionally minimal. Contributions should fit within the existing
+architecture rather than extending its scope.
 
 **Do:**
-- Fix bugs in existing fact collectors, discovery, or snapshot assembly
+- Fix bugs in existing fact collectors, discovery, snapshot assembly, or placement
 - Improve error handling or robustness of existing collectors
 - Add test coverage for existing behavior
 - Improve documentation accuracy
 
 **Do not:**
-- Add Phase 2+ features (daemon, task placement, mesh networking) without a prior
-  discussion in an issue
+- Add a daemon / background coordinator without a prior discussion in an issue
+- Add mesh networking or peer discovery beyond the static seed file without discussion
 - Add heavy dependencies without strong justification — the project intentionally
   keeps its dependency surface small (currently: `cobra`, `golang.org/x/crypto`,
   `gopkg.in/yaml.v3`)
 - Overfit to a specific private cluster topology (e.g., hardcoded interface names,
   private hostnames, or vendor-specific tool names that are not broadly installed)
-- Add features or behaviors not grounded in the existing architecture
 
 ## Accuracy Expectations
 
