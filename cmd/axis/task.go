@@ -85,6 +85,7 @@ func taskPlaceCmd() *cobra.Command {
 
 // inferRequirements derives TaskRequirements from a task description string.
 // Simple keyword matching — no ML, no parsing.
+// Phase-level matches to avoid false positives (e.g. "large codebase" ≠ heavy RAM).
 func inferRequirements(desc string) models.TaskRequirements {
 	reqs := models.TaskRequirements{
 		Description: desc,
@@ -92,16 +93,23 @@ func inferRequirements(desc string) models.TaskRequirements {
 
 	lower := strings.ToLower(desc)
 
-	// Tool inference
+	// Tool inference — order matters (first match wins)
 	switch {
-	case containsAny(lower, "repo", "analyze", "code"):
+	case containsAny(lower, "inference", "ollama", "llm"):
+		reqs.RequiredTool = "ollama"
+	case containsAny(lower, "repo", "analyze", "code", "clone", "commit"):
 		reqs.RequiredTool = "git"
-	case containsAny(lower, "build"):
+	case containsAny(lower, "build", "compile"):
+		// Fallback chain resolved at placement time — request "go" as primary
 		reqs.RequiredTool = "go"
+	case containsAny(lower, "docker", "container"):
+		reqs.RequiredTool = "docker"
 	}
 
-	// RAM inference
-	if containsAny(lower, "model", "large", "heavy") {
+	// RAM inference — phrase-level to reduce false positives
+	// "large codebase" should NOT trigger heavy RAM; "large model" SHOULD
+	if containsAny(lower, "large model", "heavy", "70b", "13b", "inference") ||
+		(strings.Contains(lower, "model") && containsAny(lower, "run", "load", "inference", "serve")) {
 		reqs.MinFreeRAMMB = 4096
 	}
 
