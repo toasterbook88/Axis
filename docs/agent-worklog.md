@@ -1,52 +1,50 @@
-# AXIS Agent Worklog
+# AXIS Agent Work Log
 
-> Single source of truth for multi-agent coordination on the AXIS project.
+This file is the canonical coordination surface for active AXIS work.
+
+## Coordination Contract
+
+- Live repo and runtime state beat docs, summaries, and prior claims.
+- No task is marked `done` without proof: command output plus a commit.
+- Each task must declare owner, scope, dependencies, proof required, and status.
+- File ownership is exclusive unless an explicit handoff is recorded below.
+- Prefer small, mergeable changes with clear verification.
 
 ## Repo State
 
-- **Branch:** main
-- **HEAD:** 56dfab0
-- **Last updated:** 2026-03-19T14:40 EDT
+- Branch: `main`
+- HEAD: `56dfab0`
+- Last updated: `2026-03-19 14:40:03 EDT`
 
 ## Active Tasks
 
-| ID | Title | Owner | Status | Scope | Files | Proof Required |
-|:---|:------|:------|:-------|:------|:------|:---------------|
-| P0-1 | Seed coordination worklog | Claude | complete | Create `docs/agent-worklog.md` | `docs/agent-worklog.md` | Commit + push |
-| P1-1 | Runtime hygiene verified | Warp | pending | Confirm bare `axis` resolves correctly, install path clean | — | `which axis` + `axis version` output |
-| P2-1 | LLM fit scoring | Claude | complete | Fit score 0-100, local detection, improved reasoning | `ranker.go`, `selector.go`, `task.go`, `types.go`, `placement_test.go` | 16/16 tests + live queries |
-| P3-1 | Initial codebase audit | Gemini CLI | pending | Full codebase map, source-to-doc drift, gap analysis | — | Written audit report |
-| P4-1 | Docs alignment | — | pending | Update README + white paper to reflect Phase 2 | `README.md`, `docs/white_paper_v1.md` | Diff showing new commands documented |
+| ID | Title | Owner | Status | Scope | Deps | Files | Proof |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| AX-000 | Seed canonical work log | Codex | in_progress | Create and maintain the shared coordination file | None | `docs/agent-worklog.md` | Commit containing the seeded work log |
+| AX-001 | Runtime hygiene baseline | Warp | pending | Verify bare `axis` resolution, binary path, install flow | AX-000 | Runtime environment, install path | `which axis` + `axis version` transcript |
+| AX-002 | Initial repo audit | Gemini CLI | pending | Map source, detect doc drift, identify gaps, propose priorities | AX-000 | `README.md`, `docs/`, source files | Audit summary with file references |
+| AX-003 | Phase 2 placement packet | Claude (Antigravity) | blocked | Improve inference, reasoning, fit scoring, tests, runtime checks | AX-002 | `cmd/axis/`, `internal/placement/` | Passing tests + runtime output + commit |
 
 ## File Ownership
 
 | File/Path | Owner | Notes |
-|:----------|:------|:------|
-| `cmd/axis/*.go` | Claude | CLI commands and inference logic |
-| `internal/placement/*.go` | Claude | Placement engine + tests |
-| `internal/models/types.go` | Claude | Shared data types |
-| `internal/facts/*.go` | Claude | Fact collectors (touch with care) |
-| `internal/config/config.go` | Claude | Config loader + tests |
-| `internal/snapshot/snapshot.go` | Claude | Snapshot builder + tests |
-| `internal/transport/ssh.go` | Claude | SSH executor (stable, avoid churn) |
-| `internal/discovery/discovery.go` | Claude | Discovery fan-out (stable) |
-| `docs/agent-worklog.md` | Codex | Coordination surface |
-| `docs/*.md` (other) | Gemini CLI | Architecture docs |
-| `README.md` | Gemini CLI | Project README |
-| `nodes.example.yaml` | — | Example config |
+| --- | --- | --- |
+| `docs/agent-worklog.md` | Codex | Coordination surface; update for every handoff and status change |
+| `cmd/axis/` | Claude (Antigravity) | CLI behavior changes during Phase 2 unless handed off |
+| `internal/placement/` | Claude (Antigravity) | Placement engine and fit-score logic |
+| `README.md` | Gemini CLI | Audit findings and drift proposals first |
+| `docs/` (except work log) | Gemini CLI | Architecture review, drift analysis, roadmap proposals |
+| Runtime environment | Warp | Binary path, install flow, shell resolution |
 
 ## Handoffs
 
-_None active._
+- Warp -> Codex: report `axis` binary resolution, install target, PATH behavior, and hygiene fixes.
+- Gemini CLI -> Codex and Claude: deliver audit, source-to-doc drift, and top priorities.
+- Codex -> Claude (Antigravity): open Phase 2 packet once audit findings are in.
+- Any owner -> Codex: provide command output, commit hash, and files before marking `done`.
 
 ## Completed
 
 | ID | Owner | Commit | Proof |
-|:---|:------|:-------|:------|
-| — | Claude | `632ebde` | Phase 1 scaffold: go module, models, config, transport, facts, discovery, snapshot |
-| — | Claude | `07524b2` | CLI entry point: axis version, facts, status |
-| — | Claude | `bd9612f` | Phase 2: deterministic task placement engine |
-| — | Claude | `25653e0` | Test suites: snapshot 100%, config 96.3% |
-| — | Claude | `a91266c` | Fix: keyword inference false positives |
-| — | Claude | `3392267` | Fix: diagnostic placement reasoning |
-| — | Claude | `56dfab0` | Feat: LLM fit scoring, local-node detection, improved reasoning |
+| --- | --- | --- | --- |
+| None yet | - | - | Coordination layer seeded locally; awaiting commit-level proof |
