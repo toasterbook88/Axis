@@ -17,10 +17,31 @@ import (
 // Remote nodes use SSH-based RemoteCollector.
 // Never fails hard — unreachable nodes return StatusUnreachable.
 func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
-	results := make([]models.NodeFacts, len(cfg.Nodes))
+	discovered := make(map[string]config.NodeConfig)
+	var mu sync.Mutex
+
+	// Prefill with static config
+	for _, n := range cfg.Nodes {
+		discovered[n.Name] = n
+	}
+
+	if cfg.Discovery != nil && cfg.Discovery.Enabled {
+		startUDP(ctx, cfg, discovered, &mu)
+		// Wait 8 seconds to accumulate beacons before proceeding to SSH collection.
+		time.Sleep(8 * time.Second)
+	}
+
+	mu.Lock()
+	var finalNodes []config.NodeConfig
+	for _, nc := range discovered {
+		finalNodes = append(finalNodes, nc)
+	}
+	mu.Unlock()
+
+	results := make([]models.NodeFacts, len(finalNodes))
 
 	var wg sync.WaitGroup
-	for i, node := range cfg.Nodes {
+	for i, node := range finalNodes {
 		wg.Add(1)
 		go func(idx int, nc config.NodeConfig) {
 			defer wg.Done()

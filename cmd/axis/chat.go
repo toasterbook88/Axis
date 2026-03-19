@@ -63,7 +63,7 @@ func chatCmd() *cobra.Command {
 				if err := engine.GenerateStream(ctx, prompt, w); err != nil {
 					fmt.Printf("\n[Error: %v]\n", err)
 				}
-				fmt.Println("\n")
+				fmt.Println()
 				
 				if history != "" {
 					history = history + "\nUser: " + query + "\nAssistant: " + buf.String()
@@ -75,6 +75,6 @@ func chatCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&model, "model", "m", "llama3", "Ollama model to use for inference")
+	cmd.Flags().StringVarP(&model, "model", "m", "qwen2.5-coder:1.5b", "Ollama model to use for inference")
 	return cmd
 }

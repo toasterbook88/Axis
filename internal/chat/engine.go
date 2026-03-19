@@ -25,11 +25,10 @@ type HybridEngine struct {
 	ollama *OllamaClient
 }
 
-// GenerateStream attempts generation via local Ollama daemon, and handles fallback gracefully
 func (e *HybridEngine) GenerateStream(ctx context.Context, prompt string, w io.Writer) error {
 	if err := e.ollama.GenerateStream(ctx, prompt, w); err != nil {
-		// Fallback to basic template if Ollama is unavailable
-		fallback := fmt.Sprintf("\n[AXIS Fallback] The local Ollama daemon at http://localhost:11434 is currently unreachable or model %q is not pulled.\n\nError: %v\n\nPlease ensure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull %s`) to use the full AI chat experience.\n", e.model, err, e.model)
+		// Fallback to basic template if Ollama is unconditionally broken
+		fallback := fmt.Sprintf("\n[AXIS Fallback] The auto-start sequence for Ollama failed.\nError: %v\n\nEnsure 'ollama' is installed on this node, or fall back to the raw context block generator (`axis task context`).\n", err)
 		fmt.Fprint(w, fallback)
 	}
 	return nil
