@@ -40,6 +40,7 @@ func main() {
 	root.AddCommand(factsCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(taskCmd())
+	root.AddCommand(mcpCmd())
 	root.AddCommand(chatCmd())
 
 	if err := root.Execute(); err != nil {
