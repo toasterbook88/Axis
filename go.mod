@@ -3,6 +3,7 @@ module github.com/toasterbook88/axis
 go 1.26.1
 
 require (
+	al.essio.dev/pkg/shellescape v1.6.0
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.49.0
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	al.essio.dev/pkg/shellescape v1.6.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

@@ -70,6 +70,20 @@ type ToolInfo struct {
 	Class   ToolClass `json:"class" yaml:"class"`
 }
 
+// OllamaInfo is collected in addition to the normal ToolInfo for "ollama".
+// This is what makes discovery actually useful for placement and task run.
+type OllamaInfo struct {
+	Installed   bool     `json:"installed" yaml:"installed"`
+	Path        string   `json:"path,omitempty" yaml:"path,omitempty"`
+	Version     string   `json:"version,omitempty" yaml:"version,omitempty"`
+	Running     bool     `json:"running" yaml:"running"`
+	Listening   bool     `json:"listening" yaml:"listening"`
+	Port        int      `json:"port,omitempty" yaml:"port,omitempty"`
+	Models      []string `json:"models,omitempty" yaml:"models,omitempty"`
+	GPUOffload  string   `json:"gpu_offload,omitempty" yaml:"gpu_offload,omitempty"`
+	Error       string   `json:"error,omitempty" yaml:"error,omitempty"`
+}
+
 // --- Node Result ---
 
 // NodeFacts holds combined observed and assigned state for a node.
@@ -88,6 +102,7 @@ type NodeFacts struct {
 	Resources *Resources       `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Addresses []NetworkAddress `json:"addresses,omitempty" yaml:"addresses,omitempty"`
 	Tools     []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama    *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
 
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`

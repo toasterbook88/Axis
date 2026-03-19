@@ -36,7 +36,9 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 	var out []models.NodeFacts
 	for _, n := range nodes {
 		if n.Status != models.StatusComplete {
-			continue
+			if reqs.RequiredTool != "ollama" || !isOllamaBootstrapPossible(n) {
+				continue
+			}
 		}
 		if reqs.MinFreeRAMMB > 0 {
 			adjustedFree := freeRAMWithState(n, st)
@@ -44,7 +46,10 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 				continue
 			}
 		}
-		if reqs.RequiredTool != "" {
+		if reqs.RequiredTool == "ollama" && !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
+			continue
+		}
+		if reqs.RequiredTool != "" && reqs.RequiredTool != "ollama" {
 			if !hasTool(n, reqs.RequiredTool) {
 				continue
 			}
@@ -183,4 +188,12 @@ func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
 
 func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
 	return freeRAMWithState(n, st) - reqs.MinFreeRAMMB
+}
+
+func ollamaIsReady(n models.NodeFacts) bool {
+	return n.Ollama != nil && n.Ollama.Running
+}
+
+func isOllamaBootstrapPossible(n models.NodeFacts) bool {
+	return n.Ollama != nil && n.Ollama.Installed
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 // --- Test Helpers ---
@@ -321,6 +322,50 @@ func TestSelectFailure_HeavyRAMScopeNote(t *testing.T) {
 	}
 }
 
+func TestReservedRAMAffectsSelection(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("alpha", 5000, "none", "git"),
+		nodeComplete("beta", 4200, "none", "git"),
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2000},
+		},
+	}
+	reqs := models.TaskRequirements{RequiredTool: "git", MinFreeRAMMB: 3000}
+
+	d := SelectBestNode(reqs, nodes, st)
+	if !d.OK || d.Node != "beta" {
+		t.Fatalf("expected OK=true node=beta, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
+	}
+}
+
+func TestReservedRAMAppearsInFailureReasoning(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("alpha", 5000, "none", "git"),
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2500},
+		},
+	}
+	reqs := models.TaskRequirements{RequiredTool: "git", MinFreeRAMMB: 3000}
+
+	d := SelectBestNode(reqs, nodes, st)
+	if d.OK {
+		t.Fatal("expected OK=false")
+	}
+	foundEffective := false
+	for _, r := range d.Reasoning {
+		if contains(r, "effective") && contains(r, "base 5000MB") {
+			foundEffective = true
+		}
+	}
+	if !foundEffective {
+		t.Errorf("expected effective RAM reasoning, got: %v", d.Reasoning)
+	}
+}
+
 // --- Helpers ---
 
 func contains(s, sub string) bool {
@@ -346,9 +391,9 @@ func names(nodes []models.NodeFacts) []string {
 
 func TestInferRequirements(t *testing.T) {
 	tests := []struct {
-		desc      string
-		wantTool  string
-		wantRAM   int64
+		desc     string
+		wantTool string
+		wantRAM  int64
 	}{
 		{"Run a 70b inference model", "ollama", 4096},
 		{"clone this repo and analyze it", "git", 0},
@@ -356,6 +401,7 @@ func TestInferRequirements(t *testing.T) {
 		{"spin up a docker container", "docker", 0},
 		{"just a simple task", "", 0},
 		{"deploy using gpu", "ollama", 0},
+		{"run a small local model with ollama inference", "ollama", 1536},
 	}
 	for _, tt := range tests {
 		got := InferRequirements(tt.desc)

@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -89,6 +90,17 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 
 	// Tools
 	facts.Tools = c.remoteTools(ctx)
+
+	ollamaInfo := c.discoverOllamaRobust(ctx)
+	if ollamaInfo.Installed {
+		facts.Ollama = &ollamaInfo
+		facts.Tools = append(facts.Tools, models.ToolInfo{
+			Name:    "ollama",
+			Path:    ollamaInfo.Path,
+			Version: ollamaInfo.Version,
+			Class:   models.ToolClassAICLI,
+		})
+	}
 
 	if partial {
 		facts.Status = models.StatusPartial
@@ -185,7 +197,7 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 	var addrs []models.NetworkAddress
 	// Fallback script that tries `ip` first, then `ifconfig`
 	cmd := `if command -v ip >/dev/null 2>&1; then ip addr show scope global | awk '/inet/ {print $2}' | cut -d/ -f1; else ifconfig | awk '/inet / && !/127.0.0.1/ {print $2}; /inet6 / && !/::1/ && !/fe80/ {print $2}' | cut -d% -f1 | cut -d/ -f1; fi`
-	
+
 	out, err := c.Exec.Run(ctx, cmd)
 	if err != nil {
 		return addrs
@@ -200,7 +212,7 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 		if ip == nil {
 			continue
 		}
-		
+
 		kind := "ipv4"
 		if ip.To4() == nil {
 			kind = "ipv6"
@@ -241,4 +253,22 @@ func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
 		tools = append(tools, ti)
 	}
 	return tools
+}
+
+// discoverOllamaRobust does ONE SSH command that gathers everything robustly.
+func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) models.OllamaInfo {
+	info := models.OllamaInfo{Installed: false}
+
+	out, err := c.Exec.Run(ctx, OllamaDiscoveryScript)
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+
+	// parse the JSON blob
+	var parsed models.OllamaInfo
+	if json.Unmarshal([]byte(out), &parsed) == nil {
+		return parsed
+	}
+	return info
 }

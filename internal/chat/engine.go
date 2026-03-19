@@ -27,8 +27,8 @@ type HybridEngine struct {
 
 func (e *HybridEngine) GenerateStream(ctx context.Context, prompt string, w io.Writer) error {
 	if err := e.ollama.GenerateStream(ctx, prompt, w); err != nil {
-		// Fallback to basic template if Ollama is unconditionally broken
-		fallback := fmt.Sprintf("\n[AXIS Fallback] The auto-start sequence for Ollama failed.\nError: %v\n\nEnsure 'ollama' is installed on this node, or fall back to the raw context block generator (`axis task context`).\n", err)
+		// Fallback to basic template if Ollama is unavailable or the model is missing.
+		fallback := fmt.Sprintf("\n[AXIS Fallback] Local Ollama is not ready for this request.\nError: %v\n\nEnsure 'ollama' is installed, the daemon is running, and the requested model exists locally. You can also fall back to `axis task context`.\n", err)
 		fmt.Fprint(w, fallback)
 	}
 	return nil

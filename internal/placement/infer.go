@@ -28,10 +28,11 @@ func InferRequirements(desc string) models.TaskRequirements {
 		reqs.RequiredTool = "docker"
 	}
 
-	// RAM inference — "model" in this domain always means ML model
-	// "large codebase" should NOT trigger; "model", "70b", "heavy" SHOULD
-	if containsAny(lower, "model", "heavy", "70b", "13b", "7b", "inference") {
+	// RAM inference — reserve the heavy threshold for explicitly large models.
+	if containsAny(lower, "70b", "large model", "13b+", "inference server") {
 		reqs.MinFreeRAMMB = 4096
+	} else if containsAny(lower, "model", "ollama", "small local") {
+		reqs.MinFreeRAMMB = 1536
 	}
 
 	return reqs
