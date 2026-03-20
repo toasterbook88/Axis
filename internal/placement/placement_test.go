@@ -346,9 +346,9 @@ func names(nodes []models.NodeFacts) []string {
 
 func TestInferRequirements(t *testing.T) {
 	tests := []struct {
-		desc      string
-		wantTool  string
-		wantRAM   int64
+		desc     string
+		wantTool string
+		wantRAM  int64
 	}{
 		{"Run a 70b inference model", "ollama", 4096},
 		{"clone this repo and analyze it", "git", 0},

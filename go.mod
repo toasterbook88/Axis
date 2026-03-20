@@ -1,6 +1,6 @@
 module github.com/toasterbook88/axis
 
-go 1.26.1
+go 1.24
 
 require (
 	github.com/mark3labs/mcp-go v0.45.0

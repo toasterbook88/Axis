@@ -52,7 +52,7 @@ Pages inactive:                          3000.
 	if got := parseDarwinFreeRAM(vmstatAmd64); got != expectedAmd64 {
 		t.Errorf("parseDarwinFreeRAM() AMD64 = %v, want %v", got, expectedAmd64)
 	}
-	
+
 	// Default fallback if page size is missing
 	vmstatMissing := `Pages free:                              1000.
 Pages inactive:                          3000.

@@ -72,7 +72,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
 	e.client = ssh.NewClient(sshConn, chans, reqs)
-	
+
 	return nil
 }
 

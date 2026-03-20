@@ -17,10 +17,10 @@ func TestOllamaClient_GenerateStream(t *testing.T) {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		
+
 		// Simulate a streaming JSON response
 		w.Write([]byte(`{"model":"llama3","response":"Hello","done":false}` + "\n"))
 		w.Write([]byte(`{"model":"llama3","response":" World!","done":true}` + "\n"))
@@ -28,13 +28,13 @@ func TestOllamaClient_GenerateStream(t *testing.T) {
 	defer server.Close()
 
 	client := NewOllamaClient(server.URL, "llama3")
-	
+
 	var buf bytes.Buffer
 	err := client.GenerateStream(context.Background(), "test prompt", &buf)
 	if err != nil {
 		t.Fatalf("GenerateStream returned error: %v", err)
 	}
-	
+
 	if got := buf.String(); got != "Hello World!" {
 		t.Errorf("expected 'Hello World!', got %q", got)
 	}
@@ -47,7 +47,7 @@ func TestOllamaClient_GenerateStream_ErrorStatus(t *testing.T) {
 	defer server.Close()
 
 	client := NewOllamaClient(server.URL, "llama3")
-	
+
 	var buf bytes.Buffer
 	err := client.GenerateStream(context.Background(), "test prompt", &buf)
 	if err == nil {
@@ -70,13 +70,13 @@ func TestHybridEngine_GenerateStream_Fallback(t *testing.T) {
 		model:  "llama3",
 		ollama: client,
 	}
-	
+
 	var buf bytes.Buffer
 	err := engine.GenerateStream(context.Background(), "test prompt", &buf)
 	if err != nil {
 		t.Fatalf("GenerateStream returned unexpected error: %v", err)
 	}
-	
+
 	got := buf.String()
 	if !strings.Contains(got, "[AXIS Fallback]") {
 		t.Errorf("expected fallback message, got %q", got)

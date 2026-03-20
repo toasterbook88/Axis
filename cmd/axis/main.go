@@ -32,7 +32,7 @@ func main() {
 
 			fmt.Fprint(out, logo)
 			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
-			
+
 			chat := chatCmd()
 			return chat.RunE(chat, args)
 		},

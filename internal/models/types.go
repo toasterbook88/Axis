@@ -108,7 +108,7 @@ type ClusterSummary struct {
 // Warning represents a specific issue detected during snapshot assembly.
 type Warning struct {
 	Node    string `json:"node" yaml:"node"`
-	Kind    string `json:"kind" yaml:"kind"`       // unreachable, partial, ram_pressure, error
+	Kind    string `json:"kind" yaml:"kind"` // unreachable, partial, ram_pressure, error
 	Message string `json:"message" yaml:"message"`
 }
 

@@ -24,7 +24,7 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 		wg.Add(1)
 		go func(idx int, nc config.NodeConfig) {
 			defer wg.Done()
-			
+
 			nodeCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveTimeout())*time.Second)
 			defer cancel()
 
@@ -59,4 +59,3 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 	wg.Wait()
 	return results
 }
-

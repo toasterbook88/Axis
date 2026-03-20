@@ -29,156 +29,160 @@ func taskCmd() *cobra.Command {
 }
 
 func taskPlaceCmd() *cobra.Command {
-	var format string
-
 	cmd := &cobra.Command{
 		Use:   "place [description]",
 		Short: "Select the best node to run a task (advisory only)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			desc := args[0]
-
-			// Load config → discover → snapshot (reuse Phase 1 flow)
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				return err
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-
-			// Infer requirements from description
-			reqs := placement.InferRequirements(desc)
-
-			// Run placement
-			decision := placement.SelectBestNode(reqs, snap.Nodes)
-
-			if format == "json" {
-				return printOutput(decision, "json")
-			}
-
-			// Human-readable output
-			if !decision.OK {
-				fmt.Println("No suitable node found.")
-				for _, r := range decision.Reasoning {
-					fmt.Printf("  - %s\n", r)
-				}
-				os.Exit(ExitErrNoNodesFit)
-			}
-
-			locality := "remote"
-			if decision.IsLocal {
-				locality = "local"
-			}
-			fmt.Printf("Selected node: %s (%s, fit %d/100)\n", decision.Node, locality, decision.FitScore)
-			if decision.Tool != "" {
-				fmt.Printf("Tool: %s\n", decision.Tool)
-			}
-			fmt.Println("Reason:")
-			for _, r := range decision.Reasoning {
-				fmt.Printf("  - %s\n", r)
-			}
-			return nil
-		},
+		RunE:  runTaskPlace,
 	}
 
-	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
+	cmd.Flags().String("format", "", "Output format: json")
 	return cmd
 }
 
+func runTaskPlace(cmd *cobra.Command, args []string) error {
+	format, _ := cmd.Flags().GetString("format")
+	desc := args[0]
+
+	// Load config → discover → snapshot (reuse Phase 1 flow)
+	cfgPath := config.DefaultConfigPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	nodes := discovery.Discover(ctx, cfg)
+	snap := snapshot.Build(nodes)
+
+	// Infer requirements from description
+	reqs := placement.InferRequirements(desc)
+
+	// Run placement
+	decision := placement.SelectBestNode(reqs, snap.Nodes)
+
+	if format == "json" {
+		return printOutput(decision, "json")
+	}
+
+	// Human-readable output
+	if !decision.OK {
+		fmt.Println("No suitable node found.")
+		for _, r := range decision.Reasoning {
+			fmt.Printf("  - %s\n", r)
+		}
+		os.Exit(ExitErrNoNodesFit)
+	}
+
+	locality := "remote"
+	if decision.IsLocal {
+		locality = "local"
+	}
+	fmt.Printf("Selected node: %s (%s, fit %d/100)\n", decision.Node, locality, decision.FitScore)
+	if decision.Tool != "" {
+		fmt.Printf("Tool: %s\n", decision.Tool)
+	}
+	fmt.Println("Reason:")
+	for _, r := range decision.Reasoning {
+		fmt.Printf("  - %s\n", r)
+	}
+	return nil
+}
+
 func taskRunCmd() *cobra.Command {
-	var execFlag, scriptFlag bool
 	cmd := &cobra.Command{
 		Use:   "run [description-or-command]",
 		Short: "Run task on best node (explicit only — advisory placement first)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			input := args[0]
-
-			// 1. placement (reuse existing)
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-			reqs := placement.InferRequirements(input)
-			
-			// Always bypass strict requirement for purely explicit runs if user just says "df -h"
-			if execFlag && reqs.RequiredTool == "ollama" {
-				reqs.RequiredTool = ""
-			}
-
-			decision := placement.SelectBestNode(reqs, snap.Nodes)
-
-			fmt.Printf("Selected node: %s (fit %d/100)\n", decision.Node, decision.FitScore)
-			for _, r := range decision.Reasoning {
-				fmt.Printf("  - %s\n", r)
-			}
-
-			if !decision.OK {
-				Fatal(ExitErrNoNodesFit, "no suitable node found")
-			}
-
-			// 2. explicit command only
-			commandToRun := input
-			if scriptFlag {
-				// future multi-line support
-			}
-			if !execFlag && !scriptFlag {
-				return fmt.Errorf("use --exec \"command\" or --script (safety gate enforces conscious execution)")
-			}
-
-			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", decision.Node, commandToRun)
-
-			// 3. execute with stream
-			// Match the node explicitly
-			var targetNode models.NodeFacts
-			for _, n := range snap.Nodes {
-				if n.Name == decision.Node {
-					targetNode = n
-					break
-				}
-			}
-
-			if models.IsLocalNode(targetNode) {
-				c := exec.CommandContext(ctx, "bash", "-c", commandToRun)
-				c.Stdout = os.Stdout
-				c.Stderr = os.Stderr
-				return c.Run()
-			} else {
-				// Find config for SSH transport
-				var targetConfig config.NodeConfig
-				for _, nc := range cfg.Nodes {
-					if nc.Name == decision.Node {
-						targetConfig = nc
-						break
-					}
-				}
-				
-				executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.SSHPort, targetConfig.SSHUser, targetConfig.TimeoutSec)
-				defer executor.Close()
-				
-				quotedCmd := "bash -c " + shellescape.Quote(commandToRun)
-				if err := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr); err != nil {
-					return fmt.Errorf("remote execution failed: %w", err)
-				}
-			}
-			return nil
-		},
+		RunE:  runTaskRun,
 	}
-	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
-	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
+	cmd.Flags().Bool("exec", false, "run raw command (required for safety)")
+	cmd.Flags().Bool("script", false, "run multi-line script")
 	return cmd
+}
+
+func runTaskRun(cmd *cobra.Command, args []string) error {
+	execFlag, _ := cmd.Flags().GetBool("exec")
+	scriptFlag, _ := cmd.Flags().GetBool("script")
+	input := args[0]
+
+	// 1. placement (reuse existing)
+	cfgPath := config.DefaultConfigPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	nodes := discovery.Discover(ctx, cfg)
+	snap := snapshot.Build(nodes)
+	reqs := placement.InferRequirements(input)
+
+	// Always bypass strict requirement for purely explicit runs if user just says "df -h"
+	if execFlag && reqs.RequiredTool == "ollama" {
+		reqs.RequiredTool = ""
+	}
+
+	decision := placement.SelectBestNode(reqs, snap.Nodes)
+
+	fmt.Printf("Selected node: %s (fit %d/100)\n", decision.Node, decision.FitScore)
+	for _, r := range decision.Reasoning {
+		fmt.Printf("  - %s\n", r)
+	}
+
+	if !decision.OK {
+		Fatal(ExitErrNoNodesFit, "no suitable node found")
+	}
+
+	// 2. explicit command only
+	commandToRun := input
+	if scriptFlag {
+		// future multi-line support
+	}
+	if !execFlag && !scriptFlag {
+		return fmt.Errorf("use --exec \"command\" or --script (safety gate enforces conscious execution)")
+	}
+
+	fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", decision.Node, commandToRun)
+
+	// 3. execute with stream
+	// Match the node explicitly
+	var targetNode models.NodeFacts
+	for _, n := range snap.Nodes {
+		if n.Name == decision.Node {
+			targetNode = n
+			break
+		}
+	}
+
+	if models.IsLocalNode(targetNode) {
+		c := exec.CommandContext(ctx, "bash", "-c", commandToRun)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		return c.Run()
+	} else {
+		// Find config for SSH transport
+		var targetConfig config.NodeConfig
+		for _, nc := range cfg.Nodes {
+			if nc.Name == decision.Node {
+				targetConfig = nc
+				break
+			}
+		}
+
+		executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.SSHPort, targetConfig.SSHUser, targetConfig.TimeoutSec)
+		defer executor.Close()
+
+		quotedCmd := "bash -c " + shellescape.Quote(commandToRun)
+		if err := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr); err != nil {
+			return fmt.Errorf("remote execution failed: %w", err)
+		}
+	}
+	return nil
 }
 
 // === NEW: axis task context <description> — zero-risk token saver ===
@@ -187,24 +191,26 @@ func taskContextCmd() *cobra.Command {
 		Use:   "context [description]",
 		Short: "Emit 200-token context block for Gemini/Codex/Copilot/OpenCode",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			desc := args[0]
-
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			snap := snapshot.Build(discovery.Discover(ctx, cfg))
-			reqs := placement.InferRequirements(desc)
-			printContextBlock(snap, reqs, desc)
-			return nil
-		},
+		RunE:  runTaskContext,
 	}
 	return cmd
+}
+
+func runTaskContext(cmd *cobra.Command, args []string) error {
+	desc := args[0]
+
+	cfgPath := config.DefaultConfigPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	snap := snapshot.Build(discovery.Discover(ctx, cfg))
+	reqs := placement.InferRequirements(desc)
+	printContextBlock(snap, reqs, desc)
+	return nil
 }
 
 func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task string) {

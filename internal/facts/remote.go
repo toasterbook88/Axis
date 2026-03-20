@@ -185,7 +185,7 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 	var addrs []models.NetworkAddress
 	// Fallback script that tries `ip` first, then `ifconfig`
 	cmd := `if command -v ip >/dev/null 2>&1; then ip addr show scope global | awk '/inet/ {print $2}' | cut -d/ -f1; else ifconfig | awk '/inet / && !/127.0.0.1/ {print $2}; /inet6 / && !/::1/ && !/fe80/ {print $2}' | cut -d% -f1 | cut -d/ -f1; fi`
-	
+
 	out, err := c.Exec.Run(ctx, cmd)
 	if err != nil {
 		return addrs
@@ -200,7 +200,7 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 		if ip == nil {
 			continue
 		}
-		
+
 		kind := "ipv4"
 		if ip.To4() == nil {
 			kind = "ipv6"

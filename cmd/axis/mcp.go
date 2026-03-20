@@ -17,19 +17,20 @@ func mcpCmd() *cobra.Command {
 }
 
 func mcpServeCmd() *cobra.Command {
-	var transport string
-
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start an ephemeral MCP server",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if transport != "stdio" {
-				return fmt.Errorf("unsupported transport %q: only stdio is implemented", transport)
-			}
-			return axismcp.ServeStdio()
-		},
+		RunE:  runMCPServe,
 	}
 
-	cmd.Flags().StringVar(&transport, "transport", "stdio", "MCP transport: stdio")
+	cmd.Flags().String("transport", "stdio", "MCP transport: stdio")
 	return cmd
+}
+
+func runMCPServe(cmd *cobra.Command, args []string) error {
+	transport, _ := cmd.Flags().GetString("transport")
+	if transport != "stdio" {
+		return fmt.Errorf("unsupported transport %q: only stdio is implemented", transport)
+	}
+	return axismcp.ServeStdio()
 }

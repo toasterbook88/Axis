@@ -13,33 +13,34 @@ import (
 )
 
 func statusCmd() *cobra.Command {
-	var format string
-
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Collect cluster snapshot from all configured nodes",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				return err
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-
-			if err := printOutput(snap, format); err != nil {
-				fmt.Fprintf(os.Stderr, "output error: %v\n", err)
-				return err
-			}
-			return nil
-		},
+		RunE:  runStatus,
 	}
 
-	cmd.Flags().StringVar(&format, "format", "json", "Output format: json or yaml")
+	cmd.Flags().String("format", "json", "Output format: json or yaml")
 	return cmd
+}
+
+func runStatus(cmd *cobra.Command, args []string) error {
+	format, _ := cmd.Flags().GetString("format")
+	cfgPath := config.DefaultConfigPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	nodes := discovery.Discover(ctx, cfg)
+	snap := snapshot.Build(nodes)
+
+	if err := printOutput(snap, format); err != nil {
+		fmt.Fprintf(os.Stderr, "output error: %v\n", err)
+		return err
+	}
+	return nil
 }

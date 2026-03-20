@@ -43,7 +43,7 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 		Prompt: prompt,
 		Stream: true,
 	}
-	
+
 	bodyData, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
@@ -78,7 +78,7 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 		}
 
 		fmt.Fprint(w, chunk.Response)
-		
+
 		if chunk.Done {
 			break
 		}
