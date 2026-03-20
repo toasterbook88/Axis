@@ -24,13 +24,22 @@ func chatCmd() *cobra.Command {
 		Long:  "Chat with the AXIS cluster intelligence using a local LLM or fallback interface.",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			engine := chat.NewEngine(model)
+			currentModel := resolveChatModel(model)
 
 			if len(args) > 0 {
+				if handled, nextModel := handleChatMetaCommand(strings.Join(args, " "), currentModel); handled {
+					if nextModel == "" {
+						return nil
+					}
+					currentModel = nextModel
+					return nil
+				}
+
+				engine := chat.NewEngine(currentModel)
 				ctx, cancel := chatRequestContext(timeout)
 				defer cancel()
 				query := strings.Join(args, " ")
-				fmt.Printf("AXIS [Model: %s] | Thinking...\n\n", model)
+				fmt.Printf("AXIS [Model: %s] | Thinking...\n\n", currentModel)
 
 				if err := engine.GenerateStream(ctx, query, os.Stdout); err != nil {
 					Fatal(ExitErrCommandFail, "Chat engine failed: %v", err)
@@ -39,7 +48,7 @@ func chatCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("AXIS Chat Session [Model: %s]\nType 'exit' or 'quit' to leave.\n\n", model)
+			fmt.Printf("AXIS Chat Session [Model: %s]\nType 'exit' or 'quit' to leave. Use '/models' to browse model options.\n\n", currentModel)
 			scanner := bufio.NewScanner(os.Stdin)
 			var history string
 			for {
@@ -54,6 +63,15 @@ func chatCmd() *cobra.Command {
 				if strings.ToLower(query) == "exit" || strings.ToLower(query) == "quit" {
 					break
 				}
+				if handled, nextModel := handleChatMetaCommand(query, currentModel); handled {
+					if nextModel != "" {
+						currentModel = nextModel
+						fmt.Printf("Switched model to %s\n\n", currentModel)
+					}
+					continue
+				}
+
+				engine := chat.NewEngine(currentModel)
 
 				prompt := query
 				if history != "" {
@@ -80,7 +98,7 @@ func chatCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&model, "model", "m", "qwen2.5-coder:1.5b", "Ollama model to use for inference")
+	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model to use for inference (default: best installed recommended model)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 2*time.Minute, "Per-request timeout for chat generation (0 disables timeout)")
 	return cmd
 }
@@ -90,4 +108,37 @@ func chatRequestContext(timeout time.Duration) (context.Context, context.CancelF
 		return context.WithCancel(context.Background())
 	}
 	return context.WithTimeout(context.Background(), timeout)
+}
+
+func resolveChatModel(requested string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return chat.ResolveDefaultModel(ctx)
+}
+
+func handleChatMetaCommand(input, currentModel string) (handled bool, nextModel string) {
+	query := strings.TrimSpace(input)
+	switch {
+	case query == "/models":
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		fmt.Println(chat.FormatModelCatalog(chat.BuildModelCatalog(ctx, currentModel)))
+		return true, ""
+	case strings.HasPrefix(query, "/model "):
+		next := strings.TrimSpace(strings.TrimPrefix(query, "/model "))
+		if next == "" {
+			fmt.Println("Usage: /model <tag>")
+			return true, ""
+		}
+		return true, next
+	case query == "/model":
+		fmt.Println("Usage: /model <tag>")
+		return true, ""
+	default:
+		return false, ""
+	}
 }
