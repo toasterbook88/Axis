@@ -69,7 +69,7 @@ func TestFilterExcludesMissingTool(t *testing.T) {
 		nodeComplete("a", 4000, "none", "python3"),
 		nodeComplete("b", 4000, "none", "git", "go"),
 	}
-	reqs := models.TaskRequirements{RequiredTool: "git"}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
 	result := FilterCandidates(reqs, nodes, nil)
 	if len(result) != 1 || result[0].Name != "b" {
 		t.Errorf("expected [b], got %v", names(result))
@@ -81,10 +81,23 @@ func TestFilterPassesAllQualified(t *testing.T) {
 		nodeComplete("a", 5000, "none", "git"),
 		nodeComplete("b", 6000, "none", "git"),
 	}
-	reqs := models.TaskRequirements{RequiredTool: "git", MinFreeRAMMB: 4096}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 4096}
 	result := FilterCandidates(reqs, nodes, nil)
 	if len(result) != 2 {
 		t.Errorf("expected 2 candidates, got %d", len(result))
+	}
+}
+
+func TestFilterRequiresAllTools(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("docker-only", 5000, "none", "docker"),
+		nodeComplete("docker-and-go", 5000, "none", "docker", "go"),
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"docker", "go"}}
+
+	result := FilterCandidates(reqs, nodes, nil)
+	if len(result) != 1 || result[0].Name != "docker-and-go" {
+		t.Errorf("expected [docker-and-go], got %v", names(result))
 	}
 }
 
@@ -155,8 +168,8 @@ func TestSelectBestNode(t *testing.T) {
 		nodeUnreachable("m2"),
 	}
 	reqs := models.TaskRequirements{
-		Description:  "analyze repo",
-		RequiredTool: "git",
+		Description:   "analyze repo",
+		RequiredTools: []string{"git"},
 	}
 
 	d := SelectBestNode(reqs, nodes, nil)
@@ -214,8 +227,8 @@ func TestSelectFailure_MissingTool(t *testing.T) {
 		nodeComplete("m3", 5000, "none", "git", "go"),
 	}
 	reqs := models.TaskRequirements{
-		Description:  "inference with ollama",
-		RequiredTool: "ollama",
+		Description:   "inference with ollama",
+		RequiredTools: []string{"ollama"},
 	}
 
 	d := SelectBestNode(reqs, nodes, nil)
@@ -238,7 +251,7 @@ func TestSelectSuccess_RunnerUpComparison(t *testing.T) {
 		nodeComplete("m3", 2000, "none", "git"),
 		nodeComplete("m1", 5000, "none", "git"),
 	}
-	reqs := models.TaskRequirements{RequiredTool: "git"}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
 
 	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK || d.Node != "m1" {
@@ -260,7 +273,7 @@ func TestSelectSuccess_SingleCandidate(t *testing.T) {
 		nodeComplete("solo", 4000, "none", "git"),
 		nodeUnreachable("down"),
 	}
-	reqs := models.TaskRequirements{RequiredTool: "git"}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
 
 	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK || d.Node != "solo" {
@@ -345,7 +358,7 @@ func TestReservedRAMAffectsSelection(t *testing.T) {
 			"alpha": {ReservedMB: 2000},
 		},
 	}
-	reqs := models.TaskRequirements{RequiredTool: "git", MinFreeRAMMB: 3000}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
 
 	d := SelectBestNode(reqs, nodes, st)
 	if !d.OK || d.Node != "beta" {
@@ -362,7 +375,7 @@ func TestReservedRAMAppearsInFailureReasoning(t *testing.T) {
 			"alpha": {ReservedMB: 2500},
 		},
 	}
-	reqs := models.TaskRequirements{RequiredTool: "git", MinFreeRAMMB: 3000}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
 
 	d := SelectBestNode(reqs, nodes, st)
 	if d.OK {
@@ -450,8 +463,12 @@ func TestInferRequirements(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got := InferRequirements(tt.desc)
-		if got.RequiredTool != tt.wantTool {
-			t.Errorf("InferRequirements(%q) TOOL = %q, want %q", tt.desc, got.RequiredTool, tt.wantTool)
+		gotTool := ""
+		if len(got.RequiredTools) > 0 {
+			gotTool = got.RequiredTools[0]
+		}
+		if gotTool != tt.wantTool {
+			t.Errorf("InferRequirements(%q) TOOL = %q, want %q", tt.desc, gotTool, tt.wantTool)
 		}
 		if got.MinFreeRAMMB != tt.wantRAM {
 			t.Errorf("InferRequirements(%q) RAM = %d, want %d", tt.desc, got.MinFreeRAMMB, tt.wantRAM)

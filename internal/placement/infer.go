@@ -19,13 +19,13 @@ func InferRequirements(desc string) models.TaskRequirements {
 	// Tool inference — order matters (first match wins)
 	switch {
 	case containsAny(lower, "inference", "ollama", "llm", "gpu"):
-		reqs.RequiredTool = "ollama"
+		reqs.RequiredTools = []string{"ollama"}
 	case containsAny(lower, "repo", "analyze", "code", "clone", "commit"):
-		reqs.RequiredTool = "git"
+		reqs.RequiredTools = []string{"git"}
 	case containsAny(lower, "build", "compile"):
-		reqs.RequiredTool = "go"
+		reqs.RequiredTools = []string{"go"}
 	case containsAny(lower, "docker", "container"):
-		reqs.RequiredTool = "docker"
+		reqs.RequiredTools = []string{"docker"}
 	}
 
 	// RAM inference

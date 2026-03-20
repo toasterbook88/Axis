@@ -277,15 +277,19 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 
 	reqs := placement.InferRequirements(req.Description)
 	if intent.matchedScript != nil {
-		if len(intent.matchedScript.RequiredTools) > 0 && reqs.RequiredTool == "" {
-			reqs.RequiredTool = intent.matchedScript.RequiredTools[0]
-		}
+		reqs.RequiredTools = append([]string(nil), intent.matchedScript.RequiredTools...)
 		if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
 			reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
 		}
 	}
-	if req.Mode == "exec" && reqs.RequiredTool == "ollama" {
-		reqs.RequiredTool = ""
+	if req.Mode == "exec" && len(reqs.RequiredTools) > 0 {
+		filtered := reqs.RequiredTools[:0]
+		for _, tool := range reqs.RequiredTools {
+			if !strings.EqualFold(tool, "ollama") {
+				filtered = append(filtered, tool)
+			}
+		}
+		reqs.RequiredTools = append([]string(nil), filtered...)
 	}
 
 	decision := placement.SelectBestNode(reqs, rc.snap.Nodes, rc.st)
