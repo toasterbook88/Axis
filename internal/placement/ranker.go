@@ -62,8 +62,10 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 // RankCandidates sorts nodes deterministically.
 // Priority order:
 //  1. Lowest RAM pressure (none < low < medium < high)
-//  2. Highest free RAM
-//  3. Node name ascending (stable tiebreak)
+//  2. GPU present
+//  3. Highest effective headroom (free-with-state - requirement)
+//  4. Highest raw free RAM
+//  5. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
@@ -73,6 +75,12 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 		pj := pressureOf(ranked[j])
 		if pi != pj {
 			return pressureRank(pi) < pressureRank(pj)
+		}
+
+		gi := gpuPresent(ranked[i])
+		gj := gpuPresent(ranked[j])
+		if gi != gj {
+			return gi && !gj
 		}
 
 		hi := headroom(ranked[i], st, reqs)
@@ -114,6 +122,13 @@ func freeRAM(n models.NodeFacts) int64 {
 		return 0
 	}
 	return n.Resources.RAMFreeMB
+}
+
+func gpuPresent(n models.NodeFacts) bool {
+	if n.Resources == nil {
+		return false
+	}
+	return len(n.Resources.GPUs) > 0
 }
 
 // ComputeFitScore returns 0-100 indicating small-model suitability.

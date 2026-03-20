@@ -112,6 +112,19 @@ func TestRankByFreeRAM(t *testing.T) {
 	}
 }
 
+func TestRankByGPU(t *testing.T) {
+	candidates := []models.NodeFacts{
+		nodeComplete("cpu-only", 6000, "none"),
+		nodeComplete("gpu-node", 5000, "none"),
+	}
+	candidates[1].Resources.GPUs = []string{"RTX 4090"}
+
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
+	if ranked[0].Name != "gpu-node" {
+		t.Errorf("expected gpu-node first, got %s", ranked[0].Name)
+	}
+}
+
 func TestRankDeterministicTiebreak(t *testing.T) {
 	candidates := []models.NodeFacts{
 		nodeComplete("zulu", 4000, "none"),
