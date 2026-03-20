@@ -366,6 +366,38 @@ func TestReservedRAMAppearsInFailureReasoning(t *testing.T) {
 	}
 }
 
+func TestEffectiveRAMNeverGoesNegative(t *testing.T) {
+	n := nodeComplete("alpha", 400, "high", "git")
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 4096},
+		},
+	}
+
+	if got := freeRAMWithState(n, st); got != 0 {
+		t.Fatalf("expected effective RAM to clamp at 0, got %d", got)
+	}
+}
+
+func TestFitScoreUsesEffectiveRAM(t *testing.T) {
+	n := nodeComplete("alpha", 5000, "none", "git")
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2048},
+		},
+	}
+
+	base := ComputeFitScore(n, false, nil)
+	effective := ComputeFitScore(n, false, st)
+
+	if effective >= base {
+		t.Fatalf("expected reserved RAM to lower fit score, got base=%d effective=%d", base, effective)
+	}
+	if effective != 44 {
+		t.Fatalf("expected effective fit score 44, got %d", effective)
+	}
+}
+
 // --- Helpers ---
 
 func contains(s, sub string) bool {
