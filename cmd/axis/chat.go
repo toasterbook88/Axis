@@ -87,7 +87,6 @@ func chatCmd() *cobra.Command {
 				}
 				cancel()
 				fmt.Println()
-
 				if history != "" {
 					history = history + "\nUser: " + query + "\nAssistant: " + buf.String()
 				} else {
