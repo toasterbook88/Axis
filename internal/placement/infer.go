@@ -32,7 +32,11 @@ func InferRequirements(desc string) models.TaskRequirements {
 	switch {
 	case containsAny(lower, "70b", "13b", "heavy"):
 		reqs.MinFreeRAMMB = 4096
-	case containsAny(lower, "model", "7b", "inference"):
+	case containsAny(lower, "7b"):
+		reqs.MinFreeRAMMB = 1536
+	case containsAny(lower, "model", "inference", "ollama"):
+		reqs.MinFreeRAMMB = 600
+	case containsAny(lower, "llm"):
 		reqs.MinFreeRAMMB = 1536
 	}
 

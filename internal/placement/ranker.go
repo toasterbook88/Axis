@@ -42,8 +42,9 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 			}
 		}
 		if reqs.MinFreeRAMMB > 0 {
+			minNeeded := effectiveMinFreeRAM(reqs, n)
 			adjustedFree := freeRAMWithState(n, st)
-			if n.Resources == nil || adjustedFree < reqs.MinFreeRAMMB {
+			if n.Resources == nil || adjustedFree < minNeeded {
 				continue
 			}
 		}
@@ -229,17 +230,29 @@ func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
 }
 
 func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
+	minNeeded := effectiveMinFreeRAM(reqs, n)
 	free := freeRAMWithState(n, st)
-	if free < reqs.MinFreeRAMMB {
+	if free < minNeeded {
 		return -1
 	}
 
-	penalty := clusterPressurePenalty(n, st, reqs.MinFreeRAMMB)
+	penalty := clusterPressurePenalty(n, st, minNeeded)
 	adjusted := free - penalty
 	if adjusted < 0 {
 		adjusted = 0
 	}
-	return adjusted - reqs.MinFreeRAMMB
+	return adjusted - minNeeded
+}
+
+func effectiveMinFreeRAM(reqs models.TaskRequirements, n models.NodeFacts) int64 {
+	minNeeded := reqs.MinFreeRAMMB
+	if minNeeded <= 0 {
+		return 0
+	}
+	if requiresTool(reqs.RequiredTools, "ollama") && ollamaWarm(n) && minNeeded > 600 {
+		return 600
+	}
+	return minNeeded
 }
 
 func totalReserved(st *state.ClusterState) int64 {
@@ -283,4 +296,8 @@ func ollamaIsReady(n models.NodeFacts) bool {
 
 func isOllamaBootstrapPossible(n models.NodeFacts) bool {
 	return n.Ollama != nil && n.Ollama.Installed
+}
+
+func ollamaWarm(n models.NodeFacts) bool {
+	return n.Ollama != nil && (n.Ollama.Listening || len(n.Ollama.Models) > 0 || n.Ollama.Running)
 }
