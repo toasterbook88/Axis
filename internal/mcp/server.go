@@ -48,6 +48,13 @@ func NewServer() *mcpserver.MCPServer {
 		mcpserver.WithInstructions("AXIS exposes read-only cluster state and diagnostics. Do not assume any write or execution authority."),
 	)
 
+	registerResources(s)
+	registerTools(s)
+
+	return s
+}
+
+func registerResources(s *mcpserver.MCPServer) {
 	snapResource := mcpproto.NewResource(
 		clusterSnapshotURI,
 		"Cluster Snapshot",
@@ -55,7 +62,9 @@ func NewServer() *mcpserver.MCPServer {
 		mcpproto.WithMIMEType("application/json"),
 	)
 	s.AddResource(snapResource, clusterSnapshotResource)
+}
 
+func registerTools(s *mcpserver.MCPServer) {
 	s.AddTool(
 		mcpproto.NewTool(
 			"cluster_snapshot",
@@ -143,7 +152,6 @@ func NewServer() *mcpserver.MCPServer {
 		sshConnectivityTestTool,
 	)
 
-	return s
 }
 
 func ServeStdio() error {
