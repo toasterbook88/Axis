@@ -241,7 +241,6 @@ func taskRunCmd() *cobra.Command {
 
 			// knowledge injection
 			k := knowledge.Build(snap, st, decision.Node)
-			axisKnowsJSON := k.JSON()
 
 			// Safety blocker applies only once the user has explicitly opted into execution.
 			if block := safety.Check(k, commandToRun, skillStore.IsKnownBad); block.Blocked {
@@ -256,9 +255,30 @@ func taskRunCmd() *cobra.Command {
 				return nil
 			}
 
+			contextJSON, err := knowledge.ExecutionContextJSON(snap, st, decision, input, intent.matchedScript, intent.matchedSkill)
+			if err != nil {
+				Fatal(ExitErrContextWrite, "failed to encode execution context: %v", err)
+			}
+
 			if models.IsLocalNode(targetNode) {
-				os.WriteFile("/tmp/axis-knows.json", []byte(axisKnowsJSON), 0644)
-				c := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf("export BEST_NODE=%s; %s", shellescape.Quote(decision.Node), commandToRun))
+				contextFile, err := os.CreateTemp("", "axis-knows-*.json")
+				if err != nil {
+					Fatal(ExitErrContextWrite, "failed to create context file: %v", err)
+				}
+				defer os.Remove(contextFile.Name())
+				if _, err := contextFile.Write(contextJSON); err != nil {
+					contextFile.Close()
+					Fatal(ExitErrContextWrite, "failed to write context: %v", err)
+				}
+				if err := contextFile.Close(); err != nil {
+					Fatal(ExitErrContextWrite, "failed to finalize context file: %v", err)
+				}
+
+				c := exec.CommandContext(ctx, "bash", "-c", commandToRun)
+				c.Env = append(os.Environ(),
+					"AXIS_CONTEXT_FILE="+contextFile.Name(),
+					"BEST_NODE="+decision.Node,
+				)
 				c.Stdout = os.Stdout
 				c.Stderr = os.Stderr
 				runErr := c.Run()
@@ -292,10 +312,19 @@ func taskRunCmd() *cobra.Command {
 				executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
 				defer executor.Close()
 
-				writeJsonCmd := fmt.Sprintf("cat > /tmp/axis-knows.json << 'EOF'\n%s\nEOF\n", axisKnowsJSON)
-				executor.Run(ctx, writeJsonCmd)
+				remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
+				writeJSONCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
+				if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
+					Fatal(ExitErrContextWrite, "failed to upload context: %v", err)
+				}
 
-				quotedCmd := fmt.Sprintf("export BEST_NODE=%s; bash -c %s", shellescape.Quote(decision.Node), shellescape.Quote(commandToRun))
+				quotedCmd := fmt.Sprintf(
+					"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -c %s",
+					shellescape.Quote(decision.Node),
+					shellescape.Quote(remoteContextPath),
+					shellescape.Quote(remoteContextPath),
+					shellescape.Quote(commandToRun),
+				)
 				runErr := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr)
 				if runErr == nil {
 					st, _ := state.Load()
