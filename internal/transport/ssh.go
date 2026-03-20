@@ -180,24 +180,17 @@ func (e *SSHExecutor) sshConfig() (*ssh.ClientConfig, error) {
 		return nil, fmt.Errorf("no SSH keys or agent available")
 	}
 
-	// Opt-in insecure mode
-	insecure := os.Getenv("AXIS_SSH_INSECURE") == "1"
-	var hostKeyCallback ssh.HostKeyCallback
+	// SSH Host Key verification is MANDATORY.
+	// Users MUST populate their ~/.ssh/known_hosts for security.
+	home, _ := os.UserHomeDir()
+	knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
 
-	if insecure {
-		hostKeyCallback = ssh.InsecureIgnoreHostKey()
-	} else {
-		home, _ := os.UserHomeDir()
-		knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
-
-		cb, err := knownhosts.New(knownHostsPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("~/.ssh/known_hosts not found. Run 'ssh-keyscan <host> >> ~/.ssh/known_hosts' or set AXIS_SSH_INSECURE=1")
-			}
-			return nil, fmt.Errorf("failed to load known_hosts (set AXIS_SSH_INSECURE=1 to bypass): %w", err)
+	hostKeyCallback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("~/.ssh/known_hosts not found. To trust a host, run: ssh-keyscan -p %d %s >> ~/.ssh/known_hosts", e.Port, e.Host)
 		}
-		hostKeyCallback = cb
+		return nil, fmt.Errorf("failed to load known_hosts: %w", err)
 	}
 
 	return &ssh.ClientConfig{
