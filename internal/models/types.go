@@ -73,15 +73,15 @@ type ToolInfo struct {
 // OllamaInfo is collected in addition to the normal ToolInfo for "ollama".
 // This is what makes discovery actually useful for placement and task run.
 type OllamaInfo struct {
-	Installed   bool     `json:"installed" yaml:"installed"`
-	Path        string   `json:"path,omitempty" yaml:"path,omitempty"`
-	Version     string   `json:"version,omitempty" yaml:"version,omitempty"`
-	Running     bool     `json:"running" yaml:"running"`
-	Listening   bool     `json:"listening" yaml:"listening"`
-	Port        int      `json:"port,omitempty" yaml:"port,omitempty"`
-	Models      []string `json:"models,omitempty" yaml:"models,omitempty"`
-	GPUOffload  string   `json:"gpu_offload,omitempty" yaml:"gpu_offload,omitempty"`
-	Error       string   `json:"error,omitempty" yaml:"error,omitempty"`
+	Installed  bool     `json:"installed" yaml:"installed"`
+	Path       string   `json:"path,omitempty" yaml:"path,omitempty"`
+	Version    string   `json:"version,omitempty" yaml:"version,omitempty"`
+	Running    bool     `json:"running" yaml:"running"`
+	Listening  bool     `json:"listening" yaml:"listening"`
+	Port       int      `json:"port,omitempty" yaml:"port,omitempty"`
+	Models     []string `json:"models,omitempty" yaml:"models,omitempty"`
+	GPUOffload string   `json:"gpu_offload,omitempty" yaml:"gpu_offload,omitempty"`
+	Error      string   `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 // --- Node Result ---
@@ -123,7 +123,7 @@ type ClusterSummary struct {
 // Warning represents a specific issue detected during snapshot assembly.
 type Warning struct {
 	Node    string `json:"node" yaml:"node"`
-	Kind    string `json:"kind" yaml:"kind"`       // unreachable, partial, ram_pressure, error
+	Kind    string `json:"kind" yaml:"kind"` // unreachable, partial, ram_pressure, error
 	Message string `json:"message" yaml:"message"`
 }
 
@@ -142,9 +142,9 @@ type ClusterSnapshot struct {
 // TaskRequirements describes what a task needs to run.
 // Inferred from task description by keyword matching in the CLI layer.
 type TaskRequirements struct {
-	Description  string `json:"description" yaml:"description"`
-	RequiredTool string `json:"required_tool,omitempty" yaml:"required_tool,omitempty"`
-	MinFreeRAMMB int64  `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	Description   string   `json:"description" yaml:"description"`
+	RequiredTools []string `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
+	MinFreeRAMMB  int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
 }
 
 // PlacementDecision is the output of the placement engine.

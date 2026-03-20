@@ -32,7 +32,7 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		IsLocal:  local,
 	}
 
-	if reqs.RequiredTool == "ollama" && models.IsLocalNode(best) {
+	if requiresTool(reqs.RequiredTools, "ollama") && models.IsLocalNode(best) {
 		decision.Reasoning = append(decision.Reasoning, "local m3 preferred for ollama")
 	}
 
@@ -63,18 +63,32 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 	}
 
 	// Tool match
-	if reqs.RequiredTool != "" {
-		for _, t := range best.Tools {
-			if strings.EqualFold(t.Name, reqs.RequiredTool) {
-				decision.Tool = t.Name
-				ver := t.Version
-				if ver == "" {
-					ver = "detected"
+	if len(reqs.RequiredTools) > 0 {
+		matched := make([]string, 0, len(reqs.RequiredTools))
+		for _, required := range reqs.RequiredTools {
+			for _, t := range best.Tools {
+				if strings.EqualFold(t.Name, required) {
+					if decision.Tool == "" {
+						decision.Tool = t.Name
+					}
+					ver := t.Version
+					if ver == "" {
+						ver = "detected"
+					}
+					matched = append(matched, fmt.Sprintf("%s (%s)", t.Name, ver))
+					break
 				}
-				decision.Reasoning = append(decision.Reasoning,
-					fmt.Sprintf("required tool %q available (version: %s)", t.Name, ver))
-				break
 			}
+			if strings.EqualFold(required, "ollama") && decision.Tool == "" {
+				decision.Tool = "ollama"
+			}
+		}
+		if len(matched) == 1 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("required tool %s available", matched[0]))
+		} else if len(matched) > 1 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("required tools available: %s", strings.Join(matched, ", ")))
 		}
 	}
 
@@ -123,19 +137,31 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 				continue
 			}
 		}
-		if reqs.RequiredTool != "" && !hasTool(n, reqs.RequiredTool) {
+		if len(reqs.RequiredTools) > 0 && !satisfiesRequiredTools(n, reqs.RequiredTools) {
+			missing := make([]string, 0, len(reqs.RequiredTools))
+			for _, required := range reqs.RequiredTools {
+				if strings.EqualFold(required, "ollama") {
+					if !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
+						missing = append(missing, required)
+					}
+					continue
+				}
+				if !hasTool(n, required) {
+					missing = append(missing, required)
+				}
+			}
 			available := make([]string, 0, len(n.Tools))
 			for _, t := range n.Tools {
 				available = append(available, t.Name)
 			}
 			d.Reasoning = append(d.Reasoning,
-				fmt.Sprintf("  %s: missing required tool %q (has: %v)",
-					n.Name, reqs.RequiredTool, available))
+				fmt.Sprintf("  %s: missing required tools %v (has: %v)",
+					n.Name, missing, available))
 			continue
 		}
 	}
 
-	if reqs.RequiredTool == "ollama" {
+	if requiresTool(reqs.RequiredTools, "ollama") {
 		d.Reasoning = append(d.Reasoning,
 			"note: AXIS can bootstrap Ollama on partial nodes when tool is ollama")
 	} else if reqs.MinFreeRAMMB >= 4096 {

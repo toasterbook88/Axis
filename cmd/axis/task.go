@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"al.essio.dev/pkg/shellescape"
@@ -187,17 +188,21 @@ func taskRunCmd() *cobra.Command {
 			reqs := placement.InferRequirements(input)
 
 			if intent.matchedScript != nil {
-				if len(intent.matchedScript.RequiredTools) > 0 && reqs.RequiredTool == "" {
-					reqs.RequiredTool = intent.matchedScript.RequiredTools[0]
-				}
+				reqs.RequiredTools = append([]string(nil), intent.matchedScript.RequiredTools...)
 				if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
 					reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
 				}
 			}
 
 			// Always bypass strict requirement for purely explicit runs if user just says "df -h"
-			if execFlag && reqs.RequiredTool == "ollama" {
-				reqs.RequiredTool = ""
+			if execFlag && len(reqs.RequiredTools) > 0 {
+				filtered := reqs.RequiredTools[:0]
+				for _, tool := range reqs.RequiredTools {
+					if !strings.EqualFold(tool, "ollama") {
+						filtered = append(filtered, tool)
+					}
+				}
+				reqs.RequiredTools = append([]string(nil), filtered...)
 			}
 
 			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
@@ -433,7 +438,7 @@ func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (
 	}
 
 	// Keep the context block broad: prefer a capable node even if the exact tool is absent.
-	reqs.RequiredTool = ""
+	reqs.RequiredTools = nil
 	ranked := placement.RankCandidates(placement.FilterCandidates(reqs, nodes, nil), reqs, nil)
 	if len(ranked) > 0 {
 		return ranked[0], true

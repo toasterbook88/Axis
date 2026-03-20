@@ -31,12 +31,12 @@ func pressureRank(p string) int {
 // Rules (all must pass):
 //   - Status must be complete
 //   - If MinFreeRAMMB > 0, node must have resources with enough free RAM
-//   - If RequiredTool is set, node must have a tool with that name
+//   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
 	for _, n := range nodes {
 		if n.Status != models.StatusComplete {
-			if reqs.RequiredTool != "ollama" || !isOllamaBootstrapPossible(n) {
+			if !allowsIncompleteNode(n, reqs.RequiredTools) {
 				continue
 			}
 		}
@@ -46,13 +46,8 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 				continue
 			}
 		}
-		if reqs.RequiredTool == "ollama" && !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
+		if !satisfiesRequiredTools(n, reqs.RequiredTools) {
 			continue
-		}
-		if reqs.RequiredTool != "" && reqs.RequiredTool != "ollama" {
-			if !hasTool(n, reqs.RequiredTool) {
-				continue
-			}
 		}
 		out = append(out, n)
 	}
@@ -108,6 +103,33 @@ func hasTool(n models.NodeFacts, name string) bool {
 		}
 	}
 	return false
+}
+
+func requiresTool(tools []string, name string) bool {
+	for _, tool := range tools {
+		if strings.EqualFold(tool, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func allowsIncompleteNode(n models.NodeFacts, requiredTools []string) bool {
+	return len(requiredTools) == 1 && requiresTool(requiredTools, "ollama") && isOllamaBootstrapPossible(n)
+}
+
+func satisfiesRequiredTools(n models.NodeFacts, requiredTools []string) bool {
+	for _, tool := range requiredTools {
+		switch {
+		case strings.EqualFold(tool, "ollama"):
+			if !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
+				return false
+			}
+		case !hasTool(n, tool):
+			return false
+		}
+	}
+	return true
 }
 
 func pressureOf(n models.NodeFacts) string {
