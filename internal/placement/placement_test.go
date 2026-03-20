@@ -366,6 +366,24 @@ func TestReservedRAMAffectsSelection(t *testing.T) {
 	}
 }
 
+func TestClusterPressureSharePenalizesDominantNode(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("alpha", 5000, "none", "git"),
+		nodeComplete("beta", 3500, "none", "git"),
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 1000},
+		},
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 1000}
+
+	d := SelectBestNode(reqs, nodes, st)
+	if !d.OK || d.Node != "beta" {
+		t.Fatalf("expected OK=true node=beta after cluster-share penalty, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
+	}
+}
+
 func TestReservedRAMAppearsInFailureReasoning(t *testing.T) {
 	nodes := []models.NodeFacts{
 		nodeComplete("alpha", 5000, "none", "git"),
