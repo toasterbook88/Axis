@@ -12,6 +12,7 @@ type NodeState struct {
 	LastTask     string    `json:"last_task"`
 	LastPlacedAt time.Time `json:"last_placed_at"`
 	ActiveTasks  int       `json:"active_tasks"`
+	ActiveExecs  []string  `json:"active_execs,omitempty"`
 }
 
 type ClusterState struct {
@@ -37,15 +38,37 @@ func Load() (*ClusterState, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
-	// expire reservations older than 45 min
-	if s.Nodes != nil {
-		for name, ns := range s.Nodes {
-			if time.Since(ns.LastPlacedAt) > 45*time.Minute {
-				delete(s.Nodes, name)
-			}
-		}
-	} else {
+	if s.Nodes == nil {
 		s.Nodes = make(map[string]NodeState)
+	}
+
+	mutated := false
+	for name, ns := range s.Nodes {
+		if time.Since(ns.LastPlacedAt) > 45*time.Minute {
+			delete(s.Nodes, name)
+			mutated = true
+			continue
+		}
+
+		// Legacy state written before explicit acquire/release had no exec IDs,
+		// so any retained reservation is untrustworthy and should be discarded.
+		if len(ns.ActiveExecs) == 0 && (ns.ActiveTasks > 0 || ns.ReservedMB > 0) {
+			delete(s.Nodes, name)
+			mutated = true
+			continue
+		}
+
+		if ns.ActiveTasks != len(ns.ActiveExecs) {
+			ns.ActiveTasks = len(ns.ActiveExecs)
+			s.Nodes[name] = ns
+			mutated = true
+		}
+	}
+
+	if mutated {
+		if err := s.Save(); err != nil {
+			return nil, err
+		}
 	}
 	return &s, nil
 }
@@ -55,19 +78,33 @@ func (s *ClusterState) Save() error {
 		s.Nodes = make(map[string]NodeState)
 	}
 	s.UpdatedAt = time.Now().UTC()
-	data, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(Path(), data, 0644)
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc string) {
+	_, _ = s.AcquireTask(node, taskDesc, estRAMMB)
+}
+
+func (s *ClusterState) AcquireTask(node, taskDesc string, estRAMMB int64) (string, error) {
 	if s.Nodes == nil {
 		s.Nodes = make(map[string]NodeState)
 	}
 	ns := s.Nodes[node]
+	execID := time.Now().UTC().Format("20060102-150405.000000000") + "-" + node
 	ns.ReservedMB += estRAMMB
 	ns.LastTask = taskDesc
 	ns.LastPlacedAt = time.Now().UTC()
 	ns.ActiveTasks++
+	ns.ActiveExecs = append(ns.ActiveExecs, execID)
 	s.Nodes[node] = ns
 
 	// keep last 20 decisions
@@ -75,4 +112,40 @@ func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc str
 	if len(s.Decisions) > 20 {
 		s.Decisions = s.Decisions[len(s.Decisions)-20:]
 	}
+	return execID, s.Save()
+}
+
+func (s *ClusterState) ReleaseTask(node, execID string, estRAMMB int64) error {
+	if s.Nodes == nil {
+		return nil
+	}
+
+	ns, ok := s.Nodes[node]
+	if !ok {
+		return nil
+	}
+
+	for i, id := range ns.ActiveExecs {
+		if id == execID {
+			ns.ActiveExecs = append(ns.ActiveExecs[:i], ns.ActiveExecs[i+1:]...)
+			break
+		}
+	}
+
+	ns.ReservedMB -= estRAMMB
+	if ns.ReservedMB < 0 {
+		ns.ReservedMB = 0
+	}
+	ns.ActiveTasks--
+	if ns.ActiveTasks < 0 {
+		ns.ActiveTasks = 0
+	}
+
+	if ns.ActiveTasks == 0 && ns.ReservedMB == 0 {
+		delete(s.Nodes, node)
+	} else {
+		s.Nodes[node] = ns
+	}
+
+	return s.Save()
 }

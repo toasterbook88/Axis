@@ -279,15 +279,22 @@ func taskRunCmd() *cobra.Command {
 					"AXIS_CONTEXT_FILE="+contextFile.Name(),
 					"BEST_NODE="+decision.Node,
 				)
+				if st != nil {
+					reservationMB := reqs.MinFreeRAMMB + 1024
+					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
+					if err != nil {
+						return fmt.Errorf("failed to persist task reservation: %w", err)
+					}
+					defer func() {
+						if err := st.ReleaseTask(decision.Node, execID, reservationMB); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: failed to release task reservation: %v\n", err)
+						}
+					}()
+				}
 				c.Stdout = os.Stdout
 				c.Stderr = os.Stderr
 				runErr := c.Run()
 				if runErr == nil {
-					st, _ := state.Load()
-					if st != nil {
-						st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, input)
-						st.Save()
-					}
 					skillStore.RecordSuccess(input, commandToRun, decision.Node)
 					skillStore.Save()
 				} else {
@@ -318,6 +325,19 @@ func taskRunCmd() *cobra.Command {
 					Fatal(ExitErrContextWrite, "failed to upload context: %v", err)
 				}
 
+				if st != nil {
+					reservationMB := reqs.MinFreeRAMMB + 1024
+					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
+					if err != nil {
+						return fmt.Errorf("failed to persist task reservation: %w", err)
+					}
+					defer func() {
+						if err := st.ReleaseTask(decision.Node, execID, reservationMB); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: failed to release task reservation: %v\n", err)
+						}
+					}()
+				}
+
 				quotedCmd := fmt.Sprintf(
 					"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -c %s",
 					shellescape.Quote(decision.Node),
@@ -327,11 +347,6 @@ func taskRunCmd() *cobra.Command {
 				)
 				runErr := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr)
 				if runErr == nil {
-					st, _ := state.Load()
-					if st != nil {
-						st.RecordPlacement(decision.Node, reqs.MinFreeRAMMB+1024, input)
-						st.Save()
-					}
 					skillStore.RecordSuccess(input, commandToRun, decision.Node)
 					skillStore.Save()
 				}
