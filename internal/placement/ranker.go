@@ -179,8 +179,8 @@ func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
 	}
 	committed := int64(0)
 	if st != nil && st.Nodes != nil {
-		if ns, ok := st.Nodes[n.Name]; ok {
-			committed = ns.ReservedMB
+		if _, ok := st.Nodes[n.Name]; ok {
+			committed = 0 // disabled until task completion tracking is implemented
 		}
 	}
 	return n.Resources.RAMFreeMB - committed
