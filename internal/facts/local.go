@@ -184,7 +184,16 @@ func parseDarwinFreeRAM(vmstat string) int64 {
 	pageSize := int64(16384) // fallback for arm64
 
 	var free, inactive int64
-	for _, line := range strings.Split(vmstat, "\n") {
+	remaining := vmstat
+	for len(remaining) > 0 {
+		var line string
+		if idx := strings.IndexByte(remaining, '\n'); idx == -1 {
+			line = remaining
+			remaining = ""
+		} else {
+			line = remaining[:idx]
+			remaining = remaining[idx+1:]
+		}
 		// e.g. "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
 		if strings.HasPrefix(line, "Mach Virtual Memory Statistics:") {
 			if idx := strings.Index(line, "page size of "); idx != -1 {
@@ -216,7 +225,16 @@ func parseVMStatVal(line string) int64 {
 
 func parseLinuxMeminfo(data string) (int64, int64, error) {
 	var total, available int64
-	for _, line := range strings.Split(data, "\n") {
+	remaining := data
+	for len(remaining) > 0 {
+		var line string
+		if idx := strings.IndexByte(remaining, '\n'); idx == -1 {
+			line = remaining
+			remaining = ""
+		} else {
+			line = remaining[:idx]
+			remaining = remaining[idx+1:]
+		}
 		if strings.HasPrefix(line, "MemTotal:") {
 			total = parseKBField(line)
 		} else if strings.HasPrefix(line, "MemAvailable:") {

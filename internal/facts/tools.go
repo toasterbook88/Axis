@@ -64,7 +64,11 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 // Handles formats like "go version go1.24.1 darwin/arm64", "Python 3.11.0",
 // "git version 2.39.5", "v20.11.0", etc.
 func parseVersionString(raw string) string {
-	line := strings.TrimSpace(strings.Split(raw, "\n")[0])
+	line := raw
+	if idx := strings.IndexByte(raw, '\n'); idx != -1 {
+		line = raw[:idx]
+	}
+	line = strings.TrimSpace(line)
 
 	// Try to find a version-like token (starts with digit or v+digit)
 	for _, field := range strings.Fields(line) {
