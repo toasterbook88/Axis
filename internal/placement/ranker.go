@@ -3,6 +3,7 @@
 package placement
 
 import (
+	"math"
 	"sort"
 	"strings"
 
@@ -228,7 +229,52 @@ func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
 }
 
 func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
-	return freeRAMWithState(n, st) - reqs.MinFreeRAMMB
+	free := freeRAMWithState(n, st)
+	if free < reqs.MinFreeRAMMB {
+		return -1
+	}
+
+	penalty := clusterPressurePenalty(n, st, reqs.MinFreeRAMMB)
+	adjusted := free - penalty
+	if adjusted < 0 {
+		adjusted = 0
+	}
+	return adjusted - reqs.MinFreeRAMMB
+}
+
+func totalReserved(st *state.ClusterState) int64 {
+	if st == nil || st.Nodes == nil {
+		return 0
+	}
+
+	var sum int64
+	for _, ns := range st.Nodes {
+		sum += ns.ReservedMB
+	}
+	return sum
+}
+
+func clusterPressurePenalty(n models.NodeFacts, st *state.ClusterState, requestMB int64) int64 {
+	if st == nil || st.Nodes == nil || requestMB <= 0 {
+		return 0
+	}
+
+	ns, ok := st.Nodes[n.Name]
+	if !ok || ns.ReservedMB <= 0 {
+		return 0
+	}
+
+	clusterReserved := totalReserved(st)
+	if clusterReserved <= 0 {
+		return 0
+	}
+
+	share := float64(ns.ReservedMB) / float64(clusterReserved+1)
+	penalty := int64(math.Round(share * float64(requestMB) * 1.5))
+	if penalty < 0 {
+		return 0
+	}
+	return penalty
 }
 
 func ollamaIsReady(n models.NodeFacts) bool {
