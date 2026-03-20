@@ -30,6 +30,7 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-010 | Current-state documentation baseline | Codex | in_review | Create a live orientation doc that maps the actual command surface, package map, test/coverage status, and current risks | AX-002 | `docs/current-state.md`, `docs/README.md`, `docs/agent-worklog.md` | Markdown diff, referenced verification commands, and a commit |
 | AX-011 | Documentation truth-alignment pass | Codex | in_progress | Reconcile repo docs with the live command surface and recent placement hardening | AX-010 | `docs/current-state.md`, `docs/README.md`, `docs/agent-worklog.md`, `docs/future-roadmap.md`, `docs/doctrine.md`, `docs/ram-balancing-research.md` | Updated docs, reviewed HEAD sync, and a commit |
 | AX-016 | Placement intelligence design phase | Codex | in_review | Turn the recent placement hardening into a documented next-phase design around allocatable RAM, leases, pressure, and skew-aware balancing | AX-012 | `docs/ram-balancing-research.md`, `docs/doctrine.md`, `docs/future-roadmap.md`, `docs/current-state.md` | Cross-linked design docs, reviewed against live main, and a commit |
+| AX-017 | Git expertise strategy lane | Codex | in_review | Make AXIS explicitly great at Git-aware operator work, not just networking and cluster routing | AX-011 | `docs/doctrine.md`, `docs/future-roadmap.md`, `docs/current-state.md`, Git-aware runbooks later | Strategy documented, repo-state reflected, and a commit |
 
 ## File Ownership
 
@@ -47,6 +48,7 @@ This file is the canonical coordination surface for active AXIS work.
 | `docs/ram-balancing-research.md` | Codex | Research baseline for cluster memory-sharing policy and implementation direction |
 | `docs/future-roadmap.md` | Codex | Strategic direction and sequencing for the next placement-intelligence phase |
 | `docs/doctrine.md` | Codex | Product boundary and decision rules; update with strategic shifts only |
+| Git-aware operator workflows | Codex / future implementation owner | Make AXIS explicitly strong at live Git state, review, and repo reasoning |
 | Runtime environment | Warp | Binary path, install flow, shell resolution |
 
 ## Handoffs
@@ -57,6 +59,7 @@ This file is the canonical coordination surface for active AXIS work.
 - Codex -> Claude (Antigravity): reopen the placement lane only if a verified follow-up task appears after the audit revision.
 - Any owner -> Codex: provide command output, commit hash, and files before marking `done`.
 - Codex -> future placement work: recent fixes made reservations, GPU preference, and multi-tool enforcement live; the next lane is placement intelligence, not more ad hoc ranking tweaks.
+- Codex -> future Git work: treat Git expertise as a first-class operator capability, grounded in live repo state and explicit verification.
 
 ## Completed
 

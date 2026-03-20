@@ -39,6 +39,7 @@ AXIS is not, by default:
 - a background scheduler
 - a hidden agent runtime
 - a replacement for SSH, Docker, Tailscale, or Ollama
+- a replacement for Git hosting or Git itself
 
 AXIS may integrate with those tools, but it should not lose its identity by
 trying to become all of them.
@@ -73,6 +74,7 @@ Examples:
 
 - chat
 - task execution
+- Git-aware operator assistance
 - scripts
 - learned skills
 - MCP tools
@@ -162,6 +164,7 @@ Examples of work that fits AXIS well:
 - clearer placement reasoning
 - better cluster-level RAM balancing and headroom accounting
 - improved tool detection
+- explicit, operator-facing Git expertise built on live repo state and real Git commands
 - safer, read-only MCP exposure of snapshot and diagnostics
 - better docs that match live behavior
 - tests around discovery, facts, placement, and transport

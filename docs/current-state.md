@@ -24,6 +24,7 @@ The live repo currently contains:
 - UDP beacon-based node discovery
 - Per-run execution context files instead of shared temp-path injection
 - Stateful placement ranking with reservation subtraction, GPU preference, and full multi-tool enforcement
+- Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 
 The core observation pipeline is reasonably clean. The execution and safety surfaces are where most of the risk now lives.
 
@@ -61,6 +62,7 @@ Top-level commands currently registered in the binary:
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
 | `internal/knowledge` | Build execution context blob | Thin wrapper, currently placeholder-heavy |
 | `internal/scripts` | Built-in task scripts | Useful, but registry prerequisites are under-modeled |
+| Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, lightly validated, no tests |
 | `internal/safety` | Execution blocker | Heuristic and brittle, no tests |
 | `internal/transport` | SSH execution layer | Critical runtime package with no tests |
@@ -96,6 +98,7 @@ Areas where the live repo has moved past the older docs/specs:
 - The repo includes task execution, not just advisory placement
 - The repo includes UDP discovery and MCP diagnostics
 - Placement now subtracts reserved RAM during ranking, prefers GPU nodes after pressure, and enforces full script toolchains
+- Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
 
@@ -123,6 +126,7 @@ In practical terms:
 - Discovery order is not stabilized before later logic uses the node list
 - Safety blocking is substring-based and can both over-block and under-block
 - Script prerequisites like `jq` and broader shell assumptions are still under-modeled even though multi-tool requirements are now enforced
+- Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
 - Persistence helpers do not consistently create parent directories or surface save/load corruption clearly
 
 ## Recommended Next Sequence

@@ -33,6 +33,11 @@ The repo also now contains chat, execution, scripts, skills, MCP, an HTTP API,
 and local state. Those can be useful, but they only strengthen AXIS if they stay
 subordinate to the fact plane.
 
+AXIS also has a natural adjacent strength in Git-aware operator support:
+understanding repository state, surfacing meaningful diffs, and helping route
+code-review and repo-analysis work to the right node without turning into a
+general-purpose forge.
+
 ## Strategic Options
 
 ### Path 1: Fact Plane Excellence
@@ -141,7 +146,35 @@ Verdict:
 
 **Useful, but should remain supportive rather than central.**
 
-### Path 5: Explicit Supervised Execution
+### Path 5: Git-Aware Operator Intelligence
+
+Make AXIS excellent at repository-aware assistance as well as networking and
+cluster state.
+
+Focus areas:
+
+- strong Git state understanding from live working trees
+- better repo-analysis and review-oriented task inference
+- compact, truthful repo context for chat, MCP, and execution prompts
+- Git-aware scripts and runbooks that stay explicit and operator-driven
+- safer handling of dirty trees, branch state, and verification workflows
+
+Why it fits:
+
+- Git is already one of the most important operator tools AXIS detects and uses
+- it complements cluster placement instead of competing with it
+- it makes AXIS more useful for real coding and review workflows
+
+Risk:
+
+- can sprawl into generic developer-assistant behavior if not tied to live repo truth
+- must stay grounded in explicit Git state, not vague summarization
+
+Verdict:
+
+**High-value support path, alongside MCP and network intelligence.**
+
+### Path 6: Explicit Supervised Execution
 
 Allow operators to use AXIS to run tasks on the selected node, but only with
 strong consent and safety.
@@ -168,7 +201,7 @@ Verdict:
 
 **Allowed path, but only if execution stays explicit and conservative.**
 
-### Path 6: Lightweight Snapshot Cache or `axisd`
+### Path 7: Lightweight Snapshot Cache or `axisd`
 
 Introduce a lightweight background helper only after the fact plane is mature.
 
@@ -191,7 +224,7 @@ Verdict:
 
 **Deferred path. Only after earlier phases are boringly reliable.**
 
-### Path 7: Full Orchestrator / Scheduler
+### Path 8: Full Orchestrator / Scheduler
 
 AXIS could theoretically evolve toward a richer scheduler or orchestration
 system.
@@ -219,8 +252,9 @@ The best future for AXIS is:
 1. **fact plane first**
 2. **MCP-native cluster context second**
 3. **network-aware cluster intelligence third**
-4. **local/cloud model routing as a support layer**
-5. **explicit execution only when trust is high**
+4. **Git-aware operator intelligence as a support layer**
+5. **local/cloud model routing as a support layer**
+6. **explicit execution only when trust is high**
 
 The best future for AXIS is **not** "become a general orchestrator."
 
@@ -270,7 +304,25 @@ Exit criteria:
 - MCP is stable enough for editor/agent use
 - no repeated full-cluster rediscovery for every small tool call
 
-### Phase C: Network-Aware Placement
+### Phase C: Git Intelligence
+
+Goal:
+
+Make AXIS excellent at live-repo reasoning and Git-aware operator workflows.
+
+Priority work:
+
+- improve repo-aware task inference and script routing
+- add compact Git context surfaces for prompts and MCP
+- harden dirty-tree, branch, and diff handling
+- add explicit Git runbooks and verification flows
+
+Exit criteria:
+
+- AXIS can explain repo state clearly from live Git data
+- Git-oriented tasks feel first-class without turning AXIS into a generic forge
+
+### Phase D: Network-Aware Placement
 
 Goal:
 
@@ -288,7 +340,7 @@ Exit criteria:
 - network context improves placement and operator reasoning
 - AXIS can explain not just "what node," but "why that path is viable"
 
-### Phase D: Model Routing Layer
+### Phase E: Model Routing Layer
 
 Goal:
 
@@ -306,7 +358,7 @@ Exit criteria:
 - chat is useful without becoming the product center
 - model routing stays explicit and understandable
 
-### Phase E: Explicit Execution Hardening
+### Phase F: Explicit Execution Hardening
 
 Goal:
 
@@ -325,7 +377,7 @@ Exit criteria:
 - operators can predict what AXIS will do before it runs
 - execution no longer outruns the fact plane
 
-### Phase F: Optional Cache Daemon
+### Phase G: Optional Cache Daemon
 
 Goal:
 
