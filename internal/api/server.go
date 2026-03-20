@@ -344,6 +344,19 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 			"AXIS_CONTEXT_FILE="+contextFile.Name(),
 			"BEST_NODE="+decision.Node,
 		)
+		if rc.st != nil {
+			reservationMB := reqs.MinFreeRAMMB + 1024
+			execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
+			if err != nil {
+				resp.Error = err.Error()
+				return resp, err
+			}
+			defer func() {
+				if err := rc.st.ReleaseTask(decision.Node, execID, reservationMB); err != nil && resp.Error == "" {
+					resp.Error = err.Error()
+				}
+			}()
+		}
 		out, err := cmd.CombinedOutput()
 		resp.Output = string(out)
 		resp.ExitCode = exitCode(err)
@@ -353,7 +366,7 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 			_ = rc.skillStore.Save()
 			return resp, err
 		}
-		recordSuccess(rc, decision.Node, reqs.MinFreeRAMMB+1024, req.Description, intent.command)
+		recordSuccess(rc, req.Description, intent.command, decision.Node)
 		resp.OK = true
 		return resp, nil
 	}
@@ -375,6 +388,20 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 		return resp, err
 	}
 
+	if rc.st != nil {
+		reservationMB := reqs.MinFreeRAMMB + 1024
+		execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp, err
+		}
+		defer func() {
+			if err := rc.st.ReleaseTask(decision.Node, execID, reservationMB); err != nil && resp.Error == "" {
+				resp.Error = err.Error()
+			}
+		}()
+	}
+
 	quotedCmd := fmt.Sprintf(
 		"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -lc %s",
 		shellescape.Quote(decision.Node),
@@ -392,16 +419,12 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 		return resp, err
 	}
 
-	recordSuccess(rc, decision.Node, reqs.MinFreeRAMMB+1024, req.Description, intent.command)
+	recordSuccess(rc, req.Description, intent.command, decision.Node)
 	resp.OK = true
 	return resp, nil
 }
 
-func recordSuccess(rc *runnerContext, node string, estRAMMB int64, description, command string) {
-	if rc.st != nil {
-		rc.st.RecordPlacement(node, estRAMMB, description)
-		_ = rc.st.Save()
-	}
+func recordSuccess(rc *runnerContext, description, command, node string) {
 	rc.skillStore.RecordSuccess(description, command, node)
 	_ = rc.skillStore.Save()
 }
