@@ -25,7 +25,7 @@ func AutoDiscoverSkills(ctx context.Context, nodes []models.NodeFacts) *Store {
 			skill := LearnedSkill{
 				ID:            "auto-" + name + "-" + time.Now().Format("20060102"),
 				Description:   "use " + name + " (auto-discovered on " + n.Name + ")",
-				Command:       name + " $(cat /tmp/axis-knows.json | jq -r '.snapshot.summary')",
+				Command:       name + ` $(cat "$AXIS_CONTEXT_FILE" | jq -r '.snapshot.summary')`,
 				SuccessCount:  0,
 				LastUsed:      time.Now().UTC(),
 				PreferredNode: n.Name,

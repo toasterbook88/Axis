@@ -316,14 +316,34 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 		return resp, nil
 	}
 
-	axisKnowsJSON := k.JSON()
+	contextJSON, err := knowledge.ExecutionContextJSON(rc.snap, rc.st, decision, req.Description, intent.matchedScript, intent.matchedSkill)
+	if err != nil {
+		resp.Error = err.Error()
+		return resp, err
+	}
 
 	if models.IsLocalNode(targetNode) {
-		if err := os.WriteFile("/tmp/axis-knows.json", []byte(axisKnowsJSON), 0644); err != nil {
+		contextFile, err := os.CreateTemp("", "axis-knows-*.json")
+		if err != nil {
 			resp.Error = err.Error()
 			return resp, err
 		}
-		cmd := exec.CommandContext(ctx, "bash", "-lc", fmt.Sprintf("export BEST_NODE=%s; %s", shellescape.Quote(decision.Node), intent.command))
+		defer os.Remove(contextFile.Name())
+		if _, err := contextFile.Write(contextJSON); err != nil {
+			_ = contextFile.Close()
+			resp.Error = err.Error()
+			return resp, err
+		}
+		if err := contextFile.Close(); err != nil {
+			resp.Error = err.Error()
+			return resp, err
+		}
+
+		cmd := exec.CommandContext(ctx, "bash", "-lc", intent.command)
+		cmd.Env = append(os.Environ(),
+			"AXIS_CONTEXT_FILE="+contextFile.Name(),
+			"BEST_NODE="+decision.Node,
+		)
 		out, err := cmd.CombinedOutput()
 		resp.Output = string(out)
 		resp.ExitCode = exitCode(err)
@@ -347,14 +367,21 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 	executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
 	defer executor.Close()
 
-	writeJSONCmd := fmt.Sprintf("cat > /tmp/axis-knows.json << 'EOF'\n%s\nEOF\n", axisKnowsJSON)
+	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
+	writeJSONCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
 	if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
 		resp.Error = err.Error()
 		resp.ExitCode = 1
 		return resp, err
 	}
 
-	quotedCmd := fmt.Sprintf("export BEST_NODE=%s; bash -lc %s", shellescape.Quote(decision.Node), shellescape.Quote(intent.command))
+	quotedCmd := fmt.Sprintf(
+		"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -lc %s",
+		shellescape.Quote(decision.Node),
+		shellescape.Quote(remoteContextPath),
+		shellescape.Quote(remoteContextPath),
+		shellescape.Quote(intent.command),
+	)
 	out, err := executor.Run(ctx, quotedCmd)
 	resp.Output = out
 	resp.ExitCode = exitCode(err)

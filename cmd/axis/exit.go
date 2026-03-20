@@ -7,11 +7,12 @@ import (
 
 // Exit codes for the AXIS CLI
 const (
-	ExitOK             = 0
-	ExitErrGeneric     = 1
-	ExitErrConfigLoad  = 2
-	ExitErrNoNodesFit  = 3
-	ExitErrCommandFail = 4
+	ExitOK              = 0
+	ExitErrGeneric      = 1
+	ExitErrConfigLoad   = 2
+	ExitErrNoNodesFit   = 3
+	ExitErrCommandFail  = 4
+	ExitErrContextWrite = 5
 )
 
 // Fatal exits the program with the given code and prints an optional error message to stderr.
