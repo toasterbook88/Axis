@@ -101,6 +101,21 @@ func TestFilterRequiresAllTools(t *testing.T) {
 	}
 }
 
+func TestFilterWarmOllamaUsesLowerHeadroom(t *testing.T) {
+	node := nodeComplete("m3", 1186, "low")
+	node.Ollama = &models.OllamaInfo{
+		Installed: true,
+		Listening: true,
+		Models:    []string{"qwen3:1.7b"},
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"ollama"}, MinFreeRAMMB: 1536}
+
+	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(result) != 1 || result[0].Name != "m3" {
+		t.Errorf("expected warm ollama node to qualify, got %v", names(result))
+	}
+}
+
 // --- Rank Tests ---
 
 func TestRankByPressure(t *testing.T) {
@@ -477,7 +492,9 @@ func TestInferRequirements(t *testing.T) {
 		{"spin up a docker container", "docker", 0},
 		{"just a simple task", "", 0},
 		{"deploy using gpu", "ollama", 0},
-		{"run a small local model with ollama inference", "ollama", 1536},
+		{"run a small local model with ollama inference", "ollama", 600},
+		{"ollama run llama3", "ollama", 600},
+		{"run a 7b model locally", "", 1536},
 	}
 	for _, tt := range tests {
 		got := InferRequirements(tt.desc)

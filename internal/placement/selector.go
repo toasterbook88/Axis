@@ -124,16 +124,17 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 			continue
 		}
 		if reqs.MinFreeRAMMB > 0 {
+			minNeeded := effectiveMinFreeRAM(reqs, n)
 			actual := int64(0)
 			effective := int64(0)
 			if n.Resources != nil {
 				actual = n.Resources.RAMFreeMB
 				effective = freeRAMWithState(n, st)
 			}
-			if effective < reqs.MinFreeRAMMB {
+			if effective < minNeeded {
 				d.Reasoning = append(d.Reasoning,
 					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB effective (base %dMB, short %dMB)",
-						n.Name, reqs.MinFreeRAMMB, effective, actual, reqs.MinFreeRAMMB-effective))
+						n.Name, minNeeded, effective, actual, minNeeded-effective))
 				continue
 			}
 		}
