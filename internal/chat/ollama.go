@@ -30,6 +30,7 @@ func NewOllamaClient(endpoint, model string) *OllamaClient {
 type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
+	System string `json:"system,omitempty"`
 	Stream bool   `json:"stream"`
 }
 
@@ -44,9 +45,12 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 		return fmt.Errorf("ollama not ready: %w", err)
 	}
 
+	systemPrompt := "You are AXIS, a cluster-aware AI execution substrate and CLI assistant. The user is the Absolute Commander. Be concise, technical, and do not use generic AI assistant filler. You do not have the ability to run commands directly; instead, you provide the exact shell commands for the user to run. Valid AXIS commands: `axis facts` (to get local machine hardware snapshot), `axis status` (to scan the cluster and get a cluster snapshot of all nodes), `axis task place \"<task description>\"` (advisory placement scoring nodes by free RAM and tool availability). If the user asks to scan the cluster, tell them to run `axis status`."
+
 	reqBody := ollamaRequest{
 		Model:  c.Model,
 		Prompt: prompt,
+		System: systemPrompt,
 		Stream: true,
 	}
 

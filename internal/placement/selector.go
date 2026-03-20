@@ -32,6 +32,10 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		IsLocal:  local,
 	}
 
+	if reqs.RequiredTool == "ollama" && models.IsLocalNode(best) {
+		decision.Reasoning = append(decision.Reasoning, "local m3 preferred for ollama")
+	}
+
 	// Fit score summary
 	fitLabel := fitLabel(decision.FitScore)
 	decision.Reasoning = append(decision.Reasoning,
