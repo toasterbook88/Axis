@@ -26,8 +26,10 @@ axis task place "run ollama inference on a 7b model"
 
 - `axis facts` — local hardware/tool snapshot
 - `axis status` — full cluster snapshot over SSH
+- `axis status --cached` — explicit daemon-backed cached snapshot read
 - `axis task place` — advisory placement with fit score and failure reasoning
 - `axis serve` — optional local HTTP API surface
+- `axis daemon invalidate` — explicit local daemon cache invalidation
 - `axis mcp serve` — optional read-only MCP server over stdio
 - `axis task run` — explicit execution surface layered on top of placement
 
@@ -40,7 +42,7 @@ axis task place "run ollama inference on a 7b model"
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
 | **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, free RAM, and locality |
-| **Optional local control surfaces** | `axis serve`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
+| **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
 | **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
 
@@ -97,6 +99,7 @@ Then:
 ```bash
 axis status              # JSON cluster snapshot
 axis status --format yaml
+axis status --cached     # read explicit daemon cache instead of live SSH sweep
 ```
 
 ### `axis task place` — advisory placement
@@ -120,7 +123,16 @@ Placement uses keyword matching against the task description (no ML). It infers 
 axis serve
 ```
 
-Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by default.
+Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by default, plus a background snapshot refresh loop that powers the explicit cached-read path.
+
+### `axis daemon invalidate` — clear local daemon cache
+
+```bash
+axis daemon invalidate
+axis daemon invalidate --cache-addr 127.0.0.1:42425
+```
+
+Clears the daemon-backed snapshot cache explicitly. This does not change the default `axis status` live path; it only affects cached reads and other daemon-backed surfaces.
 
 ## Configuration Reference
 
@@ -153,6 +165,8 @@ Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by def
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/snapshot/  │ Assembles `ClusterSnapshot` from `[]NodeFacts`                                  │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/daemon/    │ Background snapshot refresh, in-memory cache, and explicit invalidation         │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/state/     │ Persists local placement memory and execution state                              │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/api/       │ Local HTTP API and execution surface                                             │
@@ -173,10 +187,11 @@ Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by def
 - Placement is deterministic: RAM pressure → GPU → effective headroom → free RAM → name
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
+- `axis serve` hosts an optional daemon-backed cache; `axis status --cached` and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
 - Placement memory lives locally in `~/.axis/state.json`
 
-**Current phase:** The Phase 1 observability core is complete, and Phase 2 advisory placement is live on `main`. Optional local server, MCP, chat, and explicit execution surfaces also exist, but the project is still not daemon-first.
+**Current phase:** The Phase 1 observability core is complete, and Phase 2 advisory placement is live on `main`. Optional local server, daemon-backed cache, MCP, chat, and explicit execution surfaces also exist, but the project is still not daemon-first.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 

@@ -32,4 +32,4 @@ When docs disagree:
 | Phase | Status | Description |
 |---|---|---|
 | Phase 1 | **Active** | CLI bootstrap, local/remote fact collection, ClusterSnapshot output |
-| Phase 2 | Active in code; hardening and design refinement in progress | Placement, execution surfaces, MCP, state, and utility layers exist; current effort is truth-alignment plus smarter placement design |
+| Phase 2 | Active in code; hardening and design refinement in progress | Placement, execution surfaces, MCP, daemon-backed cached reads, and utility layers exist; current effort is truth-alignment plus smarter placement and cache policy design |
