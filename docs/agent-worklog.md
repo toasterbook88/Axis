@@ -13,8 +13,8 @@ This file is the canonical coordination surface for active AXIS work.
 ## Repo State
 
 - Branch: `main`
-- Reviewed HEAD: `e37b00c`
-- Last updated: `2026-03-24 16:46 EDT`
+- Reviewed HEAD: `1b3f5df`
+- Last updated: `2026-03-24 16:58 EDT`
 - Note: `Reviewed HEAD` is the source state this worklog update was based on. A worklog-only commit will advance repository HEAD.
 
 ## Active Tasks
@@ -27,7 +27,7 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-005 | Link-local address blindspot review | Warp | pending | Decide whether `169.254.x.x` and similar link-local addresses should be exposed, filtered, or tagged explicitly | AX-002 | `internal/facts/local.go` | `axis facts` output demonstrating intended address behavior and a commit |
 | AX-006 | Local metric collection hardening | Claude (Antigravity) | pending | Reduce brittle local disk/RAM command parsing while preserving current behavior and adding coverage where practical | AX-005 | `internal/facts/local.go`, related tests | Passing tests, runtime verification, and a commit |
 | AX-007 | SSH identity resolution hardening | Claude (Antigravity) | pending | Respect non-default SSH identity configuration or explicitly document the current limitation | AX-002 | `internal/transport/ssh.go`, related tests/docs | Verified non-default identity behavior or documented limitation, plus a commit |
-| AX-024 | Cached context/MCP expansion | Codex | pending | Decide whether explicit cached reads should extend next into `task context`, MCP, or HTTP context helpers without introducing hidden fallback behavior | AX-022 | `cmd/axis/task.go`, `internal/api/`, `internal/mcp/`, docs | Design note or scoped implementation with explicit verification |
+| AX-024 | Cached context/MCP expansion | Codex | in_progress | `task context --cached` is now the next explicit cached read; decide whether cached reads should extend further into MCP or HTTP context helpers without introducing hidden fallback behavior | AX-022 | `cmd/axis/task.go`, `internal/api/`, `internal/mcp/`, docs | Design note or scoped implementation with explicit verification |
 | AX-025 | Daemon freshness policy | Codex | in_review | Explicit refresh/invalidate now exist; decide whether the timer loop should remain the only background freshness mechanism or gain additional operator-facing policy/docs | AX-023 | `internal/daemon/`, `cmd/axis/daemon.go`, runbooks/docs | Clear operator-facing policy and a commit if docs/code change |
 
 ## File Ownership
@@ -81,3 +81,4 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-021 | Codex | `eaa9dc1` | Public-repo sanitization removed environment-specific strings from tracked source without changing behavior. |
 | AX-022 | Codex | working tree | `axis task place --cached` now reads from the explicit daemon cache and surfaces `source` in JSON mode. Full suite and live smoke passed locally. |
 | AX-023 | Codex | `e37b00c` | Explicit daemon refresh landed via `POST /refresh` and `axis daemon refresh`, with live ready→invalidate smoke verified. |
+| AX-024 | Codex | `1b3f5df` | `axis task context --cached` now emits prompt blocks from the explicit daemon cache with a visible `Source:` line. Full suite and live smoke passed. |

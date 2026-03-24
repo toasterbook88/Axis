@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-24 16:46 EDT
+Last reviewed: 2026-03-24 16:58 EDT
 Branch: `main`
-Reviewed HEAD: `e37b00c`
+Reviewed HEAD: `1b3f5df`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -21,6 +21,7 @@ The live repo currently contains:
 - A daemon-backed cached snapshot seam behind `axis serve`
 - Explicit cached status reads via `axis status --cached`
 - Explicit cached placement reads via `axis task place --cached`
+- Explicit cached context reads via `axis task context --cached`
 - Explicit cache refresh via `axis daemon refresh`
 - Explicit cache invalidation via `axis daemon invalidate`
 - A CLI task execution path (`axis task run`)
@@ -44,7 +45,7 @@ Top-level commands currently registered in the binary:
 | `axis status` | Collect cluster snapshot | Live SSH by default; `--cached` uses the local daemon cache |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis task place` | Advisory placement | Human output/JSON; `--cached` uses the local daemon cache |
-| `axis task context` | Emit compact context block | Helper for external agents |
+| `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
 | `axis task run` | Execute on selected node | Explicit execution path exists |
 | `axis chat` | Local chat via Ollama | Also used as the default root action |
@@ -87,6 +88,7 @@ Audit commands run against this repo state:
 - `go build -o /tmp/axis ./cmd/axis` -> passes
 - `/tmp/axis status --cached --cache-addr 127.0.0.1:42433` -> returns wrapped snapshot with `source: "daemon-cache"`
 - `/tmp/axis task place --cached --cache-addr 127.0.0.1:42437 "test inference"` -> returns placement output sourced from `daemon-cache`
+- `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
 - `go test ./internal/config ./internal/placement ./internal/facts` -> passes after public-repo sanitization
@@ -142,7 +144,7 @@ In practical terms:
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
 - Persistence helpers do not consistently create parent directories or surface save/load corruption clearly
 - The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
-- `axis status` and `axis task place` now have explicit cached paths; context and most other read surfaces still hit live discovery by default
+- `axis status`, `axis task place`, and `axis task context` now have explicit cached paths; most other read surfaces still hit live discovery by default
 
 ## Recommended Next Sequence
 
@@ -157,7 +159,7 @@ Documentation and organization first:
 
 Engineering follow-up after doc alignment:
 
-1. Decide which read surfaces should gain explicit cached modes next (`task context`, MCP, or HTTP context/placement helpers).
+1. Decide which read surfaces should gain explicit cached modes next (MCP, HTTP context/placement helpers, or richer API reads).
 2. Refine reservation accounting into a clearer cluster RAM balancing model.
 3. Make all execution paths explicit and consistent.
 4. Add integration tests around SSH, API execution, safety, discovery, and daemon freshness.

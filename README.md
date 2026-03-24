@@ -29,6 +29,7 @@ axis task place "run ollama inference on a 7b model"
 - `axis status --cached` — explicit daemon-backed cached snapshot read
 - `axis task place` — advisory placement with fit score and failure reasoning
 - `axis task place --cached` — explicit daemon-backed cached placement read
+- `axis task context --cached` — explicit daemon-backed cached context block
 - `axis serve` — optional local HTTP API surface
 - `axis daemon refresh` — force a fresh daemon snapshot now
 - `axis daemon invalidate` — explicit local daemon cache invalidation
@@ -122,6 +123,15 @@ Placement uses keyword matching against the task description (no ML). It infers 
 
 With `--cached`, placement uses the explicit daemon snapshot cache instead of a fresh SSH sweep. JSON output includes a `source` wrapper so you can tell whether the decision came from `daemon-cache` or live fallback.
 
+### `axis task context` — compact operator/agent prompt block
+
+```bash
+axis task context "test inference"
+axis task context --cached "test inference"
+```
+
+`--cached` uses the explicit daemon snapshot cache and includes a `Source:` line in the rendered context block so you can tell where the prompt data came from.
+
 ### `axis serve` — optional local HTTP API
 
 ```bash
@@ -201,7 +211,7 @@ Forces the daemon to rebuild its cached snapshot immediately. This is the fastes
 - Placement is deterministic: RAM pressure → GPU → effective headroom → free RAM → name
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
-- `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
+- `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
 - Placement memory lives locally in `~/.axis/state.json`
 
