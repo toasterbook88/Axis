@@ -37,13 +37,12 @@ func path() string {
 func Load() *Store {
 	data, err := os.ReadFile(path())
 	if err != nil {
-		return &Store{
-			Skills:   []LearnedSkill{},
-			Failures: []LearnedFailure{},
-		}
+		return newStore()
 	}
 	var s Store
-	json.Unmarshal(data, &s)
+	if err := json.Unmarshal(data, &s); err != nil {
+		return newStore()
+	}
 	if s.Skills == nil {
 		s.Skills = []LearnedSkill{}
 	}
@@ -54,8 +53,11 @@ func Load() *Store {
 }
 
 func (s *Store) Save() error {
+	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
+		return err
+	}
 	data, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(path(), data, 0644)
+	return os.WriteFile(path(), data, 0o644)
 }
 
 // RecordSuccess learns from real usage
@@ -95,7 +97,7 @@ func (s *Store) BestMatch(desc string) (LearnedSkill, bool) {
 		}
 		score := float64(skill.SuccessCount) * 10 // success weight
 		score += 50
-		
+
 		if score > bestScore {
 			bestScore = score
 			best = skill
@@ -122,4 +124,11 @@ func (s *Store) IsKnownBad(desc string) bool {
 		}
 	}
 	return false
+}
+
+func newStore() *Store {
+	return &Store{
+		Skills:   []LearnedSkill{},
+		Failures: []LearnedFailure{},
+	}
 }
