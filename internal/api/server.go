@@ -46,6 +46,7 @@ type KnowledgeResponse struct {
 type RunRequest struct {
 	Description string `json:"description"`
 	Mode        string `json:"mode,omitempty"`
+	Confirm     string `json:"confirm,omitempty"`
 }
 
 type RunResponse struct {
@@ -186,14 +187,15 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 		tools := []ToolDef{
 			{
 				Name:        "axis_execute",
-				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Explicit mode is required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands.",
+				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Explicit mode and explicit operator confirmation are required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands, and set confirm=YES to authorize execution.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"description": map[string]any{"type": "string", "description": "Natural language task description or raw command"},
 						"mode":        map[string]any{"type": "string", "description": "Execution mode: script or exec"},
+						"confirm":     map[string]any{"type": "string", "description": "Must be YES to authorize execution"},
 					},
-					"required": []string{"description", "mode"},
+					"required": []string{"description", "mode", "confirm"},
 				},
 			},
 			{
@@ -243,6 +245,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 		}
 		req.Description = strings.TrimSpace(req.Description)
 		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+		req.Confirm = strings.TrimSpace(req.Confirm)
 		if req.Description == "" {
 			writeError(w, http.StatusBadRequest, "description is required")
 			return
@@ -253,6 +256,10 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 		}
 		if req.Mode != "script" && req.Mode != "exec" {
 			writeError(w, http.StatusBadRequest, "mode must be script or exec")
+			return
+		}
+		if req.Confirm != "YES" {
+			writeError(w, http.StatusBadRequest, "confirm must be YES to authorize execution")
 			return
 		}
 
