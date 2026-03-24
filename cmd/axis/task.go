@@ -461,24 +461,28 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 		return "No nodes found in cluster."
 	}
 
-	freeRAM := "unknown"
+	ramSummary := "unknown"
 	pressure := "unknown"
 	if best.Resources != nil {
-		freeRAM = fmt.Sprintf("%dMB", best.Resources.RAMFreeMB)
+		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
+			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB)
+		} else {
+			ramSummary = fmt.Sprintf("%dMB free", best.Resources.RAMFreeMB)
+		}
 		pressure = best.Resources.Pressure
 	}
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
 
 - Source: %s
-- Best node: %s (%s free, %s pressure)
+- Best node: %s (%s, %s pressure)
 - Tools: %v
 - Summary: %d nodes, %dMB total free RAM
 - Task: %s
 - Live tools: start read-only MCP with: axis mcp serve
 
 Be precise. Use real node names and tools above.`,
-		sourceOrLive(source), best.Name, freeRAM, pressure,
+		sourceOrLive(source), best.Name, ramSummary, pressure,
 		toolsList(best), len(snap.Nodes), snap.Summary.TotalFreeRAMMB, task)
 }
 

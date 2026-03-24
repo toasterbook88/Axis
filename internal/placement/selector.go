@@ -50,8 +50,15 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 
 	// Resource details
 	if best.Resources != nil {
-		decision.Reasoning = append(decision.Reasoning,
-			fmt.Sprintf("%dMB free RAM (of %dMB total)", best.Resources.RAMFreeMB, best.Resources.RAMTotalMB))
+		allocatable := freeRAMWithState(best, st)
+		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("%dMB allocatable (%dMB reserved) of %dMB total",
+					allocatable, reservedRAM(best, st), best.Resources.RAMTotalMB))
+		} else {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("%dMB free RAM (of %dMB total)", best.Resources.RAMFreeMB, best.Resources.RAMTotalMB))
+		}
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("pressure: %s", best.Resources.Pressure))
 		decision.Reasoning = append(decision.Reasoning,

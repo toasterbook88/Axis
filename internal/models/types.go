@@ -44,14 +44,16 @@ const (
 
 // Resources holds observed hardware resource metrics.
 type Resources struct {
-	CPUCores    int      `json:"cpu_cores" yaml:"cpu_cores"`
-	CPUModel    string   `json:"cpu_model" yaml:"cpu_model"`
-	RAMTotalMB  int64    `json:"ram_total_mb" yaml:"ram_total_mb"`
-	RAMFreeMB   int64    `json:"ram_free_mb" yaml:"ram_free_mb"`
-	DiskTotalGB int64    `json:"disk_total_gb" yaml:"disk_total_gb"`
-	DiskFreeGB  int64    `json:"disk_free_gb" yaml:"disk_free_gb"`
-	GPUs        []string `json:"gpus,omitempty" yaml:"gpus,omitempty"`
-	Pressure    string   `json:"pressure" yaml:"pressure"` // none, low, medium, high
+	CPUCores         int      `json:"cpu_cores" yaml:"cpu_cores"`
+	CPUModel         string   `json:"cpu_model" yaml:"cpu_model"`
+	RAMTotalMB       int64    `json:"ram_total_mb" yaml:"ram_total_mb"`
+	RAMFreeMB        int64    `json:"ram_free_mb" yaml:"ram_free_mb"`
+	RAMReservedMB    int64    `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
+	RAMAllocatableMB int64    `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+	DiskTotalGB      int64    `json:"disk_total_gb" yaml:"disk_total_gb"`
+	DiskFreeGB       int64    `json:"disk_free_gb" yaml:"disk_free_gb"`
+	GPUs             []string `json:"gpus,omitempty" yaml:"gpus,omitempty"`
+	Pressure         string   `json:"pressure" yaml:"pressure"` // none, low, medium, high
 }
 
 // NetworkAddress represents a single network address.
