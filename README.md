@@ -36,6 +36,15 @@ axis task place "run ollama inference on a 7b model"
 - `axis mcp serve` — optional read-only MCP server over stdio
 - `axis task run` — explicit execution surface layered on top of placement
 
+## Execution Safety (hardened)
+
+- `/run` and `axis_execute` require explicit `mode=script` or `mode=exec` + `confirm: "YES"`
+- Hardened safety blocker with allow-list, cluster-aware RAM/GPU checks, and learned-bad fast path
+- Per-node reservation caps enforced before any command runs (`RAMTotalMB - 1024` headroom)
+- Reservations auto-clean on every daemon refresh (45 min TTL + legacy leak detection)
+- All cached paths (`task place --cached`, `task context --cached`, `mcp serve --cached`) use the single `internal/daemon/client`
+- Visible in `/snapshot/meta` as `reserved_mb`
+
 ## Features
 
 | Feature | Details |
