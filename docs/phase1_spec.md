@@ -6,17 +6,21 @@ Phase 1 delivers the AXIS CLI binary and the core observability layer:
 local and remote fact collection, tool discovery, and `ClusterSnapshot` assembly.
 It is the foundation that later phases will build on.
 
+> Live-repo note: `main` has moved beyond the original Phase 1 boundary. Advisory
+> placement via `axis task place` is live, and optional local server/MCP/execution
+> surfaces also exist. This document still describes the Phase 1 observability core.
+
 ## Goals
 
-- Provide a single binary (`axis`) that works without a daemon or server
+- Provide a single binary (`axis`) that works without requiring a daemon or always-on server
 - Collect structured hardware and software facts from the local machine and remote nodes
 - Emit a compact, machine-readable `ClusterSnapshot` (JSON or YAML)
 - Tolerate collection failures gracefully: degrade node status rather than crash
 
 ## Non-Goals for Phase 1
 
-- Daemon process or persistent state
-- Task execution (advisory placement is implemented in Phase 2)
+- Daemon-first architecture or required persistent service
+- Task execution as part of the Phase 1 core (live `main` now includes explicit execution surfaces beyond this spec)
 - Mesh networking, Tailscale, or peer discovery
 
 ---
@@ -56,6 +60,18 @@ nodes, and emits a `ClusterSnapshot`.
 ```bash
 axis status [--format json|yaml]
 ```
+
+### Live main extension: `axis task place`
+
+The live CLI now includes:
+
+```bash
+axis task place "<description>"
+```
+
+This is advisory-only placement layered on top of the Phase 1 observability core.
+It uses the `ClusterSnapshot` plus inferred task requirements to select the best node
+and explain the decision with fit score and per-node diagnostics.
 
 ---
 
