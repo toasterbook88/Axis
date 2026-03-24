@@ -85,6 +85,7 @@ type runnerContext struct {
 type snapshotCache interface {
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
+	Invalidate()
 }
 
 func Serve(addr string, cache snapshotCache) error {
@@ -145,6 +146,19 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 			return
 		}
 		writeJSON(w, http.StatusOK, cache.Meta())
+	})
+
+	mux.HandleFunc("/invalidate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		cache.Invalidate()
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	toolsHandler := func(w http.ResponseWriter, r *http.Request) {

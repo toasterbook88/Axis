@@ -113,3 +113,42 @@ func TestRefreshFailurePreservesPreviousSnapshot(t *testing.T) {
 		t.Fatalf("expected deadline exceeded in last_error, got %q", meta.LastError)
 	}
 }
+
+func TestInvalidateClearsSnapshotAndRemovesPersistedFile(t *testing.T) {
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: 1,
+			},
+		}, nil
+	})
+
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	d.SetSnapshotPath(path)
+
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected persisted snapshot file: %v", err)
+	}
+
+	d.Invalidate()
+
+	if _, ok := d.Snapshot(); ok {
+		t.Fatal("expected snapshot to be cleared")
+	}
+
+	meta := d.Meta()
+	if meta.Ready {
+		t.Fatal("expected cache to be marked not ready")
+	}
+	if !meta.CollectedAt.IsZero() {
+		t.Fatal("expected collected_at to be cleared")
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected snapshot file to be removed, got %v", err)
+	}
+}

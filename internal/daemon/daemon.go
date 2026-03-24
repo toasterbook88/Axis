@@ -132,6 +132,19 @@ func (d *Daemon) Snapshot() (*models.ClusterSnapshot, bool) {
 	return cloneSnapshot(d.snapshot), true
 }
 
+func (d *Daemon) Invalidate() {
+	d.mu.Lock()
+	path := d.snapshotPath
+	d.snapshot = nil
+	d.collectedAt = time.Time{}
+	d.lastError = ""
+	d.mu.Unlock()
+
+	if path != "" {
+		_ = os.Remove(path)
+	}
+}
+
 func (d *Daemon) Meta() Metadata {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
