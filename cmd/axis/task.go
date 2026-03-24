@@ -412,35 +412,45 @@ func taskRunCmd() *cobra.Command {
 
 // === NEW: axis task context <description> — zero-risk token saver ===
 func taskContextCmd() *cobra.Command {
+	var cached bool
+	var cacheAddr string
+
 	cmd := &cobra.Command{
 		Use:   "context [description]",
 		Short: "Emit 200-token context block for Gemini/Codex/Copilot/OpenCode",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
-
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			snap := snapshot.Build(discovery.Discover(ctx, cfg))
+			snap, source, err := collectStatusSnapshot(
+				ctx,
+				cached,
+				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+					return fetchCachedSnapshot(ctx, cacheAddr)
+				},
+				discoverLiveSnapshot,
+			)
+			if err != nil {
+				Fatal(ExitErrConfigLoad, "Failed to load snapshot: %v", err)
+			}
+
 			reqs := placement.InferRequirements(desc)
-			printContextBlock(snap, reqs, desc)
+			printContextBlock(snap, reqs, desc, source)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr, "Address of the local AXIS daemon cache")
 	return cmd
 }
 
-func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task string) {
-	fmt.Println(buildContextBlock(snap, reqs, task))
+func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string) {
+	fmt.Println(buildContextBlock(snap, reqs, task, source))
 }
 
-func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task string) string {
+func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string) string {
 	if snap == nil || len(snap.Nodes) == 0 {
 		return "No nodes found in cluster."
 	}
@@ -459,14 +469,23 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
 
+- Source: %s
 - Best node: %s (%s free, %s pressure)
 - Tools: %v
 - Summary: %d nodes, %dMB total free RAM
 - Task: %s
 - Live tools: start read-only MCP with: axis mcp serve
 
-Be precise. Use real node names and tools above.`, best.Name, freeRAM, pressure,
+Be precise. Use real node names and tools above.`,
+		sourceOrLive(source), best.Name, freeRAM, pressure,
 		toolsList(best), len(snap.Nodes), snap.Summary.TotalFreeRAMMB, task)
+}
+
+func sourceOrLive(source string) string {
+	if strings.TrimSpace(source) == "" {
+		return "live"
+	}
+	return source
 }
 
 func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (models.NodeFacts, bool) {
@@ -492,7 +511,12 @@ func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (
 
 func toolsList(n models.NodeFacts) []string {
 	var t []string
+	seen := make(map[string]struct{}, len(n.Tools))
 	for _, tool := range n.Tools {
+		if _, ok := seen[tool.Name]; ok {
+			continue
+		}
+		seen[tool.Name] = struct{}{}
 		t = append(t, tool.Name)
 	}
 	return t
