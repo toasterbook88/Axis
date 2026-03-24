@@ -44,6 +44,10 @@ type Daemon struct {
 	lastError     string
 }
 
+func (d *Daemon) RefreshNow(ctx context.Context) error {
+	return d.Refresh(ctx)
+}
+
 func NewDefault(interval time.Duration) *Daemon {
 	return New(interval, defaultCollector())
 }

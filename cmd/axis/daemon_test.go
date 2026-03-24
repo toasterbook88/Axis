@@ -28,3 +28,25 @@ func TestInvalidateDaemonCachePostsToEndpoint(t *testing.T) {
 		t.Fatal("expected invalidate endpoint to be called")
 	}
 }
+
+func TestRefreshDaemonCachePostsToEndpoint(t *testing.T) {
+	var sawPost bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/refresh" {
+			t.Fatalf("expected /refresh, got %s", r.URL.Path)
+		}
+		sawPost = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := refreshDaemonCache(context.Background(), server.URL); err != nil {
+		t.Fatalf("refreshDaemonCache: %v", err)
+	}
+	if !sawPost {
+		t.Fatal("expected refresh endpoint to be called")
+	}
+}
