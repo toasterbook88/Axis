@@ -28,7 +28,9 @@ axis task place "run ollama inference on a 7b model"
 - `axis status` — full cluster snapshot over SSH
 - `axis status --cached` — explicit daemon-backed cached snapshot read
 - `axis task place` — advisory placement with fit score and failure reasoning
+- `axis task place --cached` — explicit daemon-backed cached placement read
 - `axis serve` — optional local HTTP API surface
+- `axis daemon refresh` — force a fresh daemon snapshot now
 - `axis daemon invalidate` — explicit local daemon cache invalidation
 - `axis mcp serve` — optional read-only MCP server over stdio
 - `axis task run` — explicit execution surface layered on top of placement
@@ -41,7 +43,7 @@ axis task place "run ollama inference on a 7b model"
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc` |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
-| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, free RAM, and locality |
+| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, free RAM, and locality; `--cached` uses the explicit daemon snapshot cache |
 | **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
 | **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
@@ -113,9 +115,12 @@ axis task place "analyze a git repo"
 #     - free RAM: 14336 MB
 
 axis task place "run ollama inference on a 7b model" --format json
+axis task place --cached "run ollama inference on a 7b model"
 ```
 
 Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement; free RAM breaks ties.
+
+With `--cached`, placement uses the explicit daemon snapshot cache instead of a fresh SSH sweep. JSON output includes a `source` wrapper so you can tell whether the decision came from `daemon-cache` or live fallback.
 
 ### `axis serve` — optional local HTTP API
 
@@ -133,6 +138,15 @@ axis daemon invalidate --cache-addr 127.0.0.1:42425
 ```
 
 Clears the daemon-backed snapshot cache explicitly. This does not change the default `axis status` live path; it only affects cached reads and other daemon-backed surfaces.
+
+### `axis daemon refresh` — force a fresh daemon snapshot now
+
+```bash
+axis daemon refresh
+axis daemon refresh --cache-addr 127.0.0.1:42425
+```
+
+Forces the daemon to rebuild its cached snapshot immediately. This is the fastest way to ensure `axis status --cached` and `axis task place --cached` use fresh cluster state without waiting for the next background tick.
 
 ## Configuration Reference
 
@@ -187,7 +201,7 @@ Clears the daemon-backed snapshot cache explicitly. This does not change the def
 - Placement is deterministic: RAM pressure → GPU → effective headroom → free RAM → name
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
-- `axis serve` hosts an optional daemon-backed cache; `axis status --cached` and `axis daemon invalidate` use it explicitly
+- `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
 - Placement memory lives locally in `~/.axis/state.json`
 
