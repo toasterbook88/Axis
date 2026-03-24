@@ -174,6 +174,24 @@ func TestRankDeterministicTiebreak(t *testing.T) {
 	}
 }
 
+func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
+	candidates := []models.NodeFacts{
+		nodeComplete("alpha", 5000, "none"),
+		nodeComplete("beta", 3500, "none"),
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2000},
+			"beta":  {ReservedMB: 500},
+		},
+	}
+
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, st)
+	if ranked[0].Name != "beta" {
+		t.Fatalf("expected beta first on lower reservation ratio, got %s", ranked[0].Name)
+	}
+}
+
 // --- Selector Tests ---
 
 func TestSelectBestNode(t *testing.T) {

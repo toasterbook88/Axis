@@ -62,7 +62,8 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 //  2. GPU present
 //  3. Highest effective headroom (free-with-state - requirement)
 //  4. Highest allocatable RAM
-//  5. Node name ascending (stable tiebreak)
+//  5. Lowest reservation ratio (reserved / total RAM)
+//  6. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
@@ -90,6 +91,12 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 		rj := allocatableRAM(ranked[j], st)
 		if ri != rj {
 			return ri > rj
+		}
+
+		ratioI := reservationRatio(ranked[i], st)
+		ratioJ := reservationRatio(ranked[j], st)
+		if ratioI != ratioJ {
+			return ratioI < ratioJ
 		}
 
 		return ranked[i].Name < ranked[j].Name
@@ -172,6 +179,13 @@ func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
 		return 0
 	}
 	return effective
+}
+
+func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
+	if n.Resources == nil || n.Resources.RAMTotalMB <= 0 {
+		return 1.0
+	}
+	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
 }
 
 func gpuPresent(n models.NodeFacts) bool {
