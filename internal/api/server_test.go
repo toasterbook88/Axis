@@ -6,12 +6,30 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/skills"
 )
 
+type fakeCache struct {
+	snap *models.ClusterSnapshot
+	meta daemon.Metadata
+}
+
+func (f fakeCache) Snapshot() (*models.ClusterSnapshot, bool) {
+	if f.snap == nil {
+		return nil, false
+	}
+	return f.snap, true
+}
+
+func (f fakeCache) Meta() daemon.Metadata {
+	return f.meta
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
-	registerRoutes(mux)
+	registerRoutes(mux, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -35,7 +53,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	mux := http.NewServeMux()
-	registerRoutes(mux)
+	registerRoutes(mux, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp/tools", nil)
 	rec := httptest.NewRecorder()
@@ -65,6 +83,93 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	}
 	if !sawKnowledge {
 		t.Fatal("expected axis_knowledge tool in /mcp/tools")
+	}
+}
+
+func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, fakeCache{
+		snap: &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: 1,
+			},
+		},
+		meta: daemon.Metadata{
+			Source:             "daemon-cache",
+			Ready:              true,
+			RefreshIntervalSec: 60,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/snapshot", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload models.ClusterSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if payload.Summary.TotalNodes != 1 {
+		t.Fatalf("expected total nodes 1, got %d", payload.Summary.TotalNodes)
+	}
+}
+
+func TestSnapshotMetaEndpointReturnsCacheMetadata(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, fakeCache{
+		meta: daemon.Metadata{
+			Source:             "daemon-cache",
+			Ready:              true,
+			RefreshIntervalSec: 60,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/snapshot/meta", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload daemon.Metadata
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if payload.Source != "daemon-cache" {
+		t.Fatalf("expected source daemon-cache, got %q", payload.Source)
+	}
+	if !payload.Ready {
+		t.Fatal("expected ready=true")
+	}
+	if payload.RefreshIntervalSec != 60 {
+		t.Fatalf("expected refresh interval sec 60, got %d", payload.RefreshIntervalSec)
+	}
+}
+
+func TestToolsEndpointAliasReturnsSamePayload(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/tools", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload ToolsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(payload.Tools) == 0 {
+		t.Fatal("expected tools payload")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
@@ -81,9 +82,14 @@ type runnerContext struct {
 	skillStore *skills.Store
 }
 
-func Serve(addr string) error {
+type snapshotCache interface {
+	Snapshot() (*models.ClusterSnapshot, bool)
+	Meta() daemon.Metadata
+}
+
+func Serve(addr string, cache snapshotCache) error {
 	mux := http.NewServeMux()
-	registerRoutes(mux)
+	registerRoutes(mux, cache)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -93,19 +99,55 @@ func Serve(addr string) error {
 	return srv.ListenAndServe()
 }
 
-func registerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		payload := map[string]any{
 			"status": "ok",
 			"name":   "axis",
-		})
+		}
+		if cache != nil {
+			meta := cache.Meta()
+			payload["cache_ready"] = meta.Ready
+		}
+		writeJSON(w, http.StatusOK, payload)
+	}
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/healthz", healthHandler)
+
+	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		snap, ok := cache.Snapshot()
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache not ready")
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
 	})
 
-	mux.HandleFunc("/mcp/tools", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/snapshot/meta", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, cache.Meta())
+	})
+
+	toolsHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -133,7 +175,9 @@ func registerRoutes(mux *http.ServeMux) {
 			},
 		}
 		writeJSON(w, http.StatusOK, ToolsResponse{Tools: tools})
-	})
+	}
+	mux.HandleFunc("/tools", toolsHandler)
+	mux.HandleFunc("/mcp/tools", toolsHandler)
 
 	mux.HandleFunc("/knowledge", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
