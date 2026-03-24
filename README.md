@@ -4,7 +4,7 @@
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, and gives deterministic advisory task placement — no daemon, no server, no persistent state.**
+**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, provides deterministic advisory task placement, and exposes optional local control surfaces — no daemon-first architecture required.**
 
 ## Quick Start
 
@@ -22,6 +22,15 @@ axis status
 axis task place "run ollama inference on a 7b model"
 ```
 
+## What Works Today
+
+- `axis facts` — local hardware/tool snapshot
+- `axis status` — full cluster snapshot over SSH
+- `axis task place` — advisory placement with fit score and failure reasoning
+- `axis serve` — optional local HTTP API surface
+- `axis mcp serve` — optional read-only MCP server over stdio
+- `axis task run` — explicit execution surface layered on top of placement
+
 ## Features
 
 | Feature | Details |
@@ -30,9 +39,10 @@ axis task place "run ollama inference on a 7b model"
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc` |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
-| **Advisory task placement** | `axis task place` scores nodes by free RAM and tool availability; deterministic, no ML |
-| **Zero runtime deps** | Single static binary; no daemon, no database, no background process |
-| **JSON & YAML output** | All commands support `--format yaml` |
+| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, free RAM, and locality |
+| **Optional local control surfaces** | `axis serve`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
+| **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
+| **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
 
 ## Installation
 
@@ -52,7 +62,7 @@ go build -o axis ./cmd/axis/
 mv axis /usr/local/bin/axis
 ```
 
-**Requirements:** Go 1.22+, SSH key-based auth for remote nodes.
+**Requirements:** Go 1.26.1+, SSH key-based auth for remote nodes.
 
 ## Usage
 
@@ -104,6 +114,14 @@ axis task place "run ollama inference on a 7b model" --format json
 
 Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement; free RAM breaks ties.
 
+### `axis serve` — optional local HTTP API
+
+```bash
+axis serve
+```
+
+Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by default.
+
 ## Configuration Reference
 
 `~/.axis/nodes.yaml` fields:
@@ -123,7 +141,7 @@ Placement uses keyword matching against the task description (no ML). It infers 
 ┌─────────────────────┬─────────────────────────────────────────────────────────────────────────────────┐
 │       Package       │                                      Role                                       │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ cmd/axis/           │ Cobra CLI entry — chat, facts, status, task, exit codes                         │
+│ cmd/axis/           │ Cobra CLI entry — chat, facts, status, task, serve, context, scripts, skills   │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/config/    │ Loads ~/.axis/nodes.yaml (node list, SSH user/port/timeout)                     │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
@@ -133,7 +151,13 @@ Placement uses keyword matching against the task description (no ML). It infers 
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/chat/      │ Streams via local Ollama (localhost:11434), graceful fallback message           │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/snapshot/  │ Persists node facts to disk                                                     │
+│ internal/snapshot/  │ Assembles `ClusterSnapshot` from `[]NodeFacts`                                  │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/state/     │ Persists local placement memory and execution state                              │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/api/       │ Local HTTP API and execution surface                                             │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/mcp/       │ Read-only MCP server over stdio                                                  │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/transport/ │ Raw SSH execution layer                                                         │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
@@ -146,12 +170,13 @@ Placement uses keyword matching against the task description (no ML). It infers 
 ### Key design notes
 
 - Config lives at `~/.axis/nodes.yaml` — no cluster IPs hardcoded in code
-- Placement is deterministic: RAM pressure → free RAM → name (stable tiebreak)
+- Placement is deterministic: RAM pressure → GPU → effective headroom → free RAM → name
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
-- No Cortex/MCP integration — fully standalone from the rest of the AXIS stack
+- `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
+- Placement memory lives locally in `~/.axis/state.json`
 
-**Phase boundary:** This is Phase 1 — facts collection and advisory placement only. No task execution, no remote dispatch.
+**Current phase:** The Phase 1 observability core is complete, and Phase 2 advisory placement is live on `main`. Optional local server, MCP, chat, and explicit execution surfaces also exist, but the project is still not daemon-first.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 

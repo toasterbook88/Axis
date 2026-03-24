@@ -19,13 +19,15 @@ execution.
 It collects hardware facts and tool inventories from a configured set of nodes,
 assembles them into a compact `ClusterSnapshot`, and emits the result as structured
 JSON or YAML. The snapshot gives models and operators a single, accurate document
-describing available compute — without requiring a daemon, server, or persistent
-state.
+describing available compute — without requiring a daemon-first control plane.
+Live `main` also includes advisory placement, an optional local HTTP API, a
+read-only MCP server, and explicit execution/helper surfaces layered on top of
+that fact plane.
 
 AXIS is intentionally minimal:
 
 - Single binary, no installation beyond `go build`
-- No daemon or background process
+- No required daemon or background process
 - No proprietary wire protocol — SSH for transport, YAML for config, JSON for output
 - Dependency surface is small by design: `cobra`, `golang.org/x/crypto`, `gopkg.in/yaml.v3`
 
@@ -67,10 +69,10 @@ axis status         (fan-out over SSH)
    health, and generates per-node warnings.
 5. The CLI marshals the result to JSON or YAML and writes it to stdout.
 
-## Current Status: Phase 1
+## Current Status
 
-Phase 1 is the observability layer. It answers the question: *what compute do I
-have right now?*
+The Phase 1 observability layer is live and forms the core of the project. It
+answers the question: *what compute do I have right now?*
 
 What it produces:
 
@@ -93,13 +95,15 @@ Implemented features:
 - Failure diagnostics: per-node exclusion reasons (RAM gap, missing tool, status)
 - Runner-up comparison with fit score delta
 - Scope-aware: tasks too large for the cluster fail gracefully
+- Optional local HTTP API via `axis serve`
+- Optional read-only MCP surface via `axis mcp serve`
 
 Longer-term directions under consideration:
 
 - A lightweight daemon (`axisd`) for periodic background collection
 - Structured context export suitable for injection into LLM system prompts
 - Multi-hop or mesh node discovery (beyond a static YAML seed file)
-- Task execution (currently advisory only)
+- More fully hardened execution and automation surfaces
 
 ## Design Principles
 
