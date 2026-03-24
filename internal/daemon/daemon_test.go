@@ -152,3 +152,31 @@ func TestInvalidateClearsSnapshotAndRemovesPersistedFile(t *testing.T) {
 		t.Fatalf("expected snapshot file to be removed, got %v", err)
 	}
 }
+
+func TestRefreshNowStoresSnapshotImmediately(t *testing.T) {
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: 2,
+			},
+		}, nil
+	})
+	d.SetSnapshotPath(filepath.Join(t.TempDir(), "snapshot.json"))
+
+	if err := d.RefreshNow(context.Background()); err != nil {
+		t.Fatalf("RefreshNow: %v", err)
+	}
+
+	snap, ok := d.Snapshot()
+	if !ok {
+		t.Fatal("expected snapshot after RefreshNow")
+	}
+	if snap.Summary.TotalNodes != 2 {
+		t.Fatalf("expected total nodes 2, got %d", snap.Summary.TotalNodes)
+	}
+
+	if !d.Meta().Ready {
+		t.Fatal("expected daemon to be ready after RefreshNow")
+	}
+}

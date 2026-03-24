@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ type fakeCache struct {
 	snap        *models.ClusterSnapshot
 	meta        daemon.Metadata
 	invalidated bool
+	refreshed   bool
 }
 
 func (f *fakeCache) Snapshot() (*models.ClusterSnapshot, bool) {
@@ -32,6 +34,13 @@ func (f *fakeCache) Invalidate() {
 	f.invalidated = true
 	f.snap = nil
 	f.meta.Ready = false
+}
+
+func (f *fakeCache) RefreshNow(context.Context) error {
+	f.refreshed = true
+	f.snap = &models.ClusterSnapshot{Status: models.SnapshotHealthy}
+	f.meta.Ready = true
+	return nil
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -197,6 +206,25 @@ func TestInvalidateEndpointCallsCacheInvalidate(t *testing.T) {
 	}
 	if !cache.invalidated {
 		t.Fatal("expected cache invalidation to be triggered")
+	}
+}
+
+func TestRefreshEndpointCallsCacheRefresh(t *testing.T) {
+	cache := &fakeCache{
+		meta: daemon.Metadata{Ready: false},
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache)
+
+	req := httptest.NewRequest(http.MethodPost, "/refresh", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if !cache.refreshed {
+		t.Fatal("expected cache refresh to be triggered")
 	}
 }
 

@@ -86,6 +86,7 @@ type snapshotCache interface {
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
 	Invalidate()
+	RefreshNow(context.Context) error
 }
 
 func Serve(addr string, cache snapshotCache) error {
@@ -158,6 +159,22 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 			return
 		}
 		cache.Invalidate()
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		if err := cache.RefreshNow(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
