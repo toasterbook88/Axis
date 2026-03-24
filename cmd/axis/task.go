@@ -10,6 +10,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/knowledge"
@@ -34,8 +35,15 @@ func taskCmd() *cobra.Command {
 	return cmd
 }
 
+type taskPlaceOutput struct {
+	Source   string                   `json:"source" yaml:"source"`
+	Decision models.PlacementDecision `json:"decision" yaml:"decision"`
+}
+
 func taskPlaceCmd() *cobra.Command {
 	var format string
+	var cached bool
+	var cacheAddr string
 
 	cmd := &cobra.Command{
 		Use:   "place [description]",
@@ -44,32 +52,39 @@ func taskPlaceCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 
-			// Load config → discover → snapshot (reuse Phase 1 flow)
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			decision, source, err := planTaskPlacement(
+				ctx,
+				desc,
+				cached,
+				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+					return fetchCachedSnapshot(ctx, cacheAddr)
+				},
+				discoverLiveSnapshot,
+			)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-
-			// Infer requirements from description
-			reqs := placement.InferRequirements(desc)
-
-			// Run placement
-			decision := placement.SelectBestNode(reqs, snap.Nodes, nil)
-
 			if format == "json" {
-				return printOutput(decision, "json")
+				var payload any = decision
+				if cached {
+					payload = taskPlaceOutput{
+						Source:   source,
+						Decision: decision,
+					}
+				}
+				return printOutput(payload, "json")
 			}
 
 			// Human-readable output
 			if !decision.OK {
+				if cached {
+					fmt.Printf("Source: %s\n", source)
+				}
 				fmt.Println("No suitable node found.")
 				for _, r := range decision.Reasoning {
 					fmt.Printf("  - %s\n", r)
@@ -80,6 +95,9 @@ func taskPlaceCmd() *cobra.Command {
 			locality := "remote"
 			if decision.IsLocal {
 				locality = "local"
+			}
+			if cached {
+				fmt.Printf("Source: %s\n", source)
 			}
 			fmt.Printf("Selected node: %s (%s, fit %d/100)\n", decision.Node, locality, decision.FitScore)
 			if decision.Tool != "" {
@@ -94,7 +112,26 @@ func taskPlaceCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
+	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr, "Address of the local AXIS daemon cache")
 	return cmd
+}
+
+func planTaskPlacement(
+	ctx context.Context,
+	desc string,
+	cached bool,
+	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+) (models.PlacementDecision, string, error) {
+	snap, source, err := collectStatusSnapshot(ctx, cached, cachedLoader, liveLoader)
+	if err != nil {
+		return models.PlacementDecision{}, "", err
+	}
+
+	reqs := placement.InferRequirements(desc)
+	decision := placement.SelectBestNode(reqs, snap.Nodes, nil)
+	return decision, source, nil
 }
 
 type taskRunIntent struct {
