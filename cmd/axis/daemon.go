@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +23,34 @@ func daemonCmd() *cobra.Command {
 		Short: "Interact with the local AXIS daemon cache",
 	}
 	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Show local AXIS daemon health and staleness",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			meta, err := daemon.FetchMeta(ctx, cacheAddr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "daemon not responding on %s: %v\n", cacheAddr, err)
+				return err
+			}
+
+			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(meta); err != nil {
+				return err
+			}
+
+			switch {
+			case meta.Version == "":
+				fmt.Fprintln(cmd.OutOrStdout(), "warning: daemon metadata is missing version information; restart axis serve from current main")
+			case meta.Stale:
+				fmt.Fprintln(cmd.OutOrStdout(), "warning: daemon cache is stale; restart axis serve or run axis daemon refresh")
+			default:
+				fmt.Fprintln(cmd.OutOrStdout(), "daemon cache is fresh")
+			}
+			return nil
+		},
+	})
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "invalidate",
