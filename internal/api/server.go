@@ -186,14 +186,14 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 		tools := []ToolDef{
 			{
 				Name:        "axis_execute",
-				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Use mode=auto for known task intents, mode=script for matched scripts/skills only, or mode=exec for explicit raw commands.",
+				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Explicit mode is required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"description": map[string]any{"type": "string", "description": "Natural language task description or raw command"},
-						"mode":        map[string]any{"type": "string", "description": "Execution mode: auto, script, or exec"},
+						"mode":        map[string]any{"type": "string", "description": "Execution mode: script or exec"},
 					},
-					"required": []string{"description"},
+					"required": []string{"description", "mode"},
 				},
 			},
 			{
@@ -247,6 +247,14 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache) {
 			writeError(w, http.StatusBadRequest, "description is required")
 			return
 		}
+		if req.Mode == "" {
+			writeError(w, http.StatusBadRequest, "mode is required (use script or exec)")
+			return
+		}
+		if req.Mode != "script" && req.Mode != "exec" {
+			writeError(w, http.StatusBadRequest, "mode must be script or exec")
+			return
+		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 		defer cancel()
@@ -290,10 +298,6 @@ func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 }
 
 func resolveIntent(description, mode string, skillStore *skills.Store) (runIntent, error) {
-	if mode == "" {
-		mode = "auto"
-	}
-
 	var intent runIntent
 	if skillStore != nil {
 		if skill, ok := skillStore.BestMatch(description); ok {
@@ -307,7 +311,7 @@ func resolveIntent(description, mode string, skillStore *skills.Store) (runInten
 	}
 
 	switch mode {
-	case "auto", "script":
+	case "script":
 		if intent.matchedScript != nil {
 			intent.command = intent.matchedScript.Command
 			intent.label = fmt.Sprintf("fallback script %q", intent.matchedScript.Name)
