@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
@@ -178,5 +179,53 @@ func TestRefreshNowStoresSnapshotImmediately(t *testing.T) {
 
 	if !d.Meta().Ready {
 		t.Fatal("expected daemon to be ready after RefreshNow")
+	}
+}
+
+func TestMetaIncludesReservedMB(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 512, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-a"}},
+			"beta":  {ReservedMB: 256, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-b"}},
+		},
+	}
+	if err := st.Save(); err != nil {
+		t.Fatalf("state save: %v", err)
+	}
+
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{Status: models.SnapshotHealthy}, nil
+	})
+	meta := d.Meta()
+	if meta.ReservedMB != 768 {
+		t.Fatalf("expected reserved_mb 768, got %d", meta.ReservedMB)
+	}
+}
+
+func TestCanReserveUsesNodeRAMCap(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "alpha",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+				},
+			},
+		},
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2048},
+		},
+	}
+
+	if !CanReserve(snap, st, "alpha", 1024) {
+		t.Fatal("expected reservation to fit under cap")
+	}
+	if CanReserve(snap, st, "alpha", 6145) {
+		t.Fatal("expected reservation to exceed cap")
 	}
 }

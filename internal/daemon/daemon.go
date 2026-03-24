@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 const (
@@ -30,6 +31,7 @@ type Metadata struct {
 	NextRefreshAt      time.Time `json:"next_refresh_at,omitempty"`
 	LastError          string    `json:"last_error,omitempty"`
 	SnapshotPath       string    `json:"snapshot_path,omitempty"`
+	ReservedMB         int64     `json:"reserved_mb,omitempty"`
 }
 
 type Daemon struct {
@@ -124,6 +126,13 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 		d.lastError = err.Error()
 		return err
 	}
+
+	// Trigger persisted reservation cleanup on every successful refresh so
+	// stale exec state does not survive indefinitely across daemon runs.
+	if _, err := state.Load(); err != nil {
+		d.lastError = err.Error()
+		return err
+	}
 	return nil
 }
 
@@ -152,7 +161,7 @@ func (d *Daemon) Invalidate() {
 func (d *Daemon) Meta() Metadata {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return Metadata{
+	meta := Metadata{
 		Source:             "daemon-cache",
 		Ready:              d.snapshot != nil,
 		RefreshIntervalSec: int(d.interval / time.Second),
@@ -161,6 +170,42 @@ func (d *Daemon) Meta() Metadata {
 		LastError:          d.lastError,
 		SnapshotPath:       d.snapshotPath,
 	}
+
+	if st, err := state.Load(); err == nil && st != nil {
+		for _, ns := range st.Nodes {
+			meta.ReservedMB += ns.ReservedMB
+		}
+	}
+
+	return meta
+}
+
+func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node string, mb int64) bool {
+	if mb <= 0 || snap == nil || st == nil {
+		return true
+	}
+
+	var totalRAM int64
+	for _, n := range snap.Nodes {
+		if n.Name == node && n.Resources != nil {
+			totalRAM = n.Resources.RAMTotalMB
+			break
+		}
+	}
+	if totalRAM <= 0 {
+		return true
+	}
+
+	capMB := totalRAM - 1024
+	if capMB < 0 {
+		capMB = 0
+	}
+
+	ns, ok := st.Nodes[node]
+	if !ok {
+		return mb <= capMB
+	}
+	return ns.ReservedMB+mb <= capMB
 }
 
 func defaultCollector() Collector {
