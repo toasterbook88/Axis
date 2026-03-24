@@ -389,6 +389,12 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 		return resp, fmt.Errorf("no suitable node found")
 	}
 
+	reservationMB := reqs.MinFreeRAMMB + 1024
+	if !daemon.CanReserve(rc.snap, rc.st, decision.Node, reservationMB) {
+		resp.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
+		return resp, fmt.Errorf("reservation cap exceeded")
+	}
+
 	var targetNode models.NodeFacts
 	for _, n := range rc.snap.Nodes {
 		if n.Name == decision.Node {
@@ -435,7 +441,6 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 			"BEST_NODE="+decision.Node,
 		)
 		if rc.st != nil {
-			reservationMB := reqs.MinFreeRAMMB + 1024
 			execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
 			if err != nil {
 				resp.Error = err.Error()
@@ -479,7 +484,6 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 	}
 
 	if rc.st != nil {
-		reservationMB := reqs.MinFreeRAMMB + 1024
 		execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
 		if err != nil {
 			resp.Error = err.Error()
