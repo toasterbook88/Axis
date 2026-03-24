@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-20 00:34 EDT
+Last reviewed: 2026-03-24 12:27 EDT
 Branch: `main`
-Reviewed HEAD: `2bca37a`
+Reviewed HEAD: `6a2cb99`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -18,6 +18,9 @@ The live repo currently contains:
 - Cluster snapshot assembly and advisory placement
 - A local chat surface backed by Ollama
 - A local HTTP API with task execution
+- A daemon-backed cached snapshot seam behind `axis serve`
+- Explicit cached status reads via `axis status --cached`
+- Explicit cache invalidation via `axis daemon invalidate`
 - A CLI task execution path (`axis task run`)
 - A read-only MCP server for cluster diagnostics
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
@@ -36,7 +39,8 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `axis version` | Print version | Version is `0.1.0` |
 | `axis facts` | Collect local facts | JSON/YAML output |
-| `axis status` | Collect cluster snapshot | Uses configured nodes |
+| `axis status` | Collect cluster snapshot | Live SSH by default; `--cached` uses the local daemon cache |
+| `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis task place` | Advisory placement | Human output or JSON |
 | `axis task context` | Emit compact context block | Helper for external agents |
 | `axis task run` | Execute on selected node | Explicit execution path exists |
@@ -57,6 +61,7 @@ Top-level commands currently registered in the binary:
 | `internal/facts` | Local/remote hardware + tool collection | Parsing is decent; remote collection is round-trip heavy |
 | `internal/discovery` | Fan-out discovery and UDP beacons | Works, but has ordering/timing issues and no tests |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
+| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads and invalidate |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality rules are too permissive |
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, and multi-tool requirements are now live, but balancing policy is still simple |
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
@@ -74,11 +79,12 @@ Top-level commands currently registered in the binary:
 
 Audit commands run against this repo state:
 
-- `go vet ./...` -> passes
 - `go test ./...` -> passes
-- `go test -race ./internal/state ./internal/placement` -> passes
-- `go run ./cmd/axis task run "nuke-caches"` -> safe suggestion path shows `docker` + `go` requirements and does not execute implicitly
-- `go test ./... -cover` -> still shows several runtime-critical packages at `0.0%` coverage
+- `go build ./...` -> passes
+- `go build -o /tmp/axis ./cmd/axis` -> passes
+- `/tmp/axis status --cached --cache-addr 127.0.0.1:42433` -> returns wrapped snapshot with `source: "daemon-cache"`
+- `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
+- `go test ./internal/config ./internal/placement ./internal/facts` -> passes after public-repo sanitization
 
 Coverage gaps called out by `go test ./... -cover`:
 
@@ -97,6 +103,8 @@ Areas where the live repo has moved past the older docs/specs:
 - The repo persists state and learned skills to disk
 - The repo includes task execution, not just advisory placement
 - The repo includes UDP discovery and MCP diagnostics
+- The repo now includes an explicit daemon-backed snapshot cache, not just ad hoc live discovery
+- Cached reads and cache invalidation are explicit operator actions, not hidden behavior
 - Placement now subtracts reserved RAM during ranking, prefers GPU nodes after pressure, and enforces full script toolchains
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
@@ -128,6 +136,8 @@ In practical terms:
 - Script prerequisites like `jq` and broader shell assumptions are still under-modeled even though multi-tool requirements are now enforced
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
 - Persistence helpers do not consistently create parent directories or surface save/load corruption clearly
+- The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
+- Only `axis status` has an explicit cached path today; placement, context, and other read surfaces still hit live discovery by default
 
 ## Recommended Next Sequence
 
@@ -142,7 +152,8 @@ Documentation and organization first:
 
 Engineering follow-up after doc alignment:
 
-1. Refine reservation accounting into a clearer cluster RAM balancing model.
-2. Make all execution paths explicit and consistent.
-3. Add integration tests around SSH, API execution, safety, and discovery.
-4. Use [ram-balancing-research.md](ram-balancing-research.md) as the technical basis for the next placement-intelligence phase.
+1. Decide which read surfaces should gain explicit cached modes next (`task place`, context, or MCP).
+2. Refine reservation accounting into a clearer cluster RAM balancing model.
+3. Make all execution paths explicit and consistent.
+4. Add integration tests around SSH, API execution, safety, discovery, and daemon freshness.
+5. Use [ram-balancing-research.md](ram-balancing-research.md) as the technical basis for the next placement-intelligence phase.

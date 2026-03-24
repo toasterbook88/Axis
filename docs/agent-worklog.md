@@ -13,8 +13,8 @@ This file is the canonical coordination surface for active AXIS work.
 ## Repo State
 
 - Branch: `main`
-- Reviewed HEAD: `2bca37a`
-- Last updated: `2026-03-20 00:34 EDT`
+- Reviewed HEAD: `6a2cb99`
+- Last updated: `2026-03-24 12:27 EDT`
 - Note: `Reviewed HEAD` is the source state this worklog update was based on. A worklog-only commit will advance repository HEAD.
 
 ## Active Tasks
@@ -27,10 +27,8 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-005 | Link-local address blindspot review | Warp | pending | Decide whether `169.254.x.x` and similar link-local addresses should be exposed, filtered, or tagged explicitly | AX-002 | `internal/facts/local.go` | `axis facts` output demonstrating intended address behavior and a commit |
 | AX-006 | Local metric collection hardening | Claude (Antigravity) | pending | Reduce brittle local disk/RAM command parsing while preserving current behavior and adding coverage where practical | AX-005 | `internal/facts/local.go`, related tests | Passing tests, runtime verification, and a commit |
 | AX-007 | SSH identity resolution hardening | Claude (Antigravity) | pending | Respect non-default SSH identity configuration or explicitly document the current limitation | AX-002 | `internal/transport/ssh.go`, related tests/docs | Verified non-default identity behavior or documented limitation, plus a commit |
-| AX-010 | Current-state documentation baseline | Codex | in_review | Create a live orientation doc that maps the actual command surface, package map, test/coverage status, and current risks | AX-002 | `docs/current-state.md`, `docs/README.md`, `docs/agent-worklog.md` | Markdown diff, referenced verification commands, and a commit |
-| AX-011 | Documentation truth-alignment pass | Codex | in_progress | Reconcile repo docs with the live command surface and recent placement hardening | AX-010 | `docs/current-state.md`, `docs/README.md`, `docs/agent-worklog.md`, `docs/future-roadmap.md`, `docs/doctrine.md`, `docs/ram-balancing-research.md` | Updated docs, reviewed HEAD sync, and a commit |
-| AX-016 | Placement intelligence design phase | Codex | in_review | Turn the recent placement hardening into a documented next-phase design around allocatable RAM, leases, pressure, and skew-aware balancing | AX-012 | `docs/ram-balancing-research.md`, `docs/doctrine.md`, `docs/future-roadmap.md`, `docs/current-state.md` | Cross-linked design docs, reviewed against live main, and a commit |
-| AX-017 | Git expertise strategy lane | Codex | in_review | Make AXIS explicitly great at Git-aware operator work, not just networking and cluster routing | AX-011 | `docs/doctrine.md`, `docs/future-roadmap.md`, `docs/current-state.md`, Git-aware runbooks later | Strategy documented, repo-state reflected, and a commit |
+| AX-022 | Cached read surface expansion | Codex | pending | Decide whether explicit cached reads should extend beyond `axis status` into placement, context, or MCP without introducing hidden fallback behavior | AX-020 | `cmd/axis/status.go`, `cmd/axis/task.go`, `internal/api/`, `internal/mcp/`, docs | Design note or scoped implementation with explicit verification |
+| AX-023 | Daemon freshness policy | Codex | pending | Define whether daemon refresh should stay timer-only or gain additional explicit/manual refresh semantics beyond invalidate | AX-020 | `internal/daemon/`, `cmd/axis/daemon.go`, runbooks/docs | Clear operator-facing policy, tests if code changes, and a commit |
 
 ## File Ownership
 
@@ -73,3 +71,11 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-013 | Codex | `83e6032` | Per-run execution context files replaced shared `/tmp/axis-knows.json`. `go test ./...`, build, runtime execution, and `rg` proof all clean. |
 | AX-014 | Codex | `5b342b8` | Explicit task lifecycle added with acquire/release and legacy state migration. `go test ./...` passes; `~/.axis/state.json` returns to empty after execution. |
 | AX-015 | Codex | `a52ab4d`, `c2c5051`, `2bca37a` | Placement hardening: reservation subtraction live, GPU is a real ranking key, and full `RequiredTools[]` is enforced. Focused placement tests and full suite passed. |
+| AX-010 | Codex | `6e42786` | Current-state baseline docs landed with live package map, command surface, and risk summary. |
+| AX-011 | Codex | `194d101` | Top-level docs aligned with live main; stale PR noise removed; README, phase spec, and white paper updated. |
+| AX-016 | Codex | `6e42786` | Placement intelligence design documented and cross-linked through research, doctrine, roadmap, and current-state docs. |
+| AX-017 | Codex | `422f8d6` | Git expertise formally added as an explicit AXIS strategy lane in doctrine and roadmap docs. |
+| AX-018 | Codex | `d9ddbb5` | Daemon seam landed: `axis serve` now hosts background snapshot refresh plus cached snapshot endpoints. |
+| AX-019 | Codex | `76c05bc` | `axis status --cached` added as the first explicit cached CLI read over the daemon cache. |
+| AX-020 | Codex | `6a2cb99` | Explicit cache invalidation landed via `POST /invalidate` and `axis daemon invalidate`. |
+| AX-021 | Codex | `eaa9dc1` | Public-repo sanitization removed environment-specific strings from tracked source without changing behavior. |
