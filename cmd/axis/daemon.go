@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/daemon"
 )
 
 func daemonCmd() *cobra.Command {
@@ -55,7 +56,7 @@ func daemonCmd() *cobra.Command {
 }
 
 func invalidateDaemonCache(ctx context.Context, addr string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeCacheAddr(addr)+"/invalidate", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, daemon.NormalizeAddr(addr)+"/invalidate", nil)
 	if err != nil {
 		return err
 	}
@@ -64,7 +65,7 @@ func invalidateDaemonCache(ctx context.Context, addr string) error {
 }
 
 func refreshDaemonCache(ctx context.Context, addr string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeCacheAddr(addr)+"/refresh", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, daemon.NormalizeAddr(addr)+"/refresh", nil)
 	if err != nil {
 		return err
 	}
