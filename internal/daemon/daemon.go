@@ -32,6 +32,9 @@ type Metadata struct {
 	LastError          string    `json:"last_error,omitempty"`
 	SnapshotPath       string    `json:"snapshot_path,omitempty"`
 	ReservedMB         int64     `json:"reserved_mb,omitempty"`
+	Version            string    `json:"version,omitempty"`
+	CacheAgeSec        int       `json:"cache_age_sec,omitempty"`
+	Stale              bool      `json:"stale,omitempty"`
 }
 
 type Daemon struct {
@@ -160,6 +163,17 @@ func (d *Daemon) Invalidate() {
 func (d *Daemon) Meta() Metadata {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+
+	age := 0
+	stale := false
+	if !d.collectedAt.IsZero() {
+		age = int(time.Since(d.collectedAt).Seconds())
+		if age < 0 {
+			age = 0
+		}
+		stale = time.Since(d.collectedAt) > 5*time.Minute
+	}
+
 	meta := Metadata{
 		Source:             "daemon-cache",
 		Ready:              d.snapshot != nil,
@@ -168,6 +182,9 @@ func (d *Daemon) Meta() Metadata {
 		NextRefreshAt:      d.nextRefreshAt,
 		LastError:          d.lastError,
 		SnapshotPath:       d.snapshotPath,
+		Version:            Version,
+		CacheAgeSec:        age,
+		Stale:              stale,
 	}
 
 	if st, err := state.Load(); err == nil && st != nil {

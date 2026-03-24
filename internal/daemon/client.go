@@ -11,6 +11,8 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+const Version = "0.1.0"
+
 func NormalizeAddr(addr string) string {
 	addr = strings.TrimSpace(addr)
 	addr = strings.TrimRight(addr, "/")
@@ -21,30 +23,16 @@ func NormalizeAddr(addr string) string {
 }
 
 func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, string, error) {
-	baseURL := NormalizeAddr(addr)
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	metaReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/snapshot/meta", nil)
+	meta, err := FetchMeta(ctx, addr)
 	if err != nil {
-		return nil, "", err
-	}
-	metaResp, err := client.Do(metaReq)
-	if err != nil {
-		return nil, "", err
-	}
-	defer metaResp.Body.Close()
-	if metaResp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("cache metadata request failed: %s", metaResp.Status)
-	}
-
-	var meta Metadata
-	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
 		return nil, "", err
 	}
 	if !meta.Ready {
 		return nil, "", fmt.Errorf("snapshot cache not ready")
 	}
 
+	baseURL := NormalizeAddr(addr)
+	client := &http.Client{Timeout: 5 * time.Second}
 	snapReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/snapshot", nil)
 	if err != nil {
 		return nil, "", err
@@ -69,4 +57,28 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 	}
 
 	return &snap, source, nil
+}
+
+func FetchMeta(ctx context.Context, addr string) (Metadata, error) {
+	baseURL := NormalizeAddr(addr)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	metaReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/snapshot/meta", nil)
+	if err != nil {
+		return Metadata{}, err
+	}
+	metaResp, err := client.Do(metaReq)
+	if err != nil {
+		return Metadata{}, err
+	}
+	defer metaResp.Body.Close()
+	if metaResp.StatusCode != http.StatusOK {
+		return Metadata{}, fmt.Errorf("cache metadata request failed: %s", metaResp.Status)
+	}
+
+	var meta Metadata
+	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
+		return Metadata{}, err
+	}
+	return meta, nil
 }

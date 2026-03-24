@@ -62,6 +62,9 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	if meta.Source != "daemon-cache" {
 		t.Fatalf("expected source daemon-cache, got %q", meta.Source)
 	}
+	if meta.Version != Version {
+		t.Fatalf("expected version %q, got %q", Version, meta.Version)
+	}
 	if meta.RefreshIntervalSec != 30 {
 		t.Fatalf("expected refresh interval sec 30, got %d", meta.RefreshIntervalSec)
 	}
@@ -73,6 +76,12 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	}
 	if meta.LastError != "" {
 		t.Fatalf("expected empty last_error, got %q", meta.LastError)
+	}
+	if meta.CacheAgeSec < 0 {
+		t.Fatalf("expected non-negative cache age, got %d", meta.CacheAgeSec)
+	}
+	if meta.Stale {
+		t.Fatal("expected fresh metadata immediately after refresh")
 	}
 
 	data, err := os.ReadFile(path)
@@ -215,6 +224,21 @@ func TestMetaIncludesReservedMB(t *testing.T) {
 	meta := d.Meta()
 	if meta.ReservedMB != 768 {
 		t.Fatalf("expected reserved_mb 768, got %d", meta.ReservedMB)
+	}
+}
+
+func TestMetaMarksStaleSnapshots(t *testing.T) {
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{Status: models.SnapshotHealthy}, nil
+	})
+	d.collectedAt = time.Now().UTC().Add(-6 * time.Minute)
+
+	meta := d.Meta()
+	if !meta.Stale {
+		t.Fatal("expected metadata to be stale")
+	}
+	if meta.CacheAgeSec < 360 {
+		t.Fatalf("expected cache age >= 360s, got %d", meta.CacheAgeSec)
 	}
 }
 

@@ -43,3 +43,32 @@ func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
 		t.Fatalf("expected cached snapshot total nodes 3, got %d", snap.Summary.TotalNodes)
 	}
 }
+
+func TestFetchMetaReadsDaemonMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/snapshot/meta" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(Metadata{
+			Source:             "daemon-cache",
+			Ready:              true,
+			RefreshIntervalSec: 60,
+			Version:            Version,
+			CacheAgeSec:        12,
+			Stale:              false,
+		})
+	}))
+	defer server.Close()
+
+	meta, err := FetchMeta(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchMeta: %v", err)
+	}
+	if meta.Version != Version {
+		t.Fatalf("expected version %q, got %q", Version, meta.Version)
+	}
+	if meta.CacheAgeSec != 12 {
+		t.Fatalf("expected cache age 12, got %d", meta.CacheAgeSec)
+	}
+}
