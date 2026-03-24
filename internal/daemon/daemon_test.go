@@ -18,6 +18,16 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 		return &models.ClusterSnapshot{
 			Timestamp: time.Unix(1700000000, 0).UTC(),
 			Status:    models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name:   "alpha",
+					Status: models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 8192,
+						RAMFreeMB:  4096,
+					},
+				},
+			},
 			Summary: models.ClusterSummary{
 				TotalNodes:     1,
 				ReachableNodes: 1,
@@ -40,6 +50,9 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	}
 	if snap.Summary.TotalFreeRAMMB != 4096 {
 		t.Fatalf("expected free ram 4096, got %d", snap.Summary.TotalFreeRAMMB)
+	}
+	if snap.Summary.TotalAllocatableMB != 4096 {
+		t.Fatalf("expected allocatable ram 4096, got %d", snap.Summary.TotalAllocatableMB)
 	}
 
 	meta := d.Meta()
@@ -250,6 +263,12 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	if got := snap.Nodes[0].Resources.RAMAllocatableMB; got != 3328 {
 		t.Fatalf("expected allocatable RAM 3328, got %d", got)
 	}
+	if got := snap.Summary.TotalReservedMB; got != 768 {
+		t.Fatalf("expected summary reserved RAM 768, got %d", got)
+	}
+	if got := snap.Summary.TotalAllocatableMB; got != 3328 {
+		t.Fatalf("expected summary allocatable RAM 3328, got %d", got)
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -261,6 +280,9 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	}
 	if got := persisted.Nodes[0].Resources.RAMAllocatableMB; got != 3328 {
 		t.Fatalf("expected persisted allocatable RAM 3328, got %d", got)
+	}
+	if got := persisted.Summary.TotalAllocatableMB; got != 3328 {
+		t.Fatalf("expected persisted summary allocatable RAM 3328, got %d", got)
 	}
 }
 

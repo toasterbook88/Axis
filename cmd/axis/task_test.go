@@ -30,8 +30,10 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 			},
 		},
 		Summary: models.ClusterSummary{
-			TotalNodes:     2,
-			TotalFreeRAMMB: 833,
+			TotalNodes:         2,
+			TotalFreeRAMMB:     833,
+			TotalAllocatableMB: 577,
+			TotalReservedMB:    256,
 		},
 	}
 
@@ -45,6 +47,9 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 	}
 	if !strings.Contains(out, "577MB allocatable (256MB reserved)") {
 		t.Fatalf("expected allocatable RAM line in context block, got:\n%s", out)
+	}
+	if !strings.Contains(out, "2 nodes, 577MB allocatable across cluster (256MB reserved)") {
+		t.Fatalf("expected allocatable cluster summary in context block, got:\n%s", out)
 	}
 	if !strings.Contains(out, "axis mcp serve") {
 		t.Fatalf("expected MCP hint in context block, got:\n%s", out)

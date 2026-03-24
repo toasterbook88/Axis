@@ -63,11 +63,15 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 
 	// === Live cluster-aware checks ===
 	if k != nil {
+		clusterAllocatable := k.Snapshot.Summary.TotalAllocatableMB
+		if clusterAllocatable <= 0 {
+			clusterAllocatable = k.Snapshot.Summary.TotalFreeRAMMB
+		}
 		if (strings.Contains(lower, "model") || strings.Contains(lower, "inference") || strings.Contains(lower, "large")) &&
-			k.Snapshot.Summary.TotalFreeRAMMB < 4096 {
+			clusterAllocatable < 4096 {
 			return BlockResult{
 				Blocked: true,
-				Reason:  fmt.Sprintf("cluster only has %d MB free RAM total — too small for heavy model", k.Snapshot.Summary.TotalFreeRAMMB),
+				Reason:  fmt.Sprintf("cluster only has %d MB allocatable RAM total — too small for heavy model", clusterAllocatable),
 				Score:   87,
 			}
 		}
