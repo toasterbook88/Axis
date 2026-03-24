@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
@@ -60,7 +61,7 @@ func taskPlaceCmd() *cobra.Command {
 				desc,
 				cached,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-					return fetchCachedSnapshot(ctx, cacheAddr)
+					return daemon.FetchSnapshot(ctx, cacheAddr)
 				},
 				discoverLiveSnapshot,
 			)
@@ -428,7 +429,7 @@ func taskContextCmd() *cobra.Command {
 				ctx,
 				cached,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-					return fetchCachedSnapshot(ctx, cacheAddr)
+					return daemon.FetchSnapshot(ctx, cacheAddr)
 				},
 				discoverLiveSnapshot,
 			)

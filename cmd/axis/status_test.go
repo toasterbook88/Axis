@@ -2,12 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -63,39 +59,5 @@ func TestCollectStatusSnapshotFallsBackToLiveWhenCacheFails(t *testing.T) {
 	}
 	if source != "live" {
 		t.Fatalf("expected live source, got %q", source)
-	}
-}
-
-func TestFetchCachedSnapshotReadsDaemonEndpoints(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/snapshot/meta":
-			_ = json.NewEncoder(w).Encode(daemon.Metadata{
-				Source:             "daemon-cache",
-				Ready:              true,
-				RefreshIntervalSec: 60,
-			})
-		case "/snapshot":
-			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
-				Status: models.SnapshotHealthy,
-				Summary: models.ClusterSummary{
-					TotalNodes: 3,
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	snap, source, err := fetchCachedSnapshot(context.Background(), server.URL)
-	if err != nil {
-		t.Fatalf("fetchCachedSnapshot: %v", err)
-	}
-	if source != "daemon-cache" {
-		t.Fatalf("expected daemon-cache source, got %q", source)
-	}
-	if snap.Summary.TotalNodes != 3 {
-		t.Fatalf("expected cached snapshot total nodes 3, got %d", snap.Summary.TotalNodes)
 	}
 }

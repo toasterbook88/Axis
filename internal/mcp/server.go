@@ -11,6 +11,7 @@ import (
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
@@ -38,7 +39,7 @@ type sshConnectivityResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func NewServer() *mcpserver.MCPServer {
+func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"axis",
 		"0.1.0",
@@ -48,30 +49,34 @@ func NewServer() *mcpserver.MCPServer {
 		mcpserver.WithInstructions("AXIS exposes read-only cluster state and diagnostics. Do not assume any write or execution authority."),
 	)
 
-	registerResources(s)
-	registerTools(s)
+	registerResources(s, useCache, cacheAddr)
+	registerTools(s, useCache, cacheAddr)
 
 	return s
 }
 
-func registerResources(s *mcpserver.MCPServer) {
+func registerResources(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 	snapResource := mcpproto.NewResource(
 		clusterSnapshotURI,
 		"Cluster Snapshot",
 		mcpproto.WithResourceDescription("Current AXIS cluster state as JSON"),
 		mcpproto.WithMIMEType("application/json"),
 	)
-	s.AddResource(snapResource, clusterSnapshotResource)
+	s.AddResource(snapResource, func(ctx context.Context, req mcpproto.ReadResourceRequest) ([]mcpproto.ResourceContents, error) {
+		return clusterSnapshotResource(ctx, req, useCache, cacheAddr)
+	})
 }
 
-func registerTools(s *mcpserver.MCPServer) {
+func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 	s.AddTool(
 		mcpproto.NewTool(
 			"cluster_snapshot",
 			mcpproto.WithDescription("Return the current AXIS cluster snapshot"),
 			mcpproto.WithReadOnlyHintAnnotation(true),
 		),
-		clusterSnapshotTool,
+		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			return clusterSnapshotTool(ctx, req, useCache, cacheAddr)
+		},
 	)
 
 	s.AddTool(
@@ -85,7 +90,9 @@ func registerTools(s *mcpserver.MCPServer) {
 				mcpproto.Description("Task description to evaluate"),
 			),
 		),
-		placementDecisionTool,
+		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			return placementDecisionTool(ctx, req, useCache, cacheAddr)
+		},
 	)
 
 	s.AddTool(
@@ -154,12 +161,12 @@ func registerTools(s *mcpserver.MCPServer) {
 
 }
 
-func ServeStdio() error {
-	return mcpserver.ServeStdio(NewServer())
+func ServeStdio(cached bool, cacheAddr string) error {
+	return mcpserver.ServeStdio(NewServer(cached, cacheAddr))
 }
 
-func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceRequest) ([]mcpproto.ResourceContents, error) {
-	snap, err := currentSnapshot(ctx)
+func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceRequest, useCache bool, cacheAddr string) ([]mcpproto.ResourceContents, error) {
+	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -178,21 +185,21 @@ func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceReque
 	}, nil
 }
 
-func clusterSnapshotTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-	snap, err := currentSnapshot(ctx)
+func clusterSnapshotTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 	return mcpproto.NewToolResultJSON(snap)
 }
 
-func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
 	desc, err := req.RequireString("description")
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 
-	snap, err := currentSnapshot(ctx)
+	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
@@ -275,7 +282,15 @@ func sshConnectivityTestTool(ctx context.Context, req mcpproto.CallToolRequest) 
 	return mcpproto.NewToolResultJSON(result)
 }
 
-func currentSnapshot(ctx context.Context) (*models.ClusterSnapshot, error) {
+func currentSnapshot(ctx context.Context, useCache bool, cacheAddr string) (*models.ClusterSnapshot, error) {
+	if useCache {
+		snap, _, err := daemon.FetchSnapshot(ctx, cacheAddr)
+		if err != nil {
+			return nil, err
+		}
+		return snap, nil
+	}
+
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
 		return nil, err
