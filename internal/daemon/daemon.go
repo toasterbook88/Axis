@@ -105,6 +105,11 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	snap, err := d.collector(ctx)
 	now := time.Now().UTC()
 
+	var st *state.ClusterState
+	if err == nil {
+		st, err = state.Load()
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -116,20 +121,14 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	}
 
 	d.snapshot = cloneSnapshot(snap)
+	applyReservationView(d.snapshot, st)
 	d.collectedAt = now
 	d.lastError = ""
 
 	if d.snapshotPath == "" {
 		return nil
 	}
-	if err := persistSnapshot(d.snapshotPath, snap); err != nil {
-		d.lastError = err.Error()
-		return err
-	}
-
-	// Trigger persisted reservation cleanup on every successful refresh so
-	// stale exec state does not survive indefinitely across daemon runs.
-	if _, err := state.Load(); err != nil {
+	if err := persistSnapshot(d.snapshotPath, d.snapshot); err != nil {
 		d.lastError = err.Error()
 		return err
 	}
@@ -243,7 +242,48 @@ func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		return nil
 	}
 	clone := *snap
-	clone.Nodes = append([]models.NodeFacts(nil), snap.Nodes...)
+	clone.Nodes = make([]models.NodeFacts, len(snap.Nodes))
+	for i, node := range snap.Nodes {
+		nodeCopy := node
+		if node.Resources != nil {
+			res := *node.Resources
+			res.GPUs = append([]string(nil), node.Resources.GPUs...)
+			nodeCopy.Resources = &res
+		}
+		nodeCopy.Addresses = append([]models.NetworkAddress(nil), node.Addresses...)
+		nodeCopy.Tools = append([]models.ToolInfo(nil), node.Tools...)
+		if node.Ollama != nil {
+			ollama := *node.Ollama
+			ollama.Models = append([]string(nil), node.Ollama.Models...)
+			nodeCopy.Ollama = &ollama
+		}
+		clone.Nodes[i] = nodeCopy
+	}
 	clone.Warnings = append([]models.Warning(nil), snap.Warnings...)
 	return &clone
+}
+
+func applyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
+	if snap == nil || st == nil || st.Nodes == nil {
+		return
+	}
+
+	for i := range snap.Nodes {
+		node := &snap.Nodes[i]
+		if node.Resources == nil {
+			continue
+		}
+
+		reserved := int64(0)
+		if ns, ok := st.Nodes[node.Name]; ok {
+			reserved = ns.ReservedMB
+		}
+		node.Resources.RAMReservedMB = reserved
+
+		allocatable := node.Resources.RAMFreeMB - reserved
+		if allocatable < 0 {
+			allocatable = 0
+		}
+		node.Resources.RAMAllocatableMB = allocatable
+	}
 }

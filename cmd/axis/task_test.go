@@ -22,8 +22,10 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 				},
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
-					RAMFreeMB: 833,
-					Pressure:  "low",
+					RAMFreeMB:        833,
+					RAMReservedMB:    256,
+					RAMAllocatableMB: 577,
+					Pressure:         "low",
 				},
 			},
 		},
@@ -40,6 +42,9 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 	}
 	if !strings.Contains(out, "Source: daemon-cache") {
 		t.Fatalf("expected source line in context block, got:\n%s", out)
+	}
+	if !strings.Contains(out, "577MB allocatable (256MB reserved)") {
+		t.Fatalf("expected allocatable RAM line in context block, got:\n%s", out)
 	}
 	if !strings.Contains(out, "axis mcp serve") {
 		t.Fatalf("expected MCP hint in context block, got:\n%s", out)

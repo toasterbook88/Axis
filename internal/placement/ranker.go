@@ -61,7 +61,7 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 //  1. Lowest RAM pressure (none < low < medium < high)
 //  2. GPU present
 //  3. Highest effective headroom (free-with-state - requirement)
-//  4. Highest raw free RAM
+//  4. Highest allocatable RAM
 //  5. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
@@ -86,8 +86,8 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return hi > hj
 		}
 
-		ri := freeRAM(ranked[i])
-		rj := freeRAM(ranked[j])
+		ri := allocatableRAM(ranked[i], st)
+		rj := allocatableRAM(ranked[j], st)
 		if ri != rj {
 			return ri > rj
 		}
@@ -148,6 +148,32 @@ func freeRAM(n models.NodeFacts) int64 {
 	return n.Resources.RAMFreeMB
 }
 
+func reservedRAM(n models.NodeFacts, st *state.ClusterState) int64 {
+	if st != nil && st.Nodes != nil {
+		if ns, ok := st.Nodes[n.Name]; ok {
+			return ns.ReservedMB
+		}
+	}
+	if n.Resources == nil {
+		return 0
+	}
+	return n.Resources.RAMReservedMB
+}
+
+func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
+	if n.Resources == nil {
+		return 0
+	}
+	if st == nil && (n.Resources.RAMReservedMB > 0 || n.Resources.RAMAllocatableMB > 0) {
+		return n.Resources.RAMAllocatableMB
+	}
+	effective := n.Resources.RAMFreeMB - reservedRAM(n, st)
+	if effective < 0 {
+		return 0
+	}
+	return effective
+}
+
 func gpuPresent(n models.NodeFacts) bool {
 	if n.Resources == nil {
 		return false
@@ -157,7 +183,7 @@ func gpuPresent(n models.NodeFacts) bool {
 
 // ComputeFitScore returns 0-100 indicating small-model suitability.
 // Scoring breakdown:
-//   - Free RAM:    up to 30 pts (1 pt per 256MB, capped at 30)
+//   - Allocatable RAM: up to 30 pts (1 pt per 256MB, capped at 30)
 //   - Pressure:    up to 25 pts (none=25, low=20, medium=10, high=0)
 //   - GPU present: +25 pts
 //   - CPU cores:   up to 10 pts (1 pt per core, capped at 10)
@@ -171,7 +197,7 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) i
 
 	score := 0
 
-	// Free RAM: 1pt per 256MB, cap 30
+	// Allocatable RAM: 1pt per 256MB, cap 30
 	adjusted := freeRAMWithState(n, st)
 	ramPts := int(adjusted / 256)
 	if ramPts > 30 {
@@ -213,20 +239,7 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) i
 }
 
 func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
-	if n.Resources == nil {
-		return 0
-	}
-	committed := int64(0)
-	if st != nil && st.Nodes != nil {
-		if ns, ok := st.Nodes[n.Name]; ok {
-			committed = ns.ReservedMB
-		}
-	}
-	effective := n.Resources.RAMFreeMB - committed
-	if effective < 0 {
-		return 0
-	}
-	return effective
+	return allocatableRAM(n, st)
 }
 
 func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {

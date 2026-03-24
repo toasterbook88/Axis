@@ -205,6 +205,65 @@ func TestMetaIncludesReservedMB(t *testing.T) {
 	}
 }
 
+func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 768, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-a"}},
+		},
+	}
+	if err := st.Save(); err != nil {
+		t.Fatalf("state save: %v", err)
+	}
+
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name:   "alpha",
+					Status: models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 8192,
+						RAMFreeMB:  4096,
+					},
+				},
+			},
+		}, nil
+	})
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	d.SetSnapshotPath(path)
+
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	snap, ok := d.Snapshot()
+	if !ok {
+		t.Fatal("expected cached snapshot")
+	}
+	if got := snap.Nodes[0].Resources.RAMReservedMB; got != 768 {
+		t.Fatalf("expected reserved RAM 768, got %d", got)
+	}
+	if got := snap.Nodes[0].Resources.RAMAllocatableMB; got != 3328 {
+		t.Fatalf("expected allocatable RAM 3328, got %d", got)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read snapshot file: %v", err)
+	}
+	var persisted models.ClusterSnapshot
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("unmarshal snapshot file: %v", err)
+	}
+	if got := persisted.Nodes[0].Resources.RAMAllocatableMB; got != 3328 {
+		t.Fatalf("expected persisted allocatable RAM 3328, got %d", got)
+	}
+}
+
 func TestCanReserveUsesNodeRAMCap(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{

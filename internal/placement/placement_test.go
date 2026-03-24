@@ -457,6 +457,44 @@ func TestFitScoreUsesEffectiveRAM(t *testing.T) {
 	}
 }
 
+func TestCachedAllocatableRAMAffectsSelection(t *testing.T) {
+	alpha := nodeComplete("alpha", 5000, "none", "git")
+	alpha.Resources.RAMReservedMB = 3000
+	alpha.Resources.RAMAllocatableMB = 2000
+
+	beta := nodeComplete("beta", 4200, "none", "git")
+	beta.Resources.RAMReservedMB = 512
+	beta.Resources.RAMAllocatableMB = 3688
+
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
+	d := SelectBestNode(reqs, []models.NodeFacts{alpha, beta}, nil)
+
+	if !d.OK || d.Node != "beta" {
+		t.Fatalf("expected cached allocatable RAM to prefer beta, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
+	}
+}
+
+func TestSuccessReasoningShowsAllocatableRAM(t *testing.T) {
+	alpha := nodeComplete("alpha", 5000, "none", "git")
+	alpha.Resources.RAMReservedMB = 2048
+	alpha.Resources.RAMAllocatableMB = 2952
+
+	d := SelectBestNode(models.TaskRequirements{RequiredTools: []string{"git"}}, []models.NodeFacts{alpha}, nil)
+	if !d.OK {
+		t.Fatalf("expected OK=true, got reasoning=%v", d.Reasoning)
+	}
+
+	foundAllocatable := false
+	for _, r := range d.Reasoning {
+		if contains(r, "allocatable") && contains(r, "reserved") {
+			foundAllocatable = true
+		}
+	}
+	if !foundAllocatable {
+		t.Fatalf("expected allocatable RAM reasoning, got %v", d.Reasoning)
+	}
+}
+
 // --- Helpers ---
 
 func contains(s, sub string) bool {
