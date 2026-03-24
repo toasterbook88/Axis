@@ -33,10 +33,13 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 		},
 	}
 
-	out := buildContextBlock(snap, models.TaskRequirements{MinFreeRAMMB: 4096}, "analyze repo")
+	out := buildContextBlock(snap, models.TaskRequirements{MinFreeRAMMB: 4096}, "analyze repo", "daemon-cache")
 
 	if !strings.Contains(out, "Best node: m3") {
 		t.Fatalf("expected context block to choose node with resources, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Source: daemon-cache") {
+		t.Fatalf("expected source line in context block, got:\n%s", out)
 	}
 	if !strings.Contains(out, "axis mcp serve") {
 		t.Fatalf("expected MCP hint in context block, got:\n%s", out)
