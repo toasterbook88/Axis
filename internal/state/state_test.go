@@ -202,3 +202,107 @@ func TestStateLifecycleAcquireAndRelease(t *testing.T) {
 		t.Fatal("expected alpha node to be pruned after release")
 	}
 }
+
+func TestLoadNormalizesActiveTasksToExecCount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   1024,
+				LastPlacedAt: time.Now().UTC(),
+				ActiveTasks:  99,
+				ActiveExecs:  []string{"exec-1", "exec-2"},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns := loaded.Nodes["alpha"]
+	if ns.ActiveTasks != 2 {
+		t.Fatalf("ActiveTasks = %d, want 2", ns.ActiveTasks)
+	}
+}
+
+func TestSaveInitializesNilNodes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := &ClusterState{}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if s.Nodes == nil {
+		t.Fatal("expected Save to initialize Nodes map")
+	}
+}
+
+func TestRecordPlacementPersistsReservation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := &ClusterState{}
+	s.RecordPlacement("alpha", 256, "inspect repo")
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns, ok := loaded.Nodes["alpha"]
+	if !ok {
+		t.Fatal("expected alpha node after RecordPlacement")
+	}
+	if ns.ReservedMB != 256 {
+		t.Fatalf("ReservedMB = %d, want 256", ns.ReservedMB)
+	}
+	if len(ns.ActiveExecs) != 1 {
+		t.Fatalf("ActiveExecs = %v, want single exec", ns.ActiveExecs)
+	}
+}
+
+func TestReleaseTaskHandlesMissingStateAndClampsValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var empty ClusterState
+	if err := empty.ReleaseTask("missing", "exec", 10); err != nil {
+		t.Fatalf("ReleaseTask() on empty state error = %v", err)
+	}
+
+	s := &ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   128,
+				LastPlacedAt: time.Now().UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+			},
+		},
+	}
+
+	if err := s.ReleaseTask("alpha", "wrong-exec", 512); err != nil {
+		t.Fatalf("ReleaseTask() error = %v", err)
+	}
+
+	if _, ok := s.Nodes["alpha"]; ok {
+		t.Fatal("expected alpha node to be pruned after clamp to zero")
+	}
+}
