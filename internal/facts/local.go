@@ -427,6 +427,7 @@ func localAddresses() []models.NetworkAddress {
 			if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
 				continue
 			}
+
 			kind := "ipv4"
 			if ip.To4() == nil {
 				kind = "ipv6"

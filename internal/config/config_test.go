@@ -11,13 +11,13 @@ func TestLoad_ValidConfig(t *testing.T) {
 	path := filepath.Join(dir, "nodes.yaml")
 	os.WriteFile(path, []byte(`
 nodes:
-  - name: m3
-    hostname: m3.local
-    ssh_user: smithanator
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
     role: cortex
-  - name: m1
-    hostname: m1.local
-    ssh_user: smithanator
+  - name: node-b
+    hostname: node-b.local
+    ssh_user: user
 `), 0644)
 
 	cfg, err := Load(path)
@@ -27,11 +27,11 @@ nodes:
 	if len(cfg.Nodes) != 2 {
 		t.Fatalf("expected 2 nodes, got %d", len(cfg.Nodes))
 	}
-	if cfg.Nodes[0].Name != "m3" {
-		t.Errorf("node[0].name: got %q, want m3", cfg.Nodes[0].Name)
+	if cfg.Nodes[0].Name != "node-a" {
+		t.Errorf("node[0].name: got %q, want node-a", cfg.Nodes[0].Name)
 	}
-	if cfg.Nodes[1].Hostname != "m1.local" {
-		t.Errorf("node[1].hostname: got %q, want m1.local", cfg.Nodes[1].Hostname)
+	if cfg.Nodes[1].Hostname != "node-b.local" {
+		t.Errorf("node[1].hostname: got %q, want node-b.local", cfg.Nodes[1].Hostname)
 	}
 }
 
