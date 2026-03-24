@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/daemon"
@@ -229,7 +230,7 @@ func TestRefreshEndpointCallsCacheRefresh(t *testing.T) {
 }
 
 func TestResolveIntentMatchesNaturalLanguageScript(t *testing.T) {
-	intent, err := resolveIntent("run a small local model with ollama inference", "auto", &skills.Store{})
+	intent, err := resolveIntent("run a small local model with ollama inference", "script", &skills.Store{})
 	if err != nil {
 		t.Fatalf("expected natural-language script match, got %v", err)
 	}
@@ -238,5 +239,22 @@ func TestResolveIntentMatchesNaturalLanguageScript(t *testing.T) {
 	}
 	if intent.matchedScript.Name != "ollama-run-smart" {
 		t.Fatalf("expected ollama-run-smart, got %q", intent.matchedScript.Name)
+	}
+}
+
+func TestRunEndpointRequiresExplicitMode(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"description":"git status"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "mode is required") {
+		t.Fatalf("expected mode-required error, got %q", rec.Body.String())
 	}
 }
