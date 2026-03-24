@@ -258,3 +258,20 @@ func TestRunEndpointRequiresExplicitMode(t *testing.T) {
 		t.Fatalf("expected mode-required error, got %q", rec.Body.String())
 	}
 }
+
+func TestRunEndpointRequiresExplicitConfirmation(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"description":"git status","mode":"exec"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "confirm must be YES") {
+		t.Fatalf("expected confirm-required error, got %q", rec.Body.String())
+	}
+}
