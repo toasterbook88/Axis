@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -81,6 +87,15 @@ func daemonCmd() *cobra.Command {
 			return nil
 		},
 	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "restart",
+		Short: "Restart the AXIS daemon on the target address from the current binary",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return restartDaemon(ctx, cacheAddr, cmd.OutOrStdout())
+		},
+	})
 
 	return cmd
 }
@@ -120,4 +135,159 @@ func doDaemonAction(req *http.Request, prefix string) error {
 		return fmt.Errorf("%s: %s", prefix, resp.Status)
 	}
 	return fmt.Errorf("%s: %s: %s", prefix, resp.Status, msg)
+}
+
+func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
+	listenAddr, err := daemonListenAddr(addr)
+	if err != nil {
+		return err
+	}
+
+	metaCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	meta, metaErr := daemon.FetchMeta(metaCtx, listenAddr)
+	cancel()
+	if metaErr == nil && meta.Version == daemon.Version && !meta.Stale {
+		fmt.Fprintf(out, "AXIS daemon already fresh on %s\n", listenAddr)
+		return nil
+	}
+
+	pid, err := findDaemonPID(listenAddr)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case metaErr == nil && pid > 0:
+		fmt.Fprintf(out, "Sending SIGTERM to AXIS daemon PID %d on %s\n", pid, listenAddr)
+		if err := terminatePID(pid, out); err != nil {
+			return err
+		}
+	case metaErr == nil && pid == 0:
+		return fmt.Errorf("daemon metadata found on %s but no listener PID could be identified", listenAddr)
+	case metaErr != nil && pid > 0:
+		return fmt.Errorf("address %s is already in use but daemon metadata could not be read; refusing automatic restart", listenAddr)
+	default:
+		fmt.Fprintf(out, "No daemon responding on %s; starting fresh\n", listenAddr)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot resolve current binary: %w", err)
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	serveCmd := exec.Command(exe, "serve", "--addr", listenAddr)
+	serveCmd.Stdin = devNull
+	serveCmd.Stdout = devNull
+	serveCmd.Stderr = devNull
+	serveCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := serveCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start fresh daemon: %w", err)
+	}
+	fmt.Fprintf(out, "Fresh daemon started (PID %d) on %s\n", serveCmd.Process.Pid, listenAddr)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			meta, err := daemon.FetchMeta(pollCtx, listenAddr)
+			cancel()
+			if err == nil && meta.Version == daemon.Version && !meta.Stale {
+				fmt.Fprintln(out, "AXIS daemon is fresh and serving current snapshot")
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("daemon did not become ready in time on %s", listenAddr)
+}
+
+func daemonListenAddr(addr string) (string, error) {
+	normalized := daemon.NormalizeAddr(addr)
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return "", fmt.Errorf("invalid daemon address %q: %w", addr, err)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("invalid daemon address %q", addr)
+	}
+	if _, _, err := net.SplitHostPort(u.Host); err != nil {
+		return "", fmt.Errorf("invalid daemon address %q: %w", addr, err)
+	}
+	return u.Host, nil
+}
+
+func findDaemonPID(addr string) (int, error) {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, fmt.Errorf("split host/port: %w", err)
+	}
+
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+port, "-sTCP:LISTEN", "-Fp").Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("lsof lookup failed: %w", err)
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "p") {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimPrefix(line, "p"))
+		if err == nil {
+			return pid, nil
+		}
+	}
+	return 0, nil
+}
+
+func terminatePID(pid int, out io.Writer) error {
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("sigterm pid %d: %w", pid, err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !pidAlive(pid) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !pidAlive(pid) {
+		return nil
+	}
+
+	fmt.Fprintf(out, "Daemon PID %d did not exit after SIGTERM; sending SIGKILL\n", pid)
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("sigkill pid %d: %w", pid, err)
+	}
+
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if !pidAlive(pid) {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if pidAlive(pid) {
+		return fmt.Errorf("pid %d is still alive after SIGKILL", pid)
+	}
+	return nil
+}
+
+func pidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

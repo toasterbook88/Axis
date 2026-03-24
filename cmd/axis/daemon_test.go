@@ -76,3 +76,23 @@ func TestDaemonStatusWarnsWhenVersionMissing(t *testing.T) {
 		t.Fatalf("expected missing-version warning, got %q", out.String())
 	}
 }
+
+func TestDaemonListenAddrNormalizesHostPort(t *testing.T) {
+	got, err := daemonListenAddr("127.0.0.1:42425")
+	if err != nil {
+		t.Fatalf("daemonListenAddr: %v", err)
+	}
+	if got != "127.0.0.1:42425" {
+		t.Fatalf("expected normalized host:port, got %q", got)
+	}
+}
+
+func TestDaemonListenAddrAcceptsHTTPURL(t *testing.T) {
+	got, err := daemonListenAddr("http://127.0.0.1:42425")
+	if err != nil {
+		t.Fatalf("daemonListenAddr: %v", err)
+	}
+	if got != "127.0.0.1:42425" {
+		t.Fatalf("expected URL host:port, got %q", got)
+	}
+}
