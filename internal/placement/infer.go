@@ -19,19 +19,25 @@ func InferRequirements(desc string) models.TaskRequirements {
 	// Tool inference — order matters (first match wins)
 	switch {
 	case containsAny(lower, "inference", "ollama", "llm", "gpu"):
-		reqs.RequiredTool = "ollama"
+		reqs.RequiredTools = []string{"ollama"}
 	case containsAny(lower, "repo", "analyze", "code", "clone", "commit"):
-		reqs.RequiredTool = "git"
+		reqs.RequiredTools = []string{"git"}
 	case containsAny(lower, "build", "compile"):
-		reqs.RequiredTool = "go"
+		reqs.RequiredTools = []string{"go"}
 	case containsAny(lower, "docker", "container"):
-		reqs.RequiredTool = "docker"
+		reqs.RequiredTools = []string{"docker"}
 	}
 
-	// RAM inference — "model" in this domain always means ML model
-	// "large codebase" should NOT trigger; "model", "70b", "heavy" SHOULD
-	if containsAny(lower, "model", "heavy", "70b", "13b", "7b", "inference") {
+	// RAM inference
+	switch {
+	case containsAny(lower, "70b", "13b", "heavy"):
 		reqs.MinFreeRAMMB = 4096
+	case containsAny(lower, "7b"):
+		reqs.MinFreeRAMMB = 1536
+	case containsAny(lower, "model", "inference", "ollama"):
+		reqs.MinFreeRAMMB = 600
+	case containsAny(lower, "llm"):
+		reqs.MinFreeRAMMB = 1536
 	}
 
 	return reqs

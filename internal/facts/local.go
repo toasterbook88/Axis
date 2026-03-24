@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -59,6 +60,17 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 
 	// Tools
 	facts.Tools = DiscoverTools(ctx)
+
+	ollamaInfo := discoverOllamaLocal(ctx)
+	if ollamaInfo.Installed {
+		facts.Ollama = &ollamaInfo
+		facts.Tools = append(facts.Tools, models.ToolInfo{
+			Name:    "ollama",
+			Path:    ollamaInfo.Path,
+			Version: ollamaInfo.Version,
+			Class:   models.ToolClassAICLI,
+		})
+	}
 
 	return facts, nil
 }
@@ -133,18 +145,53 @@ func computePressure(totalMB, freeMB int64) string {
 func localCPU() (int, string, error) {
 	if runtime.GOOS == "darwin" {
 		cOut, err := exec.Command("sysctl", "-n", "hw.ncpu").Output()
-		if err != nil {
-			return 0, "", err
+		if err == nil {
+			cores, _ := strconv.Atoi(strings.TrimSpace(string(cOut)))
+			mOut, _ := exec.Command("sysctl", "-n", "machdep.cpu.brand_string").Output()
+			model := strings.TrimSpace(string(mOut))
+			if model == "" {
+				// Apple Silicon doesn't have machdep.cpu.brand_string
+				mOut, _ = exec.Command("sysctl", "-n", "hw.model").Output()
+				model = strings.TrimSpace(string(mOut))
+			}
+			return cores, model, nil
 		}
-		cores, _ := strconv.Atoi(strings.TrimSpace(string(cOut)))
-		mOut, _ := exec.Command("sysctl", "-n", "machdep.cpu.brand_string").Output()
-		model := strings.TrimSpace(string(mOut))
-		if model == "" {
-			// Apple Silicon doesn't have machdep.cpu.brand_string
-			mOut, _ = exec.Command("sysctl", "-n", "hw.model").Output()
-			model = strings.TrimSpace(string(mOut))
+
+		if out, err := exec.Command("system_profiler", "SPHardwareDataType").Output(); err == nil {
+			var cores int
+			var model string
+			for _, line := range strings.Split(string(out), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "Chip:") {
+					model = strings.TrimSpace(strings.TrimPrefix(trimmed, "Chip:"))
+				} else if strings.HasPrefix(trimmed, "Total Number of Cores:") {
+					fields := strings.Fields(strings.TrimPrefix(trimmed, "Total Number of Cores:"))
+					if len(fields) > 0 {
+						cores, _ = strconv.Atoi(fields[0])
+					}
+				}
+			}
+			if cores > 0 || model != "" {
+				return cores, model, nil
+			}
 		}
-		return cores, model, nil
+
+		if out, err := exec.Command("hostinfo").Output(); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.Contains(trimmed, "processors are logically available.") {
+					fields := strings.Fields(trimmed)
+					if len(fields) > 0 {
+						cores, _ := strconv.Atoi(fields[0])
+						if cores > 0 {
+							return cores, "Apple Silicon", nil
+						}
+					}
+				}
+			}
+		}
+
+		return 0, "", err
 	}
 	// Linux
 	cOut, err := exec.Command("nproc").Output()
@@ -158,19 +205,23 @@ func localCPU() (int, string, error) {
 
 func localRAM() (int64, int64, error) {
 	if runtime.GOOS == "darwin" {
-		tOut, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+		totalMB := darwinTotalRAMMB()
+
+		vmOut, err := exec.Command("vm_stat").Output()
+		freeMB := int64(0)
+		if err == nil {
+			freeMB = parseDarwinFreeRAM(string(vmOut))
+		}
+		if totalMB > 0 && freeMB == 0 {
+			freeMB = totalMB / 4
+		}
+		if totalMB > 0 {
+			return totalMB, freeMB, nil
+		}
 		if err != nil {
 			return 0, 0, err
 		}
-		totalBytes, _ := strconv.ParseInt(strings.TrimSpace(string(tOut)), 10, 64)
-		totalMB := totalBytes / (1024 * 1024)
-
-		vmOut, err := exec.Command("vm_stat").Output()
-		if err != nil {
-			return totalMB, 0, err
-		}
-		freeMB := parseDarwinFreeRAM(string(vmOut))
-		return totalMB, freeMB, nil
+		return 0, freeMB, fmt.Errorf("could not determine total RAM")
 	}
 	// Linux
 	data, err := os.ReadFile("/proc/meminfo")
@@ -184,7 +235,16 @@ func parseDarwinFreeRAM(vmstat string) int64 {
 	pageSize := int64(16384) // fallback for arm64
 
 	var free, inactive int64
-	for _, line := range strings.Split(vmstat, "\n") {
+	remaining := vmstat
+	for len(remaining) > 0 {
+		var line string
+		if idx := strings.IndexByte(remaining, '\n'); idx == -1 {
+			line = remaining
+			remaining = ""
+		} else {
+			line = remaining[:idx]
+			remaining = remaining[idx+1:]
+		}
 		// e.g. "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
 		if strings.HasPrefix(line, "Mach Virtual Memory Statistics:") {
 			if idx := strings.Index(line, "page size of "); idx != -1 {
@@ -216,7 +276,16 @@ func parseVMStatVal(line string) int64 {
 
 func parseLinuxMeminfo(data string) (int64, int64, error) {
 	var total, available int64
-	for _, line := range strings.Split(data, "\n") {
+	remaining := data
+	for len(remaining) > 0 {
+		var line string
+		if idx := strings.IndexByte(remaining, '\n'); idx == -1 {
+			line = remaining
+			remaining = ""
+		} else {
+			line = remaining[:idx]
+			remaining = remaining[idx+1:]
+		}
 		if strings.HasPrefix(line, "MemTotal:") {
 			total = parseKBField(line)
 		} else if strings.HasPrefix(line, "MemAvailable:") {
@@ -224,6 +293,55 @@ func parseLinuxMeminfo(data string) (int64, int64, error) {
 		}
 	}
 	return total / 1024, available / 1024, nil
+}
+
+func darwinTotalRAMMB() int64 {
+	if out, err := exec.Command("sysctl", "-n", "hw.memsize").Output(); err == nil {
+		totalBytes, _ := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		if totalBytes > 0 {
+			return totalBytes / (1024 * 1024)
+		}
+	}
+
+	if out, err := exec.Command("hostinfo").Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "Primary memory available:") {
+				fields := strings.Fields(trimmed)
+				if len(fields) >= 5 {
+					value, _ := strconv.ParseFloat(fields[3], 64)
+					unit := strings.ToLower(fields[4])
+					switch {
+					case strings.HasPrefix(unit, "gigabyte"):
+						return int64(value * 1024)
+					case strings.HasPrefix(unit, "megabyte"):
+						return int64(value)
+					}
+				}
+			}
+		}
+	}
+
+	if out, err := exec.Command("system_profiler", "SPHardwareDataType").Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "Memory:") {
+				fields := strings.Fields(strings.TrimPrefix(trimmed, "Memory:"))
+				if len(fields) >= 2 {
+					value, _ := strconv.ParseFloat(fields[0], 64)
+					unit := strings.ToLower(fields[1])
+					switch unit {
+					case "gb":
+						return int64(value * 1024)
+					case "mb":
+						return int64(value)
+					}
+				}
+			}
+		}
+	}
+
+	return 0
 }
 
 func parseKBField(line string) int64 {
@@ -320,4 +438,21 @@ func localAddresses() []models.NetworkAddress {
 		}
 	}
 	return addrs
+}
+
+func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {
+	info := models.OllamaInfo{Installed: false}
+
+	out, err := exec.CommandContext(ctx, "bash", "-c", OllamaDiscoveryScript).Output()
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+
+	// parse the JSON blob
+	var parsed models.OllamaInfo
+	if json.Unmarshal(out, &parsed) == nil {
+		return parsed
+	}
+	return info
 }

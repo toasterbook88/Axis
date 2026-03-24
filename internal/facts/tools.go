@@ -8,6 +8,31 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+// OllamaDiscoveryScript is the bash script used to robustly discover Ollama state
+// and models across both local and remote nodes.
+const OllamaDiscoveryScript = `set -o pipefail;
+		OLLAMA_BIN=$(command -v ollama || echo "/usr/local/bin/ollama /opt/ollama/ollama ~/.ollama/bin/ollama" | tr ' ' '\n' | while read p; do [ -x "$p" ] && echo "$p" && break; done)
+		if [ -z "$OLLAMA_BIN" ]; then echo '{"installed":false}'; exit 0; fi
+		VERSION=$($OLLAMA_BIN --version 2>/dev/null | head -1)
+		PGREP=$(pgrep -f "$OLLAMA_BIN" || echo "")
+		MODELS=$($OLLAMA_BIN list 2>/dev/null | tail -n +2 | awk 'NF { printf "%s\"%s\"", (n++ ? "," : ""), $1 }')
+		if [ -n "$MODELS" ]; then
+			MODELS="[$MODELS]"
+		else
+			MODELS="[]"
+		fi
+		LISTENING=false
+		if command -v lsof >/dev/null 2>&1 && lsof -i :11434 2>/dev/null | grep -q LISTEN; then
+			LISTENING=true
+		elif command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q ':11434 '; then
+			LISTENING=true
+		elif command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':11434 '; then
+			LISTENING=true
+		fi
+		GPU=$($OLLAMA_BIN ps 2>/dev/null | grep -o 'gpu:[^ ]*' | head -1)
+		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"gpu_offload\":\"${GPU:-none}\"}"
+	`
+
 // toolDef defines a tool to probe during discovery.
 type toolDef struct {
 	name       string
@@ -64,7 +89,11 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 // Handles formats like "go version go1.24.1 darwin/arm64", "Python 3.11.0",
 // "git version 2.39.5", "v20.11.0", etc.
 func parseVersionString(raw string) string {
-	line := strings.TrimSpace(strings.Split(raw, "\n")[0])
+	line := raw
+	if idx := strings.IndexByte(raw, '\n'); idx != -1 {
+		line = raw[:idx]
+	}
+	line = strings.TrimSpace(line)
 
 	// Try to find a version-like token (starts with digit or v+digit)
 	for _, field := range strings.Fields(line) {

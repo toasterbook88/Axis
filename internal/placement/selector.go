@@ -5,26 +5,35 @@ import (
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 // SelectBestNode runs the full placement pipeline: filter → rank → select.
 // Reasoning is diagnostic: on failure it explains why each node was excluded;
 // on success it explains fit score, locality, and runner-up comparison.
-func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) models.PlacementDecision {
-	candidates := FilterCandidates(reqs, nodes)
+func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) models.PlacementDecision {
+	candidates := FilterCandidates(reqs, nodes, st)
 	if len(candidates) == 0 {
-		return buildFailureDecision(reqs, nodes)
+		return buildFailureDecision(reqs, nodes, st)
 	}
 
-	ranked := RankCandidates(candidates)
+	ranked := RankCandidates(candidates, reqs, st)
 	best := ranked[0]
 	local := models.IsLocalNode(best)
 
+	return buildSuccessDecision(best, ranked, reqs, local, st)
+}
+
+func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs models.TaskRequirements, local bool, st *state.ClusterState) models.PlacementDecision {
 	decision := models.PlacementDecision{
 		Node:     best.Name,
 		OK:       true,
-		FitScore: ComputeFitScore(best, local),
+		FitScore: ComputeFitScore(best, local, st),
 		IsLocal:  local,
+	}
+
+	if requiresTool(reqs.RequiredTools, "ollama") && models.IsLocalNode(best) {
+		decision.Reasoning = append(decision.Reasoning, "local m3 preferred for ollama")
 	}
 
 	// Fit score summary
@@ -54,18 +63,32 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 	}
 
 	// Tool match
-	if reqs.RequiredTool != "" {
-		for _, t := range best.Tools {
-			if strings.EqualFold(t.Name, reqs.RequiredTool) {
-				decision.Tool = t.Name
-				ver := t.Version
-				if ver == "" {
-					ver = "detected"
+	if len(reqs.RequiredTools) > 0 {
+		matched := make([]string, 0, len(reqs.RequiredTools))
+		for _, required := range reqs.RequiredTools {
+			for _, t := range best.Tools {
+				if strings.EqualFold(t.Name, required) {
+					if decision.Tool == "" {
+						decision.Tool = t.Name
+					}
+					ver := t.Version
+					if ver == "" {
+						ver = "detected"
+					}
+					matched = append(matched, fmt.Sprintf("%s (%s)", t.Name, ver))
+					break
 				}
-				decision.Reasoning = append(decision.Reasoning,
-					fmt.Sprintf("required tool %q available (version: %s)", t.Name, ver))
-				break
 			}
+			if strings.EqualFold(required, "ollama") && decision.Tool == "" {
+				decision.Tool = "ollama"
+			}
+		}
+		if len(matched) == 1 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("required tool %s available", matched[0]))
+		} else if len(matched) > 1 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("required tools available: %s", strings.Join(matched, ", ")))
 		}
 	}
 
@@ -73,7 +96,7 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
 		ruLocal := models.IsLocalNode(runnerUp)
-		ruScore := ComputeFitScore(runnerUp, ruLocal)
+		ruScore := ComputeFitScore(runnerUp, ruLocal, st)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
 		decision.Reasoning = append(decision.Reasoning,
@@ -84,7 +107,7 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts) mode
 }
 
 // buildFailureDecision explains why every node was excluded.
-func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts) models.PlacementDecision {
+func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) models.PlacementDecision {
 	d := models.PlacementDecision{OK: false}
 
 	if len(nodes) == 0 {
@@ -100,30 +123,49 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 				fmt.Sprintf("  %s: excluded (status: %s)", n.Name, n.Status))
 			continue
 		}
-		if reqs.MinFreeRAMMB > 0 && (n.Resources == nil || n.Resources.RAMFreeMB < reqs.MinFreeRAMMB) {
+		if reqs.MinFreeRAMMB > 0 {
+			minNeeded := effectiveMinFreeRAM(reqs, n)
 			actual := int64(0)
+			effective := int64(0)
 			if n.Resources != nil {
 				actual = n.Resources.RAMFreeMB
+				effective = freeRAMWithState(n, st)
 			}
-			d.Reasoning = append(d.Reasoning,
-				fmt.Sprintf("  %s: need %dMB free RAM, have %dMB (short %dMB)",
-					n.Name, reqs.MinFreeRAMMB, actual, reqs.MinFreeRAMMB-actual))
-			continue
+			if effective < minNeeded {
+				d.Reasoning = append(d.Reasoning,
+					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB effective (base %dMB, short %dMB)",
+						n.Name, minNeeded, effective, actual, minNeeded-effective))
+				continue
+			}
 		}
-		if reqs.RequiredTool != "" && !hasTool(n, reqs.RequiredTool) {
+		if len(reqs.RequiredTools) > 0 && !satisfiesRequiredTools(n, reqs.RequiredTools) {
+			missing := make([]string, 0, len(reqs.RequiredTools))
+			for _, required := range reqs.RequiredTools {
+				if strings.EqualFold(required, "ollama") {
+					if !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
+						missing = append(missing, required)
+					}
+					continue
+				}
+				if !hasTool(n, required) {
+					missing = append(missing, required)
+				}
+			}
 			available := make([]string, 0, len(n.Tools))
 			for _, t := range n.Tools {
 				available = append(available, t.Name)
 			}
 			d.Reasoning = append(d.Reasoning,
-				fmt.Sprintf("  %s: missing required tool %q (has: %v)",
-					n.Name, reqs.RequiredTool, available))
+				fmt.Sprintf("  %s: missing required tools %v (has: %v)",
+					n.Name, missing, available))
 			continue
 		}
 	}
 
-	// If heavy RAM was required, explain AXIS scope
-	if reqs.MinFreeRAMMB >= 4096 {
+	if requiresTool(reqs.RequiredTools, "ollama") {
+		d.Reasoning = append(d.Reasoning,
+			"note: AXIS can bootstrap Ollama on partial nodes when tool is ollama")
+	} else if reqs.MinFreeRAMMB >= 4096 {
 		d.Reasoning = append(d.Reasoning,
 			"note: AXIS targets small assistive models, not 70B+ inference")
 	}

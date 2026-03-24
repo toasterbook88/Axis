@@ -17,25 +17,7 @@ func main() {
 	root := &cobra.Command{
 		Use:   "axis",
 		Short: "AXIS — cluster-aware AI execution substrate",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			const logo = `
- █████╗ ██╗  ██╗██╗███████╗
-██╔══██╗╚██╗██╔╝██║██╔════╝
-███████║ ╚███╔╝ ██║███████╗
-██╔══██║ ██╔██╗ ██║╚════██║
-██║  ██║██╔╝ ██╗██║███████║
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝
-`
-			out := cmd.OutOrStdout()
-			cmd.SetOut(out)
-			cmd.SetErr(out)
-
-			fmt.Fprint(out, logo)
-			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
-
-			chat := chatCmd()
-			return chat.RunE(chat, args)
-		},
+		RunE:  runRoot,
 	}
 
 	root.AddCommand(versionCmd())
@@ -43,11 +25,36 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(taskCmd())
 	root.AddCommand(mcpCmd())
+	root.AddCommand(serveCmd())
 	root.AddCommand(chatCmd())
+	root.AddCommand(discoverCmd())
+	root.AddCommand(contextCmd())
+	root.AddCommand(scriptsCmd())
+	root.AddCommand(skillsCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(ExitErrGeneric)
 	}
+}
+
+func runRoot(cmd *cobra.Command, args []string) error {
+	const logo = `
+ █████╗ ██╗  ██╗██╗███████╗
+██╔══██╗╚██╗██╔╝██║██╔════╝
+███████║ ╚███╔╝ ██║███████╗
+██╔══██║ ██╔██╗ ██║╚════██║
+██║  ██║██╔╝ ██╗██║███████║
+╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝
+`
+	out := cmd.OutOrStdout()
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	fmt.Fprint(out, logo)
+	fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
+
+	chat := chatCmd()
+	return chat.RunE(chat, args)
 }
 
 func versionCmd() *cobra.Command {

@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -89,6 +90,17 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 
 	// Tools
 	facts.Tools = c.remoteTools(ctx)
+
+	ollamaInfo := c.discoverOllamaRobust(ctx)
+	if ollamaInfo.Installed {
+		facts.Ollama = &ollamaInfo
+		facts.Tools = append(facts.Tools, models.ToolInfo{
+			Name:    "ollama",
+			Path:    ollamaInfo.Path,
+			Version: ollamaInfo.Version,
+			Class:   models.ToolClassAICLI,
+		})
+	}
 
 	if partial {
 		facts.Status = models.StatusPartial
@@ -241,4 +253,22 @@ func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
 		tools = append(tools, ti)
 	}
 	return tools
+}
+
+// discoverOllamaRobust does ONE SSH command that gathers everything robustly.
+func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) models.OllamaInfo {
+	info := models.OllamaInfo{Installed: false}
+
+	out, err := c.Exec.Run(ctx, OllamaDiscoveryScript)
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+
+	// parse the JSON blob
+	var parsed models.OllamaInfo
+	if json.Unmarshal([]byte(out), &parsed) == nil {
+		return parsed
+	}
+	return info
 }

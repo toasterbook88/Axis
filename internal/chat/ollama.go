@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
+	"time"
 )
 
 // OllamaClient interacts with the local Ollama API
@@ -28,6 +30,7 @@ func NewOllamaClient(endpoint, model string) *OllamaClient {
 type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
+	System string `json:"system,omitempty"`
 	Stream bool   `json:"stream"`
 }
 
@@ -38,9 +41,16 @@ type ollamaResponse struct {
 
 // GenerateStream streams the inference response to an io.Writer
 func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.Writer) error {
+	if err := c.ensureRunning(ctx, w); err != nil {
+		return fmt.Errorf("ollama not ready: %w", err)
+	}
+
+	systemPrompt := "You are AXIS, a cluster-aware AI execution substrate and CLI assistant. The user is the Absolute Commander. Be concise, technical, and do not use generic AI assistant filler. You do not have the ability to run commands directly; instead, you provide the exact shell commands for the user to run. Valid AXIS commands: `axis facts` (to get local machine hardware snapshot), `axis status` (to scan the cluster and get a cluster snapshot of all nodes), `axis task place \"<task description>\"` (advisory placement scoring nodes by free RAM and tool availability). If the user asks to scan the cluster, tell them to run `axis status`."
+
 	reqBody := ollamaRequest{
 		Model:  c.Model,
 		Prompt: prompt,
+		System: systemPrompt,
 		Stream: true,
 	}
 
@@ -85,4 +95,60 @@ func (c *OllamaClient) GenerateStream(ctx context.Context, prompt string, w io.W
 	}
 
 	return scanner.Err()
+}
+
+func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
+	// 1. Check if daemon is responsive
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("create ollama readiness request: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	} else {
+		// Try starting the daemon
+		fmt.Fprintf(w, "[AXIS] Auto-starting local Ollama daemon...\n")
+		cmd := exec.Command("ollama", "serve")
+		// Start in background, detached from our process grouping if possible, but standard Start() is fine
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("could not start ollama serve: %w", err)
+		}
+
+		// Wait for it to come up
+		up := false
+		for i := 0; i < 10; i++ {
+			time.Sleep(500 * time.Millisecond)
+			if r, e := c.client.Get(c.Endpoint); e == nil {
+				r.Body.Close()
+				up = true
+				break
+			}
+		}
+		if !up {
+			return fmt.Errorf("ollama daemon failed to become responsive after start")
+		}
+	}
+
+	// 2. Check if model is available locally.
+	checkReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+"/api/show", bytes.NewBufferString(fmt.Sprintf(`{"model":"%s"}`, c.Model)))
+	if err != nil {
+		return fmt.Errorf("create model readiness request: %w", err)
+	}
+	checkReq.Header.Set("Content-Type", "application/json")
+	checkResp, err := c.client.Do(checkReq)
+	if err != nil {
+		return fmt.Errorf("check model %q: %w", c.Model, err)
+	}
+	defer checkResp.Body.Close()
+
+	if checkResp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	if checkResp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("model %q is not available locally; run: ollama pull %s", c.Model, c.Model)
+	}
+
+	return fmt.Errorf("model check for %q failed with status: %s", c.Model, checkResp.Status)
 }
