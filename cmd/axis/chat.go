@@ -69,7 +69,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		if err := engine.GenerateStream(ctx, prompt, w); err != nil {
 			fmt.Printf("\n[Error: %v]\n", err)
 		}
-		fmt.Println("\n")
+		fmt.Println()
 
 		if history != "" {
 			history = history + "\nUser: " + query + "\nAssistant: " + buf.String()
