@@ -12,19 +12,26 @@ import (
 )
 
 type fakeCache struct {
-	snap *models.ClusterSnapshot
-	meta daemon.Metadata
+	snap        *models.ClusterSnapshot
+	meta        daemon.Metadata
+	invalidated bool
 }
 
-func (f fakeCache) Snapshot() (*models.ClusterSnapshot, bool) {
+func (f *fakeCache) Snapshot() (*models.ClusterSnapshot, bool) {
 	if f.snap == nil {
 		return nil, false
 	}
 	return f.snap, true
 }
 
-func (f fakeCache) Meta() daemon.Metadata {
+func (f *fakeCache) Meta() daemon.Metadata {
 	return f.meta
+}
+
+func (f *fakeCache) Invalidate() {
+	f.invalidated = true
+	f.snap = nil
+	f.meta.Ready = false
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -88,7 +95,7 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 
 func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
-	registerRoutes(mux, fakeCache{
+	registerRoutes(mux, &fakeCache{
 		snap: &models.ClusterSnapshot{
 			Status: models.SnapshotHealthy,
 			Summary: models.ClusterSummary{
@@ -121,7 +128,7 @@ func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 
 func TestSnapshotMetaEndpointReturnsCacheMetadata(t *testing.T) {
 	mux := http.NewServeMux()
-	registerRoutes(mux, fakeCache{
+	registerRoutes(mux, &fakeCache{
 		meta: daemon.Metadata{
 			Source:             "daemon-cache",
 			Ready:              true,
@@ -170,6 +177,26 @@ func TestToolsEndpointAliasReturnsSamePayload(t *testing.T) {
 	}
 	if len(payload.Tools) == 0 {
 		t.Fatal("expected tools payload")
+	}
+}
+
+func TestInvalidateEndpointCallsCacheInvalidate(t *testing.T) {
+	cache := &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+		meta: daemon.Metadata{Ready: true},
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache)
+
+	req := httptest.NewRequest(http.MethodPost, "/invalidate", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if !cache.invalidated {
+		t.Fatal("expected cache invalidation to be triggered")
 	}
 }
 

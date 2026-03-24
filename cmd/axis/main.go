@@ -44,6 +44,7 @@ func main() {
 	root.AddCommand(taskCmd())
 	root.AddCommand(mcpCmd())
 	root.AddCommand(serveCmd())
+	root.AddCommand(daemonCmd())
 	root.AddCommand(chatCmd())
 	root.AddCommand(discoverCmd())
 	root.AddCommand(contextCmd())
