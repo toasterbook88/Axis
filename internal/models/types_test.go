@@ -18,14 +18,16 @@ func sampleNodeFacts() models.NodeFacts {
 		OSVersion: "6.1.0",
 		Arch:      "amd64",
 		Resources: &models.Resources{
-			CPUCores:    4,
-			CPUModel:    "Intel i7-1065G7",
-			RAMTotalMB:  16384,
-			RAMFreeMB:   8192,
-			DiskTotalGB: 500,
-			DiskFreeGB:  250,
-			GPUs:        []string{"NVIDIA MX250"},
-			Pressure:    "none",
+			CPUCores:         4,
+			CPUModel:         "Intel i7-1065G7",
+			RAMTotalMB:       16384,
+			RAMFreeMB:        8192,
+			RAMReservedMB:    1024,
+			RAMAllocatableMB: 7168,
+			DiskTotalGB:      500,
+			DiskFreeGB:       250,
+			GPUs:             []string{"NVIDIA MX250"},
+			Pressure:         "none",
 		},
 		Addresses: []models.NetworkAddress{
 			{Kind: "ipv4", Address: "192.168.1.100"},
@@ -46,10 +48,12 @@ func sampleSnapshot() models.ClusterSnapshot {
 		Status:    models.SnapshotHealthy,
 		Nodes:     []models.NodeFacts{sampleNodeFacts()},
 		Summary: models.ClusterSummary{
-			TotalNodes:     1,
-			ReachableNodes: 1,
-			TotalRAMMB:     16384,
-			TotalFreeRAMMB: 8192,
+			TotalNodes:         1,
+			ReachableNodes:     1,
+			TotalRAMMB:         16384,
+			TotalFreeRAMMB:     8192,
+			TotalAllocatableMB: 7168,
+			TotalReservedMB:    1024,
 		},
 	}
 }
@@ -81,6 +85,9 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Resources.Pressure != "none" {
 		t.Errorf("pressure: got %q, want %q", decoded.Resources.Pressure, "none")
+	}
+	if decoded.Resources.RAMAllocatableMB != 7168 {
+		t.Errorf("ram_allocatable_mb: got %d, want 7168", decoded.Resources.RAMAllocatableMB)
 	}
 	if len(decoded.Addresses) != 2 {
 		t.Errorf("addresses: got %d, want 2", len(decoded.Addresses))
@@ -132,6 +139,9 @@ func TestClusterSnapshot_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Summary.TotalRAMMB != 16384 {
 		t.Errorf("total_ram: got %d, want 16384", decoded.Summary.TotalRAMMB)
+	}
+	if decoded.Summary.TotalAllocatableMB != 7168 {
+		t.Errorf("total_allocatable_mb: got %d, want 7168", decoded.Summary.TotalAllocatableMB)
 	}
 }
 

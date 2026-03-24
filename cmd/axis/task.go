@@ -477,13 +477,24 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 - Source: %s
 - Best node: %s (%s, %s pressure)
 - Tools: %v
-- Summary: %d nodes, %dMB total free RAM
+- Summary: %s
 - Task: %s
 - Live tools: start read-only MCP with: axis mcp serve
 
 Be precise. Use real node names and tools above.`,
 		sourceOrLive(source), best.Name, ramSummary, pressure,
-		toolsList(best), len(snap.Nodes), snap.Summary.TotalFreeRAMMB, task)
+		toolsList(best), clusterSummaryLine(snap), task)
+}
+
+func clusterSummaryLine(snap *models.ClusterSnapshot) string {
+	if snap == nil {
+		return "unknown"
+	}
+	if snap.Summary.TotalAllocatableMB > 0 || snap.Summary.TotalReservedMB > 0 {
+		return fmt.Sprintf("%d nodes, %dMB allocatable across cluster (%dMB reserved)",
+			len(snap.Nodes), snap.Summary.TotalAllocatableMB, snap.Summary.TotalReservedMB)
+	}
+	return fmt.Sprintf("%d nodes, %dMB total free RAM", len(snap.Nodes), snap.Summary.TotalFreeRAMMB)
 }
 
 func sourceOrLive(source string) string {

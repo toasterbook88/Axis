@@ -18,7 +18,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 		Nodes:     nodes,
 	}
 
-	var totalRAM, freeRAM int64
+	var totalRAM, freeRAM, allocatableRAM, reservedRAM int64
 	reachable := 0
 
 	for _, n := range nodes {
@@ -28,6 +28,15 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 			if n.Resources != nil {
 				totalRAM += n.Resources.RAMTotalMB
 				freeRAM += n.Resources.RAMFreeMB
+				reservedRAM += n.Resources.RAMReservedMB
+				alloc := n.Resources.RAMAllocatableMB
+				if alloc == 0 && n.Resources.RAMFreeMB > 0 && n.Resources.RAMReservedMB == 0 {
+					alloc = n.Resources.RAMFreeMB
+				}
+				if alloc < 0 {
+					alloc = 0
+				}
+				allocatableRAM += alloc
 			}
 		}
 
@@ -72,10 +81,12 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 	}
 
 	snap.Summary = models.ClusterSummary{
-		TotalNodes:     len(nodes),
-		ReachableNodes: reachable,
-		TotalRAMMB:     totalRAM,
-		TotalFreeRAMMB: freeRAM,
+		TotalNodes:         len(nodes),
+		ReachableNodes:     reachable,
+		TotalRAMMB:         totalRAM,
+		TotalFreeRAMMB:     freeRAM,
+		TotalAllocatableMB: allocatableRAM,
+		TotalReservedMB:    reservedRAM,
 	}
 
 	return snap

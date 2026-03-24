@@ -264,10 +264,11 @@ func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 }
 
 func applyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
-	if snap == nil || st == nil || st.Nodes == nil {
+	if snap == nil {
 		return
 	}
 
+	var totalReserved, totalAllocatable int64
 	for i := range snap.Nodes {
 		node := &snap.Nodes[i]
 		if node.Resources == nil {
@@ -275,8 +276,10 @@ func applyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 		}
 
 		reserved := int64(0)
-		if ns, ok := st.Nodes[node.Name]; ok {
-			reserved = ns.ReservedMB
+		if st != nil && st.Nodes != nil {
+			if ns, ok := st.Nodes[node.Name]; ok {
+				reserved = ns.ReservedMB
+			}
 		}
 		node.Resources.RAMReservedMB = reserved
 
@@ -285,5 +288,11 @@ func applyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 			allocatable = 0
 		}
 		node.Resources.RAMAllocatableMB = allocatable
+
+		totalReserved += reserved
+		totalAllocatable += allocatable
 	}
+
+	snap.Summary.TotalReservedMB = totalReserved
+	snap.Summary.TotalAllocatableMB = totalAllocatable
 }

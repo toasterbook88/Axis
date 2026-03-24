@@ -116,10 +116,12 @@ type NodeFacts struct {
 
 // ClusterSummary holds cluster-level aggregates derived from node facts.
 type ClusterSummary struct {
-	TotalNodes     int   `json:"total_nodes" yaml:"total_nodes"`
-	ReachableNodes int   `json:"reachable_nodes" yaml:"reachable_nodes"`
-	TotalRAMMB     int64 `json:"total_ram_mb" yaml:"total_ram_mb"`
-	TotalFreeRAMMB int64 `json:"total_free_ram_mb" yaml:"total_free_ram_mb"`
+	TotalNodes         int   `json:"total_nodes" yaml:"total_nodes"`
+	ReachableNodes     int   `json:"reachable_nodes" yaml:"reachable_nodes"`
+	TotalRAMMB         int64 `json:"total_ram_mb" yaml:"total_ram_mb"`
+	TotalFreeRAMMB     int64 `json:"total_free_ram_mb" yaml:"total_free_ram_mb"`
+	TotalAllocatableMB int64 `json:"total_allocatable_mb,omitempty" yaml:"total_allocatable_mb,omitempty"`
+	TotalReservedMB    int64 `json:"total_reserved_mb,omitempty" yaml:"total_reserved_mb,omitempty"`
 }
 
 // Warning represents a specific issue detected during snapshot assembly.

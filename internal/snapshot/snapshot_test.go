@@ -49,6 +49,12 @@ func TestBuild_AllComplete_Healthy(t *testing.T) {
 	if snap.Summary.TotalFreeRAMMB != 9000 {
 		t.Errorf("free_ram: got %d, want 9000", snap.Summary.TotalFreeRAMMB)
 	}
+	if snap.Summary.TotalAllocatableMB != 9000 {
+		t.Errorf("allocatable_ram: got %d, want 9000", snap.Summary.TotalAllocatableMB)
+	}
+	if snap.Summary.TotalReservedMB != 0 {
+		t.Errorf("reserved_ram: got %d, want 0", snap.Summary.TotalReservedMB)
+	}
 	if len(snap.Warnings) != 0 {
 		t.Errorf("expected 0 warnings, got %d", len(snap.Warnings))
 	}
@@ -225,6 +231,33 @@ func TestBuild_NoRAMPressureWhenAboveThreshold(t *testing.T) {
 		if w.Kind == "ram_pressure" {
 			t.Errorf("unexpected ram_pressure warning: %v", w)
 		}
+	}
+}
+
+func TestBuild_UsesReservationAwareSummaryWhenPresent(t *testing.T) {
+	nodes := []models.NodeFacts{
+		{
+			Name:   "alpha",
+			Status: models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB:       8192,
+				RAMFreeMB:        4096,
+				RAMReservedMB:    1024,
+				RAMAllocatableMB: 3072,
+			},
+			CollectedAt: ts(),
+		},
+	}
+
+	snap := Build(nodes)
+	if snap.Summary.TotalFreeRAMMB != 4096 {
+		t.Errorf("free_ram: got %d, want 4096", snap.Summary.TotalFreeRAMMB)
+	}
+	if snap.Summary.TotalReservedMB != 1024 {
+		t.Errorf("reserved_ram: got %d, want 1024", snap.Summary.TotalReservedMB)
+	}
+	if snap.Summary.TotalAllocatableMB != 3072 {
+		t.Errorf("allocatable_ram: got %d, want 3072", snap.Summary.TotalAllocatableMB)
 	}
 }
 
