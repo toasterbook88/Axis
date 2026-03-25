@@ -52,7 +52,7 @@ Pages inactive:                          3000.
 	if got := parseDarwinFreeRAM(vmstatAmd64); got != expectedAmd64 {
 		t.Errorf("parseDarwinFreeRAM() AMD64 = %v, want %v", got, expectedAmd64)
 	}
-	
+
 	// Default fallback if page size is missing
 	vmstatMissing := `Pages free:                              1000.
 Pages inactive:                          3000.
@@ -100,6 +100,61 @@ Buffers:          345000 kB
 	}
 	if avail != 12164 {
 		t.Errorf("parseLinuxMeminfo() avail = %v, want 12164", avail)
+	}
+}
+
+func TestParseLinuxMeminfoFallsBackToMemFree(t *testing.T) {
+	meminfo := `MemTotal:       8192000 kB
+MemFree:        2048000 kB
+Buffers:          345000 kB
+`
+
+	total, avail, err := parseLinuxMeminfo(meminfo)
+	if err != nil {
+		t.Fatalf("parseLinuxMeminfo() error = %v", err)
+	}
+	if total != 8000 {
+		t.Fatalf("parseLinuxMeminfo() total = %v, want 8000", total)
+	}
+	if avail != 2000 {
+		t.Fatalf("parseLinuxMeminfo() avail = %v, want 2000", avail)
+	}
+}
+
+func TestParseLinuxMeminfoErrorsWithoutMemTotal(t *testing.T) {
+	meminfo := `MemFree:        2048000 kB
+MemAvailable:   12456780 kB
+`
+
+	if _, _, err := parseLinuxMeminfo(meminfo); err == nil {
+		t.Fatal("expected error when MemTotal is missing")
+	}
+}
+
+func TestParseDFOutput(t *testing.T) {
+	df := `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/disk3s1 3145728 1048576 2097152 34% /
+`
+
+	total, free, err := parseDFOutput(df)
+	if err != nil {
+		t.Fatalf("parseDFOutput() error = %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("parseDFOutput() total = %v, want 3", total)
+	}
+	if free != 2 {
+		t.Fatalf("parseDFOutput() free = %v, want 2", free)
+	}
+}
+
+func TestParseDFOutputErrorsOnMalformedFields(t *testing.T) {
+	df := `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/disk3s1 nope 250000 750000 25% /
+`
+
+	if _, _, err := parseDFOutput(df); err == nil {
+		t.Fatal("expected parseDFOutput to fail on malformed numbers")
 	}
 }
 
