@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/skills"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
@@ -108,5 +110,65 @@ func TestResolveTaskRunIntentPrefersRawExec(t *testing.T) {
 	}
 	if intent.requiresConfirmation {
 		t.Fatal("raw exec should not require confirmation")
+	}
+}
+
+func TestReservationMBForRequirementsAddsHeadroom(t *testing.T) {
+	reqs := models.TaskRequirements{MinFreeRAMMB: 4096}
+	if got := reservationMBForRequirements(reqs); got != 5120 {
+		t.Fatalf("reservationMBForRequirements() = %d, want 5120", got)
+	}
+}
+
+func TestEnsureReservationCapacityRejectsOverCapNode(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "alpha",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+				},
+			},
+		},
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 7168},
+		},
+	}
+
+	err := ensureReservationCapacity(snap, st, "alpha", 1025)
+	if err == nil {
+		t.Fatal("expected reservation capacity error")
+	}
+	if !strings.Contains(err.Error(), "cannot reserve") {
+		t.Fatalf("expected reservation error message, got %v", err)
+	}
+}
+
+func TestEnsureReservationCapacityMatchesDaemonCapLogic(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "alpha",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+				},
+			},
+		},
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2048},
+		},
+	}
+
+	if err := ensureReservationCapacity(snap, st, "alpha", 1024); err != nil {
+		t.Fatalf("expected reservation to fit cap, got %v", err)
+	}
+	if !daemon.CanReserve(snap, st, "alpha", 1024) {
+		t.Fatal("expected daemon cap logic to agree with helper")
 	}
 }

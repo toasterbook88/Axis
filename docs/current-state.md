@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-25 11:37 EDT
+Last reviewed: 2026-03-25 11:39 EDT
 Branch: `main`
-Reviewed base HEAD: `afab32c`
+Reviewed base HEAD: `f1db2b9`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -133,7 +133,7 @@ In practical terms:
 
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
-- Execution confirmation is explicit across CLI and HTTP now, but the UX and error contracts still differ between surfaces
+- Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
 - Locality detection can treat a node as local based on its logical name, not just its real hostname/address
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block

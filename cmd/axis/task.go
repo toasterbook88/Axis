@@ -143,6 +143,17 @@ type taskRunIntent struct {
 	requiresConfirmation bool
 }
 
+func reservationMBForRequirements(reqs models.TaskRequirements) int64 {
+	return reqs.MinFreeRAMMB + 1024
+}
+
+func ensureReservationCapacity(snap *models.ClusterSnapshot, st *state.ClusterState, node string, reservationMB int64) error {
+	if !daemon.CanReserve(snap, st, node, reservationMB) {
+		return fmt.Errorf("node %s cannot reserve %d MB (current reservations exceed cap)", node, reservationMB)
+	}
+	return nil
+}
+
 func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *skills.Store) (taskRunIntent, error) {
 	if execFlag && scriptFlag {
 		return taskRunIntent{}, fmt.Errorf("use either --exec for a raw command or --script for a known script/skill, not both")
@@ -272,6 +283,11 @@ func taskRunCmd() *cobra.Command {
 
 			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", decision.Node, commandToRun)
 
+			reservationMB := reservationMBForRequirements(reqs)
+			if err := ensureReservationCapacity(snap, st, decision.Node, reservationMB); err != nil {
+				return err
+			}
+
 			// 3. execute with stream
 			// Match the node explicitly
 			var targetNode models.NodeFacts
@@ -317,13 +333,12 @@ func taskRunCmd() *cobra.Command {
 					Fatal(ExitErrContextWrite, "failed to finalize context file: %v", err)
 				}
 
-				c := exec.CommandContext(ctx, "bash", "-c", commandToRun)
+				c := exec.CommandContext(ctx, "bash", "-lc", commandToRun)
 				c.Env = append(os.Environ(),
 					"AXIS_CONTEXT_FILE="+contextFile.Name(),
 					"BEST_NODE="+decision.Node,
 				)
 				if st != nil {
-					reservationMB := reqs.MinFreeRAMMB + 1024
 					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
 					if err != nil {
 						return fmt.Errorf("failed to persist task reservation: %w", err)
@@ -369,7 +384,6 @@ func taskRunCmd() *cobra.Command {
 				}
 
 				if st != nil {
-					reservationMB := reqs.MinFreeRAMMB + 1024
 					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
 					if err != nil {
 						return fmt.Errorf("failed to persist task reservation: %w", err)
@@ -382,7 +396,7 @@ func taskRunCmd() *cobra.Command {
 				}
 
 				quotedCmd := fmt.Sprintf(
-					"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -c %s",
+					"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -lc %s",
 					shellescape.Quote(decision.Node),
 					shellescape.Quote(remoteContextPath),
 					shellescape.Quote(remoteContextPath),
