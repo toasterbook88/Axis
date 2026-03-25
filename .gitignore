@@ -23,3 +23,6 @@ Thumbs.db
 # Build artifacts
 /dist/
 /bin/
+
+# Local Claude AI session directory
+.claude/
