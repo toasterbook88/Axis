@@ -136,7 +136,7 @@ In practical terms:
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block
-- Script prerequisites like `jq` and broader shell assumptions are still under-modeled even though multi-tool requirements are now enforced
+- Built-in script prerequisites now model `jq` explicitly, but broader shell assumptions are still under-modeled
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
 - Persistence helpers do not consistently create parent directories or surface save/load corruption clearly
 - The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
