@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ func TestSSHConfig_InsecureEnvIgnored(t *testing.T) {
 	defer os.Unsetenv("AXIS_SSH_INSECURE")
 
 	executor := NewSSHExecutor("localhost", 22, "user", 10)
-	_, err := executor.sshConfig()
+	_, err := executor.sshConfig(context.Background())
 
 	if err == nil {
 		// Config succeeded using known_hosts (not insecure) — that's fine.

@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-25 10:46 EDT
+Last reviewed: 2026-03-25 11:29 EDT
 Branch: `main`
-Reviewed base HEAD: `c79bdc8`
+Reviewed base HEAD: `e7621af`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -74,7 +74,7 @@ Top-level commands currently registered in the binary:
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, moderately covered, but semantic validation is still light |
 | `internal/safety` | Execution blocker | Heuristic, but now well unit-tested |
-| `internal/transport` | SSH execution layer | Critical runtime package with light coverage |
+| `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; integration coverage still needs to grow, but baseline unit coverage is now solid |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, low coverage |
 | `internal/mcp` | Read-only MCP surfaces | Useful diagnostic layer, low coverage |
 | `internal/chat` | Ollama-backed chat | Moderately tested, utility-oriented |
@@ -91,13 +91,13 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `35.8%`)
+- `go test ./... -cover` -> passes (total coverage: `37.3%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
 - `internal/knowledge`
 - `internal/models`
-- low-coverage runtime surfaces: `cmd/axis`, `internal/api`, `internal/facts`, `internal/mcp`, `internal/transport`
+- low-coverage runtime surfaces: `cmd/axis`, `internal/api`, `internal/facts`, `internal/mcp`
 
 ## Reality Check
 
