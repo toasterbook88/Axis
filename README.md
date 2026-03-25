@@ -4,7 +4,7 @@
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, provides deterministic advisory task placement, and exposes optional local control surfaces — no daemon-first architecture required.**
+**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, provides deterministic reservation-aware task placement, and exposes guarded optional local control surfaces — no daemon-first architecture required.**
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ axis task place "run ollama inference on a 7b model"
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc` |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
-| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, free RAM, and locality; `--cached` uses the explicit daemon snapshot cache |
+| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, allocatable RAM, reservation ratio, and locality; `--cached` uses the explicit daemon snapshot cache |
 | **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
 | **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
@@ -128,7 +128,7 @@ axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
 
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement; free RAM breaks ties.
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, allocatable RAM, reservation ratio, and stable name ordering.
 
 With `--cached`, placement uses the explicit daemon snapshot cache instead of a fresh SSH sweep. JSON output includes a `source` wrapper so you can tell whether the decision came from `daemon-cache` or live fallback.
 
@@ -217,14 +217,14 @@ Forces the daemon to rebuild its cached snapshot immediately. This is the fastes
 ### Key design notes
 
 - Config lives at `~/.axis/nodes.yaml` — no cluster IPs hardcoded in code
-- Placement is deterministic: RAM pressure → GPU → effective headroom → free RAM → name
+- Placement is deterministic: RAM pressure → GPU → effective headroom → allocatable RAM → reservation ratio → name
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
 - `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
 - Placement memory lives locally in `~/.axis/state.json`
 
-**Current phase:** The Phase 1 observability core is complete, and Phase 2 advisory placement is live on `main`. Optional local server, daemon-backed cache, MCP, chat, and explicit execution surfaces also exist, but the project is still not daemon-first.
+**Current phase:** The original Phase 1 observability core is complete, and `main` now ships Phase 2-style reservation-aware placement plus explicit cache, MCP, chat, and execution surfaces. The project is still not daemon-first.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 

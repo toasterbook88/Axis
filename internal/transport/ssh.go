@@ -1,5 +1,5 @@
 // Package transport provides command execution abstractions.
-// Phase 1: SSHExecutor. Future: AgentExecutor (axisd).
+// Today this package is backed by SSH, with room for future transports.
 package transport
 
 import (
@@ -27,7 +27,7 @@ type Executor interface {
 }
 
 // SSHExecutor executes commands on a remote node via SSH.
-// This is a Phase 1 temporary transport mechanism.
+// This is the current remote transport mechanism.
 type SSHExecutor struct {
 	Host       string
 	Port       int
@@ -72,7 +72,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
 	e.client = ssh.NewClient(sshConn, chans, reqs)
-	
+
 	return nil
 }
 

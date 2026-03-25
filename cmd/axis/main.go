@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Version is the hardcoded Phase 1 version string.
+// Version is the hardcoded AXIS version string.
 const Version = "0.1.0"
 
 func main() {
