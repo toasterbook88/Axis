@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-25 11:39 EDT
+Last reviewed: 2026-03-25 11:52 EDT
 Branch: `main`
-Reviewed base HEAD: `f1db2b9`
+Reviewed base HEAD: `ade4ae4`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -66,7 +66,7 @@ Top-level commands currently registered in the binary:
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads and invalidate |
-| `internal/models` | Shared types and locality helpers | Types are fine; locality rules are too permissive |
+| `internal/models` | Shared types and locality helpers | Types are fine; locality matching now prefers real hostnames/addresses over logical names |
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, and multi-tool requirements are now live, but balancing policy is still simple |
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
 | `internal/knowledge` | Build execution context blob | Thin wrapper, currently placeholder-heavy |
@@ -91,12 +91,11 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `37.8%`)
+- `go test ./... -cover` -> passes (total coverage: `39.2%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
 - `internal/knowledge`
-- `internal/models`
 - low-coverage runtime surfaces: `cmd/axis`, `internal/api`, `internal/facts`, `internal/mcp`
 
 ## Reality Check
@@ -134,7 +133,7 @@ In practical terms:
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
-- Locality detection can treat a node as local based on its logical name, not just its real hostname/address
+- Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block
 - Script prerequisites like `jq` and broader shell assumptions are still under-modeled even though multi-tool requirements are now enforced
