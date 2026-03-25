@@ -146,12 +146,16 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 			r.RAMFreeMB = parseDarwinFreeRAM(out)
 		}
 	} else {
-		if out, err := c.Exec.Run(ctx, `grep -E 'MemTotal|MemAvailable' /proc/meminfo`); err != nil {
+		if out, err := c.Exec.Run(ctx, `grep -E 'MemTotal|MemAvailable|MemFree' /proc/meminfo`); err != nil {
 			partial = true
 		} else {
-			total, avail, _ := parseLinuxMeminfo(out)
-			r.RAMTotalMB = total
-			r.RAMFreeMB = avail
+			total, avail, err := parseLinuxMeminfo(out)
+			if err != nil {
+				partial = true
+			} else {
+				r.RAMTotalMB = total
+				r.RAMFreeMB = avail
+			}
 		}
 	}
 
@@ -160,18 +164,15 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 	}
 
 	// Disk
-	if out, err := c.Exec.Run(ctx, "df -k /"); err != nil {
+	if out, err := c.Exec.Run(ctx, "df -kP /"); err != nil {
 		partial = true
 	} else {
-		lines := strings.Split(strings.TrimSpace(out), "\n")
-		if len(lines) >= 2 {
-			fields := strings.Fields(lines[1])
-			if len(fields) >= 4 {
-				totalKB, _ := strconv.ParseInt(fields[1], 10, 64)
-				freeKB, _ := strconv.ParseInt(fields[3], 10, 64)
-				r.DiskTotalGB = totalKB / (1024 * 1024)
-				r.DiskFreeGB = freeKB / (1024 * 1024)
-			}
+		total, free, err := parseDFOutput(out)
+		if err != nil {
+			partial = true
+		} else {
+			r.DiskTotalGB = total
+			r.DiskFreeGB = free
 		}
 	}
 

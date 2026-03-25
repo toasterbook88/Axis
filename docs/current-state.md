@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-25 11:29 EDT
+Last reviewed: 2026-03-25 11:37 EDT
 Branch: `main`
-Reviewed base HEAD: `e7621af`
+Reviewed base HEAD: `afab32c`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -62,7 +62,7 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small and stable, but not strict against unknown YAML fields |
-| `internal/facts` | Local/remote hardware + tool collection | Parsing is decent; remote collection is round-trip heavy |
+| `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy |
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads and invalidate |
@@ -91,7 +91,7 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `37.3%`)
+- `go test ./... -cover` -> passes (total coverage: `37.8%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 

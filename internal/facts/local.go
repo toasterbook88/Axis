@@ -275,7 +275,7 @@ func parseVMStatVal(line string) int64 {
 }
 
 func parseLinuxMeminfo(data string) (int64, int64, error) {
-	var total, available int64
+	var total, available, free int64
 	remaining := data
 	for len(remaining) > 0 {
 		var line string
@@ -288,8 +288,20 @@ func parseLinuxMeminfo(data string) (int64, int64, error) {
 		}
 		if strings.HasPrefix(line, "MemTotal:") {
 			total = parseKBField(line)
+		} else if strings.HasPrefix(line, "MemFree:") {
+			free = parseKBField(line)
 		} else if strings.HasPrefix(line, "MemAvailable:") {
 			available = parseKBField(line)
+		}
+	}
+	if total <= 0 {
+		return 0, 0, fmt.Errorf("meminfo missing MemTotal")
+	}
+	if available <= 0 {
+		if free > 0 {
+			available = free
+		} else {
+			return 0, 0, fmt.Errorf("meminfo missing MemAvailable")
 		}
 	}
 	return total / 1024, available / 1024, nil
@@ -354,21 +366,37 @@ func parseKBField(line string) int64 {
 }
 
 func localDisk() (int64, int64, error) {
-	out, err := exec.Command("df", "-k", "/").Output()
+	out, err := exec.Command("df", "-kP", "/").Output()
 	if err != nil {
 		return 0, 0, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	return parseDFOutput(string(out))
+}
+
+func parseDFOutput(out string) (int64, int64, error) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {
 		return 0, 0, fmt.Errorf("unexpected df output")
 	}
-	fields := strings.Fields(lines[1])
-	if len(fields) < 4 {
-		return 0, 0, fmt.Errorf("unexpected df fields")
+
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		totalKB, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid df total: %w", err)
+		}
+		freeKB, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid df free: %w", err)
+		}
+		return totalKB / (1024 * 1024), freeKB / (1024 * 1024), nil
 	}
-	totalKB, _ := strconv.ParseInt(fields[1], 10, 64)
-	freeKB, _ := strconv.ParseInt(fields[3], 10, 64)
-	return totalKB / (1024 * 1024), freeKB / (1024 * 1024), nil
+
+	return 0, 0, fmt.Errorf("unexpected df fields")
 }
 
 func localGPUs() []string {
