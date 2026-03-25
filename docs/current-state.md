@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-24 20:42 EDT
+Last reviewed: 2026-03-25 10:46 EDT
 Branch: `main`
-Reviewed base HEAD: `70ae717`
+Reviewed base HEAD: `c79bdc8`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -63,7 +63,7 @@ Top-level commands currently registered in the binary:
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small and stable, but not strict against unknown YAML fields |
 | `internal/facts` | Local/remote hardware + tool collection | Parsing is decent; remote collection is round-trip heavy |
-| `internal/discovery` | Fan-out discovery and UDP beacons | Works, but has ordering/timing issues and no tests |
+| `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads and invalidate |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality rules are too permissive |
@@ -91,11 +91,10 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `35.5%`)
+- `go test ./... -cover` -> passes (total coverage: `35.8%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
-- `internal/discovery`
 - `internal/knowledge`
 - `internal/models`
 - low-coverage runtime surfaces: `cmd/axis`, `internal/api`, `internal/facts`, `internal/mcp`, `internal/transport`
@@ -136,7 +135,7 @@ In practical terms:
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
 - Execution confirmation is explicit across CLI and HTTP now, but the UX and error contracts still differ between surfaces
 - Locality detection can treat a node as local based on its logical name, not just its real hostname/address
-- Discovery order is not stabilized before later logic uses the node list
+- UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block
 - Script prerequisites like `jq` and broader shell assumptions are still under-modeled even though multi-tool requirements are now enforced
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
