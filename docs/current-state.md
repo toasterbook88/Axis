@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-24 16:58 EDT
+Last reviewed: 2026-03-24 20:42 EDT
 Branch: `main`
-Reviewed HEAD: `1b3f5df`
+Reviewed base HEAD: `70ae717`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -72,11 +72,11 @@ Top-level commands currently registered in the binary:
 | `internal/knowledge` | Build execution context blob | Thin wrapper, currently placeholder-heavy |
 | `internal/scripts` | Built-in task scripts | Useful, but registry prerequisites are under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
-| `internal/skills` | Learned skills/failures | Persists state, lightly validated, no tests |
-| `internal/safety` | Execution blocker | Heuristic and brittle, no tests |
-| `internal/transport` | SSH execution layer | Critical runtime package with no tests |
+| `internal/skills` | Learned skills/failures | Persists state, moderately covered, but semantic validation is still light |
+| `internal/safety` | Execution blocker | Heuristic, but now well unit-tested |
+| `internal/transport` | SSH execution layer | Critical runtime package with light coverage |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, low coverage |
-| `internal/mcp` | Read-only MCP surfaces | Useful diagnostic layer, no tests |
+| `internal/mcp` | Read-only MCP surfaces | Useful diagnostic layer, low coverage |
 | `internal/chat` | Ollama-backed chat | Moderately tested, utility-oriented |
 
 ## Verification Snapshot
@@ -91,16 +91,14 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./internal/config ./internal/placement ./internal/facts` -> passes after public-repo sanitization
+- `go test ./... -cover` -> passes (total coverage: `35.5%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
 - `internal/discovery`
 - `internal/knowledge`
-- `internal/mcp`
-- `internal/safety`
-- `internal/skills`
-- `internal/transport`
+- `internal/models`
+- low-coverage runtime surfaces: `cmd/axis`, `internal/api`, `internal/facts`, `internal/mcp`, `internal/transport`
 
 ## Reality Check
 
@@ -136,7 +134,7 @@ In practical terms:
 
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
-- Execution confirmation is inconsistent across surfaces: the CLI is stricter than the HTTP API
+- Execution confirmation is explicit across CLI and HTTP now, but the UX and error contracts still differ between surfaces
 - Locality detection can treat a node as local based on its logical name, not just its real hostname/address
 - Discovery order is not stabilized before later logic uses the node list
 - Safety blocking is substring-based and can both over-block and under-block
@@ -144,7 +142,8 @@ In practical terms:
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
 - Persistence helpers do not consistently create parent directories or surface save/load corruption clearly
 - The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
-- `axis status`, `axis task place`, and `axis task context` now have explicit cached paths; most other read surfaces still hit live discovery by default
+- `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads, but cache provenance is still only explicit on cached-path output
+- Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
 
 ## Recommended Next Sequence
 

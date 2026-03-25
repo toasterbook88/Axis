@@ -14,8 +14,8 @@ import (
 )
 
 // RemoteCollector collects facts from a remote node via SSH.
-// SSH is a Phase 1 temporary transport — the Executor interface
-// provides a clean seam for future axisd-based collection.
+// The Executor interface keeps the collection path decoupled from the current
+// transport implementation.
 type RemoteCollector struct {
 	NodeName string
 	Role     string

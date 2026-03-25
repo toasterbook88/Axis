@@ -31,5 +31,5 @@ When docs disagree:
 
 | Phase | Status | Description |
 |---|---|---|
-| Phase 1 | **Active** | CLI bootstrap, local/remote fact collection, ClusterSnapshot output |
-| Phase 2 | Active in code; hardening and design refinement in progress | Placement, execution surfaces, MCP, daemon-backed cached reads, and utility layers exist; current effort is truth-alignment plus smarter placement and cache policy design |
+| Phase 1 | Core complete; retained as the historical spec boundary | CLI bootstrap, local/remote fact collection, and `ClusterSnapshot` output remain the foundation |
+| Phase 2 | **Active on `main`** | Reservation-aware placement, execution surfaces, MCP, daemon-backed cached reads, and utility layers are shipped; current effort is hardening and truth-alignment |

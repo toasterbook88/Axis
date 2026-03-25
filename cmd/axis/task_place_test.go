@@ -65,6 +65,37 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 	}
 }
 
+func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
+	decision, source, err := planTaskPlacement(
+		context.Background(),
+		"analyze a git repo",
+		false,
+		nil,
+		func(context.Context) (*models.ClusterSnapshot, string, error) {
+			alpha := nodeComplete("alpha", 8192, "low", "git")
+			alpha.Resources.RAMReservedMB = 4096
+			alpha.Resources.RAMAllocatableMB = 4096
+
+			beta := nodeComplete("beta", 6144, "low", "git")
+			beta.Resources.RAMReservedMB = 0
+			beta.Resources.RAMAllocatableMB = 6144
+
+			return &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{alpha, beta},
+			}, "live", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("planTaskPlacement: %v", err)
+	}
+	if source != "live" {
+		t.Fatalf("expected live source, got %q", source)
+	}
+	if decision.Node != "beta" {
+		t.Fatalf("expected beta after reservation overlay, got %q", decision.Node)
+	}
+}
+
 func nodeComplete(name string, freeRAM int64, pressure string, tools ...string) models.NodeFacts {
 	node := models.NodeFacts{
 		Name:   name,

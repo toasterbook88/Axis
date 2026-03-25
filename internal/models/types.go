@@ -1,5 +1,5 @@
 // Package models defines core AXIS data types.
-// All types are internal — no public API surface in Phase 1.
+// All types are internal — there is no stable public API surface.
 package models
 
 import "time"

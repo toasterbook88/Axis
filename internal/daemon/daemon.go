@@ -124,7 +124,7 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	}
 
 	d.snapshot = cloneSnapshot(snap)
-	applyReservationView(d.snapshot, st)
+	ApplyReservationView(d.snapshot, st)
 	d.collectedAt = now
 	d.lastError = ""
 
@@ -280,7 +280,10 @@ func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 	return &clone
 }
 
-func applyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
+// ApplyReservationView overlays locally persisted reservations onto a snapshot
+// so read paths can reason about allocatable RAM without requiring daemon-only
+// semantics.
+func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
 	if snap == nil {
 		return
 	}

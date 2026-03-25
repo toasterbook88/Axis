@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 type statusOutput struct {
@@ -91,5 +92,17 @@ func discoverLiveSnapshot(ctx context.Context) (*models.ClusterSnapshot, string,
 	}
 
 	nodes := discovery.Discover(ctx, cfg)
-	return snapshot.Build(nodes), "live", nil
+	snap := snapshot.Build(nodes)
+
+	st, err := state.Load()
+	if err != nil {
+		snap.Warnings = append(snap.Warnings, models.Warning{
+			Kind:    "state",
+			Message: "failed to load local AXIS state: " + err.Error(),
+		})
+		return snap, "live", nil
+	}
+
+	daemon.ApplyReservationView(snap, st)
+	return snap, "live", nil
 }
