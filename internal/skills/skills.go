@@ -2,10 +2,13 @@ package skills
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 type LearnedSkill struct {
@@ -29,19 +32,29 @@ type Store struct {
 	Failures []LearnedFailure `json:"failures"`
 }
 
+var quarantineCorruptSkillsFile = persist.QuarantineCorruptFile
+
 func path() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".axis", "skills.json")
 }
 
-func Load() *Store {
-	data, err := os.ReadFile(path())
+func Load() (*Store, error) {
+	filePath := path()
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return newStore()
+		if os.IsNotExist(err) {
+			return newStore(), nil
+		}
+		return nil, err
 	}
 	var s Store
 	if err := json.Unmarshal(data, &s); err != nil {
-		return newStore()
+		warnErr := quarantineCorruptSkillsFile(filePath, err)
+		if _, ok := warnErr.(*persist.RecoveryWarning); ok {
+			return newStore(), fmt.Errorf("recovered learned skills store: %w", warnErr)
+		}
+		return nil, warnErr
 	}
 	if s.Skills == nil {
 		s.Skills = []LearnedSkill{}
@@ -49,7 +62,7 @@ func Load() *Store {
 	if s.Failures == nil {
 		s.Failures = []LearnedFailure{}
 	}
-	return &s
+	return &s, nil
 }
 
 func (s *Store) Save() error {

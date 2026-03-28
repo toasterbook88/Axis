@@ -163,6 +163,31 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 		r.Pressure = computePressure(r.RAMTotalMB, r.RAMFreeMB)
 	}
 
+	var loadCmd string
+	if osName == "darwin" {
+		loadCmd = "sysctl -n vm.loadavg"
+	} else {
+		loadCmd = "cat /proc/loadavg"
+	}
+	if out, err := c.Exec.Run(ctx, loadCmd); err != nil {
+		partial = true
+	} else {
+		var load1, load5, load15 float64
+		var parseErr error
+		if osName == "darwin" {
+			load1, load5, load15, parseErr = parseDarwinLoadavg(out)
+		} else {
+			load1, load5, load15, parseErr = parseLoadavgFields(out)
+		}
+		if parseErr != nil {
+			partial = true
+		} else {
+			r.Load1M = load1
+			r.Load5M = load5
+			r.Load15M = load15
+		}
+	}
+
 	// Disk
 	if out, err := c.Exec.Run(ctx, "df -kP /"); err != nil {
 		partial = true

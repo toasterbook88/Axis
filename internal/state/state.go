@@ -2,9 +2,12 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 type NodeState struct {
@@ -21,22 +24,29 @@ type ClusterState struct {
 	UpdatedAt time.Time            `json:"updated_at"`
 }
 
+var quarantineCorruptStateFile = persist.QuarantineCorruptFile
+
 func Path() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".axis", "state.json")
 }
 
 func Load() (*ClusterState, error) {
-	data, err := os.ReadFile(Path())
+	path := Path()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &ClusterState{Nodes: make(map[string]NodeState)}, nil
+			return emptyClusterState(), nil
 		}
 		return nil, err
 	}
 	var s ClusterState
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
+		warnErr := quarantineCorruptStateFile(path, err)
+		if _, ok := warnErr.(*persist.RecoveryWarning); ok {
+			return emptyClusterState(), fmt.Errorf("recovered local AXIS state: %w", warnErr)
+		}
+		return nil, warnErr
 	}
 	if s.Nodes == nil {
 		s.Nodes = make(map[string]NodeState)
@@ -71,6 +81,10 @@ func Load() (*ClusterState, error) {
 		}
 	}
 	return &s, nil
+}
+
+func emptyClusterState() *ClusterState {
+	return &ClusterState{Nodes: make(map[string]NodeState)}
 }
 
 func (s *ClusterState) Save() error {

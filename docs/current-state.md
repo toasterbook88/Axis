@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-28 18:38 EDT
+Last reviewed: 2026-03-28 23:15 EDT
 Branch: `main`
-Reviewed base HEAD: `f474969da1e4cd2ee5fe31bde2c0bd2fb4fdedf6`
+Reviewed base HEAD: `278f5978ecdb8c8edada6028b31815be92d56782` (`main`, plus current uncommitted v1 hardening worktree)
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -27,9 +27,12 @@ The live repo currently contains:
 - A CLI task execution path (`axis task run`)
 - A read-only MCP server for cluster diagnostics
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
+- Recoverable persistence for corrupt local state/skills files via quarantine + warning
 - UDP beacon-based node discovery
 - Per-run execution context files instead of shared temp-path injection
 - Stateful placement ranking with reservation subtraction, GPU preference, and full multi-tool enforcement
+- Live and cached read paths that both overlay reservations before placement/context generation
+- Real load-average data in facts, snapshots, and execution context
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 
 The core observation pipeline is reasonably clean. The execution and safety surfaces are where most of the risk now lives.
@@ -65,25 +68,28 @@ Top-level commands currently registered in the binary:
 | `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy |
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
-| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads and invalidate |
+| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, and reservation-aware snapshot views |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality matching now prefers real hostnames/addresses over logical names |
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, and multi-tool requirements are now live, but balancing policy is still simple |
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
-| `internal/knowledge` | Build execution context blob | Thin wrapper, currently placeholder-heavy |
+| `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
-| `internal/skills` | Learned skills/failures | Persists state, moderately covered, but semantic validation is still light |
+| `internal/skills` | Learned skills/failures | Persists state, now recovers from corrupt JSON, but semantic validation is still light |
 | `internal/safety` | Execution blocker | Heuristic, but now well unit-tested |
 | `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; integration coverage still needs to grow, but baseline unit coverage is now solid |
-| `internal/api` | Local HTTP API and execution surface | High-risk surface, low coverage |
-| `internal/mcp` | Read-only MCP surfaces | Useful diagnostic layer, low coverage |
+| `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
+| `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
+| `internal/persist` | Corrupt-file recovery helpers | Small helper package used for quarantine + warning recovery |
+| `internal/runtimectx` | Unified live runtime loader | Centralizes config + discovery + overlay + warning assembly for live reads |
 | `internal/chat` | Ollama-backed chat | Moderately tested, utility-oriented |
 
 ## Verification Snapshot
 
 Audit commands run against this repo state:
 
-- `go test ./...` -> passes
+- `go test ./... -count=1` -> passes
+- `go test -race ./... -count=1` -> passes
 - `go build ./...` -> passes
 - `go build -o /tmp/axis ./cmd/axis` -> passes
 - `/tmp/axis status --cached --cache-addr 127.0.0.1:42433` -> returns wrapped snapshot with `source: "daemon-cache"`
@@ -91,12 +97,12 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `39.2%`)
+- `go test ./... -cover` -> passes (total coverage: `45.2%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
-- `internal/knowledge`
-- low-coverage runtime surfaces: `cmd/axis`, `internal/api`, `internal/facts`, `internal/mcp`
+- v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `63.8%`, `internal/mcp` `51.2%`
+- remaining low-coverage surfaces: `cmd/axis`, `internal/facts`, `internal/persist`, `internal/runtimectx`
 
 ## Reality Check
 
@@ -109,6 +115,9 @@ Areas where the live repo has moved past the older docs/specs:
 - The repo now includes an explicit daemon-backed snapshot cache, not just ad hoc live discovery
 - Cached reads, cache refresh, and cache invalidation are explicit operator actions, not hidden behavior
 - Placement now subtracts reserved RAM during ranking, prefers GPU nodes after pressure, and enforces full script toolchains
+- Live status/placement/context reads now use the same reservation overlay model as cached reads
+- Corrupt local state/skills files are now quarantined and surfaced as warnings instead of collapsing read surfaces
+- Execution context now carries real load averages rather than placeholder zeros
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
@@ -138,26 +147,18 @@ In practical terms:
 - Safety blocking is substring-based and can both over-block and under-block
 - Built-in script prerequisites now model `jq` explicitly, but broader shell assumptions are still under-modeled
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
-- Persistence helpers do not consistently create parent directories or surface save/load corruption clearly
+- `internal/persist` and `internal/runtimectx` are important but still only lightly tested as direct packages
 - The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads, but cache provenance is still only explicit on cached-path output
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
 
 ## Recommended Next Sequence
 
-Documentation and organization first:
+V1 hardening is now mostly about durability, not feature growth:
 
-1. Keep this file current as the repo-orientation entry point.
-2. Align `README.md` and `docs/phase1_spec.md` with the command surface that actually exists.
-3. Decide whether AXIS should be described as:
-   - a read-only cluster observability tool, or
-   - an execution-capable local orchestration tool with safety constraints.
-4. Once the product description is stable, harden the implementation to match that description.
-
-Engineering follow-up after doc alignment:
-
-1. Decide which read surfaces should gain explicit cached modes next (MCP, HTTP context/placement helpers, or richer API reads).
-2. Refine reservation accounting into a clearer cluster RAM balancing model.
-3. Make all execution paths explicit and consistent.
-4. Add integration tests around SSH, API execution, safety, discovery, and daemon freshness.
-5. Use [ram-balancing-research.md](ram-balancing-research.md) as the technical basis for the next placement-intelligence phase.
+1. Keep this file, `README.md`, and CI coverage gates current as the orientation layer.
+2. Add direct unit coverage for `internal/persist` and `internal/runtimectx` so recovery behavior is locked in explicitly, not only through higher-level packages.
+3. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
+4. Refine reservation accounting into a clearer cluster RAM balancing model.
+5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
+6. Treat advanced balancing, PSI/reclaim behavior, and event-driven cache refresh as post-v1 work, using [ram-balancing-research.md](ram-balancing-research.md) as the technical basis.

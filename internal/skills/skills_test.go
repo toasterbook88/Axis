@@ -9,7 +9,10 @@ import (
 func TestLoadReturnsEmptyStoreWhenMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	s := Load()
+	s, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
 	if s == nil {
 		t.Fatal("expected store")
 	}
@@ -30,9 +33,48 @@ func TestLoadReturnsEmptyStoreOnInvalidJSON(t *testing.T) {
 		t.Fatalf("write invalid json: %v", err)
 	}
 
-	s := Load()
+	s, err := Load()
+	if err == nil {
+		t.Fatal("expected recoverable warning on invalid json")
+	}
 	if len(s.Skills) != 0 || len(s.Failures) != 0 {
 		t.Fatalf("expected empty store on invalid json, got %+v", s)
+	}
+	matches, globErr := filepath.Glob(filepath.Join(dir, "skills.json.corrupt-*"))
+	if globErr != nil {
+		t.Fatalf("Glob() error = %v", globErr)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one quarantined backup, got %v", matches)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "skills.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected original skills.json to be quarantined, stat err = %v", statErr)
+	}
+}
+
+func TestLoadFailsWhenQuarantineFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	previous := quarantineCorruptSkillsFile
+	t.Cleanup(func() { quarantineCorruptSkillsFile = previous })
+	quarantineCorruptSkillsFile = func(path string, cause error) error {
+		return os.ErrPermission
+	}
+
+	dir := filepath.Join(os.Getenv("HOME"), ".axis")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills.json"), []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("write invalid json: %v", err)
+	}
+
+	s, err := Load()
+	if err == nil {
+		t.Fatal("expected hard error when quarantine fails")
+	}
+	if s != nil {
+		t.Fatalf("expected nil store on hard error, got %+v", s)
 	}
 }
 
@@ -47,7 +89,10 @@ func TestSaveCreatesParentDirectoryAndRoundTrips(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	got := Load()
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
 	if len(got.Skills) != 1 {
 		t.Fatalf("expected 1 skill, got %d", len(got.Skills))
 	}

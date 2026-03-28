@@ -25,7 +25,13 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test ./...
+        run: go test ./... -count=1
+
+      - name: Run race tests
+        run: go test -race ./... -count=1
 
       - name: Build
-        run: go build ./cmd/axis/
+        run: go build ./...
+
+      - name: Coverage gates
+        run: ./hack/coverage-check.sh

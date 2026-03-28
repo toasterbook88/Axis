@@ -8,12 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
-	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
-	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
-	"github.com/toasterbook88/axis/internal/snapshot"
-	"github.com/toasterbook88/axis/internal/state"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
 type statusOutput struct {
@@ -85,24 +82,9 @@ func collectStatusSnapshot(
 }
 
 func discoverLiveSnapshot(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-	cfgPath := config.DefaultConfigPath()
-	cfg, err := config.Load(cfgPath)
+	rt, err := runtimectx.Load(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-
-	nodes := discovery.Discover(ctx, cfg)
-	snap := snapshot.Build(nodes)
-
-	st, err := state.Load()
-	if err != nil {
-		snap.Warnings = append(snap.Warnings, models.Warning{
-			Kind:    "state",
-			Message: "failed to load local AXIS state: " + err.Error(),
-		})
-		return snap, "live", nil
-	}
-
-	daemon.ApplyReservationView(snap, st)
-	return snap, "live", nil
+	return rt.Snapshot, "live", nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -109,8 +110,16 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	now := time.Now().UTC()
 
 	var st *state.ClusterState
+	var stateWarning error
 	if err == nil {
-		st, err = state.Load()
+		st, stateWarning = state.Load()
+		if stateWarning != nil && st == nil {
+			d.mu.Lock()
+			d.nextRefreshAt = now.Add(d.interval)
+			d.lastError = stateWarning.Error()
+			d.mu.Unlock()
+			return stateWarning
+		}
 	}
 
 	d.mu.Lock()
@@ -125,6 +134,22 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 
 	d.snapshot = cloneSnapshot(snap)
 	ApplyReservationView(d.snapshot, st)
+	if stateWarning != nil {
+		d.snapshot.Warnings = append(d.snapshot.Warnings, models.Warning{
+			Kind:    "state",
+			Message: stateWarning.Error(),
+		})
+	}
+	if skillStore, skillErr := skills.Load(); skillErr != nil {
+		if skillStore == nil {
+			d.lastError = skillErr.Error()
+			return skillErr
+		}
+		d.snapshot.Warnings = append(d.snapshot.Warnings, models.Warning{
+			Kind:    "skills",
+			Message: skillErr.Error(),
+		})
+	}
 	d.collectedAt = now
 	d.lastError = ""
 
@@ -187,9 +212,14 @@ func (d *Daemon) Meta() Metadata {
 		Stale:              stale,
 	}
 
-	if st, err := state.Load(); err == nil && st != nil {
+	if st, err := state.Load(); st != nil {
 		for _, ns := range st.Nodes {
 			meta.ReservedMB += ns.ReservedMB
+		}
+		if err != nil {
+			if meta.LastError == "" {
+				meta.LastError = err.Error()
+			}
 		}
 	}
 
@@ -278,6 +308,10 @@ func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 	}
 	clone.Warnings = append([]models.Warning(nil), snap.Warnings...)
 	return &clone
+}
+
+func CloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
+	return cloneSnapshot(snap)
 }
 
 // ApplyReservationView overlays locally persisted reservations onto a snapshot
