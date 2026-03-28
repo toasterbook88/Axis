@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-25 11:52 EDT
+Last reviewed: 2026-03-28 18:38 EDT
 Branch: `main`
-Reviewed base HEAD: `ade4ae4`
+Reviewed base HEAD: `f474969da1e4cd2ee5fe31bde2c0bd2fb4fdedf6`
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -70,7 +70,7 @@ Top-level commands currently registered in the binary:
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, and multi-tool requirements are now live, but balancing policy is still simple |
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
 | `internal/knowledge` | Build execution context blob | Thin wrapper, currently placeholder-heavy |
-| `internal/scripts` | Built-in task scripts | Useful, but registry prerequisites are under-modeled |
+| `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, moderately covered, but semantic validation is still light |
 | `internal/safety` | Execution blocker | Heuristic, but now well unit-tested |
