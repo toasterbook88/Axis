@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -18,8 +19,14 @@ type ClusterKnowledge struct {
 }
 
 func Build(snap *models.ClusterSnapshot, st *state.ClusterState, bestNode string) *ClusterKnowledge {
+	snapshotView := daemon.CloneSnapshot(snap)
+	if snapshotView == nil {
+		snapshotView = &models.ClusterSnapshot{}
+	}
+	daemon.ApplyReservationView(snapshotView, st)
+
 	ollamaMap := make(map[string]models.OllamaInfo)
-	for _, n := range snap.Nodes {
+	for _, n := range snapshotView.Nodes {
 		if n.Ollama != nil {
 			ollamaMap[n.Name] = *n.Ollama
 		}
@@ -27,16 +34,16 @@ func Build(snap *models.ClusterSnapshot, st *state.ClusterState, bestNode string
 
 	k := &ClusterKnowledge{
 		Timestamp: time.Now().UTC(),
-		Snapshot:  *snap,
+		Snapshot:  *snapshotView,
 		State:     st,
 		Ollama:    ollamaMap,
 		Load:      make(map[string]float64),
 		BestNode:  bestNode,
 	}
 
-	for _, n := range snap.Nodes {
+	for _, n := range snapshotView.Nodes {
 		if n.Resources != nil {
-			k.Load[n.Name] = 0 // Fill from /proc/loadavg if you want
+			k.Load[n.Name] = n.Resources.Load1M
 		}
 	}
 	return k

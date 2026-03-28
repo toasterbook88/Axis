@@ -10,7 +10,13 @@ import (
 
 // AutoDiscoverSkills turns every discovered CLI on a node into a reusable skill template.
 func AutoDiscoverSkills(ctx context.Context, nodes []models.NodeFacts) *Store {
-	s := Load()
+	s, err := Load()
+	if s == nil {
+		s = newStore()
+	}
+	if err != nil && s == nil {
+		return newStore()
+	}
 
 	for _, n := range nodes {
 		if n.Tools == nil {
@@ -44,7 +50,7 @@ func AutoDiscoverSkills(ctx context.Context, nodes []models.NodeFacts) *Store {
 		}
 	}
 
-	s.Save()
+	_ = s.Save()
 	return s
 }
 

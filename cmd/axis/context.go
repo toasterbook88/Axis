@@ -18,10 +18,17 @@ func contextCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "show",
 		Short: "Show the current cluster placement state",
-		Run: func(cmd *cobra.Command, args []string) {
-			st, _ := state.Load()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := state.Load()
+			if err != nil {
+				if st == nil {
+					return err
+				}
+				printWarning(err)
+			}
 			out, _ := json.MarshalIndent(st, "", "  ")
 			fmt.Println(string(out))
+			return nil
 		},
 	})
 	

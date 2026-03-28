@@ -306,3 +306,65 @@ func TestReleaseTaskHandlesMissingStateAndClampsValues(t *testing.T) {
 		t.Fatal("expected alpha node to be pruned after clamp to zero")
 	}
 }
+
+func TestLoadRecoversFromInvalidJSONByQuarantiningFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err == nil {
+		t.Fatal("expected recoverable warning on invalid json")
+	}
+	if loaded == nil {
+		t.Fatal("expected recovered empty state")
+	}
+	if len(loaded.Nodes) != 0 {
+		t.Fatalf("expected empty recovered state, got %v", loaded.Nodes)
+	}
+
+	matches, globErr := filepath.Glob(filepath.Join(home, ".axis", "state.json.corrupt-*"))
+	if globErr != nil {
+		t.Fatalf("Glob() error = %v", globErr)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one quarantined backup, got %v", matches)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("expected original state.json to be quarantined, stat err = %v", statErr)
+	}
+}
+
+func TestLoadFailsWhenStateQuarantineFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	previous := quarantineCorruptStateFile
+	t.Cleanup(func() { quarantineCorruptStateFile = previous })
+	quarantineCorruptStateFile = func(path string, cause error) error {
+		return os.ErrPermission
+	}
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err == nil {
+		t.Fatal("expected hard error when quarantine fails")
+	}
+	if loaded != nil {
+		t.Fatalf("expected nil state on hard error, got %+v", loaded)
+	}
+}

@@ -158,6 +158,32 @@ func TestParseDFOutputErrorsOnMalformedFields(t *testing.T) {
 	}
 }
 
+func TestParseLoadavgFields(t *testing.T) {
+	load1, load5, load15, err := parseLoadavgFields("1.23 0.98 0.55 1/999 1234")
+	if err != nil {
+		t.Fatalf("parseLoadavgFields() error = %v", err)
+	}
+	if load1 != 1.23 || load5 != 0.98 || load15 != 0.55 {
+		t.Fatalf("unexpected load averages: %.2f %.2f %.2f", load1, load5, load15)
+	}
+}
+
+func TestParseDarwinLoadavg(t *testing.T) {
+	load1, load5, load15, err := parseDarwinLoadavg("{ 3.14 2.72 1.62 }")
+	if err != nil {
+		t.Fatalf("parseDarwinLoadavg() error = %v", err)
+	}
+	if load1 != 3.14 || load5 != 2.72 || load15 != 1.62 {
+		t.Fatalf("unexpected darwin load averages: %.2f %.2f %.2f", load1, load5, load15)
+	}
+}
+
+func TestParseLoadavgFieldsErrorsOnMalformedInput(t *testing.T) {
+	if _, _, _, err := parseLoadavgFields("nope nope nope"); err == nil {
+		t.Fatal("expected parseLoadavgFields to fail on malformed values")
+	}
+}
+
 func TestComputePressure(t *testing.T) {
 	tests := []struct {
 		name     string

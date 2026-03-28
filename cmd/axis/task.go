@@ -13,17 +13,18 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
-	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
-	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
+
+var loadPlacementState = state.Load
 
 func taskCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -131,8 +132,31 @@ func planTaskPlacement(
 	}
 
 	reqs := placement.InferRequirements(desc)
-	decision := placement.SelectBestNode(reqs, snap.Nodes, nil)
+	st, stateErr := loadPlacementState()
+	if stateErr != nil && st == nil {
+		return models.PlacementDecision{}, "", stateErr
+	}
+	if stateErr != nil {
+		appendWarningIfMissing(snap, models.Warning{
+			Kind:    "state",
+			Message: stateErr.Error(),
+		})
+	}
+	decision := placement.SelectBestNode(reqs, snap.Nodes, st)
+	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
 	return decision, source, nil
+}
+
+func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
+	if snap == nil {
+		return
+	}
+	for _, existing := range snap.Warnings {
+		if existing.Kind == warning.Kind && existing.Message == warning.Message && existing.Node == warning.Node {
+			return
+		}
+	}
+	snap.Warnings = append(snap.Warnings, warning)
 }
 
 type taskRunIntent struct {
@@ -215,25 +239,23 @@ func taskRunCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
-			skillStore := skills.Load()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			rt, err := runtimectx.Load(ctx)
+			if err != nil {
+				Fatal(ExitErrConfigLoad, "Failed to load runtime context: %v", err)
+			}
+
+			skillStore := rt.Skills
 			intent, err := resolveTaskRunIntent(input, execFlag, scriptFlag, skillStore)
 			if err != nil {
 				return err
 			}
 
-			// 1. placement (reuse existing)
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-
-			st, _ := state.Load()
+			cfg := rt.Config
+			snap := rt.Snapshot
+			st := rt.State
 			reqs := placement.InferRequirements(input)
 
 			if intent.matchedScript != nil {
@@ -255,6 +277,7 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
+			decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
 
 			if !decision.OK {
 				for _, r := range decision.Reasoning {

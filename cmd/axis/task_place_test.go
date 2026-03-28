@@ -5,9 +5,13 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 func TestPlanTaskPlacementPrefersCacheWhenAvailable(t *testing.T) {
+	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restore()
+
 	decision, source, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
@@ -39,6 +43,9 @@ func TestPlanTaskPlacementPrefersCacheWhenAvailable(t *testing.T) {
 }
 
 func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
+	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restore()
+
 	decision, source, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
@@ -66,6 +73,9 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 }
 
 func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
+	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restore()
+
 	decision, source, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
@@ -111,4 +121,15 @@ func nodeComplete(name string, freeRAM int64, pressure string, tools ...string) 
 		node.Tools = append(node.Tools, models.ToolInfo{Name: tool, Version: "test"})
 	}
 	return node
+}
+
+func stubPlacementState(t *testing.T, st *state.ClusterState, err error) func() {
+	t.Helper()
+	prev := loadPlacementState
+	loadPlacementState = func() (*state.ClusterState, error) {
+		return st, err
+	}
+	return func() {
+		loadPlacementState = prev
+	}
 }

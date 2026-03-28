@@ -84,3 +84,10 @@ func printOutput(data interface{}, format string) error {
 	}
 	return nil
 }
+
+func printWarning(err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+}

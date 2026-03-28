@@ -22,6 +22,9 @@ func sampleNodeFacts() models.NodeFacts {
 			CPUModel:         "Intel i7-1065G7",
 			RAMTotalMB:       16384,
 			RAMFreeMB:        8192,
+			Load1M:           1.25,
+			Load5M:           0.80,
+			Load15M:          0.50,
 			RAMReservedMB:    1024,
 			RAMAllocatableMB: 7168,
 			DiskTotalGB:      500,
@@ -85,6 +88,9 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Resources.Pressure != "none" {
 		t.Errorf("pressure: got %q, want %q", decoded.Resources.Pressure, "none")
+	}
+	if decoded.Resources.Load1M != 1.25 || decoded.Resources.Load5M != 0.80 || decoded.Resources.Load15M != 0.50 {
+		t.Errorf("load averages: got %.2f/%.2f/%.2f", decoded.Resources.Load1M, decoded.Resources.Load5M, decoded.Resources.Load15M)
 	}
 	if decoded.Resources.RAMAllocatableMB != 7168 {
 		t.Errorf("ram_allocatable_mb: got %d, want 7168", decoded.Resources.RAMAllocatableMB)

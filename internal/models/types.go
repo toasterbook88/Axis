@@ -48,6 +48,9 @@ type Resources struct {
 	CPUModel         string   `json:"cpu_model" yaml:"cpu_model"`
 	RAMTotalMB       int64    `json:"ram_total_mb" yaml:"ram_total_mb"`
 	RAMFreeMB        int64    `json:"ram_free_mb" yaml:"ram_free_mb"`
+	Load1M           float64  `json:"load_1m" yaml:"load_1m"`
+	Load5M           float64  `json:"load_5m" yaml:"load_5m"`
+	Load15M          float64  `json:"load_15m" yaml:"load_15m"`
 	RAMReservedMB    int64    `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
 	RAMAllocatableMB int64    `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
 	DiskTotalGB      int64    `json:"disk_total_gb" yaml:"disk_total_gb"`

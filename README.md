@@ -4,7 +4,7 @@
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, provides deterministic reservation-aware task placement, and exposes guarded optional local control surfaces — no daemon-first architecture required.**
+**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, provides deterministic reservation-aware task placement, and exposes guarded optional local control surfaces with consistent live/cached reservation views — no daemon-first architecture required.**
 
 ## Quick Start
 
@@ -41,6 +41,8 @@ axis task place "run ollama inference on a 7b model"
 - `/run` and `axis_execute` require explicit `mode=script` or `mode=exec` + `confirm: "YES"`
 - Hardened safety blocker with allow-list, cluster-aware RAM/GPU checks, and learned-bad fast path
 - Per-node reservation caps enforced before any command runs (`RAMTotalMB - 1024` headroom)
+- Live and cached read paths both overlay local reservations before placement, context generation, or execution
+- Corrupt local `~/.axis/state.json` / `~/.axis/skills.json` files are quarantined to `.corrupt-*` backups and surfaced as warnings instead of crashing read paths
 - Reservations auto-clean on every daemon refresh (45 min TTL + legacy leak detection)
 - All cached paths (`task place --cached`, `task context --cached`, `mcp serve --cached`) use the single `internal/daemon/client`
 - Visible in `/snapshot/meta` as `reserved_mb`
@@ -49,7 +51,7 @@ axis task place "run ollama inference on a 7b model"
 
 | Feature | Details |
 | --- | --- |
-| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + pressure), disk, GPU list, network addresses |
+| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk, GPU list, network addresses |
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `node`, `swift`, `cargo`, `gcc` |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
@@ -234,6 +236,8 @@ The following are planned directions, not current functionality:
 
 - Background coordinator (`axisd`)
 - Mesh networking / peer discovery beyond a static seed file
+- Advanced RAM balancing / PSI-aware placement work
+- Event-driven cache refresh instead of timer-only freshness
 - Phase 2+ features — see [white paper](docs/white_paper_v1.md)
 
 ## Contributing

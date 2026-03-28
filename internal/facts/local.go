@@ -111,6 +111,14 @@ func localResources() (*models.Resources, bool) {
 		r.Pressure = computePressure(total, free)
 	}
 
+	if load1, load5, load15, err := localLoadAverages(); err != nil {
+		partial = true
+	} else {
+		r.Load1M = load1
+		r.Load5M = load5
+		r.Load15M = load15
+	}
+
 	// Disk
 	if total, free, err := localDisk(); err != nil {
 		partial = true
@@ -305,6 +313,48 @@ func parseLinuxMeminfo(data string) (int64, int64, error) {
 		}
 	}
 	return total / 1024, available / 1024, nil
+}
+
+func localLoadAverages() (float64, float64, float64, error) {
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("sysctl", "-n", "vm.loadavg").Output()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		return parseDarwinLoadavg(string(out))
+	}
+
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return parseLoadavgFields(string(data))
+}
+
+func parseDarwinLoadavg(data string) (float64, float64, float64, error) {
+	clean := strings.NewReplacer("{", "", "}", "").Replace(strings.TrimSpace(data))
+	return parseLoadavgFields(clean)
+}
+
+func parseLoadavgFields(data string) (float64, float64, float64, error) {
+	fields := strings.Fields(strings.TrimSpace(data))
+	if len(fields) < 3 {
+		return 0, 0, 0, fmt.Errorf("unexpected loadavg output")
+	}
+
+	load1, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid load1: %w", err)
+	}
+	load5, err := strconv.ParseFloat(fields[1], 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid load5: %w", err)
+	}
+	load15, err := strconv.ParseFloat(fields[2], 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid load15: %w", err)
+	}
+	return load1, load5, load15, nil
 }
 
 func darwinTotalRAMMB() int64 {
