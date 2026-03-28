@@ -19,23 +19,30 @@ type Context struct {
 	Skills   *skills.Store
 }
 
+var loadConfig = config.Load
+var discoverNodes = discovery.Discover
+var buildSnapshot = snapshot.Build
+var loadState = state.Load
+var applyReservationView = daemon.ApplyReservationView
+var loadSkills = skills.Load
+
 func Load(ctx context.Context) (*Context, error) {
-	cfg, err := config.Load(config.DefaultConfigPath())
+	cfg, err := loadConfig(config.DefaultConfigPath())
 	if err != nil {
 		return nil, err
 	}
 
-	nodes := discovery.Discover(ctx, cfg)
-	snap := snapshot.Build(nodes)
+	nodes := discoverNodes(ctx, cfg)
+	snap := buildSnapshot(nodes)
 	if snap == nil {
 		snap = &models.ClusterSnapshot{}
 	}
 
-	st, err := state.Load()
+	st, err := loadState()
 	if err != nil && st == nil {
 		return nil, err
 	}
-	daemon.ApplyReservationView(snap, st)
+	applyReservationView(snap, st)
 	if err != nil {
 		snap.Warnings = append(snap.Warnings, models.Warning{
 			Kind:    "state",
@@ -43,7 +50,7 @@ func Load(ctx context.Context) (*Context, error) {
 		})
 	}
 
-	skillStore, skillErr := skills.Load()
+	skillStore, skillErr := loadSkills()
 	if skillErr != nil && skillStore == nil {
 		return nil, skillErr
 	}

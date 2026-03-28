@@ -1,6 +1,6 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-28 23:15 EDT
+Last reviewed: 2026-03-29 00:08 EDT
 Branch: `main`
 Reviewed base HEAD: `278f5978ecdb8c8edada6028b31815be92d56782` (`main`, plus current uncommitted v1 hardening worktree)
 
@@ -97,12 +97,24 @@ Audit commands run against this repo state:
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `45.2%`)
+- `go test ./... -cover` -> passes (total coverage: `47.2%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
 - v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `63.8%`, `internal/mcp` `51.2%`
-- remaining low-coverage surfaces: `cmd/axis`, `internal/facts`, `internal/persist`, `internal/runtimectx`
+- direct coverage is now also strong in `internal/persist` `100.0%` and `internal/runtimectx` `92.6%`
+- remaining lower-coverage surfaces: `cmd/axis`, `internal/facts`
+
+## Degraded-State Matrix
+
+These are the operator-facing degraded-state contracts currently locked in by tests:
+
+| Condition | CLI contract | API contract | MCP contract | Recovery action |
+| --- | --- | --- | --- | --- |
+| Corrupt `~/.axis/state.json` | `axis context show` warns on stderr and still emits valid JSON | live reads continue; state warning is included in snapshot warnings | `placement_decision` prepends a state warning to reasoning | file is quarantined to `.corrupt-*`; empty in-memory state becomes authoritative until next write |
+| Corrupt `~/.axis/skills.json` | `axis skills` warns on stderr and still emits valid JSON | live reads continue; skills warning is included in snapshot warnings | `placement_decision` prepends a skills warning to reasoning | file is quarantined to `.corrupt-*`; empty in-memory skills store becomes authoritative until next write |
+
+The key point is that local persistence is treated as recoverable operator memory, not hard cluster truth.
 
 ## Reality Check
 
@@ -147,7 +159,7 @@ In practical terms:
 - Safety blocking is substring-based and can both over-block and under-block
 - Built-in script prerequisites now model `jq` explicitly, but broader shell assumptions are still under-modeled
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
-- `internal/persist` and `internal/runtimectx` are important but still only lightly tested as direct packages
+- degraded-state contracts are now stronger, but concurrency around simultaneous first-read / first-write recovery is still only indirectly exercised
 - The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads, but cache provenance is still only explicit on cached-path output
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
@@ -157,8 +169,8 @@ In practical terms:
 V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, and CI coverage gates current as the orientation layer.
-2. Add direct unit coverage for `internal/persist` and `internal/runtimectx` so recovery behavior is locked in explicitly, not only through higher-level packages.
+2. Keep degraded-state golden fixtures current as API/MCP/CLI response shapes evolve.
 3. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
 4. Refine reservation accounting into a clearer cluster RAM balancing model.
 5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
-6. Treat advanced balancing, PSI/reclaim behavior, and event-driven cache refresh as post-v1 work, using [ram-balancing-research.md](ram-balancing-research.md) as the technical basis.
+6. Treat advanced balancing, PSI/reclaim behavior, schema-versioned persistence, and event-driven cache refresh as post-v1 work, using [ram-balancing-research.md](ram-balancing-research.md) as the technical basis.

@@ -1,0 +1,17 @@
+{
+  "node": "node-a",
+  "tool": "git",
+  "fit_score": 54,
+  "is_local": true,
+  "reasoning": [
+    "warning: recovered local AXIS state: quarantined corrupt file $HOME/.axis/state.json to $HOME/.axis/state.json.corrupt-<STAMP>: unexpected end of JSON input",
+    "warning: recovered learned skills store: quarantined corrupt file $HOME/.axis/skills.json to $HOME/.axis/skills.json.corrupt-<STAMP>: unexpected end of JSON input",
+    "LLM fit: 54/100 (good for small models)",
+    "local node (no SSH hop)",
+    "4096MB allocatable (0MB reserved) of 8192MB total",
+    "pressure: low",
+    "8 CPU cores",
+    "required tool git (test) available"
+  ],
+  "ok": true
+}
