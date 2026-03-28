@@ -1,0 +1,69 @@
+{
+  "knowledge": {
+    "timestamp": "<TIME>",
+    "snapshot": {
+      "timestamp": "<TIME>",
+      "status": "healthy",
+      "nodes": [
+        {
+          "name": "node-a",
+          "hostname": "localhost",
+          "resources": {
+            "cpu_cores": 8,
+            "cpu_model": "",
+            "ram_total_mb": 8192,
+            "ram_free_mb": 4096,
+            "load_1m": 0,
+            "load_5m": 0,
+            "load_15m": 0,
+            "ram_allocatable_mb": 4096,
+            "disk_total_gb": 0,
+            "disk_free_gb": 0,
+            "pressure": "low"
+          },
+          "tools": [
+            {
+              "name": "git",
+              "path": "",
+              "version": "test",
+              "class": ""
+            }
+          ],
+          "status": "complete",
+          "collected_at": "<TIME>"
+        }
+      ],
+      "summary": {
+        "total_nodes": 1,
+        "reachable_nodes": 1,
+        "total_ram_mb": 8192,
+        "total_free_ram_mb": 4096,
+        "total_allocatable_mb": 4096
+      },
+      "warnings": [
+        {
+          "node": "",
+          "kind": "state",
+          "message": "recovered local AXIS state: quarantined corrupt file $HOME/.axis/state.json to $HOME/.axis/state.json.corrupt-<STAMP>: unexpected end of JSON input"
+        },
+        {
+          "node": "",
+          "kind": "skills",
+          "message": "recovered learned skills store: quarantined corrupt file $HOME/.axis/skills.json to $HOME/.axis/skills.json.corrupt-<STAMP>: unexpected end of JSON input"
+        }
+      ]
+    },
+    "state": {
+      "nodes": {},
+      "recent_decisions": null,
+      "updated_at": "<TIME>"
+    },
+    "ollama": {},
+    "load": {
+      "node-a": 0
+    },
+    "best_node": ""
+  },
+  "skills": [],
+  "failures": []
+}

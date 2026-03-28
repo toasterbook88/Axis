@@ -1,0 +1,8 @@
+STDERR:
+warning: recovered learned skills store: quarantined corrupt file $HOME/.axis/skills.json to $HOME/.axis/skills.json.corrupt-<STAMP>: unexpected end of JSON input
+
+STDOUT:
+{
+  "skills": [],
+  "failures": []
+}

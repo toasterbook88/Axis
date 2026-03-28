@@ -47,6 +47,15 @@ axis task place "run ollama inference on a 7b model"
 - All cached paths (`task place --cached`, `task context --cached`, `mcp serve --cached`) use the single `internal/daemon/client`
 - Visible in `/snapshot/meta` as `reserved_mb`
 
+## Degraded-State Behavior
+
+| Local condition | CLI behavior | API/MCP behavior | File outcome |
+| --- | --- | --- | --- |
+| Corrupt `~/.axis/state.json` | `axis context show` warns on stderr and still prints valid JSON | live snapshot-bearing reads keep working; state warning appears in snapshot warnings or placement reasoning | original file is renamed to `state.json.corrupt-<UTCSTAMP>` and a clean in-memory state is used |
+| Corrupt `~/.axis/skills.json` | `axis skills` warns on stderr and still prints valid JSON | live API/MCP reads keep working; skills warning appears in snapshot warnings or placement reasoning | original file is renamed to `skills.json.corrupt-<UTCSTAMP>` and a clean in-memory skills store is used |
+
+These files are local operator memory, not authoritative cluster truth. AXIS now prefers `warn + quarantine + continue` over failing shut on read paths.
+
 ## Features
 
 | Feature | Details |
