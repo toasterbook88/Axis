@@ -10,7 +10,7 @@
 
 ```bash
 # Install
-go install github.com/toasterbook88/axis/cmd/axis@latest
+go install github.com/toasterbook88/axis/cmd/axis@v0.2.0
 
 # Inspect the local machine
 axis facts
@@ -89,19 +89,27 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 ## Installation
 
-**Using `go install`:**
+**Using `go install` (recommended):**
 
 ```bash
-go install github.com/toasterbook88/axis/cmd/axis@latest
+go install github.com/toasterbook88/axis/cmd/axis@v0.2.0
 ```
 
-Today, `@latest` still resolves to the default-branch tip because no `v*` tag has been cut from this branch yet. Once the first tagged release is pushed, `@latest` will resolve to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.2.0`.
+`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.2.0`.
 
 **Tagged release pipeline:**
 
 - `v*` tags are published through GitHub Actions and GoReleaser
 - Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
 - The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
+- The current release is [`v0.2.0`](https://github.com/toasterbook88/axis/releases/tag/v0.2.0)
+
+**Security hygiene:**
+
+- Weekly Dependabot updates cover Go modules and GitHub Actions
+- `govulncheck` runs on pull requests, pushes to `main`, and a weekly schedule
+- Private vulnerability reporting and automated security fixes are enabled on GitHub
+- Security reporting guidance lives in [SECURITY.md](SECURITY.md)
 
 **Build from source:**
 

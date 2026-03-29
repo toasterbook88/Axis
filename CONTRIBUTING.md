@@ -85,6 +85,9 @@ Open a GitHub issue with:
 - OS and architecture
 - Relevant command output or error message
 
+For security-sensitive issues, follow [SECURITY.md](SECURITY.md) and use
+private vulnerability reporting instead of a public issue.
+
 ## Pull Requests
 
 - Keep PRs small and focused on a single concern
