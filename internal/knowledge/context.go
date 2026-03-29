@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 )
 
@@ -19,11 +19,11 @@ type ClusterKnowledge struct {
 }
 
 func Build(snap *models.ClusterSnapshot, st *state.ClusterState, bestNode string) *ClusterKnowledge {
-	snapshotView := daemon.CloneSnapshot(snap)
+	snapshotView := snapshotview.Clone(snap)
 	if snapshotView == nil {
 		snapshotView = &models.ClusterSnapshot{}
 	}
-	daemon.ApplyReservationView(snapshotView, st)
+	snapshotview.ApplyReservationView(snapshotView, st)
 
 	ollamaMap := make(map[string]models.OllamaInfo)
 	for _, n := range snapshotView.Nodes {

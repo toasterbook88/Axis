@@ -10,6 +10,7 @@ import (
 
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
@@ -55,7 +56,7 @@ var newMCPRemoteExecutor = func(nc config.NodeConfig) mcpRemoteExecutor {
 func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"axis",
-		"0.1.0",
+		buildinfo.Version,
 		mcpserver.WithRecovery(),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(false, false),
@@ -106,6 +107,26 @@ func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
 			return placementDecisionTool(ctx, req, useCache, cacheAddr)
 		},
+	)
+
+	s.AddTool(
+		mcpproto.NewTool(
+			"axis_health",
+			mcpproto.WithDescription("Return the same AXIS health payload exposed by the local HTTP control surface"),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+		),
+		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			return axisHealthTool(ctx, req, useCache, cacheAddr)
+		},
+	)
+
+	s.AddTool(
+		mcpproto.NewTool(
+			"axis_tools",
+			mcpproto.WithDescription("Return the same AXIS tool catalog exposed by the local HTTP control surface"),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+		),
+		axisToolsTool,
 	)
 
 	s.AddTool(
@@ -220,6 +241,34 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, us
 	decision := placement.SelectBestNode(placement.InferRequirements(desc), snap.Nodes, st)
 	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
 	return mcpproto.NewToolResultJSON(decision)
+}
+
+func axisHealthTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+	if useCache {
+		meta, err := daemon.FetchMeta(ctx, cacheAddr)
+		if err != nil {
+			return mcpproto.NewToolResultError(err.Error()), nil
+		}
+		return mcpproto.NewToolResultJSON(daemon.HealthPayload(&meta))
+	}
+
+	snap, err := currentSnapshot(ctx, false, cacheAddr)
+	if err != nil {
+		return mcpproto.NewToolResultError(err.Error()), nil
+	}
+
+	payload := daemon.HealthPayload(nil)
+	if snap != nil {
+		payload["snapshot_status"] = snap.Status
+		payload["warnings"] = len(snap.Warnings)
+	}
+	return mcpproto.NewToolResultJSON(payload)
+}
+
+func axisToolsTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+	_ = ctx
+	_ = req
+	return mcpproto.NewToolResultJSON(daemon.ToolsResponse{Tools: daemon.ToolDefinitions()})
 }
 
 func ipAddrTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {

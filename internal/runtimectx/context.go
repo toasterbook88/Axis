@@ -4,11 +4,11 @@ import (
 	"context"
 
 	"github.com/toasterbook88/axis/internal/config"
-	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 )
 
@@ -23,7 +23,7 @@ var loadConfig = config.Load
 var discoverNodes = discovery.Discover
 var buildSnapshot = snapshot.Build
 var loadState = state.Load
-var applyReservationView = daemon.ApplyReservationView
+var applyReservationView = snapshotview.ApplyReservationView
 var loadSkills = skills.Load
 
 func Load(ctx context.Context) (*Context, error) {

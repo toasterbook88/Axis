@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -83,7 +84,7 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 					IP:        ipStr,
 					SSHPort:   localSSHPort,
 					Role:      localRole,
-					Version:   "0.1.0",
+					Version:   buildinfo.Version,
 					Timestamp: time.Now().UTC(),
 					Secret:    secret,
 				}

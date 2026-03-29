@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
 )
 
@@ -28,7 +27,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "daemon",
 		Short: "Interact with the local AXIS daemon cache",
 	}
-	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", daemon.DefaultAddr, "Address of the local AXIS daemon cache")
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show local AXIS daemon health and staleness",

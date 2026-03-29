@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,18 +12,28 @@ import (
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
+	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 )
 
 const (
 	defaultRefreshInterval = time.Minute
 	defaultRefreshTimeout  = 60 * time.Second
+	DefaultAddr            = "127.0.0.1:42425"
 )
 
 type Collector func(context.Context) (*models.ClusterSnapshot, error)
+
+type SnapshotCache interface {
+	Snapshot() (*models.ClusterSnapshot, bool)
+	Meta() Metadata
+	Invalidate()
+	RefreshNow(context.Context) error
+}
 
 type Metadata struct {
 	Source             string    `json:"source"`
@@ -52,6 +63,18 @@ type Daemon struct {
 
 func (d *Daemon) RefreshNow(ctx context.Context) error {
 	return d.Refresh(ctx)
+}
+
+func Serve(addr string, cache SnapshotCache) error {
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, cache)
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	return srv.ListenAndServe()
 }
 
 func NewDefault(interval time.Duration) *Daemon {
@@ -132,7 +155,7 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 		return err
 	}
 
-	d.snapshot = cloneSnapshot(snap)
+	d.snapshot = snapshotview.Clone(snap)
 	ApplyReservationView(d.snapshot, st)
 	if stateWarning != nil {
 		d.snapshot.Warnings = append(d.snapshot.Warnings, models.Warning{
@@ -169,7 +192,7 @@ func (d *Daemon) Snapshot() (*models.ClusterSnapshot, bool) {
 	if d.snapshot == nil {
 		return nil, false
 	}
-	return cloneSnapshot(d.snapshot), true
+	return snapshotview.Clone(d.snapshot), true
 }
 
 func (d *Daemon) Invalidate() {
@@ -227,31 +250,7 @@ func (d *Daemon) Meta() Metadata {
 }
 
 func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node string, mb int64) bool {
-	if mb <= 0 || snap == nil || st == nil {
-		return true
-	}
-
-	var totalRAM int64
-	for _, n := range snap.Nodes {
-		if n.Name == node && n.Resources != nil {
-			totalRAM = n.Resources.RAMTotalMB
-			break
-		}
-	}
-	if totalRAM <= 0 {
-		return true
-	}
-
-	capMB := totalRAM - 1024
-	if capMB < 0 {
-		capMB = 0
-	}
-
-	ns, ok := st.Nodes[node]
-	if !ok {
-		return mb <= capMB
-	}
-	return ns.ReservedMB+mb <= capMB
+	return execution.CanReserve(snap, st, node, mb)
 }
 
 func defaultCollector() Collector {
@@ -285,29 +284,7 @@ func persistSnapshot(path string, snap *models.ClusterSnapshot) error {
 }
 
 func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
-	if snap == nil {
-		return nil
-	}
-	clone := *snap
-	clone.Nodes = make([]models.NodeFacts, len(snap.Nodes))
-	for i, node := range snap.Nodes {
-		nodeCopy := node
-		if node.Resources != nil {
-			res := *node.Resources
-			res.GPUs = append([]string(nil), node.Resources.GPUs...)
-			nodeCopy.Resources = &res
-		}
-		nodeCopy.Addresses = append([]models.NetworkAddress(nil), node.Addresses...)
-		nodeCopy.Tools = append([]models.ToolInfo(nil), node.Tools...)
-		if node.Ollama != nil {
-			ollama := *node.Ollama
-			ollama.Models = append([]string(nil), node.Ollama.Models...)
-			nodeCopy.Ollama = &ollama
-		}
-		clone.Nodes[i] = nodeCopy
-	}
-	clone.Warnings = append([]models.Warning(nil), snap.Warnings...)
-	return &clone
+	return snapshotview.Clone(snap)
 }
 
 func CloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
@@ -318,35 +295,5 @@ func CloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 // so read paths can reason about allocatable RAM without requiring daemon-only
 // semantics.
 func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
-	if snap == nil {
-		return
-	}
-
-	var totalReserved, totalAllocatable int64
-	for i := range snap.Nodes {
-		node := &snap.Nodes[i]
-		if node.Resources == nil {
-			continue
-		}
-
-		reserved := int64(0)
-		if st != nil && st.Nodes != nil {
-			if ns, ok := st.Nodes[node.Name]; ok {
-				reserved = ns.ReservedMB
-			}
-		}
-		node.Resources.RAMReservedMB = reserved
-
-		allocatable := node.Resources.RAMFreeMB - reserved
-		if allocatable < 0 {
-			allocatable = 0
-		}
-		node.Resources.RAMAllocatableMB = allocatable
-
-		totalReserved += reserved
-		totalAllocatable += allocatable
-	}
-
-	snap.Summary.TotalReservedMB = totalReserved
-	snap.Summary.TotalAllocatableMB = totalAllocatable
+	snapshotview.ApplyReservationView(snap, st)
 }

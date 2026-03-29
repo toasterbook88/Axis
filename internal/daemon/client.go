@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
-const Version = "0.1.0"
+const Version = buildinfo.Version
 
 func NormalizeAddr(addr string) string {
 	addr = strings.TrimSpace(addr)

@@ -23,7 +23,7 @@ func scriptsListCmd() *cobra.Command {
 		Short: "List all available fallback scripts",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println("AVAILABLE MOLE-STYLE SCRIPTS:")
-			
+
 			var categories []string
 			for cat := range scripts.Registry {
 				categories = append(categories, cat)
@@ -36,7 +36,7 @@ func scriptsListCmd() *cobra.Command {
 					fmt.Printf("  %-18s %s\n", script.Name, script.Description)
 				}
 			}
-			fmt.Println("\nRun a script with: axis task run \"<script-name-or-keywords>\"")
+			fmt.Println("\nRun a script with: axis task run --script \"<script-name-or-keywords>\"")
 		},
 	}
 }

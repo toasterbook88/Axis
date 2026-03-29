@@ -7,34 +7,30 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"gopkg.in/yaml.v3"
 )
 
-// Version is the hardcoded AXIS version string.
-const Version = "0.1.0"
+// Version is the CLI-visible AXIS version string.
+const Version = buildinfo.Version
 
 func main() {
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		os.Exit(ExitErrGeneric)
+	}
+}
+
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "axis",
-		Short: "AXIS — cluster-aware AI execution substrate",
+		Short: "AXIS — snapshot-first cluster facts and deterministic placement",
+		Long: "AXIS is a snapshot-first operator CLI for cluster fact collection, " +
+			"deterministic placement, and explicit local control surfaces.\n\n" +
+			"Chat and discovery helpers are experimental and must not be treated as " +
+			"authoritative cluster truth unless backed by a live snapshot or probe.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			const logo = `
- █████╗ ██╗  ██╗██╗███████╗
-██╔══██╗╚██╗██╔╝██║██╔════╝
-███████║ ╚███╔╝ ██║███████╗
-██╔══██║ ██╔██╗ ██║╚════██║
-██║  ██║██╔╝ ██╗██║███████║
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝
-`
-			out := cmd.OutOrStdout()
-			cmd.SetOut(out)
-			cmd.SetErr(out)
-
-			fmt.Fprint(out, logo)
-			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
-
-			chat := chatCmd()
-			return chat.RunE(chat, args)
+			return cmd.Help()
 		},
 	}
 
@@ -50,10 +46,7 @@ func main() {
 	root.AddCommand(contextCmd())
 	root.AddCommand(scriptsCmd())
 	root.AddCommand(skillsCmd())
-
-	if err := root.Execute(); err != nil {
-		os.Exit(ExitErrGeneric)
-	}
+	return root
 }
 
 func versionCmd() *cobra.Command {
