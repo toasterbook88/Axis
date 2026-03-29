@@ -10,12 +10,15 @@
         "cpu_model": "",
         "ram_total_mb": 16384,
         "ram_free_mb": 8192,
+        "memory_topology": "unified",
+        "memory_class": 4,
         "load_1m": 0,
         "load_5m": 0,
         "load_15m": 0,
         "disk_total_gb": 0,
         "disk_free_gb": 0,
-        "pressure": "none"
+        "pressure": "none",
+        "pressure_source": "darwin-vm-pressure"
       },
       "tools": [
         {

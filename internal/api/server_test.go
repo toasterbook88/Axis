@@ -801,6 +801,8 @@ func testNode(name, hostname string, totalRAM, freeRAM int64, pressure string, t
 
 func testTurboNode(name, hostname string, verified bool) models.NodeFacts {
 	node := testNode(name, hostname, 16384, 8192, "low", "llama-server")
+	node.Resources.PressureSource = "linux-psi"
+	node.Resources.PressureStall10 = 6.5
 	node.TurboQuant = &models.TurboQuantInfo{
 		Supported:    true,
 		Verified:     verified,

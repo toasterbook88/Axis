@@ -75,6 +75,37 @@ func TestTaskContextTurboQuantGolden(t *testing.T) {
 	)
 }
 
+func TestStatusTurboQuantJSONGolden(t *testing.T) {
+	restoreLive := stubStatusLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes:  []models.NodeFacts{goldenTurboQuantNode()},
+			Summary: models.ClusterSummary{
+				TotalNodes:         1,
+				ReachableNodes:     1,
+				TotalRAMMB:         16384,
+				TotalFreeRAMMB:     8192,
+				TotalAllocatableMB: 8192,
+			},
+		}, "live", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := statusCmd()
+		cmd.SetArgs([]string{"--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("status Execute: %v", err)
+	}
+
+	assertNormalizedGoldenText(t,
+		filepath.Join("testdata", "status_turboquant_json.golden"),
+		normalizeGoldenOutput(renderGoldenSections(stderr, normalizeGoldenOutput(stdout))),
+	)
+}
+
 func goldenTurboQuantNode() models.NodeFacts {
 	return models.NodeFacts{
 		Name:   "mlx-node",
@@ -83,9 +114,12 @@ func goldenTurboQuantNode() models.NodeFacts {
 			CPUCores:         10,
 			RAMTotalMB:       16384,
 			RAMFreeMB:        8192,
+			MemoryTopology:   models.MemoryTopologyUnified,
+			MemoryClass:      4,
 			RAMReservedMB:    0,
 			RAMAllocatableMB: 8192,
 			Pressure:         "none",
+			PressureSource:   "darwin-vm-pressure",
 		},
 		Tools: []models.ToolInfo{
 			{Name: "ollama", Version: "0.7.0"},
