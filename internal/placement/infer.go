@@ -18,6 +18,8 @@ func InferRequirements(desc string) models.TaskRequirements {
 
 	// Tool inference — order matters (first match wins)
 	switch {
+	case containsAny(lower, "apple-intelligence", "apple intelligence", "foundation models", "foundationmodels", "language model session", "apple-foundation-models"):
+		reqs.RequiredTools = []string{"apple-foundation-models"}
 	case containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server"):
 		reqs.RequiredTools = []string{"llama-server"}
 	case containsAny(lower, "inference", "ollama", "llm", "gpu"):
@@ -38,6 +40,8 @@ func InferRequirements(desc string) models.TaskRequirements {
 		reqs.MinFreeRAMMB = 8192
 	case containsAny(lower, "7b"):
 		reqs.MinFreeRAMMB = 4096
+	case containsAny(lower, "apple-intelligence", "apple intelligence", "foundation models", "foundationmodels", "language model session", "apple-foundation-models"):
+		reqs.MinFreeRAMMB = 0
 	case containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server"):
 		reqs.MinFreeRAMMB = 6144
 	case containsAny(lower, "model", "inference", "ollama", "llm", "gpu"):
@@ -54,6 +58,9 @@ func InferRequirements(desc string) models.TaskRequirements {
 
 	if containsAny(lower, "mlx", "mlx_lm", "apple silicon", "mac studio", "macbook pro", "mac mini") {
 		reqs.PreferredBackends = append(reqs.PreferredBackends, "mlx")
+	}
+	if containsAny(lower, "apple-intelligence", "apple intelligence", "foundation models", "foundationmodels", "language model session", "apple-foundation-models") {
+		reqs.PreferredBackends = append(reqs.PreferredBackends, "apple-foundation-models")
 	}
 	if containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server") {
 		reqs.PreferredBackends = append(reqs.PreferredBackends, "llama.cpp")

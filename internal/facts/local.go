@@ -21,6 +21,8 @@ type LocalCollector struct {
 	Role string
 }
 
+var RunAppleFoundationModelsProbe = runAppleFoundationModelsProbe
+
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
 	return &LocalCollector{Name: name, Role: role}
@@ -72,12 +74,85 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 		})
 	}
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
+	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {
+		facts.AppleFM = fm
+		if fm.Available && fm.Verified {
+			toolPath := "swift"
+			if swiftTool, ok := findToolInfo(facts.Tools, "swift"); ok && swiftTool.Path != "" {
+				toolPath = swiftTool.Path
+			}
+			facts.Tools = append(facts.Tools, models.ToolInfo{
+				Name:    "apple-foundation-models",
+				Path:    toolPath,
+				Version: fm.Version,
+				Class:   models.ToolClassRuntime,
+			})
+		}
+	}
 
 	return facts, nil
 }
 
 func runLocalTurboQuantProbe(ctx context.Context, cmd string) (string, error) {
 	out, err := exec.CommandContext(ctx, "bash", "-lc", cmd).CombinedOutput()
+	return string(out), err
+}
+
+func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion string, tools []models.ToolInfo) *models.AppleFoundationModelsInfo {
+	if !strings.EqualFold(osName, "darwin") || !strings.Contains(strings.ToLower(arch), "arm64") {
+		return nil
+	}
+	if !supportsAppleFoundationModelsOS(osVersion) {
+		return &models.AppleFoundationModelsInfo{
+			Version: osVersion,
+			Error:   "requires macOS 26 or later on Apple silicon",
+		}
+	}
+	if _, ok := findToolInfo(tools, "swift"); !ok {
+		return &models.AppleFoundationModelsInfo{
+			Version: osVersion,
+			Error:   "swift toolchain not detected",
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	out, err := RunAppleFoundationModelsProbe(probeCtx)
+	info := &models.AppleFoundationModelsInfo{
+		Version:   osVersion,
+		Available: err == nil,
+		Verified:  err == nil,
+	}
+	if err != nil {
+		info.Error = strings.TrimSpace(out)
+		if info.Error == "" {
+			info.Error = err.Error()
+		}
+	}
+	return info
+}
+
+func supportsAppleFoundationModelsOS(osVersion string) bool {
+	fields := strings.SplitN(strings.TrimSpace(osVersion), ".", 2)
+	if len(fields) == 0 || fields[0] == "" {
+		return false
+	}
+	major, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return false
+	}
+	return major >= 26
+}
+
+func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(
+		ctx,
+		"xcrun",
+		"swift",
+		"-e",
+		`import FoundationModels; let session = LanguageModelSession(); let response = try await session.respond(to: "Reply with exactly OK"); print(response.content)`,
+	).CombinedOutput()
 	return string(out), err
 }
 

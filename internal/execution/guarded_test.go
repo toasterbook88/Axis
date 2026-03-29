@@ -43,6 +43,16 @@ func TestPrepareRequirementsExplicitLlamaServerRequiresObservedTool(t *testing.T
 	}
 }
 
+func TestPrepareRequirementsAppleFoundationModelsUsesExplicitHelper(t *testing.T) {
+	reqs := prepareRequirements("xcrun swift hack/apple-foundation-models.swift --self-test", ModeExec, Intent{})
+	if len(reqs.RequiredTools) != 1 || reqs.RequiredTools[0] != "apple-foundation-models" {
+		t.Fatalf("expected apple foundation models requirement, got %v", reqs.RequiredTools)
+	}
+	if len(reqs.PreferredBackends) == 0 || reqs.PreferredBackends[0] != "apple-foundation-models" {
+		t.Fatalf("expected apple foundation models preferred backend, got %v", reqs.PreferredBackends)
+	}
+}
+
 func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

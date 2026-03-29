@@ -358,13 +358,13 @@ func isInferenceExecution(reqs models.TaskRequirements) bool {
 	}
 	for _, tool := range reqs.RequiredTools {
 		switch strings.ToLower(tool) {
-		case "ollama", "llama-server":
+		case "ollama", "llama-server", "apple-foundation-models":
 			return true
 		}
 	}
 	for _, backend := range reqs.PreferredBackends {
 		switch strings.ToLower(backend) {
-		case "llama.cpp", "mlx":
+		case "llama.cpp", "mlx", "apple-foundation-models":
 			return true
 		}
 	}

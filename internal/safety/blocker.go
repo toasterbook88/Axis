@@ -63,11 +63,13 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 
 	// === Live cluster-aware checks ===
 	if k != nil {
+		appleFoundationHelper := strings.Contains(lower, "apple-foundation-models.swift")
 		clusterAllocatable := k.Snapshot.Summary.TotalAllocatableMB
 		if clusterAllocatable <= 0 {
 			clusterAllocatable = k.Snapshot.Summary.TotalFreeRAMMB
 		}
-		if (strings.Contains(lower, "model") || strings.Contains(lower, "inference") || strings.Contains(lower, "large")) &&
+		if !appleFoundationHelper &&
+			(strings.Contains(lower, "model") || strings.Contains(lower, "inference") || strings.Contains(lower, "large")) &&
 			clusterAllocatable < 4096 {
 			return BlockResult{
 				Blocked: true,
