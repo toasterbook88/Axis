@@ -79,7 +79,7 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/mcp/tools", nil)
+	req := httptest.NewRequest(http.MethodGet, "/tools", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -103,10 +103,10 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	}
 
 	if !sawExecute {
-		t.Fatal("expected axis_execute tool in /mcp/tools")
+		t.Fatal("expected axis_execute tool in /tools")
 	}
 	if !sawKnowledge {
-		t.Fatal("expected axis_knowledge tool in /mcp/tools")
+		t.Fatal("expected axis_knowledge tool in /tools")
 	}
 }
 
@@ -176,24 +176,19 @@ func TestSnapshotMetaEndpointReturnsCacheMetadata(t *testing.T) {
 	}
 }
 
-func TestToolsEndpointAliasReturnsSamePayload(t *testing.T) {
+func TestToolsEndpointLegacyAliasRedirects(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/tools", nil)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/tools", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
+	if rec.Code != http.StatusPermanentRedirect {
+		t.Fatalf("expected 308, got %d", rec.Code)
 	}
-
-	var payload ToolsResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if len(payload.Tools) == 0 {
-		t.Fatal("expected tools payload")
+	if got := rec.Header().Get("Location"); got != "/tools" {
+		t.Fatalf("expected redirect to /tools, got %q", got)
 	}
 }
 
@@ -469,6 +464,55 @@ func TestRunTaskExecutesLocalCommandAndRecordsSuccess(t *testing.T) {
 	}
 }
 
+func TestRunTaskWrapsEligibleLocalScriptInNixShell(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	skillStore := &skills.Store{}
+	restoreRuntime := stubLiveRuntime(t, testRuntimeContext(
+		[]models.NodeFacts{testNode("node-a", "localhost", 8192, 4096, "low", "git", "jq", "nix")},
+		[]config.NodeConfig{{Name: "node-a", Hostname: "localhost", SSHUser: "me"}},
+		&state.ClusterState{Nodes: map[string]state.NodeState{}},
+		skillStore,
+		nil,
+	), nil)
+	defer restoreRuntime()
+
+	restoreShell := stubLocalShell(t, func(ctx context.Context, command string, env []string) ([]byte, error) {
+		for _, want := range []string{
+			"nix --extra-experimental-features 'nix-command flakes' shell",
+			"nixpkgs#git",
+			"nixpkgs#jq",
+		} {
+			if !strings.Contains(command, want) {
+				t.Fatalf("expected %q in wrapped command %q", want, command)
+			}
+		}
+		if !containsEnvPrefix(env, "AXIS_NIX_WRAPPER=1") {
+			t.Fatalf("expected AXIS_NIX_WRAPPER in env: %#v", env)
+		}
+		if !containsEnvPrefix(env, "AXIS_NIX_PACKAGES=nixpkgs#git,nixpkgs#jq") {
+			t.Fatalf("expected AXIS_NIX_PACKAGES in env: %#v", env)
+		}
+		return []byte("local nix ok"), nil
+	})
+	defer restoreShell()
+
+	resp, err := runTask(context.Background(), RunRequest{
+		Description: "git status",
+		Mode:        "script",
+		Confirm:     "YES",
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response: %#v", resp)
+	}
+	if !containsReason(resp.Reasoning, "nix ephemeral wrapper packages: nixpkgs#git, nixpkgs#jq") {
+		t.Fatalf("expected nix wrapper reasoning, got %#v", resp.Reasoning)
+	}
+}
+
 func TestRunTaskInjectsTurboQuantEnvAndFlagsForLocalVerifiedBackend(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -604,6 +648,58 @@ func TestRunTaskExecutesRemoteCommandAndRecordsSuccess(t *testing.T) {
 	}
 	if !fakeExec.closed {
 		t.Fatal("expected remote executor to be closed")
+	}
+}
+
+func TestRunTaskWrapsEligibleRemoteScriptInNixShell(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	skillStore := &skills.Store{}
+	clusterState := &state.ClusterState{Nodes: map[string]state.NodeState{}}
+	restoreRuntime := stubLiveRuntime(t, testRuntimeContext(
+		[]models.NodeFacts{testNode("node-a", "remote.example", 8192, 4096, "low", "git", "jq", "nix")},
+		[]config.NodeConfig{{Name: "node-a", Hostname: "remote.example", SSHUser: "me"}},
+		clusterState,
+		skillStore,
+		nil,
+	), nil)
+	defer restoreRuntime()
+
+	fakeExec := &fakeRemoteExec{
+		outputs: []string{"", "remote nix ok"},
+	}
+	restoreRemote := stubRemoteFactory(t, func(config.NodeConfig) remoteExecutor {
+		return fakeExec
+	})
+	defer restoreRemote()
+
+	resp, err := runTask(context.Background(), RunRequest{
+		Description: "git status",
+		Mode:        "script",
+		Confirm:     "YES",
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response: %#v", resp)
+	}
+	if len(fakeExec.commands) != 2 {
+		t.Fatalf("expected two remote commands, got %d", len(fakeExec.commands))
+	}
+	runCmd := fakeExec.commands[1]
+	for _, want := range []string{
+		"AXIS_NIX_WRAPPER=1",
+		"AXIS_NIX_PACKAGES=",
+		"nix --extra-experimental-features",
+		"nix-command flakes",
+		" shell ",
+		"nixpkgs#git",
+		"nixpkgs#jq",
+	} {
+		if !strings.Contains(runCmd, want) {
+			t.Fatalf("expected %q in remote command %q", want, runCmd)
+		}
 	}
 }
 

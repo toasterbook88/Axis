@@ -100,28 +100,36 @@ A partial but honest snapshot is better than a polished lie.
 AXIS should prefer explicit degraded status, warnings, and failure reasoning over
 guessing.
 
-### 3. Advisory Before Automatic
+### 3. Generated Narration Must Stay Subordinate To Observed State
+
+No generated output may present itself as cluster truth unless it is backed by a
+real snapshot or live probe.
+
+Model-mediated helpers can summarize, explain, or assist, but they must not
+outrank the fact plane.
+
+### 4. Advisory Before Automatic
 
 Placement should be trustworthy before execution becomes ambitious.
 
 If AXIS executes anything, that layer must be more explicit and more reversible
 than the advisory layer beneath it.
 
-### 4. Minimalism Is a Product Constraint
+### 5. Minimalism Is a Product Constraint
 
 "Small binary, no daemon, no server" is not just implementation trivia.
 It is part of the value proposition.
 
 New features should be judged partly on whether they preserve that shape.
 
-### 5. Typed Contracts Beat Hidden Conventions
+### 6. Typed Contracts Beat Hidden Conventions
 
 If a feature depends on hidden temp files, shell folklore, or undocumented side
 channels, it is probably not mature enough yet.
 
 Important system contracts should live in typed models or explicit CLI surfaces.
 
-### 6. Cluster RAM Is a Shared Resource
+### 7. Cluster RAM Is a Shared Resource
 
 AXIS should treat cluster memory as a pooled capacity that must be balanced
 across nodes, not as a series of isolated per-node numbers.

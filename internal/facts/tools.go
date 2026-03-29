@@ -51,6 +51,8 @@ func defaultToolDefs() []toolDef {
 		{name: "go", class: models.ToolClassBuild, versionCmd: "go version"},
 		{name: "python3", class: models.ToolClassRuntime, versionCmd: "python3 --version"},
 		{name: "git", class: models.ToolClassVCS, versionCmd: "git --version"},
+		{name: "jq", class: models.ToolClassRuntime, versionCmd: "jq --version"},
+		{name: "nix", class: models.ToolClassRuntime, versionCmd: "nix --version"},
 		{name: "docker", class: models.ToolClassContainer, versionCmd: "docker --version"},
 		{name: "ollama", class: models.ToolClassAICLI, versionCmd: "ollama --version"},
 		{name: "mlx_lm", class: models.ToolClassAICLI, versionCmd: "mlx_lm --help"},

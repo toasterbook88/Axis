@@ -12,12 +12,12 @@ import (
 // NodeConfig describes a single node in the cluster seed file.
 // ssh_user and ssh_port are config-only — they do NOT propagate into NodeFacts.
 type NodeConfig struct {
-	Name       string `yaml:"name"`
-	Hostname   string `yaml:"hostname"`
-	SSHUser    string `yaml:"ssh_user"`
-	Role       string `yaml:"role,omitempty"`
-	SSHPort    int    `yaml:"ssh_port,omitempty"`
-	TimeoutSec int    `yaml:"timeout_sec,omitempty"`
+	Name       string `json:"name" yaml:"name"`
+	Hostname   string `json:"hostname" yaml:"hostname"`
+	SSHUser    string `json:"ssh_user" yaml:"ssh_user"`
+	Role       string `json:"role,omitempty" yaml:"role,omitempty"`
+	SSHPort    int    `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
+	TimeoutSec int    `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
 }
 
 // EffectiveSSHPort returns the SSH port, defaulting to 22.
@@ -38,16 +38,16 @@ func (n *NodeConfig) EffectiveTimeout() int {
 
 // DiscoveryConfig describes the UDP discovery properties.
 type DiscoveryConfig struct {
-	Enabled        bool   `yaml:"enabled,omitempty"`
-	UDPPort        int    `yaml:"udp_port,omitempty"`
-	BeaconInterval int    `yaml:"beacon_interval_sec,omitempty"`
-	Secret         string `yaml:"secret,omitempty"`
+	Enabled        bool   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	UDPPort        int    `json:"udp_port,omitempty" yaml:"udp_port,omitempty"`
+	BeaconInterval int    `json:"beacon_interval_sec,omitempty" yaml:"beacon_interval_sec,omitempty"`
+	Secret         string `json:"secret,omitempty" yaml:"secret,omitempty"`
 }
 
 // Config is the top-level AXIS configuration.
 type Config struct {
-	Nodes     []NodeConfig     `yaml:"nodes"`
-	Discovery *DiscoveryConfig `yaml:"discovery,omitempty"`
+	Nodes     []NodeConfig     `json:"nodes" yaml:"nodes"`
+	Discovery *DiscoveryConfig `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.

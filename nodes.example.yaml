@@ -15,3 +15,11 @@ nodes:
     role: worker
     # ssh_port: 22           # default: 22
     # timeout_sec: 10        # per-node collection timeout in seconds; default: 10
+
+# Optional experimental UDP discovery settings.
+# Discovery suggestions still require manual review before use.
+# discovery:
+#   enabled: true
+#   udp_port: 42424
+#   beacon_interval_sec: 3
+#   secret: shared-cluster-secret

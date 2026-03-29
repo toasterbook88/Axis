@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +56,23 @@ func TestCommandSurfacesWireExpectedSubcommands(t *testing.T) {
 	}
 }
 
+func TestRootCommandShowsHelpInsteadOfRoutingToChat(t *testing.T) {
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := newRootCmd()
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("root Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "facts") || !strings.Contains(stdout, "task") {
+		t.Fatalf("expected root help output, got %q", stdout)
+	}
+}
+
 func TestVersionCommandPrintsVersion(t *testing.T) {
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := versionCmd()
@@ -86,7 +105,7 @@ func TestScriptsListCommandPrintsRegistry(t *testing.T) {
 	if !strings.Contains(stdout, "AVAILABLE MOLE-STYLE SCRIPTS:") {
 		t.Fatalf("expected scripts banner, got %q", stdout)
 	}
-	if !strings.Contains(stdout, "Run a script with: axis task run") {
+	if !strings.Contains(stdout, "Run a script with: axis task run --script") {
 		t.Fatalf("expected usage hint, got %q", stdout)
 	}
 }
@@ -158,6 +177,52 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 	}
 }
 
+func TestServeSurfaceUsesUnifiedHealthPath(t *testing.T) {
+	mux := http.NewServeMux()
+	daemon.RegisterRoutes(mux, nil)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /health, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
+		t.Fatalf("expected health payload, got %q", rec.Body.String())
+	}
+
+	redirect := httptest.NewRecorder()
+	mux.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if redirect.Code != http.StatusPermanentRedirect {
+		t.Fatalf("expected 308 from /healthz, got %d", redirect.Code)
+	}
+	if got := redirect.Header().Get("Location"); got != "/health" {
+		t.Fatalf("expected /health redirect, got %q", got)
+	}
+}
+
+func TestServeSurfaceUsesUnifiedToolsPath(t *testing.T) {
+	mux := http.NewServeMux()
+	daemon.RegisterRoutes(mux, nil)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tools", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /tools, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"axis_execute"`) || !strings.Contains(rec.Body.String(), `"axis_knowledge"`) {
+		t.Fatalf("expected tool catalog, got %q", rec.Body.String())
+	}
+
+	redirect := httptest.NewRecorder()
+	mux.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "/mcp/tools", nil))
+	if redirect.Code != http.StatusPermanentRedirect {
+		t.Fatalf("expected 308 from /mcp/tools, got %d", redirect.Code)
+	}
+	if got := redirect.Header().Get("Location"); got != "/tools" {
+		t.Fatalf("expected /tools redirect, got %q", got)
+	}
+}
+
 func TestFactsCmdUsesCollectorOutput(t *testing.T) {
 	restoreHost := stubCurrentHostname(t, func() (string, error) {
 		return "test-host", nil
@@ -220,7 +285,11 @@ func TestDiscoverCmdUsesFallbackConfigAndPrintsSuggestedNodes(t *testing.T) {
 	})
 	defer restoreLoad()
 	restoreDiscover := stubClusterDiscovery(t, func(context.Context, *config.Config) []models.NodeFacts {
-		return []models.NodeFacts{{Name: "alpha", Role: "worker"}}
+		return []models.NodeFacts{{
+			Name:     "alpha",
+			Hostname: "10.0.0.5",
+			Role:     "worker",
+		}}
 	})
 	defer restoreDiscover()
 
@@ -232,14 +301,47 @@ func TestDiscoverCmdUsesFallbackConfigAndPrintsSuggestedNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover Execute: %v", err)
 	}
-	if stderr != "" {
-		t.Fatalf("expected no stderr, got %q", stderr)
+	if !strings.Contains(stderr, "axis discover is experimental") {
+		t.Fatalf("expected experimental warning, got %q", stderr)
 	}
 	if !strings.Contains(stdout, "Listening for UDP beacons") {
 		t.Fatalf("expected discovery banner, got %q", stdout)
 	}
-	if !strings.Contains(stdout, "name: alpha") {
+	if !strings.Contains(stdout, "name: alpha") || !strings.Contains(stdout, "hostname: 10.0.0.5") || !strings.Contains(stdout, "ssh_user: \"\"") {
 		t.Fatalf("expected suggested node YAML, got %q", stdout)
+	}
+}
+
+func TestDiscoverCmdSupportsJSONOutput(t *testing.T) {
+	restorePath := stubDiscoverConfigPath(t, func() string {
+		return "/tmp/test-nodes.yaml"
+	})
+	defer restorePath()
+	restoreLoad := stubDiscoverConfigLoader(t, func(string) (*config.Config, error) {
+		return nil, errors.New("missing config")
+	})
+	defer restoreLoad()
+	restoreDiscover := stubClusterDiscovery(t, func(context.Context, *config.Config) []models.NodeFacts {
+		return []models.NodeFacts{{
+			Name:     "alpha",
+			Hostname: "10.0.0.5",
+		}}
+	})
+	defer restoreDiscover()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := discoverCmd()
+		cmd.SetArgs([]string{"--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("discover json Execute: %v", err)
+	}
+	if !strings.Contains(stderr, "axis discover is experimental") {
+		t.Fatalf("expected experimental warning, got %q", stderr)
+	}
+	if !strings.Contains(stdout, `"name": "alpha"`) || !strings.Contains(stdout, `"hostname": "10.0.0.5"`) || !strings.Contains(stdout, `"ssh_user": ""`) {
+		t.Fatalf("expected suggested node JSON, got %q", stdout)
 	}
 }
 
@@ -421,8 +523,8 @@ func TestChatCmdSingleShotUsesGenerateStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat Execute: %v", err)
 	}
-	if stderr != "" {
-		t.Fatalf("expected no stderr, got %q", stderr)
+	if !strings.Contains(stderr, "axis chat is experimental") {
+		t.Fatalf("expected experimental warning, got %q", stderr)
 	}
 	if !strings.Contains(stdout, "AXIS [Model: phi4] | Thinking...") || !strings.Contains(stdout, "chat ok") {
 		t.Fatalf("expected chat output, got %q", stdout)

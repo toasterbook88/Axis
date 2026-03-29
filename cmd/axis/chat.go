@@ -29,11 +29,14 @@ func chatCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "chat [message...]",
-		Short: "Natural language interface to AXIS",
-		Long:  "Chat with the AXIS cluster intelligence using a local LLM or fallback interface.",
-		Args:  cobra.ArbitraryArgs,
+		Short: "Experimental local chat assistant",
+		Long: "Experimental local LLM interface for AXIS.\n\n" +
+			"Chat responses are advisory only and must not be treated as cluster truth " +
+			"unless they are backed by `axis status`, `axis task context`, or a live probe.",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			currentModel := resolveChatModel(model)
+			fmt.Fprintln(cmd.ErrOrStderr(), "warning: axis chat is experimental; validate any cluster claims with axis status, axis task context, or a live probe")
 
 			if len(args) > 0 {
 				if handled, nextModel := handleChatMetaCommand(strings.Join(args, " "), currentModel); handled {

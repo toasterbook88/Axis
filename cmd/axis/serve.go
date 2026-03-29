@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -26,7 +25,7 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 }
 
 var serveHTTPAPI = func(addr string, d serveDaemon) error {
-	return api.Serve(addr, d)
+	return daemon.Serve(addr, d)
 }
 
 func serveCmd() *cobra.Command {
@@ -48,7 +47,7 @@ func serveCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&addr, "addr", api.DefaultAddr, "Listen address for the local AXIS HTTP API")
+	cmd.Flags().StringVar(&addr, "addr", daemon.DefaultAddr, "Listen address for the local AXIS HTTP API")
 	cmd.Flags().DurationVar(&refreshInterval, "refresh", time.Minute, "Background snapshot refresh interval")
 	return cmd
 }

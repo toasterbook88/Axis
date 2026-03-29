@@ -4,7 +4,7 @@
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**A single-binary Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, provides deterministic reservation-aware task placement, and exposes guarded optional local control surfaces with consistent live/cached reservation views — no daemon-first architecture required.**
+**A snapshot-first Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, and makes deterministic reservation-aware placement decisions. Optional chat, discovery, HTTP, and MCP surfaces are subordinate to observed state, not sources of truth.**
 
 ## Quick Start
 
@@ -22,25 +22,40 @@ axis status
 axis task place "run ollama inference on a 7b model"
 ```
 
-## What Works Today
+## Truth Boundary
 
+**No generated output may present itself as cluster truth unless it is backed by a real snapshot or live probe.**
+
+- The stable operator path is `axis facts`, `axis status`, `axis task place`, `axis task context`, and the daemon cache commands.
+- `axis chat` is experimental and non-authoritative.
+- `axis discover` is experimental and emits suggestions that require manual review.
+
+## Command Surface
+
+### Stable operator path
+
+- `axis version` — print the current AXIS build version
 - `axis facts` — local hardware/tool snapshot
-- `axis status` — full cluster snapshot over SSH
-- `axis status --cached` — explicit daemon-backed cached snapshot read
-- `axis task place` — advisory placement with fit score and failure reasoning
-- `axis task place --cached` — explicit daemon-backed cached placement read
-- `axis task context --cached` — explicit daemon-backed cached context block
-- long-context task hints now grade TurboQuant-capable backends as detected vs probe-verified (`mlx_lm`, `llama-cli`, `llama-server`), with `llama.cpp` verification requiring probe-visible `--ctx-size` support
-- fact collection now annotates unified-memory Apple Silicon nodes and best-effort runtime pressure metadata (`linux-psi`, Darwin VM pressure) when available
+- `axis status` / `axis status --cached` — live or daemon-cached cluster snapshot
+- `axis task place` / `axis task place --cached` — advisory placement with reasoning
+- `axis task context` / `axis task context --cached` — compact context block backed by live or cached snapshot data
+- `axis daemon status` / `refresh` / `invalidate` / `restart` — inspect and manage the local snapshot cache seam
+- `axis context show` / `clear` — inspect or reset persisted placement memory
+
+### Optional or secondary surfaces
+
+- `axis task run` — explicit execution surface layered on top of placement, with optional observed-state-gated Nix helper wrapping when the selected node proves it supports `nix`
 - `axis serve` — optional local HTTP API surface
-- `axis daemon refresh` — force a fresh daemon snapshot now
-- `axis daemon invalidate` — explicit local daemon cache invalidation
 - `axis mcp serve` — optional read-only MCP server over stdio
-- `axis task run` — explicit execution surface layered on top of placement
+- `axis scripts list` — list built-in helper scripts
+- `axis skills` — show learned local skills/failures
+- `axis chat` — experimental local chat assistant; not authoritative cluster truth
+- `axis discover` — experimental UDP discovery helper; emitted config values are suggestions only
+- `axis completion` — Cobra-generated shell completion
 
 ## Execution Safety (hardened)
 
-- `/run` and `axis_execute` require explicit `mode=script` or `mode=exec` + `confirm: "YES"`
+- CLI execution requires `axis task run --script ...` or `axis task run --exec ...`; HTTP `/run` and `axis_execute` require explicit `mode=script|exec` plus `confirm: "YES"`
 - Hardened safety blocker with allow-list, cluster-aware RAM/GPU checks, and learned-bad fast path
 - Per-node reservation caps enforced before any command runs (`RAMTotalMB - 1024` headroom)
 - Live and cached read paths both overlay local reservations before placement, context generation, or execution
@@ -74,11 +89,19 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 ## Installation
 
-**Using `go install` (recommended):**
+**Using `go install`:**
 
 ```bash
 go install github.com/toasterbook88/axis/cmd/axis@latest
 ```
+
+Today, `@latest` still resolves to the default-branch tip because no `v*` tag has been cut from this branch yet. Once the first tagged release is pushed, `@latest` will resolve to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.2.0`.
+
+**Tagged release pipeline:**
+
+- `v*` tags are published through GitHub Actions and GoReleaser
+- Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
+- The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
 
 **Build from source:**
 
@@ -183,6 +206,15 @@ axis daemon refresh --cache-addr 127.0.0.1:42425
 
 Forces the daemon to rebuild its cached snapshot immediately. This is the fastest way to ensure `axis status --cached` and `axis task place --cached` use fresh cluster state without waiting for the next background tick.
 
+### `axis daemon status` — inspect local daemon freshness
+
+```bash
+axis daemon status
+axis daemon restart
+```
+
+`axis daemon status` reports cache readiness, age, and version metadata. `axis daemon restart` restarts the local cache seam from the current binary when you need to refresh stale daemon state explicitly.
+
 ## Configuration Reference
 
 `~/.axis/nodes.yaml` fields:
@@ -195,6 +227,15 @@ Forces the daemon to rebuild its cached snapshot immediately. This is the fastes
 | `role` | no | — | `primary` or `worker` |
 | `ssh_port` | no | `22` | SSH port |
 | `timeout_sec` | no | `10` | Per-node collection timeout (seconds) |
+
+Optional discovery block used by experimental UDP-assisted discovery:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `discovery.enabled` | no | `false` | Enable UDP beacon discovery alongside configured nodes |
+| `discovery.udp_port` | no | `42424` | UDP beacon port |
+| `discovery.beacon_interval_sec` | no | `3` | Beacon broadcast interval |
+| `discovery.secret` | no | empty | Shared discovery secret for filtering beacons |
 
 ## Architecture
 
@@ -238,9 +279,10 @@ Forces the daemon to rebuild its cached snapshot immediately. This is the fastes
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
 - `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
+- `axis chat` and `axis discover` are experimental helpers and must not outrank snapshot-backed truth
 - Placement memory lives locally in `~/.axis/state.json`
 
-**Current phase:** The original Phase 1 observability core is complete, and `main` now ships Phase 2-style reservation-aware placement plus explicit cache, MCP, chat, and execution surfaces. The project is still not daemon-first.
+**Current phase:** The observability and placement core is stable; execution, chat, and discovery helpers remain subordinate surfaces that must not present model output or guessed config as authoritative cluster truth.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 

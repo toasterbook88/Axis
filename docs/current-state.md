@@ -1,12 +1,14 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-29 01:20 EDT
+Last reviewed: 2026-03-29 EDT
 Branch: `main`
-Reviewed base HEAD: `26b4e25` (`main`, plus current uncommitted unified-memory / runtime-pressure placement worktree)
+Audit base: `15847e5` on `main` (2026-03-29 workspace review)
 
 This document is the fastest way to understand what AXIS actually is today.
 
 When this file disagrees with older design docs, trust the live code first, then this file, then the older phase/spec material.
+
+Truth rule: no generated output may present itself as cluster truth unless it is backed by a real snapshot or live probe.
 
 ## Executive Summary
 
@@ -38,8 +40,9 @@ The live repo currently contains:
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
+- A tag-triggered GitHub release pipeline (`.goreleaser.yml` + `.github/workflows/release.yml`) that is ready to publish binaries once a signed `v*` tag is cut
 
-The core observation pipeline is reasonably clean. The execution and safety surfaces are where most of the risk now lives.
+The core observation pipeline is reasonably clean. The execution, chat, and discovery surfaces are where most of the risk now lives.
 
 ## Command Surface
 
@@ -47,7 +50,7 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
-| `axis version` | Print version | Version is `0.1.0` |
+| `axis version` | Print version | Version is `0.2.0` |
 | `axis facts` | Collect local facts | JSON/YAML output |
 | `axis status` | Collect cluster snapshot | Live SSH by default; `--cached` uses the local daemon cache |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
@@ -55,10 +58,10 @@ Top-level commands currently registered in the binary:
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
 | `axis task run` | Execute on selected node | Explicit execution path exists |
-| `axis chat` | Local chat via Ollama | Also used as the default root action |
+| `axis chat` | Local chat via Ollama | Experimental and non-authoritative; no longer the default root action |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
 | `axis serve` | Start local HTTP API | Includes execution surface |
-| `axis discover` | UDP-assisted discovery flow | Behavior is broader than its help text suggests |
+| `axis discover` | UDP-assisted discovery flow | Experimental helper; emitted config values require manual review |
 | `axis context show|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
@@ -95,17 +98,19 @@ Audit commands run against this repo state:
 - `go test ./... -count=1` -> passes
 - `go test -race ./... -count=1` -> passes
 - `go build ./...` -> passes
+- `go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean` -> passes; writes snapshot archives plus `checksums.txt` under `dist/`
 - `go build -o /tmp/axis ./cmd/axis` -> passes
 - `/tmp/axis status --cached --cache-addr 127.0.0.1:42433` -> returns wrapped snapshot with `source: "daemon-cache"`
 - `/tmp/axis task place --cached --cache-addr 127.0.0.1:42437 "test inference"` -> returns placement output sourced from `daemon-cache`
 - `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (total coverage: `47.2%`)
+- `go test ./... -cover` -> passes (updated per-package snapshot below)
+- `./hack/coverage-check.sh` -> passes (`internal/knowledge` `90.9%`, `internal/api` `71.4%`, `internal/mcp` `46.6%`, total gate `65.0%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
-- v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `63.8%`, `internal/mcp` `51.2%`
+- v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `71.4%`, `internal/mcp` `46.6%`
 - direct coverage is now also strong in `internal/persist` `100.0%` and `internal/runtimectx` `92.6%`
 - remaining lower-coverage surfaces: `cmd/axis`, `internal/facts`
 
@@ -135,7 +140,7 @@ Areas where the live repo has moved past the older docs/specs:
 - Corrupt local state/skills files are now quarantined and surfaced as warnings instead of collapsing read surfaces
 - Execution context now carries real load averages rather than placeholder zeros
 - Long-context task hints can now prefer graded TurboQuant-capable backends without changing the default placement contract for ordinary tasks
-- Execution paths can now carry TurboQuant hints into local and remote commands without forcing a specific runtime wrapper
+- Execution paths can now carry TurboQuant hints into local and remote commands, and can add an observed-state-gated ephemeral Nix helper wrapper when the selected node proves it has `nix` plus a trusted package mapping
 - Facts and placement now carry additive unified-memory and runtime-pressure metadata instead of relying only on coarse free-RAM pressure guesses
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
@@ -163,6 +168,8 @@ In practical terms:
 - TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs probe-verified backend responses, but it still does not verify kernel correctness or backend feature parity
 - TurboQuant execution injection is intentionally narrow today: env hints everywhere, direct flag injection only for probe-verified `llama-cli` / `llama-server` command lines that expose `--ctx-size`
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
+- Chat is now fenced as experimental, but it still is not snapshot-grounded enough to be treated as cluster truth
+- Discovery suggestions are now more honest about provenance, but the surface is still experimental and easy to over-trust
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block
@@ -177,9 +184,9 @@ In practical terms:
 
 V1 hardening is now mostly about durability, not feature growth:
 
-1. Keep this file, `README.md`, and CI coverage gates current as the orientation layer.
-2. Keep degraded-state golden fixtures current as API/MCP/CLI response shapes evolve.
-3. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
-4. Refine reservation accounting into a clearer cluster RAM balancing model.
-5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
-6. Treat advanced balancing, PSI/reclaim behavior, schema-versioned persistence, and event-driven cache refresh as post-v1 work, using [ram-balancing-research.md](ram-balancing-research.md) as the technical basis.
+1. Cut and verify the first signed `v0.2.0` tag so the configured release pipeline proves out on GitHub.
+2. Protect `main` with the existing CI job as a required status check and require PR-based merges.
+3. Keep this file, `README.md`, and CI coverage gates current as the orientation layer.
+4. Add narrow dependency/security automation (`Dependabot`, `govulncheck`) without widening the operator surface.
+5. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
+6. Refine reservation accounting into a clearer cluster RAM balancing model.

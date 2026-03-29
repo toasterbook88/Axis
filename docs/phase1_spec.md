@@ -31,7 +31,7 @@ It is the foundation that later phases will build on.
 
 ### `axis version`
 
-Prints the version string (e.g. `axis 0.1.0`).
+Prints the version string (e.g. `axis <version>`).
 
 ### `axis facts`
 

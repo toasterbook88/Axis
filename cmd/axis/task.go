@@ -4,25 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
-	"al.essio.dev/pkg/shellescape"
 	"github.com/spf13/cobra"
-	"github.com/toasterbook88/axis/internal/api"
-	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
-	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
-	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
-	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/turboexec"
 )
 
@@ -119,7 +113,7 @@ func taskPlaceCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", daemon.DefaultAddr, "Address of the local AXIS daemon cache")
 	return cmd
 }
 
@@ -172,11 +166,11 @@ type taskRunIntent struct {
 }
 
 func reservationMBForRequirements(reqs models.TaskRequirements) int64 {
-	return reqs.MinFreeRAMMB + 1024
+	return execution.ReservationMBForRequirements(reqs)
 }
 
 func ensureReservationCapacity(snap *models.ClusterSnapshot, st *state.ClusterState, node string, reservationMB int64) error {
-	if !daemon.CanReserve(snap, st, node, reservationMB) {
+	if !execution.CanReserve(snap, st, node, reservationMB) {
 		return fmt.Errorf("node %s cannot reserve %d MB (current reservations exceed cap)", node, reservationMB)
 	}
 	return nil
@@ -243,7 +237,7 @@ func taskRunCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 
 			rt, err := runtimectx.Load(ctx)
@@ -257,199 +251,52 @@ func taskRunCmd() *cobra.Command {
 				return err
 			}
 
-			cfg := rt.Config
-			snap := rt.Snapshot
-			st := rt.State
-			reqs := placement.InferRequirements(input)
-
-			if intent.matchedScript != nil {
-				reqs.RequiredTools = append([]string(nil), intent.matchedScript.RequiredTools...)
-				if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
-					reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
-				}
-			}
-
-			// Always bypass strict requirement for purely explicit runs if user just says "df -h"
-			if execFlag && len(reqs.RequiredTools) > 0 {
-				filtered := reqs.RequiredTools[:0]
-				for _, tool := range reqs.RequiredTools {
-					if !strings.EqualFold(tool, "ollama") {
-						filtered = append(filtered, tool)
-					}
-				}
-				reqs.RequiredTools = append([]string(nil), filtered...)
-			}
-
-			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
-			decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
-
-			if !decision.OK {
-				for _, r := range decision.Reasoning {
-					fmt.Printf("  - %s\n", r)
-				}
-				Fatal(ExitErrNoNodesFit, "no suitable node found")
-			}
-
-			fmt.Printf("Selected node: %s (fit %d/100)\n", decision.Node, decision.FitScore)
-			for _, r := range decision.Reasoning {
-				fmt.Printf("  - %s\n", r)
-			}
-
-			// 2. require an explicit execution opt-in for any script/skill suggestion.
 			if intent.requiresConfirmation {
 				fmt.Printf("\nSuggested %s for %q:\n%s\n", intent.label, input, intent.command)
 				return fmt.Errorf("refusing to execute implicitly; re-run with --script to execute the suggestion or --exec to run a raw command")
 			}
 
-			commandToRun := intent.command
-			if intent.matchedSkill != nil && scriptFlag {
-				fmt.Printf("\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
-			} else if intent.matchedScript != nil && scriptFlag {
-				fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
+			mode := execution.ModeExec
+			if scriptFlag {
+				mode = execution.ModeScript
 			}
 
-			reservationMB := reservationMBForRequirements(reqs)
-			if err := ensureReservationCapacity(snap, st, decision.Node, reservationMB); err != nil {
-				return err
+			req := execution.GuardedExecutionRequest{
+				Description: input,
+				Mode:        mode,
+				Confirm:     execution.ConfirmWord,
+				Stdout:      os.Stdout,
+				Stderr:      os.Stderr,
+				OnReady: func(resp execution.GuardedExecutionResult) {
+					fmt.Printf("Selected node: %s (fit %d/100)\n", resp.Node, resp.FitScore)
+					for _, reason := range resp.Reasoning {
+						fmt.Printf("  - %s\n", reason)
+					}
+					if intent.matchedSkill != nil && scriptFlag {
+						fmt.Printf("\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
+					} else if intent.matchedScript != nil && scriptFlag {
+						fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
+					}
+					fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", resp.Node, resp.Command)
+				},
 			}
 
-			// 3. execute with stream
-			// Match the node explicitly
-			var targetNode models.NodeFacts
-			for _, n := range snap.Nodes {
-				if n.Name == decision.Node {
-					targetNode = n
-					break
-				}
-			}
-
-			turboPlan := turboexec.Prepare(targetNode, reqs, commandToRun)
-			commandToRun = turboPlan.Command
-
-			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n", decision.Node, commandToRun)
-			for _, note := range turboPlan.Notes {
-				fmt.Printf("  - %s\n", note)
-			}
-			fmt.Println()
-
-			// knowledge injection
-			k := knowledge.Build(snap, st, decision.Node)
-
-			// Safety blocker applies only once the user has explicitly opted into execution.
-			if block := safety.Check(k, commandToRun, skillStore.IsKnownBad); block.Blocked {
-				if out, err := exec.Command("toilet", "-f", "mono12", "-F", "metal", "BULLSHIT BLOCKED").Output(); err == nil {
-					fmt.Print("\n", string(out), "\n")
-				} else {
-					fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
-				}
-				fmt.Printf("Reason: %s\n", block.Reason)
-				fmt.Printf("Dumb score: %d/100\n", block.Score)
+			resp, err := execution.RunGuarded(ctx, rt, req)
+			if resp.Blocked {
+				fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
+				fmt.Printf("Reason: %s\n", resp.BlockReason)
+				fmt.Printf("Dumb score: %d/100\n", resp.DumbScore)
 				fmt.Println("Nothing was executed. Fix your request.")
 				return nil
 			}
-
-			contextJSON, err := knowledge.ExecutionContextJSON(snap, st, decision, input, intent.matchedScript, intent.matchedSkill)
-			if err != nil {
-				Fatal(ExitErrContextWrite, "failed to encode execution context: %v", err)
+			if err != nil && resp.Error == "no suitable node found" {
+				for _, reason := range resp.Reasoning {
+					fmt.Printf("  - %s\n", reason)
+				}
+				Fatal(ExitErrNoNodesFit, "no suitable node found")
 			}
-
-			if models.IsLocalNode(targetNode) {
-				contextFile, err := os.CreateTemp("", "axis-knows-*.json")
-				if err != nil {
-					Fatal(ExitErrContextWrite, "failed to create context file: %v", err)
-				}
-				defer os.Remove(contextFile.Name())
-				if _, err := contextFile.Write(contextJSON); err != nil {
-					contextFile.Close()
-					Fatal(ExitErrContextWrite, "failed to write context: %v", err)
-				}
-				if err := contextFile.Close(); err != nil {
-					Fatal(ExitErrContextWrite, "failed to finalize context file: %v", err)
-				}
-
-				c := exec.CommandContext(ctx, "bash", "-lc", commandToRun)
-				c.Env = append(os.Environ(),
-					"AXIS_CONTEXT_FILE="+contextFile.Name(),
-					"BEST_NODE="+decision.Node,
-				)
-				c.Env = append(c.Env, turboPlan.Env...)
-				if st != nil {
-					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
-					if err != nil {
-						return fmt.Errorf("failed to persist task reservation: %w", err)
-					}
-					defer func() {
-						if err := st.ReleaseTask(decision.Node, execID, reservationMB); err != nil {
-							fmt.Fprintf(os.Stderr, "warning: failed to release task reservation: %v\n", err)
-						}
-					}()
-				}
-				c.Stdout = os.Stdout
-				c.Stderr = os.Stderr
-				runErr := c.Run()
-				if runErr == nil {
-					skillStore.RecordSuccess(input, commandToRun, decision.Node)
-					skillStore.Save()
-				} else {
-					exitCode := 1
-					if err, ok := runErr.(*exec.ExitError); ok {
-						exitCode = err.ExitCode()
-					}
-					skillStore.RecordFailure(input, "failed with code "+fmt.Sprint(exitCode))
-					skillStore.Save()
-				}
-				return runErr
-			} else {
-				// Find config for SSH transport
-				var targetConfig config.NodeConfig
-				for _, nc := range cfg.Nodes {
-					if nc.Name == decision.Node {
-						targetConfig = nc
-						break
-					}
-				}
-
-				executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
-				defer executor.Close()
-
-				remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
-				writeJSONCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
-				if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
-					Fatal(ExitErrContextWrite, "failed to upload context: %v", err)
-				}
-
-				if st != nil {
-					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
-					if err != nil {
-						return fmt.Errorf("failed to persist task reservation: %w", err)
-					}
-					defer func() {
-						if err := st.ReleaseTask(decision.Node, execID, reservationMB); err != nil {
-							fmt.Fprintf(os.Stderr, "warning: failed to release task reservation: %v\n", err)
-						}
-					}()
-				}
-
-				quotedCmd := fmt.Sprintf(
-					"%s trap 'rm -f %s' EXIT; bash -lc %s",
-					remoteExecPrefix(decision.Node, remoteContextPath, turboPlan.Env),
-					shellescape.Quote(remoteContextPath),
-					shellescape.Quote(commandToRun),
-				)
-				runErr := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr)
-				if runErr == nil {
-					skillStore.RecordSuccess(input, commandToRun, decision.Node)
-					skillStore.Save()
-				}
-				if runErr != nil {
-					exitCode := 1
-					if err, ok := runErr.(*exec.ExitError); ok {
-						exitCode = err.ExitCode()
-					}
-					skillStore.RecordFailure(input, "failed with code "+fmt.Sprint(exitCode))
-					skillStore.Save()
-					return fmt.Errorf("remote execution failed: %w", runErr)
-				}
+			if err != nil {
+				return err
 			}
 			return nil
 		},
@@ -491,7 +338,7 @@ func taskContextCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", daemon.DefaultAddr, "Address of the local AXIS daemon cache")
 	return cmd
 }
 
@@ -569,20 +416,7 @@ func sourceOrLive(source string) string {
 }
 
 func remoteExecPrefix(node, contextPath string, extraEnv []string) string {
-	parts := []string{
-		"export",
-		"BEST_NODE=" + shellescape.Quote(node),
-		"AXIS_CONTEXT_FILE=" + shellescape.Quote(contextPath),
-	}
-	for _, kv := range extraEnv {
-		if strings.TrimSpace(kv) == "" {
-			continue
-		}
-		if idx := strings.Index(kv, "="); idx > 0 {
-			parts = append(parts, kv[:idx]+"="+shellescape.Quote(kv[idx+1:]))
-		}
-	}
-	return strings.Join(parts, " ") + ";"
+	return execution.RemoteExecPrefix(node, contextPath, extraEnv)
 }
 
 func contextHint(reqs models.TaskRequirements) string {
