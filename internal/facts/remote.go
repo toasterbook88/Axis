@@ -79,7 +79,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	}
 
 	// Resources
-	res, resPartial := c.remoteResources(ctx, osName)
+	res, resPartial := c.remoteResources(ctx, osName, facts.Arch)
 	facts.Resources = res
 	if resPartial {
 		partial = true
@@ -111,7 +111,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	return facts, nil
 }
 
-func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*models.Resources, bool) {
+func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch string) (*models.Resources, bool) {
 	r := &models.Resources{Pressure: "none"}
 	partial := false
 
@@ -134,6 +134,7 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 	if out, err := c.Exec.Run(ctx, modelCmd); err == nil {
 		r.CPUModel = strings.TrimSpace(out)
 	}
+	r.MemoryTopology, r.MemoryClass = detectMemoryTopology(osName, arch, r.CPUModel)
 
 	// RAM
 	if osName == "darwin" {
@@ -164,6 +165,13 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 
 	if r.RAMTotalMB > 0 {
 		r.Pressure = computePressure(r.RAMTotalMB, r.RAMFreeMB)
+		r.PressureSource = "free-ram"
+	}
+
+	if source, level, stall10, ok := c.remotePressureSignal(ctx, osName); ok {
+		r.Pressure = mergePressureLevels(r.Pressure, level)
+		r.PressureSource = source
+		r.PressureStall10 = stall10
 	}
 
 	var loadCmd string
@@ -220,6 +228,33 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName string) (*
 	}
 
 	return r, partial
+}
+
+func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName string) (string, string, float64, bool) {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "linux":
+		out, err := c.Exec.Run(ctx, "cat /proc/pressure/memory 2>/dev/null")
+		if err != nil || strings.TrimSpace(out) == "" {
+			return "", "", 0, false
+		}
+		stall10, ok := parseLinuxPressureStall10(out)
+		if !ok {
+			return "", "", 0, false
+		}
+		return "linux-psi", linuxPressureLevel(stall10), stall10, true
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null")
+		if err != nil || strings.TrimSpace(out) == "" {
+			return "", "", 0, false
+		}
+		level, ok := parseDarwinMemoryPressureLevel(out)
+		if !ok {
+			return "", "", 0, false
+		}
+		return "darwin-vm-pressure", darwinPressureLevel(level), 0, true
+	default:
+		return "", "", 0, false
+	}
 }
 
 func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkAddress {

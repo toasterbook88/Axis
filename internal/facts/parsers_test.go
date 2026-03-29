@@ -207,6 +207,62 @@ func TestComputePressure(t *testing.T) {
 	}
 }
 
+func TestDetectMemoryTopology(t *testing.T) {
+	topology, class := detectMemoryTopology("darwin", "arm64", "Apple M3 Max")
+	if topology != "unified" {
+		t.Fatalf("expected unified topology, got %q", topology)
+	}
+	if class != 4 {
+		t.Fatalf("expected memory class 4 for Apple M3 Max, got %d", class)
+	}
+
+	topology, class = detectMemoryTopology("linux", "amd64", "AMD Ryzen 9")
+	if topology != "standard" {
+		t.Fatalf("expected standard topology, got %q", topology)
+	}
+	if class != 0 {
+		t.Fatalf("expected memory class 0, got %d", class)
+	}
+}
+
+func TestParseLinuxPressureStall10(t *testing.T) {
+	const psi = `some avg10=6.73 avg60=4.22 avg300=2.11 total=12345
+full avg10=0.32 avg60=0.12 avg300=0.05 total=456
+`
+	stall10, ok := parseLinuxPressureStall10(psi)
+	if !ok {
+		t.Fatal("expected linux psi parse to succeed")
+	}
+	if stall10 != 6.73 {
+		t.Fatalf("expected stall10 6.73, got %.2f", stall10)
+	}
+	if level := linuxPressureLevel(stall10); level != "medium" {
+		t.Fatalf("expected medium linux psi pressure, got %q", level)
+	}
+}
+
+func TestParseDarwinMemoryPressureLevel(t *testing.T) {
+	level, ok := parseDarwinMemoryPressureLevel("4\n")
+	if !ok {
+		t.Fatal("expected darwin pressure parse to succeed")
+	}
+	if level != 4 {
+		t.Fatalf("expected pressure level 4, got %d", level)
+	}
+	if got := darwinPressureLevel(level); got != "high" {
+		t.Fatalf("expected high darwin pressure, got %q", got)
+	}
+}
+
+func TestMergePressureLevelsKeepsWorstLevel(t *testing.T) {
+	if got := mergePressureLevels("low", "medium", "none"); got != "medium" {
+		t.Fatalf("expected medium, got %q", got)
+	}
+	if got := mergePressureLevels("none", "high"); got != "high" {
+		t.Fatalf("expected high, got %q", got)
+	}
+}
+
 func TestParseVersionString(t *testing.T) {
 	tests := []struct {
 		name     string

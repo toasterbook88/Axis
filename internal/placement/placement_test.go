@@ -51,6 +51,13 @@ func nodeTurboQuantDetected(name string, freeRAM int64, pressure string, backend
 	return n
 }
 
+func nodeUnifiedMemory(name string, freeRAM int64, pressure string, class int, tools ...string) models.NodeFacts {
+	n := nodeComplete(name, freeRAM, pressure, tools...)
+	n.Resources.MemoryTopology = models.MemoryTopologyUnified
+	n.Resources.MemoryClass = class
+	return n
+}
+
 func nodeUnreachable(name string) models.NodeFacts {
 	return models.NodeFacts{
 		Name:        name,
@@ -188,6 +195,35 @@ func TestFilterLongContextDoesNotUseDetectedOnlyTurboQuantForRAMReduction(t *tes
 	}
 }
 
+func TestFilterExcludesHeavyInferenceOnCriticalLinuxPSI(t *testing.T) {
+	node := nodeComplete("thrashing", 8192, "high", "ollama")
+	node.Resources.PressureSource = "linux-psi"
+	node.Resources.PressureStall10 = 16.4
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(result) != 0 {
+		t.Fatalf("expected critical linux psi node to be filtered for heavy inference, got %v", names(result))
+	}
+}
+
+func TestFilterAllowsLightTaskOnCriticalLinuxPSI(t *testing.T) {
+	node := nodeComplete("thrashing", 8192, "high", "git")
+	node.Resources.PressureSource = "linux-psi"
+	node.Resources.PressureStall10 = 16.4
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"git"},
+	}
+	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(result) != 1 || result[0].Name != "thrashing" {
+		t.Fatalf("expected light task to stay eligible, got %v", names(result))
+	}
+}
+
 // --- Rank Tests ---
 
 func TestRankByPressure(t *testing.T) {
@@ -297,6 +333,25 @@ func TestRankPrefersVerifiedTurboQuantOverDetected(t *testing.T) {
 	ranked := RankCandidates(candidates, reqs, nil)
 	if ranked[0].Name != "verified" {
 		t.Fatalf("expected verified turboquant node to rank first, got %s", ranked[0].Name)
+	}
+}
+
+func TestRankPrefersUnifiedMemoryForMLXLongContext(t *testing.T) {
+	candidates := []models.NodeFacts{
+		nodeComplete("standard", 4096, "none", "ollama"),
+		nodeUnifiedMemory("unified", 4096, "none", 3, "ollama"),
+	}
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+		PreferredBackends:   []string{"mlx"},
+	}
+
+	ranked := RankCandidates(candidates, reqs, nil)
+	if ranked[0].Name != "unified" {
+		t.Fatalf("expected unified-memory node to rank first, got %s", ranked[0].Name)
 	}
 }
 
@@ -488,6 +543,33 @@ func TestFitScore_DetectedTurboQuantGetsSmallerBonus(t *testing.T) {
 	}
 }
 
+func TestFitScore_UnifiedMemoryBonusForMLXLongContext(t *testing.T) {
+	standard := nodeComplete("standard", 4096, "none", "ollama")
+	unified := nodeUnifiedMemory("unified", 4096, "none", 3, "ollama")
+
+	reqs := models.TaskRequirements{
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+		PreferredBackends:   []string{"mlx"},
+	}
+
+	base := ComputeTaskFitScore(standard, false, nil, reqs)
+	boost := ComputeTaskFitScore(unified, false, nil, reqs)
+	if boost <= base {
+		t.Fatalf("expected unified-memory node to score higher, got standard=%d unified=%d", base, boost)
+	}
+}
+
+func TestInferRequirementsAddsPreferredBackends(t *testing.T) {
+	reqs := InferRequirements("run mlx long-context inference on apple silicon")
+	if len(reqs.PreferredBackends) == 0 || reqs.PreferredBackends[0] != "mlx" {
+		t.Fatalf("expected mlx preferred backend, got %v", reqs.PreferredBackends)
+	}
+	if !reqs.PrefersTurboQuant {
+		t.Fatal("expected long-context hint to keep turboquant preference")
+	}
+}
+
 func TestFitScore_NilResources(t *testing.T) {
 	n := models.NodeFacts{Name: "empty", Status: models.StatusComplete}
 	score := ComputeFitScore(n, false, nil)
@@ -517,6 +599,30 @@ func TestSelectFailure_HeavyRAMScopeNote(t *testing.T) {
 	}
 	if !foundScope {
 		t.Errorf("expected AXIS scope note about small models, got: %v", d.Reasoning)
+	}
+}
+
+func TestSelectFailure_CriticalRuntimePressureReasoning(t *testing.T) {
+	node := nodeComplete("thrashing", 8192, "high", "ollama")
+	node.Resources.PressureSource = "linux-psi"
+	node.Resources.PressureStall10 = 19.2
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	d := SelectBestNode(reqs, []models.NodeFacts{node}, nil)
+	if d.OK {
+		t.Fatal("expected placement failure")
+	}
+	found := false
+	for _, reason := range d.Reasoning {
+		if contains(reason, "linux-psi") && contains(reason, "critical runtime memory pressure") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected critical pressure reasoning, got %v", d.Reasoning)
 	}
 }
 

@@ -31,6 +31,7 @@ axis task place "run ollama inference on a 7b model"
 - `axis task place --cached` — explicit daemon-backed cached placement read
 - `axis task context --cached` — explicit daemon-backed cached context block
 - long-context task hints now grade TurboQuant-capable backends as detected vs probe-verified (`mlx_lm`, `llama-cli`, `llama-server`), with `llama.cpp` verification requiring probe-visible `--ctx-size` support
+- fact collection now annotates unified-memory Apple Silicon nodes and best-effort runtime pressure metadata (`linux-psi`, Darwin VM pressure) when available
 - `axis serve` — optional local HTTP API surface
 - `axis daemon refresh` — force a fresh daemon snapshot now
 - `axis daemon invalidate` — explicit local daemon cache invalidation
@@ -62,11 +63,11 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 | Feature | Details |
 | --- | --- |
-| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk, GPU list, network addresses |
+| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk, GPU list, network addresses, and additive memory-topology / pressure-source metadata where available |
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc` |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
-| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, allocatable RAM, reservation ratio, and locality; `--cached` uses the explicit daemon snapshot cache |
+| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, unified-memory suitability for `mlx`/long-context asks, allocatable RAM, reservation ratio, and locality; heavy AI tasks also avoid nodes under critical runtime pressure signals |
 | **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
 | **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
@@ -141,7 +142,7 @@ axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
 
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, allocatable RAM, reservation ratio, and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses.
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, unified-memory suitability for `mlx`/Apple Silicon-shaped asks, allocatable RAM, reservation ratio, and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS now filters out nodes showing critical runtime pressure from Linux PSI or Darwin VM pressure signals instead of treating them as normal fallback candidates.
 
 When `axis task run` selects a TurboQuant-capable node, AXIS exports `AXIS_TURBOQUANT`, `AXIS_TURBOQUANT_STATUS`, `AXIS_TURBOQUANT_BACKENDS`, `AXIS_TURBOQUANT_CAPABILITIES`, and long-context hints into the execution environment. For probe-verified `llama.cpp` commands with `--ctx-size` support, AXIS can also inject safe additive flags such as `--ctx-size` and `--flash-attn` when they are absent.
 

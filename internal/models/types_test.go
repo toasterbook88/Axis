@@ -22,6 +22,7 @@ func sampleNodeFacts() models.NodeFacts {
 			CPUModel:         "Intel i7-1065G7",
 			RAMTotalMB:       16384,
 			RAMFreeMB:        8192,
+			MemoryTopology:   models.MemoryTopologyStandard,
 			Load1M:           1.25,
 			Load5M:           0.80,
 			Load15M:          0.50,
@@ -31,6 +32,7 @@ func sampleNodeFacts() models.NodeFacts {
 			DiskFreeGB:       250,
 			GPUs:             []string{"NVIDIA MX250"},
 			Pressure:         "none",
+			PressureSource:   "free-ram",
 		},
 		Addresses: []models.NetworkAddress{
 			{Kind: "ipv4", Address: "192.168.1.100"},
@@ -94,6 +96,12 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Resources.Pressure != "none" {
 		t.Errorf("pressure: got %q, want %q", decoded.Resources.Pressure, "none")
+	}
+	if decoded.Resources.MemoryTopology != models.MemoryTopologyStandard {
+		t.Errorf("memory_topology: got %q, want %q", decoded.Resources.MemoryTopology, models.MemoryTopologyStandard)
+	}
+	if decoded.Resources.PressureSource != "free-ram" {
+		t.Errorf("pressure_source: got %q, want %q", decoded.Resources.PressureSource, "free-ram")
 	}
 	if decoded.Resources.Load1M != 1.25 || decoded.Resources.Load5M != 0.80 || decoded.Resources.Load15M != 0.50 {
 		t.Errorf("load averages: got %.2f/%.2f/%.2f", decoded.Resources.Load1M, decoded.Resources.Load5M, decoded.Resources.Load15M)

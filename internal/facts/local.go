@@ -107,6 +107,7 @@ func localResources() (*models.Resources, bool) {
 		r.CPUCores = cores
 		r.CPUModel = model
 	}
+	r.MemoryTopology, r.MemoryClass = detectMemoryTopology(runtime.GOOS, runtime.GOARCH, r.CPUModel)
 
 	// RAM
 	if total, free, err := localRAM(); err != nil {
@@ -115,6 +116,13 @@ func localResources() (*models.Resources, bool) {
 		r.RAMTotalMB = total
 		r.RAMFreeMB = free
 		r.Pressure = computePressure(total, free)
+		r.PressureSource = "free-ram"
+	}
+
+	if source, level, stall10, ok := localPressureSignal(); ok {
+		r.Pressure = mergePressureLevels(r.Pressure, level)
+		r.PressureSource = source
+		r.PressureStall10 = stall10
 	}
 
 	if load1, load5, load15, err := localLoadAverages(); err != nil {
@@ -137,6 +145,33 @@ func localResources() (*models.Resources, bool) {
 	r.GPUs = localGPUs()
 
 	return r, partial
+}
+
+func localPressureSignal() (string, string, float64, bool) {
+	switch runtime.GOOS {
+	case "linux":
+		data, err := os.ReadFile("/proc/pressure/memory")
+		if err != nil {
+			return "", "", 0, false
+		}
+		stall10, ok := parseLinuxPressureStall10(string(data))
+		if !ok {
+			return "", "", 0, false
+		}
+		return "linux-psi", linuxPressureLevel(stall10), stall10, true
+	case "darwin":
+		out, err := exec.Command("sysctl", "-n", "kern.memorystatus_vm_pressure_level").Output()
+		if err != nil {
+			return "", "", 0, false
+		}
+		level, ok := parseDarwinMemoryPressureLevel(string(out))
+		if !ok {
+			return "", "", 0, false
+		}
+		return "darwin-vm-pressure", darwinPressureLevel(level), 0, true
+	default:
+		return "", "", 0, false
+	}
 }
 
 func computePressure(totalMB, freeMB int64) string {
