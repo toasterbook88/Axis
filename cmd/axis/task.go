@@ -648,23 +648,5 @@ func turboQuantContextStatus(node models.NodeFacts) string {
 }
 
 func turboQuantExecutionMode(node models.NodeFacts) string {
-	if node.TurboQuant == nil || !node.TurboQuant.Supported {
-		return "none"
-	}
-	if node.TurboQuant.Verified && turboQuantHasBackend(node, "llama.cpp") {
-		return "env+flags"
-	}
-	return "env-only"
-}
-
-func turboQuantHasBackend(node models.NodeFacts, backend string) bool {
-	if node.TurboQuant == nil {
-		return false
-	}
-	for _, candidate := range node.TurboQuant.Backends {
-		if strings.EqualFold(candidate, backend) {
-			return true
-		}
-	}
-	return false
+	return turboexec.ExecutionMode(node)
 }

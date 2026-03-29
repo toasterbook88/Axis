@@ -120,6 +120,9 @@ func TestBuildContextBlockShowsTurboQuantExecutionModes(t *testing.T) {
 					Supported: true,
 					Verified:  true,
 					Backends:  []string{"llama.cpp"},
+					Capabilities: []string{
+						"ctx-size-flag",
+					},
 				},
 			},
 			{

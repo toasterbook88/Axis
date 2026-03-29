@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-03-28 23:59 EDT
 Branch: `main`
-Reviewed base HEAD: `bfbbf3e74222879411c9d5decb8b16c43e2f9962` (`main`, plus current uncommitted TurboQuant-aware placement worktree)
+Reviewed base HEAD: `925d608` (`main`, plus current uncommitted stricter TurboQuant validation worktree)
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -34,7 +34,7 @@ The live repo currently contains:
 - Live and cached read paths that both overlay reservations before placement/context generation
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
-- TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection for verified backends
+- TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection only after probe-visible `--ctx-size` support
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 
 The core observation pipeline is reasonably clean. The execution and safety surfaces are where most of the risk now lives.
@@ -158,7 +158,7 @@ In practical terms:
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
 - TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs probe-verified backend responses, but it still does not verify kernel correctness or backend feature parity
-- TurboQuant execution injection is intentionally narrow today: env hints everywhere, direct flag injection only for verified `llama-cli` / `llama-server` command lines
+- TurboQuant execution injection is intentionally narrow today: env hints everywhere, direct flag injection only for probe-verified `llama-cli` / `llama-server` command lines that expose `--ctx-size`
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
