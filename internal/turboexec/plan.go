@@ -40,7 +40,7 @@ func Prepare(node models.NodeFacts, reqs models.TaskRequirements, command string
 		plan.Env = append(plan.Env, fmt.Sprintf("AXIS_TURBOQUANT_CONTEXT_TOKENS=%d", reqs.ContextWindowTokens))
 	}
 
-	if !node.TurboQuant.Verified || reqs.ContextWindowTokens == 0 {
+	if !SupportsFlagInjection(node) || reqs.ContextWindowTokens == 0 {
 		return plan
 	}
 
@@ -87,6 +87,36 @@ func hasCapability(node models.NodeFacts, capability string) bool {
 	}
 	for _, cap := range node.TurboQuant.Capabilities {
 		if cap == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func SupportsFlagInjection(node models.NodeFacts) bool {
+	return node.TurboQuant != nil &&
+		node.TurboQuant.Supported &&
+		node.TurboQuant.Verified &&
+		hasBackend(node, "llama.cpp") &&
+		hasCapability(node, "ctx-size-flag")
+}
+
+func ExecutionMode(node models.NodeFacts) string {
+	if node.TurboQuant == nil || !node.TurboQuant.Supported {
+		return "none"
+	}
+	if SupportsFlagInjection(node) {
+		return "env+flags"
+	}
+	return "env-only"
+}
+
+func hasBackend(node models.NodeFacts, backend string) bool {
+	if node.TurboQuant == nil {
+		return false
+	}
+	for _, candidate := range node.TurboQuant.Backends {
+		if candidate == backend {
 			return true
 		}
 	}

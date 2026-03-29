@@ -47,7 +47,7 @@ func TestPrepare_ExportsTurboQuantEnv(t *testing.T) {
 }
 
 func TestPrepare_InjectsLlamaFlagsForVerifiedBackend(t *testing.T) {
-	plan := Prepare(turboNode(true, "flash-attn-flag"), models.TaskRequirements{
+	plan := Prepare(turboNode(true, "ctx-size-flag", "flash-attn-flag"), models.TaskRequirements{
 		ContextWindowTokens: 128000,
 		PrefersTurboQuant:   true,
 	}, "llama-server -m model.gguf")
@@ -69,8 +69,30 @@ func TestPrepare_DoesNotInjectFlagsForDetectedOnlyBackend(t *testing.T) {
 	}
 }
 
-func TestPrepare_DoesNotDuplicateExistingFlags(t *testing.T) {
+func TestPrepare_DoesNotInjectFlagsWithoutCtxSizeCapability(t *testing.T) {
 	plan := Prepare(turboNode(true, "flash-attn-flag"), models.TaskRequirements{
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}, "llama-server -m model.gguf")
+	if strings.Contains(plan.Command, "--ctx-size") || strings.Contains(plan.Command, "--flash-attn") {
+		t.Fatalf("did not expect flag injection without ctx-size capability, got %q", plan.Command)
+	}
+}
+
+func TestExecutionModeReflectsFlagSafety(t *testing.T) {
+	if got := ExecutionMode(turboNode(true, "ctx-size-flag")); got != "env+flags" {
+		t.Fatalf("ExecutionMode(verified ctx-size) = %q, want env+flags", got)
+	}
+	if got := ExecutionMode(turboNode(true)); got != "env-only" {
+		t.Fatalf("ExecutionMode(verified no ctx-size) = %q, want env-only", got)
+	}
+	if got := ExecutionMode(models.NodeFacts{Name: "plain"}); got != "none" {
+		t.Fatalf("ExecutionMode(no turboquant) = %q, want none", got)
+	}
+}
+
+func TestPrepare_DoesNotDuplicateExistingFlags(t *testing.T) {
+	plan := Prepare(turboNode(true, "ctx-size-flag", "flash-attn-flag"), models.TaskRequirements{
 		ContextWindowTokens: 128000,
 		PrefersTurboQuant:   true,
 	}, "llama-cli --ctx-size 8192 --flash-attn")

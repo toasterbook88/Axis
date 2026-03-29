@@ -97,11 +97,12 @@ func probeTurboQuantCapabilities(ctx context.Context, tools []models.ToolInfo, r
 
 	if tool, ok := findToolInfo(tools, "mlx_lm"); ok {
 		if out, ok := runTurboQuantProbe(ctx, tool, run); ok {
-			if mlxProbeVerified(out) {
+			caps := probeCapabilities(out, "mlx")
+			if mlxProbeVerified(caps, out) {
 				verified = true
 				capabilitySet["backend-probed"] = struct{}{}
 			}
-			for _, cap := range probeCapabilities(out, "mlx") {
+			for _, cap := range caps {
 				capabilitySet[cap] = struct{}{}
 			}
 		}
@@ -109,11 +110,12 @@ func probeTurboQuantCapabilities(ctx context.Context, tools []models.ToolInfo, r
 
 	if tool, ok := findToolInfo(tools, "llama-cli"); ok {
 		if out, ok := runTurboQuantProbe(ctx, tool, run); ok {
-			if llamaProbeVerified(out) {
+			caps := probeCapabilities(out, "llama.cpp")
+			if llamaProbeVerified(caps, out) {
 				verified = true
 				capabilitySet["backend-probed"] = struct{}{}
 			}
-			for _, cap := range probeCapabilities(out, "llama.cpp") {
+			for _, cap := range caps {
 				capabilitySet[cap] = struct{}{}
 			}
 		}
@@ -121,11 +123,12 @@ func probeTurboQuantCapabilities(ctx context.Context, tools []models.ToolInfo, r
 
 	if tool, ok := findToolInfo(tools, "llama-server"); ok {
 		if out, ok := runTurboQuantProbe(ctx, tool, run); ok {
-			if llamaProbeVerified(out) {
+			caps := probeCapabilities(out, "llama.cpp")
+			if llamaProbeVerified(caps, out) {
 				verified = true
 				capabilitySet["backend-probed"] = struct{}{}
 			}
-			for _, cap := range probeCapabilities(out, "llama.cpp") {
+			for _, cap := range caps {
 				capabilitySet[cap] = struct{}{}
 			}
 		}
@@ -151,14 +154,19 @@ func runTurboQuantProbe(ctx context.Context, tool models.ToolInfo, run turboQuan
 	return out, true
 }
 
-func mlxProbeVerified(out string) bool {
+func mlxProbeVerified(caps []string, out string) bool {
 	lower := strings.ToLower(out)
-	return strings.Contains(lower, "mlx") && (strings.Contains(lower, "generate") || strings.Contains(lower, "serve") || strings.Contains(lower, "chat"))
+	return strings.Contains(lower, "mlx") &&
+		containsCapability(caps, "mlx-runtime") &&
+		(containsCapability(caps, "generate-mode") || containsCapability(caps, "server-mode"))
 }
 
-func llamaProbeVerified(out string) bool {
+func llamaProbeVerified(caps []string, out string) bool {
 	lower := strings.ToLower(out)
-	return strings.Contains(lower, "llama") && (strings.Contains(lower, "ctx-size") || strings.Contains(lower, "n-gpu-layers") || strings.Contains(lower, "server") || strings.Contains(lower, "flash-attn"))
+	return strings.Contains(lower, "llama") &&
+		containsCapability(caps, "llama.cpp-runtime") &&
+		containsCapability(caps, "ctx-size-flag") &&
+		(containsCapability(caps, "generate-mode") || containsCapability(caps, "server-mode"))
 }
 
 func probeCapabilities(out string, backend string) []string {
@@ -216,4 +224,13 @@ func mergeCapabilities(base []string, extra []string) []string {
 	}
 	sort.Strings(merged)
 	return merged
+}
+
+func containsCapability(caps []string, want string) bool {
+	for _, cap := range caps {
+		if cap == want {
+			return true
+		}
+	}
+	return false
 }
