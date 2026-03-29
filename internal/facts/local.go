@@ -71,9 +71,14 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 			Class:   models.ToolClassAICLI,
 		})
 	}
-	facts.TurboQuant = inferTurboQuantSupport(facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama)
+	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
 
 	return facts, nil
+}
+
+func runLocalTurboQuantProbe(ctx context.Context, cmd string) (string, error) {
+	out, err := exec.CommandContext(ctx, "bash", "-lc", cmd).CombinedOutput()
+	return string(out), err
 }
 
 func localOSVersion() (string, error) {
