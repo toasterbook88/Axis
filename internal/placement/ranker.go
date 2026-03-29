@@ -1,5 +1,5 @@
-// Package placement implements deterministic task placement logic.
-// Phase 2: read-only, advisory — does NOT execute tasks.
+// Package placement implements deterministic task placement logic reused by
+// both advisory selection and guarded execution.
 package placement
 
 import (
@@ -83,6 +83,12 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 		gj := gpuPresent(ranked[j])
 		if gi != gj {
 			return gi && !gj
+		}
+
+		bi := preferredBackendRank(ranked[i], reqs)
+		bj := preferredBackendRank(ranked[j], reqs)
+		if bi != bj {
+			return bi > bj
 		}
 
 		hi := headroom(ranked[i], st, reqs)
@@ -309,10 +315,13 @@ func effectiveMinFreeRAM(reqs models.TaskRequirements, n models.NodeFacts) int64
 	if reqs.PrefersTurboQuant && turboQuantVerified(n) {
 		minNeeded = turboQuantAdjustedMinFreeRAM(minNeeded)
 	}
-	if reqs.ContextWindowTokens == 0 && requiresTool(reqs.RequiredTools, "ollama") && ollamaWarm(n) && minNeeded > 600 {
-		return 600
-	}
 	return minNeeded
+}
+
+// MinFreeRAMForNode exposes the effective placement floor used for a node.
+// Guarded execution reuses this to keep placement and last-second safety checks aligned.
+func MinFreeRAMForNode(reqs models.TaskRequirements, n models.NodeFacts) int64 {
+	return effectiveMinFreeRAM(reqs, n)
 }
 
 func turboQuantAdjustedMinFreeRAM(minNeeded int64) int64 {
@@ -344,8 +353,14 @@ func heavyInferenceTask(reqs models.TaskRequirements) bool {
 	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
 		return true
 	}
-	if requiresTool(reqs.RequiredTools, "ollama") && reqs.MinFreeRAMMB >= 1024 {
+	if requiresTool(reqs.RequiredTools, "ollama") || requiresTool(reqs.RequiredTools, "llama-server") {
 		return true
+	}
+	for _, backend := range reqs.PreferredBackends {
+		switch strings.ToLower(backend) {
+		case "llama.cpp", "mlx":
+			return true
+		}
 	}
 	return reqs.MinFreeRAMMB >= 4096
 }
@@ -438,6 +453,49 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func preferredBackendRank(n models.NodeFacts, reqs models.TaskRequirements) int {
+	best := 0
+	for _, backend := range reqs.PreferredBackends {
+		rank := 0
+		switch strings.ToLower(backend) {
+		case "llama.cpp":
+			switch {
+			case hasTool(n, "llama-server") && turboQuantHasBackend(n, "llama.cpp"):
+				rank = 3
+			case hasTool(n, "llama-server"):
+				rank = 2
+			case turboQuantHasBackend(n, "llama.cpp"):
+				rank = 1
+			}
+		case "mlx":
+			switch {
+			case turboQuantHasBackend(n, "mlx") && n.Resources != nil && n.Resources.MemoryTopology == models.MemoryTopologyUnified:
+				rank = 3
+			case turboQuantHasBackend(n, "mlx"):
+				rank = 2
+			case n.Resources != nil && n.Resources.MemoryTopology == models.MemoryTopologyUnified:
+				rank = 1
+			}
+		}
+		if rank > best {
+			best = rank
+		}
+	}
+	return best
+}
+
+func turboQuantHasBackend(n models.NodeFacts, backend string) bool {
+	if n.TurboQuant == nil {
+		return false
+	}
+	for _, candidate := range n.TurboQuant.Backends {
+		if strings.EqualFold(candidate, backend) {
+			return true
+		}
+	}
+	return false
 }
 
 func turboQuantStatusLabel(n models.NodeFacts) string {
