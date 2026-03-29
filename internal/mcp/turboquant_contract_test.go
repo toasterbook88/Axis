@@ -90,6 +90,9 @@ func TestPlacementDecisionToolTurboQuantGolden(t *testing.T) {
 
 func mcpTurboNode(name, hostname string, verified bool) models.NodeFacts {
 	node := mcpNode(name, hostname, 16384, 8192, "none")
+	node.Resources.MemoryTopology = models.MemoryTopologyUnified
+	node.Resources.MemoryClass = 4
+	node.Resources.PressureSource = "darwin-vm-pressure"
 	node.Tools = append(node.Tools, models.ToolInfo{Name: "llama-server", Version: "b123"})
 	node.TurboQuant = &models.TurboQuantInfo{
 		Supported:    true,

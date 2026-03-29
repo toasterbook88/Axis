@@ -1,12 +1,13 @@
 {
   "node": "mlx-node",
-  "fit_score": 78,
+  "fit_score": 96,
   "is_local": false,
   "reasoning": [
     "long-context task hint: ~128000 tokens",
+    "unified memory topology (class 4)",
     "turboquant-aware backend verified: llama.cpp",
     "turboquant capabilities: backend-probed, ctx-size-flag, flash-attn-flag, llama.cpp-runtime",
-    "LLM fit: 78/100 (excellent for small models)",
+    "LLM fit: 96/100 (excellent for small models)",
     "remote node (via SSH)",
     "8192MB free RAM (of 16384MB total)",
     "pressure: none",

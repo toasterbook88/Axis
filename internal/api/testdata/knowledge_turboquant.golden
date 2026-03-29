@@ -19,7 +19,9 @@
             "ram_allocatable_mb": 8192,
             "disk_total_gb": 0,
             "disk_free_gb": 0,
-            "pressure": "low"
+            "pressure": "low",
+            "pressure_stall_10": 6.5,
+            "pressure_source": "linux-psi"
           },
           "tools": [
             {

@@ -1,12 +1,15 @@
+STDERR:
+
+
+STDOUT:
 {
-  "timestamp": "<TIME>",
+  "timestamp": "0001-01-01T00:00:00Z",
   "status": "healthy",
   "nodes": [
     {
       "name": "mlx-node",
-      "hostname": "mlx.internal",
       "resources": {
-        "cpu_cores": 8,
+        "cpu_cores": 10,
         "cpu_model": "",
         "ram_total_mb": 16384,
         "ram_free_mb": 8192,
@@ -15,6 +18,7 @@
         "load_1m": 0,
         "load_5m": 0,
         "load_15m": 0,
+        "ram_allocatable_mb": 8192,
         "disk_total_gb": 0,
         "disk_free_gb": 0,
         "pressure": "none",
@@ -22,27 +26,36 @@
       },
       "tools": [
         {
-          "name": "llama-server",
+          "name": "ollama",
           "path": "",
-          "version": "b123",
+          "version": "0.7.0",
           "class": ""
         }
       ],
+      "ollama": {
+        "installed": true,
+        "running": false,
+        "listening": true,
+        "models": [
+          "llama3:8b"
+        ]
+      },
       "turboquant": {
         "supported": true,
         "verified": true,
         "backends": [
-          "llama.cpp"
+          "mlx"
         ],
         "capabilities": [
+          "apple-silicon",
           "backend-probed",
-          "ctx-size-flag",
-          "flash-attn-flag",
-          "llama.cpp-runtime"
+          "cpu-fallback",
+          "long-context",
+          "ollama-present"
         ]
       },
       "status": "complete",
-      "collected_at": "<TIME>"
+      "collected_at": "0001-01-01T00:00:00Z"
     }
   ],
   "summary": {

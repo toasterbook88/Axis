@@ -7,13 +7,14 @@ STDOUT:
   "decision": {
     "node": "mlx-node",
     "tool": "ollama",
-    "fit_score": 80,
+    "fit_score": 98,
     "is_local": false,
     "reasoning": [
       "long-context task hint: ~128000 tokens",
+      "unified memory topology (class 4)",
       "turboquant-aware backend verified: mlx",
       "turboquant capabilities: apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present",
-      "LLM fit: 80/100 (excellent for small models)",
+      "LLM fit: 98/100 (excellent for small models)",
       "remote node (via SSH)",
       "8192MB allocatable (0MB reserved) of 16384MB total",
       "pressure: none",
