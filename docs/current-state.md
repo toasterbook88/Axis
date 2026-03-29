@@ -73,7 +73,7 @@ Top-level commands currently registered in the binary:
 | Package | Role | Current Maturity |
 | --- | --- | --- |
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
-| `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small and stable, but not strict against unknown YAML fields |
+| `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small, stable, and now rejects unknown YAML fields so config typos fail fast |
 | `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, but both paths now annotate nodes with graded TurboQuant backends plus additive unified-memory and runtime-pressure metadata where supported |
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
