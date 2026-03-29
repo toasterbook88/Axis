@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -117,11 +116,8 @@ func TestSSHExecutorRunHonorsContextCancellation(t *testing.T) {
 
 	if _, err := exec.Run(ctx, "sleep"); err == nil {
 		t.Fatal("expected context cancellation")
-	} else {
-		<-ctx.Done()
-		if err != context.DeadlineExceeded && !strings.Contains(err.Error(), "remote command exited without exit status or exit signal") {
-			t.Fatalf("expected deadline or interrupted-session error, got %v", err)
-		}
+	} else if err != context.DeadlineExceeded {
+		t.Fatalf("expected deadline exceeded, got %v", err)
 	}
 }
 

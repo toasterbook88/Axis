@@ -97,6 +97,12 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		conn.Close()
 		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
+	// The connect deadline is only for dialing and handshake. Clear it once the
+	// SSH client is established so later session I/O isn't capped by an old ctx.
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return fmt.Errorf("ssh clear deadline %s: %w", addr, err)
+	}
 	e.client = ssh.NewClient(sshConn, chans, reqs)
 
 	return nil
