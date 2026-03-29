@@ -27,6 +27,8 @@ import (
 )
 
 var loadPlacementState = state.Load
+var fetchTaskSnapshot = daemon.FetchSnapshot
+var loadTaskLiveSnapshot = discoverLiveSnapshot
 
 func taskCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -64,9 +66,9 @@ func taskPlaceCmd() *cobra.Command {
 				desc,
 				cached,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-					return daemon.FetchSnapshot(ctx, cacheAddr)
+					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
-				discoverLiveSnapshot,
+				loadTaskLiveSnapshot,
 			)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -475,9 +477,9 @@ func taskContextCmd() *cobra.Command {
 				ctx,
 				cached,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-					return daemon.FetchSnapshot(ctx, cacheAddr)
+					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
-				discoverLiveSnapshot,
+				loadTaskLiveSnapshot,
 			)
 			if err != nil {
 				Fatal(ExitErrConfigLoad, "Failed to load snapshot: %v", err)
