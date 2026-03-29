@@ -40,7 +40,7 @@ The live repo currently contains:
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- A live `v0.2.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
+- A live `v0.2.1` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 
@@ -52,7 +52,7 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
-| `axis version` | Print version | Version is `0.2.0` |
+| `axis version` | Print version | Version is `0.2.1` |
 | `axis facts` | Collect local facts | JSON/YAML output |
 | `axis status` | Collect cluster snapshot | Live SSH by default; `--cached` uses the local daemon cache |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |

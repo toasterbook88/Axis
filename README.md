@@ -10,7 +10,7 @@
 
 ```bash
 # Install
-go install github.com/toasterbook88/axis/cmd/axis@v0.2.0
+go install github.com/toasterbook88/axis/cmd/axis@v0.2.1
 
 # Inspect the local machine
 axis facts
@@ -99,17 +99,17 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 **Using `go install` (recommended):**
 
 ```bash
-go install github.com/toasterbook88/axis/cmd/axis@v0.2.0
+go install github.com/toasterbook88/axis/cmd/axis@v0.2.1
 ```
 
-`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.2.0`.
+`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.2.1`.
 
 **Tagged release pipeline:**
 
 - `v*` tags are published through GitHub Actions and GoReleaser
 - Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
 - The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
-- The current release is [`v0.2.0`](https://github.com/toasterbook88/axis/releases/tag/v0.2.0)
+- The current release is [`v0.2.1`](https://github.com/toasterbook88/axis/releases/tag/v0.2.1)
 
 **Security hygiene:**
 
