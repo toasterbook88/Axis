@@ -137,9 +137,12 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 
 	select {
 	case <-ctx.Done():
-		session.Signal(ssh.SIGKILL)
+		_ = session.Signal(ssh.SIGKILL)
 		return "", ctx.Err()
 	case err := <-done:
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		if err != nil {
 			return stdout.String(), fmt.Errorf("ssh run %q on %s: %w (stderr: %s)",
 				cmd, e.Host, err, stderr.String())
@@ -163,15 +166,18 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 	}
 	defer session.Close()
 
-	// Connect context cancellation to SSH signal if needed
 	go func() {
 		<-ctx.Done()
-		session.Signal(ssh.SIGKILL)
+		_ = session.Signal(ssh.SIGKILL)
 	}()
 
 	session.Stdout = stdout
 	session.Stderr = stderr
-	return session.Run(cmd)
+	err = session.Run(cmd)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func (e *SSHExecutor) sshConfig(ctx context.Context) (*ssh.ClientConfig, error) {

@@ -55,6 +55,11 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 
 	ipStr := localIP()
 
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+	if err != nil {
+		return
+	}
+
 	// Broadcaster
 	go func() {
 		conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4bcast, Port: port})
@@ -90,15 +95,11 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 
 	// Listener
 	go func() {
-		pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
-		if err != nil {
-			return
-		}
 		defer pc.Close()
 
 		go func() {
 			<-ctx.Done()
-			pc.Close()
+			_ = pc.Close()
 		}()
 
 		buf := make([]byte, 1024)
@@ -118,7 +119,7 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 				}
 
 				mu.Lock()
-				// Only inject discovered nodes that aren't already explicitly bound 
+				// Only inject discovered nodes that aren't already explicitly bound
 				// to static SSH configurations to avoid clobbering robust setups
 				if _, exists := discovered[b.Name]; !exists {
 					discovered[b.Name] = config.NodeConfig{
