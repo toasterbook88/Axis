@@ -97,6 +97,48 @@ func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
 	if !strings.Contains(out, "apple-silicon") {
 		t.Fatalf("expected turboquant hint, got:\n%s", out)
 	}
+	if !strings.Contains(out, "TurboQuant matrix: mlx-node=verified/env-only (mlx)") {
+		t.Fatalf("expected turboquant matrix, got:\n%s", out)
+	}
+}
+
+func TestBuildContextBlockShowsTurboQuantExecutionModes(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "detected-node",
+				Status: models.StatusComplete,
+				TurboQuant: &models.TurboQuantInfo{
+					Supported: true,
+					Backends:  []string{"mlx"},
+				},
+			},
+			{
+				Name:   "llama-node",
+				Status: models.StatusComplete,
+				TurboQuant: &models.TurboQuantInfo{
+					Supported: true,
+					Verified:  true,
+					Backends:  []string{"llama.cpp"},
+				},
+			},
+			{
+				Name:   "mlx-node",
+				Status: models.StatusComplete,
+				TurboQuant: &models.TurboQuantInfo{
+					Supported: true,
+					Verified:  true,
+					Backends:  []string{"mlx"},
+				},
+			},
+		},
+	}
+
+	got := turboQuantCapabilityMatrix(snap.Nodes)
+	want := "detected-node=detected/env-only (mlx); llama-node=verified/env+flags (llama.cpp); mlx-node=verified/env-only (mlx)"
+	if got != want {
+		t.Fatalf("turboQuantCapabilityMatrix() = %q, want %q", got, want)
+	}
 }
 
 func TestResolveTaskRunIntentRequiresExplicitForRawInput(t *testing.T) {

@@ -8,5 +8,6 @@ AXIS CLUSTER CONTEXT (paste as system prompt):
 - Task: run 128k ollama inference
 - Live tools: start read-only MCP with: axis mcp serve
 - TurboQuant verified: mlx (apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present)
+- TurboQuant matrix: mlx-node=verified/env-only (mlx)
 
 Be precise. Use real node names and tools above.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -508,7 +509,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 
 	ramSummary := "unknown"
 	pressure := "unknown"
-	turboQuant := ""
+	extraLines := ""
 	if best.Resources != nil {
 		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
 			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB)
@@ -526,7 +527,10 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 		if len(best.TurboQuant.Capabilities) > 0 {
 			line += fmt.Sprintf(" (%s)", strings.Join(best.TurboQuant.Capabilities, ", "))
 		}
-		turboQuant = "\n- " + line
+		extraLines += "\n- " + line
+	}
+	if matrix := turboQuantCapabilityMatrix(snap.Nodes); matrix != "" {
+		extraLines += "\n- TurboQuant matrix: " + matrix
 	}
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
@@ -541,7 +545,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 
 Be precise. Use real node names and tools above.`,
 		sourceOrLive(source), best.Name, ramSummary, pressure,
-		contextHint(reqs), toolsList(best), clusterSummaryLine(snap), task, turboQuant)
+		contextHint(reqs), toolsList(best), clusterSummaryLine(snap), task, extraLines)
 }
 
 func clusterSummaryLine(snap *models.ClusterSnapshot) string {
@@ -618,4 +622,49 @@ func toolsList(n models.NodeFacts) []string {
 		t = append(t, tool.Name)
 	}
 	return t
+}
+
+func turboQuantCapabilityMatrix(nodes []models.NodeFacts) string {
+	entries := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.TurboQuant == nil || !node.TurboQuant.Supported {
+			continue
+		}
+		entry := fmt.Sprintf("%s=%s/%s", node.Name, turboQuantContextStatus(node), turboQuantExecutionMode(node))
+		if len(node.TurboQuant.Backends) > 0 {
+			entry += fmt.Sprintf(" (%s)", strings.Join(node.TurboQuant.Backends, ", "))
+		}
+		entries = append(entries, entry)
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, "; ")
+}
+
+func turboQuantContextStatus(node models.NodeFacts) string {
+	if node.TurboQuant != nil && node.TurboQuant.Verified {
+		return "verified"
+	}
+	return "detected"
+}
+
+func turboQuantExecutionMode(node models.NodeFacts) string {
+	if node.TurboQuant == nil || !node.TurboQuant.Supported {
+		return "none"
+	}
+	if node.TurboQuant.Verified && turboQuantHasBackend(node, "llama.cpp") {
+		return "env+flags"
+	}
+	return "env-only"
+}
+
+func turboQuantHasBackend(node models.NodeFacts, backend string) bool {
+	if node.TurboQuant == nil {
+		return false
+	}
+	for _, candidate := range node.TurboQuant.Backends {
+		if strings.EqualFold(candidate, backend) {
+			return true
+		}
+	}
+	return false
 }
