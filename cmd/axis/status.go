@@ -13,6 +13,10 @@ import (
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
+var fetchStatusSnapshot = daemon.FetchSnapshot
+var loadStatusLiveSnapshot = discoverLiveSnapshot
+var loadStatusRuntime = runtimectx.Load
+
 type statusOutput struct {
 	Source   string                  `json:"source" yaml:"source"`
 	Snapshot *models.ClusterSnapshot `json:"snapshot" yaml:"snapshot"`
@@ -34,9 +38,9 @@ func statusCmd() *cobra.Command {
 				ctx,
 				cached,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-					return daemon.FetchSnapshot(ctx, cacheAddr)
+					return fetchStatusSnapshot(ctx, cacheAddr)
 				},
-				discoverLiveSnapshot,
+				loadStatusLiveSnapshot,
 			)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -82,7 +86,7 @@ func collectStatusSnapshot(
 }
 
 func discoverLiveSnapshot(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-	rt, err := runtimectx.Load(ctx)
+	rt, err := loadStatusRuntime(ctx)
 	if err != nil {
 		return nil, "", err
 	}

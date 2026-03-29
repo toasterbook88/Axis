@@ -14,6 +14,15 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 )
 
+var generateChatStream = func(ctx context.Context, model, prompt string, w io.Writer) error {
+	return chat.NewEngine(model).GenerateStream(ctx, prompt, w)
+}
+
+var resolveDefaultChatModel = chat.ResolveDefaultModel
+var formatChatCatalog = func(ctx context.Context, currentModel string) string {
+	return chat.FormatModelCatalog(chat.BuildModelCatalog(ctx, currentModel))
+}
+
 func chatCmd() *cobra.Command {
 	var model string
 	var timeout time.Duration
@@ -35,13 +44,12 @@ func chatCmd() *cobra.Command {
 					return nil
 				}
 
-				engine := chat.NewEngine(currentModel)
 				ctx, cancel := chatRequestContext(timeout)
 				defer cancel()
 				query := strings.Join(args, " ")
 				fmt.Printf("AXIS [Model: %s] | Thinking...\n\n", currentModel)
 
-				if err := engine.GenerateStream(ctx, query, os.Stdout); err != nil {
+				if err := generateChatStream(ctx, currentModel, query, os.Stdout); err != nil {
 					Fatal(ExitErrCommandFail, "Chat engine failed: %v", err)
 				}
 				fmt.Println()
@@ -71,8 +79,6 @@ func chatCmd() *cobra.Command {
 					continue
 				}
 
-				engine := chat.NewEngine(currentModel)
-
 				prompt := query
 				if history != "" {
 					prompt = history + "\nUser: " + query + "\nAssistant: "
@@ -82,7 +88,7 @@ func chatCmd() *cobra.Command {
 				w := io.MultiWriter(os.Stdout, &buf)
 
 				ctx, cancel := chatRequestContext(timeout)
-				if err := engine.GenerateStream(ctx, prompt, w); err != nil {
+				if err := generateChatStream(ctx, currentModel, prompt, w); err != nil {
 					fmt.Printf("\n[Error: %v]\n", err)
 				}
 				cancel()
@@ -116,7 +122,7 @@ func resolveChatModel(requested string) string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	return chat.ResolveDefaultModel(ctx)
+	return resolveDefaultChatModel(ctx)
 }
 
 func handleChatMetaCommand(input, currentModel string) (handled bool, nextModel string) {
@@ -125,7 +131,7 @@ func handleChatMetaCommand(input, currentModel string) (handled bool, nextModel 
 	case query == "/models":
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
-		fmt.Println(chat.FormatModelCatalog(chat.BuildModelCatalog(ctx, currentModel)))
+		fmt.Println(formatChatCatalog(ctx, currentModel))
 		return true, ""
 	case strings.HasPrefix(query, "/model "):
 		next := strings.TrimSpace(strings.TrimPrefix(query, "/model "))

@@ -7,6 +7,8 @@ import (
 	axismcp "github.com/toasterbook88/axis/internal/mcp"
 )
 
+var serveMCPStdio = axismcp.ServeStdio
+
 func mcpCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -28,7 +30,7 @@ func mcpServeCmd() *cobra.Command {
 			if transport != "stdio" {
 				return fmt.Errorf("unsupported transport %q: only stdio is implemented", transport)
 			}
-			return axismcp.ServeStdio(cached, cacheAddr)
+			return serveMCPStdio(cached, cacheAddr)
 		},
 	}
 
