@@ -12,6 +12,8 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+var interfaceAddrs = net.InterfaceAddrs
+
 type Beacon struct {
 	Type      string    `json:"t"`
 	Name      string    `json:"n"`
@@ -135,7 +137,7 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 }
 
 func localIP() string {
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := interfaceAddrs()
 	if err != nil {
 		return "127.0.0.1"
 	}

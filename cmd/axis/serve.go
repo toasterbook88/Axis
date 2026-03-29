@@ -10,7 +10,24 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/models"
 )
+
+type serveDaemon interface {
+	Start(context.Context)
+	Snapshot() (*models.ClusterSnapshot, bool)
+	Meta() daemon.Metadata
+	Invalidate()
+	RefreshNow(context.Context) error
+}
+
+var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
+	return daemon.NewDefault(refreshInterval)
+}
+
+var serveHTTPAPI = func(addr string, d serveDaemon) error {
+	return api.Serve(addr, d)
+}
 
 func serveCmd() *cobra.Command {
 	var addr string
@@ -23,11 +40,11 @@ func serveCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			d := daemon.NewDefault(refreshInterval)
+			d := newServeDaemon(refreshInterval)
 			d.Start(ctx)
 
 			fmt.Fprintf(cmd.OutOrStdout(), "AXIS HTTP API listening on http://%s\n", addr)
-			return api.Serve(addr, d)
+			return serveHTTPAPI(addr, d)
 		},
 	}
 

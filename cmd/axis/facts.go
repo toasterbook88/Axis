@@ -11,6 +11,11 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+var currentHostname = os.Hostname
+var collectLocalFacts = func(ctx context.Context, hostname string) (*models.NodeFacts, error) {
+	return facts.NewLocalCollector(hostname, "").Collect(ctx)
+}
+
 func factsCmd() *cobra.Command {
 	var format string
 
@@ -21,10 +26,8 @@ func factsCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			hostname, _ := os.Hostname()
-			collector := facts.NewLocalCollector(hostname, "")
-
-			nf, err := collector.Collect(ctx)
+			hostname, _ := currentHostname()
+			nf, err := collectLocalFacts(ctx, hostname)
 			if err != nil {
 				// Should not happen — LocalCollector tolerates failures —
 				// but guard against it.

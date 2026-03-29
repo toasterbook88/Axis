@@ -11,6 +11,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var discoverConfigPath = config.DefaultConfigPath
+var loadDiscoverConfig = config.Load
+var runClusterDiscovery = discovery.Discover
+
 func discoverCmd() *cobra.Command {
 	var format string
 
@@ -18,8 +22,8 @@ func discoverCmd() *cobra.Command {
 		Use:   "discover",
 		Short: "Listen for UDP beacons and dump suggested nodes.yaml entries",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
+			cfgPath := discoverConfigPath()
+			cfg, err := loadDiscoverConfig(cfgPath)
 			if err != nil {
 				// If no config, create a blank one to allow pure discovery
 				cfg = &config.Config{
@@ -51,7 +55,7 @@ func discoverCmd() *cobra.Command {
 			// For simplicity and to reuse exactly what we built: Let's discover the full cluster
 			// because AXIS rule: "Always run SSH facts collection on discovered nodes — never trust UDP alone."
 			
-			nodes := discovery.Discover(ctx, cfg)
+			nodes := runClusterDiscovery(ctx, cfg)
 			
 			var suggestedConfig config.Config
 			for _, nf := range nodes {
