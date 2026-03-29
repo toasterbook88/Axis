@@ -587,14 +587,16 @@ func localGPUUtilPercent() (float64, bool) {
 		if err != nil {
 			return 0, false
 		}
+		const marker = "\"Device Utilization %\"="
 		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, "Device Utilization%") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					v, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-					if err == nil {
-						return v, true
-					}
+			if idx := strings.Index(line, marker); idx != -1 {
+				rest := line[idx+len(marker):]
+				end := strings.IndexAny(rest, ",}")
+				if end == -1 {
+					end = len(rest)
+				}
+				if v, err := strconv.ParseFloat(strings.TrimSpace(rest[:end]), 64); err == nil {
+					return v, true
 				}
 			}
 		}
