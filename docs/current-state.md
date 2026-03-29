@@ -37,7 +37,7 @@ The live repo currently contains:
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
 - TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection only after probe-visible `--ctx-size` support
-- Probe-verified local Apple Foundation Models capability on eligible macOS 26+ Apple Silicon hosts, exposed only through the explicit guarded execution path
+- Probe-verified local Apple Foundation Models capability on eligible Apple Silicon hosts running macOS 26 or later, surfaced in node facts/snapshots and as an `apple-foundation-models` tool, with actual model execution available only through the explicit guarded execution path
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows

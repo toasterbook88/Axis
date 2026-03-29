@@ -21,7 +21,7 @@ type LocalCollector struct {
 	Role string
 }
 
-var RunAppleFoundationModelsProbe = runAppleFoundationModelsProbe
+var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
 
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
@@ -105,7 +105,7 @@ func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion st
 	if !supportsAppleFoundationModelsOS(osVersion) {
 		return &models.AppleFoundationModelsInfo{
 			Version: osVersion,
-			Error:   "requires macOS 26 or later on Apple silicon",
+			Error:   "requires macOS 26 or later on Apple silicon (Apple platform versioning)",
 		}
 	}
 	if _, ok := findToolInfo(tools, "swift"); !ok {
@@ -118,22 +118,30 @@ func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion st
 	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
-	out, err := RunAppleFoundationModelsProbe(probeCtx)
+	out, err := runAppleFoundationModelsProbeFn(probeCtx)
+	trimmedOut := strings.TrimSpace(out)
+	okMarker := probeOutputContainsOK(trimmedOut)
 	info := &models.AppleFoundationModelsInfo{
 		Version:   osVersion,
 		Available: err == nil,
-		Verified:  err == nil,
+		Verified:  err == nil && okMarker,
 	}
 	if err != nil {
-		info.Error = strings.TrimSpace(out)
+		info.Error = trimmedOut
 		if info.Error == "" {
 			info.Error = err.Error()
+		}
+	} else if !okMarker {
+		info.Error = "apple foundation models probe did not return expected OK marker"
+		if trimmedOut != "" {
+			info.Error += ": " + trimmedOut
 		}
 	}
 	return info
 }
 
 func supportsAppleFoundationModelsOS(osVersion string) bool {
+	// Current Apple platform releases report macOS 26.x via sw_vers -productVersion.
 	fields := strings.SplitN(strings.TrimSpace(osVersion), ".", 2)
 	if len(fields) == 0 || fields[0] == "" {
 		return false
@@ -154,6 +162,15 @@ func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
 		`import FoundationModels; let session = LanguageModelSession(); let response = try await session.respond(to: "Reply with exactly OK"); print(response.content)`,
 	).CombinedOutput()
 	return string(out), err
+}
+
+func probeOutputContainsOK(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "OK" {
+			return true
+		}
+	}
+	return false
 }
 
 func localOSVersion() (string, error) {

@@ -105,10 +105,10 @@ func TestDetectAppleFoundationModelsRequiresEligibleHost(t *testing.T) {
 }
 
 func TestDetectAppleFoundationModelsUsesRuntimeProbe(t *testing.T) {
-	prev := RunAppleFoundationModelsProbe
-	t.Cleanup(func() { RunAppleFoundationModelsProbe = prev })
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
 
-	RunAppleFoundationModelsProbe = func(context.Context) (string, error) {
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
 		return "OK\n", nil
 	}
 
@@ -122,16 +122,36 @@ func TestDetectAppleFoundationModelsUsesRuntimeProbe(t *testing.T) {
 }
 
 func TestDetectAppleFoundationModelsAcceptsTrailingProbeNoise(t *testing.T) {
-	prev := RunAppleFoundationModelsProbe
-	t.Cleanup(func() { RunAppleFoundationModelsProbe = prev })
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
 
-	RunAppleFoundationModelsProbe = func(context.Context) (string, error) {
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
 		return "swift-driver warning\nOK\n", nil
 	}
 
 	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
 	if info == nil || !info.Verified {
 		t.Fatalf("expected OK marker to remain verified, got %+v", info)
+	}
+}
+
+func TestDetectAppleFoundationModelsRejectsMissingProbeMarker(t *testing.T) {
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
+		return "swift-driver warning\nready\n", nil
+	}
+
+	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
+	if info == nil {
+		t.Fatal("expected apple foundation models info")
+	}
+	if info.Verified {
+		t.Fatalf("expected missing OK marker to stay unverified, got %+v", info)
+	}
+	if !strings.Contains(info.Error, "expected OK marker") {
+		t.Fatalf("expected missing marker error, got %+v", info)
 	}
 }
 

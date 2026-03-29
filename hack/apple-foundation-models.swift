@@ -18,24 +18,28 @@ func usage() -> String {
 }
 
 func parseArguments() throws -> (prompt: String, json: Bool) {
-	var args = Array(CommandLine.arguments.dropFirst())
+	let args = Array(CommandLine.arguments.dropFirst())
 	var prompt: String?
 	var json = false
 	var selfTest = false
 
-	for index in args.indices {
+	var index = 0
+	while index < args.count {
 		switch args[index] {
 		case "--json":
 			json = true
+			index += 1
 		case "--self-test":
 			selfTest = true
+			index += 1
 		case "--prompt":
 			guard index + 1 < args.count else {
 				throw CLIError(description: "missing value for --prompt")
 			}
 			prompt = args[index + 1]
+			index += 2
 		default:
-			continue
+			index += 1
 		}
 	}
 

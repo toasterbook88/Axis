@@ -63,7 +63,9 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 
 	// === Live cluster-aware checks ===
 	if k != nil {
-		appleFoundationHelper := strings.Contains(lower, "apple-foundation-models.swift")
+		appleFoundationHelper := strings.Contains(lower, "xcrun swift") &&
+			strings.Contains(lower, "hack/apple-foundation-models.swift") &&
+			(strings.Contains(lower, "--prompt") || strings.Contains(lower, "--self-test"))
 		clusterAllocatable := k.Snapshot.Summary.TotalAllocatableMB
 		if clusterAllocatable <= 0 {
 			clusterAllocatable = k.Snapshot.Summary.TotalFreeRAMMB

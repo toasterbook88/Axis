@@ -86,7 +86,7 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 | Feature | Details |
 | --- | --- |
 | **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk, GPU list, network addresses, and additive memory-topology / pressure-source metadata where available |
-| **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc`, plus probe-verified local `apple-foundation-models` on eligible macOS 26+ Apple Silicon hosts |
+| **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc`, plus probe-verified local `apple-foundation-models` on eligible Apple Silicon hosts running macOS 26 or later |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
 | **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, unified-memory suitability for `mlx`/long-context asks, allocatable RAM, reservation ratio, and locality; heavy AI tasks also avoid nodes under critical runtime pressure signals |
@@ -184,7 +184,7 @@ Placement uses keyword matching against the task description (no ML). It infers 
 
 When `axis task run` selects a TurboQuant-capable node, AXIS exports `AXIS_TURBOQUANT`, `AXIS_TURBOQUANT_STATUS`, `AXIS_TURBOQUANT_BACKENDS`, `AXIS_TURBOQUANT_CAPABILITIES`, and long-context hints into the execution environment. For probe-verified `llama.cpp` commands with `--ctx-size` support, AXIS can also inject safe additive flags such as `--ctx-size` and `--flash-attn` when they are absent.
 
-Experimental local Apple Foundation Models execution is available on eligible macOS 26+ Apple Silicon machines through the source-visible Swift helper in [hack/apple-foundation-models.swift](hack/apple-foundation-models.swift):
+Experimental local Apple Foundation Models execution is available on eligible Apple Silicon machines running macOS 26 or later through the source-visible Swift helper in [hack/apple-foundation-models.swift](hack/apple-foundation-models.swift):
 
 ```bash
 axis task run --exec 'xcrun swift hack/apple-foundation-models.swift --prompt "Summarize this text"'
