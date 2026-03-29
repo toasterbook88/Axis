@@ -144,7 +144,7 @@ func localResources() (*models.Resources, bool) {
 	// GPU (best-effort, never causes partial)
 	r.GPUs = localGPUs()
 	if util, ok := localGPUUtilPercent(); ok {
-		r.GPUUtilPercent = util
+		r.GPUUtilPercent = &util
 	}
 
 	return r, partial
@@ -601,16 +601,29 @@ func localGPUUtilPercent() (float64, bool) {
 		return 0, false
 	case "linux":
 		out, err := exec.Command("nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits").Output()
-		if err != nil || len(out) == 0 {
-			return 0, false
-		}
-		lines := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)
-		v, err := strconv.ParseFloat(strings.TrimSpace(lines[0]), 64)
 		if err != nil {
 			return 0, false
 		}
-		return v, true
+		return parseLinuxGPUUtilPercent(string(out))
 	default:
 		return 0, false
 	}
+}
+
+func parseLinuxGPUUtilPercent(out string) (float64, bool) {
+	var (
+		maxUtil float64
+		found   bool
+	)
+
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(line), 64); err == nil {
+			found = true
+			if v > maxUtil {
+				maxUtil = v
+			}
+		}
+	}
+
+	return maxUtil, found
 }

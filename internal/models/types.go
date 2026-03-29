@@ -66,7 +66,7 @@ type Resources struct {
 	DiskTotalGB      int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
 	DiskFreeGB       int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
 	GPUs             []string       `json:"gpus,omitempty" yaml:"gpus,omitempty"`
-	GPUUtilPercent   float64        `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
+	GPUUtilPercent   *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
 	Pressure         string         `json:"pressure" yaml:"pressure"` // none, low, medium, high
 	PressureStall10  float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
 	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`

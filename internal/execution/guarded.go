@@ -334,8 +334,9 @@ func enforceLocalExecutionSafety(ctx context.Context, node models.NodeFacts, req
 
 	liveFree, err := ProbeLocalAvailableRAMMB(ctx)
 	if err != nil {
-		resp.Reasoning = append(resp.Reasoning, fmt.Sprintf("live local memory preflight unavailable: %v", err))
-		return nil
+		reason := fmt.Sprintf("live local memory preflight unavailable; refusing local inference execution: %v", err)
+		resp.Reasoning = append(resp.Reasoning, reason)
+		return fmt.Errorf("%s", reason)
 	}
 
 	resp.Reasoning = append(resp.Reasoning, fmt.Sprintf("live local memory preflight: %dMB available", liveFree))

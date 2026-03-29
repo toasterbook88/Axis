@@ -147,6 +147,58 @@ func TestRunGuardedLocalInferenceUsesLiveMemoryPreflight(t *testing.T) {
 	}
 }
 
+func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			OS:       "darwin",
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 16384,
+				RAMFreeMB:  12000,
+				Pressure:   "low",
+				CPUCores:   10,
+			},
+			Tools: []models.ToolInfo{{Name: "ollama", Version: "test"}},
+			Ollama: &models.OllamaInfo{
+				Installed: true,
+				Listening: true,
+				Models:    []string{"llama3"},
+			},
+		},
+	})
+
+	prevProbe := ProbeLocalAvailableRAMMB
+	ProbeLocalAvailableRAMMB = func(context.Context) (int64, error) { return 0, errors.New("vm_stat missing") }
+	defer func() { ProbeLocalAvailableRAMMB = prevProbe }()
+
+	var called bool
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+		called = true
+		return nil, errors.New("should not run")
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "ollama run llama3",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected preflight-unavailable failure")
+	}
+	if called {
+		t.Fatal("expected local shell to remain blocked")
+	}
+	if !strings.Contains(resp.Error, "preflight unavailable; refusing") {
+		t.Fatalf("expected fail-closed preflight error, got %#v", resp)
+	}
+}
+
 func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
 	cfgNodes := make([]config.NodeConfig, 0, len(nodes))
 	for _, node := range nodes {
