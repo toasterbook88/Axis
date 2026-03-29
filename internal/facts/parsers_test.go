@@ -241,6 +241,26 @@ full avg10=0.32 avg60=0.12 avg300=0.05 total=456
 	}
 }
 
+func TestParseLinuxGPUUtilPercentUsesMaxAcrossDevices(t *testing.T) {
+	util, ok := parseLinuxGPUUtilPercent("12\n0\n77\n31\n")
+	if !ok {
+		t.Fatal("expected parse to succeed")
+	}
+	if util != 77 {
+		t.Fatalf("expected max GPU util 77, got %.0f", util)
+	}
+}
+
+func TestParseLinuxGPUUtilPercentHandlesIdleZero(t *testing.T) {
+	util, ok := parseLinuxGPUUtilPercent("0\n0\n")
+	if !ok {
+		t.Fatal("expected zero util to remain a valid reading")
+	}
+	if util != 0 {
+		t.Fatalf("expected zero GPU util, got %.0f", util)
+	}
+}
+
 func TestParseDarwinMemoryPressureLevel(t *testing.T) {
 	level, ok := parseDarwinMemoryPressureLevel("4\n")
 	if !ok {

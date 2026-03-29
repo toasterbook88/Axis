@@ -143,6 +143,9 @@ func localResources() (*models.Resources, bool) {
 
 	// GPU (best-effort, never causes partial)
 	r.GPUs = localGPUs()
+	if util, ok := localGPUUtilPercent(); ok {
+		r.GPUUtilPercent = &util
+	}
 
 	return r, partial
 }
@@ -575,4 +578,52 @@ func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {
 		return parsed
 	}
 	return info
+}
+
+func localGPUUtilPercent() (float64, bool) {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("ioreg", "-r", "-c", "AGXAccelerator").Output()
+		if err != nil {
+			return 0, false
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "Device Utilization%") {
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					v, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+					if err == nil {
+						return v, true
+					}
+				}
+			}
+		}
+		return 0, false
+	case "linux":
+		out, err := exec.Command("nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits").Output()
+		if err != nil {
+			return 0, false
+		}
+		return parseLinuxGPUUtilPercent(string(out))
+	default:
+		return 0, false
+	}
+}
+
+func parseLinuxGPUUtilPercent(out string) (float64, bool) {
+	var (
+		maxUtil float64
+		found   bool
+	)
+
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(line), 64); err == nil {
+			found = true
+			if v > maxUtil {
+				maxUtil = v
+			}
+		}
+	}
+
+	return maxUtil, found
 }

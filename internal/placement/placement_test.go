@@ -130,7 +130,7 @@ func TestFilterRequiresAllTools(t *testing.T) {
 	}
 }
 
-func TestFilterWarmOllamaUsesLowerHeadroom(t *testing.T) {
+func TestFilterWarmOllamaDoesNotCollapseToUnsafeFloor(t *testing.T) {
 	node := nodeComplete("m3", 1186, "low")
 	node.Ollama = &models.OllamaInfo{
 		Installed: true,
@@ -140,8 +140,8 @@ func TestFilterWarmOllamaUsesLowerHeadroom(t *testing.T) {
 	reqs := models.TaskRequirements{RequiredTools: []string{"ollama"}, MinFreeRAMMB: 1536}
 
 	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
-	if len(result) != 1 || result[0].Name != "m3" {
-		t.Errorf("expected warm ollama node to qualify, got %v", names(result))
+	if len(result) != 0 {
+		t.Errorf("expected warm ollama node to stay blocked below safe floor, got %v", names(result))
 	}
 }
 
@@ -570,6 +570,40 @@ func TestInferRequirementsAddsPreferredBackends(t *testing.T) {
 	}
 }
 
+func TestInferRequirementsExplicitLlamaServerUsesObservedRuntime(t *testing.T) {
+	reqs := InferRequirements("llama-server -m /models/qwen.gguf")
+	if len(reqs.RequiredTools) != 1 || reqs.RequiredTools[0] != "llama-server" {
+		t.Fatalf("expected llama-server tool requirement, got %v", reqs.RequiredTools)
+	}
+	if reqs.MinFreeRAMMB != 6144 {
+		t.Fatalf("expected 6144MB floor, got %d", reqs.MinFreeRAMMB)
+	}
+	if len(reqs.PreferredBackends) == 0 || reqs.PreferredBackends[0] != "llama.cpp" {
+		t.Fatalf("expected llama.cpp preferred backend, got %v", reqs.PreferredBackends)
+	}
+}
+
+func TestSelectBestNodePrefersObservedLlamaServerForLlamaCppTask(t *testing.T) {
+	llama := nodeComplete("gpu-llama", 8192, "low", "llama-server")
+	llama.TurboQuant = &models.TurboQuantInfo{
+		Supported: true,
+		Verified:  true,
+		Backends:  []string{"llama.cpp"},
+	}
+	ollama := nodeComplete("gpu-ollama", 12288, "low", "ollama")
+
+	reqs := models.TaskRequirements{
+		RequiredTools:     []string{"llama-server"},
+		MinFreeRAMMB:      6144,
+		PreferredBackends: []string{"llama.cpp"},
+	}
+
+	d := SelectBestNode(reqs, []models.NodeFacts{ollama, llama}, nil)
+	if !d.OK || d.Node != "gpu-llama" {
+		t.Fatalf("expected llama.cpp-capable node, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
+	}
+}
+
 func TestFitScore_NilResources(t *testing.T) {
 	n := models.NodeFacts{Name: "empty", Status: models.StatusComplete}
 	score := ComputeFitScore(n, false, nil)
@@ -838,16 +872,17 @@ func TestInferRequirements(t *testing.T) {
 		wantTokens int
 		wantTQ     bool
 	}{
-		{"Run a 70b inference model", "ollama", 4096, 0, false},
+		{"Run a 70b inference model", "ollama", 12288, 0, false},
 		{"clone this repo and analyze it", "git", 0, 0, false},
 		{"compile the go binary", "go", 0, 0, false},
 		{"spin up a docker container", "docker", 0, 0, false},
 		{"just a simple task", "", 0, 0, false},
-		{"deploy using gpu", "ollama", 0, 0, false},
-		{"run a small local model with ollama inference", "ollama", 600, 0, false},
-		{"ollama run llama3", "ollama", 600, 0, false},
-		{"run a 7b model locally", "", 1536, 0, false},
-		{"run 128k book-length ollama inference", "ollama", 4096, 128000, true},
+		{"deploy using gpu", "ollama", 6144, 0, false},
+		{"run a small local model with ollama inference", "ollama", 6144, 0, false},
+		{"ollama run llama3", "ollama", 6144, 0, false},
+		{"run a 7b model locally", "", 4096, 0, false},
+		{"llama-server -m /models/qwen.gguf", "llama-server", 6144, 0, false},
+		{"run 128k book-length ollama inference", "ollama", 6144, 128000, true},
 		{"needle in a haystack 1m tokens", "", 12288, 1000000, true},
 	}
 	for _, tt := range tests {

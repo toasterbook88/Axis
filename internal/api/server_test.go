@@ -14,6 +14,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
@@ -527,6 +528,9 @@ func TestRunTaskInjectsTurboQuantEnvAndFlagsForLocalVerifiedBackend(t *testing.T
 	), nil)
 	defer restoreRuntime()
 
+	restoreProbe := stubLocalRAMProbe(t, 4096, nil)
+	defer restoreProbe()
+
 	restoreShell := stubLocalShell(t, func(ctx context.Context, command string, env []string) ([]byte, error) {
 		if !strings.Contains(command, "--ctx-size 128000") {
 			t.Fatalf("expected ctx-size injection, got %q", command)
@@ -843,6 +847,17 @@ func stubRemoteFactory(t *testing.T, fn func(config.NodeConfig) remoteExecutor) 
 	newRemoteExecutor = fn
 	return func() {
 		newRemoteExecutor = prev
+	}
+}
+
+func stubLocalRAMProbe(t *testing.T, freeMB int64, err error) func() {
+	t.Helper()
+	prev := execution.ProbeLocalAvailableRAMMB
+	execution.ProbeLocalAvailableRAMMB = func(context.Context) (int64, error) {
+		return freeMB, err
+	}
+	return func() {
+		execution.ProbeLocalAvailableRAMMB = prev
 	}
 }
 

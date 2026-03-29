@@ -2,6 +2,7 @@ package models_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 )
 
 func sampleNodeFacts() models.NodeFacts {
+	idleGPUUtil := 0.0
+
 	return models.NodeFacts{
 		Name:      "test-node",
 		Role:      "worker",
@@ -31,6 +34,7 @@ func sampleNodeFacts() models.NodeFacts {
 			DiskTotalGB:      500,
 			DiskFreeGB:       250,
 			GPUs:             []string{"NVIDIA MX250"},
+			GPUUtilPercent:   &idleGPUUtil,
 			Pressure:         "none",
 			PressureSource:   "free-ram",
 		},
@@ -103,6 +107,9 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	if decoded.Resources.PressureSource != "free-ram" {
 		t.Errorf("pressure_source: got %q, want %q", decoded.Resources.PressureSource, "free-ram")
 	}
+	if decoded.Resources.GPUUtilPercent == nil || *decoded.Resources.GPUUtilPercent != 0 {
+		t.Errorf("gpu_util_percent: got %#v, want 0", decoded.Resources.GPUUtilPercent)
+	}
 	if decoded.Resources.Load1M != 1.25 || decoded.Resources.Load5M != 0.80 || decoded.Resources.Load15M != 0.50 {
 		t.Errorf("load averages: got %.2f/%.2f/%.2f", decoded.Resources.Load1M, decoded.Resources.Load5M, decoded.Resources.Load15M)
 	}
@@ -151,6 +158,27 @@ func TestNodeFacts_YAMLRoundTrip(t *testing.T) {
 	if decoded.Tools[0].Class != models.ToolClassVCS {
 		t.Errorf("tool class: got %q, want %q", decoded.Tools[0].Class, models.ToolClassVCS)
 	}
+	if decoded.Resources == nil || decoded.Resources.GPUUtilPercent == nil || *decoded.Resources.GPUUtilPercent != 0 {
+		t.Errorf("expected yaml round-trip to preserve zero gpu util, got %#v", decoded.Resources)
+	}
+}
+
+func TestResources_JSONIncludesZeroGPUUtilWhenMeasured(t *testing.T) {
+	zero := 0.0
+	data, err := json.Marshal(models.Resources{
+		Pressure:       "none",
+		GPUUtilPercent: &zero,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(data) == "{}" || !containsJSONField(string(data), `"gpu_util_percent":0`) {
+		t.Fatalf("expected zero gpu util field in json, got %s", data)
+	}
+}
+
+func containsJSONField(data, want string) bool {
+	return strings.Contains(data, want)
 }
 
 func TestClusterSnapshot_JSONRoundTrip(t *testing.T) {

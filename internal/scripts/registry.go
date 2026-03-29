@@ -33,7 +33,7 @@ var Registry = map[string][]Script{
 
 	"ollama": {
 		{Name: "ollama-ensure", Command: `ollama serve & sleep 3; ollama list | jq -r '.models[]?.name'`, RequiredTools: []string{"ollama", "jq"}, EstRAMMB: 6144, Description: "start server + list models with context", Category: "ai", Keywords: []string{"ensure ollama", "start ollama", "ollama status", "list models", "show ollama models"}},
-		{Name: "ollama-run-smart", Command: `MODEL=$(cat "$AXIS_CONTEXT_FILE" | jq -r '.ollama["'$BEST_NODE'"].models[0] // "phi3"'); ollama run $MODEL "$(cat)"`, RequiredTools: []string{"ollama", "jq"}, EstRAMMB: 1024, Description: "smart local inference with node context", Category: "ai", Keywords: []string{"ollama inference", "local model", "run model", "small local model", "ask local model", "generate with ollama", "run ollama"}},
+		{Name: "ollama-run-smart", Command: `MODEL=$(cat "$AXIS_CONTEXT_FILE" | jq -r '.ollama["'$BEST_NODE'"].models[0] // "phi3"'); ollama run $MODEL "$(cat)"`, RequiredTools: []string{"ollama", "jq"}, EstRAMMB: 6144, Description: "guarded local inference with node context", Category: "ai", Keywords: []string{"ollama inference", "local model", "run model", "small local model", "ask local model", "generate with ollama", "run ollama"}},
 	},
 
 	"system": {
