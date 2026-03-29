@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,6 +106,7 @@ var StreamLocalShell = func(ctx context.Context, command string, env []string, s
 }
 
 var PlanNixExecution = PlanNixWrapper
+var ProbeLocalAvailableRAMMB = probeLocalAvailableRAMMB
 
 func NormalizeRequest(req *GuardedExecutionRequest) {
 	if req == nil {
@@ -255,6 +258,11 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 		return resp, fmt.Errorf("node %q not found in snapshot", decision.Node)
 	}
 
+	if err := enforceLocalExecutionSafety(ctx, targetNode, reqs, &resp); err != nil {
+		resp.Error = err.Error()
+		return resp, err
+	}
+
 	turboPlan := turboexec.Prepare(targetNode, reqs, intent.Command)
 	resp.Reasoning = append(resp.Reasoning, turboPlan.Notes...)
 	commandToRun := turboPlan.Command
@@ -302,24 +310,153 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 func prepareRequirements(description, mode string, intent Intent) models.TaskRequirements {
 	reqs := placement.InferRequirements(description)
 
-	if intent.MatchedScript != nil {
+	if mode == ModeScript && intent.MatchedScript != nil {
 		reqs.RequiredTools = append([]string(nil), intent.MatchedScript.RequiredTools...)
 		if intent.MatchedScript.EstRAMMB > reqs.MinFreeRAMMB {
 			reqs.MinFreeRAMMB = intent.MatchedScript.EstRAMMB
 		}
 	}
 
-	if mode == ModeExec && len(reqs.RequiredTools) > 0 {
-		filtered := reqs.RequiredTools[:0]
-		for _, tool := range reqs.RequiredTools {
-			if !strings.EqualFold(tool, "ollama") {
-				filtered = append(filtered, tool)
-			}
-		}
-		reqs.RequiredTools = append([]string(nil), filtered...)
+	return reqs
+}
+
+func enforceLocalExecutionSafety(ctx context.Context, node models.NodeFacts, reqs models.TaskRequirements, resp *GuardedExecutionResult) error {
+	if !models.IsLocalNode(node) || !isInferenceExecution(reqs) {
+		return nil
 	}
 
-	return reqs
+	minNeeded := placement.MinFreeRAMForNode(reqs, node)
+	if node.Resources != nil && node.Resources.RAMTotalMB > 0 && node.Resources.RAMTotalMB <= 8192 && minNeeded >= 4096 {
+		reason := fmt.Sprintf("local model execution disabled on constrained %dMB host; run this on a remote node or use a smaller explicitly bounded model", node.Resources.RAMTotalMB)
+		resp.Reasoning = append(resp.Reasoning, reason)
+		return fmt.Errorf("%s", reason)
+	}
+
+	liveFree, err := ProbeLocalAvailableRAMMB(ctx)
+	if err != nil {
+		resp.Reasoning = append(resp.Reasoning, fmt.Sprintf("live local memory preflight unavailable: %v", err))
+		return nil
+	}
+
+	resp.Reasoning = append(resp.Reasoning, fmt.Sprintf("live local memory preflight: %dMB available", liveFree))
+	if minNeeded > 0 && liveFree < minNeeded {
+		reason := fmt.Sprintf("live local memory preflight failed: need %dMB free, have %dMB", minNeeded, liveFree)
+		resp.Reasoning = append(resp.Reasoning, reason)
+		return fmt.Errorf("%s", reason)
+	}
+
+	return nil
+}
+
+func isInferenceExecution(reqs models.TaskRequirements) bool {
+	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
+		return true
+	}
+	if reqs.MinFreeRAMMB >= 4096 {
+		return true
+	}
+	for _, tool := range reqs.RequiredTools {
+		switch strings.ToLower(tool) {
+		case "ollama", "llama-server":
+			return true
+		}
+	}
+	for _, backend := range reqs.PreferredBackends {
+		switch strings.ToLower(backend) {
+		case "llama.cpp", "mlx":
+			return true
+		}
+	}
+	return false
+}
+
+func probeLocalAvailableRAMMB(ctx context.Context) (int64, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.CommandContext(ctx, "vm_stat").Output()
+		if err != nil {
+			return 0, fmt.Errorf("vm_stat: %w", err)
+		}
+		return parseDarwinAvailableRAMMB(string(out))
+	case "linux":
+		data, err := os.ReadFile("/proc/meminfo")
+		if err != nil {
+			return 0, fmt.Errorf("read /proc/meminfo: %w", err)
+		}
+		return parseLinuxAvailableRAMMB(string(data))
+	default:
+		return 0, fmt.Errorf("unsupported local RAM probe OS %q", runtime.GOOS)
+	}
+}
+
+func parseDarwinAvailableRAMMB(out string) (int64, error) {
+	var (
+		pageSize int64 = 4096
+		pages    int64
+	)
+
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.Contains(trimmed, "page size of ") && strings.Contains(trimmed, " bytes"):
+			start := strings.Index(trimmed, "page size of ")
+			end := strings.Index(trimmed, " bytes")
+			if start >= 0 && end > start {
+				value := trimmed[start+len("page size of ") : end]
+				parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+				if err == nil && parsed > 0 {
+					pageSize = parsed
+				}
+			}
+		case strings.HasPrefix(trimmed, "Pages free:"),
+			strings.HasPrefix(trimmed, "Pages inactive:"),
+			strings.HasPrefix(trimmed, "Pages speculative:"):
+			count, err := parseVMStatPageCount(trimmed)
+			if err != nil {
+				return 0, err
+			}
+			pages += count
+		}
+	}
+
+	if pages <= 0 {
+		return 0, fmt.Errorf("vm_stat did not report reclaimable pages")
+	}
+	return pages * pageSize / (1024 * 1024), nil
+}
+
+func parseVMStatPageCount(line string) (int64, error) {
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid vm_stat line %q", line)
+	}
+	value := strings.TrimSpace(parts[1])
+	value = strings.TrimSuffix(value, ".")
+	value = strings.ReplaceAll(value, ".", "")
+	value = strings.ReplaceAll(value, ",", "")
+	count, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse vm_stat count %q: %w", line, err)
+	}
+	return count, nil
+}
+
+func parseLinuxAvailableRAMMB(out string) (int64, error) {
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "MemAvailable:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0, fmt.Errorf("invalid MemAvailable line %q", line)
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse MemAvailable: %w", err)
+		}
+		return kb / 1024, nil
+	}
+	return 0, fmt.Errorf("MemAvailable not found")
 }
 
 func runLocal(

@@ -18,6 +18,8 @@ func InferRequirements(desc string) models.TaskRequirements {
 
 	// Tool inference — order matters (first match wins)
 	switch {
+	case containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server"):
+		reqs.RequiredTools = []string{"llama-server"}
 	case containsAny(lower, "inference", "ollama", "llm", "gpu"):
 		reqs.RequiredTools = []string{"ollama"}
 	case containsAny(lower, "repo", "analyze", "code", "clone", "commit"):
@@ -30,14 +32,16 @@ func InferRequirements(desc string) models.TaskRequirements {
 
 	// RAM inference
 	switch {
-	case containsAny(lower, "70b", "13b", "heavy"):
-		reqs.MinFreeRAMMB = 4096
+	case containsAny(lower, "70b"):
+		reqs.MinFreeRAMMB = 12288
+	case containsAny(lower, "13b", "heavy"):
+		reqs.MinFreeRAMMB = 8192
 	case containsAny(lower, "7b"):
-		reqs.MinFreeRAMMB = 1536
-	case containsAny(lower, "model", "inference", "ollama"):
-		reqs.MinFreeRAMMB = 600
-	case containsAny(lower, "llm"):
-		reqs.MinFreeRAMMB = 1536
+		reqs.MinFreeRAMMB = 4096
+	case containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server"):
+		reqs.MinFreeRAMMB = 6144
+	case containsAny(lower, "model", "inference", "ollama", "llm", "gpu"):
+		reqs.MinFreeRAMMB = 6144
 	}
 
 	reqs.ContextWindowTokens = inferContextWindowTokens(lower)
