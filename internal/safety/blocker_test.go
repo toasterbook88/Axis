@@ -55,6 +55,21 @@ func TestCheckBlocksHeavyModelOnSmallCluster(t *testing.T) {
 	}
 }
 
+func TestCheckAllowsExplicitAppleFoundationModelsHelperOnSmallCluster(t *testing.T) {
+	k := &knowledge.ClusterKnowledge{
+		Snapshot: models.ClusterSnapshot{
+			Summary: models.ClusterSummary{
+				TotalFreeRAMMB: 2048,
+			},
+		},
+	}
+
+	got := Check(k, "xcrun swift hack/apple-foundation-models.swift --self-test", nil)
+	if got.Blocked {
+		t.Fatalf("expected explicit apple helper to bypass heavy-model heuristic, got %+v", got)
+	}
+}
+
 func TestCheckBlocksGPURequestWhenNoGPUAvailable(t *testing.T) {
 	k := &knowledge.ClusterKnowledge{
 		Snapshot: models.ClusterSnapshot{

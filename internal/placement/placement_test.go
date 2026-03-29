@@ -224,6 +224,26 @@ func TestFilterAllowsLightTaskOnCriticalLinuxPSI(t *testing.T) {
 	}
 }
 
+func TestFilterAppleFoundationModelsIsLocalOnly(t *testing.T) {
+	local := nodeComplete("local-mac", 8192, "none", "apple-foundation-models")
+	local.Hostname = "localhost"
+	local.AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, Version: "26.1"}
+
+	remote := nodeComplete("remote-mac", 8192, "none", "apple-foundation-models")
+	remote.Hostname = "remote-mac.local"
+	remote.AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, Version: "26.1"}
+
+	reqs := models.TaskRequirements{
+		RequiredTools:     []string{"apple-foundation-models"},
+		PreferredBackends: []string{"apple-foundation-models"},
+	}
+
+	result := FilterCandidates(reqs, []models.NodeFacts{remote, local}, nil)
+	if len(result) != 1 || result[0].Name != "local-mac" {
+		t.Fatalf("expected only verified local apple node, got %v", names(result))
+	}
+}
+
 // --- Rank Tests ---
 
 func TestRankByPressure(t *testing.T) {
@@ -567,6 +587,19 @@ func TestInferRequirementsAddsPreferredBackends(t *testing.T) {
 	}
 	if !reqs.PrefersTurboQuant {
 		t.Fatal("expected long-context hint to keep turboquant preference")
+	}
+}
+
+func TestInferRequirementsDetectsAppleFoundationModels(t *testing.T) {
+	reqs := InferRequirements("summarize this with apple-intelligence via apple-foundation-models")
+	if len(reqs.RequiredTools) != 1 || reqs.RequiredTools[0] != "apple-foundation-models" {
+		t.Fatalf("expected apple foundation models requirement, got %v", reqs.RequiredTools)
+	}
+	if len(reqs.PreferredBackends) == 0 || reqs.PreferredBackends[0] != "apple-foundation-models" {
+		t.Fatalf("expected apple foundation models preferred backend, got %v", reqs.PreferredBackends)
+	}
+	if reqs.MinFreeRAMMB != 0 {
+		t.Fatalf("expected apple foundation models helper path to avoid generic model RAM floor, got %d", reqs.MinFreeRAMMB)
 	}
 }
 

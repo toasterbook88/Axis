@@ -36,6 +36,11 @@ func pressureRank(p string) int {
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
 	for _, n := range nodes {
+		if requiresAppleFoundationModels(reqs) {
+			if !models.IsLocalNode(n) || !appleFoundationModelsReady(n) {
+				continue
+			}
+		}
 		if n.Status != models.StatusComplete {
 			if !allowsIncompleteNode(n, reqs.RequiredTools) {
 				continue
@@ -145,6 +150,23 @@ func requiresTool(tools []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func prefersBackend(backends []string, name string) bool {
+	for _, backend := range backends {
+		if strings.EqualFold(backend, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresAppleFoundationModels(reqs models.TaskRequirements) bool {
+	return requiresTool(reqs.RequiredTools, "apple-foundation-models") || prefersBackend(reqs.PreferredBackends, "apple-foundation-models")
+}
+
+func appleFoundationModelsReady(n models.NodeFacts) bool {
+	return n.AppleFM != nil && n.AppleFM.Available && n.AppleFM.Verified && hasTool(n, "apple-foundation-models")
 }
 
 func allowsIncompleteNode(n models.NodeFacts, requiredTools []string) bool {
@@ -353,12 +375,12 @@ func heavyInferenceTask(reqs models.TaskRequirements) bool {
 	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
 		return true
 	}
-	if requiresTool(reqs.RequiredTools, "ollama") || requiresTool(reqs.RequiredTools, "llama-server") {
+	if requiresTool(reqs.RequiredTools, "ollama") || requiresTool(reqs.RequiredTools, "llama-server") || requiresTool(reqs.RequiredTools, "apple-foundation-models") {
 		return true
 	}
 	for _, backend := range reqs.PreferredBackends {
 		switch strings.ToLower(backend) {
-		case "llama.cpp", "mlx":
+		case "llama.cpp", "mlx", "apple-foundation-models":
 			return true
 		}
 	}
@@ -460,6 +482,10 @@ func preferredBackendRank(n models.NodeFacts, reqs models.TaskRequirements) int 
 	for _, backend := range reqs.PreferredBackends {
 		rank := 0
 		switch strings.ToLower(backend) {
+		case "apple-foundation-models":
+			if models.IsLocalNode(n) && appleFoundationModelsReady(n) {
+				rank = 4
+			}
 		case "llama.cpp":
 			switch {
 			case hasTool(n, "llama-server") && turboQuantHasBackend(n, "llama.cpp"):

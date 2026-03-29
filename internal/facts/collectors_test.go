@@ -90,6 +90,71 @@ func TestRunLocalTurboQuantProbe(t *testing.T) {
 	}
 }
 
+func TestDetectAppleFoundationModelsRequiresEligibleHost(t *testing.T) {
+	if got := detectAppleFoundationModels(context.Background(), "linux", "amd64", "6.8.0", nil); got != nil {
+		t.Fatalf("expected nil on non-darwin host, got %+v", got)
+	}
+
+	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "25.4", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
+	if info == nil {
+		t.Fatal("expected ineligible darwin host to report capability state")
+	}
+	if info.Available || info.Verified {
+		t.Fatalf("expected unavailable info on macOS < 26, got %+v", info)
+	}
+}
+
+func TestDetectAppleFoundationModelsUsesRuntimeProbe(t *testing.T) {
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
+		return "OK\n", nil
+	}
+
+	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
+	if info == nil {
+		t.Fatal("expected apple foundation models info")
+	}
+	if !info.Available || !info.Verified {
+		t.Fatalf("expected verified availability, got %+v", info)
+	}
+}
+
+func TestDetectAppleFoundationModelsAcceptsTrailingProbeNoise(t *testing.T) {
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
+		return "swift-driver warning\nOK\n", nil
+	}
+
+	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
+	if info == nil || !info.Verified {
+		t.Fatalf("expected OK marker to remain verified, got %+v", info)
+	}
+}
+
+func TestDetectAppleFoundationModelsRejectsMissingProbeMarker(t *testing.T) {
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
+		return "swift-driver warning\nready\n", nil
+	}
+
+	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
+	if info == nil {
+		t.Fatal("expected apple foundation models info")
+	}
+	if info.Verified {
+		t.Fatalf("expected missing OK marker to stay unverified, got %+v", info)
+	}
+	if !strings.Contains(info.Error, "expected OK marker") {
+		t.Fatalf("expected missing marker error, got %+v", info)
+	}
+}
+
 func TestDiscoverToolsUsesConfiguredLookups(t *testing.T) {
 	prevLookPath := lookPathTool
 	prevRun := runToolVersionCommand
