@@ -1,0 +1,70 @@
+{
+  "knowledge": {
+    "timestamp": "<TIME>",
+    "snapshot": {
+      "timestamp": "<TIME>",
+      "status": "healthy",
+      "nodes": [
+        {
+          "name": "node-a",
+          "hostname": "localhost",
+          "resources": {
+            "cpu_cores": 8,
+            "cpu_model": "",
+            "ram_total_mb": 16384,
+            "ram_free_mb": 8192,
+            "load_1m": 0,
+            "load_5m": 0,
+            "load_15m": 0,
+            "ram_allocatable_mb": 8192,
+            "disk_total_gb": 0,
+            "disk_free_gb": 0,
+            "pressure": "low"
+          },
+          "tools": [
+            {
+              "name": "llama-server",
+              "path": "",
+              "version": "test",
+              "class": ""
+            }
+          ],
+          "turboquant": {
+            "supported": true,
+            "verified": true,
+            "backends": [
+              "llama.cpp"
+            ],
+            "capabilities": [
+              "backend-probed",
+              "ctx-size-flag",
+              "flash-attn-flag",
+              "llama.cpp-runtime"
+            ]
+          },
+          "status": "complete",
+          "collected_at": "<TIME>"
+        }
+      ],
+      "summary": {
+        "total_nodes": 1,
+        "reachable_nodes": 1,
+        "total_ram_mb": 16384,
+        "total_free_ram_mb": 8192,
+        "total_allocatable_mb": 8192
+      }
+    },
+    "state": {
+      "nodes": {},
+      "recent_decisions": null,
+      "updated_at": "<TIME>"
+    },
+    "ollama": {},
+    "load": {
+      "node-a": 0
+    },
+    "best_node": ""
+  },
+  "skills": null,
+  "failures": null
+}

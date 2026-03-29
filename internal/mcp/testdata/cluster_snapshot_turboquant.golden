@@ -1,0 +1,52 @@
+{
+  "timestamp": "<TIME>",
+  "status": "healthy",
+  "nodes": [
+    {
+      "name": "mlx-node",
+      "hostname": "mlx.internal",
+      "resources": {
+        "cpu_cores": 8,
+        "cpu_model": "",
+        "ram_total_mb": 16384,
+        "ram_free_mb": 8192,
+        "load_1m": 0,
+        "load_5m": 0,
+        "load_15m": 0,
+        "disk_total_gb": 0,
+        "disk_free_gb": 0,
+        "pressure": "none"
+      },
+      "tools": [
+        {
+          "name": "llama-server",
+          "path": "",
+          "version": "b123",
+          "class": ""
+        }
+      ],
+      "turboquant": {
+        "supported": true,
+        "verified": true,
+        "backends": [
+          "llama.cpp"
+        ],
+        "capabilities": [
+          "backend-probed",
+          "ctx-size-flag",
+          "flash-attn-flag",
+          "llama.cpp-runtime"
+        ]
+      },
+      "status": "complete",
+      "collected_at": "<TIME>"
+    }
+  ],
+  "summary": {
+    "total_nodes": 1,
+    "reachable_nodes": 1,
+    "total_ram_mb": 16384,
+    "total_free_ram_mb": 8192,
+    "total_allocatable_mb": 8192
+  }
+}
