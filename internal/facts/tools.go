@@ -8,6 +8,11 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+var (
+	lookPathTool          = exec.LookPath
+	runToolVersionCommand = exec.CommandContext
+)
+
 // OllamaDiscoveryScript is the bash script used to robustly discover Ollama state
 // and models across both local and remote nodes.
 const OllamaDiscoveryScript = `set -o pipefail;
@@ -65,7 +70,7 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 	var tools []models.ToolInfo
 
 	for _, td := range defs {
-		path, err := exec.LookPath(td.name)
+		path, err := lookPathTool(td.name)
 		if err != nil {
 			continue
 		}
@@ -78,7 +83,7 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 
 		if td.versionCmd != "" {
 			parts := strings.Fields(td.versionCmd)
-			if out, err := exec.CommandContext(ctx, parts[0], parts[1:]...).Output(); err == nil {
+			if out, err := runToolVersionCommand(ctx, parts[0], parts[1:]...).Output(); err == nil {
 				ti.Version = parseVersionString(string(out))
 			}
 		}
