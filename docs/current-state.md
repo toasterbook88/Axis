@@ -30,7 +30,7 @@ The live repo currently contains:
 - A read-only MCP server for cluster diagnostics
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
 - Recoverable persistence for corrupt local state/skills files via quarantine + warning
-- UDP beacon-based node discovery
+- UDP beacon-based node discovery inside the live snapshot pipeline
 - Per-run execution context files instead of shared temp-path injection
 - Stateful placement ranking with reservation subtraction, GPU preference, and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
@@ -44,7 +44,7 @@ The live repo currently contains:
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 
-The core observation pipeline is reasonably clean. The execution, chat, and discovery surfaces are where most of the risk now lives.
+The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 
 ## Command Surface
 
@@ -63,7 +63,6 @@ Top-level commands currently registered in the binary:
 | `axis chat` | Local chat via Ollama | Experimental and non-authoritative; no longer the default root action |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
 | `axis serve` | Start local HTTP API | Includes execution surface |
-| `axis discover` | UDP-assisted discovery flow | Experimental helper; emitted config values require manual review |
 | `axis context show|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
@@ -188,7 +187,12 @@ In practical terms:
 V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
-2. Watch Dependabot and `govulncheck` for signal quality before promoting new security checks into the required-merge path.
+2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
 3. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
 4. Refine reservation accounting into a clearer cluster RAM balancing model.
 5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
+
+## Decommissioned
+
+- `cmd/axis/discover.go` — removed. Use `axis status` for discovery-backed cluster views.
+- Config is strictly validated; unknown keys in `~/.axis/nodes.yaml` now cause immediate failure.

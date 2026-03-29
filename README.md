@@ -4,7 +4,7 @@
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**A snapshot-first Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, and makes deterministic reservation-aware placement decisions. Optional chat, discovery, HTTP, and MCP surfaces are subordinate to observed state, not sources of truth.**
+**A snapshot-first Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, and makes deterministic reservation-aware placement decisions. Optional chat, HTTP, and MCP surfaces are subordinate to observed state, not sources of truth.**
 
 ## Quick Start
 
@@ -28,7 +28,6 @@ axis task place "run ollama inference on a 7b model"
 
 - The stable operator path is `axis facts`, `axis status`, `axis task place`, `axis task context`, and the daemon cache commands.
 - `axis chat` is experimental and non-authoritative.
-- `axis discover` is experimental and emits suggestions that require manual review.
 
 ## Command Surface
 
@@ -50,8 +49,16 @@ axis task place "run ollama inference on a 7b model"
 - `axis scripts list` — list built-in helper scripts
 - `axis skills` — show learned local skills/failures
 - `axis chat` — experimental local chat assistant; not authoritative cluster truth
-- `axis discover` — experimental UDP discovery helper; emitted config values are suggestions only
 - `axis completion` — Cobra-generated shell completion
+
+### Available Commands (Strict Config Enforced)
+
+- `axis version`
+- `axis facts` — local facts only
+- `axis status` — full cluster snapshot (uses strict `nodes.yaml`)
+- `axis task place <description>` — deterministic placement
+
+Removed: `axis discover` (fully replaced by `axis status` + snapshot assembly).
 
 ## Execution Safety (hardened)
 
@@ -289,10 +296,10 @@ Optional discovery block used by experimental UDP-assisted discovery:
 - Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
 - `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
-- `axis chat` and `axis discover` are experimental helpers and must not outrank snapshot-backed truth
+- `axis chat` is an experimental helper and must not outrank snapshot-backed truth
 - Placement memory lives locally in `~/.axis/state.json`
 
-**Current phase:** The observability and placement core is stable; execution, chat, and discovery helpers remain subordinate surfaces that must not present model output or guessed config as authoritative cluster truth.
+**Current phase:** The observability and placement core is stable; execution and chat helpers remain subordinate surfaces that must not present model output as authoritative cluster truth.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 

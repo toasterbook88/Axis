@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -70,6 +69,9 @@ func TestRootCommandShowsHelpInsteadOfRoutingToChat(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "facts") || !strings.Contains(stdout, "task") {
 		t.Fatalf("expected root help output, got %q", stdout)
+	}
+	if strings.Contains(stdout, "discover") {
+		t.Fatalf("expected discover to be removed from root help, got %q", stdout)
 	}
 }
 
@@ -272,76 +274,6 @@ func TestFactsCmdFallsBackToErrorNodeOnCollectorError(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"status": "error"`) || !strings.Contains(stdout, `"name": "test-host"`) {
 		t.Fatalf("expected error node output, got %q", stdout)
-	}
-}
-
-func TestDiscoverCmdUsesFallbackConfigAndPrintsSuggestedNodes(t *testing.T) {
-	restorePath := stubDiscoverConfigPath(t, func() string {
-		return "/tmp/test-nodes.yaml"
-	})
-	defer restorePath()
-	restoreLoad := stubDiscoverConfigLoader(t, func(string) (*config.Config, error) {
-		return nil, errors.New("missing config")
-	})
-	defer restoreLoad()
-	restoreDiscover := stubClusterDiscovery(t, func(context.Context, *config.Config) []models.NodeFacts {
-		return []models.NodeFacts{{
-			Name:     "alpha",
-			Hostname: "10.0.0.5",
-			Role:     "worker",
-		}}
-	})
-	defer restoreDiscover()
-
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		cmd := discoverCmd()
-		cmd.SetArgs(nil)
-		return cmd.Execute()
-	})
-	if err != nil {
-		t.Fatalf("discover Execute: %v", err)
-	}
-	if !strings.Contains(stderr, "axis discover is experimental") {
-		t.Fatalf("expected experimental warning, got %q", stderr)
-	}
-	if !strings.Contains(stdout, "Listening for UDP beacons") {
-		t.Fatalf("expected discovery banner, got %q", stdout)
-	}
-	if !strings.Contains(stdout, "name: alpha") || !strings.Contains(stdout, "hostname: 10.0.0.5") || !strings.Contains(stdout, "ssh_user: \"\"") {
-		t.Fatalf("expected suggested node YAML, got %q", stdout)
-	}
-}
-
-func TestDiscoverCmdSupportsJSONOutput(t *testing.T) {
-	restorePath := stubDiscoverConfigPath(t, func() string {
-		return "/tmp/test-nodes.yaml"
-	})
-	defer restorePath()
-	restoreLoad := stubDiscoverConfigLoader(t, func(string) (*config.Config, error) {
-		return nil, errors.New("missing config")
-	})
-	defer restoreLoad()
-	restoreDiscover := stubClusterDiscovery(t, func(context.Context, *config.Config) []models.NodeFacts {
-		return []models.NodeFacts{{
-			Name:     "alpha",
-			Hostname: "10.0.0.5",
-		}}
-	})
-	defer restoreDiscover()
-
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		cmd := discoverCmd()
-		cmd.SetArgs([]string{"--format", "json"})
-		return cmd.Execute()
-	})
-	if err != nil {
-		t.Fatalf("discover json Execute: %v", err)
-	}
-	if !strings.Contains(stderr, "axis discover is experimental") {
-		t.Fatalf("expected experimental warning, got %q", stderr)
-	}
-	if !strings.Contains(stdout, `"name": "alpha"`) || !strings.Contains(stdout, `"hostname": "10.0.0.5"`) || !strings.Contains(stdout, `"ssh_user": ""`) {
-		t.Fatalf("expected suggested node JSON, got %q", stdout)
 	}
 }
 
@@ -595,33 +527,6 @@ func stubCollectLocalFacts(t *testing.T, fn func(context.Context, string) (*mode
 	collectLocalFacts = fn
 	return func() {
 		collectLocalFacts = prev
-	}
-}
-
-func stubDiscoverConfigPath(t *testing.T, fn func() string) func() {
-	t.Helper()
-	prev := discoverConfigPath
-	discoverConfigPath = fn
-	return func() {
-		discoverConfigPath = prev
-	}
-}
-
-func stubDiscoverConfigLoader(t *testing.T, fn func(string) (*config.Config, error)) func() {
-	t.Helper()
-	prev := loadDiscoverConfig
-	loadDiscoverConfig = fn
-	return func() {
-		loadDiscoverConfig = prev
-	}
-}
-
-func stubClusterDiscovery(t *testing.T, fn func(context.Context, *config.Config) []models.NodeFacts) func() {
-	t.Helper()
-	prev := runClusterDiscovery
-	runClusterDiscovery = fn
-	return func() {
-		runClusterDiscovery = prev
 	}
 }
 

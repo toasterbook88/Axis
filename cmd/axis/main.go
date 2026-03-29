@@ -27,8 +27,8 @@ func newRootCmd() *cobra.Command {
 		Short: "AXIS — snapshot-first cluster facts and deterministic placement",
 		Long: "AXIS is a snapshot-first operator CLI for cluster fact collection, " +
 			"deterministic placement, and explicit local control surfaces.\n\n" +
-			"Chat and discovery helpers are experimental and must not be treated as " +
-			"authoritative cluster truth unless backed by a live snapshot or probe.",
+			"Chat helpers are experimental and must not be treated as authoritative " +
+			"cluster truth unless backed by a live snapshot or probe.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -42,7 +42,6 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(serveCmd())
 	root.AddCommand(daemonCmd())
 	root.AddCommand(chatCmd())
-	root.AddCommand(discoverCmd())
 	root.AddCommand(contextCmd())
 	root.AddCommand(scriptsCmd())
 	root.AddCommand(skillsCmd())
