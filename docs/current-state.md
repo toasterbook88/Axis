@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-29 00:08 EDT
+Last reviewed: 2026-03-28 23:59 EDT
 Branch: `main`
-Reviewed base HEAD: `278f5978ecdb8c8edada6028b31815be92d56782` (`main`, plus current uncommitted v1 hardening worktree)
+Reviewed base HEAD: `bfbbf3e74222879411c9d5decb8b16c43e2f9962` (`main`, plus current uncommitted TurboQuant-aware placement worktree)
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -33,6 +33,7 @@ The live repo currently contains:
 - Stateful placement ranking with reservation subtraction, GPU preference, and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
 - Real load-average data in facts, snapshots, and execution context
+- TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs verified probe states and long-context placement hints
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 
 The core observation pipeline is reasonably clean. The execution and safety surfaces are where most of the risk now lives.
@@ -65,12 +66,12 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small and stable, but not strict against unknown YAML fields |
-| `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy |
+| `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, but it now also annotates nodes with graded TurboQuant-capable backends and backend capabilities |
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, and reservation-aware snapshot views |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality matching now prefers real hostnames/addresses over logical names |
-| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, and multi-tool requirements are now live, but balancing policy is still simple |
+| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, multi-tool requirements, and TurboQuant-aware long-context hints are now live, with verified backends preferred over detected-only candidates |
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
@@ -130,6 +131,7 @@ Areas where the live repo has moved past the older docs/specs:
 - Live status/placement/context reads now use the same reservation overlay model as cached reads
 - Corrupt local state/skills files are now quarantined and surfaced as warnings instead of collapsing read surfaces
 - Execution context now carries real load averages rather than placeholder zeros
+- Long-context task hints can now prefer graded TurboQuant-capable backends without changing the default placement contract for ordinary tasks
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
@@ -153,6 +155,7 @@ In practical terms:
 
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
+- TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs verified probe responses, but it still does not verify kernel correctness or backend feature parity
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests

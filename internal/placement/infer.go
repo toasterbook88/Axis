@@ -40,6 +40,14 @@ func InferRequirements(desc string) models.TaskRequirements {
 		reqs.MinFreeRAMMB = 1536
 	}
 
+	reqs.ContextWindowTokens = inferContextWindowTokens(lower)
+	if reqs.ContextWindowTokens > 0 {
+		reqs.PrefersTurboQuant = true
+		if minForContext := longContextMinRAM(reqs.ContextWindowTokens); minForContext > reqs.MinFreeRAMMB {
+			reqs.MinFreeRAMMB = minForContext
+		}
+	}
+
 	return reqs
 }
 
@@ -50,4 +58,34 @@ func containsAny(s string, keywords ...string) bool {
 		}
 	}
 	return false
+}
+
+func inferContextWindowTokens(lower string) int {
+	switch {
+	case containsAny(lower, "million-token", "million token", "1m context", "1m tokens"):
+		return 1000000
+	case containsAny(lower, "512k"):
+		return 512000
+	case containsAny(lower, "256k", "200k"):
+		return 256000
+	case containsAny(lower, "128k", "long-context", "long context", "book-length", "book length", "needle-in-a-haystack", "needle in a haystack"):
+		return 128000
+	default:
+		return 0
+	}
+}
+
+func longContextMinRAM(tokens int) int64 {
+	switch {
+	case tokens >= 1000000:
+		return 12288
+	case tokens >= 512000:
+		return 8192
+	case tokens >= 256000:
+		return 6144
+	case tokens >= 128000:
+		return 4096
+	default:
+		return 0
+	}
 }

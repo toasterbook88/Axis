@@ -40,6 +40,12 @@ func sampleNodeFacts() models.NodeFacts {
 			{Name: "git", Path: "/usr/bin/git", Version: "2.39.0", Class: models.ToolClassVCS},
 			{Name: "python3", Path: "/usr/bin/python3", Version: "3.11.0", Class: models.ToolClassRuntime},
 		},
+		TurboQuant: &models.TurboQuantInfo{
+			Supported:    true,
+			Verified:     true,
+			Backends:     []string{"mlx"},
+			Capabilities: []string{"apple-silicon", "long-context"},
+		},
 		Status:      models.StatusComplete,
 		CollectedAt: time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC),
 	}
@@ -94,6 +100,18 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Resources.RAMAllocatableMB != 7168 {
 		t.Errorf("ram_allocatable_mb: got %d, want 7168", decoded.Resources.RAMAllocatableMB)
+	}
+	if decoded.TurboQuant == nil || !decoded.TurboQuant.Supported {
+		t.Fatal("turboquant missing after round-trip")
+	}
+	if !decoded.TurboQuant.Verified {
+		t.Fatal("expected turboquant verified flag after round-trip")
+	}
+	if len(decoded.TurboQuant.Backends) != 1 || decoded.TurboQuant.Backends[0] != "mlx" {
+		t.Fatalf("turboquant backends = %v, want [mlx]", decoded.TurboQuant.Backends)
+	}
+	if len(decoded.TurboQuant.Capabilities) != 2 {
+		t.Fatalf("turboquant capabilities = %v, want 2 entries", decoded.TurboQuant.Capabilities)
 	}
 	if len(decoded.Addresses) != 2 {
 		t.Errorf("addresses: got %d, want 2", len(decoded.Addresses))

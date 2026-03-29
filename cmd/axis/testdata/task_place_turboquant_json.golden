@@ -1,0 +1,25 @@
+STDERR:
+
+
+STDOUT:
+{
+  "source": "daemon-cache",
+  "decision": {
+    "node": "mlx-node",
+    "tool": "ollama",
+    "fit_score": 80,
+    "is_local": false,
+    "reasoning": [
+      "long-context task hint: ~128000 tokens",
+      "turboquant-aware backend verified: mlx",
+      "turboquant capabilities: apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present",
+      "LLM fit: 80/100 (excellent for small models)",
+      "remote node (via SSH)",
+      "8192MB allocatable (0MB reserved) of 16384MB total",
+      "pressure: none",
+      "10 CPU cores",
+      "required tool ollama (0.7.0) available"
+    ],
+    "ok": true
+  }
+}
