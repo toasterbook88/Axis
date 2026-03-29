@@ -33,7 +33,7 @@ The live repo currently contains:
 - Stateful placement ranking with reservation subtraction, GPU preference, and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
 - Real load-average data in facts, snapshots, and execution context
-- TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs verified probe states and long-context placement hints
+- TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 
 The core observation pipeline is reasonably clean. The execution and safety surfaces are where most of the risk now lives.
@@ -66,7 +66,7 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small and stable, but not strict against unknown YAML fields |
-| `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, but it now also annotates nodes with graded TurboQuant-capable backends and backend capabilities |
+| `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, but it now also annotates nodes with graded TurboQuant-capable backends, probe-derived verification, and backend capabilities |
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, and reservation-aware snapshot views |
@@ -155,7 +155,7 @@ In practical terms:
 
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
 - The current balancing model still lacks allocatable/system-reserve concepts, cluster skew reduction, PSI awareness, and reclaim behavior
-- TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs verified probe responses, but it still does not verify kernel correctness or backend feature parity
+- TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs probe-verified backend responses, but it still does not verify kernel correctness or backend feature parity
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests

@@ -30,7 +30,7 @@ axis task place "run ollama inference on a 7b model"
 - `axis task place` — advisory placement with fit score and failure reasoning
 - `axis task place --cached` — explicit daemon-backed cached placement read
 - `axis task context --cached` — explicit daemon-backed cached context block
-- long-context task hints now grade TurboQuant-capable backends as detected vs verified (`mlx_lm`, `llama-cli`, `llama-server`)
+- long-context task hints now grade TurboQuant-capable backends as detected vs probe-verified (`mlx_lm`, `llama-cli`, `llama-server`)
 - `axis serve` — optional local HTTP API surface
 - `axis daemon refresh` — force a fresh daemon snapshot now
 - `axis daemon invalidate` — explicit local daemon cache invalidation
@@ -140,7 +140,7 @@ axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
 
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, allocatable RAM, reservation ratio, and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for verified probe responses.
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, allocatable RAM, reservation ratio, and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses.
 
 With `--cached`, placement uses the explicit daemon snapshot cache instead of a fresh SSH sweep. JSON output includes a `source` wrapper so you can tell whether the decision came from `daemon-cache` or live fallback.
 

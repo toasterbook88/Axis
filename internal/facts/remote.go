@@ -101,7 +101,9 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 			Class:   models.ToolClassAICLI,
 		})
 	}
-	facts.TurboQuant = inferTurboQuantSupport(facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama)
+	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
+		return c.Exec.Run(ctx, cmd)
+	})
 
 	if partial {
 		facts.Status = models.StatusPartial
