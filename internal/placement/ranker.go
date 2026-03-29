@@ -41,6 +41,9 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 				continue
 			}
 		}
+		if blocksForRuntimePressure(reqs, n) {
+			continue
+		}
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
 			adjustedFree := freeRAMWithState(n, st)
@@ -61,9 +64,10 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 //  1. Lowest RAM pressure (none < low < medium < high)
 //  2. GPU present
 //  3. Highest effective headroom (free-with-state - requirement)
-//  4. Highest allocatable RAM
-//  5. Lowest reservation ratio (reserved / total RAM)
-//  6. Node name ascending (stable tiebreak)
+//  4. Highest unified-memory suitability for mlx/long-context asks
+//  5. Highest allocatable RAM
+//  6. Lowest reservation ratio (reserved / total RAM)
+//  7. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
@@ -93,6 +97,12 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			if ti != tj {
 				return ti > tj
 			}
+		}
+
+		ui := unifiedMemoryRank(ranked[i], reqs)
+		uj := unifiedMemoryRank(ranked[j], reqs)
+		if ui != uj {
+			return ui > uj
 		}
 
 		ri := allocatableRAM(ranked[i], st)
@@ -211,6 +221,7 @@ func gpuPresent(n models.NodeFacts) bool {
 //   - CPU cores:   up to 10 pts (1 pt per core, capped at 10)
 //   - Local node:  +10 pts (no SSH hop = lower latency)
 //   - TurboQuant-capable long-context backend: +15..25 pts for long-context asks
+//   - Unified-memory topology bonus: +8..16 pts for mlx/long-context asks
 //
 // Max: capped at 100
 func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) int {
@@ -263,6 +274,7 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 	if reqs.PrefersTurboQuant {
 		score += turboQuantFitBonus(n, reqs)
 	}
+	score += unifiedMemoryFitBonus(n, reqs)
 
 	if score > 100 {
 		score = 100
@@ -314,6 +326,70 @@ func turboQuantAdjustedMinFreeRAM(minNeeded int64) int64 {
 	return adjusted
 }
 
+func blocksForRuntimePressure(reqs models.TaskRequirements, n models.NodeFacts) bool {
+	if !heavyInferenceTask(reqs) || n.Resources == nil {
+		return false
+	}
+	switch strings.ToLower(n.Resources.PressureSource) {
+	case "linux-psi":
+		return n.Resources.PressureStall10 >= 15
+	case "darwin-vm-pressure":
+		return strings.EqualFold(n.Resources.Pressure, "high")
+	default:
+		return false
+	}
+}
+
+func heavyInferenceTask(reqs models.TaskRequirements) bool {
+	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
+		return true
+	}
+	if requiresTool(reqs.RequiredTools, "ollama") && reqs.MinFreeRAMMB >= 1024 {
+		return true
+	}
+	return reqs.MinFreeRAMMB >= 4096
+}
+
+func prefersUnifiedMemory(reqs models.TaskRequirements) bool {
+	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
+		return true
+	}
+	for _, backend := range reqs.PreferredBackends {
+		if strings.EqualFold(backend, "mlx") {
+			return true
+		}
+	}
+	return false
+}
+
+func unifiedMemoryRank(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if !prefersUnifiedMemory(reqs) || n.Resources == nil || n.Resources.MemoryTopology != models.MemoryTopologyUnified {
+		return 0
+	}
+	rank := 1
+	if n.Resources.MemoryClass > 0 {
+		rank += n.Resources.MemoryClass
+	}
+	if turboQuantVerified(n) {
+		rank++
+	}
+	return rank
+}
+
+func unifiedMemoryFitBonus(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if !prefersUnifiedMemory(reqs) || n.Resources == nil || n.Resources.MemoryTopology != models.MemoryTopologyUnified {
+		return 0
+	}
+	bonus := 8
+	if n.Resources.MemoryClass > 0 {
+		bonus += minInt(n.Resources.MemoryClass*2, 8)
+	}
+	if turboQuantVerified(n) {
+		bonus += 2
+	}
+	return bonus
+}
+
 func turboQuantSupported(n models.NodeFacts) bool {
 	return n.TurboQuant != nil && n.TurboQuant.Supported
 }
@@ -355,6 +431,13 @@ func turboQuantFitBonus(n models.NodeFacts, reqs models.TaskRequirements) int {
 		}
 		return 5
 	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func turboQuantStatusLabel(n models.NodeFacts) string {

@@ -39,6 +39,14 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("long-context task hint: ~%d tokens", reqs.ContextWindowTokens))
 	}
+	if best.Resources != nil && best.Resources.MemoryTopology == models.MemoryTopologyUnified && prefersUnifiedMemory(reqs) {
+		if best.Resources.MemoryClass > 0 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("unified memory topology (class %d)", best.Resources.MemoryClass))
+		} else {
+			decision.Reasoning = append(decision.Reasoning, "unified memory topology")
+		}
+	}
 	if reqs.PrefersTurboQuant && turboQuantSupported(best) {
 		backends := turboQuantBackends(best)
 		if backends == "" {
@@ -148,6 +156,19 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 		if n.Status != models.StatusComplete {
 			d.Reasoning = append(d.Reasoning,
 				fmt.Sprintf("  %s: excluded (status: %s)", n.Name, n.Status))
+			continue
+		}
+		if blocksForRuntimePressure(reqs, n) {
+			if n.Resources != nil && n.Resources.PressureSource == "linux-psi" {
+				d.Reasoning = append(d.Reasoning,
+					fmt.Sprintf("  %s: excluded (critical runtime memory pressure via linux-psi avg10=%.2f)", n.Name, n.Resources.PressureStall10))
+			} else if n.Resources != nil && n.Resources.PressureSource == "darwin-vm-pressure" {
+				d.Reasoning = append(d.Reasoning,
+					fmt.Sprintf("  %s: excluded (critical runtime memory pressure via darwin vm pressure)", n.Name))
+			} else {
+				d.Reasoning = append(d.Reasoning,
+					fmt.Sprintf("  %s: excluded (critical runtime memory pressure)", n.Name))
+			}
 			continue
 		}
 		if reqs.MinFreeRAMMB > 0 {

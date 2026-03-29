@@ -48,6 +48,13 @@ func InferRequirements(desc string) models.TaskRequirements {
 		}
 	}
 
+	if containsAny(lower, "mlx", "mlx_lm", "apple silicon", "mac studio", "macbook pro", "mac mini") {
+		reqs.PreferredBackends = append(reqs.PreferredBackends, "mlx")
+	}
+	if containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server") {
+		reqs.PreferredBackends = append(reqs.PreferredBackends, "llama.cpp")
+	}
+
 	return reqs
 }
 

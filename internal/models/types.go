@@ -40,23 +40,35 @@ const (
 	ToolClassRuntime   ToolClass = "runtime"
 )
 
+// MemoryTopology classifies the relationship between CPU/GPU accessible memory.
+type MemoryTopology string
+
+const (
+	MemoryTopologyStandard MemoryTopology = "standard"
+	MemoryTopologyUnified  MemoryTopology = "unified"
+)
+
 // --- Observed State ---
 
 // Resources holds observed hardware resource metrics.
 type Resources struct {
-	CPUCores         int      `json:"cpu_cores" yaml:"cpu_cores"`
-	CPUModel         string   `json:"cpu_model" yaml:"cpu_model"`
-	RAMTotalMB       int64    `json:"ram_total_mb" yaml:"ram_total_mb"`
-	RAMFreeMB        int64    `json:"ram_free_mb" yaml:"ram_free_mb"`
-	Load1M           float64  `json:"load_1m" yaml:"load_1m"`
-	Load5M           float64  `json:"load_5m" yaml:"load_5m"`
-	Load15M          float64  `json:"load_15m" yaml:"load_15m"`
-	RAMReservedMB    int64    `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
-	RAMAllocatableMB int64    `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
-	DiskTotalGB      int64    `json:"disk_total_gb" yaml:"disk_total_gb"`
-	DiskFreeGB       int64    `json:"disk_free_gb" yaml:"disk_free_gb"`
-	GPUs             []string `json:"gpus,omitempty" yaml:"gpus,omitempty"`
-	Pressure         string   `json:"pressure" yaml:"pressure"` // none, low, medium, high
+	CPUCores         int            `json:"cpu_cores" yaml:"cpu_cores"`
+	CPUModel         string         `json:"cpu_model" yaml:"cpu_model"`
+	RAMTotalMB       int64          `json:"ram_total_mb" yaml:"ram_total_mb"`
+	RAMFreeMB        int64          `json:"ram_free_mb" yaml:"ram_free_mb"`
+	MemoryTopology   MemoryTopology `json:"memory_topology,omitempty" yaml:"memory_topology,omitempty"`
+	MemoryClass      int            `json:"memory_class,omitempty" yaml:"memory_class,omitempty"`
+	Load1M           float64        `json:"load_1m" yaml:"load_1m"`
+	Load5M           float64        `json:"load_5m" yaml:"load_5m"`
+	Load15M          float64        `json:"load_15m" yaml:"load_15m"`
+	RAMReservedMB    int64          `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
+	RAMAllocatableMB int64          `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+	DiskTotalGB      int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
+	DiskFreeGB       int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
+	GPUs             []string       `json:"gpus,omitempty" yaml:"gpus,omitempty"`
+	Pressure         string         `json:"pressure" yaml:"pressure"` // none, low, medium, high
+	PressureStall10  float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
+	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
 }
 
 // NetworkAddress represents a single network address.
@@ -164,6 +176,7 @@ type TaskRequirements struct {
 	MinFreeRAMMB        int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
 	ContextWindowTokens int      `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
 	PrefersTurboQuant   bool     `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
+	PreferredBackends   []string `json:"preferred_backends,omitempty" yaml:"preferred_backends,omitempty"`
 }
 
 // PlacementDecision is the output of the placement engine.
