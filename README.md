@@ -227,6 +227,8 @@ axis daemon restart
 
 `~/.axis/nodes.yaml` fields:
 
+Unknown YAML keys are rejected at load time so config typos fail fast instead of being silently ignored.
+
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `name` | yes | — | Logical node name |
