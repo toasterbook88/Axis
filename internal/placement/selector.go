@@ -28,12 +28,32 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 	decision := models.PlacementDecision{
 		Node:     best.Name,
 		OK:       true,
-		FitScore: ComputeFitScore(best, local, st),
+		FitScore: ComputeTaskFitScore(best, local, st, reqs),
 		IsLocal:  local,
 	}
 
 	if requiresTool(reqs.RequiredTools, "ollama") && models.IsLocalNode(best) {
 		decision.Reasoning = append(decision.Reasoning, "local node preferred for ollama")
+	}
+	if reqs.ContextWindowTokens > 0 {
+		decision.Reasoning = append(decision.Reasoning,
+			fmt.Sprintf("long-context task hint: ~%d tokens", reqs.ContextWindowTokens))
+	}
+	if reqs.PrefersTurboQuant && turboQuantSupported(best) {
+		backends := turboQuantBackends(best)
+		if backends == "" {
+			backends = "detected backend"
+		}
+		status := turboQuantStatusLabel(best)
+		if status == "" {
+			status = "detected"
+		}
+		decision.Reasoning = append(decision.Reasoning,
+			fmt.Sprintf("turboquant-aware backend %s: %s", status, backends))
+		if caps := turboQuantCapabilities(best); caps != "" {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("turboquant capabilities: %s", caps))
+		}
 	}
 
 	// Fit score summary
@@ -103,7 +123,7 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
 		ruLocal := models.IsLocalNode(runnerUp)
-		ruScore := ComputeFitScore(runnerUp, ruLocal, st)
+		ruScore := ComputeTaskFitScore(runnerUp, ruLocal, st, reqs)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
 		decision.Reasoning = append(decision.Reasoning,
@@ -172,6 +192,10 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 	if requiresTool(reqs.RequiredTools, "ollama") {
 		d.Reasoning = append(d.Reasoning,
 			"note: AXIS can bootstrap Ollama on partial nodes when tool is ollama")
+		if reqs.PrefersTurboQuant {
+			d.Reasoning = append(d.Reasoning,
+				"note: long-context tasks prefer TurboQuant-capable backends (mlx, llama.cpp) when available")
+		}
 	} else if reqs.MinFreeRAMMB >= 4096 {
 		d.Reasoning = append(d.Reasoning,
 			"note: AXIS targets small assistive models, not 70B+ inference")

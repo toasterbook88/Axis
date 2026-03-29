@@ -29,6 +29,28 @@ func nodeComplete(name string, freeRAM int64, pressure string, tools ...string) 
 	}
 }
 
+func nodeTurboQuant(name string, freeRAM int64, pressure string, backends ...string) models.NodeFacts {
+	n := nodeComplete(name, freeRAM, pressure, "ollama")
+	n.Ollama = &models.OllamaInfo{
+		Installed: true,
+		Listening: true,
+		Models:    []string{"llama3:8b"},
+	}
+	n.TurboQuant = &models.TurboQuantInfo{
+		Supported:    true,
+		Verified:     true,
+		Backends:     backends,
+		Capabilities: []string{"long-context"},
+	}
+	return n
+}
+
+func nodeTurboQuantDetected(name string, freeRAM int64, pressure string, backends ...string) models.NodeFacts {
+	n := nodeTurboQuant(name, freeRAM, pressure, backends...)
+	n.TurboQuant.Verified = false
+	return n
+}
+
 func nodeUnreachable(name string) models.NodeFacts {
 	return models.NodeFacts{
 		Name:        name,
@@ -116,6 +138,56 @@ func TestFilterWarmOllamaUsesLowerHeadroom(t *testing.T) {
 	}
 }
 
+func TestFilterLongContextDoesNotCollapseToWarmOllamaFloor(t *testing.T) {
+	node := nodeComplete("m3", 1186, "low")
+	node.Ollama = &models.OllamaInfo{
+		Installed: true,
+		Listening: true,
+		Models:    []string{"qwen3:1.7b"},
+	}
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(result) != 0 {
+		t.Fatalf("expected warm ollama node to stay excluded for long-context task, got %v", names(result))
+	}
+}
+
+func TestFilterLongContextUsesTurboQuantAdjustedRAM(t *testing.T) {
+	node := nodeTurboQuant("mlx-node", 1536, "low", "mlx")
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(result) != 1 || result[0].Name != "mlx-node" {
+		t.Fatalf("expected turboquant node to qualify after adjusted RAM threshold, got %v", names(result))
+	}
+}
+
+func TestFilterLongContextDoesNotUseDetectedOnlyTurboQuantForRAMReduction(t *testing.T) {
+	node := nodeTurboQuantDetected("mlx-node", 1536, "low", "mlx")
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(result) != 0 {
+		t.Fatalf("expected detected-only turboquant node to stay excluded, got %v", names(result))
+	}
+}
+
 // --- Rank Tests ---
 
 func TestRankByPressure(t *testing.T) {
@@ -189,6 +261,42 @@ func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
 	ranked := RankCandidates(candidates, models.TaskRequirements{}, st)
 	if ranked[0].Name != "beta" {
 		t.Fatalf("expected beta first on lower reservation ratio, got %s", ranked[0].Name)
+	}
+}
+
+func TestRankPrefersTurboQuantForLongContextTasks(t *testing.T) {
+	candidates := []models.NodeFacts{
+		nodeComplete("plain", 4096, "none", "ollama"),
+		nodeTurboQuant("mlx", 4096, "none", "mlx"),
+	}
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	ranked := RankCandidates(candidates, reqs, nil)
+	if ranked[0].Name != "mlx" {
+		t.Fatalf("expected turboquant-capable node to rank first, got %s", ranked[0].Name)
+	}
+}
+
+func TestRankPrefersVerifiedTurboQuantOverDetected(t *testing.T) {
+	candidates := []models.NodeFacts{
+		nodeTurboQuantDetected("detected", 4096, "none", "mlx"),
+		nodeTurboQuant("verified", 4096, "none", "mlx"),
+	}
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	ranked := RankCandidates(candidates, reqs, nil)
+	if ranked[0].Name != "verified" {
+		t.Fatalf("expected verified turboquant node to rank first, got %s", ranked[0].Name)
 	}
 }
 
@@ -346,6 +454,37 @@ func TestFitScore_LocalBonus(t *testing.T) {
 
 	if local-remote != 10 {
 		t.Errorf("local bonus should be 10, got %d", local-remote)
+	}
+}
+
+func TestFitScore_TurboQuantLongContextBonus(t *testing.T) {
+	n := nodeTurboQuant("mlx", 4000, "none", "mlx")
+	reqs := models.TaskRequirements{
+		ContextWindowTokens: 256000,
+		PrefersTurboQuant:   true,
+	}
+
+	base := ComputeFitScore(n, false, nil)
+	boost := ComputeTaskFitScore(n, false, nil, reqs)
+	if boost <= base {
+		t.Fatalf("expected turboquant long-context score boost, got base=%d boost=%d", base, boost)
+	}
+	if boost-base != 20 {
+		t.Fatalf("expected turboquant bonus 20, got %d", boost-base)
+	}
+}
+
+func TestFitScore_DetectedTurboQuantGetsSmallerBonus(t *testing.T) {
+	n := nodeTurboQuantDetected("mlx", 4000, "none", "mlx")
+	reqs := models.TaskRequirements{
+		ContextWindowTokens: 256000,
+		PrefersTurboQuant:   true,
+	}
+
+	base := ComputeFitScore(n, false, nil)
+	boost := ComputeTaskFitScore(n, false, nil, reqs)
+	if boost-base != 8 {
+		t.Fatalf("expected detected turboquant bonus 8, got %d", boost-base)
 	}
 }
 
@@ -513,6 +652,55 @@ func TestSuccessReasoningShowsAllocatableRAM(t *testing.T) {
 	}
 }
 
+func TestSuccessReasoningShowsTurboQuantAvailability(t *testing.T) {
+	n := nodeTurboQuant("mlx", 4096, "none", "mlx")
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	d := SelectBestNode(reqs, []models.NodeFacts{n}, nil)
+	if !d.OK {
+		t.Fatalf("expected OK=true, got reasoning=%v", d.Reasoning)
+	}
+	foundTurboQuant := false
+	for _, r := range d.Reasoning {
+		if contains(r, "turboquant-aware backend verified") && contains(r, "mlx") {
+			foundTurboQuant = true
+		}
+	}
+	if !foundTurboQuant {
+		t.Fatalf("expected turboquant reasoning, got %v", d.Reasoning)
+	}
+}
+
+func TestSuccessReasoningShowsTurboQuantCapabilities(t *testing.T) {
+	n := nodeTurboQuant("mlx", 4096, "none", "mlx")
+	n.TurboQuant.Capabilities = []string{"apple-silicon", "long-context"}
+	reqs := models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}
+
+	d := SelectBestNode(reqs, []models.NodeFacts{n}, nil)
+	if !d.OK {
+		t.Fatalf("expected OK=true, got reasoning=%v", d.Reasoning)
+	}
+	foundCaps := false
+	for _, r := range d.Reasoning {
+		if contains(r, "turboquant capabilities") && contains(r, "apple-silicon") {
+			foundCaps = true
+		}
+	}
+	if !foundCaps {
+		t.Fatalf("expected turboquant capabilities reasoning, got %v", d.Reasoning)
+	}
+}
+
 // --- Helpers ---
 
 func contains(s, sub string) bool {
@@ -538,19 +726,23 @@ func names(nodes []models.NodeFacts) []string {
 
 func TestInferRequirements(t *testing.T) {
 	tests := []struct {
-		desc     string
-		wantTool string
-		wantRAM  int64
+		desc       string
+		wantTool   string
+		wantRAM    int64
+		wantTokens int
+		wantTQ     bool
 	}{
-		{"Run a 70b inference model", "ollama", 4096},
-		{"clone this repo and analyze it", "git", 0},
-		{"compile the go binary", "go", 0},
-		{"spin up a docker container", "docker", 0},
-		{"just a simple task", "", 0},
-		{"deploy using gpu", "ollama", 0},
-		{"run a small local model with ollama inference", "ollama", 600},
-		{"ollama run llama3", "ollama", 600},
-		{"run a 7b model locally", "", 1536},
+		{"Run a 70b inference model", "ollama", 4096, 0, false},
+		{"clone this repo and analyze it", "git", 0, 0, false},
+		{"compile the go binary", "go", 0, 0, false},
+		{"spin up a docker container", "docker", 0, 0, false},
+		{"just a simple task", "", 0, 0, false},
+		{"deploy using gpu", "ollama", 0, 0, false},
+		{"run a small local model with ollama inference", "ollama", 600, 0, false},
+		{"ollama run llama3", "ollama", 600, 0, false},
+		{"run a 7b model locally", "", 1536, 0, false},
+		{"run 128k book-length ollama inference", "ollama", 4096, 128000, true},
+		{"needle in a haystack 1m tokens", "", 12288, 1000000, true},
 	}
 	for _, tt := range tests {
 		got := InferRequirements(tt.desc)
@@ -563,6 +755,12 @@ func TestInferRequirements(t *testing.T) {
 		}
 		if got.MinFreeRAMMB != tt.wantRAM {
 			t.Errorf("InferRequirements(%q) RAM = %d, want %d", tt.desc, got.MinFreeRAMMB, tt.wantRAM)
+		}
+		if got.ContextWindowTokens != tt.wantTokens {
+			t.Errorf("InferRequirements(%q) TOKENS = %d, want %d", tt.desc, got.ContextWindowTokens, tt.wantTokens)
+		}
+		if got.PrefersTurboQuant != tt.wantTQ {
+			t.Errorf("InferRequirements(%q) PrefersTurboQuant = %v, want %v", tt.desc, got.PrefersTurboQuant, tt.wantTQ)
 		}
 	}
 }

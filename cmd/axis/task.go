@@ -500,6 +500,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 
 	ramSummary := "unknown"
 	pressure := "unknown"
+	turboQuant := ""
 	if best.Resources != nil {
 		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
 			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB)
@@ -508,19 +509,31 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 		}
 		pressure = best.Resources.Pressure
 	}
+	if best.TurboQuant != nil && best.TurboQuant.Supported && len(best.TurboQuant.Backends) > 0 {
+		status := "detected"
+		if best.TurboQuant.Verified {
+			status = "verified"
+		}
+		line := fmt.Sprintf("TurboQuant %s: %s", status, strings.Join(best.TurboQuant.Backends, ", "))
+		if len(best.TurboQuant.Capabilities) > 0 {
+			line += fmt.Sprintf(" (%s)", strings.Join(best.TurboQuant.Capabilities, ", "))
+		}
+		turboQuant = "\n- " + line
+	}
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
 
 - Source: %s
 - Best node: %s (%s, %s pressure)
+- Context hint: %s
 - Tools: %v
 - Summary: %s
 - Task: %s
-- Live tools: start read-only MCP with: axis mcp serve
+- Live tools: start read-only MCP with: axis mcp serve%s
 
 Be precise. Use real node names and tools above.`,
 		sourceOrLive(source), best.Name, ramSummary, pressure,
-		toolsList(best), clusterSummaryLine(snap), task)
+		contextHint(reqs), toolsList(best), clusterSummaryLine(snap), task, turboQuant)
 }
 
 func clusterSummaryLine(snap *models.ClusterSnapshot) string {
@@ -539,6 +552,13 @@ func sourceOrLive(source string) string {
 		return "live"
 	}
 	return source
+}
+
+func contextHint(reqs models.TaskRequirements) string {
+	if reqs.ContextWindowTokens > 0 {
+		return fmt.Sprintf("long-context (~%d tokens)", reqs.ContextWindowTokens)
+	}
+	return "standard"
 }
 
 func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (models.NodeFacts, bool) {

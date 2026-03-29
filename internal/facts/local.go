@@ -71,6 +71,7 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 			Class:   models.ToolClassAICLI,
 		})
 	}
+	facts.TurboQuant = inferTurboQuantSupport(facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama)
 
 	return facts, nil
 }

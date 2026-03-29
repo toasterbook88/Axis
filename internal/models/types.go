@@ -89,6 +89,15 @@ type OllamaInfo struct {
 	Error      string   `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
+// TurboQuantInfo records whether a node appears able to run a TurboQuant-like
+// long-context backend. This is additive advisory metadata only.
+type TurboQuantInfo struct {
+	Supported    bool     `json:"supported" yaml:"supported"`
+	Verified     bool     `json:"verified,omitempty" yaml:"verified,omitempty"`
+	Backends     []string `json:"backends,omitempty" yaml:"backends,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+}
+
 // --- Node Result ---
 
 // NodeFacts holds combined observed and assigned state for a node.
@@ -100,14 +109,15 @@ type NodeFacts struct {
 	Role string `json:"role,omitempty" yaml:"role,omitempty"`
 
 	// Observed state
-	Hostname  string           `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	OS        string           `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
-	OSVersion string           `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
-	Arch      string           `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Resources *Resources       `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Addresses []NetworkAddress `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	Tools     []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Ollama    *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	Hostname   string           `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	OS         string           `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
+	OSVersion  string           `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
+	Arch       string           `json:"arch,omitempty" yaml:"arch,omitempty"`
+	Resources  *Resources       `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Addresses  []NetworkAddress `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Tools      []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama     *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	TurboQuant *TurboQuantInfo  `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
 
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`
@@ -149,9 +159,11 @@ type ClusterSnapshot struct {
 // TaskRequirements describes what a task needs to run.
 // Inferred from task description by keyword matching in the CLI layer.
 type TaskRequirements struct {
-	Description   string   `json:"description" yaml:"description"`
-	RequiredTools []string `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
-	MinFreeRAMMB  int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	Description         string   `json:"description" yaml:"description"`
+	RequiredTools       []string `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
+	MinFreeRAMMB        int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	ContextWindowTokens int      `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
+	PrefersTurboQuant   bool     `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
 }
 
 // PlacementDecision is the output of the placement engine.

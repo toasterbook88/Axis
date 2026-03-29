@@ -58,6 +58,47 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 	}
 }
 
+func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "mlx-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:        4096,
+					RAMAllocatableMB: 4096,
+					Pressure:         "none",
+				},
+				Tools: []models.ToolInfo{{Name: "ollama"}},
+				TurboQuant: &models.TurboQuantInfo{
+					Supported:    true,
+					Verified:     true,
+					Backends:     []string{"mlx"},
+					Capabilities: []string{"apple-silicon", "long-context"},
+				},
+			},
+		},
+		Summary: models.ClusterSummary{TotalNodes: 1, TotalAllocatableMB: 4096},
+	}
+
+	out := buildContextBlock(snap, models.TaskRequirements{
+		RequiredTools:       []string{"ollama"},
+		MinFreeRAMMB:        4096,
+		ContextWindowTokens: 128000,
+		PrefersTurboQuant:   true,
+	}, "run 128k ollama inference", "live")
+
+	if !strings.Contains(out, "Context hint: long-context (~128000 tokens)") {
+		t.Fatalf("expected long-context hint, got:\n%s", out)
+	}
+	if !strings.Contains(out, "TurboQuant verified: mlx") {
+		t.Fatalf("expected turboquant verification hint, got:\n%s", out)
+	}
+	if !strings.Contains(out, "apple-silicon") {
+		t.Fatalf("expected turboquant hint, got:\n%s", out)
+	}
+}
+
 func TestResolveTaskRunIntentRequiresExplicitForRawInput(t *testing.T) {
 	_, err := resolveTaskRunIntent("totally custom raw command", false, false, &skills.Store{})
 	if err == nil {

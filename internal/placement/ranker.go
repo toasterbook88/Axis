@@ -87,6 +87,14 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return hi > hj
 		}
 
+		if reqs.PrefersTurboQuant {
+			ti := turboQuantRank(ranked[i])
+			tj := turboQuantRank(ranked[j])
+			if ti != tj {
+				return ti > tj
+			}
+		}
+
 		ri := allocatableRAM(ranked[i], st)
 		rj := allocatableRAM(ranked[j], st)
 		if ri != rj {
@@ -202,9 +210,15 @@ func gpuPresent(n models.NodeFacts) bool {
 //   - GPU present: +25 pts
 //   - CPU cores:   up to 10 pts (1 pt per core, capped at 10)
 //   - Local node:  +10 pts (no SSH hop = lower latency)
+//   - TurboQuant-capable long-context backend: +15..25 pts for long-context asks
 //
-// Max: 30+25+25+10+10 = 100
+// Max: capped at 100
 func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) int {
+	return ComputeTaskFitScore(n, isLocal, st, models.TaskRequirements{})
+}
+
+// ComputeTaskFitScore returns 0-100 indicating task-specific placement fit.
+func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState, reqs models.TaskRequirements) int {
 	if n.Resources == nil {
 		return 0
 	}
@@ -246,6 +260,10 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) i
 		score += 10
 	}
 
+	if reqs.PrefersTurboQuant {
+		score += turboQuantFitBonus(n, reqs)
+	}
+
 	if score > 100 {
 		score = 100
 	}
@@ -276,10 +294,91 @@ func effectiveMinFreeRAM(reqs models.TaskRequirements, n models.NodeFacts) int64
 	if minNeeded <= 0 {
 		return 0
 	}
-	if requiresTool(reqs.RequiredTools, "ollama") && ollamaWarm(n) && minNeeded > 600 {
+	if reqs.PrefersTurboQuant && turboQuantVerified(n) {
+		minNeeded = turboQuantAdjustedMinFreeRAM(minNeeded)
+	}
+	if reqs.ContextWindowTokens == 0 && requiresTool(reqs.RequiredTools, "ollama") && ollamaWarm(n) && minNeeded > 600 {
 		return 600
 	}
 	return minNeeded
+}
+
+func turboQuantAdjustedMinFreeRAM(minNeeded int64) int64 {
+	if minNeeded <= 0 {
+		return 0
+	}
+	adjusted := (minNeeded + 5) / 6
+	if adjusted < 1024 {
+		return 1024
+	}
+	return adjusted
+}
+
+func turboQuantSupported(n models.NodeFacts) bool {
+	return n.TurboQuant != nil && n.TurboQuant.Supported
+}
+
+func turboQuantVerified(n models.NodeFacts) bool {
+	return n.TurboQuant != nil && n.TurboQuant.Supported && n.TurboQuant.Verified
+}
+
+func turboQuantRank(n models.NodeFacts) int {
+	switch {
+	case turboQuantVerified(n):
+		return 2
+	case turboQuantSupported(n):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func turboQuantFitBonus(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if !turboQuantSupported(n) {
+		return 0
+	}
+
+	switch {
+	case reqs.ContextWindowTokens >= 1000000:
+		if turboQuantVerified(n) {
+			return 25
+		}
+		return 10
+	case reqs.ContextWindowTokens >= 256000:
+		if turboQuantVerified(n) {
+			return 20
+		}
+		return 8
+	default:
+		if turboQuantVerified(n) {
+			return 15
+		}
+		return 5
+	}
+}
+
+func turboQuantStatusLabel(n models.NodeFacts) string {
+	if turboQuantVerified(n) {
+		return "verified"
+	}
+	if turboQuantSupported(n) {
+		return "detected"
+	}
+	return ""
+}
+
+func turboQuantCapabilities(n models.NodeFacts) string {
+	if n.TurboQuant == nil || len(n.TurboQuant.Capabilities) == 0 {
+		return ""
+	}
+	return strings.Join(n.TurboQuant.Capabilities, ", ")
+}
+
+func turboQuantBackends(n models.NodeFacts) string {
+	if n.TurboQuant == nil || len(n.TurboQuant.Backends) == 0 {
+		return ""
+	}
+	return strings.Join(n.TurboQuant.Backends, ", ")
 }
 
 func totalReserved(st *state.ClusterState) int64 {
