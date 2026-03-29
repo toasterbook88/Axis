@@ -111,6 +111,15 @@ type TurboQuantInfo struct {
 	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 }
 
+// AppleFoundationModelsInfo records whether the local Apple on-device model
+// path is available and runtime-verified through the FoundationModels framework.
+type AppleFoundationModelsInfo struct {
+	Available bool   `json:"available" yaml:"available"`
+	Verified  bool   `json:"verified,omitempty" yaml:"verified,omitempty"`
+	Version   string `json:"version,omitempty" yaml:"version,omitempty"`
+	Error     string `json:"error,omitempty" yaml:"error,omitempty"`
+}
+
 // --- Node Result ---
 
 // NodeFacts holds combined observed and assigned state for a node.
@@ -122,15 +131,16 @@ type NodeFacts struct {
 	Role string `json:"role,omitempty" yaml:"role,omitempty"`
 
 	// Observed state
-	Hostname   string           `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	OS         string           `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
-	OSVersion  string           `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
-	Arch       string           `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Resources  *Resources       `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Addresses  []NetworkAddress `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	Tools      []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Ollama     *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
-	TurboQuant *TurboQuantInfo  `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
+	Hostname   string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	OS         string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
+	OSVersion  string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
+	Arch       string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
+	Resources  *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Addresses  []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Tools      []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama     *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	TurboQuant *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
+	AppleFM    *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
 
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`

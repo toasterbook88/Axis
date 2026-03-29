@@ -21,6 +21,8 @@ type LocalCollector struct {
 	Role string
 }
 
+var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
+
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
 	return &LocalCollector{Name: name, Role: role}
@@ -72,6 +74,21 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 		})
 	}
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
+	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {
+		facts.AppleFM = fm
+		if fm.Available && fm.Verified {
+			toolPath := "swift"
+			if swiftTool, ok := findToolInfo(facts.Tools, "swift"); ok && swiftTool.Path != "" {
+				toolPath = swiftTool.Path
+			}
+			facts.Tools = append(facts.Tools, models.ToolInfo{
+				Name:    "apple-foundation-models",
+				Path:    toolPath,
+				Version: fm.Version,
+				Class:   models.ToolClassRuntime,
+			})
+		}
+	}
 
 	return facts, nil
 }
@@ -79,6 +96,81 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 func runLocalTurboQuantProbe(ctx context.Context, cmd string) (string, error) {
 	out, err := exec.CommandContext(ctx, "bash", "-lc", cmd).CombinedOutput()
 	return string(out), err
+}
+
+func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion string, tools []models.ToolInfo) *models.AppleFoundationModelsInfo {
+	if !strings.EqualFold(osName, "darwin") || !strings.Contains(strings.ToLower(arch), "arm64") {
+		return nil
+	}
+	if !supportsAppleFoundationModelsOS(osVersion) {
+		return &models.AppleFoundationModelsInfo{
+			Version: osVersion,
+			Error:   "requires macOS 26 or later on Apple silicon (Apple platform versioning)",
+		}
+	}
+	if _, ok := findToolInfo(tools, "swift"); !ok {
+		return &models.AppleFoundationModelsInfo{
+			Version: osVersion,
+			Error:   "swift toolchain not detected",
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	out, err := runAppleFoundationModelsProbeFn(probeCtx)
+	trimmedOut := strings.TrimSpace(out)
+	okMarker := probeOutputContainsOK(trimmedOut)
+	info := &models.AppleFoundationModelsInfo{
+		Version:   osVersion,
+		Available: err == nil,
+		Verified:  err == nil && okMarker,
+	}
+	if err != nil {
+		info.Error = trimmedOut
+		if info.Error == "" {
+			info.Error = err.Error()
+		}
+	} else if !okMarker {
+		info.Error = "apple foundation models probe did not return expected OK marker"
+		if trimmedOut != "" {
+			info.Error += ": " + trimmedOut
+		}
+	}
+	return info
+}
+
+func supportsAppleFoundationModelsOS(osVersion string) bool {
+	// Current Apple platform releases report macOS 26.x via sw_vers -productVersion.
+	fields := strings.SplitN(strings.TrimSpace(osVersion), ".", 2)
+	if len(fields) == 0 || fields[0] == "" {
+		return false
+	}
+	major, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return false
+	}
+	return major >= 26
+}
+
+func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(
+		ctx,
+		"xcrun",
+		"swift",
+		"-e",
+		`import FoundationModels; let session = LanguageModelSession(); let response = try await session.respond(to: "Reply with exactly OK"); print(response.content)`,
+	).CombinedOutput()
+	return string(out), err
+}
+
+func probeOutputContainsOK(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "OK" {
+			return true
+		}
+	}
+	return false
 }
 
 func localOSVersion() (string, error) {
@@ -587,14 +679,16 @@ func localGPUUtilPercent() (float64, bool) {
 		if err != nil {
 			return 0, false
 		}
+		const marker = "\"Device Utilization %\"="
 		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, "Device Utilization%") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					v, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-					if err == nil {
-						return v, true
-					}
+			if idx := strings.Index(line, marker); idx != -1 {
+				rest := line[idx+len(marker):]
+				end := strings.IndexAny(rest, ",}")
+				if end == -1 {
+					end = len(rest)
+				}
+				if v, err := strconv.ParseFloat(strings.TrimSpace(rest[:end]), 64); err == nil {
+					return v, true
 				}
 			}
 		}
