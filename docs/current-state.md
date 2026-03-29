@@ -40,7 +40,9 @@ The live repo currently contains:
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- A tag-triggered GitHub release pipeline (`.goreleaser.yml` + `.github/workflows/release.yml`) that is ready to publish binaries once a signed `v*` tag is cut
+- A live `v0.2.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
+- Protected `main` with PR review, required CI, conversation resolution, and linear history
+- Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 
 The core observation pipeline is reasonably clean. The execution, chat, and discovery surfaces are where most of the risk now lives.
 
@@ -98,6 +100,7 @@ Audit commands run against this repo state:
 - `go test ./... -count=1` -> passes
 - `go test -race ./... -count=1` -> passes
 - `go build ./...` -> passes
+- `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` -> passes; no reachable vulnerabilities found in AXIS code
 - `go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean` -> passes; writes snapshot archives plus `checksums.txt` under `dist/`
 - `go build -o /tmp/axis ./cmd/axis` -> passes
 - `/tmp/axis status --cached --cache-addr 127.0.0.1:42433` -> returns wrapped snapshot with `source: "daemon-cache"`
@@ -184,9 +187,8 @@ In practical terms:
 
 V1 hardening is now mostly about durability, not feature growth:
 
-1. Cut and verify the first signed `v0.2.0` tag so the configured release pipeline proves out on GitHub.
-2. Protect `main` with the existing CI job as a required status check and require PR-based merges.
-3. Keep this file, `README.md`, and CI coverage gates current as the orientation layer.
-4. Add narrow dependency/security automation (`Dependabot`, `govulncheck`) without widening the operator surface.
-5. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
-6. Refine reservation accounting into a clearer cluster RAM balancing model.
+1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
+2. Watch Dependabot and `govulncheck` for signal quality before promoting new security checks into the required-merge path.
+3. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
+4. Refine reservation accounting into a clearer cluster RAM balancing model.
+5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.

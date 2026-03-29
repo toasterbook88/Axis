@@ -1,23 +1,28 @@
-name: CI
+name: govulncheck
 
 on:
   push:
-    branches: ["**"]
+    branches:
+      - main
   pull_request:
     branches: ["**"]
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  test:
-    name: Test & Build
+  govulncheck:
+    name: govulncheck
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
 
       - name: Set up Go
         uses: actions/setup-go@v6.3.0
@@ -27,14 +32,8 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests
-        run: go test ./... -count=1
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
-      - name: Run race tests
-        run: go test -race ./... -count=1
-
-      - name: Build
-        run: go build ./...
-
-      - name: Coverage gates
-        run: ./hack/coverage-check.sh
+      - name: Run govulncheck
+        run: govulncheck ./...
