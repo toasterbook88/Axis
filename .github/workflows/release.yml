@@ -28,7 +28,7 @@ jobs:
 
       - name: Confirm tag matches AXIS version
         run: |
-          version="$(sed -n 's/^const Version = \"\\(.*\\)\"$/\\1/p' internal/buildinfo/version.go)"
+          version="$(awk -F'"' '/^const Version = / {print $2}' internal/buildinfo/version.go)"
           tag="${GITHUB_REF_NAME#v}"
           if [ -z "${version}" ]; then
             echo "failed to read internal/buildinfo/version.go" >&2
