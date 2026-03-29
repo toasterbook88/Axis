@@ -469,6 +469,57 @@ func TestRunTaskExecutesLocalCommandAndRecordsSuccess(t *testing.T) {
 	}
 }
 
+func TestRunTaskInjectsTurboQuantEnvAndFlagsForLocalVerifiedBackend(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	skillStore := &skills.Store{}
+	clusterState := &state.ClusterState{Nodes: map[string]state.NodeState{}}
+	restoreRuntime := stubLiveRuntime(t, testRuntimeContext(
+		[]models.NodeFacts{testTurboNode("node-a", "localhost", true)},
+		[]config.NodeConfig{{Name: "node-a", Hostname: "localhost", SSHUser: "me"}},
+		clusterState,
+		skillStore,
+		nil,
+	), nil)
+	defer restoreRuntime()
+
+	restoreShell := stubLocalShell(t, func(ctx context.Context, command string, env []string) ([]byte, error) {
+		if !strings.Contains(command, "--ctx-size 128000") {
+			t.Fatalf("expected ctx-size injection, got %q", command)
+		}
+		if !strings.Contains(command, "--flash-attn") {
+			t.Fatalf("expected flash-attn injection, got %q", command)
+		}
+		for _, want := range []string{
+			"AXIS_TURBOQUANT=1",
+			"AXIS_TURBOQUANT_STATUS=verified",
+			"AXIS_TURBOQUANT_REQUESTED=1",
+			"AXIS_TURBOQUANT_CONTEXT_TOKENS=128000",
+		} {
+			if !containsEnvPrefix(env, want) {
+				t.Fatalf("expected %s in env: %#v", want, env)
+			}
+		}
+		return []byte("local turbo ok"), nil
+	})
+	defer restoreShell()
+
+	resp, err := runTask(context.Background(), RunRequest{
+		Description: "llama-server -m model.gguf 128k book-length",
+		Mode:        "exec",
+		Confirm:     "YES",
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response: %#v", resp)
+	}
+	if !containsReason(resp.Reasoning, "turboquant injected --ctx-size 128000") {
+		t.Fatalf("expected turboquant reasoning notes, got %#v", resp.Reasoning)
+	}
+}
+
 func TestRunTaskLocalFailureRecordsFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -553,6 +604,56 @@ func TestRunTaskExecutesRemoteCommandAndRecordsSuccess(t *testing.T) {
 	}
 	if !fakeExec.closed {
 		t.Fatal("expected remote executor to be closed")
+	}
+}
+
+func TestRunTaskInjectsTurboQuantEnvAndFlagsForRemoteVerifiedBackend(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	skillStore := &skills.Store{}
+	clusterState := &state.ClusterState{Nodes: map[string]state.NodeState{}}
+	restoreRuntime := stubLiveRuntime(t, testRuntimeContext(
+		[]models.NodeFacts{testTurboNode("node-a", "remote.example", true)},
+		[]config.NodeConfig{{Name: "node-a", Hostname: "remote.example", SSHUser: "me"}},
+		clusterState,
+		skillStore,
+		nil,
+	), nil)
+	defer restoreRuntime()
+
+	fakeExec := &fakeRemoteExec{
+		outputs: []string{"", "remote turbo ok"},
+	}
+	restoreRemote := stubRemoteFactory(t, func(config.NodeConfig) remoteExecutor {
+		return fakeExec
+	})
+	defer restoreRemote()
+
+	resp, err := runTask(context.Background(), RunRequest{
+		Description: "llama-server -m model.gguf 128k book-length",
+		Mode:        "exec",
+		Confirm:     "YES",
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response: %#v", resp)
+	}
+	if len(fakeExec.commands) != 2 {
+		t.Fatalf("expected two remote commands, got %d", len(fakeExec.commands))
+	}
+	runCmd := fakeExec.commands[1]
+	for _, want := range []string{
+		"AXIS_TURBOQUANT=1",
+		"AXIS_TURBOQUANT_STATUS=verified",
+		"AXIS_TURBOQUANT_REQUESTED=1",
+		"--ctx-size 128000",
+		"--flash-attn",
+	} {
+		if !strings.Contains(runCmd, want) {
+			t.Fatalf("expected %q in remote command %q", want, runCmd)
+		}
 	}
 }
 
@@ -698,9 +799,29 @@ func testNode(name, hostname string, totalRAM, freeRAM int64, pressure string, t
 	return node
 }
 
+func testTurboNode(name, hostname string, verified bool) models.NodeFacts {
+	node := testNode(name, hostname, 16384, 8192, "low", "llama-server")
+	node.TurboQuant = &models.TurboQuantInfo{
+		Supported:    true,
+		Verified:     verified,
+		Backends:     []string{"llama.cpp"},
+		Capabilities: []string{"backend-probed", "ctx-size-flag", "flash-attn-flag", "llama.cpp-runtime"},
+	}
+	return node
+}
+
 func containsEnvPrefix(env []string, want string) bool {
 	for _, item := range env {
 		if item == want || strings.HasPrefix(item, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsReason(reasoning []string, want string) bool {
+	for _, reason := range reasoning {
+		if reason == want {
 			return true
 		}
 	}

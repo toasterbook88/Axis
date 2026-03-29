@@ -43,6 +43,7 @@ axis task place "run ollama inference on a 7b model"
 - Hardened safety blocker with allow-list, cluster-aware RAM/GPU checks, and learned-bad fast path
 - Per-node reservation caps enforced before any command runs (`RAMTotalMB - 1024` headroom)
 - Live and cached read paths both overlay local reservations before placement, context generation, or execution
+- `axis task run` / `/run` now export `AXIS_TURBOQUANT_*` env hints to executed commands when a TurboQuant-capable node is selected
 - Corrupt local `~/.axis/state.json` / `~/.axis/skills.json` files are quarantined to `.corrupt-*` backups and surfaced as warnings instead of crashing read paths
 - Reservations auto-clean on every daemon refresh (45 min TTL + legacy leak detection)
 - All cached paths (`task place --cached`, `task context --cached`, `mcp serve --cached`) use the single `internal/daemon/client`
@@ -141,6 +142,8 @@ axis task place --cached "run ollama inference on a 7b model"
 ```
 
 Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, allocatable RAM, reservation ratio, and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses.
+
+When `axis task run` selects a TurboQuant-capable node, AXIS exports `AXIS_TURBOQUANT`, `AXIS_TURBOQUANT_STATUS`, `AXIS_TURBOQUANT_BACKENDS`, `AXIS_TURBOQUANT_CAPABILITIES`, and long-context hints into the execution environment. For verified `llama.cpp` commands, AXIS can also inject safe additive flags such as `--ctx-size` and `--flash-attn` when they are absent.
 
 With `--cached`, placement uses the explicit daemon snapshot cache instead of a fresh SSH sweep. JSON output includes a `source` wrapper so you can tell whether the decision came from `daemon-cache` or live fallback.
 

@@ -22,6 +22,7 @@ import (
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
+	"github.com/toasterbook88/axis/internal/turboexec"
 )
 
 const DefaultAddr = "127.0.0.1:42425"
@@ -407,6 +408,11 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 		}
 	}
 
+	turboPlan := turboexec.Prepare(targetNode, reqs, intent.command)
+	intent.command = turboPlan.Command
+	resp.Command = intent.command
+	resp.Reasoning = append(resp.Reasoning, turboPlan.Notes...)
+
 	k := knowledge.Build(rc.snap, rc.st, decision.Node)
 	if block := safety.Check(k, intent.command, rc.skillStore.IsKnownBad); block.Blocked {
 		resp.Blocked = true
@@ -443,6 +449,7 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 			"AXIS_CONTEXT_FILE="+contextFile.Name(),
 			"BEST_NODE="+decision.Node,
 		)
+		env = append(env, turboPlan.Env...)
 		if rc.st != nil {
 			execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
 			if err != nil {
@@ -500,11 +507,10 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 	}
 
 	quotedCmd := fmt.Sprintf(
-		"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -lc %s",
-		shellescape.Quote(decision.Node),
+		"%s trap 'rm -f %s' EXIT; bash -lc %s",
+		apiRemoteExecPrefix(decision.Node, remoteContextPath, turboPlan.Env),
 		shellescape.Quote(remoteContextPath),
-		shellescape.Quote(remoteContextPath),
-		shellescape.Quote(intent.command),
+		shellescape.Quote(turboPlan.Command),
 	)
 	out, err := executor.Run(ctx, quotedCmd)
 	resp.Output = out
@@ -519,6 +525,23 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 	recordSuccess(rc, req.Description, intent.command, decision.Node)
 	resp.OK = true
 	return resp, nil
+}
+
+func apiRemoteExecPrefix(node, contextPath string, extraEnv []string) string {
+	parts := []string{
+		"export",
+		"BEST_NODE=" + shellescape.Quote(node),
+		"AXIS_CONTEXT_FILE=" + shellescape.Quote(contextPath),
+	}
+	for _, kv := range extraEnv {
+		if strings.TrimSpace(kv) == "" {
+			continue
+		}
+		if idx := strings.Index(kv, "="); idx > 0 {
+			parts = append(parts, kv[:idx]+"="+shellescape.Quote(kv[idx+1:]))
+		}
+	}
+	return strings.Join(parts, " ") + ";"
 }
 
 func recordSuccess(rc *runnerContext, description, command, node string) {

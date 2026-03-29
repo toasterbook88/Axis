@@ -22,6 +22,7 @@ import (
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
+	"github.com/toasterbook88/axis/internal/turboexec"
 )
 
 var loadPlacementState = state.Load
@@ -304,8 +305,6 @@ func taskRunCmd() *cobra.Command {
 				fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
 			}
 
-			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", decision.Node, commandToRun)
-
 			reservationMB := reservationMBForRequirements(reqs)
 			if err := ensureReservationCapacity(snap, st, decision.Node, reservationMB); err != nil {
 				return err
@@ -320,6 +319,15 @@ func taskRunCmd() *cobra.Command {
 					break
 				}
 			}
+
+			turboPlan := turboexec.Prepare(targetNode, reqs, commandToRun)
+			commandToRun = turboPlan.Command
+
+			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n", decision.Node, commandToRun)
+			for _, note := range turboPlan.Notes {
+				fmt.Printf("  - %s\n", note)
+			}
+			fmt.Println()
 
 			// knowledge injection
 			k := knowledge.Build(snap, st, decision.Node)
@@ -361,6 +369,7 @@ func taskRunCmd() *cobra.Command {
 					"AXIS_CONTEXT_FILE="+contextFile.Name(),
 					"BEST_NODE="+decision.Node,
 				)
+				c.Env = append(c.Env, turboPlan.Env...)
 				if st != nil {
 					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
 					if err != nil {
@@ -419,9 +428,8 @@ func taskRunCmd() *cobra.Command {
 				}
 
 				quotedCmd := fmt.Sprintf(
-					"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -lc %s",
-					shellescape.Quote(decision.Node),
-					shellescape.Quote(remoteContextPath),
+					"%s trap 'rm -f %s' EXIT; bash -lc %s",
+					remoteExecPrefix(decision.Node, remoteContextPath, turboPlan.Env),
 					shellescape.Quote(remoteContextPath),
 					shellescape.Quote(commandToRun),
 				)
@@ -552,6 +560,23 @@ func sourceOrLive(source string) string {
 		return "live"
 	}
 	return source
+}
+
+func remoteExecPrefix(node, contextPath string, extraEnv []string) string {
+	parts := []string{
+		"export",
+		"BEST_NODE=" + shellescape.Quote(node),
+		"AXIS_CONTEXT_FILE=" + shellescape.Quote(contextPath),
+	}
+	for _, kv := range extraEnv {
+		if strings.TrimSpace(kv) == "" {
+			continue
+		}
+		if idx := strings.Index(kv, "="); idx > 0 {
+			parts = append(parts, kv[:idx]+"="+shellescape.Quote(kv[idx+1:]))
+		}
+	}
+	return strings.Join(parts, " ") + ";"
 }
 
 func contextHint(reqs models.TaskRequirements) string {
