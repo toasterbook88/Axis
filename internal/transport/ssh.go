@@ -81,8 +81,12 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	addr := net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
 	timeout := time.Duration(e.TimeoutSec) * time.Second
 
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 
@@ -121,6 +125,9 @@ func (e *SSHExecutor) Close() error {
 // Run executes a command via SSH and returns stdout.
 func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 	if e.client == nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if err := e.Connect(ctx); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return "", ctxErr
