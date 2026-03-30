@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -379,6 +381,120 @@ func TestServeUDS(t *testing.T) {
 		t.Errorf("expected 0600 permissions, got %o", info.Mode().Perm())
 	}
 }
+
+func TestDefaultAddr(t *testing.T) {
+	addr := DefaultAddr()
+	if !strings.HasSuffix(addr, filepath.Join(".axis", "axis.sock")) {
+		t.Errorf("unexpected DefaultAddr %q", addr)
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	if got := exitCode(nil); got != 0 {
+		t.Errorf("exitCode(nil) = %d, want 0", got)
+	}
+	if got := exitCode(errors.New("generic")); got != 1 {
+		t.Errorf("exitCode(generic) = %d, want 1", got)
+	}
+	cmd := exec.Command("false")
+	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if got := exitCode(err); got == 0 {
+			t.Errorf("exitCode(ExitError) = 0, want non-zero")
+		}
+	}
+}
+
+func TestFindNodeConfig(t *testing.T) {
+	cfg := &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "alpha"},
+			{Name: "beta"},
+		},
+	}
+	if n, ok := findNodeConfig(cfg, "alpha"); !ok || n.Name != "alpha" {
+		t.Errorf("expected to find alpha, got ok=%v name=%q", ok, n.Name)
+	}
+	if n, ok := findNodeConfig(cfg, "ALPHA"); !ok || n.Name != "alpha" {
+		t.Errorf("expected case-insensitive match, got ok=%v name=%q", ok, n.Name)
+	}
+	if _, ok := findNodeConfig(cfg, "gamma"); ok {
+		t.Error("expected gamma not found")
+	}
+}
+
+func TestRunTaskReturnsErrorWhenRuntimeFails(t *testing.T) {
+	restore := stubLiveRuntime(t, nil, errors.New("node discovery failed"))
+	defer restore()
+
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil, "tok")
+
+	body := `{"description":"run ollama","mode":"exec","confirm":"YES"}`
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp RunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.OK {
+		t.Error("expected ok=false when runtime fails")
+	}
+	if !strings.Contains(resp.Error, "node discovery failed") {
+		t.Errorf("expected error message, got %q", resp.Error)
+	}
+}
+
+func TestRunTaskReturnsNoSuitableNode(t *testing.T) {
+	rt := testRuntimeContext(
+		[]models.NodeFacts{testNode("mac", "mac.local", 1024, 512, "critical")},
+		nil, nil, &skills.Store{}, nil,
+	)
+	restore := stubLiveRuntime(t, rt, nil)
+	defer restore()
+
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil, "tok")
+
+	// Request 100GB RAM — no node will qualify
+	body := `{"description":"run 100GB inference","mode":"exec","confirm":"YES"}`
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp RunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Description != "run 100GB inference" {
+		t.Errorf("expected description echoed, got %q", resp.Description)
+	}
+}
+
+func TestRecordSuccess(t *testing.T) {
+	store := &skills.Store{}
+	rc := &runnerContext{
+		cfg:        &config.Config{},
+		snap:       &models.ClusterSnapshot{},
+		st:         nil,
+		skillStore: store,
+	}
+	// recordSuccess ignores Save errors; should not panic
+	recordSuccess(rc, "test task", "echo hello", "mac")
+}
+
 
 func stubLiveRuntime(t *testing.T, rt *runtimectx.Context, err error) func() {
 	t.Helper()
