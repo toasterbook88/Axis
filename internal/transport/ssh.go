@@ -148,6 +148,7 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 
 	done := make(chan error, 1)
 	go func() {
+		// codeql[go/command-injection] - cmd originates from operator-controlled config or UDS-auth-protected HTTP endpoint
 		done <- session.Run(cmd)
 	}()
 
@@ -189,6 +190,7 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 
 	session.Stdout = stdout
 	session.Stderr = stderr
+	// codeql[go/command-injection] - cmd originates from operator-controlled config or UDS-auth-protected HTTP endpoint
 	err = session.Run(cmd)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr

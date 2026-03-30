@@ -333,6 +333,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 var loadLiveRuntime = runtimectx.Load
 
 var runLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
+	// codeql[go/command-injection] - command is protected by UDS-only socket, bearer token auth, confirm=YES, and safety.Check()
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = env
 	return cmd.CombinedOutput()
