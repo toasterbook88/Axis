@@ -122,6 +122,9 @@ func (e *SSHExecutor) Close() error {
 func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 	if e.client == nil {
 		if err := e.Connect(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
 			return "", err
 		}
 	}

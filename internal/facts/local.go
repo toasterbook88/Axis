@@ -157,7 +157,12 @@ func supportsAppleFoundationModelsOS(osVersion string) bool {
 }
 
 func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
-	helperPath, err := buildAppleFoundationModelsHelperFn(ctx)
+	// Compilation is a one-time, potentially slow operation (first-time xcrun swiftc
+	// can take tens of seconds). Give it its own generous timeout rather than
+	// inheriting the short probe deadline, so the cache is populated correctly.
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer buildCancel()
+	helperPath, err := buildAppleFoundationModelsHelperFn(buildCtx)
 	if err != nil {
 		return "", err
 	}
