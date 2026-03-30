@@ -332,6 +332,12 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 
 var loadLiveRuntime = runtimectx.Load
 
+var runLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+	cmd.Env = env
+	return cmd.CombinedOutput()
+}
+
 func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 	rt, err := loadLiveRuntime(ctx)
 	if err != nil {
@@ -476,8 +482,7 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 			return resp, err
 		}
 
-		cmd := exec.CommandContext(ctx, "bash", "-lc", intent.command)
-		cmd.Env = append(os.Environ(),
+		env := append(os.Environ(),
 			"AXIS_CONTEXT_FILE="+contextFile.Name(),
 			"BEST_NODE="+decision.Node,
 		)
@@ -493,7 +498,7 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 				}
 			}()
 		}
-		out, err := cmd.CombinedOutput()
+		out, err := runLocalShell(ctx, intent.command, env)
 		resp.Output = string(out)
 		resp.ExitCode = exitCode(err)
 		if err != nil {

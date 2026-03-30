@@ -495,6 +495,16 @@ func TestRecordSuccess(t *testing.T) {
 	recordSuccess(rc, "test task", "echo hello", "mac")
 }
 
+func TestRunLocalShell(t *testing.T) {
+	out, err := runLocalShell(context.Background(), "echo axis-ok", nil)
+	if err != nil {
+		t.Fatalf("runLocalShell: %v", err)
+	}
+	if !strings.Contains(string(out), "axis-ok") {
+		t.Errorf("unexpected output: %q", out)
+	}
+}
+
 
 func stubLiveRuntime(t *testing.T, rt *runtimectx.Context, err error) func() {
 	t.Helper()
