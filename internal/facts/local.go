@@ -157,16 +157,32 @@ func supportsAppleFoundationModelsOS(osVersion string) bool {
 }
 
 func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
-	helperPath, err := buildAppleFoundationModelsHelperFn(ctx)
-	if err != nil {
-		return "", err
+	type buildResult struct {
+		path string
+		err  error
 	}
-	out, err := appleFoundationModelsProbeCommandFn(
-		ctx,
-		helperPath,
-		"--self-test",
-	).CombinedOutput()
-	return string(out), err
+	ch := make(chan buildResult, 1)
+	go func() {
+		// Compilation is a one-time, potentially slow operation (first-time
+		// xcrun swiftc can take tens of seconds). Give it its own generous
+		// timeout so the cache is populated correctly on first run, without
+		// blocking the caller context which has a short probe deadline.
+		buildCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		path, err := buildAppleFoundationModelsHelperFn(buildCtx)
+		ch <- buildResult{path, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-ch:
+		if result.err != nil {
+			return "", result.err
+		}
+		out, err := appleFoundationModelsProbeCommandFn(ctx, result.path, "--self-test").CombinedOutput()
+		return string(out), err
+	}
 }
 
 func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {

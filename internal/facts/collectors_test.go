@@ -49,6 +49,14 @@ func (f *fakeRemoteExecutor) Close() error {
 }
 
 func TestLocalCollectorCollectsFacts(t *testing.T) {
+	// Stub the Apple FM probe so this unit test does not trigger a real Swift
+	// compilation, which can block for well over a minute on first run.
+	prev := runAppleFoundationModelsProbeFn
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
+		return "", fmt.Errorf("apple foundation models unavailable in unit test environment")
+	}
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+
 	collector := NewLocalCollector("local-node", "worker")
 
 	facts, err := collector.Collect(context.Background())
