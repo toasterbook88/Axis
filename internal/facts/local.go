@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -22,6 +23,11 @@ type LocalCollector struct {
 }
 
 var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
+var findAppleFoundationModelsHelperFn = findAppleFoundationModelsHelper
+var buildAppleFoundationModelsHelperFn = buildAppleFoundationModelsHelper
+var appleFoundationModelsProbeCommandFn = exec.CommandContext
+var appleFoundationModelsBuildCommandFn = exec.CommandContext
+var appleFoundationModelsHomeDirFn = os.UserHomeDir
 
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
@@ -120,22 +126,18 @@ func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion st
 
 	out, err := runAppleFoundationModelsProbeFn(probeCtx)
 	trimmedOut := strings.TrimSpace(out)
-	okMarker := probeOutputContainsOK(trimmedOut)
 	info := &models.AppleFoundationModelsInfo{
 		Version:   osVersion,
 		Available: err == nil,
-		Verified:  err == nil && okMarker,
+		Verified:  err == nil && trimmedOut != "",
 	}
 	if err != nil {
 		info.Error = trimmedOut
 		if info.Error == "" {
 			info.Error = err.Error()
 		}
-	} else if !okMarker {
-		info.Error = "apple foundation models probe did not return expected OK marker"
-		if trimmedOut != "" {
-			info.Error += ": " + trimmedOut
-		}
+	} else if trimmedOut == "" {
+		info.Error = "apple foundation models probe returned empty output"
 	}
 	return info
 }
@@ -154,23 +156,103 @@ func supportsAppleFoundationModelsOS(osVersion string) bool {
 }
 
 func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(
+	helperPath, err := buildAppleFoundationModelsHelperFn(ctx)
+	if err != nil {
+		return "", err
+	}
+	out, err := appleFoundationModelsProbeCommandFn(
 		ctx,
-		"xcrun",
-		"swift",
-		"-e",
-		`import FoundationModels; let session = LanguageModelSession(); let response = try await session.respond(to: "Reply with exactly OK"); print(response.content)`,
+		helperPath,
+		"--self-test",
 	).CombinedOutput()
 	return string(out), err
 }
 
-func probeOutputContainsOK(out string) bool {
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == "OK" {
-			return true
+func findAppleFoundationModelsHelper() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory for apple foundation models helper: %w", err)
+	}
+
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, "hack", "apple-foundation-models.swift")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
 		}
 	}
-	return false
+
+	return "", fmt.Errorf("apple foundation models helper not found from %s", wd)
+}
+
+func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
+	helperSource, err := findAppleFoundationModelsHelperFn()
+	if err != nil {
+		return "", err
+	}
+
+	homeDir, err := appleFoundationModelsHomeDirFn()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory for apple foundation models helper: %w", err)
+	}
+
+	cacheDir := filepath.Join(homeDir, ".axis", "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("create apple foundation models cache directory: %w", err)
+	}
+
+	helperBinary := filepath.Join(cacheDir, "apple-foundation-models-helper")
+	upToDate, err := appleFoundationModelsHelperUpToDate(helperSource, helperBinary)
+	if err != nil {
+		return "", err
+	}
+	if upToDate {
+		return helperBinary, nil
+	}
+
+	tmpBinary := fmt.Sprintf("%s.tmp-%d", helperBinary, time.Now().UnixNano())
+	out, err := appleFoundationModelsBuildCommandFn(
+		ctx,
+		"xcrun",
+		"swiftc",
+		helperSource,
+		"-o",
+		tmpBinary,
+	).CombinedOutput()
+	if err != nil {
+		_ = os.Remove(tmpBinary)
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("build apple foundation models helper: %s", msg)
+	}
+	if err := os.Rename(tmpBinary, helperBinary); err != nil {
+		_ = os.Remove(tmpBinary)
+		return "", fmt.Errorf("install apple foundation models helper: %w", err)
+	}
+	return helperBinary, nil
+}
+
+func appleFoundationModelsHelperUpToDate(helperSource, helperBinary string) (bool, error) {
+	sourceInfo, err := os.Stat(helperSource)
+	if err != nil {
+		return false, fmt.Errorf("stat apple foundation models helper source: %w", err)
+	}
+	binaryInfo, err := os.Stat(helperBinary)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat apple foundation models helper binary: %w", err)
+	}
+	if binaryInfo.IsDir() {
+		return false, fmt.Errorf("apple foundation models helper binary path is a directory: %s", helperBinary)
+	}
+	return !binaryInfo.ModTime().Before(sourceInfo.ModTime()), nil
 }
 
 func localOSVersion() (string, error) {

@@ -3,7 +3,9 @@ package facts
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,16 +133,30 @@ func TestDetectAppleFoundationModelsAcceptsTrailingProbeNoise(t *testing.T) {
 
 	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
 	if info == nil || !info.Verified {
-		t.Fatalf("expected OK marker to remain verified, got %+v", info)
+		t.Fatalf("expected non-empty successful probe to remain verified, got %+v", info)
 	}
 }
 
-func TestDetectAppleFoundationModelsRejectsMissingProbeMarker(t *testing.T) {
+func TestDetectAppleFoundationModelsAcceptsQuotedProbeMarker(t *testing.T) {
 	prev := runAppleFoundationModelsProbeFn
 	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
 
 	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
-		return "swift-driver warning\nready\n", nil
+		return "Sure! Here is an example of an exact reply:\n\n\"OK\"\n\nAnything else?\n", nil
+	}
+
+	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
+	if info == nil || !info.Verified {
+		t.Fatalf("expected quoted probe response to remain verified, got %+v", info)
+	}
+}
+
+func TestDetectAppleFoundationModelsRejectsEmptyProbeOutput(t *testing.T) {
+	prev := runAppleFoundationModelsProbeFn
+	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+
+	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
+		return "\n", nil
 	}
 
 	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
@@ -148,10 +164,118 @@ func TestDetectAppleFoundationModelsRejectsMissingProbeMarker(t *testing.T) {
 		t.Fatal("expected apple foundation models info")
 	}
 	if info.Verified {
-		t.Fatalf("expected missing OK marker to stay unverified, got %+v", info)
+		t.Fatalf("expected empty probe output to stay unverified, got %+v", info)
 	}
-	if !strings.Contains(info.Error, "expected OK marker") {
-		t.Fatalf("expected missing marker error, got %+v", info)
+	if !strings.Contains(info.Error, "empty output") {
+		t.Fatalf("expected empty output error, got %+v", info)
+	}
+}
+
+func TestRunAppleFoundationModelsProbeUsesHelperScript(t *testing.T) {
+	prevBuild := buildAppleFoundationModelsHelperFn
+	prevCmd := appleFoundationModelsProbeCommandFn
+	t.Cleanup(func() {
+		buildAppleFoundationModelsHelperFn = prevBuild
+		appleFoundationModelsProbeCommandFn = prevCmd
+	})
+
+	buildAppleFoundationModelsHelperFn = func(context.Context) (string, error) {
+		return "/tmp/apple-foundation-models-helper", nil
+	}
+	appleFoundationModelsProbeCommandFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name != "/tmp/apple-foundation-models-helper" {
+			t.Fatalf("expected compiled helper probe launcher, got %q", name)
+		}
+		got := strings.Join(args, " ")
+		want := "--self-test"
+		if got != want {
+			t.Fatalf("unexpected probe args: got %q want %q", got, want)
+		}
+		return exec.CommandContext(ctx, "bash", "-lc", `printf 'OK\n'`)
+	}
+
+	out, err := runAppleFoundationModelsProbe(context.Background())
+	if err != nil {
+		t.Fatalf("run apple foundation models probe: %v", err)
+	}
+	if strings.TrimSpace(out) != "OK" {
+		t.Fatalf("unexpected probe output: %q", out)
+	}
+}
+
+func TestRunAppleFoundationModelsProbeReturnsHelperLookupError(t *testing.T) {
+	prevBuild := buildAppleFoundationModelsHelperFn
+	t.Cleanup(func() { buildAppleFoundationModelsHelperFn = prevBuild })
+
+	buildAppleFoundationModelsHelperFn = func(context.Context) (string, error) {
+		return "", fmt.Errorf("helper missing")
+	}
+
+	if _, err := runAppleFoundationModelsProbe(context.Background()); err == nil || !strings.Contains(err.Error(), "helper missing") {
+		t.Fatalf("expected helper lookup error, got %v", err)
+	}
+}
+
+func TestBuildAppleFoundationModelsHelperBuildsAndCachesBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	helperSource := filepath.Join(tmpDir, "hack", "apple-foundation-models.swift")
+	if err := os.MkdirAll(filepath.Dir(helperSource), 0o755); err != nil {
+		t.Fatalf("mkdir helper dir: %v", err)
+	}
+	if err := os.WriteFile(helperSource, []byte("print(\"OK\")\n"), 0o644); err != nil {
+		t.Fatalf("write helper source: %v", err)
+	}
+
+	prevFind := findAppleFoundationModelsHelperFn
+	prevHome := appleFoundationModelsHomeDirFn
+	prevBuild := appleFoundationModelsBuildCommandFn
+	t.Cleanup(func() {
+		findAppleFoundationModelsHelperFn = prevFind
+		appleFoundationModelsHomeDirFn = prevHome
+		appleFoundationModelsBuildCommandFn = prevBuild
+	})
+
+	findAppleFoundationModelsHelperFn = func() (string, error) {
+		return helperSource, nil
+	}
+	appleFoundationModelsHomeDirFn = func() (string, error) {
+		return tmpDir, nil
+	}
+
+	buildCalls := 0
+	appleFoundationModelsBuildCommandFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		buildCalls++
+		if name != "xcrun" {
+			t.Fatalf("expected xcrun builder, got %q", name)
+		}
+		if len(args) != 4 || args[0] != "swiftc" || args[1] != helperSource || args[2] != "-o" {
+			t.Fatalf("unexpected builder args: %q", strings.Join(args, " "))
+		}
+		tmpBinary := args[3]
+		return exec.CommandContext(ctx, "bash", "-lc", fmt.Sprintf("mkdir -p %q && printf '#!/bin/sh\\necho OK\\n' > %q && chmod +x %q", filepath.Dir(tmpBinary), tmpBinary, tmpBinary))
+	}
+
+	got, err := buildAppleFoundationModelsHelper(context.Background())
+	if err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+	want := filepath.Join(tmpDir, ".axis", "cache", "apple-foundation-models-helper")
+	if got != want {
+		t.Fatalf("unexpected helper path: got %q want %q", got, want)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("expected built helper binary: %v", err)
+	}
+
+	got, err = buildAppleFoundationModelsHelper(context.Background())
+	if err != nil {
+		t.Fatalf("rebuild helper: %v", err)
+	}
+	if got != want {
+		t.Fatalf("unexpected cached helper path: got %q want %q", got, want)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("expected cached helper build once, got %d", buildCalls)
 	}
 }
 
