@@ -315,15 +315,13 @@ See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md
 
 The following are planned directions, not current functionality:
 
-- Background coordinator (`axisd`)
 - Mesh networking / peer discovery beyond a static seed file
-- Advanced RAM balancing / PSI-aware placement work
 - Event-driven cache refresh instead of timer-only freshness
-- Phase 2+ features — see [white paper](docs/white_paper_v1.md)
+- Phase 3+ features — see [white paper](docs/white_paper_v1.md)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an issue before adding Phase 2+ features.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an issue before adding Phase 3+ features.
 
 ## License
 
