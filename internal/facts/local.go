@@ -23,11 +23,12 @@ type LocalCollector struct {
 }
 
 var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
-var findAppleFoundationModelsHelperFn = findAppleFoundationModelsHelper
 var buildAppleFoundationModelsHelperFn = buildAppleFoundationModelsHelper
 var appleFoundationModelsProbeCommandFn = exec.CommandContext
 var appleFoundationModelsBuildCommandFn = exec.CommandContext
 var appleFoundationModelsHomeDirFn = os.UserHomeDir
+var appleFoundationModelsReadFileFn = os.ReadFile
+var appleFoundationModelsWriteFileFn = os.WriteFile
 
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
@@ -168,32 +169,7 @@ func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
 	return string(out), err
 }
 
-func findAppleFoundationModelsHelper() (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("resolve working directory for apple foundation models helper: %w", err)
-	}
-
-	for dir := wd; ; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, "hack", "apple-foundation-models.swift")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return candidate, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-	}
-
-	return "", fmt.Errorf("apple foundation models helper not found from %s", wd)
-}
-
 func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
-	helperSource, err := findAppleFoundationModelsHelperFn()
-	if err != nil {
-		return "", err
-	}
-
 	homeDir, err := appleFoundationModelsHomeDirFn()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory for apple foundation models helper: %w", err)
@@ -202,6 +178,11 @@ func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
 	cacheDir := filepath.Join(homeDir, ".axis", "cache")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("create apple foundation models cache directory: %w", err)
+	}
+
+	helperSource := filepath.Join(cacheDir, "apple-foundation-models.swift")
+	if err := ensureAppleFoundationModelsHelperSource(helperSource); err != nil {
+		return "", err
 	}
 
 	helperBinary := filepath.Join(cacheDir, "apple-foundation-models-helper")
@@ -213,7 +194,17 @@ func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
 		return helperBinary, nil
 	}
 
-	tmpBinary := fmt.Sprintf("%s.tmp-%d", helperBinary, time.Now().UnixNano())
+	tmpFile, err := os.CreateTemp(cacheDir, "apple-foundation-models-helper-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temporary file for apple foundation models helper: %w", err)
+	}
+	tmpBinary := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpBinary)
+		return "", fmt.Errorf("close temporary helper file: %w", err)
+	}
+	defer os.Remove(tmpBinary)
+
 	out, err := appleFoundationModelsBuildCommandFn(
 		ctx,
 		"xcrun",
@@ -223,7 +214,6 @@ func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
 		tmpBinary,
 	).CombinedOutput()
 	if err != nil {
-		_ = os.Remove(tmpBinary)
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			msg = err.Error()
@@ -231,10 +221,24 @@ func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("build apple foundation models helper: %s", msg)
 	}
 	if err := os.Rename(tmpBinary, helperBinary); err != nil {
-		_ = os.Remove(tmpBinary)
 		return "", fmt.Errorf("install apple foundation models helper: %w", err)
 	}
 	return helperBinary, nil
+}
+
+func ensureAppleFoundationModelsHelperSource(helperSource string) error {
+	existing, err := appleFoundationModelsReadFileFn(helperSource)
+	switch {
+	case err == nil && string(existing) == appleFoundationModelsHelperSource:
+		return nil
+	case err != nil && !os.IsNotExist(err):
+		return fmt.Errorf("read apple foundation models helper source: %w", err)
+	}
+
+	if err := appleFoundationModelsWriteFileFn(helperSource, []byte(appleFoundationModelsHelperSource), 0o644); err != nil {
+		return fmt.Errorf("write apple foundation models helper source: %w", err)
+	}
+	return nil
 }
 
 func appleFoundationModelsHelperUpToDate(helperSource, helperBinary string) (bool, error) {

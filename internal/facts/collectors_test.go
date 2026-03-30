@@ -171,7 +171,7 @@ func TestDetectAppleFoundationModelsRejectsEmptyProbeOutput(t *testing.T) {
 	}
 }
 
-func TestRunAppleFoundationModelsProbeUsesHelperScript(t *testing.T) {
+func TestRunAppleFoundationModelsProbeUsesHelperBinary(t *testing.T) {
 	prevBuild := buildAppleFoundationModelsHelperFn
 	prevCmd := appleFoundationModelsProbeCommandFn
 	t.Cleanup(func() {
@@ -203,41 +203,15 @@ func TestRunAppleFoundationModelsProbeUsesHelperScript(t *testing.T) {
 	}
 }
 
-func TestRunAppleFoundationModelsProbeReturnsHelperLookupError(t *testing.T) {
-	prevBuild := buildAppleFoundationModelsHelperFn
-	t.Cleanup(func() { buildAppleFoundationModelsHelperFn = prevBuild })
-
-	buildAppleFoundationModelsHelperFn = func(context.Context) (string, error) {
-		return "", fmt.Errorf("helper missing")
-	}
-
-	if _, err := runAppleFoundationModelsProbe(context.Background()); err == nil || !strings.Contains(err.Error(), "helper missing") {
-		t.Fatalf("expected helper lookup error, got %v", err)
-	}
-}
-
 func TestBuildAppleFoundationModelsHelperBuildsAndCachesBinary(t *testing.T) {
 	tmpDir := t.TempDir()
-	helperSource := filepath.Join(tmpDir, "hack", "apple-foundation-models.swift")
-	if err := os.MkdirAll(filepath.Dir(helperSource), 0o755); err != nil {
-		t.Fatalf("mkdir helper dir: %v", err)
-	}
-	if err := os.WriteFile(helperSource, []byte("print(\"OK\")\n"), 0o644); err != nil {
-		t.Fatalf("write helper source: %v", err)
-	}
-
-	prevFind := findAppleFoundationModelsHelperFn
 	prevHome := appleFoundationModelsHomeDirFn
 	prevBuild := appleFoundationModelsBuildCommandFn
 	t.Cleanup(func() {
-		findAppleFoundationModelsHelperFn = prevFind
 		appleFoundationModelsHomeDirFn = prevHome
 		appleFoundationModelsBuildCommandFn = prevBuild
 	})
 
-	findAppleFoundationModelsHelperFn = func() (string, error) {
-		return helperSource, nil
-	}
 	appleFoundationModelsHomeDirFn = func() (string, error) {
 		return tmpDir, nil
 	}
@@ -248,6 +222,7 @@ func TestBuildAppleFoundationModelsHelperBuildsAndCachesBinary(t *testing.T) {
 		if name != "xcrun" {
 			t.Fatalf("expected xcrun builder, got %q", name)
 		}
+		helperSource := filepath.Join(tmpDir, ".axis", "cache", "apple-foundation-models.swift")
 		if len(args) != 4 || args[0] != "swiftc" || args[1] != helperSource || args[2] != "-o" {
 			t.Fatalf("unexpected builder args: %q", strings.Join(args, " "))
 		}
@@ -265,6 +240,14 @@ func TestBuildAppleFoundationModelsHelperBuildsAndCachesBinary(t *testing.T) {
 	}
 	if _, err := os.Stat(got); err != nil {
 		t.Fatalf("expected built helper binary: %v", err)
+	}
+	sourcePath := filepath.Join(tmpDir, ".axis", "cache", "apple-foundation-models.swift")
+	sourceData, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("expected embedded helper source to be written: %v", err)
+	}
+	if string(sourceData) != appleFoundationModelsHelperSource {
+		t.Fatal("expected cached helper source to match embedded source")
 	}
 
 	got, err = buildAppleFoundationModelsHelper(context.Background())
