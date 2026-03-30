@@ -12,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 type fakeCache struct {
@@ -375,4 +378,77 @@ func TestServeUDS(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Errorf("expected 0600 permissions, got %o", info.Mode().Perm())
 	}
+}
+
+func stubLiveRuntime(t *testing.T, rt *runtimectx.Context, err error) func() {
+	t.Helper()
+	prev := loadLiveRuntime
+	loadLiveRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return rt, err
+	}
+	return func() {
+		loadLiveRuntime = prev
+	}
+}
+
+func testRuntimeContext(nodes []models.NodeFacts, cfgNodes []config.NodeConfig, st *state.ClusterState, store *skills.Store, warnings []models.Warning) *runtimectx.Context {
+	return &runtimectx.Context{
+		Config: &config.Config{Nodes: cfgNodes},
+		Snapshot: &models.ClusterSnapshot{
+			Status:   models.SnapshotHealthy,
+			Nodes:    nodes,
+			Summary:  summarizeNodes(nodes),
+			Warnings: warnings,
+		},
+		State:  st,
+		Skills: store,
+	}
+}
+
+func summarizeNodes(nodes []models.NodeFacts) models.ClusterSummary {
+	summary := models.ClusterSummary{TotalNodes: len(nodes)}
+	for _, node := range nodes {
+		if node.Status == models.StatusComplete || node.Status == models.StatusPartial {
+			summary.ReachableNodes++
+		}
+		if node.Resources == nil {
+			continue
+		}
+		summary.TotalRAMMB += node.Resources.RAMTotalMB
+		summary.TotalFreeRAMMB += node.Resources.RAMFreeMB
+		summary.TotalReservedMB += node.Resources.RAMReservedMB
+		summary.TotalAllocatableMB += node.Resources.RAMAllocatableMB
+	}
+	return summary
+}
+
+func testNode(name, hostname string, totalRAM, freeRAM int64, pressure string, tools ...string) models.NodeFacts {
+	node := models.NodeFacts{
+		Name:     name,
+		Hostname: hostname,
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: totalRAM,
+			RAMFreeMB:  freeRAM,
+			Pressure:   pressure,
+			CPUCores:   8,
+		},
+	}
+	for _, tool := range tools {
+		node.Tools = append(node.Tools, models.ToolInfo{Name: tool, Version: "test"})
+	}
+	return node
+}
+
+func testTurboNode(name, hostname string, verified bool) models.NodeFacts {
+	node := testNode(name, hostname, 16384, 8192, "low", "llama-server")
+	node.Resources.PressureSource = "linux-psi"
+	node.Resources.PressureStall10 = 6.5
+	node.TurboQuant = &models.TurboQuantInfo{
+		Supported:    true,
+		Verified:     verified,
+		Backends:     []string{"llama.cpp"},
+		Capabilities: []string{"backend-probed", "ctx-size-flag", "flash-attn-flag", "llama.cpp-runtime"},
+	}
+	return node
 }

@@ -17,14 +17,13 @@ import (
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
-	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
-	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
@@ -331,32 +330,18 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	}, token))
 }
 
+var loadLiveRuntime = runtimectx.Load
+
 func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
-	cfg, err := config.Load(config.DefaultConfigPath())
+	rt, err := loadLiveRuntime(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	discoveryCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	nodes := discovery.Discover(discoveryCtx, cfg)
-	snap := snapshot.Build(nodes)
-
-	st, err := state.Load()
-	if err != nil {
-		return nil, err
-	}
-
-	skillStore, err := skills.Load()
-	if err != nil {
-		skillStore = &skills.Store{}
-	}
-
 	return &runnerContext{
-		cfg:        cfg,
-		snap:       snap,
-		st:         st,
-		skillStore: skillStore,
+		cfg:        rt.Config,
+		snap:       rt.Snapshot,
+		st:         rt.State,
+		skillStore: rt.Skills,
 	}, nil
 }
 
