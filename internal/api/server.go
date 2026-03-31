@@ -106,8 +106,18 @@ func Serve(addr string, cache snapshotCache, token string) error {
 	}
 
 	if auth.IsUnixAddr(addr) {
-		if err := os.Remove(addr); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("removing existing socket: %w", err)
+		if err := os.MkdirAll(filepath.Dir(addr), 0700); err != nil {
+			return fmt.Errorf("creating unix socket directory: %w", err)
+		}
+		if fi, err := os.Lstat(addr); err == nil {
+			if fi.Mode()&os.ModeSocket == 0 {
+				return fmt.Errorf("refusing to remove non-socket file at %s", addr)
+			}
+			if err := os.Remove(addr); err != nil {
+				return fmt.Errorf("removing existing socket: %w", err)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat socket path: %w", err)
 		}
 		ln, err := net.Listen("unix", addr)
 		if err != nil {
@@ -136,7 +146,7 @@ func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
+		parts := strings.Fields(authHeader)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
 			writeError(w, http.StatusUnauthorized, "invalid authorization header format")
 			return

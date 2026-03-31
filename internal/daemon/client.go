@@ -84,8 +84,9 @@ func HttpClientForAddr(addr string) (*http.Client, string) {
 	}
 	if auth.IsUnixAddr(addr) {
 		client.Transport = &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", addr)
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", addr)
 			},
 		}
 		return client, "http://localhost"

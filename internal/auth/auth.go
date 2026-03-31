@@ -28,7 +28,7 @@ func LoadOrGenerateToken() (string, error) {
 	}
 
 	path := TokenPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", fmt.Errorf("creating config directory: %w", err)
 	}
 
@@ -47,7 +47,12 @@ func LoadOrGenerateToken() (string, error) {
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		return strings.TrimSpace(string(data)), nil
+		token := strings.TrimSpace(string(data))
+		// Validate: token must be non-empty and the expected 64-char hex length.
+		if len(token) == 64 {
+			return token, nil
+		}
+		// Token file is corrupted or empty; regenerate under the lock.
 	}
 
 	if !os.IsNotExist(err) {
@@ -76,20 +81,55 @@ func GenerateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SaveToken saves the token to ~/.axis/token with 0600 permissions.
+// SaveToken saves the token to ~/.axis/token atomically with 0600 permissions.
+// Uses a temp file + rename to avoid partial writes on crash.
 func SaveToken(token string) error {
 	path := TokenPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(token), 0600)
+
+	tmp, err := os.CreateTemp(dir, "token.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	ok := false
+	defer func() {
+		if !ok {
+			tmp.Close()
+			os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write([]byte(token)); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	ok = true
+	// Enforce permissions on the destination even if it previously existed
+	// with broader permissions.
+	return os.Chmod(path, 0600)
 }
 
-// IsUnixAddr returns true if the address appears to be a Unix socket path.
+// IsUnixAddr returns true if the address is a Unix socket path.
+// Requires an explicit path prefix (/, ./, ../) to avoid misidentifying
+// bare hostnames or IP addresses.
 func IsUnixAddr(addr string) bool {
-	if strings.HasPrefix(addr, "/") || strings.HasPrefix(addr, "./") || strings.HasPrefix(addr, "../") {
-		return true
-	}
-	// Heuristic: if it doesn't have a colon, it's likely a local file path
-	return !strings.Contains(addr, ":")
+	return strings.HasPrefix(addr, "/") ||
+		strings.HasPrefix(addr, "./") ||
+		strings.HasPrefix(addr, "../")
 }
