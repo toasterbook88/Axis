@@ -316,8 +316,15 @@ See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md
 The following are planned directions, not current functionality:
 
 - Mesh networking / peer discovery beyond a static seed file
-- Event-driven cache refresh instead of timer-only freshness
-- Phase 3+ features — see [white paper](docs/white_paper_v1.md)
+- Phase 4+ features — see [white paper](docs/white_paper_v1.md)
+
+### What's new in Phase 3 (v0.3.x)
+
+- **nodes.yaml hot-reload** — daemon detects config changes and re-discovers nodes without restart
+- **Daemon refresh metrics** — `/health` reports `refresh_count`, `last_refresh_duration_ms`, `stale_nodes`
+- **Graceful shutdown** — `axis serve` drains in-flight work before exit
+- **`axis task context --format json`** — machine-readable context block with fit score, skills, and recent decisions
+- **HMAC-SHA256 beacon auth** — UDP discovery signs beacons instead of transmitting the shared secret
 
 ## Contributing
 

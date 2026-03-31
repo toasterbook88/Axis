@@ -102,7 +102,7 @@ func TestHealthHandlerRejectsNonGET(t *testing.T) {
 
 func TestSnapshotHandlerReturnsSnapshot(t *testing.T) {
 	snap := &models.ClusterSnapshot{
-		Status: models.SnapshotHealthy,
+		Status:  models.SnapshotHealthy,
 		Summary: models.ClusterSummary{TotalNodes: 2},
 	}
 	h := snapshotHandler(&mockCache{snap: snap})

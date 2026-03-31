@@ -189,15 +189,16 @@ func TestStartUDPAddsBeaconDiscoveredNode(t *testing.T) {
 		},
 	}, discovered, &mu)
 
-	sendBeacon(t, port, Beacon{
+	b := Beacon{
 		Type:      "axis",
 		Name:      "beacon-node",
 		IP:        "10.0.0.9",
 		SSHPort:   2200,
 		Role:      "worker",
 		Timestamp: time.Now().UTC(),
-		Secret:    "shared",
-	})
+	}
+	b.Sig = signBeacon(b, "shared")
+	sendBeacon(t, port, b)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -233,20 +234,23 @@ func TestStartUDPIgnoresSecretMismatchAndStaleBeacons(t *testing.T) {
 		},
 	}, discovered, &mu)
 
-	sendBeacon(t, port, Beacon{
+	wrongSig := Beacon{
 		Type:      "axis",
 		Name:      "wrong-secret",
 		IP:        "10.0.0.9",
 		Timestamp: time.Now().UTC(),
-		Secret:    "nope",
-	})
-	sendBeacon(t, port, Beacon{
+	}
+	wrongSig.Sig = signBeacon(wrongSig, "nope") // wrong secret → bad HMAC
+	sendBeacon(t, port, wrongSig)
+
+	stale := Beacon{
 		Type:      "axis",
 		Name:      "stale-node",
 		IP:        "10.0.0.10",
 		Timestamp: time.Now().UTC().Add(-31 * time.Second),
-		Secret:    "shared",
-	})
+	}
+	stale.Sig = signBeacon(stale, "shared")
+	sendBeacon(t, port, stale)
 
 	time.Sleep(150 * time.Millisecond)
 

@@ -76,6 +76,13 @@ func HealthPayload(meta *Metadata) map[string]any {
 	payload["cache_ready"] = meta.Ready
 	payload["cache_stale"] = meta.Stale
 	payload["cache_age_sec"] = meta.CacheAgeSec
+	payload["refresh_count"] = meta.RefreshCount
+	if meta.LastRefreshMs > 0 {
+		payload["last_refresh_duration_ms"] = meta.LastRefreshMs
+	}
+	if len(meta.StaleNodes) > 0 {
+		payload["stale_nodes"] = meta.StaleNodes
+	}
 	if !meta.CollectedAt.IsZero() {
 		payload["cache_collected_at"] = meta.CollectedAt
 	}
