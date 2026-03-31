@@ -33,7 +33,7 @@ func TestKnowledgeEndpointCorruptPersistenceGolden(t *testing.T) {
 	defer restore()
 
 	mux := http.NewServeMux()
-	registerRoutes(mux, nil)
+	registerRoutes(mux, nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/knowledge", nil)
 	rec := httptest.NewRecorder()

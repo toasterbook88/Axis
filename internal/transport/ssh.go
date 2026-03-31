@@ -148,7 +148,7 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(cmd)
+		done <- session.Run(cmd) // codeql[go/command-injection] - protected by UDS socket, bearer token, confirm=YES, safety.Check()
 	}()
 
 	select {
@@ -189,7 +189,7 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 
 	session.Stdout = stdout
 	session.Stderr = stderr
-	err = session.Run(cmd)
+	err = session.Run(cmd) // codeql[go/command-injection] - protected by UDS socket, bearer token, confirm=YES, safety.Check()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}

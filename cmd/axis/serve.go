@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -24,8 +26,8 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 	return daemon.NewDefault(refreshInterval)
 }
 
-var serveHTTPAPI = func(addr string, d serveDaemon) error {
-	return daemon.Serve(addr, d)
+var serveHTTPAPI = func(addr string, d serveDaemon, token string) error {
+	return api.Serve(addr, d, token)
 }
 
 func serveCmd() *cobra.Command {
@@ -39,15 +41,24 @@ func serveCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			token, err := auth.LoadOrGenerateToken()
+			if err != nil {
+				return fmt.Errorf("failed to load/generate API token: %w", err)
+			}
+
 			d := newServeDaemon(refreshInterval)
 			d.Start(ctx)
 
-			fmt.Fprintf(cmd.OutOrStdout(), "AXIS HTTP API listening on http://%s\n", addr)
-			return serveHTTPAPI(addr, d)
+			protocol := "http"
+			if auth.IsUnixAddr(addr) {
+				protocol = "unix"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "AXIS HTTP API listening on %s://%s\n", protocol, addr)
+			return serveHTTPAPI(addr, d, token)
 		},
 	}
 
-	cmd.Flags().StringVar(&addr, "addr", daemon.DefaultAddr, "Listen address for the local AXIS HTTP API")
+	cmd.Flags().StringVar(&addr, "addr", api.DefaultAddr(), "Listen address for the local AXIS API (Unix socket or TCP host:port)")
 	cmd.Flags().DurationVar(&refreshInterval, "refresh", time.Minute, "Background snapshot refresh interval")
 	return cmd
 }
