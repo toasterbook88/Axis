@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
@@ -113,7 +114,7 @@ func taskPlaceCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().StringVar(&cacheAddr, "cache-addr", daemon.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
 }
 
@@ -338,7 +339,7 @@ func taskContextCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().StringVar(&cacheAddr, "cache-addr", daemon.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
 }
 

@@ -53,8 +53,11 @@ gofmt -w .
 AXIS is intentionally narrow. Contributions should reduce operator confusion and
 keep model-mediated or execution-heavy surfaces subordinate to observed state.
 
+Phase 2 (UDS+bearer-auth API and advisory task placement) is complete and stable;
+those surfaces are part of the existing scope and can be improved or bug-fixed.
+
 **Do:**
-- Fix bugs in existing fact collectors, discovery, snapshot assembly, or placement
+- Fix bugs in existing fact collectors, discovery, snapshot assembly, placement, API server, or authentication layer
 - Improve error handling or robustness of existing collectors
 - Add test coverage for existing behavior
 - Improve documentation accuracy

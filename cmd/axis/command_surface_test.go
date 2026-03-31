@@ -149,7 +149,7 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(addr string, d serveDaemon) error {
+	restoreServe := stubServeHTTPAPI(t, func(addr string, d serveDaemon, token string) error {
 		if addr != "127.0.0.1:5151" {
 			t.Fatalf("addr = %q, want 127.0.0.1:5151", addr)
 		}
@@ -503,7 +503,7 @@ func stubServeDaemonFactory(t *testing.T, fn func(time.Duration) serveDaemon) fu
 	}
 }
 
-func stubServeHTTPAPI(t *testing.T, fn func(string, serveDaemon) error) func() {
+func stubServeHTTPAPI(t *testing.T, fn func(string, serveDaemon, string) error) func() {
 	t.Helper()
 	prev := serveHTTPAPI
 	serveHTTPAPI = fn

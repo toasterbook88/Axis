@@ -14,7 +14,7 @@ func contextCmd() *cobra.Command {
 		Use:   "context",
 		Short: "Show or edit placement memory state",
 	}
-	
+
 	cmd.AddCommand(&cobra.Command{
 		Use:   "show",
 		Short: "Show the current cluster placement state",
@@ -31,7 +31,7 @@ func contextCmd() *cobra.Command {
 			return nil
 		},
 	})
-	
+
 	cmd.AddCommand(&cobra.Command{
 		Use:   "clear",
 		Short: "Clear the cluster placement memory",
@@ -40,6 +40,6 @@ func contextCmd() *cobra.Command {
 			fmt.Println("Cleared cluster state.")
 		},
 	})
-	
+
 	return cmd
 }

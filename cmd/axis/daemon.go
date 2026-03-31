@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/daemon"
 )
 
@@ -27,7 +29,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "daemon",
 		Short: "Interact with the local AXIS daemon cache",
 	}
-	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", daemon.DefaultAddr, "Address of the local AXIS daemon cache")
+	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show local AXIS daemon health and staleness",
@@ -100,25 +102,37 @@ func daemonCmd() *cobra.Command {
 }
 
 func invalidateDaemonCache(ctx context.Context, addr string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, daemon.NormalizeAddr(addr)+"/invalidate", nil)
+	client, baseURLAddr := daemon.HttpClientForAddr(addr)
+	baseURL := daemon.NormalizeAddr(baseURLAddr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/invalidate", nil)
 	if err != nil {
 		return err
 	}
 
-	return doDaemonAction(req, "daemon invalidate failed")
+	return doDaemonActionWithClient(client, req, "daemon invalidate failed")
 }
 
 func refreshDaemonCache(ctx context.Context, addr string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, daemon.NormalizeAddr(addr)+"/refresh", nil)
+	client, baseURLAddr := daemon.HttpClientForAddr(addr)
+	baseURL := daemon.NormalizeAddr(baseURLAddr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/refresh", nil)
 	if err != nil {
 		return err
 	}
 
-	return doDaemonAction(req, "daemon refresh failed")
+	return doDaemonActionWithClient(client, req, "daemon refresh failed")
 }
 
-func doDaemonAction(req *http.Request, prefix string) error {
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+func doDaemonActionWithClient(client *http.Client, req *http.Request, prefix string) error {
+	token, err := auth.LoadOrGenerateToken()
+	if err != nil {
+		return fmt.Errorf("%s: loading api token: %w", prefix, err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
