@@ -67,6 +67,8 @@ func TestTaskContextTurboQuantGolden(t *testing.T) {
 		},
 		"run 128k ollama inference",
 		"daemon-cache",
+		nil,
+		nil,
 	)
 
 	assertNormalizedGoldenText(t,

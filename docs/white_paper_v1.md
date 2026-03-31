@@ -105,6 +105,29 @@ Longer-term directions under consideration:
 - Multi-hop or mesh node discovery (beyond a static YAML seed file)
 - More fully hardened execution and automation surfaces
 
+## Phase 3: Daemon Hardening & Event-Driven Cache (Active)
+
+**Phase 3** hardens the daemon and event surfaces introduced in Phase 2.
+
+Implemented features:
+
+- **Graceful shutdown**: `axis serve` drains in-flight requests and waits for
+  background refresh goroutines before exiting on SIGTERM/SIGINT
+- **nodes.yaml hot-reload**: daemon watches `~/.axis/nodes.yaml` and triggers
+  `invalidate + refresh` immediately when the file changes — no restart required
+- **Refresh metrics**: `/health` exposes `refresh_count`, `last_refresh_duration_ms`,
+  and `stale_nodes` (nodes that degraded since the last refresh)
+- **Partial node degradation tracking**: nodes that transition `complete → error`
+  are surfaced in `Metadata.StaleNodes` without busting the entire cache
+- **Structured context export**: `axis task context --format json` emits a
+  machine-readable JSON block including fit score, recent placement decisions,
+  and learned skills — suitable for programmatic LLM prompt injection
+- **Context enrichment**: plain-text context block now includes last 5 placement
+  decisions and top 5 learned skills
+- **HMAC-SHA256 beacon auth**: UDP discovery beacons are signed with
+  HMAC-SHA256(secret, payload) instead of transmitting the shared secret in
+  plaintext — prevents replay and forgery on local networks
+
 ## Design Principles
 
 **Local-first.** The binary runs on demand. There is no server to keep alive and

@@ -39,7 +39,7 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 		},
 	}
 
-	out := buildContextBlock(snap, models.TaskRequirements{MinFreeRAMMB: 4096}, "analyze repo", "daemon-cache")
+	out := buildContextBlock(snap, models.TaskRequirements{MinFreeRAMMB: 4096}, "analyze repo", "daemon-cache", nil, nil)
 
 	if !strings.Contains(out, "Best node: m3") {
 		t.Fatalf("expected context block to choose node with resources, got:\n%s", out)
@@ -86,7 +86,7 @@ func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
 		MinFreeRAMMB:        4096,
 		ContextWindowTokens: 128000,
 		PrefersTurboQuant:   true,
-	}, "run 128k ollama inference", "live")
+	}, "run 128k ollama inference", "live", nil, nil)
 
 	if !strings.Contains(out, "Context hint: long-context (~128000 tokens)") {
 		t.Fatalf("expected long-context hint, got:\n%s", out)
