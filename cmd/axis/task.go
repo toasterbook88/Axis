@@ -311,6 +311,7 @@ func taskRunCmd() *cobra.Command {
 func taskContextCmd() *cobra.Command {
 	var cached bool
 	var cacheAddr string
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "context [description]",
@@ -334,20 +335,86 @@ func taskContextCmd() *cobra.Command {
 			}
 
 			reqs := placement.InferRequirements(desc)
-			printContextBlock(snap, reqs, desc, source)
+
+			st, _ := state.Load()
+			skillStore, _ := skills.Load()
+
+			if format == "json" {
+				out := buildContextJSON(snap, reqs, desc, source, st, skillStore)
+				return printOutput(out, "json")
+			}
+			printContextBlock(snap, reqs, desc, source, st, skillStore)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
 }
 
-func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string) {
-	fmt.Println(buildContextBlock(snap, reqs, task, source))
+func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) {
+	fmt.Println(buildContextBlock(snap, reqs, task, source, st, skillStore))
 }
 
-func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string) string {
+// ContextOutput is the structured JSON form of the context block — suitable
+// for programmatic injection into LLM system prompts.
+type ContextOutput struct {
+	Node             string    `json:"node"`
+	FitScore         int       `json:"fit_score"`
+	RAMFreeMB        int64     `json:"ram_free_mb"`
+	RAMAllocatableMB int64     `json:"ram_allocatable_mb,omitempty"`
+	Pressure         string    `json:"pressure"`
+	Tools            []string  `json:"tools"`
+	RecentDecisions  []string  `json:"recent_decisions,omitempty"`
+	Skills           []string  `json:"skills,omitempty"`
+	Source           string    `json:"source"`
+	Task             string    `json:"task"`
+	GeneratedAt      time.Time `json:"generated_at"`
+}
+
+func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) ContextOutput {
+	out := ContextOutput{
+		Source:      sourceOrLive(source),
+		Task:        task,
+		GeneratedAt: time.Now().UTC(),
+	}
+	if snap == nil || len(snap.Nodes) == 0 {
+		return out
+	}
+	best, ok := selectContextNode(snap.Nodes, reqs)
+	if !ok {
+		return out
+	}
+	out.Node = best.Name
+	if best.Resources != nil {
+		out.RAMFreeMB = best.Resources.RAMFreeMB
+		out.RAMAllocatableMB = best.Resources.RAMAllocatableMB
+		out.Pressure = best.Resources.Pressure
+	}
+	out.Tools = toolsList(best)
+	var clusterState *state.ClusterState
+	if st != nil {
+		clusterState = st
+	}
+	out.FitScore = placement.ComputeFitScore(best, models.IsLocalNode(best), clusterState)
+
+	if st != nil {
+		last := st.Decisions
+		if len(last) > 5 {
+			last = last[len(last)-5:]
+		}
+		out.RecentDecisions = last
+	}
+	if skillStore != nil {
+		for _, s := range skillStore.Skills {
+			out.Skills = append(out.Skills, s.Description)
+		}
+	}
+	return out
+}
+
+func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) string {
 	if snap == nil || len(snap.Nodes) == 0 {
 		return "No nodes found in cluster."
 	}
@@ -381,6 +448,27 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	}
 	if matrix := turboQuantCapabilityMatrix(snap.Nodes); matrix != "" {
 		extraLines += "\n- TurboQuant matrix: " + matrix
+	}
+
+	// Recent placement decisions give the LLM cluster history context.
+	if st != nil && len(st.Decisions) > 0 {
+		last := st.Decisions
+		if len(last) > 5 {
+			last = last[len(last)-5:]
+		}
+		extraLines += "\n- Recent placements: " + strings.Join(last, " | ")
+	}
+
+	// Learned skills tell the LLM what tasks have been validated on this cluster.
+	if skillStore != nil && len(skillStore.Skills) > 0 {
+		names := make([]string, 0, len(skillStore.Skills))
+		for _, s := range skillStore.Skills {
+			names = append(names, s.Description)
+		}
+		if len(names) > 5 {
+			names = names[:5]
+		}
+		extraLines += "\n- Known skills: " + strings.Join(names, ", ")
 	}
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):

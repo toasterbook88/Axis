@@ -149,7 +149,7 @@ func TestPrintContextBlockWritesOutput(t *testing.T) {
 	}
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
-		printContextBlock(snap, models.TaskRequirements{}, "analyze a git repo", "live")
+		printContextBlock(snap, models.TaskRequirements{}, "analyze a git repo", "live", nil, nil)
 		return nil
 	})
 	if err != nil {

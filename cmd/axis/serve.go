@@ -10,12 +10,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
 type serveDaemon interface {
 	Start(context.Context)
+	WatchConfig(context.Context, string)
+	WaitStopped(context.Context)
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
 	Invalidate()
@@ -26,8 +29,8 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 	return daemon.NewDefault(refreshInterval)
 }
 
-var serveHTTPAPI = func(addr string, d serveDaemon, token string) error {
-	return api.Serve(addr, d, token)
+var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string) error {
+	return api.ServeWithContext(ctx, addr, d, token)
 }
 
 func serveCmd() *cobra.Command {
@@ -48,13 +51,24 @@ func serveCmd() *cobra.Command {
 
 			d := newServeDaemon(refreshInterval)
 			d.Start(ctx)
+			d.WatchConfig(ctx, config.DefaultConfigPath())
 
 			protocol := "http"
 			if auth.IsUnixAddr(addr) {
 				protocol = "unix"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "AXIS HTTP API listening on %s://%s\n", protocol, addr)
-			return serveHTTPAPI(addr, d, token)
+
+			// ServeWithContext blocks until ctx is cancelled or a listen error.
+			// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then we wait for
+			// the background refresh goroutines to finish.
+			err = serveHTTPAPI(ctx, addr, d, token)
+
+			drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
+			defer cancel()
+			d.WaitStopped(drainCtx)
+
+			return err
 		},
 	}
 

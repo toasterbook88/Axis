@@ -382,6 +382,59 @@ func TestServeUDS(t *testing.T) {
 	}
 }
 
+func TestServeWithContextGracefulShutdown(t *testing.T) {
+	// macOS limits Unix socket paths to 104 chars — use os.MkdirTemp with a short prefix.
+	tmpDir, err := os.MkdirTemp("", "ax")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	socketPath := filepath.Join(tmpDir, "s.sock")
+	cache := &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ServeWithContext(ctx, socketPath, cache, "")
+	}()
+
+	// Wait for socket
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socketPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Verify it's serving
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost/health", nil)
+	if _, err := client.Do(req); err != nil {
+		t.Fatalf("server not serving before cancel: %v", err)
+	}
+
+	// Cancel triggers graceful shutdown
+	cancel()
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			t.Errorf("ServeWithContext returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeWithContext did not shut down within 5s after context cancel")
+	}
+}
+
 func TestDefaultAddr(t *testing.T) {
 	addr := DefaultAddr()
 	if !strings.HasSuffix(addr, filepath.Join(".axis", "axis.sock")) {

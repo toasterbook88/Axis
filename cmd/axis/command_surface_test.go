@@ -149,7 +149,7 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(addr string, d serveDaemon, token string) error {
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string) error {
 		if addr != "127.0.0.1:5151" {
 			t.Fatalf("addr = %q, want 127.0.0.1:5151", addr)
 		}
@@ -473,6 +473,10 @@ func (f *fakeServeDaemon) Start(ctx context.Context) {
 	f.ctx = ctx
 }
 
+func (f *fakeServeDaemon) WatchConfig(context.Context, string) {}
+
+func (f *fakeServeDaemon) WaitStopped(context.Context) {}
+
 func (f *fakeServeDaemon) Snapshot() (*models.ClusterSnapshot, bool) {
 	return nil, false
 }
@@ -503,7 +507,7 @@ func stubServeDaemonFactory(t *testing.T, fn func(time.Duration) serveDaemon) fu
 	}
 }
 
-func stubServeHTTPAPI(t *testing.T, fn func(string, serveDaemon, string) error) func() {
+func stubServeHTTPAPI(t *testing.T, fn func(context.Context, string, serveDaemon, string) error) func() {
 	t.Helper()
 	prev := serveHTTPAPI
 	serveHTTPAPI = fn

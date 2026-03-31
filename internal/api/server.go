@@ -97,6 +97,13 @@ type snapshotCache interface {
 }
 
 func Serve(addr string, cache snapshotCache, token string) error {
+	return ServeWithContext(context.Background(), addr, cache, token)
+}
+
+// ServeWithContext starts the HTTP/Unix API server and blocks until ctx is
+// cancelled or a fatal listen error occurs. On cancellation it performs a
+// graceful shutdown with a 10-second drain before returning nil.
+func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string) error {
 	mux := http.NewServeMux()
 	registerRoutes(mux, cache, token)
 
@@ -104,6 +111,8 @@ func Serve(addr string, cache snapshotCache, token string) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	srvErr := make(chan error, 1)
 
 	if auth.IsUnixAddr(addr) {
 		if err := os.MkdirAll(filepath.Dir(addr), 0700); err != nil {
@@ -126,11 +135,34 @@ func Serve(addr string, cache snapshotCache, token string) error {
 		if err := os.Chmod(addr, 0600); err != nil {
 			return fmt.Errorf("chmod unix socket: %w", err)
 		}
-		return srv.Serve(ln)
+		go func() { srvErr <- srv.Serve(ln) }()
+	} else {
+		srv.Addr = addr
+		go func() { srvErr <- srv.ListenAndServe() }()
 	}
 
-	srv.Addr = addr
-	return srv.ListenAndServe()
+	select {
+	case err := <-srvErr:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+	}
+
+	drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(drainCtx) //nolint:contextcheck
+
+	select {
+	case err := <-srvErr:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	default:
+		return nil
+	}
 }
 
 func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {

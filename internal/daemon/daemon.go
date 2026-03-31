@@ -20,6 +20,10 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
+// ShutdownDrainTimeout is the maximum time to wait for in-flight requests and
+// the background refresh goroutines to finish when the daemon is stopping.
+const ShutdownDrainTimeout = 10 * time.Second
+
 const (
 	defaultRefreshInterval = time.Minute
 	defaultRefreshTimeout  = 60 * time.Second
@@ -47,10 +51,15 @@ type Metadata struct {
 	Version            string    `json:"version,omitempty"`
 	CacheAgeSec        int       `json:"cache_age_sec,omitempty"`
 	Stale              bool      `json:"stale,omitempty"`
+	// Phase 3: refresh metrics
+	RefreshCount  int64    `json:"refresh_count"`
+	LastRefreshMs int64    `json:"last_refresh_duration_ms,omitempty"`
+	StaleNodes    []string `json:"stale_nodes,omitempty"`
 }
 
 type Daemon struct {
 	mu           sync.RWMutex
+	wg           sync.WaitGroup // tracks background goroutines for graceful drain
 	collector    Collector
 	interval     time.Duration
 	snapshotPath string
@@ -59,6 +68,11 @@ type Daemon struct {
 	collectedAt   time.Time
 	nextRefreshAt time.Time
 	lastError     string
+
+	// Phase 3: refresh metrics
+	refreshCount        int64
+	lastRefreshDuration time.Duration
+	staleNodes          []string // nodes that degraded in the last refresh
 }
 
 func (d *Daemon) RefreshNow(ctx context.Context) error {
@@ -111,7 +125,9 @@ func (d *Daemon) Start(ctx context.Context) {
 	d.nextRefreshAt = time.Now().UTC().Add(d.interval)
 	d.mu.Unlock()
 
+	d.wg.Add(1)
 	go func() {
+		defer d.wg.Done()
 		_ = d.Refresh(ctx)
 
 		ticker := time.NewTicker(d.interval)
@@ -128,7 +144,56 @@ func (d *Daemon) Start(ctx context.Context) {
 	}()
 }
 
+// WatchConfig polls configPath every 500ms and triggers Invalidate+Refresh
+// whenever the file's modification time changes. Runs until ctx is cancelled.
+// This is the primary event-driven cache trigger: config changes are reflected
+// immediately without restarting the daemon.
+func (d *Daemon) WatchConfig(ctx context.Context, configPath string) {
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+
+		var lastMod time.Time
+		if fi, err := os.Stat(configPath); err == nil {
+			lastMod = fi.ModTime()
+		}
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fi, err := os.Stat(configPath)
+				if err != nil {
+					continue
+				}
+				if fi.ModTime().After(lastMod) {
+					lastMod = fi.ModTime()
+					d.Invalidate()
+					_ = d.Refresh(ctx)
+				}
+			}
+		}
+	}()
+}
+
+// WaitStopped blocks until all background goroutines have finished or ctx
+// expires. Call after cancelling the context passed to Start/WatchConfig to
+// ensure in-flight refreshes complete before the process exits.
+func (d *Daemon) WaitStopped(ctx context.Context) {
+	done := make(chan struct{})
+	go func() { d.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
 func (d *Daemon) Refresh(ctx context.Context) error {
+	start := time.Now()
 	snap, err := d.collector(ctx)
 	now := time.Now().UTC()
 
@@ -140,6 +205,8 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 			d.mu.Lock()
 			d.nextRefreshAt = now.Add(d.interval)
 			d.lastError = stateWarning.Error()
+			d.refreshCount++
+			d.lastRefreshDuration = time.Since(start)
 			d.mu.Unlock()
 			return stateWarning
 		}
@@ -149,11 +216,31 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	defer d.mu.Unlock()
 
 	d.nextRefreshAt = now.Add(d.interval)
+	d.refreshCount++
+	d.lastRefreshDuration = time.Since(start)
 
 	if err != nil {
 		d.lastError = err.Error()
 		return err
 	}
+
+	// Detect nodes that degraded since the last refresh (complete → error/unreachable).
+	// These are surfaced in Metadata.StaleNodes for operator visibility.
+	var staleNodes []string
+	if d.snapshot != nil && snap != nil {
+		prevStatus := make(map[string]models.NodeStatus, len(d.snapshot.Nodes))
+		for _, n := range d.snapshot.Nodes {
+			prevStatus[n.Name] = n.Status
+		}
+		for _, n := range snap.Nodes {
+			if prev, ok := prevStatus[n.Name]; ok &&
+				prev == models.StatusComplete &&
+				(n.Status == models.StatusError || n.Status == models.StatusUnreachable) {
+				staleNodes = append(staleNodes, n.Name)
+			}
+		}
+	}
+	d.staleNodes = staleNodes
 
 	d.snapshot = snapshotview.Clone(snap)
 	ApplyReservationView(d.snapshot, st)
@@ -233,6 +320,9 @@ func (d *Daemon) Meta() Metadata {
 		Version:            Version,
 		CacheAgeSec:        age,
 		Stale:              stale,
+		RefreshCount:       d.refreshCount,
+		LastRefreshMs:      d.lastRefreshDuration.Milliseconds(),
+		StaleNodes:         d.staleNodes,
 	}
 
 	if st, err := state.Load(); st != nil {
