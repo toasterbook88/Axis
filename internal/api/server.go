@@ -123,7 +123,6 @@ func Serve(addr string, cache snapshotCache, token string) error {
 	return srv.ListenAndServe()
 }
 
-
 func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {

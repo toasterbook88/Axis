@@ -505,7 +505,6 @@ func TestRunLocalShell(t *testing.T) {
 	}
 }
 
-
 func stubLiveRuntime(t *testing.T, rt *runtimectx.Context, err error) func() {
 	t.Helper()
 	prev := loadLiveRuntime
