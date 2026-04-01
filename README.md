@@ -10,7 +10,7 @@
 
 ```bash
 # Install
-go install github.com/toasterbook88/axis/cmd/axis@v0.4.0
+go install github.com/toasterbook88/axis/cmd/axis@v0.6.0
 
 # Inspect the local machine
 axis facts
@@ -48,7 +48,8 @@ axis task place "run ollama inference on a 7b model"
 - `axis mcp serve` — optional read-only MCP server over stdio
 - `axis scripts list` — list built-in helper scripts
 - `axis skills` — show learned local skills/failures
-- `axis chat` — experimental local chat assistant; not authoritative cluster truth
+- `axis chat` — cluster-aware chat assistant using Ollama `/api/chat`; advisory only
+- `axis agent` — agentic tool-calling assistant with read-only cluster tools and operator-confirmed shell execution
 - `axis completion` — Cobra-generated shell completion
 
 ### Available Commands (Strict Config Enforced)
@@ -90,7 +91,7 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
 | **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, unified-memory suitability for `mlx`/long-context asks, allocatable RAM, reservation ratio, and locality; heavy AI tasks also avoid nodes under critical runtime pressure signals |
-| **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, and `axis chat` are available when explicitly invoked |
+| **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, `axis chat`, and `axis agent` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
 | **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
 
@@ -99,17 +100,17 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 **Using `go install` (recommended):**
 
 ```bash
-go install github.com/toasterbook88/axis/cmd/axis@v0.4.0
+go install github.com/toasterbook88/axis/cmd/axis@v0.6.0
 ```
 
-`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.4.0`.
+`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.6.0`.
 
 **Tagged release pipeline:**
 
 - `v*` tags are published through GitHub Actions and GoReleaser
 - Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
 - The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
-- The current release is [`v0.4.0`](https://github.com/toasterbook88/axis/releases/tag/v0.4.0)
+- The current release is [`v0.6.0`](https://github.com/toasterbook88/axis/releases/tag/v0.6.0)
 
 **Security hygiene:**
 
@@ -288,7 +289,9 @@ Optional discovery block used by experimental UDP-assisted discovery:
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/placement/ │ Filter + rank nodes by free RAM, pressure, GPU, locality; ComputeFitScore 0–100 │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/chat/      │ Streams via local Ollama (localhost:11434), graceful fallback message           │
+│ internal/chat/      │ Structured /api/chat client with rolling context window and system prompt      │
+├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
+│ internal/agent/     │ Tool-calling agent loop with read-only tools and safety-gated shell execution   │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/snapshot/  │ Assembles `ClusterSnapshot` from `[]NodeFacts`                                  │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
@@ -313,13 +316,14 @@ Optional discovery block used by experimental UDP-assisted discovery:
 - Config lives at `~/.axis/nodes.yaml` — no cluster IPs hardcoded in code
 - Placement is deterministic: RAM pressure → GPU → effective headroom → allocatable RAM → reservation ratio → name
 - ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
-- Chat hardcoded to localhost:11434 Ollama — no remote inference routing yet
+- Chat uses the Ollama `/api/chat` endpoint with structured messages and a rolling context window; defaults to `localhost:11434`
+- `axis agent` provides a tool-calling loop with read-only cluster tools (`status`, `facts`, `place`) and safety-gated shell execution; `--auto-approve` enables automatic execution for low-risk commands
 - `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
-- `axis chat` is an experimental helper and must not outrank snapshot-backed truth
+- `axis chat` and `axis agent` are advisory helpers and must not outrank snapshot-backed truth
 - Placement memory lives locally in `~/.axis/state.json`
 
-**Current phase:** The observability and placement core is stable; execution and chat helpers remain subordinate surfaces that must not present model output as authoritative cluster truth.
+**Current phase:** The observability and placement core is stable. Chat and agent surfaces use structured `/api/chat` with tool calling and safety gates, but remain subordinate to observed state and must not present model output as authoritative cluster truth.
 
 See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
 
@@ -330,7 +334,7 @@ The following are planned directions, not current functionality:
 - Mesh networking / peer discovery beyond a static seed file
 - Phase 4+ features — see [white paper](docs/white_paper_v1.md)
 
-### Phase 3 (Shipped in v0.4.0)
+### Phase 3 (Shipped in v0.5.0)
 
 The following features were delivered in Phase 3:
 

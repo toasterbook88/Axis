@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -406,60 +409,193 @@ func TestResolveChatModelFallsBackToResolver(t *testing.T) {
 	}
 }
 
-func TestHandleChatMetaCommandModelsPrintsCatalog(t *testing.T) {
+func TestHandleSlashCommandModelsPrintsCatalog(t *testing.T) {
 	restoreFormat := stubFormatChatCatalog(t, func(context.Context, string) string {
 		return "formatted catalog"
 	})
 	defer restoreFormat()
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		handled, next := handleChatMetaCommand("/models", "phi4")
-		if !handled || next != "" {
-			t.Fatalf("expected handled /models with empty next, got handled=%v next=%q", handled, next)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("handleChatMetaCommand: %v", err)
+	var buf bytes.Buffer
+	conv := chat.NewConversation(4096)
+	next := handleSlashCommand("/models", "phi4", conv, &buf)
+	if next != "" {
+		t.Fatalf("expected empty next model for /models, got %q", next)
 	}
-	if stderr != "" {
-		t.Fatalf("expected no stderr, got %q", stderr)
-	}
-	if !strings.Contains(stdout, "formatted catalog") {
-		t.Fatalf("expected formatted catalog output, got %q", stdout)
+	if !strings.Contains(buf.String(), "formatted catalog") {
+		t.Fatalf("expected formatted catalog output, got %q", buf.String())
 	}
 }
 
-func TestChatCmdSingleShotUsesGenerateStream(t *testing.T) {
+func TestHandleSlashCommandClear(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys"})
+	conv.Append(chat.Message{Role: chat.RoleUser, Content: "hello"})
+
+	var buf bytes.Buffer
+	handleSlashCommand("/clear", "phi4", conv, &buf)
+
+	// After clear, only system messages remain.
+	if conv.Len() != 1 {
+		t.Fatalf("expected 1 message after clear, got %d", conv.Len())
+	}
+	if !strings.Contains(buf.String(), "cleared") {
+		t.Fatalf("expected cleared message, got %q", buf.String())
+	}
+}
+
+func TestHandleSlashCommandHelp(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	handleSlashCommand("/help", "phi4", conv, &buf)
+
+	if !strings.Contains(buf.String(), "/clear") || !strings.Contains(buf.String(), "/status") {
+		t.Fatalf("expected help text with commands, got %q", buf.String())
+	}
+}
+
+func TestHandleSlashCommandModelSwitch(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	next := handleSlashCommand("/model llama3", "phi4", conv, &buf)
+	if next != "llama3" {
+		t.Fatalf("expected next model 'llama3', got %q", next)
+	}
+}
+
+func TestHandleSlashCommandUnknown(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	handleSlashCommand("/bogus", "phi4", conv, &buf)
+	if !strings.Contains(buf.String(), "Unknown command") {
+		t.Fatalf("expected unknown command message, got %q", buf.String())
+	}
+}
+
+func TestHandleSlashCommandModelBare(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	next := handleSlashCommand("/model", "phi4", conv, &buf)
+	if next != "" {
+		t.Fatalf("expected empty next for bare /model, got %q", next)
+	}
+	if !strings.Contains(buf.String(), "Usage:") {
+		t.Fatalf("expected usage message, got %q", buf.String())
+	}
+}
+
+func TestChatCmdSingleShotStreamsResponse(t *testing.T) {
+	// Mock Ollama server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/show":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"modelfile":"test"}`)
+		case r.URL.Path == "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			chunks := []map[string]interface{}{
+				{"message": map[string]string{"role": "assistant", "content": "hello "}, "done": false},
+				{"message": map[string]string{"role": "assistant", "content": "world"}, "done": true},
+			}
+			for _, c := range chunks {
+				data, _ := json.Marshal(c)
+				fmt.Fprintf(w, "%s\n", data)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	// Inject test endpoint and model.
+	prev := chatEndpoint
+	chatEndpoint = srv.URL
+	defer func() { chatEndpoint = prev }()
+
 	restoreResolve := stubDefaultChatModelResolver(t, func(context.Context) string {
-		return "phi4"
+		return "test-model"
 	})
 	defer restoreResolve()
-	restoreGenerate := stubGenerateChatStream(t, func(ctx context.Context, model, prompt string, w io.Writer) error {
-		if model != "phi4" {
-			t.Fatalf("model = %q, want phi4", model)
-		}
-		if prompt != "hello world" {
-			t.Fatalf("prompt = %q, want hello world", prompt)
-		}
-		_, _ = io.WriteString(w, "chat ok")
-		return nil
-	})
-	defer restoreGenerate()
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
+	cmd := chatCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"hi"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("chat single-shot Execute: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "hello world") {
+		t.Fatalf("expected streamed response, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "advisory") {
+		t.Fatalf("expected advisory warning in stderr, got %q", stderr.String())
+	}
+}
+
+func TestChatCmdSingleShotJSONSuppressesStreaming(t *testing.T) {
+	// Mock Ollama server returning two streamed chunks.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/show":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"modelfile":"test"}`)
+		case r.URL.Path == "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			chunks := []map[string]interface{}{
+				{"message": map[string]string{"role": "assistant", "content": "hello "}, "done": false},
+				{"message": map[string]string{"role": "assistant", "content": "world"}, "done": true},
+			}
+			for _, c := range chunks {
+				data, _ := json.Marshal(c)
+				fmt.Fprintf(w, "%s\n", data)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	prev := chatEndpoint
+	chatEndpoint = srv.URL
+	defer func() { chatEndpoint = prev }()
+
+	restoreResolve := stubDefaultChatModelResolver(t, func(context.Context) string {
+		return "test-model"
+	})
+	defer restoreResolve()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
 		cmd := chatCmd()
-		cmd.SetArgs([]string{"hello", "world"})
+		cmd.SetArgs([]string{"--format", "json", "hi"})
 		return cmd.Execute()
 	})
 	if err != nil {
-		t.Fatalf("chat Execute: %v", err)
+		t.Fatalf("chat single-shot json Execute: %v", err)
 	}
-	if !strings.Contains(stderr, "axis chat is experimental") {
-		t.Fatalf("expected experimental warning, got %q", stderr)
+
+	// stdout must be valid JSON.
+	var msg map[string]interface{}
+	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &msg); jsonErr != nil {
+		t.Fatalf("expected valid JSON in stdout, got %q: %v", stdout, jsonErr)
 	}
-	if !strings.Contains(stdout, "AXIS [Model: phi4] | Thinking...") || !strings.Contains(stdout, "chat ok") {
-		t.Fatalf("expected chat output, got %q", stdout)
+
+	// The assembled content must appear inside the JSON payload.
+	content, _ := msg["content"].(string)
+	if !strings.Contains(content, "hello") {
+		t.Fatalf("expected assembled content in JSON payload, got content=%q", content)
+	}
+
+	// Streaming text must NOT appear as raw text before the JSON object.
+	// A well-formed JSON response begins with '{', not with streamed plain text.
+	trimmed := strings.TrimSpace(stdout)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("expected stdout to start with JSON object, got %q", trimmed)
 	}
 }
 
@@ -576,15 +712,6 @@ func stubFormatChatCatalog(t *testing.T, fn func(context.Context, string) string
 	formatChatCatalog = fn
 	return func() {
 		formatChatCatalog = prev
-	}
-}
-
-func stubGenerateChatStream(t *testing.T, fn func(context.Context, string, string, io.Writer) error) func() {
-	t.Helper()
-	prev := generateChatStream
-	generateChatStream = fn
-	return func() {
-		generateChatStream = prev
 	}
 }
 

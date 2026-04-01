@@ -112,7 +112,7 @@ func TestOllamaClient_GenerateStream_ModelMissingDoesNotPull(t *testing.T) {
 }
 
 func TestHybridEngine_GenerateStream_Fallback(t *testing.T) {
-	// Create a dummy server that returns 404 to trigger fallback
+	// Create a dummy server that returns 404 for the model check to trigger fallback
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			w.WriteHeader(http.StatusOK)
@@ -125,7 +125,7 @@ func TestHybridEngine_GenerateStream_Fallback(t *testing.T) {
 		if r.URL.Path == "/api/pull" {
 			t.Fatalf("unexpected auto-pull request")
 		}
-		if r.URL.Path == "/api/generate" {
+		if r.URL.Path == "/api/chat" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -133,10 +133,10 @@ func TestHybridEngine_GenerateStream_Fallback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "llama3")
+	client := NewClient(server.URL, "llama3")
 	engine := &HybridEngine{
 		model:  "llama3",
-		ollama: client,
+		client: client,
 	}
 
 	var buf bytes.Buffer
