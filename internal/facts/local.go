@@ -863,13 +863,85 @@ func localAddresses() []models.NetworkAddress {
 			if ip.To4() == nil {
 				kind = "ipv6"
 			}
+			subnet := ipNet.String()
+			if idx := strings.LastIndex(subnet, "/"); idx >= 0 {
+				ones, _ := ipNet.Mask.Size()
+				subnet = ipNet.IP.Mask(ipNet.Mask).String() + "/" + strconv.Itoa(ones)
+			}
 			addrs = append(addrs, models.NetworkAddress{
-				Kind:    kind,
-				Address: ip.String(),
+				Kind:       kind,
+				Address:    ip.String(),
+				Interface:  iface.Name,
+				Subnet:     subnet,
+				SpeedClass: classifyInterfaceSpeed(iface.Name, ip),
 			})
 		}
 	}
 	return addrs
+}
+
+// classifyInterfaceSpeed heuristically determines the speed class of a network
+// interface based on its name and IP address. This enables topology-aware
+// decisions (e.g., preferring Thunderbolt links for heavy data transfers).
+func classifyInterfaceSpeed(ifName string, ip net.IP) string {
+	lower := strings.ToLower(ifName)
+
+	// Overlay / VPN tunnels — detect by interface name
+	if strings.HasPrefix(lower, "wg") {
+		return "wireguard"
+	}
+	if strings.HasPrefix(lower, "tailscale") || strings.HasPrefix(lower, "ts") {
+		return "tailscale"
+	}
+	if strings.HasPrefix(lower, "utun") || strings.HasPrefix(lower, "tun") {
+		// Tailscale on macOS typically uses utun; check by IP range
+		if isTailscaleIP(ip) {
+			return "tailscale"
+		}
+		return "vpn"
+	}
+	if strings.HasPrefix(lower, "zt") {
+		return "zerotier"
+	}
+	if strings.HasPrefix(lower, "nb") || strings.HasPrefix(lower, "netbird") {
+		return "netbird"
+	}
+
+	// Detect by IP range for non-tunnel interfaces
+	if isTailscaleIP(ip) {
+		return "tailscale"
+	}
+
+	// Thunderbolt bridge / point-to-point
+	if strings.Contains(lower, "bridge") || strings.Contains(lower, "thunder") {
+		return "thunderbolt"
+	}
+
+	// Wi-Fi — common interface names across platforms
+	if lower == "wlan0" || lower == "wlp" || strings.HasPrefix(lower, "wlp") {
+		return "wifi"
+	}
+	if runtime.GOOS == "darwin" && (lower == "en0") {
+		// On many Macs, en0 is Wi-Fi; can't be 100% certain without IOKit
+		return "wifi"
+	}
+
+	// Ethernet
+	if strings.HasPrefix(lower, "en") || strings.HasPrefix(lower, "eth") || strings.HasPrefix(lower, "enp") {
+		return "gigabit"
+	}
+
+	return "unknown"
+}
+
+// isTailscaleIP returns true if the IP is in the Tailscale CGNAT range (100.64.0.0/10).
+func isTailscaleIP(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	// 100.64.0.0/10 → first byte 100, second byte 64-127
+	return ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
 func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {

@@ -279,8 +279,8 @@ func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName strin
 
 func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkAddress {
 	var addrs []models.NetworkAddress
-	// Fallback script that tries `ip` first, then `ifconfig`
-	cmd := `if command -v ip >/dev/null 2>&1; then ip addr show scope global | awk '/inet/ {print $2}' | cut -d/ -f1; else ifconfig | awk '/inet / && !/127.0.0.1/ {print $2}; /inet6 / && !/::1/ && !/fe80/ {print $2}' | cut -d% -f1 | cut -d/ -f1; fi`
+	// Try `ip -o addr` first (outputs: "2: eth0 inet 192.168.1.5/24 ..."), fallback to basic ip/ifconfig
+	cmd := `if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}' | cut -d/ -f1; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`
 
 	out, err := c.Exec.Run(ctx, cmd)
 	if err != nil {
@@ -288,25 +288,63 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 	}
 
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		ipStr := strings.TrimSpace(line)
-		if ipStr == "" {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
+		addr := parseRemoteAddrLine(line)
+		if addr.Address != "" {
+			addrs = append(addrs, addr)
 		}
-
-		kind := "ipv4"
-		if ip.To4() == nil {
-			kind = "ipv6"
-		}
-		addrs = append(addrs, models.NetworkAddress{
-			Kind:    kind,
-			Address: ip.String(),
-		})
 	}
 	return addrs
+}
+
+// parseRemoteAddrLine parses an address line from `ip -o addr` or fallback output.
+// ip -o format: "2: eth0    inet 192.168.1.5/24 brd ..."
+// fallback: "eth0 192.168.1.5" or just "192.168.1.5"
+func parseRemoteAddrLine(line string) models.NetworkAddress {
+	fields := strings.Fields(line)
+
+	var ipStr, ifName string
+	for i, f := range fields {
+		if f == "inet" || f == "inet6" {
+			if i+1 < len(fields) {
+				ipStr = strings.Split(fields[i+1], "/")[0]
+			}
+			if i >= 2 {
+				ifName = strings.TrimSuffix(fields[1], ":")
+			}
+			break
+		}
+	}
+
+	// Fallback: might be "ifname 1.2.3.4" or just "1.2.3.4"
+	if ipStr == "" {
+		switch len(fields) {
+		case 1:
+			ipStr = fields[0]
+		case 2:
+			ifName = fields[0]
+			ipStr = fields[1]
+		}
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return models.NetworkAddress{}
+	}
+
+	kind := "ipv4"
+	if ip.To4() == nil {
+		kind = "ipv6"
+	}
+	return models.NetworkAddress{
+		Kind:       kind,
+		Address:    ip.String(),
+		Interface:  ifName,
+		SpeedClass: classifyInterfaceSpeed(ifName, ip),
+	}
 }
 
 func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
