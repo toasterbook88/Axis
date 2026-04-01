@@ -69,7 +69,11 @@ func (s *Spinner) Stop(msg string) {
 
 	// Wait briefly for the animate goroutine to exit its select.
 	// This prevents a write race between animate's Fprintf and ours.
-	<-s.exited
+	// Use a bounded wait to avoid deadlocking on a blocked writer.
+	select {
+	case <-s.exited:
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	// Clear the spinner line and print final message.
 	fmt.Fprintf(s.w, "\r\033[K%s\n", msg)

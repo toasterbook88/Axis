@@ -103,6 +103,8 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, tools []ToolDef
 	result.Role = RoleAssistant
 
 	scanner := bufio.NewScanner(resp.Body)
+	// Increase scanner buffer to handle large NDJSON chunks (e.g., tool calls).
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -147,6 +149,9 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 	resp, err := c.http.Do(req)
 	if err == nil {
 		resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("ollama daemon at %s returned unhealthy status: %s", c.Endpoint, resp.Status)
+		}
 	} else {
 		if w != nil {
 			fmt.Fprintf(w, "[AXIS] Auto-starting local Ollama daemon...\n")
@@ -157,11 +162,18 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 		}
 		up := false
 		for i := 0; i < 10; i++ {
-			time.Sleep(500 * time.Millisecond)
-			if r, e := c.http.Get(c.Endpoint); e == nil {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context canceled while waiting for ollama daemon: %w", ctx.Err())
+			case <-time.After(500 * time.Millisecond):
+			}
+			r, e := c.http.Get(c.Endpoint)
+			if e == nil {
 				r.Body.Close()
-				up = true
-				break
+				if r.StatusCode >= 200 && r.StatusCode < 300 {
+					up = true
+					break
+				}
 			}
 		}
 		if !up {

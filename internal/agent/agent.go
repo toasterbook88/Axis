@@ -9,7 +9,6 @@ import (
 
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/knowledge"
-	"github.com/toasterbook88/axis/internal/safety"
 )
 
 // Agent drives a multi-turn tool-calling loop on top of the chat client.
@@ -200,16 +199,9 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	}
 
 	// Safety gate.
-	allowed, reason := a.safety(sa.Command)
+	allowed, reason, safetyScore := a.safety(sa.Command)
 	if !allowed {
 		return "", fmt.Errorf("command blocked by safety gate: %s", reason)
-	}
-
-	// Compute safety score for confirmation display.
-	safetyScore := 0
-	if a.safety != nil {
-		result := safety.Check(nil, sa.Command, nil)
-		safetyScore = result.Score
 	}
 
 	// Confirmation (unless auto-approved or session-level always).

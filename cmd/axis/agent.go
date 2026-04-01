@@ -24,7 +24,6 @@ func agentCmd() *cobra.Command {
 		maxTurns    int
 		autoApprove bool
 		systemMsg   string
-		format      string
 	)
 
 	cmd := &cobra.Command{
@@ -129,7 +128,6 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
-	cmd.Flags().StringVar(&format, "format", "text", "Output format (text, json)")
 	return cmd
 }
 

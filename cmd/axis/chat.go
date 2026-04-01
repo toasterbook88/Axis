@@ -78,16 +78,24 @@ func chatCmd() *cobra.Command {
 
 				ctx, cancel := chatRequestContext(timeout)
 				defer cancel()
-				resp, err := client.ChatStream(ctx, conv.Messages(), nil, w)
+
+				// When --format json, suppress streaming to stdout and
+				// only print the structured response afterward.
+				streamW := w
+				if format == "json" {
+					streamW = io.Discard
+				}
+				resp, err := client.ChatStream(ctx, conv.Messages(), nil, streamW)
 				sp.Stop("")
 
 				if err != nil {
 					Fatal(ExitErrCommandFail, "Chat failed: %v", err)
 				}
-				fmt.Fprintln(w)
 				if format == "json" {
 					conv.Append(resp)
 					printOutput(resp, format)
+				} else {
+					fmt.Fprintln(w)
 				}
 				return nil
 			}

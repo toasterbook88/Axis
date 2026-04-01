@@ -167,18 +167,18 @@ type shellArgs struct {
 }
 
 // ShellSafetyGate is called before executing any shell command. It receives
-// the command string and returns (allow bool, reason string). If allow is
-// false, the command is not executed and reason is returned to the model.
-type ShellSafetyGate func(command string) (allow bool, reason string)
+// the command string and returns (allow bool, reason string, score int).
+// If allow is false, the command is not executed and reason is returned to the model.
+type ShellSafetyGate func(command string) (allow bool, reason string, score int)
 
 // DefaultSafetyGate uses the safety package to gate shell commands.
 func DefaultSafetyGate(k *knowledge.ClusterKnowledge) ShellSafetyGate {
-	return func(command string) (bool, string) {
+	return func(command string) (bool, string, int) {
 		result := safety.Check(k, command, nil)
 		if result.Blocked {
-			return false, fmt.Sprintf("blocked (score %d/100): %s", result.Score, result.Reason)
+			return false, fmt.Sprintf("blocked (score %d/100): %s", result.Score, result.Reason), result.Score
 		}
-		return true, ""
+		return true, "", result.Score
 	}
 }
 
