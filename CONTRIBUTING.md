@@ -37,7 +37,7 @@ go build ./...
 ```
 
 3. Commit the version bump.
-4. Create and push a signed tag such as `v0.4.0`.
+4. Create and push a signed tag such as `v0.5.0`.
 
 The release workflow verifies that the pushed tag matches
 `internal/buildinfo/version.go` before publishing binaries.

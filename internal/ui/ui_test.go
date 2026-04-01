@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -16,17 +17,29 @@ func init() {
 
 func TestInitNoColor(t *testing.T) {
 	prev := color.NoColor
-	defer func() { color.NoColor = prev }()
+	prevEnv := os.Getenv("NO_COLOR")
+	defer func() {
+		color.NoColor = prev
+		os.Setenv("NO_COLOR", prevEnv)
+	}()
 
 	Init(true)
 	if Enabled() {
 		t.Error("expected color disabled after Init(true)")
 	}
 
-	color.NoColor = false
+	// With NO_COLOR unset and noColor=false, color should be enabled.
+	os.Unsetenv("NO_COLOR")
 	Init(false)
 	if !Enabled() {
-		t.Error("expected color enabled after Init(false)")
+		t.Error("expected color enabled after Init(false) with NO_COLOR unset")
+	}
+
+	// With NO_COLOR set, Init(false) should still disable color.
+	os.Setenv("NO_COLOR", "1")
+	Init(false)
+	if Enabled() {
+		t.Error("expected color disabled when NO_COLOR env is set")
 	}
 }
 

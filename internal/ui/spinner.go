@@ -25,7 +25,7 @@ func NewSpinner() *Spinner {
 }
 
 // Start begins the animation with the given message.
-// No-op if colors are disabled (non-TTY, NO_COLOR).
+// Falls back to a plain print when color is disabled.
 func (s *Spinner) Start(msg string) {
 	if !Enabled() {
 		fmt.Fprintf(s.w, "%s\n", msg)
