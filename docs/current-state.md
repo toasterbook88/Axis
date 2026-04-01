@@ -61,7 +61,8 @@ Top-level commands currently registered in the binary:
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
 | `axis task run` | Execute on selected node | Explicit execution path exists |
-| `axis chat` | Local chat via Ollama | Experimental and non-authoritative; no longer the default root action |
+| `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
+| `axis agent` | Agentic tool-calling assistant | Read-only cluster tools + safety-gated shell; `--auto-approve` for safe commands |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
 | `axis serve` | Start local HTTP API | Includes execution surface |
 | `axis update` | Self-update binary | Checks GitHub Releases, verifies SHA-256 via `checksums.txt`, replaces in-place; `--check` reports only |
@@ -96,7 +97,8 @@ Top-level commands currently registered in the binary:
 | `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
 | `internal/persist` | Corrupt-file recovery helpers | Small helper package used for quarantine + warning recovery |
 | `internal/runtimectx` | Unified live runtime loader | Centralizes config + discovery + overlay + warning assembly for live reads |
-| `internal/chat` | Ollama-backed chat | Moderately tested, utility-oriented |
+| `internal/chat` | Structured /api/chat client | Rolling context window, system prompt builder, model catalog |
+| `internal/agent` | Tool-calling agent loop | Read-only tools (status, facts, place) + safety-gated shell with adversarial tests |
 
 ## Verification Snapshot
 
@@ -176,8 +178,8 @@ In practical terms:
 - TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs probe-verified backend responses, but it still does not verify kernel correctness or backend feature parity
 - TurboQuant execution injection is intentionally narrow today: env hints everywhere, direct flag injection only for probe-verified `llama-cli` / `llama-server` command lines that expose `--ctx-size`
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
-- Chat is now fenced as experimental, but it still is not snapshot-grounded enough to be treated as cluster truth
-- Discovery suggestions are now more honest about provenance, but the surface is still experimental and easy to over-trust
+- Chat now uses structured `/api/chat` with a rolling context window and cluster-aware system prompt, but output remains advisory
+- Agent tool-calling loop has safety gates and adversarial error recovery, but is still subordinate to observed state
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block
