@@ -82,7 +82,7 @@ What it produces:
 
 This is the data foundation for later phases.
 
-## Phase 2: Advisory Task Placement (Active)
+## Phase 2: Advisory Task Placement (Completed)
 
 **Phase 2** uses the `ClusterSnapshot` as input to a deterministic placement layer.
 Given a task description and a snapshot, AXIS selects the most appropriate node.
@@ -98,14 +98,17 @@ Implemented features:
 - Optional local HTTP API via `axis serve`
 - Optional read-only MCP surface via `axis mcp serve`
 
-Longer-term directions under consideration:
+Longer-term directions that were addressed in Phase 3:
 
-- A lightweight daemon (`axisd`) for periodic background collection
-- Structured context export suitable for injection into LLM system prompts
+- A lightweight daemon (via `axis serve`) for periodic background collection — **shipped**
+- Structured context export suitable for injection into LLM system prompts — **shipped**
+- More fully hardened execution and automation surfaces — **shipped**
+
+Remaining directions under consideration:
+
 - Multi-hop or mesh node discovery (beyond a static YAML seed file)
-- More fully hardened execution and automation surfaces
 
-## Phase 3: Daemon Hardening & Event-Driven Cache (Active)
+## Phase 3: Daemon Hardening & Event-Driven Cache (Completed)
 
 **Phase 3** hardens the daemon and event surfaces introduced in Phase 2.
 
