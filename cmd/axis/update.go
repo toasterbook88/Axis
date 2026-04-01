@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -88,22 +87,23 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 	latest := strings.TrimPrefix(rel.TagName, "v")
 	fmt.Fprintf(out, "Latest version:  v%s\n", latest)
 
-	if latest == current {
-		fmt.Fprintf(out, "Already up to date.\n")
-		// Even if this binary is current, check for stale copies in PATH.
-		if !checkOnly && targetPath == "" {
-			return updateStalePathBinaries(cmd, rel, latest)
+	if checkOnly {
+		if latest == current {
+			fmt.Fprintf(out, "Already up to date.\n")
+		} else {
+			fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
+			fmt.Fprintf(out, "Run `axis update` (without --check) to install.\n")
 		}
 		return nil
 	}
 
-	fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
-
-	if checkOnly {
-		fmt.Fprintf(out, "Run `axis update` (without --check) to install.\n")
-		return nil
+	if latest == current {
+		fmt.Fprintf(out, "Already up to date.\n")
+	} else {
+		fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
 	}
 
+	// Always install: handles both new versions and stale PATH copies.
 	return installRelease(cmd, rel, latest, targetPath)
 }
 
@@ -139,50 +139,19 @@ func findAxisBinaries(explicitPath string) []string {
 		add(self)
 	}
 
-	// Any "axis" found in PATH (handles the case where ~/bin/axis differs from ./axis).
-	if pathBin, err := exec.LookPath("axis"); err == nil {
-		add(pathBin)
+	// All "axis" binaries found in PATH directories.
+	binName := "axis"
+	if runtime.GOOS == "windows" {
+		binName = "axis.exe"
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		candidate := filepath.Join(dir, binName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			add(candidate)
+		}
 	}
 
 	return paths
-}
-
-// updateStalePathBinaries checks whether any other axis binary in PATH is older
-// and offers to update it even when the current binary is already up-to-date.
-func updateStalePathBinaries(cmd *cobra.Command, rel *ghRelease, latest string) error {
-	out := cmd.OutOrStdout()
-	self, err := os.Executable()
-	if err != nil {
-		return nil
-	}
-	selfResolved, _ := filepath.EvalSymlinks(self)
-	selfAbs, _ := filepath.Abs(selfResolved)
-
-	pathBin, err := exec.LookPath("axis")
-	if err != nil {
-		return nil
-	}
-	pathResolved, _ := filepath.EvalSymlinks(pathBin)
-	pathAbs, _ := filepath.Abs(pathResolved)
-
-	if pathAbs == selfAbs {
-		return nil // same binary, nothing extra to do
-	}
-
-	// There's a different axis binary in PATH. Download and update it.
-	fmt.Fprintf(out, "\nFound another axis binary in PATH: %s\n", pathAbs)
-	fmt.Fprintf(out, "Updating it to v%s...\n", latest)
-
-	binary, err := downloadReleaseBinary(cmd, rel, latest)
-	if err != nil {
-		return err
-	}
-
-	if err := replaceExecutable(pathAbs, binary); err != nil {
-		return fmt.Errorf("replacing %s: %w", pathAbs, err)
-	}
-	fmt.Fprintf(out, "Updated: %s → v%s\n", pathAbs, latest)
-	return nil
 }
 
 func fetchLatestRelease() (*ghRelease, error) {
