@@ -67,7 +67,7 @@ func TestRootCommandShowsHelpInsteadOfRoutingToChat(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
-	if !strings.Contains(stdout, "Available Commands:") || !strings.Contains(stdout, "facts") || !strings.Contains(stdout, "task") {
+	if !strings.Contains(stdout, "COMMANDS") || !strings.Contains(stdout, "facts") || !strings.Contains(stdout, "task") {
 		t.Fatalf("expected root help output, got %q", stdout)
 	}
 	if strings.Contains(stdout, "discover") {
@@ -104,7 +104,7 @@ func TestScriptsListCommandPrintsRegistry(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
-	if !strings.Contains(stdout, "AVAILABLE MOLE-STYLE SCRIPTS:") {
+	if !strings.Contains(stdout, "AVAILABLE SCRIPTS") {
 		t.Fatalf("expected scripts banner, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "Run a script with: axis task run --script") {
@@ -263,7 +263,7 @@ func TestFactsCmdFallsBackToErrorNodeOnCollectorError(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := factsCmd()
-		cmd.SetArgs(nil)
+		cmd.SetArgs([]string{"--format", "json"})
 		return cmd.Execute()
 	})
 	if err != nil {

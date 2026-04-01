@@ -19,6 +19,7 @@ import (
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/turboexec"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 var loadPlacementState = state.Load
@@ -86,27 +87,31 @@ func taskPlaceCmd() *cobra.Command {
 				if cached {
 					fmt.Printf("Source: %s\n", source)
 				}
-				fmt.Println("No suitable node found.")
+				fmt.Printf("%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
-					fmt.Printf("  - %s\n", r)
+					fmt.Printf("  %s %s\n", ui.Dim("-"), r)
 				}
 				os.Exit(ExitErrNoNodesFit)
 			}
 
-			locality := "remote"
+			locality := ui.Dim("remote")
 			if decision.IsLocal {
-				locality = "local"
+				locality = ui.Green("local")
 			}
 			if cached {
-				fmt.Printf("Source: %s\n", source)
+				fmt.Printf("%s %s\n", ui.Dim("Source:"), source)
 			}
-			fmt.Printf("Selected node: %s (%s, fit %d/100)\n", decision.Node, locality, decision.FitScore)
+			fmt.Printf("%s %s (%s, fit %s)\n",
+				ui.Green("✓"),
+				ui.Bold(decision.Node),
+				locality,
+				ui.Cyan(fmt.Sprintf("%d/100", decision.FitScore)))
 			if decision.Tool != "" {
-				fmt.Printf("Tool: %s\n", decision.Tool)
+				fmt.Printf("  %s %s\n", ui.Dim("Tool:"), decision.Tool)
 			}
-			fmt.Println("Reason:")
+			fmt.Printf("  %s\n", ui.Dim("Reason:"))
 			for _, r := range decision.Reasoning {
-				fmt.Printf("  - %s\n", r)
+				fmt.Printf("    %s %s\n", ui.Dim("-"), r)
 			}
 			return nil
 		},

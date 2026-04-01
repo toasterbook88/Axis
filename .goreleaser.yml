@@ -10,6 +10,11 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/toasterbook88/axis/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/toasterbook88/axis/internal/buildinfo.Date={{ .Date }}
+      - -X github.com/toasterbook88/axis/internal/buildinfo.GoVersion={{ .Env.GOVERSION }}
     goos:
       - darwin
       - linux
