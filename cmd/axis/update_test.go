@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,8 +47,31 @@ func checksumLine(data []byte, name string) string {
 }
 
 func TestUpdateAlreadyUpToDate(t *testing.T) {
+	// Even in "up to date" mode the command may discover a second axis binary
+	// in PATH and try to download the release to update it. Provide a full
+	// mock so the path never fails on missing assets.
+	fakeBin := []byte("fake")
+	archiveName := fmt.Sprintf("axis_%s_%s_%s.tar.gz", buildinfo.Version, runtime.GOOS, runtime.GOARCH)
+	archiveData := buildTestArchive(t, fakeBin)
+	csLine := checksumLine(archiveData, archiveName)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghRelease{TagName: "v" + buildinfo.Version})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
+			json.NewEncoder(w).Encode(ghRelease{
+				TagName: "v" + buildinfo.Version,
+				Assets: []ghAsset{
+					{Name: archiveName, BrowserDownloadURL: "http://" + r.Host + "/archive"},
+					{Name: "checksums.txt", BrowserDownloadURL: "http://" + r.Host + "/checksums"},
+				},
+			})
+		case r.URL.Path == "/archive":
+			w.Write(archiveData)
+		case r.URL.Path == "/checksums":
+			fmt.Fprintln(w, csLine)
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
 
@@ -137,15 +161,7 @@ func TestUpdateInstall(t *testing.T) {
 	updateAPIBase = srv.URL
 	updateGetFunc = srv.Client().Get
 
-	// Patch runtime values via archive name derived from "testos"/"testarch" — we can't
-	// override runtime.GOOS/GOARCH directly, so exercise installRelease directly.
-	rel := &ghRelease{
-		TagName: "v9.9.9",
-		Assets: []ghAsset{
-			{Name: archiveName, BrowserDownloadURL: srv.URL + "/archive"},
-			{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums"},
-		},
-	}
+	// Exercise replaceExecutable directly since we can't override runtime.GOOS/GOARCH.
 	if err := replaceExecutable(target, fakeBinary); err != nil {
 		t.Fatalf("replaceExecutable: %v", err)
 	}
@@ -156,7 +172,36 @@ func TestUpdateInstall(t *testing.T) {
 	if !bytes.Equal(got, fakeBinary) {
 		t.Errorf("binary not replaced correctly")
 	}
-	_ = rel // used to verify the asset lookup path above
+}
+
+func TestFindAxisBinariesExplicitPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "axis")
+	if err := os.WriteFile(target, []byte("test"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	paths := findAxisBinaries(target)
+	if len(paths) != 1 {
+		t.Fatalf("expected 1 path, got %d: %v", len(paths), paths)
+	}
+}
+
+func TestFindAxisBinariesDedup(t *testing.T) {
+	// When explicit path is empty, findAxisBinaries deduplicates
+	// os.Executable() and exec.LookPath results — at minimum returns the
+	// current executable.
+	paths := findAxisBinaries("")
+	if len(paths) == 0 {
+		t.Fatal("expected at least 1 path for self binary")
+	}
+	// Verify no duplicates.
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		if seen[p] {
+			t.Errorf("duplicate path: %s", p)
+		}
+		seen[p] = true
+	}
 }
 
 func TestExtractBinary(t *testing.T) {
