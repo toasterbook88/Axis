@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-03-29 EDT
+Last reviewed: 2026-06-30 EDT
 Branch: `main`
-Audit base: `15847e5` on `main` (2026-03-29 workspace review)
+Audit base: `e7e1746` on `main` (Phase 4 merge)
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -41,7 +41,7 @@ The live repo currently contains:
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- A live `v0.4.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
+- A live `v0.5.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 
@@ -53,9 +53,9 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
-| `axis version` | Print version | Version is `0.4.0` |
-| `axis facts` | Collect local facts | JSON/YAML output |
-| `axis status` | Collect cluster snapshot | Live SSH by default; `--cached` uses the local daemon cache |
+| `axis version` | Print version | Version is `0.5.0`; shows commit, build date, go version, platform |
+| `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
+| `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis task place` | Advisory placement | Human output/JSON; `--cached` uses the local daemon cache |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
@@ -68,11 +68,15 @@ Top-level commands currently registered in the binary:
 | `axis context show|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
+| `axis doctor` | Validate config, SSH, and daemon health | Checks config, TCP probes per node, daemon status |
+| `axis completion` | Generate shell completions | bash/zsh/fish/powershell |
 
 ## Package Map
 
 | Package | Role | Current Maturity |
 | --- | --- | --- |
+| `internal/ui` | Terminal output: colors, tables, spinners, errors, help templates | Well-tested (84.9% coverage); auto-disables on non-TTY or `NO_COLOR` |
+| `internal/buildinfo` | Version, commit, date, go version for ldflags injection | Small, stable |
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small, stable, and now rejects unknown YAML fields so config typos fail fast |
 | `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, and the local path can now probe-verify Apple Foundation Models on eligible Macs in addition to TurboQuant/backend metadata |
@@ -110,11 +114,11 @@ Audit commands run against this repo state:
 - `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
 - `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
 - `go test ./... -cover` -> passes (updated per-package snapshot below)
-- `./hack/coverage-check.sh` -> passes (`internal/knowledge` `90.9%`, `internal/api` `71.4%`, `internal/mcp` `46.6%`, total gate `65.0%`)
+- `./hack/coverage-check.sh` -> passes (`internal/knowledge` `90.9%`, `internal/api` `50.9%`, `internal/mcp` `46.6%`, `internal/ui` `84.9%`, total gate `67.1%`)
 
 Coverage gaps called out by `go test ./... -cover`:
 
-- v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `71.4%`, `internal/mcp` `46.6%`
+- v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `50.9%`, `internal/mcp` `46.6%`, `internal/ui` `84.9%`
 - direct coverage is now also strong in `internal/persist` `100.0%` and `internal/runtimectx` `92.6%`
 - remaining lower-coverage surfaces: `cmd/axis`, `internal/facts`
 
