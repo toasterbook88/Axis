@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"net"
+
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -186,14 +188,22 @@ func TestRunGuardedRemoteConnectFailureReturnsDialError(t *testing.T) {
 	clientKey, _ := generateExecutionTestKeyPair(t)
 	_, hostSigner := generateExecutionTestKeyPair(t)
 
-	home := writeExecutionSSHHome(t, clientKey, hostSigner, "127.0.0.1", 1)
+	// Bind to an ephemeral port then close it so we have a port that immediately refuses.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not bind ephemeral port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	home := writeExecutionSSHHome(t, clientKey, hostSigner, "127.0.0.1", port)
 	t.Setenv("HOME", home)
 	t.Setenv("SSH_AUTH_SOCK", "")
 
-	cfg := loadExecutionConfig(t, filepath.Join(home, ".axis", "nodes.yaml"), "127.0.0.1", 1)
+	cfg := loadExecutionConfig(t, filepath.Join(home, ".axis", "nodes.yaml"), "127.0.0.1", port)
 	rt := testExecutionRuntime(cfg, &state.ClusterState{Nodes: map[string]state.NodeState{}}, &skills.Store{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	resp, err := RunGuarded(ctx, rt, GuardedExecutionRequest{
