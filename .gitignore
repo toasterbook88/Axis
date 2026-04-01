@@ -23,3 +23,7 @@ Thumbs.db
 # Build artifacts
 /dist/
 /bin/
+
+# AI assistant instruction files
+CLAUDE.md
+GEMINI.md

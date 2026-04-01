@@ -2,8 +2,10 @@ package ui
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -16,17 +18,29 @@ func init() {
 
 func TestInitNoColor(t *testing.T) {
 	prev := color.NoColor
-	defer func() { color.NoColor = prev }()
+	prevEnv := os.Getenv("NO_COLOR")
+	defer func() {
+		color.NoColor = prev
+		os.Setenv("NO_COLOR", prevEnv)
+	}()
 
 	Init(true)
 	if Enabled() {
 		t.Error("expected color disabled after Init(true)")
 	}
 
-	color.NoColor = false
+	// With NO_COLOR unset and noColor=false, color should be enabled.
+	os.Unsetenv("NO_COLOR")
 	Init(false)
 	if !Enabled() {
-		t.Error("expected color enabled after Init(false)")
+		t.Error("expected color enabled after Init(false) with NO_COLOR unset")
+	}
+
+	// With NO_COLOR set, Init(false) should still disable color.
+	os.Setenv("NO_COLOR", "1")
+	Init(false)
+	if Enabled() {
+		t.Error("expected color disabled when NO_COLOR env is set")
 	}
 }
 
@@ -112,13 +126,44 @@ func TestSpinnerStartStop(t *testing.T) {
 	var buf bytes.Buffer
 	s := &Spinner{w: &buf}
 	s.Start("working...")
+	// Allow at least one animation tick so animate() goroutine is covered.
+	time.Sleep(120 * time.Millisecond)
 	s.Update("still working...")
+	time.Sleep(120 * time.Millisecond)
 	s.Stop("done!")
 
 	out := buf.String()
 	if !strings.Contains(out, "done!") {
 		t.Errorf("expected final message, got %q", out)
 	}
+}
+
+func TestSpinnerStopWithoutStart(t *testing.T) {
+	prev := color.NoColor
+	color.NoColor = false
+	defer func() { color.NoColor = prev }()
+
+	var buf bytes.Buffer
+	s := &Spinner{w: &buf}
+	// Stop without Start should print the message (not-running branch).
+	s.Stop("fallback msg")
+	if !strings.Contains(buf.String(), "fallback msg") {
+		t.Errorf("expected fallback message, got %q", buf.String())
+	}
+}
+
+func TestSpinnerDoubleStart(t *testing.T) {
+	prev := color.NoColor
+	color.NoColor = false
+	defer func() { color.NoColor = prev }()
+
+	var buf bytes.Buffer
+	s := &Spinner{w: &buf}
+	s.Start("first")
+	// Second Start should be a no-op (already-running guard).
+	s.Start("second")
+	time.Sleep(100 * time.Millisecond)
+	s.Stop("done")
 }
 
 func TestFprintError(t *testing.T) {

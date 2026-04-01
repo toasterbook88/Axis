@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const defaultOllamaEndpoint = "http://localhost:11434"
+const defaultOllamaEndpoint = DefaultEndpoint
 
 type ModelOption struct {
 	Name        string

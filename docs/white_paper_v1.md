@@ -29,7 +29,8 @@ AXIS is intentionally minimal:
 - Single binary, no installation beyond `go build`
 - No required daemon or background process
 - No proprietary wire protocol — SSH for transport, YAML for config, JSON for output
-- Dependency surface is small by design: `cobra`, `golang.org/x/crypto`, `gopkg.in/yaml.v3`
+- Dependency surface is small by design: `cobra`, `golang.org/x/crypto`,
+  `gopkg.in/yaml.v3`, `mcp-go`, `shellescape`
 
 ## Architecture
 
@@ -142,7 +143,7 @@ snapshot.
 snapshot reflects reality, including uncertainty.
 
 **Minimal dependencies.** Each dependency is a liability. AXIS avoids pulling in
-monitoring frameworks, ORMs, or large CLI toolkits. Standard library and three
+monitoring frameworks, ORMs, or large CLI toolkits. Standard library and five
 focused packages is the current budget.
 
 **Cluster-topology neutral.** The config schema and data model avoid hardcoding

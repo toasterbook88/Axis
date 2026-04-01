@@ -1,5 +1,5 @@
 // Package ui provides colored, table, and spinner output for the AXIS CLI.
-// All rendering respects --no-color, NO_COLOR env, and non-TTY detection.
+// All rendering respects --no-color and the NO_COLOR environment variable.
 package ui
 
 import (
@@ -10,11 +10,10 @@ import (
 )
 
 // Init configures the UI subsystem. Call once from PersistentPreRun.
-// When noColor is true, all color output is suppressed.
+// Color is disabled when noColor is true or the NO_COLOR env var is set.
+// Otherwise color is explicitly enabled.
 func Init(noColor bool) {
-	if noColor || os.Getenv("NO_COLOR") != "" {
-		color.NoColor = true
-	}
+	color.NoColor = noColor || os.Getenv("NO_COLOR") != ""
 }
 
 // Enabled reports whether color output is active.
