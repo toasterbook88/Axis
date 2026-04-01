@@ -96,7 +96,7 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 			fmt.Sprintf("%d CPU cores", best.Resources.CPUCores))
 		if len(best.Resources.GPUs) > 0 {
 			decision.Reasoning = append(decision.Reasoning,
-				fmt.Sprintf("GPU: %s", strings.Join(best.Resources.GPUs, ", ")))
+				fmt.Sprintf("GPU: %s", strings.Join(models.GPUNames(best.Resources.GPUs), ", ")))
 		}
 	}
 

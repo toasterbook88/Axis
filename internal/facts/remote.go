@@ -215,14 +215,25 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 	// GPU (best-effort)
 	var gpuCmd string
 	if osName == "darwin" {
-		gpuCmd = `system_profiler SPDisplaysDataType 2>/dev/null | grep 'Chipset Model:' | sed 's/.*Chipset Model: //'`
+		gpuCmd = `system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'`
 	} else {
-		gpuCmd = `lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`
+		// Try nvidia-smi first, fall back to lspci
+		gpuCmd = `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`
 	}
 	if out, err := c.Exec.Run(ctx, gpuCmd); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				r.GPUs = append(r.GPUs, line)
+		out = strings.TrimSpace(out)
+		if out != "" {
+			// Detect format: nvidia-smi CSV has commas, lspci/system_profiler does not
+			if strings.Contains(out, ", ") && !strings.Contains(out, "Chipset Model") {
+				r.GPUs = parseRemoteNvidiaSMI(out)
+			} else if strings.Contains(out, "Chipset Model") {
+				r.GPUs = parseRemoteSystemProfiler(out)
+			} else {
+				for _, line := range strings.Split(out, "\n") {
+					if line = strings.TrimSpace(line); line != "" {
+						r.GPUs = append(r.GPUs, models.GPUFromString(line))
+					}
+				}
 			}
 		}
 	}
@@ -335,4 +346,61 @@ func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) models.Ollam
 		return parsed
 	}
 	return info
+}
+
+func parseRemoteNvidiaSMI(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ", ", 2)
+		name := strings.TrimSpace(parts[0])
+		gpu := models.GPUInfo{
+			Model:        name,
+			Vendor:       "nvidia",
+			Capabilities: []string{"cuda"},
+		}
+		if len(parts) >= 2 {
+			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+				gpu.VRAMMB = vram
+			}
+		}
+		gpus = append(gpus, gpu)
+	}
+	return gpus
+}
+
+func parseRemoteSystemProfiler(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	var current *models.GPUInfo
+
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Chipset Model:") {
+			if current != nil {
+				gpus = append(gpus, *current)
+			}
+			model := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
+			current = &models.GPUInfo{
+				Model:  model,
+				Vendor: models.GPUFromString(model).Vendor,
+			}
+		}
+		if current != nil {
+			if strings.HasPrefix(trimmed, "Metal Family:") || strings.HasPrefix(trimmed, "Metal Support:") {
+				if !current.HasCapability("metal") {
+					current.Capabilities = append(current.Capabilities, "metal")
+				}
+			}
+		}
+	}
+	if current != nil {
+		if current.Vendor == "apple" && !current.HasCapability("metal") {
+			current.Capabilities = append(current.Capabilities, "metal")
+		}
+		gpus = append(gpus, *current)
+	}
+	return gpus
 }

@@ -687,33 +687,139 @@ func parseDFOutput(out string) (int64, int64, error) {
 	return 0, 0, fmt.Errorf("unexpected df fields")
 }
 
-func localGPUs() []string {
+func localGPUs() []models.GPUInfo {
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
-		if err != nil {
-			return nil
+		return localGPUsDarwin()
+	}
+	return localGPUsLinux()
+}
+
+func localGPUsDarwin() []models.GPUInfo {
+	out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
+	if err != nil {
+		return nil
+	}
+	return parseSystemProfilerGPUs(string(out))
+}
+
+func parseSystemProfilerGPUs(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	var current *models.GPUInfo
+
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Chipset Model:") {
+			if current != nil {
+				gpus = append(gpus, *current)
+			}
+			model := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
+			current = &models.GPUInfo{
+				Model:  model,
+				Vendor: models.GPUFromString(model).Vendor,
+			}
 		}
-		var gpus []string
-		for _, line := range strings.Split(string(out), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "Chipset Model:") {
-				gpu := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
-				if gpu != "" {
-					gpus = append(gpus, gpu)
+		if current != nil {
+			if strings.HasPrefix(trimmed, "VRAM") && strings.Contains(trimmed, ":") {
+				vramStr := strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
+				current.VRAMMB = parseVRAMMB(vramStr)
+			}
+			if strings.HasPrefix(trimmed, "Metal Family:") || strings.HasPrefix(trimmed, "Metal Support:") {
+				if !current.HasCapability("metal") {
+					current.Capabilities = append(current.Capabilities, "metal")
 				}
 			}
 		}
-		return gpus
 	}
-	// Linux
+	if current != nil {
+		// Apple Silicon always supports Metal even if not explicitly listed
+		if current.Vendor == "apple" && !current.HasCapability("metal") {
+			current.Capabilities = append(current.Capabilities, "metal")
+		}
+		gpus = append(gpus, *current)
+	}
+	return gpus
+}
+
+// parseVRAMMB extracts MB from strings like "16 GB", "4096 MB", "16384 MB".
+func parseVRAMMB(s string) int {
+	s = strings.TrimSpace(s)
+	parts := strings.Fields(s)
+	if len(parts) < 1 {
+		return 0
+	}
+	val, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0
+	}
+	if len(parts) >= 2 {
+		switch strings.ToLower(parts[1]) {
+		case "gb":
+			return val * 1024
+		case "mb":
+			return val
+		}
+	}
+	// Assume MB if no unit
+	return val
+}
+
+func localGPUsLinux() []models.GPUInfo {
+	// Try nvidia-smi first for NVIDIA GPUs
+	gpus := localGPUsNvidiaSMI()
+
+	// Fallback: lspci for non-NVIDIA or if nvidia-smi unavailable
+	lspciGPUs := localGPUsLspci()
+	for _, g := range lspciGPUs {
+		if g.Vendor == "nvidia" && len(gpus) > 0 {
+			continue // nvidia-smi gave better data
+		}
+		gpus = append(gpus, g)
+	}
+	return gpus
+}
+
+func localGPUsNvidiaSMI() []models.GPUInfo {
+	out, err := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return nil
+	}
+	return parseNvidiaSMIOutput(string(out))
+}
+
+func parseNvidiaSMIOutput(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ", ", 2)
+		name := strings.TrimSpace(parts[0])
+		gpu := models.GPUInfo{
+			Model:        name,
+			Vendor:       "nvidia",
+			Capabilities: []string{"cuda"},
+		}
+		if len(parts) >= 2 {
+			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+				gpu.VRAMMB = vram
+			}
+		}
+		gpus = append(gpus, gpu)
+	}
+	return gpus
+}
+
+func localGPUsLspci() []models.GPUInfo {
 	out, err := exec.Command("bash", "-c", `lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
-	var gpus []string
+	var gpus []models.GPUInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
 		if line != "" {
-			gpus = append(gpus, strings.TrimSpace(line))
+			gpus = append(gpus, models.GPUFromString(line))
 		}
 	}
 	return gpus

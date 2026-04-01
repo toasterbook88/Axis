@@ -84,10 +84,10 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return pressureRank(pi) < pressureRank(pj)
 		}
 
-		gi := gpuPresent(ranked[i])
-		gj := gpuPresent(ranked[j])
+		gi := gpuScore(ranked[i], reqs)
+		gj := gpuScore(ranked[j], reqs)
 		if gi != gj {
-			return gi && !gj
+			return gi > gj
 		}
 
 		bi := preferredBackendRank(ranked[i], reqs)
@@ -234,6 +234,55 @@ func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
 	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
 }
 
+// gpuScore returns a weighted GPU score considering VRAM and capabilities.
+// Discrete GPUs with more VRAM score higher. Integrated-only GPUs (Intel) get reduced scores.
+func gpuScore(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if n.Resources == nil || len(n.Resources.GPUs) == 0 {
+		return 0
+	}
+	best := 0
+	for _, gpu := range n.Resources.GPUs {
+		score := 10 // base score for any GPU
+
+		// Capability match with preferred backends
+		for _, backend := range reqs.PreferredBackends {
+			switch strings.ToLower(backend) {
+			case "cuda":
+				if gpu.HasCapability("cuda") {
+					score += 10
+				}
+			case "metal", "mlx":
+				if gpu.HasCapability("metal") {
+					score += 10
+				}
+			case "rocm":
+				if gpu.HasCapability("rocm") {
+					score += 10
+				}
+			}
+		}
+
+		// VRAM bonus: 1 pt per GB, capped at 5
+		if gpu.VRAMMB > 0 {
+			vramPts := gpu.VRAMMB / 1024
+			if vramPts > 5 {
+				vramPts = 5
+			}
+			score += vramPts
+		}
+
+		// Penalty for integrated-only GPUs (Intel without discrete capabilities)
+		if gpu.Vendor == "intel" && len(gpu.Capabilities) == 0 {
+			score = score / 2
+		}
+
+		if score > best {
+			best = score
+		}
+	}
+	return best
+}
+
 func gpuPresent(n models.NodeFacts) bool {
 	if n.Resources == nil {
 		return false
@@ -282,10 +331,12 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 		score += 10
 	}
 
-	// GPU
-	if len(n.Resources.GPUs) > 0 {
-		score += 25
+	// GPU — capability-weighted score (up to 25 pts)
+	gpuPts := gpuScore(n, reqs)
+	if gpuPts > 25 {
+		gpuPts = 25
 	}
+	score += gpuPts
 
 	// CPU: 1pt per core, cap 10
 	cpuPts := n.Resources.CPUCores

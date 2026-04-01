@@ -83,7 +83,7 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 		kv("disk:", fmt.Sprintf("%d GB free / %d GB total", r.DiskFreeGB, r.DiskTotalGB))
 		kv("pressure:", formatPressure(r.Pressure))
 		if len(r.GPUs) > 0 {
-			kv("gpus:", strings.Join(r.GPUs, ", "))
+			kv("gpus:", strings.Join(models.GPUNames(r.GPUs), ", "))
 		}
 	}
 
