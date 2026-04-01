@@ -34,6 +34,10 @@ var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
 // Local node is detected by hostname match — uses LocalCollector.
 // Remote nodes use SSH-based RemoteCollector.
 // Never fails hard — unreachable nodes return StatusUnreachable.
+// MaxParallel controls the maximum number of concurrent SSH probes.
+// It prevents goroutine storms when the cluster has many nodes.
+var MaxParallel = 10
+
 func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 	discovered := make(map[string]config.NodeConfig)
 	var mu sync.Mutex
@@ -54,11 +58,14 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 
 	results := make([]models.NodeFacts, len(finalNodes))
 
+	sem := make(chan struct{}, MaxParallel)
 	var wg sync.WaitGroup
 	for i, node := range finalNodes {
 		wg.Add(1)
+		sem <- struct{}{} // acquire semaphore slot
 		go func(idx int, nc config.NodeConfig) {
 			defer wg.Done()
+			defer func() { <-sem }() // release slot
 
 			nodeCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveTimeout())*time.Second)
 			defer cancel()
