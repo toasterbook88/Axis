@@ -1040,3 +1040,98 @@ func TestFitScore_HighVRAMScoresHigher(t *testing.T) {
 		t.Errorf("high VRAM (%d) should score higher than low VRAM (%d)", scoreHigh, scoreLow)
 	}
 }
+
+// --- Storage & Thermal Placement Tests ---
+
+func TestFilter_LowBatteryBlocksHeavyTask(t *testing.T) {
+	batteryLow := 15
+	n := nodeComplete("laptop", 8000, "none", "ollama")
+	n.Resources.BatteryPercent = &batteryLow
+	n.Ollama = &models.OllamaInfo{Running: true, Installed: true}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 0 {
+		t.Error("low battery node should be filtered out for heavy inference")
+	}
+}
+
+func TestFilter_LowBatteryAllowsLightTask(t *testing.T) {
+	batteryLow := 15
+	n := nodeComplete("laptop", 8000, "none", "git")
+	n.Resources.BatteryPercent = &batteryLow
+
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 1 {
+		t.Error("low battery should not block non-inference tasks")
+	}
+}
+
+func TestFilter_ThermalCriticalBlocksHeavyTask(t *testing.T) {
+	n := nodeComplete("hot-box", 8000, "none", "ollama")
+	n.Resources.ThermalState = "critical"
+	n.Ollama = &models.OllamaInfo{Running: true, Installed: true}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 0 {
+		t.Error("thermally critical node should be filtered out for heavy inference")
+	}
+}
+
+func TestFilter_ThermalNominalAllowed(t *testing.T) {
+	n := nodeComplete("cool-box", 8000, "none", "ollama")
+	n.Resources.ThermalState = "nominal"
+	n.Ollama = &models.OllamaInfo{Running: true, Installed: true}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 1 {
+		t.Error("nominal thermal node should not be filtered")
+	}
+}
+
+func TestFitScore_HDDPenaltyForInference(t *testing.T) {
+	ssd := nodeComplete("ssd-node", 8000, "none")
+	ssd.Resources.StorageClass = "ssd"
+
+	hdd := nodeComplete("hdd-node", 8000, "none")
+	hdd.Resources.StorageClass = "hdd"
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	scoreSSD := ComputeTaskFitScore(ssd, false, nil, reqs)
+	scoreHDD := ComputeTaskFitScore(hdd, false, nil, reqs)
+
+	if scoreHDD >= scoreSSD {
+		t.Errorf("HDD (%d) should score lower than SSD (%d) for inference", scoreHDD, scoreSSD)
+	}
+}
+
+func TestFitScore_HDDNoPenaltyForLightTask(t *testing.T) {
+	ssd := nodeComplete("ssd-node", 8000, "none")
+	ssd.Resources.StorageClass = "ssd"
+
+	hdd := nodeComplete("hdd-node", 8000, "none")
+	hdd.Resources.StorageClass = "hdd"
+
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
+	scoreSSD := ComputeTaskFitScore(ssd, false, nil, reqs)
+	scoreHDD := ComputeTaskFitScore(hdd, false, nil, reqs)
+
+	if scoreHDD != scoreSSD {
+		t.Errorf("HDD (%d) and SSD (%d) should score same for light tasks", scoreHDD, scoreSSD)
+	}
+}

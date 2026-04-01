@@ -238,6 +238,15 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 		}
 	}
 
+	// Storage class (best-effort)
+	r.StorageClass = c.remoteStorageClass(ctx, osName)
+
+	// Battery and thermal (best-effort)
+	if pct, ok := c.remoteBatteryPercent(ctx, osName); ok {
+		r.BatteryPercent = &pct
+	}
+	r.ThermalState = c.remoteThermalState(ctx, osName)
+
 	return r, partial
 }
 
@@ -403,4 +412,101 @@ func parseRemoteSystemProfiler(out string) []models.GPUInfo {
 		gpus = append(gpus, *current)
 	}
 	return gpus
+}
+
+func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "diskutil info / 2>/dev/null")
+		if err != nil {
+			return "unknown"
+		}
+		return parseDiskutilStorageClass(out)
+	case "linux":
+		out, err := c.Exec.Run(ctx, `findmnt -n -o SOURCE / 2>/dev/null | sed 's/[0-9]*$//' | sed 's|/dev/||'`)
+		if err != nil {
+			return "unknown"
+		}
+		dev := strings.TrimSpace(out)
+		if strings.HasPrefix(dev, "nvme") {
+			return "nvme"
+		}
+		base := strings.TrimRight(dev, "0123456789")
+		if base == "" {
+			return "unknown"
+		}
+		rotOut, err := c.Exec.Run(ctx, fmt.Sprintf("cat /sys/block/%s/queue/rotational 2>/dev/null", base))
+		if err != nil {
+			return "unknown"
+		}
+		switch strings.TrimSpace(rotOut) {
+		case "0":
+			return "ssd"
+		case "1":
+			return "hdd"
+		}
+		return "unknown"
+	default:
+		return "unknown"
+	}
+}
+
+func (c *RemoteCollector) remoteBatteryPercent(ctx context.Context, osName string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "pmset -g batt 2>/dev/null")
+		if err != nil {
+			return 0, false
+		}
+		return parsePmsetBattery(out)
+	case "linux":
+		out, err := c.Exec.Run(ctx, "cat /sys/class/power_supply/BAT0/capacity /sys/class/power_supply/BAT1/capacity /sys/class/power_supply/BATT/capacity 2>/dev/null | head -1")
+		if err != nil {
+			return 0, false
+		}
+		if pct, err := strconv.Atoi(strings.TrimSpace(out)); err == nil && pct >= 0 && pct <= 100 {
+			return pct, true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
+func (c *RemoteCollector) remoteThermalState(ctx context.Context, osName string) string {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "pmset -g therm 2>/dev/null")
+		if err != nil {
+			return ""
+		}
+		return parsePmsetThermal(out)
+	case "linux":
+		out, err := c.Exec.Run(ctx, "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null")
+		if err != nil {
+			return ""
+		}
+		var maxTemp int
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if temp, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && temp > maxTemp {
+				maxTemp = temp
+			}
+		}
+		if maxTemp == 0 {
+			return ""
+		}
+		tempC := maxTemp / 1000
+		switch {
+		case tempC >= 95:
+			return "critical"
+		case tempC >= 85:
+			return "serious"
+		case tempC >= 75:
+			return "fair"
+		default:
+			return "nominal"
+		}
+	default:
+		return ""
+	}
 }

@@ -341,6 +341,15 @@ func localResources() (*models.Resources, bool) {
 		r.GPUUtilPercent = &util
 	}
 
+	// Storage class (best-effort)
+	r.StorageClass = localStorageClass()
+
+	// Thermal and power (best-effort)
+	if pct, ok := localBatteryPercent(); ok {
+		r.BatteryPercent = &pct
+	}
+	r.ThermalState = localThermalState()
+
 	return r, partial
 }
 
@@ -928,4 +937,225 @@ func parseLinuxGPUUtilPercent(out string) (float64, bool) {
 	}
 
 	return maxUtil, found
+}
+
+// --- Storage Class Detection ---
+
+func localStorageClass() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return localStorageClassDarwin()
+	case "linux":
+		return localStorageClassLinux()
+	default:
+		return "unknown"
+	}
+}
+
+func localStorageClassDarwin() string {
+	out, err := exec.Command("diskutil", "info", "/").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return parseDiskutilStorageClass(string(out))
+}
+
+func parseDiskutilStorageClass(out string) string {
+	isSolid := false
+	isNVMe := false
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Solid State:") && strings.Contains(strings.ToLower(trimmed), "yes") {
+			isSolid = true
+		}
+		if strings.HasPrefix(trimmed, "Protocol:") && strings.Contains(strings.ToLower(trimmed), "nvme") {
+			isNVMe = true
+		}
+		if strings.HasPrefix(trimmed, "Device / Media Name:") && strings.Contains(strings.ToLower(trimmed), "nvme") {
+			isNVMe = true
+		}
+	}
+	if isNVMe {
+		return "nvme"
+	}
+	if isSolid {
+		return "ssd"
+	}
+	return "unknown"
+}
+
+func localStorageClassLinux() string {
+	// Find the root device
+	out, err := exec.Command("bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null | sed 's/[0-9]*$//' | sed 's|/dev/||'`).Output()
+	if err != nil {
+		return "unknown"
+	}
+	dev := strings.TrimSpace(string(out))
+	if dev == "" {
+		return "unknown"
+	}
+	// Strip partition suffix for NVMe (e.g. nvme0n1p2 → nvme0n1)
+	if strings.HasPrefix(dev, "nvme") {
+		if idx := strings.LastIndex(dev, "p"); idx > 0 {
+			dev = dev[:idx]
+		}
+		return "nvme"
+	}
+	return parseLinuxRotational(dev)
+}
+
+func parseLinuxRotational(dev string) string {
+	// Strip partition numbers for standard devices (sda2 → sda)
+	base := strings.TrimRight(dev, "0123456789")
+	if base == "" {
+		return "unknown"
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/sys/block/%s/queue/rotational", base))
+	if err != nil {
+		return "unknown"
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "0":
+		return "ssd"
+	case "1":
+		return "hdd"
+	default:
+		return "unknown"
+	}
+}
+
+// --- Battery / Thermal Detection ---
+
+func localBatteryPercent() (int, bool) {
+	switch runtime.GOOS {
+	case "darwin":
+		return localBatteryDarwin()
+	case "linux":
+		return localBatteryLinux()
+	default:
+		return 0, false
+	}
+}
+
+func localBatteryDarwin() (int, bool) {
+	out, err := exec.Command("pmset", "-g", "batt").Output()
+	if err != nil {
+		return 0, false
+	}
+	return parsePmsetBattery(string(out))
+}
+
+func parsePmsetBattery(out string) (int, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		if idx := strings.Index(line, "%"); idx > 0 {
+			// Walk backward to find the number before %
+			start := idx - 1
+			for start >= 0 && line[start] >= '0' && line[start] <= '9' {
+				start--
+			}
+			start++
+			if start < idx {
+				if pct, err := strconv.Atoi(line[start:idx]); err == nil && pct >= 0 && pct <= 100 {
+					return pct, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func localBatteryLinux() (int, bool) {
+	// Try common power supply paths
+	for _, name := range []string{"BAT0", "BAT1", "BATT"} {
+		data, err := os.ReadFile(fmt.Sprintf("/sys/class/power_supply/%s/capacity", name))
+		if err != nil {
+			continue
+		}
+		if pct, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pct >= 0 && pct <= 100 {
+			return pct, true
+		}
+	}
+	return 0, false
+}
+
+func localThermalState() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return localThermalDarwin()
+	case "linux":
+		return localThermalLinux()
+	default:
+		return ""
+	}
+}
+
+func localThermalDarwin() string {
+	out, err := exec.Command("pmset", "-g", "therm").Output()
+	if err != nil {
+		return ""
+	}
+	return parsePmsetThermal(string(out))
+}
+
+// parsePmsetThermal maps macOS thermal pressure to: nominal, fair, serious, critical.
+// pmset -g therm outputs a CPU_Speed_Limit line (100 = nominal, < 100 = throttled).
+func parsePmsetThermal(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "CPU_Speed_Limit") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				if val, err := strconv.Atoi(fields[len(fields)-1]); err == nil {
+					switch {
+					case val >= 100:
+						return "nominal"
+					case val >= 80:
+						return "fair"
+					case val >= 50:
+						return "serious"
+					default:
+						return "critical"
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func localThermalLinux() string {
+	// Check thermal zone temperatures
+	entries, err := os.ReadDir("/sys/class/thermal")
+	if err != nil {
+		return ""
+	}
+	var maxTemp int
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "thermal_zone") {
+			continue
+		}
+		data, err := os.ReadFile(fmt.Sprintf("/sys/class/thermal/%s/temp", entry.Name()))
+		if err != nil {
+			continue
+		}
+		if temp, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			if temp > maxTemp {
+				maxTemp = temp
+			}
+		}
+	}
+	if maxTemp == 0 {
+		return ""
+	}
+	// Temps in millidegrees Celsius
+	tempC := maxTemp / 1000
+	switch {
+	case tempC >= 95:
+		return "critical"
+	case tempC >= 85:
+		return "serious"
+	case tempC >= 75:
+		return "fair"
+	default:
+		return "nominal"
+	}
 }

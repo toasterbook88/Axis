@@ -49,6 +49,9 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 		if blocksForRuntimePressure(reqs, n) {
 			continue
 		}
+		if blocksForThermalOrBattery(reqs, n) {
+			continue
+		}
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
 			adjustedFree := freeRAMWithState(n, st)
@@ -355,6 +358,12 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 	}
 	score += unifiedMemoryFitBonus(n, reqs)
 
+	// HDD penalty for heavy inference tasks
+	score -= storageClassPenalty(n, reqs)
+
+	if score < 0 {
+		score = 0
+	}
 	if score > 100 {
 		score = 100
 	}
@@ -419,6 +428,37 @@ func blocksForRuntimePressure(reqs models.TaskRequirements, n models.NodeFacts) 
 		return strings.EqualFold(n.Resources.Pressure, "high")
 	default:
 		return false
+	}
+}
+
+// blocksForThermalOrBattery disqualifies nodes that are thermally throttled or
+// critically low on battery for heavy inference tasks.
+func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts) bool {
+	if !heavyInferenceTask(reqs) || n.Resources == nil {
+		return false
+	}
+	// Battery below 20% blocks heavy tasks
+	if n.Resources.BatteryPercent != nil && *n.Resources.BatteryPercent < 20 {
+		return true
+	}
+	// Thermal throttle blocks heavy tasks
+	switch strings.ToLower(n.Resources.ThermalState) {
+	case "serious", "critical":
+		return true
+	}
+	return false
+}
+
+// storageClassPenalty reduces fit score for HDD nodes on heavy inference tasks.
+func storageClassPenalty(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if n.Resources == nil || !heavyInferenceTask(reqs) {
+		return 0
+	}
+	switch strings.ToLower(n.Resources.StorageClass) {
+	case "hdd":
+		return 15
+	default:
+		return 0
 	}
 }
 
