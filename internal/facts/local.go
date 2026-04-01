@@ -341,6 +341,15 @@ func localResources() (*models.Resources, bool) {
 		r.GPUUtilPercent = &util
 	}
 
+	// Storage class (best-effort)
+	r.StorageClass = localStorageClass()
+
+	// Thermal and power (best-effort)
+	if pct, ok := localBatteryPercent(); ok {
+		r.BatteryPercent = &pct
+	}
+	r.ThermalState = localThermalState()
+
 	return r, partial
 }
 
@@ -687,33 +696,139 @@ func parseDFOutput(out string) (int64, int64, error) {
 	return 0, 0, fmt.Errorf("unexpected df fields")
 }
 
-func localGPUs() []string {
+func localGPUs() []models.GPUInfo {
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
-		if err != nil {
-			return nil
+		return localGPUsDarwin()
+	}
+	return localGPUsLinux()
+}
+
+func localGPUsDarwin() []models.GPUInfo {
+	out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
+	if err != nil {
+		return nil
+	}
+	return parseSystemProfilerGPUs(string(out))
+}
+
+func parseSystemProfilerGPUs(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	var current *models.GPUInfo
+
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Chipset Model:") {
+			if current != nil {
+				gpus = append(gpus, *current)
+			}
+			model := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
+			current = &models.GPUInfo{
+				Model:  model,
+				Vendor: models.GPUFromString(model).Vendor,
+			}
 		}
-		var gpus []string
-		for _, line := range strings.Split(string(out), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "Chipset Model:") {
-				gpu := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
-				if gpu != "" {
-					gpus = append(gpus, gpu)
+		if current != nil {
+			if strings.HasPrefix(trimmed, "VRAM") && strings.Contains(trimmed, ":") {
+				vramStr := strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
+				current.VRAMMB = parseVRAMMB(vramStr)
+			}
+			if strings.HasPrefix(trimmed, "Metal Family:") || strings.HasPrefix(trimmed, "Metal Support:") {
+				if !current.HasCapability("metal") {
+					current.Capabilities = append(current.Capabilities, "metal")
 				}
 			}
 		}
-		return gpus
 	}
-	// Linux
+	if current != nil {
+		// Apple Silicon always supports Metal even if not explicitly listed
+		if current.Vendor == "apple" && !current.HasCapability("metal") {
+			current.Capabilities = append(current.Capabilities, "metal")
+		}
+		gpus = append(gpus, *current)
+	}
+	return gpus
+}
+
+// parseVRAMMB extracts MB from strings like "16 GB", "4096 MB", "16384 MB".
+func parseVRAMMB(s string) int {
+	s = strings.TrimSpace(s)
+	parts := strings.Fields(s)
+	if len(parts) < 1 {
+		return 0
+	}
+	val, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0
+	}
+	if len(parts) >= 2 {
+		switch strings.ToLower(parts[1]) {
+		case "gb":
+			return val * 1024
+		case "mb":
+			return val
+		}
+	}
+	// Assume MB if no unit
+	return val
+}
+
+func localGPUsLinux() []models.GPUInfo {
+	// Try nvidia-smi first for NVIDIA GPUs
+	gpus := localGPUsNvidiaSMI()
+
+	// Fallback: lspci for non-NVIDIA or if nvidia-smi unavailable
+	lspciGPUs := localGPUsLspci()
+	for _, g := range lspciGPUs {
+		if g.Vendor == "nvidia" && len(gpus) > 0 {
+			continue // nvidia-smi gave better data
+		}
+		gpus = append(gpus, g)
+	}
+	return gpus
+}
+
+func localGPUsNvidiaSMI() []models.GPUInfo {
+	out, err := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return nil
+	}
+	return parseNvidiaSMIOutput(string(out))
+}
+
+func parseNvidiaSMIOutput(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ", ", 2)
+		name := strings.TrimSpace(parts[0])
+		gpu := models.GPUInfo{
+			Model:        name,
+			Vendor:       "nvidia",
+			Capabilities: []string{"cuda"},
+		}
+		if len(parts) >= 2 {
+			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+				gpu.VRAMMB = vram
+			}
+		}
+		gpus = append(gpus, gpu)
+	}
+	return gpus
+}
+
+func localGPUsLspci() []models.GPUInfo {
 	out, err := exec.Command("bash", "-c", `lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
-	var gpus []string
+	var gpus []models.GPUInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
 		if line != "" {
-			gpus = append(gpus, strings.TrimSpace(line))
+			gpus = append(gpus, models.GPUFromString(line))
 		}
 	}
 	return gpus
@@ -748,13 +863,85 @@ func localAddresses() []models.NetworkAddress {
 			if ip.To4() == nil {
 				kind = "ipv6"
 			}
+			subnet := ipNet.String()
+			if idx := strings.LastIndex(subnet, "/"); idx >= 0 {
+				ones, _ := ipNet.Mask.Size()
+				subnet = ipNet.IP.Mask(ipNet.Mask).String() + "/" + strconv.Itoa(ones)
+			}
 			addrs = append(addrs, models.NetworkAddress{
-				Kind:    kind,
-				Address: ip.String(),
+				Kind:       kind,
+				Address:    ip.String(),
+				Interface:  iface.Name,
+				Subnet:     subnet,
+				SpeedClass: classifyInterfaceSpeed(iface.Name, ip),
 			})
 		}
 	}
 	return addrs
+}
+
+// classifyInterfaceSpeed heuristically determines the speed class of a network
+// interface based on its name and IP address. This enables topology-aware
+// decisions (e.g., preferring Thunderbolt links for heavy data transfers).
+func classifyInterfaceSpeed(ifName string, ip net.IP) string {
+	lower := strings.ToLower(ifName)
+
+	// Overlay / VPN tunnels — detect by interface name
+	if strings.HasPrefix(lower, "wg") {
+		return "wireguard"
+	}
+	if strings.HasPrefix(lower, "tailscale") || strings.HasPrefix(lower, "ts") {
+		return "tailscale"
+	}
+	if strings.HasPrefix(lower, "utun") || strings.HasPrefix(lower, "tun") {
+		// Tailscale on macOS typically uses utun; check by IP range
+		if isTailscaleIP(ip) {
+			return "tailscale"
+		}
+		return "vpn"
+	}
+	if strings.HasPrefix(lower, "zt") {
+		return "zerotier"
+	}
+	if strings.HasPrefix(lower, "nb") || strings.HasPrefix(lower, "netbird") {
+		return "netbird"
+	}
+
+	// Detect by IP range for non-tunnel interfaces
+	if isTailscaleIP(ip) {
+		return "tailscale"
+	}
+
+	// Thunderbolt bridge / point-to-point
+	if strings.Contains(lower, "bridge") || strings.Contains(lower, "thunder") {
+		return "thunderbolt"
+	}
+
+	// Wi-Fi — common interface names across platforms
+	if lower == "wlan0" || lower == "wlp" || strings.HasPrefix(lower, "wlp") {
+		return "wifi"
+	}
+	if runtime.GOOS == "darwin" && (lower == "en0") {
+		// On many Macs, en0 is Wi-Fi; can't be 100% certain without IOKit
+		return "wifi"
+	}
+
+	// Ethernet
+	if strings.HasPrefix(lower, "en") || strings.HasPrefix(lower, "eth") || strings.HasPrefix(lower, "enp") {
+		return "gigabit"
+	}
+
+	return "unknown"
+}
+
+// isTailscaleIP returns true if the IP is in the Tailscale CGNAT range (100.64.0.0/10).
+func isTailscaleIP(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	// 100.64.0.0/10 → first byte 100, second byte 64-127
+	return ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
 func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {
@@ -822,4 +1009,225 @@ func parseLinuxGPUUtilPercent(out string) (float64, bool) {
 	}
 
 	return maxUtil, found
+}
+
+// --- Storage Class Detection ---
+
+func localStorageClass() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return localStorageClassDarwin()
+	case "linux":
+		return localStorageClassLinux()
+	default:
+		return "unknown"
+	}
+}
+
+func localStorageClassDarwin() string {
+	out, err := exec.Command("diskutil", "info", "/").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return parseDiskutilStorageClass(string(out))
+}
+
+func parseDiskutilStorageClass(out string) string {
+	isSolid := false
+	isNVMe := false
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Solid State:") && strings.Contains(strings.ToLower(trimmed), "yes") {
+			isSolid = true
+		}
+		if strings.HasPrefix(trimmed, "Protocol:") && strings.Contains(strings.ToLower(trimmed), "nvme") {
+			isNVMe = true
+		}
+		if strings.HasPrefix(trimmed, "Device / Media Name:") && strings.Contains(strings.ToLower(trimmed), "nvme") {
+			isNVMe = true
+		}
+	}
+	if isNVMe {
+		return "nvme"
+	}
+	if isSolid {
+		return "ssd"
+	}
+	return "unknown"
+}
+
+func localStorageClassLinux() string {
+	// Find the root device
+	out, err := exec.Command("bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null | sed 's/[0-9]*$//' | sed 's|/dev/||'`).Output()
+	if err != nil {
+		return "unknown"
+	}
+	dev := strings.TrimSpace(string(out))
+	if dev == "" {
+		return "unknown"
+	}
+	// Strip partition suffix for NVMe (e.g. nvme0n1p2 → nvme0n1)
+	if strings.HasPrefix(dev, "nvme") {
+		if idx := strings.LastIndex(dev, "p"); idx > 0 {
+			dev = dev[:idx]
+		}
+		return "nvme"
+	}
+	return parseLinuxRotational(dev)
+}
+
+func parseLinuxRotational(dev string) string {
+	// Strip partition numbers for standard devices (sda2 → sda)
+	base := strings.TrimRight(dev, "0123456789")
+	if base == "" {
+		return "unknown"
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/sys/block/%s/queue/rotational", base))
+	if err != nil {
+		return "unknown"
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "0":
+		return "ssd"
+	case "1":
+		return "hdd"
+	default:
+		return "unknown"
+	}
+}
+
+// --- Battery / Thermal Detection ---
+
+func localBatteryPercent() (int, bool) {
+	switch runtime.GOOS {
+	case "darwin":
+		return localBatteryDarwin()
+	case "linux":
+		return localBatteryLinux()
+	default:
+		return 0, false
+	}
+}
+
+func localBatteryDarwin() (int, bool) {
+	out, err := exec.Command("pmset", "-g", "batt").Output()
+	if err != nil {
+		return 0, false
+	}
+	return parsePmsetBattery(string(out))
+}
+
+func parsePmsetBattery(out string) (int, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		if idx := strings.Index(line, "%"); idx > 0 {
+			// Walk backward to find the number before %
+			start := idx - 1
+			for start >= 0 && line[start] >= '0' && line[start] <= '9' {
+				start--
+			}
+			start++
+			if start < idx {
+				if pct, err := strconv.Atoi(line[start:idx]); err == nil && pct >= 0 && pct <= 100 {
+					return pct, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func localBatteryLinux() (int, bool) {
+	// Try common power supply paths
+	for _, name := range []string{"BAT0", "BAT1", "BATT"} {
+		data, err := os.ReadFile(fmt.Sprintf("/sys/class/power_supply/%s/capacity", name))
+		if err != nil {
+			continue
+		}
+		if pct, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pct >= 0 && pct <= 100 {
+			return pct, true
+		}
+	}
+	return 0, false
+}
+
+func localThermalState() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return localThermalDarwin()
+	case "linux":
+		return localThermalLinux()
+	default:
+		return ""
+	}
+}
+
+func localThermalDarwin() string {
+	out, err := exec.Command("pmset", "-g", "therm").Output()
+	if err != nil {
+		return ""
+	}
+	return parsePmsetThermal(string(out))
+}
+
+// parsePmsetThermal maps macOS thermal pressure to: nominal, fair, serious, critical.
+// pmset -g therm outputs a CPU_Speed_Limit line (100 = nominal, < 100 = throttled).
+func parsePmsetThermal(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "CPU_Speed_Limit") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				if val, err := strconv.Atoi(fields[len(fields)-1]); err == nil {
+					switch {
+					case val >= 100:
+						return "nominal"
+					case val >= 80:
+						return "fair"
+					case val >= 50:
+						return "serious"
+					default:
+						return "critical"
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func localThermalLinux() string {
+	// Check thermal zone temperatures
+	entries, err := os.ReadDir("/sys/class/thermal")
+	if err != nil {
+		return ""
+	}
+	var maxTemp int
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "thermal_zone") {
+			continue
+		}
+		data, err := os.ReadFile(fmt.Sprintf("/sys/class/thermal/%s/temp", entry.Name()))
+		if err != nil {
+			continue
+		}
+		if temp, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			if temp > maxTemp {
+				maxTemp = temp
+			}
+		}
+	}
+	if maxTemp == 0 {
+		return ""
+	}
+	// Temps in millidegrees Celsius
+	tempC := maxTemp / 1000
+	switch {
+	case tempC >= 95:
+		return "critical"
+	case tempC >= 85:
+		return "serious"
+	case tempC >= 75:
+		return "fair"
+	default:
+		return "nominal"
+	}
 }

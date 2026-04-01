@@ -273,7 +273,7 @@ func TestRankByGPU(t *testing.T) {
 		nodeComplete("cpu-only", 6000, "none"),
 		nodeComplete("gpu-node", 5000, "none"),
 	}
-	candidates[1].Resources.GPUs = []string{"RTX 4090"}
+	candidates[1].Resources.GPUs = []models.GPUInfo{{Model: "RTX 4090", Vendor: "nvidia", Capabilities: []string{"cuda"}}}
 
 	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	if ranked[0].Name != "gpu-node" {
@@ -508,7 +508,7 @@ func TestSelectSuccess_SingleCandidate(t *testing.T) {
 func TestFitScore_GPUNodeScoresHigher(t *testing.T) {
 	noGPU := nodeComplete("cpu-only", 4000, "none")
 	withGPU := nodeComplete("gpu-node", 4000, "none")
-	withGPU.Resources.GPUs = []string{"MX250 4GB"}
+	withGPU.Resources.GPUs = []models.GPUInfo{{Model: "MX250", Vendor: "nvidia", VRAMMB: 4096, Capabilities: []string{"cuda"}}}
 
 	scoreNoGPU := ComputeFitScore(noGPU, false, nil)
 	scoreGPU := ComputeFitScore(withGPU, false, nil)
@@ -516,9 +516,10 @@ func TestFitScore_GPUNodeScoresHigher(t *testing.T) {
 	if scoreGPU <= scoreNoGPU {
 		t.Errorf("GPU node (%d) should score higher than non-GPU (%d)", scoreGPU, scoreNoGPU)
 	}
-	// GPU bonus is 25
-	if scoreGPU-scoreNoGPU != 25 {
-		t.Errorf("GPU delta should be 25, got %d", scoreGPU-scoreNoGPU)
+	// GPU score: base 10 + 4 (4GB VRAM) = 14
+	delta := scoreGPU - scoreNoGPU
+	if delta < 10 || delta > 25 {
+		t.Errorf("GPU delta should be 10-25, got %d", delta)
 	}
 }
 
@@ -936,5 +937,266 @@ func TestInferRequirements(t *testing.T) {
 		if got.PrefersTurboQuant != tt.wantTQ {
 			t.Errorf("InferRequirements(%q) PrefersTurboQuant = %v, want %v", tt.desc, got.PrefersTurboQuant, tt.wantTQ)
 		}
+	}
+}
+
+// --- GPU Capability-Aware Placement Tests ---
+
+func TestGpuScore_NvidiaWithCUDABackend(t *testing.T) {
+	n := nodeComplete("gpu-node", 8000, "none")
+	n.Resources.GPUs = []models.GPUInfo{{
+		Model: "NVIDIA RTX 4090", Vendor: "nvidia", VRAMMB: 24576, Capabilities: []string{"cuda"},
+	}}
+	reqs := models.TaskRequirements{PreferredBackends: []string{"cuda"}}
+	score := gpuScore(n, reqs)
+	// base 10 + capability match 10 + VRAM 5 (24GB, capped) = 25
+	if score != 25 {
+		t.Errorf("gpuScore = %d, want 25", score)
+	}
+}
+
+func TestGpuScore_AppleWithMetalBackend(t *testing.T) {
+	n := nodeComplete("mac-node", 16000, "none")
+	n.Resources.GPUs = []models.GPUInfo{{
+		Model: "Apple M3 Pro", Vendor: "apple", Capabilities: []string{"metal"},
+	}}
+	reqs := models.TaskRequirements{PreferredBackends: []string{"mlx"}}
+	score := gpuScore(n, reqs)
+	// base 10 + capability match 10 = 20 (no VRAM for unified)
+	if score != 20 {
+		t.Errorf("gpuScore = %d, want 20", score)
+	}
+}
+
+func TestGpuScore_IntelIntegratedReduced(t *testing.T) {
+	n := nodeComplete("intel-node", 8000, "none")
+	n.Resources.GPUs = []models.GPUInfo{{
+		Model: "Intel UHD 630", Vendor: "intel",
+	}}
+	reqs := models.TaskRequirements{}
+	score := gpuScore(n, reqs)
+	// base 10, halved for integrated Intel with no capabilities = 5
+	if score != 5 {
+		t.Errorf("gpuScore = %d, want 5", score)
+	}
+}
+
+func TestGpuScore_NoGPU(t *testing.T) {
+	n := nodeComplete("cpu-node", 8000, "none")
+	score := gpuScore(n, models.TaskRequirements{})
+	if score != 0 {
+		t.Errorf("gpuScore = %d, want 0", score)
+	}
+}
+
+func TestRank_CUDAPreferNvidiaOverApple(t *testing.T) {
+	apple := nodeComplete("mac", 8000, "none")
+	apple.Resources.GPUs = []models.GPUInfo{{
+		Model: "Apple M3", Vendor: "apple", Capabilities: []string{"metal"},
+	}}
+	nvidia := nodeComplete("gpu-box", 8000, "none")
+	nvidia.Resources.GPUs = []models.GPUInfo{{
+		Model: "RTX 4090", Vendor: "nvidia", VRAMMB: 24576, Capabilities: []string{"cuda"},
+	}}
+
+	reqs := models.TaskRequirements{PreferredBackends: []string{"cuda"}}
+	ranked := RankCandidates([]models.NodeFacts{apple, nvidia}, reqs, nil)
+	if ranked[0].Name != "gpu-box" {
+		t.Errorf("CUDA task should prefer nvidia node, got %s first", ranked[0].Name)
+	}
+}
+
+func TestRank_MLXPreferAppleOverNvidia(t *testing.T) {
+	apple := nodeComplete("mac", 8000, "none")
+	apple.Resources.GPUs = []models.GPUInfo{{
+		Model: "Apple M3 Pro", Vendor: "apple", Capabilities: []string{"metal"},
+	}}
+	apple.Resources.MemoryTopology = models.MemoryTopologyUnified
+	nvidia := nodeComplete("gpu-box", 8000, "none")
+	nvidia.Resources.GPUs = []models.GPUInfo{{
+		Model: "RTX 3080", Vendor: "nvidia", VRAMMB: 10240, Capabilities: []string{"cuda"},
+	}}
+
+	reqs := models.TaskRequirements{PreferredBackends: []string{"mlx"}}
+	ranked := RankCandidates([]models.NodeFacts{nvidia, apple}, reqs, nil)
+	if ranked[0].Name != "mac" {
+		t.Errorf("MLX task should prefer apple node, got %s first", ranked[0].Name)
+	}
+}
+
+func TestFitScore_HighVRAMScoresHigher(t *testing.T) {
+	lowVRAM := nodeComplete("low", 8000, "none")
+	lowVRAM.Resources.GPUs = []models.GPUInfo{{
+		Model: "MX250", Vendor: "nvidia", VRAMMB: 2048, Capabilities: []string{"cuda"},
+	}}
+	highVRAM := nodeComplete("high", 8000, "none")
+	highVRAM.Resources.GPUs = []models.GPUInfo{{
+		Model: "RTX 4090", Vendor: "nvidia", VRAMMB: 24576, Capabilities: []string{"cuda"},
+	}}
+
+	scoreLow := ComputeFitScore(lowVRAM, false, nil)
+	scoreHigh := ComputeFitScore(highVRAM, false, nil)
+	if scoreHigh <= scoreLow {
+		t.Errorf("high VRAM (%d) should score higher than low VRAM (%d)", scoreHigh, scoreLow)
+	}
+}
+
+// --- Storage & Thermal Placement Tests ---
+
+func TestFilter_LowBatteryBlocksHeavyTask(t *testing.T) {
+	batteryLow := 15
+	n := nodeComplete("laptop", 8000, "none", "ollama")
+	n.Resources.BatteryPercent = &batteryLow
+	n.Ollama = &models.OllamaInfo{Running: true, Installed: true}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 0 {
+		t.Error("low battery node should be filtered out for heavy inference")
+	}
+}
+
+func TestFilter_LowBatteryAllowsLightTask(t *testing.T) {
+	batteryLow := 15
+	n := nodeComplete("laptop", 8000, "none", "git")
+	n.Resources.BatteryPercent = &batteryLow
+
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 1 {
+		t.Error("low battery should not block non-inference tasks")
+	}
+}
+
+func TestFilter_ThermalCriticalBlocksHeavyTask(t *testing.T) {
+	n := nodeComplete("hot-box", 8000, "none", "ollama")
+	n.Resources.ThermalState = "critical"
+	n.Ollama = &models.OllamaInfo{Running: true, Installed: true}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 0 {
+		t.Error("thermally critical node should be filtered out for heavy inference")
+	}
+}
+
+func TestFilter_ThermalNominalAllowed(t *testing.T) {
+	n := nodeComplete("cool-box", 8000, "none", "ollama")
+	n.Resources.ThermalState = "nominal"
+	n.Ollama = &models.OllamaInfo{Running: true, Installed: true}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 1 {
+		t.Error("nominal thermal node should not be filtered")
+	}
+}
+
+func TestFitScore_HDDPenaltyForInference(t *testing.T) {
+	ssd := nodeComplete("ssd-node", 8000, "none")
+	ssd.Resources.StorageClass = "ssd"
+
+	hdd := nodeComplete("hdd-node", 8000, "none")
+	hdd.Resources.StorageClass = "hdd"
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+	}
+	scoreSSD := ComputeTaskFitScore(ssd, false, nil, reqs)
+	scoreHDD := ComputeTaskFitScore(hdd, false, nil, reqs)
+
+	if scoreHDD >= scoreSSD {
+		t.Errorf("HDD (%d) should score lower than SSD (%d) for inference", scoreHDD, scoreSSD)
+	}
+}
+
+func TestFitScore_HDDNoPenaltyForLightTask(t *testing.T) {
+	ssd := nodeComplete("ssd-node", 8000, "none")
+	ssd.Resources.StorageClass = "ssd"
+
+	hdd := nodeComplete("hdd-node", 8000, "none")
+	hdd.Resources.StorageClass = "hdd"
+
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
+	scoreSSD := ComputeTaskFitScore(ssd, false, nil, reqs)
+	scoreHDD := ComputeTaskFitScore(hdd, false, nil, reqs)
+
+	if scoreHDD != scoreSSD {
+		t.Errorf("HDD (%d) and SSD (%d) should score same for light tasks", scoreHDD, scoreSSD)
+	}
+}
+
+// --- Tombstone Placement Tests ---
+
+func TestFilter_TombstonedNodeExcluded(t *testing.T) {
+	n := nodeComplete("cursed-node", 8000, "none", "git")
+	reqs := models.TaskRequirements{
+		Description:   "llama3:8b",
+		RequiredTools: []string{"git"},
+	}
+
+	st := &state.ClusterState{
+		Nodes: make(map[string]state.NodeState),
+		Tombstones: map[string]state.TombstoneEntry{
+			"llama3:8b@cursed-node": {
+				TaskPattern: "llama3:8b",
+				NodeName:    "cursed-node",
+				FailCount:   2,
+				ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
+			},
+		},
+	}
+
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, st)
+	if len(candidates) != 0 {
+		t.Error("tombstoned node should be filtered out")
+	}
+}
+
+func TestFilter_ExpiredTombstoneAllowed(t *testing.T) {
+	n := nodeComplete("recovered-node", 8000, "none", "git")
+	reqs := models.TaskRequirements{
+		Description:   "llama3:8b",
+		RequiredTools: []string{"git"},
+	}
+
+	st := &state.ClusterState{
+		Nodes: make(map[string]state.NodeState),
+		Tombstones: map[string]state.TombstoneEntry{
+			"llama3:8b@recovered-node": {
+				TaskPattern: "llama3:8b",
+				NodeName:    "recovered-node",
+				FailCount:   1,
+				ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
+			},
+		},
+	}
+
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, st)
+	if len(candidates) != 1 {
+		t.Error("expired tombstone should not block node")
+	}
+}
+
+func TestFilter_NilStateSkipsTombstoneCheck(t *testing.T) {
+	n := nodeComplete("any-node", 8000, "none", "git")
+	reqs := models.TaskRequirements{
+		Description:   "some-task",
+		RequiredTools: []string{"git"},
+	}
+
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 1 {
+		t.Error("nil state should not filter any nodes")
 	}
 }

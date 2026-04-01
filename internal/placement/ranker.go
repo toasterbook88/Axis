@@ -35,6 +35,7 @@ func pressureRank(p string) int {
 //   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
+	taskPattern := tombstonePattern(reqs)
 	for _, n := range nodes {
 		if requiresAppleFoundationModels(reqs) {
 			if !models.IsLocalNode(n) || !appleFoundationModelsReady(n) {
@@ -47,6 +48,12 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 			}
 		}
 		if blocksForRuntimePressure(reqs, n) {
+			continue
+		}
+		if blocksForThermalOrBattery(reqs, n) {
+			continue
+		}
+		if st != nil && taskPattern != "" && st.IsTombstoned(taskPattern, n.Name) {
 			continue
 		}
 		if reqs.MinFreeRAMMB > 0 {
@@ -62,6 +69,19 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 		out = append(out, n)
 	}
 	return out
+}
+
+// tombstonePattern derives the key used for tombstone lookups from task
+// requirements. Returns the task description if set, otherwise joins required
+// tools to form a stable pattern.
+func tombstonePattern(reqs models.TaskRequirements) string {
+	if reqs.Description != "" {
+		return reqs.Description
+	}
+	if len(reqs.RequiredTools) > 0 {
+		return strings.Join(reqs.RequiredTools, "+")
+	}
+	return ""
 }
 
 // RankCandidates sorts nodes deterministically.
@@ -84,10 +104,10 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return pressureRank(pi) < pressureRank(pj)
 		}
 
-		gi := gpuPresent(ranked[i])
-		gj := gpuPresent(ranked[j])
+		gi := gpuScore(ranked[i], reqs)
+		gj := gpuScore(ranked[j], reqs)
 		if gi != gj {
-			return gi && !gj
+			return gi > gj
 		}
 
 		bi := preferredBackendRank(ranked[i], reqs)
@@ -234,6 +254,55 @@ func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
 	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
 }
 
+// gpuScore returns a weighted GPU score considering VRAM and capabilities.
+// Discrete GPUs with more VRAM score higher. Integrated-only GPUs (Intel) get reduced scores.
+func gpuScore(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if n.Resources == nil || len(n.Resources.GPUs) == 0 {
+		return 0
+	}
+	best := 0
+	for _, gpu := range n.Resources.GPUs {
+		score := 10 // base score for any GPU
+
+		// Capability match with preferred backends
+		for _, backend := range reqs.PreferredBackends {
+			switch strings.ToLower(backend) {
+			case "cuda":
+				if gpu.HasCapability("cuda") {
+					score += 10
+				}
+			case "metal", "mlx":
+				if gpu.HasCapability("metal") {
+					score += 10
+				}
+			case "rocm":
+				if gpu.HasCapability("rocm") {
+					score += 10
+				}
+			}
+		}
+
+		// VRAM bonus: 1 pt per GB, capped at 5
+		if gpu.VRAMMB > 0 {
+			vramPts := gpu.VRAMMB / 1024
+			if vramPts > 5 {
+				vramPts = 5
+			}
+			score += vramPts
+		}
+
+		// Penalty for integrated-only GPUs (Intel without discrete capabilities)
+		if gpu.Vendor == "intel" && len(gpu.Capabilities) == 0 {
+			score = score / 2
+		}
+
+		if score > best {
+			best = score
+		}
+	}
+	return best
+}
+
 func gpuPresent(n models.NodeFacts) bool {
 	if n.Resources == nil {
 		return false
@@ -282,10 +351,12 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 		score += 10
 	}
 
-	// GPU
-	if len(n.Resources.GPUs) > 0 {
-		score += 25
+	// GPU — capability-weighted score (up to 25 pts)
+	gpuPts := gpuScore(n, reqs)
+	if gpuPts > 25 {
+		gpuPts = 25
 	}
+	score += gpuPts
 
 	// CPU: 1pt per core, cap 10
 	cpuPts := n.Resources.CPUCores
@@ -304,6 +375,12 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 	}
 	score += unifiedMemoryFitBonus(n, reqs)
 
+	// HDD penalty for heavy inference tasks
+	score -= storageClassPenalty(n, reqs)
+
+	if score < 0 {
+		score = 0
+	}
 	if score > 100 {
 		score = 100
 	}
@@ -368,6 +445,37 @@ func blocksForRuntimePressure(reqs models.TaskRequirements, n models.NodeFacts) 
 		return strings.EqualFold(n.Resources.Pressure, "high")
 	default:
 		return false
+	}
+}
+
+// blocksForThermalOrBattery disqualifies nodes that are thermally throttled or
+// critically low on battery for heavy inference tasks.
+func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts) bool {
+	if !heavyInferenceTask(reqs) || n.Resources == nil {
+		return false
+	}
+	// Battery below 20% blocks heavy tasks
+	if n.Resources.BatteryPercent != nil && *n.Resources.BatteryPercent < 20 {
+		return true
+	}
+	// Thermal throttle blocks heavy tasks
+	switch strings.ToLower(n.Resources.ThermalState) {
+	case "serious", "critical":
+		return true
+	}
+	return false
+}
+
+// storageClassPenalty reduces fit score for HDD nodes on heavy inference tasks.
+func storageClassPenalty(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if n.Resources == nil || !heavyInferenceTask(reqs) {
+		return 0
+	}
+	switch strings.ToLower(n.Resources.StorageClass) {
+	case "hdd":
+		return 15
+	default:
+		return 0
 	}
 }
 

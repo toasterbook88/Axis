@@ -46,7 +46,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 				Name: "alpha",
 				Resources: &models.Resources{
 					RAMFreeMB: 4096,
-					GPUs:      []string{"RTX 4090"},
+					GPUs:      []models.GPUInfo{{Model: "RTX 4090", Vendor: "nvidia"}},
 				},
 				Addresses: []models.NetworkAddress{{Kind: "lan", Address: "10.0.0.1"}},
 				Tools:     []models.ToolInfo{{Name: "ollama"}},
@@ -63,7 +63,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	clone := snapshotview.Clone(orig)
 
 	// Mutate clone's slices — original must be unchanged.
-	clone.Nodes[0].Resources.GPUs[0] = "MUTATED"
+	clone.Nodes[0].Resources.GPUs[0].Model = "MUTATED"
 	clone.Nodes[0].Addresses[0].Address = "0.0.0.0"
 	clone.Nodes[0].Tools[0].Name = "MUTATED"
 	clone.Nodes[0].Ollama.Models[0] = "MUTATED"
@@ -71,7 +71,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	clone.Nodes[0].TurboQuant.Capabilities[0] = "MUTATED"
 	clone.Warnings[0].Message = "MUTATED"
 
-	if orig.Nodes[0].Resources.GPUs[0] != "RTX 4090" {
+	if orig.Nodes[0].Resources.GPUs[0].Model != "RTX 4090" {
 		t.Error("Clone mutated original GPU slice")
 	}
 	if orig.Nodes[0].Addresses[0].Address != "10.0.0.1" {
