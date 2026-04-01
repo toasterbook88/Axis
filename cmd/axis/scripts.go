@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/scripts"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 func scriptsCmd() *cobra.Command {
@@ -22,7 +23,8 @@ func scriptsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all available fallback scripts",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("AVAILABLE MOLE-STYLE SCRIPTS:")
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, ui.Bold("AVAILABLE SCRIPTS"))
 
 			var categories []string
 			for cat := range scripts.Registry {
@@ -31,12 +33,14 @@ func scriptsListCmd() *cobra.Command {
 			sort.Strings(categories)
 
 			for _, cat := range categories {
-				fmt.Printf("\n[%s]\n", cat)
+				fmt.Fprintf(out, "\n%s\n", ui.Cyan("["+cat+"]"))
+				tbl := ui.NewTable("NAME", "DESCRIPTION")
 				for _, script := range scripts.Registry[cat] {
-					fmt.Printf("  %-18s %s\n", script.Name, script.Description)
+					tbl.AddRow(script.Name, script.Description)
 				}
+				tbl.Render(out)
 			}
-			fmt.Println("\nRun a script with: axis task run --script \"<script-name-or-keywords>\"")
+			fmt.Fprintf(out, "\n%s\n", ui.Dim("Run a script with: axis task run --script \"<script-name-or-keywords>\""))
 		},
 	}
 }

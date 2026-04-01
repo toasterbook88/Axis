@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,7 @@ import (
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 var fetchStatusSnapshot = daemon.FetchSnapshot
@@ -43,30 +45,111 @@ func statusCmd() *cobra.Command {
 				loadStatusLiveSnapshot,
 			)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
 				return err
 			}
 
-			var payload any = snap
-			if cached {
-				payload = statusOutput{
-					Source:   source,
-					Snapshot: snap,
+			switch format {
+			case "json", "yaml":
+				var payload any = snap
+				if cached {
+					payload = statusOutput{Source: source, Snapshot: snap}
 				}
+				return printOutput(payload, format)
+			default:
+				printStatusText(cmd, snap, source, cached)
+				return nil
 			}
-
-			if err := printOutput(payload, format); err != nil {
-				fmt.Fprintf(os.Stderr, "output error: %v\n", err)
-				return err
-			}
-			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&format, "format", "json", "Output format: json or yaml")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
+}
+
+func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source string, cached bool) {
+	out := cmd.OutOrStdout()
+
+	healthy := 0
+	for _, n := range snap.Nodes {
+		if n.Status == models.StatusComplete {
+			healthy++
+		}
+	}
+
+	fmt.Fprintf(out, "%s (%d nodes, %d healthy)\n\n",
+		ui.Bold("CLUSTER STATUS"), len(snap.Nodes), healthy)
+
+	tbl := ui.NewTable("NAME", "STATUS", "RAM FREE", "PRESSURE", "TOOLS")
+	for _, n := range snap.Nodes {
+		status := formatNodeStatus(n.Status)
+		ram := "—"
+		pressure := "—"
+		tools := "—"
+
+		if n.Resources != nil {
+			ram = fmt.Sprintf("%d MB", n.Resources.RAMFreeMB)
+			pressure = formatPressure(n.Resources.Pressure)
+		}
+		if len(n.Tools) > 0 {
+			names := make([]string, 0, len(n.Tools))
+			for _, t := range n.Tools {
+				names = append(names, t.Name)
+			}
+			tools = strings.Join(names, ", ")
+		}
+
+		tbl.AddRow(ui.Cyan(n.Name), status, ram, pressure, tools)
+	}
+	tbl.Render(out)
+
+	if len(snap.Warnings) > 0 {
+		fmt.Fprintln(out)
+		for _, w := range snap.Warnings {
+			ui.FprintWarning(out, fmt.Sprintf("%s: %s", w.Node, w.Message))
+		}
+	}
+
+	fmt.Fprintln(out)
+	sourceLabel := source
+	if sourceLabel == "" {
+		sourceLabel = "live"
+	}
+	fmt.Fprintf(out, "%s %s | %s\n",
+		ui.Dim("Snapshot:"), sourceLabel,
+		ui.Dim(snap.Timestamp.Format(time.RFC3339)))
+}
+
+func formatNodeStatus(s models.NodeStatus) string {
+	switch s {
+	case models.StatusComplete:
+		return ui.Green("✓ complete")
+	case models.StatusPartial:
+		return ui.Yellow("~ partial")
+	case models.StatusUnreachable:
+		return ui.Red("✗ unreachable")
+	case models.StatusError:
+		return ui.Red("✗ error")
+	default:
+		return string(s)
+	}
+}
+
+func formatPressure(p string) string {
+	switch p {
+	case "none", "":
+		return ui.Green("none")
+	case "low":
+		return ui.Green("low")
+	case "medium":
+		return ui.Yellow("medium")
+	case "high":
+		return ui.Red("high")
+	default:
+		return p
+	}
 }
 
 func collectStatusSnapshot(
