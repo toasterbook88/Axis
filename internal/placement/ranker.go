@@ -35,6 +35,7 @@ func pressureRank(p string) int {
 //   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
+	taskPattern := tombstonePattern(reqs)
 	for _, n := range nodes {
 		if requiresAppleFoundationModels(reqs) {
 			if !models.IsLocalNode(n) || !appleFoundationModelsReady(n) {
@@ -52,6 +53,9 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 		if blocksForThermalOrBattery(reqs, n) {
 			continue
 		}
+		if st != nil && taskPattern != "" && st.IsTombstoned(taskPattern, n.Name) {
+			continue
+		}
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
 			adjustedFree := freeRAMWithState(n, st)
@@ -65,6 +69,19 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 		out = append(out, n)
 	}
 	return out
+}
+
+// tombstonePattern derives the key used for tombstone lookups from task
+// requirements. Returns the task description if set, otherwise joins required
+// tools to form a stable pattern.
+func tombstonePattern(reqs models.TaskRequirements) string {
+	if reqs.Description != "" {
+		return reqs.Description
+	}
+	if len(reqs.RequiredTools) > 0 {
+		return strings.Join(reqs.RequiredTools, "+")
+	}
+	return ""
 }
 
 // RankCandidates sorts nodes deterministically.

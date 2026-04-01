@@ -1135,3 +1135,68 @@ func TestFitScore_HDDNoPenaltyForLightTask(t *testing.T) {
 		t.Errorf("HDD (%d) and SSD (%d) should score same for light tasks", scoreHDD, scoreSSD)
 	}
 }
+
+// --- Tombstone Placement Tests ---
+
+func TestFilter_TombstonedNodeExcluded(t *testing.T) {
+	n := nodeComplete("cursed-node", 8000, "none", "git")
+	reqs := models.TaskRequirements{
+		Description:   "llama3:8b",
+		RequiredTools: []string{"git"},
+	}
+
+	st := &state.ClusterState{
+		Nodes: make(map[string]state.NodeState),
+		Tombstones: map[string]state.TombstoneEntry{
+			"llama3:8b@cursed-node": {
+				TaskPattern: "llama3:8b",
+				NodeName:    "cursed-node",
+				FailCount:   2,
+				ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
+			},
+		},
+	}
+
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, st)
+	if len(candidates) != 0 {
+		t.Error("tombstoned node should be filtered out")
+	}
+}
+
+func TestFilter_ExpiredTombstoneAllowed(t *testing.T) {
+	n := nodeComplete("recovered-node", 8000, "none", "git")
+	reqs := models.TaskRequirements{
+		Description:   "llama3:8b",
+		RequiredTools: []string{"git"},
+	}
+
+	st := &state.ClusterState{
+		Nodes: make(map[string]state.NodeState),
+		Tombstones: map[string]state.TombstoneEntry{
+			"llama3:8b@recovered-node": {
+				TaskPattern: "llama3:8b",
+				NodeName:    "recovered-node",
+				FailCount:   1,
+				ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
+			},
+		},
+	}
+
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, st)
+	if len(candidates) != 1 {
+		t.Error("expired tombstone should not block node")
+	}
+}
+
+func TestFilter_NilStateSkipsTombstoneCheck(t *testing.T) {
+	n := nodeComplete("any-node", 8000, "none", "git")
+	reqs := models.TaskRequirements{
+		Description:   "some-task",
+		RequiredTools: []string{"git"},
+	}
+
+	candidates := FilterCandidates(reqs, []models.NodeFacts{n}, nil)
+	if len(candidates) != 1 {
+		t.Error("nil state should not filter any nodes")
+	}
+}
