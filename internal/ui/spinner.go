@@ -16,6 +16,7 @@ type Spinner struct {
 	msg     string
 	running bool
 	done    chan struct{}
+	exited  chan struct{}
 	w       io.Writer
 }
 
@@ -39,6 +40,7 @@ func (s *Spinner) Start(msg string) {
 	s.msg = msg
 	s.running = true
 	s.done = make(chan struct{})
+	s.exited = make(chan struct{})
 	s.mu.Unlock()
 
 	go s.animate()
@@ -65,11 +67,16 @@ func (s *Spinner) Stop(msg string) {
 	close(s.done)
 	s.mu.Unlock()
 
+	// Wait briefly for the animate goroutine to exit its select.
+	// This prevents a write race between animate's Fprintf and ours.
+	<-s.exited
+
 	// Clear the spinner line and print final message.
 	fmt.Fprintf(s.w, "\r\033[K%s\n", msg)
 }
 
 func (s *Spinner) animate() {
+	defer close(s.exited)
 	tick := time.NewTicker(80 * time.Millisecond)
 	defer tick.Stop()
 
