@@ -37,7 +37,7 @@ go build ./...
 ```
 
 3. Commit the version bump.
-4. Create and push a signed tag such as `v0.2.1`.
+4. Create and push a signed tag such as `v0.4.0`.
 
 The release workflow verifies that the pushed tag matches
 `internal/buildinfo/version.go` before publishing binaries.
@@ -53,7 +53,8 @@ gofmt -w .
 AXIS is intentionally narrow. Contributions should reduce operator confusion and
 keep model-mediated or execution-heavy surfaces subordinate to observed state.
 
-Phase 2 (UDS+bearer-auth API and advisory task placement) is complete and stable;
+Phase 2 (UDS+bearer-auth API and advisory task placement) and Phase 3 (daemon
+hardening, event-driven cache, context export, UDP HMAC) are complete and stable;
 those surfaces are part of the existing scope and can be improved or bug-fixed.
 
 **Do:**
