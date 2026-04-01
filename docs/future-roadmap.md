@@ -316,11 +316,13 @@ Priority work:
 - extend tool probes to detect currently-loaded models (`ollama ps`) and
   score placement higher when the needed model is already warm in GPU memory
 - upgrade GPU discovery from `len(GPUs) > 0` to structured `GPUInfo` with
-  vendor, model, VRAM, and capabilities (`cuda`/`metal`/`vulkan`)
-- add storage-class detection (NVMe vs SSD vs HDD) and I/O-tier penalties
-- add thermal/power probing (battery %, throttle state) for mobile nodes
+  vendor, model, VRAM, and capabilities (`cuda`/`metal`/`vulkan`) ✅ shipped v0.7.0
+- add storage-class detection (NVMe vs SSD vs HDD) and I/O-tier penalties ✅ shipped v0.7.0
+- add thermal/power probing (battery %, throttle state) for mobile nodes ✅ shipped v0.7.0
 - implement tombstone blacklisting: task-hash → node failure history in
-  `state.json` with expiring entries to prevent OOM crash loops
+  `state.json` with expiring entries to prevent OOM crash loops ✅ shipped v0.7.0
+- add network topology enrichment: interface name, subnet, speed class
+  (wireguard, tailscale, thunderbolt, wifi, gigabit) ✅ shipped v0.7.0
 
 Exit criteria:
 

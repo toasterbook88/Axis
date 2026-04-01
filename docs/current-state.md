@@ -1,8 +1,8 @@
 # AXIS Current State
 
-Last reviewed: 2026-04-01 EDT
-Branch: `main`
-Audit base: `e7e1746` on `main` (Phase 4 merge)
+Last reviewed: 2026-07-21 EDT
+Branch: `phase-a`
+Audit base: Phase A (Trust and Foundations)
 
 This document is the fastest way to understand what AXIS actually is today.
 
@@ -32,7 +32,7 @@ The live repo currently contains:
 - Recoverable persistence for corrupt local state/skills files via quarantine + warning
 - UDP beacon-based node discovery inside the live snapshot pipeline
 - Per-run execution context files instead of shared temp-path injection
-- Stateful placement ranking with reservation subtraction, GPU preference, and full multi-tool enforcement
+- Stateful placement ranking with reservation subtraction, GPU capability scoring (VRAM/vendor/backend match), and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
@@ -40,8 +40,12 @@ The live repo currently contains:
 - Probe-verified local Apple Foundation Models capability on eligible Apple Silicon hosts running macOS 26 or later, surfaced in node facts/snapshots and as an `apple-foundation-models` tool, with actual model execution available only through the explicit guarded execution path
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
+- Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
+- Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference
+- Network topology enrichment: interface name, CIDR subnet, and speed class (wireguard, tailscale, netbird, thunderbolt, wifi, gigabit, etc.)
+- Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- A live `v0.5.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
+- A live `v0.7.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 

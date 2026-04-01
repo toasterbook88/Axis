@@ -58,7 +58,7 @@ func TestDetectTurboQuantSupport_VerifiesLlamaProbeAndFlags(t *testing.T) {
 		"linux",
 		"amd64",
 		[]models.ToolInfo{{Name: "llama-server", Path: "/usr/bin/llama-server"}},
-		&models.Resources{GPUs: []string{"RTX 4090"}},
+		&models.Resources{GPUs: []models.GPUInfo{{Model: "RTX 4090", Vendor: "nvidia", Capabilities: []string{"cuda"}}}},
 		nil,
 		func(ctx context.Context, cmd string) (string, error) {
 			if !strings.Contains(cmd, "llama-server") {
@@ -83,7 +83,7 @@ func TestDetectTurboQuantSupport_LlamaRequiresCtxSizeForVerification(t *testing.
 		"linux",
 		"amd64",
 		[]models.ToolInfo{{Name: "llama-server", Path: "/usr/bin/llama-server"}},
-		&models.Resources{GPUs: []string{"RTX 4090"}},
+		&models.Resources{GPUs: []models.GPUInfo{{Model: "RTX 4090", Vendor: "nvidia", Capabilities: []string{"cuda"}}}},
 		nil,
 		func(ctx context.Context, cmd string) (string, error) {
 			if !strings.Contains(cmd, "llama-server") {

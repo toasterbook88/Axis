@@ -10,7 +10,7 @@
 
 ```bash
 # Install
-go install github.com/toasterbook88/axis/cmd/axis@v0.6.0
+go install github.com/toasterbook88/axis/cmd/axis@v0.7.0
 
 # Inspect the local machine
 axis facts
@@ -86,7 +86,7 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 | Feature | Details |
 | --- | --- |
-| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk, GPU list, network addresses, and additive memory-topology / pressure-source metadata where available |
+| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk (total/free + storage class: nvme/ssd/hdd), structured GPU info (vendor/model/VRAM/capabilities), network addresses (with interface name, subnet, speed class), battery %, thermal state, and additive memory-topology / pressure-source metadata where available |
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc`, plus probe-verified local `apple-foundation-models` on eligible Apple Silicon hosts running macOS 26 or later |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
@@ -100,17 +100,17 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 **Using `go install` (recommended):**
 
 ```bash
-go install github.com/toasterbook88/axis/cmd/axis@v0.6.0
+go install github.com/toasterbook88/axis/cmd/axis@v0.7.0
 ```
 
-`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.6.0`.
+`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.7.0`.
 
 **Tagged release pipeline:**
 
 - `v*` tags are published through GitHub Actions and GoReleaser
 - Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
 - The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
-- The current release is [`v0.6.0`](https://github.com/toasterbook88/axis/releases/tag/v0.6.0)
+- The current release is [`v0.7.0`](https://github.com/toasterbook88/axis/releases/tag/v0.7.0)
 
 **Security hygiene:**
 
@@ -181,7 +181,7 @@ axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
 
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU preference, effective headroom, unified-memory suitability for `mlx`/Apple Silicon-shaped asks, allocatable RAM, reservation ratio, and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS now filters out nodes showing critical runtime pressure from Linux PSI or Darwin VM pressure signals instead of treating them as normal fallback candidates.
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU capability (VRAM and backend match), effective headroom, unified-memory suitability for `mlx`/Apple Silicon-shaped asks, allocatable RAM, reservation ratio, storage class (HDD penalized for heavy loads), and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS filters out nodes showing critical runtime pressure, thermal throttling, or low battery (< 20%), and respects tombstone blacklists for task+node combinations that have repeatedly crashed.
 
 When `axis task run` selects a TurboQuant-capable node, AXIS exports `AXIS_TURBOQUANT`, `AXIS_TURBOQUANT_STATUS`, `AXIS_TURBOQUANT_BACKENDS`, `AXIS_TURBOQUANT_CAPABILITIES`, and long-context hints into the execution environment. For probe-verified `llama.cpp` commands with `--ctx-size` support, AXIS can also inject safe additive flags such as `--ctx-size` and `--flash-attn` when they are absent.
 
@@ -287,7 +287,7 @@ Optional discovery block used by experimental UDP-assisted discovery:
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/facts/     │ SSH into each node, collects RAM/CPU/GPU/tools                                  │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/placement/ │ Filter + rank nodes by free RAM, pressure, GPU, locality; ComputeFitScore 0–100 │
+│ internal/placement/ │ Filter + rank nodes by free RAM, pressure, GPU capability, storage class, thermal state, tombstones, locality; ComputeFitScore 0–100 │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/chat/      │ Structured /api/chat client with rolling context window and system prompt      │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤

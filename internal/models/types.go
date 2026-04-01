@@ -2,7 +2,10 @@
 // All types are internal — there is no stable public API surface.
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // --- Enums ---
 
@@ -50,6 +53,27 @@ const (
 
 // --- Observed State ---
 
+// GPUInfo describes a single GPU with vendor, model, VRAM, and capabilities.
+type GPUInfo struct {
+	Vendor       string   `json:"vendor" yaml:"vendor"`                                 // apple, nvidia, amd, intel, unknown
+	Model        string   `json:"model" yaml:"model"`                                   // e.g. "Apple M3 Pro", "NVIDIA GeForce RTX 4090"
+	VRAMMB       int      `json:"vram_mb,omitempty" yaml:"vram_mb,omitempty"`           // 0 means unknown or unified
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"` // metal, cuda, rocm, vulkan
+}
+
+// GPUName returns the model string for display purposes.
+func (g GPUInfo) GPUName() string { return g.Model }
+
+// HasCapability reports whether the GPU supports the named capability.
+func (g GPUInfo) HasCapability(cap string) bool {
+	for _, c := range g.Capabilities {
+		if strings.EqualFold(c, cap) {
+			return true
+		}
+	}
+	return false
+}
+
 // Resources holds observed hardware resource metrics.
 type Resources struct {
 	CPUCores         int            `json:"cpu_cores" yaml:"cpu_cores"`
@@ -65,19 +89,24 @@ type Resources struct {
 	RAMAllocatableMB int64          `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
 	DiskTotalGB      int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
 	DiskFreeGB       int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
-	GPUs             []string       `json:"gpus,omitempty" yaml:"gpus,omitempty"`
+	GPUs             []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
 	GPUUtilPercent   *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
-	Pressure         string         `json:"pressure" yaml:"pressure"` // none, low, medium, high
+	StorageClass     string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
+	BatteryPercent   *int           `json:"battery_percent,omitempty" yaml:"battery_percent,omitempty"`
+	ThermalState     string         `json:"thermal_state,omitempty" yaml:"thermal_state,omitempty"` // nominal, fair, serious, critical
+	Pressure         string         `json:"pressure" yaml:"pressure"`                               // none, low, medium, high
 	PressureStall10  float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
 	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
 }
 
-// NetworkAddress represents a single network address.
+// NetworkAddress represents a single network address with interface metadata.
 // Kind is one of: ipv4, ipv6, hostname.
-// No transport-specific labels (LAN/Thunderbolt/Tailscale) in core schema.
 type NetworkAddress struct {
-	Kind    string `json:"kind" yaml:"kind"`
-	Address string `json:"address" yaml:"address"`
+	Kind       string `json:"kind" yaml:"kind"`
+	Address    string `json:"address" yaml:"address"`
+	Interface  string `json:"interface,omitempty" yaml:"interface,omitempty"`     // e.g. en0, eth0, wg0
+	Subnet     string `json:"subnet,omitempty" yaml:"subnet,omitempty"`           // CIDR e.g. 192.168.1.0/24
+	SpeedClass string `json:"speed_class,omitempty" yaml:"speed_class,omitempty"` // thunderbolt, 10gbe, gigabit, wifi, tailscale, wireguard, unknown
 }
 
 // ToolInfo describes a discovered tool on a node.
@@ -208,4 +237,49 @@ type PlacementError struct {
 
 func (e *PlacementError) Error() string {
 	return e.Message
+}
+
+// GPUNames returns model strings for all GPUs (display helper).
+func GPUNames(gpus []GPUInfo) []string {
+	names := make([]string, len(gpus))
+	for i, g := range gpus {
+		names[i] = g.Model
+	}
+	return names
+}
+
+// GPUFromString creates a GPUInfo from a plain model string (backward compat).
+func GPUFromString(model string) GPUInfo {
+	g := GPUInfo{Model: model, Vendor: classifyGPUVendor(model)}
+	g.Capabilities = inferGPUCapabilities(g.Vendor)
+	return g
+}
+
+func classifyGPUVendor(model string) string {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "apple") || strings.HasPrefix(m, "m1") || strings.HasPrefix(m, "m2") || strings.HasPrefix(m, "m3") || strings.HasPrefix(m, "m4"):
+		return "apple"
+	case strings.Contains(m, "nvidia") || strings.Contains(m, "geforce") || strings.Contains(m, "quadro") || strings.Contains(m, "tesla") || strings.Contains(m, "rtx") || strings.Contains(m, "gtx"):
+		return "nvidia"
+	case strings.Contains(m, "amd") || strings.Contains(m, "radeon"):
+		return "amd"
+	case strings.Contains(m, "intel"):
+		return "intel"
+	default:
+		return "unknown"
+	}
+}
+
+func inferGPUCapabilities(vendor string) []string {
+	switch vendor {
+	case "apple":
+		return []string{"metal"}
+	case "nvidia":
+		return []string{"cuda"}
+	case "amd":
+		return []string{"rocm"}
+	default:
+		return nil
+	}
 }

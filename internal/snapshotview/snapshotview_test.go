@@ -61,15 +61,15 @@ func TestCloneDeepCopiesResources(t *testing.T) {
 				Resources: &models.Resources{
 					RAMTotalMB: 32768,
 					RAMFreeMB:  16384,
-					GPUs:       []string{gpu},
+					GPUs:       []models.GPUInfo{{Model: gpu, Vendor: "nvidia"}},
 				},
 			},
 		},
 	}
 
 	clone := snapshotview.Clone(orig)
-	clone.Nodes[0].Resources.GPUs[0] = "mutated"
-	if orig.Nodes[0].Resources.GPUs[0] != gpu {
+	clone.Nodes[0].Resources.GPUs[0].Model = "mutated"
+	if orig.Nodes[0].Resources.GPUs[0].Model != gpu {
 		t.Error("mutating clone GPUs changed original")
 	}
 

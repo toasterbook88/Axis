@@ -16,7 +16,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		nodeCopy := node
 		if node.Resources != nil {
 			res := *node.Resources
-			res.GPUs = append([]string(nil), node.Resources.GPUs...)
+			res.GPUs = append([]models.GPUInfo(nil), node.Resources.GPUs...)
 			nodeCopy.Resources = &res
 		}
 		nodeCopy.Addresses = append([]models.NetworkAddress(nil), node.Addresses...)

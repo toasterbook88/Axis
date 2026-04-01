@@ -33,7 +33,7 @@ func sampleNodeFacts() models.NodeFacts {
 			RAMAllocatableMB: 7168,
 			DiskTotalGB:      500,
 			DiskFreeGB:       250,
-			GPUs:             []string{"NVIDIA MX250"},
+			GPUs:             []models.GPUInfo{{Model: "NVIDIA MX250", Vendor: "nvidia", Capabilities: []string{"cuda"}}},
 			GPUUtilPercent:   &idleGPUUtil,
 			Pressure:         "none",
 			PressureSource:   "free-ram",
@@ -250,5 +250,85 @@ func TestSnapshotStatus_DegradedWhenUnreachable(t *testing.T) {
 	}
 	if len(decoded.Warnings) != 1 {
 		t.Errorf("expected 1 warning, got %d", len(decoded.Warnings))
+	}
+}
+
+func TestGPUInfo_VendorClassification(t *testing.T) {
+	tests := []struct {
+		model  string
+		vendor string
+	}{
+		{"Apple M3 Pro", "apple"},
+		{"M1 Max", "apple"},
+		{"NVIDIA GeForce RTX 4090", "nvidia"},
+		{"GeForce GTX 1080", "nvidia"},
+		{"AMD Radeon Pro 5500M", "amd"},
+		{"Intel UHD Graphics 630", "intel"},
+		{"Unknown GPU", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			g := models.GPUFromString(tt.model)
+			if g.Vendor != tt.vendor {
+				t.Errorf("GPUFromString(%q).Vendor = %q, want %q", tt.model, g.Vendor, tt.vendor)
+			}
+		})
+	}
+}
+
+func TestGPUInfo_InferredCapabilities(t *testing.T) {
+	tests := []struct {
+		model string
+		cap   string
+	}{
+		{"Apple M3", "metal"},
+		{"NVIDIA RTX 4090", "cuda"},
+		{"AMD Radeon RX 7900", "rocm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			g := models.GPUFromString(tt.model)
+			if !g.HasCapability(tt.cap) {
+				t.Errorf("GPUFromString(%q) should have %q capability", tt.model, tt.cap)
+			}
+		})
+	}
+}
+
+func TestGPUNames_Helper(t *testing.T) {
+	gpus := []models.GPUInfo{
+		{Model: "RTX 4090", Vendor: "nvidia"},
+		{Model: "Apple M3", Vendor: "apple"},
+	}
+	names := models.GPUNames(gpus)
+	if len(names) != 2 || names[0] != "RTX 4090" || names[1] != "Apple M3" {
+		t.Errorf("GPUNames = %v, unexpected", names)
+	}
+}
+
+func TestGPUInfo_JSONRoundTrip(t *testing.T) {
+	orig := models.Resources{
+		CPUCores: 8,
+		GPUs: []models.GPUInfo{
+			{Model: "RTX 4090", Vendor: "nvidia", VRAMMB: 24576, Capabilities: []string{"cuda"}},
+		},
+		Pressure: "none",
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded models.Resources
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded.GPUs) != 1 {
+		t.Fatalf("expected 1 GPU, got %d", len(decoded.GPUs))
+	}
+	if decoded.GPUs[0].VRAMMB != 24576 {
+		t.Errorf("VRAM = %d, want 24576", decoded.GPUs[0].VRAMMB)
+	}
+	if decoded.GPUs[0].Vendor != "nvidia" {
+		t.Errorf("vendor = %q, want nvidia", decoded.GPUs[0].Vendor)
 	}
 }
