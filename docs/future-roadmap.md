@@ -59,6 +59,20 @@ Focus areas:
 - **warm cache awareness**: detect currently loaded models (e.g. `ollama ps`,
   MLX processes) and score nodes higher when the requested model is already
   resident in GPU memory, eliminating unnecessary model load times
+- **granular GPU hashing**: replace `len(GPUs) > 0` with `GPUInfo` structs
+  carrying `Vendor`, `Model`, `VRAM_MB`, and `Capabilities` (`cuda`,
+  `metal`, `vulkan`); probe via `nvidia-smi` / `system_profiler` so
+  placement can cross-reference `PreferredBackends` with actual capabilities
+- **I/O tiering**: detect storage class (`nvme`, `ssd`, `hdd`) via
+  `/sys/block/*/queue/rotational` on Linux and `diskutil info` on macOS;
+  penalize HDD nodes for heavy model loading or large data tasks
+- **thermal and power probing**: read `pmset -g batt`/`pmset -g therm` on
+  macOS, `/sys/class/power_supply/` and `/sys/class/thermal/` on Linux;
+  disqualify nodes that are battery-critical or thermally throttled
+- **tombstone immune system**: track task-hash → node failure history in
+  `state.json`; if a specific task pattern repeatedly OOM-kills or crashes
+  on a node, automatically exclude that node for that task class with an
+  expiring blacklist entry
 
 Why it fits:
 
@@ -113,6 +127,18 @@ Focus areas:
 - interface labeling and route hints
 - local/remote/link speed awareness
 - transport and peer diagnostics
+- **overlay network routing**: recognize overlay subnets (100.x for
+  Tailscale, 10.x for WireGuard) and apply latency penalties so heavy
+  data tasks prefer direct links while lightweight API calls can use
+  overlays
+- **compute pairs**: detect nodes sharing high-speed links (Thunderbolt
+  bridge / 10GbE) via subnet analysis and prefer co-placing distributed
+  workloads on the fast pair
+- **secure service routing (tunneling)**: use existing SSH sessions to
+  create ephemeral `LocalForward`/`RemoteForward` tunnels so placed tasks
+  expose services on `localhost` without managing IPs or firewall rules;
+  agents request `axis task run --expose-port <remote>:<local>` and get a
+  zero-trust, zero-config tunnel torn down when the task finishes
 
 Why it fits:
 
@@ -289,6 +315,12 @@ Priority work:
   time) and persist observations to `state.json` for empirical placement
 - extend tool probes to detect currently-loaded models (`ollama ps`) and
   score placement higher when the needed model is already warm in GPU memory
+- upgrade GPU discovery from `len(GPUs) > 0` to structured `GPUInfo` with
+  vendor, model, VRAM, and capabilities (`cuda`/`metal`/`vulkan`)
+- add storage-class detection (NVMe vs SSD vs HDD) and I/O-tier penalties
+- add thermal/power probing (battery %, throttle state) for mobile nodes
+- implement tombstone blacklisting: task-hash → node failure history in
+  `state.json` with expiring entries to prevent OOM crash loops
 
 Exit criteria:
 
@@ -298,6 +330,9 @@ Exit criteria:
 - placement can use empirical history when available, falling back to
   heuristics when not
 - warm-model scoring visibly improves placement for repeated inference tasks
+- GPU placement distinguishes real compute GPUs from integrated graphics
+- HDD nodes penalized for large model loads
+- repeated crash patterns auto-excluded via tombstone
 
 ### Phase B: MCP First-Class
 
@@ -346,8 +381,13 @@ Priority work:
 
 - Tailscale status integration
 - stronger SSH reachability diagnostics
-- richer address/interface metadata
+- richer address/interface metadata (subnet, interface name, speed class)
 - optional locality and route-quality hints
+- overlay subnet detection (Tailscale 100.x, WireGuard 10.x) with
+  latency-aware placement penalties
+- compute-pair identification via shared high-speed subnets
+- ephemeral SSH port forwarding (`LocalForward`/`RemoteForward`) for
+  secure service routing of placed tasks
 
 Exit criteria:
 
