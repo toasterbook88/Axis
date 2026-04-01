@@ -21,6 +21,7 @@ var resolveDefaultChatModel = chat.ResolveDefaultModel
 var formatChatCatalog = func(ctx context.Context, currentModel string) string {
 	return chat.FormatModelCatalog(chat.BuildModelCatalog(ctx, currentModel))
 }
+var chatEndpoint = chat.DefaultEndpoint
 
 func chatCmd() *cobra.Command {
 	var (
@@ -61,7 +62,7 @@ func chatCmd() *cobra.Command {
 			}
 
 			// Build client and conversation.
-			client := chat.NewClient(chat.DefaultEndpoint, currentModel)
+			client := chat.NewClient(chatEndpoint, currentModel)
 			conv := chat.NewConversation(maxTokens)
 			sysPrompt := chat.BuildSystemPrompt(cluster, systemMsg)
 			conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
@@ -202,16 +203,15 @@ func handleSlashCommand(input, currentModel string, conv *chat.Conversation, w i
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		fmt.Fprintln(w, formatChatCatalog(ctx, currentModel))
-	case strings.HasPrefix(query, "/model "):
-		next := strings.TrimSpace(strings.TrimPrefix(query, "/model "))
-		if next == "" {
+	case strings.HasPrefix(query, "/model"):
+		parts := strings.Fields(query)
+		if len(parts) < 2 {
 			fmt.Fprintln(w, "Usage: /model <tag>")
 			return ""
 		}
+		next := parts[1]
 		fmt.Fprintf(w, "%s Switched to %s\n", ui.Green("✓"), ui.Bold(next))
 		return next
-	case query == "/model":
-		fmt.Fprintln(w, "Usage: /model <tag>")
 	case query == "/help":
 		fmt.Fprintln(w, "Slash commands:")
 		fmt.Fprintln(w, "  /clear     — clear conversation history")

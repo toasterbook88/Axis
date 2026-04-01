@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -466,6 +468,71 @@ func TestHandleSlashCommandUnknown(t *testing.T) {
 	handleSlashCommand("/bogus", "phi4", conv, &buf)
 	if !strings.Contains(buf.String(), "Unknown command") {
 		t.Fatalf("expected unknown command message, got %q", buf.String())
+	}
+}
+
+func TestHandleSlashCommandModelBare(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	next := handleSlashCommand("/model", "phi4", conv, &buf)
+	if next != "" {
+		t.Fatalf("expected empty next for bare /model, got %q", next)
+	}
+	if !strings.Contains(buf.String(), "Usage:") {
+		t.Fatalf("expected usage message, got %q", buf.String())
+	}
+}
+
+func TestChatCmdSingleShotStreamsResponse(t *testing.T) {
+	// Mock Ollama server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/show":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"modelfile":"test"}`)
+		case r.URL.Path == "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			chunks := []map[string]interface{}{
+				{"message": map[string]string{"role": "assistant", "content": "hello "}, "done": false},
+				{"message": map[string]string{"role": "assistant", "content": "world"}, "done": true},
+			}
+			for _, c := range chunks {
+				data, _ := json.Marshal(c)
+				fmt.Fprintf(w, "%s\n", data)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	// Inject test endpoint and model.
+	prev := chatEndpoint
+	chatEndpoint = srv.URL
+	defer func() { chatEndpoint = prev }()
+
+	restoreResolve := stubDefaultChatModelResolver(t, func(context.Context) string {
+		return "test-model"
+	})
+	defer restoreResolve()
+
+	cmd := chatCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"hi"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("chat single-shot Execute: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "hello world") {
+		t.Fatalf("expected streamed response, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "advisory") {
+		t.Fatalf("expected advisory warning in stderr, got %q", stderr.String())
 	}
 }
 
