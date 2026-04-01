@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -406,60 +407,65 @@ func TestResolveChatModelFallsBackToResolver(t *testing.T) {
 	}
 }
 
-func TestHandleChatMetaCommandModelsPrintsCatalog(t *testing.T) {
+func TestHandleSlashCommandModelsPrintsCatalog(t *testing.T) {
 	restoreFormat := stubFormatChatCatalog(t, func(context.Context, string) string {
 		return "formatted catalog"
 	})
 	defer restoreFormat()
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		handled, next := handleChatMetaCommand("/models", "phi4")
-		if !handled || next != "" {
-			t.Fatalf("expected handled /models with empty next, got handled=%v next=%q", handled, next)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("handleChatMetaCommand: %v", err)
+	var buf bytes.Buffer
+	conv := chat.NewConversation(4096)
+	next := handleSlashCommand("/models", "phi4", conv, &buf)
+	if next != "" {
+		t.Fatalf("expected empty next model for /models, got %q", next)
 	}
-	if stderr != "" {
-		t.Fatalf("expected no stderr, got %q", stderr)
-	}
-	if !strings.Contains(stdout, "formatted catalog") {
-		t.Fatalf("expected formatted catalog output, got %q", stdout)
+	if !strings.Contains(buf.String(), "formatted catalog") {
+		t.Fatalf("expected formatted catalog output, got %q", buf.String())
 	}
 }
 
-func TestChatCmdSingleShotUsesGenerateStream(t *testing.T) {
-	restoreResolve := stubDefaultChatModelResolver(t, func(context.Context) string {
-		return "phi4"
-	})
-	defer restoreResolve()
-	restoreGenerate := stubGenerateChatStream(t, func(ctx context.Context, model, prompt string, w io.Writer) error {
-		if model != "phi4" {
-			t.Fatalf("model = %q, want phi4", model)
-		}
-		if prompt != "hello world" {
-			t.Fatalf("prompt = %q, want hello world", prompt)
-		}
-		_, _ = io.WriteString(w, "chat ok")
-		return nil
-	})
-	defer restoreGenerate()
+func TestHandleSlashCommandClear(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys"})
+	conv.Append(chat.Message{Role: chat.RoleUser, Content: "hello"})
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		cmd := chatCmd()
-		cmd.SetArgs([]string{"hello", "world"})
-		return cmd.Execute()
-	})
-	if err != nil {
-		t.Fatalf("chat Execute: %v", err)
+	var buf bytes.Buffer
+	handleSlashCommand("/clear", "phi4", conv, &buf)
+
+	// After clear, only system messages remain.
+	if conv.Len() != 1 {
+		t.Fatalf("expected 1 message after clear, got %d", conv.Len())
 	}
-	if !strings.Contains(stderr, "axis chat is experimental") {
-		t.Fatalf("expected experimental warning, got %q", stderr)
+	if !strings.Contains(buf.String(), "cleared") {
+		t.Fatalf("expected cleared message, got %q", buf.String())
 	}
-	if !strings.Contains(stdout, "AXIS [Model: phi4] | Thinking...") || !strings.Contains(stdout, "chat ok") {
-		t.Fatalf("expected chat output, got %q", stdout)
+}
+
+func TestHandleSlashCommandHelp(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	handleSlashCommand("/help", "phi4", conv, &buf)
+
+	if !strings.Contains(buf.String(), "/clear") || !strings.Contains(buf.String(), "/status") {
+		t.Fatalf("expected help text with commands, got %q", buf.String())
+	}
+}
+
+func TestHandleSlashCommandModelSwitch(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	next := handleSlashCommand("/model llama3", "phi4", conv, &buf)
+	if next != "llama3" {
+		t.Fatalf("expected next model 'llama3', got %q", next)
+	}
+}
+
+func TestHandleSlashCommandUnknown(t *testing.T) {
+	conv := chat.NewConversation(4096)
+	var buf bytes.Buffer
+	handleSlashCommand("/bogus", "phi4", conv, &buf)
+	if !strings.Contains(buf.String(), "Unknown command") {
+		t.Fatalf("expected unknown command message, got %q", buf.String())
 	}
 }
 
@@ -576,15 +582,6 @@ func stubFormatChatCatalog(t *testing.T, fn func(context.Context, string) string
 	formatChatCatalog = fn
 	return func() {
 		formatChatCatalog = prev
-	}
-}
-
-func stubGenerateChatStream(t *testing.T, fn func(context.Context, string, string, io.Writer) error) func() {
-	t.Helper()
-	prev := generateChatStream
-	generateChatStream = fn
-	return func() {
-		generateChatStream = prev
 	}
 }
 

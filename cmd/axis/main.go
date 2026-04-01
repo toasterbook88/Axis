@@ -52,6 +52,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(serveCmd())
 	root.AddCommand(daemonCmd())
 	root.AddCommand(chatCmd())
+	root.AddCommand(agentCmd())
 	root.AddCommand(contextCmd())
 	root.AddCommand(scriptsCmd())
 	root.AddCommand(skillsCmd())
