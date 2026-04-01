@@ -1,6 +1,6 @@
 # AXIS Future Roadmap
 
-Last reviewed: 2026-03-20 00:34 EDT
+Last reviewed: 2026-04-01 EDT
 
 ## Why This Document Exists
 
@@ -52,6 +52,13 @@ Focus areas:
 - better snapshot warnings and degraded-state reporting
 - stronger placement reasoning
 - much better test coverage for runtime-critical packages
+- **empirical feedback loops**: measure actual peak RAM/VRAM and execution
+  time during `axis task run`, persist to `state.json`, use observed history
+  to self-correct placement heuristics over time (replaces keyword guessing
+  with measured reality)
+- **warm cache awareness**: detect currently loaded models (e.g. `ollama ps`,
+  MLX processes) and score nodes higher when the requested model is already
+  resident in GPU memory, eliminating unnecessary model load times
 
 Why it fits:
 
@@ -278,12 +285,19 @@ Priority work:
 - turn the RAM-balancing design in `ram-balancing-research.md` into an implementation plan
 - add tests for discovery, transport, safety, state, skills, and MCP
 - align `README.md` and design docs with the live command surface
+- add post-execution resource measurement to `task run` (peak RAM/VRAM, wall
+  time) and persist observations to `state.json` for empirical placement
+- extend tool probes to detect currently-loaded models (`ollama ps`) and
+  score placement higher when the needed model is already warm in GPU memory
 
 Exit criteria:
 
 - facts, transport, and placement are trustworthy
 - docs match live behavior
 - critical runtime packages are no longer untested
+- placement can use empirical history when available, falling back to
+  heuristics when not
+- warm-model scoring visibly improves placement for repeated inference tasks
 
 ### Phase B: MCP First-Class
 
