@@ -536,6 +536,69 @@ func TestChatCmdSingleShotStreamsResponse(t *testing.T) {
 	}
 }
 
+func TestChatCmdSingleShotJSONSuppressesStreaming(t *testing.T) {
+	// Mock Ollama server returning two streamed chunks.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/show":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"modelfile":"test"}`)
+		case r.URL.Path == "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			chunks := []map[string]interface{}{
+				{"message": map[string]string{"role": "assistant", "content": "hello "}, "done": false},
+				{"message": map[string]string{"role": "assistant", "content": "world"}, "done": true},
+			}
+			for _, c := range chunks {
+				data, _ := json.Marshal(c)
+				fmt.Fprintf(w, "%s\n", data)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	prev := chatEndpoint
+	chatEndpoint = srv.URL
+	defer func() { chatEndpoint = prev }()
+
+	restoreResolve := stubDefaultChatModelResolver(t, func(context.Context) string {
+		return "test-model"
+	})
+	defer restoreResolve()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		cmd := chatCmd()
+		cmd.SetArgs([]string{"--format", "json", "hi"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("chat single-shot json Execute: %v", err)
+	}
+
+	// stdout must be valid JSON.
+	var msg map[string]interface{}
+	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &msg); jsonErr != nil {
+		t.Fatalf("expected valid JSON in stdout, got %q: %v", stdout, jsonErr)
+	}
+
+	// The assembled content must appear inside the JSON payload.
+	content, _ := msg["content"].(string)
+	if !strings.Contains(content, "hello") {
+		t.Fatalf("expected assembled content in JSON payload, got content=%q", content)
+	}
+
+	// Streaming text must NOT appear as raw text before the JSON object.
+	// A well-formed JSON response begins with '{', not with streamed plain text.
+	trimmed := strings.TrimSpace(stdout)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("expected stdout to start with JSON object, got %q", trimmed)
+	}
+}
+
 type fakeServeDaemon struct {
 	started bool
 	ctx     context.Context
