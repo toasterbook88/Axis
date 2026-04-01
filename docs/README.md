@@ -29,7 +29,4 @@ When docs disagree:
 
 ## Phase Tracking
 
-| Phase | Status | Description |
-|---|---|---|
-| Phase 1 | Core complete; retained as the historical spec boundary | CLI bootstrap, local/remote fact collection, and `ClusterSnapshot` output remain the foundation |
-| Phase 2 | **Active on `main`** | Reservation-aware placement, execution surfaces, MCP, daemon-backed cached reads, and utility layers are shipped; current effort is hardening and truth-alignment |
+See [phase-tracking.md](phase-tracking.md) for current status. Phases 1–3 are complete.

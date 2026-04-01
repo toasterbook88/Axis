@@ -238,6 +238,18 @@ axis daemon restart
 
 `axis daemon status` reports cache readiness, age, and version metadata. `axis daemon restart` restarts the local cache seam from the current binary when you need to refresh stale daemon state explicitly.
 
+### `axis update` — self-update to the latest release
+
+```bash
+axis update           # download and install the latest release
+axis update --check   # report whether an update is available (no download)
+```
+
+Checks GitHub Releases for a newer version, downloads the matching platform
+binary, verifies its SHA-256 checksum against the release's `checksums.txt`,
+and replaces the current binary in-place. The checksum is always verified —
+the release workflow produces `checksums.txt` alongside every archive.
+
 ## Configuration Reference
 
 `~/.axis/nodes.yaml` fields:
@@ -318,7 +330,9 @@ The following are planned directions, not current functionality:
 - Mesh networking / peer discovery beyond a static seed file
 - Phase 4+ features — see [white paper](docs/white_paper_v1.md)
 
-### What's new in Phase 3 (v0.3.x)
+### Phase 3 (Shipped in v0.4.0)
+
+The following features were delivered in Phase 3:
 
 - **nodes.yaml hot-reload** — daemon detects config changes and re-discovers nodes without restart
 - **Daemon refresh metrics** — `/health` reports `refresh_count`, `last_refresh_duration_ms`, `stale_nodes`
@@ -328,7 +342,7 @@ The following are planned directions, not current functionality:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an issue before adding Phase 3+ features.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an issue before adding Phase 4+ features.
 
 ## License
 
