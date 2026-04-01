@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -47,31 +46,10 @@ func checksumLine(data []byte, name string) string {
 }
 
 func TestUpdateAlreadyUpToDate(t *testing.T) {
-	// Even in "up to date" mode the command may discover a second axis binary
-	// in PATH and try to download the release to update it. Provide a full
-	// mock so the path never fails on missing assets.
-	fakeBin := []byte("fake")
-	archiveName := fmt.Sprintf("axis_%s_%s_%s.tar.gz", buildinfo.Version, runtime.GOOS, runtime.GOARCH)
-	archiveData := buildTestArchive(t, fakeBin)
-	csLine := checksumLine(archiveData, archiveName)
-
+	// Use --check so the command reports status without attempting any
+	// binary downloads or PATH mutations, keeping the test hermetic.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
-			json.NewEncoder(w).Encode(ghRelease{
-				TagName: "v" + buildinfo.Version,
-				Assets: []ghAsset{
-					{Name: archiveName, BrowserDownloadURL: "http://" + r.Host + "/archive"},
-					{Name: "checksums.txt", BrowserDownloadURL: "http://" + r.Host + "/checksums"},
-				},
-			})
-		case r.URL.Path == "/archive":
-			w.Write(archiveData)
-		case r.URL.Path == "/checksums":
-			fmt.Fprintln(w, csLine)
-		default:
-			http.NotFound(w, r)
-		}
+		json.NewEncoder(w).Encode(ghRelease{TagName: "v" + buildinfo.Version})
 	}))
 	defer srv.Close()
 
@@ -85,6 +63,7 @@ func TestUpdateAlreadyUpToDate(t *testing.T) {
 	cmd := updateCmd()
 	var out strings.Builder
 	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--check"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,29 +103,6 @@ func TestUpdateCheckFlag(t *testing.T) {
 
 func TestUpdateInstall(t *testing.T) {
 	fakeBinary := []byte("#!/bin/sh\necho axis-new\n")
-	archiveName := fmt.Sprintf("axis_9.9.9_%s_%s.tar.gz", "testos", "testarch")
-	archiveData := buildTestArchive(t, fakeBinary)
-	csLine := checksumLine(archiveData, archiveName)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
-			json.NewEncoder(w).Encode(ghRelease{
-				TagName: "v9.9.9",
-				Assets: []ghAsset{
-					{Name: archiveName, BrowserDownloadURL: "http://" + r.Host + "/archive"},
-					{Name: "checksums.txt", BrowserDownloadURL: "http://" + r.Host + "/checksums"},
-				},
-			})
-		case r.URL.Path == "/archive":
-			w.Write(archiveData)
-		case r.URL.Path == "/checksums":
-			fmt.Fprintln(w, csLine)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
 
 	// Write a placeholder "current binary" in a temp dir.
 	tmpDir := t.TempDir()
@@ -154,12 +110,6 @@ func TestUpdateInstall(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old"), 0755); err != nil {
 		t.Fatal(err)
 	}
-
-	prev := updateAPIBase
-	prevGet := updateGetFunc
-	defer func() { updateAPIBase = prev; updateGetFunc = prevGet }()
-	updateAPIBase = srv.URL
-	updateGetFunc = srv.Client().Get
 
 	// Exercise replaceExecutable directly since we can't override runtime.GOOS/GOARCH.
 	if err := replaceExecutable(target, fakeBinary); err != nil {
