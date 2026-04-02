@@ -15,12 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/buildinfo"
+	"github.com/toasterbook88/axis/internal/versioncmp"
 )
 
 const (
@@ -127,58 +127,7 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 }
 
 func compareReleaseVersions(current, latest string) (int, error) {
-	currentParts, err := parseReleaseVersion(current)
-	if err != nil {
-		return 0, fmt.Errorf("parse current version %q: %w", current, err)
-	}
-	latestParts, err := parseReleaseVersion(latest)
-	if err != nil {
-		return 0, fmt.Errorf("parse latest version %q: %w", latest, err)
-	}
-
-	maxLen := len(currentParts)
-	if len(latestParts) > maxLen {
-		maxLen = len(latestParts)
-	}
-	for i := 0; i < maxLen; i++ {
-		var currentPart, latestPart int
-		if i < len(currentParts) {
-			currentPart = currentParts[i]
-		}
-		if i < len(latestParts) {
-			latestPart = latestParts[i]
-		}
-		switch {
-		case currentPart < latestPart:
-			return -1, nil
-		case currentPart > latestPart:
-			return 1, nil
-		}
-	}
-	return 0, nil
-}
-
-func parseReleaseVersion(raw string) ([]int, error) {
-	trimmed := strings.TrimSpace(strings.TrimPrefix(raw, "v"))
-	trimmed = strings.SplitN(trimmed, "-", 2)[0]
-	trimmed = strings.SplitN(trimmed, "+", 2)[0]
-	if trimmed == "" {
-		return nil, fmt.Errorf("empty version")
-	}
-
-	parts := strings.Split(trimmed, ".")
-	out := make([]int, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			return nil, fmt.Errorf("invalid version segment in %q", raw)
-		}
-		value, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, value)
-	}
-	return out, nil
+	return versioncmp.Compare(current, latest)
 }
 
 // findAxisBinaries discovers all unique axis binary paths to update.

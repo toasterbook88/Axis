@@ -22,46 +22,18 @@ require_command go
 require_command awk
 require_command sed
 require_command curl
+require_command jq
 
 axis_version="$(sed -n 's/^const Version = "\(.*\)"/\1/p' internal/buildinfo/version.go)"
 if [[ -z "$axis_version" ]]; then
   printf 'failed to parse axis version from internal/buildinfo/version.go; check that the Version const format matches the sed pattern in hack/refresh-current-state.sh\n' >&2
   exit 1
 fi
-repo_commit="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 refreshed_at="$(TZ=America/New_York date '+%Y-%m-%d %Z')"
 
 release_json="$(curl -fsSL "https://api.github.com/repos/toasterbook88/axis/releases/latest" || true)"
-latest_release_tag="$(printf '%s' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-latest_release_published="$(printf '%s' "$release_json" | sed -n 's/.*"published_at":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-
-compare_versions() {
-  local left="${1#v}"
-  local right="${2#v}"
-  local left_part right_part
-  local i
-
-  IFS='.' read -r -a left_parts <<<"${left%%[-+]*}"
-  IFS='.' read -r -a right_parts <<<"${right%%[-+]*}"
-
-  local max_len="${#left_parts[@]}"
-  if (( ${#right_parts[@]} > max_len )); then
-    max_len="${#right_parts[@]}"
-  fi
-
-  for ((i = 0; i < max_len; i++)); do
-    left_part="${left_parts[i]:-0}"
-    right_part="${right_parts[i]:-0}"
-    if (( 10#$left_part < 10#$right_part )); then
-      return 1
-    fi
-    if (( 10#$left_part > 10#$right_part )); then
-      return 2
-    fi
-  done
-
-  return 0
-}
+latest_release_tag="$(printf '%s' "$release_json" | jq -r '.tag_name // ""')"
+latest_release_published="$(printf '%s' "$release_json" | jq -r '.published_at // ""')"
 
 if [[ -z "$latest_release_tag" ]]; then
   latest_release_tag="unavailable"
@@ -72,12 +44,15 @@ release_truth="repo version matches the latest published release"
 if [[ "$latest_release_tag" == "unavailable" ]]; then
   release_truth="latest published release is unavailable from the GitHub API"
 else
-  compare_status=0
-  compare_versions "$axis_version" "$latest_release_tag" || compare_status=$?
+  compare_status="$(go run ./hack/compare-release-versions.go "$axis_version" "$latest_release_tag")"
   case "$compare_status" in
-    0) release_truth="repo version matches the latest published release" ;;
-    1) release_truth="repo version is behind the latest published release" ;;
-    2) release_truth="repo version is ahead of the latest published release" ;;
+    equal) release_truth="repo version matches the latest published release" ;;
+    behind) release_truth="repo version is behind the latest published release" ;;
+    ahead) release_truth="repo version is ahead of the latest published release" ;;
+    *)
+      printf 'unexpected comparison result: %s\n' "$compare_status" >&2
+      exit 1
+      ;;
   esac
 fi
 
@@ -110,7 +85,6 @@ trap 'rm -f "$facts_tmp" "$verify_tmp" "$doc_tmp"' EXIT
 cat >"$facts_tmp" <<EOF
 $facts_start
 - Refreshed: $refreshed_at
-- Repo commit: \`$repo_commit\`
 - Repo version: \`$axis_version\`
 - Latest published GitHub release: \`$latest_release_tag\` ($latest_release_published)
 - Release truth: $release_truth

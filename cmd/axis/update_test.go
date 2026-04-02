@@ -291,6 +291,9 @@ func TestCompareReleaseVersions(t *testing.T) {
 		{name: "current newer", current: "0.7.0", latest: "0.4.0", want: 1},
 		{name: "trim v prefix", current: "v0.7.0", latest: "0.7.0", want: 0},
 		{name: "compare missing patch", current: "0.7", latest: "0.7.1", want: -1},
+		{name: "prerelease to final", current: "1.0.0-rc1", latest: "1.0.0", want: -1},
+		{name: "final newer than prerelease", current: "1.0.0", latest: "1.0.0-rc1", want: 1},
+		{name: "alpha before beta", current: "1.0.0-alpha", latest: "1.0.0-beta", want: -1},
 	}
 
 	for _, tt := range tests {
