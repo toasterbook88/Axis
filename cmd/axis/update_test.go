@@ -232,8 +232,7 @@ func TestExtractBinaryNotFound(t *testing.T) {
 func TestVerifyChecksum(t *testing.T) {
 	data := []byte("hello world")
 	name := "axis_1.0.0_linux_amd64.tar.gz"
-	sum := sha256.Sum256(data)
-	csLine := hex.EncodeToString(sum[:]) + "  " + name
+	csLine := checksumLine(data, name)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, csLine)
