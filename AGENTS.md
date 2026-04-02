@@ -25,9 +25,9 @@ The repo version constant lives in `internal/buildinfo/version.go`.  The latest
 **published** GitHub release may differ from the repo version — check the
 [Releases page](https://github.com/toasterbook88/axis/releases) or run
 `./hack/refresh-current-state.sh` for the live comparison.  CI enforces this
-via `./hack/verify-repo-truth.sh`: operator-facing docs may not reference
-unpublished release tags or claim a "current release" that differs from the
-latest published GitHub release.
+for `README.md` and `docs/current-state.md` via `./hack/verify-repo-truth.sh`:
+those files may not reference unpublished release tags or claim a "current
+release" that differs from the latest published GitHub release.
 
 Do not fabricate or assume a release version. If you need the current state,
 read `docs/current-state.md` (its facts section is CI-validated).
