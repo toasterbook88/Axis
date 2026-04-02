@@ -35,6 +35,7 @@ In a heterogeneous cluster, knowing `python3` is installed is insufficient. We n
 
 ### 4. Ephemeral State & "Warm" Cache Awareness
 VRAM loading is the highest latency penalty in local AI workflows. Constantly unloading and reloading models across the cluster causes fragmentation and wastes time.
+*   **Baseline status:** AXIS already carries basic Ollama warm-state signals (`Listening`, `Running`, loaded `Models`). Phase 2 is about deepening that into stronger cross-backend resident-model locality, not starting from zero.
 *   **Implementation:** Extend probes to detect resident models (e.g., querying `ollama ps` or parsing active `mlx` processes) to see exactly what is currently loaded in VRAM.
 *   **Impact:** If a task requires `llama3`, Axis drastically boosts the score of a node that already has it loaded. This eliminates load times and makes iterative testing (e.g., of custom models) vastly more efficient.
 
@@ -55,6 +56,7 @@ Static heuristics (e.g., guessing a 7B model needs X amount of RAM) will always 
 
 ### 7. Network Topology & "Compute Pairs"
 A cluster is limited by its interconnects. A Thunderbolt bridge (M1↔M3) offers fundamentally different compute possibilities than a standard Wi-Fi link.
+*   **Baseline status:** AXIS already records interface name, subnet, and a heuristic `speed_class`. Phase 3 should treat those as hints, not measured throughput or latency, until stronger link evidence is available.
 *   **Implementation:** Introduce link-speed and latency awareness into the `ClusterSnapshot`. Map the network to identify high-speed "Compute Pairs."
 *   **Impact:** Axis can intelligently chunk tasks, keeping heavy, data-intensive pipelines on Thunderbolt links while pushing isolated, asynchronous tasks out to the wider mesh.
 

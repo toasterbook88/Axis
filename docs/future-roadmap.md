@@ -56,9 +56,11 @@ Focus areas:
   time during `axis task run`, persist to `state.json`, use observed history
   to self-correct placement heuristics over time (replaces keyword guessing
   with measured reality)
-- **warm cache awareness**: detect currently loaded models (e.g. `ollama ps`,
-  MLX processes) and score nodes higher when the requested model is already
-  resident in GPU memory, eliminating unnecessary model load times
+- **warm cache awareness**: extend today's basic Ollama `Listening` /
+  `Running` / `Models` signals into deeper resident-model detection (e.g.
+  `ollama ps`, MLX processes) so nodes that already hold the requested model
+  get stronger placement preference without pretending the current heuristic is
+  complete
 - **granular GPU hashing**: replace `len(GPUs) > 0` with `GPUInfo` structs
   carrying `Vendor`, `Model`, `VRAM_MB`, and `Capabilities` (`cuda`,
   `metal`, `vulkan`); probe via `nvidia-smi` / `system_profiler` so
@@ -313,16 +315,16 @@ Priority work:
 - align `README.md` and design docs with the live command surface
 - add post-execution resource measurement to `task run` (peak RAM/VRAM, wall
   time) and persist observations to `state.json` for empirical placement
-- extend tool probes to detect currently-loaded models (`ollama ps`) and
-  score placement higher when the needed model is already warm in GPU memory
+- deepen warm-model probes beyond the current Ollama warmth signals so
+  placement can score truly resident models higher across backends
 - upgrade GPU discovery from `len(GPUs) > 0` to structured `GPUInfo` with
-  vendor, model, VRAM, and capabilities (`cuda`/`metal`/`vulkan`) ✅ shipped v0.7.0
-- add storage-class detection (NVMe vs SSD vs HDD) and I/O-tier penalties ✅ shipped v0.7.0
-- add thermal/power probing (battery %, throttle state) for mobile nodes ✅ shipped v0.7.0
+  vendor, model, VRAM, and capabilities (`cuda`/`metal`/`vulkan`) ✅ implemented on main
+- add storage-class detection (NVMe vs SSD vs HDD) and I/O-tier penalties ✅ implemented on main
+- add thermal/power probing (battery %, throttle state) for mobile nodes ✅ implemented on main
 - implement tombstone blacklisting: task-hash → node failure history in
-  `state.json` with expiring entries to prevent OOM crash loops ✅ shipped v0.7.0
-- add network topology enrichment: interface name, subnet, speed class
-  (wireguard, tailscale, thunderbolt, wifi, gigabit) ✅ shipped v0.7.0
+  `state.json` with expiring entries to prevent OOM crash loops ✅ implemented on main
+- add network topology enrichment: interface name, subnet, heuristic speed
+  class (wireguard, tailscale, thunderbolt, wifi, gigabit) ✅ implemented on main
 
 Exit criteria:
 
@@ -383,7 +385,7 @@ Priority work:
 
 - Tailscale status integration
 - stronger SSH reachability diagnostics
-- richer address/interface metadata (subnet, interface name, speed class)
+- richer address/interface metadata (subnet, interface name, heuristic speed class)
 - optional locality and route-quality hints
 - overlay subnet detection (Tailscale 100.x, WireGuard 10.x) with
   latency-aware placement penalties

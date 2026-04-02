@@ -44,7 +44,7 @@ func runDoctor(cmd *cobra.Command) error {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "%s SSH connectivity\n", ui.Cyan("→"))
 		for _, n := range cfg.Nodes {
-			addr := fmt.Sprintf("%s:%d", n.Hostname, n.EffectiveSSHPort())
+			addr := net.JoinHostPort(n.Hostname, fmt.Sprintf("%d", n.EffectiveSSHPort()))
 			conn, dialErr := net.DialTimeout("tcp", addr, 3*time.Second)
 			if dialErr != nil {
 				fmt.Fprintf(out, "  %s %s (%s): %v\n", ui.StatusIcon(false), n.Name, addr, dialErr)

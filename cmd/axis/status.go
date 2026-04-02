@@ -57,7 +57,7 @@ func statusCmd() *cobra.Command {
 				}
 				return printOutput(payload, format)
 			default:
-				printStatusText(cmd, snap, source, cached)
+				printStatusText(cmd, snap, source)
 				return nil
 			}
 		},
@@ -69,7 +69,7 @@ func statusCmd() *cobra.Command {
 	return cmd
 }
 
-func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source string, cached bool) {
+func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source string) {
 	out := cmd.OutOrStdout()
 
 	healthy := 0
