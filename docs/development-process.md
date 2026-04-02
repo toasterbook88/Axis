@@ -21,7 +21,7 @@ Must prove it consumes existing contracts (see [current state](./current-state.m
 - Drift impact (release vs main)
 
 ## Merge Gate
-No feature may widen divergence from the placement contract.
+No feature may widen divergence from the Single Placement Contract.
 
 ## Principle
 Substrate first. Surfaces second.
