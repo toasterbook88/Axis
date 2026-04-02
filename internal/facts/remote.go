@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -413,6 +415,9 @@ func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string)
 			func(device string) (linuxBlockDeviceInfo, error) {
 				return c.remoteLinuxBlockDeviceInfo(ctx, device)
 			},
+			func(info linuxBlockDeviceInfo) ([]string, error) {
+				return c.remoteLinuxBlockDeviceSlaves(ctx, info)
+			},
 			func(device string) (string, error) {
 				return c.remoteLinuxRotational(ctx, device)
 			},
@@ -423,11 +428,33 @@ func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string)
 }
 
 func (c *RemoteCollector) remoteLinuxBlockDeviceInfo(ctx context.Context, device string) (linuxBlockDeviceInfo, error) {
-	out, err := c.Exec.Run(ctx, fmt.Sprintf("lsblk -J -n -p -o NAME,PKNAME,TYPE,ROTA %q 2>/dev/null", strings.TrimSpace(device)))
+	out, err := c.Exec.Run(ctx, fmt.Sprintf("lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA %q 2>/dev/null", strings.TrimSpace(device)))
 	if err != nil {
 		return linuxBlockDeviceInfo{}, err
 	}
 	return parseLinuxBlockDeviceInfo(out)
+}
+
+func (c *RemoteCollector) remoteLinuxBlockDeviceSlaves(ctx context.Context, info linuxBlockDeviceInfo) ([]string, error) {
+	sysfsName := linuxSysfsBlockName(info)
+	if sysfsName == "" {
+		return nil, fmt.Errorf("no sysfs block name for %+v", info)
+	}
+	out, err := c.Exec.Run(ctx, fmt.Sprintf("ls -1 /sys/class/block/%s/slaves 2>/dev/null", sysfsName))
+	if err != nil {
+		return nil, err
+	}
+
+	var parents []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		name := filepath.Base(strings.TrimSpace(line))
+		if name == "" {
+			continue
+		}
+		parents = append(parents, filepath.Join("/dev", name))
+	}
+	sort.Strings(parents)
+	return parents, nil
 }
 
 func (c *RemoteCollector) remoteLinuxRotational(ctx context.Context, device string) (string, error) {
