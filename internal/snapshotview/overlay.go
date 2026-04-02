@@ -5,6 +5,16 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
+func cloneGPUInfos(gpus []models.GPUInfo) []models.GPUInfo {
+	cloned := make([]models.GPUInfo, len(gpus))
+	for i, gpu := range gpus {
+		gpuCopy := gpu
+		gpuCopy.Capabilities = append([]string(nil), gpu.Capabilities...)
+		cloned[i] = gpuCopy
+	}
+	return cloned
+}
+
 func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 	if snap == nil {
 		return nil
@@ -16,7 +26,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		nodeCopy := node
 		if node.Resources != nil {
 			res := *node.Resources
-			res.GPUs = append([]models.GPUInfo(nil), node.Resources.GPUs...)
+			res.GPUs = cloneGPUInfos(node.Resources.GPUs)
 			nodeCopy.Resources = &res
 		}
 		nodeCopy.Addresses = append([]models.NetworkAddress(nil), node.Addresses...)

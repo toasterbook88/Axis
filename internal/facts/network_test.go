@@ -115,6 +115,9 @@ func TestParseRemoteAddrLine_IPOFormat(t *testing.T) {
 	if addr.Kind != "ipv4" {
 		t.Errorf("Kind = %q, want ipv4", addr.Kind)
 	}
+	if addr.Subnet != "192.168.1.0/24" {
+		t.Errorf("Subnet = %q, want 192.168.1.0/24", addr.Subnet)
+	}
 }
 
 func TestParseRemoteAddrLine_BareIP(t *testing.T) {
@@ -145,6 +148,19 @@ func TestParseRemoteAddrLine_IPv6(t *testing.T) {
 	}
 	if addr.Address != "2001:db8::1" {
 		t.Errorf("Address = %q, want 2001:db8::1", addr.Address)
+	}
+	if addr.Subnet != "2001:db8::/64" {
+		t.Errorf("Subnet = %q, want 2001:db8::/64", addr.Subnet)
+	}
+}
+
+func TestParseRemoteAddrLine_BareCIDR(t *testing.T) {
+	addr := parseRemoteAddrLine("10.0.0.5/24")
+	if addr.Address != "10.0.0.5" {
+		t.Errorf("Address = %q, want 10.0.0.5", addr.Address)
+	}
+	if addr.Subnet != "10.0.0.0/24" {
+		t.Errorf("Subnet = %q, want 10.0.0.0/24", addr.Subnet)
 	}
 }
 

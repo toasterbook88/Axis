@@ -863,21 +863,34 @@ func localAddresses() []models.NetworkAddress {
 			if ip.To4() == nil {
 				kind = "ipv6"
 			}
-			subnet := ipNet.String()
-			if idx := strings.LastIndex(subnet, "/"); idx >= 0 {
-				ones, _ := ipNet.Mask.Size()
-				subnet = ipNet.IP.Mask(ipNet.Mask).String() + "/" + strconv.Itoa(ones)
-			}
 			addrs = append(addrs, models.NetworkAddress{
 				Kind:       kind,
 				Address:    ip.String(),
 				Interface:  iface.Name,
-				Subnet:     subnet,
+				Subnet:     subnetFromIPNet(ipNet),
 				SpeedClass: classifyInterfaceSpeed(iface.Name, ip),
 			})
 		}
 	}
 	return addrs
+}
+
+func subnetFromIPNet(ipNet *net.IPNet) string {
+	if ipNet == nil {
+		return ""
+	}
+	ones, _ := ipNet.Mask.Size()
+	return ipNet.IP.Mask(ipNet.Mask).String() + "/" + strconv.Itoa(ones)
+}
+
+func parseAddressWithOptionalCIDR(raw string) (net.IP, string) {
+	if strings.Contains(raw, "/") {
+		ip, ipNet, err := net.ParseCIDR(raw)
+		if err == nil {
+			return ip, subnetFromIPNet(ipNet)
+		}
+	}
+	return net.ParseIP(raw), ""
 }
 
 // classifyInterfaceSpeed heuristically determines the speed class of a network
@@ -1057,28 +1070,19 @@ func parseDiskutilStorageClass(out string) string {
 }
 
 func localStorageClassLinux() string {
-	// Find the root device
-	out, err := exec.Command("bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null | sed 's/[0-9]*$//' | sed 's|/dev/||'`).Output()
+	out, err := exec.Command("bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null`).Output()
 	if err != nil {
 		return "unknown"
 	}
-	dev := strings.TrimSpace(string(out))
-	if dev == "" {
-		return "unknown"
-	}
-	// Strip partition suffix for NVMe (e.g. nvme0n1p2 → nvme0n1)
-	if strings.HasPrefix(dev, "nvme") {
-		if idx := strings.LastIndex(dev, "p"); idx > 0 {
-			dev = dev[:idx]
-		}
-		return "nvme"
-	}
-	return parseLinuxRotational(dev)
+	return resolveLinuxStorageClass(
+		strings.TrimSpace(string(out)),
+		localLinuxBlockDeviceInfo,
+		localLinuxRotational,
+	)
 }
 
 func parseLinuxRotational(dev string) string {
-	// Strip partition numbers for standard devices (sda2 → sda)
-	base := strings.TrimRight(dev, "0123456789")
+	base := fallbackLinuxBlockBase(dev)
 	if base == "" {
 		return "unknown"
 	}
@@ -1094,6 +1098,182 @@ func parseLinuxRotational(dev string) string {
 	default:
 		return "unknown"
 	}
+}
+
+type linuxBlockDeviceInfo struct {
+	Name   string `json:"name"`
+	PKName string `json:"pkname"`
+	Type   string `json:"type"`
+	ROTA   *int   `json:"rota"`
+}
+
+type linuxBlockDevicesResponse struct {
+	Blockdevices []linuxBlockDeviceInfo `json:"blockdevices"`
+}
+
+func resolveLinuxStorageClass(
+	source string,
+	query func(string) (linuxBlockDeviceInfo, error),
+	fallbackReadRotational func(string) (string, error),
+) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "unknown"
+	}
+
+	current := source
+	seen := map[string]struct{}{}
+	for hops := 0; hops < 8 && current != ""; hops++ {
+		if _, ok := seen[current]; ok {
+			break
+		}
+		seen[current] = struct{}{}
+
+		info, err := query(current)
+		if err != nil {
+			break
+		}
+
+		if strings.HasPrefix(blockDeviceName(info.Name), "nvme") {
+			return "nvme"
+		}
+		if info.Type == "disk" {
+			return classifyLinuxBlockDevice(info)
+		}
+
+		parent := parentDevicePath(info.PKName)
+		if parent == "" {
+			break
+		}
+		current = parent
+	}
+
+	return fallbackLinuxStorageClass(source, fallbackReadRotational)
+}
+
+func classifyLinuxBlockDevice(info linuxBlockDeviceInfo) string {
+	if strings.HasPrefix(blockDeviceName(info.Name), "nvme") {
+		return "nvme"
+	}
+	if info.ROTA == nil {
+		return "unknown"
+	}
+	switch *info.ROTA {
+	case 0:
+		return "ssd"
+	case 1:
+		return "hdd"
+	default:
+		return "unknown"
+	}
+}
+
+func parseLinuxBlockDeviceInfo(out string) (linuxBlockDeviceInfo, error) {
+	var resp linuxBlockDevicesResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return linuxBlockDeviceInfo{}, err
+	}
+	if len(resp.Blockdevices) == 0 {
+		return linuxBlockDeviceInfo{}, fmt.Errorf("lsblk returned no block devices")
+	}
+	return resp.Blockdevices[0], nil
+}
+
+func localLinuxBlockDeviceInfo(device string) (linuxBlockDeviceInfo, error) {
+	out, err := exec.Command("lsblk", "-J", "-n", "-p", "-o", "NAME,PKNAME,TYPE,ROTA", device).Output()
+	if err != nil {
+		return linuxBlockDeviceInfo{}, err
+	}
+	return parseLinuxBlockDeviceInfo(string(out))
+}
+
+func localLinuxRotational(device string) (string, error) {
+	base := fallbackLinuxBlockBase(device)
+	if base == "" {
+		return "", fmt.Errorf("no block device base for %q", device)
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/sys/block/%s/queue/rotational", base))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func fallbackLinuxStorageClass(source string, readRotational func(string) (string, error)) string {
+	base := fallbackLinuxBlockBase(source)
+	if base == "" {
+		return "unknown"
+	}
+	if strings.HasPrefix(base, "nvme") {
+		return "nvme"
+	}
+	rot, err := readRotational(base)
+	if err != nil {
+		return "unknown"
+	}
+	switch strings.TrimSpace(rot) {
+	case "0":
+		return "ssd"
+	case "1":
+		return "hdd"
+	default:
+		return "unknown"
+	}
+}
+
+func fallbackLinuxBlockBase(device string) string {
+	base := blockDeviceName(device)
+	if base == "" {
+		return ""
+	}
+
+	switch {
+	case strings.HasPrefix(base, "nvme"), strings.HasPrefix(base, "mmcblk"):
+		if idx := strings.LastIndex(base, "p"); idx > 0 && hasOnlyDigits(base[idx+1:]) {
+			return base[:idx]
+		}
+		return base
+	case strings.HasPrefix(base, "loop"), strings.HasPrefix(base, "dm-"):
+		return base
+	default:
+		trimmed := strings.TrimRight(base, "0123456789")
+		if trimmed == "" {
+			return base
+		}
+		return trimmed
+	}
+}
+
+func blockDeviceName(device string) string {
+	device = strings.TrimSpace(device)
+	if device == "" {
+		return ""
+	}
+	device = strings.TrimPrefix(device, "/dev/")
+	return filepath.Base(device)
+}
+
+func parentDevicePath(pkName string) string {
+	pkName = strings.TrimSpace(pkName)
+	if pkName == "" {
+		return ""
+	}
+	if strings.HasPrefix(pkName, "/dev/") {
+		return pkName
+	}
+	return filepath.Join("/dev", filepath.Base(pkName))
+}
+
+func hasOnlyDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Battery / Thermal Detection ---
