@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -89,6 +90,19 @@ func decodeStrict(data []byte, cfg *Config) error {
 		return err
 	}
 	return fmt.Errorf("multiple YAML documents are not supported")
+}
+
+// FindNode returns the configuration for the specified node name.
+func (c *Config) FindNode(name string) (NodeConfig, bool) {
+	if c == nil {
+		return NodeConfig{}, false
+	}
+	for _, n := range c.Nodes {
+		if strings.EqualFold(n.Name, name) {
+			return n, true
+		}
+	}
+	return NodeConfig{}, false
 }
 
 // Validate checks that all required fields are present.

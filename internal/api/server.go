@@ -8,24 +8,20 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
-	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
-	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
-	"github.com/toasterbook88/axis/internal/transport"
 )
 
 func DefaultAddr() string {
@@ -357,7 +353,49 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 		defer cancel()
 
-		resp, err := runTask(ctx, req)
+		resp := RunResponse{
+			Description: req.Description,
+			Mode:        req.Mode,
+		}
+
+		rc, err := loadRunnerContext(r.Context())
+		if err != nil {
+			resp.Error = err.Error()
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+
+		rtCtx := &runtimectx.Context{
+			Config:   rc.cfg,
+			Snapshot: rc.snap,
+			State:    rc.st,
+			Skills:   rc.skillStore,
+		}
+
+		guardedReq := execution.GuardedExecutionRequest{
+			Description: req.Description,
+			Mode:        req.Mode,
+			Confirm:     req.Confirm,
+		}
+
+		res, err := execution.RunGuarded(ctx, rtCtx, guardedReq)
+
+		resp.OK = res.OK
+		resp.Intent = res.Intent
+		resp.Command = res.Command
+		resp.Node = res.Node
+		resp.FitScore = res.FitScore
+		resp.IsLocal = res.IsLocal
+		resp.Reasoning = res.Reasoning
+		resp.Blocked = res.Blocked
+		resp.BlockReason = res.BlockReason
+		resp.DumbScore = res.DumbScore
+		resp.Output = res.Output
+		resp.Error = res.Error
+		resp.ExitCode = res.ExitCode
+		resp.SnapshotStatus = res.SnapshotStatus
+		resp.Summary = res.Summary
+
 		if err != nil {
 			resp.OK = false
 			if resp.Error == "" {
@@ -373,12 +411,6 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 
 var loadLiveRuntime = runtimectx.Load
 
-var runLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command) // codeql[go/command-injection] - protected by UDS socket, bearer token, confirm=YES, safety.Check()
-	cmd.Env = env
-	return cmd.CombinedOutput()
-}
-
 func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 	rt, err := loadLiveRuntime(ctx)
 	if err != nil {
@@ -390,243 +422,6 @@ func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 		st:         rt.State,
 		skillStore: rt.Skills,
 	}, nil
-}
-
-func resolveIntent(description, mode string, skillStore *skills.Store) (runIntent, error) {
-	var intent runIntent
-	if skillStore != nil {
-		if skill, ok := skillStore.BestMatch(description); ok {
-			skillCopy := skill
-			intent.matchedSkill = &skillCopy
-		}
-	}
-	if script, ok := scripts.GetBestScript(description); ok {
-		scriptCopy := script
-		intent.matchedScript = &scriptCopy
-	}
-
-	switch mode {
-	case "script":
-		if intent.matchedScript != nil {
-			intent.command = intent.matchedScript.Command
-			intent.label = fmt.Sprintf("fallback script %q", intent.matchedScript.Name)
-			return intent, nil
-		}
-		if intent.matchedSkill != nil {
-			intent.command = intent.matchedSkill.Command
-			intent.label = fmt.Sprintf("learned skill %q", intent.matchedSkill.ID)
-			return intent, nil
-		}
-		return runIntent{}, fmt.Errorf("no known script or learned skill matches %q", description)
-	case "exec":
-		intent.command = description
-		intent.label = "raw command"
-		return intent, nil
-	default:
-		return runIntent{}, fmt.Errorf("unsupported mode %q", mode)
-	}
-}
-
-func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
-	resp := RunResponse{
-		Description: req.Description,
-		Mode:        req.Mode,
-	}
-
-	rc, err := loadRunnerContext(ctx)
-	if err != nil {
-		resp.Error = err.Error()
-		return resp, err
-	}
-	resp.SnapshotStatus = rc.snap.Status
-	resp.Summary = &rc.snap.Summary
-
-	intent, err := resolveIntent(req.Description, req.Mode, rc.skillStore)
-	if err != nil {
-		resp.Error = err.Error()
-		return resp, err
-	}
-	resp.Intent = intent.label
-	resp.Command = intent.command
-
-	reqs := placement.InferRequirements(req.Description)
-	if intent.matchedScript != nil {
-		reqs.RequiredTools = append([]string(nil), intent.matchedScript.RequiredTools...)
-		if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
-			reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
-		}
-	}
-	if req.Mode == "exec" && len(reqs.RequiredTools) > 0 {
-		filtered := reqs.RequiredTools[:0]
-		for _, tool := range reqs.RequiredTools {
-			if !strings.EqualFold(tool, "ollama") {
-				filtered = append(filtered, tool)
-			}
-		}
-		reqs.RequiredTools = append([]string(nil), filtered...)
-	}
-
-	decision := placement.SelectBestNode(reqs, rc.snap.Nodes, rc.st)
-	resp.Reasoning = decision.Reasoning
-	resp.Node = decision.Node
-	resp.FitScore = decision.FitScore
-	resp.IsLocal = decision.IsLocal
-
-	if !decision.OK {
-		resp.Error = "no suitable node found"
-		return resp, fmt.Errorf("no suitable node found")
-	}
-
-	reservationMB := reqs.MinFreeRAMMB + 1024
-	if !daemon.CanReserve(rc.snap, rc.st, decision.Node, reservationMB) {
-		resp.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
-		return resp, fmt.Errorf("reservation cap exceeded")
-	}
-
-	var targetNode models.NodeFacts
-	for _, n := range rc.snap.Nodes {
-		if n.Name == decision.Node {
-			targetNode = n
-			break
-		}
-	}
-
-	k := knowledge.Build(rc.snap, rc.st, decision.Node)
-	if block := safety.Check(k, intent.command, rc.skillStore.IsKnownBad); block.Blocked {
-		resp.Blocked = true
-		resp.BlockReason = block.Reason
-		resp.DumbScore = block.Score
-		resp.Error = block.Reason
-		return resp, nil
-	}
-
-	contextJSON, err := knowledge.ExecutionContextJSON(rc.snap, rc.st, decision, req.Description, intent.matchedScript, intent.matchedSkill)
-	if err != nil {
-		resp.Error = err.Error()
-		return resp, err
-	}
-
-	if models.IsLocalNode(targetNode) {
-		contextFile, err := os.CreateTemp("", "axis-knows-*.json")
-		if err != nil {
-			resp.Error = err.Error()
-			return resp, err
-		}
-		defer os.Remove(contextFile.Name())
-		if _, err := contextFile.Write(contextJSON); err != nil {
-			_ = contextFile.Close()
-			resp.Error = err.Error()
-			return resp, err
-		}
-		if err := contextFile.Close(); err != nil {
-			resp.Error = err.Error()
-			return resp, err
-		}
-
-		env := append(os.Environ(),
-			"AXIS_CONTEXT_FILE="+contextFile.Name(),
-			"BEST_NODE="+decision.Node,
-		)
-		if rc.st != nil {
-			execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
-			if err != nil {
-				resp.Error = err.Error()
-				return resp, err
-			}
-			defer func() {
-				if err := rc.st.ReleaseTask(decision.Node, execID, reservationMB); err != nil && resp.Error == "" {
-					resp.Error = err.Error()
-				}
-			}()
-		}
-		out, err := runLocalShell(ctx, intent.command, env)
-		resp.Output = string(out)
-		resp.ExitCode = exitCode(err)
-		if err != nil {
-			resp.Error = err.Error()
-			rc.skillStore.RecordFailure(req.Description, fmt.Sprintf("failed with code %d", resp.ExitCode))
-			_ = rc.skillStore.Save()
-			return resp, err
-		}
-		recordSuccess(rc, req.Description, intent.command, decision.Node)
-		resp.OK = true
-		return resp, nil
-	}
-
-	targetConfig, ok := findNodeConfig(rc.cfg, decision.Node)
-	if !ok {
-		resp.Error = fmt.Sprintf("node %q not found in config", decision.Node)
-		return resp, fmt.Errorf("%s", resp.Error)
-	}
-
-	executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
-	defer executor.Close()
-
-	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
-	writeJSONCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
-	if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
-		resp.Error = err.Error()
-		resp.ExitCode = 1
-		return resp, err
-	}
-
-	if rc.st != nil {
-		execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
-		if err != nil {
-			resp.Error = err.Error()
-			return resp, err
-		}
-		defer func() {
-			if err := rc.st.ReleaseTask(decision.Node, execID, reservationMB); err != nil && resp.Error == "" {
-				resp.Error = err.Error()
-			}
-		}()
-	}
-
-	quotedCmd := fmt.Sprintf(
-		"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -lc %s",
-		shellescape.Quote(decision.Node),
-		shellescape.Quote(remoteContextPath),
-		shellescape.Quote(remoteContextPath),
-		shellescape.Quote(intent.command),
-	)
-	out, err := executor.Run(ctx, quotedCmd)
-	resp.Output = out
-	resp.ExitCode = exitCode(err)
-	if err != nil {
-		resp.Error = err.Error()
-		rc.skillStore.RecordFailure(req.Description, fmt.Sprintf("failed with code %d", resp.ExitCode))
-		_ = rc.skillStore.Save()
-		return resp, err
-	}
-
-	recordSuccess(rc, req.Description, intent.command, decision.Node)
-	resp.OK = true
-	return resp, nil
-}
-
-func recordSuccess(rc *runnerContext, description, command, node string) {
-	rc.skillStore.RecordSuccess(description, command, node)
-	_ = rc.skillStore.Save()
-}
-
-func findNodeConfig(cfg *config.Config, name string) (config.NodeConfig, bool) {
-	for _, n := range cfg.Nodes {
-		if strings.EqualFold(n.Name, name) {
-			return n, true
-		}
-	}
-	return config.NodeConfig{}, false
-}
-
-func exitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode()
-	}
-	return 1
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
