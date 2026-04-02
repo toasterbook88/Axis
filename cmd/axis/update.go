@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,8 +50,8 @@ func updateCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update the axis binary to the latest release",
-		Long: "Check GitHub Releases for a newer version of axis and install it in-place.\n\n" +
+		Short: "Update the axis binary to the latest published release",
+		Long: "Check GitHub Releases for a newer published version of axis and install it in-place.\n\n" +
 			"By default, updates the current binary AND any other axis binary found in PATH.\n" +
 			"Use --path to update a specific binary.\n" +
 			"Use --check to report whether an update is available without downloading.",
@@ -87,24 +88,93 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 	latest := strings.TrimPrefix(rel.TagName, "v")
 	fmt.Fprintf(out, "Latest version:  v%s\n", latest)
 
+	relation, err := compareReleaseVersions(current, latest)
+	if err != nil {
+		return fmt.Errorf("comparing versions: %w", err)
+	}
+
 	if checkOnly {
-		if latest == current {
+		switch relation {
+		case 0:
 			fmt.Fprintf(out, "Already up to date.\n")
-		} else {
+		case -1:
 			fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
 			fmt.Fprintf(out, "Run `axis update` (without --check) to install.\n")
+		case 1:
+			fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
+			fmt.Fprintf(out, "No update available; refusing to suggest a downgrade.\n")
 		}
 		return nil
 	}
 
-	if latest == current {
+	switch relation {
+	case 0:
 		fmt.Fprintf(out, "Already up to date.\n")
-	} else {
+	case -1:
 		fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
+	case 1:
+		fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
+		fmt.Fprintf(out, "Refusing to downgrade.\n")
+		return nil
 	}
 
 	// Always install: handles both new versions and stale PATH copies.
 	return installRelease(cmd, rel, latest, targetPath)
+}
+
+func compareReleaseVersions(current, latest string) (int, error) {
+	currentParts, err := parseReleaseVersion(current)
+	if err != nil {
+		return 0, fmt.Errorf("parse current version %q: %w", current, err)
+	}
+	latestParts, err := parseReleaseVersion(latest)
+	if err != nil {
+		return 0, fmt.Errorf("parse latest version %q: %w", latest, err)
+	}
+
+	maxLen := len(currentParts)
+	if len(latestParts) > maxLen {
+		maxLen = len(latestParts)
+	}
+	for i := 0; i < maxLen; i++ {
+		var currentPart, latestPart int
+		if i < len(currentParts) {
+			currentPart = currentParts[i]
+		}
+		if i < len(latestParts) {
+			latestPart = latestParts[i]
+		}
+		switch {
+		case currentPart < latestPart:
+			return -1, nil
+		case currentPart > latestPart:
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
+func parseReleaseVersion(raw string) ([]int, error) {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(raw, "v"))
+	trimmed = strings.SplitN(trimmed, "-", 2)[0]
+	trimmed = strings.SplitN(trimmed, "+", 2)[0]
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty version")
+	}
+
+	parts := strings.Split(trimmed, ".")
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			return nil, fmt.Errorf("invalid version segment in %q", raw)
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, nil
 }
 
 // findAxisBinaries discovers all unique axis binary paths to update.

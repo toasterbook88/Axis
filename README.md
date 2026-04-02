@@ -10,7 +10,7 @@
 
 ```bash
 # Install
-go install github.com/toasterbook88/axis/cmd/axis@v0.7.0
+go install github.com/toasterbook88/axis/cmd/axis@latest
 
 # Inspect the local machine
 axis facts
@@ -86,7 +86,7 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 | Feature | Details |
 | --- | --- |
-| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk (total/free + storage class: nvme/ssd/hdd), structured GPU info (vendor/model/VRAM/capabilities), network addresses (with interface name, subnet, speed class), battery %, thermal state, and additive memory-topology / pressure-source metadata where available |
+| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk (total/free + storage class: nvme/ssd/hdd), structured GPU info (vendor/model/VRAM/capabilities), network addresses (with interface name, subnet, heuristic speed class), battery %, thermal state, and additive memory-topology / pressure-source metadata where available |
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc`, plus probe-verified local `apple-foundation-models` on eligible Apple Silicon hosts running macOS 26 or later |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
 | **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
@@ -100,17 +100,17 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 **Using `go install` (recommended):**
 
 ```bash
-go install github.com/toasterbook88/axis/cmd/axis@v0.7.0
+go install github.com/toasterbook88/axis/cmd/axis@latest
 ```
 
-`@latest` now resolves to the newest tagged release. For reproducible installs, pin an explicit tag such as `@v0.7.0`.
+`@latest` resolves to the newest published tagged release. If you need unreleased `main`-branch changes, build from source from a specific commit instead of pinning an unpublished tag.
 
 **Tagged release pipeline:**
 
 - `v*` tags are published through GitHub Actions and GoReleaser
 - Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
 - The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
-- The current release is [`v0.7.0`](https://github.com/toasterbook88/axis/releases/tag/v0.7.0)
+- Published releases are listed on the [GitHub Releases page](https://github.com/toasterbook88/axis/releases)
 
 **Security hygiene:**
 

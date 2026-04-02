@@ -1,14 +1,21 @@
 # AXIS Current State
 
-Last reviewed: 2026-07-21 EDT
-Branch: `phase-a`
-Audit base: Phase A (Trust and Foundations)
-
 This document is the fastest way to understand what AXIS actually is today.
 
 When this file disagrees with older design docs, trust the live code first, then this file, then the older phase/spec material.
 
 Truth rule: no generated output may present itself as cluster truth unless it is backed by a real snapshot or live probe.
+
+## Generated Facts
+
+Refresh this section with `./hack/refresh-current-state.sh`.
+
+<!-- BEGIN GENERATED CURRENT STATE FACTS -->
+- Refreshed: 2026-04-01 EDT
+- Repo version: `0.7.0`
+- Latest published GitHub release: `v0.4.0` (2026-04-01T12:21:15Z)
+- Release truth: repo version is ahead of the latest published release
+<!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
 
@@ -42,10 +49,10 @@ The live repo currently contains:
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
 - Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference
-- Network topology enrichment: interface name, CIDR subnet, and speed class (wireguard, tailscale, netbird, thunderbolt, wifi, gigabit, etc.)
+- Network topology enrichment: interface name, CIDR subnet, and heuristic speed class (wireguard, tailscale, netbird, thunderbolt, wifi, gigabit, etc.)
+- Basic warm-model locality is already live for Ollama via `Listening`, `Running`, and loaded `Models`; richer cross-backend resident-model scoring is still roadmap work
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- A live `v0.7.0` GitHub release with published `darwin`/`linux` archives plus `checksums.txt`
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 
@@ -57,7 +64,7 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
-| `axis version` | Print version | Version is `0.5.0`; shows commit, build date, go version, platform |
+| `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
 | `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
@@ -80,7 +87,7 @@ Top-level commands currently registered in the binary:
 
 | Package | Role | Current Maturity |
 | --- | --- | --- |
-| `internal/ui` | Terminal output: colors, tables, spinners, errors, help templates | Well-tested (84.9% coverage); auto-disables on non-TTY or `NO_COLOR` |
+| `internal/ui` | Terminal output: colors, tables, spinners, errors, help templates | Well-tested; auto-disables on non-TTY or `NO_COLOR` |
 | `internal/buildinfo` | Version, commit, date, go version for ldflags injection | Small, stable |
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small, stable, and now rejects unknown YAML fields so config typos fail fast |
@@ -106,27 +113,20 @@ Top-level commands currently registered in the binary:
 
 ## Verification Snapshot
 
-Audit commands run against this repo state:
+Refresh this section with `./hack/refresh-current-state.sh`.
 
+<!-- BEGIN GENERATED CURRENT STATE VERIFICATION -->
 - `go test ./... -count=1` -> passes
 - `go test -race ./... -count=1` -> passes
 - `go build ./...` -> passes
-- `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` -> passes; no reachable vulnerabilities found in AXIS code
-- `go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean` -> passes; writes snapshot archives plus `checksums.txt` under `dist/`
-- `go build -o /tmp/axis ./cmd/axis` -> passes
-- `/tmp/axis status --cached --cache-addr 127.0.0.1:42433` -> returns wrapped snapshot with `source: "daemon-cache"`
-- `/tmp/axis task place --cached --cache-addr 127.0.0.1:42437 "test inference"` -> returns placement output sourced from `daemon-cache`
-- `/tmp/axis task context --cached --cache-addr 127.0.0.1:42438 "test inference"` -> returns prompt block with `Source: daemon-cache`
-- `/tmp/axis daemon refresh --cache-addr 127.0.0.1:42437` -> forces a fresh cached snapshot immediately
-- `/tmp/axis daemon invalidate --cache-addr 127.0.0.1:42434` -> returns `AXIS daemon cache invalidated`
-- `go test ./... -cover` -> passes (updated per-package snapshot below)
-- `./hack/coverage-check.sh` -> passes (`internal/knowledge` `90.9%`, `internal/api` `50.9%`, `internal/mcp` `46.6%`, `internal/ui` `84.9%`, total gate `67.1%`)
-
-Coverage gaps called out by `go test ./... -cover`:
-
-- v1 package gates now pass: `internal/knowledge` `90.9%`, `internal/api` `50.9%`, `internal/mcp` `46.6%`, `internal/ui` `84.9%`
-- direct coverage is now also strong in `internal/persist` `100.0%` and `internal/runtimectx` `92.6%`
-- remaining lower-coverage surfaces: `cmd/axis`, `internal/facts`
+- `./hack/coverage-check.sh` -> passes
+  - Coverage gates:
+    - `coverage gate passed: internal/knowledge 90.9% >= 90.0%`
+    - `coverage gate passed: internal/api 50.9% >= 50.0%`
+    - `coverage gate passed: internal/mcp 46.6% >= 35.0%`
+    - `coverage gate passed: internal/ui 100.0% >= 80.0%`
+    - `coverage gate passed: total 68.3% >= 45.0%`
+<!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
 
@@ -156,6 +156,7 @@ Areas where the live repo has moved past the older docs/specs:
 - Long-context task hints can now prefer graded TurboQuant-capable backends without changing the default placement contract for ordinary tasks
 - Execution paths can now carry TurboQuant hints into local and remote commands, and can add an observed-state-gated ephemeral Nix helper wrapper when the selected node proves it has `nix` plus a trusted package mapping
 - Facts and placement now carry additive unified-memory and runtime-pressure metadata instead of relying only on coarse free-RAM pressure guesses
+- Basic Ollama warm-state scoring is already live; broader resident-model and empirical-locality work is still future-facing
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
@@ -185,6 +186,7 @@ In practical terms:
 - Chat now uses structured `/api/chat` with a rolling context window and cluster-aware system prompt, but output remains advisory
 - Agent tool-calling loop has safety gates and adversarial error recovery, but is still subordinate to observed state
 - Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
+- Network `speed_class` remains heuristic metadata today, not measured throughput or latency
 - UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
 - Safety blocking is substring-based and can both over-block and under-block
 - Built-in script prerequisites now model `jq` explicitly, but broader shell assumptions are still under-modeled
