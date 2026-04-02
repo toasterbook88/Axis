@@ -4,9 +4,9 @@ Instructions for AI agents (Claude Code, GitHub Copilot, MCP consumers)
 working in this repository.
 
 For the canonical agent rules see also
-[`.github/copilot-instructions.md`](.github/copilot-instructions.md) and
-[`CLAUDE.md`](CLAUDE.md). This file exists as the single orientation entry
-point; where it conflicts with those files, the more specific file wins.
+[`.github/copilot-instructions.md`](.github/copilot-instructions.md). This file
+exists as the single orientation entry point; where it conflicts with that
+file, the more specific file wins.
 
 ## Truth Rule
 
