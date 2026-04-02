@@ -38,6 +38,7 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           clean: true
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v6.4.0
@@ -62,12 +63,17 @@ jobs:
         run: ./hack/verify-repo-truth.sh
 
       - name: Build AXIS binary for facts smoke
-        run: go build -o /tmp/axis ./cmd/axis
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+        run: go build -o "$AXIS_BIN" ./cmd/axis
 
       - name: Facts JSON smoke
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+          FACTS_OUT: ${{ runner.temp }}/axis-facts-${{ github.run_id }}.json
         run: |
-          /tmp/axis facts --format json >/tmp/axis-facts.json
-          jq '.node.os, .node.arch' /tmp/axis-facts.json >/dev/null
+          "$AXIS_BIN" facts --format json >"$FACTS_OUT"
+          jq '.node.os, .node.arch' "$FACTS_OUT" >/dev/null
 
       - name: Cleanup worktree
         if: always()
@@ -87,6 +93,7 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           clean: true
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v6.4.0
@@ -103,14 +110,19 @@ jobs:
         run: go build ./...
 
       - name: Build AXIS binary for facts smoke
-        run: go build -o /tmp/axis ./cmd/axis
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+        run: go build -o "$AXIS_BIN" ./cmd/axis
 
       - name: Facts JSON smoke
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+          FACTS_OUT: ${{ runner.temp }}/axis-facts-${{ github.run_id }}.json
         run: |
-          /tmp/axis facts --format json >/tmp/axis-facts.json
+          "$AXIS_BIN" facts --format json >"$FACTS_OUT"
           python3 - <<'PY'
-          import json
-          with open('/tmp/axis-facts.json', 'r', encoding='utf-8') as f:
+          import json, os
+          with open(os.environ['FACTS_OUT'], 'r', encoding='utf-8') as f:
               data = json.load(f)
           assert data['node']['os'] == 'darwin', data['node']['os']
           PY
