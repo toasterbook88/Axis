@@ -51,7 +51,7 @@ for tag in "${release_refs[@]}"; do
 done
 
 while IFS= read -r line; do
-  claim_tag="$(printf '%s\n' "$line" | sed -n 's/.*\(v[0-9][0-9A-Za-z.+-]*\).*/\1/p')"
+  claim_tag="$(printf '%s\n' "$line" | rg -o 'v[0-9]+\.[0-9]+\.[0-9]+([-.+][A-Za-z0-9.]+)?' | head -n1)"
   if [[ -n "$claim_tag" && "$claim_tag" != "$latest_release_tag" ]]; then
     printf 'current-release claim %s does not match latest published release %s\n' "$claim_tag" "$latest_release_tag" >&2
     exit 1
