@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/buildinfo"
+	"github.com/toasterbook88/axis/internal/versioncmp"
 )
 
 const (
@@ -49,10 +50,11 @@ func updateCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update the axis binary to the latest release",
-		Long: "Check GitHub Releases for a newer version of axis and install it in-place.\n\n" +
-			"By default, updates the current binary AND any other axis binary found in PATH.\n" +
-			"Use --path to update a specific binary.\n" +
+		Short: "Update the axis binary to the latest published release",
+		Long: "Check GitHub Releases for a newer published version of axis and install it in-place.\n\n" +
+			"By default, when a newer release is available, updates the current binary AND any other axis binary found in PATH.\n" +
+			"If the current binary is newer than the latest published release, no binaries will be changed unless --path is given explicitly.\n" +
+			"Use --path to update a specific binary (allowed even when the current build is newer).\n" +
 			"Use --check to report whether an update is available without downloading.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpdate(cmd, checkOnly, targetPath)
@@ -87,24 +89,45 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 	latest := strings.TrimPrefix(rel.TagName, "v")
 	fmt.Fprintf(out, "Latest version:  v%s\n", latest)
 
+	relation, err := compareReleaseVersions(current, latest)
+	if err != nil {
+		return fmt.Errorf("comparing versions: %w", err)
+	}
+
 	if checkOnly {
-		if latest == current {
+		switch relation {
+		case 0:
 			fmt.Fprintf(out, "Already up to date.\n")
-		} else {
+		case -1:
 			fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
 			fmt.Fprintf(out, "Run `axis update` (without --check) to install.\n")
+		case 1:
+			fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
+			fmt.Fprintf(out, "No update available; refusing to suggest a downgrade.\n")
 		}
 		return nil
 	}
 
-	if latest == current {
+	switch relation {
+	case 0:
 		fmt.Fprintf(out, "Already up to date.\n")
-	} else {
+	case -1:
 		fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
+	case 1:
+		fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
+		if targetPath == "" {
+			fmt.Fprintf(out, "Refusing to downgrade the currently running binary.\n")
+			return nil
+		}
+		fmt.Fprintf(out, "Refusing to downgrade the currently running binary, but will update requested path(s) to the latest published release.\n")
 	}
 
 	// Always install: handles both new versions and stale PATH copies.
 	return installRelease(cmd, rel, latest, targetPath)
+}
+
+func compareReleaseVersions(current, latest string) (int, error) {
+	return versioncmp.Compare(current, latest)
 }
 
 // findAxisBinaries discovers all unique axis binary paths to update.

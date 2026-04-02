@@ -101,6 +101,61 @@ func TestUpdateCheckFlag(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckCurrentBuildNewerThanLatestPublishedRelease(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghRelease{TagName: "v0.4.0"})
+	}))
+	defer srv.Close()
+
+	prev := updateAPIBase
+	prevGet := updateGetFunc
+	defer func() { updateAPIBase = prev; updateGetFunc = prevGet }()
+
+	updateAPIBase = srv.URL
+	updateGetFunc = srv.Client().Get
+
+	cmd := updateCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--check"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Current build is newer than the latest published release") {
+		t.Fatalf("expected newer-than-release message, got: %s", output)
+	}
+	if strings.Contains(output, "Update available") {
+		t.Fatalf("expected no update prompt, got: %s", output)
+	}
+}
+
+func TestUpdateRefusesDowngradeInstall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghRelease{TagName: "v0.4.0"})
+	}))
+	defer srv.Close()
+
+	prev := updateAPIBase
+	prevGet := updateGetFunc
+	defer func() { updateAPIBase = prev; updateGetFunc = prevGet }()
+
+	updateAPIBase = srv.URL
+	updateGetFunc = srv.Client().Get
+
+	cmd := updateCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Refusing to downgrade the currently running binary.") {
+		t.Fatalf("expected downgrade refusal, got: %s", output)
+	}
+}
+
 func TestUpdateInstall(t *testing.T) {
 	fakeBinary := []byte("#!/bin/sh\necho axis-new\n")
 
@@ -177,8 +232,7 @@ func TestExtractBinaryNotFound(t *testing.T) {
 func TestVerifyChecksum(t *testing.T) {
 	data := []byte("hello world")
 	name := "axis_1.0.0_linux_amd64.tar.gz"
-	sum := sha256.Sum256(data)
-	csLine := hex.EncodeToString(sum[:]) + "  " + name
+	csLine := checksumLine(data, name)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, csLine)
@@ -221,5 +275,35 @@ func TestSafeGetRejectsUnknownHost(t *testing.T) {
 	_, err := safeGet("https://evil.example.com/axis")
 	if err == nil || !strings.Contains(err.Error(), "not an allowed") {
 		t.Errorf("expected disallowed host error, got %v", err)
+	}
+}
+
+func TestCompareReleaseVersions(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		latest  string
+		want    int
+	}{
+		{name: "equal", current: "0.7.0", latest: "0.7.0", want: 0},
+		{name: "newer available", current: "0.7.0", latest: "0.8.0", want: -1},
+		{name: "current newer", current: "0.7.0", latest: "0.4.0", want: 1},
+		{name: "trim v prefix", current: "v0.7.0", latest: "0.7.0", want: 0},
+		{name: "compare missing patch", current: "0.7", latest: "0.7.1", want: -1},
+		{name: "prerelease to final", current: "1.0.0-rc1", latest: "1.0.0", want: -1},
+		{name: "final newer than prerelease", current: "1.0.0", latest: "1.0.0-rc1", want: 1},
+		{name: "alpha before beta", current: "1.0.0-alpha", latest: "1.0.0-beta", want: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := compareReleaseVersions(tt.current, tt.latest)
+			if err != nil {
+				t.Fatalf("compareReleaseVersions returned error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("compareReleaseVersions(%q, %q) = %d, want %d", tt.current, tt.latest, got, tt.want)
+			}
+		})
 	}
 }
