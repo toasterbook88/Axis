@@ -1,0 +1,122 @@
+name: Hardware Validation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "cmd/axis/**"
+      - "internal/facts/**"
+      - "internal/placement/**"
+      - "internal/transport/**"
+      - "internal/buildinfo/**"
+      - "internal/models/**"
+      - "hack/**"
+      - "README.md"
+      - "docs/current-state.md"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: hardware-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-hardware-validation:
+    name: Linux Hardware Validation
+    runs-on: [self-hosted, Linux, X64, axis, trusted]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          clean: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./... -count=1
+
+      - name: Build
+        run: go build ./...
+
+      - name: Coverage gates
+        run: ./hack/coverage-check.sh
+
+      - name: Repo truth guardrails
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./hack/verify-repo-truth.sh
+
+      - name: Build AXIS binary for facts smoke
+        run: go build -o /tmp/axis ./cmd/axis
+
+      - name: Facts JSON smoke
+        run: |
+          /tmp/axis facts --format json >/tmp/axis-facts.json
+          jq '.node.os, .node.arch' /tmp/axis-facts.json >/dev/null
+
+      - name: Cleanup worktree
+        if: always()
+        run: |
+          git reset --hard HEAD
+          git clean -ffdx
+
+  macos-hardware-validation:
+    name: macOS Hardware Validation
+    runs-on: [self-hosted, macOS, ARM64, axis, trusted]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          clean: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run targeted Darwin validation tests
+        run: go test ./internal/facts ./internal/placement ./internal/transport -count=1
+
+      - name: Build
+        run: go build ./...
+
+      - name: Build AXIS binary for facts smoke
+        run: go build -o /tmp/axis ./cmd/axis
+
+      - name: Facts JSON smoke
+        run: |
+          /tmp/axis facts --format json >/tmp/axis-facts.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/axis-facts.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data['node']['os'] == 'darwin', data['node']['os']
+          PY
+
+      - name: Cleanup worktree
+        if: always()
+        run: |
+          git reset --hard HEAD
+          git clean -ffdx
