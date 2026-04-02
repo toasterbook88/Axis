@@ -38,8 +38,8 @@ while IFS= read -r tag; do
   [[ -n "$tag" ]] && release_refs+=("$tag")
 done < <(
   {
-    rg -o '@v[0-9]+\.[0-9]+\.[0-9]+([-.+][A-Za-z0-9.]+)?' README.md docs/current-state.md | sed 's/^@//'
-    rg -o 'releases/tag/v[0-9]+\.[0-9]+\.[0-9]+([-.+][A-Za-z0-9.]+)?' README.md docs/current-state.md | sed 's#releases/tag/##'
+    rg --no-filename -o '@v[0-9]+\.[0-9]+\.[0-9]+([-.+][A-Za-z0-9.]+)?' README.md docs/current-state.md | sed 's/^@//'
+    rg --no-filename -o 'releases/tag/v[0-9]+\.[0-9]+\.[0-9]+\([-.+][A-Za-z0-9.]+\)\?' README.md docs/current-state.md | sed 's#releases/tag/##'
   } | sort -u
 )
 
