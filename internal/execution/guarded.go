@@ -200,6 +200,8 @@ func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node strin
 }
 
 func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (GuardedExecutionResult, error) {
+	// CRITICAL INVARIANT: All execution must go through RunGuarded.
+	// No other package may call exec.Command directly.
 	NormalizeRequest(&req)
 
 	resp := GuardedExecutionResult{
@@ -298,7 +300,7 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 		return runLocal(ctx, rt.State, skillStore, req, resp, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
 	}
 
-	targetConfig, ok := findNodeConfig(rt.Config, decision.Node)
+	targetConfig, ok := rt.Config.FindNode(decision.Node)
 	if !ok {
 		resp.Error = fmt.Sprintf("node %q not found in config", decision.Node)
 		return resp, fmt.Errorf("node %q not found in config", decision.Node)
@@ -670,17 +672,7 @@ func RemoteExecPrefix(node, contextPath string, extraEnv []string) string {
 	return strings.Join(parts, " ") + ";"
 }
 
-func findNodeConfig(cfg *config.Config, name string) (config.NodeConfig, bool) {
-	if cfg == nil {
-		return config.NodeConfig{}, false
-	}
-	for _, n := range cfg.Nodes {
-		if strings.EqualFold(n.Name, name) {
-			return n, true
-		}
-	}
-	return config.NodeConfig{}, false
-}
+
 
 func findNodeFacts(snap *models.ClusterSnapshot, name string) (models.NodeFacts, bool) {
 	if snap == nil {

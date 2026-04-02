@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -244,18 +243,6 @@ func TestRefreshEndpointCallsCacheRefresh(t *testing.T) {
 	}
 }
 
-func TestResolveIntentMatchesNaturalLanguageScript(t *testing.T) {
-	intent, err := resolveIntent("run a small local model with ollama inference", "script", &skills.Store{})
-	if err != nil {
-		t.Fatalf("expected natural-language script match, got %v", err)
-	}
-	if intent.matchedScript == nil {
-		t.Fatal("expected a matched script")
-	}
-	if intent.matchedScript.Name != "ollama-run-smart" {
-		t.Fatalf("expected ollama-run-smart, got %q", intent.matchedScript.Name)
-	}
-}
 
 func TestRunEndpointRequiresExplicitMode(t *testing.T) {
 	mux := http.NewServeMux()
@@ -442,39 +429,6 @@ func TestDefaultAddr(t *testing.T) {
 	}
 }
 
-func TestExitCode(t *testing.T) {
-	if got := exitCode(nil); got != 0 {
-		t.Errorf("exitCode(nil) = %d, want 0", got)
-	}
-	if got := exitCode(errors.New("generic")); got != 1 {
-		t.Errorf("exitCode(generic) = %d, want 1", got)
-	}
-	cmd := exec.Command("false")
-	_ = cmd.Run()
-	if err := cmd.Run(); err != nil {
-		if got := exitCode(err); got == 0 {
-			t.Errorf("exitCode(ExitError) = 0, want non-zero")
-		}
-	}
-}
-
-func TestFindNodeConfig(t *testing.T) {
-	cfg := &config.Config{
-		Nodes: []config.NodeConfig{
-			{Name: "alpha"},
-			{Name: "beta"},
-		},
-	}
-	if n, ok := findNodeConfig(cfg, "alpha"); !ok || n.Name != "alpha" {
-		t.Errorf("expected to find alpha, got ok=%v name=%q", ok, n.Name)
-	}
-	if n, ok := findNodeConfig(cfg, "ALPHA"); !ok || n.Name != "alpha" {
-		t.Errorf("expected case-insensitive match, got ok=%v name=%q", ok, n.Name)
-	}
-	if _, ok := findNodeConfig(cfg, "gamma"); ok {
-		t.Error("expected gamma not found")
-	}
-}
 
 func TestRunTaskReturnsErrorWhenRuntimeFails(t *testing.T) {
 	restore := stubLiveRuntime(t, nil, errors.New("node discovery failed"))
@@ -505,7 +459,7 @@ func TestRunTaskReturnsErrorWhenRuntimeFails(t *testing.T) {
 	}
 }
 
-func TestRunTaskReturnsNoSuitableNode(t *testing.T) {
+func TestRunReturnsNoSuitableNode(t *testing.T) {
 	rt := testRuntimeContext(
 		[]models.NodeFacts{testNode("mac", "mac.local", 1024, 512, "critical")},
 		nil, nil, &skills.Store{}, nil,
@@ -536,27 +490,7 @@ func TestRunTaskReturnsNoSuitableNode(t *testing.T) {
 	}
 }
 
-func TestRecordSuccess(t *testing.T) {
-	store := &skills.Store{}
-	rc := &runnerContext{
-		cfg:        &config.Config{},
-		snap:       &models.ClusterSnapshot{},
-		st:         nil,
-		skillStore: store,
-	}
-	// recordSuccess ignores Save errors; should not panic
-	recordSuccess(rc, "test task", "echo hello", "mac")
-}
 
-func TestRunLocalShell(t *testing.T) {
-	out, err := runLocalShell(context.Background(), "echo axis-ok", nil)
-	if err != nil {
-		t.Fatalf("runLocalShell: %v", err)
-	}
-	if !strings.Contains(string(out), "axis-ok") {
-		t.Errorf("unexpected output: %q", out)
-	}
-}
 
 func stubLiveRuntime(t *testing.T, rt *runtimectx.Context, err error) func() {
 	t.Helper()

@@ -319,7 +319,7 @@ func sshConnectivityTestTool(ctx context.Context, req mcpproto.CallToolRequest) 
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 
-	nc, ok := findNodeConfig(cfg, nodeName)
+	nc, ok := cfg.FindNode(nodeName)
 	if !ok {
 		return mcpproto.NewToolResultError(fmt.Sprintf("node %q not found in %s", nodeName, config.DefaultConfigPath())), nil
 	}
