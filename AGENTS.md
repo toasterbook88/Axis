@@ -141,7 +141,7 @@ rank → unified memory rank → allocatable RAM → reservation ratio → node 
 
 Scoring components: allocatable RAM (max 30), pressure (max 25), GPU (max 25),
 CPU cores (max 10), local bonus (10), TurboQuant (5–25 if preferred), unified
-memory (8–16 on Apple Silicon). HDD penalty: −15 for heavy inference.
+memory (8–18 on Apple Silicon; upper end requires TurboQuant verification). HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
