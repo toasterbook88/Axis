@@ -1,0 +1,134 @@
+name: Hardware Validation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "cmd/axis/**"
+      - "internal/facts/**"
+      - "internal/placement/**"
+      - "internal/transport/**"
+      - "internal/buildinfo/**"
+      - "internal/models/**"
+      - "hack/**"
+      - "README.md"
+      - "docs/current-state.md"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: hardware-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-hardware-validation:
+    name: Linux Hardware Validation
+    runs-on: [self-hosted, Linux, X64, axis, trusted]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./... -count=1
+
+      - name: Build
+        run: go build ./...
+
+      - name: Coverage gates
+        run: ./hack/coverage-check.sh
+
+      - name: Repo truth guardrails
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./hack/verify-repo-truth.sh
+
+      - name: Build AXIS binary for facts smoke
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+        run: go build -o "$AXIS_BIN" ./cmd/axis
+
+      - name: Facts JSON smoke
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+          FACTS_OUT: ${{ runner.temp }}/axis-facts-${{ github.run_id }}.json
+        run: |
+          "$AXIS_BIN" facts --format json >"$FACTS_OUT"
+          jq '.node.os, .node.arch' "$FACTS_OUT" >/dev/null
+
+      - name: Cleanup worktree
+        if: always()
+        run: |
+          git reset --hard HEAD
+          git clean -ffdx
+
+  macos-hardware-validation:
+    name: macOS Hardware Validation
+    runs-on: [self-hosted, macOS, ARM64, axis, trusted]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run targeted Darwin validation tests
+        run: go test ./internal/facts ./internal/placement ./internal/transport -count=1
+
+      - name: Build
+        run: go build ./...
+
+      - name: Build AXIS binary for facts smoke
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+        run: go build -o "$AXIS_BIN" ./cmd/axis
+
+      - name: Facts JSON smoke
+        env:
+          AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+          FACTS_OUT: ${{ runner.temp }}/axis-facts-${{ github.run_id }}.json
+        run: |
+          "$AXIS_BIN" facts --format json >"$FACTS_OUT"
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['FACTS_OUT'], 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data['node']['os'] == 'darwin', data['node']['os']
+          PY
+
+      - name: Cleanup worktree
+        if: always()
+        run: |
+          git reset --hard HEAD
+          git clean -ffdx
