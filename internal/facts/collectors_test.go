@@ -443,3 +443,31 @@ MemAvailable:   12456780 kB
 		t.Fatalf("expected ollama info to stay nil on discovery error, got %+v", facts.Ollama)
 	}
 }
+
+func TestRemoteStorageClassWalksMapperSlaves(t *testing.T) {
+	exec := &fakeRemoteExecutor{
+		exact: map[string]fakeRunResult{
+			`findmnt -n -o SOURCE / 2>/dev/null`: {out: "/dev/mapper/vg-root\n"},
+			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/mapper/vg-root" 2>/dev/null`: {
+				out: `{"blockdevices":[{"name":"/dev/mapper/vg-root","kname":"dm-0","type":"lvm","rota":null}]}`,
+			},
+			`ls -1 /sys/class/block/dm-0/slaves 2>/dev/null`: {out: "dm-1\n"},
+			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/dm-1" 2>/dev/null`: {
+				out: `{"blockdevices":[{"name":"/dev/dm-1","kname":"dm-1","type":"crypt","rota":null}]}`,
+			},
+			`ls -1 /sys/class/block/dm-1/slaves 2>/dev/null`: {out: "sda2\n"},
+			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/sda2" 2>/dev/null`: {
+				out: `{"blockdevices":[{"name":"/dev/sda2","kname":"sda2","pkname":"sda","type":"part","rota":null}]}`,
+			},
+			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/sda" 2>/dev/null`: {
+				out: `{"blockdevices":[{"name":"/dev/sda","kname":"sda","type":"disk","rota":1}]}`,
+			},
+		},
+	}
+
+	collector := NewRemoteCollector("linux-node", "worker", "linux-node.local", exec)
+	got := collector.remoteStorageClass(context.Background(), "linux")
+	if got != "hdd" {
+		t.Fatalf("remoteStorageClass = %q, want hdd", got)
+	}
+}

@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func neverUseLinuxStorageSlaves(t *testing.T) func(linuxBlockDeviceInfo) ([]string, error) {
+	t.Helper()
+	return func(linuxBlockDeviceInfo) ([]string, error) {
+		t.Fatal("slaves lookup should not be used for this case")
+		return nil, nil
+	}
+}
+
+func neverUseLinuxStorageFallback(t *testing.T) func(string) (string, error) {
+	t.Helper()
+	return func(string) (string, error) {
+		t.Fatal("fallback should not be used when ancestry resolution succeeds")
+		return "", nil
+	}
+}
+
 func TestParseDiskutilStorageClass_NVMe(t *testing.T) {
 	input := `   Device Identifier:         disk3s1s1
    Device Node:               /dev/disk3s1s1
@@ -66,10 +82,8 @@ func TestResolveLinuxStorageClassUsesParentDiskInfo(t *testing.T) {
 			}
 			return info, nil
 		},
-		func(string) (string, error) {
-			t.Fatal("fallback should not be used when lsblk parent resolution succeeds")
-			return "", nil
-		},
+		neverUseLinuxStorageSlaves(t),
+		neverUseLinuxStorageFallback(t),
 	)
 
 	if got != "ssd" {
@@ -101,10 +115,8 @@ func TestResolveLinuxStorageClassRecognizesNVMeParent(t *testing.T) {
 			}
 			return info, nil
 		},
-		func(string) (string, error) {
-			t.Fatal("fallback should not be used when lsblk parent resolution succeeds")
-			return "", nil
-		},
+		neverUseLinuxStorageSlaves(t),
+		neverUseLinuxStorageFallback(t),
 	)
 
 	if got != "nvme" {
@@ -118,6 +130,7 @@ func TestResolveLinuxStorageClassFallsBackToSysfs(t *testing.T) {
 		func(string) (linuxBlockDeviceInfo, error) {
 			return linuxBlockDeviceInfo{}, errors.New("lsblk unavailable")
 		},
+		neverUseLinuxStorageSlaves(t),
 		func(device string) (string, error) {
 			if device != "sda" {
 				t.Fatalf("fallback looked up %q, want sda", device)
@@ -128,6 +141,125 @@ func TestResolveLinuxStorageClassFallsBackToSysfs(t *testing.T) {
 
 	if got != "hdd" {
 		t.Fatalf("resolveLinuxStorageClass = %q, want hdd", got)
+	}
+}
+
+func TestResolveLinuxStorageClassWalksMapperAndCryptSlaves(t *testing.T) {
+	one := 1
+	infoByDevice := map[string]linuxBlockDeviceInfo{
+		"/dev/mapper/vg-root": {
+			Name:  "/dev/mapper/vg-root",
+			KName: "dm-0",
+			Type:  "lvm",
+		},
+		"/dev/dm-1": {
+			Name:  "/dev/dm-1",
+			KName: "dm-1",
+			Type:  "crypt",
+		},
+		"/dev/sda2": {
+			Name:   "/dev/sda2",
+			KName:  "sda2",
+			PKName: "sda",
+			Type:   "part",
+		},
+		"/dev/sda": {
+			Name:  "/dev/sda",
+			KName: "sda",
+			Type:  "disk",
+			ROTA:  &one,
+		},
+	}
+	slavesByKernelName := map[string][]string{
+		"dm-0": {"/dev/dm-1"},
+		"dm-1": {"/dev/sda2"},
+	}
+
+	got := resolveLinuxStorageClass(
+		"/dev/mapper/vg-root",
+		func(device string) (linuxBlockDeviceInfo, error) {
+			info, ok := infoByDevice[device]
+			if !ok {
+				return linuxBlockDeviceInfo{}, errors.New("unexpected device lookup")
+			}
+			return info, nil
+		},
+		func(info linuxBlockDeviceInfo) ([]string, error) {
+			return slavesByKernelName[linuxSysfsBlockName(info)], nil
+		},
+		neverUseLinuxStorageFallback(t),
+	)
+
+	if got != "hdd" {
+		t.Fatalf("resolveLinuxStorageClass = %q, want hdd", got)
+	}
+}
+
+func TestResolveLinuxStorageClassUsesConservativeWorstBackingDisk(t *testing.T) {
+	zero := 0
+	one := 1
+	infoByDevice := map[string]linuxBlockDeviceInfo{
+		"/dev/mapper/vg-root": {
+			Name:  "/dev/mapper/vg-root",
+			KName: "dm-0",
+			Type:  "lvm",
+		},
+		"/dev/sda1": {
+			Name:   "/dev/sda1",
+			KName:  "sda1",
+			PKName: "sda",
+			Type:   "part",
+		},
+		"/dev/sda": {
+			Name:  "/dev/sda",
+			KName: "sda",
+			Type:  "disk",
+			ROTA:  &one,
+		},
+		"/dev/nvme0n1p3": {
+			Name:   "/dev/nvme0n1p3",
+			KName:  "nvme0n1p3",
+			PKName: "nvme0n1",
+			Type:   "part",
+		},
+		"/dev/nvme0n1": {
+			Name:  "/dev/nvme0n1",
+			KName: "nvme0n1",
+			Type:  "disk",
+			ROTA:  &zero,
+		},
+	}
+
+	got := resolveLinuxStorageClass(
+		"/dev/mapper/vg-root",
+		func(device string) (linuxBlockDeviceInfo, error) {
+			info, ok := infoByDevice[device]
+			if !ok {
+				return linuxBlockDeviceInfo{}, errors.New("unexpected device lookup")
+			}
+			return info, nil
+		},
+		func(info linuxBlockDeviceInfo) ([]string, error) {
+			if linuxSysfsBlockName(info) != "dm-0" {
+				return nil, nil
+			}
+			return []string{"/dev/sda1", "/dev/nvme0n1p3"}, nil
+		},
+		neverUseLinuxStorageFallback(t),
+	)
+
+	if got != "hdd" {
+		t.Fatalf("resolveLinuxStorageClass = %q, want hdd", got)
+	}
+}
+
+func TestParseLinuxBlockDeviceInfoReadsKernelName(t *testing.T) {
+	info, err := parseLinuxBlockDeviceInfo(`{"blockdevices":[{"name":"/dev/mapper/vg-root","kname":"dm-0","type":"lvm","rota":null}]}`)
+	if err != nil {
+		t.Fatalf("parseLinuxBlockDeviceInfo: %v", err)
+	}
+	if info.KName != "dm-0" {
+		t.Fatalf("expected kname dm-0, got %q", info.KName)
 	}
 }
 

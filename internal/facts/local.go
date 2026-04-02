@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1077,12 +1078,14 @@ func localStorageClassLinux() string {
 	return resolveLinuxStorageClass(
 		strings.TrimSpace(string(out)),
 		localLinuxBlockDeviceInfo,
+		localLinuxBlockDeviceSlaves,
 		localLinuxRotational,
 	)
 }
 
 type linuxBlockDeviceInfo struct {
 	Name   string `json:"name"`
+	KName  string `json:"kname"`
 	PKName string `json:"pkname"`
 	Type   string `json:"type"`
 	ROTA   *int   `json:"rota"`
@@ -1095,6 +1098,7 @@ type linuxBlockDevicesResponse struct {
 func resolveLinuxStorageClass(
 	source string,
 	query func(string) (linuxBlockDeviceInfo, error),
+	slaves func(linuxBlockDeviceInfo) ([]string, error),
 	fallbackReadRotational func(string) (string, error),
 ) string {
 	source = strings.TrimSpace(source)
@@ -1102,34 +1106,81 @@ func resolveLinuxStorageClass(
 		return "unknown"
 	}
 
-	current := source
+	classes := linuxStorageAncestorClasses(source, query, slaves)
+	if class := aggregateLinuxStorageClass(classes); class != "unknown" {
+		return class
+	}
+
+	return fallbackLinuxStorageClass(source, fallbackReadRotational)
+}
+
+func linuxStorageAncestorClasses(
+	source string,
+	query func(string) (linuxBlockDeviceInfo, error),
+	slaves func(linuxBlockDeviceInfo) ([]string, error),
+) []string {
+	queue := []string{strings.TrimSpace(source)}
 	seen := map[string]struct{}{}
-	for hops := 0; hops < 8 && current != ""; hops++ {
+	var classes []string
+
+	for len(queue) > 0 && len(seen) < 16 {
+		current := strings.TrimSpace(queue[0])
+		queue = queue[1:]
+		if current == "" {
+			continue
+		}
 		if _, ok := seen[current]; ok {
-			break
+			continue
 		}
 		seen[current] = struct{}{}
 
 		info, err := query(current)
 		if err != nil {
-			break
+			continue
 		}
 
-		if strings.HasPrefix(blockDeviceName(info.Name), "nvme") {
-			return "nvme"
-		}
 		if info.Type == "disk" {
-			return classifyLinuxBlockDevice(info)
+			if class := classifyLinuxBlockDevice(info); class != "unknown" {
+				classes = append(classes, class)
+			}
+			continue
 		}
 
-		parent := parentDevicePath(info.PKName)
-		if parent == "" {
-			break
+		parents := linuxParentDevicePaths(info)
+		if len(parents) == 0 {
+			if discovered, err := slaves(info); err == nil {
+				parents = discovered
+			}
 		}
-		current = parent
+		queue = append(queue, parents...)
 	}
 
-	return fallbackLinuxStorageClass(source, fallbackReadRotational)
+	return classes
+}
+
+func aggregateLinuxStorageClass(classes []string) string {
+	hasNVMe := false
+	hasSSD := false
+
+	for _, class := range classes {
+		switch strings.ToLower(strings.TrimSpace(class)) {
+		case "hdd":
+			return "hdd"
+		case "nvme":
+			hasNVMe = true
+		case "ssd":
+			hasSSD = true
+		}
+	}
+
+	switch {
+	case hasNVMe:
+		return "nvme"
+	case hasSSD:
+		return "ssd"
+	default:
+		return "unknown"
+	}
 }
 
 func classifyLinuxBlockDevice(info linuxBlockDeviceInfo) string {
@@ -1161,11 +1212,33 @@ func parseLinuxBlockDeviceInfo(out string) (linuxBlockDeviceInfo, error) {
 }
 
 func localLinuxBlockDeviceInfo(device string) (linuxBlockDeviceInfo, error) {
-	out, err := exec.Command("lsblk", "-J", "-n", "-p", "-o", "NAME,PKNAME,TYPE,ROTA", device).Output()
+	out, err := exec.Command("lsblk", "-J", "-n", "-p", "-o", "NAME,KNAME,PKNAME,TYPE,ROTA", device).Output()
 	if err != nil {
 		return linuxBlockDeviceInfo{}, err
 	}
 	return parseLinuxBlockDeviceInfo(string(out))
+}
+
+func localLinuxBlockDeviceSlaves(info linuxBlockDeviceInfo) ([]string, error) {
+	sysfsName := linuxSysfsBlockName(info)
+	if sysfsName == "" {
+		return nil, fmt.Errorf("no sysfs block name for %+v", info)
+	}
+	entries, err := os.ReadDir(filepath.Join("/sys/class/block", sysfsName, "slaves"))
+	if err != nil {
+		return nil, err
+	}
+
+	parents := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := filepath.Base(strings.TrimSpace(entry.Name()))
+		if name == "" {
+			continue
+		}
+		parents = append(parents, filepath.Join("/dev", name))
+	}
+	sort.Strings(parents)
+	return parents, nil
 }
 
 func localLinuxRotational(device string) (string, error) {
@@ -1243,6 +1316,21 @@ func parentDevicePath(pkName string) string {
 		return pkName
 	}
 	return filepath.Join("/dev", filepath.Base(pkName))
+}
+
+func linuxParentDevicePaths(info linuxBlockDeviceInfo) []string {
+	parent := parentDevicePath(info.PKName)
+	if parent == "" {
+		return nil
+	}
+	return []string{parent}
+}
+
+func linuxSysfsBlockName(info linuxBlockDeviceInfo) string {
+	if info.KName != "" {
+		return filepath.Base(strings.TrimSpace(info.KName))
+	}
+	return blockDeviceName(info.Name)
 }
 
 func hasOnlyDigits(s string) bool {
