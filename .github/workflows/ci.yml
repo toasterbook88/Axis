@@ -39,5 +39,9 @@ jobs:
       - name: Coverage gates
         run: ./hack/coverage-check.sh
 
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       - name: Repo truth guardrails
         run: ./hack/verify-repo-truth.sh
