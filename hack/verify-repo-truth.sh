@@ -17,7 +17,12 @@ require_command rg
 require_command git
 require_command diff
 
-latest_release_tag="$(curl -fsSL "https://api.github.com/repos/toasterbook88/axis/releases/latest" | jq -r '.tag_name // ""')"
+curl_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+fi
+
+latest_release_tag="$(curl "${curl_args[@]}" "https://api.github.com/repos/toasterbook88/axis/releases/latest" | jq -r '.tag_name // ""')"
 if [[ -z "$latest_release_tag" ]]; then
   printf 'failed to determine latest published release tag from GitHub\n' >&2
   exit 1
@@ -27,7 +32,9 @@ tmp_doc="$(mktemp)"
 trap 'rm -f "$tmp_doc"' EXIT
 cp docs/current-state.md "$tmp_doc"
 AXIS_CURRENT_STATE_DOC_PATH="$tmp_doc" ./hack/refresh-current-state.sh --facts-only >/dev/null
-if ! diff -u docs/current-state.md "$tmp_doc" >/dev/null; then
+if ! diff -u \
+    <(grep -v '^- Refreshed:' docs/current-state.md) \
+    <(grep -v '^- Refreshed:' "$tmp_doc") >/dev/null; then
   printf 'docs/current-state.md generated facts are stale; run ./hack/refresh-current-state.sh\n' >&2
   diff -u docs/current-state.md "$tmp_doc" >&2 || true
   exit 1
@@ -44,7 +51,7 @@ done < <(
 )
 
 for tag in "${release_refs[@]}"; do
-  if ! curl -fsSL "https://api.github.com/repos/toasterbook88/axis/releases/tags/${tag}" >/dev/null; then
+  if ! curl "${curl_args[@]}" "https://api.github.com/repos/toasterbook88/axis/releases/tags/${tag}" >/dev/null; then
     printf 'operator-facing docs reference unpublished release %s\n' "$tag" >&2
     exit 1
   fi

@@ -44,4 +44,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep
       - name: Repo truth guardrails
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./hack/verify-repo-truth.sh
