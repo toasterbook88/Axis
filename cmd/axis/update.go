@@ -52,8 +52,9 @@ func updateCmd() *cobra.Command {
 		Use:   "update",
 		Short: "Update the axis binary to the latest published release",
 		Long: "Check GitHub Releases for a newer published version of axis and install it in-place.\n\n" +
-			"By default, updates the current binary AND any other axis binary found in PATH.\n" +
-			"Use --path to update a specific binary.\n" +
+			"By default, when a newer release is available, updates the current binary AND any other axis binary found in PATH.\n" +
+			"If the current binary is newer than the latest published release, no binaries will be changed unless --path is given explicitly.\n" +
+			"Use --path to update a specific binary (allowed even when the current build is newer).\n" +
 			"Use --check to report whether an update is available without downloading.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpdate(cmd, checkOnly, targetPath)
@@ -114,8 +115,11 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 		fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
 	case 1:
 		fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
-		fmt.Fprintf(out, "Refusing to downgrade.\n")
-		return nil
+		if targetPath == "" {
+			fmt.Fprintf(out, "Refusing to downgrade the currently running binary.\n")
+			return nil
+		}
+		fmt.Fprintf(out, "Refusing to downgrade the currently running binary, but will update requested path(s) to the latest published release.\n")
 	}
 
 	// Always install: handles both new versions and stale PATH copies.

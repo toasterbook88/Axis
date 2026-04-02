@@ -151,7 +151,7 @@ func TestUpdateRefusesDowngradeInstall(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := out.String()
-	if !strings.Contains(output, "Refusing to downgrade.") {
+	if !strings.Contains(output, "Refusing to downgrade the currently running binary.") {
 		t.Fatalf("expected downgrade refusal, got: %s", output)
 	}
 }

@@ -24,6 +24,11 @@ require_command sed
 require_command curl
 
 axis_version="$(sed -n 's/^const Version = "\(.*\)"/\1/p' internal/buildinfo/version.go)"
+if [[ -z "$axis_version" ]]; then
+  printf 'failed to parse axis version from internal/buildinfo/version.go; check that the Version const format matches the sed pattern in hack/refresh-current-state.sh\n' >&2
+  exit 1
+fi
+repo_commit="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 refreshed_at="$(TZ=America/New_York date '+%Y-%m-%d %Z')"
 
 release_json="$(curl -fsSL "https://api.github.com/repos/toasterbook88/axis/releases/latest" || true)"
@@ -105,6 +110,7 @@ trap 'rm -f "$facts_tmp" "$verify_tmp" "$doc_tmp"' EXIT
 cat >"$facts_tmp" <<EOF
 $facts_start
 - Refreshed: $refreshed_at
+- Repo commit: \`$repo_commit\`
 - Repo version: \`$axis_version\`
 - Latest published GitHub release: \`$latest_release_tag\` ($latest_release_published)
 - Release truth: $release_truth
