@@ -1,15 +1,18 @@
 # AXIS Development Process
 
+> Base PR guidance (scope, tests, formatting) lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
+> This document extends that guidance for substrate-first architectural changes.
+
 ## PR Types
 
-### Truth Plane
+### Fact Plane
 Must include evidence and degraded-state impact.
 
 ### Placement
 Must include before/after reasoning and score deltas.
 
 ### Surface / Adapter
-Must prove it consumes existing contracts.
+Must prove it consumes existing contracts (see [current state](./current-state.md) for canonical contracts).
 
 ## Proof Block (Required in PRs)
 - What changed

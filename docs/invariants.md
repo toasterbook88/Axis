@@ -3,7 +3,7 @@
 This document defines **non-negotiable system invariants**.
 
 ## Truth Boundary
-Only facts/status/place/context may emit authoritative truth.
+Only `axis facts`, `axis status`, `axis task place`, and `axis task context` may emit authoritative truth.
 
 ## Single Placement Contract
 All surfaces must use the same decision model.
