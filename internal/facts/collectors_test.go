@@ -329,7 +329,7 @@ Pages inactive:                          100000.
 			"df -kP /": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/disk3s1 3145728 1048576 2097152 34% /
 `},
-			"system_profiler SPDisplaysDataType 2>/dev/null | grep 'Chipset Model:' | sed 's/.*Chipset Model: //'": {out: "Apple M3 Max GPU\n"},
+			"system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'": {out: "Chipset Model: Apple M3 Max GPU\nVRAM (Total): 32 GB\nMetal: Supported, feature set macOS GPUFamily2 v1\n"},
 			`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {out: "2: en0    inet 192.168.1.10/24 brd 192.168.1.255 scope global en0\n3: en0    inet6 2001:db8::10/64 scope global en0\n"},
 			"command -v git 2>/dev/null":          {out: "/usr/bin/git\n"},
 			"git --version 2>/dev/null":           {out: "git version 2.39.3\n"},

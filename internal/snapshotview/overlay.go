@@ -6,6 +6,9 @@ import (
 )
 
 func cloneGPUInfos(gpus []models.GPUInfo) []models.GPUInfo {
+	if gpus == nil {
+		return nil
+	}
 	cloned := make([]models.GPUInfo, len(gpus))
 	for i, gpu := range gpus {
 		gpuCopy := gpu

@@ -1081,25 +1081,6 @@ func localStorageClassLinux() string {
 	)
 }
 
-func parseLinuxRotational(dev string) string {
-	base := fallbackLinuxBlockBase(dev)
-	if base == "" {
-		return "unknown"
-	}
-	data, err := os.ReadFile(fmt.Sprintf("/sys/block/%s/queue/rotational", base))
-	if err != nil {
-		return "unknown"
-	}
-	switch strings.TrimSpace(string(data)) {
-	case "0":
-		return "ssd"
-	case "1":
-		return "hdd"
-	default:
-		return "unknown"
-	}
-}
-
 type linuxBlockDeviceInfo struct {
 	Name   string `json:"name"`
 	PKName string `json:"pkname"`
