@@ -38,3 +38,6 @@ jobs:
 
       - name: Coverage gates
         run: ./hack/coverage-check.sh
+
+      - name: Repo truth guardrails
+        run: ./hack/verify-repo-truth.sh
