@@ -14,7 +14,7 @@ Must include before/after reasoning and score deltas.
 ### Surface / Adapter
 Must prove it consumes existing contracts (see [current state](./current-state.md) for canonical contracts).
 
-## Proof Block (Required in PRs)
+## Proof Block (Required in PR description)
 - What changed
 - What invariant is preserved
 - Evidence (tests / output)
