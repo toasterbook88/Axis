@@ -4,11 +4,25 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-doc_path="docs/current-state.md"
+doc_path="${AXIS_CURRENT_STATE_DOC_PATH:-docs/current-state.md}"
 facts_start='<!-- BEGIN GENERATED CURRENT STATE FACTS -->'
 facts_end='<!-- END GENERATED CURRENT STATE FACTS -->'
 verify_start='<!-- BEGIN GENERATED CURRENT STATE VERIFICATION -->'
 verify_end='<!-- END GENERATED CURRENT STATE VERIFICATION -->'
+facts_only=0
+
+while (($# > 0)); do
+  case "$1" in
+    --facts-only)
+      facts_only=1
+      shift
+      ;;
+    *)
+      printf 'unknown argument: %s\n' "$1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -78,9 +92,12 @@ run_and_report() {
 }
 
 facts_tmp="$(mktemp)"
-verify_tmp="$(mktemp)"
 doc_tmp="$(mktemp)"
-trap 'rm -f "$facts_tmp" "$verify_tmp" "$doc_tmp"' EXIT
+verify_tmp=""
+if (( facts_only == 0 )); then
+  verify_tmp="$(mktemp)"
+fi
+trap 'rm -f "$facts_tmp" "${verify_tmp:-}" "$doc_tmp"' EXIT
 
 cat >"$facts_tmp" <<EOF
 $facts_start
@@ -91,21 +108,24 @@ $facts_start
 $facts_end
 EOF
 
-{
-  printf '%s\n' "$verify_start"
-  run_and_report "go test ./... -count=1"
-  run_and_report "go test -race ./... -count=1"
-  run_and_report "go build ./..."
-  run_and_report "./hack/coverage-check.sh"
-  printf '%s\n' "$verify_end"
-} >"$verify_tmp"
+if (( facts_only == 0 )); then
+  {
+    printf '%s\n' "$verify_start"
+    run_and_report "go test ./... -count=1"
+    run_and_report "go test -race ./... -count=1"
+    run_and_report "go build ./..."
+    run_and_report "./hack/coverage-check.sh"
+    printf '%s\n' "$verify_end"
+  } >"$verify_tmp"
+fi
 
 awk -v facts_file="$facts_tmp" \
   -v verify_file="$verify_tmp" \
   -v facts_start="$facts_start" \
   -v facts_end="$facts_end" \
   -v verify_start="$verify_start" \
-  -v verify_end="$verify_end" '
+  -v verify_end="$verify_end" \
+  -v replace_verify="$((facts_only == 0))" '
 function print_file(path, line) {
   while ((getline line < path) > 0) {
     print line
@@ -119,8 +139,12 @@ function print_file(path, line) {
     next
   }
   if ($0 == verify_start) {
-    print_file(verify_file)
-    skip = verify_end
+    if (replace_verify == 1) {
+      print_file(verify_file)
+      skip = verify_end
+      next
+    }
+    print
     next
   }
   if (skip != "") {
