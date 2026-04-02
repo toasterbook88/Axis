@@ -2,7 +2,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -12,12 +14,12 @@ import (
 // NodeConfig describes a single node in the cluster seed file.
 // ssh_user and ssh_port are config-only — they do NOT propagate into NodeFacts.
 type NodeConfig struct {
-	Name       string `yaml:"name"`
-	Hostname   string `yaml:"hostname"`
-	SSHUser    string `yaml:"ssh_user"`
-	Role       string `yaml:"role,omitempty"`
-	SSHPort    int    `yaml:"ssh_port,omitempty"`
-	TimeoutSec int    `yaml:"timeout_sec,omitempty"`
+	Name       string `json:"name" yaml:"name"`
+	Hostname   string `json:"hostname" yaml:"hostname"`
+	SSHUser    string `json:"ssh_user" yaml:"ssh_user"`
+	Role       string `json:"role,omitempty" yaml:"role,omitempty"`
+	SSHPort    int    `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
+	TimeoutSec int    `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
 }
 
 // EffectiveSSHPort returns the SSH port, defaulting to 22.
@@ -38,16 +40,16 @@ func (n *NodeConfig) EffectiveTimeout() int {
 
 // DiscoveryConfig describes the UDP discovery properties.
 type DiscoveryConfig struct {
-	Enabled        bool   `yaml:"enabled,omitempty"`
-	UDPPort        int    `yaml:"udp_port,omitempty"`
-	BeaconInterval int    `yaml:"beacon_interval_sec,omitempty"`
-	Secret         string `yaml:"secret,omitempty"`
+	Enabled        bool   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	UDPPort        int    `json:"udp_port,omitempty" yaml:"udp_port,omitempty"`
+	BeaconInterval int    `json:"beacon_interval_sec,omitempty" yaml:"beacon_interval_sec,omitempty"`
+	Secret         string `json:"secret,omitempty" yaml:"secret,omitempty"`
 }
 
 // Config is the top-level AXIS configuration.
 type Config struct {
-	Nodes     []NodeConfig     `yaml:"nodes"`
-	Discovery *DiscoveryConfig `yaml:"discovery,omitempty"`
+	Nodes     []NodeConfig     `json:"nodes" yaml:"nodes"`
+	Discovery *DiscoveryConfig `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.
@@ -63,13 +65,30 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := decodeStrict(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func decodeStrict(data []byte, cfg *Config) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		return err
+	}
+
+	var extra any
+	if err := dec.Decode(&extra); err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf("multiple YAML documents are not supported")
 }
 
 // Validate checks that all required fields are present.

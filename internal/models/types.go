@@ -1,8 +1,11 @@
 // Package models defines core AXIS data types.
-// All types are internal — no public API surface in Phase 1.
+// All types are internal — there is no stable public API surface.
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // --- Enums ---
 
@@ -40,26 +43,70 @@ const (
 	ToolClassRuntime   ToolClass = "runtime"
 )
 
+// MemoryTopology classifies the relationship between CPU/GPU accessible memory.
+type MemoryTopology string
+
+const (
+	MemoryTopologyStandard MemoryTopology = "standard"
+	MemoryTopologyUnified  MemoryTopology = "unified"
+)
+
 // --- Observed State ---
+
+// GPUInfo describes a single GPU with vendor, model, VRAM, and capabilities.
+type GPUInfo struct {
+	Vendor       string   `json:"vendor" yaml:"vendor"`                                 // apple, nvidia, amd, intel, unknown
+	Model        string   `json:"model" yaml:"model"`                                   // e.g. "Apple M3 Pro", "NVIDIA GeForce RTX 4090"
+	VRAMMB       int      `json:"vram_mb,omitempty" yaml:"vram_mb,omitempty"`           // 0 means unknown or unified
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"` // metal, cuda, rocm, vulkan
+}
+
+// GPUName returns the model string for display purposes.
+func (g GPUInfo) GPUName() string { return g.Model }
+
+// HasCapability reports whether the GPU supports the named capability.
+func (g GPUInfo) HasCapability(cap string) bool {
+	for _, c := range g.Capabilities {
+		if strings.EqualFold(c, cap) {
+			return true
+		}
+	}
+	return false
+}
 
 // Resources holds observed hardware resource metrics.
 type Resources struct {
-	CPUCores    int      `json:"cpu_cores" yaml:"cpu_cores"`
-	CPUModel    string   `json:"cpu_model" yaml:"cpu_model"`
-	RAMTotalMB  int64    `json:"ram_total_mb" yaml:"ram_total_mb"`
-	RAMFreeMB   int64    `json:"ram_free_mb" yaml:"ram_free_mb"`
-	DiskTotalGB int64    `json:"disk_total_gb" yaml:"disk_total_gb"`
-	DiskFreeGB  int64    `json:"disk_free_gb" yaml:"disk_free_gb"`
-	GPUs        []string `json:"gpus,omitempty" yaml:"gpus,omitempty"`
-	Pressure    string   `json:"pressure" yaml:"pressure"` // none, low, medium, high
+	CPUCores         int            `json:"cpu_cores" yaml:"cpu_cores"`
+	CPUModel         string         `json:"cpu_model" yaml:"cpu_model"`
+	RAMTotalMB       int64          `json:"ram_total_mb" yaml:"ram_total_mb"`
+	RAMFreeMB        int64          `json:"ram_free_mb" yaml:"ram_free_mb"`
+	MemoryTopology   MemoryTopology `json:"memory_topology,omitempty" yaml:"memory_topology,omitempty"`
+	MemoryClass      int            `json:"memory_class,omitempty" yaml:"memory_class,omitempty"`
+	Load1M           float64        `json:"load_1m" yaml:"load_1m"`
+	Load5M           float64        `json:"load_5m" yaml:"load_5m"`
+	Load15M          float64        `json:"load_15m" yaml:"load_15m"`
+	RAMReservedMB    int64          `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
+	RAMAllocatableMB int64          `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+	DiskTotalGB      int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
+	DiskFreeGB       int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
+	GPUs             []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
+	GPUUtilPercent   *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
+	StorageClass     string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
+	BatteryPercent   *int           `json:"battery_percent,omitempty" yaml:"battery_percent,omitempty"`
+	ThermalState     string         `json:"thermal_state,omitempty" yaml:"thermal_state,omitempty"` // nominal, fair, serious, critical
+	Pressure         string         `json:"pressure" yaml:"pressure"`                               // none, low, medium, high
+	PressureStall10  float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
+	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
 }
 
-// NetworkAddress represents a single network address.
+// NetworkAddress represents a single network address with interface metadata.
 // Kind is one of: ipv4, ipv6, hostname.
-// No transport-specific labels (LAN/Thunderbolt/Tailscale) in core schema.
 type NetworkAddress struct {
-	Kind    string `json:"kind" yaml:"kind"`
-	Address string `json:"address" yaml:"address"`
+	Kind       string `json:"kind" yaml:"kind"`
+	Address    string `json:"address" yaml:"address"`
+	Interface  string `json:"interface,omitempty" yaml:"interface,omitempty"`     // e.g. en0, eth0, wg0
+	Subnet     string `json:"subnet,omitempty" yaml:"subnet,omitempty"`           // CIDR e.g. 192.168.1.0/24
+	SpeedClass string `json:"speed_class,omitempty" yaml:"speed_class,omitempty"` // thunderbolt, 10gbe, gigabit, wifi, tailscale, wireguard, unknown
 }
 
 // ToolInfo describes a discovered tool on a node.
@@ -84,6 +131,24 @@ type OllamaInfo struct {
 	Error      string   `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
+// TurboQuantInfo records whether a node appears able to run a TurboQuant-like
+// long-context backend. This is additive advisory metadata only.
+type TurboQuantInfo struct {
+	Supported    bool     `json:"supported" yaml:"supported"`
+	Verified     bool     `json:"verified,omitempty" yaml:"verified,omitempty"`
+	Backends     []string `json:"backends,omitempty" yaml:"backends,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+}
+
+// AppleFoundationModelsInfo records whether the local Apple on-device model
+// path is available and runtime-verified through the FoundationModels framework.
+type AppleFoundationModelsInfo struct {
+	Available bool   `json:"available" yaml:"available"`
+	Verified  bool   `json:"verified,omitempty" yaml:"verified,omitempty"`
+	Version   string `json:"version,omitempty" yaml:"version,omitempty"`
+	Error     string `json:"error,omitempty" yaml:"error,omitempty"`
+}
+
 // --- Node Result ---
 
 // NodeFacts holds combined observed and assigned state for a node.
@@ -95,14 +160,16 @@ type NodeFacts struct {
 	Role string `json:"role,omitempty" yaml:"role,omitempty"`
 
 	// Observed state
-	Hostname  string           `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	OS        string           `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
-	OSVersion string           `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
-	Arch      string           `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Resources *Resources       `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Addresses []NetworkAddress `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	Tools     []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Ollama    *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	Hostname   string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	OS         string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
+	OSVersion  string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
+	Arch       string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
+	Resources  *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Addresses  []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Tools      []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama     *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	TurboQuant *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
+	AppleFM    *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
 
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`
@@ -114,10 +181,12 @@ type NodeFacts struct {
 
 // ClusterSummary holds cluster-level aggregates derived from node facts.
 type ClusterSummary struct {
-	TotalNodes     int   `json:"total_nodes" yaml:"total_nodes"`
-	ReachableNodes int   `json:"reachable_nodes" yaml:"reachable_nodes"`
-	TotalRAMMB     int64 `json:"total_ram_mb" yaml:"total_ram_mb"`
-	TotalFreeRAMMB int64 `json:"total_free_ram_mb" yaml:"total_free_ram_mb"`
+	TotalNodes         int   `json:"total_nodes" yaml:"total_nodes"`
+	ReachableNodes     int   `json:"reachable_nodes" yaml:"reachable_nodes"`
+	TotalRAMMB         int64 `json:"total_ram_mb" yaml:"total_ram_mb"`
+	TotalFreeRAMMB     int64 `json:"total_free_ram_mb" yaml:"total_free_ram_mb"`
+	TotalAllocatableMB int64 `json:"total_allocatable_mb,omitempty" yaml:"total_allocatable_mb,omitempty"`
+	TotalReservedMB    int64 `json:"total_reserved_mb,omitempty" yaml:"total_reserved_mb,omitempty"`
 }
 
 // Warning represents a specific issue detected during snapshot assembly.
@@ -142,9 +211,12 @@ type ClusterSnapshot struct {
 // TaskRequirements describes what a task needs to run.
 // Inferred from task description by keyword matching in the CLI layer.
 type TaskRequirements struct {
-	Description   string   `json:"description" yaml:"description"`
-	RequiredTools []string `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
-	MinFreeRAMMB  int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	Description         string   `json:"description" yaml:"description"`
+	RequiredTools       []string `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
+	MinFreeRAMMB        int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	ContextWindowTokens int      `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
+	PrefersTurboQuant   bool     `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
+	PreferredBackends   []string `json:"preferred_backends,omitempty" yaml:"preferred_backends,omitempty"`
 }
 
 // PlacementDecision is the output of the placement engine.
@@ -165,4 +237,49 @@ type PlacementError struct {
 
 func (e *PlacementError) Error() string {
 	return e.Message
+}
+
+// GPUNames returns model strings for all GPUs (display helper).
+func GPUNames(gpus []GPUInfo) []string {
+	names := make([]string, len(gpus))
+	for i, g := range gpus {
+		names[i] = g.Model
+	}
+	return names
+}
+
+// GPUFromString creates a GPUInfo from a plain model string (backward compat).
+func GPUFromString(model string) GPUInfo {
+	g := GPUInfo{Model: model, Vendor: classifyGPUVendor(model)}
+	g.Capabilities = inferGPUCapabilities(g.Vendor)
+	return g
+}
+
+func classifyGPUVendor(model string) string {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "apple") || strings.HasPrefix(m, "m1") || strings.HasPrefix(m, "m2") || strings.HasPrefix(m, "m3") || strings.HasPrefix(m, "m4"):
+		return "apple"
+	case strings.Contains(m, "nvidia") || strings.Contains(m, "geforce") || strings.Contains(m, "quadro") || strings.Contains(m, "tesla") || strings.Contains(m, "rtx") || strings.Contains(m, "gtx"):
+		return "nvidia"
+	case strings.Contains(m, "amd") || strings.Contains(m, "radeon"):
+		return "amd"
+	case strings.Contains(m, "intel"):
+		return "intel"
+	default:
+		return "unknown"
+	}
+}
+
+func inferGPUCapabilities(vendor string) []string {
+	switch vendor {
+	case "apple":
+		return []string{"metal"}
+	case "nvidia":
+		return []string{"cuda"}
+	case "amd":
+		return []string{"rocm"}
+	default:
+		return nil
+	}
 }

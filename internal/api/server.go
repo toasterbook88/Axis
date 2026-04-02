@@ -2,29 +2,36 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"al.essio.dev/pkg/shellescape"
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
-	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
-	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
-const DefaultAddr = "127.0.0.1:42425"
+func DefaultAddr() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".axis", "axis.sock")
+}
 
 type ToolDef struct {
 	Name        string         `json:"name"`
@@ -45,6 +52,7 @@ type KnowledgeResponse struct {
 type RunRequest struct {
 	Description string `json:"description"`
 	Mode        string `json:"mode,omitempty"`
+	Confirm     string `json:"confirm,omitempty"`
 }
 
 type RunResponse struct {
@@ -81,31 +89,188 @@ type runnerContext struct {
 	skillStore *skills.Store
 }
 
-func Serve(addr string) error {
+type snapshotCache interface {
+	Snapshot() (*models.ClusterSnapshot, bool)
+	Meta() daemon.Metadata
+	Invalidate()
+	RefreshNow(context.Context) error
+}
+
+func Serve(addr string, cache snapshotCache, token string) error {
+	return ServeWithContext(context.Background(), addr, cache, token)
+}
+
+// ServeWithContext starts the HTTP/Unix API server and blocks until ctx is
+// cancelled or a fatal listen error occurs. On cancellation it performs a
+// graceful shutdown with a 10-second drain before returning nil.
+func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string) error {
 	mux := http.NewServeMux()
-	registerRoutes(mux)
+	registerRoutes(mux, cache, token)
 
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return srv.ListenAndServe()
+
+	srvErr := make(chan error, 1)
+
+	if auth.IsUnixAddr(addr) {
+		if err := os.MkdirAll(filepath.Dir(addr), 0700); err != nil {
+			return fmt.Errorf("creating unix socket directory: %w", err)
+		}
+		if fi, err := os.Lstat(addr); err == nil {
+			if fi.Mode()&os.ModeSocket == 0 {
+				return fmt.Errorf("refusing to remove non-socket file at %s", addr)
+			}
+			if err := os.Remove(addr); err != nil {
+				return fmt.Errorf("removing existing socket: %w", err)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat socket path: %w", err)
+		}
+		ln, err := net.Listen("unix", addr)
+		if err != nil {
+			return fmt.Errorf("listen unix %s: %w", addr, err)
+		}
+		if err := os.Chmod(addr, 0600); err != nil {
+			return fmt.Errorf("chmod unix socket: %w", err)
+		}
+		go func() { srvErr <- srv.Serve(ln) }()
+	} else {
+		srv.Addr = addr
+		go func() { srvErr <- srv.ListenAndServe() }()
+	}
+
+	select {
+	case err := <-srvErr:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+	}
+
+	drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(drainCtx) //nolint:contextcheck
+
+	select {
+	case err := <-srvErr:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	default:
+		return nil
+	}
 }
 
-func registerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if token == "" {
+			next(w, r)
+			return
+		}
+
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			writeError(w, http.StatusUnauthorized, "missing authorization header")
+			return
+		}
+
+		parts := strings.Fields(authHeader)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			writeError(w, http.StatusUnauthorized, "invalid authorization header format")
+			return
+		}
+
+		if subtle.ConstantTimeCompare([]byte(parts[1]), []byte(token)) != 1 {
+			writeError(w, http.StatusUnauthorized, "invalid api token")
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		payload := map[string]any{
 			"status": "ok",
 			"name":   "axis",
-		})
-	})
+		}
+		if cache != nil {
+			meta := cache.Meta()
+			payload["cache_ready"] = meta.Ready
+		}
+		writeJSON(w, http.StatusOK, payload)
+	}
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/healthz", healthHandler)
 
-	mux.HandleFunc("/mcp/tools", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/snapshot", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		snap, ok := cache.Snapshot()
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache not ready")
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+	}, token))
+
+	mux.HandleFunc("/snapshot/meta", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, cache.Meta())
+	}, token))
+
+	mux.HandleFunc("/invalidate", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		cache.Invalidate()
+		w.WriteHeader(http.StatusNoContent)
+	}, token))
+
+	mux.HandleFunc("/refresh", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		if err := cache.RefreshNow(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}, token))
+
+	toolsHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -113,14 +278,15 @@ func registerRoutes(mux *http.ServeMux) {
 		tools := []ToolDef{
 			{
 				Name:        "axis_execute",
-				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Use mode=auto for known task intents, mode=script for matched scripts/skills only, or mode=exec for explicit raw commands.",
+				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Explicit mode and explicit operator confirmation are required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands, and set confirm=YES to authorize execution.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"description": map[string]any{"type": "string", "description": "Natural language task description or raw command"},
-						"mode":        map[string]any{"type": "string", "description": "Execution mode: auto, script, or exec"},
+						"mode":        map[string]any{"type": "string", "description": "Execution mode: script or exec"},
+						"confirm":     map[string]any{"type": "string", "description": "Must be YES to authorize execution"},
 					},
-					"required": []string{"description"},
+					"required": []string{"description", "mode", "confirm"},
 				},
 			},
 			{
@@ -133,9 +299,11 @@ func registerRoutes(mux *http.ServeMux) {
 			},
 		}
 		writeJSON(w, http.StatusOK, ToolsResponse{Tools: tools})
-	})
+	}
+	mux.HandleFunc("/tools", withAuth(toolsHandler, token))
+	mux.HandleFunc("/mcp/tools", withAuth(toolsHandler, token))
 
-	mux.HandleFunc("/knowledge", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/knowledge", withAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -153,9 +321,9 @@ func registerRoutes(mux *http.ServeMux) {
 			Failures:  rc.skillStore.Failures,
 		}
 		writeJSON(w, http.StatusOK, payload)
-	})
+	}, token))
 
-	mux.HandleFunc("/run", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/run", withAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -168,8 +336,21 @@ func registerRoutes(mux *http.ServeMux) {
 		}
 		req.Description = strings.TrimSpace(req.Description)
 		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+		req.Confirm = strings.TrimSpace(req.Confirm)
 		if req.Description == "" {
 			writeError(w, http.StatusBadRequest, "description is required")
+			return
+		}
+		if req.Mode == "" {
+			writeError(w, http.StatusBadRequest, "mode is required (use script or exec)")
+			return
+		}
+		if req.Mode != "script" && req.Mode != "exec" {
+			writeError(w, http.StatusBadRequest, "mode must be script or exec")
+			return
+		}
+		if req.Confirm != "YES" {
+			writeError(w, http.StatusBadRequest, "confirm must be YES to authorize execution")
 			return
 		}
 
@@ -187,38 +368,31 @@ func registerRoutes(mux *http.ServeMux) {
 		}
 
 		writeJSON(w, http.StatusOK, resp)
-	})
+	}, token))
+}
+
+var loadLiveRuntime = runtimectx.Load
+
+var runLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "bash", "-lc", command) // codeql[go/command-injection] - protected by UDS socket, bearer token, confirm=YES, safety.Check()
+	cmd.Env = env
+	return cmd.CombinedOutput()
 }
 
 func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
-	cfg, err := config.Load(config.DefaultConfigPath())
+	rt, err := loadLiveRuntime(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	discoveryCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	nodes := discovery.Discover(discoveryCtx, cfg)
-	snap := snapshot.Build(nodes)
-
-	st, err := state.Load()
-	if err != nil {
-		return nil, err
-	}
-
 	return &runnerContext{
-		cfg:        cfg,
-		snap:       snap,
-		st:         st,
-		skillStore: skills.Load(),
+		cfg:        rt.Config,
+		snap:       rt.Snapshot,
+		st:         rt.State,
+		skillStore: rt.Skills,
 	}, nil
 }
 
 func resolveIntent(description, mode string, skillStore *skills.Store) (runIntent, error) {
-	if mode == "" {
-		mode = "auto"
-	}
-
 	var intent runIntent
 	if skillStore != nil {
 		if skill, ok := skillStore.BestMatch(description); ok {
@@ -232,7 +406,7 @@ func resolveIntent(description, mode string, skillStore *skills.Store) (runInten
 	}
 
 	switch mode {
-	case "auto", "script":
+	case "script":
 		if intent.matchedScript != nil {
 			intent.command = intent.matchedScript.Command
 			intent.label = fmt.Sprintf("fallback script %q", intent.matchedScript.Name)
@@ -303,6 +477,12 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 		return resp, fmt.Errorf("no suitable node found")
 	}
 
+	reservationMB := reqs.MinFreeRAMMB + 1024
+	if !daemon.CanReserve(rc.snap, rc.st, decision.Node, reservationMB) {
+		resp.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
+		return resp, fmt.Errorf("reservation cap exceeded")
+	}
+
 	var targetNode models.NodeFacts
 	for _, n := range rc.snap.Nodes {
 		if n.Name == decision.Node {
@@ -343,13 +523,11 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 			return resp, err
 		}
 
-		cmd := exec.CommandContext(ctx, "bash", "-lc", intent.command)
-		cmd.Env = append(os.Environ(),
+		env := append(os.Environ(),
 			"AXIS_CONTEXT_FILE="+contextFile.Name(),
 			"BEST_NODE="+decision.Node,
 		)
 		if rc.st != nil {
-			reservationMB := reqs.MinFreeRAMMB + 1024
 			execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
 			if err != nil {
 				resp.Error = err.Error()
@@ -361,7 +539,7 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 				}
 			}()
 		}
-		out, err := cmd.CombinedOutput()
+		out, err := runLocalShell(ctx, intent.command, env)
 		resp.Output = string(out)
 		resp.ExitCode = exitCode(err)
 		if err != nil {
@@ -393,7 +571,6 @@ func runTask(ctx context.Context, req RunRequest) (RunResponse, error) {
 	}
 
 	if rc.st != nil {
-		reservationMB := reqs.MinFreeRAMMB + 1024
 		execID, err := rc.st.AcquireTask(decision.Node, req.Description, reservationMB)
 		if err != nil {
 			resp.Error = err.Error()

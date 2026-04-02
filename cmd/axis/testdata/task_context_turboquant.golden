@@ -1,0 +1,13 @@
+AXIS CLUSTER CONTEXT (paste as system prompt):
+
+- Source: daemon-cache
+- Best node: mlx-node (8192MB allocatable (0MB reserved), none pressure)
+- Context hint: long-context (~128000 tokens)
+- Tools: [ollama]
+- Summary: 1 nodes, 8192MB allocatable across cluster (0MB reserved)
+- Task: run 128k ollama inference
+- Live tools: start read-only MCP with: axis mcp serve
+- TurboQuant verified: mlx (apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present)
+- TurboQuant matrix: mlx-node=verified/env-only (mlx)
+
+Be precise. Use real node names and tools above.

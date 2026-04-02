@@ -8,6 +8,11 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+var (
+	lookPathTool          = exec.LookPath
+	runToolVersionCommand = exec.CommandContext
+)
+
 // OllamaDiscoveryScript is the bash script used to robustly discover Ollama state
 // and models across both local and remote nodes.
 const OllamaDiscoveryScript = `set -o pipefail;
@@ -46,8 +51,13 @@ func defaultToolDefs() []toolDef {
 		{name: "go", class: models.ToolClassBuild, versionCmd: "go version"},
 		{name: "python3", class: models.ToolClassRuntime, versionCmd: "python3 --version"},
 		{name: "git", class: models.ToolClassVCS, versionCmd: "git --version"},
+		{name: "jq", class: models.ToolClassRuntime, versionCmd: "jq --version"},
+		{name: "nix", class: models.ToolClassRuntime, versionCmd: "nix --version"},
 		{name: "docker", class: models.ToolClassContainer, versionCmd: "docker --version"},
 		{name: "ollama", class: models.ToolClassAICLI, versionCmd: "ollama --version"},
+		{name: "mlx_lm", class: models.ToolClassAICLI, versionCmd: "mlx_lm --help"},
+		{name: "llama-cli", class: models.ToolClassAICLI, versionCmd: "llama-cli --version"},
+		{name: "llama-server", class: models.ToolClassAICLI, versionCmd: "llama-server --version"},
 		{name: "node", class: models.ToolClassRuntime, versionCmd: "node --version"},
 		{name: "swift", class: models.ToolClassBuild, versionCmd: "swift --version"},
 		{name: "cargo", class: models.ToolClassBuild, versionCmd: "cargo --version"},
@@ -62,7 +72,7 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 	var tools []models.ToolInfo
 
 	for _, td := range defs {
-		path, err := exec.LookPath(td.name)
+		path, err := lookPathTool(td.name)
 		if err != nil {
 			continue
 		}
@@ -75,7 +85,7 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 
 		if td.versionCmd != "" {
 			parts := strings.Fields(td.versionCmd)
-			if out, err := exec.CommandContext(ctx, parts[0], parts[1:]...).Output(); err == nil {
+			if out, err := runToolVersionCommand(ctx, parts[0], parts[1:]...).Output(); err == nil {
 				ti.Version = parseVersionString(string(out))
 			}
 		}

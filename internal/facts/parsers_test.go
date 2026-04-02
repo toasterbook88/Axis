@@ -52,7 +52,7 @@ Pages inactive:                          3000.
 	if got := parseDarwinFreeRAM(vmstatAmd64); got != expectedAmd64 {
 		t.Errorf("parseDarwinFreeRAM() AMD64 = %v, want %v", got, expectedAmd64)
 	}
-	
+
 	// Default fallback if page size is missing
 	vmstatMissing := `Pages free:                              1000.
 Pages inactive:                          3000.
@@ -103,6 +103,87 @@ Buffers:          345000 kB
 	}
 }
 
+func TestParseLinuxMeminfoFallsBackToMemFree(t *testing.T) {
+	meminfo := `MemTotal:       8192000 kB
+MemFree:        2048000 kB
+Buffers:          345000 kB
+`
+
+	total, avail, err := parseLinuxMeminfo(meminfo)
+	if err != nil {
+		t.Fatalf("parseLinuxMeminfo() error = %v", err)
+	}
+	if total != 8000 {
+		t.Fatalf("parseLinuxMeminfo() total = %v, want 8000", total)
+	}
+	if avail != 2000 {
+		t.Fatalf("parseLinuxMeminfo() avail = %v, want 2000", avail)
+	}
+}
+
+func TestParseLinuxMeminfoErrorsWithoutMemTotal(t *testing.T) {
+	meminfo := `MemFree:        2048000 kB
+MemAvailable:   12456780 kB
+`
+
+	if _, _, err := parseLinuxMeminfo(meminfo); err == nil {
+		t.Fatal("expected error when MemTotal is missing")
+	}
+}
+
+func TestParseDFOutput(t *testing.T) {
+	df := `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/disk3s1 3145728 1048576 2097152 34% /
+`
+
+	total, free, err := parseDFOutput(df)
+	if err != nil {
+		t.Fatalf("parseDFOutput() error = %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("parseDFOutput() total = %v, want 3", total)
+	}
+	if free != 2 {
+		t.Fatalf("parseDFOutput() free = %v, want 2", free)
+	}
+}
+
+func TestParseDFOutputErrorsOnMalformedFields(t *testing.T) {
+	df := `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/disk3s1 nope 250000 750000 25% /
+`
+
+	if _, _, err := parseDFOutput(df); err == nil {
+		t.Fatal("expected parseDFOutput to fail on malformed numbers")
+	}
+}
+
+func TestParseLoadavgFields(t *testing.T) {
+	load1, load5, load15, err := parseLoadavgFields("1.23 0.98 0.55 1/999 1234")
+	if err != nil {
+		t.Fatalf("parseLoadavgFields() error = %v", err)
+	}
+	if load1 != 1.23 || load5 != 0.98 || load15 != 0.55 {
+		t.Fatalf("unexpected load averages: %.2f %.2f %.2f", load1, load5, load15)
+	}
+}
+
+func TestParseDarwinLoadavg(t *testing.T) {
+	load1, load5, load15, err := parseDarwinLoadavg("{ 3.14 2.72 1.62 }")
+	if err != nil {
+		t.Fatalf("parseDarwinLoadavg() error = %v", err)
+	}
+	if load1 != 3.14 || load5 != 2.72 || load15 != 1.62 {
+		t.Fatalf("unexpected darwin load averages: %.2f %.2f %.2f", load1, load5, load15)
+	}
+}
+
+func TestParseLoadavgFieldsErrorsOnMalformedInput(t *testing.T) {
+	if _, _, _, err := parseLoadavgFields("nope nope nope"); err == nil {
+		t.Fatal("expected parseLoadavgFields to fail on malformed values")
+	}
+}
+
 func TestComputePressure(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -123,6 +204,82 @@ func TestComputePressure(t *testing.T) {
 				t.Errorf("computePressure() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDetectMemoryTopology(t *testing.T) {
+	topology, class := detectMemoryTopology("darwin", "arm64", "Apple M3 Max")
+	if topology != "unified" {
+		t.Fatalf("expected unified topology, got %q", topology)
+	}
+	if class != 4 {
+		t.Fatalf("expected memory class 4 for Apple M3 Max, got %d", class)
+	}
+
+	topology, class = detectMemoryTopology("linux", "amd64", "AMD Ryzen 9")
+	if topology != "standard" {
+		t.Fatalf("expected standard topology, got %q", topology)
+	}
+	if class != 0 {
+		t.Fatalf("expected memory class 0, got %d", class)
+	}
+}
+
+func TestParseLinuxPressureStall10(t *testing.T) {
+	const psi = `some avg10=6.73 avg60=4.22 avg300=2.11 total=12345
+full avg10=0.32 avg60=0.12 avg300=0.05 total=456
+`
+	stall10, ok := parseLinuxPressureStall10(psi)
+	if !ok {
+		t.Fatal("expected linux psi parse to succeed")
+	}
+	if stall10 != 6.73 {
+		t.Fatalf("expected stall10 6.73, got %.2f", stall10)
+	}
+	if level := linuxPressureLevel(stall10); level != "medium" {
+		t.Fatalf("expected medium linux psi pressure, got %q", level)
+	}
+}
+
+func TestParseLinuxGPUUtilPercentUsesMaxAcrossDevices(t *testing.T) {
+	util, ok := parseLinuxGPUUtilPercent("12\n0\n77\n31\n")
+	if !ok {
+		t.Fatal("expected parse to succeed")
+	}
+	if util != 77 {
+		t.Fatalf("expected max GPU util 77, got %.0f", util)
+	}
+}
+
+func TestParseLinuxGPUUtilPercentHandlesIdleZero(t *testing.T) {
+	util, ok := parseLinuxGPUUtilPercent("0\n0\n")
+	if !ok {
+		t.Fatal("expected zero util to remain a valid reading")
+	}
+	if util != 0 {
+		t.Fatalf("expected zero GPU util, got %.0f", util)
+	}
+}
+
+func TestParseDarwinMemoryPressureLevel(t *testing.T) {
+	level, ok := parseDarwinMemoryPressureLevel("4\n")
+	if !ok {
+		t.Fatal("expected darwin pressure parse to succeed")
+	}
+	if level != 4 {
+		t.Fatalf("expected pressure level 4, got %d", level)
+	}
+	if got := darwinPressureLevel(level); got != "high" {
+		t.Fatalf("expected high darwin pressure, got %q", got)
+	}
+}
+
+func TestMergePressureLevelsKeepsWorstLevel(t *testing.T) {
+	if got := mergePressureLevels("low", "medium", "none"); got != "medium" {
+		t.Fatalf("expected medium, got %q", got)
+	}
+	if got := mergePressureLevels("none", "high"); got != "high" {
+		t.Fatalf("expected high, got %q", got)
 	}
 }
 

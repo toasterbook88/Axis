@@ -202,3 +202,336 @@ func TestStateLifecycleAcquireAndRelease(t *testing.T) {
 		t.Fatal("expected alpha node to be pruned after release")
 	}
 }
+
+func TestLoadNormalizesActiveTasksToExecCount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   1024,
+				LastPlacedAt: time.Now().UTC(),
+				ActiveTasks:  99,
+				ActiveExecs:  []string{"exec-1", "exec-2"},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns := loaded.Nodes["alpha"]
+	if ns.ActiveTasks != 2 {
+		t.Fatalf("ActiveTasks = %d, want 2", ns.ActiveTasks)
+	}
+}
+
+func TestSaveInitializesNilNodes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := &ClusterState{}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if s.Nodes == nil {
+		t.Fatal("expected Save to initialize Nodes map")
+	}
+}
+
+func TestRecordPlacementPersistsReservation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := &ClusterState{}
+	s.RecordPlacement("alpha", 256, "inspect repo")
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns, ok := loaded.Nodes["alpha"]
+	if !ok {
+		t.Fatal("expected alpha node after RecordPlacement")
+	}
+	if ns.ReservedMB != 256 {
+		t.Fatalf("ReservedMB = %d, want 256", ns.ReservedMB)
+	}
+	if len(ns.ActiveExecs) != 1 {
+		t.Fatalf("ActiveExecs = %v, want single exec", ns.ActiveExecs)
+	}
+}
+
+func TestReleaseTaskHandlesMissingStateAndClampsValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var empty ClusterState
+	if err := empty.ReleaseTask("missing", "exec", 10); err != nil {
+		t.Fatalf("ReleaseTask() on empty state error = %v", err)
+	}
+
+	s := &ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   128,
+				LastPlacedAt: time.Now().UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+			},
+		},
+	}
+
+	if err := s.ReleaseTask("alpha", "wrong-exec", 512); err != nil {
+		t.Fatalf("ReleaseTask() error = %v", err)
+	}
+
+	if _, ok := s.Nodes["alpha"]; ok {
+		t.Fatal("expected alpha node to be pruned after clamp to zero")
+	}
+}
+
+func TestLoadRecoversFromInvalidJSONByQuarantiningFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err == nil {
+		t.Fatal("expected recoverable warning on invalid json")
+	}
+	if loaded == nil {
+		t.Fatal("expected recovered empty state")
+	}
+	if len(loaded.Nodes) != 0 {
+		t.Fatalf("expected empty recovered state, got %v", loaded.Nodes)
+	}
+
+	matches, globErr := filepath.Glob(filepath.Join(home, ".axis", "state.json.corrupt-*"))
+	if globErr != nil {
+		t.Fatalf("Glob() error = %v", globErr)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one quarantined backup, got %v", matches)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("expected original state.json to be quarantined, stat err = %v", statErr)
+	}
+}
+
+func TestLoadFailsWhenStateQuarantineFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	previous := quarantineCorruptStateFile
+	t.Cleanup(func() { quarantineCorruptStateFile = previous })
+	quarantineCorruptStateFile = func(path string, cause error) error {
+		return os.ErrPermission
+	}
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err == nil {
+		t.Fatal("expected hard error when quarantine fails")
+	}
+	if loaded != nil {
+		t.Fatalf("expected nil state on hard error, got %+v", loaded)
+	}
+}
+
+// --- Tombstone Immune System Tests ---
+
+func TestRecordFailureCreatesAndEscalatesTombstone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := emptyClusterState()
+
+	// First failure
+	if err := s.RecordFailure("llama3:8b", "alpha"); err != nil {
+		t.Fatalf("RecordFailure() error = %v", err)
+	}
+
+	if !s.IsTombstoned("llama3:8b", "alpha") {
+		t.Fatal("expected tombstone after first failure")
+	}
+
+	entry := s.Tombstones[tombstoneKey("llama3:8b", "alpha")]
+	if entry.FailCount != 1 {
+		t.Fatalf("FailCount = %d, want 1", entry.FailCount)
+	}
+	firstExpiry := entry.ExpiresAt
+
+	// Second failure escalates
+	if err := s.RecordFailure("llama3:8b", "alpha"); err != nil {
+		t.Fatalf("RecordFailure() error = %v", err)
+	}
+
+	entry = s.Tombstones[tombstoneKey("llama3:8b", "alpha")]
+	if entry.FailCount != 2 {
+		t.Fatalf("FailCount = %d, want 2", entry.FailCount)
+	}
+	if !entry.ExpiresAt.After(firstExpiry) {
+		t.Fatal("expected escalated expiry after second failure")
+	}
+}
+
+func TestIsTombstonedReturnsFalseForExpired(t *testing.T) {
+	s := &ClusterState{
+		Tombstones: map[string]TombstoneEntry{
+			tombstoneKey("crash-model", "beta"): {
+				TaskPattern: "crash-model",
+				NodeName:    "beta",
+				FailCount:   1,
+				ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
+			},
+		},
+	}
+
+	if s.IsTombstoned("crash-model", "beta") {
+		t.Fatal("expired tombstone should not block")
+	}
+}
+
+func TestIsTombstonedReturnsFalseForNilState(t *testing.T) {
+	var s *ClusterState
+	if s.IsTombstoned("anything", "anywhere") {
+		t.Fatal("nil state should not report tombstoned")
+	}
+}
+
+func TestPruneTombstonesRemovesExpired(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	now := time.Now().UTC()
+	s := &ClusterState{
+		Nodes: make(map[string]NodeState),
+		Tombstones: map[string]TombstoneEntry{
+			tombstoneKey("expired", "node1"): {
+				TaskPattern: "expired",
+				NodeName:    "node1",
+				ExpiresAt:   now.Add(-1 * time.Hour),
+			},
+			tombstoneKey("active", "node2"): {
+				TaskPattern: "active",
+				NodeName:    "node2",
+				ExpiresAt:   now.Add(24 * time.Hour),
+			},
+		},
+	}
+
+	pruned, err := s.PruneTombstones()
+	if err != nil {
+		t.Fatalf("PruneTombstones() error = %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned = %d, want 1", pruned)
+	}
+	if len(s.Tombstones) != 1 {
+		t.Fatalf("expected 1 remaining tombstone, got %d", len(s.Tombstones))
+	}
+	if _, ok := s.Tombstones[tombstoneKey("active", "node2")]; !ok {
+		t.Fatal("expected active tombstone to remain")
+	}
+}
+
+func TestClearTombstone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := emptyClusterState()
+	if err := s.RecordFailure("model-x", "gamma"); err != nil {
+		t.Fatalf("RecordFailure() error = %v", err)
+	}
+
+	removed, err := s.ClearTombstone("model-x", "gamma")
+	if err != nil {
+		t.Fatalf("ClearTombstone() error = %v", err)
+	}
+	if !removed {
+		t.Fatal("expected tombstone to be removed")
+	}
+	if s.IsTombstoned("model-x", "gamma") {
+		t.Fatal("expected tombstone cleared")
+	}
+
+	// Clearing again should return false
+	removed, err = s.ClearTombstone("model-x", "gamma")
+	if err != nil {
+		t.Fatalf("ClearTombstone() second call error = %v", err)
+	}
+	if removed {
+		t.Fatal("expected no-op on second clear")
+	}
+}
+
+func TestExponentialBackoffCapsAt7Days(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := emptyClusterState()
+
+	// Record enough failures to hit the cap
+	for i := 0; i < 10; i++ {
+		if err := s.RecordFailure("oom-model", "delta"); err != nil {
+			t.Fatalf("RecordFailure() %d error = %v", i, err)
+		}
+	}
+
+	entry := s.Tombstones[tombstoneKey("oom-model", "delta")]
+	maxExpiry := entry.LastFailure.Add(tombstoneMaxExpiry)
+
+	if entry.ExpiresAt.After(maxExpiry) {
+		t.Fatalf("ExpiresAt %v exceeds max %v", entry.ExpiresAt, maxExpiry)
+	}
+}
+
+func TestTombstoneRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := emptyClusterState()
+	if err := s.RecordFailure("test-task", "node1"); err != nil {
+		t.Fatalf("RecordFailure() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !loaded.IsTombstoned("test-task", "node1") {
+		t.Fatal("expected tombstone to persist through save/load")
+	}
+}

@@ -7,7 +7,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +22,14 @@ type LocalCollector struct {
 	Name string
 	Role string
 }
+
+var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
+var buildAppleFoundationModelsHelperFn = buildAppleFoundationModelsHelper
+var appleFoundationModelsProbeCommandFn = exec.CommandContext
+var appleFoundationModelsBuildCommandFn = exec.CommandContext
+var appleFoundationModelsHomeDirFn = os.UserHomeDir
+var appleFoundationModelsReadFileFn = os.ReadFile
+var appleFoundationModelsWriteFileFn = os.WriteFile
 
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
@@ -71,8 +81,199 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 			Class:   models.ToolClassAICLI,
 		})
 	}
+	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
+	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {
+		facts.AppleFM = fm
+		if fm.Available && fm.Verified {
+			toolPath := "swift"
+			if swiftTool, ok := findToolInfo(facts.Tools, "swift"); ok && swiftTool.Path != "" {
+				toolPath = swiftTool.Path
+			}
+			facts.Tools = append(facts.Tools, models.ToolInfo{
+				Name:    "apple-foundation-models",
+				Path:    toolPath,
+				Version: fm.Version,
+				Class:   models.ToolClassRuntime,
+			})
+		}
+	}
 
 	return facts, nil
+}
+
+func runLocalTurboQuantProbe(ctx context.Context, cmd string) (string, error) {
+	out, err := exec.CommandContext(ctx, "bash", "-lc", cmd).CombinedOutput()
+	return string(out), err
+}
+
+func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion string, tools []models.ToolInfo) *models.AppleFoundationModelsInfo {
+	if !strings.EqualFold(osName, "darwin") || !strings.Contains(strings.ToLower(arch), "arm64") {
+		return nil
+	}
+	if !supportsAppleFoundationModelsOS(osVersion) {
+		return &models.AppleFoundationModelsInfo{
+			Version: osVersion,
+			Error:   "requires macOS 26 or later on Apple silicon (Apple platform versioning)",
+		}
+	}
+	if _, ok := findToolInfo(tools, "swift"); !ok {
+		return &models.AppleFoundationModelsInfo{
+			Version: osVersion,
+			Error:   "swift toolchain not detected",
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	out, err := runAppleFoundationModelsProbeFn(probeCtx)
+	trimmedOut := strings.TrimSpace(out)
+	info := &models.AppleFoundationModelsInfo{
+		Version:   osVersion,
+		Available: err == nil,
+		Verified:  err == nil && trimmedOut != "",
+	}
+	if err != nil {
+		info.Error = trimmedOut
+		if info.Error == "" {
+			info.Error = err.Error()
+		}
+	} else if trimmedOut == "" {
+		info.Error = "apple foundation models probe returned empty output"
+	}
+	return info
+}
+
+func supportsAppleFoundationModelsOS(osVersion string) bool {
+	// Current Apple platform releases report macOS 26.x via sw_vers -productVersion.
+	fields := strings.SplitN(strings.TrimSpace(osVersion), ".", 2)
+	if len(fields) == 0 || fields[0] == "" {
+		return false
+	}
+	major, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return false
+	}
+	return major >= 26
+}
+
+func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
+	type buildResult struct {
+		path string
+		err  error
+	}
+	ch := make(chan buildResult, 1)
+	go func() {
+		// Compilation is a one-time, potentially slow operation (first-time
+		// xcrun swiftc can take tens of seconds). Give it its own generous
+		// timeout so the cache is populated correctly on first run, without
+		// blocking the caller context which has a short probe deadline.
+		buildCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		path, err := buildAppleFoundationModelsHelperFn(buildCtx)
+		ch <- buildResult{path, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-ch:
+		if result.err != nil {
+			return "", result.err
+		}
+		out, err := appleFoundationModelsProbeCommandFn(ctx, result.path, "--self-test").CombinedOutput()
+		return string(out), err
+	}
+}
+
+func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
+	homeDir, err := appleFoundationModelsHomeDirFn()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory for apple foundation models helper: %w", err)
+	}
+
+	cacheDir := filepath.Join(homeDir, ".axis", "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("create apple foundation models cache directory: %w", err)
+	}
+
+	helperSource := filepath.Join(cacheDir, "apple-foundation-models.swift")
+	if err := ensureAppleFoundationModelsHelperSource(helperSource); err != nil {
+		return "", err
+	}
+
+	helperBinary := filepath.Join(cacheDir, "apple-foundation-models-helper")
+	upToDate, err := appleFoundationModelsHelperUpToDate(helperSource, helperBinary)
+	if err != nil {
+		return "", err
+	}
+	if upToDate {
+		return helperBinary, nil
+	}
+
+	tmpFile, err := os.CreateTemp(cacheDir, "apple-foundation-models-helper-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temporary file for apple foundation models helper: %w", err)
+	}
+	tmpBinary := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpBinary)
+		return "", fmt.Errorf("close temporary helper file: %w", err)
+	}
+	defer os.Remove(tmpBinary)
+
+	out, err := appleFoundationModelsBuildCommandFn(
+		ctx,
+		"xcrun",
+		"swiftc",
+		helperSource,
+		"-o",
+		tmpBinary,
+	).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("build apple foundation models helper: %s", msg)
+	}
+	if err := os.Rename(tmpBinary, helperBinary); err != nil {
+		return "", fmt.Errorf("install apple foundation models helper: %w", err)
+	}
+	return helperBinary, nil
+}
+
+func ensureAppleFoundationModelsHelperSource(helperSource string) error {
+	existing, err := appleFoundationModelsReadFileFn(helperSource)
+	switch {
+	case err == nil && string(existing) == appleFoundationModelsHelperSource:
+		return nil
+	case err != nil && !os.IsNotExist(err):
+		return fmt.Errorf("read apple foundation models helper source: %w", err)
+	}
+
+	if err := appleFoundationModelsWriteFileFn(helperSource, []byte(appleFoundationModelsHelperSource), 0o644); err != nil {
+		return fmt.Errorf("write apple foundation models helper source: %w", err)
+	}
+	return nil
+}
+
+func appleFoundationModelsHelperUpToDate(helperSource, helperBinary string) (bool, error) {
+	sourceInfo, err := os.Stat(helperSource)
+	if err != nil {
+		return false, fmt.Errorf("stat apple foundation models helper source: %w", err)
+	}
+	binaryInfo, err := os.Stat(helperBinary)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat apple foundation models helper binary: %w", err)
+	}
+	if binaryInfo.IsDir() {
+		return false, fmt.Errorf("apple foundation models helper binary path is a directory: %s", helperBinary)
+	}
+	return !binaryInfo.ModTime().Before(sourceInfo.ModTime()), nil
 }
 
 func localOSVersion() (string, error) {
@@ -101,6 +302,7 @@ func localResources() (*models.Resources, bool) {
 		r.CPUCores = cores
 		r.CPUModel = model
 	}
+	r.MemoryTopology, r.MemoryClass = detectMemoryTopology(runtime.GOOS, runtime.GOARCH, r.CPUModel)
 
 	// RAM
 	if total, free, err := localRAM(); err != nil {
@@ -109,6 +311,21 @@ func localResources() (*models.Resources, bool) {
 		r.RAMTotalMB = total
 		r.RAMFreeMB = free
 		r.Pressure = computePressure(total, free)
+		r.PressureSource = "free-ram"
+	}
+
+	if source, level, stall10, ok := localPressureSignal(); ok {
+		r.Pressure = mergePressureLevels(r.Pressure, level)
+		r.PressureSource = source
+		r.PressureStall10 = stall10
+	}
+
+	if load1, load5, load15, err := localLoadAverages(); err != nil {
+		partial = true
+	} else {
+		r.Load1M = load1
+		r.Load5M = load5
+		r.Load15M = load15
 	}
 
 	// Disk
@@ -121,8 +338,47 @@ func localResources() (*models.Resources, bool) {
 
 	// GPU (best-effort, never causes partial)
 	r.GPUs = localGPUs()
+	if util, ok := localGPUUtilPercent(); ok {
+		r.GPUUtilPercent = &util
+	}
+
+	// Storage class (best-effort)
+	r.StorageClass = localStorageClass()
+
+	// Thermal and power (best-effort)
+	if pct, ok := localBatteryPercent(); ok {
+		r.BatteryPercent = &pct
+	}
+	r.ThermalState = localThermalState()
 
 	return r, partial
+}
+
+func localPressureSignal() (string, string, float64, bool) {
+	switch runtime.GOOS {
+	case "linux":
+		data, err := os.ReadFile("/proc/pressure/memory")
+		if err != nil {
+			return "", "", 0, false
+		}
+		stall10, ok := parseLinuxPressureStall10(string(data))
+		if !ok {
+			return "", "", 0, false
+		}
+		return "linux-psi", linuxPressureLevel(stall10), stall10, true
+	case "darwin":
+		out, err := exec.Command("sysctl", "-n", "kern.memorystatus_vm_pressure_level").Output()
+		if err != nil {
+			return "", "", 0, false
+		}
+		level, ok := parseDarwinMemoryPressureLevel(string(out))
+		if !ok {
+			return "", "", 0, false
+		}
+		return "darwin-vm-pressure", darwinPressureLevel(level), 0, true
+	default:
+		return "", "", 0, false
+	}
 }
 
 func computePressure(totalMB, freeMB int64) string {
@@ -275,7 +531,7 @@ func parseVMStatVal(line string) int64 {
 }
 
 func parseLinuxMeminfo(data string) (int64, int64, error) {
-	var total, available int64
+	var total, available, free int64
 	remaining := data
 	for len(remaining) > 0 {
 		var line string
@@ -288,11 +544,65 @@ func parseLinuxMeminfo(data string) (int64, int64, error) {
 		}
 		if strings.HasPrefix(line, "MemTotal:") {
 			total = parseKBField(line)
+		} else if strings.HasPrefix(line, "MemFree:") {
+			free = parseKBField(line)
 		} else if strings.HasPrefix(line, "MemAvailable:") {
 			available = parseKBField(line)
 		}
 	}
+	if total <= 0 {
+		return 0, 0, fmt.Errorf("meminfo missing MemTotal")
+	}
+	if available <= 0 {
+		if free > 0 {
+			available = free
+		} else {
+			return 0, 0, fmt.Errorf("meminfo missing MemAvailable")
+		}
+	}
 	return total / 1024, available / 1024, nil
+}
+
+func localLoadAverages() (float64, float64, float64, error) {
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("sysctl", "-n", "vm.loadavg").Output()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		return parseDarwinLoadavg(string(out))
+	}
+
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return parseLoadavgFields(string(data))
+}
+
+func parseDarwinLoadavg(data string) (float64, float64, float64, error) {
+	clean := strings.NewReplacer("{", "", "}", "").Replace(strings.TrimSpace(data))
+	return parseLoadavgFields(clean)
+}
+
+func parseLoadavgFields(data string) (float64, float64, float64, error) {
+	fields := strings.Fields(strings.TrimSpace(data))
+	if len(fields) < 3 {
+		return 0, 0, 0, fmt.Errorf("unexpected loadavg output")
+	}
+
+	load1, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid load1: %w", err)
+	}
+	load5, err := strconv.ParseFloat(fields[1], 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid load5: %w", err)
+	}
+	load15, err := strconv.ParseFloat(fields[2], 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid load15: %w", err)
+	}
+	return load1, load5, load15, nil
 }
 
 func darwinTotalRAMMB() int64 {
@@ -354,50 +664,172 @@ func parseKBField(line string) int64 {
 }
 
 func localDisk() (int64, int64, error) {
-	out, err := exec.Command("df", "-k", "/").Output()
+	out, err := exec.Command("df", "-kP", "/").Output()
 	if err != nil {
 		return 0, 0, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	return parseDFOutput(string(out))
+}
+
+func parseDFOutput(out string) (int64, int64, error) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {
 		return 0, 0, fmt.Errorf("unexpected df output")
 	}
-	fields := strings.Fields(lines[1])
-	if len(fields) < 4 {
-		return 0, 0, fmt.Errorf("unexpected df fields")
+
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		totalKB, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid df total: %w", err)
+		}
+		freeKB, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid df free: %w", err)
+		}
+		return totalKB / (1024 * 1024), freeKB / (1024 * 1024), nil
 	}
-	totalKB, _ := strconv.ParseInt(fields[1], 10, 64)
-	freeKB, _ := strconv.ParseInt(fields[3], 10, 64)
-	return totalKB / (1024 * 1024), freeKB / (1024 * 1024), nil
+
+	return 0, 0, fmt.Errorf("unexpected df fields")
 }
 
-func localGPUs() []string {
+func localGPUs() []models.GPUInfo {
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
-		if err != nil {
-			return nil
+		return localGPUsDarwin()
+	}
+	return localGPUsLinux()
+}
+
+func localGPUsDarwin() []models.GPUInfo {
+	out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
+	if err != nil {
+		return nil
+	}
+	return parseSystemProfilerGPUs(string(out))
+}
+
+func parseSystemProfilerGPUs(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	var current *models.GPUInfo
+
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Chipset Model:") {
+			if current != nil {
+				gpus = append(gpus, *current)
+			}
+			model := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
+			current = &models.GPUInfo{
+				Model:  model,
+				Vendor: models.GPUFromString(model).Vendor,
+			}
 		}
-		var gpus []string
-		for _, line := range strings.Split(string(out), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "Chipset Model:") {
-				gpu := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
-				if gpu != "" {
-					gpus = append(gpus, gpu)
+		if current != nil {
+			if strings.HasPrefix(trimmed, "VRAM") && strings.Contains(trimmed, ":") {
+				vramStr := strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
+				current.VRAMMB = parseVRAMMB(vramStr)
+			}
+			if strings.HasPrefix(trimmed, "Metal Family:") || strings.HasPrefix(trimmed, "Metal Support:") {
+				if !current.HasCapability("metal") {
+					current.Capabilities = append(current.Capabilities, "metal")
 				}
 			}
 		}
-		return gpus
 	}
-	// Linux
+	if current != nil {
+		// Apple Silicon always supports Metal even if not explicitly listed
+		if current.Vendor == "apple" && !current.HasCapability("metal") {
+			current.Capabilities = append(current.Capabilities, "metal")
+		}
+		gpus = append(gpus, *current)
+	}
+	return gpus
+}
+
+// parseVRAMMB extracts MB from strings like "16 GB", "4096 MB", "16384 MB".
+func parseVRAMMB(s string) int {
+	s = strings.TrimSpace(s)
+	parts := strings.Fields(s)
+	if len(parts) < 1 {
+		return 0
+	}
+	val, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0
+	}
+	if len(parts) >= 2 {
+		switch strings.ToLower(parts[1]) {
+		case "gb":
+			return val * 1024
+		case "mb":
+			return val
+		}
+	}
+	// Assume MB if no unit
+	return val
+}
+
+func localGPUsLinux() []models.GPUInfo {
+	// Try nvidia-smi first for NVIDIA GPUs
+	gpus := localGPUsNvidiaSMI()
+
+	// Fallback: lspci for non-NVIDIA or if nvidia-smi unavailable
+	lspciGPUs := localGPUsLspci()
+	for _, g := range lspciGPUs {
+		if g.Vendor == "nvidia" && len(gpus) > 0 {
+			continue // nvidia-smi gave better data
+		}
+		gpus = append(gpus, g)
+	}
+	return gpus
+}
+
+func localGPUsNvidiaSMI() []models.GPUInfo {
+	out, err := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return nil
+	}
+	return parseNvidiaSMIOutput(string(out))
+}
+
+func parseNvidiaSMIOutput(out string) []models.GPUInfo {
+	var gpus []models.GPUInfo
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ", ", 2)
+		name := strings.TrimSpace(parts[0])
+		gpu := models.GPUInfo{
+			Model:        name,
+			Vendor:       "nvidia",
+			Capabilities: []string{"cuda"},
+		}
+		if len(parts) >= 2 {
+			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+				gpu.VRAMMB = vram
+			}
+		}
+		gpus = append(gpus, gpu)
+	}
+	return gpus
+}
+
+func localGPUsLspci() []models.GPUInfo {
 	out, err := exec.Command("bash", "-c", `lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
-	var gpus []string
+	var gpus []models.GPUInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
 		if line != "" {
-			gpus = append(gpus, strings.TrimSpace(line))
+			gpus = append(gpus, models.GPUFromString(line))
 		}
 	}
 	return gpus
@@ -427,17 +859,103 @@ func localAddresses() []models.NetworkAddress {
 			if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
 				continue
 			}
+
 			kind := "ipv4"
 			if ip.To4() == nil {
 				kind = "ipv6"
 			}
 			addrs = append(addrs, models.NetworkAddress{
-				Kind:    kind,
-				Address: ip.String(),
+				Kind:       kind,
+				Address:    ip.String(),
+				Interface:  iface.Name,
+				Subnet:     subnetFromIPNet(ipNet),
+				SpeedClass: classifyInterfaceSpeed(iface.Name, ip),
 			})
 		}
 	}
 	return addrs
+}
+
+func subnetFromIPNet(ipNet *net.IPNet) string {
+	if ipNet == nil {
+		return ""
+	}
+	ones, _ := ipNet.Mask.Size()
+	return ipNet.IP.Mask(ipNet.Mask).String() + "/" + strconv.Itoa(ones)
+}
+
+func parseAddressWithOptionalCIDR(raw string) (net.IP, string) {
+	if strings.Contains(raw, "/") {
+		ip, ipNet, err := net.ParseCIDR(raw)
+		if err == nil {
+			return ip, subnetFromIPNet(ipNet)
+		}
+	}
+	return net.ParseIP(raw), ""
+}
+
+// classifyInterfaceSpeed heuristically determines the speed class of a network
+// interface based on its name and IP address. This enables topology-aware
+// decisions (e.g., preferring Thunderbolt links for heavy data transfers).
+func classifyInterfaceSpeed(ifName string, ip net.IP) string {
+	lower := strings.ToLower(ifName)
+
+	// Overlay / VPN tunnels — detect by interface name
+	if strings.HasPrefix(lower, "wg") {
+		return "wireguard"
+	}
+	if strings.HasPrefix(lower, "tailscale") || strings.HasPrefix(lower, "ts") {
+		return "tailscale"
+	}
+	if strings.HasPrefix(lower, "utun") || strings.HasPrefix(lower, "tun") {
+		// Tailscale on macOS typically uses utun; check by IP range
+		if isTailscaleIP(ip) {
+			return "tailscale"
+		}
+		return "vpn"
+	}
+	if strings.HasPrefix(lower, "zt") {
+		return "zerotier"
+	}
+	if strings.HasPrefix(lower, "nb") || strings.HasPrefix(lower, "netbird") {
+		return "netbird"
+	}
+
+	// Detect by IP range for non-tunnel interfaces
+	if isTailscaleIP(ip) {
+		return "tailscale"
+	}
+
+	// Thunderbolt bridge / point-to-point
+	if strings.Contains(lower, "bridge") || strings.Contains(lower, "thunder") {
+		return "thunderbolt"
+	}
+
+	// Wi-Fi — common interface names across platforms
+	if lower == "wlan0" || lower == "wlp" || strings.HasPrefix(lower, "wlp") {
+		return "wifi"
+	}
+	if runtime.GOOS == "darwin" && (lower == "en0") {
+		// On many Macs, en0 is Wi-Fi; can't be 100% certain without IOKit
+		return "wifi"
+	}
+
+	// Ethernet
+	if strings.HasPrefix(lower, "en") || strings.HasPrefix(lower, "eth") || strings.HasPrefix(lower, "enp") {
+		return "gigabit"
+	}
+
+	return "unknown"
+}
+
+// isTailscaleIP returns true if the IP is in the Tailscale CGNAT range (100.64.0.0/10).
+func isTailscaleIP(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	// 100.64.0.0/10 → first byte 100, second byte 64-127
+	return ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
 func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {
@@ -455,4 +973,510 @@ func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {
 		return parsed
 	}
 	return info
+}
+
+func localGPUUtilPercent() (float64, bool) {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("ioreg", "-r", "-c", "AGXAccelerator").Output()
+		if err != nil {
+			return 0, false
+		}
+		const marker = "\"Device Utilization %\"="
+		for _, line := range strings.Split(string(out), "\n") {
+			if idx := strings.Index(line, marker); idx != -1 {
+				rest := line[idx+len(marker):]
+				end := strings.IndexAny(rest, ",}")
+				if end == -1 {
+					end = len(rest)
+				}
+				if v, err := strconv.ParseFloat(strings.TrimSpace(rest[:end]), 64); err == nil {
+					return v, true
+				}
+			}
+		}
+		return 0, false
+	case "linux":
+		out, err := exec.Command("nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits").Output()
+		if err != nil {
+			return 0, false
+		}
+		return parseLinuxGPUUtilPercent(string(out))
+	default:
+		return 0, false
+	}
+}
+
+func parseLinuxGPUUtilPercent(out string) (float64, bool) {
+	var (
+		maxUtil float64
+		found   bool
+	)
+
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(line), 64); err == nil {
+			found = true
+			if v > maxUtil {
+				maxUtil = v
+			}
+		}
+	}
+
+	return maxUtil, found
+}
+
+// --- Storage Class Detection ---
+
+func localStorageClass() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return localStorageClassDarwin()
+	case "linux":
+		return localStorageClassLinux()
+	default:
+		return "unknown"
+	}
+}
+
+func localStorageClassDarwin() string {
+	out, err := exec.Command("diskutil", "info", "/").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return parseDiskutilStorageClass(string(out))
+}
+
+func parseDiskutilStorageClass(out string) string {
+	isSolid := false
+	isNVMe := false
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Solid State:") && strings.Contains(strings.ToLower(trimmed), "yes") {
+			isSolid = true
+		}
+		if strings.HasPrefix(trimmed, "Protocol:") && strings.Contains(strings.ToLower(trimmed), "nvme") {
+			isNVMe = true
+		}
+		if strings.HasPrefix(trimmed, "Device / Media Name:") && strings.Contains(strings.ToLower(trimmed), "nvme") {
+			isNVMe = true
+		}
+	}
+	if isNVMe {
+		return "nvme"
+	}
+	if isSolid {
+		return "ssd"
+	}
+	return "unknown"
+}
+
+func localStorageClassLinux() string {
+	out, err := exec.Command("bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null`).Output()
+	if err != nil {
+		return "unknown"
+	}
+	return resolveLinuxStorageClass(
+		strings.TrimSpace(string(out)),
+		localLinuxBlockDeviceInfo,
+		localLinuxBlockDeviceSlaves,
+		localLinuxRotational,
+	)
+}
+
+type linuxBlockDeviceInfo struct {
+	Name   string `json:"name"`
+	KName  string `json:"kname"`
+	PKName string `json:"pkname"`
+	Type   string `json:"type"`
+	ROTA   *int   `json:"rota"`
+}
+
+type linuxBlockDevicesResponse struct {
+	Blockdevices []linuxBlockDeviceInfo `json:"blockdevices"`
+}
+
+func resolveLinuxStorageClass(
+	source string,
+	query func(string) (linuxBlockDeviceInfo, error),
+	slaves func(linuxBlockDeviceInfo) ([]string, error),
+	fallbackReadRotational func(string) (string, error),
+) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "unknown"
+	}
+
+	classes := linuxStorageAncestorClasses(source, query, slaves)
+	if class := aggregateLinuxStorageClass(classes); class != "unknown" {
+		return class
+	}
+
+	return fallbackLinuxStorageClass(source, fallbackReadRotational)
+}
+
+func linuxStorageAncestorClasses(
+	source string,
+	query func(string) (linuxBlockDeviceInfo, error),
+	slaves func(linuxBlockDeviceInfo) ([]string, error),
+) []string {
+	queue := []string{strings.TrimSpace(source)}
+	seen := map[string]struct{}{}
+	var classes []string
+
+	for len(queue) > 0 && len(seen) < 16 {
+		current := strings.TrimSpace(queue[0])
+		queue = queue[1:]
+		if current == "" {
+			continue
+		}
+		if _, ok := seen[current]; ok {
+			continue
+		}
+		seen[current] = struct{}{}
+
+		info, err := query(current)
+		if err != nil {
+			continue
+		}
+
+		if info.Type == "disk" {
+			if class := classifyLinuxBlockDevice(info); class != "unknown" {
+				classes = append(classes, class)
+			}
+			continue
+		}
+
+		parents := linuxParentDevicePaths(info)
+		if len(parents) == 0 {
+			if discovered, err := slaves(info); err == nil {
+				parents = discovered
+			}
+		}
+		queue = append(queue, parents...)
+	}
+
+	return classes
+}
+
+func aggregateLinuxStorageClass(classes []string) string {
+	hasNVMe := false
+	hasSSD := false
+
+	for _, class := range classes {
+		switch strings.ToLower(strings.TrimSpace(class)) {
+		case "hdd":
+			return "hdd"
+		case "nvme":
+			hasNVMe = true
+		case "ssd":
+			hasSSD = true
+		}
+	}
+
+	switch {
+	case hasNVMe:
+		return "nvme"
+	case hasSSD:
+		return "ssd"
+	default:
+		return "unknown"
+	}
+}
+
+func classifyLinuxBlockDevice(info linuxBlockDeviceInfo) string {
+	if strings.HasPrefix(blockDeviceName(info.Name), "nvme") {
+		return "nvme"
+	}
+	if info.ROTA == nil {
+		return "unknown"
+	}
+	switch *info.ROTA {
+	case 0:
+		return "ssd"
+	case 1:
+		return "hdd"
+	default:
+		return "unknown"
+	}
+}
+
+func parseLinuxBlockDeviceInfo(out string) (linuxBlockDeviceInfo, error) {
+	var resp linuxBlockDevicesResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return linuxBlockDeviceInfo{}, err
+	}
+	if len(resp.Blockdevices) == 0 {
+		return linuxBlockDeviceInfo{}, fmt.Errorf("lsblk returned no block devices")
+	}
+	return resp.Blockdevices[0], nil
+}
+
+func localLinuxBlockDeviceInfo(device string) (linuxBlockDeviceInfo, error) {
+	out, err := exec.Command("lsblk", "-J", "-n", "-p", "-o", "NAME,KNAME,PKNAME,TYPE,ROTA", device).Output()
+	if err != nil {
+		return linuxBlockDeviceInfo{}, err
+	}
+	return parseLinuxBlockDeviceInfo(string(out))
+}
+
+func localLinuxBlockDeviceSlaves(info linuxBlockDeviceInfo) ([]string, error) {
+	sysfsName := linuxSysfsBlockName(info)
+	if sysfsName == "" {
+		return nil, fmt.Errorf("no sysfs block name for %+v", info)
+	}
+	entries, err := os.ReadDir(filepath.Join("/sys/class/block", sysfsName, "slaves"))
+	if err != nil {
+		return nil, err
+	}
+
+	parents := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := filepath.Base(strings.TrimSpace(entry.Name()))
+		if name == "" {
+			continue
+		}
+		parents = append(parents, filepath.Join("/dev", name))
+	}
+	sort.Strings(parents)
+	return parents, nil
+}
+
+func localLinuxRotational(device string) (string, error) {
+	base := fallbackLinuxBlockBase(device)
+	if base == "" {
+		return "", fmt.Errorf("no block device base for %q", device)
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/sys/block/%s/queue/rotational", base))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func fallbackLinuxStorageClass(source string, readRotational func(string) (string, error)) string {
+	base := fallbackLinuxBlockBase(source)
+	if base == "" {
+		return "unknown"
+	}
+	if strings.HasPrefix(base, "nvme") {
+		return "nvme"
+	}
+	rot, err := readRotational(base)
+	if err != nil {
+		return "unknown"
+	}
+	switch strings.TrimSpace(rot) {
+	case "0":
+		return "ssd"
+	case "1":
+		return "hdd"
+	default:
+		return "unknown"
+	}
+}
+
+func fallbackLinuxBlockBase(device string) string {
+	base := blockDeviceName(device)
+	if base == "" {
+		return ""
+	}
+
+	switch {
+	case strings.HasPrefix(base, "nvme"), strings.HasPrefix(base, "mmcblk"):
+		if idx := strings.LastIndex(base, "p"); idx > 0 && hasOnlyDigits(base[idx+1:]) {
+			return base[:idx]
+		}
+		return base
+	case strings.HasPrefix(base, "loop"), strings.HasPrefix(base, "dm-"):
+		return base
+	default:
+		trimmed := strings.TrimRight(base, "0123456789")
+		if trimmed == "" {
+			return base
+		}
+		return trimmed
+	}
+}
+
+func blockDeviceName(device string) string {
+	device = strings.TrimSpace(device)
+	if device == "" {
+		return ""
+	}
+	device = strings.TrimPrefix(device, "/dev/")
+	return filepath.Base(device)
+}
+
+func parentDevicePath(pkName string) string {
+	pkName = strings.TrimSpace(pkName)
+	if pkName == "" {
+		return ""
+	}
+	if strings.HasPrefix(pkName, "/dev/") {
+		return pkName
+	}
+	return filepath.Join("/dev", filepath.Base(pkName))
+}
+
+func linuxParentDevicePaths(info linuxBlockDeviceInfo) []string {
+	parent := parentDevicePath(info.PKName)
+	if parent == "" {
+		return nil
+	}
+	return []string{parent}
+}
+
+func linuxSysfsBlockName(info linuxBlockDeviceInfo) string {
+	if info.KName != "" {
+		return filepath.Base(strings.TrimSpace(info.KName))
+	}
+	return blockDeviceName(info.Name)
+}
+
+func hasOnlyDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// --- Battery / Thermal Detection ---
+
+func localBatteryPercent() (int, bool) {
+	switch runtime.GOOS {
+	case "darwin":
+		return localBatteryDarwin()
+	case "linux":
+		return localBatteryLinux()
+	default:
+		return 0, false
+	}
+}
+
+func localBatteryDarwin() (int, bool) {
+	out, err := exec.Command("pmset", "-g", "batt").Output()
+	if err != nil {
+		return 0, false
+	}
+	return parsePmsetBattery(string(out))
+}
+
+func parsePmsetBattery(out string) (int, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		if idx := strings.Index(line, "%"); idx > 0 {
+			// Walk backward to find the number before %
+			start := idx - 1
+			for start >= 0 && line[start] >= '0' && line[start] <= '9' {
+				start--
+			}
+			start++
+			if start < idx {
+				if pct, err := strconv.Atoi(line[start:idx]); err == nil && pct >= 0 && pct <= 100 {
+					return pct, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func localBatteryLinux() (int, bool) {
+	// Try common power supply paths
+	for _, name := range []string{"BAT0", "BAT1", "BATT"} {
+		data, err := os.ReadFile(fmt.Sprintf("/sys/class/power_supply/%s/capacity", name))
+		if err != nil {
+			continue
+		}
+		if pct, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pct >= 0 && pct <= 100 {
+			return pct, true
+		}
+	}
+	return 0, false
+}
+
+func localThermalState() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return localThermalDarwin()
+	case "linux":
+		return localThermalLinux()
+	default:
+		return ""
+	}
+}
+
+func localThermalDarwin() string {
+	out, err := exec.Command("pmset", "-g", "therm").Output()
+	if err != nil {
+		return ""
+	}
+	return parsePmsetThermal(string(out))
+}
+
+// parsePmsetThermal maps macOS thermal pressure to: nominal, fair, serious, critical.
+// pmset -g therm outputs a CPU_Speed_Limit line (100 = nominal, < 100 = throttled).
+func parsePmsetThermal(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "CPU_Speed_Limit") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				if val, err := strconv.Atoi(fields[len(fields)-1]); err == nil {
+					switch {
+					case val >= 100:
+						return "nominal"
+					case val >= 80:
+						return "fair"
+					case val >= 50:
+						return "serious"
+					default:
+						return "critical"
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func localThermalLinux() string {
+	// Check thermal zone temperatures
+	entries, err := os.ReadDir("/sys/class/thermal")
+	if err != nil {
+		return ""
+	}
+	var maxTemp int
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "thermal_zone") {
+			continue
+		}
+		data, err := os.ReadFile(fmt.Sprintf("/sys/class/thermal/%s/temp", entry.Name()))
+		if err != nil {
+			continue
+		}
+		if temp, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			if temp > maxTemp {
+				maxTemp = temp
+			}
+		}
+	}
+	if maxTemp == 0 {
+		return ""
+	}
+	// Temps in millidegrees Celsius
+	tempC := maxTemp / 1000
+	switch {
+	case tempC >= 95:
+		return "critical"
+	case tempC >= 85:
+		return "serious"
+	case tempC >= 75:
+		return "fair"
+	default:
+		return "nominal"
+	}
 }

@@ -7,8 +7,10 @@ local and remote fact collection, tool discovery, and `ClusterSnapshot` assembly
 It is the foundation that later phases will build on.
 
 > Live-repo note: `main` has moved beyond the original Phase 1 boundary. Advisory
-> placement via `axis task place` is live, and optional local server/MCP/execution
-> surfaces also exist. This document still describes the Phase 1 observability core.
+> placement via `axis task place` is live, optional local server/MCP/execution
+> surfaces also exist, live reads now overlay local reservations, and corrupt
+> local state/skills files are recovered via quarantine + warning. This document
+> still describes the Phase 1 observability core.
 
 ## Goals
 
@@ -29,7 +31,7 @@ It is the foundation that later phases will build on.
 
 ### `axis version`
 
-Prints the version string (e.g. `axis 0.1.0`).
+Prints the version string (e.g. `axis <version>`).
 
 ### `axis facts`
 
@@ -44,6 +46,7 @@ Collected per run:
 - OS (darwin / linux) and kernel version
 - Architecture
 - CPU core count and model string
+- Load averages (1m / 5m / 15m) when available
 - Total and free RAM (MB), with pressure classification
 - Total and free disk space (GB)
 - GPU list (best-effort; silent if unavailable)
@@ -149,6 +152,7 @@ Per-node hardware metrics:
 
 - `cpu_cores`, `cpu_model`
 - `ram_total_mb`, `ram_free_mb`
+- `load_1m`, `load_5m`, `load_15m`
 - `disk_total_gb`, `disk_free_gb`
 - `gpus` (optional)
 - `pressure`: `none` / `low` / `medium` / `high`

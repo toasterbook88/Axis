@@ -11,13 +11,36 @@ cd axis
 go build -o axis ./cmd/axis/
 ```
 
-Requires Go 1.22+.
+Requires Go 1.26.1+.
 
 ## Running Tests
 
 ```bash
 go test ./...
+go test -race ./...
+./hack/coverage-check.sh
 ```
+
+## Releasing
+
+AXIS release artifacts are built from signed `v*` tags by GitHub Actions and
+GoReleaser.
+
+1. Update `internal/buildinfo/version.go`.
+2. Run the full local validation set:
+
+```bash
+go test ./... -count=1
+go test -race ./... -count=1
+go build ./...
+./hack/coverage-check.sh
+```
+
+3. Commit the version bump.
+4. Create and push a signed tag such as `v0.6.0`.
+
+The release workflow verifies that the pushed tag matches
+`internal/buildinfo/version.go` before publishing binaries.
 
 Format the code before submitting:
 
@@ -27,21 +50,26 @@ gofmt -w .
 
 ## Scope Discipline
 
-AXIS is intentionally minimal. Contributions should fit within the existing
-architecture rather than extending its scope.
+AXIS is intentionally narrow. Contributions should reduce operator confusion and
+keep model-mediated or execution-heavy surfaces subordinate to observed state.
+
+Phase 2 (UDS+bearer-auth API and advisory task placement) and Phase 3 (daemon
+hardening, event-driven cache, context export, UDP HMAC) are complete and stable;
+those surfaces are part of the existing scope and can be improved or bug-fixed.
 
 **Do:**
-- Fix bugs in existing fact collectors, discovery, snapshot assembly, or placement
+- Fix bugs in existing fact collectors, discovery, snapshot assembly, placement, API server, or authentication layer
 - Improve error handling or robustness of existing collectors
 - Add test coverage for existing behavior
 - Improve documentation accuracy
+- Prefer deleting dead or duplicate complexity over preserving it
 
 **Do not:**
-- Add a daemon / background coordinator without a prior discussion in an issue
-- Add mesh networking or peer discovery beyond the static seed file without discussion
+- Add new duplicate control surfaces or background authority paths without a prior discussion
+- Treat generated output as cluster truth unless it is backed by a real snapshot or live probe
 - Add heavy dependencies without strong justification — the project intentionally
   keeps its dependency surface small (currently: `cobra`, `golang.org/x/crypto`,
-  `gopkg.in/yaml.v3`)
+  `gopkg.in/yaml.v3`, `mcp-go`, and `shellescape`)
 - Overfit to a specific private cluster topology (e.g., hardcoded interface names,
   private hostnames, or vendor-specific tool names that are not broadly installed)
 
@@ -60,6 +88,9 @@ Open a GitHub issue with:
 - AXIS version (`axis version`)
 - OS and architecture
 - Relevant command output or error message
+
+For security-sensitive issues, follow [SECURITY.md](SECURITY.md) and use
+private vulnerability reporting instead of a public issue.
 
 ## Pull Requests
 

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -11,13 +12,13 @@ func TestLoad_ValidConfig(t *testing.T) {
 	path := filepath.Join(dir, "nodes.yaml")
 	os.WriteFile(path, []byte(`
 nodes:
-  - name: m3
-    hostname: m3.local
-    ssh_user: smithanator
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
     role: cortex
-  - name: m1
-    hostname: m1.local
-    ssh_user: smithanator
+  - name: node-b
+    hostname: node-b.local
+    ssh_user: user
 `), 0644)
 
 	cfg, err := Load(path)
@@ -27,11 +28,11 @@ nodes:
 	if len(cfg.Nodes) != 2 {
 		t.Fatalf("expected 2 nodes, got %d", len(cfg.Nodes))
 	}
-	if cfg.Nodes[0].Name != "m3" {
-		t.Errorf("node[0].name: got %q, want m3", cfg.Nodes[0].Name)
+	if cfg.Nodes[0].Name != "node-a" {
+		t.Errorf("node[0].name: got %q, want node-a", cfg.Nodes[0].Name)
 	}
-	if cfg.Nodes[1].Hostname != "m1.local" {
-		t.Errorf("node[1].hostname: got %q, want m1.local", cfg.Nodes[1].Hostname)
+	if cfg.Nodes[1].Hostname != "node-b.local" {
+		t.Errorf("node[1].hostname: got %q, want node-b.local", cfg.Nodes[1].Hostname)
 	}
 }
 
@@ -50,6 +51,95 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoad_RejectsUnknownTopLevelField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	os.WriteFile(path, []byte(`
+nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+unexpected: true
+`), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown top-level field")
+	}
+	if !strings.Contains(err.Error(), "field unexpected not found") {
+		t.Fatalf("expected unknown-field error, got %v", err)
+	}
+}
+
+func TestLoad_RejectsUnknownNodeField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	os.WriteFile(path, []byte(`
+nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+    sshuser_typo: user
+`), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown node field")
+	}
+	if !strings.Contains(err.Error(), "field sshuser_typo not found") {
+		t.Fatalf("expected unknown-field error, got %v", err)
+	}
+}
+
+func TestLoad_RejectsUnknownDiscoveryField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	os.WriteFile(path, []byte(`
+nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+discovery:
+  enabled: true
+  beacon_interval_typo: 3
+`), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown discovery field")
+	}
+	if !strings.Contains(err.Error(), "field beacon_interval_typo not found") {
+		t.Fatalf("expected unknown-field error, got %v", err)
+	}
+}
+
+func TestLoad_ValidConfigWithDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	os.WriteFile(path, []byte(`
+nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+discovery:
+  enabled: true
+  udp_port: 42424
+  beacon_interval_sec: 3
+  secret: shared-cluster-secret
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with discovery: %v", err)
+	}
+	if cfg.Discovery == nil || !cfg.Discovery.Enabled {
+		t.Fatalf("expected discovery config to load, got %#v", cfg.Discovery)
+	}
+	if cfg.Discovery.UDPPort != 42424 {
+		t.Fatalf("expected discovery udp_port 42424, got %d", cfg.Discovery.UDPPort)
 	}
 }
 

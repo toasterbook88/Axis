@@ -5,62 +5,84 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/buildinfo"
+	"github.com/toasterbook88/axis/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
-// Version is the hardcoded Phase 1 version string.
-const Version = "0.1.0"
+// Version is the CLI-visible AXIS version string.
+const Version = buildinfo.Version
 
 func main() {
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		os.Exit(ExitErrGeneric)
+	}
+}
+
+func newRootCmd() *cobra.Command {
+	var noColor bool
+
 	root := &cobra.Command{
 		Use:   "axis",
-		Short: "AXIS — cluster-aware AI execution substrate",
+		Short: "AXIS — snapshot-first cluster facts and deterministic placement",
+		Long: "AXIS is a snapshot-first operator CLI for cluster fact collection, " +
+			"deterministic placement, and explicit local control surfaces.\n\n" +
+			"Chat helpers are experimental and must not be treated as authoritative " +
+			"cluster truth unless backed by a live snapshot or probe.",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			ui.Init(noColor)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			const logo = `
- █████╗ ██╗  ██╗██╗███████╗
-██╔══██╗╚██╗██╔╝██║██╔════╝
-███████║ ╚███╔╝ ██║███████╗
-██╔══██║ ██╔██╗ ██║╚════██║
-██║  ██║██╔╝ ██╗██║███████║
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝
-`
-			out := cmd.OutOrStdout()
-			cmd.SetOut(out)
-			cmd.SetErr(out)
-
-			fmt.Fprint(out, logo)
-			fmt.Fprintf(out, "\nAXIS %s — cluster-aware AI execution substrate\n\n", Version)
-
-			chat := chatCmd()
-			return chat.RunE(chat, args)
+			return cmd.Help()
 		},
 	}
 
+	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
+
+	root.AddCommand(updateCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(factsCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(taskCmd())
 	root.AddCommand(mcpCmd())
 	root.AddCommand(serveCmd())
+	root.AddCommand(daemonCmd())
 	root.AddCommand(chatCmd())
-	root.AddCommand(discoverCmd())
+	root.AddCommand(agentCmd())
 	root.AddCommand(contextCmd())
 	root.AddCommand(scriptsCmd())
 	root.AddCommand(skillsCmd())
+	root.AddCommand(completionCmd())
+	root.AddCommand(doctorCmd())
 
-	if err := root.Execute(); err != nil {
-		os.Exit(ExitErrGeneric)
-	}
+	ui.ApplyHelpTemplate(root)
+
+	return root
 }
 
 func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print AXIS version",
+		Short: "Print AXIS version and build info",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("axis " + Version)
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "axis %s\n", Version)
+			if buildinfo.Commit != "" {
+				fmt.Fprintf(out, "  commit:   %s\n", buildinfo.Commit)
+			}
+			if buildinfo.Date != "" {
+				fmt.Fprintf(out, "  built:    %s\n", buildinfo.Date)
+			}
+			goVer := buildinfo.GoVersion
+			if goVer == "" {
+				goVer = runtime.Version()
+			}
+			fmt.Fprintf(out, "  go:       %s\n", goVer)
+			fmt.Fprintf(out, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		},
 	}
 }
@@ -82,4 +104,11 @@ func printOutput(data interface{}, format string) error {
 		fmt.Println(string(out))
 	}
 	return nil
+}
+
+func printWarning(err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 }

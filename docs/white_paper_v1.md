@@ -29,7 +29,8 @@ AXIS is intentionally minimal:
 - Single binary, no installation beyond `go build`
 - No required daemon or background process
 - No proprietary wire protocol — SSH for transport, YAML for config, JSON for output
-- Dependency surface is small by design: `cobra`, `golang.org/x/crypto`, `gopkg.in/yaml.v3`
+- Dependency surface is small by design: `cobra`, `golang.org/x/crypto`,
+  `gopkg.in/yaml.v3`, `mcp-go`, `shellescape`
 
 ## Architecture
 
@@ -82,7 +83,7 @@ What it produces:
 
 This is the data foundation for later phases.
 
-## Phase 2: Advisory Task Placement (Active)
+## Phase 2: Advisory Task Placement (Completed)
 
 **Phase 2** uses the `ClusterSnapshot` as input to a deterministic placement layer.
 Given a task description and a snapshot, AXIS selects the most appropriate node.
@@ -98,12 +99,38 @@ Implemented features:
 - Optional local HTTP API via `axis serve`
 - Optional read-only MCP surface via `axis mcp serve`
 
-Longer-term directions under consideration:
+Longer-term directions that were addressed in Phase 3:
 
-- A lightweight daemon (`axisd`) for periodic background collection
-- Structured context export suitable for injection into LLM system prompts
+- A lightweight daemon (via `axis serve`) for periodic background collection — **shipped**
+- Structured context export suitable for injection into LLM system prompts — **shipped**
+- More fully hardened execution and automation surfaces — **shipped**
+
+Remaining directions under consideration:
+
 - Multi-hop or mesh node discovery (beyond a static YAML seed file)
-- More fully hardened execution and automation surfaces
+
+## Phase 3: Daemon Hardening & Event-Driven Cache (Completed)
+
+**Phase 3** hardens the daemon and event surfaces introduced in Phase 2.
+
+Implemented features:
+
+- **Graceful shutdown**: `axis serve` drains in-flight requests and waits for
+  background refresh goroutines before exiting on SIGTERM/SIGINT
+- **nodes.yaml hot-reload**: daemon watches `~/.axis/nodes.yaml` and triggers
+  `invalidate + refresh` immediately when the file changes — no restart required
+- **Refresh metrics**: `/health` exposes `refresh_count`, `last_refresh_duration_ms`,
+  and `stale_nodes` (nodes that degraded since the last refresh)
+- **Partial node degradation tracking**: nodes that transition `complete → error`
+  are surfaced in `Metadata.StaleNodes` without busting the entire cache
+- **Structured context export**: `axis task context --format json` emits a
+  machine-readable JSON block including fit score, recent placement decisions,
+  and learned skills — suitable for programmatic LLM prompt injection
+- **Context enrichment**: plain-text context block now includes last 5 placement
+  decisions and top 5 learned skills
+- **HMAC-SHA256 beacon auth**: UDP discovery beacons are signed with
+  HMAC-SHA256(secret, payload) instead of transmitting the shared secret in
+  plaintext — prevents replay and forgery on local networks
 
 ## Design Principles
 
@@ -116,7 +143,7 @@ snapshot.
 snapshot reflects reality, including uncertainty.
 
 **Minimal dependencies.** Each dependency is a liability. AXIS avoids pulling in
-monitoring frameworks, ORMs, or large CLI toolkits. Standard library and three
+monitoring frameworks, ORMs, or large CLI toolkits. Standard library and five
 focused packages is the current budget.
 
 **Cluster-topology neutral.** The config schema and data model avoid hardcoding

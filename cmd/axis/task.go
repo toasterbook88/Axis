@@ -4,24 +4,27 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
-	"al.essio.dev/pkg/shellescape"
 	"github.com/spf13/cobra"
-	"github.com/toasterbook88/axis/internal/config"
-	"github.com/toasterbook88/axis/internal/discovery"
-	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
-	"github.com/toasterbook88/axis/internal/safety"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
-	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/state"
-	"github.com/toasterbook88/axis/internal/transport"
+	"github.com/toasterbook88/axis/internal/turboexec"
+	"github.com/toasterbook88/axis/internal/ui"
 )
+
+var loadPlacementState = state.Load
+var fetchTaskSnapshot = daemon.FetchSnapshot
+var loadTaskLiveSnapshot = discoverLiveSnapshot
 
 func taskCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -34,8 +37,15 @@ func taskCmd() *cobra.Command {
 	return cmd
 }
 
+type taskPlaceOutput struct {
+	Source   string                   `json:"source" yaml:"source"`
+	Decision models.PlacementDecision `json:"decision" yaml:"decision"`
+}
+
 func taskPlaceCmd() *cobra.Command {
 	var format string
+	var cached bool
+	var cacheAddr string
 
 	cmd := &cobra.Command{
 		Use:   "place [description]",
@@ -44,57 +54,113 @@ func taskPlaceCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 
-			// Load config → discover → snapshot (reuse Phase 1 flow)
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			decision, source, err := planTaskPlacement(
+				ctx,
+				desc,
+				cached,
+				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+					return fetchTaskSnapshot(ctx, cacheAddr)
+				},
+				loadTaskLiveSnapshot,
+			)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-
-			// Infer requirements from description
-			reqs := placement.InferRequirements(desc)
-
-			// Run placement
-			decision := placement.SelectBestNode(reqs, snap.Nodes, nil)
-
 			if format == "json" {
-				return printOutput(decision, "json")
+				var payload any = decision
+				if cached {
+					payload = taskPlaceOutput{
+						Source:   source,
+						Decision: decision,
+					}
+				}
+				return printOutput(payload, "json")
 			}
 
 			// Human-readable output
 			if !decision.OK {
-				fmt.Println("No suitable node found.")
+				if cached {
+					fmt.Printf("Source: %s\n", source)
+				}
+				fmt.Printf("%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
-					fmt.Printf("  - %s\n", r)
+					fmt.Printf("  %s %s\n", ui.Dim("-"), r)
 				}
 				os.Exit(ExitErrNoNodesFit)
 			}
 
-			locality := "remote"
+			locality := ui.Dim("remote")
 			if decision.IsLocal {
-				locality = "local"
+				locality = ui.Green("local")
 			}
-			fmt.Printf("Selected node: %s (%s, fit %d/100)\n", decision.Node, locality, decision.FitScore)
+			if cached {
+				fmt.Printf("%s %s\n", ui.Dim("Source:"), source)
+			}
+			fmt.Printf("%s %s (%s, fit %s)\n",
+				ui.Green("✓"),
+				ui.Bold(decision.Node),
+				locality,
+				ui.Cyan(fmt.Sprintf("%d/100", decision.FitScore)))
 			if decision.Tool != "" {
-				fmt.Printf("Tool: %s\n", decision.Tool)
+				fmt.Printf("  %s %s\n", ui.Dim("Tool:"), decision.Tool)
 			}
-			fmt.Println("Reason:")
+			fmt.Printf("  %s\n", ui.Dim("Reason:"))
 			for _, r := range decision.Reasoning {
-				fmt.Printf("  - %s\n", r)
+				fmt.Printf("    %s %s\n", ui.Dim("-"), r)
 			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
+	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
+}
+
+func planTaskPlacement(
+	ctx context.Context,
+	desc string,
+	cached bool,
+	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+) (models.PlacementDecision, string, error) {
+	snap, source, err := collectStatusSnapshot(ctx, cached, cachedLoader, liveLoader)
+	if err != nil {
+		return models.PlacementDecision{}, "", err
+	}
+
+	reqs := placement.InferRequirements(desc)
+	st, stateErr := loadPlacementState()
+	if stateErr != nil && st == nil {
+		return models.PlacementDecision{}, "", stateErr
+	}
+	if stateErr != nil {
+		appendWarningIfMissing(snap, models.Warning{
+			Kind:    "state",
+			Message: stateErr.Error(),
+		})
+	}
+	decision := placement.SelectBestNode(reqs, snap.Nodes, st)
+	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
+	return decision, source, nil
+}
+
+func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
+	if snap == nil {
+		return
+	}
+	for _, existing := range snap.Warnings {
+		if existing.Kind == warning.Kind && existing.Message == warning.Message && existing.Node == warning.Node {
+			return
+		}
+	}
+	snap.Warnings = append(snap.Warnings, warning)
 }
 
 type taskRunIntent struct {
@@ -103,6 +169,17 @@ type taskRunIntent struct {
 	matchedScript        *scripts.Script
 	matchedSkill         *skills.LearnedSkill
 	requiresConfirmation bool
+}
+
+func reservationMBForRequirements(reqs models.TaskRequirements) int64 {
+	return execution.ReservationMBForRequirements(reqs)
+}
+
+func ensureReservationCapacity(snap *models.ClusterSnapshot, st *state.ClusterState, node string, reservationMB int64) error {
+	if !execution.CanReserve(snap, st, node, reservationMB) {
+		return fmt.Errorf("node %s cannot reserve %d MB (current reservations exceed cap)", node, reservationMB)
+	}
+	return nil
 }
 
 func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *skills.Store) (taskRunIntent, error) {
@@ -166,204 +243,66 @@ func taskRunCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
-			skillStore := skills.Load()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+
+			rt, err := runtimectx.Load(ctx)
+			if err != nil {
+				Fatal(ExitErrConfigLoad, "Failed to load runtime context: %v", err)
+			}
+
+			skillStore := rt.Skills
 			intent, err := resolveTaskRunIntent(input, execFlag, scriptFlag, skillStore)
 			if err != nil {
 				return err
 			}
 
-			// 1. placement (reuse existing)
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			nodes := discovery.Discover(ctx, cfg)
-			snap := snapshot.Build(nodes)
-
-			st, _ := state.Load()
-			reqs := placement.InferRequirements(input)
-
-			if intent.matchedScript != nil {
-				reqs.RequiredTools = append([]string(nil), intent.matchedScript.RequiredTools...)
-				if intent.matchedScript.EstRAMMB > reqs.MinFreeRAMMB {
-					reqs.MinFreeRAMMB = intent.matchedScript.EstRAMMB
-				}
-			}
-
-			// Always bypass strict requirement for purely explicit runs if user just says "df -h"
-			if execFlag && len(reqs.RequiredTools) > 0 {
-				filtered := reqs.RequiredTools[:0]
-				for _, tool := range reqs.RequiredTools {
-					if !strings.EqualFold(tool, "ollama") {
-						filtered = append(filtered, tool)
-					}
-				}
-				reqs.RequiredTools = append([]string(nil), filtered...)
-			}
-
-			decision := placement.SelectBestNode(reqs, snap.Nodes, st)
-
-			if !decision.OK {
-				for _, r := range decision.Reasoning {
-					fmt.Printf("  - %s\n", r)
-				}
-				Fatal(ExitErrNoNodesFit, "no suitable node found")
-			}
-
-			fmt.Printf("Selected node: %s (fit %d/100)\n", decision.Node, decision.FitScore)
-			for _, r := range decision.Reasoning {
-				fmt.Printf("  - %s\n", r)
-			}
-
-			// 2. require an explicit execution opt-in for any script/skill suggestion.
 			if intent.requiresConfirmation {
 				fmt.Printf("\nSuggested %s for %q:\n%s\n", intent.label, input, intent.command)
 				return fmt.Errorf("refusing to execute implicitly; re-run with --script to execute the suggestion or --exec to run a raw command")
 			}
 
-			commandToRun := intent.command
-			if intent.matchedSkill != nil && scriptFlag {
-				fmt.Printf("\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
-			} else if intent.matchedScript != nil && scriptFlag {
-				fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
+			mode := execution.ModeExec
+			if scriptFlag {
+				mode = execution.ModeScript
 			}
 
-			fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", decision.Node, commandToRun)
-
-			// 3. execute with stream
-			// Match the node explicitly
-			var targetNode models.NodeFacts
-			for _, n := range snap.Nodes {
-				if n.Name == decision.Node {
-					targetNode = n
-					break
-				}
+			req := execution.GuardedExecutionRequest{
+				Description: input,
+				Mode:        mode,
+				Confirm:     execution.ConfirmWord,
+				Stdout:      os.Stdout,
+				Stderr:      os.Stderr,
+				OnReady: func(resp execution.GuardedExecutionResult) {
+					fmt.Printf("Selected node: %s (fit %d/100)\n", resp.Node, resp.FitScore)
+					for _, reason := range resp.Reasoning {
+						fmt.Printf("  - %s\n", reason)
+					}
+					if intent.matchedSkill != nil && scriptFlag {
+						fmt.Printf("\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
+					} else if intent.matchedScript != nil && scriptFlag {
+						fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
+					}
+					fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", resp.Node, resp.Command)
+				},
 			}
 
-			// knowledge injection
-			k := knowledge.Build(snap, st, decision.Node)
-
-			// Safety blocker applies only once the user has explicitly opted into execution.
-			if block := safety.Check(k, commandToRun, skillStore.IsKnownBad); block.Blocked {
-				if out, err := exec.Command("toilet", "-f", "mono12", "-F", "metal", "BULLSHIT BLOCKED").Output(); err == nil {
-					fmt.Print("\n", string(out), "\n")
-				} else {
-					fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
-				}
-				fmt.Printf("Reason: %s\n", block.Reason)
-				fmt.Printf("Dumb score: %d/100\n", block.Score)
+			resp, err := execution.RunGuarded(ctx, rt, req)
+			if resp.Blocked {
+				fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
+				fmt.Printf("Reason: %s\n", resp.BlockReason)
+				fmt.Printf("Dumb score: %d/100\n", resp.DumbScore)
 				fmt.Println("Nothing was executed. Fix your request.")
 				return nil
 			}
-
-			contextJSON, err := knowledge.ExecutionContextJSON(snap, st, decision, input, intent.matchedScript, intent.matchedSkill)
-			if err != nil {
-				Fatal(ExitErrContextWrite, "failed to encode execution context: %v", err)
+			if err != nil && resp.Error == "no suitable node found" {
+				for _, reason := range resp.Reasoning {
+					fmt.Printf("  - %s\n", reason)
+				}
+				Fatal(ExitErrNoNodesFit, "no suitable node found")
 			}
-
-			if models.IsLocalNode(targetNode) {
-				contextFile, err := os.CreateTemp("", "axis-knows-*.json")
-				if err != nil {
-					Fatal(ExitErrContextWrite, "failed to create context file: %v", err)
-				}
-				defer os.Remove(contextFile.Name())
-				if _, err := contextFile.Write(contextJSON); err != nil {
-					contextFile.Close()
-					Fatal(ExitErrContextWrite, "failed to write context: %v", err)
-				}
-				if err := contextFile.Close(); err != nil {
-					Fatal(ExitErrContextWrite, "failed to finalize context file: %v", err)
-				}
-
-				c := exec.CommandContext(ctx, "bash", "-c", commandToRun)
-				c.Env = append(os.Environ(),
-					"AXIS_CONTEXT_FILE="+contextFile.Name(),
-					"BEST_NODE="+decision.Node,
-				)
-				if st != nil {
-					reservationMB := reqs.MinFreeRAMMB + 1024
-					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
-					if err != nil {
-						return fmt.Errorf("failed to persist task reservation: %w", err)
-					}
-					defer func() {
-						if err := st.ReleaseTask(decision.Node, execID, reservationMB); err != nil {
-							fmt.Fprintf(os.Stderr, "warning: failed to release task reservation: %v\n", err)
-						}
-					}()
-				}
-				c.Stdout = os.Stdout
-				c.Stderr = os.Stderr
-				runErr := c.Run()
-				if runErr == nil {
-					skillStore.RecordSuccess(input, commandToRun, decision.Node)
-					skillStore.Save()
-				} else {
-					exitCode := 1
-					if err, ok := runErr.(*exec.ExitError); ok {
-						exitCode = err.ExitCode()
-					}
-					skillStore.RecordFailure(input, "failed with code "+fmt.Sprint(exitCode))
-					skillStore.Save()
-				}
-				return runErr
-			} else {
-				// Find config for SSH transport
-				var targetConfig config.NodeConfig
-				for _, nc := range cfg.Nodes {
-					if nc.Name == decision.Node {
-						targetConfig = nc
-						break
-					}
-				}
-
-				executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
-				defer executor.Close()
-
-				remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
-				writeJSONCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
-				if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
-					Fatal(ExitErrContextWrite, "failed to upload context: %v", err)
-				}
-
-				if st != nil {
-					reservationMB := reqs.MinFreeRAMMB + 1024
-					execID, err := st.AcquireTask(decision.Node, input, reservationMB)
-					if err != nil {
-						return fmt.Errorf("failed to persist task reservation: %w", err)
-					}
-					defer func() {
-						if err := st.ReleaseTask(decision.Node, execID, reservationMB); err != nil {
-							fmt.Fprintf(os.Stderr, "warning: failed to release task reservation: %v\n", err)
-						}
-					}()
-				}
-
-				quotedCmd := fmt.Sprintf(
-					"export BEST_NODE=%s AXIS_CONTEXT_FILE=%s; trap 'rm -f %s' EXIT; bash -c %s",
-					shellescape.Quote(decision.Node),
-					shellescape.Quote(remoteContextPath),
-					shellescape.Quote(remoteContextPath),
-					shellescape.Quote(commandToRun),
-				)
-				runErr := executor.Stream(ctx, quotedCmd, os.Stdout, os.Stderr)
-				if runErr == nil {
-					skillStore.RecordSuccess(input, commandToRun, decision.Node)
-					skillStore.Save()
-				}
-				if runErr != nil {
-					exitCode := 1
-					if err, ok := runErr.(*exec.ExitError); ok {
-						exitCode = err.ExitCode()
-					}
-					skillStore.RecordFailure(input, "failed with code "+fmt.Sprint(exitCode))
-					skillStore.Save()
-					return fmt.Errorf("remote execution failed: %w", runErr)
-				}
+			if err != nil {
+				return err
 			}
 			return nil
 		},
@@ -375,35 +314,112 @@ func taskRunCmd() *cobra.Command {
 
 // === NEW: axis task context <description> — zero-risk token saver ===
 func taskContextCmd() *cobra.Command {
+	var cached bool
+	var cacheAddr string
+	var format string
+
 	cmd := &cobra.Command{
 		Use:   "context [description]",
 		Short: "Emit 200-token context block for Gemini/Codex/Copilot/OpenCode",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
-
-			cfgPath := config.DefaultConfigPath()
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load config: %v", err)
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			snap := snapshot.Build(discovery.Discover(ctx, cfg))
+			snap, source, err := collectStatusSnapshot(
+				ctx,
+				cached,
+				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+					return fetchTaskSnapshot(ctx, cacheAddr)
+				},
+				loadTaskLiveSnapshot,
+			)
+			if err != nil {
+				Fatal(ExitErrConfigLoad, "Failed to load snapshot: %v", err)
+			}
+
 			reqs := placement.InferRequirements(desc)
-			printContextBlock(snap, reqs, desc)
+
+			st, _ := state.Load()
+			skillStore, _ := skills.Load()
+
+			if format == "json" {
+				out := buildContextJSON(snap, reqs, desc, source, st, skillStore)
+				return printOutput(out, "json")
+			}
+			printContextBlock(snap, reqs, desc, source, st, skillStore)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
 }
 
-func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task string) {
-	fmt.Println(buildContextBlock(snap, reqs, task))
+func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) {
+	fmt.Println(buildContextBlock(snap, reqs, task, source, st, skillStore))
 }
 
-func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task string) string {
+// ContextOutput is the structured JSON form of the context block — suitable
+// for programmatic injection into LLM system prompts.
+type ContextOutput struct {
+	Node             string    `json:"node"`
+	FitScore         int       `json:"fit_score"`
+	RAMFreeMB        int64     `json:"ram_free_mb"`
+	RAMAllocatableMB int64     `json:"ram_allocatable_mb,omitempty"`
+	Pressure         string    `json:"pressure"`
+	Tools            []string  `json:"tools"`
+	RecentDecisions  []string  `json:"recent_decisions,omitempty"`
+	Skills           []string  `json:"skills,omitempty"`
+	Source           string    `json:"source"`
+	Task             string    `json:"task"`
+	GeneratedAt      time.Time `json:"generated_at"`
+}
+
+func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) ContextOutput {
+	out := ContextOutput{
+		Source:      sourceOrLive(source),
+		Task:        task,
+		GeneratedAt: time.Now().UTC(),
+	}
+	if snap == nil || len(snap.Nodes) == 0 {
+		return out
+	}
+	best, ok := selectContextNode(snap.Nodes, reqs)
+	if !ok {
+		return out
+	}
+	out.Node = best.Name
+	if best.Resources != nil {
+		out.RAMFreeMB = best.Resources.RAMFreeMB
+		out.RAMAllocatableMB = best.Resources.RAMAllocatableMB
+		out.Pressure = best.Resources.Pressure
+	}
+	out.Tools = toolsList(best)
+	var clusterState *state.ClusterState
+	if st != nil {
+		clusterState = st
+	}
+	out.FitScore = placement.ComputeFitScore(best, models.IsLocalNode(best), clusterState)
+
+	if st != nil {
+		last := st.Decisions
+		if len(last) > 5 {
+			last = last[len(last)-5:]
+		}
+		out.RecentDecisions = last
+	}
+	if skillStore != nil {
+		for _, s := range skillStore.Skills {
+			out.Skills = append(out.Skills, s.Description)
+		}
+	}
+	return out
+}
+
+func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) string {
 	if snap == nil || len(snap.Nodes) == 0 {
 		return "No nodes found in cluster."
 	}
@@ -413,23 +429,95 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 		return "No nodes found in cluster."
 	}
 
-	freeRAM := "unknown"
+	ramSummary := "unknown"
 	pressure := "unknown"
+	extraLines := ""
 	if best.Resources != nil {
-		freeRAM = fmt.Sprintf("%dMB", best.Resources.RAMFreeMB)
+		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
+			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB)
+		} else {
+			ramSummary = fmt.Sprintf("%dMB free", best.Resources.RAMFreeMB)
+		}
 		pressure = best.Resources.Pressure
+	}
+	if best.TurboQuant != nil && best.TurboQuant.Supported && len(best.TurboQuant.Backends) > 0 {
+		status := "detected"
+		if best.TurboQuant.Verified {
+			status = "verified"
+		}
+		line := fmt.Sprintf("TurboQuant %s: %s", status, strings.Join(best.TurboQuant.Backends, ", "))
+		if len(best.TurboQuant.Capabilities) > 0 {
+			line += fmt.Sprintf(" (%s)", strings.Join(best.TurboQuant.Capabilities, ", "))
+		}
+		extraLines += "\n- " + line
+	}
+	if matrix := turboQuantCapabilityMatrix(snap.Nodes); matrix != "" {
+		extraLines += "\n- TurboQuant matrix: " + matrix
+	}
+
+	// Recent placement decisions give the LLM cluster history context.
+	if st != nil && len(st.Decisions) > 0 {
+		last := st.Decisions
+		if len(last) > 5 {
+			last = last[len(last)-5:]
+		}
+		extraLines += "\n- Recent placements: " + strings.Join(last, " | ")
+	}
+
+	// Learned skills tell the LLM what tasks have been validated on this cluster.
+	if skillStore != nil && len(skillStore.Skills) > 0 {
+		names := make([]string, 0, len(skillStore.Skills))
+		for _, s := range skillStore.Skills {
+			names = append(names, s.Description)
+		}
+		if len(names) > 5 {
+			names = names[:5]
+		}
+		extraLines += "\n- Known skills: " + strings.Join(names, ", ")
 	}
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
 
-- Best node: %s (%s free, %s pressure)
+- Source: %s
+- Best node: %s (%s, %s pressure)
+- Context hint: %s
 - Tools: %v
-- Summary: %d nodes, %dMB total free RAM
+- Summary: %s
 - Task: %s
-- Live tools: start read-only MCP with: axis mcp serve
+- Live tools: start read-only MCP with: axis mcp serve%s
 
-Be precise. Use real node names and tools above.`, best.Name, freeRAM, pressure,
-		toolsList(best), len(snap.Nodes), snap.Summary.TotalFreeRAMMB, task)
+Be precise. Use real node names and tools above.`,
+		sourceOrLive(source), best.Name, ramSummary, pressure,
+		contextHint(reqs), toolsList(best), clusterSummaryLine(snap), task, extraLines)
+}
+
+func clusterSummaryLine(snap *models.ClusterSnapshot) string {
+	if snap == nil {
+		return "unknown"
+	}
+	if snap.Summary.TotalAllocatableMB > 0 || snap.Summary.TotalReservedMB > 0 {
+		return fmt.Sprintf("%d nodes, %dMB allocatable across cluster (%dMB reserved)",
+			len(snap.Nodes), snap.Summary.TotalAllocatableMB, snap.Summary.TotalReservedMB)
+	}
+	return fmt.Sprintf("%d nodes, %dMB total free RAM", len(snap.Nodes), snap.Summary.TotalFreeRAMMB)
+}
+
+func sourceOrLive(source string) string {
+	if strings.TrimSpace(source) == "" {
+		return "live"
+	}
+	return source
+}
+
+func remoteExecPrefix(node, contextPath string, extraEnv []string) string {
+	return execution.RemoteExecPrefix(node, contextPath, extraEnv)
+}
+
+func contextHint(reqs models.TaskRequirements) string {
+	if reqs.ContextWindowTokens > 0 {
+		return fmt.Sprintf("long-context (~%d tokens)", reqs.ContextWindowTokens)
+	}
+	return "standard"
 }
 
 func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (models.NodeFacts, bool) {
@@ -455,8 +543,40 @@ func selectContextNode(nodes []models.NodeFacts, reqs models.TaskRequirements) (
 
 func toolsList(n models.NodeFacts) []string {
 	var t []string
+	seen := make(map[string]struct{}, len(n.Tools))
 	for _, tool := range n.Tools {
+		if _, ok := seen[tool.Name]; ok {
+			continue
+		}
+		seen[tool.Name] = struct{}{}
 		t = append(t, tool.Name)
 	}
 	return t
+}
+
+func turboQuantCapabilityMatrix(nodes []models.NodeFacts) string {
+	entries := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.TurboQuant == nil || !node.TurboQuant.Supported {
+			continue
+		}
+		entry := fmt.Sprintf("%s=%s/%s", node.Name, turboQuantContextStatus(node), turboQuantExecutionMode(node))
+		if len(node.TurboQuant.Backends) > 0 {
+			entry += fmt.Sprintf(" (%s)", strings.Join(node.TurboQuant.Backends, ", "))
+		}
+		entries = append(entries, entry)
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, "; ")
+}
+
+func turboQuantContextStatus(node models.NodeFacts) string {
+	if node.TurboQuant != nil && node.TurboQuant.Verified {
+		return "verified"
+	}
+	return "detected"
+}
+
+func turboQuantExecutionMode(node models.NodeFacts) string {
+	return turboexec.ExecutionMode(node)
 }

@@ -2,7 +2,7 @@
 
 ## Start Here
 
-- [Current State](current-state.md) — authoritative orientation doc for the live repo, command surface, coverage snapshot, and known weak spots
+- [Current State](current-state.md) — current orientation doc for the live repo, command surface, coverage snapshot, and known weak spots
 - [Agent Worklog](agent-worklog.md) — active coordination surface, file ownership, and current task tracking
 - [RAM Balancing Research](ram-balancing-research.md) — research-backed design note on how AXIS should model cluster RAM sharing and balancing
 
@@ -29,7 +29,4 @@ When docs disagree:
 
 ## Phase Tracking
 
-| Phase | Status | Description |
-|---|---|---|
-| Phase 1 | **Active** | CLI bootstrap, local/remote fact collection, ClusterSnapshot output |
-| Phase 2 | Active in code; hardening and design refinement in progress | Placement, execution surfaces, MCP, state, and utility layers exist; current effort is truth-alignment plus smarter placement design |
+See [phase-tracking.md](phase-tracking.md) for current status. Phases 1–3 are complete.

@@ -1,5 +1,5 @@
-// Package placement implements deterministic task placement logic.
-// Phase 2: read-only, advisory — does NOT execute tasks.
+// Package placement implements deterministic task placement logic reused by
+// both advisory selection and guarded execution.
 package placement
 
 import (
@@ -35,11 +35,26 @@ func pressureRank(p string) int {
 //   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
+	taskPattern := tombstonePattern(reqs)
 	for _, n := range nodes {
+		if requiresAppleFoundationModels(reqs) {
+			if !models.IsLocalNode(n) || !appleFoundationModelsReady(n) {
+				continue
+			}
+		}
 		if n.Status != models.StatusComplete {
 			if !allowsIncompleteNode(n, reqs.RequiredTools) {
 				continue
 			}
+		}
+		if blocksForRuntimePressure(reqs, n) {
+			continue
+		}
+		if blocksForThermalOrBattery(reqs, n) {
+			continue
+		}
+		if st != nil && taskPattern != "" && st.IsTombstoned(taskPattern, n.Name) {
+			continue
 		}
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
@@ -56,13 +71,28 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 	return out
 }
 
+// tombstonePattern derives the key used for tombstone lookups from task
+// requirements. Returns the task description if set, otherwise joins required
+// tools to form a stable pattern.
+func tombstonePattern(reqs models.TaskRequirements) string {
+	if reqs.Description != "" {
+		return reqs.Description
+	}
+	if len(reqs.RequiredTools) > 0 {
+		return strings.Join(reqs.RequiredTools, "+")
+	}
+	return ""
+}
+
 // RankCandidates sorts nodes deterministically.
 // Priority order:
 //  1. Lowest RAM pressure (none < low < medium < high)
 //  2. GPU present
 //  3. Highest effective headroom (free-with-state - requirement)
-//  4. Highest raw free RAM
-//  5. Node name ascending (stable tiebreak)
+//  4. Highest unified-memory suitability for mlx/long-context asks
+//  5. Highest allocatable RAM
+//  6. Lowest reservation ratio (reserved / total RAM)
+//  7. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
@@ -74,10 +104,16 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return pressureRank(pi) < pressureRank(pj)
 		}
 
-		gi := gpuPresent(ranked[i])
-		gj := gpuPresent(ranked[j])
+		gi := gpuScore(ranked[i], reqs)
+		gj := gpuScore(ranked[j], reqs)
 		if gi != gj {
-			return gi && !gj
+			return gi > gj
+		}
+
+		bi := preferredBackendRank(ranked[i], reqs)
+		bj := preferredBackendRank(ranked[j], reqs)
+		if bi != bj {
+			return bi > bj
 		}
 
 		hi := headroom(ranked[i], st, reqs)
@@ -86,10 +122,30 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return hi > hj
 		}
 
-		ri := freeRAM(ranked[i])
-		rj := freeRAM(ranked[j])
+		if reqs.PrefersTurboQuant {
+			ti := turboQuantRank(ranked[i])
+			tj := turboQuantRank(ranked[j])
+			if ti != tj {
+				return ti > tj
+			}
+		}
+
+		ui := unifiedMemoryRank(ranked[i], reqs)
+		uj := unifiedMemoryRank(ranked[j], reqs)
+		if ui != uj {
+			return ui > uj
+		}
+
+		ri := allocatableRAM(ranked[i], st)
+		rj := allocatableRAM(ranked[j], st)
 		if ri != rj {
 			return ri > rj
+		}
+
+		ratioI := reservationRatio(ranked[i], st)
+		ratioJ := reservationRatio(ranked[j], st)
+		if ratioI != ratioJ {
+			return ratioI < ratioJ
 		}
 
 		return ranked[i].Name < ranked[j].Name
@@ -114,6 +170,23 @@ func requiresTool(tools []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func prefersBackend(backends []string, name string) bool {
+	for _, backend := range backends {
+		if strings.EqualFold(backend, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresAppleFoundationModels(reqs models.TaskRequirements) bool {
+	return requiresTool(reqs.RequiredTools, "apple-foundation-models") || prefersBackend(reqs.PreferredBackends, "apple-foundation-models")
+}
+
+func appleFoundationModelsReady(n models.NodeFacts) bool {
+	return n.AppleFM != nil && n.AppleFM.Available && n.AppleFM.Verified && hasTool(n, "apple-foundation-models")
 }
 
 func allowsIncompleteNode(n models.NodeFacts, requiredTools []string) bool {
@@ -148,6 +221,88 @@ func freeRAM(n models.NodeFacts) int64 {
 	return n.Resources.RAMFreeMB
 }
 
+func reservedRAM(n models.NodeFacts, st *state.ClusterState) int64 {
+	if st != nil && st.Nodes != nil {
+		if ns, ok := st.Nodes[n.Name]; ok {
+			return ns.ReservedMB
+		}
+	}
+	if n.Resources == nil {
+		return 0
+	}
+	return n.Resources.RAMReservedMB
+}
+
+func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
+	if n.Resources == nil {
+		return 0
+	}
+	if st == nil && (n.Resources.RAMReservedMB > 0 || n.Resources.RAMAllocatableMB > 0) {
+		return n.Resources.RAMAllocatableMB
+	}
+	effective := n.Resources.RAMFreeMB - reservedRAM(n, st)
+	if effective < 0 {
+		return 0
+	}
+	return effective
+}
+
+func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
+	if n.Resources == nil || n.Resources.RAMTotalMB <= 0 {
+		return 1.0
+	}
+	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
+}
+
+// gpuScore returns a weighted GPU score considering VRAM and capabilities.
+// Discrete GPUs with more VRAM score higher. Integrated-only GPUs (Intel) get reduced scores.
+func gpuScore(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if n.Resources == nil || len(n.Resources.GPUs) == 0 {
+		return 0
+	}
+	best := 0
+	for _, gpu := range n.Resources.GPUs {
+		score := 10 // base score for any GPU
+
+		// Capability match with preferred backends
+		for _, backend := range reqs.PreferredBackends {
+			switch strings.ToLower(backend) {
+			case "cuda":
+				if gpu.HasCapability("cuda") {
+					score += 10
+				}
+			case "metal", "mlx":
+				if gpu.HasCapability("metal") {
+					score += 10
+				}
+			case "rocm":
+				if gpu.HasCapability("rocm") {
+					score += 10
+				}
+			}
+		}
+
+		// VRAM bonus: 1 pt per GB, capped at 5
+		if gpu.VRAMMB > 0 {
+			vramPts := gpu.VRAMMB / 1024
+			if vramPts > 5 {
+				vramPts = 5
+			}
+			score += vramPts
+		}
+
+		// Penalty for integrated-only GPUs (Intel without discrete capabilities)
+		if gpu.Vendor == "intel" && len(gpu.Capabilities) == 0 {
+			score = score / 2
+		}
+
+		if score > best {
+			best = score
+		}
+	}
+	return best
+}
+
 func gpuPresent(n models.NodeFacts) bool {
 	if n.Resources == nil {
 		return false
@@ -157,21 +312,28 @@ func gpuPresent(n models.NodeFacts) bool {
 
 // ComputeFitScore returns 0-100 indicating small-model suitability.
 // Scoring breakdown:
-//   - Free RAM:    up to 30 pts (1 pt per 256MB, capped at 30)
+//   - Allocatable RAM: up to 30 pts (1 pt per 256MB, capped at 30)
 //   - Pressure:    up to 25 pts (none=25, low=20, medium=10, high=0)
 //   - GPU present: +25 pts
 //   - CPU cores:   up to 10 pts (1 pt per core, capped at 10)
 //   - Local node:  +10 pts (no SSH hop = lower latency)
+//   - TurboQuant-capable long-context backend: +15..25 pts for long-context asks
+//   - Unified-memory topology bonus: +8..16 pts for mlx/long-context asks
 //
-// Max: 30+25+25+10+10 = 100
+// Max: capped at 100
 func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) int {
+	return ComputeTaskFitScore(n, isLocal, st, models.TaskRequirements{})
+}
+
+// ComputeTaskFitScore returns 0-100 indicating task-specific placement fit.
+func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState, reqs models.TaskRequirements) int {
 	if n.Resources == nil {
 		return 0
 	}
 
 	score := 0
 
-	// Free RAM: 1pt per 256MB, cap 30
+	// Allocatable RAM: 1pt per 256MB, cap 30
 	adjusted := freeRAMWithState(n, st)
 	ramPts := int(adjusted / 256)
 	if ramPts > 30 {
@@ -189,10 +351,12 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) i
 		score += 10
 	}
 
-	// GPU
-	if len(n.Resources.GPUs) > 0 {
-		score += 25
+	// GPU — capability-weighted score (up to 25 pts)
+	gpuPts := gpuScore(n, reqs)
+	if gpuPts > 25 {
+		gpuPts = 25
 	}
+	score += gpuPts
 
 	// CPU: 1pt per core, cap 10
 	cpuPts := n.Resources.CPUCores
@@ -206,6 +370,17 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) i
 		score += 10
 	}
 
+	if reqs.PrefersTurboQuant {
+		score += turboQuantFitBonus(n, reqs)
+	}
+	score += unifiedMemoryFitBonus(n, reqs)
+
+	// HDD penalty for heavy inference tasks
+	score -= storageClassPenalty(n, reqs)
+
+	if score < 0 {
+		score = 0
+	}
 	if score > 100 {
 		score = 100
 	}
@@ -213,20 +388,7 @@ func ComputeFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterState) i
 }
 
 func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
-	if n.Resources == nil {
-		return 0
-	}
-	committed := int64(0)
-	if st != nil && st.Nodes != nil {
-		if ns, ok := st.Nodes[n.Name]; ok {
-			committed = ns.ReservedMB
-		}
-	}
-	effective := n.Resources.RAMFreeMB - committed
-	if effective < 0 {
-		return 0
-	}
-	return effective
+	return allocatableRAM(n, st)
 }
 
 func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
@@ -249,10 +411,249 @@ func effectiveMinFreeRAM(reqs models.TaskRequirements, n models.NodeFacts) int64
 	if minNeeded <= 0 {
 		return 0
 	}
-	if requiresTool(reqs.RequiredTools, "ollama") && ollamaWarm(n) && minNeeded > 600 {
-		return 600
+	if reqs.PrefersTurboQuant && turboQuantVerified(n) {
+		minNeeded = turboQuantAdjustedMinFreeRAM(minNeeded)
 	}
 	return minNeeded
+}
+
+// MinFreeRAMForNode exposes the effective placement floor used for a node.
+// Guarded execution reuses this to keep placement and last-second safety checks aligned.
+func MinFreeRAMForNode(reqs models.TaskRequirements, n models.NodeFacts) int64 {
+	return effectiveMinFreeRAM(reqs, n)
+}
+
+func turboQuantAdjustedMinFreeRAM(minNeeded int64) int64 {
+	if minNeeded <= 0 {
+		return 0
+	}
+	adjusted := (minNeeded + 5) / 6
+	if adjusted < 1024 {
+		return 1024
+	}
+	return adjusted
+}
+
+func blocksForRuntimePressure(reqs models.TaskRequirements, n models.NodeFacts) bool {
+	if !heavyInferenceTask(reqs) || n.Resources == nil {
+		return false
+	}
+	switch strings.ToLower(n.Resources.PressureSource) {
+	case "linux-psi":
+		return n.Resources.PressureStall10 >= 15
+	case "darwin-vm-pressure":
+		return strings.EqualFold(n.Resources.Pressure, "high")
+	default:
+		return false
+	}
+}
+
+// blocksForThermalOrBattery disqualifies nodes that are thermally throttled or
+// critically low on battery for heavy inference tasks.
+func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts) bool {
+	if !heavyInferenceTask(reqs) || n.Resources == nil {
+		return false
+	}
+	// Battery below 20% blocks heavy tasks
+	if n.Resources.BatteryPercent != nil && *n.Resources.BatteryPercent < 20 {
+		return true
+	}
+	// Thermal throttle blocks heavy tasks
+	switch strings.ToLower(n.Resources.ThermalState) {
+	case "serious", "critical":
+		return true
+	}
+	return false
+}
+
+// storageClassPenalty reduces fit score for HDD nodes on heavy inference tasks.
+func storageClassPenalty(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if n.Resources == nil || !heavyInferenceTask(reqs) {
+		return 0
+	}
+	switch strings.ToLower(n.Resources.StorageClass) {
+	case "hdd":
+		return 15
+	default:
+		return 0
+	}
+}
+
+func heavyInferenceTask(reqs models.TaskRequirements) bool {
+	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
+		return true
+	}
+	if requiresTool(reqs.RequiredTools, "ollama") || requiresTool(reqs.RequiredTools, "llama-server") || requiresTool(reqs.RequiredTools, "apple-foundation-models") {
+		return true
+	}
+	for _, backend := range reqs.PreferredBackends {
+		switch strings.ToLower(backend) {
+		case "llama.cpp", "mlx", "apple-foundation-models":
+			return true
+		}
+	}
+	return reqs.MinFreeRAMMB >= 4096
+}
+
+func prefersUnifiedMemory(reqs models.TaskRequirements) bool {
+	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
+		return true
+	}
+	for _, backend := range reqs.PreferredBackends {
+		if strings.EqualFold(backend, "mlx") {
+			return true
+		}
+	}
+	return false
+}
+
+func unifiedMemoryRank(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if !prefersUnifiedMemory(reqs) || n.Resources == nil || n.Resources.MemoryTopology != models.MemoryTopologyUnified {
+		return 0
+	}
+	rank := 1
+	if n.Resources.MemoryClass > 0 {
+		rank += n.Resources.MemoryClass
+	}
+	if turboQuantVerified(n) {
+		rank++
+	}
+	return rank
+}
+
+func unifiedMemoryFitBonus(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if !prefersUnifiedMemory(reqs) || n.Resources == nil || n.Resources.MemoryTopology != models.MemoryTopologyUnified {
+		return 0
+	}
+	bonus := 8
+	if n.Resources.MemoryClass > 0 {
+		bonus += minInt(n.Resources.MemoryClass*2, 8)
+	}
+	if turboQuantVerified(n) {
+		bonus += 2
+	}
+	return bonus
+}
+
+func turboQuantSupported(n models.NodeFacts) bool {
+	return n.TurboQuant != nil && n.TurboQuant.Supported
+}
+
+func turboQuantVerified(n models.NodeFacts) bool {
+	return n.TurboQuant != nil && n.TurboQuant.Supported && n.TurboQuant.Verified
+}
+
+func turboQuantRank(n models.NodeFacts) int {
+	switch {
+	case turboQuantVerified(n):
+		return 2
+	case turboQuantSupported(n):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func turboQuantFitBonus(n models.NodeFacts, reqs models.TaskRequirements) int {
+	if !turboQuantSupported(n) {
+		return 0
+	}
+
+	switch {
+	case reqs.ContextWindowTokens >= 1000000:
+		if turboQuantVerified(n) {
+			return 25
+		}
+		return 10
+	case reqs.ContextWindowTokens >= 256000:
+		if turboQuantVerified(n) {
+			return 20
+		}
+		return 8
+	default:
+		if turboQuantVerified(n) {
+			return 15
+		}
+		return 5
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func preferredBackendRank(n models.NodeFacts, reqs models.TaskRequirements) int {
+	best := 0
+	for _, backend := range reqs.PreferredBackends {
+		rank := 0
+		switch strings.ToLower(backend) {
+		case "apple-foundation-models":
+			if models.IsLocalNode(n) && appleFoundationModelsReady(n) {
+				rank = 4
+			}
+		case "llama.cpp":
+			switch {
+			case hasTool(n, "llama-server") && turboQuantHasBackend(n, "llama.cpp"):
+				rank = 3
+			case hasTool(n, "llama-server"):
+				rank = 2
+			case turboQuantHasBackend(n, "llama.cpp"):
+				rank = 1
+			}
+		case "mlx":
+			switch {
+			case turboQuantHasBackend(n, "mlx") && n.Resources != nil && n.Resources.MemoryTopology == models.MemoryTopologyUnified:
+				rank = 3
+			case turboQuantHasBackend(n, "mlx"):
+				rank = 2
+			case n.Resources != nil && n.Resources.MemoryTopology == models.MemoryTopologyUnified:
+				rank = 1
+			}
+		}
+		if rank > best {
+			best = rank
+		}
+	}
+	return best
+}
+
+func turboQuantHasBackend(n models.NodeFacts, backend string) bool {
+	if n.TurboQuant == nil {
+		return false
+	}
+	for _, candidate := range n.TurboQuant.Backends {
+		if strings.EqualFold(candidate, backend) {
+			return true
+		}
+	}
+	return false
+}
+
+func turboQuantStatusLabel(n models.NodeFacts) string {
+	if turboQuantVerified(n) {
+		return "verified"
+	}
+	if turboQuantSupported(n) {
+		return "detected"
+	}
+	return ""
+}
+
+func turboQuantCapabilities(n models.NodeFacts) string {
+	if n.TurboQuant == nil || len(n.TurboQuant.Capabilities) == 0 {
+		return ""
+	}
+	return strings.Join(n.TurboQuant.Capabilities, ", ")
+}
+
+func turboQuantBackends(n models.NodeFacts) string {
+	if n.TurboQuant == nil || len(n.TurboQuant.Backends) == 0 {
+		return ""
+	}
+	return strings.Join(n.TurboQuant.Backends, ", ")
 }
 
 func totalReserved(st *state.ClusterState) int64 {
