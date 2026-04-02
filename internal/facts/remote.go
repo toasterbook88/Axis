@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -225,9 +224,9 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 		if out != "" {
 			// Detect format: nvidia-smi CSV has commas, lspci/system_profiler does not
 			if strings.Contains(out, ", ") && !strings.Contains(out, "Chipset Model") {
-				r.GPUs = parseRemoteNvidiaSMI(out)
+				r.GPUs = parseNvidiaSMIOutput(out)
 			} else if strings.Contains(out, "Chipset Model") {
-				r.GPUs = parseRemoteSystemProfiler(out)
+				r.GPUs = parseSystemProfilerGPUs(out)
 			} else {
 				for _, line := range strings.Split(out, "\n") {
 					if line = strings.TrimSpace(line); line != "" {
@@ -280,7 +279,7 @@ func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName strin
 func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkAddress {
 	var addrs []models.NetworkAddress
 	// Try `ip -o addr` first (outputs: "2: eth0 inet 192.168.1.5/24 ..."), fallback to basic ip/ifconfig
-	cmd := `if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}' | cut -d/ -f1; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`
+	cmd := `if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`
 
 	out, err := c.Exec.Run(ctx, cmd)
 	if err != nil {
@@ -306,11 +305,11 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 func parseRemoteAddrLine(line string) models.NetworkAddress {
 	fields := strings.Fields(line)
 
-	var ipStr, ifName string
+	var addrField, ifName string
 	for i, f := range fields {
 		if f == "inet" || f == "inet6" {
 			if i+1 < len(fields) {
-				ipStr = strings.Split(fields[i+1], "/")[0]
+				addrField = fields[i+1]
 			}
 			if i >= 2 {
 				ifName = strings.TrimSuffix(fields[1], ":")
@@ -320,17 +319,17 @@ func parseRemoteAddrLine(line string) models.NetworkAddress {
 	}
 
 	// Fallback: might be "ifname 1.2.3.4" or just "1.2.3.4"
-	if ipStr == "" {
+	if addrField == "" {
 		switch len(fields) {
 		case 1:
-			ipStr = fields[0]
+			addrField = fields[0]
 		case 2:
 			ifName = fields[0]
-			ipStr = fields[1]
+			addrField = fields[1]
 		}
 	}
 
-	ip := net.ParseIP(ipStr)
+	ip, subnet := parseAddressWithOptionalCIDR(addrField)
 	if ip == nil {
 		return models.NetworkAddress{}
 	}
@@ -343,6 +342,7 @@ func parseRemoteAddrLine(line string) models.NetworkAddress {
 		Kind:       kind,
 		Address:    ip.String(),
 		Interface:  ifName,
+		Subnet:     subnet,
 		SpeedClass: classifyInterfaceSpeed(ifName, ip),
 	}
 }
@@ -395,63 +395,6 @@ func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) models.Ollam
 	return info
 }
 
-func parseRemoteNvidiaSMI(out string) []models.GPUInfo {
-	var gpus []models.GPUInfo
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, ", ", 2)
-		name := strings.TrimSpace(parts[0])
-		gpu := models.GPUInfo{
-			Model:        name,
-			Vendor:       "nvidia",
-			Capabilities: []string{"cuda"},
-		}
-		if len(parts) >= 2 {
-			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
-				gpu.VRAMMB = vram
-			}
-		}
-		gpus = append(gpus, gpu)
-	}
-	return gpus
-}
-
-func parseRemoteSystemProfiler(out string) []models.GPUInfo {
-	var gpus []models.GPUInfo
-	var current *models.GPUInfo
-
-	for _, line := range strings.Split(out, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "Chipset Model:") {
-			if current != nil {
-				gpus = append(gpus, *current)
-			}
-			model := strings.TrimSpace(strings.TrimPrefix(trimmed, "Chipset Model:"))
-			current = &models.GPUInfo{
-				Model:  model,
-				Vendor: models.GPUFromString(model).Vendor,
-			}
-		}
-		if current != nil {
-			if strings.HasPrefix(trimmed, "Metal Family:") || strings.HasPrefix(trimmed, "Metal Support:") {
-				if !current.HasCapability("metal") {
-					current.Capabilities = append(current.Capabilities, "metal")
-				}
-			}
-		}
-	}
-	if current != nil {
-		if current.Vendor == "apple" && !current.HasCapability("metal") {
-			current.Capabilities = append(current.Capabilities, "metal")
-		}
-		gpus = append(gpus, *current)
-	}
-	return gpus
-}
-
 func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {
 	switch strings.ToLower(strings.TrimSpace(osName)) {
 	case "darwin":
@@ -461,32 +404,38 @@ func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string)
 		}
 		return parseDiskutilStorageClass(out)
 	case "linux":
-		out, err := c.Exec.Run(ctx, `findmnt -n -o SOURCE / 2>/dev/null | sed 's/[0-9]*$//' | sed 's|/dev/||'`)
+		out, err := c.Exec.Run(ctx, `findmnt -n -o SOURCE / 2>/dev/null`)
 		if err != nil {
 			return "unknown"
 		}
-		dev := strings.TrimSpace(out)
-		if strings.HasPrefix(dev, "nvme") {
-			return "nvme"
-		}
-		base := strings.TrimRight(dev, "0123456789")
-		if base == "" {
-			return "unknown"
-		}
-		rotOut, err := c.Exec.Run(ctx, fmt.Sprintf("cat /sys/block/%s/queue/rotational 2>/dev/null", base))
-		if err != nil {
-			return "unknown"
-		}
-		switch strings.TrimSpace(rotOut) {
-		case "0":
-			return "ssd"
-		case "1":
-			return "hdd"
-		}
-		return "unknown"
+		return resolveLinuxStorageClass(
+			strings.TrimSpace(out),
+			func(device string) (linuxBlockDeviceInfo, error) {
+				return c.remoteLinuxBlockDeviceInfo(ctx, device)
+			},
+			func(device string) (string, error) {
+				return c.remoteLinuxRotational(ctx, device)
+			},
+		)
 	default:
 		return "unknown"
 	}
+}
+
+func (c *RemoteCollector) remoteLinuxBlockDeviceInfo(ctx context.Context, device string) (linuxBlockDeviceInfo, error) {
+	out, err := c.Exec.Run(ctx, fmt.Sprintf("lsblk -J -n -p -o NAME,PKNAME,TYPE,ROTA %q 2>/dev/null", strings.TrimSpace(device)))
+	if err != nil {
+		return linuxBlockDeviceInfo{}, err
+	}
+	return parseLinuxBlockDeviceInfo(out)
+}
+
+func (c *RemoteCollector) remoteLinuxRotational(ctx context.Context, device string) (string, error) {
+	base := fallbackLinuxBlockBase(device)
+	if base == "" {
+		return "", fmt.Errorf("no block device base for %q", device)
+	}
+	return c.Exec.Run(ctx, fmt.Sprintf("cat /sys/block/%s/queue/rotational 2>/dev/null", base))
 }
 
 func (c *RemoteCollector) remoteBatteryPercent(ctx context.Context, osName string) (int, bool) {

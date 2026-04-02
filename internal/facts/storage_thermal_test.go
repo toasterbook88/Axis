@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -41,9 +42,114 @@ func TestParseDiskutilStorageClass_Unknown(t *testing.T) {
 	}
 }
 
-func TestParseLinuxRotational_SSD(t *testing.T) {
-	// Can't test directly without the filesystem, test the parse logic via
-	// the parseDiskutilStorageClass instead. The Linux path reads files.
+func TestResolveLinuxStorageClassUsesParentDiskInfo(t *testing.T) {
+	zero := 0
+	infoByDevice := map[string]linuxBlockDeviceInfo{
+		"/dev/mmcblk0p2": {
+			Name:   "/dev/mmcblk0p2",
+			PKName: "mmcblk0",
+			Type:   "part",
+		},
+		"/dev/mmcblk0": {
+			Name: "/dev/mmcblk0",
+			Type: "disk",
+			ROTA: &zero,
+		},
+	}
+
+	got := resolveLinuxStorageClass(
+		"/dev/mmcblk0p2",
+		func(device string) (linuxBlockDeviceInfo, error) {
+			info, ok := infoByDevice[device]
+			if !ok {
+				return linuxBlockDeviceInfo{}, errors.New("unexpected device lookup")
+			}
+			return info, nil
+		},
+		func(string) (string, error) {
+			t.Fatal("fallback should not be used when lsblk parent resolution succeeds")
+			return "", nil
+		},
+	)
+
+	if got != "ssd" {
+		t.Fatalf("resolveLinuxStorageClass = %q, want ssd", got)
+	}
+}
+
+func TestResolveLinuxStorageClassRecognizesNVMeParent(t *testing.T) {
+	zero := 0
+	infoByDevice := map[string]linuxBlockDeviceInfo{
+		"/dev/nvme0n1p2": {
+			Name:   "/dev/nvme0n1p2",
+			PKName: "nvme0n1",
+			Type:   "part",
+		},
+		"/dev/nvme0n1": {
+			Name: "/dev/nvme0n1",
+			Type: "disk",
+			ROTA: &zero,
+		},
+	}
+
+	got := resolveLinuxStorageClass(
+		"/dev/nvme0n1p2",
+		func(device string) (linuxBlockDeviceInfo, error) {
+			info, ok := infoByDevice[device]
+			if !ok {
+				return linuxBlockDeviceInfo{}, errors.New("unexpected device lookup")
+			}
+			return info, nil
+		},
+		func(string) (string, error) {
+			t.Fatal("fallback should not be used when lsblk parent resolution succeeds")
+			return "", nil
+		},
+	)
+
+	if got != "nvme" {
+		t.Fatalf("resolveLinuxStorageClass = %q, want nvme", got)
+	}
+}
+
+func TestResolveLinuxStorageClassFallsBackToSysfs(t *testing.T) {
+	got := resolveLinuxStorageClass(
+		"/dev/sda1",
+		func(string) (linuxBlockDeviceInfo, error) {
+			return linuxBlockDeviceInfo{}, errors.New("lsblk unavailable")
+		},
+		func(device string) (string, error) {
+			if device != "sda" {
+				t.Fatalf("fallback looked up %q, want sda", device)
+			}
+			return "1", nil
+		},
+	)
+
+	if got != "hdd" {
+		t.Fatalf("resolveLinuxStorageClass = %q, want hdd", got)
+	}
+}
+
+func TestFallbackLinuxBlockBaseHandlesPartitionStyles(t *testing.T) {
+	tests := []struct {
+		device string
+		want   string
+	}{
+		{device: "/dev/nvme0n1p2", want: "nvme0n1"},
+		{device: "/dev/mmcblk0p2", want: "mmcblk0"},
+		{device: "/dev/sda1", want: "sda"},
+		{device: "/dev/loop0", want: "loop0"},
+		{device: "/dev/dm-0", want: "dm-0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.device, func(t *testing.T) {
+			if got := fallbackLinuxBlockBase(tt.device); got != tt.want {
+				t.Fatalf("fallbackLinuxBlockBase(%q) = %q, want %q", tt.device, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestParsePmsetBattery(t *testing.T) {
