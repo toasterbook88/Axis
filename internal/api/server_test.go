@@ -488,6 +488,12 @@ func TestRunReturnsNoSuitableNode(t *testing.T) {
 	if resp.Description != "run 100GB inference" {
 		t.Errorf("expected description echoed, got %q", resp.Description)
 	}
+	if resp.OK {
+		t.Error("expected ok=false when no node is suitable")
+	}
+	if !strings.Contains(resp.Error, "no suitable node found") {
+		t.Errorf("expected error message containing 'no suitable node found', got %q", resp.Error)
+	}
 }
 
 
