@@ -358,7 +358,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Mode:        req.Mode,
 		}
 
-		rc, err := loadRunnerContext(r.Context())
+		rc, err := loadRunnerContext(ctx)
 		if err != nil {
 			resp.Error = err.Error()
 			writeJSON(w, http.StatusOK, resp)
