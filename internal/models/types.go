@@ -208,26 +208,50 @@ type ClusterSnapshot struct {
 
 // --- Phase 2: Task Placement ---
 
+// WorkloadClass categorizes a task based on its resource and behavioral needs.
+type WorkloadClass string
+
+const (
+	ClassRepoAnalysis         WorkloadClass = "repo-analysis"
+	ClassGoBuild              WorkloadClass = "go-build"
+	ClassDockerBuild          WorkloadClass = "docker-build"
+	ClassLocalLLMInference    WorkloadClass = "local-llm-inference"
+	ClassLongContextInference WorkloadClass = "long-context-inference"
+	ClassAppleIntelligence    WorkloadClass = "apple-intelligence"
+	ClassLlamaServer          WorkloadClass = "llama-server"
+	ClassIndexingIO           WorkloadClass = "indexing-io"
+	ClassBatchScript          WorkloadClass = "batch-script"
+	ClassUnknown              WorkloadClass = "unknown"
+)
+
+// WorkloadProfileMatch contains the result of matching a task to a profile.
+type WorkloadProfileMatch struct {
+	Class WorkloadClass `json:"class" yaml:"class"`
+	Notes []string      `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
 // TaskRequirements describes what a task needs to run.
-// Inferred from task description by keyword matching in the CLI layer.
+// Inferred from task description by workload profile matching.
 type TaskRequirements struct {
-	Description         string   `json:"description" yaml:"description"`
-	RequiredTools       []string `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
-	MinFreeRAMMB        int64    `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
-	ContextWindowTokens int      `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
-	PrefersTurboQuant   bool     `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
-	PreferredBackends   []string `json:"preferred_backends,omitempty" yaml:"preferred_backends,omitempty"`
+	Description         string               `json:"description" yaml:"description"`
+	Workload            WorkloadProfileMatch `json:"workload" yaml:"workload"`
+	RequiredTools       []string             `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
+	MinFreeRAMMB        int64                `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	ContextWindowTokens int                  `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
+	PrefersTurboQuant   bool                 `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
+	PreferredBackends   []string             `json:"preferred_backends,omitempty" yaml:"preferred_backends,omitempty"`
 }
 
 // PlacementDecision is the output of the placement engine.
 // OK is false when no node qualifies.
 type PlacementDecision struct {
-	Node      string   `json:"node" yaml:"node"`
-	Tool      string   `json:"tool,omitempty" yaml:"tool,omitempty"`
-	FitScore  int      `json:"fit_score" yaml:"fit_score"`
-	IsLocal   bool     `json:"is_local" yaml:"is_local"`
-	Reasoning []string `json:"reasoning" yaml:"reasoning"`
-	OK        bool     `json:"ok" yaml:"ok"`
+	Node      string               `json:"node" yaml:"node"`
+	Tool      string               `json:"tool,omitempty" yaml:"tool,omitempty"`
+	FitScore  int                  `json:"fit_score" yaml:"fit_score"`
+	IsLocal   bool                 `json:"is_local" yaml:"is_local"`
+	Workload  WorkloadProfileMatch `json:"workload" yaml:"workload"`
+	Reasoning []string             `json:"reasoning" yaml:"reasoning"`
+	OK        bool                 `json:"ok" yaml:"ok"`
 }
 
 // PlacementError describes why placement failed.

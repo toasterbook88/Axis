@@ -9,7 +9,15 @@ STDOUT:
     "tool": "ollama",
     "fit_score": 98,
     "is_local": false,
+    "workload": {
+      "class": "long-context-inference",
+      "notes": [
+        "also matched class: local-llm-inference"
+      ]
+    },
     "reasoning": [
+      "workload class: long-context-inference",
+      "workload note: also matched class: local-llm-inference",
       "long-context task hint: ~128000 tokens",
       "unified memory topology (class 4)",
       "turboquant-aware backend verified: mlx",
