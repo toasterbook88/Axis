@@ -57,6 +57,14 @@ jobs:
       - name: Coverage gates
         run: ./hack/coverage-check.sh
 
+      - name: Install ripgrep
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            echo "ripgrep already installed"
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y ripgrep
+          fi
+
       - name: Repo truth guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -73,7 +81,7 @@ jobs:
           FACTS_OUT: ${{ runner.temp }}/axis-facts-${{ github.run_id }}.json
         run: |
           "$AXIS_BIN" facts --format json >"$FACTS_OUT"
-          jq '.node.os, .node.arch' "$FACTS_OUT" >/dev/null
+          jq -e '.os, .arch' "$FACTS_OUT" >/dev/null
 
       - name: Cleanup worktree
         if: always()
@@ -124,7 +132,7 @@ jobs:
           import json, os
           with open(os.environ['FACTS_OUT'], 'r', encoding='utf-8') as f:
               data = json.load(f)
-          assert data['node']['os'] == 'darwin', data['node']['os']
+          assert data['os'] == 'darwin', data['os']
           PY
 
       - name: Cleanup worktree
