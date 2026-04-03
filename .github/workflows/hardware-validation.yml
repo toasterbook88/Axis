@@ -63,6 +63,14 @@ jobs:
             echo "ripgrep already installed"
           elif command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update && sudo apt-get install -y ripgrep
+          else
+            echo "ripgrep (rg) is required for ./hack/verify-repo-truth.sh, but neither rg nor apt-get is available on this runner" >&2
+            exit 1
+          fi
+
+          if ! command -v rg >/dev/null 2>&1; then
+            echo "ripgrep installation did not make rg available on PATH; cannot run ./hack/verify-repo-truth.sh" >&2
+            exit 1
           fi
 
       - name: Repo truth guardrails
@@ -81,7 +89,7 @@ jobs:
           FACTS_OUT: ${{ runner.temp }}/axis-facts-${{ github.run_id }}.json
         run: |
           "$AXIS_BIN" facts --format json >"$FACTS_OUT"
-          jq -e '.os, .arch' "$FACTS_OUT" >/dev/null
+          jq -e '(.os != null) and (.arch != null)' "$FACTS_OUT" >/dev/null
 
       - name: Cleanup worktree
         if: always()
