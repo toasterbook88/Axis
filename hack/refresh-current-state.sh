@@ -45,12 +45,21 @@ if [[ -z "$axis_version" ]]; then
 fi
 refreshed_at="$(TZ=America/New_York date '+%Y-%m-%d %Z')"
 
-curl_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-fi
+github_api_get() {
+  local url="$1"
+  local curl_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
 
-release_json="$(curl "${curl_args[@]}" "https://api.github.com/repos/toasterbook88/axis/releases/latest" || true)"
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    curl "${curl_args[@]}" --config - "$url" <<EOF
+header = "Authorization: Bearer ${GITHUB_TOKEN}"
+EOF
+    return
+  fi
+
+  curl "${curl_args[@]}" "$url"
+}
+
+release_json="$(github_api_get "https://api.github.com/repos/toasterbook88/axis/releases/latest" || true)"
 latest_release_tag="$(printf '%s' "$release_json" | jq -r '.tag_name // ""')"
 latest_release_published="$(printf '%s' "$release_json" | jq -r '.published_at // ""')"
 

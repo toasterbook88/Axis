@@ -200,8 +200,8 @@ func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node strin
 }
 
 func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (GuardedExecutionResult, error) {
-	// CRITICAL INVARIANT: All execution must go through RunGuarded.
-	// No other package may call exec.Command directly.
+	// CRITICAL INVARIANT: operator-requested task execution in this package's
+	// guarded execution path must go through RunGuarded rather than bypassing it.
 	NormalizeRequest(&req)
 
 	resp := GuardedExecutionResult{
