@@ -380,21 +380,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 
 		res, err := execution.RunGuarded(ctx, rtCtx, guardedReq)
 
-		resp.OK = res.OK
-		resp.Intent = res.Intent
-		resp.Command = res.Command
-		resp.Node = res.Node
-		resp.FitScore = res.FitScore
-		resp.IsLocal = res.IsLocal
-		resp.Reasoning = res.Reasoning
-		resp.Blocked = res.Blocked
-		resp.BlockReason = res.BlockReason
-		resp.DumbScore = res.DumbScore
-		resp.Output = res.Output
-		resp.Error = res.Error
-		resp.ExitCode = res.ExitCode
-		resp.SnapshotStatus = res.SnapshotStatus
-		resp.Summary = res.Summary
+		resp = RunResponse(res)
 
 		if err != nil {
 			resp.OK = false
