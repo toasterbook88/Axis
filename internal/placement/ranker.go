@@ -35,7 +35,6 @@ func pressureRank(p string) int {
 //   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
 	var out []models.NodeFacts
-	taskPattern := tombstonePattern(reqs)
 	for _, n := range nodes {
 		if requiresAppleFoundationModels(reqs) {
 			if !models.IsLocalNode(n) || !appleFoundationModelsReady(n) {
@@ -53,8 +52,14 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 		if blocksForThermalOrBattery(reqs, n) {
 			continue
 		}
-		if st != nil && taskPattern != "" && st.IsTombstoned(taskPattern, n.Name) {
-			continue
+		if st != nil && st.Failures != nil {
+			rec, ok := st.Failures.NarrowestMatch(models.FailureScope{
+				Node:     n.Name,
+				Workload: reqs.Workload.Class,
+			})
+			if ok && isBlockingFailure(rec.Class) {
+				continue
+			}
 		}
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
@@ -71,17 +76,12 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 	return out
 }
 
-// tombstonePattern derives the key used for tombstone lookups from task
-// requirements. Returns the task description if set, otherwise joins required
-// tools to form a stable pattern.
-func tombstonePattern(reqs models.TaskRequirements) string {
-	if reqs.Description != "" {
-		return reqs.Description
+func isBlockingFailure(class models.FailureClass) bool {
+	switch class {
+	case models.FailureExecCrash, models.FailureThermal, models.FailureBattery, models.FailureBackendMisfit:
+		return true
 	}
-	if len(reqs.RequiredTools) > 0 {
-		return strings.Join(reqs.RequiredTools, "+")
-	}
-	return ""
+	return false
 }
 
 // RankCandidates sorts nodes deterministically.
@@ -377,6 +377,17 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 
 	// HDD penalty for heavy inference tasks
 	score -= storageClassPenalty(n, reqs)
+
+	// Soft failure memory penalty
+	if st != nil && st.Failures != nil {
+		rec, ok := st.Failures.NarrowestMatch(models.FailureScope{
+			Node:     n.Name,
+			Workload: reqs.Workload.Class,
+		})
+		if ok && !isBlockingFailure(rec.Class) {
+			score -= 10 * rec.Count // 10 point penalty per occurrence
+		}
+	}
 
 	if score < 0 {
 		score = 0

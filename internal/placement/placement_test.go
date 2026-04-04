@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -1136,23 +1137,27 @@ func TestFitScore_HDDNoPenaltyForLightTask(t *testing.T) {
 	}
 }
 
-// --- Tombstone Placement Tests ---
+// --- Failure Memory Placement Tests ---
 
-func TestFilter_TombstonedNodeExcluded(t *testing.T) {
+func TestFilter_FailureNodeExcluded(t *testing.T) {
 	n := nodeComplete("cursed-node", 8000, "none", "git")
 	reqs := models.TaskRequirements{
 		Description:   "llama3:8b",
 		RequiredTools: []string{"git"},
+		Workload: models.WorkloadProfileMatch{
+			Class: models.ClassLocalLLMInference,
+		},
 	}
 
 	st := &state.ClusterState{
 		Nodes: make(map[string]state.NodeState),
-		Tombstones: map[string]state.TombstoneEntry{
-			"llama3:8b@cursed-node": {
-				TaskPattern: "llama3:8b",
-				NodeName:    "cursed-node",
-				FailCount:   2,
-				ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
+		Failures: failures.Store{
+			"hash123": models.FailureRecord{
+				ID: "hash123",
+				Class: models.FailureExecCrash,
+				Scope: models.FailureScope{Node: "cursed-node", Workload: models.ClassLocalLLMInference},
+				Count: 2,
+				ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 			},
 		},
 	}
@@ -1163,21 +1168,25 @@ func TestFilter_TombstonedNodeExcluded(t *testing.T) {
 	}
 }
 
-func TestFilter_ExpiredTombstoneAllowed(t *testing.T) {
+func TestFilter_ExpiredFailureAllowed(t *testing.T) {
 	n := nodeComplete("recovered-node", 8000, "none", "git")
 	reqs := models.TaskRequirements{
 		Description:   "llama3:8b",
 		RequiredTools: []string{"git"},
+		Workload: models.WorkloadProfileMatch{
+			Class: models.ClassLocalLLMInference,
+		},
 	}
 
 	st := &state.ClusterState{
 		Nodes: make(map[string]state.NodeState),
-		Tombstones: map[string]state.TombstoneEntry{
-			"llama3:8b@recovered-node": {
-				TaskPattern: "llama3:8b",
-				NodeName:    "recovered-node",
-				FailCount:   1,
-				ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
+		Failures: failures.Store{
+			"hash456": models.FailureRecord{
+				ID: "hash456",
+				Class: models.FailureExecCrash,
+				Scope: models.FailureScope{Node: "recovered-node", Workload: models.ClassLocalLLMInference},
+				Count: 1,
+				ExpiresAt: time.Now().UTC().Add(-1 * time.Hour),
 			},
 		},
 	}
@@ -1188,7 +1197,7 @@ func TestFilter_ExpiredTombstoneAllowed(t *testing.T) {
 	}
 }
 
-func TestFilter_NilStateSkipsTombstoneCheck(t *testing.T) {
+func TestFilter_NilStateSkipsFailureCheck(t *testing.T) {
 	n := nodeComplete("any-node", 8000, "none", "git")
 	reqs := models.TaskRequirements{
 		Description:   "some-task",
