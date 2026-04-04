@@ -21,7 +21,9 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts, st *
 	best := ranked[0]
 	local := models.IsLocalNode(best)
 
-	return buildSuccessDecision(best, ranked, reqs, local, st)
+	decision := buildSuccessDecision(best, ranked, reqs, local, st)
+	decision.Workload = reqs.Workload
+	return decision
 }
 
 func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs models.TaskRequirements, local bool, st *state.ClusterState) models.PlacementDecision {
@@ -30,6 +32,14 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		OK:       true,
 		FitScore: ComputeTaskFitScore(best, local, st, reqs),
 		IsLocal:  local,
+	}
+
+	if reqs.Workload.Class != "" && reqs.Workload.Class != models.ClassUnknown {
+		decision.Reasoning = append(decision.Reasoning,
+			fmt.Sprintf("workload class: %s", reqs.Workload.Class))
+	}
+	for _, note := range reqs.Workload.Notes {
+		decision.Reasoning = append(decision.Reasoning, fmt.Sprintf("workload note: %s", note))
 	}
 
 	if requiresTool(reqs.RequiredTools, "ollama") && models.IsLocalNode(best) {
@@ -146,7 +156,10 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 
 // buildFailureDecision explains why every node was excluded.
 func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) models.PlacementDecision {
-	d := models.PlacementDecision{OK: false}
+	d := models.PlacementDecision{
+		OK:       false,
+		Workload: reqs.Workload,
+	}
 
 	if len(nodes) == 0 {
 		d.Reasoning = []string{"no nodes in cluster"}
@@ -154,6 +167,14 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 	}
 
 	d.Reasoning = []string{fmt.Sprintf("0 of %d nodes qualify", len(nodes))}
+
+	if reqs.Workload.Class != "" && reqs.Workload.Class != models.ClassUnknown {
+		d.Reasoning = append(d.Reasoning,
+			fmt.Sprintf("workload class: %s", reqs.Workload.Class))
+	}
+	for _, note := range reqs.Workload.Notes {
+		d.Reasoning = append(d.Reasoning, fmt.Sprintf("workload note: %s", note))
+	}
 
 	for _, n := range nodes {
 		if requiresAppleFoundationModels(reqs) {
