@@ -56,9 +56,11 @@ type RunResponse struct {
 	Description    string                 `json:"description"`
 	Mode           string                 `json:"mode,omitempty"`
 	Intent         string                 `json:"intent,omitempty"`
-	Command        string                 `json:"command,omitempty"`
-	Node           string                 `json:"node,omitempty"`
-	FitScore       int                    `json:"fit_score,omitempty"`
+	Command        string                     `json:"command,omitempty"`
+	Node           string                     `json:"node,omitempty"`
+	Tool           string                     `json:"tool,omitempty"`
+	Workload       models.WorkloadProfileMatch `json:"workload,omitempty"`
+	FitScore       int                        `json:"fit_score,omitempty"`
 	IsLocal        bool                   `json:"is_local,omitempty"`
 	Reasoning      []string               `json:"reasoning,omitempty"`
 	Blocked        bool                   `json:"blocked,omitempty"`

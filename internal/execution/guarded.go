@@ -3,6 +3,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,9 +48,11 @@ type GuardedExecutionResult struct {
 	Description    string                 `json:"description"`
 	Mode           string                 `json:"mode,omitempty"`
 	Intent         string                 `json:"intent,omitempty"`
-	Command        string                 `json:"command,omitempty"`
-	Node           string                 `json:"node,omitempty"`
-	FitScore       int                    `json:"fit_score,omitempty"`
+	Command        string                     `json:"command,omitempty"`
+	Node           string                     `json:"node,omitempty"`
+	Tool           string                     `json:"tool,omitempty"`
+	Workload       models.WorkloadProfileMatch `json:"workload,omitempty"`
+	FitScore       int                        `json:"fit_score,omitempty"`
 	IsLocal        bool                   `json:"is_local,omitempty"`
 	Reasoning      []string               `json:"reasoning,omitempty"`
 	Blocked        bool                   `json:"blocked,omitempty"`
@@ -239,6 +242,8 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 	decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
 	resp.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, rt.Snapshot.Warnings)
 	resp.Node = decision.Node
+	resp.Tool = decision.Tool
+	resp.Workload = decision.Workload
 	resp.FitScore = decision.FitScore
 	resp.IsLocal = decision.IsLocal
 
@@ -519,10 +524,12 @@ func runLocal(
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
+		emitFailure(st, req, resp, runErr)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
+	emitSuccess(st, req, resp)
 	resp.OK = true
 	return resp, nil
 }
@@ -583,10 +590,12 @@ func runRemote(
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
+		emitFailure(st, req, resp, runErr)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
+	emitSuccess(st, req, resp)
 	resp.OK = true
 	return resp, nil
 }
@@ -700,6 +709,56 @@ func recordFailure(skillStore *skills.Store, description string, exitCode int) {
 	}
 	skillStore.RecordFailure(description, fmt.Sprintf("failed with code %d", exitCode))
 	_ = skillStore.Save()
+}
+
+func emitFailure(st *state.ClusterState, req GuardedExecutionRequest, resp GuardedExecutionResult, runErr error) {
+	if st == nil || st.Failures == nil {
+		return
+	}
+	class := models.FailureExecCrash
+	if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
+		class = models.FailureTimeout
+	}
+	evidence := []string{fmt.Sprintf("exit code %d", resp.ExitCode)}
+	scope := models.FailureScope{
+		Node:     resp.Node,
+		Workload: resp.Workload.Class,
+		Tool:     resp.Tool,
+	}
+	st.Failures.Record(class, scope, runErr.Error(), evidence)
+	// Also record a broader {Node, Workload} entry so placement filter/ranking
+	// queries (which do not include Tool) can still match this failure.
+	if resp.Tool != "" {
+		broadScope := models.FailureScope{
+			Node:     resp.Node,
+			Workload: resp.Workload.Class,
+		}
+		st.Failures.Record(class, broadScope, runErr.Error(), evidence)
+	}
+	_ = st.Save()
+}
+
+func emitSuccess(st *state.ClusterState, req GuardedExecutionRequest, resp GuardedExecutionResult) {
+	if st == nil || st.Failures == nil {
+		return
+	}
+	scope := models.FailureScope{
+		Node:     resp.Node,
+		Workload: resp.Workload.Class,
+		Tool:     resp.Tool,
+	}
+	cleared := st.Failures.RecordSuccess(scope)
+	// Also clear the broader {Node, Workload} entry written by emitFailure.
+	if resp.Tool != "" {
+		broadScope := models.FailureScope{
+			Node:     resp.Node,
+			Workload: resp.Workload.Class,
+		}
+		cleared = st.Failures.RecordSuccess(broadScope) || cleared
+	}
+	if cleared {
+		_ = st.Save()
+	}
 }
 
 func exitCode(err error) int {

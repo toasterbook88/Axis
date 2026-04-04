@@ -254,6 +254,48 @@ type PlacementDecision struct {
 	OK        bool                 `json:"ok" yaml:"ok"`
 }
 
+// --- Phase 3: Failure Memory ---
+
+// FailureClass categorizes an operational failure.
+type FailureClass string
+
+const (
+	FailureExecCrash          FailureClass = "exec-crash"
+	FailureToolMissing        FailureClass = "tool-missing"
+	FailureResourceExhaustion FailureClass = "resource-exhaustion"
+	FailureThermal            FailureClass = "thermal-failure"
+	FailureBattery            FailureClass = "battery-failure"
+	FailureNetwork            FailureClass = "network-failure"
+	FailureTimeout            FailureClass = "timeout"
+	FailureBackendMisfit      FailureClass = "backend-misfit"
+	FailureOperatorAbort      FailureClass = "operator-abort"
+	FailureUnknown            FailureClass = "unknown"
+)
+
+// FailureScope defines what a failure applies to.
+type FailureScope struct {
+	Node     string        `json:"node,omitempty" yaml:"node,omitempty"`
+	Workload WorkloadClass `json:"workload,omitempty" yaml:"workload,omitempty"`
+	Tool     string        `json:"tool,omitempty" yaml:"tool,omitempty"`
+	Backend  string        `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Surface  string        `json:"surface,omitempty" yaml:"surface,omitempty"`
+}
+
+// FailureRecord represents a tracked failure pattern for the immune system.
+type FailureRecord struct {
+	ID               string       `json:"id" yaml:"id"`
+	Class            FailureClass `json:"class" yaml:"class"`
+	Scope            FailureScope `json:"scope" yaml:"scope"`
+	OccurredAt       time.Time    `json:"occurred_at" yaml:"occurred_at"`
+	ExpiresAt        time.Time    `json:"expires_at" yaml:"expires_at"`
+	Count            int          `json:"count" yaml:"count"`
+	Confidence       float64      `json:"confidence" yaml:"confidence"`
+	Reason           string       `json:"reason" yaml:"reason"`
+	Evidence         []string     `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+	OperatorOverride bool         `json:"operator_override" yaml:"operator_override"`
+	OperatorNote     string       `json:"operator_note,omitempty" yaml:"operator_note,omitempty"`
+}
+
 // PlacementError describes why placement failed.
 type PlacementError struct {
 	Message string `json:"message" yaml:"message"`

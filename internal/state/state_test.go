@@ -2,8 +2,10 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -369,161 +371,33 @@ func TestLoadFailsWhenStateQuarantineFails(t *testing.T) {
 	}
 }
 
-// --- Tombstone Immune System Tests ---
+// --- Migration Tests ---
 
-func TestRecordFailureCreatesAndEscalatesTombstone(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	s := emptyClusterState()
-
-	// First failure
-	if err := s.RecordFailure("llama3:8b", "alpha"); err != nil {
-		t.Fatalf("RecordFailure() error = %v", err)
-	}
-
-	if !s.IsTombstoned("llama3:8b", "alpha") {
-		t.Fatal("expected tombstone after first failure")
-	}
-
-	entry := s.Tombstones[tombstoneKey("llama3:8b", "alpha")]
-	if entry.FailCount != 1 {
-		t.Fatalf("FailCount = %d, want 1", entry.FailCount)
-	}
-	firstExpiry := entry.ExpiresAt
-
-	// Second failure escalates
-	if err := s.RecordFailure("llama3:8b", "alpha"); err != nil {
-		t.Fatalf("RecordFailure() error = %v", err)
-	}
-
-	entry = s.Tombstones[tombstoneKey("llama3:8b", "alpha")]
-	if entry.FailCount != 2 {
-		t.Fatalf("FailCount = %d, want 2", entry.FailCount)
-	}
-	if !entry.ExpiresAt.After(firstExpiry) {
-		t.Fatal("expected escalated expiry after second failure")
-	}
-}
-
-func TestIsTombstonedReturnsFalseForExpired(t *testing.T) {
-	s := &ClusterState{
-		Tombstones: map[string]TombstoneEntry{
-			tombstoneKey("crash-model", "beta"): {
-				TaskPattern: "crash-model",
-				NodeName:    "beta",
-				FailCount:   1,
-				ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
-			},
-		},
-	}
-
-	if s.IsTombstoned("crash-model", "beta") {
-		t.Fatal("expired tombstone should not block")
-	}
-}
-
-func TestIsTombstonedReturnsFalseForNilState(t *testing.T) {
-	var s *ClusterState
-	if s.IsTombstoned("anything", "anywhere") {
-		t.Fatal("nil state should not report tombstoned")
-	}
-}
-
-func TestPruneTombstonesRemovesExpired(t *testing.T) {
+func TestTombstoneMigrationRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	now := time.Now().UTC()
-	s := &ClusterState{
-		Nodes: make(map[string]NodeState),
-		Tombstones: map[string]TombstoneEntry{
-			tombstoneKey("expired", "node1"): {
-				TaskPattern: "expired",
-				NodeName:    "node1",
-				ExpiresAt:   now.Add(-1 * time.Hour),
-			},
-			tombstoneKey("active", "node2"): {
-				TaskPattern: "active",
-				NodeName:    "node2",
-				ExpiresAt:   now.Add(24 * time.Hour),
-			},
-		},
-	}
+	// Manually construct JSON to simulate legacy state
+	jsonStr := fmt.Sprintf(`{
+	  "nodes": {},
+	  "tombstones": {
+	    "test-pattern@node1": {
+	      "task_pattern": "test-pattern",
+	      "node_name": "node1",
+	      "fail_count": 2,
+	      "last_failure": %q,
+	      "expires_at": %q
+	    }
+	  }
+	}`, now.Format(time.RFC3339Nano), now.Add(48*time.Hour).Format(time.RFC3339Nano))
 
-	pruned, err := s.PruneTombstones()
-	if err != nil {
-		t.Fatalf("PruneTombstones() error = %v", err)
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
 	}
-	if pruned != 1 {
-		t.Fatalf("pruned = %d, want 1", pruned)
-	}
-	if len(s.Tombstones) != 1 {
-		t.Fatalf("expected 1 remaining tombstone, got %d", len(s.Tombstones))
-	}
-	if _, ok := s.Tombstones[tombstoneKey("active", "node2")]; !ok {
-		t.Fatal("expected active tombstone to remain")
-	}
-}
-
-func TestClearTombstone(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	s := emptyClusterState()
-	if err := s.RecordFailure("model-x", "gamma"); err != nil {
-		t.Fatalf("RecordFailure() error = %v", err)
-	}
-
-	removed, err := s.ClearTombstone("model-x", "gamma")
-	if err != nil {
-		t.Fatalf("ClearTombstone() error = %v", err)
-	}
-	if !removed {
-		t.Fatal("expected tombstone to be removed")
-	}
-	if s.IsTombstoned("model-x", "gamma") {
-		t.Fatal("expected tombstone cleared")
-	}
-
-	// Clearing again should return false
-	removed, err = s.ClearTombstone("model-x", "gamma")
-	if err != nil {
-		t.Fatalf("ClearTombstone() second call error = %v", err)
-	}
-	if removed {
-		t.Fatal("expected no-op on second clear")
-	}
-}
-
-func TestExponentialBackoffCapsAt7Days(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	s := emptyClusterState()
-
-	// Record enough failures to hit the cap
-	for i := 0; i < 10; i++ {
-		if err := s.RecordFailure("oom-model", "delta"); err != nil {
-			t.Fatalf("RecordFailure() %d error = %v", i, err)
-		}
-	}
-
-	entry := s.Tombstones[tombstoneKey("oom-model", "delta")]
-	maxExpiry := entry.LastFailure.Add(tombstoneMaxExpiry)
-
-	if entry.ExpiresAt.After(maxExpiry) {
-		t.Fatalf("ExpiresAt %v exceeds max %v", entry.ExpiresAt, maxExpiry)
-	}
-}
-
-func TestTombstoneRoundTrip(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	s := emptyClusterState()
-	if err := s.RecordFailure("test-task", "node1"); err != nil {
-		t.Fatalf("RecordFailure() error = %v", err)
+	if err := os.WriteFile(path, []byte(jsonStr), 0644); err != nil {
+		t.Fatal(err)
 	}
 
 	loaded, err := Load()
@@ -531,7 +405,32 @@ func TestTombstoneRoundTrip(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if !loaded.IsTombstoned("test-task", "node1") {
-		t.Fatal("expected tombstone to persist through save/load")
+	if loaded.Failures == nil {
+		t.Fatal("expected Failures map to be initialized")
+	}
+
+	// Verify migration happened: legacy tombstone becomes a {Node}-scoped record
+	// so placement queries on {Node, Workload} can still match it.
+	found := false
+	for _, rec := range loaded.Failures {
+		if rec.Scope.Node == "node1" && rec.Scope.Tool == "" && rec.Count == 2 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected legacy tombstone to be migrated to a {Node}-scoped FailureRecord")
+	}
+
+	// Saving should no longer write 'tombstones'
+	if err := loaded.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"tombstones"`) {
+		t.Fatal("saved state should not contain legacy tombstones key")
 	}
 }
