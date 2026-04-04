@@ -34,14 +34,15 @@ func InferRequirements(desc string) models.TaskRequirements {
 }
 
 // Apply populates TaskRequirements based on the matched workload class.
-// It also aggregates requirements from any secondary matches found in the description.
+// It aggregates resource signals (RAM, TurboQuant) and required tools/backends
+// from all matching profiles found in the description.
 func Apply(match models.WorkloadProfileMatch, reqs *models.TaskRequirements) {
 	reqs.Workload = match
 	lower := strings.ToLower(reqs.Description)
 	registry := DefaultRegistry()
 
 	appleMatched := false
-	// Aggregate resources from all matching profiles
+	// 1. Aggregate resources and tools from all matching profiles
 	for _, p := range registry {
 		if containsAny(lower, p.Keywords...) {
 			// Resource aggregation
@@ -53,10 +54,18 @@ func Apply(match models.WorkloadProfileMatch, reqs *models.TaskRequirements) {
 			if p.PrefersTurboQuant {
 				reqs.PrefersTurboQuant = true
 			}
-			// Only add tools if the primary keywords for that tool are present.
-			if len(reqs.RequiredTools) == 0 && len(p.RequiredTools) > 0 {
-				if matchToolKeywords(lower, p.Class) {
-					reqs.RequiredTools = append([]string(nil), p.RequiredTools...)
+
+			// Tool aggregation
+			for _, tool := range p.RequiredTools {
+				if !contains(reqs.RequiredTools, tool) {
+					reqs.RequiredTools = append(reqs.RequiredTools, tool)
+				}
+			}
+
+			// Backend aggregation
+			for _, backend := range p.PreferredBackends {
+				if !contains(reqs.PreferredBackends, backend) {
+					reqs.PreferredBackends = append(reqs.PreferredBackends, backend)
 				}
 			}
 		}
@@ -67,36 +76,32 @@ func Apply(match models.WorkloadProfileMatch, reqs *models.TaskRequirements) {
 	}
 }
 
-func matchToolKeywords(lower string, class models.WorkloadClass) bool {
-	switch class {
-	case models.ClassAppleIntelligence:
-		return containsAny(lower, "apple-intelligence", "apple intelligence", "apple foundation models", "apple-foundation-models", "language model session")
-	case models.ClassLlamaServer:
-		return containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server")
-	case models.ClassLocalLLMInference, models.ClassLongContextInference:
-		return containsAny(lower, "inference", "ollama", "llm", "gpu")
-	case models.ClassRepoAnalysis:
-		return containsAny(lower, "repo", "analyze", "code", "clone", "commit")
-	case models.ClassGoBuild:
-		return containsAny(lower, "build", "compile")
-	case models.ClassDockerBuild:
-		return containsAny(lower, "docker", "container")
-	default:
-		return false
+func contains(slice []string, s string) bool {
+	for _, item := range slice {
+		if strings.EqualFold(item, s) {
+			return true
+		}
 	}
+	return false
 }
 
 // InferBackends adds backend preferences based on keywords in the description.
 func InferBackends(desc string, reqs *models.TaskRequirements) {
 	lower := strings.ToLower(desc)
 	if containsAny(lower, "mlx", "mlx_lm", "apple silicon", "mac studio", "macbook pro", "mac mini") {
-		reqs.PreferredBackends = append(reqs.PreferredBackends, "mlx")
+		if !contains(reqs.PreferredBackends, "mlx") {
+			reqs.PreferredBackends = append(reqs.PreferredBackends, "mlx")
+		}
 	}
 	if containsAny(lower, "apple-intelligence", "apple intelligence", "apple foundation models", "apple-foundation-models", "language model session") {
-		reqs.PreferredBackends = append(reqs.PreferredBackends, "apple-foundation-models")
+		if !contains(reqs.PreferredBackends, "apple-foundation-models") {
+			reqs.PreferredBackends = append(reqs.PreferredBackends, "apple-foundation-models")
+		}
 	}
 	if containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server") {
-		reqs.PreferredBackends = append(reqs.PreferredBackends, "llama.cpp")
+		if !contains(reqs.PreferredBackends, "llama.cpp") {
+			reqs.PreferredBackends = append(reqs.PreferredBackends, "llama.cpp")
+		}
 	}
 }
 

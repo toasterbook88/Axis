@@ -30,7 +30,6 @@ func DefaultRegistry() []Profile {
 		{
 			Class:    models.ClassLongContextInference,
 			Keywords: []string{"128k", "256k", "512k", "1m tokens", "long context", "million token", "book length", "needle-in-a-haystack", "needle in a haystack"},
-			RequiredTools: []string{"ollama"},
 			MinFreeRAMMB:  6144,
 			PrefersTurboQuant: true,
 		},

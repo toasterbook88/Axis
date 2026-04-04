@@ -234,7 +234,7 @@ type WorkloadProfileMatch struct {
 // Inferred from task description by workload profile matching.
 type TaskRequirements struct {
 	Description         string               `json:"description" yaml:"description"`
-	Workload            WorkloadProfileMatch `json:"workload" yaml:"workload"`
+	Workload            WorkloadProfileMatch `json:"workload,omitempty" yaml:"workload,omitempty"`
 	RequiredTools       []string             `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
 	MinFreeRAMMB        int64                `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
 	ContextWindowTokens int                  `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
@@ -249,7 +249,7 @@ type PlacementDecision struct {
 	Tool      string               `json:"tool,omitempty" yaml:"tool,omitempty"`
 	FitScore  int                  `json:"fit_score" yaml:"fit_score"`
 	IsLocal   bool                 `json:"is_local" yaml:"is_local"`
-	Workload  WorkloadProfileMatch `json:"workload" yaml:"workload"`
+	Workload  WorkloadProfileMatch `json:"workload,omitempty" yaml:"workload,omitempty"`
 	Reasoning []string             `json:"reasoning" yaml:"reasoning"`
 	OK        bool                 `json:"ok" yaml:"ok"`
 }
