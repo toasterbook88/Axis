@@ -10,17 +10,26 @@ import (
 )
 
 // HashScope generates a stable, unique key for a failure scope.
+// Fields are normalized (lowercased, whitespace-trimmed) before hashing so that
+// scopes that differ only by casing or surrounding spaces hash to the same key,
+// matching the case-insensitive semantics of Match.
 func HashScope(s models.FailureScope) string {
 	parts := []string{
-		"node:" + s.Node,
-		"workload:" + string(s.Workload),
-		"tool:" + s.Tool,
-		"backend:" + s.Backend,
-		"surface:" + s.Surface,
+		"node:" + normalizeField(s.Node),
+		"workload:" + normalizeField(string(s.Workload)),
+		"tool:" + normalizeField(s.Tool),
+		"backend:" + normalizeField(s.Backend),
+		"surface:" + normalizeField(s.Surface),
 	}
 	joined := strings.Join(parts, "|")
 	hash := sha256.Sum256([]byte(joined))
 	return hex.EncodeToString(hash[:12]) // 24 chars is plenty for local collision resistance
+}
+
+// normalizeField returns a lowercased, whitespace-trimmed version of s so that
+// HashScope and Match operate on the same effective comparison domain.
+func normalizeField(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // Match checks if a specific target scope falls under a failure record's scope.
@@ -57,7 +66,7 @@ func (s Store) NarrowestMatch(target models.FailureScope) (*models.FailureRecord
 	bestScore := -1
 
 	for _, rec := range s {
-		if rec.OperatorOverride || now.After(rec.ExpiresAt) {
+		if rec.OperatorOverride || !now.Before(rec.ExpiresAt) {
 			continue // expired or overridden records don't match
 		}
 

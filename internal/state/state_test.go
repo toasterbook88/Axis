@@ -409,15 +409,16 @@ func TestTombstoneMigrationRoundTrip(t *testing.T) {
 		t.Fatal("expected Failures map to be initialized")
 	}
 
-	// Verify migration happened
+	// Verify migration happened: legacy tombstone becomes a {Node}-scoped record
+	// so placement queries on {Node, Workload} can still match it.
 	found := false
 	for _, rec := range loaded.Failures {
-		if rec.Scope.Node == "node1" && rec.Scope.Tool == "test-pattern" && rec.Count == 2 {
+		if rec.Scope.Node == "node1" && rec.Scope.Tool == "" && rec.Count == 2 {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("expected legacy tombstone to be migrated to FailureRecord")
+		t.Fatal("expected legacy tombstone to be migrated to a {Node}-scoped FailureRecord")
 	}
 
 	// Saving should no longer write 'tombstones'

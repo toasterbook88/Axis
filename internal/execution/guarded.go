@@ -3,6 +3,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -713,15 +714,25 @@ func emitFailure(st *state.ClusterState, req GuardedExecutionRequest, resp Guard
 		return
 	}
 	class := models.FailureExecCrash
-	if runErr != nil && strings.Contains(runErr.Error(), "timeout") { // Context timeout
+	if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
 		class = models.FailureTimeout
 	}
+	evidence := []string{fmt.Sprintf("exit code %d", resp.ExitCode)}
 	scope := models.FailureScope{
 		Node:     resp.Node,
 		Workload: resp.Workload.Class,
 		Tool:     resp.Tool,
 	}
-	st.Failures.Record(class, scope, runErr.Error(), []string{fmt.Sprintf("exit code %d", resp.ExitCode)})
+	st.Failures.Record(class, scope, runErr.Error(), evidence)
+	// Also record a broader {Node, Workload} entry so placement filter/ranking
+	// queries (which do not include Tool) can still match this failure.
+	if resp.Tool != "" {
+		broadScope := models.FailureScope{
+			Node:     resp.Node,
+			Workload: resp.Workload.Class,
+		}
+		st.Failures.Record(class, broadScope, runErr.Error(), evidence)
+	}
 	_ = st.Save()
 }
 
@@ -734,7 +745,16 @@ func emitSuccess(st *state.ClusterState, req GuardedExecutionRequest, resp Guard
 		Workload: resp.Workload.Class,
 		Tool:     resp.Tool,
 	}
-	if st.Failures.RecordSuccess(scope) {
+	cleared := st.Failures.RecordSuccess(scope)
+	// Also clear the broader {Node, Workload} entry written by emitFailure.
+	if resp.Tool != "" {
+		broadScope := models.FailureScope{
+			Node:     resp.Node,
+			Workload: resp.Workload.Class,
+		}
+		cleared = st.Failures.RecordSuccess(broadScope) || cleared
+	}
+	if cleared {
 		_ = st.Save()
 	}
 }

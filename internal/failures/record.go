@@ -26,7 +26,13 @@ func (s Store) Record(class models.FailureClass, scope models.FailureScope, reas
 	entry, exists := s[key]
 	if !exists {
 		idBytes := make([]byte, 8)
-		_, _ = rand.Read(idBytes)
+		if _, err := rand.Read(idBytes); err != nil {
+			// Fallback: derive a time-based ID when the entropy source is unavailable.
+			ns := time.Now().UnixNano()
+			for i := range idBytes {
+				idBytes[i] = byte(ns >> (i * 8))
+			}
+		}
 		entry = models.FailureRecord{
 			ID:         hex.EncodeToString(idBytes),
 			Class:      class,
@@ -62,7 +68,10 @@ func (s Store) RecordSuccess(scope models.FailureScope) bool {
 	return true
 }
 
-// ClearOverride removes a failure completely if an operator overrides it.
+// ClearOverride marks a failure as operator-overridden, preventing it from
+// influencing placement. The record expires immediately and will be removed on
+// the next Prune call. To permanently delete a record without expiry semantics,
+// use Delete instead.
 func (s Store) ClearOverride(scope models.FailureScope, note string) bool {
 	key := HashScope(scope)
 	entry, exists := s[key]

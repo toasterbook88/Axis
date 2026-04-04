@@ -74,9 +74,12 @@ func Load() (*ClusterState, error) {
 	mutated := false
 	if s.Tombstones != nil && len(s.Tombstones) > 0 {
 		for _, t := range s.Tombstones {
+			// Migrate to {Node}-only scope so placement queries on {Node, Workload}
+			// can match via the broad-scope Match semantics.  The legacy TaskPattern
+			// was a free-form string (not a canonical tool name), so including it as
+			// Tool would prevent placement from seeing these records.
 			scope := models.FailureScope{
 				Node: t.NodeName,
-				Tool: t.TaskPattern, // legacy pattern was often tool names
 			}
 			class := models.FailureUnknown
 			lowerPat := strings.ToLower(t.TaskPattern)
