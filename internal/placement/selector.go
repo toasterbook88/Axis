@@ -151,6 +151,18 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 			fmt.Sprintf("runner-up %q scored %d/100", runnerUp.Name, ruScore))
 	}
 
+	// Soft failure memory penalty reasoning
+	if st != nil && st.Failures != nil {
+		rec, ok := st.Failures.NarrowestMatch(models.FailureScope{
+			Node:     best.Name,
+			Workload: reqs.Workload.Class,
+		})
+		if ok && !isBlockingFailure(rec.Class) {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("penalized: %s recorded %d time(s) for this scope", rec.Class, rec.Count))
+		}
+	}
+
 	return decision
 }
 
@@ -206,6 +218,21 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 					fmt.Sprintf("  %s: excluded (critical runtime memory pressure)", n.Name))
 			}
 			continue
+		}
+		if blocksForThermalOrBattery(reqs, n) {
+			if n.Resources != nil && n.Resources.BatteryPercent != nil && *n.Resources.BatteryPercent < 20 {
+				d.Reasoning = append(d.Reasoning, fmt.Sprintf("  %s: excluded (battery critically low: %d%%)", n.Name, *n.Resources.BatteryPercent))
+			} else {
+				d.Reasoning = append(d.Reasoning, fmt.Sprintf("  %s: excluded (thermal throttling state: %s)", n.Name, n.Resources.ThermalState))
+			}
+			continue
+		}
+		if st != nil && st.Failures != nil {
+			if rec, ok := st.Failures.NarrowestMatch(models.FailureScope{Node: n.Name, Workload: reqs.Workload.Class}); ok && isBlockingFailure(rec.Class) {
+				d.Reasoning = append(d.Reasoning,
+					fmt.Sprintf("  %s: blocked (%s repeated %d time(s) for this scope)", n.Name, rec.Class, rec.Count))
+				continue
+			}
 		}
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
