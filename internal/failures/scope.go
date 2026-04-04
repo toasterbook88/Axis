@@ -66,7 +66,7 @@ func (s Store) NarrowestMatch(target models.FailureScope) (*models.FailureRecord
 	bestScore := -1
 
 	for _, rec := range s {
-		if rec.OperatorOverride || !now.Before(rec.ExpiresAt) {
+		if rec.OperatorOverride || !rec.ExpiresAt.After(now) {
 			continue // expired or overridden records don't match
 		}
 

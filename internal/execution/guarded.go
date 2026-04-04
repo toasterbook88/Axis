@@ -524,10 +524,12 @@ func runLocal(
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
+		emitFailure(st, req, resp, runErr)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
+	emitSuccess(st, req, resp)
 	resp.OK = true
 	return resp, nil
 }

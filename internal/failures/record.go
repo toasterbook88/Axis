@@ -17,6 +17,17 @@ func NewStore() Store {
 	return make(Store)
 }
 
+func severity(c models.FailureClass) int {
+	switch c {
+	case models.FailureExecCrash, models.FailureThermal, models.FailureBattery, models.FailureBackendMisfit:
+		return 100 // Blocking failures
+	case models.FailureTimeout, models.FailureNetwork:
+		return 50 // Transient but serious
+	default:
+		return 10 // Minor or specific
+	}
+}
+
 // Record creates or escalates a failure record for a specific scope.
 // It applies exponential backoff for recurring failures.
 func (s Store) Record(class models.FailureClass, scope models.FailureScope, reason string, evidence []string) (models.FailureRecord, bool) {
@@ -44,9 +55,14 @@ func (s Store) Record(class models.FailureClass, scope models.FailureScope, reas
 
 	// Update mutable fields
 	entry.Count++
-	entry.Class = class // update to latest class
-	entry.Reason = reason
-	entry.Evidence = evidence
+	
+	// Avoid masking a more severe historical failure with a transient one.
+	if !exists || severity(class) >= severity(entry.Class) {
+		entry.Class = class
+		entry.Reason = reason
+		entry.Evidence = evidence
+	}
+	
 	entry.OccurredAt = now
 	entry.OperatorOverride = false
 	entry.OperatorNote = ""
@@ -100,7 +116,7 @@ func (s Store) Prune() int {
 	now := time.Now().UTC()
 	removed := 0
 	for k, v := range s {
-		if v.OperatorOverride || now.After(v.ExpiresAt) || now.Equal(v.ExpiresAt) {
+		if v.OperatorOverride || !v.ExpiresAt.After(now) {
 			delete(s, k)
 			removed++
 		}
