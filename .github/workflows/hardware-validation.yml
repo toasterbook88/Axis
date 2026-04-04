@@ -54,24 +54,34 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Install runner dependencies
+        run: |
+          for cmd in awk rg jq; do
+            if ! command -v $cmd >/dev/null 2>&1; then
+              echo "$cmd is missing, attempting to install..."
+              pkg="$cmd"
+              [ "$cmd" = "awk" ] && pkg="gawk"
+              [ "$cmd" = "rg" ] && pkg="ripgrep"
+              if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update && sudo apt-get install -y $pkg
+              elif command -v nix-env >/dev/null 2>&1; then
+                nix-env -iA nixpkgs.$pkg
+              else
+                echo "$cmd is required, but neither apt-get nor nix-env is available" >&2
+                exit 1
+              fi
+            fi
+          done
+
+          for cmd in awk rg jq; do
+            if ! command -v $cmd >/dev/null 2>&1; then
+              echo "Failed to install $cmd on PATH" >&2
+              exit 1
+            fi
+          done
+
       - name: Coverage gates
         run: ./hack/coverage-check.sh
-
-      - name: Install ripgrep
-        run: |
-          if command -v rg >/dev/null 2>&1; then
-            echo "ripgrep already installed"
-          elif command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y ripgrep
-          else
-            echo "ripgrep (rg) is required for ./hack/verify-repo-truth.sh, but neither rg nor apt-get is available on this runner" >&2
-            exit 1
-          fi
-
-          if ! command -v rg >/dev/null 2>&1; then
-            echo "ripgrep installation did not make rg available on PATH; cannot run ./hack/verify-repo-truth.sh" >&2
-            exit 1
-          fi
 
       - name: Repo truth guardrails
         env:
