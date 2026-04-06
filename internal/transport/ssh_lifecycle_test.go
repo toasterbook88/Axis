@@ -148,6 +148,36 @@ func TestSSHExecutorStreamWritesOutput(t *testing.T) {
 	}
 }
 
+func TestSSHExecutorStreamWrapsFailureWithCommandAndHost(t *testing.T) {
+	clientKey, clientSigner := generateTestKeyPair(t)
+	_, hostSigner := generateTestKeyPair(t)
+
+	server := startSSHTestServer(t, clientSigner.PublicKey(), hostSigner, map[string]sshCommandResponse{
+		"fail": {stderr: "boom\n", exitStatus: 23},
+	})
+	defer server.Close()
+
+	home := writeSSHClientEnv(t, clientKey, hostSigner, server.Host(), server.Port())
+	restore := stubSSHConfigEnv(t, home)
+	defer restore()
+
+	exec := NewSSHExecutor(server.Host(), server.Port(), "axis", 5)
+	var stdout, stderr bytes.Buffer
+	err := exec.Stream(context.Background(), "fail", &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected stream failure")
+	}
+	if !strings.Contains(err.Error(), "ssh stream \"fail\" on "+server.Host()) {
+		t.Fatalf("expected wrapped stream error with command and host, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "status 23") {
+		t.Fatalf("expected upstream ssh exit status in error, got %q", err.Error())
+	}
+	if stderr.String() != "boom\n" {
+		t.Fatalf("expected stderr writer to receive remote stderr, got %q", stderr.String())
+	}
+}
+
 func TestSSHExecutorStreamReturnsCanceledContextBeforeConnect(t *testing.T) {
 	exec := NewSSHExecutor("127.0.0.1", 1, "axis", 5)
 	var stdout, stderr bytes.Buffer
