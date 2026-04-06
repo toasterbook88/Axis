@@ -148,6 +148,26 @@ func TestSSHExecutorStreamWritesOutput(t *testing.T) {
 	}
 }
 
+func TestSSHExecutorStreamReturnsCanceledContextBeforeConnect(t *testing.T) {
+	exec := NewSSHExecutor("127.0.0.1", 1, "axis", 5)
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	defer cancel()
+
+	start := time.Now()
+	err := exec.Stream(ctx, "sleep", &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected stream cancellation")
+	}
+	if err != context.Canceled {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("expected prompt cancel return, got %s", elapsed)
+	}
+}
+
 func TestSSHExecutorConnectFailsOnDial(t *testing.T) {
 	exec := NewSSHExecutor("127.0.0.1", 1, "axis", 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
