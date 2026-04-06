@@ -52,25 +52,25 @@ type RunRequest struct {
 }
 
 type RunResponse struct {
-	OK             bool                   `json:"ok"`
-	Description    string                 `json:"description"`
-	Mode           string                 `json:"mode,omitempty"`
-	Intent         string                 `json:"intent,omitempty"`
-	Command        string                     `json:"command,omitempty"`
-	Node           string                     `json:"node,omitempty"`
-	Tool           string                     `json:"tool,omitempty"`
+	OK             bool                        `json:"ok"`
+	Description    string                      `json:"description"`
+	Mode           string                      `json:"mode,omitempty"`
+	Intent         string                      `json:"intent,omitempty"`
+	Command        string                      `json:"command,omitempty"`
+	Node           string                      `json:"node,omitempty"`
+	Tool           string                      `json:"tool,omitempty"`
 	Workload       models.WorkloadProfileMatch `json:"workload,omitempty"`
-	FitScore       int                        `json:"fit_score,omitempty"`
-	IsLocal        bool                   `json:"is_local,omitempty"`
-	Reasoning      []string               `json:"reasoning,omitempty"`
-	Blocked        bool                   `json:"blocked,omitempty"`
-	BlockReason    string                 `json:"block_reason,omitempty"`
-	DumbScore      int                    `json:"dumb_score,omitempty"`
-	Output         string                 `json:"output,omitempty"`
-	Error          string                 `json:"error,omitempty"`
-	ExitCode       int                    `json:"exit_code,omitempty"`
-	SnapshotStatus models.SnapshotStatus  `json:"snapshot_status,omitempty"`
-	Summary        *models.ClusterSummary `json:"summary,omitempty"`
+	FitScore       int                         `json:"fit_score,omitempty"`
+	IsLocal        bool                        `json:"is_local,omitempty"`
+	Reasoning      []string                    `json:"reasoning,omitempty"`
+	Blocked        bool                        `json:"blocked,omitempty"`
+	BlockReason    string                      `json:"block_reason,omitempty"`
+	DumbScore      int                         `json:"dumb_score,omitempty"`
+	Output         string                      `json:"output,omitempty"`
+	Error          string                      `json:"error,omitempty"`
+	ExitCode       int                         `json:"exit_code,omitempty"`
+	SnapshotStatus models.SnapshotStatus       `json:"snapshot_status,omitempty"`
+	Summary        *models.ClusterSummary      `json:"summary,omitempty"`
 }
 
 type runIntent struct {
@@ -93,6 +93,14 @@ type snapshotCache interface {
 	Invalidate()
 	RefreshNow(context.Context) error
 }
+
+type triggerableSnapshotCache interface {
+	RefreshWithTrigger(context.Context, string) error
+}
+
+const runtimeRefreshTimeout = 30 * time.Second
+
+var runLiveGuarded = execution.RunGuarded
 
 func Serve(addr string, cache snapshotCache, token string) error {
 	return ServeWithContext(context.Background(), addr, cache, token)
@@ -197,13 +205,10 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		payload := map[string]any{
-			"status": "ok",
-			"name":   "axis",
-		}
+		payload := daemon.HealthPayload(nil)
 		if cache != nil {
 			meta := cache.Meta()
-			payload["cache_ready"] = meta.Ready
+			payload = daemon.HealthPayload(&meta)
 		}
 		writeJSON(w, http.StatusOK, payload)
 	}
@@ -261,7 +266,12 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
 			return
 		}
-		if err := cache.RefreshNow(r.Context()); err != nil {
+		trigger, err := daemon.NormalizeRefreshTrigger(r.URL.Query().Get("trigger"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := refreshCache(cache, r.Context(), trigger); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -360,8 +370,43 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Mode:        req.Mode,
 		}
 
+		forwardedOrigin, hasForwardedOrigin, err := auth.ForwardedExecutionOriginFromRequest(r, token, time.Now())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		guardedReq := execution.GuardedExecutionRequest{
+			Description:  req.Description,
+			Mode:         req.Mode,
+			Confirm:      req.Confirm,
+			OwnerSurface: execution.OwnerSurfaceHTTPRun,
+			OwnerLabel:   requestCallerLabel(r),
+			OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
+				scheduleCacheRefresh(cache, trigger)
+			},
+		}
+		if hasForwardedOrigin {
+			guardedReq.OriginOverride = forwardedOrigin
+		}
+
+		emitResult, streamed, err := daemon.WireRunStreamResponse(w, r, &guardedReq)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
 		rc, err := loadRunnerContext(ctx)
 		if err != nil {
+			if streamed {
+				_ = emitResult(execution.GuardedExecutionResult{
+					OK:          false,
+					Description: req.Description,
+					Mode:        req.Mode,
+					Error:       err.Error(),
+				})
+				return
+			}
 			resp.Error = err.Error()
 			writeJSON(w, http.StatusOK, resp)
 			return
@@ -374,24 +419,15 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Skills:   rc.skillStore,
 		}
 
-		guardedReq := execution.GuardedExecutionRequest{
-			Description: req.Description,
-			Mode:        req.Mode,
-			Confirm:     req.Confirm,
-		}
+		res, runErr := runLiveGuarded(ctx, rtCtx, guardedReq)
+		res = daemon.NormalizeRunResult(res, runErr)
 
-		res, err := execution.RunGuarded(ctx, rtCtx, guardedReq)
-
-		resp = RunResponse(res)
-
-		if err != nil {
-			resp.OK = false
-			if resp.Error == "" {
-				resp.Error = err.Error()
-			}
-			writeJSON(w, http.StatusOK, resp)
+		if streamed {
+			_ = emitResult(res)
 			return
 		}
+
+		resp = RunResponse(res)
 
 		writeJSON(w, http.StatusOK, resp)
 	}, token))
@@ -410,6 +446,42 @@ func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 		st:         rt.State,
 		skillStore: rt.Skills,
 	}, nil
+}
+
+func refreshCache(cache snapshotCache, ctx context.Context, trigger string) error {
+	if cache == nil {
+		return nil
+	}
+	if triggered, ok := any(cache).(triggerableSnapshotCache); ok {
+		return triggered.RefreshWithTrigger(ctx, trigger)
+	}
+	return cache.RefreshNow(ctx)
+}
+
+func scheduleCacheRefresh(cache snapshotCache, trigger string) {
+	if cache == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeRefreshTimeout)
+		defer cancel()
+		_ = refreshCache(cache, ctx, trigger)
+	}()
+}
+
+func requestCallerLabel(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	remoteAddr := strings.TrimSpace(r.RemoteAddr)
+	if remoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return strings.TrimSpace(host)
+	}
+	return remoteAddr
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

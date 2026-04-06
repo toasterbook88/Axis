@@ -3,9 +3,12 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -29,8 +32,13 @@ type KnowledgeResponse struct {
 }
 
 type RouteDeps struct {
-	LoadRuntime func(context.Context) (*runtimectx.Context, error)
-	RunGuarded  func(context.Context, *runtimectx.Context, execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error)
+	LoadRuntime          func(context.Context) (*runtimectx.Context, error)
+	RunGuarded           func(context.Context, *runtimectx.Context, execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error)
+	ForwardedOriginToken string
+}
+
+type triggerableSnapshotCache interface {
+	RefreshWithTrigger(context.Context, string) error
 }
 
 func RegisterRoutes(mux *http.ServeMux, cache SnapshotCache) {
@@ -60,7 +68,7 @@ func RegisterRoutesWithDeps(mux *http.ServeMux, cache SnapshotCache, deps RouteD
 	mux.HandleFunc("/mcp/tools", permanentRedirect("/tools"))
 
 	mux.HandleFunc("/knowledge", knowledgeHandler(deps))
-	mux.HandleFunc("/run", runHandler(deps))
+	mux.HandleFunc("/run", runHandler(cache, deps))
 }
 
 func HealthPayload(meta *Metadata) map[string]any {
@@ -77,8 +85,14 @@ func HealthPayload(meta *Metadata) map[string]any {
 	payload["cache_stale"] = meta.Stale
 	payload["cache_age_sec"] = meta.CacheAgeSec
 	payload["refresh_count"] = meta.RefreshCount
+	if meta.LastRefreshTrigger != "" {
+		payload["last_refresh_trigger"] = meta.LastRefreshTrigger
+	}
 	if meta.LastRefreshMs > 0 {
 		payload["last_refresh_duration_ms"] = meta.LastRefreshMs
+	}
+	if !meta.LastConfigEventAt.IsZero() {
+		payload["last_config_event_at"] = meta.LastConfigEventAt
 	}
 	if len(meta.StaleNodes) > 0 {
 		payload["stale_nodes"] = meta.StaleNodes
@@ -202,7 +216,12 @@ func refreshHandler(cache SnapshotCache) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
 			return
 		}
-		if err := cache.RefreshNow(r.Context()); err != nil {
+		trigger, err := NormalizeRefreshTrigger(r.URL.Query().Get("trigger"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := refreshCache(cache, r.Context(), trigger); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -237,7 +256,7 @@ func knowledgeHandler(deps RouteDeps) http.HandlerFunc {
 	}
 }
 
-func runHandler(deps RouteDeps) http.HandlerFunc {
+func runHandler(cache SnapshotCache, deps RouteDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -258,26 +277,87 @@ func runHandler(deps RouteDeps) http.HandlerFunc {
 		runCtx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 		defer cancel()
 
+		forwardedOrigin, hasForwardedOrigin, err := auth.ForwardedExecutionOriginFromRequest(r, deps.ForwardedOriginToken, time.Now())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		req.OnStateChange = func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
+			scheduleCacheRefresh(cache, trigger)
+		}
+		req.OwnerSurface = execution.OwnerSurfaceHTTPRun
+		req.OwnerLabel = requestCallerLabel(r)
+		if hasForwardedOrigin {
+			req.OriginOverride = forwardedOrigin
+		}
+
+		emitResult, streamed, err := WireRunStreamResponse(w, r, &req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
 		rt, err := deps.LoadRuntime(runCtx)
 		if err != nil {
-			writeJSON(w, http.StatusOK, execution.GuardedExecutionResult{
+			resp := execution.GuardedExecutionResult{
 				OK:          false,
 				Description: req.Description,
 				Mode:        req.Mode,
 				Error:       err.Error(),
-			})
+			}
+			if streamed {
+				_ = emitResult(resp)
+				return
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 
 		resp, runErr := deps.RunGuarded(runCtx, rt, req)
-		if runErr != nil {
-			resp.OK = false
-			if resp.Error == "" {
-				resp.Error = runErr.Error()
-			}
+		resp = NormalizeRunResult(resp, runErr)
+		if streamed {
+			_ = emitResult(resp)
+			return
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+func refreshCache(cache SnapshotCache, ctx context.Context, trigger string) error {
+	if cache == nil {
+		return nil
+	}
+	if triggered, ok := any(cache).(triggerableSnapshotCache); ok {
+		return triggered.RefreshWithTrigger(ctx, trigger)
+	}
+	return cache.RefreshNow(ctx)
+}
+
+func scheduleCacheRefresh(cache SnapshotCache, trigger string) {
+	if cache == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeRefreshTimeout)
+		defer cancel()
+		_ = refreshCache(cache, ctx, trigger)
+	}()
+}
+
+func requestCallerLabel(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	remoteAddr := strings.TrimSpace(r.RemoteAddr)
+	if remoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		return strings.TrimSpace(host)
+	}
+	return remoteAddr
 }
 
 func permanentRedirect(target string) http.HandlerFunc {
