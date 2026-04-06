@@ -56,3 +56,39 @@ func TestQuarantineCorruptFileReturnsRenameError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestWriteFileAtomicReplacesContents(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := WriteFileAtomic(path, []byte("first"), 0o644); err != nil {
+		t.Fatalf("first WriteFileAtomic: %v", err)
+	}
+	if err := WriteFileAtomic(path, []byte("second"), 0o600); err != nil {
+		t.Fatalf("second WriteFileAtomic: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "second" {
+		t.Fatalf("contents = %q, want %q", string(data), "second")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want %o", info.Mode().Perm(), 0o600)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, "state.json.tmp-*"))
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no temp files left behind, got %v", matches)
+	}
+}
