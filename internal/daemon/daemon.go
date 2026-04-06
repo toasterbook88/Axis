@@ -88,6 +88,9 @@ type configFingerprint struct {
 }
 
 var watchConfigPollInterval = 500 * time.Millisecond
+var reportWatchFingerprintError = func(path, trigger string, err error) {
+	fmt.Fprintf(os.Stderr, "axis daemon: watch fingerprint failed for %s (%s): %v\n", path, trigger, err)
+}
 
 func (d *Daemon) RefreshNow(ctx context.Context) error {
 	return d.RefreshWithTrigger(ctx, RefreshTriggerManual)
@@ -266,7 +269,10 @@ func (d *Daemon) watchFileWithFingerprint(ctx context.Context, path, trigger str
 	go func() {
 		defer d.wg.Done()
 
-		lastFingerprint, _ := fingerprintFn(path)
+		lastFingerprint, err := fingerprintFn(path)
+		if err != nil {
+			reportWatchFingerprintError(path, trigger, err)
+		}
 
 		ticker := time.NewTicker(watchConfigPollInterval)
 		defer ticker.Stop()
@@ -278,6 +284,7 @@ func (d *Daemon) watchFileWithFingerprint(ctx context.Context, path, trigger str
 			case <-ticker.C:
 				fingerprint, err := fingerprintFn(path)
 				if err != nil {
+					reportWatchFingerprintError(path, trigger, err)
 					continue
 				}
 				if fingerprint != lastFingerprint {

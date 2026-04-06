@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +16,10 @@ import (
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
 )
+
+var reportAsyncRefreshError = func(trigger string, err error) {
+	fmt.Fprintf(os.Stderr, "axis daemon: async refresh (%s) failed: %v\n", trigger, err)
+}
 
 type ToolDef struct {
 	Name        string         `json:"name"`
@@ -341,7 +347,9 @@ func scheduleCacheRefresh(cache SnapshotCache, trigger string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), runtimeRefreshTimeout)
 		defer cancel()
-		_ = refreshCache(cache, ctx, trigger)
+		if err := refreshCache(cache, ctx, trigger); err != nil {
+			reportAsyncRefreshError(trigger, err)
+		}
 	}()
 }
 

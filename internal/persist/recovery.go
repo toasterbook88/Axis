@@ -1,9 +1,11 @@
 package persist
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -35,6 +37,26 @@ func QuarantineCorruptFile(path string, cause error) error {
 
 // WriteFileAtomic writes data to path via a same-directory temporary file and
 // rename, so readers never observe a partially-written persistence file.
+var syncAtomicTempFile = func(f *os.File) error {
+	return f.Sync()
+}
+
+var syncAtomicParentDir = func(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EBADF) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -60,10 +82,17 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := syncAtomicTempFile(tmp); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	if err := syncAtomicParentDir(path); err != nil {
 		return err
 	}
 	removeTemp = false

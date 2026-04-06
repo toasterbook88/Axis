@@ -325,11 +325,7 @@ func taskRunCmd() *cobra.Command {
 }
 
 func scheduleTaskRunDaemonRefresh(trigger string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = signalTaskRunDaemonRefresh(ctx, trigger)
-	}()
+	scheduleBestEffortDaemonRefresh("task-run", trigger, signalTaskRunDaemonRefresh)
 }
 
 func runTaskRunRequest(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {

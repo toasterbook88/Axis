@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -509,6 +510,60 @@ func TestWatchStateIgnoresHeartbeatOnlyChanges(t *testing.T) {
 	}
 
 	t.Fatalf("expected reservation change refresh after heartbeat-only write, got meta=%+v calls=%d", d.Meta(), calls.Load())
+}
+
+func TestWatchFileWithFingerprintReportsFingerprintErrors(t *testing.T) {
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	errCh := make(chan struct {
+		path    string
+		trigger string
+		err     error
+	}, 2)
+	prevReport := reportWatchFingerprintError
+	reportWatchFingerprintError = func(path, trigger string, err error) {
+		errCh <- struct {
+			path    string
+			trigger string
+			err     error
+		}{path: path, trigger: trigger, err: err}
+	}
+
+	d := New(time.Minute, func(context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+		defer waitCancel()
+		d.WaitStopped(waitCtx)
+		reportWatchFingerprintError = prevReport
+	}()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	wantErr := errors.New("fingerprint boom")
+	d.watchFileWithFingerprint(ctx, path, RefreshTriggerStateChange, func(string) (configFingerprint, error) {
+		return configFingerprint{}, wantErr
+	})
+
+	select {
+	case got := <-errCh:
+		if got.path != path {
+			t.Fatalf("path = %q, want %q", got.path, path)
+		}
+		if got.trigger != RefreshTriggerStateChange {
+			t.Fatalf("trigger = %q, want %q", got.trigger, RefreshTriggerStateChange)
+		}
+		if !errors.Is(got.err, wantErr) {
+			t.Fatalf("err = %v, want %v", got.err, wantErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected fingerprint error to be reported")
+	}
 }
 
 func TestWatchSkillsRefreshesWhenFileAppears(t *testing.T) {

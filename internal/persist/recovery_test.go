@@ -92,3 +92,38 @@ func TestWriteFileAtomicReplacesContents(t *testing.T) {
 		t.Fatalf("expected no temp files left behind, got %v", matches)
 	}
 }
+
+func TestWriteFileAtomicSyncsFileAndParentDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	prevFileSync := syncAtomicTempFile
+	prevDirSync := syncAtomicParentDir
+	fileSyncCalls := 0
+	dirSyncCalls := 0
+	syncAtomicTempFile = func(_ *os.File) error {
+		fileSyncCalls++
+		return nil
+	}
+	syncAtomicParentDir = func(gotPath string) error {
+		dirSyncCalls++
+		if gotPath != path {
+			t.Fatalf("sync path = %q, want %q", gotPath, path)
+		}
+		return nil
+	}
+	defer func() {
+		syncAtomicTempFile = prevFileSync
+		syncAtomicParentDir = prevDirSync
+	}()
+
+	if err := WriteFileAtomic(path, []byte("value"), 0o600); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+	if fileSyncCalls != 1 {
+		t.Fatalf("file sync calls = %d, want 1", fileSyncCalls)
+	}
+	if dirSyncCalls != 1 {
+		t.Fatalf("dir sync calls = %d, want 1", dirSyncCalls)
+	}
+}

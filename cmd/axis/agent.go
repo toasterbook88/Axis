@@ -210,9 +210,5 @@ func marshalGuardedExecutionPayload(resp execution.GuardedExecutionResult, runEr
 }
 
 func scheduleAgentDaemonRefresh(trigger string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = signalAgentDaemonRefresh(ctx, trigger)
-	}()
+	scheduleBestEffortDaemonRefresh("agent", trigger, signalAgentDaemonRefresh)
 }

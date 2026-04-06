@@ -460,6 +460,23 @@ MemAvailable:   12456780 kB
 	}
 }
 
+func TestDetectRemoteHostnameRejectsEmptyFallback(t *testing.T) {
+	exec := &fakeRemoteExecutor{
+		exact: map[string]fakeRunResult{
+			"hostname": {out: "\n"},
+			"uname -n": {out: "\n"},
+		},
+	}
+
+	hostname, err := detectRemoteHostname(context.Background(), exec)
+	if err == nil {
+		t.Fatal("expected empty fallback hostname to fail")
+	}
+	if hostname != "" {
+		t.Fatalf("hostname = %q, want empty string", hostname)
+	}
+}
+
 func TestRemoteStorageClassWalksMapperSlaves(t *testing.T) {
 	exec := &fakeRemoteExecutor{
 		exact: map[string]fakeRunResult{

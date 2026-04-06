@@ -778,19 +778,12 @@ func runWithReservationHeartbeat(
 	ticker := time.NewTicker(executionHeartbeatInterval)
 	defer ticker.Stop()
 
-	var (
-		ctxDone = ctx.Done()
-		tickC   = ticker.C
-	)
 	for {
 		select {
 		case res := <-done:
 			return res.out, res.err
-		case <-tickC:
+		case <-ticker.C:
 			_ = heartbeatTask(st, node, execID)
-		case <-ctxDone:
-			ctxDone = nil
-			tickC = nil
 		}
 	}
 }

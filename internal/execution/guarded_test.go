@@ -308,6 +308,58 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	}
 }
 
+func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(t *testing.T) {
+	prevInterval := executionHeartbeatInterval
+	executionHeartbeatInterval = 10 * time.Millisecond
+	defer func() { executionHeartbeatInterval = prevInterval }()
+
+	prevHeartbeat := heartbeatTask
+	heartbeatCh := make(chan struct{}, 16)
+	heartbeatTask = func(_ *state.ClusterState, node, execID string) error {
+		if node != "alpha" || execID != "exec-1" {
+			t.Fatalf("unexpected heartbeat target node=%q execID=%q", node, execID)
+		}
+		heartbeatCh <- struct{}{}
+		return nil
+	}
+	defer func() { heartbeatTask = prevHeartbeat }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneRun := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := runWithReservationHeartbeat(ctx, &state.ClusterState{}, "alpha", "exec-1", func() (string, error) {
+			<-doneRun
+			return "ok", nil
+		}); err != nil {
+			t.Errorf("runWithReservationHeartbeat: %v", err)
+		}
+	}()
+
+	select {
+	case <-heartbeatCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected initial heartbeat")
+	}
+
+	cancel()
+
+	select {
+	case <-heartbeatCh:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected heartbeats to continue after cancellation until run returns")
+	}
+
+	close(doneRun)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected heartbeat wrapper to exit after run returns")
+	}
+}
+
 func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

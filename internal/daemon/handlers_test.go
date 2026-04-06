@@ -313,6 +313,36 @@ func TestRefreshHandlerPropagatesError(t *testing.T) {
 	}
 }
 
+func TestScheduleCacheRefreshReportsAsyncRefreshErrors(t *testing.T) {
+	cache := &mockCache{refreshErr: context.DeadlineExceeded}
+	errCh := make(chan struct {
+		trigger string
+		err     error
+	}, 1)
+	prevReport := reportAsyncRefreshError
+	reportAsyncRefreshError = func(trigger string, err error) {
+		errCh <- struct {
+			trigger string
+			err     error
+		}{trigger: trigger, err: err}
+	}
+	defer func() { reportAsyncRefreshError = prevReport }()
+
+	scheduleCacheRefresh(cache, execution.StateChangeExecutionFinished)
+
+	select {
+	case got := <-errCh:
+		if got.trigger != execution.StateChangeExecutionFinished {
+			t.Fatalf("trigger = %q, want %q", got.trigger, execution.StateChangeExecutionFinished)
+		}
+		if !errors.Is(got.err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want %v", got.err, context.DeadlineExceeded)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected async refresh error to be reported")
+	}
+}
+
 func TestRefreshHandlerRejectsGET(t *testing.T) {
 	h := refreshHandler(&mockCache{})
 	rec, req := newRecordedRequest(http.MethodGet, "/refresh", "")
