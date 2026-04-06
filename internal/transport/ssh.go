@@ -161,7 +161,6 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 		// Intentional remote execution boundary: this transport forwards cmd
 		// to the remote SSH session. Callers must ensure cmd is trusted and
 		// correctly quoted or escaped for the remote shell context.
-
 		// codeql[go/command-injection]
 		done <- session.Run(cmd)
 	}()
@@ -204,34 +203,23 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 	}
 	defer session.Close()
 
+	go func() {
+		<-ctx.Done()
+		_ = session.Signal(ssh.SIGKILL)
+	}()
+
 	session.Stdout = stdout
 	session.Stderr = stderr
 
 	// Intentional remote execution boundary: this transport forwards cmd
 	// to the remote SSH session. Callers must ensure cmd is trusted and
 	// correctly quoted or escaped for the remote shell context.
-
 	// codeql[go/command-injection]
-	startErr := session.Start(cmd)
-	if startErr != nil {
-		return startErr
+	err = session.Run(cmd)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- session.Wait()
-	}()
-
-	select {
-	case <-ctx.Done():
-		_ = session.Signal(ssh.SIGKILL)
-		return ctx.Err()
-	case err := <-done:
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		return err
-	}
+	return err
 }
 
 func handshakeDeadlineExceeded(ctx context.Context, err error) bool {

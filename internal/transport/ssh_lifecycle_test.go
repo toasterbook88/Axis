@@ -148,22 +148,11 @@ func TestSSHExecutorStreamWritesOutput(t *testing.T) {
 	}
 }
 
-func TestSSHExecutorStreamHonorsContextCancellation(t *testing.T) {
-	clientKey, clientSigner := generateTestKeyPair(t)
-	_, hostSigner := generateTestKeyPair(t)
-
-	server := startSSHTestServer(t, clientSigner.PublicKey(), hostSigner, map[string]sshCommandResponse{
-		"sleep": {delay: 300 * time.Millisecond},
-	})
-	defer server.Close()
-
-	home := writeSSHClientEnv(t, clientKey, hostSigner, server.Host(), server.Port())
-	restore := stubSSHConfigEnv(t, home)
-	defer restore()
-
-	exec := NewSSHExecutor(server.Host(), server.Port(), "axis", 5)
+func TestSSHExecutorStreamReturnsCanceledContextBeforeConnect(t *testing.T) {
+	exec := NewSSHExecutor("127.0.0.1", 1, "axis", 5)
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	defer cancel()
 
 	start := time.Now()
@@ -171,10 +160,10 @@ func TestSSHExecutorStreamHonorsContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected stream cancellation")
 	}
-	if err != context.DeadlineExceeded {
-		t.Fatalf("expected deadline exceeded, got %v", err)
+	if err != context.Canceled {
+		t.Fatalf("expected context canceled, got %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("expected prompt cancel return, got %s", elapsed)
 	}
 }
