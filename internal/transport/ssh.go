@@ -219,6 +219,9 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
+	if err != nil {
+		return fmt.Errorf("ssh stream %q on %s: %w", cmd, e.Host, err)
+	}
 	return err
 }
 
