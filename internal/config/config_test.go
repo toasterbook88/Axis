@@ -14,6 +14,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 nodes:
   - name: node-a
     hostname: node-a.local
+    stable_id: F47AC10B-58CC-4372-A567-0E02B2C3D479
     ssh_user: user
     role: cortex
   - name: node-b
@@ -30,6 +31,9 @@ nodes:
 	}
 	if cfg.Nodes[0].Name != "node-a" {
 		t.Errorf("node[0].name: got %q, want node-a", cfg.Nodes[0].Name)
+	}
+	if cfg.Nodes[0].StableID != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
+		t.Errorf("node[0].stable_id: got %q", cfg.Nodes[0].StableID)
 	}
 	if cfg.Nodes[1].Hostname != "node-b.local" {
 		t.Errorf("node[1].hostname: got %q, want node-b.local", cfg.Nodes[1].Hostname)

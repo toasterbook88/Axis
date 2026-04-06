@@ -50,6 +50,7 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 
 	hostname, _ := os.Hostname()
 	facts.Hostname = hostname
+	facts.Identity = detectLocalNodeIdentity(ctx, facts.OS)
 
 	// OS version
 	if v, err := localOSVersion(); err != nil {

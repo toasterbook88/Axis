@@ -34,9 +34,13 @@ type Store struct {
 
 var quarantineCorruptSkillsFile = persist.QuarantineCorruptFile
 
-func path() string {
+func Path() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".axis", "skills.json")
+}
+
+func path() string {
+	return Path()
 }
 
 func Load() (*Store, error) {
@@ -66,11 +70,8 @@ func Load() (*Store, error) {
 }
 
 func (s *Store) Save() error {
-	if err := os.MkdirAll(filepath.Dir(path()), 0o755); err != nil {
-		return err
-	}
 	data, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(path(), data, 0o644)
+	return persist.WriteFileAtomic(path(), data, 0o644)
 }
 
 // RecordSuccess learns from real usage

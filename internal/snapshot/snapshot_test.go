@@ -77,6 +77,17 @@ func TestBuild_SingleNode_Healthy(t *testing.T) {
 	}
 }
 
+func TestBuild_AllocatableRespectsSystemReserveFloor(t *testing.T) {
+	nodes := []models.NodeFacts{
+		completeNode("solo", 8192, 7900, "none"),
+	}
+	snap := Build(nodes)
+
+	if snap.Summary.TotalAllocatableMB != 7168 {
+		t.Fatalf("allocatable_ram: got %d, want 7168", snap.Summary.TotalAllocatableMB)
+	}
+}
+
 // --- Degraded scenarios ---
 
 func TestBuild_UnreachableNode_Degraded(t *testing.T) {

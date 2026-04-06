@@ -196,6 +196,31 @@ func TestApplyReservationViewAllocatableFloorZero(t *testing.T) {
 	}
 }
 
+func TestApplyReservationViewKeepsSystemReserveOutOfAllocatablePool(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "alpha",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  7900,
+				},
+			},
+		},
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 512},
+		},
+	}
+
+	snapshotview.ApplyReservationView(snap, st)
+
+	if got := snap.Nodes[0].Resources.RAMAllocatableMB; got != 6656 {
+		t.Fatalf("RAMAllocatableMB: got %d, want 6656", got)
+	}
+}
+
 func TestApplyReservationViewSummaryTotals(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
