@@ -549,6 +549,57 @@ func TestStatusCmdMarksLiveFallbackWhenCacheFails(t *testing.T) {
 	}
 }
 
+func TestStatusCmdCachedOnlyUsesCacheWrapper(t *testing.T) {
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Summary: models.ClusterSummary{TotalNodes: 4},
+		}, "daemon-cache", nil
+	})
+	defer restoreCache()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := statusCmd()
+		cmd.SetArgs([]string{"--cached-only", "--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("status Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, `"source": "daemon-cache"`) || !strings.Contains(stdout, `"total_nodes": 4`) {
+		t.Fatalf("expected cached-only wrapper output, got %q", stdout)
+	}
+}
+
+func TestStatusCmdCachedOnlyFailsWhenCacheUnavailable(t *testing.T) {
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", context.DeadlineExceeded
+	})
+	defer restoreCache()
+	restoreLive := stubStatusLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		t.Fatal("expected no live fallback in cached-only mode")
+		return nil, "", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := statusCmd()
+		cmd.SetArgs([]string{"--cached-only", "--format", "json"})
+		return cmd.Execute()
+	})
+	if err == nil {
+		t.Fatal("expected cached-only cache failure")
+	}
+	if stdout != "" {
+		t.Fatalf("expected no stdout on cached-only failure, got %q", stdout)
+	}
+	if !strings.Contains(stderr, "daemon cache unavailable: context deadline exceeded") {
+		t.Fatalf("expected cached-only error in stderr, got %q", stderr)
+	}
+}
+
 func TestAppendWarningIfMissingDeduplicates(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Warnings: []models.Warning{{Kind: "state", Message: "recovered"}},

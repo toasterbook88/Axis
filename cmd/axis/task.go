@@ -53,6 +53,7 @@ type taskPlaceOutput struct {
 func taskPlaceCmd() *cobra.Command {
 	var format string
 	var cached bool
+	var cachedOnly bool
 	var cacheAddr string
 
 	cmd := &cobra.Command{
@@ -64,11 +65,13 @@ func taskPlaceCmd() *cobra.Command {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
+			cacheRequested := cached || cachedOnly
 
 			decision, source, err := planTaskPlacement(
 				ctx,
 				desc,
-				cached,
+				cacheRequested,
+				cachedOnly,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
 					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
@@ -81,7 +84,7 @@ func taskPlaceCmd() *cobra.Command {
 
 			if format == "json" {
 				var payload any = decision
-				if cached {
+				if cacheRequested {
 					payload = taskPlaceOutput{
 						Source:   source,
 						Decision: decision,
@@ -92,7 +95,7 @@ func taskPlaceCmd() *cobra.Command {
 
 			// Human-readable output
 			if !decision.OK {
-				if cached {
+				if cacheRequested {
 					fmt.Printf("Source: %s\n", source)
 				}
 				fmt.Printf("%s %s\n", ui.Red("✗"), "No suitable node found.")
@@ -106,7 +109,7 @@ func taskPlaceCmd() *cobra.Command {
 			if decision.IsLocal {
 				locality = ui.Green("local")
 			}
-			if cached {
+			if cacheRequested {
 				fmt.Printf("%s %s\n", ui.Dim("Source:"), source)
 			}
 			fmt.Printf("%s %s (%s, fit %s)\n",
@@ -127,6 +130,7 @@ func taskPlaceCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
 }
@@ -135,10 +139,11 @@ func planTaskPlacement(
 	ctx context.Context,
 	desc string,
 	cached bool,
+	cachedOnly bool,
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 ) (models.PlacementDecision, string, error) {
-	snap, source, err := collectStatusSnapshot(ctx, cached, cachedLoader, liveLoader)
+	snap, source, err := collectStatusSnapshot(ctx, cached, cachedOnly, cachedLoader, liveLoader)
 	if err != nil {
 		return models.PlacementDecision{}, "", err
 	}
@@ -350,6 +355,7 @@ func tryTaskRunViaDaemon(ctx context.Context, rt *runtimectx.Context, req execut
 // === NEW: axis task context <description> — zero-risk token saver ===
 func taskContextCmd() *cobra.Command {
 	var cached bool
+	var cachedOnly bool
 	var cacheAddr string
 	var format string
 
@@ -361,10 +367,12 @@ func taskContextCmd() *cobra.Command {
 			desc := args[0]
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
+			cacheRequested := cached || cachedOnly
 
 			snap, source, err := collectStatusSnapshot(
 				ctx,
-				cached,
+				cacheRequested,
+				cachedOnly,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
 					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
@@ -388,6 +396,7 @@ func taskContextCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
