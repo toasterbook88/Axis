@@ -14,7 +14,7 @@ builds:
       - -s -w
       - -X github.com/toasterbook88/axis/internal/buildinfo.Commit={{ .ShortCommit }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.Date={{ .Date }}
-      - -X github.com/toasterbook88/axis/internal/buildinfo.GoVersion={{ .Runtime.Goversion }}
+      - -X github.com/toasterbook88/axis/internal/buildinfo.GoVersion={{ .Env.GOVERSION }}
     goos:
       - darwin
       - linux
