@@ -7,4 +7,4 @@
 | Phase 3 | **Completed** | Daemon graceful shutdown, `nodes.yaml` hot-reload, refresh metrics, `task context --format json`, context enrichment (skills + decisions), UDP HMAC beacon auth, `axis update` self-updater |
 | Phase 4 | **Completed** | Professional CLI UX: colors, tables, spinners, `doctor`, `completion`, `--no-color`, `--format text`, SSH concurrency limiter, Makefile, ldflags |
 
-Current release: **v0.5.0**
+Current release: **v0.7.0**
