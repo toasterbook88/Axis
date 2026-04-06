@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -85,7 +86,9 @@ func TestWaitForBeaconWindowReturnsOnContextCancel(t *testing.T) {
 	cancel()
 
 	start := time.Now()
-	waitForBeaconWindow(ctx, 5*time.Second)
+	if completed := waitForBeaconWindow(ctx, 5*time.Second); completed {
+		t.Fatal("expected canceled wait window")
+	}
 
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("expected immediate return on canceled context, got %s", elapsed)
@@ -94,7 +97,9 @@ func TestWaitForBeaconWindowReturnsOnContextCancel(t *testing.T) {
 
 func TestWaitForBeaconWindowHonorsDuration(t *testing.T) {
 	start := time.Now()
-	waitForBeaconWindow(context.Background(), 20*time.Millisecond)
+	if completed := waitForBeaconWindow(context.Background(), 20*time.Millisecond); !completed {
+		t.Fatal("expected wait window to complete")
+	}
 
 	if elapsed := time.Since(start); elapsed < 15*time.Millisecond {
 		t.Fatalf("expected wait to honor duration, got %s", elapsed)
@@ -161,7 +166,7 @@ func TestDiscoverCollectsLocalAndRemoteNodesInStableOrder(t *testing.T) {
 	defer restoreRemote()
 	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
 	defer restoreUDP()
-	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) {})
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
 	defer restoreWait()
 
 	nodes := Discover(context.Background(), &config.Config{
@@ -198,7 +203,7 @@ func TestDiscoverWrapsCollectorFailuresAsErrorNodes(t *testing.T) {
 	defer restoreRemote()
 	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
 	defer restoreUDP()
-	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) {})
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
 	defer restoreWait()
 
 	nodes := Discover(context.Background(), &config.Config{
@@ -240,7 +245,7 @@ func TestDiscoverUsesStableIdentityAwareLocalMatcher(t *testing.T) {
 	defer restoreRemote()
 	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
 	defer restoreUDP()
-	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) {})
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
 	defer restoreWait()
 
 	nodes := Discover(context.Background(), &config.Config{
@@ -262,8 +267,9 @@ func TestDiscoverUsesAdaptiveBeaconWindowFromConfig(t *testing.T) {
 	defer restoreUDP()
 
 	var waited time.Duration
-	restoreWait := stubDiscoveryBeaconWait(t, func(_ context.Context, d time.Duration) {
+	restoreWait := stubDiscoveryBeaconWait(t, func(_ context.Context, d time.Duration) bool {
 		waited = d
+		return true
 	})
 	defer restoreWait()
 
@@ -276,6 +282,49 @@ func TestDiscoverUsesAdaptiveBeaconWindowFromConfig(t *testing.T) {
 
 	if waited != 2250*time.Millisecond {
 		t.Fatalf("Discover() waited %s, want 2250ms", waited)
+	}
+}
+
+func TestDiscoverWithWarningsReportsEarlyBeaconWindowTermination(t *testing.T) {
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return false })
+	defer restoreWait()
+
+	nodes, warnings := DiscoverWithWarnings(context.Background(), &config.Config{
+		Discovery: &config.DiscoveryConfig{
+			Enabled:        true,
+			BeaconInterval: 2,
+		},
+	})
+
+	if len(nodes) != 0 {
+		t.Fatalf("expected no discovered nodes, got %#v", nodes)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected single discovery warning, got %#v", warnings)
+	}
+	if warnings[0].Kind != "discovery" {
+		t.Fatalf("unexpected warning kind: %#v", warnings[0])
+	}
+	if !strings.Contains(warnings[0].Message, "ended early before 2.25s") {
+		t.Fatalf("unexpected warning message: %q", warnings[0].Message)
+	}
+}
+
+func TestDiscoverWithWarningsOmitsWarningWhenBeaconWindowCompletes(t *testing.T) {
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
+	defer restoreWait()
+
+	_, warnings := DiscoverWithWarnings(context.Background(), &config.Config{
+		Discovery: &config.DiscoveryConfig{
+			Enabled: true,
+		},
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("expected no discovery warnings, got %#v", warnings)
 	}
 }
 
@@ -294,8 +343,9 @@ func TestDiscoverSeededSkipsUDPWindowAndIncludesSeededNodes(t *testing.T) {
 		udpCalls++
 	})
 	defer restoreUDP()
-	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) {
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool {
 		waitCalls++
+		return true
 	})
 	defer restoreWait()
 
@@ -589,7 +639,7 @@ func stubDiscoveryStartUDP(t *testing.T, fn func(context.Context, *config.Config
 	}
 }
 
-func stubDiscoveryBeaconWait(t *testing.T, fn func(context.Context, time.Duration)) func() {
+func stubDiscoveryBeaconWait(t *testing.T, fn func(context.Context, time.Duration) bool) func() {
 	t.Helper()
 	prev := discoveryBeaconWait
 	discoveryBeaconWait = fn

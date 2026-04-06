@@ -3,6 +3,7 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -48,6 +49,13 @@ var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
 const maxParallel = 10
 
 func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
+	nodes, _ := discover(ctx, cfg, nil, true)
+	return nodes
+}
+
+// DiscoverWithWarnings probes all configured nodes and returns any discovery
+// warnings that should be surfaced to operators.
+func DiscoverWithWarnings(ctx context.Context, cfg *config.Config) ([]models.NodeFacts, []models.Warning) {
 	return discover(ctx, cfg, nil, true)
 }
 
@@ -55,12 +63,14 @@ func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
 // nodes supplied by the caller. Unlike Discover, it does not reopen the UDP
 // listener or wait for a fresh beacon accumulation window.
 func DiscoverSeeded(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig) []models.NodeFacts {
-	return discover(ctx, cfg, seeded, false)
+	nodes, _ := discover(ctx, cfg, seeded, false)
+	return nodes
 }
 
-func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig, includeUDP bool) []models.NodeFacts {
+func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig, includeUDP bool) ([]models.NodeFacts, []models.Warning) {
 	discovered := make(map[string]config.NodeConfig)
 	var mu sync.Mutex
+	var warnings []models.Warning
 
 	// Prefill with static config
 	for _, n := range cfg.Nodes {
@@ -80,7 +90,13 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 
 	if includeUDP && cfg.Discovery != nil && cfg.Discovery.Enabled {
 		discoveryStartUDP(ctx, cfg, discovered, &mu)
-		discoveryBeaconWait(ctx, beaconWaitDuration(cfg))
+		wait := beaconWaitDuration(cfg)
+		if !discoveryBeaconWait(ctx, wait) {
+			warnings = append(warnings, models.Warning{
+				Kind:    "discovery",
+				Message: fmt.Sprintf("discovery beacon window ended early before %s; results may miss peer nodes", wait.Round(time.Millisecond)),
+			})
+		}
 	}
 
 	mu.Lock()
@@ -124,7 +140,7 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 	}
 
 	wg.Wait()
-	return results
+	return results, warnings
 }
 
 func beaconWaitDuration(cfg *config.Config) time.Duration {
@@ -143,9 +159,9 @@ func beaconWaitDuration(cfg *config.Config) time.Duration {
 	return wait
 }
 
-func waitForBeaconWindow(ctx context.Context, d time.Duration) {
+func waitForBeaconWindow(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
-		return
+		return true
 	}
 
 	timer := time.NewTimer(d)
@@ -153,7 +169,9 @@ func waitForBeaconWindow(ctx context.Context, d time.Duration) {
 
 	select {
 	case <-ctx.Done():
+		return false
 	case <-timer.C:
+		return true
 	}
 }
 
