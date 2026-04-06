@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	restorePath := stubDoctorConfigPath(t, func() string {
@@ -52,6 +55,7 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
+	stdout = stripANSI(stdout)
 
 	if len(seen) != 2 {
 		t.Fatalf("checked %d nodes, want 2", len(seen))
@@ -111,6 +115,7 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
+	stdout = stripANSI(stdout)
 	if !strings.Contains(stdout, "✓ alpha (alpha.local:22)") {
 		t.Fatalf("expected SSH success in output, got %q", stdout)
 	}
@@ -147,4 +152,8 @@ func stubDoctorSSHChecker(t *testing.T, fn func(context.Context, config.NodeConf
 	return func() {
 		doctorCheckNodeSSH = prev
 	}
+}
+
+func stripANSI(s string) string {
+	return ansiEscapePattern.ReplaceAllString(s, "")
 }
