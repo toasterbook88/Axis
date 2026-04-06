@@ -210,8 +210,9 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 	// to the remote SSH session. Callers must ensure cmd is trusted and
 	// correctly quoted or escaped for the remote shell context.
 	// codeql[go/command-injection]
-	if err := session.Start(cmd); err != nil {
-		return err
+	startErr := session.Start(cmd)
+	if startErr != nil {
+		return startErr
 	}
 
 	done := make(chan error, 1)
