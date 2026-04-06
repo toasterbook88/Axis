@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -64,11 +65,14 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planTaskPlacement: %v", err)
 	}
-	if source != "live" {
-		t.Fatalf("expected live source, got %q", source)
+	if source != "live-fallback" {
+		t.Fatalf("expected live-fallback source, got %q", source)
 	}
 	if decision.Node != "live-node" {
 		t.Fatalf("expected live-node, got %q", decision.Node)
+	}
+	if joined := strings.Join(decision.Reasoning, "\n"); !strings.Contains(joined, "daemon cache unavailable; fell back to live snapshot: context deadline exceeded") {
+		t.Fatalf("expected cache fallback reasoning, got %q", joined)
 	}
 }
 

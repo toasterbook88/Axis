@@ -76,7 +76,7 @@ func PrependWarningReasoning(reasoning []string, warnings []models.Warning) []st
 
 	prefixed := make([]string, 0, len(warnings)+len(reasoning))
 	for _, warning := range warnings {
-		if warning.Kind != "state" && warning.Kind != "skills" {
+		if warning.Kind != "state" && warning.Kind != "skills" && warning.Kind != "cache" {
 			continue
 		}
 		prefixed = append(prefixed, "warning: "+warning.Message)

@@ -140,6 +140,43 @@ func TestTaskContextCmdCachedOutput(t *testing.T) {
 	}
 }
 
+func TestTaskContextCmdMarksLiveFallbackWhenCacheFails(t *testing.T) {
+	restoreFetch := stubTaskSnapshotFetcher(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", context.DeadlineExceeded
+	})
+	defer restoreFetch()
+	restoreLive := stubTaskLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				nodeComplete("live-node", 4096, "none", "git"),
+			},
+			Summary: models.ClusterSummary{
+				TotalNodes:         1,
+				TotalAllocatableMB: 4096,
+			},
+		}, "live", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := taskContextCmd()
+		cmd.SetArgs([]string{"--cached", "analyze a git repo"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("task context cached fallback Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, "Source: live-fallback") {
+		t.Fatalf("expected live-fallback source, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "Best node: live-node") {
+		t.Fatalf("expected live fallback node, got %q", stdout)
+	}
+}
+
 func TestPrintContextBlockWritesOutput(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
