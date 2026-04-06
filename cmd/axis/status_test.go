@@ -34,6 +34,9 @@ func TestCollectStatusSnapshotPrefersCacheWhenAvailable(t *testing.T) {
 	if source != "daemon-cache" {
 		t.Fatalf("expected daemon-cache source, got %q", source)
 	}
+	if len(snap.Warnings) != 0 {
+		t.Fatalf("expected no warnings on cached hit, got %#v", snap.Warnings)
+	}
 }
 
 func TestCollectStatusSnapshotFallsBackToLiveWhenCacheFails(t *testing.T) {
@@ -57,7 +60,16 @@ func TestCollectStatusSnapshotFallsBackToLiveWhenCacheFails(t *testing.T) {
 	if snap != liveSnap {
 		t.Fatal("expected live snapshot fallback")
 	}
-	if source != "live" {
-		t.Fatalf("expected live source, got %q", source)
+	if source != "live-fallback" {
+		t.Fatalf("expected live-fallback source, got %q", source)
+	}
+	if len(snap.Warnings) != 1 {
+		t.Fatalf("expected one cache warning, got %#v", snap.Warnings)
+	}
+	if snap.Warnings[0].Kind != "cache" {
+		t.Fatalf("warning kind = %q, want cache", snap.Warnings[0].Kind)
+	}
+	if got := snap.Warnings[0].Message; got != "daemon cache unavailable; fell back to live snapshot: context deadline exceeded" {
+		t.Fatalf("warning message = %q", got)
 	}
 }

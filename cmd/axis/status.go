@@ -163,6 +163,18 @@ func collectStatusSnapshot(
 		if err == nil {
 			return snap, source, nil
 		}
+
+		liveSnap, liveSource, liveErr := liveLoader(ctx)
+		if liveErr != nil {
+			return nil, "", liveErr
+		}
+		if liveSnap != nil {
+			appendWarningIfMissing(liveSnap, models.Warning{
+				Kind:    "cache",
+				Message: fmt.Sprintf("daemon cache unavailable; fell back to live snapshot: %v", err),
+			})
+		}
+		return liveSnap, fallbackSource(liveSource), nil
 	}
 
 	return liveLoader(ctx)
@@ -174,4 +186,13 @@ func discoverLiveSnapshot(ctx context.Context) (*models.ClusterSnapshot, string,
 		return nil, "", err
 	}
 	return rt.Snapshot, "live", nil
+}
+
+func fallbackSource(source string) string {
+	switch normalized := sourceOrLive(source); normalized {
+	case "live":
+		return "live-fallback"
+	default:
+		return normalized + "-fallback"
+	}
 }
