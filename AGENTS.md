@@ -107,7 +107,7 @@ internal/agent/       Tool-calling agent loop with safety-gated shell
 internal/execution/   Guarded execution: safety → reserve → run → release
 internal/safety/      Execution blocker (0–100 score; ≥80 = hard block)
 internal/state/       Reservation tracking, per-exec liveness/provenance, and
-                      tombstone immune system
+                      failure immune system
 internal/skills/      Learned skills/failures, corrupt-file recovery
 internal/scripts/     Built-in helper scripts with keyword matching
 internal/knowledge/   Cluster knowledge context for execution
@@ -189,8 +189,8 @@ Optional UDP discovery block: `discovery.enabled`, `discovery.udp_port`
 `discovery.secret` (HMAC-SHA256 beacon auth).
 
 Persisted local state:
-- `~/.axis/state.json` — reservation tracking, tombstones, recent decisions,
-  per-exec heartbeats, and local caller/origin provenance
+- `~/.axis/state.json` — reservation tracking, failure records, recent
+  decisions, per-exec heartbeats, and local caller/origin provenance
 - `~/.axis/skills.json` — learned skills and failures
 - `~/.axis/snapshot.json` — daemon-cached snapshot
 
