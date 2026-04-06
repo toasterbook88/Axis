@@ -132,14 +132,6 @@ func (e *SSHExecutor) Close() error {
 	return nil
 }
 
-func runSessionCommand(session *ssh.Session, cmd string) error {
-	// Intentional remote execution boundary: this transport forwards cmd
-	// to the remote SSH session. Callers must ensure cmd is trusted and
-	// correctly quoted or escaped for the remote shell context.
-	// codeql[go/command-injection]
-	return session.Run(cmd)
-}
-
 // Run executes a command via SSH and returns stdout.
 func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 	if e.client == nil {
@@ -166,7 +158,11 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runSessionCommand(session, cmd)
+		// Intentional remote execution boundary: this transport forwards cmd
+		// to the remote SSH session. Callers must ensure cmd is trusted and
+		// correctly quoted or escaped for the remote shell context.
+		// codeql[go/command-injection]
+		done <- session.Run(cmd)
 	}()
 
 	select {
@@ -210,9 +206,17 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 	session.Stdout = stdout
 	session.Stderr = stderr
 
+	// Intentional remote execution boundary: this transport forwards cmd
+	// to the remote SSH session. Callers must ensure cmd is trusted and
+	// correctly quoted or escaped for the remote shell context.
+	// codeql[go/command-injection]
+	if err := session.Start(cmd); err != nil {
+		return err
+	}
+
 	done := make(chan error, 1)
 	go func() {
-		done <- runSessionCommand(session, cmd)
+		done <- session.Wait()
 	}()
 
 	select {
