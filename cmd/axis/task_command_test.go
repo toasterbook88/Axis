@@ -74,6 +74,66 @@ func TestTaskPlaceCmdCachedJSONOutput(t *testing.T) {
 	}
 }
 
+func TestTaskPlaceCmdCachedOnlyJSONOutput(t *testing.T) {
+	restoreState := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restoreState()
+	restoreFetch := stubTaskSnapshotFetcher(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				nodeComplete("cached-node", 6144, "none", "git"),
+			},
+		}, "daemon-cache", nil
+	})
+	defer restoreFetch()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := taskPlaceCmd()
+		cmd.SetArgs([]string{"--cached-only", "--format", "json", "analyze a git repo"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("task place cached-only Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, `"source": "daemon-cache"`) {
+		t.Fatalf("expected cached-only source, got %q", stdout)
+	}
+	if !strings.Contains(stdout, `"node": "cached-node"`) {
+		t.Fatalf("expected cached-only node in JSON, got %q", stdout)
+	}
+}
+
+func TestTaskPlaceCmdCachedOnlyFailsWhenCacheUnavailable(t *testing.T) {
+	restoreState := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restoreState()
+	restoreFetch := stubTaskSnapshotFetcher(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", context.DeadlineExceeded
+	})
+	defer restoreFetch()
+	restoreLive := stubTaskLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		t.Fatal("expected no live fallback in cached-only mode")
+		return nil, "", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := taskPlaceCmd()
+		cmd.SetArgs([]string{"--cached-only", "analyze a git repo"})
+		return cmd.Execute()
+	})
+	if err == nil {
+		t.Fatal("expected cached-only cache failure")
+	}
+	if stdout != "" {
+		t.Fatalf("expected no stdout on cached-only failure, got %q", stdout)
+	}
+	if !strings.Contains(stderr, "daemon cache unavailable: context deadline exceeded") {
+		t.Fatalf("expected cached-only error in stderr, got %q", stderr)
+	}
+}
+
 func TestTaskContextCmdLiveOutput(t *testing.T) {
 	restoreLive := stubTaskLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
 		return &models.ClusterSnapshot{
@@ -128,6 +188,39 @@ func TestTaskContextCmdCachedOutput(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("task context cached Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, "Source: daemon-cache") {
+		t.Fatalf("expected daemon-cache source, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "Best node: cached-node") {
+		t.Fatalf("expected cached node, got %q", stdout)
+	}
+}
+
+func TestTaskContextCmdCachedOnlyOutput(t *testing.T) {
+	restoreFetch := stubTaskSnapshotFetcher(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				nodeComplete("cached-node", 4096, "none", "git"),
+			},
+			Summary: models.ClusterSummary{
+				TotalNodes:         1,
+				TotalAllocatableMB: 4096,
+			},
+		}, "daemon-cache", nil
+	})
+	defer restoreFetch()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := taskContextCmd()
+		cmd.SetArgs([]string{"--cached-only", "analyze a git repo"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("task context cached-only Execute: %v", err)
 	}
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)

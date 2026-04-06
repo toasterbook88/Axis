@@ -17,6 +17,7 @@ func TestPlanTaskPlacementPrefersCacheWhenAvailable(t *testing.T) {
 		context.Background(),
 		"analyze a git repo",
 		true,
+		false,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
 			return &models.ClusterSnapshot{
 				Nodes: []models.NodeFacts{
@@ -51,6 +52,7 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 		context.Background(),
 		"analyze a git repo",
 		true,
+		false,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
 			return nil, "", context.DeadlineExceeded
 		},
@@ -76,6 +78,37 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 	}
 }
 
+func TestPlanTaskPlacementCachedOnlyFailsWhenCacheFails(t *testing.T) {
+	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restore()
+
+	decision, source, err := planTaskPlacement(
+		context.Background(),
+		"analyze a git repo",
+		false,
+		true,
+		func(context.Context) (*models.ClusterSnapshot, string, error) {
+			return nil, "", context.DeadlineExceeded
+		},
+		func(context.Context) (*models.ClusterSnapshot, string, error) {
+			t.Fatal("expected no live fallback in cached-only mode")
+			return nil, "", nil
+		},
+	)
+	if err == nil {
+		t.Fatal("expected cached-only cache failure")
+	}
+	if source != "" {
+		t.Fatalf("expected empty source on cached-only failure, got %q", source)
+	}
+	if decision.OK || decision.Node != "" || decision.FitScore != 0 || len(decision.Reasoning) != 0 {
+		t.Fatalf("expected empty decision on cached-only failure, got %#v", decision)
+	}
+	if got := err.Error(); got != "daemon cache unavailable: context deadline exceeded" {
+		t.Fatalf("unexpected cached-only error: %q", got)
+	}
+}
+
 func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
@@ -83,6 +116,7 @@ func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
 	decision, source, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
+		false,
 		false,
 		nil,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {

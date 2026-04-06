@@ -27,6 +27,7 @@ type statusOutput struct {
 func statusCmd() *cobra.Command {
 	var format string
 	var cached bool
+	var cachedOnly bool
 	var cacheAddr string
 
 	cmd := &cobra.Command{
@@ -35,10 +36,12 @@ func statusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
+			cacheRequested := cached || cachedOnly
 
 			snap, source, err := collectStatusSnapshot(
 				ctx,
-				cached,
+				cacheRequested,
+				cachedOnly,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
 					return fetchStatusSnapshot(ctx, cacheAddr)
 				},
@@ -52,7 +55,7 @@ func statusCmd() *cobra.Command {
 			switch format {
 			case "json", "yaml":
 				var payload any = snap
-				if cached {
+				if cacheRequested {
 					payload = statusOutput{Source: source, Snapshot: snap}
 				}
 				return printOutput(payload, format)
@@ -65,6 +68,7 @@ func statusCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
+	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
 }
@@ -155,13 +159,21 @@ func formatPressure(p string) string {
 func collectStatusSnapshot(
 	ctx context.Context,
 	cached bool,
+	cachedOnly bool,
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 ) (*models.ClusterSnapshot, string, error) {
+	if cachedOnly {
+		cached = true
+	}
+
 	if cached && cachedLoader != nil {
 		snap, source, err := cachedLoader(ctx)
 		if err == nil {
 			return snap, source, nil
+		}
+		if cachedOnly {
+			return nil, "", fmt.Errorf("daemon cache unavailable: %w", err)
 		}
 
 		liveSnap, liveSource, liveErr := liveLoader(ctx)
