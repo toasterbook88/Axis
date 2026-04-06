@@ -518,6 +518,37 @@ func TestStatusCmdUsesCacheWrapperWhenRequested(t *testing.T) {
 	}
 }
 
+func TestStatusCmdMarksLiveFallbackWhenCacheFails(t *testing.T) {
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", context.DeadlineExceeded
+	})
+	defer restoreCache()
+	restoreLive := stubStatusLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Summary: models.ClusterSummary{TotalNodes: 2},
+		}, "live", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := statusCmd()
+		cmd.SetArgs([]string{"--cached", "--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("status Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, `"source": "live-fallback"`) {
+		t.Fatalf("expected live-fallback source, got %q", stdout)
+	}
+	if !strings.Contains(stdout, `"kind": "cache"`) || !strings.Contains(stdout, `daemon cache unavailable; fell back to live snapshot: context deadline exceeded`) {
+		t.Fatalf("expected cache warning in JSON output, got %q", stdout)
+	}
+}
+
 func TestAppendWarningIfMissingDeduplicates(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Warnings: []models.Warning{{Kind: "state", Message: "recovered"}},

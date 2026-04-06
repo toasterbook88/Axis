@@ -134,15 +134,17 @@ func TestLoadFailsOnHardSkillsError(t *testing.T) {
 	}
 }
 
-func TestPrependWarningReasoningOnlyIncludesStateAndSkills(t *testing.T) {
+func TestPrependWarningReasoningIncludesOperatorWarnings(t *testing.T) {
 	got := PrependWarningReasoning([]string{"chosen node"}, []models.Warning{
 		{Kind: "partial", Message: "ignore me"},
 		{Kind: "state", Message: "state warning"},
+		{Kind: "cache", Message: "cache warning"},
 		{Kind: "skills", Message: "skills warning"},
 	})
 
 	want := []string{
 		"warning: state warning",
+		"warning: cache warning",
 		"warning: skills warning",
 		"chosen node",
 	}
