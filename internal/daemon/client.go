@@ -68,12 +68,42 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 		return nil, "", err
 	}
 
+	if meta.Stale {
+		appendSnapshotWarningIfMissing(&snap, staleCacheWarning(meta))
+	}
+
 	source := meta.Source
 	if source == "" {
 		source = "daemon-cache"
 	}
 
 	return &snap, source, nil
+}
+
+func staleCacheWarning(meta Metadata) models.Warning {
+	message := "daemon cache is stale; run axis daemon refresh or restart axis serve"
+	if meta.CacheAgeSec > 0 {
+		message = fmt.Sprintf("daemon cache is stale (%ds old); run axis daemon refresh or restart axis serve", meta.CacheAgeSec)
+	}
+	if len(meta.StaleNodes) > 0 {
+		message = fmt.Sprintf("%s; stale nodes: %s", message, strings.Join(meta.StaleNodes, ", "))
+	}
+	return models.Warning{
+		Kind:    "cache",
+		Message: message,
+	}
+}
+
+func appendSnapshotWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
+	if snap == nil {
+		return
+	}
+	for _, existing := range snap.Warnings {
+		if existing.Kind == warning.Kind && existing.Message == warning.Message && existing.Node == warning.Node {
+			return
+		}
+	}
+	snap.Warnings = append(snap.Warnings, warning)
 }
 
 func FetchMeta(ctx context.Context, addr string) (Metadata, error) {

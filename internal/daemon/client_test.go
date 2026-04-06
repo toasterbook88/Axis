@@ -48,6 +48,52 @@ func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
 	}
 }
 
+func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/snapshot/meta":
+			_ = json.NewEncoder(w).Encode(Metadata{
+				Source:             "daemon-cache",
+				Ready:              true,
+				RefreshIntervalSec: 60,
+				CacheAgeSec:        187,
+				Stale:              true,
+				StaleNodes:         []string{"m1", "m2"},
+			})
+		case "/snapshot":
+			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
+				Status: models.SnapshotHealthy,
+				Summary: models.ClusterSummary{
+					TotalNodes: 2,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snap, source, err := FetchSnapshot(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchSnapshot: %v", err)
+	}
+	if source != "daemon-cache" {
+		t.Fatalf("expected daemon-cache source, got %q", source)
+	}
+	if len(snap.Warnings) != 1 {
+		t.Fatalf("expected stale cache warning, got %#v", snap.Warnings)
+	}
+	if snap.Warnings[0].Kind != "cache" {
+		t.Fatalf("warning kind = %q, want cache", snap.Warnings[0].Kind)
+	}
+	if !strings.Contains(snap.Warnings[0].Message, "daemon cache is stale (187s old)") {
+		t.Fatalf("unexpected warning message: %q", snap.Warnings[0].Message)
+	}
+	if !strings.Contains(snap.Warnings[0].Message, "stale nodes: m1, m2") {
+		t.Fatalf("expected stale node list in warning, got %q", snap.Warnings[0].Message)
+	}
+}
+
 func TestFetchMetaReadsDaemonMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/snapshot/meta" {
