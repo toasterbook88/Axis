@@ -49,6 +49,9 @@ jobs:
           go build ./...
           ./hack/coverage-check.sh
 
+      - name: Capture Go version for GoReleaser ldflags
+        run: echo "GOVERSION=$(go env GOVERSION)" >> "$GITHUB_ENV"
+
       - name: Publish release
         uses: goreleaser/goreleaser-action@v7.0.0
         with:
