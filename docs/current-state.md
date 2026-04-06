@@ -33,6 +33,7 @@ The live repo currently contains:
 - Explicit cached context reads via `axis task context --cached`
 - Explicit cache refresh via `axis daemon refresh`
 - Explicit cache invalidation via `axis daemon invalidate`
+- Content-aware `nodes.yaml`, semantic `state.json`, and `skills.json` watch refreshes in the daemon cache, plus explicit execution-state and long-lived UDP beacon refresh triggers, with refresh-trigger metadata surfaced through daemon health/status
 - A CLI task execution path (`axis task run`)
 - A read-only MCP server for cluster diagnostics
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
@@ -41,6 +42,8 @@ The live repo currently contains:
 - Per-run execution context files instead of shared temp-path injection
 - Stateful placement ranking with reservation subtraction, GPU capability scoring (VRAM/vendor/backend match), and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
+- Observed stable node identity when the host exposes it (`machine-id` on Linux, platform UUID on macOS), with locality preferring explicit identity before hostname/address fallback
+- Optional `nodes.yaml` `stable_id` seeds and identity-aware UDP beacon dedupe so configured nodes survive hostname/IP drift without overriding observed truth
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
 - TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection only after probe-visible `--ctx-size` support
@@ -92,10 +95,10 @@ Top-level commands currently registered in the binary:
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small, stable, and now rejects unknown YAML fields so config typos fail fast |
 | `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, and the local path can now probe-verify Apple Foundation Models on eligible Macs in addition to TurboQuant/backend metadata |
-| `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized and baseline tests exist; UDP timing behavior still needs broader hardening |
+| `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized; the daemon cache now has a long-lived beacon watcher for event-driven freshness, while the ad hoc live-discovery path still uses an interval-aware accumulation window |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
-| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, and reservation-aware snapshot views |
-| `internal/models` | Shared types and locality helpers | Types are fine; locality matching now prefers real hostnames/addresses over logical names |
+| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, and trigger-aware refresh metadata for config/state/skills, explicit execution events, and long-lived discovery beacons |
+| `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
 | `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
@@ -171,28 +174,34 @@ machines, not just as a local anti-overcommit guard.
 In practical terms:
 
 - `RAMFreeMB` is the live observed memory on a node
+- AXIS now derives a shared reservable pool as `min(RAMFreeMB, RAMTotalMB - 1024MB system reserve)`
 - persisted reserved memory is a soft claim against that node's contribution to
   the shared cluster memory pool
+- late placement ties now break toward the node holding a smaller share of the
+  current cluster reservation pool
 - placement should use those soft claims to spread memory pressure across the
   cluster instead of repeatedly selecting the same node
 
 ## Current Weak Spots
 
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
-- The current balancing model still lacks deeper allocatable/system-reserve concepts, cluster skew reduction, reclaim behavior, and any event-driven freshness model for pressure signals
+- The current balancing model now has an explicit reservable/allocatable system-reserve floor, a cluster-reservation-share tie-break, explicit per-exec reservation heartbeats, owner-PID reclaim for local AXIS processes, persisted local caller provenance across guarded execution surfaces, runtime-derived local execution-origin identity (node / hostname / stable ID when observable), and signed forwarded upstream origin acceptance on trusted HTTP execution boundaries, but it still lacks multi-hop or cross-cluster exec identity beyond a single AXIS token trust domain and any event-driven freshness model for pressure signals
 - TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs probe-verified backend responses, but it still does not verify kernel correctness or backend feature parity
 - TurboQuant execution injection is intentionally narrow today: env hints everywhere, direct flag injection only for probe-verified `llama-cli` / `llama-server` command lines that expose `--ctx-size`
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
 - Chat now uses structured `/api/chat` with a rolling context window and cluster-aware system prompt, but output remains advisory
 - Agent tool-calling loop has safety gates and adversarial error recovery, but is still subordinate to observed state
-- Locality detection is stricter now, but still depends on hostname/interface inspection rather than explicit node identity
+- Locality and discovery can now use optional stable IDs, but those IDs are still operator-seeded hints until a live probe confirms observed identity
 - Network `speed_class` remains heuristic metadata today, not measured throughput or latency
-- UDP discovery still depends on a fixed accumulation window and needs broader runtime coverage beyond the new baseline tests
+- UDP discovery now has a long-lived daemon watcher for beacon-triggered cache refreshes, but the ad hoc live-discovery path still uses an interval-aware bounded accumulation window and broader runtime hardening is still needed
 - Safety blocking is substring-based and can both over-block and under-block
 - Built-in script prerequisites now model `jq` explicitly, but broader shell assumptions are still under-modeled
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
 - degraded-state contracts are now stronger, but concurrency around simultaneous first-read / first-write recovery is still only indirectly exercised
-- The daemon cache refresh loop is still timer-based; invalidation is now explicit, but freshness is not yet event-driven
+- The daemon cache still relies on a timer for full probe freshness, but config/state/skills changes, explicit execution events, and long-lived UDP beacon changes now trigger immediate refreshes and surface their trigger explicitly; heartbeat-only `state.json` writes are filtered out so guarded-run liveness does not cause cache-refresh churn
+- `axis task run`, HTTP `/run`, and approved `axis agent` shell execution now share the same guarded execution path and persist both internal caller provenance and runtime-derived local origin identity; both `axis task run` and `axis agent` now prefer the local daemon/API `/run` client when available, and the streamed NDJSON contract preserves ready-time placement output, explicit state changes, and live stdout/stderr across that hop, but broader runtime identity is still limited to one AXIS token trust domain rather than a richer distributed or multi-hop model
+- The streamed `/run` contract now carries explicit execution state-change events (`execution-reserved`, `execution-finished`) in addition to ready/output/final-result events, cross-boundary callers can replay those into their existing callback hooks instead of losing reservation/finish semantics at the daemon/API seam, and early runtime/load failures now stay inside that same final-result stream contract instead of falling back to buffered JSON
+- Local daemon `/run` callers now share one execution transport path, and that path no longer inherits the short snapshot/meta HTTP timeout, so long-running daemon-hop executions are bounded by caller context instead of a fixed 5-second client timeout
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads, but cache provenance is still only explicit on cached-path output
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
 
@@ -202,7 +211,7 @@ V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
-3. Push discovery beyond the fixed UDP accumulation window toward adaptive or event-driven freshness.
+3. Push discovery beyond the current interval-aware window toward more event-driven freshness.
 4. Refine reservation accounting into a clearer cluster RAM balancing model.
 5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
 

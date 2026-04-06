@@ -69,9 +69,16 @@ Removed: `axis discover` (fully replaced by `axis status` + snapshot assembly).
 - Live and cached read paths both overlay local reservations before placement, context generation, or execution
 - `axis task run` / `/run` now export `AXIS_TURBOQUANT_*` env hints to executed commands when a TurboQuant-capable node is selected
 - Corrupt local `~/.axis/state.json` / `~/.axis/skills.json` files are quarantined to `.corrupt-*` backups and surfaced as warnings instead of crashing read paths
-- Reservations auto-clean on every daemon refresh (45 min TTL + legacy leak detection)
+- Reservations auto-clean on every daemon refresh: guarded executions now write explicit per-exec heartbeats while they are alive, reservation entries record their owning local AXIS PID, internal caller provenance (`task-run`, `http-run`, `agent-run-shell`), and the observed local AXIS execution origin (node name / hostname / stable ID when available); HTTP execution surfaces can also accept a signed forwarded upstream origin when the caller proves possession of the shared AXIS API token, heartbeat-stale exec reservations are reclaimed after about 2 minutes, legacy no-heartbeat state still falls back to the older 45-minute/24-hour cleanup path, and no-exec entries are discarded immediately
 - All cached paths (`task place --cached`, `task context --cached`, `mcp serve --cached`) use the single `internal/daemon/client`
 - Visible in `/snapshot/meta` as `reserved_mb`
+- `axis serve` now watches `~/.axis/nodes.yaml`, `~/.axis/state.json`, and `~/.axis/skills.json` for semantic/content changes and surfaces the resulting `last_refresh_trigger` in daemon metadata/health; heartbeat-only `state.json` writes are ignored so active executions do not force full cache refresh churn
+- `axis task run` and HTTP `/run` now emit best-effort `execution-reserved` / `execution-finished` refresh signals so the default local daemon cache can react immediately to real execution-state changes
+- `axis agent` now routes approved `run_shell` calls through the same guarded AXIS execution path as other execution surfaces, preferring the local AXIS `/run` daemon/API hop when available so signed upstream origin survives that boundary; agent-triggered commands still participate in placement, reservation tracking, heartbeats, caller provenance, and refresh signaling
+- `axis task run` now also prefers the local AXIS daemon/API `/run` hop when available, using a streamed NDJSON execution contract so placement readiness and live stdout/stderr survive the boundary instead of forcing a local-only execution path
+- The streamed `/run` contract now also carries explicit execution state-change events, and early runtime/load failures now surface as the normal final `result` event instead of unexpectedly falling back to buffered JSON
+- Local daemon `/run` clients now use a dedicated long-lived execution transport instead of inheriting the short snapshot/meta HTTP timeout, so daemon-hop executions can run for the full caller context
+- When UDP discovery is enabled, `axis serve` also runs a long-lived beacon watcher so new/changed/expired beacon-derived nodes can trigger `beacon-change` cache refreshes without waiting for the normal snapshot timer
 
 ## Degraded-State Behavior
 
@@ -148,6 +155,7 @@ Create `~/.axis/nodes.yaml` (see [nodes.example.yaml](nodes.example.yaml)):
 nodes:
   - name: node-a
     hostname: node-a.local
+    # stable_id: f47ac10b-58cc-4372-a567-0e02b2c3d479
     ssh_user: alice
     role: primary
 
@@ -181,7 +189,7 @@ axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
 
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU capability (VRAM and backend match), effective headroom, unified-memory suitability for `mlx`/Apple Silicon-shaped asks, allocatable RAM, reservation ratio, storage class (HDD penalized for heavy loads), and stable name ordering. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS filters out nodes showing critical runtime pressure, thermal throttling, or low battery (< 20%), and respects tombstone blacklists for task+node combinations that have repeatedly crashed.
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node — tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU capability (VRAM and backend match), effective headroom, unified-memory suitability for `mlx`/Apple Silicon-shaped asks, allocatable RAM, reservation ratio, storage class (HDD penalized for heavy loads), and stable name ordering. AXIS now treats allocatable RAM as `min(live free RAM, total RAM minus a protected 1GB system reserve) - local reservations`, so cached reads, placement, and last-second execution admission use the same headroom model. When allocatable and per-node reservation ratios tie, placement now also prefers the node holding a smaller share of the current cluster reservation pool, which makes RAM spreading more explicit instead of repeatedly picking the same machine on late ties. Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS filters out nodes showing critical runtime pressure, thermal throttling, or low battery (< 20%), and respects tombstone blacklists for task+node combinations that have repeatedly crashed.
 
 When `axis task run` selects a TurboQuant-capable node, AXIS exports `AXIS_TURBOQUANT`, `AXIS_TURBOQUANT_STATUS`, `AXIS_TURBOQUANT_BACKENDS`, `AXIS_TURBOQUANT_CAPABILITIES`, and long-context hints into the execution environment. For probe-verified `llama.cpp` commands with `--ctx-size` support, AXIS can also inject safe additive flags such as `--ctx-size` and `--flash-attn` when they are absent.
 
@@ -261,6 +269,7 @@ Unknown YAML keys are rejected at load time so config typos fail fast instead of
 | --- | --- | --- | --- |
 | `name` | yes | — | Logical node name |
 | `hostname` | yes | — | Resolvable hostname or IP |
+| `stable_id` | no | — | Optional observed machine identity (`machine-id` / platform UUID) used for locality and discovery dedupe |
 | `ssh_user` | yes | — | SSH username |
 | `role` | no | — | `primary` or `worker` |
 | `ssh_port` | no | `22` | SSH port |
@@ -274,6 +283,8 @@ Optional discovery block used by experimental UDP-assisted discovery:
 | `discovery.udp_port` | no | `42424` | UDP beacon port |
 | `discovery.beacon_interval_sec` | no | `3` | Beacon broadcast interval |
 | `discovery.secret` | no | empty | Shared discovery secret for filtering beacons |
+
+When a host exposes a stable identity, AXIS includes it in UDP beacons and uses it only to avoid duplicate nodes or preserve an explicit config binding when names or IPs drift.
 
 ## Architecture
 
@@ -319,6 +330,7 @@ Optional discovery block used by experimental UDP-assisted discovery:
 - Chat uses the Ollama `/api/chat` endpoint with structured messages and a rolling context window; defaults to `localhost:11434`
 - `axis agent` provides a tool-calling loop with read-only cluster tools (`status`, `facts`, `place`) and safety-gated shell execution; `--auto-approve` enables automatic execution for low-risk commands
 - `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
+- The daemon cache now refreshes immediately on config/state/skills content changes, explicit execution-state signals, and long-lived UDP beacon changes, in addition to its normal timer loop
 - `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
 - `axis chat` and `axis agent` are advisory helpers and must not outrank snapshot-backed truth
 - Placement memory lives locally in `~/.axis/state.json`
