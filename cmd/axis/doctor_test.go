@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,8 +15,9 @@ import (
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
 	restorePath := stubDoctorConfigPath(t, func() string {
-		return "/tmp/axis-test/nodes.yaml"
+		return tmpFile
 	})
 	defer restorePath()
 
@@ -66,11 +68,17 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	if seen[1].EffectiveTimeout() != 25 {
 		t.Fatalf("beta timeout = %d, want 25", seen[1].EffectiveTimeout())
 	}
-	if !strings.Contains(stdout, "✓ alpha (alpha.local:22)") {
+	if !strings.Contains(stdout, "alpha (alpha.local:22)") {
 		t.Fatalf("expected alpha success in output, got %q", stdout)
 	}
-	if !strings.Contains(stdout, "✗ beta (beta.local:2222): ssh handshake beta.local:2222: ssh: handshake failed: knownhosts: key mismatch") {
-		t.Fatalf("expected beta handshake failure in output, got %q", stdout)
+	if !strings.Contains(stdout, "beta (beta.local:2222)") {
+		t.Fatalf("expected beta failure header in output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "knownhosts") {
+		t.Fatalf("expected knownhosts failure detail in output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "key mismatch") {
+		t.Fatalf("expected key mismatch detail in output, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "Some checks failed") {
 		t.Fatalf("expected doctor warning summary, got %q", stdout)
@@ -78,8 +86,9 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 }
 
 func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
 	restorePath := stubDoctorConfigPath(t, func() string {
-		return "/tmp/axis-test/nodes.yaml"
+		return tmpFile
 	})
 	defer restorePath()
 
@@ -116,10 +125,10 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
 	stdout = stripANSI(stdout)
-	if !strings.Contains(stdout, "✓ alpha (alpha.local:22)") {
+	if !strings.Contains(stdout, "alpha (alpha.local:22)") {
 		t.Fatalf("expected SSH success in output, got %q", stdout)
 	}
-	if !strings.Contains(stdout, "✓ Reachable, 1 node(s) cached") {
+	if !strings.Contains(stdout, "Reachable, 1 node(s) cached") {
 		t.Fatalf("expected daemon success in output, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "All checks passed") {

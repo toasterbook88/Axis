@@ -59,7 +59,7 @@ func runDoctor(cmd *cobra.Command) error {
 		fmt.Fprintf(out, "%s SSH connectivity\n", ui.Cyan("→"))
 		for _, n := range cfg.Nodes {
 			addr := net.JoinHostPort(n.Hostname, fmt.Sprintf("%d", n.EffectiveSSHPort()))
-			sshCtx, cancel := context.WithTimeout(context.Background(), time.Duration(n.EffectiveTimeout())*time.Second)
+			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(n.EffectiveTimeout())*time.Second)
 			sshErr := doctorCheckNodeSSH(sshCtx, n)
 			cancel()
 			if sshErr != nil {
