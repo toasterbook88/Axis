@@ -20,7 +20,7 @@ type Context struct {
 }
 
 var loadConfig = config.Load
-var discoverNodes = discovery.Discover
+var discoverNodes = discovery.DiscoverWithWarnings
 var buildSnapshot = snapshot.Build
 var loadState = state.Load
 var applyReservationView = snapshotview.ApplyReservationView
@@ -32,10 +32,13 @@ func Load(ctx context.Context) (*Context, error) {
 		return nil, err
 	}
 
-	nodes := discoverNodes(ctx, cfg)
+	nodes, discoveryWarnings := discoverNodes(ctx, cfg)
 	snap := buildSnapshot(nodes)
 	if snap == nil {
 		snap = &models.ClusterSnapshot{}
+	}
+	for _, warning := range discoveryWarnings {
+		models.AppendWarningIfMissing(snap, warning)
 	}
 
 	st, err := loadState()
@@ -76,7 +79,7 @@ func PrependWarningReasoning(reasoning []string, warnings []models.Warning) []st
 
 	prefixed := make([]string, 0, len(warnings)+len(reasoning))
 	for _, warning := range warnings {
-		if warning.Kind != "state" && warning.Kind != "skills" && warning.Kind != "cache" {
+		if warning.Kind != "state" && warning.Kind != "skills" && warning.Kind != "cache" && warning.Kind != "discovery" {
 			continue
 		}
 		prefixed = append(prefixed, "warning: "+warning.Message)

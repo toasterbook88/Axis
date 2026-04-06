@@ -32,7 +32,7 @@ func TestLoadBuildsRuntimeAndSurfacesRecoverableWarnings(t *testing.T) {
 
 	restore := stubRuntimeDeps(t,
 		func(string) (*config.Config, error) { return cfg, nil },
-		func(context.Context, *config.Config) []models.NodeFacts { return nodes },
+		func(context.Context, *config.Config) ([]models.NodeFacts, []models.Warning) { return nodes, nil },
 		func([]models.NodeFacts) *models.ClusterSnapshot {
 			return &models.ClusterSnapshot{
 				Status: models.SnapshotHealthy,
@@ -74,7 +74,7 @@ func TestLoadReturnsEmptySnapshotWhenBuilderReturnsNil(t *testing.T) {
 		func(string) (*config.Config, error) {
 			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.internal", SSHUser: "me"}}}, nil
 		},
-		func(context.Context, *config.Config) []models.NodeFacts { return nil },
+		func(context.Context, *config.Config) ([]models.NodeFacts, []models.Warning) { return nil, nil },
 		func([]models.NodeFacts) *models.ClusterSnapshot { return nil },
 		func() (*state.ClusterState, error) {
 			return &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil
@@ -101,7 +101,7 @@ func TestLoadFailsOnHardStateError(t *testing.T) {
 		func(string) (*config.Config, error) {
 			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.internal", SSHUser: "me"}}}, nil
 		},
-		func(context.Context, *config.Config) []models.NodeFacts { return nil },
+		func(context.Context, *config.Config) ([]models.NodeFacts, []models.Warning) { return nil, nil },
 		func([]models.NodeFacts) *models.ClusterSnapshot { return &models.ClusterSnapshot{} },
 		func() (*state.ClusterState, error) { return nil, errors.New("state hard fail") },
 		func(*models.ClusterSnapshot, *state.ClusterState) {},
@@ -119,7 +119,7 @@ func TestLoadFailsOnHardSkillsError(t *testing.T) {
 		func(string) (*config.Config, error) {
 			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.internal", SSHUser: "me"}}}, nil
 		},
-		func(context.Context, *config.Config) []models.NodeFacts { return nil },
+		func(context.Context, *config.Config) ([]models.NodeFacts, []models.Warning) { return nil, nil },
 		func([]models.NodeFacts) *models.ClusterSnapshot { return &models.ClusterSnapshot{} },
 		func() (*state.ClusterState, error) {
 			return &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil
@@ -134,17 +134,56 @@ func TestLoadFailsOnHardSkillsError(t *testing.T) {
 	}
 }
 
+func TestLoadSurfacesDiscoveryWarnings(t *testing.T) {
+	restore := stubRuntimeDeps(t,
+		func(string) (*config.Config, error) {
+			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.internal", SSHUser: "me"}}}, nil
+		},
+		func(context.Context, *config.Config) ([]models.NodeFacts, []models.Warning) {
+			nodes := []models.NodeFacts{
+				{Name: "node-a", Status: models.StatusComplete},
+			}
+			warnings := []models.Warning{
+				{Kind: "discovery", Message: "discovery beacon window ended early"},
+			}
+			return nodes, warnings
+		},
+		func(nodes []models.NodeFacts) *models.ClusterSnapshot {
+			return &models.ClusterSnapshot{Nodes: nodes}
+		},
+		func() (*state.ClusterState, error) {
+			return &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil
+		},
+		func(*models.ClusterSnapshot, *state.ClusterState) {},
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	defer restore()
+
+	rt, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(rt.Snapshot.Warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %#v", rt.Snapshot.Warnings)
+	}
+	if rt.Snapshot.Warnings[0].Kind != "discovery" {
+		t.Fatalf("expected discovery warning, got %#v", rt.Snapshot.Warnings)
+	}
+}
+
 func TestPrependWarningReasoningIncludesOperatorWarnings(t *testing.T) {
 	got := PrependWarningReasoning([]string{"chosen node"}, []models.Warning{
 		{Kind: "partial", Message: "ignore me"},
 		{Kind: "state", Message: "state warning"},
 		{Kind: "cache", Message: "cache warning"},
+		{Kind: "discovery", Message: "discovery warning"},
 		{Kind: "skills", Message: "skills warning"},
 	})
 
 	want := []string{
 		"warning: state warning",
 		"warning: cache warning",
+		"warning: discovery warning",
 		"warning: skills warning",
 		"chosen node",
 	}
@@ -161,7 +200,7 @@ func TestPrependWarningReasoningIncludesOperatorWarnings(t *testing.T) {
 func stubRuntimeDeps(
 	t *testing.T,
 	cfgFn func(string) (*config.Config, error),
-	discoverFn func(context.Context, *config.Config) []models.NodeFacts,
+	discoverFn func(context.Context, *config.Config) ([]models.NodeFacts, []models.Warning),
 	buildFn func([]models.NodeFacts) *models.ClusterSnapshot,
 	stateFn func() (*state.ClusterState, error),
 	applyFn func(*models.ClusterSnapshot, *state.ClusterState),
