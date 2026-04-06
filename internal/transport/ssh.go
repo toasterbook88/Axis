@@ -184,8 +184,15 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 // Stream runs a command with realtime output to the provided writers.
 // Used for long-running tasks. Same SSH setup as Run().
 func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	if e.client == nil {
 		if err := e.Connect(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			return err
 		}
 	}
