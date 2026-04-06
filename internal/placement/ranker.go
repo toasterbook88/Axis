@@ -91,7 +91,8 @@ func isBlockingFailure(class models.FailureClass) bool {
 //  3. Highest effective headroom (free-with-state - requirement)
 //  4. Highest unified-memory suitability for mlx/long-context asks
 //  5. Highest allocatable RAM
-//  6. Lowest reservation ratio (reserved / total RAM)
+//  6. Lowest reservation ratio (reserved / total RAM), then lowest current
+//     share of the cluster reservation pool
 //  7. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
@@ -146,6 +147,12 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 		ratioJ := reservationRatio(ranked[j], st)
 		if ratioI != ratioJ {
 			return ratioI < ratioJ
+		}
+
+		shareI := clusterReservationShare(ranked[i], st)
+		shareJ := clusterReservationShare(ranked[j], st)
+		if shareI != shareJ {
+			return shareI < shareJ
 		}
 
 		return ranked[i].Name < ranked[j].Name
@@ -237,14 +244,10 @@ func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
 	if n.Resources == nil {
 		return 0
 	}
-	if st == nil && (n.Resources.RAMReservedMB > 0 || n.Resources.RAMAllocatableMB > 0) {
+	if st == nil && n.Resources.RAMAllocatableMB > 0 {
 		return n.Resources.RAMAllocatableMB
 	}
-	effective := n.Resources.RAMFreeMB - reservedRAM(n, st)
-	if effective < 0 {
-		return 0
-	}
-	return effective
+	return models.AllocatableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, reservedRAM(n, st))
 }
 
 func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
@@ -252,6 +255,19 @@ func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
 		return 1.0
 	}
 	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
+}
+
+func clusterReservationShare(n models.NodeFacts, st *state.ClusterState) float64 {
+	clusterReserved := totalReserved(st)
+	if clusterReserved <= 0 {
+		return 0
+	}
+
+	reserved := reservedRAM(n, st)
+	if reserved <= 0 {
+		return 0
+	}
+	return float64(reserved) / float64(clusterReserved)
 }
 
 // gpuScore returns a weighted GPU score considering VRAM and capabilities.
@@ -674,7 +690,9 @@ func totalReserved(st *state.ClusterState) int64 {
 
 	var sum int64
 	for _, ns := range st.Nodes {
-		sum += ns.ReservedMB
+		if ns.ReservedMB > 0 {
+			sum += ns.ReservedMB
+		}
 	}
 	return sum
 }
@@ -694,7 +712,7 @@ func clusterPressurePenalty(n models.NodeFacts, st *state.ClusterState, requestM
 		return 0
 	}
 
-	share := float64(ns.ReservedMB) / float64(clusterReserved+1)
+	share := clusterReservationShare(n, st)
 	penalty := int64(math.Round(share * float64(requestMB) * 1.5))
 	if penalty < 0 {
 		return 0

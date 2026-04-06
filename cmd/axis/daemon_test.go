@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/toasterbook88/axis/internal/execution"
 )
 
 func TestInvalidateDaemonCachePostsToEndpoint(t *testing.T) {
@@ -50,6 +52,28 @@ func TestRefreshDaemonCachePostsToEndpoint(t *testing.T) {
 	}
 	if !sawPost {
 		t.Fatal("expected refresh endpoint to be called")
+	}
+}
+
+func TestRefreshDaemonCacheWithTriggerPostsQueryParam(t *testing.T) {
+	var gotTrigger string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/refresh" {
+			t.Fatalf("expected /refresh, got %s", r.URL.Path)
+		}
+		gotTrigger = r.URL.Query().Get("trigger")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := refreshDaemonCacheWithTrigger(context.Background(), server.URL, execution.StateChangeExecutionFinished); err != nil {
+		t.Fatalf("refreshDaemonCacheWithTrigger: %v", err)
+	}
+	if gotTrigger != execution.StateChangeExecutionFinished {
+		t.Fatalf("expected execution trigger query, got %q", gotTrigger)
 	}
 }
 

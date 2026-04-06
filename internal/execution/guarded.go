@@ -32,37 +32,55 @@ const (
 	ModeExec   = "exec"
 
 	ConfirmWord = "YES"
+
+	StateChangeExecutionReserved = "execution-reserved"
+	StateChangeExecutionFinished = "execution-finished"
+
+	OwnerSurfaceGuardedExec   = "guarded-exec"
+	OwnerSurfaceTaskRun       = "task-run"
+	OwnerSurfaceHTTPRun       = "http-run"
+	OwnerSurfaceAgentRunShell = "agent-run-shell"
 )
 
+var executionHeartbeatInterval = 15 * time.Second
+var heartbeatTask = func(st *state.ClusterState, node, execID string) error {
+	return st.HeartbeatTask(node, execID)
+}
+var localExecutionHostname = os.Hostname
+
 type GuardedExecutionRequest struct {
-	Description string                       `json:"description"`
-	Mode        string                       `json:"mode,omitempty"`
-	Confirm     string                       `json:"confirm,omitempty"`
-	Stdout      io.Writer                    `json:"-"`
-	Stderr      io.Writer                    `json:"-"`
-	OnReady     func(GuardedExecutionResult) `json:"-"`
+	Description    string                                                `json:"description"`
+	Mode           string                                                `json:"mode,omitempty"`
+	Confirm        string                                                `json:"confirm,omitempty"`
+	OwnerSurface   string                                                `json:"-"`
+	OwnerLabel     string                                                `json:"-"`
+	OriginOverride models.ExecutionOrigin                                `json:"-"`
+	Stdout         io.Writer                                             `json:"-"`
+	Stderr         io.Writer                                             `json:"-"`
+	OnReady        func(GuardedExecutionResult)                          `json:"-"`
+	OnStateChange  func(context.Context, string, GuardedExecutionResult) `json:"-"`
 }
 
 type GuardedExecutionResult struct {
-	OK             bool                   `json:"ok"`
-	Description    string                 `json:"description"`
-	Mode           string                 `json:"mode,omitempty"`
-	Intent         string                 `json:"intent,omitempty"`
-	Command        string                     `json:"command,omitempty"`
-	Node           string                     `json:"node,omitempty"`
-	Tool           string                     `json:"tool,omitempty"`
+	OK             bool                        `json:"ok"`
+	Description    string                      `json:"description"`
+	Mode           string                      `json:"mode,omitempty"`
+	Intent         string                      `json:"intent,omitempty"`
+	Command        string                      `json:"command,omitempty"`
+	Node           string                      `json:"node,omitempty"`
+	Tool           string                      `json:"tool,omitempty"`
 	Workload       models.WorkloadProfileMatch `json:"workload,omitempty"`
-	FitScore       int                        `json:"fit_score,omitempty"`
-	IsLocal        bool                   `json:"is_local,omitempty"`
-	Reasoning      []string               `json:"reasoning,omitempty"`
-	Blocked        bool                   `json:"blocked,omitempty"`
-	BlockReason    string                 `json:"block_reason,omitempty"`
-	DumbScore      int                    `json:"dumb_score,omitempty"`
-	Output         string                 `json:"output,omitempty"`
-	Error          string                 `json:"error,omitempty"`
-	ExitCode       int                    `json:"exit_code,omitempty"`
-	SnapshotStatus models.SnapshotStatus  `json:"snapshot_status,omitempty"`
-	Summary        *models.ClusterSummary `json:"summary,omitempty"`
+	FitScore       int                         `json:"fit_score,omitempty"`
+	IsLocal        bool                        `json:"is_local,omitempty"`
+	Reasoning      []string                    `json:"reasoning,omitempty"`
+	Blocked        bool                        `json:"blocked,omitempty"`
+	BlockReason    string                      `json:"block_reason,omitempty"`
+	DumbScore      int                         `json:"dumb_score,omitempty"`
+	Output         string                      `json:"output,omitempty"`
+	Error          string                      `json:"error,omitempty"`
+	ExitCode       int                         `json:"exit_code,omitempty"`
+	SnapshotStatus models.SnapshotStatus       `json:"snapshot_status,omitempty"`
+	Summary        *models.ClusterSummary      `json:"summary,omitempty"`
 }
 
 type Intent struct {
@@ -118,6 +136,9 @@ func NormalizeRequest(req *GuardedExecutionRequest) {
 	req.Description = strings.TrimSpace(req.Description)
 	req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
 	req.Confirm = strings.TrimSpace(req.Confirm)
+	req.OwnerSurface = strings.TrimSpace(req.OwnerSurface)
+	req.OwnerLabel = strings.TrimSpace(req.OwnerLabel)
+	req.OriginOverride = req.OriginOverride.Normalized()
 }
 
 func ValidateRequest(req GuardedExecutionRequest) error {
@@ -133,6 +154,45 @@ func ValidateRequest(req GuardedExecutionRequest) error {
 	default:
 		return nil
 	}
+}
+
+func executionOwner(rt *runtimectx.Context, req GuardedExecutionRequest) state.ExecutionOwner {
+	origin := req.OriginOverride.Normalized()
+	if origin.IsZero() {
+		origin = resolveExecutionOrigin(rt)
+	}
+	owner := state.ExecutionOwner{
+		Surface: strings.TrimSpace(req.OwnerSurface),
+		Label:   strings.TrimSpace(req.OwnerLabel),
+		Origin:  origin,
+	}
+	if owner.Surface == "" {
+		owner.Surface = OwnerSurfaceGuardedExec
+	}
+	return owner
+}
+
+// LocalExecutionOrigin derives the trusted local AXIS execution origin from
+// the current runtime context.
+func LocalExecutionOrigin(rt *runtimectx.Context) models.ExecutionOrigin {
+	return resolveExecutionOrigin(rt)
+}
+
+func resolveExecutionOrigin(rt *runtimectx.Context) models.ExecutionOrigin {
+	if rt != nil && rt.Snapshot != nil {
+		if localNode, ok := models.FindLocalNode(rt.Snapshot.Nodes); ok {
+			return models.ExecutionOriginFromNode(localNode)
+		}
+	}
+	if rt != nil && rt.Config != nil {
+		for _, nc := range rt.Config.Nodes {
+			if models.IsLocalConfig(nc.Name, nc.Hostname, nc.StableID) {
+				return models.NewExecutionOrigin(nc.Name, nc.Hostname, nc.StableID)
+			}
+		}
+	}
+	hostname, _ := localExecutionHostname()
+	return models.NewExecutionOrigin("", hostname, models.CurrentLocalStableID())
 }
 
 func ResolveIntent(description, mode string, skillStore *skills.Store) (Intent, error) {
@@ -179,21 +239,19 @@ func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node strin
 		return true
 	}
 
-	var totalRAM int64
+	var totalRAM, freeRAM int64
 	for _, n := range snap.Nodes {
 		if n.Name == node && n.Resources != nil {
 			totalRAM = n.Resources.RAMTotalMB
+			freeRAM = n.Resources.RAMFreeMB
 			break
 		}
 	}
-	if totalRAM <= 0 {
+	if totalRAM <= 0 && freeRAM <= 0 {
 		return true
 	}
 
-	capMB := totalRAM - 1024
-	if capMB < 0 {
-		capMB = 0
-	}
+	capMB := models.ReservableRAMMB(totalRAM, freeRAM)
 
 	ns, ok := st.Nodes[node]
 	if !ok {
@@ -302,7 +360,7 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 	}
 
 	if models.IsLocalNode(targetNode) {
-		return runLocal(ctx, rt.State, skillStore, req, resp, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
+		return runLocal(ctx, rt.State, skillStore, executionOwner(rt, req), req, resp, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
 	}
 
 	targetConfig, ok := rt.Config.FindNode(decision.Node)
@@ -311,7 +369,7 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 		return resp, fmt.Errorf("node %q not found in config", decision.Node)
 	}
 
-	return runRemote(ctx, rt.State, skillStore, req, resp, targetConfig, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
+	return runRemote(ctx, rt.State, skillStore, executionOwner(rt, req), req, resp, targetConfig, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
 }
 
 func prepareRequirements(description, mode string, intent Intent) models.TaskRequirements {
@@ -471,6 +529,7 @@ func runLocal(
 	ctx context.Context,
 	st *state.ClusterState,
 	skillStore *skills.Store,
+	owner state.ExecutionOwner,
 	req GuardedExecutionRequest,
 	resp GuardedExecutionResult,
 	decision models.PlacementDecision,
@@ -479,6 +538,13 @@ func runLocal(
 	extraEnv []string,
 	contextJSON []byte,
 ) (GuardedExecutionResult, error) {
+	runtimeChanged := false
+	defer func() {
+		if runtimeChanged {
+			notifyStateChange(ctx, req, StateChangeExecutionFinished, resp)
+		}
+	}()
+
 	contextFile, err := os.CreateTemp("", "axis-knows-*.json")
 	if err != nil {
 		resp.Error = err.Error()
@@ -505,12 +571,16 @@ func runLocal(
 	)
 	env = append(env, extraEnv...)
 
+	var execID string
 	if st != nil {
-		execID, err := st.AcquireTask(decision.Node, req.Description, reservationMB)
-		if err != nil {
-			resp.Error = err.Error()
-			return resp, err
+		acquireID, acquireErr := st.AcquireTaskWithOwner(decision.Node, req.Description, reservationMB, owner)
+		if acquireErr != nil {
+			resp.Error = acquireErr.Error()
+			return resp, acquireErr
 		}
+		execID = acquireID
+		runtimeChanged = true
+		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
 		defer func() {
 			if releaseErr := st.ReleaseTask(decision.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
@@ -518,18 +588,22 @@ func runLocal(
 		}()
 	}
 
-	out, runErr := runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
+	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
+		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
+	})
 	resp.Output = out
 	resp.ExitCode = exitCode(runErr)
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
-		emitFailure(st, req, resp, runErr)
+		runtimeChanged = true
+		emitFailure(st, resp, runErr)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
-	emitSuccess(st, req, resp)
+	runtimeChanged = true
+	emitSuccess(st, resp)
 	resp.OK = true
 	return resp, nil
 }
@@ -538,6 +612,7 @@ func runRemote(
 	ctx context.Context,
 	st *state.ClusterState,
 	skillStore *skills.Store,
+	owner state.ExecutionOwner,
 	req GuardedExecutionRequest,
 	resp GuardedExecutionResult,
 	targetConfig config.NodeConfig,
@@ -547,6 +622,13 @@ func runRemote(
 	extraEnv []string,
 	contextJSON []byte,
 ) (GuardedExecutionResult, error) {
+	runtimeChanged := false
+	defer func() {
+		if runtimeChanged {
+			notifyStateChange(ctx, req, StateChangeExecutionFinished, resp)
+		}
+	}()
+
 	executor := NewRemoteExecutor(targetConfig)
 	defer executor.Close()
 
@@ -558,12 +640,16 @@ func runRemote(
 		return resp, err
 	}
 
+	var execID string
 	if st != nil {
-		execID, err := st.AcquireTask(decision.Node, req.Description, reservationMB)
-		if err != nil {
-			resp.Error = err.Error()
-			return resp, err
+		acquireID, acquireErr := st.AcquireTaskWithOwner(decision.Node, req.Description, reservationMB, owner)
+		if acquireErr != nil {
+			resp.Error = acquireErr.Error()
+			return resp, acquireErr
 		}
+		execID = acquireID
+		runtimeChanged = true
+		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
 		defer func() {
 			if releaseErr := st.ReleaseTask(decision.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
@@ -584,18 +670,22 @@ func runRemote(
 		shellescape.Quote(command),
 	)
 
-	out, runErr := runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
+	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
+		return runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
+	})
 	resp.Output = out
 	resp.ExitCode = exitCode(runErr)
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
-		emitFailure(st, req, resp, runErr)
+		runtimeChanged = true
+		emitFailure(st, resp, runErr)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
-	emitSuccess(st, req, resp)
+	runtimeChanged = true
+	emitSuccess(st, resp)
 	resp.OK = true
 	return resp, nil
 }
@@ -664,6 +754,39 @@ func combinedOutput(stdout, stderr string) string {
 	}
 }
 
+func runWithReservationHeartbeat(
+	st *state.ClusterState,
+	node, execID string,
+	run func() (string, error),
+) (string, error) {
+	if st == nil || execID == "" {
+		return run()
+	}
+
+	type result struct {
+		out string
+		err error
+	}
+
+	done := make(chan result, 1)
+	go func() {
+		out, err := run()
+		done <- result{out: out, err: err}
+	}()
+
+	ticker := time.NewTicker(executionHeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case res := <-done:
+			return res.out, res.err
+		case <-ticker.C:
+			_ = heartbeatTask(st, node, execID)
+		}
+	}
+}
+
 func RemoteExecPrefix(node, contextPath string, extraEnv []string) string {
 	parts := []string{
 		"export",
@@ -680,8 +803,6 @@ func RemoteExecPrefix(node, contextPath string, extraEnv []string) string {
 	}
 	return strings.Join(parts, " ") + ";"
 }
-
-
 
 func findNodeFacts(snap *models.ClusterSnapshot, name string) (models.NodeFacts, bool) {
 	if snap == nil {
@@ -711,7 +832,13 @@ func recordFailure(skillStore *skills.Store, description string, exitCode int) {
 	_ = skillStore.Save()
 }
 
-func emitFailure(st *state.ClusterState, req GuardedExecutionRequest, resp GuardedExecutionResult, runErr error) {
+func notifyStateChange(ctx context.Context, req GuardedExecutionRequest, trigger string, resp GuardedExecutionResult) {
+	if req.OnStateChange != nil {
+		req.OnStateChange(ctx, trigger, resp)
+	}
+}
+
+func emitFailure(st *state.ClusterState, resp GuardedExecutionResult, runErr error) {
 	if st == nil || st.Failures == nil {
 		return
 	}
@@ -738,7 +865,7 @@ func emitFailure(st *state.ClusterState, req GuardedExecutionRequest, resp Guard
 	_ = st.Save()
 }
 
-func emitSuccess(st *state.ClusterState, req GuardedExecutionRequest, resp GuardedExecutionResult) {
+func emitSuccess(st *state.ClusterState, resp GuardedExecutionResult) {
 	if st == nil || st.Failures == nil {
 		return
 	}

@@ -161,6 +161,7 @@ type NodeFacts struct {
 
 	// Observed state
 	Hostname   string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	Identity   *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
 	OS         string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
 	OSVersion  string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
 	Arch       string                     `json:"arch,omitempty" yaml:"arch,omitempty"`

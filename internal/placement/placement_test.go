@@ -321,6 +321,33 @@ func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
 	}
 }
 
+func TestRankPrefersLowerClusterReservationShareWhenReservationRatioTied(t *testing.T) {
+	alpha := nodeComplete("alpha", 5000, "none")
+	alpha.Resources.RAMTotalMB = 16384
+
+	beta := nodeComplete("beta", 4000, "none")
+	beta.Resources.RAMTotalMB = 8192
+
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2000},
+			"beta":  {ReservedMB: 1000},
+		},
+	}
+
+	if gotAlpha, gotBeta := reservationRatio(alpha, st), reservationRatio(beta, st); gotAlpha != gotBeta {
+		t.Fatalf("expected reservation ratio tie, got alpha=%f beta=%f", gotAlpha, gotBeta)
+	}
+	if gotAlpha, gotBeta := clusterReservationShare(alpha, st), clusterReservationShare(beta, st); gotAlpha <= gotBeta {
+		t.Fatalf("expected alpha to hold more cluster reservation share, got alpha=%f beta=%f", gotAlpha, gotBeta)
+	}
+
+	ranked := RankCandidates([]models.NodeFacts{alpha, beta}, models.TaskRequirements{}, st)
+	if ranked[0].Name != "beta" {
+		t.Fatalf("expected beta first on lower cluster reservation share tie-break, got %s", ranked[0].Name)
+	}
+}
+
 func TestRankPrefersTurboQuantForLongContextTasks(t *testing.T) {
 	candidates := []models.NodeFacts{
 		nodeComplete("plain", 4096, "none", "ollama"),
@@ -827,6 +854,36 @@ func TestSuccessReasoningShowsAllocatableRAM(t *testing.T) {
 	}
 }
 
+func TestSuccessReasoningShowsClusterReservationShare(t *testing.T) {
+	alpha := nodeComplete("alpha", 5000, "none", "git")
+	alpha.Resources.RAMTotalMB = 16384
+
+	beta := nodeComplete("beta", 4000, "none", "git")
+	beta.Resources.RAMTotalMB = 8192
+
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 2000},
+			"beta":  {ReservedMB: 1000},
+		},
+	}
+
+	d := SelectBestNode(models.TaskRequirements{RequiredTools: []string{"git"}}, []models.NodeFacts{alpha, beta}, st)
+	if !d.OK || d.Node != "beta" {
+		t.Fatalf("expected OK=true node=beta, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
+	}
+
+	foundShare := false
+	for _, r := range d.Reasoning {
+		if contains(r, "cluster reservation share") && contains(r, "runner-up") {
+			foundShare = true
+		}
+	}
+	if !foundShare {
+		t.Fatalf("expected cluster reservation share reasoning, got %v", d.Reasoning)
+	}
+}
+
 func TestSuccessReasoningShowsTurboQuantAvailability(t *testing.T) {
 	n := nodeTurboQuant("mlx", 4096, "none", "mlx")
 	reqs := models.TaskRequirements{
@@ -1153,10 +1210,10 @@ func TestFilter_FailureNodeExcluded(t *testing.T) {
 		Nodes: make(map[string]state.NodeState),
 		Failures: failures.Store{
 			"hash123": models.FailureRecord{
-				ID: "hash123",
-				Class: models.FailureExecCrash,
-				Scope: models.FailureScope{Node: "cursed-node", Workload: models.ClassLocalLLMInference},
-				Count: 2,
+				ID:        "hash123",
+				Class:     models.FailureExecCrash,
+				Scope:     models.FailureScope{Node: "cursed-node", Workload: models.ClassLocalLLMInference},
+				Count:     2,
 				ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 			},
 		},
@@ -1182,10 +1239,10 @@ func TestFilter_ExpiredFailureAllowed(t *testing.T) {
 		Nodes: make(map[string]state.NodeState),
 		Failures: failures.Store{
 			"hash456": models.FailureRecord{
-				ID: "hash456",
-				Class: models.FailureExecCrash,
-				Scope: models.FailureScope{Node: "recovered-node", Workload: models.ClassLocalLLMInference},
-				Count: 1,
+				ID:        "hash456",
+				Class:     models.FailureExecCrash,
+				Scope:     models.FailureScope{Node: "recovered-node", Workload: models.ClassLocalLLMInference},
+				Count:     1,
 				ExpiresAt: time.Now().UTC().Add(-1 * time.Hour),
 			},
 		},

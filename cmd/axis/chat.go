@@ -187,16 +187,14 @@ func handleSlashCommand(input, currentModel string, conv *chat.Conversation, w i
 		if snap == nil {
 			fmt.Fprintln(w, ui.Yellow("No cluster snapshot available"))
 		} else {
-			hostname, _ := os.Hostname()
-			for _, n := range snap.Nodes {
-				if n.Hostname == hostname || n.Name == hostname {
-					if n.Resources != nil {
-						fmt.Fprintf(w, "Node: %s (%s/%s)\n", n.Name, n.OS, n.Arch)
-						fmt.Fprintf(w, "CPU: %d cores\n", n.Resources.CPUCores)
-						fmt.Fprintf(w, "RAM: %d MB total, %d MB free\n", n.Resources.RAMTotalMB, n.Resources.RAMFreeMB)
-					}
-					break
+			if n, ok := models.FindLocalNode(snap.Nodes); ok {
+				fmt.Fprintf(w, "Node: %s (%s/%s)\n", n.Name, n.OS, n.Arch)
+				if n.Resources != nil {
+					fmt.Fprintf(w, "CPU: %d cores\n", n.Resources.CPUCores)
+					fmt.Fprintf(w, "RAM: %d MB total, %d MB free\n", n.Resources.RAMTotalMB, n.Resources.RAMFreeMB)
 				}
+			} else {
+				fmt.Fprintln(w, ui.Yellow("Local node not found in snapshot"))
 			}
 		}
 	case query == "/models":

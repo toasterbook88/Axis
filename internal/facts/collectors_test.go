@@ -314,7 +314,9 @@ func TestDiscoverToolsUsesConfiguredLookups(t *testing.T) {
 func TestRemoteCollectorCollectsDarwinFacts(t *testing.T) {
 	exec := &fakeRemoteExecutor{
 		exact: map[string]fakeRunResult{
-			"uname -s":                {out: "Darwin\n"},
+			"uname -s": {out: "Darwin\n"},
+			"hostname": {out: "mac-studio-observed\n"},
+			`ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F '"' '/IOPlatformUUID/ {print $4; exit}'`: {out: "F47AC10B-58CC-4372-A567-0E02B2C3D479\n"},
 			"uname -m":                {out: "arm64\n"},
 			"sw_vers -productVersion": {out: "14.4\n"},
 			"sysctl -n hw.ncpu":       {out: "16\n"},
@@ -353,6 +355,12 @@ Pages inactive:                          100000.
 	}
 	if facts.Status != models.StatusComplete {
 		t.Fatalf("expected complete status, got %s", facts.Status)
+	}
+	if facts.Hostname != "mac-studio-observed" {
+		t.Fatalf("expected observed hostname, got %q", facts.Hostname)
+	}
+	if facts.Identity == nil || facts.Identity.StableID != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
+		t.Fatalf("expected darwin identity, got %+v", facts.Identity)
 	}
 	if facts.Resources == nil {
 		t.Fatal("expected resources")
@@ -409,6 +417,8 @@ func TestRemoteCollectorMarksPartialOnCollectorFailures(t *testing.T) {
 	exec := &fakeRemoteExecutor{
 		exact: map[string]fakeRunResult{
 			"uname -s": {out: "Linux\n"},
+			"hostname": {out: "linux-node-observed\n"},
+			"cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null": {out: "1234567890abcdef1234567890abcdef\n"},
 			"uname -m": {out: "amd64\n"},
 			"uname -r": {out: "6.8.0\n"},
 			"nproc":    {err: fmt.Errorf("boom")},
@@ -433,6 +443,12 @@ MemAvailable:   12456780 kB
 	if facts.Status != models.StatusPartial {
 		t.Fatalf("expected partial status, got %s", facts.Status)
 	}
+	if facts.Hostname != "linux-node-observed" {
+		t.Fatalf("expected observed hostname on partial facts, got %q", facts.Hostname)
+	}
+	if facts.Identity == nil || facts.Identity.Source != "linux-machine-id" {
+		t.Fatalf("expected linux identity, got %+v", facts.Identity)
+	}
 	if facts.Resources == nil {
 		t.Fatal("expected resources even on partial failure")
 	}
@@ -441,6 +457,23 @@ MemAvailable:   12456780 kB
 	}
 	if facts.Ollama != nil {
 		t.Fatalf("expected ollama info to stay nil on discovery error, got %+v", facts.Ollama)
+	}
+}
+
+func TestDetectRemoteHostnameRejectsEmptyFallback(t *testing.T) {
+	exec := &fakeRemoteExecutor{
+		exact: map[string]fakeRunResult{
+			"hostname": {out: "\n"},
+			"uname -n": {out: "\n"},
+		},
+	}
+
+	hostname, err := detectRemoteHostname(context.Background(), exec)
+	if err == nil {
+		t.Fatal("expected empty fallback hostname to fail")
+	}
+	if hostname != "" {
+		t.Fatalf("hostname = %q, want empty string", hostname)
 	}
 }
 

@@ -72,12 +72,12 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 				reserved = ns.ReservedMB
 			}
 		}
+		if reserved < 0 {
+			reserved = 0
+		}
 		node.Resources.RAMReservedMB = reserved
 
-		allocatable := node.Resources.RAMFreeMB - reserved
-		if allocatable < 0 {
-			allocatable = 0
-		}
+		allocatable := models.AllocatableRAMMB(node.Resources.RAMTotalMB, node.Resources.RAMFreeMB, reserved)
 		node.Resources.RAMAllocatableMB = allocatable
 
 		totalReserved += reserved

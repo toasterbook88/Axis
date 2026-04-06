@@ -17,6 +17,7 @@ func sampleNodeFacts() models.NodeFacts {
 		Name:      "test-node",
 		Role:      "worker",
 		Hostname:  "test.local",
+		Identity:  models.NewNodeIdentity("f47ac10b-58cc-4372-a567-0e02b2c3d479", "linux-machine-id"),
 		OS:        "linux",
 		OSVersion: "6.1.0",
 		Arch:      "amd64",
@@ -89,6 +90,9 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	if decoded.Status != original.Status {
 		t.Errorf("status: got %q, want %q", decoded.Status, original.Status)
 	}
+	if decoded.Identity == nil || decoded.Identity.StableID != original.Identity.StableID {
+		t.Fatalf("identity: got %+v, want %+v", decoded.Identity, original.Identity)
+	}
 	if decoded.OS != "linux" || decoded.OSVersion != "6.1.0" {
 		t.Errorf("os fields: got %q/%q", decoded.OS, decoded.OSVersion)
 	}
@@ -148,6 +152,9 @@ func TestNodeFacts_YAMLRoundTrip(t *testing.T) {
 	}
 	if decoded.Name != original.Name {
 		t.Errorf("name: got %q, want %q", decoded.Name, original.Name)
+	}
+	if decoded.Identity == nil || decoded.Identity.Source != "linux-machine-id" {
+		t.Fatalf("identity: got %+v", decoded.Identity)
 	}
 	if decoded.OS != "linux" {
 		t.Errorf("os: got %q, want linux", decoded.OS)

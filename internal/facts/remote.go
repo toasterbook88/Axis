@@ -37,7 +37,6 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	facts := &models.NodeFacts{
 		Name:        c.NodeName,
 		Role:        c.Role,
-		Hostname:    c.Hostname,
 		Status:      models.StatusComplete,
 		CollectedAt: time.Now().UTC(),
 	}
@@ -58,6 +57,13 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	}
 	osName := strings.ToLower(strings.TrimSpace(osOut))
 	facts.OS = osName
+	if hostname, err := detectRemoteHostname(ctx, c.Exec); err != nil {
+		partial = true
+		facts.Hostname = c.Hostname
+	} else {
+		facts.Hostname = hostname
+	}
+	facts.Identity = detectRemoteNodeIdentity(ctx, c.Exec, osName)
 
 	// Arch
 	if archOut, err := c.Exec.Run(ctx, "uname -m"); err != nil {

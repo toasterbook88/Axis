@@ -25,6 +25,14 @@ import (
 var loadPlacementState = state.Load
 var fetchTaskSnapshot = daemon.FetchSnapshot
 var loadTaskLiveSnapshot = discoverLiveSnapshot
+var loadTaskRunRuntime = runtimectx.Load
+var runTaskGuarded = execution.RunGuarded
+var runTaskGuardedViaDaemon = daemon.RunGuardedStream
+var fetchTaskDaemonMeta = daemon.FetchMeta
+var taskDaemonExecutionAddr = api.DefaultAddr
+var signalTaskRunDaemonRefresh = func(ctx context.Context, trigger string) error {
+	return refreshDaemonCacheWithTrigger(ctx, api.DefaultAddr(), trigger)
+}
 
 func taskCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -246,7 +254,7 @@ func taskRunCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 
-			rt, err := runtimectx.Load(ctx)
+			rt, err := loadTaskRunRuntime(ctx)
 			if err != nil {
 				Fatal(ExitErrConfigLoad, "Failed to load runtime context: %v", err)
 			}
@@ -268,11 +276,15 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			req := execution.GuardedExecutionRequest{
-				Description: input,
-				Mode:        mode,
-				Confirm:     execution.ConfirmWord,
-				Stdout:      os.Stdout,
-				Stderr:      os.Stderr,
+				Description:  input,
+				Mode:         mode,
+				Confirm:      execution.ConfirmWord,
+				OwnerSurface: execution.OwnerSurfaceTaskRun,
+				Stdout:       os.Stdout,
+				Stderr:       os.Stderr,
+				OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
+					scheduleTaskRunDaemonRefresh(trigger)
+				},
 				OnReady: func(resp execution.GuardedExecutionResult) {
 					fmt.Printf("Selected node: %s (fit %d/100)\n", resp.Node, resp.FitScore)
 					for _, reason := range resp.Reasoning {
@@ -287,7 +299,7 @@ func taskRunCmd() *cobra.Command {
 				},
 			}
 
-			resp, err := execution.RunGuarded(ctx, rt, req)
+			resp, err := runTaskRunRequest(ctx, rt, req)
 			if resp.Blocked {
 				fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
 				fmt.Printf("Reason: %s\n", resp.BlockReason)
@@ -310,6 +322,29 @@ func taskRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
 	return cmd
+}
+
+func scheduleTaskRunDaemonRefresh(trigger string) {
+	scheduleBestEffortDaemonRefresh("task-run", trigger, signalTaskRunDaemonRefresh)
+}
+
+func runTaskRunRequest(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+	if resp, usedDaemon, err := tryTaskRunViaDaemon(ctx, rt, req); usedDaemon {
+		return resp, err
+	}
+	return runTaskGuarded(ctx, rt, req)
+}
+
+func tryTaskRunViaDaemon(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, bool, error) {
+	addr := taskDaemonExecutionAddr()
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	if _, err := fetchTaskDaemonMeta(probeCtx, addr); err != nil {
+		return execution.GuardedExecutionResult{}, false, nil
+	}
+	resp, err := runTaskGuardedViaDaemon(ctx, addr, req, execution.LocalExecutionOrigin(rt))
+	return resp, true, err
 }
 
 // === NEW: axis task context <description> — zero-risk token saver ===

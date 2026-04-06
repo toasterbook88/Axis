@@ -15,11 +15,23 @@ import (
 )
 
 type NodeState struct {
-	ReservedMB   int64     `json:"reserved_mb"`
-	LastTask     string    `json:"last_task"`
-	LastPlacedAt time.Time `json:"last_placed_at"`
-	ActiveTasks  int       `json:"active_tasks"`
-	ActiveExecs  []string  `json:"active_execs,omitempty"`
+	ReservedMB         int64                             `json:"reserved_mb"`
+	LastTask           string                            `json:"last_task"`
+	LastPlacedAt       time.Time                         `json:"last_placed_at"`
+	ActiveTasks        int                               `json:"active_tasks"`
+	ActiveExecs        []string                          `json:"active_execs,omitempty"`
+	ExecReservationsMB map[string]int64                  `json:"exec_reservations_mb,omitempty"`
+	ExecHeartbeatAt    map[string]time.Time              `json:"exec_heartbeat_at,omitempty"`
+	ExecOwnerPID       map[string]int                    `json:"exec_owner_pid,omitempty"`
+	ExecOwnerSurface   map[string]string                 `json:"exec_owner_surface,omitempty"`
+	ExecOwnerLabel     map[string]string                 `json:"exec_owner_label,omitempty"`
+	ExecOrigin         map[string]models.ExecutionOrigin `json:"exec_origin,omitempty"`
+}
+
+type ExecutionOwner struct {
+	Surface string
+	Label   string
+	Origin  models.ExecutionOrigin
 }
 
 // TombstoneEntry records a task-node failure for the immune system.
@@ -41,6 +53,14 @@ type ClusterState struct {
 }
 
 var quarantineCorruptStateFile = persist.QuarantineCorruptFile
+var execOwnerPID = os.Getpid
+var execOwnerAlive = processAlive
+
+const (
+	staleReservationReclaimAfter = 45 * time.Minute
+	staleReservationHardExpiry   = 24 * time.Hour
+	execHeartbeatStaleAfter      = 2 * time.Minute
+)
 
 func Path() string {
 	home, _ := os.UserHomeDir()
@@ -72,7 +92,7 @@ func Load() (*ClusterState, error) {
 	}
 
 	mutated := false
-	if s.Tombstones != nil && len(s.Tombstones) > 0 {
+	if len(s.Tombstones) > 0 {
 		for _, t := range s.Tombstones {
 			// Migrate to {Node}-only scope so placement queries on {Node, Workload}
 			// can match via the broad-scope Match semantics.  The legacy TaskPattern
@@ -108,8 +128,15 @@ func Load() (*ClusterState, error) {
 		mutated = true
 	}
 
+	now := time.Now().UTC()
 	for name, ns := range s.Nodes {
-		if time.Since(ns.LastPlacedAt) > 45*time.Minute {
+		legacyHeartbeatMode := len(ns.ActiveExecs) > 0 && len(ns.ExecHeartbeatAt) == 0
+		ns, normalized := normalizeNodeStateExecTracking(ns, now)
+		if normalized {
+			mutated = true
+		}
+
+		if shouldDropAncientNodeState(now, ns, legacyHeartbeatMode) {
 			delete(s.Nodes, name)
 			mutated = true
 			continue
@@ -123,11 +150,19 @@ func Load() (*ClusterState, error) {
 			continue
 		}
 
-		if ns.ActiveTasks != len(ns.ActiveExecs) {
-			ns.ActiveTasks = len(ns.ActiveExecs)
-			s.Nodes[name] = ns
+		reclaimed, reclaimedAny := reclaimStaleReservation(now, ns, legacyHeartbeatMode)
+		if reclaimedAny {
+			ns = reclaimed
 			mutated = true
 		}
+
+		if ns.ActiveTasks == 0 && ns.ReservedMB == 0 {
+			delete(s.Nodes, name)
+			mutated = true
+			continue
+		}
+
+		s.Nodes[name] = ns
 	}
 
 	if mutated {
@@ -143,6 +178,472 @@ func emptyClusterState() *ClusterState {
 		Nodes:    make(map[string]NodeState),
 		Failures: failures.NewStore(),
 	}
+}
+
+func shouldDropAncientNodeState(now time.Time, ns NodeState, legacyHeartbeatMode bool) bool {
+	if ns.LastPlacedAt.IsZero() {
+		return false
+	}
+	if len(ns.ActiveExecs) == 0 {
+		return now.Sub(ns.LastPlacedAt) > staleReservationReclaimAfter
+	}
+	if !legacyHeartbeatMode {
+		return false
+	}
+	return now.Sub(ns.LastPlacedAt) > staleReservationHardExpiry
+}
+
+func normalizeNodeStateExecTracking(ns NodeState, now time.Time) (NodeState, bool) {
+	mutated := false
+
+	if ns.ActiveTasks != len(ns.ActiveExecs) {
+		ns.ActiveTasks = len(ns.ActiveExecs)
+		mutated = true
+	}
+
+	if len(ns.ActiveExecs) == 0 {
+		if len(ns.ExecReservationsMB) > 0 {
+			ns.ExecReservationsMB = nil
+			mutated = true
+		}
+		if len(ns.ExecHeartbeatAt) > 0 {
+			ns.ExecHeartbeatAt = nil
+			mutated = true
+		}
+		if len(ns.ExecOwnerPID) > 0 {
+			ns.ExecOwnerPID = nil
+			mutated = true
+		}
+		if len(ns.ExecOwnerSurface) > 0 {
+			ns.ExecOwnerSurface = nil
+			mutated = true
+		}
+		if len(ns.ExecOwnerLabel) > 0 {
+			ns.ExecOwnerLabel = nil
+			mutated = true
+		}
+		if len(ns.ExecOrigin) > 0 {
+			ns.ExecOrigin = nil
+			mutated = true
+		}
+		return ns, mutated
+	}
+
+	reservations := make(map[string]int64, len(ns.ActiveExecs))
+	var reservedSum int64
+	var missingReservations []string
+	for _, execID := range ns.ActiveExecs {
+		if amount, ok := ns.ExecReservationsMB[execID]; ok && amount > 0 {
+			reservations[execID] = amount
+			reservedSum += amount
+			continue
+		}
+		missingReservations = append(missingReservations, execID)
+	}
+	if len(missingReservations) > 0 {
+		remainder := ns.ReservedMB - reservedSum
+		if remainder < 0 {
+			remainder = 0
+		}
+		base := int64(0)
+		extra := int64(0)
+		if len(missingReservations) > 0 {
+			base = remainder / int64(len(missingReservations))
+			extra = remainder % int64(len(missingReservations))
+		}
+		for _, execID := range missingReservations {
+			amount := base
+			if extra > 0 {
+				amount++
+				extra--
+			}
+			reservations[execID] = amount
+			reservedSum += amount
+		}
+	}
+	if !sameExecReservationMap(ns.ExecReservationsMB, reservations) {
+		ns.ExecReservationsMB = reservations
+		mutated = true
+	}
+
+	heartbeats := make(map[string]time.Time, len(ns.ActiveExecs))
+	fallback := ns.LastPlacedAt
+	if fallback.IsZero() {
+		fallback = now
+	}
+	for _, execID := range ns.ActiveExecs {
+		hb, ok := ns.ExecHeartbeatAt[execID]
+		if !ok || hb.IsZero() {
+			hb = fallback
+		}
+		heartbeats[execID] = hb.UTC()
+	}
+	if !sameExecHeartbeatMap(ns.ExecHeartbeatAt, heartbeats) {
+		ns.ExecHeartbeatAt = heartbeats
+		mutated = true
+	}
+
+	owners := make(map[string]int, len(ns.ActiveExecs))
+	for _, execID := range ns.ActiveExecs {
+		if pid, ok := ns.ExecOwnerPID[execID]; ok && pid > 0 {
+			owners[execID] = pid
+		}
+	}
+	if !sameExecOwnerMap(ns.ExecOwnerPID, owners) {
+		if len(owners) == 0 {
+			ns.ExecOwnerPID = nil
+		} else {
+			ns.ExecOwnerPID = owners
+		}
+		mutated = true
+	}
+
+	ownerSurfaces := make(map[string]string, len(ns.ActiveExecs))
+	for _, execID := range ns.ActiveExecs {
+		if surface, ok := ns.ExecOwnerSurface[execID]; ok && strings.TrimSpace(surface) != "" {
+			ownerSurfaces[execID] = strings.TrimSpace(surface)
+		}
+	}
+	if !sameExecStringMap(ns.ExecOwnerSurface, ownerSurfaces) {
+		if len(ownerSurfaces) == 0 {
+			ns.ExecOwnerSurface = nil
+		} else {
+			ns.ExecOwnerSurface = ownerSurfaces
+		}
+		mutated = true
+	}
+
+	ownerLabels := make(map[string]string, len(ns.ActiveExecs))
+	for _, execID := range ns.ActiveExecs {
+		if label, ok := ns.ExecOwnerLabel[execID]; ok && strings.TrimSpace(label) != "" {
+			ownerLabels[execID] = strings.TrimSpace(label)
+		}
+	}
+	if !sameExecStringMap(ns.ExecOwnerLabel, ownerLabels) {
+		if len(ownerLabels) == 0 {
+			ns.ExecOwnerLabel = nil
+		} else {
+			ns.ExecOwnerLabel = ownerLabels
+		}
+		mutated = true
+	}
+
+	origins := make(map[string]models.ExecutionOrigin, len(ns.ActiveExecs))
+	for _, execID := range ns.ActiveExecs {
+		if origin, ok := ns.ExecOrigin[execID]; ok {
+			origin = origin.Normalized()
+			if !origin.IsZero() {
+				origins[execID] = origin
+			}
+		}
+	}
+	if !sameExecOriginMap(ns.ExecOrigin, origins) {
+		if len(origins) == 0 {
+			ns.ExecOrigin = nil
+		} else {
+			ns.ExecOrigin = origins
+		}
+		mutated = true
+	}
+
+	if ns.ReservedMB != reservedSum {
+		ns.ReservedMB = reservedSum
+		mutated = true
+	}
+
+	return ns, mutated
+}
+
+func reclaimStaleReservation(now time.Time, ns NodeState, legacyHeartbeatMode bool) (NodeState, bool) {
+	if ns.LastPlacedAt.IsZero() || len(ns.ActiveExecs) == 0 {
+		return ns, false
+	}
+
+	reclaimed, changed := reclaimDeadOwnerExecutions(ns)
+	if changed {
+		ns = reclaimed
+		if len(ns.ActiveExecs) == 0 {
+			return ns, true
+		}
+	}
+
+	if !legacyHeartbeatMode {
+		reclaimed, heartbeatChanged := reclaimHeartbeatStaleExecutions(now, ns)
+		return reclaimed, changed || heartbeatChanged
+	}
+
+	if now.Sub(ns.LastPlacedAt) <= staleReservationReclaimAfter {
+		return ns, changed
+	}
+
+	capMB := staleReservationCapMB(ns)
+	if capMB <= 0 || ns.ReservedMB <= capMB {
+		return ns, changed
+	}
+	ns.ReservedMB = capMB
+	return ns, true
+}
+
+func staleReservationCapMB(ns NodeState) int64 {
+	if len(ns.ActiveExecs) == 0 {
+		return 0
+	}
+	return int64(len(ns.ActiveExecs)) * models.MinimumSystemReserveMB
+}
+
+func reclaimHeartbeatStaleExecutions(now time.Time, ns NodeState) (NodeState, bool) {
+	if len(ns.ActiveExecs) == 0 {
+		return ns, false
+	}
+
+	var (
+		activeExecs []string
+		changed     bool
+	)
+	reservations := make(map[string]int64, len(ns.ExecReservationsMB))
+	heartbeats := make(map[string]time.Time, len(ns.ExecHeartbeatAt))
+	owners := make(map[string]int, len(ns.ExecOwnerPID))
+	ownerSurfaces := make(map[string]string, len(ns.ExecOwnerSurface))
+	ownerLabels := make(map[string]string, len(ns.ExecOwnerLabel))
+	origins := make(map[string]models.ExecutionOrigin, len(ns.ExecOrigin))
+
+	for _, execID := range ns.ActiveExecs {
+		hb, ok := ns.ExecHeartbeatAt[execID]
+		if !ok || hb.IsZero() || now.Sub(hb) > execHeartbeatStaleAfter {
+			changed = true
+			continue
+		}
+		activeExecs = append(activeExecs, execID)
+		if amount, ok := ns.ExecReservationsMB[execID]; ok && amount > 0 {
+			reservations[execID] = amount
+		}
+		heartbeats[execID] = hb
+		if pid, ok := ns.ExecOwnerPID[execID]; ok && pid > 0 {
+			owners[execID] = pid
+		}
+		if surface, ok := ns.ExecOwnerSurface[execID]; ok && strings.TrimSpace(surface) != "" {
+			ownerSurfaces[execID] = strings.TrimSpace(surface)
+		}
+		if label, ok := ns.ExecOwnerLabel[execID]; ok && strings.TrimSpace(label) != "" {
+			ownerLabels[execID] = strings.TrimSpace(label)
+		}
+		if origin, ok := ns.ExecOrigin[execID]; ok {
+			origin = origin.Normalized()
+			if !origin.IsZero() {
+				origins[execID] = origin
+			}
+		}
+	}
+
+	if !changed {
+		return ns, false
+	}
+
+	ns.ActiveExecs = activeExecs
+	ns.ActiveTasks = len(activeExecs)
+	if len(activeExecs) == 0 {
+		ns.ExecReservationsMB = nil
+		ns.ExecHeartbeatAt = nil
+		ns.ExecOwnerPID = nil
+		ns.ExecOwnerSurface = nil
+		ns.ExecOwnerLabel = nil
+		ns.ExecOrigin = nil
+		ns.ReservedMB = 0
+		return ns, true
+	}
+
+	ns.ExecReservationsMB = reservations
+	ns.ExecHeartbeatAt = heartbeats
+	if len(owners) == 0 {
+		ns.ExecOwnerPID = nil
+	} else {
+		ns.ExecOwnerPID = owners
+	}
+	if len(ownerSurfaces) == 0 {
+		ns.ExecOwnerSurface = nil
+	} else {
+		ns.ExecOwnerSurface = ownerSurfaces
+	}
+	if len(ownerLabels) == 0 {
+		ns.ExecOwnerLabel = nil
+	} else {
+		ns.ExecOwnerLabel = ownerLabels
+	}
+	if len(origins) == 0 {
+		ns.ExecOrigin = nil
+	} else {
+		ns.ExecOrigin = origins
+	}
+	ns.ReservedMB = sumExecReservations(reservations)
+	return ns, true
+}
+
+func reclaimDeadOwnerExecutions(ns NodeState) (NodeState, bool) {
+	if len(ns.ActiveExecs) == 0 || len(ns.ExecOwnerPID) == 0 {
+		return ns, false
+	}
+
+	var (
+		activeExecs []string
+		changed     bool
+	)
+	reservations := make(map[string]int64, len(ns.ExecReservationsMB))
+	heartbeats := make(map[string]time.Time, len(ns.ExecHeartbeatAt))
+	owners := make(map[string]int, len(ns.ExecOwnerPID))
+	ownerSurfaces := make(map[string]string, len(ns.ExecOwnerSurface))
+	ownerLabels := make(map[string]string, len(ns.ExecOwnerLabel))
+	origins := make(map[string]models.ExecutionOrigin, len(ns.ExecOrigin))
+	aliveCache := make(map[int]bool)
+
+	for _, execID := range ns.ActiveExecs {
+		pid, hasOwner := ns.ExecOwnerPID[execID]
+		if hasOwner && pid > 0 {
+			alive, ok := aliveCache[pid]
+			if !ok {
+				alive = execOwnerAlive(pid)
+				aliveCache[pid] = alive
+			}
+			if !alive {
+				changed = true
+				continue
+			}
+			owners[execID] = pid
+		}
+
+		activeExecs = append(activeExecs, execID)
+		if amount, ok := ns.ExecReservationsMB[execID]; ok && amount > 0 {
+			reservations[execID] = amount
+		}
+		if hb, ok := ns.ExecHeartbeatAt[execID]; ok && !hb.IsZero() {
+			heartbeats[execID] = hb
+		}
+		if surface, ok := ns.ExecOwnerSurface[execID]; ok && strings.TrimSpace(surface) != "" {
+			ownerSurfaces[execID] = strings.TrimSpace(surface)
+		}
+		if label, ok := ns.ExecOwnerLabel[execID]; ok && strings.TrimSpace(label) != "" {
+			ownerLabels[execID] = strings.TrimSpace(label)
+		}
+		if origin, ok := ns.ExecOrigin[execID]; ok {
+			origin = origin.Normalized()
+			if !origin.IsZero() {
+				origins[execID] = origin
+			}
+		}
+	}
+
+	if !changed {
+		return ns, false
+	}
+
+	ns.ActiveExecs = activeExecs
+	ns.ActiveTasks = len(activeExecs)
+	if len(activeExecs) == 0 {
+		ns.ExecReservationsMB = nil
+		ns.ExecHeartbeatAt = nil
+		ns.ExecOwnerPID = nil
+		ns.ExecOwnerSurface = nil
+		ns.ExecOwnerLabel = nil
+		ns.ExecOrigin = nil
+		ns.ReservedMB = 0
+		return ns, true
+	}
+
+	ns.ExecReservationsMB = reservations
+	ns.ExecHeartbeatAt = heartbeats
+	if len(owners) == 0 {
+		ns.ExecOwnerPID = nil
+	} else {
+		ns.ExecOwnerPID = owners
+	}
+	if len(ownerSurfaces) == 0 {
+		ns.ExecOwnerSurface = nil
+	} else {
+		ns.ExecOwnerSurface = ownerSurfaces
+	}
+	if len(ownerLabels) == 0 {
+		ns.ExecOwnerLabel = nil
+	} else {
+		ns.ExecOwnerLabel = ownerLabels
+	}
+	if len(origins) == 0 {
+		ns.ExecOrigin = nil
+	} else {
+		ns.ExecOrigin = origins
+	}
+	ns.ReservedMB = sumExecReservations(reservations)
+	return ns, true
+}
+
+func sameExecReservationMap(a, b map[string]int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		if bv, ok := b[key]; !ok || av != bv {
+			return false
+		}
+	}
+	return true
+}
+
+func sameExecHeartbeatMap(a, b map[string]time.Time) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		bv, ok := b[key]
+		if !ok || !av.Equal(bv) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameExecOwnerMap(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		if bv, ok := b[key]; !ok || av != bv {
+			return false
+		}
+	}
+	return true
+}
+
+func sameExecStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		if bv, ok := b[key]; !ok || av != bv {
+			return false
+		}
+	}
+	return true
+}
+
+func sameExecOriginMap(a, b map[string]models.ExecutionOrigin) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		bv, ok := b[key]
+		if !ok || av.Normalized() != bv.Normalized() {
+			return false
+		}
+	}
+	return true
+}
+
+func sumExecReservations(m map[string]int64) int64 {
+	var total int64
+	for _, amount := range m {
+		if amount > 0 {
+			total += amount
+		}
+	}
+	return total
 }
 
 func (s *ClusterState) Save() error {
@@ -162,7 +663,7 @@ func (s *ClusterState) Save() error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return persist.WriteFileAtomic(path, data, 0o644)
 }
 
 func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc string) {
@@ -170,16 +671,56 @@ func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc str
 }
 
 func (s *ClusterState) AcquireTask(node, taskDesc string, estRAMMB int64) (string, error) {
+	return s.AcquireTaskWithOwner(node, taskDesc, estRAMMB, ExecutionOwner{})
+}
+
+func (s *ClusterState) AcquireTaskWithOwner(node, taskDesc string, estRAMMB int64, owner ExecutionOwner) (string, error) {
 	if s.Nodes == nil {
 		s.Nodes = make(map[string]NodeState)
 	}
 	ns := s.Nodes[node]
-	execID := time.Now().UTC().Format("20060102-150405.000000000") + "-" + node
+	now := time.Now().UTC()
+	execID := now.Format("20060102-150405.000000000") + "-" + node
+	surface := strings.TrimSpace(owner.Surface)
+	label := strings.TrimSpace(owner.Label)
+	origin := owner.Origin.Normalized()
+	if ns.ExecReservationsMB == nil {
+		ns.ExecReservationsMB = make(map[string]int64)
+	}
+	if ns.ExecHeartbeatAt == nil {
+		ns.ExecHeartbeatAt = make(map[string]time.Time)
+	}
+	if ns.ExecOwnerPID == nil {
+		ns.ExecOwnerPID = make(map[string]int)
+	}
+	if surface != "" && ns.ExecOwnerSurface == nil {
+		ns.ExecOwnerSurface = make(map[string]string)
+	}
+	if label != "" && ns.ExecOwnerLabel == nil {
+		ns.ExecOwnerLabel = make(map[string]string)
+	}
+	if !origin.IsZero() && ns.ExecOrigin == nil {
+		ns.ExecOrigin = make(map[string]models.ExecutionOrigin)
+	}
 	ns.ReservedMB += estRAMMB
 	ns.LastTask = taskDesc
-	ns.LastPlacedAt = time.Now().UTC()
+	ns.LastPlacedAt = now
 	ns.ActiveTasks++
 	ns.ActiveExecs = append(ns.ActiveExecs, execID)
+	ns.ExecReservationsMB[execID] = estRAMMB
+	ns.ExecHeartbeatAt[execID] = now
+	if pid := execOwnerPID(); pid > 0 {
+		ns.ExecOwnerPID[execID] = pid
+	}
+	if surface != "" {
+		ns.ExecOwnerSurface[execID] = surface
+	}
+	if label != "" {
+		ns.ExecOwnerLabel[execID] = label
+	}
+	if !origin.IsZero() {
+		ns.ExecOrigin[execID] = origin
+	}
 	s.Nodes[node] = ns
 
 	// keep last 20 decisions
@@ -188,6 +729,35 @@ func (s *ClusterState) AcquireTask(node, taskDesc string, estRAMMB int64) (strin
 		s.Decisions = s.Decisions[len(s.Decisions)-20:]
 	}
 	return execID, s.Save()
+}
+
+func (s *ClusterState) HeartbeatTask(node, execID string) error {
+	if s == nil || s.Nodes == nil {
+		return nil
+	}
+
+	ns, ok := s.Nodes[node]
+	if !ok {
+		return nil
+	}
+
+	active := false
+	for _, id := range ns.ActiveExecs {
+		if id == execID {
+			active = true
+			break
+		}
+	}
+	if !active {
+		return nil
+	}
+
+	if ns.ExecHeartbeatAt == nil {
+		ns.ExecHeartbeatAt = make(map[string]time.Time)
+	}
+	ns.ExecHeartbeatAt[execID] = time.Now().UTC()
+	s.Nodes[node] = ns
+	return s.Save()
 }
 
 func (s *ClusterState) ReleaseTask(node, execID string, estRAMMB int64) error {
@@ -200,18 +770,71 @@ func (s *ClusterState) ReleaseTask(node, execID string, estRAMMB int64) error {
 		return nil
 	}
 
+	removed := false
 	for i, id := range ns.ActiveExecs {
 		if id == execID {
 			ns.ActiveExecs = append(ns.ActiveExecs[:i], ns.ActiveExecs[i+1:]...)
+			removed = true
 			break
 		}
 	}
 
-	ns.ReservedMB -= estRAMMB
-	if ns.ReservedMB < 0 {
+	if ns.ExecReservationsMB != nil {
+		if amount, ok := ns.ExecReservationsMB[execID]; ok {
+			estRAMMB = amount
+			delete(ns.ExecReservationsMB, execID)
+		}
+		if len(ns.ExecReservationsMB) == 0 {
+			ns.ExecReservationsMB = nil
+		}
+	}
+	if ns.ExecHeartbeatAt != nil {
+		delete(ns.ExecHeartbeatAt, execID)
+		if len(ns.ExecHeartbeatAt) == 0 {
+			ns.ExecHeartbeatAt = nil
+		}
+	}
+	if ns.ExecOwnerPID != nil {
+		delete(ns.ExecOwnerPID, execID)
+		if len(ns.ExecOwnerPID) == 0 {
+			ns.ExecOwnerPID = nil
+		}
+	}
+	if ns.ExecOwnerSurface != nil {
+		delete(ns.ExecOwnerSurface, execID)
+		if len(ns.ExecOwnerSurface) == 0 {
+			ns.ExecOwnerSurface = nil
+		}
+	}
+	if ns.ExecOwnerLabel != nil {
+		delete(ns.ExecOwnerLabel, execID)
+		if len(ns.ExecOwnerLabel) == 0 {
+			ns.ExecOwnerLabel = nil
+		}
+	}
+	if ns.ExecOrigin != nil {
+		delete(ns.ExecOrigin, execID)
+		if len(ns.ExecOrigin) == 0 {
+			ns.ExecOrigin = nil
+		}
+	}
+
+	if !removed && ns.ExecReservationsMB == nil && ns.ExecHeartbeatAt == nil && ns.ExecOwnerPID == nil && ns.ExecOwnerSurface == nil && ns.ExecOwnerLabel == nil && ns.ExecOrigin == nil {
+		ns.ActiveExecs = nil
+		ns.ActiveTasks = 0
 		ns.ReservedMB = 0
 	}
-	ns.ActiveTasks--
+
+	if removed && ns.ExecReservationsMB != nil {
+		ns.ReservedMB = sumExecReservations(ns.ExecReservationsMB)
+	} else {
+		ns.ReservedMB -= estRAMMB
+		if ns.ReservedMB < 0 {
+			ns.ReservedMB = 0
+		}
+	}
+
+	ns.ActiveTasks = len(ns.ActiveExecs)
 	if ns.ActiveTasks < 0 {
 		ns.ActiveTasks = 0
 	}

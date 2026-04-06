@@ -63,6 +63,13 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 	}
 
 	kv("hostname:", nf.Hostname)
+	if nf.Identity != nil && nf.Identity.StableID != "" {
+		val := nf.Identity.StableID
+		if nf.Identity.Source != "" {
+			val = fmt.Sprintf("%s (%s)", val, nf.Identity.Source)
+		}
+		kv("identity:", val)
+	}
 	kv("os:", fmt.Sprintf("%s %s", nf.OS, nf.OSVersion))
 	kv("arch:", nf.Arch)
 	kv("status:", string(nf.Status))

@@ -7,6 +7,7 @@
 nodes:
   - name: node-a
     hostname: node-a.local   # resolvable hostname or IP address
+    # stable_id: f47ac10b-58cc-4372-a567-0e02b2c3d479  # optional observed machine-id/platform UUID
     ssh_user: user
     role: primary            # optional: primary or worker
 

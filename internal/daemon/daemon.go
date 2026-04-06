@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -43,6 +44,8 @@ type Metadata struct {
 	Source             string    `json:"source"`
 	Ready              bool      `json:"ready"`
 	RefreshIntervalSec int       `json:"refresh_interval_sec"`
+	LastRefreshTrigger string    `json:"last_refresh_trigger,omitempty"`
+	LastConfigEventAt  time.Time `json:"last_config_event_at,omitempty"`
 	CollectedAt        time.Time `json:"collected_at,omitempty"`
 	NextRefreshAt      time.Time `json:"next_refresh_at,omitempty"`
 	LastError          string    `json:"last_error,omitempty"`
@@ -58,15 +61,19 @@ type Metadata struct {
 }
 
 type Daemon struct {
-	mu           sync.RWMutex
-	wg           sync.WaitGroup // tracks background goroutines for graceful drain
-	collector    Collector
-	interval     time.Duration
-	snapshotPath string
+	mu             sync.RWMutex
+	refreshMu      sync.Mutex
+	wg             sync.WaitGroup // tracks background goroutines for graceful drain
+	collector      Collector
+	interval       time.Duration
+	snapshotPath   string
+	beaconRegistry *discovery.BeaconRegistry
 
 	snapshot      *models.ClusterSnapshot
 	collectedAt   time.Time
 	nextRefreshAt time.Time
+	lastTrigger   string
+	lastConfigAt  time.Time
 	lastError     string
 
 	// Phase 3: refresh metrics
@@ -75,8 +82,26 @@ type Daemon struct {
 	staleNodes          []string // nodes that degraded in the last refresh
 }
 
+type configFingerprint struct {
+	exists bool
+	sum    [sha256.Size]byte
+}
+
+var watchConfigPollInterval = 500 * time.Millisecond
+var reportWatchFingerprintError = func(path, trigger string, err error) {
+	fmt.Fprintf(os.Stderr, "axis daemon: watch fingerprint failed for %s (%s): %v\n", path, trigger, err)
+}
+
 func (d *Daemon) RefreshNow(ctx context.Context) error {
-	return d.Refresh(ctx)
+	return d.RefreshWithTrigger(ctx, RefreshTriggerManual)
+}
+
+func (d *Daemon) RefreshWithTrigger(ctx context.Context, trigger string) error {
+	normalized, err := NormalizeRefreshTrigger(trigger)
+	if err != nil {
+		return err
+	}
+	return d.refreshWithTrigger(ctx, normalized)
 }
 
 func Serve(addr string, cache SnapshotCache) error {
@@ -92,7 +117,10 @@ func Serve(addr string, cache SnapshotCache) error {
 }
 
 func NewDefault(interval time.Duration) *Daemon {
-	return New(interval, defaultCollector())
+	registry := discovery.NewBeaconRegistry()
+	d := New(interval, defaultCollector(registry))
+	d.beaconRegistry = registry
+	return d
 }
 
 func New(interval time.Duration, collector Collector) *Daemon {
@@ -100,7 +128,7 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		interval = defaultRefreshInterval
 	}
 	if collector == nil {
-		collector = defaultCollector()
+		collector = defaultCollector(nil)
 	}
 	return &Daemon{
 		collector:    collector,
@@ -128,7 +156,7 @@ func (d *Daemon) Start(ctx context.Context) {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		_ = d.Refresh(ctx)
+		_ = d.refreshWithTrigger(ctx, RefreshTriggerStartup)
 
 		ticker := time.NewTicker(d.interval)
 		defer ticker.Stop()
@@ -138,27 +166,79 @@ func (d *Daemon) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = d.Refresh(ctx)
+				_ = d.refreshWithTrigger(ctx, RefreshTriggerInterval)
 			}
 		}
 	}()
 }
 
-// WatchConfig polls configPath every 500ms and triggers Invalidate+Refresh
-// whenever the file's modification time changes. Runs until ctx is cancelled.
-// This is the primary event-driven cache trigger: config changes are reflected
-// immediately without restarting the daemon.
+// WatchConfig polls configPath and triggers Invalidate+Refresh whenever the
+// file contents appear or change, or when the file disappears. Runs until ctx
+// is cancelled. This is the primary config-driven cache trigger.
 func (d *Daemon) WatchConfig(ctx context.Context, configPath string) {
+	d.watchFile(ctx, configPath, RefreshTriggerConfigChange)
+}
+
+// WatchState polls statePath and triggers Invalidate+Refresh whenever local
+// reservation/failure memory changes on disk. This keeps cached snapshots in
+// step with guarded execution and local placement memory.
+func (d *Daemon) WatchState(ctx context.Context, statePath string) {
+	d.watchFileWithFingerprint(ctx, statePath, RefreshTriggerStateChange, fingerprintStateFile)
+}
+
+// WatchSkills polls skillsPath and triggers Invalidate+Refresh whenever the
+// learned skills/failures store changes on disk.
+func (d *Daemon) WatchSkills(ctx context.Context, skillsPath string) {
+	d.watchFile(ctx, skillsPath, RefreshTriggerSkillsChange)
+}
+
+// WatchDiscovery keeps a long-lived UDP discovery watcher aligned with the
+// current config file and refreshes the daemon cache when beacon-derived nodes
+// appear, change, or age out.
+func (d *Daemon) WatchDiscovery(ctx context.Context, configPath string) {
+	if d.beaconRegistry == nil {
+		return
+	}
+
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
 
-		var lastMod time.Time
-		if fi, err := os.Stat(configPath); err == nil {
-			lastMod = fi.ModTime()
+		var (
+			lastFingerprint configFingerprint
+			watcherCancel   context.CancelFunc
+			initialized     bool
+		)
+		defer func() {
+			if watcherCancel != nil {
+				watcherCancel()
+			}
+		}()
+
+		applyWatcher := func() {
+			if watcherCancel != nil {
+				watcherCancel()
+				watcherCancel = nil
+			}
+			_ = d.beaconRegistry.Reset()
+
+			cfg, err := config.Load(configPath)
+			if err != nil || cfg == nil || cfg.Discovery == nil || !cfg.Discovery.Enabled {
+				return
+			}
+
+			watchCtx, cancel := context.WithCancel(ctx)
+			watcherCancel = cancel
+			discovery.WatchBeaconChanges(watchCtx, cfg, d.beaconRegistry, func() {
+				d.scheduleRefresh(RefreshTriggerBeaconChange)
+			})
 		}
 
-		ticker := time.NewTicker(500 * time.Millisecond)
+		lastFingerprint, _ = fingerprintFile(configPath)
+		initialized = true
+		applyWatcher()
+
+		ticker := time.NewTicker(watchConfigPollInterval)
 		defer ticker.Stop()
 
 		for {
@@ -166,14 +246,51 @@ func (d *Daemon) WatchConfig(ctx context.Context, configPath string) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				fi, err := os.Stat(configPath)
+				fingerprint, err := fingerprintFile(configPath)
 				if err != nil {
 					continue
 				}
-				if fi.ModTime().After(lastMod) {
-					lastMod = fi.ModTime()
+				if !initialized || fingerprint != lastFingerprint {
+					lastFingerprint = fingerprint
+					initialized = true
+					applyWatcher()
+				}
+			}
+		}
+	}()
+}
+
+func (d *Daemon) watchFile(ctx context.Context, path, trigger string) {
+	d.watchFileWithFingerprint(ctx, path, trigger, fingerprintFile)
+}
+
+func (d *Daemon) watchFileWithFingerprint(ctx context.Context, path, trigger string, fingerprintFn func(string) (configFingerprint, error)) {
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+
+		lastFingerprint, err := fingerprintFn(path)
+		if err != nil {
+			reportWatchFingerprintError(path, trigger, err)
+		}
+
+		ticker := time.NewTicker(watchConfigPollInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fingerprint, err := fingerprintFn(path)
+				if err != nil {
+					reportWatchFingerprintError(path, trigger, err)
+					continue
+				}
+				if fingerprint != lastFingerprint {
+					lastFingerprint = fingerprint
 					d.Invalidate()
-					_ = d.Refresh(ctx)
+					_ = d.refreshWithTrigger(ctx, trigger)
 				}
 			}
 		}
@@ -193,6 +310,21 @@ func (d *Daemon) WaitStopped(ctx context.Context) {
 }
 
 func (d *Daemon) Refresh(ctx context.Context) error {
+	return d.RefreshWithTrigger(ctx, RefreshTriggerManual)
+}
+
+func (d *Daemon) scheduleRefresh(trigger string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeRefreshTimeout)
+		defer cancel()
+		_ = d.RefreshWithTrigger(ctx, trigger)
+	}()
+}
+
+func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
+	d.refreshMu.Lock()
+	defer d.refreshMu.Unlock()
+
 	start := time.Now()
 	snap, err := d.collector(ctx)
 	now := time.Now().UTC()
@@ -204,6 +336,10 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 		if stateWarning != nil && st == nil {
 			d.mu.Lock()
 			d.nextRefreshAt = now.Add(d.interval)
+			d.lastTrigger = trigger
+			if trigger == RefreshTriggerConfigChange {
+				d.lastConfigAt = now
+			}
 			d.lastError = stateWarning.Error()
 			d.refreshCount++
 			d.lastRefreshDuration = time.Since(start)
@@ -216,6 +352,10 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	defer d.mu.Unlock()
 
 	d.nextRefreshAt = now.Add(d.interval)
+	d.lastTrigger = trigger
+	if trigger == RefreshTriggerConfigChange {
+		d.lastConfigAt = now
+	}
 	d.refreshCount++
 	d.lastRefreshDuration = time.Since(start)
 
@@ -273,6 +413,31 @@ func (d *Daemon) Refresh(ctx context.Context) error {
 	return nil
 }
 
+func fingerprintFile(path string) (configFingerprint, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return configFingerprint{}, nil
+		}
+		return configFingerprint{}, err
+	}
+	return configFingerprint{
+		exists: true,
+		sum:    sha256.Sum256(data),
+	}, nil
+}
+
+func fingerprintStateFile(path string) (configFingerprint, error) {
+	sum, exists, err := state.SemanticFingerprint(path)
+	if err != nil {
+		return configFingerprint{}, err
+	}
+	return configFingerprint{
+		exists: exists,
+		sum:    sum,
+	}, nil
+}
+
 func (d *Daemon) Snapshot() (*models.ClusterSnapshot, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -313,6 +478,8 @@ func (d *Daemon) Meta() Metadata {
 		Source:             "daemon-cache",
 		Ready:              d.snapshot != nil,
 		RefreshIntervalSec: int(d.interval / time.Second),
+		LastRefreshTrigger: d.lastTrigger,
+		LastConfigEventAt:  d.lastConfigAt,
 		CollectedAt:        d.collectedAt,
 		NextRefreshAt:      d.nextRefreshAt,
 		LastError:          d.lastError,
@@ -343,7 +510,7 @@ func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node strin
 	return execution.CanReserve(snap, st, node, mb)
 }
 
-func defaultCollector() Collector {
+func defaultCollector(registry *discovery.BeaconRegistry) Collector {
 	return func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		cfg, err := config.Load(config.DefaultConfigPath())
 		if err != nil {
@@ -353,7 +520,12 @@ func defaultCollector() Collector {
 		runCtx, cancel := context.WithTimeout(ctx, defaultRefreshTimeout)
 		defer cancel()
 
-		nodes := discovery.Discover(runCtx, cfg)
+		var nodes []models.NodeFacts
+		if registry != nil && cfg.Discovery != nil && cfg.Discovery.Enabled {
+			nodes = discovery.DiscoverSeeded(runCtx, cfg, registry.Snapshot())
+		} else {
+			nodes = discovery.Discover(runCtx, cfg)
+		}
 		return snapshot.Build(nodes), nil
 	}
 }

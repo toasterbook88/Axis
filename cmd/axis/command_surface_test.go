@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
@@ -177,8 +180,173 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 	if !fake.started {
 		t.Fatal("expected daemon Start to be called")
 	}
+	if !fake.watchedConfig || !fake.watchedState || !fake.watchedSkills || !fake.watchedDiscovery {
+		t.Fatalf("expected config/state/skills/discovery watchers to be started, got config=%v state=%v skills=%v discovery=%v", fake.watchedConfig, fake.watchedState, fake.watchedSkills, fake.watchedDiscovery)
+	}
 	if !strings.Contains(stdout, "AXIS HTTP API listening on http://127.0.0.1:5151") {
 		t.Fatalf("expected serve banner, got %q", stdout)
+	}
+}
+
+func TestGuardedAgentShellRunnerUsesRunGuardedAndSignalsRefresh(t *testing.T) {
+	prevLoad := loadAgentShellRuntime
+	prevRun := runGuardedAgentShell
+	prevDaemonRun := runDaemonGuardedAgentShell
+	prevDaemonMeta := fetchAgentDaemonMeta
+	prevSignal := signalAgentDaemonRefresh
+	t.Cleanup(func() {
+		loadAgentShellRuntime = prevLoad
+		runGuardedAgentShell = prevRun
+		runDaemonGuardedAgentShell = prevDaemonRun
+		fetchAgentDaemonMeta = prevDaemonMeta
+		signalAgentDaemonRefresh = prevSignal
+	})
+
+	rt := &runtimectx.Context{}
+	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return rt, nil
+	}
+	fetchAgentDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
+		return daemon.Metadata{}, errors.New("daemon unavailable")
+	}
+
+	triggerCh := make(chan string, 1)
+	signalAgentDaemonRefresh = func(_ context.Context, trigger string) error {
+		triggerCh <- trigger
+		return nil
+	}
+
+	runGuardedAgentShell = func(ctx context.Context, gotRT *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		if gotRT != rt {
+			t.Fatalf("expected injected runtime context")
+		}
+		if req.Description != "echo hello" {
+			t.Fatalf("description = %q, want echo hello", req.Description)
+		}
+		if req.Mode != execution.ModeExec {
+			t.Fatalf("mode = %q, want %q", req.Mode, execution.ModeExec)
+		}
+		if req.Confirm != execution.ConfirmWord {
+			t.Fatalf("confirm = %q, want %q", req.Confirm, execution.ConfirmWord)
+		}
+		if req.OwnerSurface != execution.OwnerSurfaceAgentRunShell {
+			t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceAgentRunShell)
+		}
+		if req.OwnerLabel != "qwen2.5" {
+			t.Fatalf("OwnerLabel = %q, want qwen2.5", req.OwnerLabel)
+		}
+		if req.OnStateChange == nil {
+			t.Fatal("expected OnStateChange callback")
+		}
+		req.OnStateChange(ctx, execution.StateChangeExecutionReserved, execution.GuardedExecutionResult{Node: "alpha"})
+		return execution.GuardedExecutionResult{
+			OK:      true,
+			Node:    "alpha",
+			Command: "echo hello",
+			Output:  "hello",
+		}, nil
+	}
+
+	out, err := guardedAgentShellRunner("qwen2.5")(context.Background(), "echo hello")
+	if err != nil {
+		t.Fatalf("guardedAgentShellRunner: %v", err)
+	}
+	if !strings.Contains(out, `"node":"alpha"`) || !strings.Contains(out, `"output":"hello"`) {
+		t.Fatalf("expected guarded execution JSON output, got %q", out)
+	}
+
+	select {
+	case got := <-triggerCh:
+		if got != execution.StateChangeExecutionReserved {
+			t.Fatalf("refresh trigger = %q, want %q", got, execution.StateChangeExecutionReserved)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected daemon refresh trigger from agent guarded shell runner")
+	}
+}
+
+func TestGuardedAgentShellRunnerPrefersDaemonRunWhenAvailable(t *testing.T) {
+	prevLoad := loadAgentShellRuntime
+	prevRun := runGuardedAgentShell
+	prevDaemonRun := runDaemonGuardedAgentShell
+	prevDaemonMeta := fetchAgentDaemonMeta
+	prevSignal := signalAgentDaemonRefresh
+	t.Cleanup(func() {
+		loadAgentShellRuntime = prevLoad
+		runGuardedAgentShell = prevRun
+		runDaemonGuardedAgentShell = prevDaemonRun
+		fetchAgentDaemonMeta = prevDaemonMeta
+		signalAgentDaemonRefresh = prevSignal
+	})
+
+	rt := &runtimectx.Context{
+		Config: &config.Config{
+			Nodes: []config.NodeConfig{
+				{Name: "studio", Hostname: "localhost", SSHUser: "me", StableID: "abc-123"},
+			},
+		},
+	}
+	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return rt, nil
+	}
+	fetchAgentDaemonMeta = func(_ context.Context, addr string) (daemon.Metadata, error) {
+		if addr != api.DefaultAddr() {
+			t.Fatalf("addr = %q, want %q", addr, api.DefaultAddr())
+		}
+		return daemon.Metadata{Ready: true}, nil
+	}
+	runGuardedAgentShell = func(context.Context, *runtimectx.Context, execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		t.Fatal("expected daemon /run path, not local guarded execution")
+		return execution.GuardedExecutionResult{}, nil
+	}
+	triggerCh := make(chan string, 1)
+	signalAgentDaemonRefresh = func(context.Context, string) error {
+		triggerCh <- execution.StateChangeExecutionReserved
+		return nil
+	}
+	runDaemonGuardedAgentShell = func(_ context.Context, addr string, req execution.GuardedExecutionRequest, origin models.ExecutionOrigin) (execution.GuardedExecutionResult, error) {
+		if addr != api.DefaultAddr() {
+			t.Fatalf("addr = %q, want %q", addr, api.DefaultAddr())
+		}
+		if req.Description != "echo hello" {
+			t.Fatalf("description = %q, want echo hello", req.Description)
+		}
+		if req.OwnerSurface != execution.OwnerSurfaceAgentRunShell {
+			t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceAgentRunShell)
+		}
+		if req.OwnerLabel != "qwen2.5" {
+			t.Fatalf("OwnerLabel = %q, want qwen2.5", req.OwnerLabel)
+		}
+		if req.OnStateChange == nil {
+			t.Fatal("expected daemon stream path to preserve OnStateChange")
+		}
+		wantOrigin := models.NewExecutionOrigin("studio", "localhost", "abc-123")
+		if origin != wantOrigin {
+			t.Fatalf("origin = %+v, want %+v", origin, wantOrigin)
+		}
+		req.OnStateChange(context.Background(), execution.StateChangeExecutionReserved, execution.GuardedExecutionResult{Node: "alpha"})
+		return execution.GuardedExecutionResult{
+			OK:      true,
+			Node:    "alpha",
+			Command: "echo hello",
+			Output:  "hello",
+		}, nil
+	}
+
+	out, err := guardedAgentShellRunner("qwen2.5")(context.Background(), "echo hello")
+	if err != nil {
+		t.Fatalf("guardedAgentShellRunner: %v", err)
+	}
+	if !strings.Contains(out, `"node":"alpha"`) || !strings.Contains(out, `"output":"hello"`) {
+		t.Fatalf("expected guarded execution JSON output, got %q", out)
+	}
+	select {
+	case got := <-triggerCh:
+		if got != execution.StateChangeExecutionReserved {
+			t.Fatalf("refresh trigger = %q, want %q", got, execution.StateChangeExecutionReserved)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected daemon stream path to preserve refresh signaling")
 	}
 }
 
@@ -600,8 +768,12 @@ func TestChatCmdSingleShotJSONSuppressesStreaming(t *testing.T) {
 }
 
 type fakeServeDaemon struct {
-	started bool
-	ctx     context.Context
+	started          bool
+	ctx              context.Context
+	watchedConfig    bool
+	watchedState     bool
+	watchedSkills    bool
+	watchedDiscovery bool
 }
 
 func (f *fakeServeDaemon) Start(ctx context.Context) {
@@ -609,7 +781,13 @@ func (f *fakeServeDaemon) Start(ctx context.Context) {
 	f.ctx = ctx
 }
 
-func (f *fakeServeDaemon) WatchConfig(context.Context, string) {}
+func (f *fakeServeDaemon) WatchConfig(context.Context, string) { f.watchedConfig = true }
+
+func (f *fakeServeDaemon) WatchState(context.Context, string) { f.watchedState = true }
+
+func (f *fakeServeDaemon) WatchSkills(context.Context, string) { f.watchedSkills = true }
+
+func (f *fakeServeDaemon) WatchDiscovery(context.Context, string) { f.watchedDiscovery = true }
 
 func (f *fakeServeDaemon) WaitStopped(context.Context) {}
 

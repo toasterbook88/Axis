@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -214,6 +219,7 @@ func TestEnsureReservationCapacityRejectsOverCapNode(t *testing.T) {
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMTotalMB: 8192,
+					RAMFreeMB:  8192,
 				},
 			},
 		},
@@ -241,6 +247,7 @@ func TestEnsureReservationCapacityMatchesDaemonCapLogic(t *testing.T) {
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMTotalMB: 8192,
+					RAMFreeMB:  3072,
 				},
 			},
 		},
@@ -256,5 +263,148 @@ func TestEnsureReservationCapacityMatchesDaemonCapLogic(t *testing.T) {
 	}
 	if !daemon.CanReserve(snap, st, "alpha", 1024) {
 		t.Fatal("expected daemon cap logic to agree with helper")
+	}
+}
+
+func TestScheduleTaskRunDaemonRefreshSignalsBestEffort(t *testing.T) {
+	ch := make(chan string, 1)
+	prev := signalTaskRunDaemonRefresh
+	signalTaskRunDaemonRefresh = func(_ context.Context, trigger string) error {
+		ch <- trigger
+		return nil
+	}
+	defer func() { signalTaskRunDaemonRefresh = prev }()
+
+	scheduleTaskRunDaemonRefresh(execution.StateChangeExecutionFinished)
+
+	select {
+	case got := <-ch:
+		if got != execution.StateChangeExecutionFinished {
+			t.Fatalf("expected execution trigger, got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected daemon refresh signal")
+	}
+}
+
+func TestTaskRunCmdAddsOwnerProvenanceToGuardedRequest(t *testing.T) {
+	prevLoad := loadTaskRunRuntime
+	prevRun := runTaskGuarded
+	prevDaemonRun := runTaskGuardedViaDaemon
+	prevDaemonMeta := fetchTaskDaemonMeta
+	t.Cleanup(func() {
+		loadTaskRunRuntime = prevLoad
+		runTaskGuarded = prevRun
+		runTaskGuardedViaDaemon = prevDaemonRun
+		fetchTaskDaemonMeta = prevDaemonMeta
+	})
+
+	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
+	}
+	fetchTaskDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
+		return daemon.Metadata{}, context.DeadlineExceeded
+	}
+	runTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		if req.OwnerSurface != execution.OwnerSurfaceTaskRun {
+			t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceTaskRun)
+		}
+		return execution.GuardedExecutionResult{OK: true, Node: "alpha"}, nil
+	}
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := taskRunCmd()
+		cmd.SetArgs([]string{"--exec", "echo hello"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("task run Execute: %v", err)
+	}
+	if stdout != "" {
+		t.Fatalf("expected no stdout, got %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestTaskRunCmdPrefersDaemonStreamWhenAvailable(t *testing.T) {
+	prevLoad := loadTaskRunRuntime
+	prevRun := runTaskGuarded
+	prevDaemonRun := runTaskGuardedViaDaemon
+	prevDaemonMeta := fetchTaskDaemonMeta
+	prevSignal := signalTaskRunDaemonRefresh
+	t.Cleanup(func() {
+		loadTaskRunRuntime = prevLoad
+		runTaskGuarded = prevRun
+		runTaskGuardedViaDaemon = prevDaemonRun
+		fetchTaskDaemonMeta = prevDaemonMeta
+		signalTaskRunDaemonRefresh = prevSignal
+	})
+
+	rt := &runtimectx.Context{}
+	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return rt, nil
+	}
+	fetchTaskDaemonMeta = func(_ context.Context, addr string) (daemon.Metadata, error) {
+		if addr != api.DefaultAddr() {
+			t.Fatalf("addr = %q, want %q", addr, api.DefaultAddr())
+		}
+		return daemon.Metadata{Ready: true}, nil
+	}
+	runTaskGuarded = func(context.Context, *runtimectx.Context, execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		t.Fatal("expected daemon stream path, not direct guarded execution")
+		return execution.GuardedExecutionResult{}, nil
+	}
+	triggerCh := make(chan string, 1)
+	signalTaskRunDaemonRefresh = func(_ context.Context, trigger string) error {
+		triggerCh <- trigger
+		return nil
+	}
+	runTaskGuardedViaDaemon = func(_ context.Context, addr string, req execution.GuardedExecutionRequest, origin models.ExecutionOrigin) (execution.GuardedExecutionResult, error) {
+		if addr != api.DefaultAddr() {
+			t.Fatalf("addr = %q, want %q", addr, api.DefaultAddr())
+		}
+		if req.OwnerSurface != execution.OwnerSurfaceTaskRun {
+			t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceTaskRun)
+		}
+		if req.OnReady == nil || req.Stdout == nil || req.Stderr == nil {
+			t.Fatal("expected stream callbacks and writers to be preserved")
+		}
+		req.OnReady(execution.GuardedExecutionResult{Node: "alpha", FitScore: 99, Command: "echo hello"})
+		req.OnStateChange(context.Background(), execution.StateChangeExecutionReserved, execution.GuardedExecutionResult{Node: "alpha"})
+		if _, err := req.Stdout.Write([]byte("hello\n")); err != nil {
+			t.Fatalf("stdout write: %v", err)
+		}
+		return execution.GuardedExecutionResult{OK: true, Node: "alpha", Output: "hello"}, nil
+	}
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := taskRunCmd()
+		cmd.SetArgs([]string{"--exec", "echo hello"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("task run Execute: %v", err)
+	}
+	if !strings.Contains(stdout, "Selected node: alpha (fit 99/100)") {
+		t.Fatalf("expected ready banner, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "=== EXECUTING ON alpha ===") {
+		t.Fatalf("expected execution banner, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "hello\n") {
+		t.Fatalf("expected streamed stdout, got %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	select {
+	case got := <-triggerCh:
+		if got != execution.StateChangeExecutionReserved {
+			t.Fatalf("refresh trigger = %q, want %q", got, execution.StateChangeExecutionReserved)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected daemon stream path to preserve refresh signaling")
 	}
 }
