@@ -133,10 +133,10 @@ func (e *SSHExecutor) Close() error {
 }
 
 func runSessionCommand(session *ssh.Session, cmd string) error {
-	// codeql[go/command-injection]
 	// Intentional remote execution boundary: this transport forwards cmd
 	// to the remote SSH session. Callers must ensure cmd is trusted and
 	// correctly quoted or escaped for the remote shell context.
+	// codeql[go/command-injection]
 	return session.Run(cmd)
 }
 
