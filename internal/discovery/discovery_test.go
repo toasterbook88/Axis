@@ -101,7 +101,52 @@ func TestWaitForBeaconWindowHonorsDuration(t *testing.T) {
 	}
 }
 
+func TestBeaconWaitDurationDefaultsAndCaps(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want time.Duration
+	}{
+		{
+			name: "nil config uses default interval",
+			cfg:  nil,
+			want: 3250 * time.Millisecond,
+		},
+		{
+			name: "missing discovery uses default interval",
+			cfg:  &config.Config{},
+			want: 3250 * time.Millisecond,
+		},
+		{
+			name: "configured interval adjusts wait",
+			cfg: &config.Config{
+				Discovery: &config.DiscoveryConfig{BeaconInterval: 2},
+			},
+			want: 2250 * time.Millisecond,
+		},
+		{
+			name: "long interval is capped",
+			cfg: &config.Config{
+				Discovery: &config.DiscoveryConfig{BeaconInterval: 60},
+			},
+			want: 8 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := beaconWaitDuration(tt.cfg); got != tt.want {
+				t.Fatalf("beaconWaitDuration() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDiscoverCollectsLocalAndRemoteNodesInStableOrder(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(nc config.NodeConfig) bool {
+		return nc.Hostname == "localhost"
+	})
+	defer restoreMatch()
 	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string) facts.Collector {
 		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
 			return &models.NodeFacts{Name: name, Role: role, Status: models.StatusComplete}, nil
@@ -135,6 +180,10 @@ func TestDiscoverCollectsLocalAndRemoteNodesInStableOrder(t *testing.T) {
 }
 
 func TestDiscoverWrapsCollectorFailuresAsErrorNodes(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(nc config.NodeConfig) bool {
+		return nc.Hostname == "localhost"
+	})
+	defer restoreMatch()
 	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string) facts.Collector {
 		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
 			return nil, errors.New("local boom")
@@ -172,6 +221,104 @@ func TestDiscoverWrapsCollectorFailuresAsErrorNodes(t *testing.T) {
 	}
 }
 
+func TestDiscoverUsesStableIdentityAwareLocalMatcher(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(nc config.NodeConfig) bool {
+		return nc.StableID == "abc-123"
+	})
+	defer restoreMatch()
+	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{Name: name, Hostname: "local-collected", Status: models.StatusComplete}, nil
+		})
+	})
+	defer restoreLocal()
+	restoreRemote := stubRemoteDiscoveryCollector(t, func(nc config.NodeConfig) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{Name: nc.Name, Hostname: "remote-collected", Status: models.StatusComplete}, nil
+		})
+	})
+	defer restoreRemote()
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) {})
+	defer restoreWait()
+
+	nodes := Discover(context.Background(), &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "local-a", Hostname: "198.51.100.7", StableID: "abc-123", Role: "laptop", SSHUser: "axis"},
+		},
+	})
+
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	if nodes[0].Hostname != "local-collected" {
+		t.Fatalf("expected stable identity match to use local collector, got %#v", nodes[0])
+	}
+}
+
+func TestDiscoverUsesAdaptiveBeaconWindowFromConfig(t *testing.T) {
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+
+	var waited time.Duration
+	restoreWait := stubDiscoveryBeaconWait(t, func(_ context.Context, d time.Duration) {
+		waited = d
+	})
+	defer restoreWait()
+
+	Discover(context.Background(), &config.Config{
+		Discovery: &config.DiscoveryConfig{
+			Enabled:        true,
+			BeaconInterval: 2,
+		},
+	})
+
+	if waited != 2250*time.Millisecond {
+		t.Fatalf("Discover() waited %s, want 2250ms", waited)
+	}
+}
+
+func TestDiscoverSeededSkipsUDPWindowAndIncludesSeededNodes(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(config.NodeConfig) bool { return false })
+	defer restoreMatch()
+	restoreRemote := stubRemoteDiscoveryCollector(t, func(nc config.NodeConfig) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{Name: nc.Name, Hostname: nc.Hostname, Status: models.StatusComplete}, nil
+		})
+	})
+	defer restoreRemote()
+
+	var udpCalls, waitCalls int
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {
+		udpCalls++
+	})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) {
+		waitCalls++
+	})
+	defer restoreWait()
+
+	nodes := DiscoverSeeded(context.Background(), &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "static-node", Hostname: "10.0.0.1", SSHUser: "axis"},
+		},
+		Discovery: &config.DiscoveryConfig{Enabled: true, BeaconInterval: 2},
+	}, []config.NodeConfig{
+		{Name: "beacon-node", Hostname: "10.0.0.9", SSHUser: "axis"},
+	})
+
+	if udpCalls != 0 || waitCalls != 0 {
+		t.Fatalf("expected seeded discovery to skip UDP accumulation, got udp=%d wait=%d", udpCalls, waitCalls)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 discovered nodes, got %d", len(nodes))
+	}
+	if nodes[0].Name != "beacon-node" || nodes[1].Name != "static-node" {
+		t.Fatalf("expected seeded node merge in stable order, got %#v", nodes)
+	}
+}
+
 func TestStartUDPAddsBeaconDiscoveredNode(t *testing.T) {
 	port := freeUDPPort(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -192,6 +339,7 @@ func TestStartUDPAddsBeaconDiscoveredNode(t *testing.T) {
 	b := Beacon{
 		Type:      "axis",
 		Name:      "beacon-node",
+		StableID:  "ABC-123",
 		IP:        "10.0.0.9",
 		SSHPort:   2200,
 		Role:      "worker",
@@ -206,7 +354,7 @@ func TestStartUDPAddsBeaconDiscoveredNode(t *testing.T) {
 		node, ok := discovered["beacon-node"]
 		mu.Unlock()
 		if ok {
-			if node.Hostname != "10.0.0.9" || node.SSHPort != 2200 || node.SSHUser != "axis" {
+			if node.Hostname != "10.0.0.9" || node.SSHPort != 2200 || node.SSHUser != "axis" || node.StableID != "abc-123" {
 				t.Fatalf("unexpected discovered node: %#v", node)
 			}
 			return
@@ -297,6 +445,110 @@ func TestStartUDPDoesNotClobberStaticNode(t *testing.T) {
 	}
 }
 
+func TestStartUDPDoesNotDuplicateStableIDBoundNode(t *testing.T) {
+	port := freeUDPPort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	discovered := map[string]config.NodeConfig{
+		"static-node": {
+			Name:     "static-node",
+			Hostname: "192.168.1.10",
+			StableID: "abc-123",
+			SSHUser:  "me",
+			SSHPort:  2222,
+		},
+	}
+	var mu sync.Mutex
+
+	startUDP(ctx, &config.Config{
+		Discovery: &config.DiscoveryConfig{
+			Enabled:        true,
+			UDPPort:        port,
+			BeaconInterval: 60,
+		},
+	}, discovered, &mu)
+
+	sendBeacon(t, port, Beacon{
+		Type:      "axis",
+		Name:      "renamed-node",
+		StableID:  "ABC-123",
+		IP:        "10.0.0.99",
+		SSHPort:   22,
+		Timestamp: time.Now().UTC(),
+	})
+
+	time.Sleep(150 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(discovered) != 1 {
+		t.Fatalf("expected stable-id match to avoid duplicates, got %#v", discovered)
+	}
+	if _, ok := discovered["renamed-node"]; ok {
+		t.Fatalf("expected renamed beacon to merge into existing node, got %#v", discovered)
+	}
+	node := discovered["static-node"]
+	if node.Hostname != "192.168.1.10" || node.SSHUser != "me" || node.SSHPort != 2222 || node.StableID != "abc-123" {
+		t.Fatalf("expected static node to remain authoritative, got %#v", node)
+	}
+}
+
+func TestBeaconRegistryTracksChangesAndPrunesExpired(t *testing.T) {
+	registry := NewBeaconRegistry()
+
+	changed := registry.UpdateFromBeacon(Beacon{
+		Name:      "beacon-node",
+		StableID:  "ABC-123",
+		IP:        "10.0.0.9",
+		SSHPort:   2200,
+		Role:      "worker",
+		Timestamp: time.Now().UTC(),
+	})
+	if !changed {
+		t.Fatal("expected first beacon to change registry")
+	}
+
+	changed = registry.UpdateFromBeacon(Beacon{
+		Name:      "beacon-node",
+		StableID:  "abc-123",
+		IP:        "10.0.0.9",
+		SSHPort:   2200,
+		Role:      "worker",
+		Timestamp: time.Now().UTC(),
+	})
+	if changed {
+		t.Fatal("expected identical beacon payload to be ignored")
+	}
+
+	changed = registry.UpdateFromBeacon(Beacon{
+		Name:      "renamed-node",
+		StableID:  "abc-123",
+		IP:        "10.0.0.11",
+		SSHPort:   2200,
+		Role:      "worker",
+		Timestamp: time.Now().UTC(),
+	})
+	if !changed {
+		t.Fatal("expected changed beacon payload to update registry")
+	}
+
+	nodes := registry.Snapshot()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 registry node, got %#v", nodes)
+	}
+	if nodes[0].Name != "renamed-node" || nodes[0].Hostname != "10.0.0.11" || nodes[0].StableID != "abc-123" {
+		t.Fatalf("unexpected registry snapshot: %#v", nodes[0])
+	}
+
+	if !registry.PruneExpired(time.Now().UTC().Add(beaconTTL + time.Second)) {
+		t.Fatal("expected expired beacon entry to prune")
+	}
+	if got := registry.Snapshot(); len(got) != 0 {
+		t.Fatalf("expected empty registry after prune, got %#v", got)
+	}
+}
+
 func TestLocalIPFallsBackWhenInterfaceLookupFails(t *testing.T) {
 	restore := stubInterfaceAddrs(t, func() ([]net.Addr, error) {
 		return nil, errors.New("boom")
@@ -343,6 +595,15 @@ func stubDiscoveryBeaconWait(t *testing.T, fn func(context.Context, time.Duratio
 	discoveryBeaconWait = fn
 	return func() {
 		discoveryBeaconWait = prev
+	}
+}
+
+func stubDiscoveryIsLocalConfig(t *testing.T, fn func(config.NodeConfig) bool) func() {
+	t.Helper()
+	prev := discoveryIsLocalConfig
+	discoveryIsLocalConfig = fn
+	return func() {
+		discoveryIsLocalConfig = prev
 	}
 }
 

@@ -113,9 +113,23 @@ func invalidateDaemonCache(ctx context.Context, addr string) error {
 }
 
 func refreshDaemonCache(ctx context.Context, addr string) error {
+	return refreshDaemonCacheWithTrigger(ctx, addr, "")
+}
+
+func refreshDaemonCacheWithTrigger(ctx context.Context, addr, trigger string) error {
 	client, baseURLAddr := daemon.HttpClientForAddr(addr)
 	baseURL := daemon.NormalizeAddr(baseURLAddr)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/refresh", nil)
+	endpoint := baseURL + "/refresh"
+	if trigger != "" {
+		normalized, err := daemon.NormalizeRefreshTrigger(trigger)
+		if err != nil {
+			return err
+		}
+		values := url.Values{}
+		values.Set("trigger", normalized)
+		endpoint += "?" + values.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return err
 	}

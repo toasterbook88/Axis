@@ -13,11 +13,16 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/skills"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 type serveDaemon interface {
 	Start(context.Context)
 	WatchConfig(context.Context, string)
+	WatchState(context.Context, string)
+	WatchSkills(context.Context, string)
+	WatchDiscovery(context.Context, string)
 	WaitStopped(context.Context)
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
@@ -52,6 +57,9 @@ func serveCmd() *cobra.Command {
 			d := newServeDaemon(refreshInterval)
 			d.Start(ctx)
 			d.WatchConfig(ctx, config.DefaultConfigPath())
+			d.WatchState(ctx, state.Path())
+			d.WatchSkills(ctx, skills.Path())
+			d.WatchDiscovery(ctx, config.DefaultConfigPath())
 
 			protocol := "http"
 			if auth.IsUnixAddr(addr) {
