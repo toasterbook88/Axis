@@ -588,7 +588,7 @@ func runLocal(
 		}()
 	}
 
-	out, runErr := runWithReservationHeartbeat(ctx, st, decision.Node, execID, func() (string, error) {
+	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
 		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
 	})
 	resp.Output = out
@@ -670,7 +670,7 @@ func runRemote(
 		shellescape.Quote(command),
 	)
 
-	out, runErr := runWithReservationHeartbeat(ctx, st, decision.Node, execID, func() (string, error) {
+	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
 		return runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
 	})
 	resp.Output = out
@@ -755,7 +755,6 @@ func combinedOutput(stdout, stderr string) string {
 }
 
 func runWithReservationHeartbeat(
-	ctx context.Context,
 	st *state.ClusterState,
 	node, execID string,
 	run func() (string, error),

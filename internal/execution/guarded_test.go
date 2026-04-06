@@ -324,12 +324,12 @@ func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(
 	}
 	defer func() { heartbeatTask = prevHeartbeat }()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	doneRun := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, err := runWithReservationHeartbeat(ctx, &state.ClusterState{}, "alpha", "exec-1", func() (string, error) {
+		if _, err := runWithReservationHeartbeat(&state.ClusterState{}, "alpha", "exec-1", func() (string, error) {
 			<-doneRun
 			return "ok", nil
 		}); err != nil {
