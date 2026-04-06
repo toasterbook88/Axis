@@ -106,7 +106,8 @@ internal/chat/        Structured Ollama /api/chat client (subordinate to facts)
 internal/agent/       Tool-calling agent loop with safety-gated shell
 internal/execution/   Guarded execution: safety → reserve → run → release
 internal/safety/      Execution blocker (0–100 score; ≥80 = hard block)
-internal/state/       Reservation tracking + tombstone immune system
+internal/state/       Reservation tracking, per-exec liveness/provenance, and
+                      tombstone immune system
 internal/skills/      Learned skills/failures, corrupt-file recovery
 internal/scripts/     Built-in helper scripts with keyword matching
 internal/knowledge/   Cluster knowledge context for execution
@@ -180,14 +181,16 @@ memory (8–18 on Apple Silicon; upper end requires TurboQuant verification). HD
 
 `~/.axis/nodes.yaml` — required per node: `name`, `hostname`, `ssh_user`.
 Optional: `role` (primary/worker), `ssh_port` (default 22), `timeout_sec`
-(default 10). Unknown YAML keys are rejected at load time.
+(default 10), `stable_id` (optional observed machine identity used for locality
+matching and discovery dedupe). Unknown YAML keys are rejected at load time.
 
 Optional UDP discovery block: `discovery.enabled`, `discovery.udp_port`
 (default 42424), `discovery.beacon_interval_sec` (default 3),
 `discovery.secret` (HMAC-SHA256 beacon auth).
 
 Persisted local state:
-- `~/.axis/state.json` — reservation tracking, tombstones, recent decisions
+- `~/.axis/state.json` — reservation tracking, tombstones, recent decisions,
+  per-exec heartbeats, and local caller/origin provenance
 - `~/.axis/skills.json` — learned skills and failures
 - `~/.axis/snapshot.json` — daemon-cached snapshot
 
