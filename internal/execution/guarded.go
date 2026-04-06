@@ -113,12 +113,22 @@ var NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
 }
 
 var RunLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
+
+	// codeql[go/command-injection]
+	// Intentional ModeExec shell boundary: raw commands retain full shell
+	// semantics and are gated by confirm=YES, placement safety, authenticated
+	// daemon access, reservation heartbeats, and provenance tracking.
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = env
 	return cmd.CombinedOutput()
 }
 
 var StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) error {
+
+	// codeql[go/command-injection]
+	// Intentional ModeExec shell boundary: raw commands retain full shell
+	// semantics and are gated by confirm=YES, placement safety, authenticated
+	// daemon access, reservation heartbeats, and provenance tracking.
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = env
 	cmd.Stdout = stdout

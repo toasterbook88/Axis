@@ -155,7 +155,12 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(cmd) // codeql[go/command-injection] - protected by UDS socket, bearer token, confirm=YES, safety.Check()
+
+		// codeql[go/command-injection]
+		// Intentional remote shell boundary: cmd is produced by guarded
+		// execution after confirm=YES, placement safety, authenticated daemon
+		// access, reservation heartbeats, and provenance tracking.
+		done <- session.Run(cmd)
 	}()
 
 	select {
@@ -196,7 +201,12 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 
 	session.Stdout = stdout
 	session.Stderr = stderr
-	err = session.Run(cmd) // codeql[go/command-injection] - protected by UDS socket, bearer token, confirm=YES, safety.Check()
+
+	// codeql[go/command-injection]
+	// Intentional remote shell boundary: cmd is produced by guarded
+	// execution after confirm=YES, placement safety, authenticated daemon
+	// access, reservation heartbeats, and provenance tracking.
+	err = session.Run(cmd)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
