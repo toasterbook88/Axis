@@ -16,6 +16,8 @@ import (
 )
 
 func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/snapshot/meta":
@@ -50,6 +52,8 @@ func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
 }
 
 func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/snapshot/meta":
@@ -96,6 +100,8 @@ func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
 }
 
 func TestFetchSnapshotTruncatesLongStaleNodeLists(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
 	staleNodes := make([]string, 0, 12)
 	for i := 1; i <= 12; i++ {
 		staleNodes = append(staleNodes, fmt.Sprintf("n%d", i))
@@ -143,6 +149,8 @@ func TestFetchSnapshotTruncatesLongStaleNodeLists(t *testing.T) {
 }
 
 func TestFetchMetaReadsDaemonMetadata(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/snapshot/meta" {
 			http.NotFound(w, r)

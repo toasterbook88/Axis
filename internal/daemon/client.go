@@ -70,7 +70,7 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 	}
 
 	if meta.Stale {
-		appendSnapshotWarningIfMissing(&snap, staleCacheWarning(meta))
+		models.AppendWarningIfMissing(&snap, staleCacheWarning(meta))
 	}
 
 	source := meta.Source
@@ -97,18 +97,6 @@ func staleCacheWarning(meta Metadata) models.Warning {
 		Kind:    "cache",
 		Message: message,
 	}
-}
-
-func appendSnapshotWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
-	if snap == nil {
-		return
-	}
-	for _, existing := range snap.Warnings {
-		if existing.Kind == warning.Kind && existing.Message == warning.Message && existing.Node == warning.Node {
-			return
-		}
-	}
-	snap.Warnings = append(snap.Warnings, warning)
 }
 
 func FetchMeta(ctx context.Context, addr string) (Metadata, error) {
