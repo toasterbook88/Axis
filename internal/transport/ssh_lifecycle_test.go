@@ -179,8 +179,8 @@ func TestSSHExecutorConnectReportsHostKeyMismatchRemediation(t *testing.T) {
 	}
 
 	msg := err.Error()
-	if !strings.Contains(msg, "knownhosts: key mismatch") {
-		t.Fatalf("expected key mismatch in error, got %q", msg)
+	if !strings.Contains(msg, "known_hosts key mismatch") {
+		t.Fatalf("expected known_hosts mismatch guidance, got %q", msg)
 	}
 	if !strings.Contains(msg, "remediation:") {
 		t.Fatalf("expected remediation guidance in error, got %q", msg)
