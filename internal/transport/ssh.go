@@ -233,11 +233,12 @@ func handshakeRemediation(err error, host string, port int) string {
 	}
 
 	var keyErr *knownhosts.KeyError
-	if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
-		return fmt.Sprintf("known_hosts key mismatch for [%s]:%d; verify host identity and refresh the known_hosts entry (for example: ssh-keygen -R '[%s]:%d')", host, port, host, port)
+	isMismatch := errors.As(err, &keyErr) && len(keyErr.Want) > 0
+	if !isMismatch {
+		isMismatch = strings.Contains(strings.ToLower(err.Error()), "knownhosts: key mismatch")
 	}
 
-	if strings.Contains(strings.ToLower(err.Error()), "knownhosts: key mismatch") {
+	if isMismatch {
 		return fmt.Sprintf("known_hosts key mismatch for [%s]:%d; verify host identity and refresh the known_hosts entry (for example: ssh-keygen -R '[%s]:%d')", host, port, host, port)
 	}
 
