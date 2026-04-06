@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,6 +155,42 @@ func TestSSHExecutorConnectFailsOnDial(t *testing.T) {
 
 	if err := exec.Connect(ctx); err == nil {
 		t.Fatal("expected connect failure")
+	}
+}
+
+func TestSSHExecutorConnectReportsHostKeyMismatchRemediation(t *testing.T) {
+	clientKey, clientSigner := generateTestKeyPair(t)
+	_, serverHostSigner := generateTestKeyPair(t)
+	_, staleHostSigner := generateTestKeyPair(t)
+
+	server := startSSHTestServer(t, clientSigner.PublicKey(), serverHostSigner, map[string]sshCommandResponse{
+		"echo hi": {stdout: "hi\n"},
+	})
+	defer server.Close()
+
+	home := writeSSHClientEnv(t, clientKey, staleHostSigner, server.Host(), server.Port())
+	restore := stubSSHConfigEnv(t, home)
+	defer restore()
+
+	exec := NewSSHExecutor(server.Host(), server.Port(), "axis", 5)
+	err := exec.Connect(context.Background())
+	if err == nil {
+		t.Fatal("expected host key mismatch")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "known_hosts key mismatch") {
+		t.Fatalf("expected known_hosts mismatch guidance, got %q", msg)
+	}
+	if !strings.Contains(msg, "remediation:") {
+		t.Fatalf("expected remediation guidance in error, got %q", msg)
+	}
+	target := fmt.Sprintf("[%s]:%d", server.Host(), server.Port())
+	if !strings.Contains(msg, target) {
+		t.Fatalf("expected host target %q in remediation, got %q", target, msg)
+	}
+	if !strings.Contains(msg, "ssh-keygen -R") {
+		t.Fatalf("expected ssh-keygen hint in remediation, got %q", msg)
 	}
 }
 

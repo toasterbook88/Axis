@@ -106,6 +106,9 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		if handshakeDeadlineExceeded(ctx, err) {
 			return context.DeadlineExceeded
 		}
+		if hint := handshakeRemediation(err, e.Host, e.Port); hint != "" {
+			return fmt.Errorf("ssh handshake %s: %w; remediation: %s", addr, err, hint)
+		}
 		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
 	// The connect deadline is only for dialing and handshake. Clear it once the
@@ -222,6 +225,24 @@ func handshakeDeadlineExceeded(ctx context.Context, err error) bool {
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func handshakeRemediation(err error, host string, port int) string {
+	if err == nil || host == "" || port <= 0 {
+		return ""
+	}
+
+	var keyErr *knownhosts.KeyError
+	isMismatch := errors.As(err, &keyErr) && len(keyErr.Want) > 0
+	if !isMismatch {
+		isMismatch = strings.Contains(strings.ToLower(err.Error()), "knownhosts: key mismatch")
+	}
+
+	if isMismatch {
+		return fmt.Sprintf("known_hosts key mismatch for [%s]:%d; verify host identity and refresh the known_hosts entry (for example: ssh-keygen -R '[%s]:%d')", host, port, host, port)
+	}
+
+	return ""
 }
 
 func (e *SSHExecutor) sshConfig(ctx context.Context) (*ssh.ClientConfig, error) {
