@@ -162,7 +162,8 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 		// to the remote SSH session. Callers must ensure cmd is trusted and
 		// correctly quoted or escaped for the remote shell context.
 		// codeql[go/command-injection]
-		done <- session.Run(cmd)
+		runErr := session.Run(cmd)
+		done <- runErr
 	}()
 
 	select {
