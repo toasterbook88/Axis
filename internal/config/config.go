@@ -9,14 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/toasterbook88/axis/internal/models"
 	"gopkg.in/yaml.v3"
 )
 
 // NodeConfig describes a single node in the cluster seed file.
 // ssh_user and ssh_port are config-only — they do NOT propagate into NodeFacts.
+// stable_id is an optional operator seed used for locality/dedupe only; it
+// does not override observed node identity.
 type NodeConfig struct {
 	Name       string `json:"name" yaml:"name"`
 	Hostname   string `json:"hostname" yaml:"hostname"`
+	StableID   string `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
 	SSHUser    string `json:"ssh_user" yaml:"ssh_user"`
 	Role       string `json:"role,omitempty" yaml:"role,omitempty"`
 	SSHPort    int    `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
@@ -110,7 +114,8 @@ func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {
 		return fmt.Errorf("config: no nodes defined")
 	}
-	for i, n := range c.Nodes {
+	for i := range c.Nodes {
+		n := &c.Nodes[i]
 		if n.Name == "" {
 			return fmt.Errorf("config: node[%d] missing name", i)
 		}
@@ -120,6 +125,7 @@ func (c *Config) Validate() error {
 		if n.SSHUser == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)
 		}
+		n.StableID = models.NormalizeStableID(n.StableID)
 	}
 	return nil
 }

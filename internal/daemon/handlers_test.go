@@ -3,19 +3,25 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
 // mockCache is a minimal SnapshotCache for handler tests.
 type mockCache struct {
-	snap       *models.ClusterSnapshot
-	meta       Metadata
-	refreshErr error
+	snap        *models.ClusterSnapshot
+	meta        Metadata
+	refreshErr  error
+	lastTrigger string
 }
 
 func (m *mockCache) Snapshot() (*models.ClusterSnapshot, bool) {
@@ -30,6 +36,11 @@ func (m *mockCache) Meta() Metadata { return m.meta }
 func (m *mockCache) Invalidate() { m.snap = nil }
 
 func (m *mockCache) RefreshNow(_ context.Context) error { return m.refreshErr }
+
+func (m *mockCache) RefreshWithTrigger(_ context.Context, trigger string) error {
+	m.lastTrigger = trigger
+	return m.refreshErr
+}
 
 // newRecordedRequest builds a request and response recorder for a handler test.
 func newRecordedRequest(method, path string, body string) (*httptest.ResponseRecorder, *http.Request) {
@@ -69,6 +80,36 @@ func TestHealthHandlerReturnsOK(t *testing.T) {
 	}
 	if payload["name"] != "axis" {
 		t.Errorf("expected name axis, got %v", payload["name"])
+	}
+}
+
+func TestHealthHandlerIncludesRefreshTriggerAndConfigEvent(t *testing.T) {
+	configAt := time.Unix(1700000000, 0).UTC()
+	cache := &mockCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+		meta: Metadata{
+			Ready:              true,
+			CacheAgeSec:        5,
+			LastRefreshTrigger: "config-change",
+			LastConfigEventAt:  configAt,
+		},
+	}
+	h := healthHandler(cache)
+	rec, req := newRecordedRequest(http.MethodGet, "/health", "")
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode health payload: %v", err)
+	}
+	if payload["last_refresh_trigger"] != "config-change" {
+		t.Fatalf("expected last_refresh_trigger config-change, got %v", payload["last_refresh_trigger"])
+	}
+	if payload["last_config_event_at"] == nil {
+		t.Fatal("expected last_config_event_at in health payload")
 	}
 }
 
@@ -236,6 +277,31 @@ func TestRefreshHandlerTriggersRefresh(t *testing.T) {
 	}
 }
 
+func TestRefreshHandlerUsesExplicitTrigger(t *testing.T) {
+	cache := &mockCache{refreshErr: nil}
+	h := refreshHandler(cache)
+	rec, req := newRecordedRequest(http.MethodPost, "/refresh?trigger="+execution.StateChangeExecutionFinished, "")
+	h(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if cache.lastTrigger != execution.StateChangeExecutionFinished {
+		t.Fatalf("expected explicit trigger, got %q", cache.lastTrigger)
+	}
+}
+
+func TestRefreshHandlerRejectsUnsupportedTrigger(t *testing.T) {
+	cache := &mockCache{refreshErr: nil}
+	h := refreshHandler(cache)
+	rec, req := newRecordedRequest(http.MethodPost, "/refresh?trigger=nope", "")
+	h(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
 func TestRefreshHandlerPropagatesError(t *testing.T) {
 	cache := &mockCache{refreshErr: context.DeadlineExceeded}
 	h := refreshHandler(cache)
@@ -244,6 +310,36 @@ func TestRefreshHandlerPropagatesError(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestScheduleCacheRefreshReportsAsyncRefreshErrors(t *testing.T) {
+	cache := &mockCache{refreshErr: context.DeadlineExceeded}
+	errCh := make(chan struct {
+		trigger string
+		err     error
+	}, 1)
+	prevReport := reportAsyncRefreshError
+	reportAsyncRefreshError = func(trigger string, err error) {
+		errCh <- struct {
+			trigger string
+			err     error
+		}{trigger: trigger, err: err}
+	}
+	defer func() { reportAsyncRefreshError = prevReport }()
+
+	scheduleCacheRefresh(cache, execution.StateChangeExecutionFinished)
+
+	select {
+	case got := <-errCh:
+		if got.trigger != execution.StateChangeExecutionFinished {
+			t.Fatalf("trigger = %q, want %q", got.trigger, execution.StateChangeExecutionFinished)
+		}
+		if !errors.Is(got.err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want %v", got.err, context.DeadlineExceeded)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected async refresh error to be reported")
 	}
 }
 
@@ -262,6 +358,149 @@ func TestRefreshHandlerNilCacheReturns503(t *testing.T) {
 	h(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestRunHandlerAddsOwnerProvenanceToGuardedRequest(t *testing.T) {
+	h := runHandler(nil, RouteDeps{
+		LoadRuntime: func(context.Context) (*runtimectx.Context, error) {
+			return &runtimectx.Context{}, nil
+		},
+		RunGuarded: func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+			if req.OwnerSurface != execution.OwnerSurfaceHTTPRun {
+				t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceHTTPRun)
+			}
+			if req.OwnerLabel != "203.0.113.10" {
+				t.Fatalf("OwnerLabel = %q, want 203.0.113.10", req.OwnerLabel)
+			}
+			return execution.GuardedExecutionResult{OK: true, Node: "alpha"}, nil
+		},
+	})
+
+	rec, req := newRecordedRequest(http.MethodPost, "/run", `{"description":"echo ok","mode":"exec","confirm":"YES"}`)
+	req.RemoteAddr = "203.0.113.10:9876"
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestRunHandlerAcceptsSignedForwardedExecutionOrigin(t *testing.T) {
+	want := models.NewExecutionOrigin("upstream-node", "upstream.local", "abc-123")
+	h := runHandler(nil, RouteDeps{
+		LoadRuntime: func(context.Context) (*runtimectx.Context, error) {
+			return &runtimectx.Context{}, nil
+		},
+		RunGuarded: func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+			if req.OriginOverride != want {
+				t.Fatalf("OriginOverride = %+v, want %+v", req.OriginOverride, want)
+			}
+			return execution.GuardedExecutionResult{OK: true, Node: "alpha"}, nil
+		},
+		ForwardedOriginToken: "tok",
+	})
+
+	rec, req := newRecordedRequest(http.MethodPost, "/run", `{"description":"echo ok","mode":"exec","confirm":"YES"}`)
+	if err := auth.SetForwardedExecutionOriginHeaders(req.Header, want, "tok", time.Now()); err != nil {
+		t.Fatalf("SetForwardedExecutionOriginHeaders: %v", err)
+	}
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestRunHandlerStreamReturnsFinalResultWhenRuntimeFails(t *testing.T) {
+	h := runHandler(nil, RouteDeps{
+		LoadRuntime: func(context.Context) (*runtimectx.Context, error) {
+			return nil, errors.New("node discovery failed")
+		},
+	})
+
+	rec, req := newRecordedRequest(http.MethodPost, "/run?stream=1", `{"description":"echo ok","mode":"exec","confirm":"YES"}`)
+	req.Header.Set("Accept", RunStreamContentType)
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != RunStreamContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, RunStreamContentType)
+	}
+
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 stream event, got %d: %q", len(lines), rec.Body.String())
+	}
+
+	var event RunStreamEvent
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
+		t.Fatalf("unmarshal stream event: %v", err)
+	}
+	if event.Type != RunStreamEventResult || event.Result == nil {
+		t.Fatalf("unexpected stream event: %+v", event)
+	}
+	if event.Result.OK {
+		t.Fatal("expected ok=false when runtime fails")
+	}
+	if !strings.Contains(event.Result.Error, "node discovery failed") {
+		t.Fatalf("expected runtime failure in final stream result, got %q", event.Result.Error)
+	}
+}
+
+func TestRunHandlerStreamEmitsReadyOutputAndResult(t *testing.T) {
+	h := runHandler(nil, RouteDeps{
+		LoadRuntime: func(context.Context) (*runtimectx.Context, error) {
+			return &runtimectx.Context{}, nil
+		},
+		RunGuarded: func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+			if req.OnReady == nil || req.Stdout == nil || req.Stderr == nil {
+				t.Fatalf("expected stream callbacks/writers")
+			}
+			req.OnReady(execution.GuardedExecutionResult{Node: "alpha", FitScore: 91, Command: "echo ok"})
+			req.OnStateChange(context.Background(), execution.StateChangeExecutionReserved, execution.GuardedExecutionResult{Node: "alpha"})
+			if _, err := req.Stdout.Write([]byte("hello\n")); err != nil {
+				t.Fatalf("stdout write: %v", err)
+			}
+			if _, err := req.Stderr.Write([]byte("warn\n")); err != nil {
+				t.Fatalf("stderr write: %v", err)
+			}
+			req.OnStateChange(context.Background(), execution.StateChangeExecutionFinished, execution.GuardedExecutionResult{Node: "alpha", OK: true})
+			return execution.GuardedExecutionResult{OK: true, Node: "alpha", Output: "hello\nwarn"}, nil
+		},
+	})
+
+	rec, req := newRecordedRequest(http.MethodPost, "/run?stream=1", `{"description":"echo ok","mode":"exec","confirm":"YES"}`)
+	req.Header.Set("Accept", RunStreamContentType)
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != RunStreamContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, RunStreamContentType)
+	}
+
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 stream events, got %d: %q", len(lines), rec.Body.String())
+	}
+
+	var reserved RunStreamEvent
+	if err := json.Unmarshal([]byte(lines[1]), &reserved); err != nil {
+		t.Fatalf("unmarshal reserved event: %v", err)
+	}
+	if reserved.Type != RunStreamEventStateChange || reserved.Trigger != execution.StateChangeExecutionReserved {
+		t.Fatalf("unexpected reserved event: %+v", reserved)
+	}
+	var final RunStreamEvent
+	if err := json.Unmarshal([]byte(lines[5]), &final); err != nil {
+		t.Fatalf("unmarshal final event: %v", err)
+	}
+	if final.Type != RunStreamEventResult || final.Result == nil || !final.Result.OK {
+		t.Fatalf("unexpected final event: %+v", final)
 	}
 }
 

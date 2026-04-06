@@ -5,6 +5,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -99,6 +100,12 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
 		conn.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if handshakeDeadlineExceeded(ctx, err) {
+			return context.DeadlineExceeded
+		}
 		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
 	// The connect deadline is only for dialing and handshake. Clear it once the
@@ -194,6 +201,18 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 		return ctxErr
 	}
 	return err
+}
+
+func handshakeDeadlineExceeded(ctx context.Context, err error) bool {
+	if ctx == nil || err == nil {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Now().Before(deadline) {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (e *SSHExecutor) sshConfig(ctx context.Context) (*ssh.ClientConfig, error) {

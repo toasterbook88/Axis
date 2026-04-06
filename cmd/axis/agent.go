@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,11 +11,23 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
+
+var loadAgentShellRuntime = runtimectx.Load
+var runGuardedAgentShell = execution.RunGuarded
+var runDaemonGuardedAgentShell = daemon.RunGuardedStream
+var fetchAgentDaemonMeta = daemon.FetchMeta
+var signalAgentDaemonRefresh = func(ctx context.Context, trigger string) error {
+	return refreshDaemonCacheWithTrigger(ctx, api.DefaultAddr(), trigger)
+}
+var agentDaemonExecutionAddr = api.DefaultAddr
 
 func agentCmd() *cobra.Command {
 	var (
@@ -32,7 +45,7 @@ func agentCmd() *cobra.Command {
 		Long: "Run an AI agent that can call AXIS tools to answer cluster questions.\n\n" +
 			"The agent uses the Ollama /api/chat endpoint with tool calling.\n" +
 			"It can run read-only cluster queries (status, facts, placement) and\n" +
-			"execute shell commands with operator confirmation.\n\n" +
+			"execute shell commands through guarded AXIS execution with operator confirmation.\n\n" +
 			"Agent output is advisory only — it is a consumer of the fact plane,\n" +
 			"never a source of cluster truth.",
 		Args: cobra.ArbitraryArgs,
@@ -75,6 +88,7 @@ func agentCmd() *cobra.Command {
 				Knowledge:   k,
 				ToolContext: tc,
 				Output:      w,
+				RunShell:    guardedAgentShellRunner(currentModel),
 			}
 
 			a := agent.New(cfg)
@@ -136,4 +150,65 @@ func agentRequestContext(timeout time.Duration) (context.Context, context.Cancel
 		return context.WithCancel(context.Background())
 	}
 	return context.WithTimeout(context.Background(), timeout)
+}
+
+func guardedAgentShellRunner(model string) agent.ShellRunner {
+	return func(ctx context.Context, command string) (string, error) {
+		rt, err := loadAgentShellRuntime(ctx)
+		if err != nil {
+			return "", fmt.Errorf("load runtime context for guarded execution: %w", err)
+		}
+
+		req := execution.GuardedExecutionRequest{
+			Description:  command,
+			Mode:         execution.ModeExec,
+			Confirm:      execution.ConfirmWord,
+			OwnerSurface: execution.OwnerSurfaceAgentRunShell,
+			OwnerLabel:   strings.TrimSpace(model),
+			OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
+				scheduleAgentDaemonRefresh(trigger)
+			},
+		}
+
+		if resp, usedDaemon, err := tryGuardedAgentShellViaDaemon(ctx, rt, req); usedDaemon {
+			if err != nil {
+				return "", fmt.Errorf("daemon guarded execution: %w", err)
+			}
+			return marshalGuardedExecutionPayload(resp, nil)
+		}
+
+		resp, runErr := runGuardedAgentShell(ctx, rt, req)
+		return marshalGuardedExecutionPayload(resp, runErr)
+	}
+}
+
+func tryGuardedAgentShellViaDaemon(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, bool, error) {
+	addr := agentDaemonExecutionAddr()
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	if _, err := fetchAgentDaemonMeta(probeCtx, addr); err != nil {
+		return execution.GuardedExecutionResult{}, false, nil
+	}
+
+	resp, err := runDaemonGuardedAgentShell(ctx, addr, req, execution.LocalExecutionOrigin(rt))
+	return resp, true, err
+}
+
+func marshalGuardedExecutionPayload(resp execution.GuardedExecutionResult, runErr error) (string, error) {
+	if runErr != nil && resp.Error == "" {
+		resp.Error = runErr.Error()
+	}
+	if resp.Error != "" {
+		resp.OK = false
+	}
+	payload, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("marshal guarded execution result: %w", err)
+	}
+	return string(payload), nil
+}
+
+func scheduleAgentDaemonRefresh(trigger string) {
+	scheduleBestEffortDaemonRefresh("agent", trigger, signalAgentDaemonRefresh)
 }

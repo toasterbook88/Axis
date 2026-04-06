@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
@@ -206,6 +207,256 @@ func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) 
 	}
 	if !strings.Contains(resp.Error, "preflight unavailable; refusing") {
 		t.Fatalf("expected fail-closed preflight error, got %#v", resp)
+	}
+}
+
+func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+		return []byte("ok\n"), nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	var triggers []string
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo ok",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+		OnStateChange: func(_ context.Context, trigger string, _ GuardedExecutionResult) {
+			triggers = append(triggers, trigger)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunGuarded: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response, got %#v", resp)
+	}
+	if len(triggers) != 2 {
+		t.Fatalf("expected two execution state changes, got %v", triggers)
+	}
+	if triggers[0] != StateChangeExecutionReserved || triggers[1] != StateChangeExecutionFinished {
+		t.Fatalf("unexpected execution state change sequence: %v", triggers)
+	}
+}
+
+func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	prevInterval := executionHeartbeatInterval
+	executionHeartbeatInterval = 10 * time.Millisecond
+	defer func() { executionHeartbeatInterval = prevInterval }()
+
+	prevHeartbeat := heartbeatTask
+	heartbeatCalls := 0
+	heartbeatTask = func(st *state.ClusterState, node, execID string) error {
+		heartbeatCalls++
+		return st.HeartbeatTask(node, execID)
+	}
+	defer func() { heartbeatTask = prevHeartbeat }()
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+		time.Sleep(35 * time.Millisecond)
+		return []byte("ok\n"), nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo ok",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err != nil {
+		t.Fatalf("RunGuarded: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response, got %#v", resp)
+	}
+	if heartbeatCalls == 0 {
+		t.Fatal("expected at least one execution heartbeat during run")
+	}
+}
+
+func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(t *testing.T) {
+	prevInterval := executionHeartbeatInterval
+	executionHeartbeatInterval = 10 * time.Millisecond
+	defer func() { executionHeartbeatInterval = prevInterval }()
+
+	prevHeartbeat := heartbeatTask
+	heartbeatCh := make(chan struct{}, 16)
+	heartbeatTask = func(_ *state.ClusterState, node, execID string) error {
+		if node != "alpha" || execID != "exec-1" {
+			t.Fatalf("unexpected heartbeat target node=%q execID=%q", node, execID)
+		}
+		heartbeatCh <- struct{}{}
+		return nil
+	}
+	defer func() { heartbeatTask = prevHeartbeat }()
+
+	_, cancel := context.WithCancel(context.Background())
+	doneRun := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := runWithReservationHeartbeat(&state.ClusterState{}, "alpha", "exec-1", func() (string, error) {
+			<-doneRun
+			return "ok", nil
+		}); err != nil {
+			t.Errorf("runWithReservationHeartbeat: %v", err)
+		}
+	}()
+
+	select {
+	case <-heartbeatCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected initial heartbeat")
+	}
+
+	cancel()
+
+	select {
+	case <-heartbeatCh:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected heartbeats to continue after cancellation until run returns")
+	}
+
+	close(doneRun)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected heartbeat wrapper to exit after run returns")
+	}
+}
+
+func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Identity: models.NewNodeIdentity("abc-123", "linux-machine-id"),
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+		ns, ok := rt.State.Nodes["studio"]
+		if !ok {
+			t.Fatal("expected active reservation state for studio")
+		}
+		if len(ns.ActiveExecs) != 1 {
+			t.Fatalf("ActiveExecs = %v, want single active exec", ns.ActiveExecs)
+		}
+		execID := ns.ActiveExecs[0]
+		if got := ns.ExecOrigin[execID]; got != models.NewExecutionOrigin("studio", "localhost", "abc-123") {
+			t.Fatalf("ExecOrigin[%s] = %+v, want studio/localhost/abc-123", execID, got)
+		}
+		return []byte("ok\n"), nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description:  "echo ok",
+		Mode:         ModeExec,
+		Confirm:      ConfirmWord,
+		OwnerSurface: OwnerSurfaceTaskRun,
+	})
+	if err != nil {
+		t.Fatalf("RunGuarded: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response, got %#v", resp)
+	}
+}
+
+func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Identity: models.NewNodeIdentity("abc-123", "linux-machine-id"),
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	want := models.NewExecutionOrigin("relay", "relay.local", "relay-123")
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+		ns, ok := rt.State.Nodes["studio"]
+		if !ok {
+			t.Fatal("expected active reservation state for studio")
+		}
+		if len(ns.ActiveExecs) != 1 {
+			t.Fatalf("ActiveExecs = %v, want single active exec", ns.ActiveExecs)
+		}
+		execID := ns.ActiveExecs[0]
+		if got := ns.ExecOrigin[execID]; got != want {
+			t.Fatalf("ExecOrigin[%s] = %+v, want %+v", execID, got, want)
+		}
+		return []byte("ok\n"), nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description:    "echo ok",
+		Mode:           ModeExec,
+		Confirm:        ConfirmWord,
+		OwnerSurface:   OwnerSurfaceHTTPRun,
+		OriginOverride: want,
+	})
+	if err != nil {
+		t.Fatalf("RunGuarded: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response, got %#v", resp)
 	}
 }
 

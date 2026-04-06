@@ -571,17 +571,28 @@ func TestAgentShellExecutesWhenApproved(t *testing.T) {
 	defer server.Close()
 
 	var out bytes.Buffer
+	called := false
 	agent := New(Config{
 		Endpoint:    server.URL,
 		Model:       "test-model",
 		Output:      &out,
 		Confirm:     alwaysConfirm(),
 		ToolContext: &ToolContext{},
+		RunShell: func(ctx context.Context, command string) (string, error) {
+			called = true
+			if command != "echo agent-test-output" {
+				t.Fatalf("RunShell command = %q, want echo agent-test-output", command)
+			}
+			return `{"ok":true,"node":"alpha","output":"agent-test-output"}`, nil
+		},
 	})
 
 	err := agent.Run(context.Background(), "echo test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected injected RunShell to be called")
 	}
 
 	// Check the conversation has the shell result.

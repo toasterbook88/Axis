@@ -145,8 +145,14 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		runnerUp := ranked[1]
 		ruLocal := models.IsLocalNode(runnerUp)
 		ruScore := ComputeTaskFitScore(runnerUp, ruLocal, st, reqs)
+		bestShare := clusterReservationShare(best, st)
+		runnerShare := clusterReservationShare(runnerUp, st)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
+		if bestShare < runnerShare {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("lower cluster reservation share favored: %.0f%% vs runner-up %.0f%%", bestShare*100, runnerShare*100))
+		}
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("runner-up %q scored %d/100", runnerUp.Name, ruScore))
 	}

@@ -55,14 +55,14 @@ func (s Store) Record(class models.FailureClass, scope models.FailureScope, reas
 
 	// Update mutable fields
 	entry.Count++
-	
+
 	// Avoid masking a more severe historical failure with a transient one.
 	if !exists || severity(class) >= severity(entry.Class) {
 		entry.Class = class
 		entry.Reason = reason
 		entry.Evidence = evidence
 	}
-	
+
 	entry.OccurredAt = now
 	entry.OperatorOverride = false
 	entry.OperatorNote = ""

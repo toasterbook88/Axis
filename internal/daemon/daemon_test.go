@@ -2,14 +2,24 @@ package daemon
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
 
@@ -67,6 +77,9 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	}
 	if meta.RefreshIntervalSec != 30 {
 		t.Fatalf("expected refresh interval sec 30, got %d", meta.RefreshIntervalSec)
+	}
+	if meta.LastRefreshTrigger != "manual" {
+		t.Fatalf("expected last refresh trigger manual, got %q", meta.LastRefreshTrigger)
 	}
 	if meta.CollectedAt.IsZero() {
 		t.Fatal("expected collected_at to be populated")
@@ -202,6 +215,23 @@ func TestRefreshNowStoresSnapshotImmediately(t *testing.T) {
 	if !d.Meta().Ready {
 		t.Fatal("expected daemon to be ready after RefreshNow")
 	}
+	if got := d.Meta().LastRefreshTrigger; got != "manual" {
+		t.Fatalf("expected RefreshNow trigger manual, got %q", got)
+	}
+}
+
+func TestRefreshWithTriggerStoresExplicitTrigger(t *testing.T) {
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{Status: models.SnapshotHealthy}, nil
+	})
+	d.SetSnapshotPath("")
+
+	if err := d.RefreshWithTrigger(context.Background(), execution.StateChangeExecutionFinished); err != nil {
+		t.Fatalf("RefreshWithTrigger: %v", err)
+	}
+	if got := d.Meta().LastRefreshTrigger; got != execution.StateChangeExecutionFinished {
+		t.Fatalf("expected explicit execution trigger, got %q", got)
+	}
 }
 
 func TestMetaIncludesReservedMB(t *testing.T) {
@@ -240,6 +270,423 @@ func TestMetaMarksStaleSnapshots(t *testing.T) {
 	if meta.CacheAgeSec < 360 {
 		t.Fatalf("expected cache age >= 360s, got %d", meta.CacheAgeSec)
 	}
+}
+
+func TestWatchConfigRefreshesOnContentChange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, "nodes.yaml")
+	if err := os.WriteFile(configPath, []byte("nodes:\n  - name: alpha\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	var calls atomic.Int32
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		calls.Add(1)
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: 1,
+			},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.WatchConfig(ctx, configPath)
+	time.Sleep(3 * watchConfigPollInterval)
+
+	if err := os.WriteFile(configPath, []byte("nodes:\n  - name: beta\n"), 0o644); err != nil {
+		t.Fatalf("rewrite config: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		meta := d.Meta()
+		if calls.Load() >= 1 && meta.LastRefreshTrigger == "config-change" && !meta.LastConfigEventAt.IsZero() && meta.Ready {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected config change refresh, got meta=%+v calls=%d", d.Meta(), calls.Load())
+}
+
+func TestWatchConfigInvalidatesCacheWhenConfigDisappears(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, "nodes.yaml")
+	if err := os.WriteFile(configPath, []byte("nodes:\n  - name: alpha\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		if _, err := os.Stat(configPath); err != nil {
+			return nil, err
+		}
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: 1,
+			},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+	if !d.Meta().Ready {
+		t.Fatal("expected initial cache readiness")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.WatchConfig(ctx, configPath)
+	time.Sleep(3 * watchConfigPollInterval)
+
+	if err := os.Remove(configPath); err != nil {
+		t.Fatalf("remove config: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		meta := d.Meta()
+		if !meta.Ready && meta.LastRefreshTrigger == "config-change" && strings.Contains(meta.LastError, "no such file or directory") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected config removal to invalidate cache, got meta=%+v", d.Meta())
+}
+
+func TestWatchStateRefreshesOnContentChange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 256, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-a"}},
+		},
+	}
+	if err := st.Save(); err != nil {
+		t.Fatalf("state save: %v", err)
+	}
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	var calls atomic.Int32
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		calls.Add(1)
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{{
+				Name: "alpha",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  4096,
+				},
+				Status: models.StatusComplete,
+			}},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.WatchState(ctx, state.Path())
+	time.Sleep(3 * watchConfigPollInterval)
+
+	st.Nodes["alpha"] = state.NodeState{ReservedMB: 512, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-b"}}
+	if err := st.Save(); err != nil {
+		t.Fatalf("state resave: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		meta := d.Meta()
+		if calls.Load() >= 1 && meta.LastRefreshTrigger == "state-change" && meta.Ready {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected state change refresh, got meta=%+v calls=%d", d.Meta(), calls.Load())
+}
+
+func TestWatchStateIgnoresHeartbeatOnlyChanges(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {
+				ReservedMB:   256,
+				LastPlacedAt: time.Now().UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-a"},
+				ExecReservationsMB: map[string]int64{
+					"exec-a": 256,
+				},
+				ExecHeartbeatAt: map[string]time.Time{
+					"exec-a": time.Now().UTC().Add(-time.Minute),
+				},
+			},
+		},
+	}
+	if err := st.Save(); err != nil {
+		t.Fatalf("state save: %v", err)
+	}
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	var calls atomic.Int32
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		calls.Add(1)
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{{
+				Name: "alpha",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  4096,
+				},
+				Status: models.StatusComplete,
+			}},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.WatchState(ctx, state.Path())
+	time.Sleep(3 * watchConfigPollInterval)
+
+	ns := st.Nodes["alpha"]
+	ns.ExecHeartbeatAt["exec-a"] = time.Now().UTC()
+	st.Nodes["alpha"] = ns
+	if err := st.Save(); err != nil {
+		t.Fatalf("state heartbeat save: %v", err)
+	}
+
+	time.Sleep(6 * watchConfigPollInterval)
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("expected heartbeat-only state write to avoid refresh, got %d refresh calls", got)
+	}
+	if meta := d.Meta(); meta.LastRefreshTrigger == RefreshTriggerStateChange {
+		t.Fatalf("expected no state-change trigger for heartbeat-only write, got meta=%+v", meta)
+	}
+
+	ns.ReservedMB = 512
+	ns.ExecReservationsMB["exec-a"] = 512
+	st.Nodes["alpha"] = ns
+	if err := st.Save(); err != nil {
+		t.Fatalf("state reservation save: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		meta := d.Meta()
+		if calls.Load() >= 1 && meta.LastRefreshTrigger == RefreshTriggerStateChange && meta.Ready {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected reservation change refresh after heartbeat-only write, got meta=%+v calls=%d", d.Meta(), calls.Load())
+}
+
+func TestWatchFileWithFingerprintReportsFingerprintErrors(t *testing.T) {
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	errCh := make(chan struct {
+		path    string
+		trigger string
+		err     error
+	}, 2)
+	prevReport := reportWatchFingerprintError
+	reportWatchFingerprintError = func(path, trigger string, err error) {
+		errCh <- struct {
+			path    string
+			trigger string
+			err     error
+		}{path: path, trigger: trigger, err: err}
+	}
+
+	d := New(time.Minute, func(context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+		defer waitCancel()
+		d.WaitStopped(waitCtx)
+		reportWatchFingerprintError = prevReport
+	}()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	wantErr := errors.New("fingerprint boom")
+	d.watchFileWithFingerprint(ctx, path, RefreshTriggerStateChange, func(string) (configFingerprint, error) {
+		return configFingerprint{}, wantErr
+	})
+
+	select {
+	case got := <-errCh:
+		if got.path != path {
+			t.Fatalf("path = %q, want %q", got.path, path)
+		}
+		if got.trigger != RefreshTriggerStateChange {
+			t.Fatalf("trigger = %q, want %q", got.trigger, RefreshTriggerStateChange)
+		}
+		if !errors.Is(got.err, wantErr) {
+			t.Fatalf("err = %v, want %v", got.err, wantErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected fingerprint error to be reported")
+	}
+}
+
+func TestWatchSkillsRefreshesWhenFileAppears(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	var calls atomic.Int32
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		calls.Add(1)
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: 1,
+			},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.WatchSkills(ctx, skills.Path())
+	time.Sleep(3 * watchConfigPollInterval)
+
+	store := &skills.Store{
+		Skills: []skills.LearnedSkill{{
+			ID:           "skill-1",
+			Description:  "test skill",
+			Command:      "echo ok",
+			SuccessCount: 1,
+			LastUsed:     time.Now().UTC(),
+		}},
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("skills save: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		meta := d.Meta()
+		if calls.Load() >= 1 && meta.LastRefreshTrigger == "skills-change" && meta.Ready {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected skills change refresh, got meta=%+v calls=%d", d.Meta(), calls.Load())
+}
+
+func TestWatchDiscoveryRefreshesOnBeaconChange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	port := freeUDPPort(t)
+	configPath := filepath.Join(home, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configBody := []byte("nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: axis\n    role: primary\ndiscovery:\n  enabled: true\n  udp_port: " + strconv.Itoa(port) + "\n  beacon_interval_sec: 60\n  secret: shared\n")
+	if err := os.WriteFile(configPath, configBody, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	var calls atomic.Int32
+	registry := discovery.NewBeaconRegistry()
+	var d *Daemon
+	d = New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		calls.Add(1)
+		nodes := registry.Snapshot()
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Summary: models.ClusterSummary{
+				TotalNodes: len(nodes),
+			},
+		}, nil
+	})
+	d.beaconRegistry = registry
+	d.SetSnapshotPath("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)
+		defer drainCancel()
+		d.WaitStopped(drainCtx)
+		watchConfigPollInterval = prevPoll
+	}()
+	d.WatchDiscovery(ctx, configPath)
+	time.Sleep(3 * watchConfigPollInterval)
+
+	beacon := discovery.Beacon{
+		Type:      "axis",
+		Name:      "beacon-node",
+		StableID:  "abc-123",
+		IP:        "10.0.0.9",
+		SSHPort:   2200,
+		Role:      "worker",
+		Timestamp: time.Now().UTC(),
+	}
+	beacon.Sig = discoveryTestSignBeacon(beacon, "shared")
+
+	deadline := time.Now().Add(2 * time.Second)
+	sendTicker := time.NewTicker(25 * time.Millisecond)
+	defer sendTicker.Stop()
+	for time.Now().Before(deadline) {
+		sendDaemonBeacon(t, port, beacon)
+		meta := d.Meta()
+		snap, ok := d.Snapshot()
+		if ok && calls.Load() >= 1 && meta.LastRefreshTrigger == RefreshTriggerBeaconChange && snap.Summary.TotalNodes == 1 {
+			return
+		}
+		<-sendTicker.C
+	}
+
+	snap, _ := d.Snapshot()
+	t.Fatalf("expected beacon change refresh, got meta=%+v calls=%d snap=%+v", d.Meta(), calls.Load(), snap)
 }
 
 func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
@@ -310,13 +757,72 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	}
 }
 
-func TestCanReserveUsesNodeRAMCap(t *testing.T) {
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenPacket: %v", err)
+	}
+	defer pc.Close()
+	return pc.LocalAddr().(*net.UDPAddr).Port
+}
+
+func sendDaemonBeacon(t *testing.T, port int, beacon discovery.Beacon) {
+	t.Helper()
+	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port})
+	if err != nil {
+		t.Fatalf("DialUDP: %v", err)
+	}
+	defer conn.Close()
+
+	data, err := json.Marshal(beacon)
+	if err != nil {
+		t.Fatalf("Marshal beacon: %v", err)
+	}
+	if _, err := conn.Write(data); err != nil {
+		t.Fatalf("Write beacon: %v", err)
+	}
+}
+
+func discoveryTestSignBeacon(b discovery.Beacon, secret string) string {
+	timestamp := b.Timestamp
+	data, err := json.Marshal(struct {
+		Type      string    `json:"t"`
+		Name      string    `json:"n"`
+		Hostname  string    `json:"h"`
+		StableID  string    `json:"id,omitempty"`
+		IP        string    `json:"ip"`
+		SSHPort   int       `json:"p"`
+		Role      string    `json:"r"`
+		Version   string    `json:"v"`
+		Timestamp time.Time `json:"ts"`
+	}{
+		Type:      b.Type,
+		Name:      b.Name,
+		Hostname:  b.Hostname,
+		StableID:  b.StableID,
+		IP:        b.IP,
+		SSHPort:   b.SSHPort,
+		Role:      b.Role,
+		Version:   b.Version,
+		Timestamp: timestamp,
+	})
+	if err != nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestCanReserveUsesReservableRAMCap(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
 			{
 				Name: "alpha",
 				Resources: &models.Resources{
 					RAMTotalMB: 8192,
+					RAMFreeMB:  3072,
 				},
 			},
 		},
@@ -330,7 +836,7 @@ func TestCanReserveUsesNodeRAMCap(t *testing.T) {
 	if !CanReserve(snap, st, "alpha", 1024) {
 		t.Fatal("expected reservation to fit under cap")
 	}
-	if CanReserve(snap, st, "alpha", 6145) {
-		t.Fatal("expected reservation to exceed cap")
+	if CanReserve(snap, st, "alpha", 1025) {
+		t.Fatal("expected reservation to exceed live reservable cap")
 	}
 }

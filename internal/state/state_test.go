@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
@@ -46,6 +48,12 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	}
 	if got.ReservedMB != 2048 {
 		t.Fatalf("ReservedMB = %d, want 2048", got.ReservedMB)
+	}
+	if got.ExecReservationsMB["exec-1"] != 2048 {
+		t.Fatalf("ExecReservationsMB = %v, want exec-1=2048", got.ExecReservationsMB)
+	}
+	if got.ExecHeartbeatAt["exec-1"].IsZero() {
+		t.Fatalf("ExecHeartbeatAt = %v, want non-zero heartbeat", got.ExecHeartbeatAt)
 	}
 	if got.LastTask != "build project" {
 		t.Fatalf("LastTask = %q, want build project", got.LastTask)
@@ -96,6 +104,500 @@ func TestLoadExpiresStaleReservations(t *testing.T) {
 	}
 	if _, ok := loaded.Nodes["fresh"]; !ok {
 		t.Fatal("expected fresh reservation to remain")
+	}
+}
+
+func TestLoadReclaimsStaleActiveReservationsToPerExecCap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   4096,
+				LastPlacedAt: time.Now().Add(-46 * time.Minute).UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns, ok := loaded.Nodes["alpha"]
+	if !ok {
+		t.Fatal("expected stale active reservation to remain after reclaim")
+	}
+	if ns.ReservedMB != 1024 {
+		t.Fatalf("ReservedMB = %d, want 1024 after reclaim", ns.ReservedMB)
+	}
+	if ns.ActiveTasks != 1 || len(ns.ActiveExecs) != 1 {
+		t.Fatalf("expected active execution metadata to survive reclaim, got %+v", ns)
+	}
+}
+
+func TestLoadPreservesActiveReservationWithRecentHeartbeat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	prevAlive := execOwnerAlive
+	execOwnerAlive = func(pid int) bool { return pid == 4242 }
+	t.Cleanup(func() { execOwnerAlive = prevAlive })
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   4096,
+				LastPlacedAt: time.Now().Add(-25 * time.Hour).UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+				ExecReservationsMB: map[string]int64{
+					"exec-1": 4096,
+				},
+				ExecHeartbeatAt: map[string]time.Time{
+					"exec-1": time.Now().Add(-30 * time.Second).UTC(),
+				},
+				ExecOwnerPID: map[string]int{
+					"exec-1": 4242,
+				},
+				ExecOwnerSurface: map[string]string{
+					"exec-1": "task-run",
+				},
+				ExecOwnerLabel: map[string]string{
+					"exec-1": "cli",
+				},
+				ExecOrigin: map[string]models.ExecutionOrigin{
+					"exec-1": models.NewExecutionOrigin("local-node", "host.local", "abc-123"),
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns, ok := loaded.Nodes["alpha"]
+	if !ok {
+		t.Fatal("expected active heartbeat-backed reservation to remain")
+	}
+	if ns.ReservedMB != 4096 {
+		t.Fatalf("ReservedMB = %d, want 4096", ns.ReservedMB)
+	}
+	if ns.ExecOwnerPID["exec-1"] != 4242 {
+		t.Fatalf("ExecOwnerPID = %v, want exec-1=4242", ns.ExecOwnerPID)
+	}
+	if ns.ExecOwnerSurface["exec-1"] != "task-run" {
+		t.Fatalf("ExecOwnerSurface = %v, want exec-1=task-run", ns.ExecOwnerSurface)
+	}
+	if ns.ExecOwnerLabel["exec-1"] != "cli" {
+		t.Fatalf("ExecOwnerLabel = %v, want exec-1=cli", ns.ExecOwnerLabel)
+	}
+	if ns.ExecOrigin["exec-1"] != models.NewExecutionOrigin("local-node", "host.local", "abc-123") {
+		t.Fatalf("ExecOrigin = %v, want exec-1 local origin", ns.ExecOrigin)
+	}
+}
+
+func TestLoadDropsAncientActiveReservations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   2048,
+				LastPlacedAt: time.Now().Add(-25 * time.Hour).UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if _, ok := loaded.Nodes["alpha"]; ok {
+		t.Fatal("expected ancient active reservation to be dropped")
+	}
+}
+
+func TestLoadReclaimsActiveReservationWithDeadOwnerPID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	prevAlive := execOwnerAlive
+	execOwnerAlive = func(pid int) bool { return false }
+	t.Cleanup(func() { execOwnerAlive = prevAlive })
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   2048,
+				LastPlacedAt: time.Now().Add(-10 * time.Second).UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+				ExecReservationsMB: map[string]int64{
+					"exec-1": 2048,
+				},
+				ExecHeartbeatAt: map[string]time.Time{
+					"exec-1": time.Now().UTC(),
+				},
+				ExecOwnerPID: map[string]int{
+					"exec-1": 9999,
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, ok := loaded.Nodes["alpha"]; ok {
+		t.Fatalf("expected dead-owner reservation to be reclaimed, got %+v", loaded.Nodes["alpha"])
+	}
+}
+
+func TestSemanticFingerprintIgnoresHeartbeatOnlyChanges(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	base := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   2048,
+				LastTask:     "serve",
+				LastPlacedAt: time.Unix(1_700_000_000, 0).UTC(),
+				ActiveTasks:  1,
+				ActiveExecs:  []string{"exec-1"},
+				ExecReservationsMB: map[string]int64{
+					"exec-1": 2048,
+				},
+				ExecHeartbeatAt: map[string]time.Time{
+					"exec-1": time.Unix(1_700_000_010, 0).UTC(),
+				},
+			},
+		},
+		UpdatedAt: time.Unix(1_700_000_020, 0).UTC(),
+	}
+	data, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	first, exists, err := SemanticFingerprint(path)
+	if err != nil {
+		t.Fatalf("SemanticFingerprint() error = %v", err)
+	}
+	if !exists {
+		t.Fatal("expected semantic fingerprint file to exist")
+	}
+
+	base.Nodes["alpha"] = NodeState{
+		ReservedMB:   2048,
+		LastTask:     "serve",
+		LastPlacedAt: time.Unix(1_700_000_000, 0).UTC(),
+		ActiveTasks:  1,
+		ActiveExecs:  []string{"exec-1"},
+		ExecReservationsMB: map[string]int64{
+			"exec-1": 2048,
+		},
+		ExecHeartbeatAt: map[string]time.Time{
+			"exec-1": time.Unix(1_700_000_099, 0).UTC(),
+		},
+	}
+	base.UpdatedAt = time.Unix(1_700_000_100, 0).UTC()
+	data, err = json.Marshal(base)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	second, exists, err := SemanticFingerprint(path)
+	if err != nil {
+		t.Fatalf("SemanticFingerprint() second call error = %v", err)
+	}
+	if !exists {
+		t.Fatal("expected semantic fingerprint file to still exist")
+	}
+	if first != second {
+		t.Fatalf("expected heartbeat-only change to keep semantic fingerprint stable: %x != %x", first, second)
+	}
+}
+
+func TestSemanticFingerprintChangesForReservationShape(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	writeState := func(reserved int64) [32]byte {
+		t.Helper()
+		payload := ClusterState{
+			Nodes: map[string]NodeState{
+				"alpha": {
+					ReservedMB:   reserved,
+					LastTask:     "serve",
+					LastPlacedAt: time.Unix(1_700_000_000, 0).UTC(),
+					ActiveTasks:  1,
+					ActiveExecs:  []string{"exec-1"},
+					ExecReservationsMB: map[string]int64{
+						"exec-1": reserved,
+					},
+					ExecHeartbeatAt: map[string]time.Time{
+						"exec-1": time.Unix(1_700_000_010, 0).UTC(),
+					},
+				},
+			},
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		sum, exists, err := SemanticFingerprint(path)
+		if err != nil {
+			t.Fatalf("SemanticFingerprint() error = %v", err)
+		}
+		if !exists {
+			t.Fatal("expected semantic fingerprint file to exist")
+		}
+		return sum
+	}
+
+	first := writeState(2048)
+	second := writeState(1024)
+	if first == second {
+		t.Fatalf("expected reservation-shape change to alter semantic fingerprint: %x", first)
+	}
+}
+
+func TestSemanticFingerprintChangesForOwnerProvenance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	writeState := func(surface string) [32]byte {
+		t.Helper()
+		payload := ClusterState{
+			Nodes: map[string]NodeState{
+				"alpha": {
+					ReservedMB:   2048,
+					LastTask:     "serve",
+					LastPlacedAt: time.Unix(1_700_000_000, 0).UTC(),
+					ActiveTasks:  1,
+					ActiveExecs:  []string{"exec-1"},
+					ExecReservationsMB: map[string]int64{
+						"exec-1": 2048,
+					},
+					ExecHeartbeatAt: map[string]time.Time{
+						"exec-1": time.Unix(1_700_000_010, 0).UTC(),
+					},
+					ExecOwnerSurface: map[string]string{
+						"exec-1": surface,
+					},
+				},
+			},
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		sum, exists, err := SemanticFingerprint(path)
+		if err != nil {
+			t.Fatalf("SemanticFingerprint() error = %v", err)
+		}
+		if !exists {
+			t.Fatal("expected semantic fingerprint file to exist")
+		}
+		return sum
+	}
+
+	first := writeState("task-run")
+	second := writeState("http-run")
+	if first == second {
+		t.Fatalf("expected owner-provenance change to alter semantic fingerprint: %x", first)
+	}
+}
+
+func TestSemanticFingerprintChangesForExecutionOrigin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	writeState := func(origin models.ExecutionOrigin) [32]byte {
+		t.Helper()
+		payload := ClusterState{
+			Nodes: map[string]NodeState{
+				"alpha": {
+					ReservedMB:   2048,
+					LastTask:     "serve",
+					LastPlacedAt: time.Unix(1_700_000_000, 0).UTC(),
+					ActiveTasks:  1,
+					ActiveExecs:  []string{"exec-1"},
+					ExecReservationsMB: map[string]int64{
+						"exec-1": 2048,
+					},
+					ExecHeartbeatAt: map[string]time.Time{
+						"exec-1": time.Unix(1_700_000_010, 0).UTC(),
+					},
+					ExecOrigin: map[string]models.ExecutionOrigin{
+						"exec-1": origin,
+					},
+				},
+			},
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		sum, exists, err := SemanticFingerprint(path)
+		if err != nil {
+			t.Fatalf("SemanticFingerprint() error = %v", err)
+		}
+		if !exists {
+			t.Fatal("expected semantic fingerprint file to exist")
+		}
+		return sum
+	}
+
+	first := writeState(models.NewExecutionOrigin("node-a", "host-a.local", "abc-123"))
+	second := writeState(models.NewExecutionOrigin("node-b", "host-b.local", "def-456"))
+	if first == second {
+		t.Fatalf("expected execution-origin change to alter semantic fingerprint: %x", first)
+	}
+}
+
+func TestLoadReclaimsExecutionsWithStaleHeartbeats(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	payload := ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:   4096,
+				LastPlacedAt: time.Now().UTC(),
+				ActiveTasks:  2,
+				ActiveExecs:  []string{"stale", "live"},
+				ExecReservationsMB: map[string]int64{
+					"stale": 3072,
+					"live":  1024,
+				},
+				ExecHeartbeatAt: map[string]time.Time{
+					"stale": time.Now().Add(-3 * time.Minute).UTC(),
+					"live":  time.Now().Add(-30 * time.Second).UTC(),
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ns, ok := loaded.Nodes["alpha"]
+	if !ok {
+		t.Fatal("expected live execution to remain")
+	}
+	if ns.ReservedMB != 1024 {
+		t.Fatalf("ReservedMB = %d, want 1024 after stale heartbeat reclaim", ns.ReservedMB)
+	}
+	if len(ns.ActiveExecs) != 1 || ns.ActiveExecs[0] != "live" {
+		t.Fatalf("ActiveExecs = %v, want [live]", ns.ActiveExecs)
 	}
 }
 
@@ -175,12 +677,19 @@ func TestRecordPlacementAccumulatesReservationsAndCapsDecisionHistory(t *testing
 func TestStateLifecycleAcquireAndRelease(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	prevOwnerPID := execOwnerPID
+	execOwnerPID = func() int { return 4242 }
+	t.Cleanup(func() { execOwnerPID = prevOwnerPID })
 
 	s := &ClusterState{}
 
-	execID, err := s.AcquireTask("alpha", "git status", 512)
+	execID, err := s.AcquireTaskWithOwner("alpha", "git status", 512, ExecutionOwner{
+		Surface: "task-run",
+		Label:   "cli",
+		Origin:  models.NewExecutionOrigin("local-node", "host.local", "abc-123"),
+	})
 	if err != nil {
-		t.Fatalf("AcquireTask() error = %v", err)
+		t.Fatalf("AcquireTaskWithOwner() error = %v", err)
 	}
 
 	ns, ok := s.Nodes["alpha"]
@@ -196,12 +705,53 @@ func TestStateLifecycleAcquireAndRelease(t *testing.T) {
 	if len(ns.ActiveExecs) != 1 || ns.ActiveExecs[0] != execID {
 		t.Fatalf("ActiveExecs = %v, want [%s]", ns.ActiveExecs, execID)
 	}
+	if ns.ExecReservationsMB[execID] != 512 {
+		t.Fatalf("ExecReservationsMB = %v, want %s=512", ns.ExecReservationsMB, execID)
+	}
+	if ns.ExecHeartbeatAt[execID].IsZero() {
+		t.Fatalf("ExecHeartbeatAt = %v, want heartbeat for %s", ns.ExecHeartbeatAt, execID)
+	}
+	if ns.ExecOwnerPID[execID] != 4242 {
+		t.Fatalf("ExecOwnerPID = %v, want %s=4242", ns.ExecOwnerPID, execID)
+	}
+	if ns.ExecOwnerSurface[execID] != "task-run" {
+		t.Fatalf("ExecOwnerSurface = %v, want %s=task-run", ns.ExecOwnerSurface, execID)
+	}
+	if ns.ExecOwnerLabel[execID] != "cli" {
+		t.Fatalf("ExecOwnerLabel = %v, want %s=cli", ns.ExecOwnerLabel, execID)
+	}
+	if ns.ExecOrigin[execID] != models.NewExecutionOrigin("local-node", "host.local", "abc-123") {
+		t.Fatalf("ExecOrigin = %v, want %s local origin", ns.ExecOrigin, execID)
+	}
 
 	if err := s.ReleaseTask("alpha", execID, 512); err != nil {
 		t.Fatalf("ReleaseTask() error = %v", err)
 	}
 	if _, ok := s.Nodes["alpha"]; ok {
 		t.Fatal("expected alpha node to be pruned after release")
+	}
+}
+
+func TestHeartbeatTaskRefreshesActiveExecution(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := &ClusterState{}
+	execID, err := s.AcquireTask("alpha", "git status", 512)
+	if err != nil {
+		t.Fatalf("AcquireTask() error = %v", err)
+	}
+
+	before := s.Nodes["alpha"].ExecHeartbeatAt[execID]
+	time.Sleep(10 * time.Millisecond)
+
+	if err := s.HeartbeatTask("alpha", execID); err != nil {
+		t.Fatalf("HeartbeatTask() error = %v", err)
+	}
+
+	after := s.Nodes["alpha"].ExecHeartbeatAt[execID]
+	if !after.After(before) {
+		t.Fatalf("expected heartbeat to advance, before=%v after=%v", before, after)
 	}
 }
 

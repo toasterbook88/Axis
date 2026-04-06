@@ -24,6 +24,7 @@ type beaconPayload struct {
 	Type      string    `json:"t"`
 	Name      string    `json:"n"`
 	Hostname  string    `json:"h"`
+	StableID  string    `json:"id,omitempty"`
 	IP        string    `json:"ip"`
 	SSHPort   int       `json:"p"`
 	Role      string    `json:"r"`
@@ -35,6 +36,7 @@ type Beacon struct {
 	Type      string    `json:"t"`
 	Name      string    `json:"n"`
 	Hostname  string    `json:"h"`
+	StableID  string    `json:"id,omitempty"`
 	IP        string    `json:"ip"`
 	SSHPort   int       `json:"p"`
 	Role      string    `json:"r"`
@@ -52,7 +54,7 @@ func signBeacon(b Beacon, secret string) string {
 		return ""
 	}
 	payload := beaconPayload{
-		Type: b.Type, Name: b.Name, Hostname: b.Hostname, IP: b.IP,
+		Type: b.Type, Name: b.Name, Hostname: b.Hostname, StableID: b.StableID, IP: b.IP,
 		SSHPort: b.SSHPort, Role: b.Role, Version: b.Version, Timestamp: b.Timestamp,
 	}
 	data, err := json.Marshal(payload)
@@ -76,40 +78,60 @@ func verifyBeacon(b Beacon, secret string) bool {
 }
 
 func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]config.NodeConfig, mu *sync.Mutex) {
-	port := 42424
-	interval := 3
-	secret := ""
-	if cfg.Discovery != nil {
-		if cfg.Discovery.UDPPort > 0 {
-			port = cfg.Discovery.UDPPort
-		}
-		if cfg.Discovery.BeaconInterval > 0 {
-			interval = cfg.Discovery.BeaconInterval
-		}
-		secret = cfg.Discovery.Secret
+	startBeaconBroadcaster(ctx, cfg)
+	pc, secret, err := openBeaconListener(cfg)
+	if err != nil {
+		return
+	}
+	listenForBeacons(ctx, pc, secret, func(b Beacon) {
+		mu.Lock()
+		mergeBeaconNode(discovered, b)
+		mu.Unlock()
+	})
+}
+
+// WatchBeaconChanges runs a long-lived beacon broadcaster/listener pair and
+// updates the provided registry as beacon-derived nodes appear, change, or age
+// out. onChange is called only when the observed registry meaningfully changes.
+func WatchBeaconChanges(ctx context.Context, cfg *config.Config, registry *BeaconRegistry, onChange func()) {
+	if cfg == nil || cfg.Discovery == nil || !cfg.Discovery.Enabled || registry == nil {
+		return
 	}
 
-	hostname, _ := os.Hostname()
-	localName := hostname
-	localRole := "unknown"
-	localSSHPort := 22
-	for _, n := range cfg.Nodes {
-		if models.IsLocalConfig(n.Name, n.Hostname) {
-			localName = n.Name
-			localRole = n.Role
-			localSSHPort = n.EffectiveSSHPort()
-			break
-		}
-	}
-
-	ipStr := localIP()
-
-	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+	startBeaconBroadcaster(ctx, cfg)
+	pc, secret, err := openBeaconListener(cfg)
 	if err != nil {
 		return
 	}
 
-	// Broadcaster
+	listenForBeacons(ctx, pc, secret, func(b Beacon) {
+		if registry.UpdateFromBeacon(b) && onChange != nil {
+			onChange()
+		}
+	})
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				if registry.PruneExpired(now.UTC()) && onChange != nil {
+					onChange()
+				}
+			}
+		}
+	}()
+}
+
+func startBeaconBroadcaster(ctx context.Context, cfg *config.Config) {
+	port, interval, _, beacon, ok := udpSettings(cfg)
+	if !ok {
+		return
+	}
+
 	go func() {
 		conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4bcast, Port: port})
 		if err != nil {
@@ -125,24 +147,31 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				b := Beacon{
-					Type:      "axis",
-					Name:      localName,
-					Hostname:  hostname,
-					IP:        ipStr,
-					SSHPort:   localSSHPort,
-					Role:      localRole,
-					Version:   buildinfo.Version,
-					Timestamp: time.Now().UTC(),
+				beacon.Timestamp = time.Now().UTC()
+				beacon.Sig = signBeacon(beacon, udpSecret(cfg))
+				data, err := json.Marshal(beacon)
+				if err != nil {
+					continue
 				}
-				b.Sig = signBeacon(b, secret)
-				data, _ := json.Marshal(b)
-				conn.Write(data)
+				_, _ = conn.Write(data)
 			}
 		}
 	}()
+}
 
-	// Listener
+func openBeaconListener(cfg *config.Config) (*net.UDPConn, string, error) {
+	port, _, secret, _, ok := udpSettings(cfg)
+	if !ok {
+		return nil, "", net.InvalidAddrError("discovery disabled")
+	}
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+	if err != nil {
+		return nil, "", err
+	}
+	return pc, secret, nil
+}
+
+func listenForBeacons(ctx context.Context, pc *net.UDPConn, secret string, onBeacon func(Beacon)) {
 	go func() {
 		defer pc.Close()
 
@@ -163,27 +192,100 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 				if !verifyBeacon(b, secret) {
 					continue
 				}
-				if time.Since(b.Timestamp) > 30*time.Second {
+				if time.Since(b.Timestamp) > beaconTTL {
 					continue
 				}
-
-				mu.Lock()
-				// Only inject discovered nodes that aren't already explicitly bound
-				// to static SSH configurations to avoid clobbering robust setups
-				if _, exists := discovered[b.Name]; !exists {
-					discovered[b.Name] = config.NodeConfig{
-						Name:       b.Name,
-						Hostname:   b.IP,
-						SSHUser:    "axis", // Need default because UDP doesn't broadcast SSH user safely
-						Role:       b.Role,
-						SSHPort:    b.SSHPort,
-						TimeoutSec: 10,
-					}
-				}
-				mu.Unlock()
+				onBeacon(b)
 			}
 		}
 	}()
+}
+
+func udpSettings(cfg *config.Config) (int, int, string, Beacon, bool) {
+	if cfg == nil || cfg.Discovery == nil || !cfg.Discovery.Enabled {
+		return 0, 0, "", Beacon{}, false
+	}
+
+	port := 42424
+	interval := 3
+	if cfg.Discovery.UDPPort > 0 {
+		port = cfg.Discovery.UDPPort
+	}
+	if cfg.Discovery.BeaconInterval > 0 {
+		interval = cfg.Discovery.BeaconInterval
+	}
+
+	hostname, _ := os.Hostname()
+	localStableID := models.CurrentLocalStableID()
+	localName := hostname
+	localRole := "unknown"
+	localSSHPort := 22
+	for _, n := range cfg.Nodes {
+		if discoveryIsLocalConfig(n) {
+			localName = n.Name
+			localRole = n.Role
+			localSSHPort = n.EffectiveSSHPort()
+			break
+		}
+	}
+
+	beacon := Beacon{
+		Type:     "axis",
+		Name:     localName,
+		Hostname: hostname,
+		StableID: localStableID,
+		IP:       localIP(),
+		SSHPort:  localSSHPort,
+		Role:     localRole,
+		Version:  buildinfo.Version,
+	}
+	return port, interval, cfg.Discovery.Secret, beacon, true
+}
+
+func udpSecret(cfg *config.Config) string {
+	if cfg == nil || cfg.Discovery == nil {
+		return ""
+	}
+	return cfg.Discovery.Secret
+}
+
+func mergeBeaconNode(discovered map[string]config.NodeConfig, b Beacon) {
+	if key, exists := discoveredNodeKey(discovered, b.Name, b.StableID); exists {
+		existing := discovered[key]
+		if existing.StableID == "" {
+			existing.StableID = models.NormalizeStableID(b.StableID)
+			discovered[key] = existing
+		}
+		return
+	}
+
+	discovered[b.Name] = config.NodeConfig{
+		Name:       beaconNodeConfig(b).Name,
+		Hostname:   beaconNodeConfig(b).Hostname,
+		StableID:   beaconNodeConfig(b).StableID,
+		SSHUser:    beaconNodeConfig(b).SSHUser,
+		Role:       beaconNodeConfig(b).Role,
+		SSHPort:    beaconNodeConfig(b).SSHPort,
+		TimeoutSec: beaconNodeConfig(b).TimeoutSec,
+	}
+}
+
+func discoveredNodeKey(discovered map[string]config.NodeConfig, name, stableID string) (string, bool) {
+	if _, exists := discovered[name]; exists {
+		return name, true
+	}
+
+	normalizedStableID := models.NormalizeStableID(stableID)
+	if normalizedStableID == "" {
+		return "", false
+	}
+
+	for key, node := range discovered {
+		if models.NormalizeStableID(node.StableID) == normalizedStableID {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 func localIP() string {
