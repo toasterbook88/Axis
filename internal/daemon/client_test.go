@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,8 @@ import (
 )
 
 func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/snapshot/meta":
@@ -48,7 +51,106 @@ func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
 	}
 }
 
+func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/snapshot/meta":
+			_ = json.NewEncoder(w).Encode(Metadata{
+				Source:             "daemon-cache",
+				Ready:              true,
+				RefreshIntervalSec: 60,
+				CacheAgeSec:        187,
+				Stale:              true,
+				StaleNodes:         []string{"m1", "m2"},
+			})
+		case "/snapshot":
+			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
+				Status: models.SnapshotHealthy,
+				Summary: models.ClusterSummary{
+					TotalNodes: 2,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snap, source, err := FetchSnapshot(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchSnapshot: %v", err)
+	}
+	if source != "daemon-cache" {
+		t.Fatalf("expected daemon-cache source, got %q", source)
+	}
+	if len(snap.Warnings) != 1 {
+		t.Fatalf("expected stale cache warning, got %#v", snap.Warnings)
+	}
+	if snap.Warnings[0].Kind != "cache" {
+		t.Fatalf("warning kind = %q, want cache", snap.Warnings[0].Kind)
+	}
+	if !strings.Contains(snap.Warnings[0].Message, "daemon cache is stale (187s old)") {
+		t.Fatalf("unexpected warning message: %q", snap.Warnings[0].Message)
+	}
+	if !strings.Contains(snap.Warnings[0].Message, "stale nodes: m1, m2") {
+		t.Fatalf("expected stale node list in warning, got %q", snap.Warnings[0].Message)
+	}
+}
+
+func TestFetchSnapshotTruncatesLongStaleNodeLists(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
+	staleNodes := make([]string, 0, 12)
+	for i := 1; i <= 12; i++ {
+		staleNodes = append(staleNodes, fmt.Sprintf("n%d", i))
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/snapshot/meta":
+			_ = json.NewEncoder(w).Encode(Metadata{
+				Source:             "daemon-cache",
+				Ready:              true,
+				RefreshIntervalSec: 60,
+				CacheAgeSec:        60,
+				Stale:              true,
+				StaleNodes:         staleNodes,
+			})
+		case "/snapshot":
+			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
+				Status: models.SnapshotHealthy,
+				Summary: models.ClusterSummary{
+					TotalNodes: 12,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snap, _, err := FetchSnapshot(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchSnapshot: %v", err)
+	}
+	if len(snap.Warnings) != 1 {
+		t.Fatalf("expected stale cache warning, got %#v", snap.Warnings)
+	}
+
+	msg := snap.Warnings[0].Message
+	if !strings.Contains(msg, "stale nodes: n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, ... (2 more)") {
+		t.Fatalf("expected truncated stale node list, got %q", msg)
+	}
+	if strings.Contains(msg, "n11") || strings.Contains(msg, "n12") {
+		t.Fatalf("expected n11/n12 to be truncated, got %q", msg)
+	}
+}
+
 func TestFetchMetaReadsDaemonMetadata(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/snapshot/meta" {
 			http.NotFound(w, r)

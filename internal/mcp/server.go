@@ -384,7 +384,7 @@ func currentPlacementInputs(ctx context.Context, useCache bool, cacheAddr string
 	}
 	if stateErr != nil {
 		snap = daemon.CloneSnapshot(snap)
-		appendMCPWarningIfMissing(snap, models.Warning{
+		models.AppendWarningIfMissing(snap, models.Warning{
 			Kind:    "state",
 			Message: stateErr.Error(),
 		})
@@ -438,18 +438,6 @@ func runCommand(ctx context.Context, name string, args ...string) commandResult 
 		result.Error = err.Error()
 	}
 	return result
-}
-
-func appendMCPWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
-	if snap == nil {
-		return
-	}
-	for _, existing := range snap.Warnings {
-		if existing.Kind == warning.Kind && existing.Message == warning.Message && existing.Node == warning.Node {
-			return
-		}
-	}
-	snap.Warnings = append(snap.Warnings, warning)
 }
 
 func toolResultJSON(v any) (*mcpproto.CallToolResult, error) {

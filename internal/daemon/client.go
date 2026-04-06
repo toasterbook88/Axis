@@ -21,6 +21,7 @@ import (
 const Version = buildinfo.Version
 
 const daemonRequestTimeout = 5 * time.Second
+const staleWarningNodeLimit = 10
 
 func NormalizeAddr(addr string) string {
 	addr = strings.TrimSpace(addr)
@@ -68,12 +69,34 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 		return nil, "", err
 	}
 
+	if meta.Stale {
+		models.AppendWarningIfMissing(&snap, staleCacheWarning(meta))
+	}
+
 	source := meta.Source
 	if source == "" {
 		source = "daemon-cache"
 	}
 
 	return &snap, source, nil
+}
+
+func staleCacheWarning(meta Metadata) models.Warning {
+	message := "daemon cache is stale; run axis daemon refresh or restart axis serve"
+	if meta.CacheAgeSec > 0 {
+		message = fmt.Sprintf("daemon cache is stale (%ds old); run axis daemon refresh or restart axis serve", meta.CacheAgeSec)
+	}
+	if len(meta.StaleNodes) > 0 {
+		nodes := meta.StaleNodes
+		if len(nodes) > staleWarningNodeLimit {
+			nodes = append(nodes[:staleWarningNodeLimit:staleWarningNodeLimit], fmt.Sprintf("... (%d more)", len(nodes)-staleWarningNodeLimit))
+		}
+		message = fmt.Sprintf("%s; stale nodes: %s", message, strings.Join(nodes, ", "))
+	}
+	return models.Warning{
+		Kind:    "cache",
+		Message: message,
+	}
 }
 
 func FetchMeta(ctx context.Context, addr string) (Metadata, error) {
