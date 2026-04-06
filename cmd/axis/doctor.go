@@ -10,8 +10,22 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
+
+var doctorConfigPath = config.DefaultConfigPath
+var loadDoctorConfig = config.Load
+var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
+	exec := transport.NewSSHExecutor(
+		node.Hostname,
+		node.EffectiveSSHPort(),
+		node.SSHUser,
+		node.EffectiveTimeout(),
+	)
+	defer exec.Close()
+	return exec.Connect(ctx)
+}
 
 func doctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -31,9 +45,9 @@ func runDoctor(cmd *cobra.Command) error {
 	allOK := true
 
 	// 1. Config check
-	cfgPath := config.DefaultConfigPath()
+	cfgPath := doctorConfigPath()
 	fmt.Fprintf(out, "%s Config: %s\n", ui.Cyan("→"), cfgPath)
-	cfg, err := config.Load(cfgPath)
+	cfg, err := loadDoctorConfig(cfgPath)
 	if err != nil {
 		ui.FprintError(out, fmt.Sprintf("Config: %v", err), "cp nodes.example.yaml ~/.axis/nodes.yaml")
 		allOK = false
@@ -45,12 +59,13 @@ func runDoctor(cmd *cobra.Command) error {
 		fmt.Fprintf(out, "%s SSH connectivity\n", ui.Cyan("→"))
 		for _, n := range cfg.Nodes {
 			addr := net.JoinHostPort(n.Hostname, fmt.Sprintf("%d", n.EffectiveSSHPort()))
-			conn, dialErr := net.DialTimeout("tcp", addr, 3*time.Second)
-			if dialErr != nil {
-				fmt.Fprintf(out, "  %s %s (%s): %v\n", ui.StatusIcon(false), n.Name, addr, dialErr)
+			sshCtx, cancel := context.WithTimeout(context.Background(), time.Duration(n.EffectiveTimeout())*time.Second)
+			sshErr := doctorCheckNodeSSH(sshCtx, n)
+			cancel()
+			if sshErr != nil {
+				fmt.Fprintf(out, "  %s %s (%s): %v\n", ui.StatusIcon(false), n.Name, addr, sshErr)
 				allOK = false
 			} else {
-				conn.Close()
 				fmt.Fprintf(out, "  %s %s (%s)\n", ui.StatusIcon(true), n.Name, addr)
 			}
 		}
