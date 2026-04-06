@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -32,6 +31,10 @@ type ToolContext struct {
 	Snapshot *models.ClusterSnapshot
 	State    *state.ClusterState
 }
+
+// ShellRunner executes an approved shell command and returns the tool-visible
+// output. CLI callers can route this through guarded AXIS execution.
+type ShellRunner func(context.Context, string) (string, error)
 
 // NewToolRegistry creates the default set of agent tools.
 func NewToolRegistry(tc *ToolContext) *ToolRegistry {
@@ -110,17 +113,13 @@ func (r *ToolRegistry) registerFacts(tc *ToolContext) {
 		"Return local hardware facts for the current machine (CPU, RAM, disk, GPUs, installed tools).",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			hostname, _ := os.Hostname()
-			// Use the snapshot's local node facts if available.
 			if tc.Snapshot != nil {
-				for _, n := range tc.Snapshot.Nodes {
-					if n.Hostname == hostname || n.Name == hostname {
-						out, err := json.Marshal(n)
-						if err != nil {
-							return "", fmt.Errorf("marshal facts: %w", err)
-						}
-						return string(out), nil
+				if n, ok := models.FindLocalNode(tc.Snapshot.Nodes); ok {
+					out, err := json.Marshal(n)
+					if err != nil {
+						return "", fmt.Errorf("marshal facts: %w", err)
 					}
+					return string(out), nil
 				}
 			}
 			return `{"error":"local node not found in snapshot"}`, nil
@@ -187,7 +186,7 @@ const shellTimeout = 30 * time.Second
 
 func (r *ToolRegistry) registerShell() {
 	r.add("run_shell",
-		"Execute a shell command on the local machine. Only use for read-only diagnostics (ls, cat, df, top, etc). Destructive commands will be blocked.",
+		"Execute a shell command through the agent execution gate. CLI callers may route this through guarded AXIS execution with placement and reservation protection; destructive commands will still be blocked.",
 		json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"The shell command to execute"}},"required":["command"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a shellArgs
@@ -204,8 +203,8 @@ func (r *ToolRegistry) registerShell() {
 	)
 }
 
-// ExecuteShell runs a shell command with timeout and captures output.
-// This is called by the agent loop AFTER safety gating and confirmation.
+// ExecuteShell runs a local shell command with timeout and captures output.
+// This is the fallback shell runner when no guarded AXIS executor is wired in.
 func ExecuteShell(ctx context.Context, command string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, shellTimeout)
 	defer cancel()

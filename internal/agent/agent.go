@@ -18,6 +18,7 @@ type Agent struct {
 	conv     *chat.Conversation
 	tools    *ToolRegistry
 	confirm  ConfirmFunc
+	runShell ShellRunner
 	safety   ShellSafetyGate
 	output   io.Writer
 	maxTurns int
@@ -52,6 +53,10 @@ type Config struct {
 
 	// Confirm is the confirmation function. If nil, StdinConfirm() is used.
 	Confirm ConfirmFunc
+
+	// RunShell executes an approved shell command. If nil, the agent falls back
+	// to a direct local shell helper.
+	RunShell ShellRunner
 }
 
 // New creates an Agent from the given configuration.
@@ -97,12 +102,17 @@ func New(cfg Config) *Agent {
 
 	// Build safety gate.
 	safetyGate := DefaultSafetyGate(cfg.Knowledge)
+	runShell := cfg.RunShell
+	if runShell == nil {
+		runShell = ExecuteShell
+	}
 
 	return &Agent{
 		client:   client,
 		conv:     conv,
 		tools:    tools,
 		confirm:  confirm,
+		runShell: runShell,
 		safety:   safetyGate,
 		output:   cfg.Output,
 		maxTurns: cfg.MaxTurns,
@@ -221,7 +231,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	}
 
 	fmt.Fprintf(a.output, "\n▶ Executing shell: %s\n", sa.Command)
-	return ExecuteShell(ctx, sa.Command)
+	return a.runShell(ctx, sa.Command)
 }
 
 func (a *Agent) toolNames() string {
