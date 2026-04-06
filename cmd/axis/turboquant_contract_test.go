@@ -19,6 +19,7 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 		context.Background(),
 		"run 128k ollama inference",
 		true,
+		false,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
 			return &models.ClusterSnapshot{
 				Nodes: []models.NodeFacts{goldenTurboQuantNode()},
