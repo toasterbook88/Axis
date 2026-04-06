@@ -351,12 +351,14 @@ See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md
 
 ## Roadmap
 
-The following are planned directions, not current functionality:
+The following are planned directions beyond the functionality shipped in v0.7.0:
 
 - Mesh networking / peer discovery beyond a static seed file
-- Phase 4+ features — see [white paper](docs/white_paper_v1.md)
+- Future roadmap phases beyond the current runtime-hardening wave — see
+  [white paper](docs/white_paper_v1.md) and
+  [future roadmap](docs/future-roadmap.md)
 
-### Phase 3 (Shipped in v0.5.0)
+### Phase 3 (Shipped in v0.4.0) · Phases 4–7 (Shipped in v0.7.0)
 
 The following features were delivered in Phase 3:
 
@@ -366,9 +368,14 @@ The following features were delivered in Phase 3:
 - **`axis task context --format json`** — machine-readable context block with fit score, skills, and recent decisions
 - **HMAC-SHA256 beacon auth** — UDP discovery signs beacons instead of transmitting the shared secret
 
+Phases 4–7 are now shipped in v0.7.0, including professional CLI UX,
+structured chat and agent surfaces, transport and execution hardening, and the
+trust-and-foundations work tracked in the roadmap docs.
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an issue before adding Phase 4+ features.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an
+issue before adding major new roadmap phases or control surfaces.
 
 ## License
 
