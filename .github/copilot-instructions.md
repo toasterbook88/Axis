@@ -10,18 +10,30 @@ real snapshot or live probe.
 
 - `axis facts`, `axis status`, `axis task place`, and `axis task context` are
   the primary operator truth surfaces.
-- `axis chat` and `axis discover` are experimental helpers and must stay
-  subordinate to observed state.
+- `axis chat` and `axis agent` are experimental helpers subordinate to observed
+  state.
 - Optional HTTP, MCP, and execution surfaces must not weaken the fact plane.
+
+## Release State
+
+The repo version constant lives in `internal/buildinfo/version.go`. The latest
+published GitHub release may differ from the repo version, so check the
+Releases page or refresh `docs/current-state.md` before making release claims.
+
+Do not describe roadmap phases, future-path docs, or unpublished tags as live
+product truth unless they are backed by the code, `docs/current-state.md`, and
+the latest published GitHub release.
 
 ## Build And Test
 
+Source of truth: [`Makefile`](../Makefile).
+
 ```bash
-go build -o axis ./cmd/axis/
-go test ./...
-go test -race ./...
-./hack/coverage-check.sh
-gofmt -w .
+make build
+make test
+make test-race
+make lint
+make coverage
 ```
 
 Requires Go 1.26.1+ and SSH key-based auth for remote nodes.
@@ -44,8 +56,11 @@ Secondary surfaces:
 - `internal/daemon/` powers explicit cached reads
 - `internal/api/` provides the optional local HTTP surface
 - `internal/mcp/` provides read-only MCP access
-- `internal/chat/`, `internal/scripts/`, and `internal/skills/` are useful only
-  if they remain truthful and explicit
+- `internal/chat/` is advisory only and must remain subordinate to facts
+- `internal/agent/`, `internal/execution/`, and `internal/safety/` handle the
+  guarded execution path
+- `internal/scripts/` and `internal/skills/` are useful only if they remain
+  truthful and explicit
 
 ## Scope Discipline
 

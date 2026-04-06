@@ -32,6 +32,11 @@ release" that differs from the latest published GitHub release.
 Do not fabricate or assume a release version. If you need the current state,
 read `docs/current-state.md` (its facts section is CI-validated).
 
+For planned work, read `docs/future-roadmap.md` and older phase/spec docs as
+design material, not live product truth. Do not describe roadmap phases or
+future-path documents as shipped behavior unless they are backed by the code,
+`docs/current-state.md`, and the latest published GitHub release.
+
 ## Build & Test
 
 Source of truth: [`Makefile`](Makefile).
@@ -65,7 +70,7 @@ Verification steps:
 Coverage gates (from `hack/coverage-check.sh`):
 
 | Package | Minimum |
-|---------|---------|
+| --------- | --------- |
 | `internal/knowledge` | 90% |
 | `internal/ui` | 80% |
 | `internal/api` | 50% |
@@ -84,7 +89,7 @@ publishes via GoReleaser (`darwin`/`linux` × `amd64`/`arm64`).
 
 ### Stable operator path
 
-```
+```text
 cmd/axis/             Cobra CLI — one file per subcommand (15 commands)
 internal/config/      Load ~/.axis/nodes.yaml; strict YAML parsing
 internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
@@ -98,7 +103,7 @@ internal/transport/   SSH execution layer (host-key verification must stay on)
 
 ### Secondary / optional surfaces
 
-```
+```text
 internal/daemon/      Background snapshot refresh, in-memory cache
 internal/api/         Optional local HTTP API (axis serve)
 internal/mcp/         Read-only MCP server (axis mcp serve), 10 tools
@@ -115,7 +120,7 @@ internal/knowledge/   Cluster knowledge context for execution
 
 ### Supporting packages
 
-```
+```text
 internal/models/      Core types: NodeFacts, ClusterSnapshot, PlacementDecision
 internal/buildinfo/   Version, commit, date, go version (ldflags injection)
 internal/ui/          Terminal colors, tables, spinners, help templates
@@ -142,19 +147,20 @@ rank → unified memory rank → allocatable RAM → reservation ratio → node 
 
 Scoring components: allocatable RAM (max 30), pressure (max 25), GPU (max 25),
 CPU cores (max 10), local bonus (10), TurboQuant (5–25 if preferred), unified
-memory (8–18 on Apple Silicon; upper end requires TurboQuant verification). HDD penalty: −15 for heavy inference.
+memory (8–18 on Apple Silicon; upper end requires TurboQuant verification).
+HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
 15 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
 
 | Command | Purpose |
-|---------|---------|
-| `axis update [--check]` | Self-update via GitHub Releases with SHA-256 verification |
+| --------- | --------- |
+| `axis update [--check]` | Self-update via GitHub Releases; SHA-256 verified |
 | `axis version` | Print build version, commit, date, go, platform |
 | `axis facts [--format json\|yaml]` | Local node facts |
 | `axis status [--cached] [--format]` | Cluster snapshot |
-| `axis task` | Subcommands: `place`, `context`, `run` — placement, context, execution |
+| `axis task` | Task subcommands: `place`, `context`, `run` |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
 | `axis daemon` | Subcommands: `status`, `refresh`, `invalidate`, `restart` |
@@ -169,7 +175,7 @@ memory (8–18 on Apple Silicon; upper end requires TurboQuant verification). HD
 ### Exit codes (`cmd/axis/exit.go`)
 
 | Code | Constant | Meaning |
-|------|----------|---------|
+| ------ | ---------- | --------- |
 | 0 | `ExitOK` | Success |
 | 1 | `ExitErrGeneric` | Generic error |
 | 2 | `ExitErrConfigLoad` | Configuration load failure |
@@ -189,6 +195,7 @@ Optional UDP discovery block: `discovery.enabled`, `discovery.udp_port`
 `discovery.secret` (HMAC-SHA256 beacon auth).
 
 Persisted local state:
+
 - `~/.axis/state.json` — reservation tracking, failure records, recent
   decisions, per-exec heartbeats, and local caller/origin provenance
 - `~/.axis/skills.json` — learned skills and failures
@@ -216,7 +223,7 @@ file outputs for degraded-state recovery.
 7 direct dependencies (`go.mod`):
 
 | Module | Purpose |
-|--------|---------|
+| -------- | --------- |
 | `al.essio.dev/pkg/shellescape` | Shell argument escaping |
 | `github.com/fatih/color` | Terminal color output |
 | `github.com/mark3labs/mcp-go` | MCP protocol implementation |
@@ -238,9 +245,9 @@ reason, or add heavy dependencies without strong justification.
 ## Hack Scripts
 
 | Script | Purpose |
-|--------|---------|
+| -------- | --------- |
 | `hack/coverage-check.sh` | Per-package and total coverage gates |
-| `hack/verify-repo-truth.sh` | CI guardrail: validates doc facts, release tag references, current-release claims |
-| `hack/refresh-current-state.sh` | Regenerate `docs/current-state.md` facts + verification sections |
-| `hack/compare-release-versions.go` | Compare repo version vs published release tag |
-| `hack/apple-foundation-models.swift` | Probe Apple Foundation Models capability on eligible hosts |
+| `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
+| `hack/refresh-current-state.sh` | Rebuild `docs/current-state.md` |
+| `hack/compare-release-versions.go` | Compare repo vs published release tag |
+| `hack/apple-foundation-models.swift` | Probe Apple Foundation Models support |
