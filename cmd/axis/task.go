@@ -165,15 +165,7 @@ func planTaskPlacement(
 }
 
 func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
-	if snap == nil {
-		return
-	}
-	for _, existing := range snap.Warnings {
-		if existing.Kind == warning.Kind && existing.Message == warning.Message && existing.Node == warning.Node {
-			return
-		}
-	}
-	snap.Warnings = append(snap.Warnings, warning)
+	models.AppendWarningIfMissing(snap, warning)
 }
 
 type taskRunIntent struct {
