@@ -969,13 +969,14 @@ func TestInferRequirements(t *testing.T) {
 		{"compile the go binary", "go", 0, 0, false},
 		{"spin up a docker container", "docker", 0, 0, false},
 		{"just a simple task", "", 0, 0, false},
-		{"deploy using gpu", "ollama", 6144, 0, false},
+		{"deploy using gpu", "", 0, 0, false},
 		{"run a small local model with ollama inference", "ollama", 6144, 0, false},
 		{"ollama run llama3", "ollama", 6144, 0, false},
 		{"run a 7b model locally", "", 4096, 0, false},
 		{"llama-server -m /models/qwen.gguf", "llama-server", 6144, 0, false},
 		{"run 128k book-length ollama inference", "ollama", 6144, 128000, true},
 		{"needle in a haystack 1m tokens", "", 12288, 1000000, true},
+		{"Dad computer specs: GPU NVIDIA RTX 5090 32GB, 192GB RAM, organize files from multiple machines and prep for cluster connection", "", 0, 0, false},
 	}
 	for _, tt := range tests {
 		got := InferRequirements(tt.desc)

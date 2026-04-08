@@ -593,8 +593,8 @@ func TestRunReturnsNoSuitableNode(t *testing.T) {
 	if resp.OK {
 		t.Error("expected ok=false when no node is suitable")
 	}
-	if !strings.Contains(resp.Error, "no suitable node found") {
-		t.Errorf("expected error message containing 'no suitable node found', got %q", resp.Error)
+	if !strings.Contains(resp.Error, "too small for heavy model") {
+		t.Errorf("expected heavy-model safety detail, got %q", resp.Error)
 	}
 }
 

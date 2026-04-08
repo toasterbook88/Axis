@@ -244,6 +244,28 @@ func TestSSHExecutorConnectReportsHostKeyMismatchRemediation(t *testing.T) {
 	}
 }
 
+func TestSSHExecutorConnectUsesResolvedHostnameAndHostKeyAlias(t *testing.T) {
+	clientKey, clientSigner := generateTestKeyPair(t)
+	_, hostSigner := generateTestKeyPair(t)
+
+	server := startSSHTestServer(t, clientSigner.PublicKey(), hostSigner, map[string]sshCommandResponse{
+		"echo hi": {stdout: "hi\n"},
+	})
+	defer server.Close()
+
+	home := writeSSHClientEnv(t, clientKey, hostSigner, "cluster-node", server.Port())
+	restore := stubSSHConfigEnvWithOutput(t, home, fmt.Sprintf(
+		"identityfile ~/.ssh/test_key\nuserknownhostsfile ~/.ssh/known_hosts\nhostname %s\nhostkeyalias cluster-node\n",
+		server.Host(),
+	))
+	defer restore()
+
+	exec := NewSSHExecutor("mesh-alias", server.Port(), "axis", 5)
+	if err := exec.Connect(context.Background()); err != nil {
+		t.Fatalf("connect with resolved hostname + hostkeyalias: %v", err)
+	}
+}
+
 func startSSHTestServer(t *testing.T, authorized ssh.PublicKey, hostSigner ssh.Signer, responses map[string]sshCommandResponse) *sshTestServer {
 	t.Helper()
 
@@ -408,6 +430,34 @@ func stubSSHConfigEnv(t *testing.T, home string) func() {
 	}
 	runSSHConfigCommand = func(ctx context.Context, host string, port int, user string) (string, error) {
 		return "identityfile ~/.ssh/test_key\nuserknownhostsfile ~/.ssh/known_hosts\n", nil
+	}
+
+	return func() {
+		runSSHConfigCommand = prevRunner
+		_ = os.Setenv("HOME", prevHome)
+		if prevSock == "" {
+			_ = os.Unsetenv("SSH_AUTH_SOCK")
+		} else {
+			_ = os.Setenv("SSH_AUTH_SOCK", prevSock)
+		}
+	}
+}
+
+func stubSSHConfigEnvWithOutput(t *testing.T, home, output string) func() {
+	t.Helper()
+
+	prevHome := os.Getenv("HOME")
+	prevSock := os.Getenv("SSH_AUTH_SOCK")
+	prevRunner := runSSHConfigCommand
+
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("set HOME: %v", err)
+	}
+	if err := os.Unsetenv("SSH_AUTH_SOCK"); err != nil {
+		t.Fatalf("unset SSH_AUTH_SOCK: %v", err)
+	}
+	runSSHConfigCommand = func(ctx context.Context, host string, port int, user string) (string, error) {
+		return output, nil
 	}
 
 	return func() {

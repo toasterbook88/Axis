@@ -136,6 +136,95 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 	}
 }
 
+func TestDoctorTreatsDaemonFailureAsAdvisoryByDefault(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
+	restorePath := stubDoctorConfigPath(t, func() string {
+		return tmpFile
+	})
+	defer restorePath()
+
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{
+				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+			},
+		}, nil
+	})
+	defer restoreLoad()
+
+	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error {
+		return nil
+	})
+	defer restoreSSH()
+
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", errors.New("daemon unavailable")
+	})
+	defer restoreCache()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	stdout = stripANSI(stdout)
+	if !strings.Contains(stdout, "Core checks passed with advisory warnings") {
+		t.Fatalf("expected advisory summary, got %q", stdout)
+	}
+	if strings.Contains(stdout, "All checks passed") {
+		t.Fatalf("did not expect full success summary, got %q", stdout)
+	}
+}
+
+func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
+	restorePath := stubDoctorConfigPath(t, func() string {
+		return tmpFile
+	})
+	defer restorePath()
+
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{
+				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+			},
+		}, nil
+	})
+	defer restoreLoad()
+
+	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error {
+		return nil
+	})
+	defer restoreSSH()
+
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", errors.New("daemon unavailable")
+	})
+	defer restoreCache()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SetArgs([]string{"--strict"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	stdout = stripANSI(stdout)
+	if !strings.Contains(stdout, "Some checks failed") {
+		t.Fatalf("expected strict failure summary, got %q", stdout)
+	}
+}
+
 func stubDoctorConfigPath(t *testing.T, fn func() string) func() {
 	t.Helper()
 	prev := doctorConfigPath
