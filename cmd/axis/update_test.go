@@ -185,7 +185,7 @@ func TestFindAxisBinariesExplicitPath(t *testing.T) {
 	if err := os.WriteFile(target, []byte("test"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	paths := findAxisBinaries(target)
+	paths := findAxisBinaries(target, false)
 	if len(paths) != 1 {
 		t.Fatalf("expected 1 path, got %d: %v", len(paths), paths)
 	}
@@ -195,7 +195,7 @@ func TestFindAxisBinariesDedup(t *testing.T) {
 	// When explicit path is empty, findAxisBinaries deduplicates
 	// os.Executable() and exec.LookPath results — at minimum returns the
 	// current executable.
-	paths := findAxisBinaries("")
+	paths := findAxisBinaries("", false)
 	if len(paths) == 0 {
 		t.Fatal("expected at least 1 path for self binary")
 	}
