@@ -11,11 +11,19 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         versionFile = builtins.readFile ./internal/buildinfo/version.go;
-        versionMatch = builtins.match ''(.|\n)*Version = "([^"]+)"(.|\n)*'' versionFile;
+        versionLine =
+          pkgs.lib.lists.findFirst
+            (line: pkgs.lib.strings.hasPrefix "const Version = " line)
+            null
+            (pkgs.lib.strings.splitString "\n" versionFile);
+        versionMatch =
+          if versionLine == null
+          then null
+          else builtins.match ''const Version = "([^"]+)"'' versionLine;
         version =
           if versionMatch == null
           then throw "Could not extract AXIS version from internal/buildinfo/version.go"
-          else builtins.elemAt versionMatch 1;
+          else builtins.elemAt versionMatch 0;
 
         # You may need to update this hash when dependencies change.
         # To get the new hash, set vendorHash = pkgs.lib.fakeHash; run `nix build`,
