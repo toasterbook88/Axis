@@ -1,6 +1,6 @@
 module github.com/toasterbook88/axis
 
-go 1.26.2
+go 1.26.1
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0

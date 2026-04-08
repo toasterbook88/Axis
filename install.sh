@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 # Default variables
 AXIS_VERSION="${AXIS_VERSION:-latest}"
 AXIS_INSTALL_DIR="${AXIS_INSTALL_DIR:-$HOME/.local/bin}"
 REPO="toasterbook88/axis"
+CURL_ARGS=(-fsSL)
 
 echo "Installing AXIS to $AXIS_INSTALL_DIR..."
 
@@ -30,8 +31,8 @@ esac
 echo "Detected Platform: $OS-$ARCH"
 
 # Dependencies check
-for cmd in curl tar; do
-    if ! command -v $cmd >/dev/null 2>&1; then
+for cmd in curl tar mktemp install; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: Required command '$cmd' is not installed."
         exit 1
     fi
@@ -50,9 +51,9 @@ fi
 # Determine download URL
 if [ "$AXIS_VERSION" = "latest" ]; then
     echo "Fetching latest release tag..."
-    LATEST_JSON=$(curl -s "https://api.github.com/repos/$REPO/releases/latest")
-    TAG=$(echo "$LATEST_JSON" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    if [ -z "$TAG" ]; then
+    LATEST_URL=$(curl "${CURL_ARGS[@]}" -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
+    TAG="${LATEST_URL##*/}"
+    if [ -z "$TAG" ] || [[ ! "$TAG" == v* ]]; then
         echo "Error: Failed to fetch latest release tag from GitHub."
         exit 1
     fi
@@ -74,13 +75,13 @@ trap 'rm -rf "$WORKDIR"' EXIT
 cd "$WORKDIR"
 
 echo "Downloading $ARCHIVE_NAME (version $TAG)..."
-if ! curl -sL "$DOWNLOAD_URL" -o "$ARCHIVE_NAME"; then
+if ! curl "${CURL_ARGS[@]}" "$DOWNLOAD_URL" -o "$ARCHIVE_NAME"; then
     echo "Error: Failed to download $DOWNLOAD_URL"
     exit 1
 fi
 
 echo "Downloading checksums.txt..."
-if ! curl -sL "$CHECKSUM_URL" -o "checksums.txt"; then
+if ! curl "${CURL_ARGS[@]}" "$CHECKSUM_URL" -o "checksums.txt"; then
     echo "Error: Failed to download checksums.txt"
     exit 1
 fi
@@ -107,7 +108,7 @@ echo "Extracting binary..."
 tar -xzf "$ARCHIVE_NAME" axis
 
 mkdir -p "$AXIS_INSTALL_DIR"
-mv axis "$AXIS_INSTALL_DIR/"
+install -m 0755 axis "$AXIS_INSTALL_DIR/axis"
 
 echo ""
 echo "=================================================="

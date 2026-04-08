@@ -138,7 +138,7 @@ nix run github:toasterbook88/axis
 
 ### For Developers (Build from Source)
 
-If you need unreleased `main`-branch changes or specifically want to use the Go ecosystem, you can compile from source. **Requirements:** Go 1.26.2+, SSH key-based auth for remote nodes.
+If you need unreleased `main`-branch changes or specifically want to use the Go ecosystem, you can compile from source. **Requirements:** Go 1.26.1+ (use the latest 1.26 patch release), SSH key-based auth for remote nodes.
 
 **Using `go install`:**
 

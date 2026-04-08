@@ -10,6 +10,12 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        versionFile = builtins.readFile ./internal/buildinfo/version.go;
+        versionMatch = builtins.match ''(.|\n)*Version = "([^"]+)"(.|\n)*'' versionFile;
+        version =
+          if versionMatch == null
+          then throw "Could not extract AXIS version from internal/buildinfo/version.go"
+          else builtins.elemAt versionMatch 1;
 
         # You may need to update this hash when dependencies change.
         # To get the new hash, set vendorHash = pkgs.lib.fakeHash; run `nix build`,
@@ -18,7 +24,7 @@
 
         axis = pkgs.buildGoModule {
           pname = "axis";
-          version = "0.7.0";
+          inherit version;
 
           src = ./.;
 
