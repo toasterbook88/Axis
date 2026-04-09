@@ -73,6 +73,12 @@ func TestInferRequirementsBoundaryAware(t *testing.T) {
 			wantBackend: "mlx",
 		},
 		{
+			desc:        "run 14b inference with mlx",
+			wantClass:   models.ClassLocalLLMInference,
+			wantRAM:     8192,
+			wantBackend: "mlx",
+		},
+		{
 			desc:        "llama-server -m /models/qwen.gguf",
 			wantClass:   models.ClassLlamaServer,
 			wantTool:    "llama-server",

@@ -192,9 +192,9 @@ func TestFindAxisBinariesExplicitPath(t *testing.T) {
 }
 
 func TestFindAxisBinariesDedup(t *testing.T) {
-	// When explicit path is empty, findAxisBinaries deduplicates
-	// os.Executable() and exec.LookPath results — at minimum returns the
-	// current executable.
+	// When explicit path is empty and updateAll is false, findAxisBinaries
+	// includes the current executable from os.Executable() and should return
+	// at least that path without duplicates.
 	paths := findAxisBinaries("", false)
 	if len(paths) == 0 {
 		t.Fatal("expected at least 1 path for self binary")

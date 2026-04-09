@@ -178,14 +178,18 @@ func shouldRequireOllama(d descriptionView, class models.WorkloadClass) bool {
 	if class != models.ClassLocalLLMInference && class != models.ClassLongContextInference {
 		return false
 	}
-	switch {
-	case d.has("ollama"):
+	if d.has("ollama") {
 		return true
+	}
+	if hasNonOllamaExplicitBackend(d) {
+		return false
+	}
+	switch {
 	case d.has("llm"):
 		return true
 	case d.hasAny("13b", "14b", "32b", "34b", "70b"):
 		return true
-	case d.has("inference") && !hasNonOllamaExplicitBackend(d):
+	case d.has("inference"):
 		return true
 	default:
 		return false

@@ -87,8 +87,8 @@ if ! curl "${CURL_ARGS[@]}" "$CHECKSUM_URL" -o "checksums.txt"; then
 fi
 
 echo "Verifying checksum..."
-EXPECTED_SHA=$(grep "$ARCHIVE_NAME" checksums.txt | awk '{print $1}')
-if [ -z "$EXPECTED_SHA" ]; then
+EXPECTED_SHA=$(awk -v name="$ARCHIVE_NAME" '$2 == name { print $1; exit }' checksums.txt)
+if [ -z "${EXPECTED_SHA:-}" ]; then
     echo "Error: Checksum not found for $ARCHIVE_NAME in checksums.txt"
     exit 1
 fi

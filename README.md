@@ -112,10 +112,13 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 ### 1. Quick Install (macOS / Linux)
 
-The fastest way to install AXIS is using our one-liner script. It automatically detects your OS/Arch, downloads the latest release tarball securely verified against `checksums.txt`, and places it in `~/.local/bin`.
+The fastest way to install AXIS is using our install script. It automatically detects your OS/Arch, downloads the latest release tarball securely verified against `checksums.txt`, and places it in `~/.local/bin`.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh | bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh
+less install.sh
+bash install.sh
+rm -f install.sh
 ```
 
 ### 2. Nix Flakes (NixOS / macOS)
