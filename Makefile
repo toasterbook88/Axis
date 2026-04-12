@@ -6,7 +6,8 @@ GOVERSION := $(shell go version | awk '{print $$3}')
 LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Commit=$(COMMIT) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Date=$(DATE) \
-	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION)
+	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION) \
+	-X github.com/toasterbook88/axis/internal/buildinfo.UpdateManagedBy=
 
 .PHONY: build test test-race lint coverage clean install
 

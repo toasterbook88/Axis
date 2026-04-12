@@ -36,7 +36,8 @@ make lint
 make coverage
 ```
 
-Requires Go 1.26.1+ and SSH key-based auth for remote nodes.
+Requires Go 1.26.1+ and SSH key-based auth for remote nodes. Use the latest
+1.26 patch release for CI, release, and local source builds.
 
 ## High-Level Shape
 

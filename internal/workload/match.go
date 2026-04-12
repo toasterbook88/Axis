@@ -1,23 +1,41 @@
 package workload
 
-import (
-	"strings"
-
-	"github.com/toasterbook88/axis/internal/models"
-)
+import "github.com/toasterbook88/axis/internal/models"
 
 // Match returns the best-fitting workload profile for a task description.
 func Match(desc string) models.WorkloadProfileMatch {
-	lower := strings.ToLower(desc)
-	registry := DefaultRegistry()
+	return matchFromSignals(analyzeDescription(desc))
+}
 
+func matchFromSignals(signals workloadSignals) models.WorkloadProfileMatch {
 	var matchedClasses []models.WorkloadClass
-	var notes []string
 
-	for _, p := range registry {
-		if containsAny(lower, p.Keywords...) {
-			matchedClasses = append(matchedClasses, p.Class)
-		}
+	if signals.apple {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassAppleIntelligence)
+	}
+	if signals.llama {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassLlamaServer)
+	}
+	if signals.localLLM {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassLocalLLMInference)
+	}
+	if signals.repo {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassRepoAnalysis)
+	}
+	if signals.goBuild {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassGoBuild)
+	}
+	if signals.dockerBuild {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassDockerBuild)
+	}
+	if signals.indexingIO {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassIndexingIO)
+	}
+	if signals.batchScript {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassBatchScript)
+	}
+	if signals.longContext {
+		matchedClasses = appendUniqueClass(matchedClasses, models.ClassLongContextInference)
 	}
 
 	if len(matchedClasses) == 0 {
@@ -27,26 +45,19 @@ func Match(desc string) models.WorkloadProfileMatch {
 		}
 	}
 
-	// Selection and precedence logic
 	primary := matchedClasses[0]
-	for _, c := range matchedClasses {
-		// LongContext overrides LocalLLM
-		if c == models.ClassLongContextInference && primary == models.ClassLocalLLMInference {
-			primary = c
-			notes = append(notes, "upgraded to long-context-inference")
-		}
-		// AppleIntelligence / LlamaServer are very specific
-		if c == models.ClassAppleIntelligence || c == models.ClassLlamaServer {
-			primary = c
-		}
+	if signals.longContext && primary == models.ClassLocalLLMInference {
+		primary = models.ClassLongContextInference
+	} else if primary == models.ClassUnknown && signals.longContext {
+		primary = models.ClassLongContextInference
 	}
 
-	if len(matchedClasses) > 1 {
-		for _, c := range matchedClasses {
-			if c != primary {
-				notes = append(notes, "also matched class: "+string(c))
-			}
+	var notes []string
+	for _, class := range matchedClasses {
+		if class == primary {
+			continue
 		}
+		notes = append(notes, "also matched class: "+string(class))
 	}
 
 	return models.WorkloadProfileMatch{
@@ -55,3 +66,11 @@ func Match(desc string) models.WorkloadProfileMatch {
 	}
 }
 
+func appendUniqueClass(classes []models.WorkloadClass, class models.WorkloadClass) []models.WorkloadClass {
+	for _, existing := range classes {
+		if existing == class {
+			return classes
+		}
+	}
+	return append(classes, class)
+}

@@ -28,21 +28,25 @@ var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error
 }
 
 func doctorCmd() *cobra.Command {
-	return &cobra.Command{
+	var strict bool
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Validate configuration, SSH connectivity, and daemon health",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDoctor(cmd)
+			return runDoctor(cmd, strict)
 		},
 	}
+	cmd.Flags().BoolVar(&strict, "strict", false, "treat daemon cache availability as a required check")
+	return cmd
 }
 
-func runDoctor(cmd *cobra.Command) error {
+func runDoctor(cmd *cobra.Command, strict bool) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, ui.Bold("AXIS Doctor"))
 	fmt.Fprintln(out)
 
-	allOK := true
+	coreFailures := 0
+	advisoryWarnings := 0
 
 	// 1. Config check
 	cfgPath := doctorConfigPath()
@@ -50,7 +54,7 @@ func runDoctor(cmd *cobra.Command) error {
 	cfg, err := loadDoctorConfig(cfgPath)
 	if err != nil {
 		ui.FprintError(out, fmt.Sprintf("Config: %v", err), "cp nodes.example.yaml ~/.axis/nodes.yaml")
-		allOK = false
+		coreFailures++
 	} else {
 		fmt.Fprintf(out, "  %s Loaded %d node(s)\n", ui.StatusIcon(true), len(cfg.Nodes))
 
@@ -64,7 +68,7 @@ func runDoctor(cmd *cobra.Command) error {
 			cancel()
 			if sshErr != nil {
 				fmt.Fprintf(out, "  %s %s (%s): %v\n", ui.StatusIcon(false), n.Name, addr, sshErr)
-				allOK = false
+				coreFailures++
 			} else {
 				fmt.Fprintf(out, "  %s %s (%s)\n", ui.StatusIcon(true), n.Name, addr)
 			}
@@ -81,6 +85,11 @@ func runDoctor(cmd *cobra.Command) error {
 	if daemonErr != nil || snap == nil {
 		fmt.Fprintf(out, "  %s Not reachable at %s\n", ui.StatusIcon(false), daemonAddr)
 		fmt.Fprintf(out, "    %s\n", ui.Dim("hint: start with: axis serve"))
+		if strict {
+			coreFailures++
+		} else {
+			advisoryWarnings++
+		}
 	} else {
 		fmt.Fprintf(out, "  %s Reachable, %d node(s) cached\n",
 			ui.StatusIcon(true), len(snap.Nodes))
@@ -94,10 +103,13 @@ func runDoctor(cmd *cobra.Command) error {
 	fmt.Fprintf(out, "  %s %s\n", ui.Dim("version:"), Version)
 
 	fmt.Fprintln(out)
-	if allOK {
-		ui.FprintSuccess(out, "All checks passed")
-	} else {
+	switch {
+	case coreFailures > 0:
 		ui.FprintWarning(out, "Some checks failed (see above)")
+	case advisoryWarnings > 0:
+		ui.FprintWarning(out, "Core checks passed with advisory warnings")
+	default:
+		ui.FprintSuccess(out, "All checks passed")
 	}
 	return nil
 }

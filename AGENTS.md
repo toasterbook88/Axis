@@ -51,7 +51,8 @@ make coverage       # ./hack/coverage-check.sh
 make clean          # rm -f axis
 ```
 
-Requires Go 1.26.1+ (`go.mod` is authoritative). Remote node tests require SSH
+Requires Go 1.26.1+ (`go.mod` is authoritative for the minimum; use the latest
+1.26 patch release). Remote node tests require SSH
 key-based auth.
 
 ### CI Pipeline

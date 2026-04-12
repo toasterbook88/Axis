@@ -110,13 +110,72 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 
 ## Installation
 
-**Using `go install` (recommended):**
+### 1. Quick Install (macOS / Linux)
+
+The fastest way to install AXIS is using our install script. It automatically detects your OS/Arch, downloads the latest release tarball securely verified against `checksums.txt`, and places it in `~/.local/bin`.
+
+```bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh
+less install.sh
+bash install.sh
+rm -f install.sh
+```
+
+### 2. Nix Flakes (NixOS / macOS)
+
+AXIS offers native, reproducible Nix support.
+
+```bash
+# Install to your profile
+nix profile install github:toasterbook88/axis
+
+# Or run instantly without installing
+nix run github:toasterbook88/axis
+```
+
+*Note for contributors*: Run `nix develop` to enter a reproducible `devShell` containing the matching Go toolchain and required utilities.
+
+### 3. Homebrew (macOS / Linux)
+
+> Note: Homebrew Tap automation is currently pending. For now, please use the Quick Install script above.
+
+### For Developers (Build from Source)
+
+If you need unreleased `main`-branch changes or specifically want to use the Go ecosystem, you can compile from source. **Requirements:** Go 1.26.1+ (use the latest 1.26 patch release), SSH key-based auth for remote nodes.
+
+**Using `go install`:**
 
 ```bash
 go install github.com/toasterbook88/axis/cmd/axis@latest
 ```
 
-`@latest` resolves to the newest published tagged release. If you need unreleased `main`-branch changes, build from source from a specific commit instead of pinning an unpublished tag.
+**Manual Compilation:**
+
+```bash
+git clone https://github.com/toasterbook88/axis.git
+cd axis
+go build -o axis ./cmd/axis/
+# Optional: move to $PATH
+mv axis /usr/local/bin/axis
+```
+
+### Updating AXIS
+
+AXIS includes a built-in self-updater via the `axis update` command.
+
+> [!WARNING]
+> **If you installed AXIS via a package manager (like Nix or Homebrew), DO NOT use `axis update` to upgrade the binary.** Doing so attempts an in-place executable swap which violates immutable system paths and desyncs your package manager's state. AXIS is package-manager aware and will politely refuse to upgrade itself, instructing you to use your respective tool (e.g. `nix profile upgrade`, `brew upgrade`).
+
+To safely check if there is a newer version available without triggering an upgrade, run:
+
+```bash
+axis update --check
+```
+
+**Important Notes for `axis update` on Quick Install / Source builds:**
+By default, `axis update` safely scopes its upgrade *only* to the currently executing binary to prevent cross-contamination in mixed dev/prod `PATH` environments. If you want it to automatically upgrade all other `axis` binaries it finds in your `$PATH`, pass the `--all` flag.
+
+## Release Pipeline & Security
 
 **Tagged release pipeline:**
 
@@ -131,18 +190,6 @@ go install github.com/toasterbook88/axis/cmd/axis@latest
 - `govulncheck` runs on pull requests, pushes to `main`, and a weekly schedule
 - Private vulnerability reporting and automated security fixes are enabled on GitHub
 - Security reporting guidance lives in [SECURITY.md](SECURITY.md)
-
-**Build from source:**
-
-```bash
-git clone https://github.com/toasterbook88/axis.git
-cd axis
-go build -o axis ./cmd/axis/
-# Optional: move to $PATH
-mv axis /usr/local/bin/axis
-```
-
-**Requirements:** Go 1.26.1+, SSH key-based auth for remote nodes.
 
 ## Usage
 
@@ -260,7 +307,8 @@ axis daemon restart
 ### `axis update` — self-update to the latest release
 
 ```bash
-axis update           # download and install the latest release
+axis update           # download and install the latest release (only replaces current binary)
+axis update --all     # replace ALL discovered `axis` binaries in your $PATH
 axis update --check   # report whether an update is available (no download)
 ```
 
@@ -268,6 +316,10 @@ Checks GitHub Releases for a newer version, downloads the matching platform
 binary, verifies its SHA-256 checksum against the release's `checksums.txt`,
 and replaces the current binary in-place. The checksum is always verified —
 the release workflow produces `checksums.txt` alongside every archive.
+
+Note: if your copy of `axis` was installed using a package manager like `nix`
+or `homebrew`, `axis update` will refuse to perform an in-place replacement
+and will direct you to update using your package manager natively instead.
 
 ## Configuration Reference
 

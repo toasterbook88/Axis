@@ -13,7 +13,8 @@ func TestSSHConfig_InsecureEnvIgnored(t *testing.T) {
 	defer os.Unsetenv("AXIS_SSH_INSECURE")
 
 	executor := NewSSHExecutor("localhost", 22, "user", 10)
-	_, err := executor.sshConfig(context.Background())
+	resolved := executor.resolveSSHConfig(context.Background())
+	_, err := executor.sshConfig(resolved, "localhost:22")
 
 	if err == nil {
 		// Config succeeded using known_hosts (not insecure) — that's fine.
