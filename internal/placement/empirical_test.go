@@ -115,3 +115,40 @@ func TestSelectBestNodeReasoningMentionsEmpiricalAndResidentModelSignals(t *test
 		t.Fatalf("expected resident model reasoning, got %v", decision.Reasoning)
 	}
 }
+
+func TestRankCandidatesPrefersLlamaServerResidentModelLocality(t *testing.T) {
+	cold := nodeComplete("cold", 6000, "none", "llama-server")
+	warm := nodeComplete("warm", 6000, "none", "llama-server")
+	warm.ResidentModels = []models.ResidentModel{
+		{Name: "llama3:8b-q4", Runtime: "llama.cpp", Source: "proc-cmdline"},
+	}
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"llama-server"},
+		Workload:      models.WorkloadProfileMatch{Class: models.ClassLlamaServer},
+	}
+
+	ranked := RankCandidates([]models.NodeFacts{cold, warm}, reqs, nil)
+	if ranked[0].Name != "warm" {
+		t.Fatalf("expected llama-server resident model locality to win, got %s", ranked[0].Name)
+	}
+}
+
+func TestRankCandidatesPrefersLlamaCppBackendResidentModelLocality(t *testing.T) {
+	cold := nodeComplete("cold", 6000, "none", "llama-server")
+	warm := nodeComplete("warm", 6000, "none", "llama-server")
+	warm.ResidentModels = []models.ResidentModel{
+		{Name: "mistral:7b-q4", Runtime: "llama.cpp", Source: "proc-cmdline"},
+	}
+
+	// Task specifies preferred backend rather than a required tool.
+	reqs := models.TaskRequirements{
+		PreferredBackends: []string{"llama.cpp"},
+		Workload:          models.WorkloadProfileMatch{Class: models.ClassLlamaServer},
+	}
+
+	ranked := RankCandidates([]models.NodeFacts{cold, warm}, reqs, nil)
+	if ranked[0].Name != "warm" {
+		t.Fatalf("expected llama.cpp preferred backend to surface resident model locality, got %s", ranked[0].Name)
+	}
+}
