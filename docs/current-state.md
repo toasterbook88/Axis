@@ -79,8 +79,8 @@ Top-level commands currently registered in the binary:
 | `axis agent` | Agentic tool-calling assistant | Read-only cluster tools + safety-gated shell; `--auto-approve` for safe commands |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
 | `axis serve` | Start local HTTP API | Includes execution surface |
-| `axis update` | Self-update binary | Checks GitHub Releases, verifies SHA-256 via `checksums.txt`, replaces in-place; `--check` reports only |
-| `axis context show|clear` | Inspect or clear placement memory | Uses persisted state |
+| `axis update` | Self-update binary | Safely replaces only the current executing binary with the latest release, verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--all` to upgrade all `$PATH` matches. `--check` reports only |
+| `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
 | `axis doctor` | Validate config, SSH, and daemon health | Checks config, TCP probes per node, daemon status |

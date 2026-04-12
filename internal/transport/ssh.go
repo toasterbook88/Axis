@@ -5,6 +5,8 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -43,7 +46,23 @@ type resolvedSSHConfig struct {
 	IdentityFiles        []string
 	UserKnownHostsFiles  []string
 	GlobalKnownHostsFile []string
+	Hostname             string
+	User                 string
+	HostKeyAlias         string
+	HostKeyAlgorithms    []string
+	Port                 int
 }
+
+type probeRemoteAddr string
+
+func (a probeRemoteAddr) Network() string { return "tcp" }
+func (a probeRemoteAddr) String() string  { return string(a) }
+
+var (
+	hostKeyProbeOnce sync.Once
+	hostKeyProbeKey  ssh.PublicKey
+	hostKeyProbeErr  error
+)
 
 // Executor abstracts command execution on a target node.
 // This is the seam where axisd-based collection will later plug in.
@@ -74,21 +93,24 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	config, err := e.sshConfig(ctx)
+	resolved := e.resolveSSHConfig(ctx)
+	dialAddr := net.JoinHostPort(resolvedDialHost(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
+	hostKeyAddr := net.JoinHostPort(resolvedHostKeyName(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
+
+	config, err := e.sshConfig(resolved, hostKeyAddr)
 	if err != nil {
 		return fmt.Errorf("ssh config: %w", err)
 	}
 
-	addr := net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
 	timeout := time.Duration(e.TimeoutSec) * time.Second
 
 	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", dialAddr)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return fmt.Errorf("ssh dial %s: %w", addr, err)
+		return fmt.Errorf("ssh dial %s: %w", dialAddr, err)
 	}
 
 	deadline, ok := ctx.Deadline()
@@ -97,7 +119,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	}
 	conn.SetDeadline(deadline)
 
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, hostKeyAddr, config)
 	if err != nil {
 		conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -106,16 +128,16 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		if handshakeDeadlineExceeded(ctx, err) {
 			return context.DeadlineExceeded
 		}
-		if hint := handshakeRemediation(err, e.Host, e.Port); hint != "" {
-			return fmt.Errorf("ssh handshake %s: %w; remediation: %s", addr, err, hint)
+		if hint := handshakeRemediation(err, resolvedHostKeyName(resolved, e.Host), resolvedPort(resolved, e.Port)); hint != "" {
+			return fmt.Errorf("ssh handshake %s: %w; remediation: %s", dialAddr, err, hint)
 		}
-		return fmt.Errorf("ssh handshake %s: %w", addr, err)
+		return fmt.Errorf("ssh handshake %s: %w", dialAddr, err)
 	}
 	// The connect deadline is only for dialing and handshake. Clear it once the
 	// SSH client is established so later session I/O isn't capped by an old ctx.
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		conn.Close()
-		return fmt.Errorf("ssh clear deadline %s: %w", addr, err)
+		return fmt.Errorf("ssh clear deadline %s: %w", dialAddr, err)
 	}
 	e.client = ssh.NewClient(sshConn, chans, reqs)
 
@@ -255,9 +277,8 @@ func handshakeRemediation(err error, host string, port int) string {
 	return ""
 }
 
-func (e *SSHExecutor) sshConfig(ctx context.Context) (*ssh.ClientConfig, error) {
+func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) (*ssh.ClientConfig, error) {
 	var signers []ssh.Signer
-	resolved := e.resolveSSHConfig(ctx)
 	home, _ := os.UserHomeDir()
 
 	// Try SSH agent first
@@ -287,7 +308,12 @@ func (e *SSHExecutor) sshConfig(ctx context.Context) (*ssh.ClientConfig, error) 
 
 	// SSH Host Key verification is MANDATORY.
 	// Users MUST populate their ~/.ssh/known_hosts for security.
-	knownHostsPaths, err := existingKnownHostsPaths(home, resolved, e.Host, e.Port)
+	knownHostsPaths, err := existingKnownHostsPaths(
+		home,
+		resolved,
+		resolvedHostKeyName(resolved, e.Host),
+		resolvedPort(resolved, e.Port),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -297,11 +323,18 @@ func (e *SSHExecutor) sshConfig(ctx context.Context) (*ssh.ClientConfig, error) 
 		return nil, fmt.Errorf("failed to load known_hosts: %w", err)
 	}
 
+	hostKeyAlgorithms := preferredHostKeyAlgorithms(resolved, knownHostsPaths, hostKeyAddr)
+	user := strings.TrimSpace(resolved.User)
+	if user == "" {
+		user = e.User
+	}
+
 	return &ssh.ClientConfig{
-		User:            e.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...)},
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         time.Duration(e.TimeoutSec) * time.Second,
+		User:              user,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signers...)},
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms,
+		Timeout:           time.Duration(e.TimeoutSec) * time.Second,
 	}, nil
 }
 
@@ -326,6 +359,18 @@ func parseSSHConfigDump(output string) resolvedSSHConfig {
 		values := fields[1:]
 
 		switch key {
+		case "hostname":
+			resolved.Hostname = values[0]
+		case "user":
+			resolved.User = values[0]
+		case "port":
+			if port, err := strconv.Atoi(values[0]); err == nil && port > 0 {
+				resolved.Port = port
+			}
+		case "hostkeyalias":
+			resolved.HostKeyAlias = values[0]
+		case "hostkeyalgorithms":
+			resolved.HostKeyAlgorithms = appendAlgorithmValues(resolved.HostKeyAlgorithms, values...)
 		case "identityfile":
 			resolved.IdentityFiles = append(resolved.IdentityFiles, values...)
 		case "userknownhostsfile":
@@ -404,4 +449,92 @@ func uniqueNonEmptyPaths(paths []string) []string {
 		out = append(out, path)
 	}
 	return out
+}
+
+func appendAlgorithmValues(existing []string, values ...string) []string {
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			existing = append(existing, part)
+		}
+	}
+	return existing
+}
+
+func resolvedDialHost(resolved resolvedSSHConfig, fallback string) string {
+	if host := strings.TrimSpace(resolved.Hostname); host != "" {
+		return host
+	}
+	return fallback
+}
+
+func resolvedHostKeyName(resolved resolvedSSHConfig, fallback string) string {
+	if alias := strings.TrimSpace(resolved.HostKeyAlias); alias != "" {
+		return alias
+	}
+	return resolvedDialHost(resolved, fallback)
+}
+
+func resolvedPort(resolved resolvedSSHConfig, fallback int) int {
+	if resolved.Port > 0 {
+		return resolved.Port
+	}
+	return fallback
+}
+
+func preferredHostKeyAlgorithms(resolved resolvedSSHConfig, knownHostsPaths []string, hostKeyAddr string) []string {
+	if explicit := uniqueNonEmptyPaths(resolved.HostKeyAlgorithms); len(explicit) > 0 {
+		return explicit
+	}
+	return knownHostKeyAlgorithms(knownHostsPaths, hostKeyAddr)
+}
+
+func knownHostKeyAlgorithms(paths []string, hostKeyAddr string) []string {
+	if len(paths) == 0 || strings.TrimSpace(hostKeyAddr) == "" {
+		return nil
+	}
+	callback, err := knownhosts.New(paths...)
+	if err != nil {
+		return nil
+	}
+	probeKey, err := hostKeyProbePublicKey()
+	if err != nil {
+		return nil
+	}
+
+	err = callback(hostKeyAddr, probeRemoteAddr(hostKeyAddr), probeKey)
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+
+	var algorithms []string
+	for _, known := range keyErr.Want {
+		algorithms = append(algorithms, expandHostKeyAlgorithm(known.Key.Type())...)
+	}
+	return uniqueNonEmptyPaths(algorithms)
+}
+
+func expandHostKeyAlgorithm(algo string) []string {
+	switch algo {
+	case ssh.KeyAlgoRSA:
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	default:
+		return []string{algo}
+	}
+}
+
+func hostKeyProbePublicKey() (ssh.PublicKey, error) {
+	hostKeyProbeOnce.Do(func() {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			hostKeyProbeErr = err
+			return
+		}
+		hostKeyProbeKey, hostKeyProbeErr = ssh.NewPublicKey(pub)
+	})
+	return hostKeyProbeKey, hostKeyProbeErr
 }

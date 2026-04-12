@@ -46,21 +46,24 @@ var allowedUpdateHosts = []string{
 
 func updateCmd() *cobra.Command {
 	var checkOnly bool
+	var updateAll bool
 	var targetPath string
 
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update the axis binary to the latest published release",
 		Long: "Check GitHub Releases for a newer published version of axis and install it in-place.\n\n" +
-			"By default, when a newer release is available, updates the current binary AND any other axis binary found in PATH.\n" +
+			"By default, when a newer release is available, updates only the current executing binary.\n" +
+			"Use --all to update all other axis binaries found in PATH as well.\n" +
 			"If the current binary is newer than the latest published release, no binaries will be changed unless --path is given explicitly.\n" +
 			"Use --path to update a specific binary (allowed even when the current build is newer).\n" +
 			"Use --check to report whether an update is available without downloading.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(cmd, checkOnly, targetPath)
+			return runUpdate(cmd, checkOnly, updateAll, targetPath)
 		},
 	}
 	cmd.Flags().BoolVarP(&checkOnly, "check", "c", false, "report whether an update is available without installing")
+	cmd.Flags().BoolVar(&updateAll, "all", false, "update all axis binaries found in PATH")
 	cmd.Flags().StringVar(&targetPath, "path", "", "update a specific axis binary at this path")
 	return cmd
 }
@@ -75,10 +78,15 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
+func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string) error {
 	out := cmd.OutOrStdout()
 	current := buildinfo.Version
 	fmt.Fprintf(out, "Current version: v%s\n", current)
+
+	if buildinfo.UpdateManagedBy != "" {
+		fmt.Fprintf(out, "Managed by:      %s\n", buildinfo.UpdateManagedBy)
+	}
+
 	fmt.Fprintf(out, "Checking for updates...\n")
 
 	rel, err := fetchLatestRelease()
@@ -100,7 +108,11 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 			fmt.Fprintf(out, "Already up to date.\n")
 		case -1:
 			fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
-			fmt.Fprintf(out, "Run `axis update` (without --check) to install.\n")
+			if buildinfo.UpdateManagedBy != "" {
+				fmt.Fprintf(out, "Run your package manager (e.g. brew upgrade axis) to install.\n")
+			} else {
+				fmt.Fprintf(out, "Run `axis update` (without --check) to install.\n")
+			}
 		case 1:
 			fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
 			fmt.Fprintf(out, "No update available; refusing to suggest a downgrade.\n")
@@ -122,8 +134,13 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, targetPath string) error {
 		fmt.Fprintf(out, "Refusing to downgrade the currently running binary, but will update requested path(s) to the latest published release.\n")
 	}
 
+	if buildinfo.UpdateManagedBy != "" {
+		fmt.Fprintf(out, "Refusing in-place update. This installation is managed by '%s'. Please use your package manager to upgrade.\n", buildinfo.UpdateManagedBy)
+		return nil
+	}
+
 	// Always install: handles both new versions and stale PATH copies.
-	return installRelease(cmd, rel, latest, targetPath)
+	return installRelease(cmd, rel, latest, updateAll, targetPath)
 }
 
 func compareReleaseVersions(current, latest string) (int, error) {
@@ -131,9 +148,9 @@ func compareReleaseVersions(current, latest string) (int, error) {
 }
 
 // findAxisBinaries discovers all unique axis binary paths to update.
-// Returns the deduplicated set of: the current executable, any "axis" in PATH,
-// and the explicit --path target if specified.
-func findAxisBinaries(explicitPath string) []string {
+// Returns the deduplicated set of: the current executable, the explicit --path target if specified,
+// and optionally all "axis" in PATH if updateAll is true.
+func findAxisBinaries(explicitPath string, updateAll bool) []string {
 	seen := make(map[string]bool)
 	var paths []string
 
@@ -162,15 +179,17 @@ func findAxisBinaries(explicitPath string) []string {
 		add(self)
 	}
 
-	// All "axis" binaries found in PATH directories.
-	binName := "axis"
-	if runtime.GOOS == "windows" {
-		binName = "axis.exe"
-	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		candidate := filepath.Join(dir, binName)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			add(candidate)
+	if updateAll {
+		// All "axis" binaries found in PATH directories.
+		binName := "axis"
+		if runtime.GOOS == "windows" {
+			binName = "axis.exe"
+		}
+		for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+			candidate := filepath.Join(dir, binName)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				add(candidate)
+			}
 		}
 	}
 
@@ -234,7 +253,7 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 	return binary, nil
 }
 
-func installRelease(cmd *cobra.Command, rel *ghRelease, version, explicitPath string) error {
+func installRelease(cmd *cobra.Command, rel *ghRelease, version string, updateAll bool, explicitPath string) error {
 	out := cmd.OutOrStdout()
 
 	binary, err := downloadReleaseBinary(cmd, rel, version)
@@ -242,7 +261,7 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, version, explicitPath st
 		return err
 	}
 
-	targets := findAxisBinaries(explicitPath)
+	targets := findAxisBinaries(explicitPath, updateAll)
 	if len(targets) == 0 {
 		return fmt.Errorf("could not determine axis binary location")
 	}

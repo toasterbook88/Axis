@@ -13,13 +13,11 @@ func InferRequirements(desc string) models.TaskRequirements {
 		Description: desc,
 	}
 
-	match := Match(desc)
+	match := matchFromSignals(analyzeDescription(desc))
 	Apply(match, &reqs)
 
-	lower := strings.ToLower(desc)
-
 	// Context window inference (additive to profile)
-	reqs.ContextWindowTokens = InferContextWindowTokens(lower)
+	reqs.ContextWindowTokens = InferContextWindowTokens(desc)
 	if reqs.ContextWindowTokens > 0 {
 		reqs.PrefersTurboQuant = true
 		if minForContext := LongContextMinRAM(reqs.ContextWindowTokens); minForContext > reqs.MinFreeRAMMB {
@@ -34,45 +32,41 @@ func InferRequirements(desc string) models.TaskRequirements {
 }
 
 // Apply populates TaskRequirements based on the matched workload class.
-// It aggregates resource signals (RAM, TurboQuant) and required tools/backends
-// from all matching profiles found in the description.
+// It applies class defaults and a small set of explicit runtime/tool modifiers.
 func Apply(match models.WorkloadProfileMatch, reqs *models.TaskRequirements) {
 	reqs.Workload = match
-	lower := strings.ToLower(reqs.Description)
-	registry := DefaultRegistry()
+	signals := analyzeDescription(reqs.Description)
+	view := newDescriptionView(reqs.Description)
 
-	appleMatched := false
-	// 1. Aggregate resources and tools from all matching profiles
-	for _, p := range registry {
-		if containsAny(lower, p.Keywords...) {
-			// Resource aggregation
-			if p.MinFreeRAMMB == -1 {
-				appleMatched = true
-			} else if p.MinFreeRAMMB > reqs.MinFreeRAMMB {
-				reqs.MinFreeRAMMB = p.MinFreeRAMMB
-			}
-			if p.PrefersTurboQuant {
-				reqs.PrefersTurboQuant = true
-			}
+	if profile, ok := profileForClass(match.Class); ok {
+		applyProfile(reqs, profile)
+	}
 
-			// Tool aggregation
-			for _, tool := range p.RequiredTools {
-				if !contains(reqs.RequiredTools, tool) {
-					reqs.RequiredTools = append(reqs.RequiredTools, tool)
-				}
-			}
-
-			// Backend aggregation
-			for _, backend := range p.PreferredBackends {
-				if !contains(reqs.PreferredBackends, backend) {
-					reqs.PreferredBackends = append(reqs.PreferredBackends, backend)
-				}
-			}
+	switch match.Class {
+	case models.ClassAppleIntelligence:
+		reqs.MinFreeRAMMB = 0
+	case models.ClassLocalLLMInference, models.ClassLongContextInference:
+		if floor := inferLocalLLMMinRAMMB(view); floor > reqs.MinFreeRAMMB {
+			reqs.MinFreeRAMMB = floor
+		}
+		if shouldRequireOllama(view, match.Class) {
+			addTools(reqs, "ollama")
 		}
 	}
 
-	if appleMatched {
-		reqs.MinFreeRAMMB = 0
+	// Preserve strong explicit secondary requirements without reintroducing
+	// broad substring aggregation.
+	if signals.repo && match.Class != models.ClassRepoAnalysis {
+		addTools(reqs, "git")
+	}
+	if signals.goBuild && match.Class != models.ClassGoBuild {
+		addTools(reqs, "go", "git")
+	}
+	if signals.dockerBuild && match.Class != models.ClassDockerBuild {
+		addTools(reqs, "docker")
+	}
+	if signals.explicitOllama && !contains(reqs.RequiredTools, "ollama") && !hasNonOllamaExplicitBackend(view) {
+		addTools(reqs, "ollama")
 	}
 }
 
@@ -87,18 +81,18 @@ func contains(slice []string, s string) bool {
 
 // InferBackends adds backend preferences based on keywords in the description.
 func InferBackends(desc string, reqs *models.TaskRequirements) {
-	lower := strings.ToLower(desc)
-	if containsAny(lower, "mlx", "mlx_lm", "apple silicon", "mac studio", "macbook pro", "mac mini") {
+	d := newDescriptionView(desc)
+	if d.hasAny("mlx", "mlx lm", "apple silicon", "mac studio", "macbook pro", "mac mini") {
 		if !contains(reqs.PreferredBackends, "mlx") {
 			reqs.PreferredBackends = append(reqs.PreferredBackends, "mlx")
 		}
 	}
-	if containsAny(lower, "apple-intelligence", "apple intelligence", "apple foundation models", "apple-foundation-models", "language model session") {
+	if d.hasAny("apple intelligence", "apple foundation models", "language model session") {
 		if !contains(reqs.PreferredBackends, "apple-foundation-models") {
 			reqs.PreferredBackends = append(reqs.PreferredBackends, "apple-foundation-models")
 		}
 	}
-	if containsAny(lower, "llama.cpp", "llama-cli", "llama server", "llama-server") {
+	if d.hasAny("llama cpp", "llama cli", "llama server") {
 		if !contains(reqs.PreferredBackends, "llama.cpp") {
 			reqs.PreferredBackends = append(reqs.PreferredBackends, "llama.cpp")
 		}
@@ -106,15 +100,16 @@ func InferBackends(desc string, reqs *models.TaskRequirements) {
 }
 
 // InferContextWindowTokens derives a heuristic token count from description keywords.
-func InferContextWindowTokens(lower string) int {
+func InferContextWindowTokens(desc string) int {
+	d := newDescriptionView(desc)
 	switch {
-	case containsAny(lower, "million-token", "million token", "1m context", "1m tokens"):
+	case d.hasAny("million token", "million tokens", "1m context", "1m tokens"):
 		return 1000000
-	case containsAny(lower, "512k"):
+	case d.has("512k"):
 		return 512000
-	case containsAny(lower, "256k", "200k"):
+	case d.hasAny("256k", "200k"):
 		return 256000
-	case containsAny(lower, "128k", "long-context", "long context", "book-length", "book length", "needle-in-a-haystack", "needle in a haystack"):
+	case d.hasAny("128k", "long context", "book length", "needle in a haystack"):
 		return 128000
 	default:
 		return 0
@@ -137,11 +132,77 @@ func LongContextMinRAM(tokens int) int64 {
 	}
 }
 
-func containsAny(s string, keywords ...string) bool {
-	for _, kw := range keywords {
-		if strings.Contains(s, kw) {
-			return true
+func applyProfile(reqs *models.TaskRequirements, profile Profile) {
+	if profile.MinFreeRAMMB > reqs.MinFreeRAMMB {
+		reqs.MinFreeRAMMB = profile.MinFreeRAMMB
+	}
+	if profile.PrefersTurboQuant {
+		reqs.PrefersTurboQuant = true
+	}
+	addTools(reqs, profile.RequiredTools...)
+	addBackends(reqs, profile.PreferredBackends...)
+}
+
+func addTools(reqs *models.TaskRequirements, tools ...string) {
+	for _, tool := range tools {
+		if !contains(reqs.RequiredTools, tool) {
+			reqs.RequiredTools = append(reqs.RequiredTools, tool)
 		}
 	}
-	return false
+}
+
+func addBackends(reqs *models.TaskRequirements, backends ...string) {
+	for _, backend := range backends {
+		if !contains(reqs.PreferredBackends, backend) {
+			reqs.PreferredBackends = append(reqs.PreferredBackends, backend)
+		}
+	}
+}
+
+func inferLocalLLMMinRAMMB(d descriptionView) int64 {
+	switch {
+	case d.has("70b"):
+		return 12288
+	case d.hasAny("13b", "14b", "32b", "34b", "heavy"):
+		return 8192
+	case d.hasAny("7b", "8b"):
+		return 4096
+	case d.hasAny("inference", "llm", "ollama"):
+		return 6144
+	default:
+		return 0
+	}
+}
+
+func shouldRequireOllama(d descriptionView, class models.WorkloadClass) bool {
+	if class != models.ClassLocalLLMInference && class != models.ClassLongContextInference {
+		return false
+	}
+	if d.has("ollama") {
+		return true
+	}
+	if hasNonOllamaExplicitBackend(d) {
+		return false
+	}
+	switch {
+	case d.has("llm"):
+		return true
+	case d.hasAny("13b", "14b", "32b", "34b", "70b"):
+		return true
+	case d.has("inference"):
+		return true
+	default:
+		return false
+	}
+}
+
+func hasNonOllamaExplicitBackend(d descriptionView) bool {
+	return d.hasAny(
+		"mlx",
+		"llama cpp",
+		"llama server",
+		"llama cli",
+		"apple intelligence",
+		"apple foundation models",
+	)
 }
