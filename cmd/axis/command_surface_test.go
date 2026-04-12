@@ -494,6 +494,36 @@ func TestStatusCmdUsesLiveLoaderForOutput(t *testing.T) {
 	}
 }
 
+func TestStatusCmdJSONIncludesDiscoveryFreshness(t *testing.T) {
+	restoreLive := stubStatusLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Summary: models.ClusterSummary{TotalNodes: 2},
+			Freshness: &models.DiscoveryFreshness{
+				Source:           "udp-window",
+				ExpectedWindowMS: 2250,
+				ObservedWindowMS: 2250,
+				CompletedWindow:  true,
+			},
+		}, "live", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := statusCmd()
+		cmd.SetArgs([]string{"--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("status Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !strings.Contains(stdout, `"freshness":`) || !strings.Contains(stdout, `"source": "udp-window"`) {
+		t.Fatalf("expected discovery freshness in CLI JSON output, got %q", stdout)
+	}
+}
+
 func TestStatusCmdUsesCacheWrapperWhenRequested(t *testing.T) {
 	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
 		return &models.ClusterSnapshot{

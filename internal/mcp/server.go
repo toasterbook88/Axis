@@ -261,6 +261,9 @@ func axisHealthTool(ctx context.Context, req mcpproto.CallToolRequest, useCache 
 	if snap != nil {
 		payload["snapshot_status"] = snap.Status
 		payload["warnings"] = len(snap.Warnings)
+		if snap.Freshness != nil {
+			payload["discovery_freshness"] = snap.Freshness
+		}
 	}
 	return mcpproto.NewToolResultJSON(payload)
 }

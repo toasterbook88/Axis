@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-04-06 EDT
+- Refreshed: 2026-04-12 EDT
 - Repo version: `0.7.0`
 - Latest published GitHub release: `v0.7.0` (2026-04-06T19:15:16Z)
 - Release truth: repo version matches the latest published release
@@ -34,6 +34,7 @@ The live repo currently contains:
 - Explicit cache refresh via `axis daemon refresh`
 - Explicit cache invalidation via `axis daemon invalidate`
 - Content-aware `nodes.yaml`, semantic `state.json`, and `skills.json` watch refreshes in the daemon cache, plus explicit execution-state and long-lived UDP beacon refresh triggers, with refresh-trigger metadata surfaced through daemon health/status
+- Typed discovery freshness metadata on live and cached snapshots (`source`, expected/observed window, additive beacon count, completion state, warning)
 - A CLI task execution path (`axis task run`)
 - A read-only MCP server for cluster diagnostics
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
@@ -49,11 +50,12 @@ The live repo currently contains:
 - TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection only after probe-visible `--ctx-size` support
 - Probe-verified local Apple Foundation Models capability on eligible Apple Silicon hosts running macOS 26 or later, surfaced in node facts/snapshots and as an `apple-foundation-models` tool, with actual model execution available only through the explicit guarded execution path
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
+- Resident-model truth in node facts via `resident_models`, currently populated from `ollama ps`
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
 - Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference
 - Network topology enrichment: interface name, CIDR subnet, and heuristic speed class (wireguard, tailscale, netbird, thunderbolt, wifi, gigabit, etc.)
-- Basic warm-model locality is already live for Ollama via `Listening`, `Running`, and loaded `Models`; richer cross-backend resident-model scoring is still roadmap work
+- Exact-scope execution observations in persisted local state, separate from failure memory, with mandatory wall time and best-effort RAM/VRAM peaks when directly observed
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
@@ -95,12 +97,12 @@ Top-level commands currently registered in the binary:
 | `cmd/axis` | CLI entrypoint and command wiring | Broad surface area, mixed behavior, low command-level coverage |
 | `internal/config` | Load and validate `~/.axis/nodes.yaml` | Small, stable, and now rejects unknown YAML fields so config typos fail fast |
 | `internal/facts` | Local/remote hardware + tool collection | Local RAM/disk parsing is less brittle now; remote collection is still round-trip heavy, and the local path can now probe-verify Apple Foundation Models on eligible Macs in addition to TurboQuant/backend metadata |
-| `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is now stabilized; the daemon cache now has a long-lived beacon watcher for event-driven freshness, while the ad hoc live-discovery path still uses an interval-aware accumulation window |
+| `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is stabilized, live discovery now emits typed freshness metadata for the bounded beacon window, and the daemon cache has a long-lived beacon watcher for event-driven refreshes |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
-| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, and trigger-aware refresh metadata for config/state/skills, explicit execution events, and long-lived discovery beacons |
+| `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, trigger-aware refresh metadata, and cached discovery-freshness exposure for config/state/skills, execution events, and long-lived discovery beacons |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
-| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
-| `internal/state` | Persist placement memory | Explicit acquire/release is now live and tested; broader balancing semantics still need refinement |
+| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
+| `internal/state` | Persist placement memory | Explicit acquire/release is live and tested; state now also stores exact-scope execution observations separately from failure memory |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
@@ -126,9 +128,9 @@ Refresh this section with `./hack/refresh-current-state.sh`.
   - Coverage gates:
     - `coverage gate passed: internal/knowledge 90.9% >= 90.0%`
     - `coverage gate passed: internal/api 70.6% >= 50.0%`
-    - `coverage gate passed: internal/mcp 43.9% >= 35.0%`
+    - `coverage gate passed: internal/mcp 43.1% >= 35.0%`
     - `coverage gate passed: internal/ui 100.0% >= 80.0%`
-    - `coverage gate passed: total 70.1% >= 45.0%`
+    - `coverage gate passed: total 71.9% >= 45.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
@@ -159,7 +161,8 @@ Areas where the live repo has moved past the older docs/specs:
 - Long-context task hints can now prefer graded TurboQuant-capable backends without changing the default placement contract for ordinary tasks
 - Execution paths can now carry TurboQuant hints into local and remote commands, and can add an observed-state-gated ephemeral Nix helper wrapper when the selected node proves it has `nix` plus a trusted package mapping
 - Facts and placement now carry additive unified-memory and runtime-pressure metadata instead of relying only on coarse free-RAM pressure guesses
-- Basic Ollama warm-state scoring is already live; broader resident-model and empirical-locality work is still future-facing
+- Live and cached snapshot-bearing surfaces now expose the same typed discovery-freshness contract instead of relying only on free-form warnings
+- Placement now consumes fresh exact-scope empirical history and truth-backed resident-model locality as additive preferences instead of relying only on static heuristics
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
@@ -185,7 +188,7 @@ In practical terms:
 ## Current Weak Spots
 
 - Placement state accounting now subtracts reserved RAM correctly and releases on completion, but the broader RAM-sharing model is still heuristic
-- The current balancing model now has an explicit reservable/allocatable system-reserve floor, a cluster-reservation-share tie-break, explicit per-exec reservation heartbeats, owner-PID reclaim for local AXIS processes, persisted local caller provenance across guarded execution surfaces, runtime-derived local execution-origin identity (node / hostname / stable ID when observable), and signed forwarded upstream origin acceptance on trusted HTTP execution boundaries, but it still lacks multi-hop or cross-cluster exec identity beyond a single AXIS token trust domain and any event-driven freshness model for pressure signals
+- The current balancing model now has an explicit reservable/allocatable system-reserve floor, a cluster-reservation-share tie-break, explicit per-exec reservation heartbeats, owner-PID reclaim for local AXIS processes, persisted local caller provenance across guarded execution surfaces, runtime-derived local execution-origin identity (node / hostname / stable ID when observable), signed forwarded upstream origin acceptance on trusted HTTP execution boundaries, and exact-scope empirical observations, but it still lacks multi-hop or cross-cluster exec identity beyond a single AXIS token trust domain
 - TurboQuant grading is still heuristic today; AXIS now distinguishes detected vs probe-verified backend responses, but it still does not verify kernel correctness or backend feature parity
 - TurboQuant execution injection is intentionally narrow today: env hints everywhere, direct flag injection only for probe-verified `llama-cli` / `llama-server` command lines that expose `--ctx-size`
 - Execution confirmation and reservation caps are now explicit across CLI and HTTP, but the UX and error contracts still differ between surfaces
@@ -193,7 +196,7 @@ In practical terms:
 - Agent tool-calling loop has safety gates and adversarial error recovery, but is still subordinate to observed state
 - Locality and discovery can now use optional stable IDs, but those IDs are still operator-seeded hints until a live probe confirms observed identity
 - Network `speed_class` remains heuristic metadata today, not measured throughput or latency
-- UDP discovery now has a long-lived daemon watcher for beacon-triggered cache refreshes, but the ad hoc live-discovery path still uses an interval-aware bounded accumulation window and broader runtime hardening is still needed
+- UDP discovery now has both a long-lived daemon watcher for beacon-triggered cache refreshes and a typed freshness contract for the ad hoc live-discovery accumulation window, but broader runtime hardening is still needed
 - Safety blocking is substring-based and can both over-block and under-block
 - Built-in script prerequisites now model `jq` explicitly, but broader shell assumptions are still under-modeled
 - Git-aware workflows exist, but there is no dedicated doctrine/runbook/test layer for “AXIS as a Git expert” yet
@@ -202,7 +205,7 @@ In practical terms:
 - `axis task run`, HTTP `/run`, and approved `axis agent` shell execution now share the same guarded execution path and persist both internal caller provenance and runtime-derived local origin identity; both `axis task run` and `axis agent` now prefer the local daemon/API `/run` client when available, and the streamed NDJSON contract preserves ready-time placement output, explicit state changes, and live stdout/stderr across that hop, but broader runtime identity is still limited to one AXIS token trust domain rather than a richer distributed or multi-hop model
 - The streamed `/run` contract now carries explicit execution state-change events (`execution-reserved`, `execution-finished`) in addition to ready/output/final-result events, cross-boundary callers can replay those into their existing callback hooks instead of losing reservation/finish semantics at the daemon/API seam, and early runtime/load failures now stay inside that same final-result stream contract instead of falling back to buffered JSON
 - Local daemon `/run` callers now share one execution transport path, and that path no longer inherits the short snapshot/meta HTTP timeout, so long-running daemon-hop executions are bounded by caller context instead of a fixed 5-second client timeout
-- `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads, but cache provenance is still only explicit on cached-path output
+- `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads and can surface typed discovery freshness in machine-readable output, but cache provenance is still only explicit on cached-path output
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
 
 ## Recommended Next Sequence
@@ -211,7 +214,7 @@ V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
-3. Push discovery beyond the current interval-aware window toward more event-driven freshness.
+3. Push resident-model truth beyond Ollama into more unambiguous backends and add direct RAM/VRAM peak probes where truth-backed process metrics are available.
 4. Refine reservation accounting into a clearer cluster RAM balancing model.
 5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
 

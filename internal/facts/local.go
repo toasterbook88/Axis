@@ -72,9 +72,10 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	// Tools
 	facts.Tools = DiscoverTools(ctx)
 
-	ollamaInfo := discoverOllamaLocal(ctx)
+	ollamaInfo, residentModels := discoverOllamaLocal(ctx)
 	if ollamaInfo.Installed {
 		facts.Ollama = &ollamaInfo
+		facts.ResidentModels = residentModels
 		facts.Tools = append(facts.Tools, models.ToolInfo{
 			Name:    "ollama",
 			Path:    ollamaInfo.Path,
@@ -959,21 +960,21 @@ func isTailscaleIP(ip net.IP) bool {
 	return ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
-func discoverOllamaLocal(ctx context.Context) models.OllamaInfo {
+func discoverOllamaLocal(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
 	info := models.OllamaInfo{Installed: false}
 
 	out, err := exec.CommandContext(ctx, "bash", "-c", OllamaDiscoveryScript).Output()
 	if err != nil {
 		info.Error = err.Error()
-		return info
+		return info, nil
 	}
 
 	// parse the JSON blob
-	var parsed models.OllamaInfo
+	var parsed ollamaDiscoveryPayload
 	if json.Unmarshal(out, &parsed) == nil {
-		return parsed
+		return parsed.OllamaInfo, parsed.ResidentModels
 	}
-	return info
+	return info, nil
 }
 
 func localGPUUtilPercent() (float64, bool) {

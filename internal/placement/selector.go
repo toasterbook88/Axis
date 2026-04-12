@@ -76,6 +76,13 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 				fmt.Sprintf("turboquant capabilities: %s", caps))
 		}
 	}
+	bestObservation := empiricalObservation(best, reqs, st)
+	if reason := empiricalReason(bestObservation); reason != "" {
+		decision.Reasoning = append(decision.Reasoning, reason)
+	}
+	if reason := residentModelReason(best, reqs); reason != "" {
+		decision.Reasoning = append(decision.Reasoning, reason)
+	}
 
 	// Fit score summary
 	fitLabel := fitLabel(decision.FitScore)
@@ -147,8 +154,17 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		ruScore := ComputeTaskFitScore(runnerUp, ruLocal, st, reqs)
 		bestShare := clusterReservationShare(best, st)
 		runnerShare := clusterReservationShare(runnerUp, st)
+		runnerObservation := empiricalObservation(runnerUp, reqs, st)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
+		if compareObservationPreference(bestObservation, runnerObservation) > 0 && bestObservation != nil {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("empirical history favored %q over runner-up %q", best.Name, runnerUp.Name))
+		}
+		if residentModelRank(best, reqs) > residentModelRank(runnerUp, reqs) && residentModelRank(best, reqs) > 0 {
+			decision.Reasoning = append(decision.Reasoning,
+				fmt.Sprintf("resident model locality favored %q over runner-up %q", best.Name, runnerUp.Name))
+		}
 		if bestShare < runnerShare {
 			decision.Reasoning = append(decision.Reasoning,
 				fmt.Sprintf("lower cluster reservation share favored: %.0f%% vs runner-up %.0f%%", bestShare*100, runnerShare*100))

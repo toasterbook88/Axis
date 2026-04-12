@@ -20,8 +20,9 @@ type beaconEntry struct {
 // daemon can merge them into later refreshes without reopening the beacon
 // listener on every snapshot build.
 type BeaconRegistry struct {
-	mu    sync.RWMutex
-	nodes map[string]beaconEntry
+	mu        sync.RWMutex
+	nodes     map[string]beaconEntry
+	startedAt time.Time
 }
 
 func NewBeaconRegistry() *BeaconRegistry {
@@ -52,6 +53,7 @@ func (r *BeaconRegistry) Reset() bool {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.startedAt = time.Now().UTC()
 
 	if len(r.nodes) == 0 {
 		return false
@@ -67,6 +69,9 @@ func (r *BeaconRegistry) UpdateFromBeacon(b Beacon) bool {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.startedAt.IsZero() {
+		r.startedAt = time.Now().UTC()
+	}
 
 	projected := beaconNodeConfig(b)
 	key := beaconRegistryKey(r.nodes, projected.Name, projected.StableID)
@@ -78,6 +83,29 @@ func (r *BeaconRegistry) UpdateFromBeacon(b Beacon) bool {
 		expiresAt: time.Now().UTC().Add(beaconTTL),
 	}
 	return changed
+}
+
+func (r *BeaconRegistry) Freshness(cfg *config.Config, seededCount int) *models.DiscoveryFreshness {
+	if r == nil {
+		return BuildFreshness("beacon-registry", 0, 0, seededCount, 0, true)
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	expected := beaconWaitDuration(cfg)
+	if expected <= 0 {
+		return BuildFreshness("beacon-registry", 0, 0, seededCount, len(r.nodes), true)
+	}
+
+	startedAt := r.startedAt
+	if startedAt.IsZero() {
+		return BuildFreshness("beacon-registry", expected, 0, seededCount, len(r.nodes), false)
+	}
+
+	observed := time.Since(startedAt)
+	completed := observed >= expected
+	return BuildFreshness("beacon-registry", expected, observed, seededCount, len(r.nodes), completed)
 }
 
 func (r *BeaconRegistry) PruneExpired(now time.Time) bool {

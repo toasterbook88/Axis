@@ -55,9 +55,10 @@ type Metadata struct {
 	CacheAgeSec        int       `json:"cache_age_sec,omitempty"`
 	Stale              bool      `json:"stale,omitempty"`
 	// Phase 3: refresh metrics
-	RefreshCount  int64    `json:"refresh_count"`
-	LastRefreshMs int64    `json:"last_refresh_duration_ms,omitempty"`
-	StaleNodes    []string `json:"stale_nodes,omitempty"`
+	RefreshCount  int64                      `json:"refresh_count"`
+	LastRefreshMs int64                      `json:"last_refresh_duration_ms,omitempty"`
+	StaleNodes    []string                   `json:"stale_nodes,omitempty"`
+	Freshness     *models.DiscoveryFreshness `json:"freshness,omitempty"`
 }
 
 type Daemon struct {
@@ -491,6 +492,10 @@ func (d *Daemon) Meta() Metadata {
 		LastRefreshMs:      d.lastRefreshDuration.Milliseconds(),
 		StaleNodes:         d.staleNodes,
 	}
+	if d.snapshot != nil && d.snapshot.Freshness != nil {
+		freshness := *d.snapshot.Freshness
+		meta.Freshness = &freshness
+	}
 
 	if st, err := state.Load(); st != nil {
 		for _, ns := range st.Nodes {
@@ -520,13 +525,28 @@ func defaultCollector(registry *discovery.BeaconRegistry) Collector {
 		runCtx, cancel := context.WithTimeout(ctx, defaultRefreshTimeout)
 		defer cancel()
 
-		var nodes []models.NodeFacts
+		var result discovery.Result
 		if registry != nil && cfg.Discovery != nil && cfg.Discovery.Enabled {
-			nodes = discovery.DiscoverSeeded(runCtx, cfg, registry.Snapshot())
+			result = discovery.DiscoverSeededResult(runCtx, cfg, registry.Snapshot())
+			result.Freshness = registry.Freshness(cfg, len(cfg.Nodes))
 		} else {
-			nodes = discovery.Discover(runCtx, cfg)
+			result = discovery.DiscoverResult(runCtx, cfg)
 		}
-		return snapshot.Build(nodes), nil
+		snap := snapshot.Build(result.Nodes)
+		if snap == nil {
+			snap = &models.ClusterSnapshot{}
+		}
+		snap.Freshness = result.Freshness
+		for _, warning := range result.Warnings {
+			models.AppendWarningIfMissing(snap, warning)
+		}
+		if snap.Freshness != nil && snap.Freshness.Warning != "" {
+			models.AppendWarningIfMissing(snap, models.Warning{
+				Kind:    "discovery",
+				Message: snap.Freshness.Warning,
+			})
+		}
+		return snap, nil
 	}
 }
 
