@@ -139,6 +139,8 @@ func residentRuntimePreference(reqs models.TaskRequirements) string {
 		return "apple-foundation-models"
 	case requiresTool(reqs.RequiredTools, "ollama"):
 		return "ollama"
+	case requiresTool(reqs.RequiredTools, "llama-server"):
+		return "llama.cpp"
 	}
 	for _, backend := range reqs.PreferredBackends {
 		switch strings.ToLower(strings.TrimSpace(backend)) {
@@ -146,6 +148,8 @@ func residentRuntimePreference(reqs models.TaskRequirements) string {
 			return "mlx"
 		case "ollama":
 			return "ollama"
+		case "llama.cpp", "llama-server":
+			return "llama.cpp"
 		}
 	}
 	return ""
