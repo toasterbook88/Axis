@@ -322,9 +322,14 @@ type ExecutionObservation struct {
 	SampleCount int              `json:"sample_count" yaml:"sample_count"`
 	LastSuccess bool             `json:"last_success" yaml:"last_success"`
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
-	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
-	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
-	ModelName   string           `json:"model_name,omitempty" yaml:"model_name,omitempty"`
+	PeakRAMMB  int64 `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
+	PeakVRAMMB int64 `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	// ModelName is the inference model name observed during execution
+	// (e.g. "llama3.2:latest", "qwen2.5-coder:7b"). Populated when a model
+	// name is extractable from the task command or description. Used by
+	// empirical placement to prefer nodes that already have the named model
+	// loaded in the target runtime.
+	ModelName string `json:"model_name,omitempty" yaml:"model_name,omitempty"`
 }
 
 // FailureRecord represents a tracked failure pattern for the immune system.
