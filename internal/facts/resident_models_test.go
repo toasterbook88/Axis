@@ -78,6 +78,51 @@ func TestRemoteCollectorCollectsResidentModelsFromLlamaServerProbe(t *testing.T)
 	}
 }
 
+func TestRemoteCollectorCollectsResidentModelsFromMLXProbe(t *testing.T) {
+	m := minimalRemoteExec()
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","source":"mlx-lm-api"}]}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1 mlx model", facts.ResidentModels)
+	}
+	got := facts.ResidentModels[0]
+	if got.Name != "Qwen2.5-Coder-7B-Instruct-4bit" {
+		t.Errorf("Name = %q, want Qwen2.5-Coder-7B-Instruct-4bit", got.Name)
+	}
+	if got.Runtime != "mlx" {
+		t.Errorf("Runtime = %q, want mlx", got.Runtime)
+	}
+	if got.Processor != "gpu" {
+		t.Errorf("Processor = %q, want gpu", got.Processor)
+	}
+	if got.Source != "mlx-lm-api" {
+		t.Errorf("Source = %q, want mlx-lm-api", got.Source)
+	}
+}
+
+func TestRemoteCollectorMLXNotInstalledReturnsNoResidentModels(t *testing.T) {
+	m := minimalRemoteExec()
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":false}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("scout", "worker", "scout.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	for _, rm := range facts.ResidentModels {
+		if rm.Runtime == "mlx" {
+			t.Errorf("unexpected mlx resident model on node without mlx: %+v", rm)
+		}
+	}
+}
+
 func TestRemoteCollectorMergesOllamaAndLlamaServerResidentModels(t *testing.T) {
 	m := minimalRemoteExec()
 	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
@@ -101,5 +146,31 @@ func TestRemoteCollectorMergesOllamaAndLlamaServerResidentModels(t *testing.T) {
 	}
 	if !runtimes["llama.cpp"] {
 		t.Error("expected a llama.cpp resident model")
+	}
+}
+
+func TestRemoteCollectorMergesAllThreeResidentModelBackends(t *testing.T) {
+	m := minimalRemoteExec()
+	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","source":"llama-server-ps"}]}`}
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","source":"mlx-lm-api"}]}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 3 {
+		t.Fatalf("resident models = %#v, want 3 (ollama + llama.cpp + mlx)", facts.ResidentModels)
+	}
+	runtimes := map[string]bool{}
+	for _, rm := range facts.ResidentModels {
+		runtimes[rm.Runtime] = true
+	}
+	for _, want := range []string{"ollama", "llama.cpp", "mlx"} {
+		if !runtimes[want] {
+			t.Errorf("expected a %q resident model in merged list", want)
+		}
 	}
 }
