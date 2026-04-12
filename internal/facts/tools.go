@@ -115,14 +115,17 @@ const MLXDiscoveryScript = `set -o pipefail;
 			MLX_OK=true
 		fi
 		if [ "$MLX_OK" = "false" ]; then echo '{"installed":false}'; exit 0; fi
-		PGREP=$(pgrep -f "mlx_lm.server" 2>/dev/null | head -1 || pgrep -f "mlx_lm server" 2>/dev/null | head -1 || echo "")
+		# Bracket trick: [m]lx_lm.server matches the process mlx_lm.server but not
+		# the pgrep command's own cmdline (which contains the literal "[m]lx_lm.server").
+		PGREP=$(pgrep -f "[m]lx_lm.server" 2>/dev/null | head -1 || pgrep -f "[m]lx_lm server" 2>/dev/null | head -1 || echo "")
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
 		PORT=8080
 		if [ -n "$PGREP" ]; then
 			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
 			PORT_ARG=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--port"){print $(i+1);exit}if($i~/^--port=/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
-			[ -n "$PORT_ARG" ] && PORT="$PORT_ARG"
+			# Validate PORT_ARG is numeric before accepting it.
+			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then PORT="$PORT_ARG"; fi
 		fi
 		RESIDENT="[]"
 		if [ "$RUNNING" = "true" ] && command -v curl >/dev/null 2>&1; then
@@ -138,9 +141,8 @@ try:
         if not mid:
             continue
         name = mid.split('/')[-1]
-        name = name.replace('\"', '\\\\\"')
-        items.append('{\"name\":\"%s\",\"runtime\":\"mlx\",\"processor\":\"gpu\",\"source\":\"mlx-lm-api\"}' % name)
-    print('[' + ','.join(items) + ']')
+        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'source': 'mlx-lm-api'})
+    print(json.dumps(items))
 except Exception:
     print('[]')
 " 2>/dev/null || echo "[]")

@@ -24,8 +24,10 @@ func minimalRemoteExec() map[string]fakeRunResult {
 		"df -kP / | tail -1":                                                                {out: "/dev/nvme0n1 1048576 524288 524288 50% /\n"},
 		"cat /proc/pressure/memory 2>/dev/null":                                             {out: "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"},
 		`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {out: "2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"},
-		// Ollama not installed on this node.
-		OllamaDiscoveryScript: {out: `{"installed":false}`},
+		// Inference backends not installed on this baseline node.
+		OllamaDiscoveryScript:       {out: `{"installed":false}`},
+		LlamaServerDiscoveryScript:  {out: `{"installed":false}`},
+		MLXDiscoveryScript:          {out: `{"installed":false}`},
 	}
 }
 
