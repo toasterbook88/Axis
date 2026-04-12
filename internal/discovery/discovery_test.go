@@ -400,6 +400,63 @@ func TestDiscoverSeededSkipsUDPWindowAndIncludesSeededNodes(t *testing.T) {
 	}
 }
 
+func TestDiscoverSeededResultUsesBeaconRegistrySourceWhenExtraNodesPresent(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(config.NodeConfig) bool { return false })
+	defer restoreMatch()
+	restoreRemote := stubRemoteDiscoveryCollector(t, func(nc config.NodeConfig) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{Name: nc.Name, Status: models.StatusComplete}, nil
+		})
+	})
+	defer restoreRemote()
+
+	result := DiscoverSeededResult(context.Background(), &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "static-node", Hostname: "10.0.0.1", SSHUser: "axis"},
+		},
+	}, []config.NodeConfig{
+		{Name: "beacon-node", Hostname: "10.0.0.9", SSHUser: "axis"},
+	})
+
+	if result.Freshness == nil {
+		t.Fatal("expected freshness metadata")
+	}
+	if result.Freshness.Source != "beacon-registry" {
+		t.Fatalf("freshness source = %q, want beacon-registry when extra seeded nodes are present", result.Freshness.Source)
+	}
+	if !result.Freshness.CompletedWindow {
+		t.Fatal("expected completed window for seeded discovery")
+	}
+}
+
+func TestDiscoverResultUsesStaticConfigSourceWithoutUDP(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(config.NodeConfig) bool { return false })
+	defer restoreMatch()
+	restoreRemote := stubRemoteDiscoveryCollector(t, func(nc config.NodeConfig) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{Name: nc.Name, Status: models.StatusComplete}, nil
+		})
+	})
+	defer restoreRemote()
+
+	// DiscoverResult with no discovery block — falls through to the static-config path.
+	result := DiscoverResult(context.Background(), &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "node-a", Hostname: "10.0.0.1", SSHUser: "axis"},
+		},
+	})
+
+	if result.Freshness == nil {
+		t.Fatal("expected freshness metadata")
+	}
+	if result.Freshness.Source != "static-config" {
+		t.Fatalf("freshness source = %q, want static-config when no UDP discovery", result.Freshness.Source)
+	}
+	if !result.Freshness.CompletedWindow {
+		t.Fatal("expected completed window for static discovery")
+	}
+}
+
 func TestStartUDPAddsBeaconDiscoveredNode(t *testing.T) {
 	port := freeUDPPort(t)
 	ctx, cancel := context.WithCancel(context.Background())

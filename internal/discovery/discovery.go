@@ -157,7 +157,15 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 			})
 		}
 	} else {
-		result.Freshness = BuildFreshness("static-config", 0, 0, seededCount, 0, true)
+		// Use a distinct source when the caller supplied beacon-registry nodes
+		// so the freshness contract accurately reflects that the node set
+		// includes daemon-tracked beacon nodes and not just nodes.yaml contents.
+		// seeded is nil for plain DiscoverResult calls without a UDP window.
+		source := "static-config"
+		if len(seeded) > 0 {
+			source = "beacon-registry"
+		}
+		result.Freshness = BuildFreshness(source, 0, 0, seededCount, 0, true)
 	}
 
 	mu.Lock()

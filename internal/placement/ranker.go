@@ -101,6 +101,15 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
 
+	// Precompute empirical observations once before sorting so the comparator
+	// uses a consistent snapshot. Calling time.Now() inside the comparator
+	// could produce non-deterministic results if an observation crosses the
+	// staleness boundary mid-sort, potentially violating strict weak ordering.
+	empirical := make(map[string]*models.ExecutionObservation, len(ranked))
+	for _, n := range ranked {
+		empirical[n.Name] = empiricalObservation(n, reqs, st)
+	}
+
 	sort.SliceStable(ranked, func(i, j int) bool {
 		ri := allocatableRAM(ranked[i], st)
 		rj := allocatableRAM(ranked[j], st)
@@ -108,7 +117,7 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return ri > rj
 		}
 
-		if cmp := compareObservationPreference(empiricalObservation(ranked[i], reqs, st), empiricalObservation(ranked[j], reqs, st)); cmp != 0 {
+		if cmp := compareObservationPreference(empirical[ranked[i].Name], empirical[ranked[j].Name]); cmp != 0 {
 			return cmp > 0
 		}
 

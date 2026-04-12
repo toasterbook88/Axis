@@ -40,7 +40,7 @@ const OllamaDiscoveryScript = `set -o pipefail;
 			LISTENING=true
 		fi
 		GPU=$($OLLAMA_BIN ps 2>/dev/null | grep -o 'gpu:[^ ]*' | head -1)
-		RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; if (NF >= 3) { proc=$(NF-1) " " $NF } gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc }')
+		RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; for(i=1;i<=NF;i++){if($i~/[0-9]+%/){proc=$i" "$(i+1);break}} gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc }')
 		if [ -n "$RESIDENT" ]; then
 			RESIDENT="[$RESIDENT]"
 		else
