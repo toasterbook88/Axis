@@ -88,6 +88,10 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	if llamaResidents := discoverLlamaServerLocal(ctx); len(llamaResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
 	}
+	// Merge MLX resident models (runtime="mlx") from the mlx_lm.server API.
+	if mlxResidents := discoverMLXLocal(ctx); len(mlxResidents) > 0 {
+		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
+	}
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
 	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {
 		facts.AppleFM = fm
@@ -991,6 +995,21 @@ func discoverLlamaServerLocal(ctx context.Context) []models.ResidentModel {
 		return nil
 	}
 	var parsed llamaServerDiscoveryPayload
+	if json.Unmarshal(out, &parsed) == nil && parsed.Installed {
+		return parsed.ResidentModels
+	}
+	return nil
+}
+
+// discoverMLXLocal probes for a running mlx_lm.server process on the local
+// node and queries its /v1/models endpoint to enumerate resident models.
+// Returns nil if mlx_lm is not installed or no server is running.
+func discoverMLXLocal(ctx context.Context) []models.ResidentModel {
+	out, err := exec.CommandContext(ctx, "bash", "-c", MLXDiscoveryScript).Output()
+	if err != nil {
+		return nil
+	}
+	var parsed mlxDiscoveryPayload
 	if json.Unmarshal(out, &parsed) == nil && parsed.Installed {
 		return parsed.ResidentModels
 	}

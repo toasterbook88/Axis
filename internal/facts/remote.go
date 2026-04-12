@@ -114,6 +114,10 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if llamaResidents := c.discoverLlamaServerRobust(ctx); len(llamaResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
 	}
+	// Merge MLX resident models (runtime="mlx") from the remote mlx_lm.server API.
+	if mlxResidents := c.discoverMLXRobust(ctx); len(mlxResidents) > 0 {
+		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
+	}
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)
 	})
@@ -417,6 +421,21 @@ func (c *RemoteCollector) discoverLlamaServerRobust(ctx context.Context) []model
 		return nil
 	}
 	var parsed llamaServerDiscoveryPayload
+	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
+		return parsed.ResidentModels
+	}
+	return nil
+}
+
+// discoverMLXRobust probes for a running mlx_lm.server process on the remote
+// node via a single SSH command and queries its /v1/models endpoint to
+// enumerate resident models.
+func (c *RemoteCollector) discoverMLXRobust(ctx context.Context) []models.ResidentModel {
+	out, err := c.Exec.Run(ctx, MLXDiscoveryScript)
+	if err != nil {
+		return nil
+	}
+	var parsed mlxDiscoveryPayload
 	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
 		return parsed.ResidentModels
 	}
