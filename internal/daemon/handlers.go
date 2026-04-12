@@ -109,6 +109,9 @@ func HealthPayload(meta *Metadata) map[string]any {
 	if meta.LastError != "" {
 		payload["cache_last_error"] = meta.LastError
 	}
+	if meta.Freshness != nil {
+		payload["discovery_freshness"] = meta.Freshness
+	}
 	return payload
 }
 

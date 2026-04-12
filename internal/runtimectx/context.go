@@ -20,7 +20,7 @@ type Context struct {
 }
 
 var loadConfig = config.Load
-var discoverNodes = discovery.DiscoverWithWarnings
+var discoverNodes = discovery.DiscoverResult
 var buildSnapshot = snapshot.Build
 var loadState = state.Load
 var applyReservationView = snapshotview.ApplyReservationView
@@ -32,12 +32,13 @@ func Load(ctx context.Context) (*Context, error) {
 		return nil, err
 	}
 
-	nodes, discoveryWarnings := discoverNodes(ctx, cfg)
-	snap := buildSnapshot(nodes)
+	discoveryResult := discoverNodes(ctx, cfg)
+	snap := buildSnapshot(discoveryResult.Nodes)
 	if snap == nil {
 		snap = &models.ClusterSnapshot{}
 	}
-	for _, warning := range discoveryWarnings {
+	snap.Freshness = discoveryResult.Freshness
+	for _, warning := range discoveryResult.Warnings {
 		models.AppendWarningIfMissing(snap, warning)
 	}
 

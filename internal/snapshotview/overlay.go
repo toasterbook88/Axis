@@ -24,6 +24,10 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 	}
 
 	clone := *snap
+	if snap.Freshness != nil {
+		freshness := *snap.Freshness
+		clone.Freshness = &freshness
+	}
 	clone.Nodes = make([]models.NodeFacts, len(snap.Nodes))
 	for i, node := range snap.Nodes {
 		nodeCopy := node
@@ -39,6 +43,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 			ollama.Models = append([]string(nil), node.Ollama.Models...)
 			nodeCopy.Ollama = &ollama
 		}
+		nodeCopy.ResidentModels = append([]models.ResidentModel(nil), node.ResidentModels...)
 		if node.TurboQuant != nil {
 			turbo := *node.TurboQuant
 			turbo.Backends = append([]string(nil), node.TurboQuant.Backends...)

@@ -75,6 +75,9 @@ func semanticFingerprintBytes(data []byte) ([sha256.Size]byte, error) {
 	if len(s.Failures) == 0 {
 		s.Failures = nil
 	}
+	if len(s.Observations) == 0 {
+		s.Observations = nil
+	}
 
 	canonical, err := json.Marshal(s)
 	if err != nil {

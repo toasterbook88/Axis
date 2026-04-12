@@ -272,7 +272,7 @@ func TestRankByFreeRAM(t *testing.T) {
 func TestRankByGPU(t *testing.T) {
 	candidates := []models.NodeFacts{
 		nodeComplete("cpu-only", 6000, "none"),
-		nodeComplete("gpu-node", 5000, "none"),
+		nodeComplete("gpu-node", 6000, "none"),
 	}
 	candidates[1].Resources.GPUs = []models.GPUInfo{{Model: "RTX 4090", Vendor: "nvidia", Capabilities: []string{"cuda"}}}
 
@@ -740,7 +740,7 @@ func TestReservedRAMAffectsSelection(t *testing.T) {
 	}
 }
 
-func TestClusterPressureSharePenalizesDominantNode(t *testing.T) {
+func TestAllocatableRAMOutweighsClusterPressureSharePenalty(t *testing.T) {
 	nodes := []models.NodeFacts{
 		nodeComplete("alpha", 5000, "none", "git"),
 		nodeComplete("beta", 3500, "none", "git"),
@@ -753,8 +753,8 @@ func TestClusterPressureSharePenalizesDominantNode(t *testing.T) {
 	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 1000}
 
 	d := SelectBestNode(reqs, nodes, st)
-	if !d.OK || d.Node != "beta" {
-		t.Fatalf("expected OK=true node=beta after cluster-share penalty, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
+	if !d.OK || d.Node != "alpha" {
+		t.Fatalf("expected OK=true node=alpha when allocatable RAM leads, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
 	}
 }
 

@@ -48,14 +48,26 @@ var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
 // It prevents goroutine storms when the cluster has many nodes.
 const maxParallel = 10
 
+type Result struct {
+	Nodes     []models.NodeFacts
+	Warnings  []models.Warning
+	Freshness *models.DiscoveryFreshness
+}
+
 func Discover(ctx context.Context, cfg *config.Config) []models.NodeFacts {
-	nodes, _ := discover(ctx, cfg, nil, true)
-	return nodes
+	return DiscoverResult(ctx, cfg).Nodes
 }
 
 // DiscoverWithWarnings probes all configured nodes and returns any discovery
 // warnings that should be surfaced to operators.
 func DiscoverWithWarnings(ctx context.Context, cfg *config.Config) ([]models.NodeFacts, []models.Warning) {
+	result := DiscoverResult(ctx, cfg)
+	return result.Nodes, result.Warnings
+}
+
+// DiscoverResult probes configured nodes and returns the additive structured
+// discovery metadata alongside the observed node set.
+func DiscoverResult(ctx context.Context, cfg *config.Config) Result {
 	return discover(ctx, cfg, nil, true)
 }
 
@@ -63,14 +75,57 @@ func DiscoverWithWarnings(ctx context.Context, cfg *config.Config) ([]models.Nod
 // nodes supplied by the caller. Unlike Discover, it does not reopen the UDP
 // listener or wait for a fresh beacon accumulation window.
 func DiscoverSeeded(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig) []models.NodeFacts {
-	nodes, _ := discover(ctx, cfg, seeded, false)
-	return nodes
+	return DiscoverSeededResult(ctx, cfg, seeded).Nodes
 }
 
-func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig, includeUDP bool) ([]models.NodeFacts, []models.Warning) {
+// DiscoverSeededResult probes configured nodes plus long-lived beacon-derived
+// nodes supplied by the caller without opening a new UDP accumulation window.
+func DiscoverSeededResult(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig) Result {
+	return discover(ctx, cfg, seeded, false)
+}
+
+// BuildFreshness applies the shared discovery freshness policy used by both
+// live UDP discovery windows and long-lived daemon beacon watchers.
+func BuildFreshness(source string, expected, observed time.Duration, seededCount, beaconCount int, completed bool) *models.DiscoveryFreshness {
+	if expected < 0 {
+		expected = 0
+	}
+	if observed < 0 {
+		observed = 0
+	}
+	if completed && expected > 0 && observed < expected {
+		observed = expected
+	}
+	if expected > 0 && observed > expected {
+		observed = expected
+	}
+
+	freshness := &models.DiscoveryFreshness{
+		Source:           source,
+		ExpectedWindowMS: expected.Milliseconds(),
+		ObservedWindowMS: observed.Milliseconds(),
+		SeededNodeCount:  seededCount,
+		BeaconNodeCount:  beaconCount,
+		CompletedWindow:  completed,
+	}
+	if freshness.Warning == "" && expected > 0 && !completed {
+		freshness.Warning = fmt.Sprintf("discovery source %s observed only %s of expected %s; results may miss peer nodes",
+			source,
+			observed.Round(time.Millisecond),
+			expected.Round(time.Millisecond),
+		)
+	}
+	return freshness
+}
+
+func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfig, includeUDP bool) Result {
 	discovered := make(map[string]config.NodeConfig)
 	var mu sync.Mutex
-	var warnings []models.Warning
+	result := Result{}
+	seededCount := 0
+	if cfg != nil {
+		seededCount = len(cfg.Nodes)
+	}
 
 	// Prefill with static config
 	for _, n := range cfg.Nodes {
@@ -89,19 +144,40 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 	}
 
 	if includeUDP && cfg.Discovery != nil && cfg.Discovery.Enabled {
-		discoveryStartUDP(ctx, cfg, discovered, &mu)
 		wait := beaconWaitDuration(cfg)
-		if !discoveryBeaconWait(ctx, wait) {
-			warnings = append(warnings, models.Warning{
+		windowStart := time.Now().UTC()
+		discoveryStartUDP(ctx, cfg, discovered, &mu)
+		completed := discoveryBeaconWait(ctx, wait)
+		observed := time.Since(windowStart)
+		result.Freshness = BuildFreshness("udp-window", wait, observed, seededCount, 0, completed)
+		if !completed && result.Freshness != nil && result.Freshness.Warning != "" {
+			result.Warnings = append(result.Warnings, models.Warning{
 				Kind:    "discovery",
-				Message: fmt.Sprintf("discovery beacon window ended early before %s; results may miss peer nodes", wait.Round(time.Millisecond)),
+				Message: result.Freshness.Warning,
 			})
 		}
+	} else {
+		// Use a distinct source when the caller supplied beacon-registry nodes
+		// so the freshness contract accurately reflects that the node set
+		// includes daemon-tracked beacon nodes and not just nodes.yaml contents.
+		// seeded is nil for plain DiscoverResult calls without a UDP window.
+		source := "static-config"
+		if len(seeded) > 0 {
+			source = "beacon-registry"
+		}
+		result.Freshness = BuildFreshness(source, 0, 0, seededCount, 0, true)
 	}
 
 	mu.Lock()
 	finalNodes := orderedNodes(discovered)
 	mu.Unlock()
+	if result.Freshness != nil {
+		additive := len(finalNodes) - seededCount
+		if additive < 0 {
+			additive = 0
+		}
+		result.Freshness.BeaconNodeCount = additive
+	}
 
 	results := make([]models.NodeFacts, len(finalNodes))
 
@@ -140,7 +216,8 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 	}
 
 	wg.Wait()
-	return results, warnings
+	result.Nodes = results
+	return result
 }
 
 func beaconWaitDuration(cfg *config.Config) time.Duration {

@@ -131,6 +131,15 @@ type OllamaInfo struct {
 	Error      string   `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
+// ResidentModel is additive truth-plane metadata describing a model that is
+// currently resident in a node runtime according to a live probe.
+type ResidentModel struct {
+	Name      string `json:"name" yaml:"name"`
+	Runtime   string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
+	Processor string `json:"processor,omitempty" yaml:"processor,omitempty"`
+	Source    string `json:"source,omitempty" yaml:"source,omitempty"`
+}
+
 // TurboQuantInfo records whether a node appears able to run a TurboQuant-like
 // long-context backend. This is additive advisory metadata only.
 type TurboQuantInfo struct {
@@ -160,17 +169,18 @@ type NodeFacts struct {
 	Role string `json:"role,omitempty" yaml:"role,omitempty"`
 
 	// Observed state
-	Hostname   string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	Identity   *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
-	OS         string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
-	OSVersion  string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
-	Arch       string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Resources  *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Addresses  []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	Tools      []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Ollama     *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
-	TurboQuant *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
-	AppleFM    *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
+	Hostname       string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	Identity       *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
+	OS             string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
+	OSVersion      string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
+	Arch           string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
+	Resources      *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Addresses      []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Tools          []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama         *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	ResidentModels []ResidentModel            `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
+	TurboQuant     *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
+	AppleFM        *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
 
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`
@@ -197,14 +207,27 @@ type Warning struct {
 	Message string `json:"message" yaml:"message"`
 }
 
+// DiscoveryFreshness describes how complete the current beacon-derived node
+// picture is relative to the expected accumulation window.
+type DiscoveryFreshness struct {
+	Source           string `json:"source" yaml:"source"`
+	ExpectedWindowMS int64  `json:"expected_window_ms,omitempty" yaml:"expected_window_ms,omitempty"`
+	ObservedWindowMS int64  `json:"observed_window_ms,omitempty" yaml:"observed_window_ms,omitempty"`
+	SeededNodeCount  int    `json:"seeded_node_count,omitempty" yaml:"seeded_node_count,omitempty"`
+	BeaconNodeCount  int    `json:"beacon_node_count,omitempty" yaml:"beacon_node_count,omitempty"`
+	CompletedWindow  bool   `json:"completed_window" yaml:"completed_window"`
+	Warning          string `json:"warning,omitempty" yaml:"warning,omitempty"`
+}
+
 // ClusterSnapshot is the principal output of AXIS: a compact structured
 // summary of cluster state for consumption by frontier models and operators.
 type ClusterSnapshot struct {
-	Timestamp time.Time      `json:"timestamp" yaml:"timestamp"`
-	Status    SnapshotStatus `json:"status" yaml:"status"`
-	Nodes     []NodeFacts    `json:"nodes" yaml:"nodes"`
-	Summary   ClusterSummary `json:"summary" yaml:"summary"`
-	Warnings  []Warning      `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	Timestamp time.Time           `json:"timestamp" yaml:"timestamp"`
+	Status    SnapshotStatus      `json:"status" yaml:"status"`
+	Nodes     []NodeFacts         `json:"nodes" yaml:"nodes"`
+	Summary   ClusterSummary      `json:"summary" yaml:"summary"`
+	Warnings  []Warning           `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	Freshness *DiscoveryFreshness `json:"freshness,omitempty" yaml:"freshness,omitempty"`
 }
 
 // --- Phase 2: Task Placement ---
@@ -280,6 +303,28 @@ type FailureScope struct {
 	Tool     string        `json:"tool,omitempty" yaml:"tool,omitempty"`
 	Backend  string        `json:"backend,omitempty" yaml:"backend,omitempty"`
 	Surface  string        `json:"surface,omitempty" yaml:"surface,omitempty"`
+}
+
+// ObservationScope identifies the exact execution shape tracked by empirical
+// runtime observations.
+type ObservationScope struct {
+	Node     string        `json:"node,omitempty" yaml:"node,omitempty"`
+	Workload WorkloadClass `json:"workload,omitempty" yaml:"workload,omitempty"`
+	Backend  string        `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Tool     string        `json:"tool,omitempty" yaml:"tool,omitempty"`
+}
+
+// ExecutionObservation records the latest empirical execution profile for an
+// exact scope. Unknown resource peaks remain unset.
+type ExecutionObservation struct {
+	Scope       ObservationScope `json:"scope" yaml:"scope"`
+	ObservedAt  time.Time        `json:"observed_at" yaml:"observed_at"`
+	SampleCount int              `json:"sample_count" yaml:"sample_count"`
+	LastSuccess bool             `json:"last_success" yaml:"last_success"`
+	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
+	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
+	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	ModelName   string           `json:"model_name,omitempty" yaml:"model_name,omitempty"`
 }
 
 // FailureRecord represents a tracked failure pattern for the immune system.
