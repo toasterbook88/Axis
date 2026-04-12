@@ -85,6 +85,8 @@ Removed: `axis discover` (fully replaced by `axis status` + snapshot assembly).
 - The streamed `/run` contract now also carries explicit execution state-change events, and early runtime/load failures now surface as the normal final `result` event instead of unexpectedly falling back to buffered JSON
 - Local daemon `/run` clients now use a dedicated long-lived execution transport instead of inheriting the short snapshot/meta HTTP timeout, so daemon-hop executions can run for the full caller context
 - When UDP discovery is enabled, `axis serve` also runs a long-lived beacon watcher so new/changed/expired beacon-derived nodes can trigger `beacon-change` cache refreshes without waiting for the normal snapshot timer
+- Live and cached snapshots now carry a typed `freshness` contract describing the discovery source, expected/observed beacon window, additive beacon-node count, completion state, and any degraded-confidence warning
+- Guarded execution now records exact-scope empirical observations (`node`, workload, backend, tool) separately from failure memory so later placement can prefer fresh successful history without treating "slow" as "broken"
 
 ## Degraded-State Behavior
 
@@ -102,8 +104,8 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 | **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk (total/free + storage class: nvme/ssd/hdd), structured GPU info (vendor/model/VRAM/capabilities), network addresses (with interface name, subnet, heuristic speed class), battery %, thermal state, and additive memory-topology / pressure-source metadata where available |
 | **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc`, plus probe-verified local `apple-foundation-models` on eligible Apple Silicon hosts running macOS 26 or later |
 | **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
-| **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`) and cluster-level aggregates |
-| **Advisory task placement** | `axis task place` ranks nodes deterministically by pressure, GPU, effective headroom, unified-memory suitability for `mlx`/long-context asks, allocatable RAM, reservation ratio, and locality; heavy AI tasks also avoid nodes under critical runtime pressure signals |
+| **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`), cluster-level aggregates, and additive discovery freshness metadata for both live and cached reads |
+| **Advisory task placement** | `axis task place` ranks nodes deterministically by allocatable RAM first, then fresh exact-scope empirical history, resident-model locality, backend/GPU/headroom tie-breaks, and reservation spread; heavy AI tasks still avoid nodes under critical runtime pressure signals |
 | **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, `axis chat`, and `axis agent` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
 | **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
@@ -242,9 +244,13 @@ axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
 
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node. Tool presence is a hard requirement, and eligible nodes are ranked by pressure, GPU capability (VRAM and backend match), effective headroom, unified-memory suitability for `mlx`/Apple Silicon-shaped asks, allocatable RAM, reservation ratio, storage class (HDD penalized for heavy loads), and stable name ordering.
+Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node. Tool presence is a hard requirement, and eligible nodes are ranked by allocatable RAM first, then fresh exact-scope empirical history, resident-model locality, backend/GPU/headroom tie-breaks, reservation spread, storage class (HDD penalized for heavy loads), and stable name ordering.
 
 AXIS now treats allocatable RAM as `min(live free RAM, total RAM minus a protected 1GB system reserve) - local reservations`, so cached reads, placement, and last-second execution admission use the same headroom model. When allocatable and per-node reservation ratios tie, placement also prefers the node holding a smaller share of the current cluster reservation pool, which makes RAM spreading more explicit instead of repeatedly picking the same machine on late ties.
+
+When UDP discovery is enabled, both live and cached snapshot surfaces now also expose a typed freshness contract instead of only a free-form warning string. That contract reports whether the expected beacon window completed, how much of it was actually observed, and how many additive beacon-derived nodes were included.
+
+For Ollama-shaped tasks, observed `resident_models` from `ollama ps` now provide a truth-backed warm-runtime locality hint, and guarded execution now feeds back exact-scope observations (wall time always, RAM/VRAM peaks only when directly observed) into later placement decisions.
 
 Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS filters out nodes showing critical runtime pressure, thermal throttling, or low battery (< 20%), and respects tombstone blacklists for task+node combinations that have repeatedly crashed.
 

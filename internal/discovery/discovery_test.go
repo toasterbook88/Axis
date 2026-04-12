@@ -307,8 +307,39 @@ func TestDiscoverWithWarningsReportsEarlyBeaconWindowTermination(t *testing.T) {
 	if warnings[0].Kind != "discovery" {
 		t.Fatalf("unexpected warning kind: %#v", warnings[0])
 	}
-	if !strings.Contains(warnings[0].Message, "ended early before 2.25s") {
+	if !strings.Contains(warnings[0].Message, "observed only") || !strings.Contains(warnings[0].Message, "2.25s") {
 		t.Fatalf("unexpected warning message: %q", warnings[0].Message)
+	}
+}
+
+func TestDiscoverResultIncludesFreshnessForCompletedWindow(t *testing.T) {
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
+	defer restoreWait()
+
+	result := DiscoverResult(context.Background(), &config.Config{
+		Nodes: []config.NodeConfig{{Name: "alpha", Hostname: "alpha.internal", SSHUser: "axis"}},
+		Discovery: &config.DiscoveryConfig{
+			Enabled:        true,
+			BeaconInterval: 2,
+		},
+	})
+
+	if result.Freshness == nil {
+		t.Fatal("expected freshness metadata")
+	}
+	if result.Freshness.Source != "udp-window" {
+		t.Fatalf("freshness source = %q, want udp-window", result.Freshness.Source)
+	}
+	if !result.Freshness.CompletedWindow {
+		t.Fatalf("expected completed window, got %#v", result.Freshness)
+	}
+	if result.Freshness.ExpectedWindowMS != 2250 || result.Freshness.ObservedWindowMS != 2250 {
+		t.Fatalf("unexpected freshness window: %#v", result.Freshness)
+	}
+	if result.Freshness.SeededNodeCount != 1 {
+		t.Fatalf("seeded node count = %d, want 1", result.Freshness.SeededNodeCount)
 	}
 }
 

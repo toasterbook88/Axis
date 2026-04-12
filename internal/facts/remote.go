@@ -98,9 +98,10 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	// Tools
 	facts.Tools = c.remoteTools(ctx)
 
-	ollamaInfo := c.discoverOllamaRobust(ctx)
+	ollamaInfo, residentModels := c.discoverOllamaRobust(ctx)
 	if ollamaInfo.Installed {
 		facts.Ollama = &ollamaInfo
+		facts.ResidentModels = residentModels
 		facts.Tools = append(facts.Tools, models.ToolInfo{
 			Name:    "ollama",
 			Path:    ollamaInfo.Path,
@@ -386,21 +387,21 @@ func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
 }
 
 // discoverOllamaRobust does ONE SSH command that gathers everything robustly.
-func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) models.OllamaInfo {
+func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
 	info := models.OllamaInfo{Installed: false}
 
 	out, err := c.Exec.Run(ctx, OllamaDiscoveryScript)
 	if err != nil {
 		info.Error = err.Error()
-		return info
+		return info, nil
 	}
 
 	// parse the JSON blob
-	var parsed models.OllamaInfo
+	var parsed ollamaDiscoveryPayload
 	if json.Unmarshal([]byte(out), &parsed) == nil {
-		return parsed
+		return parsed.OllamaInfo, parsed.ResidentModels
 	}
-	return info
+	return info, nil
 }
 
 func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {

@@ -86,35 +86,48 @@ func isBlockingFailure(class models.FailureClass) bool {
 
 // RankCandidates sorts nodes deterministically.
 // Priority order:
-//  1. Lowest RAM pressure (none < low < medium < high)
-//  2. GPU present
-//  3. Highest effective headroom (free-with-state - requirement)
-//  4. Highest unified-memory suitability for mlx/long-context asks
-//  5. Highest allocatable RAM
-//  6. Lowest reservation ratio (reserved / total RAM), then lowest current
-//     share of the cluster reservation pool
-//  7. Node name ascending (stable tiebreak)
+//  1. Highest allocatable RAM
+//  2. Best exact-scope empirical observation (fresh only)
+//  3. Resident model locality for the requested runtime
+//  4. Preferred backend rank
+//  5. GPU score
+//  6. Highest effective headroom (free-with-state - requirement)
+//  7. Highest unified-memory suitability / TurboQuant for matching asks
+//  8. Lowest RAM pressure (soft tie-break after hard blockers)
+//  9. Lowest reservation ratio and cluster reservation share
+//
+// 10. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
 	ranked := make([]models.NodeFacts, len(candidates))
 	copy(ranked, candidates)
 
 	sort.SliceStable(ranked, func(i, j int) bool {
-		pi := pressureOf(ranked[i])
-		pj := pressureOf(ranked[j])
-		if pi != pj {
-			return pressureRank(pi) < pressureRank(pj)
+		ri := allocatableRAM(ranked[i], st)
+		rj := allocatableRAM(ranked[j], st)
+		if ri != rj {
+			return ri > rj
 		}
 
-		gi := gpuScore(ranked[i], reqs)
-		gj := gpuScore(ranked[j], reqs)
-		if gi != gj {
-			return gi > gj
+		if cmp := compareObservationPreference(empiricalObservation(ranked[i], reqs, st), empiricalObservation(ranked[j], reqs, st)); cmp != 0 {
+			return cmp > 0
+		}
+
+		rmi := residentModelRank(ranked[i], reqs)
+		rmj := residentModelRank(ranked[j], reqs)
+		if rmi != rmj {
+			return rmi > rmj
 		}
 
 		bi := preferredBackendRank(ranked[i], reqs)
 		bj := preferredBackendRank(ranked[j], reqs)
 		if bi != bj {
 			return bi > bj
+		}
+
+		gi := gpuScore(ranked[i], reqs)
+		gj := gpuScore(ranked[j], reqs)
+		if gi != gj {
+			return gi > gj
 		}
 
 		hi := headroom(ranked[i], st, reqs)
@@ -137,10 +150,10 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return ui > uj
 		}
 
-		ri := allocatableRAM(ranked[i], st)
-		rj := allocatableRAM(ranked[j], st)
-		if ri != rj {
-			return ri > rj
+		pi := pressureOf(ranked[i])
+		pj := pressureOf(ranked[j])
+		if pi != pj {
+			return pressureRank(pi) < pressureRank(pj)
 		}
 
 		ratioI := reservationRatio(ranked[i], st)

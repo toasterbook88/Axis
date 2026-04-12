@@ -368,7 +368,7 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 	}
 
 	if models.IsLocalNode(targetNode) {
-		return runLocal(ctx, rt.State, skillStore, executionOwner(rt, req), req, resp, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
+		return runLocal(ctx, rt.State, skillStore, executionOwner(rt, req), req, reqs, resp, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
 	}
 
 	targetConfig, ok := rt.Config.FindNode(decision.Node)
@@ -377,7 +377,7 @@ func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutio
 		return resp, fmt.Errorf("node %q not found in config", decision.Node)
 	}
 
-	return runRemote(ctx, rt.State, skillStore, executionOwner(rt, req), req, resp, targetConfig, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
+	return runRemote(ctx, rt.State, skillStore, executionOwner(rt, req), req, reqs, resp, targetConfig, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
 }
 
 func prepareRequirements(description, mode string, intent Intent) models.TaskRequirements {
@@ -539,6 +539,7 @@ func runLocal(
 	skillStore *skills.Store,
 	owner state.ExecutionOwner,
 	req GuardedExecutionRequest,
+	reqs models.TaskRequirements,
 	resp GuardedExecutionResult,
 	decision models.PlacementDecision,
 	reservationMB int64,
@@ -596,22 +597,24 @@ func runLocal(
 		}()
 	}
 
+	startedAt := time.Now().UTC()
 	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
 		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
 	})
+	elapsed := time.Since(startedAt)
 	resp.Output = out
 	resp.ExitCode = exitCode(runErr)
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
-		emitFailure(st, resp, runErr)
+		recordExecutionOutcome(st, reqs, resp, runErr, elapsed)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
 	runtimeChanged = true
-	emitSuccess(st, resp)
+	recordExecutionOutcome(st, reqs, resp, nil, elapsed)
 	resp.OK = true
 	return resp, nil
 }
@@ -622,6 +625,7 @@ func runRemote(
 	skillStore *skills.Store,
 	owner state.ExecutionOwner,
 	req GuardedExecutionRequest,
+	reqs models.TaskRequirements,
 	resp GuardedExecutionResult,
 	targetConfig config.NodeConfig,
 	decision models.PlacementDecision,
@@ -678,22 +682,24 @@ func runRemote(
 		shellescape.Quote(command),
 	)
 
+	startedAt := time.Now().UTC()
 	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
 		return runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
 	})
+	elapsed := time.Since(startedAt)
 	resp.Output = out
 	resp.ExitCode = exitCode(runErr)
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
-		emitFailure(st, resp, runErr)
+		recordExecutionOutcome(st, reqs, resp, runErr, elapsed)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
 	runtimeChanged = true
-	emitSuccess(st, resp)
+	recordExecutionOutcome(st, reqs, resp, nil, elapsed)
 	resp.OK = true
 	return resp, nil
 }
@@ -846,7 +852,7 @@ func notifyStateChange(ctx context.Context, req GuardedExecutionRequest, trigger
 	}
 }
 
-func emitFailure(st *state.ClusterState, resp GuardedExecutionResult, runErr error) {
+func applyFailureOutcome(st *state.ClusterState, resp GuardedExecutionResult, runErr error) {
 	if st == nil || st.Failures == nil {
 		return
 	}
@@ -870,10 +876,9 @@ func emitFailure(st *state.ClusterState, resp GuardedExecutionResult, runErr err
 		}
 		st.Failures.Record(class, broadScope, runErr.Error(), evidence)
 	}
-	_ = st.Save()
 }
 
-func emitSuccess(st *state.ClusterState, resp GuardedExecutionResult) {
+func applySuccessOutcome(st *state.ClusterState, resp GuardedExecutionResult) {
 	if st == nil || st.Failures == nil {
 		return
 	}
@@ -882,18 +887,44 @@ func emitSuccess(st *state.ClusterState, resp GuardedExecutionResult) {
 		Workload: resp.Workload.Class,
 		Tool:     resp.Tool,
 	}
-	cleared := st.Failures.RecordSuccess(scope)
+	st.Failures.RecordSuccess(scope)
 	// Also clear the broader {Node, Workload} entry written by emitFailure.
 	if resp.Tool != "" {
 		broadScope := models.FailureScope{
 			Node:     resp.Node,
 			Workload: resp.Workload.Class,
 		}
-		cleared = st.Failures.RecordSuccess(broadScope) || cleared
+		st.Failures.RecordSuccess(broadScope)
 	}
-	if cleared {
-		_ = st.Save()
+}
+
+func durationMilliseconds(d time.Duration) int64 {
+	if d <= 0 {
+		return 1
 	}
+	if ms := d.Milliseconds(); ms > 0 {
+		return ms
+	}
+	return 1
+}
+
+func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements, resp GuardedExecutionResult, runErr error, elapsed time.Duration) {
+	if st == nil {
+		return
+	}
+	st.RecordObservation(models.ExecutionObservation{
+		Scope:       placement.ObservationScopeForRequirements(resp.Node, reqs, resp.Tool),
+		ObservedAt:  time.Now().UTC(),
+		SampleCount: 1,
+		LastSuccess: runErr == nil,
+		WallTimeMS:  durationMilliseconds(elapsed),
+	})
+	if runErr != nil {
+		applyFailureOutcome(st, resp, runErr)
+	} else {
+		applySuccessOutcome(st, resp)
+	}
+	_ = st.Save()
 }
 
 func exitCode(err error) int {

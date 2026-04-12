@@ -45,11 +45,12 @@ type TombstoneEntry struct {
 }
 
 type ClusterState struct {
-	Nodes      map[string]NodeState      `json:"nodes"`
-	Tombstones map[string]TombstoneEntry `json:"tombstones,omitempty"` // legacy
-	Failures   failures.Store            `json:"failures,omitempty"`
-	Decisions  []string                  `json:"recent_decisions"` // last 20 for context
-	UpdatedAt  time.Time                 `json:"updated_at"`
+	Nodes        map[string]NodeState                   `json:"nodes"`
+	Tombstones   map[string]TombstoneEntry              `json:"tombstones,omitempty"` // legacy
+	Failures     failures.Store                         `json:"failures,omitempty"`
+	Observations map[string]models.ExecutionObservation `json:"observations,omitempty"`
+	Decisions    []string                               `json:"recent_decisions"` // last 20 for context
+	UpdatedAt    time.Time                              `json:"updated_at"`
 }
 
 var quarantineCorruptStateFile = persist.QuarantineCorruptFile
@@ -89,6 +90,9 @@ func Load() (*ClusterState, error) {
 	}
 	if s.Failures == nil {
 		s.Failures = failures.NewStore()
+	}
+	if s.Observations == nil {
+		s.Observations = make(map[string]models.ExecutionObservation)
 	}
 
 	mutated := false
@@ -175,8 +179,9 @@ func Load() (*ClusterState, error) {
 
 func emptyClusterState() *ClusterState {
 	return &ClusterState{
-		Nodes:    make(map[string]NodeState),
-		Failures: failures.NewStore(),
+		Nodes:        make(map[string]NodeState),
+		Failures:     failures.NewStore(),
+		Observations: make(map[string]models.ExecutionObservation),
 	}
 }
 
@@ -652,6 +657,9 @@ func (s *ClusterState) Save() error {
 	}
 	if s.Failures == nil {
 		s.Failures = failures.NewStore()
+	}
+	if s.Observations == nil {
+		s.Observations = make(map[string]models.ExecutionObservation)
 	}
 	s.UpdatedAt = time.Now().UTC()
 	data, err := json.MarshalIndent(s, "", "  ")

@@ -13,6 +13,11 @@ var (
 	runToolVersionCommand = exec.CommandContext
 )
 
+type ollamaDiscoveryPayload struct {
+	models.OllamaInfo
+	ResidentModels []models.ResidentModel `json:"resident_models,omitempty"`
+}
+
 // OllamaDiscoveryScript is the bash script used to robustly discover Ollama state
 // and models across both local and remote nodes.
 const OllamaDiscoveryScript = `set -o pipefail;
@@ -35,7 +40,13 @@ const OllamaDiscoveryScript = `set -o pipefail;
 			LISTENING=true
 		fi
 		GPU=$($OLLAMA_BIN ps 2>/dev/null | grep -o 'gpu:[^ ]*' | head -1)
-		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"gpu_offload\":\"${GPU:-none}\"}"
+		RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; if (NF >= 3) { proc=$(NF-1) " " $NF } gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc }')
+		if [ -n "$RESIDENT" ]; then
+			RESIDENT="[$RESIDENT]"
+		else
+			RESIDENT="[]"
+		fi
+		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\"}"
 	`
 
 // toolDef defines a tool to probe during discovery.
