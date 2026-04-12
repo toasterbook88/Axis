@@ -83,6 +83,11 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 			Class:   models.ToolClassAICLI,
 		})
 	}
+	// Merge llama-server resident models (runtime="llama.cpp") so empirical
+	// placement can prefer nodes with the right model already loaded.
+	if llamaResidents := discoverLlamaServerLocal(ctx); len(llamaResidents) > 0 {
+		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
+	}
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
 	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {
 		facts.AppleFM = fm
@@ -975,6 +980,21 @@ func discoverOllamaLocal(ctx context.Context) (models.OllamaInfo, []models.Resid
 		return parsed.OllamaInfo, parsed.ResidentModels
 	}
 	return info, nil
+}
+
+// discoverLlamaServerLocal probes for a running llama-server process and
+// returns its resident models. Returns nil if llama-server is not installed or
+// not running.
+func discoverLlamaServerLocal(ctx context.Context) []models.ResidentModel {
+	out, err := exec.CommandContext(ctx, "bash", "-c", LlamaServerDiscoveryScript).Output()
+	if err != nil {
+		return nil
+	}
+	var parsed llamaServerDiscoveryPayload
+	if json.Unmarshal(out, &parsed) == nil && parsed.Installed {
+		return parsed.ResidentModels
+	}
+	return nil
 }
 
 func localGPUUtilPercent() (float64, bool) {

@@ -84,9 +84,9 @@ func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 
 	var called bool
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		called = true
-		return nil, errors.New("should not run")
+		return nil, 0, errors.New("should not run")
 	}
 	defer func() { RunLocalShell = prevShell }()
 
@@ -136,9 +136,9 @@ func TestRunGuardedLocalInferenceUsesLiveMemoryPreflight(t *testing.T) {
 
 	var called bool
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		called = true
-		return nil, errors.New("should not run")
+		return nil, 0, errors.New("should not run")
 	}
 	defer func() { RunLocalShell = prevShell }()
 
@@ -188,9 +188,9 @@ func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) 
 
 	var called bool
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		called = true
-		return nil, errors.New("should not run")
+		return nil, 0, errors.New("should not run")
 	}
 	defer func() { RunLocalShell = prevShell }()
 
@@ -228,8 +228,8 @@ func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
 	})
 
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
-		return []byte("ok\n"), nil
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("ok\n"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
 
@@ -286,9 +286,9 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	defer func() { heartbeatTask = prevHeartbeat }()
 
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		time.Sleep(35 * time.Millisecond)
-		return []byte("ok\n"), nil
+		return []byte("ok\n"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
 
@@ -329,9 +329,9 @@ func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, err := runWithReservationHeartbeat(&state.ClusterState{}, "alpha", "exec-1", func() (string, error) {
+		if _, _, err := runWithReservationHeartbeat(&state.ClusterState{}, "alpha", "exec-1", func() (string, int64, error) {
 			<-doneRun
-			return "ok", nil
+			return "ok", 0, nil
 		}); err != nil {
 			t.Errorf("runWithReservationHeartbeat: %v", err)
 		}
@@ -379,7 +379,7 @@ func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 	})
 
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		ns, ok := rt.State.Nodes["studio"]
 		if !ok {
 			t.Fatal("expected active reservation state for studio")
@@ -391,7 +391,7 @@ func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 		if got := ns.ExecOrigin[execID]; got != models.NewExecutionOrigin("studio", "localhost", "abc-123") {
 			t.Fatalf("ExecOrigin[%s] = %+v, want studio/localhost/abc-123", execID, got)
 		}
-		return []byte("ok\n"), nil
+		return []byte("ok\n"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
 
@@ -429,7 +429,7 @@ func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 
 	want := models.NewExecutionOrigin("relay", "relay.local", "relay-123")
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		ns, ok := rt.State.Nodes["studio"]
 		if !ok {
 			t.Fatal("expected active reservation state for studio")
@@ -441,7 +441,7 @@ func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 		if got := ns.ExecOrigin[execID]; got != want {
 			t.Fatalf("ExecOrigin[%s] = %+v, want %+v", execID, got, want)
 		}
-		return []byte("ok\n"), nil
+		return []byte("ok\n"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
 

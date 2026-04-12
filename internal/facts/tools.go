@@ -49,6 +49,54 @@ const OllamaDiscoveryScript = `set -o pipefail;
 		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\"}"
 	`
 
+// LlamaServerDiscoveryScript is the bash script used to detect a running
+// llama-server process, extract its loaded model from the command line, and
+// report it as a resident model. Works locally and over SSH.
+//
+// pgrep is trimmed to a single PID with | head -1 to handle multiple instances
+// deterministically. The --model/-m flag is parsed with awk to handle both
+// --model=path and --model path forms and avoid fragile column assumptions.
+const LlamaServerDiscoveryScript = `set -o pipefail;
+		LSBIN=$(command -v llama-server || echo "")
+		if [ -z "$LSBIN" ]; then echo '{"installed":false}'; exit 0; fi
+		VERSION=$($LSBIN --version 2>/dev/null | head -1)
+		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || pgrep -f llama-server 2>/dev/null | head -1 || echo "")
+		RUNNING=false
+		[ -n "$PGREP" ] && RUNNING=true
+		LISTENING=false
+		if command -v lsof >/dev/null 2>&1 && lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+			LISTENING=true
+		elif command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':8080 '; then
+			LISTENING=true
+		elif command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q ':8080 '; then
+			LISTENING=true
+		fi
+		RESIDENT="[]"
+		if [ -n "$PGREP" ]; then
+			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
+			MODEL=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+			if [ -n "$MODEL" ]; then
+				MNAME=$(basename "$MODEL" | sed 's/\.[^.]*$//')
+				GPU_LAYERS=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--n-gpu-layers"||$i=="-ngl"){print $(i+1);exit}if($i~/^(--n-gpu-layers=|-ngl=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+				PROC="cpu"
+				[ -n "$GPU_LAYERS" ] && [ "$GPU_LAYERS" -gt 0 ] 2>/dev/null && PROC="gpu"
+				MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
+				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"source\":\"llama-server-ps\"}]"
+			fi
+		fi
+		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":8080,\"resident_models\":$RESIDENT}"
+	`
+
+type llamaServerDiscoveryPayload struct {
+	Installed      bool                   `json:"installed"`
+	Path           string                 `json:"path,omitempty"`
+	Version        string                 `json:"version,omitempty"`
+	Running        bool                   `json:"running,omitempty"`
+	Listening      bool                   `json:"listening,omitempty"`
+	Port           int                    `json:"port,omitempty"`
+	ResidentModels []models.ResidentModel `json:"resident_models,omitempty"`
+}
+
 // toolDef defines a tool to probe during discovery.
 type toolDef struct {
 	name       string
