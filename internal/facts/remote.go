@@ -109,6 +109,11 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 			Class:   models.ToolClassAICLI,
 		})
 	}
+	// Merge llama-server resident models (runtime="llama.cpp") so empirical
+	// placement can prefer nodes with the right model already loaded.
+	if llamaResidents := c.discoverLlamaServerRobust(ctx); len(llamaResidents) > 0 {
+		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
+	}
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)
 	})
@@ -402,6 +407,20 @@ func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) (models.Olla
 		return parsed.OllamaInfo, parsed.ResidentModels
 	}
 	return info, nil
+}
+
+// discoverLlamaServerRobust probes for a running llama-server process on the
+// remote node via a single SSH command and returns its resident models.
+func (c *RemoteCollector) discoverLlamaServerRobust(ctx context.Context) []models.ResidentModel {
+	out, err := c.Exec.Run(ctx, LlamaServerDiscoveryScript)
+	if err != nil {
+		return nil
+	}
+	var parsed llamaServerDiscoveryPayload
+	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
+		return parsed.ResidentModels
+	}
+	return nil
 }
 
 func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {

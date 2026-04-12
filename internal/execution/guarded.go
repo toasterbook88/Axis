@@ -112,17 +112,25 @@ var NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
 	return transport.NewSSHExecutor(nc.Hostname, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveTimeout())
 }
 
-var RunLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
+// RunLocalShell executes command in a login bash shell and returns its combined
+// output, the peak RSS of the child process in MB (0 if unavailable), and any
+// error. The second return value is populated from cmd.ProcessState.SysUsage()
+// after the process exits, giving per-execution accuracy.
+var RunLocalShell = func(ctx context.Context, command string, env []string) ([]byte, int64, error) {
 	// Intentional ModeExec shell boundary: raw commands retain full shell
 	// semantics under guarded execution after confirm=YES, safety.Check,
 	// reservation heartbeats, and provenance tracking.
 	// codeql[go/command-injection]
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = env
-	return cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	return out, peakRAMFromProcessState(cmd.ProcessState), err
 }
 
-var StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) error {
+// StreamLocalShell executes command in a login bash shell, streaming output to
+// the supplied writers. Returns the peak RSS in MB (0 if unavailable) and any
+// error.
+var StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (int64, error) {
 	// Intentional ModeExec shell boundary: raw commands retain full shell
 	// semantics under guarded execution after confirm=YES, safety.Check,
 	// reservation heartbeats, and provenance tracking.
@@ -131,11 +139,13 @@ var StreamLocalShell = func(ctx context.Context, command string, env []string, s
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	return cmd.Run()
+	err := cmd.Run()
+	return peakRAMFromProcessState(cmd.ProcessState), err
 }
 
 var PlanNixExecution = PlanNixWrapper
 var ProbeLocalAvailableRAMMB = probeLocalAvailableRAMMB
+
 
 func NormalizeRequest(req *GuardedExecutionRequest) {
 	if req == nil {
@@ -598,7 +608,7 @@ func runLocal(
 	}
 
 	startedAt := time.Now().UTC()
-	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
+	out, peakRAMMB, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, int64, error) {
 		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
 	})
 	elapsed := time.Since(startedAt)
@@ -608,13 +618,13 @@ func runLocal(
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
-		recordExecutionOutcome(st, reqs, resp, runErr, elapsed)
+		recordExecutionOutcome(st, reqs, resp, runErr, elapsed, peakRAMMB)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
 	runtimeChanged = true
-	recordExecutionOutcome(st, reqs, resp, nil, elapsed)
+	recordExecutionOutcome(st, reqs, resp, nil, elapsed, peakRAMMB)
 	resp.OK = true
 	return resp, nil
 }
@@ -683,8 +693,9 @@ func runRemote(
 	)
 
 	startedAt := time.Now().UTC()
-	out, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, error) {
-		return runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
+	out, _, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, int64, error) {
+		out, err := runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
+		return out, 0, err
 	})
 	elapsed := time.Since(startedAt)
 	resp.Output = out
@@ -693,21 +704,21 @@ func runRemote(
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
-		recordExecutionOutcome(st, reqs, resp, runErr, elapsed)
+		recordExecutionOutcome(st, reqs, resp, runErr, elapsed, 0)
 		return resp, runErr
 	}
 
 	recordSuccess(skillStore, req.Description, command, decision.Node)
 	runtimeChanged = true
-	recordExecutionOutcome(st, reqs, resp, nil, elapsed)
+	recordExecutionOutcome(st, reqs, resp, nil, elapsed, 0)
 	resp.OK = true
 	return resp, nil
 }
 
-func runLocalWithOutput(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (string, error) {
+func runLocalWithOutput(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (string, int64, error) {
 	if stdout == nil && stderr == nil {
-		out, err := RunLocalShell(ctx, command, env)
-		return string(out), err
+		out, peak, err := RunLocalShell(ctx, command, env)
+		return string(out), peak, err
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -721,8 +732,8 @@ func runLocalWithOutput(ctx context.Context, command string, env []string, stdou
 		errWriter = io.MultiWriter(stderr, &stderrBuf)
 	}
 
-	err := StreamLocalShell(ctx, command, env, outWriter, errWriter)
-	return combinedOutput(stdoutBuf.String(), stderrBuf.String()), err
+	peak, err := StreamLocalShell(ctx, command, env, outWriter, errWriter)
+	return combinedOutput(stdoutBuf.String(), stderrBuf.String()), peak, err
 }
 
 func runRemoteWithOutput(ctx context.Context, executor RemoteExecutor, command string, stdout, stderr io.Writer) (string, error) {
@@ -771,21 +782,22 @@ func combinedOutput(stdout, stderr string) string {
 func runWithReservationHeartbeat(
 	st *state.ClusterState,
 	node, execID string,
-	run func() (string, error),
-) (string, error) {
+	run func() (string, int64, error),
+) (string, int64, error) {
 	if st == nil || execID == "" {
 		return run()
 	}
 
 	type result struct {
-		out string
-		err error
+		out  string
+		peak int64
+		err  error
 	}
 
 	done := make(chan result, 1)
 	go func() {
-		out, err := run()
-		done <- result{out: out, err: err}
+		out, peak, err := run()
+		done <- result{out: out, peak: peak, err: err}
 	}()
 
 	ticker := time.NewTicker(executionHeartbeatInterval)
@@ -794,7 +806,7 @@ func runWithReservationHeartbeat(
 	for {
 		select {
 		case res := <-done:
-			return res.out, res.err
+			return res.out, res.peak, res.err
 		case <-ticker.C:
 			_ = heartbeatTask(st, node, execID)
 		}
@@ -908,7 +920,7 @@ func durationMilliseconds(d time.Duration) int64 {
 	return 1
 }
 
-func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements, resp GuardedExecutionResult, runErr error, elapsed time.Duration) {
+func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements, resp GuardedExecutionResult, runErr error, elapsed time.Duration, peakRAMMB int64) {
 	if st == nil {
 		return
 	}
@@ -918,6 +930,7 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 		SampleCount: 1,
 		LastSuccess: runErr == nil,
 		WallTimeMS:  durationMilliseconds(elapsed),
+		PeakRAMMB:   peakRAMMB,
 	})
 	if runErr != nil {
 		applyFailureOutcome(st, resp, runErr)
