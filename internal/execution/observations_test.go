@@ -29,15 +29,13 @@ func TestRunGuardedPropagatesPeakRAMMBToObservation(t *testing.T) {
 	reqs := prepareRequirements("git status", ModeExec, Intent{})
 	scope := placement.ObservationScopeForRequirements("studio", reqs, "")
 
+	// Stub RunLocalShell to return a specific peak RSS (512 MB) so the test
+	// doesn't depend on real process state being populated in the test runner.
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
-		return []byte("ok"), nil
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("ok"), 512, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
-
-	prevPeak := captureChildrenPeakRAMMB
-	captureChildrenPeakRAMMB = func() int64 { return 512 }
-	defer func() { captureChildrenPeakRAMMB = prevPeak }()
 
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "git status",
@@ -85,15 +83,11 @@ func TestRunGuardedRecordsObservationAndClearsMatchingFailuresOnSuccess(t *testi
 	}, "previous crash", []string{"exit code 1"})
 
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		time.Sleep(5 * time.Millisecond)
-		return []byte("ok"), nil
+		return []byte("ok"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
-
-	prevPeak := captureChildrenPeakRAMMB
-	captureChildrenPeakRAMMB = func() int64 { return 0 }
-	defer func() { captureChildrenPeakRAMMB = prevPeak }()
 
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "git status",

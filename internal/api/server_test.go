@@ -612,8 +612,8 @@ func TestRunEndpointRefreshesCacheOnExecutionStateChanges(t *testing.T) {
 	defer restoreRuntime()
 
 	prevShell := execution.RunLocalShell
-	execution.RunLocalShell = func(context.Context, string, []string) ([]byte, error) {
-		return []byte("ok\n"), nil
+	execution.RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("ok\n"), 0, nil
 	}
 	defer func() { execution.RunLocalShell = prevShell }()
 

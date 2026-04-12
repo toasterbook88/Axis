@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"al.essio.dev/pkg/shellescape"
@@ -113,17 +112,25 @@ var NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
 	return transport.NewSSHExecutor(nc.Hostname, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveTimeout())
 }
 
-var RunLocalShell = func(ctx context.Context, command string, env []string) ([]byte, error) {
+// RunLocalShell executes command in a login bash shell and returns its combined
+// output, the peak RSS of the child process in MB (0 if unavailable), and any
+// error. The second return value is populated from cmd.ProcessState.SysUsage()
+// after the process exits, giving per-execution accuracy.
+var RunLocalShell = func(ctx context.Context, command string, env []string) ([]byte, int64, error) {
 	// Intentional ModeExec shell boundary: raw commands retain full shell
 	// semantics under guarded execution after confirm=YES, safety.Check,
 	// reservation heartbeats, and provenance tracking.
 	// codeql[go/command-injection]
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = env
-	return cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	return out, peakRAMFromProcessState(cmd.ProcessState), err
 }
 
-var StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) error {
+// StreamLocalShell executes command in a login bash shell, streaming output to
+// the supplied writers. Returns the peak RSS in MB (0 if unavailable) and any
+// error.
+var StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (int64, error) {
 	// Intentional ModeExec shell boundary: raw commands retain full shell
 	// semantics under guarded execution after confirm=YES, safety.Check,
 	// reservation heartbeats, and provenance tracking.
@@ -132,34 +139,13 @@ var StreamLocalShell = func(ctx context.Context, command string, env []string, s
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	return cmd.Run()
+	err := cmd.Run()
+	return peakRAMFromProcessState(cmd.ProcessState), err
 }
 
 var PlanNixExecution = PlanNixWrapper
 var ProbeLocalAvailableRAMMB = probeLocalAvailableRAMMB
 
-// captureChildrenPeakRAMMB reads the peak RSS of the most recently terminated
-// child process via RUSAGE_CHILDREN. Called immediately after RunLocalShell or
-// StreamLocalShell returns, before any other child exits. Returns 0 on error or
-// unsupported platform.
-var captureChildrenPeakRAMMB = defaultCaptureChildrenPeakRAMMB
-
-func defaultCaptureChildrenPeakRAMMB() int64 {
-	var rusage syscall.Rusage
-	if err := syscall.Getrusage(syscall.RUSAGE_CHILDREN, &rusage); err != nil {
-		return 0
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		// Maxrss is in bytes on Darwin.
-		return rusage.Maxrss / (1024 * 1024)
-	case "linux":
-		// Maxrss is in kilobytes on Linux.
-		return rusage.Maxrss / 1024
-	default:
-		return 0
-	}
-}
 
 func NormalizeRequest(req *GuardedExecutionRequest) {
 	if req == nil {
@@ -731,8 +717,7 @@ func runRemote(
 
 func runLocalWithOutput(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (string, int64, error) {
 	if stdout == nil && stderr == nil {
-		out, err := RunLocalShell(ctx, command, env)
-		peak := captureChildrenPeakRAMMB()
+		out, peak, err := RunLocalShell(ctx, command, env)
 		return string(out), peak, err
 	}
 
@@ -747,8 +732,7 @@ func runLocalWithOutput(ctx context.Context, command string, env []string, stdou
 		errWriter = io.MultiWriter(stderr, &stderrBuf)
 	}
 
-	err := StreamLocalShell(ctx, command, env, outWriter, errWriter)
-	peak := captureChildrenPeakRAMMB()
+	peak, err := StreamLocalShell(ctx, command, env, outWriter, errWriter)
 	return combinedOutput(stdoutBuf.String(), stderrBuf.String()), peak, err
 }
 

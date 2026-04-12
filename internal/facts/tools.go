@@ -52,11 +52,15 @@ const OllamaDiscoveryScript = `set -o pipefail;
 // LlamaServerDiscoveryScript is the bash script used to detect a running
 // llama-server process, extract its loaded model from the command line, and
 // report it as a resident model. Works locally and over SSH.
+//
+// pgrep is trimmed to a single PID with | head -1 to handle multiple instances
+// deterministically. The --model/-m flag is parsed with awk to handle both
+// --model=path and --model path forms and avoid fragile column assumptions.
 const LlamaServerDiscoveryScript = `set -o pipefail;
 		LSBIN=$(command -v llama-server || echo "")
 		if [ -z "$LSBIN" ]; then echo '{"installed":false}'; exit 0; fi
 		VERSION=$($LSBIN --version 2>/dev/null | head -1)
-		PGREP=$(pgrep -x llama-server 2>/dev/null || pgrep -f llama-server 2>/dev/null | head -1 || echo "")
+		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || pgrep -f llama-server 2>/dev/null | head -1 || echo "")
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
 		LISTENING=false
@@ -70,10 +74,10 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 		RESIDENT="[]"
 		if [ -n "$PGREP" ]; then
 			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
-			MODEL=$(echo "$CMDLINE" | sed -n 's/.*--model[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)
+			MODEL=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 			if [ -n "$MODEL" ]; then
 				MNAME=$(basename "$MODEL" | sed 's/\.[^.]*$//')
-				GPU_LAYERS=$(echo "$CMDLINE" | sed -n 's/.*--n-gpu-layers[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+				GPU_LAYERS=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--n-gpu-layers"||$i=="-ngl"){print $(i+1);exit}if($i~/^(--n-gpu-layers=|-ngl=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 				PROC="cpu"
 				[ -n "$GPU_LAYERS" ] && [ "$GPU_LAYERS" -gt 0 ] 2>/dev/null && PROC="gpu"
 				MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
