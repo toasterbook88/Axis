@@ -68,6 +68,9 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 				continue
 			}
 		}
+		if blocksForEmpiricalPeakRAM(n, reqs, st) {
+			continue
+		}
 		if !satisfiesRequiredTools(n, reqs.RequiredTools) {
 			continue
 		}
@@ -513,6 +516,23 @@ func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts)
 		return true
 	}
 	return false
+}
+
+// blocksForEmpiricalPeakRAM hard-excludes a node when a fresh empirical
+// observation for this workload recorded a PeakRAMMB that exceeds the node's
+// current allocatable RAM. This prevents scheduling on nodes that are
+// empirically too small for the workload even if no explicit MinFreeRAMMB was
+// set by the caller.
+//
+// The check is intentionally conservative: it only fires when both (a) a fresh
+// observation exists and (b) PeakRAMMB > 0. Absent or stale observations leave
+// the node eligible — we don't penalise nodes that haven't been observed yet.
+func blocksForEmpiricalPeakRAM(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) bool {
+	obs, ok := freshObservation(n, reqs, st)
+	if !ok || obs.PeakRAMMB <= 0 {
+		return false
+	}
+	return allocatableRAM(n, st) < obs.PeakRAMMB
 }
 
 // storageClassPenalty reduces fit score for HDD nodes on heavy inference tasks.
