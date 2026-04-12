@@ -307,11 +307,17 @@ type FailureScope struct {
 
 // ObservationScope identifies the exact execution shape tracked by empirical
 // runtime observations.
+//
+// ModelName is optional: when set, the observation is scoped to a specific
+// inference model (e.g. "llama3.2:latest"). When empty, the observation
+// covers the workload class without model specificity, preserving backward
+// compatibility with existing observation entries.
 type ObservationScope struct {
-	Node     string        `json:"node,omitempty" yaml:"node,omitempty"`
-	Workload WorkloadClass `json:"workload,omitempty" yaml:"workload,omitempty"`
-	Backend  string        `json:"backend,omitempty" yaml:"backend,omitempty"`
-	Tool     string        `json:"tool,omitempty" yaml:"tool,omitempty"`
+	Node      string        `json:"node,omitempty" yaml:"node,omitempty"`
+	Workload  WorkloadClass `json:"workload,omitempty" yaml:"workload,omitempty"`
+	Backend   string        `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Tool      string        `json:"tool,omitempty" yaml:"tool,omitempty"`
+	ModelName string        `json:"model_name,omitempty" yaml:"model_name,omitempty"`
 }
 
 // ExecutionObservation records the latest empirical execution profile for an

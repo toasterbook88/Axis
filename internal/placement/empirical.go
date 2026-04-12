@@ -56,13 +56,32 @@ func inferredToolForObservation(reqs models.TaskRequirements, selectedTool strin
 
 // ObservationScopeForRequirements normalizes the exact empirical scope used by
 // guarded execution recording and placement lookup.
+//
+// ModelName is populated by extracting a model name from reqs.Description only
+// for inference-related workload classes. Non-inference workloads leave ModelName
+// empty — preserving backward compatibility and avoiding false positives from
+// flags like -m in git commit messages.
 func ObservationScopeForRequirements(node string, reqs models.TaskRequirements, selectedTool string) models.ObservationScope {
 	tool := inferredToolForObservation(reqs, selectedTool)
 	return models.ObservationScope{
-		Node:     strings.TrimSpace(node),
-		Workload: reqs.Workload.Class,
-		Backend:  observationBackend(reqs, tool),
-		Tool:     tool,
+		Node:      strings.TrimSpace(node),
+		Workload:  reqs.Workload.Class,
+		Backend:   observationBackend(reqs, tool),
+		Tool:      tool,
+		ModelName: inferenceModelName(reqs),
+	}
+}
+
+// inferenceModelName extracts a model name from the task description when the
+// workload is inference-related. Returns "" for all other workload classes to
+// avoid false positives from generic -m flags (e.g. git commit -m "...").
+func inferenceModelName(reqs models.TaskRequirements) string {
+	switch reqs.Workload.Class {
+	case models.ClassLocalLLMInference, models.ClassLongContextInference,
+		models.ClassAppleIntelligence, models.ClassLlamaServer:
+		return ExtractModelName(reqs.Description)
+	default:
+		return ""
 	}
 }
 

@@ -22,6 +22,11 @@ func ObservationKey(scope models.ObservationScope) string {
 		"backend:" + normalizeObservationField(scope.Backend),
 		"tool:" + normalizeObservationField(scope.Tool),
 	}
+	// Include model name only when set — preserves existing keys for unscoped
+	// observations while giving per-model granularity when a name is known.
+	if m := normalizeObservationField(scope.ModelName); m != "" {
+		parts = append(parts, "model:"+m)
+	}
 	hash := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(hash[:12])
 }
@@ -30,7 +35,13 @@ func normalizeObservation(obs models.ExecutionObservation) models.ExecutionObser
 	obs.Scope.Node = strings.TrimSpace(obs.Scope.Node)
 	obs.Scope.Backend = strings.TrimSpace(obs.Scope.Backend)
 	obs.Scope.Tool = strings.TrimSpace(obs.Scope.Tool)
+	obs.Scope.ModelName = strings.TrimSpace(obs.Scope.ModelName)
 	obs.ModelName = strings.TrimSpace(obs.ModelName)
+	// Keep top-level ModelName in sync with Scope.ModelName so empiricalReason
+	// always has a name to display even when a caller sets only the scope field.
+	if obs.ModelName == "" && obs.Scope.ModelName != "" {
+		obs.ModelName = obs.Scope.ModelName
+	}
 	if obs.ObservedAt.IsZero() {
 		obs.ObservedAt = time.Now().UTC()
 	} else {

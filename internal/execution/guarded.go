@@ -924,13 +924,15 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 	if st == nil {
 		return
 	}
+	scope := placement.ObservationScopeForRequirements(resp.Node, reqs, resp.Tool)
 	st.RecordObservation(models.ExecutionObservation{
-		Scope:       placement.ObservationScopeForRequirements(resp.Node, reqs, resp.Tool),
+		Scope:       scope,
 		ObservedAt:  time.Now().UTC(),
 		SampleCount: 1,
 		LastSuccess: runErr == nil,
 		WallTimeMS:  durationMilliseconds(elapsed),
 		PeakRAMMB:   peakRAMMB,
+		ModelName:   scope.ModelName,
 	})
 	if runErr != nil {
 		applyFailureOutcome(st, resp, runErr)
