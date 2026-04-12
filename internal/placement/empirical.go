@@ -56,13 +56,19 @@ func inferredToolForObservation(reqs models.TaskRequirements, selectedTool strin
 
 // ObservationScopeForRequirements normalizes the exact empirical scope used by
 // guarded execution recording and placement lookup.
+//
+// ModelName is populated by extracting a model name from reqs.Description when
+// one is identifiable (e.g. "llama3.2:latest" from "ollama run llama3.2:latest").
+// Observations without an extractable model name use the empty ModelName,
+// which preserves backward compatibility with existing observation entries.
 func ObservationScopeForRequirements(node string, reqs models.TaskRequirements, selectedTool string) models.ObservationScope {
 	tool := inferredToolForObservation(reqs, selectedTool)
 	return models.ObservationScope{
-		Node:     strings.TrimSpace(node),
-		Workload: reqs.Workload.Class,
-		Backend:  observationBackend(reqs, tool),
-		Tool:     tool,
+		Node:      strings.TrimSpace(node),
+		Workload:  reqs.Workload.Class,
+		Backend:   observationBackend(reqs, tool),
+		Tool:      tool,
+		ModelName: ExtractModelName(reqs.Description),
 	}
 }
 

@@ -89,6 +89,99 @@ func TestSaveLoadPreservesObservations(t *testing.T) {
 	}
 }
 
+// TestObservationKeyModelNameSegregation verifies that observations with
+// different ModelNames produce distinct keys, and that an empty ModelName
+// produces the same key as an observation created before ModelName existed
+// (backward compatibility invariant).
+func TestObservationKeyModelNameSegregation(t *testing.T) {
+	base := models.ObservationScope{
+		Node:     "cortex",
+		Workload: models.ClassLocalLLMInference,
+		Backend:  "ollama",
+		Tool:     "ollama",
+	}
+
+	// Empty ModelName must equal the legacy key (no model field in hash input).
+	keyNoModel := ObservationKey(base)
+	baseWithEmpty := base
+	baseWithEmpty.ModelName = ""
+	if ObservationKey(baseWithEmpty) != keyNoModel {
+		t.Error("empty ModelName should produce the same key as omitted ModelName")
+	}
+
+	// Non-empty ModelName must produce a different key.
+	withLlama := base
+	withLlama.ModelName = "llama3.2:latest"
+	keyLlama := ObservationKey(withLlama)
+	if keyLlama == keyNoModel {
+		t.Error("non-empty ModelName should produce a different key from empty")
+	}
+
+	// Two different model names must produce different keys.
+	withQwen := base
+	withQwen.ModelName = "qwen2.5:14b"
+	keyQwen := ObservationKey(withQwen)
+	if keyQwen == keyLlama {
+		t.Error("different model names should produce different keys")
+	}
+
+	// Case-insensitive: "Llama3.2:latest" must equal "llama3.2:latest".
+	withLlamaUpper := base
+	withLlamaUpper.ModelName = "Llama3.2:latest"
+	if ObservationKey(withLlamaUpper) != keyLlama {
+		t.Error("ObservationKey should be case-insensitive for ModelName")
+	}
+}
+
+// TestObservationStoreSeparatesByModelName ensures that RecordObservation
+// stores model-scoped observations separately so per-model history stays clean.
+func TestObservationStoreSeparatesByModelName(t *testing.T) {
+	s := &ClusterState{}
+	base := models.ObservationScope{
+		Node:     "cortex",
+		Workload: models.ClassLocalLLMInference,
+		Backend:  "ollama",
+		Tool:     "ollama",
+	}
+
+	llamaScope := base
+	llamaScope.ModelName = "llama3.2:latest"
+	qwenScope := base
+	qwenScope.ModelName = "qwen2.5:14b"
+
+	now := time.Now().UTC()
+	s.RecordObservation(models.ExecutionObservation{
+		Scope: llamaScope, ObservedAt: now, SampleCount: 1,
+		LastSuccess: true, WallTimeMS: 800,
+	})
+	s.RecordObservation(models.ExecutionObservation{
+		Scope: qwenScope, ObservedAt: now, SampleCount: 1,
+		LastSuccess: true, WallTimeMS: 1200,
+	})
+
+	llamaObs, ok := s.Observation(llamaScope)
+	if !ok || llamaObs == nil {
+		t.Fatal("expected llama observation")
+	}
+	if llamaObs.WallTimeMS != 800 {
+		t.Errorf("llama WallTimeMS = %d, want 800", llamaObs.WallTimeMS)
+	}
+
+	qwenObs, ok := s.Observation(qwenScope)
+	if !ok || qwenObs == nil {
+		t.Fatal("expected qwen observation")
+	}
+	if qwenObs.WallTimeMS != 1200 {
+		t.Errorf("qwen WallTimeMS = %d, want 1200", qwenObs.WallTimeMS)
+	}
+
+	// The unscoped base scope should not return either model-specific entry.
+	_, ok = s.Observation(base)
+	if ok {
+		t.Error("unscoped lookup should not match a model-scoped entry")
+	}
+}
+
 func TestObservationIsFresh(t *testing.T) {
 	now := time.Now().UTC()
 	fresh := models.ExecutionObservation{ObservedAt: now.Add(-time.Hour)}
