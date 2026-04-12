@@ -5,22 +5,25 @@ import (
 	"strings"
 )
 
-// modelTagRe matches a valid Ollama-style model tag: word characters, dots,
-// dashes, slashes, and an optional colon-tag suffix (e.g. "llama3.2:latest",
-// "hf.co/org/model:q4_k_m"). The name must start with a word character and
-// contain at least one dot, colon, or slash to avoid treating arbitrary words
-// as model names.
+// modelTagRe matches Ollama-style model-like tokens: a leading word character,
+// followed by word characters, dots, dashes, or slashes, with an optional
+// colon-tag suffix (e.g. "llama3.2:latest", "hf.co/org/model:q4_k_m").
+// This regex is intentionally broader than the bare-token extraction heuristic:
+// later logic only treats colon- or slash-containing tokens as extractable
+// model references, so dot-only tokens (e.g. "llama3.2") are not returned
+// by the bare heuristic.
 var modelTagRe = regexp.MustCompile(
 	`(?i)\b([\w][\w.\-/]+(?::[^\s]+)?)\b`,
 )
 
-// flagPrefixes are explicit CLI flags that introduce a model name argument.
+// flagPrefixes are explicit CLI flags and subcommands that introduce a model
+// name argument. The character class [\w][\w.\-/:]* restricts matches to
+// model-name-shaped tokens, avoiding capture of trailing punctuation or
+// subsequent flags. ollama serve is intentionally omitted — it starts a daemon
+// and does not accept a model name argument.
 var flagPrefixes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(?:--model|-m)=(\S+)`),     // --model=name or -m=name
-	regexp.MustCompile(`(?i)(?:--model|-m)\s+(\S+)`),   // --model name or -m name
-	regexp.MustCompile(`(?i)\bollama\s+run\s+(\S+)`),   // ollama run <model>
-	regexp.MustCompile(`(?i)\bollama\s+pull\s+(\S+)`),  // ollama pull <model>
-	regexp.MustCompile(`(?i)\bollama\s+serve\s+(\S+)`), // ollama serve <model> (rare but valid)
+	regexp.MustCompile(`(?i)(?:--model|-m)(?:=|\s+)([\w][\w.\-/:]*)\b`),  // --model=name, -m=name, --model name, -m name
+	regexp.MustCompile(`(?i)\bollama\s+(?:run|pull)\s+([\w][\w.\-/:]*)\b`), // ollama run <model>, ollama pull <model>
 }
 
 // knownNonModelWords are tokens that look like model names but aren't — common

@@ -1,6 +1,54 @@
 package placement
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/toasterbook88/axis/internal/models"
+)
+
+// TestInferenceModelNameGating verifies that model name extraction only fires
+// for inference workload classes, not general ones where -m is a common flag
+// (e.g. git commit -m "message").
+func TestInferenceModelNameGating(t *testing.T) {
+	desc := "git commit -m llama3.2:latest"
+
+	inferenceClasses := []models.WorkloadClass{
+		models.ClassLocalLLMInference,
+		models.ClassLongContextInference,
+		models.ClassAppleIntelligence,
+		models.ClassLlamaServer,
+	}
+	nonInferenceClasses := []models.WorkloadClass{
+		models.ClassRepoAnalysis,
+		models.ClassGoBuild,
+		models.ClassDockerBuild,
+		models.ClassBatchScript,
+		models.ClassIndexingIO,
+		models.ClassUnknown,
+	}
+
+	for _, cls := range inferenceClasses {
+		reqs := models.TaskRequirements{
+			Description: desc,
+			Workload:    models.WorkloadProfileMatch{Class: cls},
+		}
+		got := inferenceModelName(reqs)
+		if got == "" {
+			t.Errorf("inferenceModelName with class %q: expected non-empty, got %q", cls, got)
+		}
+	}
+
+	for _, cls := range nonInferenceClasses {
+		reqs := models.TaskRequirements{
+			Description: desc,
+			Workload:    models.WorkloadProfileMatch{Class: cls},
+		}
+		got := inferenceModelName(reqs)
+		if got != "" {
+			t.Errorf("inferenceModelName with class %q: expected empty, got %q", cls, got)
+		}
+	}
+}
 
 func TestExtractModelName(t *testing.T) {
 	tests := []struct {

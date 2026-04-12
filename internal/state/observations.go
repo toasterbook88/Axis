@@ -37,6 +37,11 @@ func normalizeObservation(obs models.ExecutionObservation) models.ExecutionObser
 	obs.Scope.Tool = strings.TrimSpace(obs.Scope.Tool)
 	obs.Scope.ModelName = strings.TrimSpace(obs.Scope.ModelName)
 	obs.ModelName = strings.TrimSpace(obs.ModelName)
+	// Keep top-level ModelName in sync with Scope.ModelName so empiricalReason
+	// always has a name to display even when a caller sets only the scope field.
+	if obs.ModelName == "" && obs.Scope.ModelName != "" {
+		obs.ModelName = obs.Scope.ModelName
+	}
 	if obs.ObservedAt.IsZero() {
 		obs.ObservedAt = time.Now().UTC()
 	} else {

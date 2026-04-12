@@ -182,6 +182,32 @@ func TestObservationStoreSeparatesByModelName(t *testing.T) {
 	}
 }
 
+// TestNormalizeObservationSyncsScopeModelName verifies that when ModelName is
+// empty but Scope.ModelName is set, normalizeObservation copies it over so
+// empiricalReason always has a model name to display after merges.
+func TestNormalizeObservationSyncsScopeModelName(t *testing.T) {
+	obs := models.ExecutionObservation{
+		Scope: models.ObservationScope{
+			Node:      "cortex",
+			ModelName: "llama3.2:latest",
+		},
+		SampleCount: 1,
+		WallTimeMS:  100,
+		LastSuccess: true,
+	}
+	s := &ClusterState{}
+	s.RecordObservation(obs)
+
+	scope := models.ObservationScope{Node: "cortex", ModelName: "llama3.2:latest"}
+	stored, ok := s.Observation(scope)
+	if !ok || stored == nil {
+		t.Fatal("expected stored observation")
+	}
+	if stored.ModelName != "llama3.2:latest" {
+		t.Errorf("ModelName = %q, want %q", stored.ModelName, "llama3.2:latest")
+	}
+}
+
 func TestObservationIsFresh(t *testing.T) {
 	now := time.Now().UTC()
 	fresh := models.ExecutionObservation{ObservedAt: now.Add(-time.Hour)}
