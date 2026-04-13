@@ -11,10 +11,10 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-04-12 EDT
-- Repo version: `0.7.0`
+- Refreshed: 2026-04-13 EDT
+- Repo version: `0.8.0`
 - Latest published GitHub release: `v0.7.0` (2026-04-06T19:15:16Z)
-- Release truth: repo version matches the latest published release
+- Release truth: repo version is ahead of the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -50,12 +50,15 @@ The live repo currently contains:
 - TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection only after probe-visible `--ctx-size` support
 - Probe-verified local Apple Foundation Models capability on eligible Apple Silicon hosts running macOS 26 or later, surfaced in node facts/snapshots and as an `apple-foundation-models` tool, with actual model execution available only through the explicit guarded execution path
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
-- Resident-model truth in node facts via `resident_models`, currently populated from `ollama ps`
+- Resident-model truth in node facts via `resident_models`, populated from `ollama ps`, `llama-server` `/v1/models`, and `mlx_lm.server` `/v1/models`
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
 - Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference
 - Network topology enrichment: interface name, CIDR subnet, and heuristic speed class (wireguard, tailscale, netbird, thunderbolt, wifi, gigabit, etc.)
-- Exact-scope execution observations in persisted local state, separate from failure memory, with mandatory wall time and best-effort RAM/VRAM peaks when directly observed
+- Exact-scope execution observations in persisted local state, separate from failure memory, with mandatory wall time and best-effort RAM/VRAM peaks when directly observed; observation scopes are keyed per model name so different models on the same node accumulate independent empirical histories
+- Hard empirical filter in placement: nodes whose freshly-observed `PeakRAMMB` exceeds current allocatable RAM are excluded from `FilterCandidates` before ranking begins
+- `axis status` renders a RESIDENT MODELS table showing which models are live on each node, grouped by runtime (ollama, llama.cpp, mlx, apple-foundation-models), with stable canonical ordering and `+N more` truncation for wide lists
+- `axis doctor` probes local AI backends (llama-server and MLX) and reports installed/running/port/model-count state as advisory checks; probe errors surface stderr for actionability without blocking core SSH/config checks
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
@@ -85,7 +88,7 @@ Top-level commands currently registered in the binary:
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
-| `axis doctor` | Validate config, SSH, and daemon health | Checks config, TCP probes per node, daemon status |
+| `axis doctor` | Validate config, SSH, daemon health, and local AI backends | Checks config, TCP probes per node, daemon status; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
 | `axis completion` | Generate shell completions | bash/zsh/fish/powershell |
 
 ## Package Map
@@ -101,7 +104,7 @@ Top-level commands currently registered in the binary:
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, trigger-aware refresh metadata, and cached discovery-freshness exposure for config/state/skills, execution events, and long-lived discovery beacons |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
-| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
+| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences (keyed per model name), hard `PeakRAMMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
 | `internal/state` | Persist placement memory | Explicit acquire/release is live and tested; state now also stores exact-scope execution observations separately from failure memory |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
@@ -130,7 +133,7 @@ Refresh this section with `./hack/refresh-current-state.sh`.
     - `coverage gate passed: internal/api 70.6% >= 50.0%`
     - `coverage gate passed: internal/mcp 43.1% >= 35.0%`
     - `coverage gate passed: internal/ui 100.0% >= 80.0%`
-    - `coverage gate passed: total 71.9% >= 45.0%`
+    - `coverage gate passed: total 72.3% >= 45.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
@@ -163,6 +166,11 @@ Areas where the live repo has moved past the older docs/specs:
 - Facts and placement now carry additive unified-memory and runtime-pressure metadata instead of relying only on coarse free-RAM pressure guesses
 - Live and cached snapshot-bearing surfaces now expose the same typed discovery-freshness contract instead of relying only on free-form warnings
 - Placement now consumes fresh exact-scope empirical history and truth-backed resident-model locality as additive preferences instead of relying only on static heuristics
+- Empirical observation scopes are now keyed per model name so different models on the same node do not contaminate each other's peak RAM history
+- Placement hard-filters nodes before ranking when a fresh empirical `PeakRAMMB` observation exceeds the node's current allocatable RAM, making the empirical arc load-bearing rather than advisory
+- Resident-model facts now include llama-server and MLX in addition to Ollama, making the resident-model view multiruntime
+- `axis status` now surfaces a live RESIDENT MODELS table so operators can see at a glance which models are running where and under which runtime
+- `axis doctor` now probes local AI backends and reports their state as advisory checks alongside the existing SSH/config/daemon checks
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
@@ -214,7 +222,7 @@ V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
-3. Push resident-model truth beyond Ollama into more unambiguous backends and add direct RAM/VRAM peak probes where truth-backed process metrics are available.
+3. Push resident-model VRAM peak probes where truth-backed process metrics are available; the multi-runtime resident-model view (Ollama + llama-server + MLX) is now live.
 4. Refine reservation accounting into a clearer cluster RAM balancing model.
 5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
 
