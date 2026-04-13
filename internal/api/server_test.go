@@ -856,6 +856,7 @@ func summarizeNodes(nodes []models.NodeFacts) models.ClusterSummary {
 		}
 		summary.TotalRAMMB += node.Resources.RAMTotalMB
 		summary.TotalFreeRAMMB += node.Resources.RAMFreeMB
+		summary.TotalReservableMB += node.Resources.RAMReservableMB
 		summary.TotalReservedMB += node.Resources.RAMReservedMB
 		summary.TotalAllocatableMB += node.Resources.RAMAllocatableMB
 	}

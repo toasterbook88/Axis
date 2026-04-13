@@ -9,6 +9,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/state"
+	"github.com/toasterbook88/axis/internal/workload"
 )
 
 // pressureRank maps pressure strings to sort-order integers.
@@ -282,11 +283,19 @@ func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
 	return models.AllocatableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, reservedRAM(n, st))
 }
 
+func reservableRAM(n models.NodeFacts) int64 {
+	if n.Resources == nil {
+		return 0
+	}
+	return n.Resources.ReservableRAM()
+}
+
 func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
-	if n.Resources == nil || n.Resources.RAMTotalMB <= 0 {
+	reservable := reservableRAM(n)
+	if reservable <= 0 {
 		return 1.0
 	}
-	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
+	return float64(reservedRAM(n, st)) / float64(reservable)
 }
 
 func clusterReservationShare(n models.NodeFacts, st *state.ClusterState) float64 {
@@ -452,6 +461,14 @@ func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
 
 func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
 	minNeeded := effectiveMinFreeRAM(reqs, n)
+	// When no explicit floor is set, use the profile's peak RAM hint as a
+	// soft sizing signal so the ranker prefers nodes that can comfortably
+	// handle the expected workload.
+	if minNeeded <= 0 {
+		if hint := workload.PeakRAMHint(reqs.Workload.Class); hint > 0 {
+			minNeeded = hint
+		}
+	}
 	free := freeRAMWithState(n, st)
 	if free < minNeeded {
 		return -1
@@ -538,6 +555,8 @@ func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts)
 // The check is intentionally conservative: it only fires when both (a) a fresh
 // observation exists and (b) PeakRAMMB > 0. Absent or stale observations leave
 // the node eligible — we don't penalise nodes that haven't been observed yet.
+// Profile-based PeakRAMHint is used as a soft ranking signal only (see
+// RankCandidates), not a hard filter.
 func blocksForEmpiricalPeakRAM(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, nodeAllocatableMB int64, modelName string) bool {
 	tool := inferredToolForObservation(reqs, "")
 	obs, ok := freshObservationForScope(models.ObservationScope{

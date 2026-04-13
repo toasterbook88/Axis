@@ -27,3 +27,34 @@ Thumbs.db
 # AI assistant instruction files
 CLAUDE.md
 GEMINI.md
+
+# AI agent config directories (auto-generated, contain only Render deploy skills)
+.adal/
+.augment/
+.claude/
+.cline/
+.codebuddy/
+.codeium/
+.commandcode/
+.config/
+.continue/
+.factory/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openclaw/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.trae-cn/
+.vibe/
+.zencoder/

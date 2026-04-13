@@ -30,6 +30,7 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMFreeMB:        833,
+					RAMReservableMB:  833,
 					RAMReservedMB:    256,
 					RAMAllocatableMB: 577,
 					Pressure:         "low",
@@ -39,6 +40,7 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 		Summary: models.ClusterSummary{
 			TotalNodes:         2,
 			TotalFreeRAMMB:     833,
+			TotalReservableMB:  833,
 			TotalAllocatableMB: 577,
 			TotalReservedMB:    256,
 		},
@@ -52,10 +54,10 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 	if !strings.Contains(out, "Source: daemon-cache") {
 		t.Fatalf("expected source line in context block, got:\n%s", out)
 	}
-	if !strings.Contains(out, "577MB allocatable (256MB reserved)") {
+	if !strings.Contains(out, "577MB allocatable (256MB reserved of 833MB reservable)") {
 		t.Fatalf("expected allocatable RAM line in context block, got:\n%s", out)
 	}
-	if !strings.Contains(out, "2 nodes, 577MB allocatable across cluster (256MB reserved)") {
+	if !strings.Contains(out, "2 nodes, 577MB allocatable across cluster (256MB reserved of 833MB reservable)") {
 		t.Fatalf("expected allocatable cluster summary in context block, got:\n%s", out)
 	}
 	if !strings.Contains(out, "axis mcp serve") {
@@ -71,6 +73,7 @@ func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMFreeMB:        4096,
+					RAMReservableMB:  4096,
 					RAMAllocatableMB: 4096,
 					Pressure:         "none",
 				},
@@ -83,7 +86,7 @@ func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
 				},
 			},
 		},
-		Summary: models.ClusterSummary{TotalNodes: 1, TotalAllocatableMB: 4096},
+		Summary: models.ClusterSummary{TotalNodes: 1, TotalReservableMB: 4096, TotalAllocatableMB: 4096},
 	}
 
 	out := buildContextBlock(snap, models.TaskRequirements{

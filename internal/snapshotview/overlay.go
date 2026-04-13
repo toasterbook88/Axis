@@ -64,7 +64,7 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 		return
 	}
 
-	var totalReserved, totalAllocatable int64
+	var totalReservable, totalReserved, totalAllocatable int64
 	for i := range snap.Nodes {
 		node := &snap.Nodes[i]
 		if node.Resources == nil {
@@ -80,15 +80,22 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 		if reserved < 0 {
 			reserved = 0
 		}
+		reservable := models.ReservableRAMMB(node.Resources.RAMTotalMB, node.Resources.RAMFreeMB)
+		node.Resources.RAMReservableMB = reservable
 		node.Resources.RAMReservedMB = reserved
 
-		allocatable := models.AllocatableRAMMB(node.Resources.RAMTotalMB, node.Resources.RAMFreeMB, reserved)
+		allocatable := reservable - reserved
+		if allocatable < 0 {
+			allocatable = 0
+		}
 		node.Resources.RAMAllocatableMB = allocatable
 
+		totalReservable += reservable
 		totalReserved += reserved
 		totalAllocatable += allocatable
 	}
 
+	snap.Summary.TotalReservableMB = totalReservable
 	snap.Summary.TotalReservedMB = totalReserved
 	snap.Summary.TotalAllocatableMB = totalAllocatable
 }
