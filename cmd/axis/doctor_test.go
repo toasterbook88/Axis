@@ -225,6 +225,181 @@ func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
 	}
 }
 
+// --- AI backend doctor check tests ---
+
+func stubDoctorLlamaServer(t *testing.T, fn func(context.Context) doctorBackendStatus) func() {
+	t.Helper()
+	prev := doctorProbeLlamaServer
+	doctorProbeLlamaServer = fn
+	return func() { doctorProbeLlamaServer = prev }
+}
+
+func stubDoctorMLX(t *testing.T, fn func(context.Context) doctorBackendStatus) func() {
+	t.Helper()
+	prev := doctorProbeMLX
+	doctorProbeMLX = fn
+	return func() { doctorProbeMLX = prev }
+}
+
+func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
+	t.Helper()
+	restorePath := stubDoctorConfigPath(t, func() string { return t.TempDir() + "/nodes.yaml" })
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{Nodes: []config.NodeConfig{{Name: "n", Hostname: "n.local", SSHUser: "axis"}}}, nil
+	})
+	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error { return nil })
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "n"}}}, "cached", nil
+	})
+	restoreLlama := stubDoctorLlamaServer(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: false}
+	})
+	restoreMLX := stubDoctorMLX(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: false}
+	})
+	return func() {
+		restorePath()
+		restoreLoad()
+		restoreSSH()
+		restoreCache()
+		restoreLlama()
+		restoreMLX()
+	}
+}
+
+func TestDoctorShowsLlamaServerNotInstalled(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	// Override llama-server to not installed (default from minimalDoctorStubs).
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "llama-server: not installed") {
+		t.Errorf("expected 'llama-server: not installed', got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected 'All checks passed' (not-installed is not a failure), got:\n%s", out)
+	}
+}
+
+func TestDoctorShowsLlamaServerRunning(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreLlama := stubDoctorLlamaServer(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: true, Running: true, Port: 8080, ResidentCount: 2}
+	})
+	defer restoreLlama()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "llama-server: running on :8080") {
+		t.Errorf("expected running+port in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "2 models loaded") {
+		t.Errorf("expected '2 models loaded', got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected 'All checks passed', got:\n%s", out)
+	}
+}
+
+func TestDoctorShowsMLXRunningNoModels(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreMLX := stubDoctorMLX(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: true, Running: true, Port: 8080, ResidentCount: 0}
+	})
+	defer restoreMLX()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "mlx: running on :8080") {
+		t.Errorf("expected mlx running in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "no models loaded") {
+		t.Errorf("expected 'no models loaded', got:\n%s", out)
+	}
+}
+
+func TestDoctorShowsLlamaServerInstalledNotRunning(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreLlama := stubDoctorLlamaServer(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: true, Running: false}
+	})
+	defer restoreLlama()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "llama-server: installed, not running") {
+		t.Errorf("expected 'installed, not running', got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected installed-not-running to be advisory only, got:\n%s", out)
+	}
+}
+
+func TestDoctorBackendProbeErrorIsAdvisory(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreLlama := stubDoctorLlamaServer(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Err: errors.New("bash: command not found")}
+	})
+	defer restoreLlama()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "probe error") {
+		t.Errorf("expected 'probe error' in output, got:\n%s", out)
+	}
+	// Probe errors are advisory, not core failures.
+	if !strings.Contains(out, "Core checks passed with advisory warnings") {
+		t.Errorf("expected advisory summary (not core failure), got:\n%s", out)
+	}
+}
+
+func TestFormatResidentModelCount(t *testing.T) {
+	cases := []struct{ n int; want string }{
+		{0, ", no models loaded"},
+		{1, ", 1 model loaded"},
+		{3, ", 3 models loaded"},
+	}
+	for _, tc := range cases {
+		if got := formatResidentModelCount(tc.n); got != tc.want {
+			t.Errorf("formatResidentModelCount(%d) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}
+
 func stubDoctorConfigPath(t *testing.T, fn func() string) func() {
 	t.Helper()
 	prev := doctorConfigPath
