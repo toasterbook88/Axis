@@ -51,10 +51,20 @@ type DiscoveryConfig struct {
 	Secret         string `json:"secret,omitempty" yaml:"secret,omitempty"`
 }
 
+// ChatConfig holds optional operator preferences for the chat and agent surfaces.
+// All fields are optional; omitting the section entirely is valid.
+type ChatConfig struct {
+	// DefaultModel is the Ollama model tag to use when no --model flag is given.
+	// When unset, AXIS auto-selects the best available installed model.
+	// Example: default_model: "llama3.2:latest"
+	DefaultModel string `json:"default_model,omitempty" yaml:"default_model,omitempty"`
+}
+
 // Config is the top-level AXIS configuration.
 type Config struct {
 	Nodes     []NodeConfig     `json:"nodes" yaml:"nodes"`
 	Discovery *DiscoveryConfig `json:"discovery,omitempty" yaml:"discovery,omitempty"`
+	Chat      *ChatConfig      `json:"chat,omitempty" yaml:"chat,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.
