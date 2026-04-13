@@ -138,7 +138,7 @@ type ResidentModel struct {
 	Runtime    string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
 	Processor  string `json:"processor,omitempty" yaml:"processor,omitempty"`
 	Source     string `json:"source,omitempty" yaml:"source,omitempty"`
-	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown; Ollama-reported VRAM in MB
+	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown/not reported by the runtime; currently populated only by the Ollama probe
 }
 
 // TurboQuantInfo records whether a node appears able to run a TurboQuant-like
@@ -329,8 +329,8 @@ type ExecutionObservation struct {
 	SampleCount int              `json:"sample_count" yaml:"sample_count"`
 	LastSuccess bool             `json:"last_success" yaml:"last_success"`
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
-	PeakRAMMB  int64 `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
-	PeakVRAMMB int64 `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
+	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
 	// ModelName is the inference model name observed during execution
 	// (e.g. "llama3.2:latest", "qwen2.5-coder:7b"). Populated when a model
 	// name is extractable from the task command or description. Used by
