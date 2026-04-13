@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/facts"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -17,14 +20,78 @@ import (
 var doctorConfigPath = config.DefaultConfigPath
 var loadDoctorConfig = config.Load
 var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
-	exec := transport.NewSSHExecutor(
+	sshExec := transport.NewSSHExecutor(
 		node.Hostname,
 		node.EffectiveSSHPort(),
 		node.SSHUser,
 		node.EffectiveTimeout(),
 	)
-	defer exec.Close()
-	return exec.Connect(ctx)
+	defer sshExec.Close()
+	return sshExec.Connect(ctx)
+}
+
+// doctorBackendStatus is the result of a local AI backend probe.
+type doctorBackendStatus struct {
+	Installed     bool
+	Running       bool
+	Port          int
+	ResidentCount int
+	Err           error
+}
+
+var doctorProbeLlamaServer = func(ctx context.Context) doctorBackendStatus {
+	return runBackendProbeScript(ctx, facts.LlamaServerDiscoveryScript)
+}
+
+var doctorProbeMLX = func(ctx context.Context) doctorBackendStatus {
+	return runBackendProbeScript(ctx, facts.MLXDiscoveryScript)
+}
+
+// formatResidentModelCount returns a human-readable model count suffix.
+func formatResidentModelCount(n int) string {
+	switch n {
+	case 0:
+		return ", no models loaded"
+	case 1:
+		return ", 1 model loaded"
+	default:
+		return fmt.Sprintf(", %d models loaded", n)
+	}
+}
+
+// runBackendProbeScript executes a discovery script and parses the minimal
+// fields needed for the doctor health display. The full payload types live in
+// internal/facts; this helper only extracts what doctor needs.
+//
+// script is always one of the exported package-level constants from
+// internal/facts (LlamaServerDiscoveryScript, MLXDiscoveryScript).
+// It is passed as a parameter rather than selected via an allowlist so that
+// tests can inject a substitute without spawning a real shell.
+func runBackendProbeScript(ctx context.Context, script string) doctorBackendStatus {
+	out, err := exec.CommandContext(ctx, "bash", "-c", script).Output() //nolint:gosec // script is always a package-level constant
+	if err != nil {
+		// Surface stderr so the advisory message is actionable (e.g. "bash:
+		// command not found") rather than an opaque "exit status 1".
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return doctorBackendStatus{Err: fmt.Errorf("%w: %s", err, exitErr.Stderr)}
+		}
+		return doctorBackendStatus{Err: err}
+	}
+	var payload struct {
+		Installed      bool              `json:"installed"`
+		Running        bool              `json:"running"`
+		Port           int               `json:"port"`
+		ResidentModels []json.RawMessage `json:"resident_models"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return doctorBackendStatus{Err: err}
+	}
+	return doctorBackendStatus{
+		Installed:     payload.Installed,
+		Running:       payload.Running,
+		Port:          payload.Port,
+		ResidentCount: len(payload.ResidentModels),
+	}
 }
 
 func doctorCmd() *cobra.Command {
@@ -95,7 +162,41 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 			ui.StatusIcon(true), len(snap.Nodes))
 	}
 
-	// 4. Binary info
+	// 4. Local AI backend health (advisory — not counted as core failures)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%s AI backends (local)\n", ui.Cyan("→"))
+	for _, b := range []struct {
+		name  string
+		probe func(context.Context) doctorBackendStatus
+	}{
+		{"llama-server", doctorProbeLlamaServer},
+		{"mlx", doctorProbeMLX},
+	} {
+		// Each backend gets its own independent timeout derived from the
+		// command context so that Ctrl-C cancels immediately and a slow
+		// first probe never starves the second.
+		bCtx, bCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		s := b.probe(bCtx)
+		bCancel()
+		switch {
+		case s.Err != nil:
+			fmt.Fprintf(out, "  %s %s: probe error: %v\n", ui.StatusIcon(false), b.name, s.Err)
+			advisoryWarnings++
+		case !s.Installed:
+			fmt.Fprintf(out, "  %s %s: not installed\n", ui.Dim("–"), b.name)
+		case !s.Running:
+			fmt.Fprintf(out, "  %s %s: installed, not running\n", ui.StatusIcon(true), b.name)
+		default:
+			portStr := ""
+			if s.Port > 0 {
+				portStr = fmt.Sprintf(" on :%d", s.Port)
+			}
+			modelStr := formatResidentModelCount(s.ResidentCount)
+			fmt.Fprintf(out, "  %s %s: running%s%s\n", ui.StatusIcon(true), b.name, portStr, modelStr)
+		}
+	}
+
+	// 5. Binary info
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%s Binary\n", ui.Cyan("→"))
 	self, _ := os.Executable()
