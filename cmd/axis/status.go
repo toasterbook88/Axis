@@ -138,35 +138,40 @@ var canonicalRuntimeOrder = []string{"ollama", "llama.cpp", "mlx", "apple-founda
 // node has live resident models. Rows are ordered by node then by runtime
 // (ollama → llama.cpp → mlx → apple-fm → others alphabetically). Model names
 // are truncated at 3 per row with a "+N more" suffix to keep lines readable on
-// narrow terminals.
+// narrow terminals. A VRAM column is added when at least one model carries a
+// truth-backed SizeVRAMMB value (currently populated by the Ollama probe only).
 func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 	type runtimeRow struct {
 		node    string
 		runtime string
-		models  []string
+		models  []models.ResidentModel
 	}
 
 	// Collect rows in display order: iterate nodes, then group by runtime.
 	var rows []runtimeRow
+	var anyVRAM bool
 	for _, n := range nodes {
 		if len(n.ResidentModels) == 0 {
 			continue
 		}
-		// Group model names by runtime for this node.
-		byRuntime := make(map[string][]string, 4)
+		// Group resident models by runtime for this node.
+		byRuntime := make(map[string][]models.ResidentModel, 4)
 		for _, rm := range n.ResidentModels {
 			rt := strings.ToLower(strings.TrimSpace(rm.Runtime))
 			if rt == "" {
 				rt = "unknown"
 			}
-			byRuntime[rt] = append(byRuntime[rt], rm.Name)
+			byRuntime[rt] = append(byRuntime[rt], rm)
+			if rm.SizeVRAMMB > 0 {
+				anyVRAM = true
+			}
 		}
 		// Emit canonical runtimes first, then any extras in sorted order to
 		// guarantee deterministic output (map iteration order is undefined).
 		seen := make(map[string]bool, len(canonicalRuntimeOrder))
 		for _, rt := range canonicalRuntimeOrder {
-			if names, ok := byRuntime[rt]; ok {
-				rows = append(rows, runtimeRow{n.Name, rt, names})
+			if rms, ok := byRuntime[rt]; ok {
+				rows = append(rows, runtimeRow{n.Name, rt, rms})
 				seen[rt] = true
 			}
 		}
@@ -188,15 +193,55 @@ func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%s\n", ui.Bold("RESIDENT MODELS"))
-	tbl := ui.NewTable("NODE", "RUNTIME", "MODELS")
+	var tbl *ui.Table
+	if anyVRAM {
+		tbl = ui.NewTable("NODE", "RUNTIME", "MODELS", "VRAM")
+	} else {
+		tbl = ui.NewTable("NODE", "RUNTIME", "MODELS")
+	}
 	for _, row := range rows {
-		tbl.AddRow(
-			ui.Cyan(row.node),
-			formatResidentRuntime(row.runtime),
-			truncateModelList(row.models, 3),
-		)
+		names := make([]string, len(row.models))
+		for i, rm := range row.models {
+			names[i] = rm.Name
+		}
+		if anyVRAM {
+			tbl.AddRow(
+				ui.Cyan(row.node),
+				formatResidentRuntime(row.runtime),
+				truncateModelList(names, 3),
+				formatResidentVRAM(residentRowVRAMTotal(row.models)),
+			)
+		} else {
+			tbl.AddRow(
+				ui.Cyan(row.node),
+				formatResidentRuntime(row.runtime),
+				truncateModelList(names, 3),
+			)
+		}
 	}
 	tbl.Render(out)
+}
+
+// residentRowVRAMTotal returns the sum of SizeVRAMMB across all resident models
+// in a runtime row. Returns 0 when no VRAM data is available.
+func residentRowVRAMTotal(rms []models.ResidentModel) int64 {
+	var total int64
+	for _, rm := range rms {
+		total += rm.SizeVRAMMB
+	}
+	return total
+}
+
+// formatResidentVRAM formats a VRAM total for display in the status table.
+// Returns "—" when total is 0 (unknown or not applicable to this runtime).
+func formatResidentVRAM(mb int64) string {
+	if mb <= 0 {
+		return "—"
+	}
+	if mb < 1024 {
+		return fmt.Sprintf("%d MB", mb)
+	}
+	return fmt.Sprintf("%.1f GB", float64(mb)/1024)
 }
 
 // formatResidentRuntime returns a human-readable, optionally coloured label for

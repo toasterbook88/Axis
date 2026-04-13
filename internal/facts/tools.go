@@ -40,7 +40,7 @@ const OllamaDiscoveryScript = `set -o pipefail;
 			LISTENING=true
 		fi
 		GPU=$($OLLAMA_BIN ps 2>/dev/null | grep -o 'gpu:[^ ]*' | head -1)
-		RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; for(i=1;i<=NF;i++){if($i~/[0-9]+%/){proc=$i" "$(i+1);break}} gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc }')
+		RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; size_mb=0; for(i=1;i<=NF;i++){if($i~/[0-9]+%/){proc=$i" "$(i+1)} if(($i=="GB"||$i=="GiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)*1024+0.5)} if(($i=="MB"||$i=="MiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)+0.5)}} gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"size_vram_mb\":%d,\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc, size_mb }')
 		if [ -n "$RESIDENT" ]; then
 			RESIDENT="[$RESIDENT]"
 		else
