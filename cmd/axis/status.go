@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -109,6 +111,8 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	}
 	tbl.Render(out)
 
+	printResidentModelsSection(out, snap.Nodes)
+
 	if len(snap.Warnings) > 0 {
 		fmt.Fprintln(out)
 		for _, w := range snap.Warnings {
@@ -124,6 +128,102 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	fmt.Fprintf(out, "%s %s | %s\n",
 		ui.Dim("Snapshot:"), sourceLabel,
 		ui.Dim(snap.Timestamp.Format(time.RFC3339)))
+}
+
+// canonicalRuntimeOrder defines the display order for known resident model
+// runtimes. Unknown runtimes are appended in sorted order after these.
+var canonicalRuntimeOrder = []string{"ollama", "llama.cpp", "mlx", "apple-foundation-models"}
+
+// printResidentModelsSection renders a RESIDENT MODELS table when at least one
+// node has live resident models. Rows are ordered by node then by runtime
+// (ollama → llama.cpp → mlx → apple-fm → others alphabetically). Model names
+// are truncated at 3 per row with a "+N more" suffix to keep lines readable on
+// narrow terminals.
+func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
+	type runtimeRow struct {
+		node    string
+		runtime string
+		models  []string
+	}
+
+	// Collect rows in display order: iterate nodes, then group by runtime.
+	var rows []runtimeRow
+	for _, n := range nodes {
+		if len(n.ResidentModels) == 0 {
+			continue
+		}
+		// Group model names by runtime for this node.
+		byRuntime := make(map[string][]string, 4)
+		for _, rm := range n.ResidentModels {
+			rt := strings.ToLower(strings.TrimSpace(rm.Runtime))
+			if rt == "" {
+				rt = "unknown"
+			}
+			byRuntime[rt] = append(byRuntime[rt], rm.Name)
+		}
+		// Emit canonical runtimes first, then any extras in sorted order to
+		// guarantee deterministic output (map iteration order is undefined).
+		seen := make(map[string]bool, len(canonicalRuntimeOrder))
+		for _, rt := range canonicalRuntimeOrder {
+			if names, ok := byRuntime[rt]; ok {
+				rows = append(rows, runtimeRow{n.Name, rt, names})
+				seen[rt] = true
+			}
+		}
+		extras := make([]string, 0, len(byRuntime))
+		for rt := range byRuntime {
+			if !seen[rt] {
+				extras = append(extras, rt)
+			}
+		}
+		sort.Strings(extras)
+		for _, rt := range extras {
+			rows = append(rows, runtimeRow{n.Name, rt, byRuntime[rt]})
+		}
+	}
+
+	if len(rows) == 0 {
+		return
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%s\n", ui.Bold("RESIDENT MODELS"))
+	tbl := ui.NewTable("NODE", "RUNTIME", "MODELS")
+	for _, row := range rows {
+		tbl.AddRow(
+			ui.Cyan(row.node),
+			formatResidentRuntime(row.runtime),
+			truncateModelList(row.models, 3),
+		)
+	}
+	tbl.Render(out)
+}
+
+// formatResidentRuntime returns a human-readable, optionally coloured label for
+// a resident model runtime string.
+func formatResidentRuntime(rt string) string {
+	switch rt {
+	case "ollama":
+		return ui.Green("ollama")
+	case "llama.cpp":
+		return ui.Yellow("llama.cpp")
+	case "mlx":
+		return ui.Cyan("mlx")
+	case "apple-foundation-models":
+		return ui.Green("apple-fm")
+	default:
+		return ui.Dim(rt)
+	}
+}
+
+// truncateModelList joins model names with ", " and appends "+N more" when the
+// list exceeds max visible entries.
+func truncateModelList(names []string, max int) string {
+	if len(names) <= max {
+		return strings.Join(names, ", ")
+	}
+	visible := strings.Join(names[:max], ", ")
+	return fmt.Sprintf("%s, +%d more", visible, len(names)-max)
 }
 
 func formatNodeStatus(s models.NodeStatus) string {
