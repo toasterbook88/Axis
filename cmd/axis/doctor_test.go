@@ -243,7 +243,7 @@ func stubDoctorMLX(t *testing.T, fn func(context.Context) doctorBackendStatus) f
 
 func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	t.Helper()
-	restorePath := stubDoctorConfigPath(t, func() string { return t.TempDir() + "/nodes.yaml" })
+	restorePath := stubDoctorConfigPath(t, func() string { return filepath.Join(t.TempDir(), "nodes.yaml") })
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{Nodes: []config.NodeConfig{{Name: "n", Hostname: "n.local", SSHUser: "axis"}}}, nil
 	})

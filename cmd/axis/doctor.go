@@ -62,9 +62,19 @@ func formatResidentModelCount(n int) string {
 // runBackendProbeScript executes a discovery script and parses the minimal
 // fields needed for the doctor health display. The full payload types live in
 // internal/facts; this helper only extracts what doctor needs.
+//
+// script is always one of the exported package-level constants from
+// internal/facts (LlamaServerDiscoveryScript, MLXDiscoveryScript).
+// It is passed as a parameter rather than selected via an allowlist so that
+// tests can inject a substitute without spawning a real shell.
 func runBackendProbeScript(ctx context.Context, script string) doctorBackendStatus {
-	out, err := exec.CommandContext(ctx, "bash", "-c", script).Output()
+	out, err := exec.CommandContext(ctx, "bash", "-c", script).Output() //nolint:gosec // script is always a package-level constant
 	if err != nil {
+		// Surface stderr so the advisory message is actionable (e.g. "bash:
+		// command not found") rather than an opaque "exit status 1".
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return doctorBackendStatus{Err: fmt.Errorf("%w: %s", err, exitErr.Stderr)}
+		}
 		return doctorBackendStatus{Err: err}
 	}
 	var payload struct {
@@ -155,8 +165,6 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 	// 4. Local AI backend health (advisory — not counted as core failures)
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%s AI backends (local)\n", ui.Cyan("→"))
-	probeCtx, probeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer probeCancel()
 	for _, b := range []struct {
 		name  string
 		probe func(context.Context) doctorBackendStatus
@@ -164,7 +172,12 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		{"llama-server", doctorProbeLlamaServer},
 		{"mlx", doctorProbeMLX},
 	} {
-		s := b.probe(probeCtx)
+		// Each backend gets its own independent timeout derived from the
+		// command context so that Ctrl-C cancels immediately and a slow
+		// first probe never starves the second.
+		bCtx, bCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		s := b.probe(bCtx)
+		bCancel()
 		switch {
 		case s.Err != nil:
 			fmt.Fprintf(out, "  %s %s: probe error: %v\n", ui.StatusIcon(false), b.name, s.Err)
