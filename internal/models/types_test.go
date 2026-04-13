@@ -30,6 +30,7 @@ func sampleNodeFacts() models.NodeFacts {
 			Load1M:           1.25,
 			Load5M:           0.80,
 			Load15M:          0.50,
+			RAMReservableMB:  8192,
 			RAMReservedMB:    1024,
 			RAMAllocatableMB: 7168,
 			DiskTotalGB:      500,
@@ -68,6 +69,7 @@ func sampleSnapshot() models.ClusterSnapshot {
 			ReachableNodes:     1,
 			TotalRAMMB:         16384,
 			TotalFreeRAMMB:     8192,
+			TotalReservableMB:  8192,
 			TotalAllocatableMB: 7168,
 			TotalReservedMB:    1024,
 		},
@@ -119,6 +121,9 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Resources.RAMAllocatableMB != 7168 {
 		t.Errorf("ram_allocatable_mb: got %d, want 7168", decoded.Resources.RAMAllocatableMB)
+	}
+	if decoded.Resources.RAMReservableMB != 8192 {
+		t.Errorf("ram_reservable_mb: got %d, want 8192", decoded.Resources.RAMReservableMB)
 	}
 	if decoded.TurboQuant == nil || !decoded.TurboQuant.Supported {
 		t.Fatal("turboquant missing after round-trip")
@@ -209,6 +214,9 @@ func TestClusterSnapshot_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Summary.TotalAllocatableMB != 7168 {
 		t.Errorf("total_allocatable_mb: got %d, want 7168", decoded.Summary.TotalAllocatableMB)
+	}
+	if decoded.Summary.TotalReservableMB != 8192 {
+		t.Errorf("total_reservable_mb: got %d, want 8192", decoded.Summary.TotalReservableMB)
 	}
 }
 

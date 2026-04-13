@@ -85,6 +85,7 @@ type Resources struct {
 	Load1M           float64        `json:"load_1m" yaml:"load_1m"`
 	Load5M           float64        `json:"load_5m" yaml:"load_5m"`
 	Load15M          float64        `json:"load_15m" yaml:"load_15m"`
+	RAMReservableMB  int64          `json:"ram_reservable_mb,omitempty" yaml:"ram_reservable_mb,omitempty"`
 	RAMReservedMB    int64          `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
 	RAMAllocatableMB int64          `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
 	DiskTotalGB      int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
@@ -97,6 +98,19 @@ type Resources struct {
 	Pressure         string         `json:"pressure" yaml:"pressure"`                               // none, low, medium, high
 	PressureStall10  float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
 	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
+}
+
+// ReservableRAM returns the amount of RAM available for tracking cluster reservations.
+// It prioritizes RAMReservableMB if explicitly reported by the node probe,
+// otherwise falls back to calculating the reservable budget via ReservableRAMMB.
+func (r *Resources) ReservableRAM() int64 {
+	if r == nil {
+		return 0
+	}
+	if r.RAMReservableMB > 0 {
+		return r.RAMReservableMB
+	}
+	return ReservableRAMMB(r.RAMTotalMB, r.RAMFreeMB)
 }
 
 // NetworkAddress represents a single network address with interface metadata.
@@ -197,6 +211,7 @@ type ClusterSummary struct {
 	ReachableNodes     int   `json:"reachable_nodes" yaml:"reachable_nodes"`
 	TotalRAMMB         int64 `json:"total_ram_mb" yaml:"total_ram_mb"`
 	TotalFreeRAMMB     int64 `json:"total_free_ram_mb" yaml:"total_free_ram_mb"`
+	TotalReservableMB  int64 `json:"total_reservable_mb,omitempty" yaml:"total_reservable_mb,omitempty"`
 	TotalAllocatableMB int64 `json:"total_allocatable_mb,omitempty" yaml:"total_allocatable_mb,omitempty"`
 	TotalReservedMB    int64 `json:"total_reserved_mb,omitempty" yaml:"total_reserved_mb,omitempty"`
 }

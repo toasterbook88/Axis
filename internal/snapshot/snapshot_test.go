@@ -49,6 +49,9 @@ func TestBuild_AllComplete_Healthy(t *testing.T) {
 	if snap.Summary.TotalFreeRAMMB != 9000 {
 		t.Errorf("free_ram: got %d, want 9000", snap.Summary.TotalFreeRAMMB)
 	}
+	if snap.Summary.TotalReservableMB != 9000 {
+		t.Errorf("reservable_ram: got %d, want 9000", snap.Summary.TotalReservableMB)
+	}
 	if snap.Summary.TotalAllocatableMB != 9000 {
 		t.Errorf("allocatable_ram: got %d, want 9000", snap.Summary.TotalAllocatableMB)
 	}
@@ -85,6 +88,9 @@ func TestBuild_AllocatableRespectsSystemReserveFloor(t *testing.T) {
 
 	if snap.Summary.TotalAllocatableMB != 7168 {
 		t.Fatalf("allocatable_ram: got %d, want 7168", snap.Summary.TotalAllocatableMB)
+	}
+	if snap.Summary.TotalReservableMB != 7168 {
+		t.Fatalf("reservable_ram: got %d, want 7168", snap.Summary.TotalReservableMB)
 	}
 }
 
@@ -253,6 +259,7 @@ func TestBuild_UsesReservationAwareSummaryWhenPresent(t *testing.T) {
 			Resources: &models.Resources{
 				RAMTotalMB:       8192,
 				RAMFreeMB:        4096,
+				RAMReservableMB:  4096,
 				RAMReservedMB:    1024,
 				RAMAllocatableMB: 3072,
 			},
@@ -266,6 +273,9 @@ func TestBuild_UsesReservationAwareSummaryWhenPresent(t *testing.T) {
 	}
 	if snap.Summary.TotalReservedMB != 1024 {
 		t.Errorf("reserved_ram: got %d, want 1024", snap.Summary.TotalReservedMB)
+	}
+	if snap.Summary.TotalReservableMB != 4096 {
+		t.Errorf("reservable_ram: got %d, want 4096", snap.Summary.TotalReservableMB)
 	}
 	if snap.Summary.TotalAllocatableMB != 3072 {
 		t.Errorf("allocatable_ram: got %d, want 3072", snap.Summary.TotalAllocatableMB)

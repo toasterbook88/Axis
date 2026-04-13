@@ -24,7 +24,7 @@ STDOUT:
       "turboquant capabilities: apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present",
       "LLM fit: 98/100 (excellent for small models)",
       "remote node (via SSH)",
-      "8192MB allocatable (0MB reserved) of 16384MB total",
+      "8192MB allocatable (0MB reserved of 8192MB reservable pool; 16384MB total)",
       "pressure: none",
       "10 CPU cores",
       "required tool ollama (0.7.0) available"

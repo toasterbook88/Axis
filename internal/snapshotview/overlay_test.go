@@ -116,7 +116,7 @@ func TestClonePreservesScalarFields(t *testing.T) {
 	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	orig := &models.ClusterSnapshot{
 		Timestamp: ts,
-		Summary:   models.ClusterSummary{TotalAllocatableMB: 8192},
+		Summary:   models.ClusterSummary{TotalReservableMB: 8192, TotalAllocatableMB: 8192},
 	}
 	clone := snapshotview.Clone(orig)
 	if !clone.Timestamp.Equal(orig.Timestamp) {
@@ -124,6 +124,9 @@ func TestClonePreservesScalarFields(t *testing.T) {
 	}
 	if clone.Summary.TotalAllocatableMB != 8192 {
 		t.Error("Summary not preserved in clone")
+	}
+	if clone.Summary.TotalReservableMB != 8192 {
+		t.Error("Reservable summary not preserved in clone")
 	}
 }
 
@@ -156,6 +159,9 @@ func TestApplyReservationViewNilState(t *testing.T) {
 	if n.Resources.RAMReservedMB != 0 {
 		t.Errorf("RAMReservedMB: got %d, want 0", n.Resources.RAMReservedMB)
 	}
+	if n.Resources.RAMReservableMB != 4096 {
+		t.Errorf("RAMReservableMB: got %d, want 4096", n.Resources.RAMReservableMB)
+	}
 	if n.Resources.RAMAllocatableMB != 4096 {
 		t.Errorf("RAMAllocatableMB: got %d, want 4096", n.Resources.RAMAllocatableMB)
 	}
@@ -175,6 +181,9 @@ func TestApplyReservationViewWithReservation(t *testing.T) {
 	if n.Resources.RAMReservedMB != 2048 {
 		t.Errorf("RAMReservedMB: got %d, want 2048", n.Resources.RAMReservedMB)
 	}
+	if n.Resources.RAMReservableMB != 8192 {
+		t.Errorf("RAMReservableMB: got %d, want 8192", n.Resources.RAMReservableMB)
+	}
 	if n.Resources.RAMAllocatableMB != 6144 {
 		t.Errorf("RAMAllocatableMB: got %d, want 6144", n.Resources.RAMAllocatableMB)
 	}
@@ -191,6 +200,9 @@ func TestApplyReservationViewAllocatableFloorZero(t *testing.T) {
 		},
 	}
 	snapshotview.ApplyReservationView(snap, st)
+	if got := snap.Nodes[0].Resources.RAMReservableMB; got != 1024 {
+		t.Errorf("reservable should floor at 1024, got %d", got)
+	}
 	if snap.Nodes[0].Resources.RAMAllocatableMB != 0 {
 		t.Errorf("allocatable should floor at 0, got %d", snap.Nodes[0].Resources.RAMAllocatableMB)
 	}
@@ -219,6 +231,9 @@ func TestApplyReservationViewKeepsSystemReserveOutOfAllocatablePool(t *testing.T
 	if got := snap.Nodes[0].Resources.RAMAllocatableMB; got != 6656 {
 		t.Fatalf("RAMAllocatableMB: got %d, want 6656", got)
 	}
+	if got := snap.Nodes[0].Resources.RAMReservableMB; got != 7168 {
+		t.Fatalf("RAMReservableMB: got %d, want 7168", got)
+	}
 }
 
 func TestApplyReservationViewSummaryTotals(t *testing.T) {
@@ -237,8 +252,12 @@ func TestApplyReservationViewSummaryTotals(t *testing.T) {
 	snapshotview.ApplyReservationView(snap, st)
 
 	wantReserved := int64(1024 + 512)
+	wantReservable := int64(8192 + 4096)
 	wantAllocatable := int64((8192 - 1024) + (4096 - 512))
 
+	if snap.Summary.TotalReservableMB != wantReservable {
+		t.Errorf("TotalReservableMB: got %d, want %d", snap.Summary.TotalReservableMB, wantReservable)
+	}
 	if snap.Summary.TotalReservedMB != wantReserved {
 		t.Errorf("TotalReservedMB: got %d, want %d", snap.Summary.TotalReservedMB, wantReserved)
 	}
@@ -267,6 +286,9 @@ func TestApplyReservationViewSkipsNodesWithoutResources(t *testing.T) {
 	if snap.Nodes[1].Resources.RAMAllocatableMB != 1536 {
 		t.Errorf("beta allocatable: got %d, want 1536", snap.Nodes[1].Resources.RAMAllocatableMB)
 	}
+	if snap.Nodes[1].Resources.RAMReservableMB != 2048 {
+		t.Errorf("beta reservable: got %d, want 2048", snap.Nodes[1].Resources.RAMReservableMB)
+	}
 }
 
 func TestApplyReservationViewUnknownNodeGetsZeroReservation(t *testing.T) {
@@ -280,6 +302,9 @@ func TestApplyReservationViewUnknownNodeGetsZeroReservation(t *testing.T) {
 	if snap.Nodes[0].Resources.RAMReservedMB != 0 {
 		t.Error("node not in state should get zero reservation")
 	}
+	if snap.Nodes[0].Resources.RAMReservableMB != 4096 {
+		t.Errorf("expected 4096 reservable, got %d", snap.Nodes[0].Resources.RAMReservableMB)
+	}
 	if snap.Nodes[0].Resources.RAMAllocatableMB != 4096 {
 		t.Errorf("expected 4096 allocatable, got %d", snap.Nodes[0].Resources.RAMAllocatableMB)
 	}
@@ -288,7 +313,7 @@ func TestApplyReservationViewUnknownNodeGetsZeroReservation(t *testing.T) {
 func TestApplyReservationViewEmptyNodes(t *testing.T) {
 	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{}}
 	snapshotview.ApplyReservationView(snap, nil)
-	if snap.Summary.TotalReservedMB != 0 || snap.Summary.TotalAllocatableMB != 0 {
+	if snap.Summary.TotalReservableMB != 0 || snap.Summary.TotalReservedMB != 0 || snap.Summary.TotalAllocatableMB != 0 {
 		t.Error("empty node list should produce zero totals")
 	}
 }

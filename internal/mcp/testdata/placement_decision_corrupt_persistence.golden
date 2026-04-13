@@ -12,7 +12,7 @@
     "workload class: repo-analysis",
     "LLM fit: 54/100 (good for small models)",
     "local node (no SSH hop)",
-    "4096MB allocatable (0MB reserved) of 8192MB total",
+    "4096MB allocatable (0MB reserved of 4096MB reservable pool; 8192MB total)",
     "pressure: low",
     "8 CPU cores",
     "required tool git (test) available"

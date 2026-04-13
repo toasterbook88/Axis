@@ -52,6 +52,7 @@ func TestTaskContextTurboQuantGolden(t *testing.T) {
 		Nodes: []models.NodeFacts{goldenTurboQuantNode()},
 		Summary: models.ClusterSummary{
 			TotalNodes:         1,
+			TotalReservableMB:  8192,
 			TotalAllocatableMB: 8192,
 			TotalReservedMB:    0,
 		},
@@ -88,6 +89,7 @@ func TestStatusTurboQuantJSONGolden(t *testing.T) {
 				ReachableNodes:     1,
 				TotalRAMMB:         16384,
 				TotalFreeRAMMB:     8192,
+				TotalReservableMB:  8192,
 				TotalAllocatableMB: 8192,
 			},
 		}, "live", nil
@@ -119,6 +121,7 @@ func goldenTurboQuantNode() models.NodeFacts {
 			RAMFreeMB:        8192,
 			MemoryTopology:   models.MemoryTopologyUnified,
 			MemoryClass:      4,
+			RAMReservableMB:  8192,
 			RAMReservedMB:    0,
 			RAMAllocatableMB: 8192,
 			Pressure:         "none",

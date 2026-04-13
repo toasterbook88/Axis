@@ -18,6 +18,7 @@ STDOUT:
         "load_1m": 0,
         "load_5m": 0,
         "load_15m": 0,
+        "ram_reservable_mb": 8192,
         "ram_allocatable_mb": 8192,
         "disk_total_gb": 0,
         "disk_free_gb": 0,
@@ -63,6 +64,7 @@ STDOUT:
     "reachable_nodes": 1,
     "total_ram_mb": 16384,
     "total_free_ram_mb": 8192,
+    "total_reservable_mb": 8192,
     "total_allocatable_mb": 8192
   }
 }
