@@ -152,10 +152,17 @@ func listInstalledModels(ctx context.Context, endpoint string) ([]string, error)
 }
 
 func choosePreferredModel(installed []string) (string, bool) {
+	// Prefer recommended models in priority order.
 	for _, candidate := range recommendedLocalModels {
 		if slices.Contains(installed, candidate.Name) {
 			return candidate.Name, true
 		}
+	}
+	// Any installed model beats falling back to a hardcoded name that may not
+	// be present. This handles clusters where the operator has pulled their own
+	// preferred models (e.g. qwen3:4b, llama3.2:latest).
+	if len(installed) > 0 {
+		return installed[0], true
 	}
 	return "", false
 }

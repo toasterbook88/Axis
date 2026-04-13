@@ -20,6 +20,60 @@ func TestChoosePreferredModel(t *testing.T) {
 	}
 }
 
+// TestChoosePreferredModelFallsBackToFirstInstalled verifies that when none of
+// the hardcoded recommended models are present, the first installed model is
+// returned instead of ("", false). This prevents the hardcoded fallback in
+// ResolveDefaultModel from selecting a model that isn't available locally.
+func TestChoosePreferredModelFallsBackToFirstInstalled(t *testing.T) {
+	installed := []string{"qwen3:4b", "llama3.2:latest", "mistral:7b"}
+	got, ok := choosePreferredModel(installed)
+	if !ok {
+		t.Fatal("expected ok=true when installed models exist but none are recommended")
+	}
+	if got != "qwen3:4b" {
+		t.Fatalf("expected first installed model %q, got %q", "qwen3:4b", got)
+	}
+}
+
+// TestChoosePreferredModelEmptyReturnsFalse confirms the only case where
+// choosePreferredModel legitimately returns false: no models installed at all.
+func TestChoosePreferredModelEmptyReturnsFalse(t *testing.T) {
+	_, ok := choosePreferredModel(nil)
+	if ok {
+		t.Fatal("expected ok=false for empty installed list")
+	}
+	_, ok = choosePreferredModel([]string{})
+	if ok {
+		t.Fatal("expected ok=false for empty installed list")
+	}
+}
+
+// TestResolveDefaultModelPicksAnyInstalledWhenNoneRecommended verifies the
+// full ResolveDefaultModel path for a node that has its own models (e.g.
+// qwen3:4b) but none from the recommended list.
+func TestResolveDefaultModelPicksAnyInstalledWhenNoneRecommended(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:4b"},{"name":"llama3.2:latest"}]}`))
+	}))
+	defer server.Close()
+
+	restore := stubDefaultHTTPClient(t, rewriteClientToServer(t, server.URL))
+	defer restore()
+
+	got := ResolveDefaultModel(context.Background())
+	// Should pick qwen3:4b (first installed) rather than falling back to
+	// the hardcoded "qwen3:1.7b" which is absent.
+	if got == recommendedLocalModels[0].Name {
+		t.Fatalf("ResolveDefaultModel() = %q — selected hardcoded fallback that is not installed; want first installed model", got)
+	}
+	if got != "qwen3:4b" {
+		t.Fatalf("ResolveDefaultModel() = %q, want first installed model %q", got, "qwen3:4b")
+	}
+}
+
 func TestFormatModelCatalogIncludesCloudHint(t *testing.T) {
 	out := FormatModelCatalog(ModelCatalog{
 		Current:            "qwen3:1.7b",

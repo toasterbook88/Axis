@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -147,6 +148,17 @@ func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
 	}
 
 	if checkResp.StatusCode == http.StatusNotFound {
+		// Try to list installed models so the operator knows what is available
+		// and which --model value to use without needing a separate command.
+		if installed, listErr := listInstalledModels(ctx, c.Endpoint); listErr == nil && len(installed) > 0 {
+			suggest := installed[0]
+			available := strings.Join(installed, ", ")
+			if len(installed) > 4 {
+				available = strings.Join(installed[:4], ", ") + fmt.Sprintf(" (+%d more)", len(installed)-4)
+			}
+			return fmt.Errorf("model %q is not available locally\navailable: %s\ntry: axis chat --model %s  OR  run: ollama pull %s",
+				c.Model, available, suggest, c.Model)
+		}
 		return fmt.Errorf("model %q is not available locally; run: ollama pull %s", c.Model, c.Model)
 	}
 

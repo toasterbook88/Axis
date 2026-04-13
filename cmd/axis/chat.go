@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -241,9 +242,24 @@ func chatRequestContext(timeout time.Duration) (context.Context, context.CancelF
 }
 
 func resolveChatModel(requested string) string {
+	return resolveChatModelFromPath(requested, config.DefaultConfigPath())
+}
+
+// resolveChatModelFromPath is the testable core of resolveChatModel. cfgPath
+// allows tests to inject a temporary config file without touching the real
+// ~/.axis/nodes.yaml.
+func resolveChatModelFromPath(requested, cfgPath string) string {
+	// Explicit --model flag always wins.
 	if strings.TrimSpace(requested) != "" {
 		return strings.TrimSpace(requested)
 	}
+	// Operator-configured default in nodes.yaml chat.default_model.
+	if cfg, err := config.Load(cfgPath); err == nil {
+		if cfg.Chat != nil && strings.TrimSpace(cfg.Chat.DefaultModel) != "" {
+			return strings.TrimSpace(cfg.Chat.DefaultModel)
+		}
+	}
+	// Auto-detect: pick the best available installed model.
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	return resolveDefaultChatModel(ctx)
