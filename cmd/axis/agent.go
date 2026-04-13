@@ -136,7 +136,7 @@ func agentCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model (default: best installed)")
+	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model (default: chat.default_model or best installed)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Minute, "Per-request timeout")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "Maximum agent loop iterations per query")

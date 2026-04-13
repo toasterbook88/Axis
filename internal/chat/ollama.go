@@ -147,7 +147,12 @@ func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
 	}
 
 	if checkResp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("model %q is not available locally; run: ollama pull %s", c.Model, c.Model)
+		// Try to list installed models so the operator knows what is available
+		// and which --model value to use without needing a separate command.
+		if installed, listErr := listInstalledModels(ctx, c.Endpoint); listErr == nil && len(installed) > 0 {
+			return formatMissingModelError(c.Model, installed)
+		}
+		return formatMissingModelError(c.Model, nil)
 	}
 
 	return fmt.Errorf("model check for %q failed with status: %s", c.Model, checkResp.Status)

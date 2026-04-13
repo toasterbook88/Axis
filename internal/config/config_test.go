@@ -218,3 +218,27 @@ func TestDefaultConfigPath(t *testing.T) {
 		t.Errorf("expected nodes.yaml, got %s", filepath.Base(p))
 	}
 }
+
+func TestLoad_ChatDefaultModel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+chat:
+  default_model: "llama3.2:latest"
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with chat config: %v", err)
+	}
+	if cfg.Chat == nil {
+		t.Fatal("expected chat config to be parsed, got nil")
+	}
+	if cfg.Chat.DefaultModel != "llama3.2:latest" {
+		t.Fatalf("chat.default_model = %q, want %q", cfg.Chat.DefaultModel, "llama3.2:latest")
+	}
+}
