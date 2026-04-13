@@ -96,6 +96,21 @@ func freshObservation(n models.NodeFacts, reqs models.TaskRequirements, st *stat
 	return obs, true
 }
 
+// freshObservationForScope retrieves and freshness-validates an observation for a
+// fully-assembled scope. Callers in hot loops can precompute constant scope fields
+// (workload, backend, tool, model name) once and vary only the Node field per
+// iteration, avoiding repeated regex-based model-name extraction.
+func freshObservationForScope(scope models.ObservationScope, st *state.ClusterState) (*models.ExecutionObservation, bool) {
+	if st == nil {
+		return nil, false
+	}
+	obs, ok := st.Observation(scope)
+	if !ok || obs == nil || !state.ObservationIsFresh(*obs, time.Now().UTC()) {
+		return nil, false
+	}
+	return obs, true
+}
+
 func empiricalObservation(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) *models.ExecutionObservation {
 	obs, ok := freshObservation(n, reqs, st)
 	if !ok {
