@@ -11,8 +11,8 @@ import (
 // RemoteCollector's mandatory probes for a Linux worker node.
 func minimalRemoteExec() map[string]fakeRunResult {
 	return map[string]fakeRunResult{
-		"uname -s":                             {out: "Linux\n"},
-		"hostname":                             {out: "worker-1\n"},
+		"uname -s": {out: "Linux\n"},
+		"hostname": {out: "worker-1\n"},
 		"cat /etc/machine-id 2>/dev/null || hostnamectl --static 2>/dev/null || hostname": {out: "worker-1-id\n"},
 		"uname -m": {out: "x86_64\n"},
 		"uname -r": {out: "6.8.0\n"},
@@ -25,9 +25,9 @@ func minimalRemoteExec() map[string]fakeRunResult {
 		"cat /proc/pressure/memory 2>/dev/null":                                             {out: "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"},
 		`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {out: "2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"},
 		// Inference backends not installed on this baseline node.
-		OllamaDiscoveryScript:       {out: `{"installed":false}`},
-		LlamaServerDiscoveryScript:  {out: `{"installed":false}`},
-		MLXDiscoveryScript:          {out: `{"installed":false}`},
+		OllamaDiscoveryScript:      {out: `{"installed":false}`},
+		LlamaServerDiscoveryScript: {out: `{"installed":false}`},
+		MLXDiscoveryScript:         {out: `{"installed":false}`},
 	}
 }
 
@@ -241,5 +241,41 @@ func TestOllamaResidentModelZeroVRAMWhenSizeAbsent(t *testing.T) {
 	}
 	if got := facts.ResidentModels[0].SizeVRAMMB; got != 0 {
 		t.Errorf("SizeVRAMMB = %d, want 0 when field absent in probe JSON", got)
+	}
+}
+
+func TestLlamaServerResidentModelZeroVRAMWhenSizeUnavailable(t *testing.T) {
+	m := minimalRemoteExec()
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","source":"llama-server-ps"}]}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	if got := facts.ResidentModels[0].SizeVRAMMB; got != 0 {
+		t.Errorf("SizeVRAMMB = %d, want 0 when llama-server does not report live VRAM", got)
+	}
+}
+
+func TestMLXResidentModelZeroVRAMWhenSizeUnavailable(t *testing.T) {
+	m := minimalRemoteExec()
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","source":"mlx-lm-api"}]}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	if got := facts.ResidentModels[0].SizeVRAMMB; got != 0 {
+		t.Errorf("SizeVRAMMB = %d, want 0 when mlx-lm does not report live VRAM", got)
 	}
 }
