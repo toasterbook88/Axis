@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -129,10 +130,15 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 		ui.Dim(snap.Timestamp.Format(time.RFC3339)))
 }
 
+// canonicalRuntimeOrder defines the display order for known resident model
+// runtimes. Unknown runtimes are appended in sorted order after these.
+var canonicalRuntimeOrder = []string{"ollama", "llama.cpp", "mlx", "apple-foundation-models"}
+
 // printResidentModelsSection renders a RESIDENT MODELS table when at least one
 // node has live resident models. Rows are ordered by node then by runtime
-// (ollama → llama.cpp → mlx → others). Model names are truncated at 3 per row
-// with a "+N more" suffix to keep lines readable on narrow terminals.
+// (ollama → llama.cpp → mlx → apple-fm → others alphabetically). Model names
+// are truncated at 3 per row with a "+N more" suffix to keep lines readable on
+// narrow terminals.
 func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 	type runtimeRow struct {
 		node    string
@@ -147,7 +153,6 @@ func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 			continue
 		}
 		// Group model names by runtime for this node.
-		order := []string{"ollama", "llama.cpp", "mlx", "apple-foundation-models"}
 		byRuntime := make(map[string][]string, 4)
 		for _, rm := range n.ResidentModels {
 			rt := strings.ToLower(strings.TrimSpace(rm.Runtime))
@@ -156,18 +161,24 @@ func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 			}
 			byRuntime[rt] = append(byRuntime[rt], rm.Name)
 		}
-		// Emit in canonical order, then any extras alphabetically.
-		seen := make(map[string]bool)
-		for _, rt := range order {
+		// Emit canonical runtimes first, then any extras in sorted order to
+		// guarantee deterministic output (map iteration order is undefined).
+		seen := make(map[string]bool, len(canonicalRuntimeOrder))
+		for _, rt := range canonicalRuntimeOrder {
 			if names, ok := byRuntime[rt]; ok {
 				rows = append(rows, runtimeRow{n.Name, rt, names})
 				seen[rt] = true
 			}
 		}
-		for rt, names := range byRuntime {
+		extras := make([]string, 0, len(byRuntime))
+		for rt := range byRuntime {
 			if !seen[rt] {
-				rows = append(rows, runtimeRow{n.Name, rt, names})
+				extras = append(extras, rt)
 			}
+		}
+		sort.Strings(extras)
+		for _, rt := range extras {
+			rows = append(rows, runtimeRow{n.Name, rt, byRuntime[rt]})
 		}
 	}
 

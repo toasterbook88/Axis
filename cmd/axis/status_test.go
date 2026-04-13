@@ -266,6 +266,38 @@ func TestTruncateModelList(t *testing.T) {
 	}
 }
 
+func TestPrintResidentModelsSectionUnknownRuntimesSortedAlphabetically(t *testing.T) {
+	// Unknown runtimes must appear in sorted order regardless of map iteration.
+	// Run many times to expose any non-determinism from map traversal.
+	var buf bytes.Buffer
+	nodes := []models.NodeFacts{
+		{
+			Name:   "node",
+			Status: models.StatusComplete,
+			ResidentModels: []models.ResidentModel{
+				{Name: "z-model", Runtime: "zzz-backend"},
+				{Name: "a-model", Runtime: "aaa-backend"},
+				{Name: "m-model", Runtime: "mmm-backend"},
+			},
+		},
+	}
+	for i := 0; i < 20; i++ {
+		buf.Reset()
+		printResidentModelsSection(&buf, nodes)
+		out := buf.String()
+		// aaa must appear before mmm, mmm before zzz
+		aIdx := strings.Index(out, "aaa-backend")
+		mIdx := strings.Index(out, "mmm-backend")
+		zIdx := strings.Index(out, "zzz-backend")
+		if aIdx < 0 || mIdx < 0 || zIdx < 0 {
+			t.Fatalf("iteration %d: missing runtime label in output:\n%s", i, out)
+		}
+		if !(aIdx < mIdx && mIdx < zIdx) {
+			t.Errorf("iteration %d: expected aaa < mmm < zzz, got positions %d %d %d\n%s", i, aIdx, mIdx, zIdx, out)
+		}
+	}
+}
+
 func TestFormatResidentRuntime(t *testing.T) {
 	// Strip ANSI codes by checking the raw string contains the label text.
 	cases := []struct{ rt, want string }{
