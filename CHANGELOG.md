@@ -10,9 +10,10 @@ empirical history load-bearing:
 
 - **Per-model observation scoping** (#69): `ObservationScope` now carries a
   `ModelName` field so different models on the same node accumulate independent
-  peak-RAM histories. Observation key derivation uses SHA-256 over all five scope
-  fields (node, workload class, backend, tool, model name), preventing cross-model
-  contamination.
+  peak-RAM histories. Observation key derivation uses SHA-256 over the base scope
+  fields (node, workload class, backend, tool), conditionally extending the hash
+  input with model name when known to prevent cross-model contamination while
+  preserving existing keys for unscoped observations.
 
 - **MLX resident model detection** (#70): `axis facts` and cluster snapshots now
   include models served by `mlx_lm.server` alongside the existing Ollama collector.
@@ -23,7 +24,7 @@ empirical history load-bearing:
   whose freshly-observed `PeakRAMMB` exceeds the node's current allocatable RAM
   before the ranking phase begins. The filter short-circuits on stale or missing
   observations (safe default: allow). `inferenceModelName` is hoisted outside the
-  per-node loop (one regex compile per placement call, not per node).
+  per-node loop to avoid repeating model-name extraction/matching for each node.
 
 **`axis status` resident model display (PR #72)**
 
