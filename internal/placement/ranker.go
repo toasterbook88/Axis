@@ -287,10 +287,7 @@ func reservableRAM(n models.NodeFacts) int64 {
 	if n.Resources == nil {
 		return 0
 	}
-	if n.Resources.RAMReservableMB > 0 {
-		return n.Resources.RAMReservableMB
-	}
-	return models.ReservableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB)
+	return n.Resources.ReservableRAM()
 }
 
 func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {

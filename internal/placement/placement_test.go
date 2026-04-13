@@ -322,24 +322,34 @@ func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
 }
 
 func TestRankPrefersLowerClusterReservationShareWhenReservationRatioTied(t *testing.T) {
-	alpha := nodeComplete("alpha", 8000, "none")
-	alpha.Resources.RAMTotalMB = 16384
+	// To tie allocatable RAM and reservation ratio but differ on reservation total,
+	// allocatable RAM must be clamped at 0.
+	alpha := nodeComplete("alpha", 1000, "none")
+	alpha.Resources.RAMTotalMB = 8192
+	// Reservable = 1000. Reserved = 2000. Allocatable = 0. Ratio = 2.0.
 
-	beta := nodeComplete("beta", 4000, "none")
-	beta.Resources.RAMTotalMB = 8192
+	beta := nodeComplete("beta", 2000, "none")
+	beta.Resources.RAMTotalMB = 16384
+	// Reservable = 2000. Reserved = 4000. Allocatable = 0. Ratio = 2.0.
 
 	st := &state.ClusterState{
 		Nodes: map[string]state.NodeState{
 			"alpha": {ReservedMB: 2000},
-			"beta":  {ReservedMB: 1000},
+			"beta":  {ReservedMB: 4000},
 		},
 	}
 
 	if gotAlpha, gotBeta := reservationRatio(alpha, st), reservationRatio(beta, st); gotAlpha != gotBeta {
 		t.Fatalf("expected reservation ratio tie, got alpha=%f beta=%f", gotAlpha, gotBeta)
 	}
-	if gotAlpha, gotBeta := clusterReservationShare(alpha, st), clusterReservationShare(beta, st); gotAlpha <= gotBeta {
-		t.Fatalf("expected alpha to hold more cluster reservation share, got alpha=%f beta=%f", gotAlpha, gotBeta)
+	if gotAlpha, gotBeta := clusterReservationShare(alpha, st), clusterReservationShare(beta, st); gotAlpha >= gotBeta {
+		t.Fatalf("expected alpha to hold lower cluster reservation share, got alpha=%f beta=%f", gotAlpha, gotBeta)
+	}
+
+	candidates := []models.NodeFacts{beta, alpha}
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, st)
+	if ranked[0].Name != "alpha" {
+		t.Fatalf("expected alpha first on lower cluster reservation share, got %s", ranked[0].Name)
 	}
 }
 

@@ -33,10 +33,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 					reserved = 0
 				}
 				reservedRAM += reserved
-				reservable := n.Resources.RAMReservableMB
-				if reservable <= 0 && (n.Resources.RAMFreeMB > 0 || n.Resources.RAMTotalMB > 0) {
-					reservable = models.ReservableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB)
-				}
+				reservable := n.Resources.ReservableRAM()
 				if reservable < 0 {
 					reservable = 0
 				}

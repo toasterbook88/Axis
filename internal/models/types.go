@@ -100,6 +100,19 @@ type Resources struct {
 	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
 }
 
+// ReservableRAM returns the amount of RAM available for tracking cluster reservations.
+// It prioritizes RAMReservableMB if explicitly reported by the node probe,
+// otherwise falls back to calculating the reservable budget via ReservableRAMMB.
+func (r *Resources) ReservableRAM() int64 {
+	if r == nil {
+		return 0
+	}
+	if r.RAMReservableMB > 0 {
+		return r.RAMReservableMB
+	}
+	return ReservableRAMMB(r.RAMTotalMB, r.RAMFreeMB)
+}
+
 // NetworkAddress represents a single network address with interface metadata.
 // Kind is one of: ipv4, ipv6, hostname.
 type NetworkAddress struct {

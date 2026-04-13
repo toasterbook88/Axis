@@ -398,15 +398,7 @@ func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	fmt.Println(buildContextBlock(snap, reqs, task, source, st, skillStore))
 }
 
-func reservableRAMForResources(res *models.Resources) int64 {
-	if res == nil {
-		return 0
-	}
-	if res.RAMReservableMB > 0 {
-		return res.RAMReservableMB
-	}
-	return models.ReservableRAMMB(res.RAMTotalMB, res.RAMFreeMB)
-}
+
 
 // ContextOutput is the structured JSON form of the context block — suitable
 // for programmatic injection into LLM system prompts.
@@ -441,7 +433,7 @@ func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements
 	out.Node = best.Name
 	if best.Resources != nil {
 		out.RAMFreeMB = best.Resources.RAMFreeMB
-		out.RAMReservableMB = reservableRAMForResources(best.Resources)
+		out.RAMReservableMB = best.Resources.ReservableRAM()
 		out.RAMAllocatableMB = best.Resources.RAMAllocatableMB
 		out.Pressure = best.Resources.Pressure
 	}
@@ -481,7 +473,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	pressure := "unknown"
 	extraLines := ""
 	if best.Resources != nil {
-		reservable := reservableRAMForResources(best.Resources)
+		reservable := best.Resources.ReservableRAM()
 		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
 			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved of %dMB reservable)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB, reservable)
 		} else {
@@ -547,7 +539,7 @@ func clusterSummaryLine(snap *models.ClusterSnapshot) string {
 	totalReservable := snap.Summary.TotalReservableMB
 	if totalReservable <= 0 {
 		for _, node := range snap.Nodes {
-			totalReservable += reservableRAMForResources(node.Resources)
+			totalReservable += node.Resources.ReservableRAM()
 		}
 	}
 	if snap.Summary.TotalAllocatableMB > 0 || snap.Summary.TotalReservedMB > 0 || totalReservable > 0 {
