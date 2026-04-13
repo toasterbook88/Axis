@@ -134,10 +134,11 @@ type OllamaInfo struct {
 // ResidentModel is additive truth-plane metadata describing a model that is
 // currently resident in a node runtime according to a live probe.
 type ResidentModel struct {
-	Name      string `json:"name" yaml:"name"`
-	Runtime   string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
-	Processor string `json:"processor,omitempty" yaml:"processor,omitempty"`
-	Source    string `json:"source,omitempty" yaml:"source,omitempty"`
+	Name       string `json:"name" yaml:"name"`
+	Runtime    string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
+	Processor  string `json:"processor,omitempty" yaml:"processor,omitempty"`
+	Source     string `json:"source,omitempty" yaml:"source,omitempty"`
+	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown; Ollama-reported VRAM in MB
 }
 
 // TurboQuantInfo records whether a node appears able to run a TurboQuant-like

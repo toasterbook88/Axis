@@ -176,3 +176,70 @@ func TestRemoteCollectorMergesAllThreeResidentModelBackends(t *testing.T) {
 		}
 	}
 }
+
+// --- SizeVRAMMB field tests ---
+
+// TestOllamaResidentModelCarriesSizeVRAMMB_GB verifies that the Ollama probe
+// JSON (as emitted by the updated awk script for a GB-sized model) is parsed
+// into the SizeVRAMMB field on the ResidentModel struct.
+func TestOllamaResidentModelCarriesSizeVRAMMB_GB(t *testing.T) {
+	m := minimalRemoteExec()
+	// size_vram_mb: 4915 ≈ 4.8 GB (awk: int(4.8 * 1024 + 0.5) = 4915)
+	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","size_vram_mb":4915,"source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	got := facts.ResidentModels[0]
+	if got.SizeVRAMMB != 4915 {
+		t.Errorf("SizeVRAMMB = %d, want 4915 (4.8 GB → awk int(4.8*1024+0.5))", got.SizeVRAMMB)
+	}
+}
+
+// TestOllamaResidentModelCarriesSizeVRAMMB_MB verifies parsing when the probe
+// emits a sub-GB value (MB unit path in the awk script).
+func TestOllamaResidentModelCarriesSizeVRAMMB_MB(t *testing.T) {
+	m := minimalRemoteExec()
+	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["smol:latest"],"resident_models":[{"name":"smol:latest","runtime":"ollama","processor":"100% CPU","size_vram_mb":512,"source":"ollama-ps"}],"gpu_offload":"none"}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	got := facts.ResidentModels[0]
+	if got.SizeVRAMMB != 512 {
+		t.Errorf("SizeVRAMMB = %d, want 512 (MB unit path)", got.SizeVRAMMB)
+	}
+}
+
+// TestOllamaResidentModelZeroVRAMWhenSizeAbsent verifies that a probe JSON
+// without size_vram_mb (e.g. an older script version) results in SizeVRAMMB == 0
+// rather than an error.
+func TestOllamaResidentModelZeroVRAMWhenSizeAbsent(t *testing.T) {
+	m := minimalRemoteExec()
+	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.5.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	if got := facts.ResidentModels[0].SizeVRAMMB; got != 0 {
+		t.Errorf("SizeVRAMMB = %d, want 0 when field absent in probe JSON", got)
+	}
+}
