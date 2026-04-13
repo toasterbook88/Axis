@@ -86,6 +86,12 @@ func TestOllamaClient_GenerateStream_ModelMissingDoesNotPull(t *testing.T) {
 		case "/api/show":
 			w.WriteHeader(http.StatusNotFound)
 			return
+		case "/api/tags":
+			// Return empty list so no model suggestions are shown; lets the
+			// existing assertion on "ollama pull llama3" pass unchanged.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[]}`))
+			return
 		case "/api/pull":
 			atomic.AddInt32(&pullCalls, 1)
 			w.WriteHeader(http.StatusOK)
@@ -114,22 +120,23 @@ func TestOllamaClient_GenerateStream_ModelMissingDoesNotPull(t *testing.T) {
 func TestHybridEngine_GenerateStream_Fallback(t *testing.T) {
 	// Create a dummy server that returns 404 for the model check to trigger fallback
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
+		switch r.URL.Path {
+		case "/":
 			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if r.URL.Path == "/api/show" {
+		case "/api/show":
 			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.URL.Path == "/api/pull" {
+		case "/api/tags":
+			// Return empty list — no models to suggest; the fallback message
+			// still contains the pull guidance the assertion checks for.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[]}`))
+		case "/api/pull":
 			t.Fatalf("unexpected auto-pull request")
-		}
-		if r.URL.Path == "/api/chat" {
+		case "/api/chat":
 			w.WriteHeader(http.StatusOK)
-			return
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
 		}
-		t.Fatalf("unexpected request path: %s", r.URL.Path)
 	}))
 	defer server.Close()
 
