@@ -282,11 +282,22 @@ func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
 	return models.AllocatableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, reservedRAM(n, st))
 }
 
+func reservableRAM(n models.NodeFacts) int64 {
+	if n.Resources == nil {
+		return 0
+	}
+	if n.Resources.RAMReservableMB > 0 {
+		return n.Resources.RAMReservableMB
+	}
+	return models.ReservableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB)
+}
+
 func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
-	if n.Resources == nil || n.Resources.RAMTotalMB <= 0 {
+	reservable := reservableRAM(n)
+	if reservable <= 0 {
 		return 1.0
 	}
-	return float64(reservedRAM(n, st)) / float64(n.Resources.RAMTotalMB)
+	return float64(reservedRAM(n, st)) / float64(reservable)
 }
 
 func clusterReservationShare(n models.NodeFacts, st *state.ClusterState) float64 {

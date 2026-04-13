@@ -398,12 +398,23 @@ func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	fmt.Println(buildContextBlock(snap, reqs, task, source, st, skillStore))
 }
 
+func reservableRAMForResources(res *models.Resources) int64 {
+	if res == nil {
+		return 0
+	}
+	if res.RAMReservableMB > 0 {
+		return res.RAMReservableMB
+	}
+	return models.ReservableRAMMB(res.RAMTotalMB, res.RAMFreeMB)
+}
+
 // ContextOutput is the structured JSON form of the context block — suitable
 // for programmatic injection into LLM system prompts.
 type ContextOutput struct {
 	Node             string    `json:"node"`
 	FitScore         int       `json:"fit_score"`
 	RAMFreeMB        int64     `json:"ram_free_mb"`
+	RAMReservableMB  int64     `json:"ram_reservable_mb,omitempty"`
 	RAMAllocatableMB int64     `json:"ram_allocatable_mb,omitempty"`
 	Pressure         string    `json:"pressure"`
 	Tools            []string  `json:"tools"`
@@ -430,6 +441,7 @@ func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements
 	out.Node = best.Name
 	if best.Resources != nil {
 		out.RAMFreeMB = best.Resources.RAMFreeMB
+		out.RAMReservableMB = reservableRAMForResources(best.Resources)
 		out.RAMAllocatableMB = best.Resources.RAMAllocatableMB
 		out.Pressure = best.Resources.Pressure
 	}
@@ -469,8 +481,9 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	pressure := "unknown"
 	extraLines := ""
 	if best.Resources != nil {
+		reservable := reservableRAMForResources(best.Resources)
 		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
-			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB)
+			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved of %dMB reservable)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB, reservable)
 		} else {
 			ramSummary = fmt.Sprintf("%dMB free", best.Resources.RAMFreeMB)
 		}
@@ -531,9 +544,15 @@ func clusterSummaryLine(snap *models.ClusterSnapshot) string {
 	if snap == nil {
 		return "unknown"
 	}
-	if snap.Summary.TotalAllocatableMB > 0 || snap.Summary.TotalReservedMB > 0 {
-		return fmt.Sprintf("%d nodes, %dMB allocatable across cluster (%dMB reserved)",
-			len(snap.Nodes), snap.Summary.TotalAllocatableMB, snap.Summary.TotalReservedMB)
+	totalReservable := snap.Summary.TotalReservableMB
+	if totalReservable <= 0 {
+		for _, node := range snap.Nodes {
+			totalReservable += reservableRAMForResources(node.Resources)
+		}
+	}
+	if snap.Summary.TotalAllocatableMB > 0 || snap.Summary.TotalReservedMB > 0 || totalReservable > 0 {
+		return fmt.Sprintf("%d nodes, %dMB allocatable across cluster (%dMB reserved of %dMB reservable)",
+			len(snap.Nodes), snap.Summary.TotalAllocatableMB, snap.Summary.TotalReservedMB, totalReservable)
 	}
 	return fmt.Sprintf("%d nodes, %dMB total free RAM", len(snap.Nodes), snap.Summary.TotalFreeRAMMB)
 }

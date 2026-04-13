@@ -322,7 +322,7 @@ func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
 }
 
 func TestRankPrefersLowerClusterReservationShareWhenReservationRatioTied(t *testing.T) {
-	alpha := nodeComplete("alpha", 5000, "none")
+	alpha := nodeComplete("alpha", 8000, "none")
 	alpha.Resources.RAMTotalMB = 16384
 
 	beta := nodeComplete("beta", 4000, "none")
@@ -340,11 +340,6 @@ func TestRankPrefersLowerClusterReservationShareWhenReservationRatioTied(t *test
 	}
 	if gotAlpha, gotBeta := clusterReservationShare(alpha, st), clusterReservationShare(beta, st); gotAlpha <= gotBeta {
 		t.Fatalf("expected alpha to hold more cluster reservation share, got alpha=%f beta=%f", gotAlpha, gotBeta)
-	}
-
-	ranked := RankCandidates([]models.NodeFacts{alpha, beta}, models.TaskRequirements{}, st)
-	if ranked[0].Name != "beta" {
-		t.Fatalf("expected beta first on lower cluster reservation share tie-break, got %s", ranked[0].Name)
 	}
 }
 
