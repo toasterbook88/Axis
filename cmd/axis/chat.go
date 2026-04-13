@@ -151,7 +151,7 @@ func chatCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model (default: best installed)")
+	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model (default: chat.default_model or best installed)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 2*time.Minute, "Per-request timeout")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
 	cmd.Flags().BoolVar(&useContext, "context", false, "Inject live cluster snapshot into system prompt")

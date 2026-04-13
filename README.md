@@ -352,6 +352,12 @@ Optional discovery block used by experimental UDP-assisted discovery:
 | `discovery.beacon_interval_sec` | no | `3` | Beacon broadcast interval |
 | `discovery.secret` | no | empty | Shared discovery secret for filtering beacons |
 
+Optional chat block used by the advisory `axis chat` and `axis agent` surfaces:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `chat.default_model` | no | auto-detect best installed model | Default Ollama model tag when `--model` is omitted |
+
 When a host exposes a stable identity, AXIS includes it in UDP beacons and uses it only to avoid duplicate nodes or preserve an explicit config binding when names or IPs drift.
 
 ## Architecture
