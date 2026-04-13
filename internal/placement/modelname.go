@@ -22,7 +22,7 @@ var modelTagRe = regexp.MustCompile(
 // subsequent flags. ollama serve is intentionally omitted — it starts a daemon
 // and does not accept a model name argument.
 var flagPrefixes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(?:--model|-m)(?:=|\s+)([\w][\w.\-/:]*)\b`),  // --model=name, -m=name, --model name, -m name
+	regexp.MustCompile(`(?i)(?:--model|-m)(?:=|\s+)([\w][\w.\-/:]*)\b`),    // --model=name, -m=name, --model name, -m name
 	regexp.MustCompile(`(?i)\bollama\s+(?:run|pull)\s+([\w][\w.\-/:]*)\b`), // ollama run <model>, ollama pull <model>
 }
 

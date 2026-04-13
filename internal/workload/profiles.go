@@ -57,8 +57,8 @@ func DefaultRegistry() []Profile {
 			PeakRAMHintMB: 4096,
 		},
 		{
-			Class:        models.ClassIndexingIO,
-			MinFreeRAMMB: 2048,
+			Class:         models.ClassIndexingIO,
+			MinFreeRAMMB:  2048,
 			PeakRAMHintMB: 2048,
 		},
 		{
@@ -87,4 +87,3 @@ func PeakRAMHint(class models.WorkloadClass) int64 {
 	}
 	return 0
 }
-
