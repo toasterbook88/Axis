@@ -34,6 +34,11 @@ func pressureRank(p string) int {
 //   - If MinFreeRAMMB > 0, node must have resources with enough free RAM
 //   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
+	// Precompute values that are constant for every candidate in this call.
+	// inferenceModelName runs regex extraction; hoisting it out of the loop
+	// avoids repeated compilation and matching across potentially many nodes.
+	cachedModelName := inferenceModelName(reqs)
+
 	var out []models.NodeFacts
 	for _, n := range nodes {
 		if requiresAppleFoundationModels(reqs) {
@@ -61,12 +66,17 @@ func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 				continue
 			}
 		}
+		// Compute allocatable RAM once per node; both the MinFreeRAMMB check
+		// and the empirical PeakRAMMB check need it.
+		nodeAllocatable := allocatableRAM(n, st)
 		if reqs.MinFreeRAMMB > 0 {
 			minNeeded := effectiveMinFreeRAM(reqs, n)
-			adjustedFree := freeRAMWithState(n, st)
-			if n.Resources == nil || adjustedFree < minNeeded {
+			if n.Resources == nil || nodeAllocatable < minNeeded {
 				continue
 			}
+		}
+		if blocksForEmpiricalPeakRAM(n, reqs, st, nodeAllocatable, cachedModelName) {
+			continue
 		}
 		if !satisfiesRequiredTools(n, reqs.RequiredTools) {
 			continue
@@ -513,6 +523,34 @@ func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts)
 		return true
 	}
 	return false
+}
+
+// blocksForEmpiricalPeakRAM hard-excludes a node when a fresh empirical
+// observation for this workload recorded a PeakRAMMB that exceeds the node's
+// current allocatable RAM. This prevents scheduling on nodes that are
+// empirically too small for the workload even if no explicit MinFreeRAMMB was
+// set by the caller.
+//
+// nodeAllocatableMB and modelName are precomputed by the caller (FilterCandidates)
+// to avoid recomputing allocatableRAM and re-running regex extraction for every
+// node in the loop.
+//
+// The check is intentionally conservative: it only fires when both (a) a fresh
+// observation exists and (b) PeakRAMMB > 0. Absent or stale observations leave
+// the node eligible — we don't penalise nodes that haven't been observed yet.
+func blocksForEmpiricalPeakRAM(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, nodeAllocatableMB int64, modelName string) bool {
+	tool := inferredToolForObservation(reqs, "")
+	obs, ok := freshObservationForScope(models.ObservationScope{
+		Node:      strings.TrimSpace(n.Name),
+		Workload:  reqs.Workload.Class,
+		Backend:   observationBackend(reqs, tool),
+		Tool:      tool,
+		ModelName: modelName,
+	}, st)
+	if !ok || obs.PeakRAMMB <= 0 {
+		return false
+	}
+	return nodeAllocatableMB < obs.PeakRAMMB
 }
 
 // storageClassPenalty reduces fit score for HDD nodes on heavy inference tasks.
