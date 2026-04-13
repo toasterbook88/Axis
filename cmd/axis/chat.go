@@ -258,6 +258,8 @@ func resolveChatModelFromPath(requested, cfgPath string) string {
 		if cfg.Chat != nil && strings.TrimSpace(cfg.Chat.DefaultModel) != "" {
 			return strings.TrimSpace(cfg.Chat.DefaultModel)
 		}
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "warning: failed to load chat config from %s: %v\n", cfgPath, err)
 	}
 	// Auto-detect: pick the best available installed model.
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)

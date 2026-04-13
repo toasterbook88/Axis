@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,18 +21,18 @@ func TestChoosePreferredModel(t *testing.T) {
 	}
 }
 
-// TestChoosePreferredModelFallsBackToFirstInstalled verifies that when none of
-// the hardcoded recommended models are present, the first installed model is
-// returned instead of ("", false). This prevents the hardcoded fallback in
-// ResolveDefaultModel from selecting a model that isn't available locally.
-func TestChoosePreferredModelFallsBackToFirstInstalled(t *testing.T) {
-	installed := []string{"qwen3:4b", "llama3.2:latest", "mistral:7b"}
+// TestChoosePreferredModelFallsBackToSortedInstalled verifies that when none
+// of the hardcoded recommended models are present, the lexicographically first
+// installed model is returned instead of ("", false). listInstalledModels
+// sorts the installed set so this fallback stays deterministic across runs.
+func TestChoosePreferredModelFallsBackToSortedInstalled(t *testing.T) {
+	installed := []string{"llama3.2:latest", "mistral:7b", "qwen3:4b"}
 	got, ok := choosePreferredModel(installed)
 	if !ok {
 		t.Fatal("expected ok=true when installed models exist but none are recommended")
 	}
-	if got != "qwen3:4b" {
-		t.Fatalf("expected first installed model %q, got %q", "qwen3:4b", got)
+	if got != "llama3.2:latest" {
+		t.Fatalf("expected deterministic installed model %q, got %q", "llama3.2:latest", got)
 	}
 }
 
@@ -48,10 +49,10 @@ func TestChoosePreferredModelEmptyReturnsFalse(t *testing.T) {
 	}
 }
 
-// TestResolveDefaultModelPicksAnyInstalledWhenNoneRecommended verifies the
-// full ResolveDefaultModel path for a node that has its own models (e.g.
-// qwen3:4b) but none from the recommended list.
-func TestResolveDefaultModelPicksAnyInstalledWhenNoneRecommended(t *testing.T) {
+// TestResolveDefaultModelPicksDeterministicInstalledWhenNoneRecommended
+// verifies the full ResolveDefaultModel path for a node that has its own
+// models but none from the recommended list.
+func TestResolveDefaultModelPicksDeterministicInstalledWhenNoneRecommended(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tags" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -64,13 +65,13 @@ func TestResolveDefaultModelPicksAnyInstalledWhenNoneRecommended(t *testing.T) {
 	defer restore()
 
 	got := ResolveDefaultModel(context.Background())
-	// Should pick qwen3:4b (first installed) rather than falling back to
-	// the hardcoded "qwen3:1.7b" which is absent.
+	// Should pick the deterministic sorted fallback rather than the hardcoded
+	// "qwen3:1.7b" which is absent.
 	if got == recommendedLocalModels[0].Name {
-		t.Fatalf("ResolveDefaultModel() = %q — selected hardcoded fallback that is not installed; want first installed model", got)
+		t.Fatalf("ResolveDefaultModel() = %q — selected hardcoded fallback that is not installed; want deterministic installed model", got)
 	}
-	if got != "qwen3:4b" {
-		t.Fatalf("ResolveDefaultModel() = %q, want first installed model %q", got, "qwen3:4b")
+	if got != "llama3.2:latest" {
+		t.Fatalf("ResolveDefaultModel() = %q, want deterministic installed model %q", got, "llama3.2:latest")
 	}
 }
 
@@ -161,6 +162,23 @@ func TestListInstalledModelsReturnsStatusError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "502") {
 		t.Fatalf("expected 502 status in error, got %v", err)
+	}
+}
+
+func TestListInstalledModelsSortsResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:4b"},{"name":"llama3.2:latest"},{"name":"mistral:7b"}]}`))
+	}))
+	defer server.Close()
+
+	got, err := listInstalledModels(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("listInstalledModels() error = %v", err)
+	}
+
+	want := []string{"llama3.2:latest", "mistral:7b", "qwen3:4b"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listInstalledModels() = %v, want %v", got, want)
 	}
 }
 

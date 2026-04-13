@@ -32,10 +32,8 @@ chat:
 	}
 	defer func() { resolveDefaultChatModel = prev }()
 
-	// Temporarily redirect the config load to our temp file by overriding the
-	// env-independent path used in resolveChatModel.  Because resolveChatModel
-	// calls config.Load(config.DefaultConfigPath()) we swap the function var to
-	// a wrapper that calls Load with our temp path instead.
+	// Resolve the model using the temporary config path directly so the test
+	// stays independent of the default config location.
 	got := resolveChatModelFromPath("", cfgPath)
 	if got != "llama3.2:latest" {
 		t.Fatalf("resolveChatModel() = %q, want %q", got, "llama3.2:latest")

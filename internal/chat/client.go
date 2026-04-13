@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -202,15 +201,9 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 	case http.StatusNotFound:
 		// Try to list installed models so the operator knows what to use.
 		if installed, listErr := listInstalledModels(ctx, c.Endpoint); listErr == nil && len(installed) > 0 {
-			suggest := installed[0]
-			available := strings.Join(installed, ", ")
-			if len(installed) > 4 {
-				available = strings.Join(installed[:4], ", ") + fmt.Sprintf(" (+%d more)", len(installed)-4)
-			}
-			return fmt.Errorf("model %q is not available locally\navailable: %s\ntry: axis chat --model %s  OR  run: ollama pull %s",
-				c.Model, available, suggest, c.Model)
+			return formatMissingModelError(c.Model, installed)
 		}
-		return fmt.Errorf("model %q is not available locally; run: ollama pull %s", c.Model, c.Model)
+		return formatMissingModelError(c.Model, nil)
 	default:
 		return fmt.Errorf("model check for %q failed with status: %s", c.Model, checkResp.Status)
 	}

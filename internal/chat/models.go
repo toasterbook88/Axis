@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -148,7 +149,23 @@ func listInstalledModels(ctx context.Context, endpoint string) ([]string, error)
 			models = append(models, m.Name)
 		}
 	}
+	sort.Strings(models)
 	return models, nil
+}
+
+func formatMissingModelError(model string, installed []string) error {
+	if len(installed) == 0 {
+		return fmt.Errorf("model %q is not available locally; run: ollama pull %s", model, model)
+	}
+
+	suggest := installed[0]
+	available := strings.Join(installed, ", ")
+	if len(installed) > 4 {
+		available = strings.Join(installed[:4], ", ") + fmt.Sprintf(" (+%d more)", len(installed)-4)
+	}
+
+	return fmt.Errorf("model %q is not available locally\navailable: %s\nre-run with --model %s or set chat.default_model in ~/.axis/nodes.yaml\nor pull it with: ollama pull %s",
+		model, available, suggest, model)
 }
 
 func choosePreferredModel(installed []string) (string, bool) {

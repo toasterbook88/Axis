@@ -394,7 +394,7 @@ func TestClientChatStreamModelMissing(t *testing.T) {
 
 // TestClientChatStreamModelMissingListsAvailable verifies that when the
 // requested model is absent but other models are installed, the error message
-// lists them and suggests --model.
+// lists them and suggests a generic --model override.
 func TestClientChatStreamModelMissingListsAvailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -419,11 +419,14 @@ func TestClientChatStreamModelMissingListsAvailable(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing model")
 	}
-	if !strings.Contains(err.Error(), "qwen3:4b") {
+	if !strings.Contains(err.Error(), "llama3.2:latest") {
 		t.Errorf("error should list available models, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "--model") {
 		t.Errorf("error should suggest --model flag, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "chat.default_model") {
+		t.Errorf("error should mention chat.default_model, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "ollama pull nomodel") {
 		t.Errorf("error should still suggest pull for the missing model, got %v", err)
