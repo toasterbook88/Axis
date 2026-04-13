@@ -339,27 +339,30 @@ func TestPrintResidentModelsSectionVRAMColumnShownWhenPresent(t *testing.T) {
 	}
 }
 
-func TestPrintResidentModelsSectionVRAMColumnAbsentWhenAllZero(t *testing.T) {
+func TestPrintResidentModelsSectionVRAMColumnShownWhenAllUnknown(t *testing.T) {
 	var buf bytes.Buffer
 	nodes := []models.NodeFacts{
 		{
 			Name:   "cortex",
 			Status: models.StatusComplete,
 			ResidentModels: []models.ResidentModel{
-				{Name: "llama3:8b", Runtime: "ollama", Source: "ollama-ps", SizeVRAMMB: 0},
+				{Name: "qwen2.5-7b-q4", Runtime: "llama.cpp", Source: "llama-server-ps", SizeVRAMMB: 0},
 			},
 		},
 	}
 	printResidentModelsSection(&buf, nodes)
 	out := buf.String()
-	if strings.Contains(out, "VRAM") {
-		t.Errorf("expected no VRAM column when all SizeVRAMMB == 0, got:\n%s", out)
+	if !strings.Contains(out, "VRAM") {
+		t.Errorf("expected VRAM column even when all SizeVRAMMB == 0, got:\n%s", out)
+	}
+	if !strings.Contains(out, "—") {
+		t.Errorf("expected unknown VRAM to render as em-dash, got:\n%s", out)
 	}
 }
 
 func TestPrintResidentModelsSectionVRAMDashForNonOllamaRow(t *testing.T) {
-	// When one runtime has VRAM data the column appears for all rows;
-	// rows without VRAM data should show "—".
+	// Rows without VRAM data should show "—" even when another runtime has a
+	// truth-backed value on the same node.
 	var buf bytes.Buffer
 	nodes := []models.NodeFacts{
 		{

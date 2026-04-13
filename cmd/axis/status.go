@@ -138,8 +138,9 @@ var canonicalRuntimeOrder = []string{"ollama", "llama.cpp", "mlx", "apple-founda
 // node has live resident models. Rows are ordered by node then by runtime
 // (ollama → llama.cpp → mlx → apple-fm → others alphabetically). Model names
 // are truncated at 3 per row with a "+N more" suffix to keep lines readable on
-// narrow terminals. A VRAM column is added when at least one model carries a
-// truth-backed SizeVRAMMB value (currently populated by the Ollama probe only).
+// narrow terminals. A VRAM column is always shown for resident models; rows
+// without a truth-backed SizeVRAMMB value render "—" instead of inventing a
+// number. Today that value is only populated by the Ollama probe.
 func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 	type runtimeRow struct {
 		node    string
@@ -149,7 +150,6 @@ func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 
 	// Collect rows in display order: iterate nodes, then group by runtime.
 	var rows []runtimeRow
-	var anyVRAM bool
 	for _, n := range nodes {
 		if len(n.ResidentModels) == 0 {
 			continue
@@ -162,9 +162,6 @@ func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 				rt = "unknown"
 			}
 			byRuntime[rt] = append(byRuntime[rt], rm)
-			if rm.SizeVRAMMB > 0 {
-				anyVRAM = true
-			}
 		}
 		// Emit canonical runtimes first, then any extras in sorted order to
 		// guarantee deterministic output (map iteration order is undefined).
@@ -193,31 +190,18 @@ func printResidentModelsSection(out io.Writer, nodes []models.NodeFacts) {
 
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%s\n", ui.Bold("RESIDENT MODELS"))
-	var tbl *ui.Table
-	if anyVRAM {
-		tbl = ui.NewTable("NODE", "RUNTIME", "MODELS", "VRAM")
-	} else {
-		tbl = ui.NewTable("NODE", "RUNTIME", "MODELS")
-	}
+	tbl := ui.NewTable("NODE", "RUNTIME", "MODELS", "VRAM")
 	for _, row := range rows {
 		names := make([]string, len(row.models))
 		for i, rm := range row.models {
 			names[i] = rm.Name
 		}
-		if anyVRAM {
-			tbl.AddRow(
-				ui.Cyan(row.node),
-				formatResidentRuntime(row.runtime),
-				truncateModelList(names, 3),
-				formatResidentVRAM(residentRowVRAMTotal(row.models)),
-			)
-		} else {
-			tbl.AddRow(
-				ui.Cyan(row.node),
-				formatResidentRuntime(row.runtime),
-				truncateModelList(names, 3),
-			)
-		}
+		tbl.AddRow(
+			ui.Cyan(row.node),
+			formatResidentRuntime(row.runtime),
+			truncateModelList(names, 3),
+			formatResidentVRAM(residentRowVRAMTotal(row.models)),
+		)
 	}
 	tbl.Render(out)
 }
