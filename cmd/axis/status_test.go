@@ -314,3 +314,116 @@ func TestFormatResidentRuntime(t *testing.T) {
 		}
 	}
 }
+
+// --- VRAM column tests ---
+
+func TestPrintResidentModelsSectionVRAMColumnShownWhenPresent(t *testing.T) {
+	var buf bytes.Buffer
+	nodes := []models.NodeFacts{
+		{
+			Name:   "cortex",
+			Status: models.StatusComplete,
+			ResidentModels: []models.ResidentModel{
+				{Name: "llama3:8b", Runtime: "ollama", Source: "ollama-ps", SizeVRAMMB: 4915},
+			},
+		},
+	}
+	printResidentModelsSection(&buf, nodes)
+	out := buf.String()
+	if !strings.Contains(out, "VRAM") {
+		t.Errorf("expected VRAM column header when SizeVRAMMB > 0, got:\n%s", out)
+	}
+	// 4915 MB = 4.8 GB
+	if !strings.Contains(out, "4.8 GB") {
+		t.Errorf("expected formatted VRAM '4.8 GB' in output, got:\n%s", out)
+	}
+}
+
+func TestPrintResidentModelsSectionVRAMColumnAbsentWhenAllZero(t *testing.T) {
+	var buf bytes.Buffer
+	nodes := []models.NodeFacts{
+		{
+			Name:   "cortex",
+			Status: models.StatusComplete,
+			ResidentModels: []models.ResidentModel{
+				{Name: "llama3:8b", Runtime: "ollama", Source: "ollama-ps", SizeVRAMMB: 0},
+			},
+		},
+	}
+	printResidentModelsSection(&buf, nodes)
+	out := buf.String()
+	if strings.Contains(out, "VRAM") {
+		t.Errorf("expected no VRAM column when all SizeVRAMMB == 0, got:\n%s", out)
+	}
+}
+
+func TestPrintResidentModelsSectionVRAMDashForNonOllamaRow(t *testing.T) {
+	// When one runtime has VRAM data the column appears for all rows;
+	// rows without VRAM data should show "—".
+	var buf bytes.Buffer
+	nodes := []models.NodeFacts{
+		{
+			Name:   "cortex",
+			Status: models.StatusComplete,
+			ResidentModels: []models.ResidentModel{
+				{Name: "llama3:8b", Runtime: "ollama", Source: "ollama-ps", SizeVRAMMB: 1331},
+				{Name: "qwen2.5-7b-q4", Runtime: "llama.cpp", Source: "llama-server-ps"},
+			},
+		},
+	}
+	printResidentModelsSection(&buf, nodes)
+	out := buf.String()
+	if !strings.Contains(out, "VRAM") {
+		t.Errorf("expected VRAM column, got:\n%s", out)
+	}
+	if !strings.Contains(out, "—") {
+		t.Errorf("expected em-dash for llama.cpp row with no VRAM data, got:\n%s", out)
+	}
+	// 1331 MB = 1.3 GB
+	if !strings.Contains(out, "1.3 GB") {
+		t.Errorf("expected '1.3 GB' for ollama row, got:\n%s", out)
+	}
+}
+
+func TestFormatResidentVRAM(t *testing.T) {
+	cases := []struct {
+		mb   int64
+		want string
+	}{
+		{0, "—"},
+		{-1, "—"},
+		{512, "512 MB"},
+		{1023, "1023 MB"},
+		{1024, "1.0 GB"},
+		{1331, "1.3 GB"},
+		{4915, "4.8 GB"},
+		{16384, "16.0 GB"},
+	}
+	for _, tc := range cases {
+		got := formatResidentVRAM(tc.mb)
+		if got != tc.want {
+			t.Errorf("formatResidentVRAM(%d) = %q, want %q", tc.mb, got, tc.want)
+		}
+	}
+}
+
+func TestResidentRowVRAMTotal(t *testing.T) {
+	cases := []struct {
+		rms  []models.ResidentModel
+		want int64
+	}{
+		{nil, 0},
+		{[]models.ResidentModel{{Name: "a", SizeVRAMMB: 0}}, 0},
+		{[]models.ResidentModel{{Name: "a", SizeVRAMMB: 1331}}, 1331},
+		{[]models.ResidentModel{
+			{Name: "a", SizeVRAMMB: 1331},
+			{Name: "b", SizeVRAMMB: 2048},
+		}, 3379},
+	}
+	for _, tc := range cases {
+		got := residentRowVRAMTotal(tc.rms)
+		if got != tc.want {
+			t.Errorf("residentRowVRAMTotal(%v) = %d, want %d", tc.rms, got, tc.want)
+		}
+	}
+}
