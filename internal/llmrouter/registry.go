@@ -62,12 +62,23 @@ func (r *Registry) Lookup(name string) (Provider, bool) {
 	return p, ok
 }
 
-// List returns all registered providers sorted by registration key.
+// List returns all registered providers sorted by provider name.
 // The returned slice is a snapshot; mutations to the registry after the call
 // do not affect it.
 func (r *Registry) List() []Provider {
+	return r.snapshotProviders("")
+}
+
+// ListByType returns all providers of the given type sorted by provider name.
+// The returned slice is a snapshot.
+func (r *Registry) ListByType(t ProviderType) []Provider {
+	return r.snapshotProviders(t)
+}
+
+func (r *Registry) snapshotProviders(providerType ProviderType) []Provider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	names := make([]string, 0, len(r.providers))
 	for name := range r.providers {
 		names = append(names, name)
@@ -76,20 +87,11 @@ func (r *Registry) List() []Provider {
 
 	out := make([]Provider, 0, len(names))
 	for _, name := range names {
-		out = append(out, r.providers[name])
-	}
-	return out
-}
-
-// ListByType returns all providers of the given type. The slice is a snapshot.
-func (r *Registry) ListByType(t ProviderType) []Provider {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	var out []Provider
-	for _, p := range r.providers {
-		if p.Type() == t {
-			out = append(out, p)
+		provider := r.providers[name]
+		if providerType != "" && provider.Type() != providerType {
+			continue
 		}
+		out = append(out, provider)
 	}
 	return out
 }
