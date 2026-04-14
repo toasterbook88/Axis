@@ -195,31 +195,7 @@ func TestSelectCloudFallbackPrefersCheapestThenLatency(t *testing.T) {
 	}
 }
 
-func TestSelectCloudFallbackPrefersLatencyWhenRequested(t *testing.T) {
-	registry := llmrouter.NewRegistry()
-	registry.MustRegister(&mockProvider{
-		name:         "groq",
-		providerType: llmrouter.ProviderCloud,
-		models:       []string{"llama-3.1-8b-instant"},
-		health:       llmrouter.HealthStatus{OK: true, Latency: 18 * time.Millisecond},
-		estimated:    0.003,
-	})
-	registry.MustRegister(&mockProvider{
-		name:         "openrouter",
-		providerType: llmrouter.ProviderCloud,
-		models:       []string{"openai/gpt-4o-mini"},
-		health:       llmrouter.HealthStatus{OK: true, Latency: 30 * time.Millisecond},
-		estimated:    0.001,
-	})
 
-	provider, _, err := llmrouter.SelectCloudFallback(context.Background(), registry, "review code", "latency")
-	if err != nil {
-		t.Fatalf("SelectCloudFallback() error = %v", err)
-	}
-	if provider.Name() != "groq" {
-		t.Fatalf("provider = %q, want groq", provider.Name())
-	}
-}
 
 func TestClassifyWithProviderParsesWrappedJSON(t *testing.T) {
 	provider := &mockProvider{

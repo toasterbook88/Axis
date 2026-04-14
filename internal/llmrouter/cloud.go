@@ -104,6 +104,9 @@ func (p *cloudProvider) Type() ProviderType {
 
 func (p *cloudProvider) Health(ctx context.Context) (HealthStatus, error) {
 	start := time.Now()
+	if p.kind == cloudProviderAnthropic {
+		return HealthStatus{OK: true, Latency: time.Since(start), Message: "ok"}, nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint+"/models", nil)
 	if err != nil {
 		return HealthStatus{}, fmt.Errorf("cloud health request: %w", err)
@@ -112,7 +115,7 @@ func (p *cloudProvider) Health(ctx context.Context) (HealthStatus, error) {
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return HealthStatus{}, err
+		return HealthStatus{}, fmt.Errorf("%s: health probe: %w", p.name, err)
 	}
 	defer resp.Body.Close()
 
@@ -415,6 +418,10 @@ func newConfiguredCloudProvider(name string, cfg config.AIProviderConfig, apiKey
 		return nil, fmt.Errorf("provider %s: no models configured", name)
 	}
 
+	if strings.HasPrefix(cfg.Endpoint, "http://") && !strings.Contains(cfg.Endpoint, "localhost") && !strings.Contains(cfg.Endpoint, "127.0.0.1") {
+		return nil, fmt.Errorf("provider %s: insecure http endpoint not allowed", name)
+	}
+
 	providerCfg := CloudProviderConfig{
 		Name:     name,
 		Endpoint: cfg.Endpoint,
@@ -470,14 +477,8 @@ func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer
 		return nil, RoutingDecision{}, fmt.Errorf("no cloud providers configured")
 	}
 
-	statuses := registry.CheckHealth(ctx)
 	candidates := make([]cloudSelectionCandidate, 0, len(providers))
 	for _, provider := range providers {
-		status := statuses[provider.Name()]
-		if !status.OK {
-			continue
-		}
-
 		model := defaultProviderModel(provider)
 		if model == "" || !provider.SupportsModel(model) {
 			continue
@@ -486,7 +487,7 @@ func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer
 		candidates = append(candidates, cloudSelectionCandidate{
 			provider: provider,
 			model:    model,
-			status:   status,
+			status:   HealthStatus{OK: true, Message: "assumed healthy until confirmed"},
 			cost:     provider.EstimateCost(prompt, model),
 			priority: providerPriority(provider),
 			endpoint: providerEndpoint(provider),

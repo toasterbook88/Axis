@@ -45,6 +45,7 @@ var llmInferRequirementsFn = func(prompt string, engine *llmrouter.Engine) llmIn
 	})
 	if sig.Class == "" {
 		sig.Class = reqs.Workload.Class
+		sig.Source = llmrouter.SourceReflex
 	}
 	return llmInferenceResult{reqs: reqs, sig: sig}
 }
