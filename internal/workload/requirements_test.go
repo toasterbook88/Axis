@@ -1,10 +1,26 @@
 package workload
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+// --- Classifier seam ---
+
+// mockClassifier is a test double for the Classifier interface.
+type mockClassifier struct {
+	result models.WorkloadProfileMatch
+	err    error
+	calls  int
+}
+
+func (m *mockClassifier) ClassifyWorkload(_ context.Context, _, _ string) (models.WorkloadProfileMatch, error) {
+	m.calls++
+	return m.result, m.err
+}
 
 func TestMatchIgnoresHardwareInventoryPrompts(t *testing.T) {
 	t.Run("generic hardware description stays unknown", func(t *testing.T) {
@@ -349,6 +365,162 @@ func TestOllamaRequirement(t *testing.T) {
 			t.Error("70b description should trigger ollama requirement")
 		}
 	})
+}
+
+// --- Classifier seam tests ---
+
+func TestInferRequirements_WithClassifier_UsesSemanticResult(t *testing.T) {
+	// When a Classifier is provided and succeeds, InferRequirements must use
+	// its WorkloadClass as the primary class — not the legacy string-matcher.
+	mc := &mockClassifier{
+		result: models.WorkloadProfileMatch{
+			Class: models.ClassDockerBuild,
+			Notes: []string{"semantic: detected docker intent"},
+		},
+	}
+
+	// The description alone would NOT trigger ClassDockerBuild via legacy path.
+	reqs := InferRequirements("containerize the application", InferRequirementsOptions{
+		Classifier: mc,
+	})
+
+	if reqs.Workload.Class != models.ClassDockerBuild {
+		t.Errorf("class = %q, want %q", reqs.Workload.Class, models.ClassDockerBuild)
+	}
+	if mc.calls != 1 {
+		t.Errorf("classifier called %d times, want 1", mc.calls)
+	}
+	// Profile for docker-build must have been applied (requires docker tool).
+	foundDocker := false
+	for _, tool := range reqs.RequiredTools {
+		if tool == "docker" {
+			foundDocker = true
+		}
+	}
+	if !foundDocker {
+		t.Errorf("docker tool not applied from docker-build profile, tools=%v", reqs.RequiredTools)
+	}
+}
+
+func TestInferRequirements_WithClassifier_FallsBackOnError(t *testing.T) {
+	// When the Classifier returns an error, InferRequirements must silently
+	// fall back to the legacy string-matcher and still produce a valid result.
+	mc := &mockClassifier{
+		err: errors.New("ollama unreachable"),
+	}
+
+	// "go build" is unambiguously matched by the legacy path.
+	reqs := InferRequirements("go build ./...", InferRequirementsOptions{
+		Classifier: mc,
+	})
+
+	if reqs.Workload.Class != models.ClassGoBuild {
+		t.Errorf("class = %q, want %q (legacy fallback should have fired)", reqs.Workload.Class, models.ClassGoBuild)
+	}
+	if mc.calls != 1 {
+		t.Errorf("classifier called %d times, want 1", mc.calls)
+	}
+}
+
+func TestInferRequirements_WithNilClassifier_UsesLegacy(t *testing.T) {
+	// An explicit nil Classifier is treated identically to the no-opts path.
+	reqs := InferRequirements("go test ./...", InferRequirementsOptions{
+		Classifier: nil,
+	})
+
+	if reqs.Workload.Class != models.ClassGoBuild {
+		t.Errorf("class = %q, want go-build (legacy path)", reqs.Workload.Class)
+	}
+}
+
+func TestInferRequirements_NoOpts_UsesLegacy(t *testing.T) {
+	// Original call-site: no opts at all — must behave exactly as before.
+	reqs := InferRequirements("docker build -t myapp .")
+	if reqs.Workload.Class != models.ClassDockerBuild {
+		t.Errorf("class = %q, want docker-build", reqs.Workload.Class)
+	}
+}
+
+func TestInferRequirements_WithClassifier_ExtraContextForwarded(t *testing.T) {
+	// ExtraContext should be forwarded to the classifier. We verify this by
+	// capturing it in the mock.
+	type captureClassifier struct {
+		mockClassifier
+		capturedExtra string
+	}
+	cc := &captureClassifier{
+		mockClassifier: mockClassifier{result: models.WorkloadProfileMatch{Class: models.ClassBatchScript}},
+	}
+	// Override ClassifyWorkload to capture extraContext.
+	var capturedExtra string
+	mc := classifierFunc(func(_ context.Context, _, extra string) (models.WorkloadProfileMatch, error) {
+		capturedExtra = extra
+		return models.WorkloadProfileMatch{Class: models.ClassBatchScript}, nil
+	})
+	_ = cc // suppress unused warning
+
+	InferRequirements("process data", InferRequirementsOptions{
+		Classifier:   mc,
+		ExtraContext: "node=medulla",
+	})
+
+	if capturedExtra != "node=medulla" {
+		t.Errorf("extraContext = %q, want %q", capturedExtra, "node=medulla")
+	}
+}
+
+func TestInferRequirements_WithClassifier_ProfileStillApplied(t *testing.T) {
+	// Even when the semantic classifier picks the class, the workload profile
+	// (RAM floors, required tools, etc.) must still be applied via Apply().
+	mc := &mockClassifier{
+		result: models.WorkloadProfileMatch{Class: models.ClassLlamaServer},
+	}
+
+	reqs := InferRequirements("start the inference backend", InferRequirementsOptions{
+		Classifier: mc,
+	})
+
+	if reqs.Workload.Class != models.ClassLlamaServer {
+		t.Errorf("class = %q, want llama-server", reqs.Workload.Class)
+	}
+	// llama-server profile: MinFreeRAMMB=6144, RequiredTools=["llama-server"]
+	if reqs.MinFreeRAMMB != 6144 {
+		t.Errorf("MinFreeRAMMB = %d, want 6144 (from llama-server profile)", reqs.MinFreeRAMMB)
+	}
+	foundTool := false
+	for _, tool := range reqs.RequiredTools {
+		if tool == "llama-server" {
+			foundTool = true
+		}
+	}
+	if !foundTool {
+		t.Errorf("llama-server tool not in RequiredTools, got %v", reqs.RequiredTools)
+	}
+}
+
+func TestInferRequirements_WithClassifier_NoPanic(t *testing.T) {
+	// resolveWorkloadMatch always passes context.Background() to the classifier,
+	// so InferRequirements is context-free at its own call boundary.
+	// This test documents that invariant and verifies no panic occurs.
+	mc := &mockClassifier{
+		result: models.WorkloadProfileMatch{Class: models.ClassGoBuild},
+	}
+	reqs := InferRequirements("go build ./cmd/...", InferRequirementsOptions{
+		Classifier: mc,
+	})
+	if reqs.Workload.Class != models.ClassGoBuild {
+		t.Errorf("class = %q, want go-build", reqs.Workload.Class)
+	}
+	if mc.calls != 1 {
+		t.Errorf("classifier called %d times, want 1", mc.calls)
+	}
+}
+
+// classifierFunc is an adapter that lets a plain function implement Classifier.
+type classifierFunc func(ctx context.Context, prompt, extraContext string) (models.WorkloadProfileMatch, error)
+
+func (f classifierFunc) ClassifyWorkload(ctx context.Context, prompt, extra string) (models.WorkloadProfileMatch, error) {
+	return f(ctx, prompt, extra)
 }
 
 // --- Backend inference ---

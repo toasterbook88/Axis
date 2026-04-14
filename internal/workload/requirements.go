@@ -1,6 +1,7 @@
 package workload
 
 import (
+	"context"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -8,12 +9,18 @@ import (
 
 // InferRequirements derives TaskRequirements from a task description string.
 // It uses structured workload profiles to determine hardware and tool needs.
-func InferRequirements(desc string) models.TaskRequirements {
+//
+// An optional InferRequirementsOptions may be provided to inject a semantic
+// Classifier. When a Classifier is present it determines the primary
+// WorkloadClass; the legacy string-matcher is used only when the Classifier
+// is nil or returns an error. All existing call-sites that pass no options
+// continue to use the legacy path unchanged.
+func InferRequirements(desc string, opts ...InferRequirementsOptions) models.TaskRequirements {
 	reqs := models.TaskRequirements{
 		Description: desc,
 	}
 
-	match := matchFromSignals(analyzeDescription(desc))
+	match := resolveWorkloadMatch(desc, opts)
 	Apply(match, &reqs)
 
 	// Context window inference (additive to profile)
@@ -205,4 +212,25 @@ func hasNonOllamaExplicitBackend(d descriptionView) bool {
 		"apple intelligence",
 		"apple foundation models",
 	)
+}
+
+// resolveWorkloadMatch selects the primary WorkloadClass for a description.
+//
+// When opts contains a non-nil Classifier it delegates to that classifier and
+// uses the result if no error is returned. On error it falls through to the
+// legacy string-matcher so the caller is never left without a classification.
+//
+// The legacy path (matchFromSignals + analyzeDescription) is always used when
+// no opts are provided — preserving the behaviour of all existing call-sites.
+func resolveWorkloadMatch(desc string, opts []InferRequirementsOptions) models.WorkloadProfileMatch {
+	if len(opts) > 0 && opts[0].Classifier != nil {
+		match, err := opts[0].Classifier.ClassifyWorkload(
+			context.Background(), desc, opts[0].ExtraContext,
+		)
+		if err == nil {
+			return match
+		}
+		// Classifier failed — fall through to legacy.
+	}
+	return matchFromSignals(analyzeDescription(desc))
 }
