@@ -444,20 +444,11 @@ func TestInferRequirements_NoOpts_UsesLegacy(t *testing.T) {
 func TestInferRequirements_WithClassifier_ExtraContextForwarded(t *testing.T) {
 	// ExtraContext should be forwarded to the classifier. We verify this by
 	// capturing it in the mock.
-	type captureClassifier struct {
-		mockClassifier
-		capturedExtra string
-	}
-	cc := &captureClassifier{
-		mockClassifier: mockClassifier{result: models.WorkloadProfileMatch{Class: models.ClassBatchScript}},
-	}
-	// Override ClassifyWorkload to capture extraContext.
 	var capturedExtra string
 	mc := classifierFunc(func(_ context.Context, _, extra string) (models.WorkloadProfileMatch, error) {
 		capturedExtra = extra
 		return models.WorkloadProfileMatch{Class: models.ClassBatchScript}, nil
 	})
-	_ = cc // suppress unused warning
 
 	InferRequirements("process data", InferRequirementsOptions{
 		Classifier:   mc,
@@ -466,6 +457,31 @@ func TestInferRequirements_WithClassifier_ExtraContextForwarded(t *testing.T) {
 
 	if capturedExtra != "node=medulla" {
 		t.Errorf("extraContext = %q, want %q", capturedExtra, "node=medulla")
+	}
+}
+
+func TestInferRequirements_WithPrecomputedMatch_SkipsClassifier(t *testing.T) {
+	mc := &mockClassifier{
+		result: models.WorkloadProfileMatch{Class: models.ClassGoBuild},
+	}
+	match := models.WorkloadProfileMatch{
+		Class: models.ClassDockerBuild,
+		Notes: []string{"precomputed"},
+	}
+
+	reqs := InferRequirements("containerize the application", InferRequirementsOptions{
+		Match:      &match,
+		Classifier: mc,
+	})
+
+	if mc.calls != 0 {
+		t.Fatalf("classifier called %d times, want 0", mc.calls)
+	}
+	if reqs.Workload.Class != models.ClassDockerBuild {
+		t.Fatalf("class = %q, want %q", reqs.Workload.Class, models.ClassDockerBuild)
+	}
+	if len(reqs.Workload.Notes) != 1 || reqs.Workload.Notes[0] != "precomputed" {
+		t.Fatalf("notes = %v, want precomputed marker", reqs.Workload.Notes)
 	}
 }
 

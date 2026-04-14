@@ -216,6 +216,10 @@ func hasNonOllamaExplicitBackend(d descriptionView) bool {
 
 // resolveWorkloadMatch selects the primary WorkloadClass for a description.
 //
+// When opts contains a non-nil Match it is returned immediately. This lets
+// callers reuse an existing semantic classification without paying for a
+// second classifier invocation.
+//
 // When opts contains a non-nil Classifier it delegates to that classifier and
 // uses the result if no error is returned. On error it falls through to the
 // legacy string-matcher so the caller is never left without a classification.
@@ -223,6 +227,9 @@ func hasNonOllamaExplicitBackend(d descriptionView) bool {
 // The legacy path (matchFromSignals + analyzeDescription) is always used when
 // no opts are provided — preserving the behaviour of all existing call-sites.
 func resolveWorkloadMatch(desc string, opts []InferRequirementsOptions) models.WorkloadProfileMatch {
+	if len(opts) > 0 && opts[0].Match != nil {
+		return *opts[0].Match
+	}
 	if len(opts) > 0 && opts[0].Classifier != nil {
 		match, err := opts[0].Classifier.ClassifyWorkload(
 			context.Background(), desc, opts[0].ExtraContext,
