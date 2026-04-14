@@ -60,11 +60,88 @@ type ChatConfig struct {
 	DefaultModel string `json:"default_model,omitempty" yaml:"default_model,omitempty"`
 }
 
+// AIModelConfig describes a single model within a provider config.
+type AIModelConfig struct {
+	Name      string   `json:"name" yaml:"name"`
+	Aliases   []string `json:"aliases,omitempty" yaml:"aliases,omitempty"`
+	CostPer1K float64  `json:"cost_per_1k,omitempty" yaml:"cost_per_1k,omitempty"`
+}
+
+// AIProviderConfig describes a single AI inference provider in nodes.yaml.
+// The section is optional; omitting it entirely is valid.
+//
+// Example (nodes.yaml):
+//
+//	ai_providers:
+//	  ollama-local:
+//	    type: local
+//	    endpoint: http://localhost:11434
+//	    enabled: true
+//	  openai:
+//	    type: cloud
+//	    api_key_env: OPENAI_API_KEY
+//	    enabled: true
+//	    priority: 80
+type AIProviderConfig struct {
+	// Type is "local" or "cloud".
+	Type string `json:"type" yaml:"type"`
+
+	// Endpoint is the base URL for local providers (e.g. http://localhost:11434).
+	// Ignored for cloud providers (they have fixed endpoints).
+	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+
+	// APIKeyEnv is the environment variable that holds the API key.
+	// Evaluated at runtime by internal/secrets.
+	APIKeyEnv string `json:"api_key_env,omitempty" yaml:"api_key_env,omitempty"`
+
+	// APIKeyFile is a path to a file whose contents are the API key.
+	// Used as fallback if APIKeyEnv is unset or empty.
+	APIKeyFile string `json:"api_key_file,omitempty" yaml:"api_key_file,omitempty"`
+
+	// Priority is 0–100 (higher = preferred when multiple providers are eligible).
+	Priority int `json:"priority,omitempty" yaml:"priority,omitempty"`
+
+	// Enabled controls whether this provider is considered for routing.
+	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+
+	// Models enumerates known models for this provider.
+	// Auto-detected local providers (Ollama) do not require this.
+	Models []AIModelConfig `json:"models,omitempty" yaml:"models,omitempty"`
+}
+
+// InferenceConfig holds optional cluster-wide inference preferences.
+//
+// Example (nodes.yaml):
+//
+//	inference:
+//	  default_mode: local
+//	  prefer: latency
+//	  max_cost_per_request: 0.10
+type InferenceConfig struct {
+	// DefaultMode controls which providers are considered by default.
+	// Valid values: "local" (default), "cloud", "auto".
+	DefaultMode string `json:"default_mode,omitempty" yaml:"default_mode,omitempty"`
+
+	// Prefer controls the tie-breaker when multiple providers are eligible.
+	// Valid values: "latency" (default), "cost", "quality".
+	Prefer string `json:"prefer,omitempty" yaml:"prefer,omitempty"`
+
+	// MaxCostPerRequest is a hard cap in USD. Requests estimated to exceed
+	// this are rejected before execution. 0 means no cap.
+	MaxCostPerRequest float64 `json:"max_cost_per_request,omitempty" yaml:"max_cost_per_request,omitempty"`
+
+	// BudgetAlertThreshold triggers a warning when daily spend exceeds this
+	// amount in USD. 0 means no alert.
+	BudgetAlertThreshold float64 `json:"budget_alert_threshold,omitempty" yaml:"budget_alert_threshold,omitempty"`
+}
+
 // Config is the top-level AXIS configuration.
 type Config struct {
-	Nodes     []NodeConfig     `json:"nodes" yaml:"nodes"`
-	Discovery *DiscoveryConfig `json:"discovery,omitempty" yaml:"discovery,omitempty"`
-	Chat      *ChatConfig      `json:"chat,omitempty" yaml:"chat,omitempty"`
+	Nodes       []NodeConfig                `json:"nodes" yaml:"nodes"`
+	Discovery   *DiscoveryConfig            `json:"discovery,omitempty" yaml:"discovery,omitempty"`
+	Chat        *ChatConfig                 `json:"chat,omitempty" yaml:"chat,omitempty"`
+	AIProviders map[string]AIProviderConfig `json:"ai_providers,omitempty" yaml:"ai_providers,omitempty"`
+	Inference   *InferenceConfig            `json:"inference,omitempty" yaml:"inference,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.

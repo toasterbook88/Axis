@@ -34,6 +34,8 @@ import (
 	"github.com/toasterbook88/axis/internal/workload"
 )
 
+const maxGenerateResponseBytes = 1 << 20
+
 // ClassifySource records how a classification was produced.
 type ClassifySource string
 
@@ -203,7 +205,7 @@ func (e *Engine) classifyViaSemantic(ctx context.Context, prompt, extraContext s
 		return models.ClassUnknown, IntentSignal{}, fmt.Errorf("ollama status %d", resp.StatusCode)
 	}
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxGenerateResponseBytes))
 	if err != nil {
 		return models.ClassUnknown, IntentSignal{}, fmt.Errorf("read body: %w", err)
 	}

@@ -219,6 +219,199 @@ func TestDefaultConfigPath(t *testing.T) {
 	}
 }
 
+// --- AI providers + inference ---
+
+func TestLoad_AIProviders_ParsesCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+ai_providers:
+  ollama:
+    type: local
+    endpoint: "http://localhost:11434"
+    priority: 10
+    enabled: true
+    models:
+      - name: granite3.1-moe:1b
+        aliases: ["fast", "cheap"]
+        cost_per_1k: 0
+  openai:
+    type: cloud
+    api_key_env: OPENAI_API_KEY
+    api_key_file: ~/.config/axis/openai.key
+    priority: 5
+    enabled: false
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with ai_providers: %v", err)
+	}
+	if len(cfg.AIProviders) != 2 {
+		t.Fatalf("expected 2 ai_providers, got %d", len(cfg.AIProviders))
+	}
+	ollama, ok := cfg.AIProviders["ollama"]
+	if !ok {
+		t.Fatal("missing 'ollama' provider")
+	}
+	if ollama.Type != "local" {
+		t.Errorf("ollama.type = %q, want local", ollama.Type)
+	}
+	if ollama.Endpoint != "http://localhost:11434" {
+		t.Errorf("ollama.endpoint = %q", ollama.Endpoint)
+	}
+	if ollama.Priority != 10 {
+		t.Errorf("ollama.priority = %d, want 10", ollama.Priority)
+	}
+	if !ollama.Enabled {
+		t.Error("ollama.enabled should be true")
+	}
+	if len(ollama.Models) != 1 || ollama.Models[0].Name != "granite3.1-moe:1b" {
+		t.Errorf("ollama.models = %+v", ollama.Models)
+	}
+	if len(ollama.Models[0].Aliases) != 2 {
+		t.Fatalf("ollama.models[0].aliases = %+v, want 2 aliases", ollama.Models[0].Aliases)
+	}
+
+	openai := cfg.AIProviders["openai"]
+	if openai.APIKeyEnv != "OPENAI_API_KEY" {
+		t.Errorf("openai.api_key_env = %q", openai.APIKeyEnv)
+	}
+	if openai.APIKeyFile != "~/.config/axis/openai.key" {
+		t.Errorf("openai.api_key_file = %q", openai.APIKeyFile)
+	}
+	if openai.Enabled {
+		t.Error("openai.enabled should be false")
+	}
+}
+
+func TestLoad_AIProviders_Absent_BackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load without ai_providers: %v", err)
+	}
+	if len(cfg.AIProviders) != 0 {
+		t.Errorf("expected empty ai_providers map, got %d entries", len(cfg.AIProviders))
+	}
+	if cfg.Inference != nil {
+		t.Errorf("expected nil inference config, got %+v", cfg.Inference)
+	}
+}
+
+func TestLoad_InferenceConfig_Parses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+inference:
+  default_mode: local
+  prefer: latency
+  max_cost_per_request: 0.01
+  budget_alert_threshold: 5.0
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with inference: %v", err)
+	}
+	if cfg.Inference == nil {
+		t.Fatal("expected inference config, got nil")
+	}
+	if cfg.Inference.DefaultMode != "local" {
+		t.Errorf("inference.default_mode = %q, want local", cfg.Inference.DefaultMode)
+	}
+	if cfg.Inference.Prefer != "latency" {
+		t.Errorf("inference.prefer = %q, want latency", cfg.Inference.Prefer)
+	}
+	if cfg.Inference.MaxCostPerRequest != 0.01 {
+		t.Errorf("inference.max_cost_per_request = %v, want 0.01", cfg.Inference.MaxCostPerRequest)
+	}
+	if cfg.Inference.BudgetAlertThreshold != 5.0 {
+		t.Errorf("inference.budget_alert_threshold = %v, want 5.0", cfg.Inference.BudgetAlertThreshold)
+	}
+}
+
+func TestLoad_AIProvider_UnknownField_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+ai_providers:
+  ollama:
+    type: local
+    unknown_field: oops
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown field in ai_providers entry")
+	}
+	if !strings.Contains(err.Error(), "unknown_field") {
+		t.Logf("error was: %v", err)
+		// Not all YAML decoders surface the field name; accept any error.
+	}
+}
+
+func TestLoad_AIProviderModel_UnknownField_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+ai_providers:
+  ollama:
+    type: local
+    models:
+      - name: granite3.1-moe:1b
+        unexpected: true
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown field in ai_providers model entry")
+	}
+}
+
+func TestLoad_InferenceConfig_UnknownField_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+inference:
+  default_mode: local
+  typo_field: bad
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown field in inference block")
+	}
+}
+
 func TestLoad_ChatDefaultModel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nodes.yaml")

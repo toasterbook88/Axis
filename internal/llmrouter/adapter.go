@@ -35,6 +35,6 @@ func (e *Engine) ClassifyWorkload(ctx context.Context, prompt, extraContext stri
 
 	return models.WorkloadProfileMatch{
 		Class: class,
-		Notes: sig.Notes,
+		Notes: append([]string(nil), sig.Notes...),
 	}, nil
 }

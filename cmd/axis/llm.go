@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/llmrouter"
@@ -14,9 +15,46 @@ import (
 	"github.com/toasterbook88/axis/internal/workload"
 )
 
-// llmClassifyFn is the classify call, injected in tests to avoid a real Ollama.
-var llmClassifyFn = func(ctx context.Context, e *llmrouter.Engine, prompt, extra string) (models.WorkloadClass, llmrouter.IntentSignal, error) {
-	return e.Classify(ctx, prompt, extra)
+type llmInferenceResult struct {
+	reqs models.TaskRequirements
+	sig  llmrouter.IntentSignal
+}
+
+var llmInferRequirementsFn = func(prompt string, engine *llmrouter.Engine) llmInferenceResult {
+	classifier := &capturingClassifier{engine: engine}
+	reqs := placement.InferRequirements(prompt, workload.InferRequirementsOptions{
+		Classifier: classifier,
+	})
+	if classifier.sig.Class == "" {
+		classifier.sig = llmrouter.IntentSignal{
+			Class:      reqs.Workload.Class,
+			Confidence: 1.0,
+			Source:     llmrouter.SourceReflex,
+			Notes:      append([]string(nil), reqs.Workload.Notes...),
+		}
+	}
+	return llmInferenceResult{reqs: reqs, sig: classifier.sig}
+}
+
+type capturingClassifier struct {
+	engine *llmrouter.Engine
+	sig    llmrouter.IntentSignal
+}
+
+func (c *capturingClassifier) ClassifyWorkload(ctx context.Context, prompt, extraContext string) (models.WorkloadProfileMatch, error) {
+	if err := ctx.Err(); err != nil {
+		return models.WorkloadProfileMatch{}, err
+	}
+
+	class, sig, err := c.engine.Classify(ctx, prompt, extraContext)
+	if err != nil {
+		return models.WorkloadProfileMatch{}, err
+	}
+	c.sig = sig
+	return models.WorkloadProfileMatch{
+		Class: class,
+		Notes: append([]string(nil), sig.Notes...),
+	}, nil
 }
 
 // llmResult is the structured output for axis llm. Exported fields allow
@@ -50,7 +88,7 @@ func llmCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "llm <prompt>",
-		Short: "Classify a prompt and show workload routing (Phase 2: semantic reflex)",
+		Short: "Classify a prompt and show hybrid AI router requirements",
 		Long: "Classifies a task prompt using a local LLM (via Ollama) into a WorkloadClass\n" +
 			"and derives hardware requirements for placement.\n\n" +
 			"The classifier uses a lightweight local model (default: granite3.1-moe:1b)\n" +
@@ -78,33 +116,24 @@ func llmCmd() *cobra.Command {
 			}
 			engine := llmrouter.NewEngine(engineOpts...)
 
-			// Classify with latency budget.
-			ctx, cancel := context.WithTimeout(context.Background(), timeout+50*time.Millisecond)
-			defer cancel()
-
 			sp := ui.NewSpinner()
 			sp.Start("Classifying...")
-			class, sig, _ := llmClassifyFn(ctx, engine, prompt, "")
+			inference := llmInferRequirementsFn(prompt, engine)
 			sp.Stop("")
-
-			// Derive full TaskRequirements via the seam.
-			reqs := placement.InferRequirements(prompt, workload.InferRequirementsOptions{
-				Classifier: engine,
-			})
 
 			result := llmResult{
 				Prompt:     prompt,
-				Class:      string(class),
-				Confidence: sig.Confidence,
-				Source:     string(sig.Source),
-				Signals:    sig.Signals,
-				Notes:      sig.Notes,
+				Class:      string(inference.reqs.Workload.Class),
+				Confidence: inference.sig.Confidence,
+				Source:     string(inference.sig.Source),
+				Signals:    inference.sig.Signals,
+				Notes:      inference.sig.Notes,
 				Requirements: llmRequirements{
-					MinFreeRAMMB:      reqs.MinFreeRAMMB,
-					RequiredTools:     reqs.RequiredTools,
-					PreferredBackends: reqs.PreferredBackends,
-					PrefersTurboQuant: reqs.PrefersTurboQuant,
-					ContextWindow:     reqs.ContextWindowTokens,
+					MinFreeRAMMB:      inference.reqs.MinFreeRAMMB,
+					RequiredTools:     inference.reqs.RequiredTools,
+					PreferredBackends: inference.reqs.PreferredBackends,
+					PrefersTurboQuant: inference.reqs.PrefersTurboQuant,
+					ContextWindow:     inference.reqs.ContextWindowTokens,
 				},
 			}
 
@@ -126,7 +155,7 @@ func llmCmd() *cobra.Command {
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "Ollama endpoint (default: http://localhost:11434)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 150*time.Millisecond, "Classifier latency budget")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, yaml")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show routing decision without executing (always true in Phase 2)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show routing decision without executing (classification preview only)")
 
 	return cmd
 }
@@ -183,8 +212,15 @@ func sourceLabel(source string) string {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	if max <= 0 {
+		return "…"
+	}
+	if utf8.RuneCountInString(s) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+	if max == 1 {
+		return "…"
+	}
+	runes := []rune(s)
+	return string(runes[:max-1]) + "…"
 }

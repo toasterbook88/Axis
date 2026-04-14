@@ -32,6 +32,11 @@ type Classifier interface {
 // InferRequirementsOptions controls optional behaviour of InferRequirements.
 // All fields are optional; the zero value produces legacy behaviour.
 type InferRequirementsOptions struct {
+	// Match, if non-nil, is used as the primary classification result.
+	// This takes precedence over Classifier and avoids redundant inference calls
+	// when the caller already has a semantic match.
+	Match *models.WorkloadProfileMatch
+
 	// Classifier, if non-nil, is invoked to determine the primary WorkloadClass.
 	// A nil Classifier is equivalent to calling InferRequirements with no options.
 	Classifier Classifier

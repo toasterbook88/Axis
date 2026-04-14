@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -10,14 +9,14 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
-// stubLLMClassify replaces llmClassifyFn for the duration of a test.
-func stubLLMClassify(t *testing.T, class models.WorkloadClass, sig llmrouter.IntentSignal) func() {
+// stubLLMInferRequirements replaces llmInferRequirementsFn for the duration of a test.
+func stubLLMInferRequirements(t *testing.T, result llmInferenceResult) func() {
 	t.Helper()
-	prev := llmClassifyFn
-	llmClassifyFn = func(_ context.Context, _ *llmrouter.Engine, _, _ string) (models.WorkloadClass, llmrouter.IntentSignal, error) {
-		return class, sig, nil
+	prev := llmInferRequirementsFn
+	llmInferRequirementsFn = func(_ string, _ *llmrouter.Engine) llmInferenceResult {
+		return result
 	}
-	return func() { llmClassifyFn = prev }
+	return func() { llmInferRequirementsFn = prev }
 }
 
 // --- Surface tests ---
@@ -63,11 +62,18 @@ func TestLLMCmdRequiresPrompt(t *testing.T) {
 // --- Text output ---
 
 func TestLLMCmd_TextOutput_SemanticResult(t *testing.T) {
-	restore := stubLLMClassify(t, models.ClassGoBuild, llmrouter.IntentSignal{
-		Class:      models.ClassGoBuild,
-		Confidence: 0.95,
-		Source:     llmrouter.SourceSemantic,
-		Signals:    []string{"go", "build"},
+	restore := stubLLMInferRequirements(t, llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassGoBuild,
+			},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassGoBuild,
+			Confidence: 0.95,
+			Source:     llmrouter.SourceSemantic,
+			Signals:    []string{"go", "build"},
+		},
 	})
 	defer restore()
 
@@ -100,11 +106,18 @@ func TestLLMCmd_TextOutput_SemanticResult(t *testing.T) {
 }
 
 func TestLLMCmd_TextOutput_ReflexFallback(t *testing.T) {
-	restore := stubLLMClassify(t, models.ClassDockerBuild, llmrouter.IntentSignal{
-		Class:      models.ClassDockerBuild,
-		Confidence: 1.0,
-		Source:     llmrouter.SourceReflex,
-		Notes:      []string{"semantic fallback: ollama unreachable"},
+	restore := stubLLMInferRequirements(t, llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassDockerBuild,
+			},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassDockerBuild,
+			Confidence: 1.0,
+			Source:     llmrouter.SourceReflex,
+			Notes:      []string{"semantic fallback: ollama unreachable"},
+		},
 	})
 	defer restore()
 
@@ -129,10 +142,17 @@ func TestLLMCmd_TextOutput_ReflexFallback(t *testing.T) {
 }
 
 func TestLLMCmd_TextOutput_DryRunLabel(t *testing.T) {
-	restore := stubLLMClassify(t, models.ClassBatchScript, llmrouter.IntentSignal{
-		Class:      models.ClassBatchScript,
-		Confidence: 0.80,
-		Source:     llmrouter.SourceSemantic,
+	restore := stubLLMInferRequirements(t, llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassBatchScript,
+			},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassBatchScript,
+			Confidence: 0.80,
+			Source:     llmrouter.SourceSemantic,
+		},
 	})
 	defer restore()
 
@@ -152,11 +172,18 @@ func TestLLMCmd_TextOutput_DryRunLabel(t *testing.T) {
 // --- JSON output ---
 
 func TestLLMCmd_JSONOutput(t *testing.T) {
-	restore := stubLLMClassify(t, models.ClassRepoAnalysis, llmrouter.IntentSignal{
-		Class:      models.ClassRepoAnalysis,
-		Confidence: 0.91,
-		Source:     llmrouter.SourceSemantic,
-		Signals:    []string{"review", "codebase"},
+	restore := stubLLMInferRequirements(t, llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassRepoAnalysis,
+			},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassRepoAnalysis,
+			Confidence: 0.91,
+			Source:     llmrouter.SourceSemantic,
+			Signals:    []string{"review", "codebase"},
+		},
 	})
 	defer restore()
 
@@ -192,10 +219,19 @@ func TestLLMCmd_JSONOutput(t *testing.T) {
 func TestLLMCmd_RequirementsInOutput(t *testing.T) {
 	// When classifier returns llama-server, the profile (6144 MB, llama-server tool)
 	// should appear in the JSON output — verifying the placement seam fires.
-	restore := stubLLMClassify(t, models.ClassLlamaServer, llmrouter.IntentSignal{
-		Class:      models.ClassLlamaServer,
-		Confidence: 0.88,
-		Source:     llmrouter.SourceSemantic,
+	restore := stubLLMInferRequirements(t, llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassLlamaServer,
+			},
+			MinFreeRAMMB:  6144,
+			RequiredTools: []string{"llama-server"},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassLlamaServer,
+			Confidence: 0.88,
+			Source:     llmrouter.SourceSemantic,
+		},
 	})
 	defer restore()
 
@@ -228,10 +264,17 @@ func TestLLMCmd_RequirementsInOutput(t *testing.T) {
 
 func TestLLMCmd_UnknownClass_NoRequirements(t *testing.T) {
 	// unknown class → zero RAM, no tools in the profile.
-	restore := stubLLMClassify(t, models.ClassUnknown, llmrouter.IntentSignal{
-		Class:      models.ClassUnknown,
-		Confidence: 0.55,
-		Source:     llmrouter.SourceSemantic,
+	restore := stubLLMInferRequirements(t, llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassUnknown,
+			},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassUnknown,
+			Confidence: 0.55,
+			Source:     llmrouter.SourceSemantic,
+		},
 	})
 	defer restore()
 
@@ -253,5 +296,14 @@ func TestLLMCmd_UnknownClass_NoRequirements(t *testing.T) {
 	}
 	if result.Requirements.MinFreeRAMMB != 0 {
 		t.Errorf("MinFreeRAMMB = %d, want 0 for unknown class", result.Requirements.MinFreeRAMMB)
+	}
+}
+
+func TestTruncate_UTF8SafeAndSmallLimits(t *testing.T) {
+	if got := truncate("hello", 0); got != "…" {
+		t.Fatalf("truncate max=0 = %q, want %q", got, "…")
+	}
+	if got := truncate("🙂🙂🙂", 2); got != "🙂…" {
+		t.Fatalf("truncate utf8 = %q, want %q", got, "🙂…")
 	}
 }
