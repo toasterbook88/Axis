@@ -49,7 +49,7 @@ type ModelCapability struct {
 	MaxTokens int
 }
 
-// GenerateResult holds the outcome of a single Provider.Generate call.
+// GenerateResult holds the outcome of a single Provider.Send call.
 type GenerateResult struct {
 	// Response is the model's text output.
 	Response string
@@ -116,8 +116,12 @@ type Provider interface {
 	// model may be a full tag ("llama3.1:8b") or an alias ("fast").
 	SupportsModel(model string) bool
 
-	// Generate runs a single inference call and returns the result.
+	// EstimateCost returns the estimated USD cost of a single Send call.
+	// Implementations may return 0 when the estimate is unknown.
+	EstimateCost(prompt, model string) float64
+
+	// Send runs a single inference call and returns the result.
 	// Implementations must respect ctx deadlines and never contact cloud
 	// endpoints unless Type() == ProviderCloud.
-	Generate(ctx context.Context, prompt, model string) (GenerateResult, error)
+	Send(ctx context.Context, prompt, model string) (GenerateResult, error)
 }
