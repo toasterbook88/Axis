@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
@@ -15,46 +18,36 @@ import (
 	"github.com/toasterbook88/axis/internal/workload"
 )
 
+const llmCloudFallbackTimeout = 5 * time.Second
+
 type llmInferenceResult struct {
 	reqs models.TaskRequirements
 	sig  llmrouter.IntentSignal
 }
 
+var (
+	loadLLMConfig           = config.Load
+	llmConfigPath           = config.DefaultConfigPath
+	buildLLMRegistry        = llmrouter.NewRegistryFromConfig
+	selectLLMCloudFallback  = llmrouter.SelectCloudFallback
+	llmClassifyWithProvider = llmrouter.ClassifyWithProvider
+	confirmLLMCloudFallback = defaultConfirmLLMCloudFallback
+)
+
 var llmInferRequirementsFn = func(prompt string, engine *llmrouter.Engine) llmInferenceResult {
-	classifier := &capturingClassifier{engine: engine}
-	reqs := placement.InferRequirements(prompt, workload.InferRequirementsOptions{
-		Classifier: classifier,
-	})
-	if classifier.sig.Class == "" {
-		classifier.sig = llmrouter.IntentSignal{
-			Class:      reqs.Workload.Class,
-			Confidence: 1.0,
-			Source:     llmrouter.SourceReflex,
-			Notes:      append([]string(nil), reqs.Workload.Notes...),
-		}
-	}
-	return llmInferenceResult{reqs: reqs, sig: classifier.sig}
-}
-
-type capturingClassifier struct {
-	engine *llmrouter.Engine
-	sig    llmrouter.IntentSignal
-}
-
-func (c *capturingClassifier) ClassifyWorkload(ctx context.Context, prompt, extraContext string) (models.WorkloadProfileMatch, error) {
-	if err := ctx.Err(); err != nil {
-		return models.WorkloadProfileMatch{}, err
-	}
-
-	class, sig, err := c.engine.Classify(ctx, prompt, extraContext)
-	if err != nil {
-		return models.WorkloadProfileMatch{}, err
-	}
-	c.sig = sig
-	return models.WorkloadProfileMatch{
+	class, sig, _ := engine.Classify(context.Background(), prompt, "")
+	match := models.WorkloadProfileMatch{
 		Class: class,
 		Notes: append([]string(nil), sig.Notes...),
-	}, nil
+	}
+	reqs := placement.InferRequirements(prompt, workload.InferRequirementsOptions{
+		Match: &match,
+	})
+	if sig.Class == "" {
+		sig.Class = reqs.Workload.Class
+		sig.Source = llmrouter.SourceReflex
+	}
+	return llmInferenceResult{reqs: reqs, sig: sig}
 }
 
 // llmResult is the structured output for axis llm. Exported fields allow
@@ -93,11 +86,12 @@ func llmCmd() *cobra.Command {
 			"and derives hardware requirements for placement.\n\n" +
 			"The classifier uses a lightweight local model (default: granite3.1-moe:1b)\n" +
 			"with a hard latency budget. If the local model is unavailable or too slow,\n" +
-			"it transparently falls back to the legacy string-matcher.\n\n" +
+			"AXIS can confirm a cloud fallback from configured providers before using\n" +
+			"the legacy string-matcher result.\n\n" +
 			"Output is advisory only — use `axis task place` for full placement decisions.\n\n" +
 			"Classification sources:\n" +
-			"  semantic  — local LLM classified the prompt (Ollama required)\n" +
-			"  reflex    — legacy string-matcher used (Ollama unavailable or timed out)",
+			"  semantic  — a local or confirmed cloud LLM classified the prompt\n" +
+			"  reflex    — legacy string-matcher used (LLM unavailable or declined)",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := args[0]
@@ -117,9 +111,10 @@ func llmCmd() *cobra.Command {
 			engine := llmrouter.NewEngine(engineOpts...)
 
 			sp := ui.NewSpinner()
-			sp.Start("Classifying...")
+			sp.Start("Classifying locally...")
 			inference := llmInferRequirementsFn(prompt, engine)
 			sp.Stop("")
+			inference = maybeLLMCloudFallback(prompt, inference, cmd.InOrStdin(), errW)
 
 			result := llmResult{
 				Prompt:     prompt,
@@ -158,6 +153,102 @@ func llmCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show routing decision without executing (classification preview only)")
 
 	return cmd
+}
+
+func maybeLLMCloudFallback(prompt string, current llmInferenceResult, in io.Reader, errW io.Writer) llmInferenceResult {
+	if current.sig.Source != llmrouter.SourceReflex {
+		return current
+	}
+
+	cfg, err := loadLLMConfig(llmConfigPath())
+	if err != nil {
+		return current
+	}
+
+	registry, err := buildLLMRegistry(cfg)
+	if err != nil || registry.Len() == 0 {
+		return current
+	}
+
+	prefer := ""
+	maxCost := 0.0
+	if cfg.Inference != nil {
+		prefer = cfg.Inference.Prefer
+		maxCost = cfg.Inference.MaxCostPerRequest
+	}
+
+	selectCtx, cancel := context.WithTimeout(context.Background(), llmCloudFallbackTimeout)
+	provider, decision, err := selectLLMCloudFallback(selectCtx, registry, prompt, prefer)
+	cancel()
+	if err != nil {
+		return current
+	}
+
+	if maxCost > 0 && decision.EstCost > maxCost {
+		return appendLLMNote(current,
+			fmt.Sprintf("cloud fallback skipped: estimated cost $%.4f exceeds max $%.4f", decision.EstCost, maxCost))
+	}
+
+	if !confirmLLMCloudFallback(in, errW, decision) {
+		return appendLLMNote(current,
+			fmt.Sprintf("cloud fallback skipped: operator declined %s/%s", decision.Provider, decision.Model))
+	}
+
+	sendCtx, cancel := context.WithTimeout(context.Background(), llmCloudFallbackTimeout)
+	class, sig, err := llmClassifyWithProvider(sendCtx, provider, prompt, decision.Model)
+	cancel()
+	if err != nil {
+		return appendLLMNote(current, fmt.Sprintf("cloud fallback failed: %v", err))
+	}
+
+	sig.Notes = append([]string(nil), current.sig.Notes...)
+	sig.Notes = append(sig.Notes, fmt.Sprintf("cloud fallback via %s/%s", decision.Provider, decision.Model))
+
+	match := models.WorkloadProfileMatch{
+		Class: class,
+		Notes: append([]string(nil), sig.Notes...),
+	}
+	reqs := placement.InferRequirements(prompt, workload.InferRequirementsOptions{
+		Match: &match,
+	})
+	if sig.Class == "" {
+		sig.Class = reqs.Workload.Class
+	}
+	return llmInferenceResult{
+		reqs: reqs,
+		sig:  sig,
+	}
+}
+
+func appendLLMNote(result llmInferenceResult, note string) llmInferenceResult {
+	if strings.TrimSpace(note) == "" {
+		return result
+	}
+	result.sig.Notes = append(result.sig.Notes, note)
+	result.reqs.Workload.Notes = append(result.reqs.Workload.Notes, note)
+	return result
+}
+
+func defaultConfirmLLMCloudFallback(in io.Reader, errW io.Writer, decision llmrouter.RoutingDecision) bool {
+	if in == nil {
+		return false
+	}
+
+	estimatedCost := "estimated cost unavailable"
+	if decision.EstCost > 0 {
+		estimatedCost = fmt.Sprintf("estimated cost $%.4f", decision.EstCost)
+	}
+	fmt.Fprintf(errW,
+		"cloud fallback required: %s/%s (%s, latency %s). Type YES to continue: ",
+		decision.Provider, decision.Model, estimatedCost, decision.EstLatency,
+	)
+
+	line, err := bufio.NewReader(in).ReadString('\n')
+	fmt.Fprintln(errW)
+	if err != nil && err != io.EOF {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(line), "yes")
 }
 
 // printLLMResult renders the classification result as human-readable text.

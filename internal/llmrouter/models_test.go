@@ -16,8 +16,12 @@ type mockProvider struct {
 	models       []string
 	health       llmrouter.HealthStatus
 	healthErr    error
+	estimated    float64
+	endpoint     string
+	priority     int
+	defaultModel string
 	result       llmrouter.GenerateResult
-	generateErr  error
+	sendErr      error
 }
 
 func (m *mockProvider) Name() string {
@@ -41,8 +45,30 @@ func (m *mockProvider) SupportsModel(model string) bool {
 	return false
 }
 
-func (m *mockProvider) Generate(context.Context, string, string) (llmrouter.GenerateResult, error) {
-	return m.result, m.generateErr
+func (m *mockProvider) EstimateCost(string, string) float64 {
+	return m.estimated
+}
+
+func (m *mockProvider) Send(context.Context, string, string) (llmrouter.GenerateResult, error) {
+	return m.result, m.sendErr
+}
+
+func (m *mockProvider) Endpoint() string {
+	return m.endpoint
+}
+
+func (m *mockProvider) Priority() int {
+	return m.priority
+}
+
+func (m *mockProvider) DefaultModel() string {
+	if m.defaultModel != "" {
+		return m.defaultModel
+	}
+	if len(m.models) > 0 {
+		return m.models[0]
+	}
+	return ""
 }
 
 var _ llmrouter.Provider = (*mockProvider)(nil)
@@ -88,6 +114,9 @@ func TestMockProviderImplementsProviderContract(t *testing.T) {
 	if p.SupportsModel("unknown") {
 		t.Fatal("SupportsModel(unknown) = true, want false")
 	}
+	if got := p.EstimateCost("ping", "gpt-4o"); got != 0 {
+		t.Fatalf("EstimateCost() = %v, want 0", got)
+	}
 
 	status, err := p.Health(context.Background())
 	if err != nil {
@@ -97,26 +126,26 @@ func TestMockProviderImplementsProviderContract(t *testing.T) {
 		t.Fatalf("Health() = %+v, want %+v", status, p.health)
 	}
 
-	got, err := p.Generate(context.Background(), "ping", "gpt-4o")
+	got, err := p.Send(context.Background(), "ping", "gpt-4o")
 	if err != nil {
-		t.Fatalf("Generate() error = %v", err)
+		t.Fatalf("Send() error = %v", err)
 	}
 	if got != expected {
-		t.Fatalf("Generate() = %+v, want %+v", got, expected)
+		t.Fatalf("Send() = %+v, want %+v", got, expected)
 	}
 }
 
 func TestMockProviderSurfacesErrors(t *testing.T) {
 	p := &mockProvider{
-		healthErr:   errors.New("dial tcp: refused"),
-		generateErr: errors.New("quota exceeded"),
+		healthErr: errors.New("dial tcp: refused"),
+		sendErr:   errors.New("quota exceeded"),
 	}
 
 	if _, err := p.Health(context.Background()); err == nil {
 		t.Fatal("Health() error = nil, want non-nil")
 	}
-	if _, err := p.Generate(context.Background(), "prompt", "model"); err == nil {
-		t.Fatal("Generate() error = nil, want non-nil")
+	if _, err := p.Send(context.Background(), "prompt", "model"); err == nil {
+		t.Fatal("Send() error = nil, want non-nil")
 	}
 }
 

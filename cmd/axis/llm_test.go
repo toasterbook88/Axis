@@ -1,13 +1,37 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+type llmTestProvider struct {
+	name string
+}
+
+func (p *llmTestProvider) Name() string { return p.name }
+
+func (p *llmTestProvider) Type() llmrouter.ProviderType { return llmrouter.ProviderCloud }
+
+func (p *llmTestProvider) Health(context.Context) (llmrouter.HealthStatus, error) {
+	return llmrouter.HealthStatus{OK: true}, nil
+}
+
+func (p *llmTestProvider) SupportsModel(string) bool { return true }
+
+func (p *llmTestProvider) EstimateCost(string, string) float64 { return 0.001 }
+
+func (p *llmTestProvider) Send(context.Context, string, string) (llmrouter.GenerateResult, error) {
+	return llmrouter.GenerateResult{}, nil
+}
 
 // stubLLMInferRequirements replaces llmInferRequirementsFn for the duration of a test.
 func stubLLMInferRequirements(t *testing.T, result llmInferenceResult) func() {
@@ -17,6 +41,33 @@ func stubLLMInferRequirements(t *testing.T, result llmInferenceResult) func() {
 		return result
 	}
 	return func() { llmInferRequirementsFn = prev }
+}
+
+func stubLLMCloudFallbacks(t *testing.T) func() {
+	t.Helper()
+
+	prevLoad := loadLLMConfig
+	prevPath := llmConfigPath
+	prevBuild := buildLLMRegistry
+	prevSelect := selectLLMCloudFallback
+	prevClassify := llmClassifyWithProvider
+	prevConfirm := confirmLLMCloudFallback
+
+	loadLLMConfig = config.Load
+	llmConfigPath = config.DefaultConfigPath
+	buildLLMRegistry = llmrouter.NewRegistryFromConfig
+	selectLLMCloudFallback = llmrouter.SelectCloudFallback
+	llmClassifyWithProvider = llmrouter.ClassifyWithProvider
+	confirmLLMCloudFallback = defaultConfirmLLMCloudFallback
+
+	return func() {
+		loadLLMConfig = prevLoad
+		llmConfigPath = prevPath
+		buildLLMRegistry = prevBuild
+		selectLLMCloudFallback = prevSelect
+		llmClassifyWithProvider = prevClassify
+		confirmLLMCloudFallback = prevConfirm
+	}
 }
 
 // --- Surface tests ---
@@ -305,5 +356,147 @@ func TestTruncate_UTF8SafeAndSmallLimits(t *testing.T) {
 	}
 	if got := truncate("🙂🙂🙂", 2); got != "🙂…" {
 		t.Fatalf("truncate utf8 = %q, want %q", got, "🙂…")
+	}
+}
+
+func TestMaybeLLMCloudFallbackUpgradesReflexResult(t *testing.T) {
+	restore := stubLLMCloudFallbacks(t)
+	defer restore()
+
+	loadLLMConfig = func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{{Name: "local", Hostname: "localhost", SSHUser: "me"}},
+			Inference: &config.InferenceConfig{
+				Prefer: "cost",
+			},
+		}, nil
+	}
+	provider := &llmTestProvider{name: "openrouter"}
+	buildLLMRegistry = func(*config.Config) (*llmrouter.Registry, error) {
+		registry := llmrouter.NewRegistry()
+		registry.MustRegister(provider)
+		return registry, nil
+	}
+	selectLLMCloudFallback = func(_ context.Context, _ *llmrouter.Registry, _ string, prefer string) (llmrouter.Provider, llmrouter.RoutingDecision, error) {
+		if prefer != "cost" {
+			t.Fatalf("prefer = %q, want cost", prefer)
+		}
+		return provider, llmrouter.RoutingDecision{
+			Provider:   "openrouter",
+			Model:      "openai/gpt-4o-mini",
+			EstCost:    0.002,
+			EstLatency: "35ms",
+		}, nil
+	}
+	confirmLLMCloudFallback = func(_ io.Reader, _ io.Writer, decision llmrouter.RoutingDecision) bool {
+		return decision.Provider == "openrouter"
+	}
+	llmClassifyWithProvider = func(_ context.Context, _ llmrouter.Provider, _ string, model string) (models.WorkloadClass, llmrouter.IntentSignal, error) {
+		if model != "openai/gpt-4o-mini" {
+			t.Fatalf("model = %q, want openai/gpt-4o-mini", model)
+		}
+		return models.ClassGoBuild, llmrouter.IntentSignal{
+			Class:      models.ClassGoBuild,
+			Confidence: 0.88,
+			Source:     llmrouter.SourceSemantic,
+			Signals:    []string{"go"},
+		}, nil
+	}
+
+	current := llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Description: "go build ./...",
+			Workload: models.WorkloadProfileMatch{
+				Class: models.ClassUnknown,
+				Notes: []string{"semantic fallback: ollama unavailable"},
+			},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassUnknown,
+			Confidence: 1.0,
+			Source:     llmrouter.SourceReflex,
+			Notes:      []string{"semantic fallback: ollama unavailable"},
+		},
+	}
+
+	result := maybeLLMCloudFallback("go build ./...", current, strings.NewReader("YES\n"), &bytes.Buffer{})
+	if result.sig.Source != llmrouter.SourceSemantic {
+		t.Fatalf("source = %q, want semantic", result.sig.Source)
+	}
+	if result.reqs.Workload.Class != models.ClassGoBuild {
+		t.Fatalf("class = %q, want go-build", result.reqs.Workload.Class)
+	}
+	if !strings.Contains(strings.Join(result.sig.Notes, " | "), "cloud fallback via openrouter/openai/gpt-4o-mini") {
+		t.Fatalf("notes = %v, want cloud fallback note", result.sig.Notes)
+	}
+}
+
+func TestMaybeLLMCloudFallbackHonorsCostCap(t *testing.T) {
+	restore := stubLLMCloudFallbacks(t)
+	defer restore()
+
+	loadLLMConfig = func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{{Name: "local", Hostname: "localhost", SSHUser: "me"}},
+			Inference: &config.InferenceConfig{
+				MaxCostPerRequest: 0.001,
+			},
+		}, nil
+	}
+	buildLLMRegistry = func(*config.Config) (*llmrouter.Registry, error) {
+		registry := llmrouter.NewRegistry()
+		registry.MustRegister(&llmTestProvider{name: "openrouter"})
+		return registry, nil
+	}
+	selectLLMCloudFallback = func(context.Context, *llmrouter.Registry, string, string) (llmrouter.Provider, llmrouter.RoutingDecision, error) {
+		return &llmTestProvider{name: "openrouter"}, llmrouter.RoutingDecision{
+			Provider:   "openrouter",
+			Model:      "openai/gpt-4o-mini",
+			EstCost:    0.01,
+			EstLatency: "35ms",
+		}, nil
+	}
+	confirmCalled := false
+	confirmLLMCloudFallback = func(io.Reader, io.Writer, llmrouter.RoutingDecision) bool {
+		confirmCalled = true
+		return true
+	}
+
+	current := llmInferenceResult{
+		reqs: models.TaskRequirements{
+			Workload: models.WorkloadProfileMatch{Class: models.ClassUnknown},
+		},
+		sig: llmrouter.IntentSignal{
+			Class:      models.ClassUnknown,
+			Source:     llmrouter.SourceReflex,
+			Confidence: 1.0,
+		},
+	}
+
+	result := maybeLLMCloudFallback("review repo", current, strings.NewReader("YES\n"), &bytes.Buffer{})
+	if confirmCalled {
+		t.Fatal("confirmation should not run when cost cap blocks the call")
+	}
+	if result.sig.Source != llmrouter.SourceReflex {
+		t.Fatalf("source = %q, want reflex", result.sig.Source)
+	}
+	if !strings.Contains(strings.Join(result.sig.Notes, " | "), "exceeds max") {
+		t.Fatalf("notes = %v, want cost cap note", result.sig.Notes)
+	}
+}
+
+func TestDefaultConfirmLLMCloudFallback(t *testing.T) {
+	var stderr bytes.Buffer
+	ok := defaultConfirmLLMCloudFallback(strings.NewReader("YES\n"), &stderr, llmrouter.RoutingDecision{
+		Provider:   "groq",
+		Model:      "llama-3.1-8b-instant",
+		EstCost:    0.0015,
+		EstLatency: "18ms",
+	})
+	if !ok {
+		t.Fatal("confirmation = false, want true")
+	}
+	if !strings.Contains(stderr.String(), "cloud fallback required") {
+		t.Fatalf("stderr = %q, want confirmation prompt", stderr.String())
 	}
 }

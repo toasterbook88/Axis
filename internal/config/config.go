@@ -86,8 +86,8 @@ type AIProviderConfig struct {
 	// Type is "local" or "cloud".
 	Type string `json:"type" yaml:"type"`
 
-	// Endpoint is the base URL for local providers (e.g. http://localhost:11434).
-	// Ignored for cloud providers (they have fixed endpoints).
+	// Endpoint is the base URL for the provider.
+	// Cloud providers use a fixed default when this is unset.
 	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
 
 	// APIKeyEnv is the environment variable that holds the API key.
