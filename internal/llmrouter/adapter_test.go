@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -157,7 +156,3 @@ func mustMarshal(t *testing.T, v any) string {
 	}
 	return string(b)
 }
-
-// mockOllama and ollamaGenResp are defined in engine_test.go (same package).
-// They are reused here without redeclaration.
-var _ = httptest.NewServer // ensure httptest is used (avoids import error)
