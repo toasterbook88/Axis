@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -104,9 +106,8 @@ func (p *cloudProvider) Type() ProviderType {
 
 func (p *cloudProvider) Health(ctx context.Context) (HealthStatus, error) {
 	start := time.Now()
-	if p.kind == cloudProviderAnthropic {
-		return HealthStatus{OK: true, Latency: time.Since(start), Message: "ok"}, nil
-	}
+
+	// All providers are probed via GET /models to get real health + latency data.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint+"/models", nil)
 	if err != nil {
 		return HealthStatus{}, fmt.Errorf("cloud health request: %w", err)
@@ -120,17 +121,22 @@ func (p *cloudProvider) Health(ctx context.Context) (HealthStatus, error) {
 	defer resp.Body.Close()
 
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode != http.StatusOK {
+	latency := time.Since(start)
+
+	// Anthropic returns 200 for valid keys; other providers do the same.
+	// Accept any 2xx as healthy — some endpoints return 200, some 204.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return HealthStatus{
-			OK:      false,
-			Message: fmt.Sprintf("status %d", resp.StatusCode),
+			OK:      true,
+			Latency: latency,
+			Message: "ok",
 		}, nil
 	}
 
 	return HealthStatus{
-		OK:      true,
-		Latency: time.Since(start),
-		Message: "ok",
+		OK:      false,
+		Latency: latency,
+		Message: fmt.Sprintf("status %d", resp.StatusCode),
 	}, nil
 }
 
@@ -160,6 +166,20 @@ func (p *cloudProvider) EstimateCost(prompt, model string) float64 {
 	return (float64(estimatedTokens) / 1000.0) * selected.CostPer1K
 }
 
+// costFromTokens calculates cost using actual API-reported token counts.
+// Falls back to the heuristic estimate if actual tokens are unavailable.
+func (p *cloudProvider) costFromTokens(prompt, model string, tokensIn, tokensOut int) float64 {
+	actualTokens := tokensIn + tokensOut
+	if actualTokens <= 0 {
+		return p.EstimateCost(prompt, model)
+	}
+	selected, ok := p.lookupModel(model)
+	if !ok || selected.CostPer1K <= 0 {
+		return 0
+	}
+	return (float64(actualTokens) / 1000.0) * selected.CostPer1K
+}
+
 func (p *cloudProvider) Send(ctx context.Context, prompt, model string) (GenerateResult, error) {
 	selected, ok := p.lookupModel(model)
 	if !ok {
@@ -169,9 +189,9 @@ func (p *cloudProvider) Send(ctx context.Context, prompt, model string) (Generat
 	start := time.Now()
 	switch p.kind {
 	case cloudProviderAnthropic:
-		return p.sendAnthropic(ctx, prompt, selected.Name, start)
+		return p.sendAnthropic(ctx, prompt, selected, start)
 	default:
-		return p.sendOpenAICompatible(ctx, prompt, selected.Name, start)
+		return p.sendOpenAICompatible(ctx, prompt, selected, start)
 	}
 }
 
@@ -233,9 +253,9 @@ func (p *cloudProvider) applyAuth(req *http.Request) {
 	}
 }
 
-func (p *cloudProvider) sendOpenAICompatible(ctx context.Context, prompt, model string, start time.Time) (GenerateResult, error) {
+func (p *cloudProvider) sendOpenAICompatible(ctx context.Context, prompt string, selected CloudModel, start time.Time) (GenerateResult, error) {
 	body, err := json.Marshal(map[string]any{
-		"model": model,
+		"model": selected.Name,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -264,7 +284,7 @@ func (p *cloudProvider) sendOpenAICompatible(ctx context.Context, prompt, model 
 		return GenerateResult{}, fmt.Errorf("%s: read response: %w", p.name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return GenerateResult{}, fmt.Errorf("%s: status %d", p.name, resp.StatusCode)
+		return GenerateResult{}, fmt.Errorf("%s: status %d: %s", p.name, resp.StatusCode, string(raw))
 	}
 
 	var parsed struct {
@@ -290,13 +310,13 @@ func (p *cloudProvider) sendOpenAICompatible(ctx context.Context, prompt, model 
 		TokensIn:  parsed.Usage.PromptTokens,
 		TokensOut: parsed.Usage.CompletionTokens,
 		LatencyMs: time.Since(start).Milliseconds(),
-		Cost:      p.EstimateCost(prompt, model),
+		Cost:      (float64(parsed.Usage.PromptTokens+parsed.Usage.CompletionTokens) / 1000.0) * selected.CostPer1K,
 	}, nil
 }
 
-func (p *cloudProvider) sendAnthropic(ctx context.Context, prompt, model string, start time.Time) (GenerateResult, error) {
+func (p *cloudProvider) sendAnthropic(ctx context.Context, prompt string, selected CloudModel, start time.Time) (GenerateResult, error) {
 	body, err := json.Marshal(map[string]any{
-		"model":      model,
+		"model":      selected.Name,
 		"max_tokens": 256,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
@@ -324,7 +344,7 @@ func (p *cloudProvider) sendAnthropic(ctx context.Context, prompt, model string,
 		return GenerateResult{}, fmt.Errorf("%s: read response: %w", p.name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return GenerateResult{}, fmt.Errorf("%s: status %d", p.name, resp.StatusCode)
+		return GenerateResult{}, fmt.Errorf("%s: status %d: %s", p.name, resp.StatusCode, string(raw))
 	}
 
 	var parsed struct {
@@ -358,7 +378,7 @@ func (p *cloudProvider) sendAnthropic(ctx context.Context, prompt, model string,
 		TokensIn:  parsed.Usage.InputTokens,
 		TokensOut: parsed.Usage.OutputTokens,
 		LatencyMs: time.Since(start).Milliseconds(),
-		Cost:      p.EstimateCost(prompt, model),
+		Cost:      (float64(parsed.Usage.InputTokens+parsed.Usage.OutputTokens) / 1000.0) * selected.CostPer1K,
 	}, nil
 }
 
@@ -418,8 +438,8 @@ func newConfiguredCloudProvider(name string, cfg config.AIProviderConfig, apiKey
 		return nil, fmt.Errorf("provider %s: no models configured", name)
 	}
 
-	if strings.HasPrefix(cfg.Endpoint, "http://") && !strings.Contains(cfg.Endpoint, "localhost") && !strings.Contains(cfg.Endpoint, "127.0.0.1") {
-		return nil, fmt.Errorf("provider %s: insecure http endpoint not allowed", name)
+	if err := validateEndpointSecurity(cfg.Endpoint, name); err != nil {
+		return nil, err
 	}
 
 	providerCfg := CloudProviderConfig{
@@ -440,6 +460,52 @@ func newConfiguredCloudProvider(name string, cfg config.AIProviderConfig, apiKey
 	default:
 		return nil, fmt.Errorf("provider %s: unsupported cloud provider", name)
 	}
+}
+
+// validateEndpointSecurity rejects non-HTTPS endpoints unless the hostname
+// is a loopback address (localhost, 127.0.0.1, [::1]). Empty endpoints are
+// allowed (the provider constructor fills in the default).
+func validateEndpointSecurity(endpoint, providerName string) error {
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return nil
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("provider %s: invalid endpoint URL: %w", providerName, err)
+	}
+
+	if strings.EqualFold(parsed.Scheme, "https") || parsed.Scheme == "" {
+		return nil
+	}
+
+	if !strings.EqualFold(parsed.Scheme, "http") {
+		return fmt.Errorf("provider %s: unsupported endpoint scheme %q", providerName, parsed.Scheme)
+	}
+
+	// HTTP is only allowed for loopback addresses.
+	host := parsed.Hostname()
+	if isLoopback(host) {
+		return nil
+	}
+
+	return fmt.Errorf("provider %s: insecure http endpoint not allowed (only loopback addresses permitted for http)", providerName)
+}
+
+// isLoopback returns true when host is a loopback address: "localhost",
+// "127.0.0.1", "::1", or any IP that net.IP.IsLoopback reports as loopback.
+// IPv6 zone identifiers (e.g. "::1%eth0") are stripped before parsing.
+func isLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	// Strip IPv6 zone identifier if present (e.g. "::1%eth0" → "::1").
+	if idx := strings.IndexByte(host, '%'); idx >= 0 {
+		host = host[:idx]
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func detectCloudProviderKind(name, endpoint string) cloudProviderKind {
@@ -466,7 +532,9 @@ type cloudSelectionCandidate struct {
 }
 
 // SelectCloudFallback returns the best healthy cloud provider for a fallback
-// classification call, using cost by default and latency when requested.
+// classification call. It probes all cloud providers concurrently, filters out
+// unhealthy ones, and sorts by the configured preference ("latency" by default,
+// matching the documented inference.prefer default).
 func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer string) (Provider, RoutingDecision, error) {
 	if registry == nil {
 		return nil, RoutingDecision{}, fmt.Errorf("cloud registry is nil")
@@ -477,6 +545,9 @@ func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer
 		return nil, RoutingDecision{}, fmt.Errorf("no cloud providers configured")
 	}
 
+	// Probe all cloud providers concurrently for real health + latency data.
+	healthStatuses := registry.CheckHealth(ctx)
+
 	candidates := make([]cloudSelectionCandidate, 0, len(providers))
 	for _, provider := range providers {
 		model := defaultProviderModel(provider)
@@ -484,10 +555,15 @@ func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer
 			continue
 		}
 
+		status, probed := healthStatuses[provider.Name()]
+		if !probed || !status.OK {
+			continue
+		}
+
 		candidates = append(candidates, cloudSelectionCandidate{
 			provider: provider,
 			model:    model,
-			status:   HealthStatus{OK: true, Message: "assumed healthy until confirmed"},
+			status:   status,
 			cost:     provider.EstimateCost(prompt, model),
 			priority: providerPriority(provider),
 			endpoint: providerEndpoint(provider),
@@ -497,24 +573,30 @@ func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer
 		return nil, RoutingDecision{}, fmt.Errorf("no healthy cloud providers available")
 	}
 
+	// Default to "latency" when prefer is empty or unrecognized,
+	// matching the documented inference.prefer default.
 	normalizedPrefer := strings.ToLower(strings.TrimSpace(prefer))
+	if normalizedPrefer != "cost" {
+		normalizedPrefer = "latency"
+	}
+
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i]
 		right := candidates[j]
-		if normalizedPrefer == "latency" {
-			return compareCloudCandidatesByLatency(left, right)
+		if normalizedPrefer == "cost" {
+			return compareCloudCandidatesByCost(left, right)
 		}
-		return compareCloudCandidatesByCost(left, right)
+		return compareCloudCandidatesByLatency(left, right)
 	})
 
 	best := candidates[0]
 	reasoning := []string{
 		fmt.Sprintf("local semantic path fell back to reflex; selected healthy cloud provider %q", best.provider.Name()),
 	}
-	if normalizedPrefer == "latency" {
-		reasoning = append(reasoning, "selection preference: lowest latency among healthy cloud providers")
-	} else {
+	if normalizedPrefer == "cost" {
 		reasoning = append(reasoning, "selection preference: lowest estimated cost among healthy cloud providers")
+	} else {
+		reasoning = append(reasoning, "selection preference: lowest latency among healthy cloud providers")
 	}
 
 	fallbacks := make([]string, 0, len(candidates)-1)
