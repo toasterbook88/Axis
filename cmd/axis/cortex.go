@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -127,7 +128,7 @@ func cortexEventsCmd() *cobra.Command {
 				} else {
 					evType = color(evType)
 				}
-				fmt.Fprintf(w, "  [%s] %s  %s\n", ev.CreatedAt, evType, string(ev.Payload))
+				fmt.Fprintf(w, "  [%s] %s  %s\n", ev.CreatedAt, evType, formatPayload(ev.Payload))
 			}
 			fmt.Fprintln(w)
 			return nil
@@ -175,4 +176,15 @@ func cortexRecallCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// formatPayload renders an Event.Payload for terminal display.
+// If the payload is a JSON string, the surrounding quotes are stripped.
+// Object and array payloads are printed as-is (compact JSON).
+func formatPayload(p json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(p, &s); err == nil {
+		return s
+	}
+	return string(p)
 }

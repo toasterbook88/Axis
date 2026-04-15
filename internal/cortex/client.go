@@ -245,17 +245,28 @@ func (c *Client) callTool(ctx context.Context, tool string, args any) (json.RawM
 	}
 	var envelope struct {
 		Content []struct {
+			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 		IsError bool `json:"isError"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope.Content) == 0 {
-		return raw, nil
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return raw, nil // not an envelope — return raw JSON as-is
 	}
 	if envelope.IsError {
+		if len(envelope.Content) > 0 && envelope.Content[0].Text != "" {
+			return nil, fmt.Errorf("tool %s error: %s", tool, envelope.Content[0].Text)
+		}
 		return nil, fmt.Errorf("tool %s returned isError=true", tool)
 	}
-	return json.RawMessage(envelope.Content[0].Text), nil
+	if len(envelope.Content) == 0 {
+		return raw, nil
+	}
+	item := envelope.Content[0]
+	if item.Type != "text" || item.Text == "" {
+		return nil, fmt.Errorf("tool %s: expected text content item, got type=%q text=%q", tool, item.Type, item.Text)
+	}
+	return json.RawMessage(item.Text), nil
 }
 
 // listTools sends a tools/list JSON-RPC 2.0 request.

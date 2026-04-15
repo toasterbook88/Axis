@@ -71,14 +71,22 @@ func toolCallHandler(result any) http.Handler {
 			http.Error(w, "unexpected method: "+req.Method, http.StatusBadRequest)
 			return
 		}
-		payload, _ := json.Marshal(result)
+		payload, err := json.Marshal(result)
+		if err != nil {
+			http.Error(w, "marshal result: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		envelope := map[string]any{
 			"content": []map[string]any{
 				{"type": "text", "text": string(payload)},
 			},
 			"isError": false,
 		}
-		envelopeRaw, _ := json.Marshal(envelope)
+		envelopeRaw, err := json.Marshal(envelope)
+		if err != nil {
+			http.Error(w, "marshal envelope: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
 	})
@@ -320,7 +328,52 @@ func TestReleaseLock_Success(t *testing.T) {
 	}
 }
 
-// — RPC error propagation —
+// — isError envelope tests —
+
+func TestCallTool_IsErrorWithTextReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope := map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "lock already held by session claude-123"}},
+			"isError": true,
+		}
+		envelopeRaw, _ := json.Marshal(envelope)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
+	}))
+	defer srv.Close()
+
+	client := NewClientWithOptions("127.0.0.1", "tok",
+		extractPort(t, srv.URL), 1, 2*time.Second)
+	_, err := client.AcquireLock(context.Background(), "res", "sess")
+	if err == nil {
+		t.Fatal("expected error when isError=true")
+	}
+	if !strings.Contains(err.Error(), "lock already held") {
+		t.Errorf("error %q should contain server error text", err.Error())
+	}
+}
+
+func TestCallTool_IsErrorWithNoContentReturnsGenericError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope := map[string]any{"content": []any{}, "isError": true}
+		envelopeRaw, _ := json.Marshal(envelope)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
+	}))
+	defer srv.Close()
+
+	client := NewClientWithOptions("127.0.0.1", "tok",
+		extractPort(t, srv.URL), 1, 2*time.Second)
+	_, err := client.AcquireLock(context.Background(), "res", "sess")
+	if err == nil {
+		t.Fatal("expected error when isError=true with empty content")
+	}
+	if !strings.Contains(err.Error(), "isError=true") {
+		t.Errorf("error %q should mention isError=true", err.Error())
+	}
+}
+
+
 
 func TestRPCError_PropagatesCodeAndMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
