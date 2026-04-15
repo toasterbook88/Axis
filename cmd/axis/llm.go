@@ -114,7 +114,7 @@ func llmCmd() *cobra.Command {
 			sp.Start("Classifying locally...")
 			inference := llmInferRequirementsFn(prompt, engine)
 			sp.Stop("")
-			inference = maybeLLMCloudFallback(prompt, inference, cmd.InOrStdin(), errW)
+			inference = maybeLLMCloudFallback(cmd.Context(), prompt, inference, cmd.InOrStdin(), errW)
 
 			result := llmResult{
 				Prompt:     prompt,
@@ -155,7 +155,7 @@ func llmCmd() *cobra.Command {
 	return cmd
 }
 
-func maybeLLMCloudFallback(prompt string, current llmInferenceResult, in io.Reader, errW io.Writer) llmInferenceResult {
+func maybeLLMCloudFallback(ctx context.Context, prompt string, current llmInferenceResult, in io.Reader, errW io.Writer) llmInferenceResult {
 	if current.sig.Source != llmrouter.SourceReflex {
 		return current
 	}
@@ -177,7 +177,7 @@ func maybeLLMCloudFallback(prompt string, current llmInferenceResult, in io.Read
 		maxCost = cfg.Inference.MaxCostPerRequest
 	}
 
-	selectCtx, cancel := context.WithTimeout(context.Background(), llmCloudFallbackTimeout)
+	selectCtx, cancel := context.WithTimeout(ctx, llmCloudFallbackTimeout)
 	provider, decision, err := selectLLMCloudFallback(selectCtx, registry, prompt, prefer)
 	cancel()
 	if err != nil {
@@ -194,7 +194,7 @@ func maybeLLMCloudFallback(prompt string, current llmInferenceResult, in io.Read
 			fmt.Sprintf("cloud fallback skipped: operator declined %s/%s", decision.Provider, decision.Model))
 	}
 
-	sendCtx, cancel := context.WithTimeout(context.Background(), llmCloudFallbackTimeout)
+	sendCtx, cancel := context.WithTimeout(ctx, llmCloudFallbackTimeout)
 	class, sig, err := llmClassifyWithProvider(sendCtx, provider, prompt, decision.Model)
 	cancel()
 	if err != nil {
