@@ -81,7 +81,8 @@ type rpcResponse struct {
 
 // HealthResponse is returned by Status.
 type HealthResponse struct {
-	// Status is "healthy" when both the MCP server and Qdrant are reachable.
+	// Status is "healthy" when the MCP server is reachable. Qdrant failures are
+	// degraded and reflected by Memories=0 rather than changing Status.
 	Status string `json:"status"`
 	// MCPTools is the number of tools registered on the Cortex MCP server.
 	MCPTools int `json:"mcp_tools"`
@@ -120,7 +121,7 @@ type LockResult struct {
 func (c *Client) Status(ctx context.Context) (*HealthResponse, error) {
 	raw, err := c.listTools(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("cortex MCP unreachable at %s: %w", c.mcpURL, err)
+		return nil, fmt.Errorf("cortex MCP status probe failed at %s: %w", c.mcpURL, err)
 	}
 
 	var toolsList struct {
@@ -128,7 +129,9 @@ func (c *Client) Status(ctx context.Context) (*HealthResponse, error) {
 			Name string `json:"name"`
 		} `json:"tools"`
 	}
-	_ = json.Unmarshal(raw, &toolsList)
+	if err := json.Unmarshal(raw, &toolsList); err != nil {
+		return nil, fmt.Errorf("cortex MCP at %s returned unexpected tools/list response: %w", c.mcpURL, err)
+	}
 
 	memories, _ := c.qdrantPointCount(ctx)
 
@@ -299,6 +302,10 @@ func (c *Client) qdrantPointCount(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("unexpected HTTP %d from Qdrant", resp.StatusCode)
+	}
 
 	var data struct {
 		Result struct {

@@ -15,46 +15,17 @@ import (
 func newTestClient(t *testing.T, mcpSrv *httptest.Server, qdrantSrv *httptest.Server) *Client {
 	t.Helper()
 
-	mcpHost := "127.0.0.1"
 	mcpPort := 0
 	qdrantPort := 0
 
 	if mcpSrv != nil {
-		// Extract port from test server URL.
-		addr := strings.TrimPrefix(mcpSrv.URL, "http://")
-		parts := strings.Split(addr, ":")
-		if len(parts) == 2 {
-			mcpHost = parts[0]
-			port := 0
-			_, _ = parsePort(parts[1], &port)
-			mcpPort = port
-		}
+		mcpPort = extractPort(t, mcpSrv.URL)
 	}
-
 	if qdrantSrv != nil {
-		addr := strings.TrimPrefix(qdrantSrv.URL, "http://")
-		parts := strings.Split(addr, ":")
-		if len(parts) == 2 {
-			port := 0
-			_, _ = parsePort(parts[1], &port)
-			qdrantPort = port
-		}
+		qdrantPort = extractPort(t, qdrantSrv.URL)
 	}
 
-	return NewClientWithOptions(mcpHost, "test-token", mcpPort, qdrantPort, 5*time.Second)
-}
-
-// parsePort is a tiny helper to avoid importing strconv in the test helper.
-func parsePort(s string, out *int) (string, error) {
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return s, nil
-		}
-		n = n*10 + int(c-'0')
-	}
-	*out = n
-	return s, nil
+	return NewClientWithOptions("127.0.0.1", "test-token", mcpPort, qdrantPort, 5*time.Second)
 }
 
 // mcpHandler returns an http.Handler that responds to JSON-RPC requests with
