@@ -29,7 +29,8 @@ func newTestClient(t *testing.T, mcpSrv *httptest.Server, qdrantSrv *httptest.Se
 }
 
 // mcpHandler returns an http.Handler that responds to JSON-RPC requests with
-// the provided result payload (raw JSON).
+// the provided result payload (raw JSON). Use for tools/list responses which
+// are returned directly without a content envelope.
 func mcpHandler(method string, result any) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -48,6 +49,46 @@ func mcpHandler(method string, result any) http.Handler {
 		raw, _ := json.Marshal(result)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(rpcResponse{Result: raw})
+	})
+}
+
+// toolCallHandler returns an http.Handler for tools/call requests.
+// It wraps result in the FastMCP 3.x content envelope:
+//
+//	{"content":[{"type":"text","text":"<json>"}],"isError":false}
+func toolCallHandler(result any) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req rpcRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if req.Method != "tools/call" {
+			http.Error(w, "unexpected method: "+req.Method, http.StatusBadRequest)
+			return
+		}
+		payload, err := json.Marshal(result)
+		if err != nil {
+			http.Error(w, "marshal result: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		envelope := map[string]any{
+			"content": []map[string]any{
+				{"type": "text", "text": string(payload)},
+			},
+			"isError": false,
+		}
+		envelopeRaw, err := json.Marshal(envelope)
+		if err != nil {
+			http.Error(w, "marshal envelope: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
 	})
 }
 
@@ -152,7 +193,7 @@ func TestRecall_ReturnsParsedHits(t *testing.T) {
 		{Content: "PlacementDecision has FitScore 0-100", Score: 0.87},
 	}
 
-	mcpSrv := httptest.NewServer(mcpHandler("tools/call", hits))
+	mcpSrv := httptest.NewServer(toolCallHandler(hits))
 	defer mcpSrv.Close()
 
 	client := newTestClient(t, mcpSrv, nil)
@@ -172,7 +213,7 @@ func TestRecall_ReturnsParsedHits(t *testing.T) {
 }
 
 func TestRecall_EmptyResultIsNotAnError(t *testing.T) {
-	mcpSrv := httptest.NewServer(mcpHandler("tools/call", []MemoryHit{}))
+	mcpSrv := httptest.NewServer(toolCallHandler([]MemoryHit{}))
 	defer mcpSrv.Close()
 
 	client := newTestClient(t, mcpSrv, nil)
@@ -189,11 +230,11 @@ func TestRecall_EmptyResultIsNotAnError(t *testing.T) {
 
 func TestEvents_ReturnsParsedEvents(t *testing.T) {
 	events := []Event{
-		{ID: "ev-1", Type: "test_failure", Payload: "pkg: internal/placement", CreatedAt: "2026-04-15T00:00:00Z"},
-		{ID: "ev-2", Type: "deploy_start", Payload: "node: foundry", CreatedAt: "2026-04-15T00:01:00Z"},
+		{ID: "ev-1", Type: "test_failure", Payload: json.RawMessage(`"pkg: internal/placement"`), CreatedAt: "2026-04-15T00:00:00Z"},
+		{ID: "ev-2", Type: "deploy_start", Payload: json.RawMessage(`"node: foundry"`), CreatedAt: "2026-04-15T00:01:00Z"},
 	}
 
-	mcpSrv := httptest.NewServer(mcpHandler("tools/call", events))
+	mcpSrv := httptest.NewServer(toolCallHandler(events))
 	defer mcpSrv.Close()
 
 	client := newTestClient(t, mcpSrv, nil)
@@ -220,8 +261,13 @@ func TestEvents_ZeroLimitDefaultsToTen(t *testing.T) {
 				capturedArgs = args
 			}
 		}
+		envelope := map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "[]"}},
+			"isError": false,
+		}
+		envelopeRaw, _ := json.Marshal(envelope)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(rpcResponse{Result: json.RawMessage("[]")})
+		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
 	}))
 	defer srv.Close()
 
@@ -243,7 +289,7 @@ func TestEvents_ZeroLimitDefaultsToTen(t *testing.T) {
 func TestAcquireLock_AcquiredStatus(t *testing.T) {
 	result := LockResult{Status: "ACQUIRED", Resource: "file:cmd/axis/chat.go", SessionID: "claude-1747000000"}
 
-	mcpSrv := httptest.NewServer(mcpHandler("tools/call", result))
+	mcpSrv := httptest.NewServer(toolCallHandler(result))
 	defer mcpSrv.Close()
 
 	client := newTestClient(t, mcpSrv, nil)
@@ -259,7 +305,7 @@ func TestAcquireLock_AcquiredStatus(t *testing.T) {
 func TestAcquireLock_ConflictStatus(t *testing.T) {
 	result := LockResult{Status: "CONFLICT", Resource: "file:cmd/axis/chat.go"}
 
-	mcpSrv := httptest.NewServer(mcpHandler("tools/call", result))
+	mcpSrv := httptest.NewServer(toolCallHandler(result))
 	defer mcpSrv.Close()
 
 	client := newTestClient(t, mcpSrv, nil)
@@ -273,7 +319,7 @@ func TestAcquireLock_ConflictStatus(t *testing.T) {
 }
 
 func TestReleaseLock_Success(t *testing.T) {
-	mcpSrv := httptest.NewServer(mcpHandler("tools/call", map[string]any{"released": true}))
+	mcpSrv := httptest.NewServer(toolCallHandler(map[string]any{"released": true}))
 	defer mcpSrv.Close()
 
 	client := newTestClient(t, mcpSrv, nil)
@@ -282,7 +328,52 @@ func TestReleaseLock_Success(t *testing.T) {
 	}
 }
 
-// — RPC error propagation —
+// — isError envelope tests —
+
+func TestCallTool_IsErrorWithTextReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope := map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "lock already held by session claude-123"}},
+			"isError": true,
+		}
+		envelopeRaw, _ := json.Marshal(envelope)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
+	}))
+	defer srv.Close()
+
+	client := NewClientWithOptions("127.0.0.1", "tok",
+		extractPort(t, srv.URL), 1, 2*time.Second)
+	_, err := client.AcquireLock(context.Background(), "res", "sess")
+	if err == nil {
+		t.Fatal("expected error when isError=true")
+	}
+	if !strings.Contains(err.Error(), "lock already held") {
+		t.Errorf("error %q should contain server error text", err.Error())
+	}
+}
+
+func TestCallTool_IsErrorWithNoContentReturnsGenericError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope := map[string]any{"content": []any{}, "isError": true}
+		envelopeRaw, _ := json.Marshal(envelope)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rpcResponse{Result: envelopeRaw})
+	}))
+	defer srv.Close()
+
+	client := NewClientWithOptions("127.0.0.1", "tok",
+		extractPort(t, srv.URL), 1, 2*time.Second)
+	_, err := client.AcquireLock(context.Background(), "res", "sess")
+	if err == nil {
+		t.Fatal("expected error when isError=true with empty content")
+	}
+	if !strings.Contains(err.Error(), "isError=true") {
+		t.Errorf("error %q should mention isError=true", err.Error())
+	}
+}
+
+
 
 func TestRPCError_PropagatesCodeAndMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
