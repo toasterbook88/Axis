@@ -98,10 +98,10 @@ type MemoryHit struct {
 
 // Event is a single entry from the Cortex event bus.
 type Event struct {
-	ID        string `json:"event_id"`
-	Type      string `json:"event_type"`
-	Payload   string `json:"payload"`
-	CreatedAt string `json:"created_at"`
+	ID        string          `json:"event_id"`
+	Type      string          `json:"event_type"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt string          `json:"created_at"`
 }
 
 // LockResult is the outcome of an AcquireLock or ReleaseLock call.
@@ -157,14 +157,16 @@ func (c *Client) Recall(ctx context.Context, query string) ([]MemoryHit, error) 
 	return hits, nil
 }
 
-// Events retrieves recent entries from the Cortex event bus via list_events.
+// Events retrieves recent entries from the Cortex event bus via get_events_since.
 // limit <= 0 defaults to 10.
 func (c *Client) Events(ctx context.Context, limit int) ([]Event, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	raw, err := c.callTool(ctx, "list_events", map[string]any{
-		"limit": limit,
+	raw, err := c.callTool(ctx, "get_events_since", map[string]any{
+		"limit":      limit,
+		"since":      "",
+		"event_type": "",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cortex events: %w", err)
@@ -222,9 +224,14 @@ func (c *Client) ReleaseLock(ctx context.Context, resource string) error {
 
 // — Internal helpers —
 
-// callTool sends a tools/call JSON-RPC 2.0 request.
+// callTool sends a tools/call JSON-RPC 2.0 request and unwraps the MCP
+// content envelope that FastMCP 3.x wraps around tool results:
+//
+//	{"content":[{"type":"text","text":"<json>"}],"isError":bool}
+//
+// The actual payload is extracted from content[0].text.
 func (c *Client) callTool(ctx context.Context, tool string, args any) (json.RawMessage, error) {
-	return c.doRPC(ctx, rpcRequest{
+	raw, err := c.doRPC(ctx, rpcRequest{
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "tools/call",
@@ -233,6 +240,33 @@ func (c *Client) callTool(ctx context.Context, tool string, args any) (json.RawM
 			"arguments": args,
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return raw, nil // not an envelope — return raw JSON as-is
+	}
+	if envelope.IsError {
+		if len(envelope.Content) > 0 && envelope.Content[0].Text != "" {
+			return nil, fmt.Errorf("tool %s error: %s", tool, envelope.Content[0].Text)
+		}
+		return nil, fmt.Errorf("tool %s returned isError=true", tool)
+	}
+	if len(envelope.Content) == 0 {
+		return raw, nil
+	}
+	item := envelope.Content[0]
+	if item.Type != "text" || item.Text == "" {
+		return nil, fmt.Errorf("tool %s: expected text content item, got type=%q text=%q", tool, item.Type, item.Text)
+	}
+	return json.RawMessage(item.Text), nil
 }
 
 // listTools sends a tools/list JSON-RPC 2.0 request.
@@ -256,7 +290,7 @@ func (c *Client) doRPC(ctx context.Context, req rpcRequest) (json.RawMessage, er
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	if c.token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.token)
 	}
