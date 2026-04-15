@@ -38,9 +38,16 @@ type Client struct {
 
 // NewClient creates a Cortex client targeting the given Foundry hostname.
 // token may be empty for unauthenticated access (if the server permits it).
-// Prefer NewClientWithOptions when you need to override ports or timeouts.
+// Prefer NewClientWithTimeout or NewClientWithOptions when you need to override timeouts.
 func NewClient(foundryHost, token string) *Client {
 	return NewClientWithOptions(foundryHost, token, defaultMCPPort, defaultQdrantPort, defaultTimeout)
+}
+
+// NewClientWithTimeout creates a Cortex client with a custom HTTP timeout.
+// Use this when a specific operation (e.g. recall with cold embedding model)
+// needs a longer deadline than the package default.
+func NewClientWithTimeout(foundryHost, token string, timeout time.Duration) *Client {
+	return NewClientWithOptions(foundryHost, token, defaultMCPPort, defaultQdrantPort, timeout)
 }
 
 // NewClientWithOptions creates a Cortex client with explicit port and timeout
