@@ -15,6 +15,7 @@ import (
 )
 
 const cortexDefaultTimeout = 10 * time.Second
+const cortexRecallTimeout = 45 * time.Second
 
 func cortexCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -153,7 +154,7 @@ func cortexRecallCmd() *cobra.Command {
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), cortexRecallTimeout)
 			defer cancel()
 
 			hits, err := client.Recall(ctx, args[0])
