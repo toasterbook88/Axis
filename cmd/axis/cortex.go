@@ -127,7 +127,7 @@ func cortexEventsCmd() *cobra.Command {
 				} else {
 					evType = color(evType)
 				}
-				fmt.Fprintf(w, "  [%s] %s  %s\n", ev.CreatedAt, evType, ev.Payload)
+				fmt.Fprintf(w, "  [%s] %s  %s\n", ev.CreatedAt, evType, string(ev.Payload))
 			}
 			fmt.Fprintln(w)
 			return nil
