@@ -15,6 +15,7 @@ import (
 )
 
 const cortexDefaultTimeout = 10 * time.Second
+const cortexRecallTimeout = 45 * time.Second
 
 func cortexCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -38,9 +39,9 @@ func cortexCmd() *cobra.Command {
 }
 
 // buildCortexClient resolves Foundry from nodes.yaml and the auth token from
-// secrets, then returns a ready-to-use cortex.Client.
+// secrets, then returns a ready-to-use cortex.Client with the given HTTP timeout.
 // It returns an actionable error if foundry is not configured.
-func buildCortexClient() (*cortex.Client, error) {
+func buildCortexClient(timeout time.Duration) (*cortex.Client, error) {
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("cortex: load config: %w", err)
@@ -59,7 +60,7 @@ func buildCortexClient() (*cortex.Client, error) {
 		return nil, fmt.Errorf("cortex: resolve auth token: %w", err)
 	}
 
-	return cortex.NewClient(node.Hostname, token), nil
+	return cortex.NewClientWithTimeout(node.Hostname, token, timeout), nil
 }
 
 func cortexStatusCmd() *cobra.Command {
@@ -67,12 +68,12 @@ func cortexStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show Cortex brain health and memory count",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := buildCortexClient()
+			client, err := buildCortexClient(cortexDefaultTimeout)
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), cortexDefaultTimeout)
+			ctx, cancel := context.WithTimeout(cmd.Context(), cortexDefaultTimeout)
 			defer cancel()
 
 			status, err := client.Status(ctx)
@@ -98,12 +99,12 @@ func cortexEventsCmd() *cobra.Command {
 		Use:   "events",
 		Short: "List recent events from the Cortex event bus",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := buildCortexClient()
+			client, err := buildCortexClient(cortexDefaultTimeout)
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), cortexDefaultTimeout)
+			ctx, cancel := context.WithTimeout(cmd.Context(), cortexDefaultTimeout)
 			defer cancel()
 
 			events, err := client.Events(ctx, limit)
@@ -148,12 +149,12 @@ func cortexRecallCmd() *cobra.Command {
 			"Results are ranked by relevance score (1.0 = exact match).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := buildCortexClient()
+			client, err := buildCortexClient(cortexRecallTimeout)
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), cortexRecallTimeout)
 			defer cancel()
 
 			hits, err := client.Recall(ctx, args[0])
