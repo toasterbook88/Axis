@@ -419,7 +419,7 @@ func TestMaybeLLMCloudFallbackUpgradesReflexResult(t *testing.T) {
 		},
 	}
 
-	result := maybeLLMCloudFallback("go build ./...", current, strings.NewReader("YES\n"), &bytes.Buffer{})
+	result := maybeLLMCloudFallback(context.Background(), "go build ./...", current, strings.NewReader("YES\n"), &bytes.Buffer{})
 	if result.sig.Source != llmrouter.SourceSemantic {
 		t.Fatalf("source = %q, want semantic", result.sig.Source)
 	}
@@ -473,7 +473,7 @@ func TestMaybeLLMCloudFallbackHonorsCostCap(t *testing.T) {
 		},
 	}
 
-	result := maybeLLMCloudFallback("review repo", current, strings.NewReader("YES\n"), &bytes.Buffer{})
+	result := maybeLLMCloudFallback(context.Background(), "review repo", current, strings.NewReader("YES\n"), &bytes.Buffer{})
 	if confirmCalled {
 		t.Fatal("confirmation should not run when cost cap blocks the call")
 	}
