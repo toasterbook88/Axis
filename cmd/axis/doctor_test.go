@@ -241,6 +241,13 @@ func stubDoctorMLX(t *testing.T, fn func(context.Context) doctorBackendStatus) f
 	return func() { doctorProbeMLX = prev }
 }
 
+func stubDoctorMCPServer(t *testing.T, fn func(context.Context) error) func() {
+	t.Helper()
+	prev := doctorCheckMCPServer
+	doctorCheckMCPServer = fn
+	return func() { doctorCheckMCPServer = prev }
+}
+
 func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	t.Helper()
 	restorePath := stubDoctorConfigPath(t, func() string { return filepath.Join(t.TempDir(), "nodes.yaml") })
@@ -257,6 +264,7 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	restoreMLX := stubDoctorMLX(t, func(context.Context) doctorBackendStatus {
 		return doctorBackendStatus{Installed: false}
 	})
+	restoreMCP := stubDoctorMCPServer(t, func(context.Context) error { return nil })
 	return func() {
 		restorePath()
 		restoreLoad()
@@ -264,6 +272,7 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 		restoreCache()
 		restoreLlama()
 		restoreMLX()
+		restoreMCP()
 	}
 }
 
@@ -382,6 +391,49 @@ func TestDoctorBackendProbeErrorIsAdvisory(t *testing.T) {
 		t.Errorf("expected 'probe error' in output, got:\n%s", out)
 	}
 	// Probe errors are advisory, not core failures.
+	if !strings.Contains(out, "Core checks passed with advisory warnings") {
+		t.Errorf("expected advisory summary (not core failure), got:\n%s", out)
+	}
+}
+
+func TestDoctorShowsMCPServerHealthy(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "Server constructs successfully") {
+		t.Errorf("expected MCP server success in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected All checks passed, got:\n%s", out)
+	}
+}
+
+func TestDoctorMCPServerFailureIsAdvisory(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreMCP := stubDoctorMCPServer(t, func(context.Context) error {
+		return errors.New("construction failed")
+	})
+	defer restoreMCP()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "Server construction failed") {
+		t.Errorf("expected MCP server failure in output, got:\n%s", out)
+	}
 	if !strings.Contains(out, "Core checks passed with advisory warnings") {
 		t.Errorf("expected advisory summary (not core failure), got:\n%s", out)
 	}

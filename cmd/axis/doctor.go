@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/facts"
+	axismcp "github.com/toasterbook88/axis/internal/mcp"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -45,6 +46,10 @@ var doctorProbeLlamaServer = func(ctx context.Context) doctorBackendStatus {
 
 var doctorProbeMLX = func(ctx context.Context) doctorBackendStatus {
 	return runBackendProbeScript(ctx, facts.MLXDiscoveryScript)
+}
+
+var doctorCheckMCPServer = func(ctx context.Context) error {
+	return runMCPServerSmokeCheck(ctx)
 }
 
 // formatResidentModelCount returns a human-readable model count suffix.
@@ -92,6 +97,14 @@ func runBackendProbeScript(ctx context.Context, script string) doctorBackendStat
 		Port:          payload.Port,
 		ResidentCount: len(payload.ResidentModels),
 	}
+}
+
+func runMCPServerSmokeCheck(ctx context.Context) error {
+	srv := axismcp.NewServer(false, "")
+	if srv == nil {
+		return fmt.Errorf("MCP server constructor returned nil")
+	}
+	return nil
 }
 
 func doctorCmd() *cobra.Command {
@@ -196,7 +209,20 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		}
 	}
 
-	// 5. Binary info
+	// 5. MCP server smoke test (advisory)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%s MCP server\n", ui.Cyan("→"))
+	mcpCtx, mcpCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+	mcpErr := doctorCheckMCPServer(mcpCtx)
+	mcpCancel()
+	if mcpErr != nil {
+		fmt.Fprintf(out, "  %s Server construction failed: %v\n", ui.StatusIcon(false), mcpErr)
+		advisoryWarnings++
+	} else {
+		fmt.Fprintf(out, "  %s Server constructs successfully\n", ui.StatusIcon(true))
+	}
+
+	// 6. Binary info
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%s Binary\n", ui.Cyan("→"))
 	self, _ := os.Executable()
