@@ -233,7 +233,7 @@ func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *s
 }
 
 func taskRunCmd() *cobra.Command {
-	var execFlag, scriptFlag bool
+	var execFlag, scriptFlag, dryRunFlag bool
 	cmd := &cobra.Command{
 		Use:   "run [description-or-command]",
 		Short: "Run task on best node (explicit only — advisory placement first)",
@@ -303,6 +303,10 @@ func taskRunCmd() *cobra.Command {
 				return err
 			}
 
+			if dryRunFlag {
+				return printDryRunPlan(prepared)
+			}
+
 			if taskRunUsesTTYPrompt() {
 				proceed, err := confirmTaskRunExecution(cmd, prepared)
 				if err != nil {
@@ -329,6 +333,7 @@ func taskRunCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
+	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show the execution plan without running anything")
 	return cmd
 }
 
@@ -385,6 +390,48 @@ func confirmTaskRunExecution(cmd *cobra.Command, prepared execution.PreparedExec
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes", nil
+}
+
+func printDryRunPlan(prepared execution.PreparedExecution) error {
+	fmt.Println(ui.Bold("=== DRY RUN - Execution Plan ==="))
+	fmt.Println()
+	fmt.Printf("  Node: %s\n", prepared.Result.Node)
+	fmt.Printf("  Mode: %s\n", prepared.Result.Mode)
+	fmt.Printf("  Intent: %s\n", prepared.Result.Intent)
+	fmt.Printf("  Command: %s\n", prepared.Command)
+	fmt.Printf("  Fit score: %d/100\n", prepared.Result.FitScore)
+	fmt.Printf("  Locality: %s\n", localityLabel(prepared.Result.IsLocal))
+	fmt.Printf("  Reservation: %dMB\n", prepared.ReservationMB)
+	if prepared.Result.Tool != "" {
+		fmt.Printf("  Tool: %s\n", prepared.Result.Tool)
+	}
+	if prepared.Requirements.Workload.Class != "" {
+		fmt.Printf("  Workload: %s\n", prepared.Requirements.Workload.Class)
+	}
+	if len(prepared.Result.Reasoning) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", ui.Dim("Reasoning:"))
+		for _, r := range prepared.Result.Reasoning {
+			fmt.Printf("    %s %s\n", ui.Dim("-"), r)
+		}
+	}
+	if len(prepared.ExtraEnv) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", ui.Dim("Extra environment:"))
+		for _, env := range prepared.ExtraEnv {
+			fmt.Printf("    %s\n", env)
+		}
+	}
+	fmt.Println()
+	fmt.Println(ui.Dim("Nothing was executed. Remove --dry-run to run."))
+	return nil
+}
+
+func localityLabel(isLocal bool) string {
+	if isLocal {
+		return "local"
+	}
+	return "remote"
 }
 
 func printBlockedResult(resp execution.GuardedExecutionResult) {
