@@ -9,7 +9,7 @@ LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.UpdateManagedBy=
 
-.PHONY: build test test-race lint coverage clean install
+.PHONY: build test test-race lint coverage clean install vuln
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o axis ./cmd/axis/
@@ -29,6 +29,9 @@ lint:
 
 coverage:
 	./hack/coverage-check.sh
+
+vuln:
+	go run golang.org/x/vulncheck/cmd/govulncheck@latest ./...
 
 clean:
 	rm -f axis

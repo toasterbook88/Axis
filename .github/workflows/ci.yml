@@ -39,6 +39,9 @@ jobs:
       - name: Coverage gates
         run: ./hack/coverage-check.sh
 
+      - name: Vulnerability check
+        run: go run golang.org/x/vulncheck/cmd/govulncheck@latest ./...
+
       - name: Install ripgrep
         run: |
           sudo apt-get update
