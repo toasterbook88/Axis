@@ -115,12 +115,14 @@ func (r *Resources) ReservableRAM() int64 {
 
 // NetworkAddress represents a single network address with interface metadata.
 // Kind is one of: ipv4, ipv6, hostname.
+// Scope is one of: global, link-local (empty means global for backward compat).
 type NetworkAddress struct {
 	Kind       string `json:"kind" yaml:"kind"`
 	Address    string `json:"address" yaml:"address"`
 	Interface  string `json:"interface,omitempty" yaml:"interface,omitempty"`     // e.g. en0, eth0, wg0
 	Subnet     string `json:"subnet,omitempty" yaml:"subnet,omitempty"`           // CIDR e.g. 192.168.1.0/24
 	SpeedClass string `json:"speed_class,omitempty" yaml:"speed_class,omitempty"` // thunderbolt, 10gbe, gigabit, wifi, tailscale, wireguard, unknown
+	Scope      string `json:"scope,omitempty" yaml:"scope,omitempty"`             // global, link-local
 }
 
 // ToolInfo describes a discovered tool on a node.

@@ -867,8 +867,9 @@ func localAddresses() []models.NetworkAddress {
 				continue
 			}
 			ip := ipNet.IP
+			scope := "global"
 			if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
-				continue
+				scope = "link-local"
 			}
 
 			kind := "ipv4"
@@ -881,6 +882,7 @@ func localAddresses() []models.NetworkAddress {
 				Interface:  iface.Name,
 				Subnet:     subnetFromIPNet(ipNet),
 				SpeedClass: classifyInterfaceSpeed(iface.Name, ip),
+				Scope:      scope,
 			})
 		}
 	}

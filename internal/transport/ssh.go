@@ -32,6 +32,13 @@ var runSSHConfigCommand = func(ctx context.Context, host string, port int, user 
 	if user != "" {
 		args = append(args, "-l", user)
 	}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		configPath := filepath.Join(home, ".ssh", "config")
+		if _, err := os.Stat(configPath); err == nil {
+			args = append(args, "-F", configPath)
+		}
+	}
 	args = append(args, host)
 
 	cmd := exec.CommandContext(ctx, "ssh", args...)
@@ -44,6 +51,7 @@ var runSSHConfigCommand = func(ctx context.Context, host string, port int, user 
 
 type resolvedSSHConfig struct {
 	IdentityFiles        []string
+	IdentitiesOnly       bool
 	UserKnownHostsFiles  []string
 	GlobalKnownHostsFile []string
 	Hostname             string
@@ -281,11 +289,15 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 	var signers []ssh.Signer
 	home, _ := os.UserHomeDir()
 
-	// Try SSH agent first
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if conn, err := net.Dial("unix", sock); err == nil {
-			if agentSigners, err := agent.NewClient(conn).Signers(); err == nil {
-				signers = append(signers, agentSigners...)
+	// When IdentitiesOnly yes is set, skip SSH agent and default key names
+	// to match OpenSSH behavior: only offer explicitly configured identity files.
+	if !resolved.IdentitiesOnly {
+		// Try SSH agent first
+		if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+			if conn, err := net.Dial("unix", sock); err == nil {
+				if agentSigners, err := agent.NewClient(conn).Signers(); err == nil {
+					signers = append(signers, agentSigners...)
+				}
 			}
 		}
 	}
@@ -373,6 +385,10 @@ func parseSSHConfigDump(output string) resolvedSSHConfig {
 			resolved.HostKeyAlgorithms = appendAlgorithmValues(resolved.HostKeyAlgorithms, values...)
 		case "identityfile":
 			resolved.IdentityFiles = append(resolved.IdentityFiles, values...)
+		case "identitiesonly":
+			if len(values) > 0 && strings.ToLower(values[0]) == "yes" {
+				resolved.IdentitiesOnly = true
+			}
 		case "userknownhostsfile":
 			resolved.UserKnownHostsFiles = append(resolved.UserKnownHostsFiles, values...)
 		case "globalknownhostsfile":
@@ -388,8 +404,10 @@ func signerPaths(home string, resolved resolvedSSHConfig) []string {
 	for _, path := range resolved.IdentityFiles {
 		paths = append(paths, normalizedSSHPath(home, path))
 	}
-	for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
-		paths = append(paths, filepath.Join(home, ".ssh", name))
+	if !resolved.IdentitiesOnly {
+		for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
+			paths = append(paths, filepath.Join(home, ".ssh", name))
+		}
 	}
 	return uniqueNonEmptyPaths(paths)
 }
