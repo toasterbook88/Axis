@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -93,7 +94,7 @@ type configFingerprint struct {
 
 var watchConfigPollInterval = 500 * time.Millisecond
 var reportWatchFingerprintError = func(path, trigger string, err error) {
-	fmt.Fprintf(os.Stderr, "axis daemon: watch fingerprint failed for %s (%s): %v\n", path, trigger, err)
+	slog.Error("daemon: watch fingerprint failed", "path", path, "trigger", trigger, "error", err)
 }
 
 func (d *Daemon) RefreshNow(ctx context.Context) error {
@@ -568,7 +569,7 @@ func defaultCollector(registry *discovery.BeaconRegistry) Collector {
 
 func persistSnapshot(path string, snap *models.ClusterSnapshot) error {
 	if snap == nil {
-		return fmt.Errorf("nil snapshot")
+		return errors.New("nil snapshot")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
