@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -27,17 +28,17 @@ const (
 // a trusted upstream AXIS caller.
 func SetForwardedExecutionOriginHeaders(header http.Header, origin models.ExecutionOrigin, token string, now time.Time) error {
 	if header == nil {
-		return fmt.Errorf("forwarded execution origin headers require a header target")
+		return errors.New("forwarded execution origin headers require a header target")
 	}
 
 	origin = origin.Normalized()
 	if origin.IsZero() {
-		return fmt.Errorf("forwarded execution origin requires at least one identity field")
+		return errors.New("forwarded execution origin requires at least one identity field")
 	}
 
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return fmt.Errorf("forwarded execution origin requires a signing token")
+		return errors.New("forwarded execution origin requires a signing token")
 	}
 
 	stampedAt := normalizeForwardedOriginTime(now)
@@ -68,7 +69,7 @@ func ForwardedExecutionOriginFromRequest(r *http.Request, token string, now time
 
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return models.ExecutionOrigin{}, true, fmt.Errorf("forwarded execution origin requires a configured signing token")
+		return models.ExecutionOrigin{}, true, errors.New("forwarded execution origin requires a configured signing token")
 	}
 	if stampedAt == "" {
 		return models.ExecutionOrigin{}, true, fmt.Errorf("forwarded execution origin requires %s", ForwardedOriginTimeHeader)
@@ -88,17 +89,17 @@ func ForwardedExecutionOriginFromRequest(r *http.Request, token string, now time
 	}
 	now = now.UTC()
 	if delta := now.Sub(parsedTime.UTC()); delta > forwardedOriginMaxSkew || delta < -forwardedOriginMaxSkew {
-		return models.ExecutionOrigin{}, true, fmt.Errorf("forwarded execution origin timestamp outside allowed skew")
+		return models.ExecutionOrigin{}, true, errors.New("forwarded execution origin timestamp outside allowed skew")
 	}
 
 	origin := models.NewExecutionOrigin(node, hostname, stableID)
 	if origin.IsZero() {
-		return models.ExecutionOrigin{}, true, fmt.Errorf("forwarded execution origin requires at least one identity field")
+		return models.ExecutionOrigin{}, true, errors.New("forwarded execution origin requires at least one identity field")
 	}
 
 	expected := signForwardedOrigin(origin, token, stampedAt)
 	if !hmac.Equal([]byte(signature), []byte(expected)) {
-		return models.ExecutionOrigin{}, true, fmt.Errorf("invalid forwarded execution origin signature")
+		return models.ExecutionOrigin{}, true, errors.New("invalid forwarded execution origin signature")
 	}
 
 	return origin, true, nil

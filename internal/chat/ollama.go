@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -126,7 +127,7 @@ func (c *OllamaClient) ensureRunning(ctx context.Context, w io.Writer) error {
 			}
 		}
 		if !up {
-			return fmt.Errorf("ollama daemon failed to become responsive after start")
+			return errors.New("ollama daemon failed to become responsive after start")
 		}
 	}
 

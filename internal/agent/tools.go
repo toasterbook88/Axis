@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -143,7 +144,7 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 				return "", fmt.Errorf("invalid arguments for axis_place: expected {\"description\": \"...\"}, got: %s", string(args))
 			}
 			if a.Description == "" {
-				return "", fmt.Errorf("axis_place requires a non-empty \"description\" argument")
+				return "", errors.New("axis_place requires a non-empty \"description\" argument")
 			}
 			if tc.Snapshot == nil || len(tc.Snapshot.Nodes) == 0 {
 				return `{"ok":false,"reasoning":["no nodes available in snapshot"]}`, nil
@@ -194,11 +195,11 @@ func (r *ToolRegistry) registerShell() {
 				return "", fmt.Errorf("invalid arguments for run_shell: expected {\"command\": \"...\"}, got: %s", string(args))
 			}
 			if a.Command == "" {
-				return "", fmt.Errorf("run_shell requires a non-empty \"command\" argument")
+				return "", errors.New("run_shell requires a non-empty \"command\" argument")
 			}
 			// Shell execution is handled by the agent loop after safety + confirmation.
 			// This executor is a placeholder — the Agent dispatches shell commands specially.
-			return "", fmt.Errorf("run_shell must be dispatched through the agent safety gate")
+			return "", errors.New("run_shell must be dispatched through the agent safety gate")
 		},
 	)
 }
@@ -221,7 +222,7 @@ func ExecuteShell(ctx context.Context, command string) (string, error) {
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
-		return output + "\n[timeout after 30s]", fmt.Errorf("command timed out after 30s")
+		return output + "\n[timeout after 30s]", errors.New("command timed out after 30s")
 	}
 	if err != nil {
 		return output + "\n[exit error] " + err.Error(), nil

@@ -2,7 +2,7 @@ package facts
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -79,7 +79,7 @@ func detectRemoteHostname(ctx context.Context, exec transport.Executor) (string,
 	}
 	hostname := strings.TrimSpace(out)
 	if hostname == "" {
-		return "", fmt.Errorf("remote hostname probe returned empty hostname")
+		return "", errors.New("remote hostname probe returned empty hostname")
 	}
 	return hostname, nil
 }

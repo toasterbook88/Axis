@@ -43,7 +43,7 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 		return nil, "", err
 	}
 	if !meta.Ready {
-		return nil, "", fmt.Errorf("snapshot cache not ready")
+		return nil, "", errors.New("snapshot cache not ready")
 	}
 
 	client, baseURLAddr := HttpClientForAddr(addr)
@@ -210,14 +210,14 @@ func RunGuardedStream(ctx context.Context, addr string, req execution.GuardedExe
 			}
 		case RunStreamEventResult:
 			if event.Result == nil {
-				return execution.GuardedExecutionResult{}, fmt.Errorf("run stream result event missing payload")
+				return execution.GuardedExecutionResult{}, errors.New("run stream result event missing payload")
 			}
 			final = *event.Result
 			seenFinal = true
 		}
 	}
 	if !seenFinal {
-		return execution.GuardedExecutionResult{}, fmt.Errorf("run stream ended without final result")
+		return execution.GuardedExecutionResult{}, errors.New("run stream ended without final result")
 	}
 	if final.Blocked {
 		return final, nil

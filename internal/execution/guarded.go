@@ -313,7 +313,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		return prepared, err
 	}
 	if rt == nil || rt.Config == nil || rt.Snapshot == nil {
-		err := fmt.Errorf("runtime context unavailable")
+		err := errors.New("runtime context unavailable")
 		prepared.Result.Error = err.Error()
 		prepared.Err = err
 		return prepared, err
@@ -352,7 +352,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.IsLocal = decision.IsLocal
 
 	if !decision.OK {
-		err := fmt.Errorf("no suitable node found")
+		err := errors.New("no suitable node found")
 		prepared.Result.Error = err.Error()
 		prepared.Err = err
 		return prepared, err
@@ -361,7 +361,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	reservationMB := ReservationMBForRequirements(reqs)
 	prepared.ReservationMB = reservationMB
 	if !CanReserve(rt.Snapshot, rt.State, decision.Node, reservationMB) {
-		err := fmt.Errorf("reservation cap exceeded")
+		err := errors.New("reservation cap exceeded")
 		prepared.Result.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
 		prepared.Err = err
 		return prepared, err
@@ -593,7 +593,7 @@ func parseDarwinAvailableRAMMB(out string) (int64, error) {
 	}
 
 	if pages <= 0 {
-		return 0, fmt.Errorf("vm_stat did not report reclaimable pages")
+		return 0, errors.New("vm_stat did not report reclaimable pages")
 	}
 	return pages * pageSize / (1024 * 1024), nil
 }
@@ -629,7 +629,7 @@ func parseLinuxAvailableRAMMB(out string) (int64, error) {
 		}
 		return kb / 1024, nil
 	}
-	return 0, fmt.Errorf("MemAvailable not found")
+	return 0, errors.New("MemAvailable not found")
 }
 
 func runLocal(

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -537,12 +538,12 @@ type cloudSelectionCandidate struct {
 // matching the documented inference.prefer default).
 func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer string) (Provider, RoutingDecision, error) {
 	if registry == nil {
-		return nil, RoutingDecision{}, fmt.Errorf("cloud registry is nil")
+		return nil, RoutingDecision{}, errors.New("cloud registry is nil")
 	}
 
 	providers := registry.ListByType(ProviderCloud)
 	if len(providers) == 0 {
-		return nil, RoutingDecision{}, fmt.Errorf("no cloud providers configured")
+		return nil, RoutingDecision{}, errors.New("no cloud providers configured")
 	}
 
 	// Probe all cloud providers concurrently for real health + latency data.
@@ -570,7 +571,7 @@ func SelectCloudFallback(ctx context.Context, registry *Registry, prompt, prefer
 		})
 	}
 	if len(candidates) == 0 {
-		return nil, RoutingDecision{}, fmt.Errorf("no healthy cloud providers available")
+		return nil, RoutingDecision{}, errors.New("no healthy cloud providers available")
 	}
 
 	// Default to "latency" when prefer is empty or unrecognized,

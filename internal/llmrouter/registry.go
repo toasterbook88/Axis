@@ -2,6 +2,7 @@ package llmrouter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -29,11 +30,11 @@ func NewRegistry() *Registry {
 // same name is already registered. Name matching is case-sensitive.
 func (r *Registry) Register(p Provider) error {
 	if p == nil {
-		return fmt.Errorf("registry: cannot register nil provider")
+		return errors.New("registry: cannot register nil provider")
 	}
 	name := p.Name()
 	if name == "" {
-		return fmt.Errorf("registry: provider name must not be empty")
+		return errors.New("registry: provider name must not be empty")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

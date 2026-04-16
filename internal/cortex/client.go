@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -310,9 +311,9 @@ func (c *Client) doRPC(ctx context.Context, req rpcRequest) (json.RawMessage, er
 
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("authentication required — set AXIS_CORTEX_SECRET or ~/.axis/cortex.token")
+		return nil, errors.New("authentication required — set AXIS_CORTEX_SECRET or ~/.axis/cortex.token")
 	case http.StatusForbidden:
-		return nil, fmt.Errorf("access denied — check AXIS_CORTEX_SECRET value")
+		return nil, errors.New("access denied — check AXIS_CORTEX_SECRET value")
 	case http.StatusOK:
 		// OK, fall through.
 	default:

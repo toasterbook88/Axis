@@ -3,6 +3,7 @@ package facts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -488,7 +489,7 @@ func localRAM() (int64, int64, error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		return 0, freeMB, fmt.Errorf("could not determine total RAM")
+		return 0, freeMB, errors.New("could not determine total RAM")
 	}
 	// Linux
 	data, err := os.ReadFile("/proc/meminfo")
@@ -562,13 +563,13 @@ func parseLinuxMeminfo(data string) (int64, int64, error) {
 		}
 	}
 	if total <= 0 {
-		return 0, 0, fmt.Errorf("meminfo missing MemTotal")
+		return 0, 0, errors.New("meminfo missing MemTotal")
 	}
 	if available <= 0 {
 		if free > 0 {
 			available = free
 		} else {
-			return 0, 0, fmt.Errorf("meminfo missing MemAvailable")
+			return 0, 0, errors.New("meminfo missing MemAvailable")
 		}
 	}
 	return total / 1024, available / 1024, nil
@@ -598,7 +599,7 @@ func parseDarwinLoadavg(data string) (float64, float64, float64, error) {
 func parseLoadavgFields(data string) (float64, float64, float64, error) {
 	fields := strings.Fields(strings.TrimSpace(data))
 	if len(fields) < 3 {
-		return 0, 0, 0, fmt.Errorf("unexpected loadavg output")
+		return 0, 0, 0, errors.New("unexpected loadavg output")
 	}
 
 	load1, err := strconv.ParseFloat(fields[0], 64)
@@ -685,7 +686,7 @@ func localDisk() (int64, int64, error) {
 func parseDFOutput(out string) (int64, int64, error) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {
-		return 0, 0, fmt.Errorf("unexpected df output")
+		return 0, 0, errors.New("unexpected df output")
 	}
 
 	for _, line := range lines[1:] {
@@ -705,7 +706,7 @@ func parseDFOutput(out string) (int64, int64, error) {
 		return totalKB / (1024 * 1024), freeKB / (1024 * 1024), nil
 	}
 
-	return 0, 0, fmt.Errorf("unexpected df fields")
+	return 0, 0, errors.New("unexpected df fields")
 }
 
 func localGPUs() []models.GPUInfo {
@@ -1247,7 +1248,7 @@ func parseLinuxBlockDeviceInfo(out string) (linuxBlockDeviceInfo, error) {
 		return linuxBlockDeviceInfo{}, err
 	}
 	if len(resp.Blockdevices) == 0 {
-		return linuxBlockDeviceInfo{}, fmt.Errorf("lsblk returned no block devices")
+		return linuxBlockDeviceInfo{}, errors.New("lsblk returned no block devices")
 	}
 	return resp.Blockdevices[0], nil
 }

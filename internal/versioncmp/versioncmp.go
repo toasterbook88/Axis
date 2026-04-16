@@ -1,6 +1,7 @@
 package versioncmp
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,7 +25,7 @@ func Compare(current, latest string) (int, error) {
 func normalize(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", fmt.Errorf("empty version")
+		return "", errors.New("empty version")
 	}
 	if !strings.HasPrefix(trimmed, "v") {
 		trimmed = "v" + trimmed
@@ -39,7 +40,7 @@ func normalize(raw string) (string, error) {
 
 	coreParts := strings.Split(strings.TrimPrefix(core, "v"), ".")
 	if len(coreParts) > 3 {
-		return "", fmt.Errorf("too many numeric segments")
+		return "", errors.New("too many numeric segments")
 	}
 	for len(coreParts) < 3 {
 		coreParts = append(coreParts, "0")

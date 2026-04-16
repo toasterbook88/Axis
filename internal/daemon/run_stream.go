@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -67,7 +67,7 @@ type RunStreamEmitter struct {
 func NewRunStreamEmitter(w http.ResponseWriter) (*RunStreamEmitter, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return nil, fmt.Errorf("streaming /run requires http flusher support")
+		return nil, errors.New("streaming /run requires http flusher support")
 	}
 	w.Header().Set("Content-Type", RunStreamContentType)
 	w.Header().Set("Cache-Control", "no-store")

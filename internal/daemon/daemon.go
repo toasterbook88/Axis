@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -552,7 +553,7 @@ func defaultCollector(registry *discovery.BeaconRegistry) Collector {
 
 func persistSnapshot(path string, snap *models.ClusterSnapshot) error {
 	if snap == nil {
-		return fmt.Errorf("nil snapshot")
+		return errors.New("nil snapshot")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

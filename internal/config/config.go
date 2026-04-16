@@ -3,6 +3,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -180,7 +181,7 @@ func decodeStrict(data []byte, cfg *Config) error {
 		}
 		return err
 	}
-	return fmt.Errorf("multiple YAML documents are not supported")
+	return errors.New("multiple YAML documents are not supported")
 }
 
 // FindNode returns the configuration for the specified node name.
@@ -199,7 +200,7 @@ func (c *Config) FindNode(name string) (NodeConfig, bool) {
 // Validate checks that all required fields are present.
 func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {
-		return fmt.Errorf("config: no nodes defined")
+		return errors.New("config: no nodes defined")
 	}
 	for i := range c.Nodes {
 		n := &c.Nodes[i]

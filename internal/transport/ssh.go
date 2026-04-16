@@ -303,7 +303,7 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 	}
 
 	if len(signers) == 0 {
-		return nil, fmt.Errorf("no SSH keys or agent available")
+		return nil, errors.New("no SSH keys or agent available")
 	}
 
 	// SSH Host Key verification is MANDATORY.
@@ -418,7 +418,7 @@ func existingKnownHostsPaths(home string, resolved resolvedSSHConfig, host strin
 	}
 
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no known_hosts paths available")
+		return nil, errors.New("no known_hosts paths available")
 	}
 	first := candidates[0]
 	return nil, fmt.Errorf("%s not found. To trust a host, run: ssh-keyscan -p %d %s >> %s", first, port, host, first)

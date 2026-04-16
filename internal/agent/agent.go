@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -200,12 +201,12 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		return "", fmt.Errorf("invalid arguments for run_shell: expected {\"command\": \"...\"}, got: %s", string(args))
 	}
 	if sa.Command == "" {
-		return "", fmt.Errorf("run_shell requires a non-empty \"command\" argument")
+		return "", errors.New("run_shell requires a non-empty \"command\" argument")
 	}
 
 	// Session-level block.
 	if a.blockAll {
-		return "", fmt.Errorf("operator has blocked all shell commands for this session")
+		return "", errors.New("operator has blocked all shell commands for this session")
 	}
 
 	// Safety gate.
@@ -224,7 +225,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 			a.autoApproveAll = true
 		case ConfirmNever:
 			a.blockAll = true
-			return "", fmt.Errorf("operator has blocked all shell commands for this session")
+			return "", errors.New("operator has blocked all shell commands for this session")
 		case ConfirmYes:
 			// proceed
 		}
