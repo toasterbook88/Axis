@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -466,7 +467,7 @@ func scheduleCacheRefresh(cache snapshotCache, trigger string) {
 		ctx, cancel := context.WithTimeout(context.Background(), runtimeRefreshTimeout)
 		defer cancel()
 		if err := refreshCache(cache, ctx, trigger); err != nil {
-			fmt.Fprintf(os.Stderr, "axis api: async refresh (%s) failed: %v\n", trigger, err)
+			slog.Error("api: async refresh failed", "trigger", trigger, "error", err)
 		}
 	}()
 }

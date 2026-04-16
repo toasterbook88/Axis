@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -91,7 +91,7 @@ type configFingerprint struct {
 
 var watchConfigPollInterval = 500 * time.Millisecond
 var reportWatchFingerprintError = func(path, trigger string, err error) {
-	fmt.Fprintf(os.Stderr, "axis daemon: watch fingerprint failed for %s (%s): %v\n", path, trigger, err)
+	slog.Error("daemon: watch fingerprint failed", "path", path, "trigger", trigger, "error", err)
 }
 
 func (d *Daemon) RefreshNow(ctx context.Context) error {
