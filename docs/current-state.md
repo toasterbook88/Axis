@@ -74,14 +74,21 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
-| `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache |
-| `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
-| `axis task place` | Advisory placement | Human output/JSON; `--cached` uses the local daemon cache |
+| `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache; `--cached-only` fails without daemon |
+| `axis task place` | Advisory placement | Human output/JSON; flat `PlacementDecision` output; `--cached` uses the local daemon cache |
+| `axis placement explain` | Detailed placement breakdown | Shows eligible and excluded nodes with per-node reasoning; JSON wraps in `explanation` envelope |
+| `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
+| `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
+| `axis daemon start` | Start daemon HTTP API | Alias for `axis serve`; `--addr` and `--refresh` flags |
+| `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
-| `axis task run` | Execute on selected node | Explicit execution path exists |
+| `axis daemon status` | Inspect daemon freshness | Reports cache readiness, age, version metadata |
+| `axis daemon restart` | Restart daemon | Restart the local cache seam |
 | `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
 | `axis agent` | Agentic tool-calling assistant | Read-only cluster tools + safety-gated shell; `--auto-approve` for safe commands |
+| `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |
+| `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
 | `axis serve` | Start local HTTP API | Includes execution surface |
 | `axis update` | Self-update binary | Safely replaces only the current executing binary with the latest release, verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--all` to upgrade all `$PATH` matches. `--check` reports only |
@@ -171,6 +178,10 @@ Areas where the live repo has moved past the older docs/specs:
 - Resident-model facts now include llama-server and MLX in addition to Ollama, making the resident-model view multiruntime
 - `axis status` now surfaces a live RESIDENT MODELS table so operators can see at a glance which models are running where and under which runtime
 - `axis doctor` now probes local AI backends and reports their state as advisory checks alongside the existing SSH/config/daemon checks
+- `axis placement explain` provides a detailed placement breakdown showing eligible and excluded nodes, distinct from the simpler `task place` output
+- `axis profile match` shows workload class matching and requirement inference without needing a cluster snapshot
+- `axis task run` now has a TTY-aware confirmation prompt and uses `SAFETY BLOCKED` instead of the earlier `BULLSHIT BLOCKED` banner
+- `axis daemon start` is an alias for `axis serve`, making daemon lifecycle more discoverable
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
