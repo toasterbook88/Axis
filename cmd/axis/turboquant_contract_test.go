@@ -15,7 +15,7 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	explanation, source, err := planTaskExplanation(
 		context.Background(),
 		"run 128k ollama inference",
 		true,
@@ -32,9 +32,9 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 	}
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
-		return printOutput(taskPlaceOutput{
-			Source:   source,
-			Decision: decision,
+		return printOutput(placementExplainOutput{
+			Source:      source,
+			Explanation: explanation,
 		}, "json")
 	})
 	if err != nil {

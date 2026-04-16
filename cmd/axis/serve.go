@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/signal"
 	"syscall"
 	"time"
@@ -38,6 +39,40 @@ var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token s
 	return api.ServeWithContext(ctx, addr, d, token)
 }
 
+func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	token, err := auth.LoadOrGenerateToken()
+	if err != nil {
+		return fmt.Errorf("failed to load/generate API token: %w", err)
+	}
+
+	d := newServeDaemon(refreshInterval)
+	d.Start(ctx)
+	d.WatchConfig(ctx, config.DefaultConfigPath())
+	d.WatchState(ctx, state.Path())
+	d.WatchSkills(ctx, skills.Path())
+	d.WatchDiscovery(ctx, config.DefaultConfigPath())
+
+	protocol := "http"
+	if auth.IsUnixAddr(addr) {
+		protocol = "unix"
+	}
+	fmt.Fprintf(out, "AXIS HTTP API listening on %s://%s\n", protocol, addr)
+
+	// ServeWithContext blocks until ctx is cancelled or a listen error.
+	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then we wait for
+	// the background refresh goroutines to finish.
+	err = serveHTTPAPI(ctx, addr, d, token)
+
+	drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
+	defer cancel()
+	d.WaitStopped(drainCtx)
+
+	return err
+}
+
 func serveCmd() *cobra.Command {
 	var addr string
 	var refreshInterval time.Duration
@@ -46,37 +81,7 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the local AXIS HTTP API with background snapshot refresh",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-			defer stop()
-
-			token, err := auth.LoadOrGenerateToken()
-			if err != nil {
-				return fmt.Errorf("failed to load/generate API token: %w", err)
-			}
-
-			d := newServeDaemon(refreshInterval)
-			d.Start(ctx)
-			d.WatchConfig(ctx, config.DefaultConfigPath())
-			d.WatchState(ctx, state.Path())
-			d.WatchSkills(ctx, skills.Path())
-			d.WatchDiscovery(ctx, config.DefaultConfigPath())
-
-			protocol := "http"
-			if auth.IsUnixAddr(addr) {
-				protocol = "unix"
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "AXIS HTTP API listening on %s://%s\n", protocol, addr)
-
-			// ServeWithContext blocks until ctx is cancelled or a listen error.
-			// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then we wait for
-			// the background refresh goroutines to finish.
-			err = serveHTTPAPI(ctx, addr, d, token)
-
-			drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
-			defer cancel()
-			d.WaitStopped(drainCtx)
-
-			return err
+			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval)
 		},
 	}
 

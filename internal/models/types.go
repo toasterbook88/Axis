@@ -294,6 +294,24 @@ type PlacementDecision struct {
 	OK        bool                 `json:"ok" yaml:"ok"`
 }
 
+type PlacementCandidateExplanation struct {
+	Node      string   `json:"node" yaml:"node"`
+	FitScore  int      `json:"fit_score" yaml:"fit_score"`
+	IsLocal   bool     `json:"is_local" yaml:"is_local"`
+	Reasoning []string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+}
+
+type PlacementExclusion struct {
+	Node    string   `json:"node" yaml:"node"`
+	Reasons []string `json:"reasons,omitempty" yaml:"reasons,omitempty"`
+}
+
+type PlacementExplanation struct {
+	Decision PlacementDecision               `json:"decision" yaml:"decision"`
+	Eligible []PlacementCandidateExplanation `json:"eligible,omitempty" yaml:"eligible,omitempty"`
+	Excluded []PlacementExclusion            `json:"excluded,omitempty" yaml:"excluded,omitempty"`
+}
+
 // --- Phase 3: Failure Memory ---
 
 // FailureClass categorizes an operational failure.

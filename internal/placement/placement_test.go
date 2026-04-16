@@ -1,6 +1,7 @@
 package placement
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -1402,5 +1403,101 @@ func TestFilterEmpiricalPeakRAMSelectsBetterNodeFromTwo(t *testing.T) {
 	result := FilterCandidates(reqs, []models.NodeFacts{tiny, capable}, st)
 	if len(result) != 1 || result[0].Name != "capable" {
 		t.Errorf("expected only capable to survive PeakRAMMB filter, got %v", names(result))
+	}
+}
+
+func TestExplainPlacementWinnerMatchesSelectBestNode(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("alpha", 4096, "low", "git"),
+		nodeComplete("beta", 6144, "none", "git"),
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
+
+	decision := SelectBestNode(reqs, nodes, nil)
+	explanation := ExplainPlacement(reqs, nodes, nil)
+
+	if explanation.Decision.Node != decision.Node || explanation.Decision.FitScore != decision.FitScore {
+		t.Fatalf("expected explanation winner to match SelectBestNode, got %#v vs %#v", explanation.Decision, decision)
+	}
+}
+
+func TestExplainPlacementEligibleRankingMatchesRankCandidates(t *testing.T) {
+	nodes := []models.NodeFacts{
+		nodeComplete("alpha", 4096, "low", "git"),
+		nodeComplete("beta", 6144, "none", "git"),
+		nodeComplete("gamma", 5120, "medium", "git"),
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}}
+
+	ranked := RankCandidates(FilterCandidates(reqs, nodes, nil), reqs, nil)
+	explanation := ExplainPlacement(reqs, nodes, nil)
+
+	if len(explanation.Eligible) != len(ranked) {
+		t.Fatalf("eligible count = %d, want %d", len(explanation.Eligible), len(ranked))
+	}
+	for i, node := range ranked {
+		if explanation.Eligible[i].Node != node.Name {
+			t.Fatalf("eligible[%d] = %q, want %q", i, explanation.Eligible[i].Node, node.Name)
+		}
+	}
+}
+
+func TestExplainPlacementEmitsExcludedReasonsForCommonFilters(t *testing.T) {
+	withOllama := func(node models.NodeFacts) models.NodeFacts {
+		node.Tools = append(node.Tools, models.ToolInfo{Name: "ollama"})
+		node.Ollama = &models.OllamaInfo{Installed: true, Running: true}
+		return node
+	}
+
+	capable := withOllama(nodeComplete("capable", 8192, "low"))
+	missingTool := nodeComplete("missing-tool", 8192, "low")
+	lowRAM := withOllama(nodeComplete("low-ram", 2048, "low"))
+	thrashing := withOllama(nodeComplete("thrashing", 8192, "high"))
+	thrashing.Resources.PressureSource = "linux-psi"
+	thrashing.Resources.PressureStall10 = 18.2
+	blocked := withOllama(nodeComplete("blocked", 8192, "low"))
+	tiny := withOllama(nodeComplete("tiny", 4096, "low"))
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  4096,
+		Workload:      models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference},
+	}
+	st := &state.ClusterState{
+		Nodes:        map[string]state.NodeState{},
+		Failures:     failures.NewStore(),
+		Observations: map[string]models.ExecutionObservation{},
+	}
+	st.Failures.Record(models.FailureExecCrash, models.FailureScope{
+		Node:     "blocked",
+		Workload: models.ClassLocalLLMInference,
+	}, "crashed repeatedly", nil)
+	st.RecordObservation(freshInferenceObs("tiny", reqs, 6144))
+
+	explanation := ExplainPlacement(reqs, []models.NodeFacts{capable, missingTool, lowRAM, thrashing, blocked, tiny}, st)
+
+	if explanation.Decision.Node != "capable" {
+		t.Fatalf("expected capable to win, got %#v", explanation.Decision)
+	}
+
+	reasonsByNode := make(map[string]string, len(explanation.Excluded))
+	for _, excluded := range explanation.Excluded {
+		reasonsByNode[excluded.Node] = strings.Join(excluded.Reasons, "\n")
+	}
+
+	if !contains(reasonsByNode["missing-tool"], "missing required tools") {
+		t.Fatalf("expected missing-tool exclusion reason, got %q", reasonsByNode["missing-tool"])
+	}
+	if !contains(reasonsByNode["low-ram"], "need 4096MB free RAM") {
+		t.Fatalf("expected RAM shortfall reason, got %q", reasonsByNode["low-ram"])
+	}
+	if !contains(reasonsByNode["thrashing"], "critical runtime memory pressure") {
+		t.Fatalf("expected runtime pressure reason, got %q", reasonsByNode["thrashing"])
+	}
+	if !contains(reasonsByNode["blocked"], "blocked by failure memory") {
+		t.Fatalf("expected failure-memory reason, got %q", reasonsByNode["blocked"])
+	}
+	if !contains(reasonsByNode["tiny"], "empirical peak RAM") {
+		t.Fatalf("expected empirical peak RAM reason, got %q", reasonsByNode["tiny"])
 	}
 }

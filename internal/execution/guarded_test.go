@@ -256,6 +256,94 @@ func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
 	}
 }
 
+func TestPrepareGuardedExecutionDefersOnReadyAndStateMutation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	var readyCalled bool
+	prepared, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo ok",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+		OnReady: func(GuardedExecutionResult) {
+			readyCalled = true
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareGuardedExecution: %v", err)
+	}
+	if readyCalled {
+		t.Fatal("expected prepare step to defer OnReady callback")
+	}
+	if len(rt.State.Nodes) != 0 {
+		t.Fatalf("expected no reservation state during prepare, got %#v", rt.State.Nodes)
+	}
+	if prepared.Result.Node != "studio" || prepared.Command != "echo ok" {
+		t.Fatalf("unexpected prepared result: %#v", prepared)
+	}
+}
+
+func TestRunPreparedExecutionCallsOnReadyDuringExecution(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	var readyCalled bool
+	prepared, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo ok",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+		OnReady: func(GuardedExecutionResult) {
+			readyCalled = true
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareGuardedExecution: %v", err)
+	}
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("ok\n"), 0, nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunPreparedExecution(context.Background(), prepared)
+	if err != nil {
+		t.Fatalf("RunPreparedExecution: %v", err)
+	}
+	if !readyCalled {
+		t.Fatal("expected OnReady callback during execute step")
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response, got %#v", resp)
+	}
+}
+
 func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
