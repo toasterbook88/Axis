@@ -226,6 +226,7 @@ In practical terms:
 - Local daemon `/run` callers now share one execution transport path, and that path no longer inherits the short snapshot/meta HTTP timeout, so long-running daemon-hop executions are bounded by caller context instead of a fixed 5-second client timeout
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads and can surface typed discovery freshness in machine-readable output, but cache provenance is still only explicit on cached-path output
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
+- Daemon freshness policy: 7 refresh triggers (startup, interval, manual, config-change, state-change, skills-change, beacon-change) plus execution events; staleness threshold is configurable (default 5 min, exposed via `stale_threshold_sec` in metadata); `--cached` is explicit and operator-facing, never a hidden fallback
 
 ## Recommended Next Sequence
 

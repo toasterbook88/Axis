@@ -28,6 +28,7 @@ const ShutdownDrainTimeout = 10 * time.Second
 const (
 	defaultRefreshInterval = time.Minute
 	defaultRefreshTimeout  = 60 * time.Second
+	defaultStaleThreshold  = 5 * time.Minute
 	DefaultAddr            = "127.0.0.1:42425"
 )
 
@@ -54,6 +55,7 @@ type Metadata struct {
 	Version            string    `json:"version,omitempty"`
 	CacheAgeSec        int       `json:"cache_age_sec,omitempty"`
 	Stale              bool      `json:"stale,omitempty"`
+	StaleThresholdSec  int       `json:"stale_threshold_sec,omitempty"`
 	// Phase 3: refresh metrics
 	RefreshCount  int64                      `json:"refresh_count"`
 	LastRefreshMs int64                      `json:"last_refresh_duration_ms,omitempty"`
@@ -67,6 +69,7 @@ type Daemon struct {
 	wg             sync.WaitGroup // tracks background goroutines for graceful drain
 	collector      Collector
 	interval       time.Duration
+	staleThreshold time.Duration
 	snapshotPath   string
 	beaconRegistry *discovery.BeaconRegistry
 
@@ -132,9 +135,10 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		collector = defaultCollector(nil)
 	}
 	return &Daemon{
-		collector:    collector,
-		interval:     interval,
-		snapshotPath: DefaultSnapshotPath(),
+		collector:      collector,
+		interval:       interval,
+		staleThreshold: defaultStaleThreshold,
+		snapshotPath:   DefaultSnapshotPath(),
 	}
 }
 
@@ -147,6 +151,17 @@ func (d *Daemon) SetSnapshotPath(path string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.snapshotPath = path
+}
+
+// SetStaleThreshold configures how old the cache must be before it is
+// considered stale. The default is 5 minutes. A value <= 0 resets to default.
+func (d *Daemon) SetStaleThreshold(threshold time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if threshold <= 0 {
+		threshold = defaultStaleThreshold
+	}
+	d.staleThreshold = threshold
 }
 
 func (d *Daemon) Start(ctx context.Context) {
@@ -472,7 +487,7 @@ func (d *Daemon) Meta() Metadata {
 		if age < 0 {
 			age = 0
 		}
-		stale = time.Since(d.collectedAt) > 5*time.Minute
+		stale = time.Since(d.collectedAt) > d.staleThreshold
 	}
 
 	meta := Metadata{
@@ -488,6 +503,7 @@ func (d *Daemon) Meta() Metadata {
 		Version:            Version,
 		CacheAgeSec:        age,
 		Stale:              stale,
+		StaleThresholdSec:  int(d.staleThreshold / time.Second),
 		RefreshCount:       d.refreshCount,
 		LastRefreshMs:      d.lastRefreshDuration.Milliseconds(),
 		StaleNodes:         d.staleNodes,
