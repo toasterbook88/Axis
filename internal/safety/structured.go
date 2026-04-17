@@ -137,7 +137,7 @@ func NewEvaluator(rs RuleSet) *Evaluator {
 	// Sort rules by priority (highest first) so specific high-risk matches win.
 	sorted := make([]Rule, len(rs.Rules))
 	copy(sorted, rs.Rules)
-	sort.Slice(sorted, func(i, j int) bool {
+	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].Priority > sorted[j].Priority
 	})
 	return &Evaluator{

@@ -222,4 +222,8 @@ jobs:
       - name: Test go install
         run: |
           go install github.com/toasterbook88/axis/cmd/axis@${{ github.ref_name }}
-          "$(go env GOPATH)/bin/axis" version
+          bindir="$(go env GOBIN)"
+          if [ -z "$bindir" ]; then
+            bindir="$(go env GOPATH)/bin"
+          fi
+          "$bindir/axis" version
