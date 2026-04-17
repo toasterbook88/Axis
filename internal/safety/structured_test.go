@@ -80,7 +80,7 @@ func TestEvaluate_GitForceVsNormal(t *testing.T) {
 	}
 }
 
-func TestEvaluate_LearnedOverrides(t *testing.T) {
+func TestEvaluate_LearnedOverridesAreDisabled(t *testing.T) {
 	eval := NewEvaluator(DefaultRuleSet())
 
 	// Normally would prompt
@@ -89,18 +89,18 @@ func TestEvaluate_LearnedOverrides(t *testing.T) {
 		t.Errorf("unknown command should prompt, got %s", d.Verdict)
 	}
 
-	// Operator approves — learn it
+	// Program-name-only approvals are intentionally disabled for now.
 	eval.LearnAllow("mycustomtool")
 	d = eval.Evaluate("mycustomtool run", "")
-	if d.Verdict != VerdictAllow {
-		t.Errorf("learned-allow should allow, got %s", d.Verdict)
+	if d.Verdict != VerdictPrompt {
+		t.Errorf("disabled learned-allow should leave verdict unchanged, got %s", d.Verdict)
 	}
 
-	// Can also learn-deny
+	// Same for denials until a narrower approval key exists.
 	eval.LearnDeny("badtool")
 	d = eval.Evaluate("badtool --flag", "")
-	if d.Verdict != VerdictDeny {
-		t.Errorf("learned-deny should deny, got %s", d.Verdict)
+	if d.Verdict != VerdictPrompt {
+		t.Errorf("disabled learned-deny should leave verdict unchanged, got %s", d.Verdict)
 	}
 }
 

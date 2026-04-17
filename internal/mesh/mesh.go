@@ -1,11 +1,13 @@
-// Package mesh implements gossip-based peer discovery for AXIS clusters.
-// It replaces the static-only nodes.yaml seed file with a dynamic mesh that
-// learns about new nodes through UDP gossip, mDNS announcements, and peer
-// exchange. Configured seed nodes are always authoritative; gossip-discovered
-// nodes are advisory and require promotion via "axis node trust <name>".
+// Package mesh contains gossip-based peer discovery scaffolding for AXIS
+// clusters. It is advisory metadata only and is not wired into the stable
+// operator path in this branch.
 //
 // Truth boundary: mesh discovery metadata is NEVER treated as cluster truth.
 // Only the fact plane (SSH probes) produces authoritative NodeFacts.
+//
+// HMAC verification authenticates message contents, but freshness and replay
+// protection are not enforced yet. Treat this package as internal groundwork,
+// not a hardened membership protocol.
 package mesh
 
 import (
@@ -119,7 +121,9 @@ type Mesh struct {
 	OnPeerSuspect func(Peer)
 }
 
-// gossipMessage is the wire format for UDP gossip.
+// gossipMessage is the wire format for UDP gossip. Timestamp and Nonce are
+// emitted for future freshness checks, but this branch does not enforce replay
+// protection.
 type gossipMessage struct {
 	Type      string `json:"type"` // "ping", "peer-list", "join", "leave"
 	Sender    Peer   `json:"sender"`

@@ -35,7 +35,7 @@ The fact plane collects hardware and software facts from cluster nodes.
 | `RemoteCollector` | SSH into remote nodes via `transport.SSHExecutor` |
 | `Discovery` | Fan-out probes (maxParallel=10) with semaphore |
 | `UDP Beacons` | HMAC-SHA256 authenticated node announcements |
-| `Mesh Gossip` | Proposed peer discovery with 5-state lifecycle (v0.10.0) |
+| `Mesh Gossip` | Proposed peer discovery scaffolding; HMAC only, no replay protection enforced in this branch |
 
 **Facts collected per node:**
 - OS, architecture, hostname, kernel version
@@ -124,7 +124,7 @@ Description → Intent Parse → Safety Gate → Placement → Reserve → Execu
 - 7 risk categories: safe, read-only, modify, destructive, network-mutating,
   privilege-escalate, system-critical
 - 3 verdicts: allow, deny, prompt (ask operator)
-- Learned overrides from operator approvals
+- Program-name-only learned overrides are deliberately disabled pending narrower scoping
 
 **Reservation lifecycle:**
 1. `Reserve()` — claim RAM on target node

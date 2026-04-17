@@ -37,6 +37,24 @@ func TestReserve_Success(t *testing.T) {
 	}
 }
 
+func TestReserve_UnknownCapacityRejected(t *testing.T) {
+	l := NewLedger(DefaultLimits(), nil)
+
+	_, err := l.Reserve(Entry{
+		ID:           "exec-1",
+		Node:         "node-a",
+		OwnerExecID:  "task-1",
+		OwnerSurface: "guarded-exec",
+		RAMMB:        1024,
+	})
+	if err == nil {
+		t.Fatal("expected reserve to fail when node capacity is unknown")
+	}
+	if got := len(l.Entries()); got != 0 {
+		t.Fatalf("expected 0 entries after failed reserve, got %d", got)
+	}
+}
+
 func TestReserve_DuplicateID(t *testing.T) {
 	l := NewLedger(DefaultLimits(), nil)
 	l.SetNodeCapacity("node-a", 16384)
@@ -73,6 +91,7 @@ func TestReserve_MaxEntries(t *testing.T) {
 	limits.MaxEntriesPerNode = 2
 	limits.MaxOvercommitRatio = 0 // unlimited
 	l := NewLedger(limits, nil)
+	l.SetNodeCapacity("node-a", 16384)
 
 	l.Reserve(Entry{ID: "e1", Node: "node-a", RAMMB: 100})
 	l.Reserve(Entry{ID: "e2", Node: "node-a", RAMMB: 100})

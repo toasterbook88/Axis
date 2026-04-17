@@ -13,7 +13,7 @@ backed by a real snapshot or live probe.
 axis-improvements/
 ├── IMPROVEMENTS.md                          ← This file
 ├── cmd/axis/
-│   └── dashboard.go                         ← Rich CLI dashboard + doctor + reservation views
+│   └── dashboard.go                         ← Dashboard/summary render helpers (not registered commands)
 ├── internal/
 │   ├── mesh/
 │   │   ├── mesh.go                          ← Gossip-based peer discovery (NEW PACKAGE)
@@ -22,9 +22,9 @@ axis-improvements/
 │   │   ├── ledger.go                        ← Double-entry reservation accounting (NEW PACKAGE)
 │   │   └── ledger_test.go                   ← 16 tests covering reserve/release/reclaim/metrics
 │   ├── api/
-│   │   └── v2.go                            ← Enhanced HTTP API with 9 new endpoints
+│   │   └── v2.go                            ← v2 route scaffolding with active reads + explicit stubs
 │   └── safety/
-│       ├── structured.go                    ← Structured safety rule engine (REPLACES substring)
+│       ├── structured.go                    ← Structured safety scaffolding (not wired into the operator path)
 │       └── structured_test.go               ← 9 tests covering safe/denied/prompt/parsing
 ```
 
@@ -35,7 +35,7 @@ axis-improvements/
 **Problem:** Static `nodes.yaml` seed file is the only way to add nodes.
 Zero-configuration node discovery is a roadmap item.
 
-**Solution:** Gossip-based peer discovery with a 5-state lifecycle:
+**Solution:** Gossip-based peer discovery scaffolding with a 5-state lifecycle:
 
 ```
 Discovered → Verified → Trusted
@@ -48,19 +48,17 @@ Discovered → Verified → Trusted
   Only SSH-probed NodeFacts are authoritative.
 - **Seed nodes are always trusted.** Configured nodes from `nodes.yaml` start as Trusted
   and are exempt from automatic eviction.
-- **Gossip peers require promotion.** Discovered peers must be explicitly promoted via
-  `axis node trust <name>` before they participate in placement.
-- **HMAC-SHA256 authentication.** Optional shared secret prevents gossip spoofing
-  (consistent with existing beacon auth).
+- **Gossip peers require future promotion.** A later operator surface can decide
+  how discovered peers are promoted before they participate in placement.
+- **HMAC-SHA256 authentication only.** Optional shared secret authenticates
+  message contents, but replay protection is not enforced in this branch.
 - **Bounded growth.** MaxPeers cap (default 64) prevents unbounded memory usage.
 - **Fan-out gossip.** Each round broadcasts to `FanOut` (default 3) random peers,
   preventing broadcast storms.
 
-**Integration points:**
-- Daemon: Register mesh callbacks (OnPeerJoin → trigger discovery refresh)
-- Discovery: Merge mesh.ActivePeers() with configured nodes
-- Config: Add `mesh:` section to `nodes.yaml`
-- CLI: `axis mesh status`, `axis node trust`, `axis node list`
+**Branch state:**
+- Package and tests land as internal groundwork only.
+- Daemon, discovery, config, and CLI wiring remain deferred.
 
 **Test coverage:** 15 tests — lifecycle, HMAC, MaxPeers cap, seed exemption, callbacks.
 
@@ -75,17 +73,15 @@ reservation balancing.
 **Solution:** Double-entry reservation ledger with:
 - **Per-node, per-execution tracking** with owner identity
 - **Overcommit ratio enforcement** (configurable, default 1.0 = no overcommit)
+- **Fail-closed capacity checks** — reservations are rejected when node capacity is unknown
 - **System reserve** held back from allocation (default 1024MB, matching existing logic)
 - **Heartbeat-based liveness** with configurable stale window (default 2min, matching existing)
 - **Per-node entry caps** preventing goroutine storms from concurrent reservations
 - **Metrics** for observability: total reserved, released, reclaimed, failures
 
-**Integration points:**
-- Daemon: Hold the Ledger instance, populate node capacities from snapshots
-- Placement: Query `ledger.AllocatableRAM(node)` instead of heuristic free RAM
-- Execution: `ledger.Reserve()` on start, `ledger.Release()` on finish, `ledger.Heartbeat()` loop
-- API: `/v2/reservations` endpoint
-- CLI: `axis reservation list`, `axis reservation clean`
+**Branch state:**
+- Core package and tests land here.
+- Daemon, placement, execution, API, and CLI wiring remain deferred.
 
 **Test coverage:** 16 tests — reserve, release, overcommit, heartbeat, reclaim, metrics.
 
@@ -97,30 +93,31 @@ reservation balancing.
 richer query endpoints for cluster intelligence, and external integrations
 need structured data.
 
-**New endpoints (9):**
+**Branch state:** this branch wires a versioned route namespace with a mix of
+active read surfaces and explicit stubs.
 
-| Route | Method | Purpose |
-|-------|--------|---------|
-| `/v2/cluster` | GET | Full cluster overview |
-| `/v2/nodes` | GET | Node list with health + resources |
-| `/v2/nodes/:name` | GET | Single node deep-dive |
-| `/v2/reservations` | GET/POST/DELETE | Reservation ledger CRUD |
-| `/v2/mesh` | GET | Mesh peer state |
-| `/v2/placement/dry-run` | GET/POST | Placement simulation (no execution) |
-| `/v2/metrics` | GET | Prometheus-compatible text metrics |
-| `/v2/batch/place` | POST | Batch placement for multiple tasks |
-| `/v2/doctor` | GET | Cluster health diagnostics |
+| Route | Method | Branch Status |
+|-------|--------|---------------|
+| `/v2/cluster` | GET | Active |
+| `/v2/nodes` | GET | Active |
+| `/v2/nodes/:name` | GET | Active |
+| `/v2/reservations` | GET/POST/DELETE | Stub (`501`) |
+| `/v2/mesh` | GET | Stub (`501`) |
+| `/v2/placement/dry-run` | GET/POST | Stub (`501`) |
+| `/v2/metrics` | GET | Active |
+| `/v2/batch/place` | POST | Stub (`501`) |
+| `/v2/doctor` | GET | Active |
 
 **Design decisions:**
 - **Versioned under /v2/** — non-breaking addition to existing routes
 - **Same auth model** — Bearer token with constant-time comparison
 - **/v2/metrics is unauthenticated** — standard for Prometheus scraping
 - **Prometheus text format** — native compatibility with monitoring stacks
-- **Batch placement** — up to 50 tasks per request for workflow orchestration
+- **Stub routes fail honestly** — unimplemented surfaces return non-2xx instead of synthetic success
 
 **Integration points:**
-- Server: Call `RegisterV2Routes(mux)` from existing `NewServer()`
-- Daemon: Wire SnapshotCache, Ledger, and Mesh into Server struct
+- Server: `registerV2Routes(mux, cache, token)` is wired into the existing route setup
+- Additional daemon, ledger, and mesh-backed behavior remains deferred
 
 ---
 
@@ -129,7 +126,7 @@ need structured data.
 **Problem:** Current safety blocking is substring-based, risking over-blocking
 (e.g., "rm -rf" in quoted echo) and under-blocking (creative evasion).
 
-**Solution:** Structured rule engine with:
+**Solution:** Structured rule-evaluation scaffolding with:
 - **Command parsing** — splits into program + args, strips env prefixes and paths
 - **7 risk categories** — safe, read-only, modify, destructive, network-mutating,
   privilege-escalate, system-critical
@@ -137,34 +134,28 @@ need structured data.
 - **Priority-based evaluation** — higher priority rules match first
 - **Glob patterns** — flexible matching without regex complexity
 - **Surface-aware rules** — different policies for guarded-exec vs agent-run-shell
-- **Learned overrides** — operator approvals persist as auto-allow/deny
+- **Learned overrides deferred** — program-name-only approvals are disabled in this branch
 
 **Default rules include:**
 - Always-safe: `uname`, `ls`, `ps`, `git status`, `go version`, etc.
 - Always-deny: `rm -rf`, `sudo`, `chmod 777`, disk format commands
 - Prompt: `git push`, `ollama run`, `systemctl restart`, `curl -X POST`
 
-**Migration path:** Wrap existing `safety.IsBlocked()` to call
-`evaluator.Evaluate(cmd, surface)` and map `VerdictDeny → blocked`.
-Existing behavior preserved, new capabilities added incrementally.
+**Branch state:** the evaluator package and tests land here, but the existing
+operator safety path remains authoritative until integration is done.
 
 **Test coverage:** 9 tests — safe/denied/prompt commands, git force-push,
-learned overrides, env prefix parsing, pipe handling, category coverage.
+disabled override behavior, env prefix parsing, pipe handling, category coverage.
 
 ---
 
-## 5. Enhanced CLI UX (`cmd/axis/dashboard.go`)
+## 5. CLI View Helpers (`cmd/axis/dashboard.go`)
 
 **Problem:** Operators must run multiple commands to understand cluster state.
 Output is functional but not visually scannable.
 
-**New commands:**
-- `axis summary` — one-shot cluster overview with color-coded health bars
-- `axis dashboard` — auto-refreshing TUI (every 5s)
-- `axis doctor` — comprehensive health checks with suggested fixes
-- `axis node list` — enhanced node table with status icons + pressure colors
-- `axis reservation list` — active reservation table with stale detection
-- `axis reservation clean` — reclaim stale reservations
+**Branch state:** this file contributes render helpers only. It does not
+register new Cobra commands in this branch.
 
 **Visual improvements:**
 - Unicode box-drawing for section headers
@@ -173,7 +164,8 @@ Output is functional but not visually scannable.
 - Pressure highlighting: green/yellow/red by level
 - Stale reservation warnings in red
 
-**Integration:** Register new Cobra subcommands in `cmd/axis/root.go`.
+**Future integration:** register any ready Cobra subcommands only after they are
+fully wired to real data sources.
 
 ---
 
@@ -189,7 +181,7 @@ Phase 2 (discovery):
   4. api/v2.go — register new routes on existing server
 
 Phase 3 (UX):
-  5. cmd/axis/dashboard.go — register Cobra commands
+  5. cmd/axis/dashboard.go — register only the views that are fully wired
 ```
 
 Each phase can ship independently. All packages are zero-dependency on each other

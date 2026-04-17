@@ -137,6 +137,34 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	}
 }
 
+func TestV2BatchPlaceReturnsNotImplemented(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+		meta: daemon.Metadata{Ready: true},
+	}, "test-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/v2/batch/place", strings.NewReader(`{"tasks":[{"id":"t1","description":"demo"}]}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", rec.Code)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if payload["ok"] != false {
+		t.Fatalf("expected ok=false, got %#v", payload["ok"])
+	}
+	if got, _ := payload["error"].(string); !strings.Contains(got, "not implemented") {
+		t.Fatalf("expected honest not-implemented error, got %q", got)
+	}
+}
+
 func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, &fakeCache{

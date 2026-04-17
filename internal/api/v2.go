@@ -229,31 +229,7 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
-	var req V2BatchPlaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if len(req.Tasks) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one task required")
-		return
-	}
-	if len(req.Tasks) > 50 {
-		writeError(w, http.StatusBadRequest, "max 50 tasks per batch")
-		return
-	}
-
-	results := make([]V2BatchPlaceResult, 0, len(req.Tasks))
-	for _, task := range req.Tasks {
-		results = append(results, V2BatchPlaceResult{
-			ID:     task.ID,
-			OK:     false,
-			Reason: "batch placement wiring pending",
-		})
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"results": results, "count": len(results)})
+	writeError(w, http.StatusNotImplemented, "batch placement is not implemented")
 }
 
 func (h *v2Handlers) handleMetrics(w http.ResponseWriter, r *http.Request) {

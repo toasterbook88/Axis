@@ -129,7 +129,8 @@ func (l *Ledger) SetNodeCapacity(node string, totalRAMMB int64) {
 }
 
 // Reserve attempts to create a reservation. Returns the Entry on success.
-// Fails if it would violate overcommit limits or per-node caps.
+// Fails if node capacity is unknown or if it would violate overcommit limits
+// or per-node caps.
 func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -142,6 +143,11 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	}
 	if req.RAMMB <= 0 {
 		return nil, fmt.Errorf("reservation: RAM must be > 0")
+	}
+	totalRAM, ok := l.nodeRAM[req.Node]
+	if !ok || totalRAM <= 0 {
+		l.reserveFailures++
+		return nil, fmt.Errorf("reservation: node %q capacity unknown", req.Node)
 	}
 
 	// Check existing
@@ -166,20 +172,17 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 
 	// Check overcommit ratio
 	if l.limits.MaxOvercommitRatio > 0 {
-		totalRAM, ok := l.nodeRAM[req.Node]
-		if ok && totalRAM > 0 {
-			allocatable := totalRAM - l.limits.SystemReserveMB
-			if allocatable <= 0 {
-				l.reserveFailures++
-				return nil, fmt.Errorf("reservation: node %q has no allocatable RAM after system reserve", req.Node)
-			}
-			newTotal := nodeReserved + req.RAMMB
-			ratio := float64(newTotal) / float64(allocatable)
-			if ratio > l.limits.MaxOvercommitRatio {
-				l.reserveFailures++
-				return nil, fmt.Errorf("reservation: node %q would exceed overcommit ratio (%.2f > %.2f, reserved=%dMB, allocatable=%dMB)",
-					req.Node, ratio, l.limits.MaxOvercommitRatio, newTotal, allocatable)
-			}
+		allocatable := totalRAM - l.limits.SystemReserveMB
+		if allocatable <= 0 {
+			l.reserveFailures++
+			return nil, fmt.Errorf("reservation: node %q has no allocatable RAM after system reserve", req.Node)
+		}
+		newTotal := nodeReserved + req.RAMMB
+		ratio := float64(newTotal) / float64(allocatable)
+		if ratio > l.limits.MaxOvercommitRatio {
+			l.reserveFailures++
+			return nil, fmt.Errorf("reservation: node %q would exceed overcommit ratio (%.2f > %.2f, reserved=%dMB, allocatable=%dMB)",
+				req.Node, ratio, l.limits.MaxOvercommitRatio, newTotal, allocatable)
 		}
 	}
 

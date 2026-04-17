@@ -1,16 +1,6 @@
-// Package main extension: dashboard.go adds a rich interactive CLI dashboard.
-// Replaces the need to run multiple commands with a single "axis dashboard"
-// that shows cluster state, reservations, mesh peers, and recent executions.
-//
-// New commands:
-//
-//	axis dashboard         — interactive TUI overview (refreshes every 5s)
-//	axis summary           — one-shot cluster summary (human-friendly text)
-//	axis node trust <name> — promote a mesh-discovered peer to trusted
-//	axis node list         — enhanced node listing with color-coded health
-//	axis doctor            — comprehensive cluster health check
-//	axis reservation list  — show active reservations
-//	axis reservation clean — reclaim stale reservations
+// Package main extension: dashboard.go contains rendering helpers for proposed
+// dashboard-style CLI views. These helpers are not registered as Cobra command
+// surfaces in this branch.
 package main
 
 import (

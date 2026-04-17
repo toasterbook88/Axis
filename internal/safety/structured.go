@@ -1,17 +1,19 @@
-// Package safety extension: structured.go replaces the substring-based
-// command safety blocking with a structured rule engine.
+// Package safety extension: structured.go adds structured rule-evaluation
+// scaffolding alongside the existing substring-based blocker.
 //
 // The current safety system uses substring matching which risks:
 //   - Over-blocking: "rm -rf" blocks "echo 'rm -rf' in quotes"
 //   - Under-blocking: "r""m -rf /" bypasses substring check
 //   - No context awareness: same rules for local vs remote, admin vs user
 //
-// This replaces it with:
+// This groundwork provides:
 //   - Parsed command analysis (split into program + args)
 //   - Category-based rules (destructive, network, privilege-escalation, etc.)
-//   - Context-aware evaluation (node role, execution surface, user trust)
-//   - Configurable allow/deny lists with glob patterns
-//   - Audit trail for every safety decision
+//   - Surface-aware rule matching
+//   - Explicit safety reasoning per decision
+//
+// Learned approvals are intentionally disabled in this branch because
+// program-name-only overrides are too broad to be treated as operator-safe.
 package safety
 
 import (
@@ -123,11 +125,12 @@ func DefaultRuleSet() RuleSet {
 	}
 }
 
-// Evaluator applies rules to commands.
+// Evaluator applies static rules to commands. Program-wide learned overrides are
+// intentionally disabled until they can be scoped more narrowly than a binary
+// name alone.
 type Evaluator struct {
-	mu        sync.RWMutex
-	rules     []Rule
-	overrides map[string]Verdict // per-command overrides (learned)
+	mu    sync.RWMutex
+	rules []Rule
 }
 
 // NewEvaluator creates a safety evaluator from a rule set.
@@ -143,8 +146,7 @@ func NewEvaluator(rs RuleSet) *Evaluator {
 		}
 	}
 	return &Evaluator{
-		rules:     sorted,
-		overrides: make(map[string]Verdict),
+		rules: sorted,
 	}
 }
 
@@ -156,18 +158,6 @@ func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
 		Args:    args,
 		RawCmd:  rawCmd,
 		EvalAt:  time.Now(),
-	}
-
-	// Check learned overrides first
-	e.mu.RLock()
-	v, ok := e.overrides[program]
-	e.mu.RUnlock()
-	if ok {
-		d.Verdict = v
-		d.Category = CategoryUnknown
-		d.MatchedRule = "learned-override"
-		d.Reasons = append(d.Reasons, fmt.Sprintf("learned override for %q: %s", program, v))
-		return d
 	}
 
 	joinedArgs := strings.Join(args, " ")
@@ -210,18 +200,14 @@ func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
 	return d
 }
 
-// LearnAllow records an operator-approved command for future auto-allow.
-func (e *Evaluator) LearnAllow(program string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.overrides[program] = VerdictAllow
+// LearnAllow is intentionally disabled until approvals can be scoped more
+// narrowly than a program name alone.
+func (e *Evaluator) LearnAllow(_ string) {
 }
 
-// LearnDeny records an operator-denied command for future auto-deny.
-func (e *Evaluator) LearnDeny(program string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.overrides[program] = VerdictDeny
+// LearnDeny is intentionally disabled until approvals can be scoped more
+// narrowly than a program name alone.
+func (e *Evaluator) LearnDeny(_ string) {
 }
 
 // --- Parsing helpers ---
