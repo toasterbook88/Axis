@@ -155,3 +155,40 @@ func TestCategory_Coverage(t *testing.T) {
 		}
 	}
 }
+
+func TestNewEvaluator_SortsRulesByPriority(t *testing.T) {
+	eval := NewEvaluator(RuleSet{
+		Rules: []Rule{
+			{Name: "low", Priority: 10},
+			{Name: "high", Priority: 90},
+			{Name: "mid", Priority: 50},
+		},
+	})
+
+	got := []string{eval.rules[0].Name, eval.rules[1].Name, eval.rules[2].Name}
+	want := []string{"high", "mid", "low"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sorted rule[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestGlobMatch_PreservesPrefixFallbackForJoinedArgs(t *testing.T) {
+	tests := []struct {
+		pattern string
+		value   string
+		want    bool
+	}{
+		{pattern: "push*", value: "push --force origin main", want: true},
+		{pattern: "show *", value: "show llama3", want: true},
+		{pattern: "status", value: "status", want: true},
+		{pattern: "status", value: "status --short", want: false},
+	}
+
+	for _, tt := range tests {
+		if got := globMatch(tt.value, tt.pattern); got != tt.want {
+			t.Fatalf("globMatch(%q, %q) = %v, want %v", tt.value, tt.pattern, got, tt.want)
+		}
+	}
+}

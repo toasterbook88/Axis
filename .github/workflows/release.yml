@@ -222,4 +222,4 @@ jobs:
       - name: Test go install
         run: |
           go install github.com/toasterbook88/axis/cmd/axis@${{ github.ref_name }}
-          axis version
+          "$(go env GOPATH)/bin/axis" version
