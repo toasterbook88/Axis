@@ -462,8 +462,13 @@ func (m *Mesh) broadcastPeerList() {
 		Sender:    sender,
 		Peers:     peers,
 		Timestamp: time.Now().UnixMilli(),
-		Nonce:     m.generateNonce(),
 	}
+	nonce, err := m.generateNonce()
+	if err != nil {
+		m.logger.Warn("mesh: failed to generate nonce for peer-list broadcast", "err", err)
+		return
+	}
+	msg.Nonce = nonce
 	msg.HMAC = m.computeMessageHMAC(msg)
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -500,7 +505,7 @@ func (m *Mesh) selectFanOut() []string {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
 		if err != nil {
 			m.logger.Warn("mesh: random fanout selection failed", "err", err)
-			continue
+			return addrs[:m.cfg.FanOut]
 		}
 		j := int(n.Int64())
 		addrs[i], addrs[j] = addrs[j], addrs[i]
@@ -545,10 +550,10 @@ func (m *Mesh) verifyMessageHMAC(msg gossipMessage) bool {
 	return hmac.Equal([]byte(expected), []byte(msg.HMAC))
 }
 
-func (m *Mesh) generateNonce() string {
+func (m *Mesh) generateNonce() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

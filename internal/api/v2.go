@@ -171,7 +171,7 @@ func (h *v2Handlers) handleSingleNode(w http.ResponseWriter, name string) {
 func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeError(w, http.StatusNotImplemented, "reservation ledger integration pending")
+		writeError(w, http.StatusNotImplemented, "reservation endpoints not yet implemented")
 	case http.MethodPost:
 		writeError(w, http.StatusNotImplemented, "manual reservation creation pending ledger integration")
 	default:
@@ -203,7 +203,8 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 			desc = req.Description
 		}
 	}
-	if strings.TrimSpace(desc) == "" {
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
 		writeError(w, http.StatusBadRequest, "description required")
 		return
 	}
