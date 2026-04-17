@@ -115,12 +115,14 @@ func (r *Resources) ReservableRAM() int64 {
 
 // NetworkAddress represents a single network address with interface metadata.
 // Kind is one of: ipv4, ipv6, hostname.
+// Scope is one of: global, link-local (empty means global for backward compat).
 type NetworkAddress struct {
 	Kind       string `json:"kind" yaml:"kind"`
 	Address    string `json:"address" yaml:"address"`
 	Interface  string `json:"interface,omitempty" yaml:"interface,omitempty"`     // e.g. en0, eth0, wg0
 	Subnet     string `json:"subnet,omitempty" yaml:"subnet,omitempty"`           // CIDR e.g. 192.168.1.0/24
 	SpeedClass string `json:"speed_class,omitempty" yaml:"speed_class,omitempty"` // thunderbolt, 10gbe, gigabit, wifi, tailscale, wireguard, unknown
+	Scope      string `json:"scope,omitempty" yaml:"scope,omitempty"`             // global, link-local
 }
 
 // ToolInfo describes a discovered tool on a node.
@@ -292,6 +294,24 @@ type PlacementDecision struct {
 	Workload  WorkloadProfileMatch `json:"workload,omitempty" yaml:"workload,omitempty"`
 	Reasoning []string             `json:"reasoning" yaml:"reasoning"`
 	OK        bool                 `json:"ok" yaml:"ok"`
+}
+
+type PlacementCandidateExplanation struct {
+	Node      string   `json:"node" yaml:"node"`
+	FitScore  int      `json:"fit_score" yaml:"fit_score"`
+	IsLocal   bool     `json:"is_local" yaml:"is_local"`
+	Reasoning []string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+}
+
+type PlacementExclusion struct {
+	Node    string   `json:"node" yaml:"node"`
+	Reasons []string `json:"reasons,omitempty" yaml:"reasons,omitempty"`
+}
+
+type PlacementExplanation struct {
+	Decision PlacementDecision               `json:"decision" yaml:"decision"`
+	Eligible []PlacementCandidateExplanation `json:"eligible,omitempty" yaml:"eligible,omitempty"`
+	Excluded []PlacementExclusion            `json:"excluded,omitempty" yaml:"excluded,omitempty"`
 }
 
 // --- Phase 3: Failure Memory ---

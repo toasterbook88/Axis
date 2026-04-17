@@ -206,6 +206,29 @@ Execution is an extension of the fact plane, not a substitute for it.
 If execution updates placement memory, those updates should help AXIS balance
 cluster RAM, not just record that "something ran somewhere."
 
+## Cached Reads Doctrine
+
+AXIS provides cached reads over the daemon snapshot cache (`--cached`, `--cached-only`).
+These are explicit, operator-facing flags, not hidden fallbacks.
+
+Cached reads must:
+
+- be opt-in via a visible flag
+- surface their data source (`source: daemon-cache` vs `source: live-snapshot`)
+- never silently substitute stale data when live data is available and requested
+- stay constrained to the daemon cache boundary (snapshot + context blocks)
+
+Cached reads must NOT:
+
+- extend into MCP tool calls, HTTP helpers, or other external context sources
+- introduce hidden fallback chains where a cache miss silently escalates to a
+  remote call the operator did not request
+- mask staleness by omitting age or provenance metadata
+
+If a future feature needs external context (MCP, HTTP), it must request it
+explicitly under its own flag or subcommand. The cached-read surface is not a
+general-purpose data bus.
+
 ## Documentation Doctrine
 
 Every operator-facing feature should have:

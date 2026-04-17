@@ -35,54 +35,11 @@ func pressureRank(p string) int {
 //   - If MinFreeRAMMB > 0, node must have resources with enough free RAM
 //   - If RequiredTools are set, node must satisfy all of them
 func FilterCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) []models.NodeFacts {
-	// Precompute values that are constant for every candidate in this call.
-	// inferenceModelName runs regex extraction; hoisting it out of the loop
-	// avoids repeated compilation and matching across potentially many nodes.
-	cachedModelName := inferenceModelName(reqs)
-
 	var out []models.NodeFacts
-	for _, n := range nodes {
-		if requiresAppleFoundationModels(reqs) {
-			if !models.IsLocalNode(n) || !appleFoundationModelsReady(n) {
-				continue
-			}
+	for _, eval := range evaluateCandidates(reqs, nodes, st) {
+		if eval.Eligible() {
+			out = append(out, eval.Node)
 		}
-		if n.Status != models.StatusComplete {
-			if !allowsIncompleteNode(n, reqs.RequiredTools) {
-				continue
-			}
-		}
-		if blocksForRuntimePressure(reqs, n) {
-			continue
-		}
-		if blocksForThermalOrBattery(reqs, n) {
-			continue
-		}
-		if st != nil && st.Failures != nil {
-			rec, ok := st.Failures.NarrowestMatch(models.FailureScope{
-				Node:     n.Name,
-				Workload: reqs.Workload.Class,
-			})
-			if ok && isBlockingFailure(rec.Class) {
-				continue
-			}
-		}
-		// Compute allocatable RAM once per node; both the MinFreeRAMMB check
-		// and the empirical PeakRAMMB check need it.
-		nodeAllocatable := allocatableRAM(n, st)
-		if reqs.MinFreeRAMMB > 0 {
-			minNeeded := effectiveMinFreeRAM(reqs, n)
-			if n.Resources == nil || nodeAllocatable < minNeeded {
-				continue
-			}
-		}
-		if blocksForEmpiricalPeakRAM(n, reqs, st, nodeAllocatable, cachedModelName) {
-			continue
-		}
-		if !satisfiesRequiredTools(n, reqs.RequiredTools) {
-			continue
-		}
-		out = append(out, n)
 	}
 	return out
 }

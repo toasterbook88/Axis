@@ -27,9 +27,10 @@ func daemonCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "daemon",
-		Short: "Interact with the local AXIS daemon cache",
+		Short: "Manage the local AXIS daemon lifecycle and cache",
 	}
 	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	cmd.AddCommand(daemonStartCmd())
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show local AXIS daemon health and staleness",
@@ -98,6 +99,23 @@ func daemonCmd() *cobra.Command {
 		},
 	})
 
+	return cmd
+}
+
+func daemonStartCmd() *cobra.Command {
+	var addr string
+	var refreshInterval time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "Start the local AXIS daemon HTTP API with background snapshot refresh",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval)
+		},
+	}
+
+	cmd.Flags().StringVar(&addr, "addr", api.DefaultAddr(), "Listen address for the local AXIS API (Unix socket or TCP host:port)")
+	cmd.Flags().DurationVar(&refreshInterval, "refresh", time.Minute, "Background snapshot refresh interval")
 	return cmd
 }
 

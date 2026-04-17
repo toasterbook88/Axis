@@ -34,17 +34,22 @@ axis task place "run ollama inference on a 7b model"
 ### Stable operator path
 
 - `axis version` — print the current AXIS build version
-- `axis facts` — local hardware/tool snapshot
-- `axis status` / `axis status --cached` — live or daemon-cached cluster snapshot
-- `axis task place` / `axis task place --cached` — advisory placement with reasoning
+- `axis facts` — local hardware/tool snapshot (default: text; `--format json|yaml`)
+- `axis status` / `axis status --cached` / `axis status --cached-only` — live or daemon-cached cluster snapshot
+- `axis task place` / `axis task place --cached` — advisory placement with reasoning (flat `PlacementDecision` output)
+- `axis placement explain` / `axis placement explain --cached` — detailed placement breakdown showing eligible and excluded nodes with per-node reasoning
+- `axis profile match` — show which workload class an intent maps to and what requirements are inferred (no cluster snapshot needed)
 - `axis task context` / `axis task context --cached` — compact context block backed by live or cached snapshot data
-- `axis daemon status` / `refresh` / `invalidate` / `restart` — inspect and manage the local snapshot cache seam
+- `axis task run` — explicit execution with safety gating, RAM/GPU reservation, and TTY-aware confirmation
+- `axis daemon start` / `status` / `refresh` / `invalidate` / `restart` — manage the local snapshot cache daemon
 - `axis context show` / `clear` — inspect or reset persisted placement memory
 
 ### Optional or secondary surfaces
 
-- `axis task run` — explicit execution surface layered on top of placement, with optional observed-state-gated Nix helper wrapping when the selected node proves it supports `nix`
+- `axis task run` — explicit execution surface layered on top of placement, with optional observed-state-gated Nix helper wrapping when the selected node proves it supports `nix`. When running in a TTY (stdin/stdout/stderr are all terminals), `task run` shows a confirmation prompt with the target node, workload class, fit score, reservation headroom, and command before executing. In non-TTY contexts (pipelines, cron, daemon), the prompt is skipped. Safety-blocked executions display `=== SAFETY BLOCKED ===` with the reason and dumb score.
 - `axis serve` — optional local HTTP API surface
+- `axis llm` — route prompts to local Ollama or cloud LLM providers
+- `axis cortex` — distributed vector memory and event bus (events, recall, status)
 - `axis mcp serve` — optional read-only MCP server over stdio
 - `axis scripts list` — list built-in helper scripts
 - `axis skills` — show learned local skills/failures
@@ -55,9 +60,11 @@ axis task place "run ollama inference on a 7b model"
 ### Available Commands (Strict Config Enforced)
 
 - `axis version`
-- `axis facts` — local facts only
+- `axis facts` — local facts only (default: text)
 - `axis status` — full cluster snapshot (uses strict `nodes.yaml`)
 - `axis task place <description>` — deterministic placement
+- `axis placement explain <intent>` — detailed placement breakdown with eligible/excluded nodes
+- `axis profile match <intent>` — workload class and requirement inference
 
 Removed: `axis discover` (fully replaced by `axis status` + snapshot assembly).
 
@@ -108,7 +115,7 @@ These files are local operator memory, not authoritative cluster truth. AXIS now
 | **Advisory task placement** | `axis task place` ranks nodes deterministically by allocatable RAM first, then fresh exact-scope empirical history, resident-model locality, backend/GPU/headroom tie-breaks, and reservation spread; heavy AI tasks still avoid nodes under critical runtime pressure signals |
 | **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, `axis chat`, and `axis agent` are available when explicitly invoked |
 | **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
-| **Structured output** | `axis facts` and `axis status` support JSON/YAML; `axis task place` supports human output and JSON |
+| **Structured output** | `axis facts` and `axis status` support text/JSON/YAML; `axis task place` supports text and JSON; `axis placement explain` supports text and JSON; `axis profile match` supports text, JSON, and YAML |
 
 ## Installation
 
@@ -198,7 +205,8 @@ By default, `axis update` safely scopes its upgrade *only* to the currently exec
 ### `axis facts` — local machine snapshot
 
 ```bash
-axis facts               # JSON (default)
+axis facts               # human-readable text (default)
+axis facts --format json # JSON
 axis facts --format yaml # YAML
 ```
 
@@ -225,16 +233,18 @@ nodes:
 Then:
 
 ```bash
-axis status              # JSON cluster snapshot
+axis status              # human-readable text (default)
+axis status --format json
 axis status --format yaml
 axis status --cached     # read explicit daemon cache instead of live SSH sweep
+axis status --cached-only # require daemon cache; fail instead of falling back to live
 ```
 
 ### `axis task place` — advisory placement
 
 ```bash
 axis task place "analyze a git repo"
-# → Selected node: node-b (remote, fit 82/100)
+# → ✓ node-b (remote, fit 82/100)
 #   Tool: git
 #   Reason:
 #     - has required tool: git
@@ -243,6 +253,41 @@ axis task place "analyze a git repo"
 axis task place "run ollama inference on a 7b model" --format json
 axis task place --cached "run ollama inference on a 7b model"
 ```
+
+With `--format json`, `task place` outputs a flat `PlacementDecision` object. When `--cached` is used, the JSON is wrapped in `{"source": "...", "decision": {...}}`.
+
+### `axis placement explain` — detailed placement breakdown
+
+```bash
+axis placement explain "run ollama inference on a 7b model"
+# → ✓ mlx-node (remote, fit 98/100)
+#
+#   Advisory Placement
+#   1. mlx-node (remote, fit 98/100)
+#      - turboquant-aware backend verified: mlx
+#      - 8192MB allocatable against 1024MB requirement
+#
+#   Filtered
+#   - node-b
+#      - need 4096MB free RAM, have 2048MB effective
+
+axis placement explain --cached --format json "run ollama inference on a 7b model"
+```
+
+Unlike `task place`, `placement explain` shows both eligible and excluded nodes with per-node reasoning. JSON output wraps in `{"source": "...", "explanation": {"decision": {...}, "eligible": [...], "excluded": [...]}}`.
+
+### `axis profile match` — workload class inference
+
+```bash
+axis profile match "run ollama inference on a 7b model"
+# → class: local-llm-inference
+#   min_free_ram_mb: 4096
+#   required_tools: [ollama]
+
+axis profile match --format json "analyze a git repo"
+```
+
+`profile match` shows which workload class an intent maps to and what requirements are inferred. No cluster snapshot is needed — it inspects only the workload matching rules.
 
 Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node. Tool presence is a hard requirement, and eligible nodes are ranked by allocatable RAM first, then fresh exact-scope empirical history, resident-model locality, backend/GPU/headroom tie-breaks, reservation spread, storage class (HDD penalized for heavy loads), and stable name ordering.
 
@@ -275,10 +320,12 @@ axis task context --cached "test inference"
 
 `--cached` uses the explicit daemon snapshot cache and includes a `Source:` line in the rendered context block so you can tell where the prompt data came from.
 
-### `axis serve` — optional local HTTP API
+### `axis serve` / `axis daemon start` — optional local HTTP API
 
 ```bash
 axis serve
+axis serve --addr 127.0.0.1:42425 --refresh 30s
+axis daemon start          # equivalent to axis serve
 ```
 
 Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by default, plus a background snapshot refresh loop that powers the explicit cached-read path.
@@ -366,7 +413,7 @@ When a host exposes a stable identity, AXIS includes it in UDP beacons and uses 
 ┌─────────────────────┬─────────────────────────────────────────────────────────────────────────────────┐
 │       Package       │                                      Role                                       │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ cmd/axis/           │ Cobra CLI entry — chat, facts, status, task, serve, context, scripts, skills   │
+│ cmd/axis/           │ Cobra CLI entry — facts, status, task, placement, profile, serve, daemon, context, scripts, skills, llm, cortex, agent, chat, mcp, doctor, update
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
 │ internal/config/    │ Loads ~/.axis/nodes.yaml (node list, SSH user/port/timeout)                     │
 ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤

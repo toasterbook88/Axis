@@ -49,6 +49,9 @@ func IsLocalNode(n NodeFacts) bool {
 		return true
 	}
 	for _, addr := range n.Addresses {
+		if addr.Scope == "link-local" {
+			continue
+		}
 		if identity.matches(addr.Address) {
 			return true
 		}

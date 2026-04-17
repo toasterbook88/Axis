@@ -13,8 +13,8 @@ This file is the canonical coordination surface for active AXIS work.
 ## Repo State
 
 - Branch: `main`
-- Reviewed HEAD: `1b3f5df`
-- Last updated: `2026-03-24 16:58 EDT`
+- Reviewed HEAD: `ed41449`
+- Last updated: `2026-04-16 15:30 EDT`
 - Note: `Reviewed HEAD` is the source state this worklog update was based on. A worklog-only commit will advance repository HEAD.
 
 ## Active Tasks
@@ -23,12 +23,12 @@ This file is the canonical coordination surface for active AXIS work.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | AX-001 | Runtime hygiene baseline | Claude (for Warp) | done | Verified binary resolution, removed V8 alias, removed stale aliases, deleted broken binary | AX-000 | `.zshrc`, `/usr/local/bin/axis` removed | See completed table |
 | AX-002 | Gemini audit revision | Gemini CLI | in_review | Re-issue the repo audit against live source and correct unsupported CLI-surface claims | AX-000 | `cmd/axis/`, `README.md`, `docs/phase1_spec.md`, cited source files | Updated audit with exact file references and corrected command surface |
-| AX-004 | Documentation sync with live CLI | Gemini CLI | pending | Align docs with implemented `axis task place`; do not document unsupported flags like `-f` or `--config` | AX-002 | `README.md`, `docs/phase1_spec.md`, optionally `docs/white_paper_v1.md` | Markdown diff, matching `--help` output, and a commit |
-| AX-005 | Link-local address blindspot review | Warp | pending | Decide whether `169.254.x.x` and similar link-local addresses should be exposed, filtered, or tagged explicitly | AX-002 | `internal/facts/local.go` | `axis facts` output demonstrating intended address behavior and a commit |
-| AX-006 | Local metric collection hardening | Claude (Antigravity) | pending | Reduce brittle local disk/RAM command parsing while preserving current behavior and adding coverage where practical | AX-005 | `internal/facts/local.go`, related tests | Passing tests, runtime verification, and a commit |
-| AX-007 | SSH identity resolution hardening | Claude (Antigravity) | pending | Respect non-default SSH identity configuration or explicitly document the current limitation | AX-002 | `internal/transport/ssh.go`, related tests/docs | Verified non-default identity behavior or documented limitation, plus a commit |
-| AX-024 | Cached context/MCP expansion | Codex | in_progress | `task context --cached` is now the next explicit cached read; decide whether cached reads should extend further into MCP or HTTP context helpers without introducing hidden fallback behavior | AX-022 | `cmd/axis/task.go`, `internal/api/`, `internal/mcp/`, docs | Design note or scoped implementation with explicit verification |
-| AX-025 | Daemon freshness policy | Codex | in_review | Explicit refresh/invalidate now exist; decide whether the timer loop should remain the only background freshness mechanism or gain additional operator-facing policy/docs | AX-023 | `internal/daemon/`, `cmd/axis/daemon.go`, runbooks/docs | Clear operator-facing policy and a commit if docs/code change |
+| AX-004 | Documentation sync with live CLI | Claude (Antigravity) | done | Align docs with implemented `axis task place`, `placement explain`, `profile match`, and corrected default formats | AX-002 | `README.md`, `docs/phase1_spec.md`, `docs/current-state.md` | Markdown diff, matching `--help` output, and commit `72bb0b8` |
+| AX-005 | Link-local address blindspot review | Claude (Antigravity) | done | Tag link-local addresses (169.254.x.x, fe80::) with `scope: link-local` instead of silently dropping; skip in locality matching | AX-002 | `internal/facts/local.go`, `internal/models/types.go`, `internal/models/locality.go` | `axis facts` output shows tagged addresses, locality skips them, and a commit `b8bf6fa` |
+| AX-006 | Local metric collection hardening | Claude (Antigravity) | done | Add edge-case test coverage for empty/header-only df output, speculative pages, zero input | AX-005 | `internal/facts/local.go`, related tests | Passing tests and a commit `b8bf6fa` |
+| AX-007 | SSH identity resolution hardening | Claude (Antigravity) | done | Respect `IdentitiesOnly yes` from SSH config: skip agent and default key names, only offer explicit identity files; pass `-F` to ssh -G for correct config resolution | AX-002 | `internal/transport/ssh.go`, `internal/transport/ssh_test.go` | Verified IdentitiesOnly behavior with tests, full suite green, commit `b8bf6fa` |
+| AX-024 | Cached context/MCP expansion | Claude (Antigravity) | done | Constrain cached reads; document doctrine: cached reads are explicit, operator-facing, never hidden fallbacks, must not extend into MCP/HTTP | AX-022 | `docs/doctrine.md` | Cached-reads doctrine section in doctrine.md, commit `ed41449` |
+| AX-025 | Daemon freshness policy | Claude (Antigravity) | done | Make staleness threshold configurable (default 5 min), expose `stale_threshold_sec` in metadata, document 7-trigger freshness policy | AX-023 | `internal/daemon/daemon.go`, `docs/current-state.md` | Configurable threshold, documented policy, full suite green, commit `ed41449` |
 
 ## File Ownership
 
@@ -82,3 +82,10 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-022 | Codex | working tree | `axis task place --cached` now reads from the explicit daemon cache and surfaces `source` in JSON mode. Full suite and live smoke passed locally. |
 | AX-023 | Codex | `e37b00c` | Explicit daemon refresh landed via `POST /refresh` and `axis daemon refresh`, with live ready→invalidate smoke verified. |
 | AX-024 | Codex | `1b3f5df` | `axis task context --cached` now emits prompt blocks from the explicit daemon cache with a visible `Source:` line. Full suite and live smoke passed. |
+| AX-026 | Codex + Claude (Antigravity) | `0523ebf` | Placement explain, profile match, prepare-confirm execution, TTY-aware UI. Stabilized: restored task place backward compat, removed redundant blocked check, eliminated PreparedExecution.Decision/syncDecision, renamed BULLSHIT BLOCKED to SAFETY BLOCKED. Full test suite green. |
+| AX-004 | Claude (Antigravity) | `72bb0b8` | Documentation sync: README, current-state.md, phase1_spec.md updated for placement explain, profile match, daemon start, TTY-aware task run, SAFETY BLOCKED, correct default formats, --cached-only, llm/cortex commands. Full test suite green. |
+| AX-005 | Claude (Antigravity) | `b8bf6fa` | Link-local addresses tagged with scope field instead of silently dropped; locality matching skips link-local; NetworkAddress.Scope added. Full suite green. |
+| AX-006 | Claude (Antigravity) | `b8bf6fa` | Parser edge-case tests for empty/header-only df, speculative pages, zero input. Full suite green. |
+| AX-007 | Claude (Antigravity) | `b8bf6fa` | IdentitiesOnly yes from SSH config now respected: skips agent and default key names; ssh -G passes -F for correct config resolution; 5 new tests. Full suite green. |
+| AX-024 | Claude (Antigravity) | `ed41449` | Cached-reads doctrine: explicit, operator-facing, no hidden fallbacks, no MCP/HTTP escalation. Added to doctrine.md. |
+| AX-025 | Claude (Antigravity) | `ed41449` | Staleness threshold configurable (default 5 min), SetStaleThreshold method, stale_threshold_sec in metadata, freshness policy documented. Full suite green. |

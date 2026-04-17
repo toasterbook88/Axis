@@ -388,7 +388,10 @@ func TestDoctorBackendProbeErrorIsAdvisory(t *testing.T) {
 }
 
 func TestFormatResidentModelCount(t *testing.T) {
-	cases := []struct{ n int; want string }{
+	cases := []struct {
+		n    int
+		want string
+	}{
 		{0, ", no models loaded"},
 		{1, ", 1 model loaded"},
 		{3, ", 3 models loaded"},

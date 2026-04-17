@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
@@ -292,26 +292,29 @@ func TestScheduleTaskRunDaemonRefreshSignalsBestEffort(t *testing.T) {
 
 func TestTaskRunCmdAddsOwnerProvenanceToGuardedRequest(t *testing.T) {
 	prevLoad := loadTaskRunRuntime
-	prevRun := runTaskGuarded
-	prevDaemonRun := runTaskGuardedViaDaemon
-	prevDaemonMeta := fetchTaskDaemonMeta
+	prevPrepare := prepareTaskGuarded
+	prevRunPrepared := runPreparedTaskGuarded
 	t.Cleanup(func() {
 		loadTaskRunRuntime = prevLoad
-		runTaskGuarded = prevRun
-		runTaskGuardedViaDaemon = prevDaemonRun
-		fetchTaskDaemonMeta = prevDaemonMeta
+		prepareTaskGuarded = prevPrepare
+		runPreparedTaskGuarded = prevRunPrepared
 	})
 
 	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
 		return &runtimectx.Context{}, nil
 	}
-	fetchTaskDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
-		return daemon.Metadata{}, context.DeadlineExceeded
-	}
-	runTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+	prepareTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.PreparedExecution, error) {
 		if req.OwnerSurface != execution.OwnerSurfaceTaskRun {
 			t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceTaskRun)
 		}
+		return execution.PreparedExecution{
+			Request: req,
+			Result: execution.GuardedExecutionResult{
+				Node: "alpha",
+			},
+		}, nil
+	}
+	runPreparedTaskGuarded = func(context.Context, execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
 		return execution.GuardedExecutionResult{OK: true, Node: "alpha"}, nil
 	}
 
@@ -331,83 +334,180 @@ func TestTaskRunCmdAddsOwnerProvenanceToGuardedRequest(t *testing.T) {
 	}
 }
 
-func TestTaskRunCmdPrefersDaemonStreamWhenAvailable(t *testing.T) {
+func TestTaskRunCmdTTYConfirmationProceedRunsPreparedExecution(t *testing.T) {
 	prevLoad := loadTaskRunRuntime
-	prevRun := runTaskGuarded
-	prevDaemonRun := runTaskGuardedViaDaemon
-	prevDaemonMeta := fetchTaskDaemonMeta
-	prevSignal := signalTaskRunDaemonRefresh
+	prevPrepare := prepareTaskGuarded
+	prevRunPrepared := runPreparedTaskGuarded
+	prevInTTY := taskRunStdinIsTerminal
+	prevOutTTY := taskRunStdoutIsTerminal
+	prevErrTTY := taskRunStderrIsTerminal
 	t.Cleanup(func() {
 		loadTaskRunRuntime = prevLoad
-		runTaskGuarded = prevRun
-		runTaskGuardedViaDaemon = prevDaemonRun
-		fetchTaskDaemonMeta = prevDaemonMeta
-		signalTaskRunDaemonRefresh = prevSignal
+		prepareTaskGuarded = prevPrepare
+		runPreparedTaskGuarded = prevRunPrepared
+		taskRunStdinIsTerminal = prevInTTY
+		taskRunStdoutIsTerminal = prevOutTTY
+		taskRunStderrIsTerminal = prevErrTTY
 	})
 
-	rt := &runtimectx.Context{}
 	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
-		return rt, nil
+		return &runtimectx.Context{}, nil
 	}
-	fetchTaskDaemonMeta = func(_ context.Context, addr string) (daemon.Metadata, error) {
-		if addr != api.DefaultAddr() {
-			t.Fatalf("addr = %q, want %q", addr, api.DefaultAddr())
-		}
-		return daemon.Metadata{Ready: true}, nil
-	}
-	runTaskGuarded = func(context.Context, *runtimectx.Context, execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
-		t.Fatal("expected daemon stream path, not direct guarded execution")
-		return execution.GuardedExecutionResult{}, nil
-	}
-	triggerCh := make(chan string, 1)
-	signalTaskRunDaemonRefresh = func(_ context.Context, trigger string) error {
-		triggerCh <- trigger
-		return nil
-	}
-	runTaskGuardedViaDaemon = func(_ context.Context, addr string, req execution.GuardedExecutionRequest, origin models.ExecutionOrigin) (execution.GuardedExecutionResult, error) {
-		if addr != api.DefaultAddr() {
-			t.Fatalf("addr = %q, want %q", addr, api.DefaultAddr())
-		}
-		if req.OwnerSurface != execution.OwnerSurfaceTaskRun {
-			t.Fatalf("OwnerSurface = %q, want %q", req.OwnerSurface, execution.OwnerSurfaceTaskRun)
-		}
-		if req.OnReady == nil || req.Stdout == nil || req.Stderr == nil {
-			t.Fatal("expected stream callbacks and writers to be preserved")
-		}
-		req.OnReady(execution.GuardedExecutionResult{Node: "alpha", FitScore: 99, Command: "echo hello"})
-		req.OnStateChange(context.Background(), execution.StateChangeExecutionReserved, execution.GuardedExecutionResult{Node: "alpha"})
-		if _, err := req.Stdout.Write([]byte("hello\n")); err != nil {
-			t.Fatalf("stdout write: %v", err)
-		}
-		return execution.GuardedExecutionResult{OK: true, Node: "alpha", Output: "hello"}, nil
+	taskRunStdinIsTerminal = func() bool { return true }
+	taskRunStdoutIsTerminal = func() bool { return true }
+	taskRunStderrIsTerminal = func() bool { return true }
+
+	prepareTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.PreparedExecution, error) {
+		return execution.PreparedExecution{
+			Request: req,
+			Requirements: models.TaskRequirements{
+				Workload: models.WorkloadProfileMatch{Class: models.ClassGoBuild},
+			},
+			Result: execution.GuardedExecutionResult{
+				Node:     "alpha",
+				FitScore: 88,
+				IsLocal:  true,
+			},
+			ReservationMB: 3072,
+			Command:       "echo hello",
+		}, nil
 	}
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		cmd := taskRunCmd()
-		cmd.SetArgs([]string{"--exec", "echo hello"})
-		return cmd.Execute()
-	})
-	if err != nil {
+	var ran bool
+	runPreparedTaskGuarded = func(_ context.Context, prepared execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
+		ran = true
+		if prepared.Command != "echo hello" {
+			t.Fatalf("prepared command = %q, want echo hello", prepared.Command)
+		}
+		return execution.GuardedExecutionResult{OK: true, Node: "alpha"}, nil
+	}
+
+	cmd := taskRunCmd()
+	cmd.SetArgs([]string{"--exec", "echo hello"})
+	cmd.SetIn(strings.NewReader("yes\n"))
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil {
 		t.Fatalf("task run Execute: %v", err)
 	}
-	if !strings.Contains(stdout, "Selected node: alpha (fit 99/100)") {
-		t.Fatalf("expected ready banner, got %q", stdout)
+	if !ran {
+		t.Fatal("expected prepared execution to run after confirmation")
 	}
-	if !strings.Contains(stdout, "=== EXECUTING ON alpha ===") {
-		t.Fatalf("expected execution banner, got %q", stdout)
+	if got := stderr.String(); !strings.Contains(got, "Proceed? [y/N]:") || !strings.Contains(got, "Reservation headroom: 3072MB") {
+		t.Fatalf("expected confirmation summary, got %q", got)
 	}
-	if !strings.Contains(stdout, "hello\n") {
-		t.Fatalf("expected streamed stdout, got %q", stdout)
+}
+
+func TestTaskRunCmdTTYConfirmationDeclineAbortsWithoutExecuting(t *testing.T) {
+	prevLoad := loadTaskRunRuntime
+	prevPrepare := prepareTaskGuarded
+	prevRunPrepared := runPreparedTaskGuarded
+	prevInTTY := taskRunStdinIsTerminal
+	prevOutTTY := taskRunStdoutIsTerminal
+	prevErrTTY := taskRunStderrIsTerminal
+	t.Cleanup(func() {
+		loadTaskRunRuntime = prevLoad
+		prepareTaskGuarded = prevPrepare
+		runPreparedTaskGuarded = prevRunPrepared
+		taskRunStdinIsTerminal = prevInTTY
+		taskRunStdoutIsTerminal = prevOutTTY
+		taskRunStderrIsTerminal = prevErrTTY
+	})
+
+	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
 	}
-	if stderr != "" {
-		t.Fatalf("expected no stderr, got %q", stderr)
+	taskRunStdinIsTerminal = func() bool { return true }
+	taskRunStdoutIsTerminal = func() bool { return true }
+	taskRunStderrIsTerminal = func() bool { return true }
+
+	prepareTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.PreparedExecution, error) {
+		return execution.PreparedExecution{
+			Request: req,
+			Requirements: models.TaskRequirements{
+				Workload: models.WorkloadProfileMatch{Class: models.ClassGoBuild},
+			},
+			Result: execution.GuardedExecutionResult{
+				Node:     "alpha",
+				FitScore: 88,
+			},
+			ReservationMB: 2048,
+			Command:       "echo hello",
+		}, nil
 	}
-	select {
-	case got := <-triggerCh:
-		if got != execution.StateChangeExecutionReserved {
-			t.Fatalf("refresh trigger = %q, want %q", got, execution.StateChangeExecutionReserved)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expected daemon stream path to preserve refresh signaling")
+
+	runPreparedTaskGuarded = func(context.Context, execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
+		t.Fatal("did not expect execution after operator declined")
+		return execution.GuardedExecutionResult{}, nil
+	}
+
+	cmd := taskRunCmd()
+	cmd.SetArgs([]string{"--exec", "echo hello"})
+	cmd.SetIn(strings.NewReader("n\n"))
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("task run Execute: %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "aborted; nothing executed") {
+		t.Fatalf("expected abort message, got %q", got)
+	}
+}
+
+func TestTaskRunCmdNonTTYSkipsConfirmationPrompt(t *testing.T) {
+	prevLoad := loadTaskRunRuntime
+	prevPrepare := prepareTaskGuarded
+	prevRunPrepared := runPreparedTaskGuarded
+	prevInTTY := taskRunStdinIsTerminal
+	prevOutTTY := taskRunStdoutIsTerminal
+	prevErrTTY := taskRunStderrIsTerminal
+	t.Cleanup(func() {
+		loadTaskRunRuntime = prevLoad
+		prepareTaskGuarded = prevPrepare
+		runPreparedTaskGuarded = prevRunPrepared
+		taskRunStdinIsTerminal = prevInTTY
+		taskRunStdoutIsTerminal = prevOutTTY
+		taskRunStderrIsTerminal = prevErrTTY
+	})
+
+	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
+	}
+	taskRunStdinIsTerminal = func() bool { return false }
+	taskRunStdoutIsTerminal = func() bool { return false }
+	taskRunStderrIsTerminal = func() bool { return false }
+
+	prepareTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.PreparedExecution, error) {
+		return execution.PreparedExecution{
+			Request: req,
+			Result: execution.GuardedExecutionResult{
+				Node: "alpha",
+			},
+			Command: "echo hello",
+		}, nil
+	}
+
+	var ran bool
+	runPreparedTaskGuarded = func(context.Context, execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
+		ran = true
+		return execution.GuardedExecutionResult{OK: true, Node: "alpha"}, nil
+	}
+
+	cmd := taskRunCmd()
+	cmd.SetArgs([]string{"--exec", "echo hello"})
+	cmd.SetIn(strings.NewReader("nope\n"))
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("task run Execute: %v", err)
+	}
+	if !ran {
+		t.Fatal("expected non-tty execution to proceed without prompt")
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected no confirmation prompt on non-tty, got %q", got)
 	}
 }

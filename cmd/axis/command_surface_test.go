@@ -46,7 +46,9 @@ func TestCommandSurfacesWireExpectedSubcommands(t *testing.T) {
 		want []string
 	}{
 		{taskCmd(), []string{"place", "context", "run"}},
-		{daemonCmd(), []string{"status", "invalidate", "refresh", "restart"}},
+		{daemonCmd(), []string{"start", "status", "invalidate", "refresh", "restart"}},
+		{profileCmd(), []string{"match"}},
+		{placementCmd(), []string{"explain"}},
 		{mcpCmd(), []string{"serve"}},
 		{scriptsCmd(), []string{"list"}},
 		{contextCmd(), []string{"show", "clear"}},
@@ -185,6 +187,45 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "AXIS HTTP API listening on http://127.0.0.1:5151") {
 		t.Fatalf("expected serve banner, got %q", stdout)
+	}
+}
+
+func TestDaemonStartCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
+	fake := &fakeServeDaemon{}
+	restoreDaemon := stubServeDaemonFactory(t, func(time.Duration) serveDaemon {
+		return fake
+	})
+	defer restoreDaemon()
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string) error {
+		if addr != "127.0.0.1:6262" {
+			t.Fatalf("addr = %q, want 127.0.0.1:6262", addr)
+		}
+		if d != fake {
+			t.Fatalf("expected injected daemon instance")
+		}
+		return nil
+	})
+	defer restoreServe()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := daemonCmd()
+		cmd.SetArgs([]string{"start", "--addr", "127.0.0.1:6262", "--refresh", "90s"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("daemon start Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	if !fake.started {
+		t.Fatal("expected daemon Start to be called")
+	}
+	if !fake.watchedConfig || !fake.watchedState || !fake.watchedSkills || !fake.watchedDiscovery {
+		t.Fatalf("expected config/state/skills/discovery watchers to be started, got config=%v state=%v skills=%v discovery=%v", fake.watchedConfig, fake.watchedState, fake.watchedSkills, fake.watchedDiscovery)
+	}
+	if !strings.Contains(stdout, "AXIS HTTP API listening on http://127.0.0.1:6262") {
+		t.Fatalf("expected daemon start banner, got %q", stdout)
 	}
 }
 
