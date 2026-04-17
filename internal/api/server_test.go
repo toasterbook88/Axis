@@ -165,6 +165,565 @@ func TestV2BatchPlaceReturnsNotImplemented(t *testing.T) {
 	}
 }
 
+func TestV2ClusterEndpointSummarizesSnapshot(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{
+			Status: models.SnapshotDegraded,
+			Nodes: []models.NodeFacts{
+				{
+					Name:   "alpha",
+					Status: models.StatusComplete,
+					OS:     "darwin",
+					Arch:   "arm64",
+					Resources: &models.Resources{
+						RAMTotalMB: 32768,
+						RAMFreeMB:  16384,
+						Pressure:   "low",
+						GPUs:       []models.GPUInfo{{Model: "Apple M3 Max"}},
+					},
+					Tools: []models.ToolInfo{{Name: "ollama"}, {Name: "git"}},
+				},
+				{
+					Name:   "beta",
+					Status: models.StatusPartial,
+					OS:     "linux",
+					Arch:   "amd64",
+					Resources: &models.Resources{
+						RAMTotalMB: 65536,
+						RAMFreeMB:  8192,
+						Pressure:   "high",
+					},
+					Tools: []models.ToolInfo{{Name: "docker"}},
+				},
+			},
+		},
+		meta: daemon.Metadata{
+			Ready:       true,
+			Version:     "test-build",
+			CacheAgeSec: 17,
+		},
+	}, "test-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/cluster", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload V2ClusterResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if payload.Status != string(models.SnapshotDegraded) {
+		t.Fatalf("expected degraded status, got %q", payload.Status)
+	}
+	if payload.Version != "test-build" {
+		t.Fatalf("expected version test-build, got %q", payload.Version)
+	}
+	if payload.NodeCount != 2 || payload.HealthyNodes != 1 || payload.DegradedNodes != 1 {
+		t.Fatalf("unexpected node counts: %+v", payload)
+	}
+	if payload.TotalRAMMB != 98304 || payload.FreeRAMMB != 24576 {
+		t.Fatalf("unexpected RAM totals: %+v", payload)
+	}
+	if payload.GPUCount != 1 {
+		t.Fatalf("expected 1 GPU, got %d", payload.GPUCount)
+	}
+	if payload.CacheAge != "17s" {
+		t.Fatalf("expected cache age 17s, got %q", payload.CacheAge)
+	}
+}
+
+func TestV2ClusterEndpointRequiresCache(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil, "test-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/cluster", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "snapshot cache unavailable") {
+		t.Fatalf("expected cache-unavailable error, got %q", rec.Body.String())
+	}
+}
+
+func TestV2NodesEndpointsReturnStructuredNodeData(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name:   "beta",
+					Status: models.StatusPartial,
+					OS:     "linux",
+					Arch:   "amd64",
+					Resources: &models.Resources{
+						RAMTotalMB: 65536,
+						RAMFreeMB:  8192,
+						Pressure:   "high",
+					},
+					Tools: []models.ToolInfo{{Name: "docker"}},
+				},
+				{
+					Name:   "alpha",
+					Status: models.StatusComplete,
+					OS:     "darwin",
+					Arch:   "arm64",
+					Resources: &models.Resources{
+						RAMTotalMB: 32768,
+						RAMFreeMB:  16384,
+						Pressure:   "low",
+						GPUs:       []models.GPUInfo{{Model: "Apple M3 Max"}},
+					},
+					Tools: []models.ToolInfo{{Name: "ollama"}, {Name: "git"}},
+				},
+			},
+		},
+		meta: daemon.Metadata{Ready: true},
+	}, "test-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/nodes", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var payload struct {
+		Nodes []V2NodeResponse `json:"nodes"`
+		Count int              `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if payload.Count != 2 || len(payload.Nodes) != 2 {
+		t.Fatalf("unexpected node list payload: %+v", payload)
+	}
+	if payload.Nodes[0].Name != "alpha" || payload.Nodes[1].Name != "beta" {
+		t.Fatalf("expected alphabetical node order, got %+v", payload.Nodes)
+	}
+	if payload.Nodes[0].RAMTotalMB != 32768 || payload.Nodes[0].RAMFreeMB != 16384 {
+		t.Fatalf("unexpected alpha RAM values: %+v", payload.Nodes[0])
+	}
+	if len(payload.Nodes[0].GPUs) != 1 || payload.Nodes[0].GPUs[0] != "Apple M3 Max" {
+		t.Fatalf("unexpected GPU list: %+v", payload.Nodes[0].GPUs)
+	}
+	if got := strings.Join(payload.Nodes[0].Tools, ","); got != "ollama,git" {
+		t.Fatalf("unexpected tool list: %q", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v2/nodes/alpha", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from single-node endpoint, got %d", rec.Code)
+	}
+
+	var node models.NodeFacts
+	if err := json.Unmarshal(rec.Body.Bytes(), &node); err != nil {
+		t.Fatalf("unmarshal single-node response: %v", err)
+	}
+	if node.Name != "alpha" || node.Status != models.StatusComplete {
+		t.Fatalf("unexpected single-node response: %+v", node)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v2/nodes/missing", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing node, got %d", rec.Code)
+	}
+	var missingPayload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &missingPayload); err != nil {
+		t.Fatalf("unmarshal missing-node response: %v", err)
+	}
+	if got, _ := missingPayload["error"].(string); got != `node "missing" not found` {
+		t.Fatalf("expected missing-node error, got %q", got)
+	}
+}
+
+func TestV2StubEndpointsStayNon2XX(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+		meta: daemon.Metadata{Ready: true},
+	}, "test-token")
+
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		body           string
+		expectedStatus int
+		errorContains  string
+	}{
+		{
+			name:           "reservations get",
+			method:         http.MethodGet,
+			path:           "/v2/reservations",
+			expectedStatus: http.StatusNotImplemented,
+			errorContains:  "reservation endpoints not yet implemented",
+		},
+		{
+			name:           "reservations post",
+			method:         http.MethodPost,
+			path:           "/v2/reservations",
+			expectedStatus: http.StatusNotImplemented,
+			errorContains:  "manual reservation creation pending ledger integration",
+		},
+		{
+			name:           "mesh get",
+			method:         http.MethodGet,
+			path:           "/v2/mesh",
+			expectedStatus: http.StatusNotImplemented,
+			errorContains:  "mesh integration pending",
+		},
+		{
+			name:           "mesh method",
+			method:         http.MethodDelete,
+			path:           "/v2/mesh",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
+		},
+		{
+			name:           "dry run missing description",
+			method:         http.MethodGet,
+			path:           "/v2/placement/dry-run",
+			expectedStatus: http.StatusBadRequest,
+			errorContains:  "description required",
+		},
+		{
+			name:           "dry run get with description",
+			method:         http.MethodGet,
+			path:           "/v2/placement/dry-run?description=demo",
+			expectedStatus: http.StatusNotImplemented,
+			errorContains:  "dry-run placement wiring pending",
+		},
+		{
+			name:           "dry run post with description",
+			method:         http.MethodPost,
+			path:           "/v2/placement/dry-run",
+			body:           `{"description":"demo"}`,
+			expectedStatus: http.StatusNotImplemented,
+			errorContains:  "dry-run placement wiring pending",
+		},
+		{
+			name:           "history get",
+			method:         http.MethodGet,
+			path:           "/v2/history",
+			expectedStatus: http.StatusNotImplemented,
+			errorContains:  "execution history wiring pending",
+		},
+		{
+			name:           "batch wrong method",
+			method:         http.MethodGet,
+			path:           "/v2/batch/place",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if payload["ok"] != false {
+				t.Fatalf("expected ok=false, got %#v", payload["ok"])
+			}
+			if got, _ := payload["error"].(string); !strings.Contains(got, tt.errorContains) {
+				t.Fatalf("expected error containing %q, got %q", tt.errorContains, got)
+			}
+		})
+	}
+}
+
+func TestV2MethodValidationAndCacheState(t *testing.T) {
+	tests := []struct {
+		name           string
+		cache          snapshotCache
+		method         string
+		path           string
+		expectedStatus int
+		errorContains  string
+	}{
+		{
+			name: "cluster wrong method",
+			cache: &fakeCache{
+				snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+				meta: daemon.Metadata{Ready: true},
+			},
+			method:         http.MethodPost,
+			path:           "/v2/cluster",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
+		},
+		{
+			name: "cluster cache not ready",
+			cache: &fakeCache{
+				meta: daemon.Metadata{Ready: false},
+			},
+			method:         http.MethodGet,
+			path:           "/v2/cluster",
+			expectedStatus: http.StatusServiceUnavailable,
+			errorContains:  "snapshot cache not ready",
+		},
+		{
+			name: "nodes wrong method",
+			cache: &fakeCache{
+				snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+				meta: daemon.Metadata{Ready: true},
+			},
+			method:         http.MethodPost,
+			path:           "/v2/nodes",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
+		},
+		{
+			name: "nodes cache not ready",
+			cache: &fakeCache{
+				meta: daemon.Metadata{Ready: false},
+			},
+			method:         http.MethodGet,
+			path:           "/v2/nodes",
+			expectedStatus: http.StatusServiceUnavailable,
+			errorContains:  "snapshot cache not ready",
+		},
+		{
+			name: "metrics wrong method",
+			cache: &fakeCache{
+				meta: daemon.Metadata{Ready: true},
+			},
+			method:         http.MethodPost,
+			path:           "/v2/metrics",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
+		},
+		{
+			name:           "metrics require cache",
+			cache:          nil,
+			method:         http.MethodGet,
+			path:           "/v2/metrics",
+			expectedStatus: http.StatusServiceUnavailable,
+			errorContains:  "snapshot cache unavailable",
+		},
+		{
+			name: "doctor wrong method",
+			cache: &fakeCache{
+				meta: daemon.Metadata{Ready: true},
+			},
+			method:         http.MethodPost,
+			path:           "/v2/doctor",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
+		},
+		{
+			name:           "doctor require cache",
+			cache:          nil,
+			method:         http.MethodGet,
+			path:           "/v2/doctor",
+			expectedStatus: http.StatusServiceUnavailable,
+			errorContains:  "snapshot cache unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			registerRoutes(mux, tt.cache, "test-token")
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			if tt.path != "/v2/metrics" || tt.cache != nil {
+				req.Header.Set("Authorization", "Bearer test-token")
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if payload["ok"] != false {
+				t.Fatalf("expected ok=false, got %#v", payload["ok"])
+			}
+			if got, _ := payload["error"].(string); !strings.Contains(got, tt.errorContains) {
+				t.Fatalf("expected error containing %q, got %q", tt.errorContains, got)
+			}
+		})
+	}
+}
+
+func TestV2MetricsEndpointExportsCacheAndNodeCounts(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{
+			Status: models.SnapshotDegraded,
+			Nodes: []models.NodeFacts{
+				{Name: "alpha", Status: models.StatusComplete},
+				{Name: "beta", Status: models.StatusPartial},
+			},
+		},
+		meta: daemon.Metadata{
+			CacheAgeSec:   15,
+			RefreshCount:  3,
+			LastRefreshMs: 42,
+			Stale:         true,
+			Ready:         true,
+		},
+	}, "test-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/metrics", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("expected text/plain content type, got %q", got)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"axis_cache_age_seconds 15",
+		"axis_cache_refresh_total 3",
+		"axis_cache_refresh_duration_ms 42",
+		"axis_cache_stale 1",
+		"axis_cache_ready 1",
+		"axis_nodes_total 2",
+		"axis_nodes_healthy 1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected metrics body to contain %q, got %q", want, body)
+		}
+	}
+}
+
+func TestV2DoctorEndpointReportsCurrentHealth(t *testing.T) {
+	tests := []struct {
+		name              string
+		cache             *fakeCache
+		expectedOverall   string
+		expectedStatuses  []string
+		expectedSubstring string
+	}{
+		{
+			name: "cache not ready",
+			cache: &fakeCache{
+				meta: daemon.Metadata{Ready: false},
+			},
+			expectedOverall:   "unhealthy",
+			expectedStatuses:  []string{"fail"},
+			expectedSubstring: "snapshot cache is not ready",
+		},
+		{
+			name: "stale cache and degraded nodes",
+			cache: &fakeCache{
+				snap: &models.ClusterSnapshot{
+					Nodes: []models.NodeFacts{
+						{Name: "alpha", Status: models.StatusComplete},
+						{Name: "beta", Status: models.StatusPartial},
+					},
+				},
+				meta: daemon.Metadata{
+					Ready:             true,
+					Stale:             true,
+					CacheAgeSec:       90,
+					StaleThresholdSec: 30,
+				},
+			},
+			expectedOverall:   "degraded",
+			expectedStatuses:  []string{"warn", "warn"},
+			expectedSubstring: "1 of 2 nodes are degraded",
+		},
+		{
+			name: "fresh cache and healthy nodes",
+			cache: &fakeCache{
+				snap: &models.ClusterSnapshot{
+					Nodes: []models.NodeFacts{
+						{Name: "alpha", Status: models.StatusComplete},
+						{Name: "beta", Status: models.StatusComplete},
+					},
+				},
+				meta: daemon.Metadata{
+					Ready:       true,
+					CacheAgeSec: 12,
+				},
+			},
+			expectedOverall:   "healthy",
+			expectedStatuses:  []string{"pass", "pass"},
+			expectedSubstring: "all 2 nodes healthy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			registerRoutes(mux, tt.cache, "test-token")
+
+			req := httptest.NewRequest(http.MethodGet, "/v2/doctor", nil)
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rec.Code)
+			}
+
+			var payload struct {
+				Overall string              `json:"overall"`
+				Checks  []V2DiagnosticCheck `json:"checks"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if payload.Overall != tt.expectedOverall {
+				t.Fatalf("expected overall=%q, got %q", tt.expectedOverall, payload.Overall)
+			}
+			if len(payload.Checks) != len(tt.expectedStatuses) {
+				t.Fatalf("expected %d checks, got %d", len(tt.expectedStatuses), len(payload.Checks))
+			}
+			for i, wantStatus := range tt.expectedStatuses {
+				if payload.Checks[i].Status != wantStatus {
+					t.Fatalf("check %d status = %q, want %q", i, payload.Checks[i].Status, wantStatus)
+				}
+			}
+			if joined := rec.Body.String(); !strings.Contains(joined, tt.expectedSubstring) {
+				t.Fatalf("expected response to contain %q, got %q", tt.expectedSubstring, joined)
+			}
+		})
+	}
+}
+
 func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, &fakeCache{
