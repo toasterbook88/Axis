@@ -432,6 +432,8 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 
 		writeJSON(w, http.StatusOK, resp)
 	}, token))
+
+	registerV2Routes(mux, cache, token)
 }
 
 var loadLiveRuntime = runtimectx.Load

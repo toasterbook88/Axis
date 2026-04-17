@@ -1,10 +1,48 @@
 # AXIS
 
 [![CI](https://github.com/toasterbook88/axis/actions/workflows/ci.yml/badge.svg)](https://github.com/toasterbook88/axis/actions/workflows/ci.yml)
+[![Release](https://github.com/toasterbook88/axis/actions/workflows/release.yml/badge.svg)](https://github.com/toasterbook88/axis/actions/workflows/release.yml)
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/toasterbook88/axis?include_prereleases)](https://github.com/toasterbook88/axis/releases)
 
-**A snapshot-first Go CLI that discovers hardware facts across your cluster via SSH, builds a `ClusterSnapshot`, and makes deterministic reservation-aware placement decisions. Optional chat, HTTP, and MCP surfaces are subordinate to observed state, not sources of truth.**
+**A local-first cluster substrate that discovers hardware across your machines via SSH,
+builds deterministic snapshots, and makes reservation-aware placement decisions —
+with optional gossip mesh discovery, AI agent surfaces, and guarded execution.**
+
+> **Truth Boundary:** No generated output may present itself as cluster truth
+> unless it is backed by a real snapshot or live probe.
+
+---
+
+## Architecture
+
+AXIS is built as a 5-layer stack. Each layer is subordinate to the one below it —
+advisory surfaces never override observed state.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 5: ADVISORY                                              │
+│  Chat · Agent · MCP Server                                      │
+│  Experimental helpers — never authoritative                     │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 4: EXECUTION                                             │
+│  Guarded Exec · Safety Gates · Heartbeat Reservations           │
+│  Structured NDJSON streaming · Resource accounting              │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 3: PLACEMENT                                             │
+│  Filter → Rank → Select · FitScore 0-100                        │
+│  GPU/VRAM matching · Locality · Empirical observations          │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 2: SNAPSHOT                                              │
+│  ClusterSnapshot assembly · Daemon cache · 7 refresh triggers   │
+│  Content-aware config watches · Staleness detection             │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 1: FACT PLANE                                            │
+│  SSH hardware probes · UDP beacons · Proposed mesh scaffolding  │
+│  Local + remote collectors · HMAC-authenticated beacons         │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
@@ -20,474 +58,266 @@ axis status
 
 # Ask where to run a task
 axis task place "run ollama inference on a 7b model"
+
+# Explain a placement decision
+axis placement explain "run ollama inference on a 7b model"
+
+# Health diagnostics
+axis doctor
 ```
 
-## Truth Boundary
+## Proposed for v0.10.0 (not yet shipped)
 
-**No generated output may present itself as cluster truth unless it is backed by a real snapshot or live probe.**
+The items in this section describe proposed capabilities from this branch and
+roadmap work. For shipped behavior, use `docs/current-state.md` and the latest
+published GitHub release.
 
-- The stable operator path is `axis facts`, `axis status`, `axis task place`, `axis task context`, and the daemon cache commands.
-- `axis chat` is experimental and non-authoritative.
+### 🌐 Mesh Discovery
+Experimental gossip scaffolding for peer discovery. The package authenticates
+message contents with HMAC-SHA256, but freshness and replay protection are not
+enforced yet, and the mesh is not wired into the stable operator path.
+
+```
+Discovered → Verified → Trusted
+     ↓           ↓
+  Suspect → Dead (evicted)
+```
+
+### 📊 Reservation Ledger
+Double-entry resource accounting replaces the heuristic RAM sharing model.
+Per-node, per-execution tracking with configurable overcommit policy,
+heartbeat-based liveness, automatic stale reclaim, and fail-closed rejection
+when node capacity is unknown.
+
+### 🛡️ Structured Safety Engine
+Structured rule-evaluation scaffolding with parsed command analysis and 7 risk
+categories. Program-name-only learned approvals are deliberately disabled in
+this branch, and the existing operator surface remains the authoritative path.
+
+### 🖥️ CLI Dashboard
+Rendering helpers for dashboard-style views, RAM usage bars, node health icons,
+and reservation tables. These helpers are not registered as CLI commands in
+this branch.
+
+### 🔌 Enhanced HTTP API (v2)
+Versioned route scaffolding plus active read-only surfaces. Cluster, node,
+metrics, and doctor routes are wired; reservation, mesh, dry-run, and batch
+placement remain explicit non-2xx placeholders until implemented.
 
 ## Command Surface
 
-### Stable operator path
+### Stable Operator Path
 
-- `axis version` — print the current AXIS build version
-- `axis facts` — local hardware/tool snapshot (default: text; `--format json|yaml`)
-- `axis status` / `axis status --cached` / `axis status --cached-only` — live or daemon-cached cluster snapshot
-- `axis task place` / `axis task place --cached` — advisory placement with reasoning (flat `PlacementDecision` output)
-- `axis placement explain` / `axis placement explain --cached` — detailed placement breakdown showing eligible and excluded nodes with per-node reasoning
-- `axis profile match` — show which workload class an intent maps to and what requirements are inferred (no cluster snapshot needed)
-- `axis task context` / `axis task context --cached` — compact context block backed by live or cached snapshot data
-- `axis task run` — explicit execution with safety gating, RAM/GPU reservation, and TTY-aware confirmation
-- `axis daemon start` / `status` / `refresh` / `invalidate` / `restart` — manage the local snapshot cache daemon
-- `axis context show` / `clear` — inspect or reset persisted placement memory
+| Command | Purpose |
+|---------|---------|
+| `axis version` | Print build version, commit, and Go version |
+| `axis facts` | Local hardware/tool snapshot (`--format json\|yaml`) |
+| `axis status` | Live cluster snapshot (`--cached`, `--cached-only`) |
+| `axis task place` | Advisory placement with reasoning (`--cached`) |
+| `axis placement explain` | Detailed per-node placement breakdown |
+| `axis profile match` | Workload class inference (no snapshot needed) |
+| `axis task context` | Compact context block (`--format json`, `--cached`) |
+| `axis task run` | Guarded task execution with safety gates |
+| `axis doctor` | Comprehensive health diagnostics |
+| `axis daemon start` | Background snapshot refresh daemon |
+| `axis daemon status` | Daemon health and cache metadata |
+| `axis daemon refresh` | Trigger immediate cache refresh |
+| `axis daemon invalidate` | Invalidate cached snapshot |
 
-### Optional or secondary surfaces
+### Secondary Commands
 
-- `axis task run` — explicit execution surface layered on top of placement, with optional observed-state-gated Nix helper wrapping when the selected node proves it supports `nix`. When running in a TTY (stdin/stdout/stderr are all terminals), `task run` shows a confirmation prompt with the target node, workload class, fit score, reservation headroom, and command before executing. In non-TTY contexts (pipelines, cron, daemon), the prompt is skipped. Safety-blocked executions display `=== SAFETY BLOCKED ===` with the reason and dumb score.
-- `axis serve` — optional local HTTP API surface
-- `axis llm` — route prompts to local Ollama or cloud LLM providers
-- `axis cortex` — distributed vector memory and event bus (events, recall, status)
-- `axis mcp serve` — optional read-only MCP server over stdio
-- `axis scripts list` — list built-in helper scripts
-- `axis skills` — show learned local skills/failures
-- `axis chat` — cluster-aware chat assistant using Ollama `/api/chat`; advisory only
-- `axis agent` — agentic tool-calling assistant with read-only cluster tools and operator-confirmed shell execution
-- `axis completion` — Cobra-generated shell completion
+| Command | Purpose |
+|---------|---------|
+| `axis serve` | Local HTTP API + daemon |
+| `axis llm` | LLM routing and model management |
+| `axis cortex` | Distributed vector memory / event bus |
+| `axis mcp serve` | Read-only MCP server over stdio |
+| `axis chat` | Ollama-backed advisory chat |
+| `axis agent` | Tool-calling agent loop |
+| `axis scripts list` | Built-in script catalog |
+| `axis skills` | Learned execution skills |
 
-### Available Commands (Strict Config Enforced)
+Render helpers for proposed dashboard, mesh, and reservation commands live in
+`cmd/axis/dashboard.go`, but those command surfaces are not registered in this
+branch.
 
-- `axis version`
-- `axis facts` — local facts only (default: text)
-- `axis status` — full cluster snapshot (uses strict `nodes.yaml`)
-- `axis task place <description>` — deterministic placement
-- `axis placement explain <intent>` — detailed placement breakdown with eligible/excluded nodes
-- `axis profile match <intent>` — workload class and requirement inference
+## Placement Algorithm
 
-Removed: `axis discover` (fully replaced by `axis status` + snapshot assembly).
+The placement engine uses a deterministic **Filter → Rank → Select** pipeline:
 
-## Execution Safety (hardened)
+### Filter (all must pass)
+- Node status: `complete`
+- Allocatable RAM ≥ requirement (after system reserve)
+- GPU VRAM/vendor/backend match
+- Required tools present
+- Empirical PeakRAMMB filter
+- No thermal throttling
+- Battery ≥ 20%
+- No active tombstones
+- Storage class check (HDD penalty)
 
-- CLI execution requires `axis task run --script ...` or `axis task run --exec ...`; HTTP `/run` and `axis_execute` require explicit `mode=script|exec` plus `confirm: "YES"`
-- Hardened safety blocker with allow-list, cluster-aware RAM/GPU checks, and learned-bad fast path
-- Per-node reservation caps enforced before any command runs (`RAMTotalMB - 1024` headroom)
-- Live and cached read paths both overlay local reservations before placement, context generation, or execution
-- `axis task run` / `/run` now export `AXIS_TURBOQUANT_*` env hints to executed commands when a TurboQuant-capable node is selected
-- Corrupt local `~/.axis/state.json` / `~/.axis/skills.json` files are quarantined to `.corrupt-*` backups and surfaced as warnings instead of crashing read paths
-- Reservations auto-clean on every daemon refresh:
-  - guarded executions now write explicit per-exec heartbeats while they are alive
-  - reservation entries record their owning local AXIS PID, internal caller provenance (`task-run`, `http-run`, `agent-run-shell`), and the observed local AXIS execution origin (node name / hostname / stable ID when available)
-  - HTTP execution surfaces can also accept a signed forwarded upstream origin when the caller proves possession of the shared AXIS API token
-  - heartbeat-stale exec reservations are reclaimed after about 2 minutes
-  - legacy no-heartbeat state still falls back to the older 45-minute/24-hour cleanup path
-  - no-exec entries are discarded immediately
-- All cached paths (`task place --cached`, `task context --cached`, `mcp serve --cached`) use the single `internal/daemon/client`
-- Visible in `/snapshot/meta` as `reserved_mb`
-- `axis serve` now watches `~/.axis/nodes.yaml`, `~/.axis/state.json`, and `~/.axis/skills.json` for semantic/content changes and surfaces the resulting `last_refresh_trigger` in daemon metadata/health; heartbeat-only `state.json` writes are ignored so active executions do not force full cache refresh churn
-- `axis task run` and HTTP `/run` now emit best-effort `execution-reserved` / `execution-finished` refresh signals so the default local daemon cache can react immediately to real execution-state changes
-- `axis agent` now routes approved `run_shell` calls through the same guarded AXIS execution path as other execution surfaces, preferring the local AXIS `/run` daemon/API hop when available so signed upstream origin survives that boundary; agent-triggered commands still participate in placement, reservation tracking, heartbeats, caller provenance, and refresh signaling
-- `axis task run` now also prefers the local AXIS daemon/API `/run` hop when available, using a streamed NDJSON execution contract so placement readiness and live stdout/stderr survive the boundary instead of forcing a local-only execution path
-- The streamed `/run` contract now also carries explicit execution state-change events, and early runtime/load failures now surface as the normal final `result` event instead of unexpectedly falling back to buffered JSON
-- Local daemon `/run` clients now use a dedicated long-lived execution transport instead of inheriting the short snapshot/meta HTTP timeout, so daemon-hop executions can run for the full caller context
-- When UDP discovery is enabled, `axis serve` also runs a long-lived beacon watcher so new/changed/expired beacon-derived nodes can trigger `beacon-change` cache refreshes without waiting for the normal snapshot timer
-- Live and cached snapshots now carry a typed `freshness` contract describing the discovery source, expected/observed beacon window, additive beacon-node count, completion state, and any degraded-confidence warning
-- Guarded execution now records exact-scope empirical observations (`node`, workload, backend, tool) separately from failure memory so later placement can prefer fresh successful history without treating "slow" as "broken"
+### Rank (priority order)
+1. Highest allocatable RAM
+2. Best empirical observation (fresh only)
+3. Resident model locality
+4. Preferred backend rank
+5. GPU score (+25 pts)
+6. Highest effective headroom
+7. Unified-memory / TurboQuant suitability
+8. Lowest RAM pressure
+9. Lowest reservation ratio
+10. Node name ascending (stable tiebreak)
 
-## Degraded-State Behavior
+### FitScore (0–100)
+- GPU match: **+25 pts**
+- Local node: **+10 pts**
+- Unified memory bonus for matching workloads
+- Reservation ratio factor
 
-| Local condition | CLI behavior | API/MCP behavior | File outcome |
-| --- | --- | --- | --- |
-| Corrupt `~/.axis/state.json` | `axis context show` warns on stderr and still prints valid JSON | live snapshot-bearing reads keep working; state warning appears in snapshot warnings or placement reasoning | original file is renamed to `state.json.corrupt-<UTCSTAMP>` and a clean in-memory state is used |
-| Corrupt `~/.axis/skills.json` | `axis skills` warns on stderr and still prints valid JSON | live API/MCP reads keep working; skills warning appears in snapshot warnings or placement reasoning | original file is renamed to `skills.json.corrupt-<UTCSTAMP>` and a clean in-memory skills store is used |
+## HTTP API
 
-These files are local operator memory, not authoritative cluster truth. AXIS now prefers `warn + quarantine + continue` over failing shut on read paths.
+### v1 Routes (Unix socket: `~/.axis/axis.sock`)
 
-## Features
+| Route | Auth | Purpose |
+|-------|------|---------|
+| `GET /health` | No | Daemon health |
+| `GET /snapshot` | Yes | Full ClusterSnapshot |
+| `GET /snapshot/meta` | Yes | Cache metadata |
+| `POST /run` | Yes | Guarded execution (NDJSON stream) |
+| `POST /refresh` | Yes | Trigger cache refresh |
+| `POST /invalidate` | Yes | Invalidate cache |
+| `GET /tools` | Yes | MCP tool definitions |
+| `GET /knowledge` | Yes | Cluster knowledge + skills |
 
-| Feature | Details |
-| --- | --- |
-| **Local fact collection** | OS, kernel, arch, CPU cores/model, RAM (total/free + load averages + pressure), disk (total/free + storage class: nvme/ssd/hdd), structured GPU info (vendor/model/VRAM/capabilities), network addresses (with interface name, subnet, heuristic speed class), battery %, thermal state, and additive memory-topology / pressure-source metadata where available |
-| **Tool inventory** | `go`, `python3`, `git`, `docker`, `ollama`, `mlx_lm`, `llama-cli`, `llama-server`, `node`, `swift`, `cargo`, `gcc`, plus probe-verified local `apple-foundation-models` on eligible Apple Silicon hosts running macOS 26 or later |
-| **SSH cluster sweep** | Concurrent fan-out over all configured nodes; per-node timeout |
-| **ClusterSnapshot** | Structured JSON/YAML with per-node status (`complete` / `partial` / `unreachable` / `error`), cluster-level aggregates, and additive discovery freshness metadata for both live and cached reads |
-| **Advisory task placement** | `axis task place` ranks nodes deterministically by allocatable RAM first, then fresh exact-scope empirical history, resident-model locality, backend/GPU/headroom tie-breaks, and reservation spread; heavy AI tasks still avoid nodes under critical runtime pressure signals |
-| **Optional local control surfaces** | `axis serve`, `axis daemon invalidate`, `axis mcp serve`, `axis task run`, `axis chat`, and `axis agent` are available when explicitly invoked |
-| **Single-binary operation** | No required daemon, database, or background process; local server/MCP surfaces are opt-in |
-| **Structured output** | `axis facts` and `axis status` support text/JSON/YAML; `axis task place` supports text and JSON; `axis placement explain` supports text and JSON; `axis profile match` supports text, JSON, and YAML |
+### v2 Routes (partial scaffolding in this branch)
 
-## Installation
+| Route | Auth | Status | Purpose |
+|-------|------|--------|---------|
+| `GET /v2/cluster` | Yes | Active | Full cluster overview |
+| `GET /v2/nodes` | Yes | Active | Node list with health |
+| `GET /v2/nodes/:name` | Yes | Active | Single node deep-dive |
+| `GET /v2/reservations` | Yes | Stub (`501`) | Reserved for future reservation wiring |
+| `GET /v2/mesh` | Yes | Stub (`501`) | Reserved for future mesh wiring |
+| `GET/POST /v2/placement/dry-run` | Yes | Stub (`501`) | Reserved for future placement simulation |
+| `GET /v2/metrics` | **No** | Active | Prometheus-compatible metrics |
+| `POST /v2/batch/place` | Yes | Stub (`501`) | Reserved for future batch placement |
+| `GET /v2/doctor` | Yes | Active | Health diagnostics |
 
-### 1. Quick Install (macOS / Linux)
-
-The fastest way to install AXIS is using our install script. It automatically detects your OS/Arch, downloads the latest release tarball securely verified against `checksums.txt`, and places it in `~/.local/bin`.
-
-```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh
-less install.sh
-bash install.sh
-rm -f install.sh
-```
-
-### 2. Nix Flakes (NixOS / macOS)
-
-AXIS offers native, reproducible Nix support.
-
-```bash
-# Install to your profile
-nix profile install github:toasterbook88/axis
-
-# Or run instantly without installing
-nix run github:toasterbook88/axis
-```
-
-*Note for contributors*: Run `nix develop` to enter a reproducible `devShell` containing the matching Go toolchain and required utilities.
-
-### 3. Homebrew (macOS / Linux)
-
-> Note: Homebrew Tap automation is currently pending. For now, please use the Quick Install script above.
-
-### For Developers (Build from Source)
-
-If you need unreleased `main`-branch changes or specifically want to use the Go ecosystem, you can compile from source. **Requirements:** Go 1.26.1+ (use the latest 1.26 patch release), SSH key-based auth for remote nodes.
-
-**Using `go install`:**
-
-```bash
-go install github.com/toasterbook88/axis/cmd/axis@latest
-```
-
-**Manual Compilation:**
-
-```bash
-git clone https://github.com/toasterbook88/axis.git
-cd axis
-go build -o axis ./cmd/axis/
-# Optional: move to $PATH
-mv axis /usr/local/bin/axis
-```
-
-### Updating AXIS
-
-AXIS includes a built-in self-updater via the `axis update` command.
-
-> [!WARNING]
-> **If you installed AXIS via a package manager (like Nix or Homebrew), DO NOT use `axis update` to upgrade the binary.** Doing so attempts an in-place executable swap which violates immutable system paths and desyncs your package manager's state. AXIS is package-manager aware and will politely refuse to upgrade itself, instructing you to use your respective tool (e.g. `nix profile upgrade`, `brew upgrade`).
-
-To safely check if there is a newer version available without triggering an upgrade, run:
-
-```bash
-axis update --check
-```
-
-**Important Notes for `axis update` on Quick Install / Source builds:**
-By default, `axis update` safely scopes its upgrade *only* to the currently executing binary to prevent cross-contamination in mixed dev/prod `PATH` environments. If you want it to automatically upgrade all other `axis` binaries it finds in your `$PATH`, pass the `--all` flag.
-
-## Release Pipeline & Security
-
-**Tagged release pipeline:**
-
-- `v*` tags are published through GitHub Actions and GoReleaser
-- Release artifacts are configured for `darwin`/`linux` on `amd64`/`arm64`
-- The release workflow refuses to publish if the pushed tag and `internal/buildinfo/version.go` disagree
-- Published releases are listed on the [GitHub Releases page](https://github.com/toasterbook88/axis/releases)
-
-**Security hygiene:**
-
-- Weekly Dependabot updates cover Go modules and GitHub Actions
-- `govulncheck` runs on pull requests, pushes to `main`, and a weekly schedule
-- Private vulnerability reporting and automated security fixes are enabled on GitHub
-- Security reporting guidance lives in [SECURITY.md](SECURITY.md)
-
-## Usage
-
-### `axis facts` — local machine snapshot
-
-```bash
-axis facts               # human-readable text (default)
-axis facts --format json # JSON
-axis facts --format yaml # YAML
-```
-
-### `axis status` — cluster snapshot
-
-Create `~/.axis/nodes.yaml` (see [nodes.example.yaml](nodes.example.yaml)):
+## Configuration
 
 ```yaml
+# ~/.axis/nodes.yaml
 nodes:
-  - name: node-a
-    hostname: node-a.local
-    # stable_id: f47ac10b-58cc-4372-a567-0e02b2c3d479
-    ssh_user: alice
-    role: primary
+  - name: macbook-pro
+    hostname: 192.168.1.100
+    ssh_port: 22
+    ssh_user: admin
+    role: workstation
+    timeout: 10s
 
-  - name: node-b
-    hostname: node-b.local
-    ssh_user: alice
-    role: worker
-    # ssh_port: 22
-    # timeout_sec: 10
+  - name: linux-server
+    hostname: 192.168.1.200
+    ssh_user: deploy
+    role: server
+
+# Proposed future mesh scaffolding in this branch (not wired into config loading)
+# mesh:
+#   enabled: true
+#   listen_addr: ":42426"
+#   gossip_interval: 5s
+#   shared_secret: "your-cluster-secret"
+#   max_peers: 64
+
+# Proposed future reservation policy scaffolding in this branch (not wired yet)
+# reservation:
+#   max_overcommit_ratio: 1.0   # 1.0 = no overcommit
+#   system_reserve_mb: 1024
+#   heartbeat_stale_window: 2m
+#   max_entries_per_node: 32
 ```
 
-Then:
+## Build & Test
 
 ```bash
-axis status              # human-readable text (default)
-axis status --format json
-axis status --format yaml
-axis status --cached     # read explicit daemon cache instead of live SSH sweep
-axis status --cached-only # require daemon cache; fail instead of falling back to live
+make build          # CGO_ENABLED=0 go build -trimpath with LDFLAGS
+make install        # Build + copy to $GOPATH/bin
+make test           # go test ./... -count=1 -timeout 180s
+make test-race      # go test ./... -count=1 -timeout 180s -race
+make lint           # gofmt + go vet
+make coverage       # Coverage gates via hack/coverage-check.sh
 ```
 
-### `axis task place` — advisory placement
+## Release Process
+
+Releases are automated via GitHub Actions:
 
 ```bash
-axis task place "analyze a git repo"
-# → ✓ node-b (remote, fit 82/100)
-#   Tool: git
-#   Reason:
-#     - has required tool: git
-#     - free RAM: 14336 MB
+# 1. Update version in internal/buildinfo/version.go
+# 2. Commit and tag
+git tag v0.10.0
+git push origin v0.10.0
 
-axis task place "run ollama inference on a 7b model" --format json
-axis task place --cached "run ollama inference on a 7b model"
+# 3. release.yml runs automatically:
+#    Test Gate → Version Validation → Security Scan → GoReleaser → Verify Install
 ```
 
-With `--format json`, `task place` outputs a flat `PlacementDecision` object. When `--cached` is used, the JSON is wrapped in `{"source": "...", "decision": {...}}`.
+Binaries are built for **darwin/linux × amd64/arm64** with:
+- Reproducible builds (`-trimpath`, `CGO_ENABLED=0`)
+- Embedded version, commit hash, build date
+- SHA-256 checksums
+- Conventional Commits changelog
 
-### `axis placement explain` — detailed placement breakdown
+## Project Layout
 
-```bash
-axis placement explain "run ollama inference on a 7b model"
-# → ✓ mlx-node (remote, fit 98/100)
-#
-#   Advisory Placement
-#   1. mlx-node (remote, fit 98/100)
-#      - turboquant-aware backend verified: mlx
-#      - 8192MB allocatable against 1024MB requirement
-#
-#   Filtered
-#   - node-b
-#      - need 4096MB free RAM, have 2048MB effective
-
-axis placement explain --cached --format json "run ollama inference on a 7b model"
+```
+axis/
+├── cmd/axis/          Cobra CLI entry point
+├── internal/          Private packages (34 packages)
+│   ├── facts/         SSH hardware/tool collection
+│   ├── snapshot/      ClusterSnapshot assembly
+│   ├── placement/     Deterministic Filter→Rank→Select
+│   ├── execution/     Guarded task execution
+│   ├── daemon/        Background cache + 7 refresh triggers
+│   ├── api/           HTTP API (v1 + partial v2 scaffolding)
+│   ├── mesh/          Gossip peer discovery scaffolding
+│   ├── reservation/   Resource accounting ledger
+│   ├── safety/        Structured command safety groundwork
+│   ├── discovery/     SSH + UDP node discovery
+│   ├── mcp/           MCP server (stdio)
+│   ├── agent/         Tool-calling agent loop
+│   └── ...            20+ additional packages
+├── docs/              Design docs + CI-validated state
+├── hack/              Developer scripts
+└── .github/           CI + release workflows
 ```
 
-Unlike `task place`, `placement explain` shows both eligible and excluded nodes with per-node reasoning. JSON output wraps in `{"source": "...", "explanation": {"decision": {...}, "eligible": [...], "excluded": [...]}}`.
+## Security
 
-### `axis profile match` — workload class inference
+- **Air-gapped option:** On-device inference via Ollama, no cloud dependency
+- **HMAC-SHA256:** Beacon auth is shipped; mesh gossip scaffolding authenticates payloads but does not yet enforce replay protection
+- **Zero-trust execution:** Existing safety gates are shipped; parsed command analysis groundwork in this branch is not operator-enabled yet
+- **Constant-time auth:** Bearer token comparison via `crypto/subtle`
+- **No data exfiltration:** All state persisted locally in `~/.axis/`
+- **govulncheck:** Automated vulnerability scanning in release pipeline
+- **SBOM generation:** Supply chain transparency via GoReleaser
 
-```bash
-axis profile match "run ollama inference on a 7b model"
-# → class: local-llm-inference
-#   min_free_ram_mb: 4096
-#   required_tools: [ollama]
-
-axis profile match --format json "analyze a git repo"
-```
-
-`profile match` shows which workload class an intent maps to and what requirements are inferred. No cluster snapshot is needed — it inspects only the workload matching rules.
-
-Placement uses keyword matching against the task description (no ML). It infers the required tool (`ollama`, `git`, `go`, `docker`) and minimum free RAM from specific keywords (`model`, `7b`, `inference`, `heavy`, etc.), then scores each reachable node. Tool presence is a hard requirement, and eligible nodes are ranked by allocatable RAM first, then fresh exact-scope empirical history, resident-model locality, backend/GPU/headroom tie-breaks, reservation spread, storage class (HDD penalized for heavy loads), and stable name ordering.
-
-AXIS now treats allocatable RAM as `min(live free RAM, total RAM minus a protected 1GB system reserve) - local reservations`, so cached reads, placement, and last-second execution admission use the same headroom model. When allocatable and per-node reservation ratios tie, placement also prefers the node holding a smaller share of the current cluster reservation pool, which makes RAM spreading more explicit instead of repeatedly picking the same machine on late ties.
-
-When UDP discovery is enabled, both live and cached snapshot surfaces now also expose a typed freshness contract instead of only a free-form warning string. That contract reports whether the expected beacon window completed, how much of it was actually observed, and how many additive beacon-derived nodes were included.
-
-For Ollama-shaped tasks, observed `resident_models` from `ollama ps` now provide a truth-backed warm-runtime locality hint, and guarded execution now feeds back exact-scope observations (wall time always, RAM/VRAM peaks only when directly observed) into later placement decisions.
-
-Long-context hints such as `128k`, `book-length`, or `million-token` also trigger a TurboQuant-aware preference when a node exposes `mlx` or `llama.cpp`-style backends, with stronger RAM reduction and fit bonuses reserved for recognizable backend help/probe responses. For heavy inference tasks, AXIS filters out nodes showing critical runtime pressure, thermal throttling, or low battery (< 20%), and respects tombstone blacklists for task+node combinations that have repeatedly crashed.
-
-When `axis task run` selects a TurboQuant-capable node, AXIS exports `AXIS_TURBOQUANT`, `AXIS_TURBOQUANT_STATUS`, `AXIS_TURBOQUANT_BACKENDS`, `AXIS_TURBOQUANT_CAPABILITIES`, and long-context hints into the execution environment. For probe-verified `llama.cpp` commands with `--ctx-size` support, AXIS can also inject safe additive flags such as `--ctx-size` and `--flash-attn` when they are absent.
-
-Experimental local Apple Foundation Models execution is available on eligible Apple Silicon machines running macOS 26 or later through the source-visible Swift helper in [hack/apple-foundation-models.swift](hack/apple-foundation-models.swift):
-
-```bash
-axis task run --exec 'xcrun swift hack/apple-foundation-models.swift --prompt "Summarize this text"'
-```
-
-AXIS treats `apple-foundation-models` as a local-only verified capability. Remote nodes are excluded for that backend instead of being treated as fallback candidates.
-
-With `--cached`, placement uses the explicit daemon snapshot cache instead of a fresh SSH sweep. JSON output includes a `source` wrapper so you can tell whether the decision came from `daemon-cache` or live fallback.
-
-### `axis task context` — compact operator/agent prompt block
-
-```bash
-axis task context "test inference"
-axis task context --cached "test inference"
-```
-
-`--cached` uses the explicit daemon snapshot cache and includes a `Source:` line in the rendered context block so you can tell where the prompt data came from.
-
-### `axis serve` / `axis daemon start` — optional local HTTP API
-
-```bash
-axis serve
-axis serve --addr 127.0.0.1:42425 --refresh 30s
-axis daemon start          # equivalent to axis serve
-```
-
-Starts the local AXIS HTTP API and execution surface on `127.0.0.1:42425` by default, plus a background snapshot refresh loop that powers the explicit cached-read path.
-
-### `axis daemon invalidate` — clear local daemon cache
-
-```bash
-axis daemon invalidate
-axis daemon invalidate --cache-addr 127.0.0.1:42425
-```
-
-Clears the daemon-backed snapshot cache explicitly. This does not change the default `axis status` live path; it only affects cached reads and other daemon-backed surfaces.
-
-### `axis daemon refresh` — force a fresh daemon snapshot now
-
-```bash
-axis daemon refresh
-axis daemon refresh --cache-addr 127.0.0.1:42425
-```
-
-Forces the daemon to rebuild its cached snapshot immediately. This is the fastest way to ensure `axis status --cached` and `axis task place --cached` use fresh cluster state without waiting for the next background tick.
-
-### `axis daemon status` — inspect local daemon freshness
-
-```bash
-axis daemon status
-axis daemon restart
-```
-
-`axis daemon status` reports cache readiness, age, and version metadata. `axis daemon restart` restarts the local cache seam from the current binary when you need to refresh stale daemon state explicitly.
-
-### `axis update` — self-update to the latest release
-
-```bash
-axis update           # download and install the latest release (only replaces current binary)
-axis update --all     # replace ALL discovered `axis` binaries in your $PATH
-axis update --check   # report whether an update is available (no download)
-```
-
-Checks GitHub Releases for a newer version, downloads the matching platform
-binary, verifies its SHA-256 checksum against the release's `checksums.txt`,
-and replaces the current binary in-place. The checksum is always verified —
-the release workflow produces `checksums.txt` alongside every archive.
-
-Note: if your copy of `axis` was installed using a package manager like `nix`
-or `homebrew`, `axis update` will refuse to perform an in-place replacement
-and will direct you to update using your package manager natively instead.
-
-## Configuration Reference
-
-`~/.axis/nodes.yaml` fields:
-
-Unknown YAML keys are rejected at load time so config typos fail fast instead of being silently ignored.
-
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `name` | yes | — | Logical node name |
-| `hostname` | yes | — | Resolvable hostname or IP |
-| `stable_id` | no | — | Optional observed machine identity (`machine-id` / platform UUID) used for locality and discovery dedupe |
-| `ssh_user` | yes | — | SSH username |
-| `role` | no | — | `primary` or `worker` |
-| `ssh_port` | no | `22` | SSH port |
-| `timeout_sec` | no | `10` | Per-node collection timeout (seconds) |
-
-Optional discovery block used by experimental UDP-assisted discovery:
-
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `discovery.enabled` | no | `false` | Enable UDP beacon discovery alongside configured nodes |
-| `discovery.udp_port` | no | `42424` | UDP beacon port |
-| `discovery.beacon_interval_sec` | no | `3` | Beacon broadcast interval |
-| `discovery.secret` | no | empty | Shared discovery secret for filtering beacons |
-
-Optional chat block used by the advisory `axis chat` and `axis agent` surfaces:
-
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `chat.default_model` | no | auto-detect best installed model | Default Ollama model tag when `--model` is omitted |
-
-When a host exposes a stable identity, AXIS includes it in UDP beacons and uses it only to avoid duplicate nodes or preserve an explicit config binding when names or IPs drift.
-
-## Architecture
-
-```text
-┌─────────────────────┬─────────────────────────────────────────────────────────────────────────────────┐
-│       Package       │                                      Role                                       │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ cmd/axis/           │ Cobra CLI entry — facts, status, task, placement, profile, serve, daemon, context, scripts, skills, llm, cortex, agent, chat, mcp, doctor, update
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/config/    │ Loads ~/.axis/nodes.yaml (node list, SSH user/port/timeout)                     │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/facts/     │ SSH into each node, collects RAM/CPU/GPU/tools                                  │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/placement/ │ Filter + rank nodes by free RAM, pressure, GPU capability, storage class, thermal state, tombstones, locality; ComputeFitScore 0–100 │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/chat/      │ Structured /api/chat client with rolling context window and system prompt      │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/agent/     │ Tool-calling agent loop with read-only tools and safety-gated shell execution   │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/snapshot/  │ Assembles `ClusterSnapshot` from `[]NodeFacts`                                  │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/daemon/    │ Background snapshot refresh, in-memory cache, and explicit invalidation         │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/state/     │ Persists local placement memory and execution state                              │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/api/       │ Local HTTP API and execution surface                                             │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/mcp/       │ Read-only MCP server over stdio                                                  │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/transport/ │ Raw SSH execution layer                                                         │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/discovery/ │ Node discovery                                                                  │
-├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────┤
-│ internal/models/    │ Shared types: NodeFacts, TaskRequirements, Locality                             │
-└─────────────────────┴─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Key design notes
-
-- Config lives at `~/.axis/nodes.yaml` — no cluster IPs hardcoded in code
-- Placement is deterministic: RAM pressure → GPU → effective headroom → allocatable RAM → reservation ratio → name
-- ComputeFitScore factors in GPU (+25pts) and local-node bonus (+10pts) — M1↔M3 RAM sharing would be relevant here
-- Chat uses the Ollama `/api/chat` endpoint with structured messages and a rolling context window; defaults to `localhost:11434`
-- `axis agent` provides a tool-calling loop with read-only cluster tools (`status`, `facts`, `place`) and safety-gated shell execution; `--auto-approve` enables automatic execution for low-risk commands
-- `axis serve` hosts an optional daemon-backed cache; `axis status --cached`, `axis task place --cached`, `axis task context --cached`, `axis daemon refresh`, and `axis daemon invalidate` use it explicitly
-- The daemon cache now refreshes immediately on config/state/skills content changes, explicit execution-state signals, and long-lived UDP beacon changes, in addition to its normal timer loop
-- `axis serve` and `axis mcp serve` are optional local surfaces, not required infrastructure
-- `axis chat` and `axis agent` are advisory helpers and must not outrank snapshot-backed truth
-- Placement memory lives locally in `~/.axis/state.json`
-
-**Current phase:** The observability and placement core is stable. Chat and agent surfaces use structured `/api/chat` with tool calling and safety gates, but remain subordinate to observed state and must not present model output as authoritative cluster truth.
-
-See [Phase 1 Spec](docs/phase1_spec.md) and [White Paper](docs/white_paper_v1.md) for detailed design notes.
-
-## Roadmap
-
-The following are planned directions beyond the functionality shipped in v0.7.0:
-
-- Mesh networking / peer discovery beyond a static seed file
-- Future roadmap phases beyond the current runtime-hardening wave — see
-  [white paper](docs/white_paper_v1.md) and
-  [future roadmap](docs/future-roadmap.md)
-
-### Phase 3 (Shipped in v0.4.0) · Phases 4–7 (Shipped in v0.7.0)
-
-The following features were delivered in Phase 3:
-
-- **nodes.yaml hot-reload** — daemon detects config changes and re-discovers nodes without restart
-- **Daemon refresh metrics** — `/health` reports `refresh_count`, `last_refresh_duration_ms`, `stale_nodes`
-- **Graceful shutdown** — `axis serve` drains in-flight work before exit
-- **`axis task context --format json`** — machine-readable context block with fit score, skills, and recent decisions
-- **HMAC-SHA256 beacon auth** — UDP discovery signs beacons instead of transmitting the shared secret
-
-Phases 4–7 are now shipped in v0.7.0, including professional CLI UX,
-structured chat and agent surfaces, transport and execution hardening, and the
-trust-and-foundations work tracked in the roadmap docs.
+See [SECURITY.md](SECURITY.md) for our vulnerability disclosure policy.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs small and focused; open an
-issue before adding major new roadmap phases or control surfaces.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
+
+For AI agents working in this repo, see [AGENTS.md](AGENTS.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) — Smith Software Solutions LLC
+
+---
+
+<p align="center">
+  <a href="https://axismcp.app">axismcp.app</a> ·
+  <a href="https://axismcp.tech">axismcp.tech</a> ·
+  <a href="https://smithsolutionssc.com">smithsolutionssc.com</a> ·
+  <a href="https://twitter.com/AXISBRIDGEMACOS">@AXISBRIDGEMACOS</a>
+</p>
