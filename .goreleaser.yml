@@ -1,6 +1,17 @@
+# GoReleaser configuration for AXIS
+# Docs: https://goreleaser.com/customization/
+#
+# Local dry-run:   goreleaser release --snapshot --clean
+# CI release:      triggered by .github/workflows/release.yml on v* tags
+
 version: 2
 
 project_name: axis
+
+before:
+  hooks:
+    - go mod download
+    - go mod verify
 
 builds:
   - id: axis
@@ -12,6 +23,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X github.com/toasterbook88/axis/internal/buildinfo.Version={{ .Version }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.Commit={{ .ShortCommit }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.Date={{ .Date }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.GoVersion={{ .Env.GOVERSION }}
@@ -21,27 +33,97 @@ builds:
     goarch:
       - amd64
       - arm64
+    # Build ID for reproducibility
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - id: axis
     ids:
       - axis
     name_template: "axis_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
     files:
       - LICENSE
       - README.md
+      - CHANGELOG.md
+      - nodes.example.yaml
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
 
+# Source archive for reproducible builds
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+
+# SBOMs for supply chain security
+sboms:
+  - artifacts: archive
+
+# Release configuration
 release:
+  github:
+    owner: toasterbook88
+    name: axis
   draft: false
   prerelease: auto
+  name_template: "AXIS v{{ .Version }}"
+  header: |
+    ## AXIS v{{ .Version }}
+
+    **Truth boundary:** No generated output may present itself as cluster truth
+    unless it is backed by a real snapshot or live probe.
+
+    ### Installation
+
+    ```bash
+    # Go install (recommended)
+    go install github.com/toasterbook88/axis/cmd/axis@v{{ .Version }}
+
+    # Or download binary from assets below
+    ```
+
+    ### Verify checksums
+    ```bash
+    sha256sum -c checksums.txt
+    ```
+  footer: |
+    ---
+    **Full changelog:** https://github.com/toasterbook88/axis/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    Built with Go {{ .Env.GOVERSION }} | [axismcp.app](https://axismcp.app) | Smith Software Solutions LLC
 
 changelog:
   sort: asc
+  use: github
+  groups:
+    - title: "🚀 Features"
+      regexp: '^.*?feat((.+))?!?:.*$'
+      order: 0
+    - title: "🐛 Bug Fixes"
+      regexp: '^.*?fix((.+))?!?:.*$'
+      order: 1
+    - title: "🔒 Security"
+      regexp: '^.*?sec((.+))?!?:.*$'
+      order: 2
+    - title: "📚 Documentation"
+      regexp: '^.*?docs((.+))?!?:.*$'
+      order: 3
+    - title: "🔧 Maintenance"
+      regexp: '^.*?(chore|ci|refactor|perf|style|test)((.+))?!?:.*$'
+      order: 4
+    - title: "Other"
+      order: 999
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      - "^Merge"
+      - "^merge"
+
+# Announce on release (optional — enable when ready)
+# announce:
+#   twitter:
+#     enabled: true
+#     message_template: "AXIS {{ .Tag }} released! {{ .ReleaseURL }}"
