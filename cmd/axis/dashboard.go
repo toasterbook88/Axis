@@ -3,13 +3,14 @@
 // that shows cluster state, reservations, mesh peers, and recent executions.
 //
 // New commands:
-//   axis dashboard         — interactive TUI overview (refreshes every 5s)
-//   axis summary           — one-shot cluster summary (human-friendly text)
-//   axis node trust <name> — promote a mesh-discovered peer to trusted
-//   axis node list         — enhanced node listing with color-coded health
-//   axis doctor            — comprehensive cluster health check
-//   axis reservation list  — show active reservations
-//   axis reservation clean — reclaim stale reservations
+//
+//	axis dashboard         — interactive TUI overview (refreshes every 5s)
+//	axis summary           — one-shot cluster summary (human-friendly text)
+//	axis node trust <name> — promote a mesh-discovered peer to trusted
+//	axis node list         — enhanced node listing with color-coded health
+//	axis doctor            — comprehensive cluster health check
+//	axis reservation list  — show active reservations
+//	axis reservation clean — reclaim stale reservations
 package main
 
 import (
@@ -34,19 +35,19 @@ var (
 
 // ClusterSummaryView renders a human-friendly cluster overview.
 type ClusterSummaryView struct {
-	Version      string
-	NodeCount    int
-	Healthy      int
-	Degraded     int
-	Unreachable  int
-	TotalRAMMB   int64
-	FreeRAMMB    int64
+	Version       string
+	NodeCount     int
+	Healthy       int
+	Degraded      int
+	Unreachable   int
+	TotalRAMMB    int64
+	FreeRAMMB     int64
 	ReservedRAMMB int64
-	GPUCount     int
-	CacheAge     time.Duration
-	IsStale      bool
-	MeshPeers    int
-	Warnings     []string
+	GPUCount      int
+	CacheAge      time.Duration
+	IsStale       bool
+	MeshPeers     int
+	Warnings      []string
 }
 
 func (v ClusterSummaryView) Render() string {
@@ -153,23 +154,23 @@ func renderBar(pct float64, width int) string {
 		c = colorGreen
 	}
 
-	return c.Sprint("[" + bar + "]") + fmt.Sprintf(" %.0f%%", pct)
+	return c.Sprint("["+bar+"]") + fmt.Sprintf(" %.0f%%", pct)
 }
 
 // --- Node List ---
 
 // NodeListItem represents a node in the enhanced listing.
 type NodeListItem struct {
-	Name       string
-	Status     string
-	OS         string
-	Arch       string
-	RAMTotal   int
-	RAMFree    int
-	Pressure   string
-	GPUs       []string
-	IsLocal    bool
-	Reserved   int64
+	Name     string
+	Status   string
+	OS       string
+	Arch     string
+	RAMTotal int
+	RAMFree  int
+	Pressure string
+	GPUs     []string
+	IsLocal  bool
+	Reserved int64
 }
 
 func (n NodeListItem) StatusIcon() string {
@@ -296,12 +297,12 @@ func RenderDoctorReport(checks []DoctorCheck) string {
 // --- Reservation List ---
 
 type ReservationListItem struct {
-	ID       string
-	Node     string
-	RAMMB    int64
-	Owner    string
-	Age      time.Duration
-	IsStale  bool
+	ID      string
+	Node    string
+	RAMMB   int64
+	Owner   string
+	Age     time.Duration
+	IsStale bool
 }
 
 func RenderReservationTable(items []ReservationListItem) string {
@@ -344,11 +345,4 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 	}
 	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
 }

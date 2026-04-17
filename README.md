@@ -66,7 +66,11 @@ axis summary
 axis doctor
 ```
 
-## What's New in v0.10.0
+## Proposed for v0.10.0 (not yet shipped)
+
+The items in this section describe proposed capabilities from this branch and
+roadmap work. For shipped behavior, use `docs/current-state.md` and the latest
+published GitHub release.
 
 ### 🌐 Mesh Discovery
 Zero-configuration peer discovery using gossip protocol. Nodes find each other

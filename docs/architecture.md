@@ -1,8 +1,8 @@
 # AXIS Architecture Reference
 
-> This document describes the current architecture as shipped. When it
-> disagrees with the live code, trust the code first. For planned work,
-> see [future-roadmap.md](future-roadmap.md).
+> This document mixes shipped architecture with proposed v0.10.0 extensions.
+> When it disagrees with the live code, trust the code and
+> [docs/current-state.md](current-state.md) first.
 
 ## Design Principles
 
@@ -35,7 +35,7 @@ The fact plane collects hardware and software facts from cluster nodes.
 | `RemoteCollector` | SSH into remote nodes via `transport.SSHExecutor` |
 | `Discovery` | Fan-out probes (maxParallel=10) with semaphore |
 | `UDP Beacons` | HMAC-SHA256 authenticated node announcements |
-| `Mesh Gossip` | Peer discovery with 5-state lifecycle (v0.10.0) |
+| `Mesh Gossip` | Proposed peer discovery with 5-state lifecycle (v0.10.0) |
 
 **Facts collected per node:**
 - OS, architecture, hostname, kernel version
@@ -119,7 +119,7 @@ Guarded task execution with pre-flight safety checks and resource reservation.
 Description → Intent Parse → Safety Gate → Placement → Reserve → Execute → Release
 ```
 
-**Safety evaluation (v0.10.0):**
+**Proposed safety evaluation (v0.10.0):**
 - Parsed command analysis (program + args, not substring matching)
 - 7 risk categories: safe, read-only, modify, destructive, network-mutating,
   privilege-escalate, system-critical

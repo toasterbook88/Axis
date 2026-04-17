@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"sort"
 	"sync"
@@ -58,16 +59,16 @@ func (s PeerState) String() string {
 
 // Peer represents a node in the mesh.
 type Peer struct {
-	Name       string    `json:"name"`
-	Hostname   string    `json:"hostname"`
-	Port       int       `json:"port"`
-	StableID   string    `json:"stable_id"`
-	State      PeerState `json:"state"`
-	Source     string    `json:"source"` // "config", "gossip", "mdns", "peer-exchange"
-	FirstSeen  time.Time `json:"first_seen"`
-	LastSeen   time.Time `json:"last_seen"`
-	MissedPings int      `json:"missed_pings"`
-	Generation  uint64   `json:"generation"` // Lamport-style monotonic counter
+	Name        string    `json:"name"`
+	Hostname    string    `json:"hostname"`
+	Port        int       `json:"port"`
+	StableID    string    `json:"stable_id"`
+	State       PeerState `json:"state"`
+	Source      string    `json:"source"` // "config", "gossip", "mdns", "peer-exchange"
+	FirstSeen   time.Time `json:"first_seen"`
+	LastSeen    time.Time `json:"last_seen"`
+	MissedPings int       `json:"missed_pings"`
+	Generation  uint64    `json:"generation"` // Lamport-style monotonic counter
 }
 
 // Config controls mesh behavior.
@@ -102,15 +103,15 @@ func DefaultConfig() Config {
 
 // Mesh manages peer discovery and gossip protocol.
 type Mesh struct {
-	mu          sync.RWMutex
-	peers       map[string]*Peer // key: stable_id or hostname
-	self        Peer
-	cfg         Config
-	generation  uint64
-	conn        *net.UDPConn
-	logger      *slog.Logger
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
+	mu         sync.RWMutex
+	peers      map[string]*Peer // key: stable_id or hostname
+	self       Peer
+	cfg        Config
+	generation uint64
+	conn       *net.UDPConn
+	logger     *slog.Logger
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 
 	// Callbacks for integration with daemon cache.
 	OnPeerJoin    func(Peer)
@@ -120,7 +121,7 @@ type Mesh struct {
 
 // gossipMessage is the wire format for UDP gossip.
 type gossipMessage struct {
-	Type      string `json:"type"`       // "ping", "peer-list", "join", "leave"
+	Type      string `json:"type"` // "ping", "peer-list", "join", "leave"
 	Sender    Peer   `json:"sender"`
 	Peers     []Peer `json:"peers,omitempty"`
 	Timestamp int64  `json:"ts"`
@@ -285,7 +286,7 @@ func (m *Mesh) listenLoop(ctx context.Context) {
 			continue
 		}
 
-		if !m.verifyHMAC(buf[:n], msg.HMAC) {
+		if !m.verifyMessageHMAC(msg) {
 			m.logger.Warn("mesh: HMAC verification failed", "from", addr)
 			continue
 		}
@@ -362,9 +363,6 @@ func (m *Mesh) handleMessage(msg gossipMessage, from *net.UDPAddr) {
 // mergePeer integrates a gossipped peer into our local state.
 // Never demotes a trusted peer. Never exceeds MaxPeers.
 func (m *Mesh) mergePeer(p Peer, now time.Time) {
-	if len(m.peers) >= m.cfg.MaxPeers {
-		return // cap reached
-	}
 	key := m.peerKey(p)
 	if key == m.peerKey(m.self) {
 		return // ignore self
@@ -372,6 +370,9 @@ func (m *Mesh) mergePeer(p Peer, now time.Time) {
 
 	existing, ok := m.peers[key]
 	if !ok {
+		if len(m.peers) >= m.cfg.MaxPeers {
+			return // cap reached for new peers
+		}
 		// New peer discovered via gossip
 		p.State = PeerDiscovered
 		p.FirstSeen = now
@@ -439,9 +440,10 @@ func (m *Mesh) detectFailures() {
 
 // broadcastPeerList sends our peer knowledge to a random subset of peers.
 func (m *Mesh) broadcastPeerList() {
-	m.mu.RLock()
+	m.mu.Lock()
 	m.generation++
 	m.self.Generation = m.generation
+	sender := m.self
 	targets := m.selectFanOut()
 	peers := make([]Peer, 0, len(m.peers))
 	for _, p := range m.peers {
@@ -449,7 +451,7 @@ func (m *Mesh) broadcastPeerList() {
 			peers = append(peers, *p)
 		}
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
 
 	if len(targets) == 0 {
 		return
@@ -457,19 +459,17 @@ func (m *Mesh) broadcastPeerList() {
 
 	msg := gossipMessage{
 		Type:      "peer-list",
-		Sender:    m.self,
+		Sender:    sender,
 		Peers:     peers,
 		Timestamp: time.Now().UnixMilli(),
+		Nonce:     m.generateNonce(),
 	}
-
+	msg.HMAC = m.computeMessageHMAC(msg)
 	data, err := json.Marshal(msg)
 	if err != nil {
 		m.logger.Error("mesh: marshal gossip", "err", err)
 		return
 	}
-	msg.Nonce = m.generateNonce()
-	msg.HMAC = m.computeHMAC(data)
-	data, _ = json.Marshal(msg)
 
 	for _, target := range targets {
 		addr, err := net.ResolveUDPAddr("udp", target)
@@ -497,9 +497,12 @@ func (m *Mesh) selectFanOut() []string {
 	}
 	// Fisher-Yates shuffle, take first FanOut
 	for i := len(addrs) - 1; i > 0; i-- {
-		b := make([]byte, 1)
-		rand.Read(b)
-		j := int(b[0]) % (i + 1)
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			m.logger.Warn("mesh: random fanout selection failed", "err", err)
+			continue
+		}
+		j := int(n.Int64())
 		addrs[i], addrs[j] = addrs[j], addrs[i]
 	}
 	return addrs[:m.cfg.FanOut]
@@ -522,8 +525,30 @@ func (m *Mesh) verifyHMAC(data []byte, received string) bool {
 	return hmac.Equal([]byte(expected), []byte(received))
 }
 
+func (m *Mesh) computeMessageHMAC(msg gossipMessage) string {
+	if m.cfg.SharedSecret == "" {
+		return ""
+	}
+	msg.HMAC = ""
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return ""
+	}
+	return m.computeHMAC(payload)
+}
+
+func (m *Mesh) verifyMessageHMAC(msg gossipMessage) bool {
+	if m.cfg.SharedSecret == "" {
+		return true
+	}
+	expected := m.computeMessageHMAC(msg)
+	return hmac.Equal([]byte(expected), []byte(msg.HMAC))
+}
+
 func (m *Mesh) generateNonce() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
 	return hex.EncodeToString(b)
 }

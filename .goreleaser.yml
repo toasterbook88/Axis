@@ -23,7 +23,6 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/toasterbook88/axis/internal/buildinfo.Version={{ .Version }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.Commit={{ .ShortCommit }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.Date={{ .Date }}
       - -X github.com/toasterbook88/axis/internal/buildinfo.GoVersion={{ .Env.GOVERSION }}

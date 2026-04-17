@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,22 +47,22 @@ const (
 
 // Decision captures the full reasoning for a safety evaluation.
 type Decision struct {
-	Verdict   Verdict   `json:"verdict"`
-	Category  Category  `json:"category"`
-	Program   string    `json:"program"`
-	Args      []string  `json:"args"`
-	RawCmd    string    `json:"raw_cmd"`
-	Reasons   []string  `json:"reasons"`
-	MatchedRule string  `json:"matched_rule,omitempty"`
-	EvalAt    time.Time `json:"evaluated_at"`
+	Verdict     Verdict   `json:"verdict"`
+	Category    Category  `json:"category"`
+	Program     string    `json:"program"`
+	Args        []string  `json:"args"`
+	RawCmd      string    `json:"raw_cmd"`
+	Reasons     []string  `json:"reasons"`
+	MatchedRule string    `json:"matched_rule,omitempty"`
+	EvalAt      time.Time `json:"evaluated_at"`
 }
 
 // Rule defines a single safety rule.
 type Rule struct {
 	Name        string   `yaml:"name" json:"name"`
 	Description string   `yaml:"description" json:"description"`
-	Programs    []string `yaml:"programs" json:"programs"`           // glob patterns for program name
-	ArgPatterns []string `yaml:"arg_patterns" json:"arg_patterns"`   // glob patterns matched against joined args
+	Programs    []string `yaml:"programs" json:"programs"`         // glob patterns for program name
+	ArgPatterns []string `yaml:"arg_patterns" json:"arg_patterns"` // glob patterns matched against joined args
 	Category    Category `yaml:"category" json:"category"`
 	Verdict     Verdict  `yaml:"verdict" json:"verdict"`
 	Priority    int      `yaml:"priority" json:"priority"`           // higher = evaluated first
@@ -124,7 +125,8 @@ func DefaultRuleSet() RuleSet {
 
 // Evaluator applies rules to commands.
 type Evaluator struct {
-	rules    []Rule
+	mu        sync.RWMutex
+	rules     []Rule
 	overrides map[string]Verdict // per-command overrides (learned)
 }
 
@@ -157,7 +159,10 @@ func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
 	}
 
 	// Check learned overrides first
-	if v, ok := e.overrides[program]; ok {
+	e.mu.RLock()
+	v, ok := e.overrides[program]
+	e.mu.RUnlock()
+	if ok {
 		d.Verdict = v
 		d.Category = CategoryUnknown
 		d.MatchedRule = "learned-override"
@@ -207,11 +212,15 @@ func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
 
 // LearnAllow records an operator-approved command for future auto-allow.
 func (e *Evaluator) LearnAllow(program string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.overrides[program] = VerdictAllow
 }
 
 // LearnDeny records an operator-denied command for future auto-deny.
 func (e *Evaluator) LearnDeny(program string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.overrides[program] = VerdictDeny
 }
 

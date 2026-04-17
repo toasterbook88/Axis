@@ -94,6 +94,7 @@ type Ledger struct {
 	entries map[string]*Entry // key: entry ID
 	limits  Limits
 	logger  *slog.Logger
+	now     func() time.Time
 
 	// nodeRAM maps node name → total RAM in MB (populated from snapshots).
 	nodeRAM map[string]int64
@@ -115,6 +116,7 @@ func NewLedger(limits Limits, logger *slog.Logger) *Ledger {
 		limits:  limits,
 		logger:  logger.With("component", "reservation-ledger"),
 		nodeRAM: make(map[string]int64),
+		now:     time.Now,
 	}
 }
 
@@ -181,7 +183,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		}
 	}
 
-	now := time.Now()
+	now := l.now()
 	req.CreatedAt = now
 	req.LastHeartbeat = now
 	l.entries[req.ID] = &req
@@ -218,7 +220,7 @@ func (l *Ledger) Heartbeat(id string) error {
 	if !ok {
 		return fmt.Errorf("reservation: unknown entry %q for heartbeat", id)
 	}
-	e.LastHeartbeat = time.Now()
+	e.LastHeartbeat = l.now()
 	return nil
 }
 
@@ -226,7 +228,7 @@ func (l *Ledger) Heartbeat(id string) error {
 func (l *Ledger) Reclaim() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
+	now := l.now()
 	reclaimed := 0
 	for id, e := range l.entries {
 		if e.IsStale(now, l.limits.HeartbeatStaleWindow) || e.IsExpired(now) {
@@ -278,7 +280,7 @@ func (l *Ledger) AllocatableRAM(node string) int64 {
 func (l *Ledger) NodeSummaryFor(node string) NodeSummary {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	now := time.Now()
+	now := l.now()
 	summary := NodeSummary{
 		Node:       node,
 		TotalRAMMB: l.nodeRAM[node],
@@ -305,7 +307,7 @@ func (l *Ledger) NodeSummaryFor(node string) NodeSummary {
 func (l *Ledger) Summary() ClusterSummary {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	now := time.Now()
+	now := l.now()
 
 	nodeMap := make(map[string]*NodeSummary)
 	for node, ram := range l.nodeRAM {

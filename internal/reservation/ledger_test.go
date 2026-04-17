@@ -107,9 +107,12 @@ func TestRelease_Unknown(t *testing.T) {
 func TestHeartbeat(t *testing.T) {
 	l := NewLedger(DefaultLimits(), nil)
 	l.SetNodeCapacity("node-a", 16384)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	current := base
+	l.now = func() time.Time { return current }
 	l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 1024})
 
-	time.Sleep(10 * time.Millisecond)
+	current = current.Add(10 * time.Millisecond)
 	err := l.Heartbeat("exec-1")
 	if err != nil {
 		t.Fatalf("Heartbeat failed: %v", err)

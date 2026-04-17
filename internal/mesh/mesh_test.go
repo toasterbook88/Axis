@@ -205,18 +205,26 @@ func TestOnPeerJoinCallback(t *testing.T) {
 
 	var mu sync.Mutex
 	var joined []string
+	joinedCh := make(chan struct{}, 1)
 	m.OnPeerJoin = func(p Peer) {
 		mu.Lock()
 		joined = append(joined, p.Name)
 		mu.Unlock()
+		select {
+		case joinedCh <- struct{}{}:
+		default:
+		}
 	}
 
 	m.mu.Lock()
 	m.mergePeer(Peer{Name: "new-node", Hostname: "10.0.0.5", StableID: "id-new"}, time.Now())
 	m.mu.Unlock()
 
-	// Wait for callback goroutine
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-joinedCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for OnPeerJoin callback")
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(joined) != 1 || joined[0] != "new-node" {
@@ -288,6 +296,29 @@ func TestHMAC_ValidSecret(t *testing.T) {
 	}
 	if m.verifyHMAC(data, "bad-mac") {
 		t.Error("invalid HMAC should not verify")
+	}
+}
+
+func TestHMAC_VerifyMessageWithEmbeddedMAC(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SharedSecret = "test-secret-key"
+	m := New(Peer{Name: "node-a", Hostname: "10.0.0.1", StableID: "id-a"}, cfg, nil)
+
+	msg := gossipMessage{
+		Type:      "peer-list",
+		Sender:    Peer{Name: "node-a", Hostname: "10.0.0.1", StableID: "id-a", Generation: 2},
+		Peers:     []Peer{{Name: "node-b", Hostname: "10.0.0.2", StableID: "id-b", Generation: 1}},
+		Timestamp: time.Now().UnixMilli(),
+		Nonce:     "nonce-1",
+	}
+	msg.HMAC = m.computeMessageHMAC(msg)
+	if !m.verifyMessageHMAC(msg) {
+		t.Fatal("expected message HMAC to verify")
+	}
+
+	msg.Nonce = "tampered"
+	if m.verifyMessageHMAC(msg) {
+		t.Fatal("expected tampered message HMAC verification to fail")
 	}
 }
 

@@ -176,6 +176,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Capture Go toolchain version
+        id: go-env
+        run: echo "goversion=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -186,7 +190,7 @@ jobs:
             ${{ (github.event.inputs.dry_run == 'true' || github.event_name == 'workflow_dispatch') && '--snapshot --clean' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOVERSION: ${{ env.GO_VERSION }}
+          GOVERSION: ${{ steps.go-env.outputs.goversion }}
 
       - name: Upload artifacts (dry-run only)
         if: github.event.inputs.dry_run == 'true' || github.event_name == 'workflow_dispatch'
@@ -201,7 +205,7 @@ jobs:
   # ──────────────────────────────────────────────
   verify-install:
     name: Verify Install
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: release
     if: github.event_name == 'push'  # only on real releases
     strategy:
