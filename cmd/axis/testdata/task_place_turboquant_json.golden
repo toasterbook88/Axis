@@ -4,31 +4,45 @@ STDERR:
 STDOUT:
 {
   "source": "daemon-cache",
-  "decision": {
-    "node": "mlx-node",
-    "tool": "ollama",
-    "fit_score": 98,
-    "is_local": false,
-    "workload": {
-      "class": "long-context-inference",
-      "notes": [
-        "also matched class: local-llm-inference"
-      ]
+  "explanation": {
+    "decision": {
+      "node": "mlx-node",
+      "tool": "ollama",
+      "fit_score": 98,
+      "is_local": false,
+      "workload": {
+        "class": "long-context-inference",
+        "notes": [
+          "also matched class: local-llm-inference"
+        ]
+      },
+      "reasoning": [
+        "workload class: long-context-inference",
+        "workload note: also matched class: local-llm-inference",
+        "long-context task hint: ~128000 tokens",
+        "unified memory topology (class 4)",
+        "turboquant-aware backend verified: mlx",
+        "turboquant capabilities: apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present",
+        "LLM fit: 98/100 (excellent for small models)",
+        "remote node (via SSH)",
+        "8192MB allocatable (0MB reserved of 8192MB reservable pool; 16384MB total)",
+        "pressure: none",
+        "10 CPU cores",
+        "required tool ollama (0.7.0) available"
+      ],
+      "ok": true
     },
-    "reasoning": [
-      "workload class: long-context-inference",
-      "workload note: also matched class: local-llm-inference",
-      "long-context task hint: ~128000 tokens",
-      "unified memory topology (class 4)",
-      "turboquant-aware backend verified: mlx",
-      "turboquant capabilities: apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present",
-      "LLM fit: 98/100 (excellent for small models)",
-      "remote node (via SSH)",
-      "8192MB allocatable (0MB reserved of 8192MB reservable pool; 16384MB total)",
-      "pressure: none",
-      "10 CPU cores",
-      "required tool ollama (0.7.0) available"
-    ],
-    "ok": true
+    "eligible": [
+      {
+        "node": "mlx-node",
+        "fit_score": 98,
+        "is_local": false,
+        "reasoning": [
+          "turboquant-aware backend verified: mlx",
+          "8192MB allocatable against 1024MB requirement",
+          "required tools available: ollama"
+        ]
+      }
+    ]
   }
 }

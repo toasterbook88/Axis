@@ -83,6 +83,23 @@ type GuardedExecutionResult struct {
 	Summary        *models.ClusterSummary      `json:"summary,omitempty"`
 }
 
+type PreparedExecution struct {
+	Request       GuardedExecutionRequest
+	Intent        Intent
+	Requirements  models.TaskRequirements
+	Result        GuardedExecutionResult
+	ReservationMB int64
+	Command       string
+	ExtraEnv      []string
+	ContextJSON   []byte
+	TargetNode    models.NodeFacts
+	TargetConfig  config.NodeConfig
+	Owner         state.ExecutionOwner
+	SkillStore    *skills.Store
+	State         *state.ClusterState
+	Err           error
+}
+
 type Intent struct {
 	Command       string
 	Label         string
@@ -145,7 +162,6 @@ var StreamLocalShell = func(ctx context.Context, command string, env []string, s
 
 var PlanNixExecution = PlanNixWrapper
 var ProbeLocalAvailableRAMMB = probeLocalAvailableRAMMB
-
 
 func NormalizeRequest(req *GuardedExecutionRequest) {
 	if req == nil {
@@ -278,116 +294,189 @@ func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node strin
 	return ns.ReservedMB+mb <= capMB
 }
 
-func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (GuardedExecutionResult, error) {
+func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (PreparedExecution, error) {
 	// CRITICAL INVARIANT: operator-requested task execution in this package's
 	// guarded execution path must go through RunGuarded rather than bypassing it.
 	NormalizeRequest(&req)
 
-	resp := GuardedExecutionResult{
-		Description: req.Description,
-		Mode:        req.Mode,
+	prepared := PreparedExecution{
+		Request: req,
+		Result: GuardedExecutionResult{
+			Description: req.Description,
+			Mode:        req.Mode,
+		},
 	}
 
 	if err := ValidateRequest(req); err != nil {
-		resp.Error = err.Error()
-		return resp, err
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
 	if rt == nil || rt.Config == nil || rt.Snapshot == nil {
-		resp.Error = "runtime context unavailable"
-		return resp, fmt.Errorf("runtime context unavailable")
+		err := fmt.Errorf("runtime context unavailable")
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
 
-	resp.SnapshotStatus = rt.Snapshot.Status
-	resp.Summary = &rt.Snapshot.Summary
+	prepared.Result.SnapshotStatus = rt.Snapshot.Status
+	prepared.Result.Summary = &rt.Snapshot.Summary
 
 	skillStore := rt.Skills
 	if skillStore == nil {
 		skillStore = &skills.Store{}
 	}
+	prepared.SkillStore = skillStore
+	prepared.State = rt.State
+	prepared.Owner = executionOwner(rt, req)
 
 	intent, err := ResolveIntent(req.Description, req.Mode, skillStore)
 	if err != nil {
-		resp.Error = err.Error()
-		return resp, err
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
+	prepared.Intent = intent
 
-	resp.Intent = intent.Label
-	resp.Command = intent.Command
+	prepared.Result.Intent = intent.Label
+	prepared.Result.Command = intent.Command
 
 	reqs := prepareRequirements(req.Description, req.Mode, intent)
+	prepared.Requirements = reqs
 	decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
-	resp.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, rt.Snapshot.Warnings)
-	resp.Node = decision.Node
-	resp.Tool = decision.Tool
-	resp.Workload = decision.Workload
-	resp.FitScore = decision.FitScore
-	resp.IsLocal = decision.IsLocal
+	prepared.Result.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, rt.Snapshot.Warnings)
+	prepared.Result.Node = decision.Node
+	prepared.Result.Tool = decision.Tool
+	prepared.Result.Workload = decision.Workload
+	prepared.Result.FitScore = decision.FitScore
+	prepared.Result.IsLocal = decision.IsLocal
 
 	if !decision.OK {
-		resp.Error = "no suitable node found"
-		return resp, fmt.Errorf("no suitable node found")
+		err := fmt.Errorf("no suitable node found")
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
 
 	reservationMB := ReservationMBForRequirements(reqs)
+	prepared.ReservationMB = reservationMB
 	if !CanReserve(rt.Snapshot, rt.State, decision.Node, reservationMB) {
-		resp.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
-		return resp, fmt.Errorf("reservation cap exceeded")
+		err := fmt.Errorf("reservation cap exceeded")
+		prepared.Result.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
+		prepared.Err = err
+		return prepared, err
 	}
-	resp.Reasoning = append(resp.Reasoning, fmt.Sprintf("reservation headroom protected: %dMB", reservationMB))
+	prepared.Result.Reasoning = append(prepared.Result.Reasoning, fmt.Sprintf("reservation headroom protected: %dMB", reservationMB))
 
 	targetNode, ok := findNodeFacts(rt.Snapshot, decision.Node)
 	if !ok {
-		resp.Error = fmt.Sprintf("node %q not found in snapshot", decision.Node)
-		return resp, fmt.Errorf("node %q not found in snapshot", decision.Node)
+		err := fmt.Errorf("node %q not found in snapshot", decision.Node)
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
+	prepared.TargetNode = targetNode
 
-	if err := enforceLocalExecutionSafety(ctx, targetNode, reqs, &resp); err != nil {
-		resp.Error = err.Error()
-		return resp, err
+	if err := enforceLocalExecutionSafety(ctx, targetNode, reqs, &prepared.Result); err != nil {
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
 
 	turboPlan := turboexec.Prepare(targetNode, reqs, intent.Command)
-	resp.Reasoning = append(resp.Reasoning, turboPlan.Notes...)
+	prepared.Result.Reasoning = append(prepared.Result.Reasoning, turboPlan.Notes...)
 	commandToRun := turboPlan.Command
 
 	k := knowledge.Build(rt.Snapshot, rt.State, decision.Node)
 	if block := safety.Check(k, commandToRun, skillStore.IsKnownBad); block.Blocked {
-		resp.Blocked = true
-		resp.BlockReason = block.Reason
-		resp.DumbScore = block.Score
-		resp.Error = block.Reason
-		return resp, nil
+		prepared.Result.Blocked = true
+		prepared.Result.BlockReason = block.Reason
+		prepared.Result.DumbScore = block.Score
+		prepared.Result.Error = block.Reason
+		return prepared, nil
 	}
 
 	contextJSON, err := knowledge.ExecutionContextJSON(rt.Snapshot, rt.State, decision, req.Description, intent.MatchedScript, intent.MatchedSkill)
 	if err != nil {
-		resp.Error = err.Error()
-		return resp, err
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
 	}
+	prepared.ContextJSON = contextJSON
 
 	nixPlan := PlanNixExecution(targetNode, reqs, commandToRun)
-	resp.Command = commandToRun
+	prepared.Result.Command = commandToRun
 	if nixPlan.Enabled {
 		commandToRun = nixPlan.Command
-		resp.Command = commandToRun
-		resp.Reasoning = append(resp.Reasoning, nixPlan.Notes...)
+		prepared.Result.Command = commandToRun
+		prepared.Result.Reasoning = append(prepared.Result.Reasoning, nixPlan.Notes...)
 	}
-
-	if req.OnReady != nil {
-		req.OnReady(resp)
-	}
+	prepared.Command = commandToRun
+	prepared.ExtraEnv = append(turboPlan.Env, nixPlan.Env...)
 
 	if models.IsLocalNode(targetNode) {
-		return runLocal(ctx, rt.State, skillStore, executionOwner(rt, req), req, reqs, resp, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
+		return prepared, nil
 	}
 
 	targetConfig, ok := rt.Config.FindNode(decision.Node)
 	if !ok {
-		resp.Error = fmt.Sprintf("node %q not found in config", decision.Node)
-		return resp, fmt.Errorf("node %q not found in config", decision.Node)
+		err := fmt.Errorf("node %q not found in config", decision.Node)
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
+	}
+	prepared.TargetConfig = targetConfig
+
+	return prepared, nil
+}
+
+func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (GuardedExecutionResult, error) {
+	if prepared.Err != nil || prepared.Result.Blocked {
+		return prepared.Result, prepared.Err
 	}
 
-	return runRemote(ctx, rt.State, skillStore, executionOwner(rt, req), req, reqs, resp, targetConfig, decision, reservationMB, commandToRun, append(turboPlan.Env, nixPlan.Env...), contextJSON)
+	if prepared.Request.OnReady != nil {
+		prepared.Request.OnReady(prepared.Result)
+	}
+
+	if models.IsLocalNode(prepared.TargetNode) {
+		return runLocal(
+			ctx,
+			prepared.State,
+			prepared.SkillStore,
+			prepared.Owner,
+			prepared.Request,
+			prepared.Requirements,
+			prepared.Result,
+			prepared.ReservationMB,
+			prepared.Command,
+			prepared.ExtraEnv,
+			prepared.ContextJSON,
+		)
+	}
+
+	return runRemote(
+		ctx,
+		prepared.State,
+		prepared.SkillStore,
+		prepared.Owner,
+		prepared.Request,
+		prepared.Requirements,
+		prepared.Result,
+		prepared.TargetConfig,
+		prepared.ReservationMB,
+		prepared.Command,
+		prepared.ExtraEnv,
+		prepared.ContextJSON,
+	)
+}
+
+func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (GuardedExecutionResult, error) {
+	prepared, err := PrepareGuardedExecution(ctx, rt, req)
+	if err != nil || prepared.Result.Blocked {
+		return prepared.Result, err
+	}
+	return RunPreparedExecution(ctx, prepared)
 }
 
 func prepareRequirements(description, mode string, intent Intent) models.TaskRequirements {
@@ -551,7 +640,6 @@ func runLocal(
 	req GuardedExecutionRequest,
 	reqs models.TaskRequirements,
 	resp GuardedExecutionResult,
-	decision models.PlacementDecision,
 	reservationMB int64,
 	command string,
 	extraEnv []string,
@@ -583,7 +671,7 @@ func runLocal(
 
 	env := append(os.Environ(),
 		"AXIS_CONTEXT_FILE="+contextFile.Name(),
-		"BEST_NODE="+decision.Node,
+		"BEST_NODE="+resp.Node,
 		"AXIS_EXECUTION_MODE="+req.Mode,
 		"AXIS_CONFIRM="+req.Confirm,
 		fmt.Sprintf("AXIS_RESERVATION_MB=%d", reservationMB),
@@ -592,7 +680,7 @@ func runLocal(
 
 	var execID string
 	if st != nil {
-		acquireID, acquireErr := st.AcquireTaskWithOwner(decision.Node, req.Description, reservationMB, owner)
+		acquireID, acquireErr := st.AcquireTaskWithOwner(resp.Node, req.Description, reservationMB, owner)
 		if acquireErr != nil {
 			resp.Error = acquireErr.Error()
 			return resp, acquireErr
@@ -601,14 +689,14 @@ func runLocal(
 		runtimeChanged = true
 		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
 		defer func() {
-			if releaseErr := st.ReleaseTask(decision.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
+			if releaseErr := st.ReleaseTask(resp.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
 			}
 		}()
 	}
 
 	startedAt := time.Now().UTC()
-	out, peakRAMMB, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, int64, error) {
+	out, peakRAMMB, runErr := runWithReservationHeartbeat(st, resp.Node, execID, func() (string, int64, error) {
 		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
 	})
 	elapsed := time.Since(startedAt)
@@ -622,7 +710,7 @@ func runLocal(
 		return resp, runErr
 	}
 
-	recordSuccess(skillStore, req.Description, command, decision.Node)
+	recordSuccess(skillStore, req.Description, command, resp.Node)
 	runtimeChanged = true
 	recordExecutionOutcome(st, reqs, resp, nil, elapsed, peakRAMMB)
 	resp.OK = true
@@ -638,7 +726,6 @@ func runRemote(
 	reqs models.TaskRequirements,
 	resp GuardedExecutionResult,
 	targetConfig config.NodeConfig,
-	decision models.PlacementDecision,
 	reservationMB int64,
 	command string,
 	extraEnv []string,
@@ -664,7 +751,7 @@ func runRemote(
 
 	var execID string
 	if st != nil {
-		acquireID, acquireErr := st.AcquireTaskWithOwner(decision.Node, req.Description, reservationMB, owner)
+		acquireID, acquireErr := st.AcquireTaskWithOwner(resp.Node, req.Description, reservationMB, owner)
 		if acquireErr != nil {
 			resp.Error = acquireErr.Error()
 			return resp, acquireErr
@@ -673,7 +760,7 @@ func runRemote(
 		runtimeChanged = true
 		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
 		defer func() {
-			if releaseErr := st.ReleaseTask(decision.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
+			if releaseErr := st.ReleaseTask(resp.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
 			}
 		}()
@@ -687,13 +774,13 @@ func runRemote(
 
 	runCmd := fmt.Sprintf(
 		"%s trap 'rm -f %s' EXIT; bash -lc %s",
-		RemoteExecPrefix(decision.Node, remoteContextPath, env),
+		RemoteExecPrefix(resp.Node, remoteContextPath, env),
 		shellescape.Quote(remoteContextPath),
 		shellescape.Quote(command),
 	)
 
 	startedAt := time.Now().UTC()
-	out, _, runErr := runWithReservationHeartbeat(st, decision.Node, execID, func() (string, int64, error) {
+	out, _, runErr := runWithReservationHeartbeat(st, resp.Node, execID, func() (string, int64, error) {
 		out, err := runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
 		return out, 0, err
 	})
@@ -708,7 +795,7 @@ func runRemote(
 		return resp, runErr
 	}
 
-	recordSuccess(skillStore, req.Description, command, decision.Node)
+	recordSuccess(skillStore, req.Description, command, resp.Node)
 	runtimeChanged = true
 	recordExecutionOutcome(st, reqs, resp, nil, elapsed, 0)
 	resp.OK = true

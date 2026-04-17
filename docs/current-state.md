@@ -11,10 +11,10 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-04-15 EDT
+- Refreshed: 2026-04-16 EDT
 - Repo version: `0.9.0`
-- Latest published GitHub release: `v0.8.0` (2026-04-13T11:12:10Z)
-- Release truth: repo version is ahead of the latest published release
+- Latest published GitHub release: `v0.9.0` (2026-04-15T21:47:54Z)
+- Release truth: repo version matches the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -74,14 +74,21 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
-| `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache |
-| `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
-| `axis task place` | Advisory placement | Human output/JSON; `--cached` uses the local daemon cache |
+| `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache; `--cached-only` fails without daemon |
+| `axis task place` | Advisory placement | Human output/JSON; flat `PlacementDecision` output; `--cached` uses the local daemon cache |
+| `axis placement explain` | Detailed placement breakdown | Shows eligible and excluded nodes with per-node reasoning; JSON wraps in `explanation` envelope |
+| `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
+| `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
+| `axis daemon start` | Start daemon HTTP API | Alias for `axis serve`; `--addr` and `--refresh` flags |
+| `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
-| `axis task run` | Execute on selected node | Explicit execution path exists |
+| `axis daemon status` | Inspect daemon freshness | Reports cache readiness, age, version metadata |
+| `axis daemon restart` | Restart daemon | Restart the local cache seam |
 | `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
 | `axis agent` | Agentic tool-calling assistant | Read-only cluster tools + safety-gated shell; `--auto-approve` for safe commands |
+| `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |
+| `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
 | `axis serve` | Start local HTTP API | Includes execution surface |
 | `axis update` | Self-update binary | Safely replaces only the current executing binary with the latest release, verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--all` to upgrade all `$PATH` matches. `--check` reports only |
@@ -171,6 +178,10 @@ Areas where the live repo has moved past the older docs/specs:
 - Resident-model facts now include llama-server and MLX in addition to Ollama, making the resident-model view multiruntime
 - `axis status` now surfaces a live RESIDENT MODELS table so operators can see at a glance which models are running where and under which runtime
 - `axis doctor` now probes local AI backends and reports their state as advisory checks alongside the existing SSH/config/daemon checks
+- `axis placement explain` provides a detailed placement breakdown showing eligible and excluded nodes, distinct from the simpler `task place` output
+- `axis profile match` shows workload class matching and requirement inference without needing a cluster snapshot
+- `axis task run` now has a TTY-aware confirmation prompt and uses `SAFETY BLOCKED` instead of the earlier `BULLSHIT BLOCKED` banner
+- `axis daemon start` is an alias for `axis serve`, making daemon lifecycle more discoverable
 - Git-aware workflows are already a meaningful part of AXIS behavior, not just incidental tool detection
 
 That does not mean the execution model is fully hardened yet. It means the codebase should now be understood as a hybrid of observability, advisory placement, and early execution tooling.
@@ -215,6 +226,7 @@ In practical terms:
 - Local daemon `/run` callers now share one execution transport path, and that path no longer inherits the short snapshot/meta HTTP timeout, so long-running daemon-hop executions are bounded by caller context instead of a fixed 5-second client timeout
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads and can surface typed discovery freshness in machine-readable output, but cache provenance is still only explicit on cached-path output
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
+- Daemon freshness policy: 7 refresh triggers (startup, interval, manual, config-change, state-change, skills-change, beacon-change) plus execution events; staleness threshold is configurable (default 5 min, exposed via `stale_threshold_sec` in metadata); `--cached` is explicit and operator-facing, never a hidden fallback
 
 ## Recommended Next Sequence
 

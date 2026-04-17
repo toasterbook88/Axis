@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -26,10 +29,11 @@ var loadPlacementState = state.Load
 var fetchTaskSnapshot = daemon.FetchSnapshot
 var loadTaskLiveSnapshot = discoverLiveSnapshot
 var loadTaskRunRuntime = runtimectx.Load
-var runTaskGuarded = execution.RunGuarded
-var runTaskGuardedViaDaemon = daemon.RunGuardedStream
-var fetchTaskDaemonMeta = daemon.FetchMeta
-var taskDaemonExecutionAddr = api.DefaultAddr
+var prepareTaskGuarded = execution.PrepareGuardedExecution
+var runPreparedTaskGuarded = execution.RunPreparedExecution
+var taskRunStdinIsTerminal = ui.StdinIsTerminal
+var taskRunStdoutIsTerminal = ui.StdoutIsTerminal
+var taskRunStderrIsTerminal = ui.StderrIsTerminal
 var signalTaskRunDaemonRefresh = func(ctx context.Context, trigger string) error {
 	return refreshDaemonCacheWithTrigger(ctx, api.DefaultAddr(), trigger)
 }
@@ -62,7 +66,6 @@ func taskPlaceCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
-
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			cacheRequested := cached || cachedOnly
@@ -96,7 +99,7 @@ func taskPlaceCmd() *cobra.Command {
 			// Human-readable output
 			if !decision.OK {
 				if cacheRequested {
-					fmt.Printf("Source: %s\n", source)
+					fmt.Printf("%s %s\n", ui.Dim("Source:"), source)
 				}
 				fmt.Printf("%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
@@ -143,25 +146,11 @@ func planTaskPlacement(
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 ) (models.PlacementDecision, string, error) {
-	snap, source, err := collectStatusSnapshot(ctx, cached, cachedOnly, cachedLoader, liveLoader)
+	explanation, source, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
 	if err != nil {
 		return models.PlacementDecision{}, "", err
 	}
-
-	reqs := placement.InferRequirements(desc)
-	st, stateErr := loadPlacementState()
-	if stateErr != nil && st == nil {
-		return models.PlacementDecision{}, "", stateErr
-	}
-	if stateErr != nil {
-		appendWarningIfMissing(snap, models.Warning{
-			Kind:    "state",
-			Message: stateErr.Error(),
-		})
-	}
-	decision := placement.SelectBestNode(reqs, snap.Nodes, st)
-	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
-	return decision, source, nil
+	return explanation.Decision, source, nil
 }
 
 func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
@@ -241,7 +230,7 @@ func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *s
 }
 
 func taskRunCmd() *cobra.Command {
-	var execFlag, scriptFlag bool
+	var execFlag, scriptFlag, dryRunFlag bool
 	cmd := &cobra.Command{
 		Use:   "run [description-or-command]",
 		Short: "Run task on best node (explicit only — advisory placement first)",
@@ -296,14 +285,37 @@ func taskRunCmd() *cobra.Command {
 				},
 			}
 
-			resp, err := runTaskRunRequest(ctx, rt, req)
-			if resp.Blocked {
-				fmt.Printf("\n=== BULLSHIT BLOCKED ===\n")
-				fmt.Printf("Reason: %s\n", resp.BlockReason)
-				fmt.Printf("Dumb score: %d/100\n", resp.DumbScore)
-				fmt.Println("Nothing was executed. Fix your request.")
+			prepared, err := prepareTaskGuarded(ctx, rt, req)
+			if prepared.Result.Blocked {
+				printBlockedResult(prepared.Result)
 				return nil
 			}
+			if err != nil && prepared.Result.Error == "no suitable node found" {
+				for _, reason := range prepared.Result.Reasoning {
+					fmt.Printf("  - %s\n", reason)
+				}
+				Fatal(ExitErrNoNodesFit, "no suitable node found")
+			}
+			if err != nil {
+				return err
+			}
+
+			if dryRunFlag {
+				return printDryRunPlan(prepared)
+			}
+
+			if taskRunUsesTTYPrompt() {
+				proceed, err := confirmTaskRunExecution(cmd, prepared)
+				if err != nil {
+					return err
+				}
+				if !proceed {
+					fmt.Fprintln(cmd.ErrOrStderr(), "aborted; nothing executed")
+					return nil
+				}
+			}
+
+			resp, err := runTaskRunRequest(ctx, prepared)
 			if err != nil && resp.Error == "no suitable node found" {
 				for _, reason := range resp.Reasoning {
 					fmt.Printf("  - %s\n", reason)
@@ -318,6 +330,7 @@ func taskRunCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
+	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show the execution plan without running anything")
 	return cmd
 }
 
@@ -325,23 +338,89 @@ func scheduleTaskRunDaemonRefresh(trigger string) {
 	scheduleBestEffortDaemonRefresh("task-run", trigger, signalTaskRunDaemonRefresh)
 }
 
-func runTaskRunRequest(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
-	if resp, usedDaemon, err := tryTaskRunViaDaemon(ctx, rt, req); usedDaemon {
-		return resp, err
-	}
-	return runTaskGuarded(ctx, rt, req)
+func runTaskRunRequest(ctx context.Context, prepared execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
+	return runPreparedTaskGuarded(ctx, prepared)
 }
 
-func tryTaskRunViaDaemon(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, bool, error) {
-	addr := taskDaemonExecutionAddr()
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
+func taskRunUsesTTYPrompt() bool {
+	return taskRunStdinIsTerminal() && taskRunStdoutIsTerminal() && taskRunStderrIsTerminal()
+}
 
-	if _, err := fetchTaskDaemonMeta(probeCtx, addr); err != nil {
-		return execution.GuardedExecutionResult{}, false, nil
+func confirmTaskRunExecution(cmd *cobra.Command, prepared execution.PreparedExecution) (bool, error) {
+	errW := cmd.ErrOrStderr()
+	locality := "remote"
+	if prepared.Result.IsLocal {
+		locality = "local"
 	}
-	resp, err := runTaskGuardedViaDaemon(ctx, addr, req, execution.LocalExecutionOrigin(rt))
-	return resp, true, err
+	workloadClass := string(prepared.Requirements.Workload.Class)
+	if workloadClass == "" {
+		workloadClass = "unknown"
+	}
+
+	fmt.Fprintln(errW, "About to run guarded execution:")
+	fmt.Fprintf(errW, "  Node: %s\n", prepared.Result.Node)
+	fmt.Fprintf(errW, "  Workload: %s\n", workloadClass)
+	fmt.Fprintf(errW, "  Fit score: %d/100\n", prepared.Result.FitScore)
+	fmt.Fprintf(errW, "  Reservation headroom: %dMB\n", prepared.ReservationMB)
+	fmt.Fprintf(errW, "  Locality: %s\n", locality)
+	fmt.Fprintf(errW, "  Command: %s\n", prepared.Command)
+	fmt.Fprint(errW, "Proceed? [y/N]: ")
+
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes", nil
+}
+
+func printDryRunPlan(prepared execution.PreparedExecution) error {
+	fmt.Println(ui.Bold("=== DRY RUN - Execution Plan ==="))
+	fmt.Println()
+	fmt.Printf("  Node: %s\n", prepared.Result.Node)
+	fmt.Printf("  Mode: %s\n", prepared.Result.Mode)
+	fmt.Printf("  Intent: %s\n", prepared.Result.Intent)
+	fmt.Printf("  Command: %s\n", prepared.Command)
+	fmt.Printf("  Fit score: %d/100\n", prepared.Result.FitScore)
+	fmt.Printf("  Locality: %s\n", localityLabel(prepared.Result.IsLocal))
+	fmt.Printf("  Reservation: %dMB\n", prepared.ReservationMB)
+	if prepared.Result.Tool != "" {
+		fmt.Printf("  Tool: %s\n", prepared.Result.Tool)
+	}
+	if prepared.Requirements.Workload.Class != "" {
+		fmt.Printf("  Workload: %s\n", prepared.Requirements.Workload.Class)
+	}
+	if len(prepared.Result.Reasoning) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", ui.Dim("Reasoning:"))
+		for _, r := range prepared.Result.Reasoning {
+			fmt.Printf("    %s %s\n", ui.Dim("-"), r)
+		}
+	}
+	if len(prepared.ExtraEnv) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", ui.Dim("Extra environment:"))
+		for _, env := range prepared.ExtraEnv {
+			fmt.Printf("    %s\n", env)
+		}
+	}
+	fmt.Println()
+	fmt.Println(ui.Dim("Nothing was executed. Remove --dry-run to run."))
+	return nil
+}
+
+func localityLabel(isLocal bool) string {
+	if isLocal {
+		return "local"
+	}
+	return "remote"
+}
+
+func printBlockedResult(resp execution.GuardedExecutionResult) {
+	fmt.Printf("\n=== SAFETY BLOCKED ===\n")
+	fmt.Printf("Reason: %s\n", resp.BlockReason)
+	fmt.Printf("Safety score: %d/100\n", resp.DumbScore)
+	fmt.Println("Nothing was executed. Fix your request.")
 }
 
 // === NEW: axis task context <description> — zero-risk token saver ===
@@ -397,8 +476,6 @@ func taskContextCmd() *cobra.Command {
 func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) {
 	fmt.Println(buildContextBlock(snap, reqs, task, source, st, skillStore))
 }
-
-
 
 // ContextOutput is the structured JSON form of the context block — suitable
 // for programmatic injection into LLM system prompts.

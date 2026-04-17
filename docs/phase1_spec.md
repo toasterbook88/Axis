@@ -35,10 +35,12 @@ Prints the version string (e.g. `axis <version>`).
 
 ### `axis facts`
 
-Collects facts from the **local** machine and prints them as JSON (default) or YAML.
+Collects facts from the **local** machine and prints them as human-readable text (default) or JSON/YAML.
 
 ```bash
-axis facts [--format json|yaml]
+axis facts              # human-readable text (default)
+axis facts --format json # JSON
+axis facts --format yaml # YAML
 ```
 
 Collected per run:
@@ -61,7 +63,11 @@ Reads `~/.axis/nodes.yaml`, fans out SSH-based fact collection to all configured
 nodes, and emits a `ClusterSnapshot`.
 
 ```bash
-axis status [--format json|yaml]
+axis status              # human-readable table (default)
+axis status --format json # JSON
+axis status --format yaml # YAML
+axis status --cached      # use daemon cache
+axis status --cached-only # require daemon cache; fail without it
 ```
 
 ### Live main extension: `axis task place`
@@ -74,7 +80,28 @@ axis task place "<description>"
 
 This is advisory-only placement layered on top of the Phase 1 observability core.
 It uses the `ClusterSnapshot` plus inferred task requirements to select the best node
-and explain the decision with fit score and per-node diagnostics.
+and explain the decision with fit score and per-node diagnostics. Output is a flat
+`PlacementDecision`; JSON output wraps in `{"source":..., "decision":...}` when `--cached`.
+
+### Live main extension: `axis placement explain`
+
+```bash
+axis placement explain "<intent>"
+```
+
+Provides a richer placement breakdown than `task place`, showing both eligible
+candidates ranked by FitScore and excluded nodes with per-node exclusion reasons.
+JSON output wraps in `{"source":..., "explanation":{"decision":..., "eligible":..., "excluded":...}}`.
+
+### Live main extension: `axis profile match`
+
+```bash
+axis profile match "<intent>"
+```
+
+Shows which workload class an intent maps to and what requirements are inferred.
+No cluster snapshot is needed — it inspects only the workload matching rules.
+Supports `--format text|json|yaml`.
 
 ---
 

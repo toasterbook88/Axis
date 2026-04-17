@@ -19,10 +19,13 @@ func init() {
 func TestInitNoColor(t *testing.T) {
 	prev := color.NoColor
 	prevEnv := os.Getenv("NO_COLOR")
+	prevTTY := fileIsTerminal
 	defer func() {
 		color.NoColor = prev
 		os.Setenv("NO_COLOR", prevEnv)
+		fileIsTerminal = prevTTY
 	}()
+	fileIsTerminal = func(*os.File) bool { return true }
 
 	Init(true)
 	if Enabled() {
@@ -105,8 +108,13 @@ func TestTableEmpty(t *testing.T) {
 
 func TestSpinnerNoColor(t *testing.T) {
 	prev := color.NoColor
+	prevTTY := fileIsTerminal
 	color.NoColor = true
-	defer func() { color.NoColor = prev }()
+	fileIsTerminal = func(*os.File) bool { return true }
+	defer func() {
+		color.NoColor = prev
+		fileIsTerminal = prevTTY
+	}()
 
 	var buf bytes.Buffer
 	s := &Spinner{w: &buf}
@@ -120,8 +128,13 @@ func TestSpinnerNoColor(t *testing.T) {
 
 func TestSpinnerStartStop(t *testing.T) {
 	prev := color.NoColor
+	prevTTY := fileIsTerminal
 	color.NoColor = false
-	defer func() { color.NoColor = prev }()
+	fileIsTerminal = func(*os.File) bool { return true }
+	defer func() {
+		color.NoColor = prev
+		fileIsTerminal = prevTTY
+	}()
 
 	var buf bytes.Buffer
 	s := &Spinner{w: &buf}
@@ -140,8 +153,13 @@ func TestSpinnerStartStop(t *testing.T) {
 
 func TestSpinnerStopWithoutStart(t *testing.T) {
 	prev := color.NoColor
+	prevTTY := fileIsTerminal
 	color.NoColor = false
-	defer func() { color.NoColor = prev }()
+	fileIsTerminal = func(*os.File) bool { return true }
+	defer func() {
+		color.NoColor = prev
+		fileIsTerminal = prevTTY
+	}()
 
 	var buf bytes.Buffer
 	s := &Spinner{w: &buf}
@@ -154,8 +172,13 @@ func TestSpinnerStopWithoutStart(t *testing.T) {
 
 func TestSpinnerDoubleStart(t *testing.T) {
 	prev := color.NoColor
+	prevTTY := fileIsTerminal
 	color.NoColor = false
-	defer func() { color.NoColor = prev }()
+	fileIsTerminal = func(*os.File) bool { return true }
+	defer func() {
+		color.NoColor = prev
+		fileIsTerminal = prevTTY
+	}()
 
 	var buf bytes.Buffer
 	s := &Spinner{w: &buf}
@@ -234,6 +257,52 @@ func TestNewSpinner(t *testing.T) {
 	}
 	if s.w == nil {
 		t.Error("expected non-nil writer")
+	}
+}
+
+func TestInitDisablesColorWhenStdoutIsNotTTY(t *testing.T) {
+	prev := color.NoColor
+	prevEnv := os.Getenv("NO_COLOR")
+	prevTTY := fileIsTerminal
+	defer func() {
+		color.NoColor = prev
+		os.Setenv("NO_COLOR", prevEnv)
+		fileIsTerminal = prevTTY
+	}()
+
+	os.Unsetenv("NO_COLOR")
+	fileIsTerminal = func(*os.File) bool { return false }
+
+	Init(false)
+	if Enabled() {
+		t.Error("expected color disabled when stdout is not a TTY")
+	}
+}
+
+func TestSpinnerFallsBackWhenStderrIsNotTTY(t *testing.T) {
+	prev := color.NoColor
+	prevTTY := fileIsTerminal
+	defer func() {
+		color.NoColor = prev
+		fileIsTerminal = prevTTY
+	}()
+
+	color.NoColor = false
+	fileIsTerminal = func(f *os.File) bool {
+		return f != os.Stderr
+	}
+
+	var buf bytes.Buffer
+	s := &Spinner{w: &buf}
+	s.Start("loading")
+	s.Stop("done")
+
+	out := buf.String()
+	if !strings.Contains(out, "loading") {
+		t.Fatalf("expected fallback message when stderr is not a tty, got %q", out)
+	}
+	if strings.Contains(out, "done") {
+		t.Fatalf("expected no spinner final message when spinner never started, got %q", out)
 	}
 }
 

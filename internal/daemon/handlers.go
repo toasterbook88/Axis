@@ -3,10 +3,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 )
 
 var reportAsyncRefreshError = func(trigger string, err error) {
-	fmt.Fprintf(os.Stderr, "axis daemon: async refresh (%s) failed: %v\n", trigger, err)
+	slog.Error("daemon: async refresh failed", "trigger", trigger, "error", err)
 }
 
 type ToolDef struct {
