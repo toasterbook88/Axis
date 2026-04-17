@@ -80,7 +80,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 
 			printPlacementExplanationText(cmd.OutOrStdout(), explanation, source, cacheRequested)
 			if !explanation.Decision.OK {
-				os.Exit(ExitErrNoNodesFit)
+				return ExitCodeError(ExitErrNoNodesFit)
 			}
 			return nil
 		},

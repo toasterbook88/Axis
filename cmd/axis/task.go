@@ -105,7 +105,7 @@ func taskPlaceCmd() *cobra.Command {
 				for _, r := range decision.Reasoning {
 					fmt.Printf("  %s %s\n", ui.Dim("-"), r)
 				}
-				os.Exit(ExitErrNoNodesFit)
+				return ExitCodeError(ExitErrNoNodesFit)
 			}
 
 			locality := ui.Dim("remote")
@@ -242,7 +242,8 @@ func taskRunCmd() *cobra.Command {
 
 			rt, err := loadTaskRunRuntime(ctx)
 			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load runtime context: %v", err)
+				fmt.Fprintf(os.Stderr, "error: Failed to load runtime context: %v\n", err)
+				return ExitCodeError(ExitErrConfigLoad)
 			}
 
 			skillStore := rt.Skills
@@ -294,7 +295,8 @@ func taskRunCmd() *cobra.Command {
 				for _, reason := range prepared.Result.Reasoning {
 					fmt.Printf("  - %s\n", reason)
 				}
-				Fatal(ExitErrNoNodesFit, "no suitable node found")
+				fmt.Fprintf(os.Stderr, "error: no suitable node found\n")
+				return ExitCodeError(ExitErrNoNodesFit)
 			}
 			if err != nil {
 				return err
@@ -320,7 +322,8 @@ func taskRunCmd() *cobra.Command {
 				for _, reason := range resp.Reasoning {
 					fmt.Printf("  - %s\n", reason)
 				}
-				Fatal(ExitErrNoNodesFit, "no suitable node found")
+				fmt.Fprintf(os.Stderr, "error: no suitable node found\n")
+				return ExitCodeError(ExitErrNoNodesFit)
 			}
 			if err != nil {
 				return err
@@ -450,7 +453,8 @@ func taskContextCmd() *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
-				Fatal(ExitErrConfigLoad, "Failed to load snapshot: %v", err)
+				fmt.Fprintf(os.Stderr, "error: Failed to load snapshot: %v\n", err)
+				return ExitCodeError(ExitErrConfigLoad)
 			}
 
 			reqs := placement.InferRequirements(desc)

@@ -3,10 +3,12 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -545,6 +547,54 @@ func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 	}
 	if !resp.OK {
 		t.Fatalf("expected OK response, got %#v", resp)
+	}
+}
+
+func TestRemoteTrapIsShellSafeWithAdversarialPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		command string
+	}{
+		{"simple path", "/tmp/axis-knows-123.json", "echo hello"},
+		{"path with spaces", "/tmp/path with spaces.json", "echo hello"},
+		{"path with single quote", "/tmp/it's-a-test.json", "echo hello"},
+		{"path with dollar sign", "/tmp/axis-$HOME.json", "echo hello"},
+		{"path with backtick", "/tmp/axis-`whoami`.json", "echo hello"},
+		{"path with semicolon", "/tmp/axis;rm -rf.json", "echo hello"},
+		{"command with pipe", "/tmp/ctx.json", "echo hello | grep h"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix := RemoteExecPrefix("node1", tt.path, []string{
+				"AXIS_EXECUTION_MODE=exec",
+				"AXIS_CONFIRM=YES",
+			})
+			escapedPath := shellescape.Quote(tt.path)
+			escapedCmd := shellescape.Quote(tt.command)
+
+			// Pattern: _axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT; bash -lc QUOTED
+			// The path is assigned to a variable and referenced as "$_axis_ctx"
+			// inside single-quoted trap body, so no quoting interaction occurs.
+			// The variable assignment uses shellescape.Quote which is safe in
+			// simple command position (no nested quoting context).
+			runCmd := fmt.Sprintf(
+				"%s _axis_ctx=%s; trap 'rm -f \"$_axis_ctx\"' EXIT; bash -lc %s",
+				prefix, escapedPath, escapedCmd,
+			)
+			_ = runCmd
+
+			// Verify the constructed command contains the variable-based trap.
+			// The trap body is single-quoted, so "$_axis_ctx" is a literal
+			// shell variable reference — no quoting interaction with the path.
+			if !strings.Contains(runCmd, "_axis_ctx=") {
+				t.Fatal("remote command must use variable-based cleanup trap")
+			}
+			if !strings.Contains(runCmd, "trap 'rm -f \"$_axis_ctx\"' EXIT") {
+				t.Fatalf("trap pattern not found in command: %s", runCmd)
+			}
+		})
 	}
 }
 

@@ -742,7 +742,7 @@ func runRemote(
 	defer executor.Close()
 
 	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
-	writeJSONCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
+	writeJSONCmd := fmt.Sprintf("cat > %s << 'AXIS_EOF'\n%s\nAXIS_EOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
 	if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
 		resp.Error = err.Error()
 		resp.ExitCode = 1
@@ -773,7 +773,7 @@ func runRemote(
 	}, extraEnv...)
 
 	runCmd := fmt.Sprintf(
-		"%s trap 'rm -f %s' EXIT; bash -lc %s",
+		"%s _axis_ctx=%s; trap 'rm -f \"$_axis_ctx\"' EXIT; bash -lc %s",
 		RemoteExecPrefix(resp.Node, remoteContextPath, env),
 		shellescape.Quote(remoteContextPath),
 		shellescape.Quote(command),

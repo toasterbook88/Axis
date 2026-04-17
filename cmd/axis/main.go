@@ -19,7 +19,7 @@ const Version = buildinfo.Version
 func main() {
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
-		os.Exit(ExitErrGeneric)
+		os.Exit(ExitCode(err))
 	}
 }
 
