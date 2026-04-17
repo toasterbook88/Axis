@@ -373,8 +373,6 @@ func TestCallTool_IsErrorWithNoContentReturnsGenericError(t *testing.T) {
 	}
 }
 
-
-
 func TestRPCError_PropagatesCodeAndMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -867,7 +867,7 @@ func localAddresses() []models.NetworkAddress {
 				continue
 			}
 			ip := ipNet.IP
-			scope := "global"
+			scope := ""
 			if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
 				scope = "link-local"
 			}

@@ -256,7 +256,7 @@ func TestClassify_ReflexFallback_OllamaError(t *testing.T) {
 func TestClassify_SemanticPath_ConfidenceClamped(t *testing.T) {
 	// Model returns out-of-range confidence values; engine must clamp to [0,1].
 	cases := []struct {
-		rawConf    float64
+		rawConf     float64
 		wantClamped float64
 	}{
 		{rawConf: 1.5, wantClamped: 1.0},

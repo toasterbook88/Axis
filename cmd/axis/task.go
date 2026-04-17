@@ -31,9 +31,6 @@ var loadTaskLiveSnapshot = discoverLiveSnapshot
 var loadTaskRunRuntime = runtimectx.Load
 var prepareTaskGuarded = execution.PrepareGuardedExecution
 var runPreparedTaskGuarded = execution.RunPreparedExecution
-var runTaskGuardedViaDaemon = daemon.RunGuardedStream
-var fetchTaskDaemonMeta = daemon.FetchMeta
-var taskDaemonExecutionAddr = api.DefaultAddr
 var taskRunStdinIsTerminal = ui.StdinIsTerminal
 var taskRunStdoutIsTerminal = ui.StdoutIsTerminal
 var taskRunStderrIsTerminal = ui.StderrIsTerminal
@@ -318,7 +315,7 @@ func taskRunCmd() *cobra.Command {
 				}
 			}
 
-			resp, err := runTaskRunRequest(ctx, rt, req, prepared)
+			resp, err := runTaskRunRequest(ctx, prepared)
 			if err != nil && resp.Error == "no suitable node found" {
 				for _, reason := range resp.Reasoning {
 					fmt.Printf("  - %s\n", reason)
@@ -341,23 +338,8 @@ func scheduleTaskRunDaemonRefresh(trigger string) {
 	scheduleBestEffortDaemonRefresh("task-run", trigger, signalTaskRunDaemonRefresh)
 }
 
-func runTaskRunRequest(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest, prepared execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
-	if resp, usedDaemon, err := tryTaskRunViaDaemon(ctx, rt, req); usedDaemon {
-		return resp, err
-	}
+func runTaskRunRequest(ctx context.Context, prepared execution.PreparedExecution) (execution.GuardedExecutionResult, error) {
 	return runPreparedTaskGuarded(ctx, prepared)
-}
-
-func tryTaskRunViaDaemon(ctx context.Context, rt *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, bool, error) {
-	addr := taskDaemonExecutionAddr()
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	if _, err := fetchTaskDaemonMeta(probeCtx, addr); err != nil {
-		return execution.GuardedExecutionResult{}, false, nil
-	}
-	resp, err := runTaskGuardedViaDaemon(ctx, addr, req, execution.LocalExecutionOrigin(rt))
-	return resp, true, err
 }
 
 func taskRunUsesTTYPrompt() bool {
