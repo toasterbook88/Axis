@@ -100,19 +100,19 @@ changelog:
   use: github
   groups:
     - title: "🚀 Features"
-      regexp: '^.*?feat((.+))?!?:.*$'
+      regexp: '^feat(\(.+\))?!?:'
       order: 0
     - title: "🐛 Bug Fixes"
-      regexp: '^.*?fix((.+))?!?:.*$'
+      regexp: '^fix(\(.+\))?!?:'
       order: 1
     - title: "🔒 Security"
-      regexp: '^.*?sec((.+))?!?:.*$'
+      regexp: '^sec(\(.+\))?!?:'
       order: 2
     - title: "📚 Documentation"
-      regexp: '^.*?docs((.+))?!?:.*$'
+      regexp: '^docs(\(.+\))?!?:'
       order: 3
     - title: "🔧 Maintenance"
-      regexp: '^.*?(chore|ci|refactor|perf|style|test)((.+))?!?:.*$'
+      regexp: '^(chore|ci|refactor|perf|style|test)(\(.+\))?!?:'
       order: 4
     - title: "Other"
       order: 999

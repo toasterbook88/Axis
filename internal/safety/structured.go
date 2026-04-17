@@ -19,8 +19,8 @@ package safety
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -129,22 +129,17 @@ func DefaultRuleSet() RuleSet {
 // intentionally disabled until they can be scoped more narrowly than a binary
 // name alone.
 type Evaluator struct {
-	mu    sync.RWMutex
 	rules []Rule
 }
 
 // NewEvaluator creates a safety evaluator from a rule set.
 func NewEvaluator(rs RuleSet) *Evaluator {
-	// Sort rules by priority (highest first)
+	// Sort rules by priority (highest first) so specific high-risk matches win.
 	sorted := make([]Rule, len(rs.Rules))
 	copy(sorted, rs.Rules)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Priority > sorted[i].Priority {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Priority > sorted[j].Priority
+	})
 	return &Evaluator{
 		rules: sorted,
 	}
@@ -300,12 +295,11 @@ func globMatch(s, pattern string) bool {
 	if matched {
 		return true
 	}
-	// Also try prefix match for patterns ending with *
+	// Joined argument strings can contain spaces, so keep an explicit prefix
+	// fallback for the common "foo*" rule style used by the evaluator.
 	if strings.HasSuffix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
-		if strings.HasPrefix(s, prefix) {
-			return true
-		}
+		return strings.HasPrefix(s, prefix)
 	}
 	return false
 }
