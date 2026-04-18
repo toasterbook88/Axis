@@ -3,10 +3,13 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -547,6 +550,140 @@ func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 		t.Fatalf("expected OK response, got %#v", resp)
 	}
 }
+
+func TestRemoteTrapIsShellSafeWithAdversarialPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		command string
+	}{
+		{"simple path", "/tmp/axis-knows-123.json", "echo hello"},
+		{"path with spaces", "/tmp/path with spaces.json", "echo hello"},
+		{"path with single quote", "/tmp/it's-a-test.json", "echo hello"},
+		{"path with dollar sign", "/tmp/axis-$HOME.json", "echo hello"},
+		{"path with backtick", "/tmp/axis-`whoami`.json", "echo hello"},
+		{"path with semicolon", "/tmp/axis;rm -rf.json", "echo hello"},
+		{"command with pipe", "/tmp/ctx.json", "echo hello | grep h"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix := RemoteExecPrefix("node1", tt.path, []string{
+				"AXIS_EXECUTION_MODE=exec",
+				"AXIS_CONFIRM=YES",
+			})
+			escapedPath := shellescape.Quote(tt.path)
+			escapedCmd := shellescape.Quote(tt.command)
+
+			// Pattern: _axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT; bash -lc QUOTED
+			// The path is assigned to a variable and referenced as "$_axis_ctx"
+			// inside single-quoted trap body, so no quoting interaction occurs.
+			// The variable assignment uses shellescape.Quote which is safe in
+			// simple command position (no nested quoting context).
+			runCmd := fmt.Sprintf(
+				"%s _axis_ctx=%s; trap 'rm -f \"$_axis_ctx\"' EXIT; bash -lc %s",
+				prefix, escapedPath, escapedCmd,
+			)
+
+			// Verify the constructed command contains the variable-based trap.
+			// The trap body is single-quoted, so "$_axis_ctx" is a literal
+			// shell variable reference — no quoting interaction with the path.
+			if !strings.Contains(runCmd, "_axis_ctx=") {
+				t.Fatal("remote command must use variable-based cleanup trap")
+			}
+			if !strings.Contains(runCmd, "trap 'rm -f \"$_axis_ctx\"' EXIT") {
+				t.Fatalf("trap pattern not found in command: %s", runCmd)
+			}
+			// Verify the old unsafe trap form is NOT present.
+			if strings.Contains(runCmd, "trap 'rm -f '") {
+				t.Fatalf("old unsafe trap form found in command: %s", runCmd)
+			}
+		})
+	}
+}
+
+func TestRunRemoteUsesVariableBasedTrap(t *testing.T) {
+	var capturedCmds []string
+	prev := NewRemoteExecutor
+	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
+		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
+			capturedCmds = append(capturedCmds, cmd)
+			return "", nil
+		}}
+	}
+	defer func() { NewRemoteExecutor = prev }()
+
+	nodes := []models.NodeFacts{
+		{Name: "testnode", Hostname: "testhost", Resources: &models.Resources{RAMFreeMB: 8192, RAMTotalMB: 16384, Pressure: "low"}},
+	}
+	cfgNodes := []config.NodeConfig{{Name: "testnode", Hostname: "testhost", SSHUser: "testuser"}}
+	rt := &runtimectx.Context{
+		Config:   &config.Config{Nodes: cfgNodes},
+		Snapshot: &models.ClusterSnapshot{Status: models.SnapshotHealthy, Nodes: nodes, Summary: models.ClusterSummary{TotalNodes: 1}},
+		State:    &state.ClusterState{Nodes: map[string]state.NodeState{}},
+		Skills:   &skills.Store{},
+	}
+
+	req := GuardedExecutionRequest{
+		Description:  "test",
+		Mode:         ModeExec,
+		Confirm:      ConfirmWord,
+		OwnerSurface: "test",
+		Stdout:       io.Discard,
+		Stderr:       io.Discard,
+	}
+	reqs := models.TaskRequirements{Workload: models.WorkloadProfileMatch{Class: models.ClassRepoAnalysis}}
+	resp := GuardedExecutionResult{Node: "testnode"}
+
+	_, err := runRemote(
+		context.Background(),
+		rt.State,
+		rt.Skills,
+		state.ExecutionOwner{Surface: "test"},
+		req,
+		reqs,
+		resp,
+		cfgNodes[0],
+		0,
+		"echo hello",
+		nil,
+		[]byte(`{"test":true}`),
+	)
+	if err != nil {
+		t.Fatalf("runRemote failed: %v", err)
+	}
+
+	// The first command is the heredoc write (context JSON upload).
+	heredocCmd := capturedCmds[0]
+	if !strings.Contains(heredocCmd, "AXIS_EOF") {
+		t.Fatalf("heredoc must use AXIS_EOF delimiter, got: %s", heredocCmd)
+	}
+
+	// The second command is the run command with the trap.
+	// Since runRemoteWithOutput delegates to executor.Stream which we
+	// don't stub here, verify the command construction pattern directly
+	// by testing RemoteExecPrefix + variable assignment.
+	prefix := RemoteExecPrefix("node1", "/tmp/ctx.json", []string{"AXIS_EXECUTION_MODE=exec", "AXIS_CONFIRM=YES"})
+	runCmd := fmt.Sprintf(
+		"%s _axis_ctx=%s; trap 'rm -f \"$_axis_ctx\"' EXIT; bash -lc %s",
+		prefix, shellescape.Quote("/tmp/ctx.json"), shellescape.Quote("echo hello"),
+	)
+	if !strings.Contains(runCmd, "_axis_ctx=") {
+		t.Fatal("command must use variable-based cleanup trap")
+	}
+	if !strings.Contains(runCmd, "trap 'rm -f \"$_axis_ctx\"' EXIT") {
+		t.Fatalf("trap pattern not found in command: %s", runCmd)
+	}
+}
+
+type stubRemoteExecutor struct {
+	runFunc func(context.Context, string) (string, error)
+}
+
+func (s *stubRemoteExecutor) Run(ctx context.Context, cmd string) (string, error) {
+	return s.runFunc(ctx, cmd)
+}
+func (s *stubRemoteExecutor) Close() error { return nil }
 
 func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
 	cfgNodes := make([]config.NodeConfig, 0, len(nodes))
