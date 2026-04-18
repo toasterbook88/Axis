@@ -91,7 +91,8 @@ func chatCmd() *cobra.Command {
 				sp.Stop("")
 
 				if err != nil {
-					Fatal(ExitErrCommandFail, "Chat failed: %v", err)
+					fmt.Fprintf(errW, "error: Chat failed: %v\n", err)
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("chat failed: %v", err)}
 				}
 				if format == "json" {
 					conv.Append(resp)

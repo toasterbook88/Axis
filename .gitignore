@@ -31,7 +31,9 @@ GEMINI.md
 # AI agent config directories (auto-generated, contain only Render deploy skills)
 .adal/
 .augment/
+.agents/
 .claude/
+.gemini/
 .cline/
 .codebuddy/
 .codeium/

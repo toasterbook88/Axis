@@ -101,7 +101,8 @@ func agentCmd() *cobra.Command {
 				ctx, cancel := agentRequestContext(timeout)
 				defer cancel()
 				if err := a.Run(ctx, instruction); err != nil {
-					Fatal(ExitErrCommandFail, "Agent failed: %v", err)
+					fmt.Fprintf(errW, "error: Agent failed: %v\n", err)
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 				}
 				fmt.Fprintln(w)
 				return nil
