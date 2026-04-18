@@ -80,7 +80,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 
 			printPlacementExplanationText(cmd.OutOrStdout(), explanation, source, cacheRequested)
 			if !explanation.Decision.OK {
-				return ExitCodeError(ExitErrNoNodesFit)
+				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
 			return nil
 		},

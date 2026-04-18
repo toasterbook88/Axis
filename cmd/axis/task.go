@@ -81,7 +81,7 @@ func taskPlaceCmd() *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
 				return err
 			}
 
@@ -105,7 +105,7 @@ func taskPlaceCmd() *cobra.Command {
 				for _, r := range decision.Reasoning {
 					fmt.Printf("  %s %s\n", ui.Dim("-"), r)
 				}
-				return ExitCodeError(ExitErrNoNodesFit)
+				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
 
 			locality := ui.Dim("remote")
@@ -242,8 +242,8 @@ func taskRunCmd() *cobra.Command {
 
 			rt, err := loadTaskRunRuntime(ctx)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: Failed to load runtime context: %v\n", err)
-				return ExitCodeError(ExitErrConfigLoad)
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: failed to load runtime context: %v\n", err)
+				return ExitCodeError{Code: ExitErrConfigLoad, Message: fmt.Sprintf("failed to load runtime context: %v", err)}
 			}
 
 			skillStore := rt.Skills
@@ -295,8 +295,8 @@ func taskRunCmd() *cobra.Command {
 				for _, reason := range prepared.Result.Reasoning {
 					fmt.Printf("  - %s\n", reason)
 				}
-				fmt.Fprintf(os.Stderr, "error: no suitable node found\n")
-				return ExitCodeError(ExitErrNoNodesFit)
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: no suitable node found\n")
+				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
 			if err != nil {
 				return err
@@ -322,8 +322,8 @@ func taskRunCmd() *cobra.Command {
 				for _, reason := range resp.Reasoning {
 					fmt.Printf("  - %s\n", reason)
 				}
-				fmt.Fprintf(os.Stderr, "error: no suitable node found\n")
-				return ExitCodeError(ExitErrNoNodesFit)
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: no suitable node found\n")
+				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
 			if err != nil {
 				return err
@@ -453,8 +453,8 @@ func taskContextCmd() *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: Failed to load snapshot: %v\n", err)
-				return ExitCodeError(ExitErrConfigLoad)
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: failed to load snapshot: %v\n", err)
+				return ExitCodeError{Code: ExitErrConfigLoad, Message: fmt.Sprintf("failed to load snapshot: %v", err)}
 			}
 
 			reqs := placement.InferRequirements(desc)
