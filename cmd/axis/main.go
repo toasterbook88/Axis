@@ -27,8 +27,8 @@ func newRootCmd() *cobra.Command {
 	var noColor bool
 
 	root := &cobra.Command{
-		Use:          "axis",
-		Short:        "AXIS — snapshot-first cluster facts and deterministic placement",
+		Use:           "axis",
+		Short:         "AXIS — snapshot-first cluster facts and deterministic placement",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: "AXIS is a snapshot-first operator CLI for cluster fact collection, " +
