@@ -121,7 +121,7 @@ Top-level commands currently registered in the binary:
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, now recovers from corrupt JSON, but semantic validation is still light |
-| `internal/safety` | Execution blocker | Heuristic, but now well unit-tested |
+| `internal/safety` | Execution blocker + structured command analysis | Heuristic substring blocker is well unit-tested; structured command analysis scaffolding exists but learned approvals are deliberately disabled and NOT wired into the operator path |
 | `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; integration coverage still needs to grow, but baseline unit coverage is now solid |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
 | `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
@@ -130,8 +130,7 @@ Top-level commands currently registered in the binary:
 | `internal/chat` | Structured /api/chat client | Rolling context window, system prompt builder, model catalog |
 | `internal/agent` | Tool-calling agent loop | Read-only tools (status, facts, place) + safety-gated shell with adversarial tests |
 | `internal/mesh` | Gossip peer discovery | Scaffolding only; HMAC-SHA256 auth, 5-state lifecycle; NOT wired into CLI operator path |
-| `internal/reservation` | Double-entry reservation ledger | Used as library by task placement + `/v2/reservations` API; no standalone CLI command |
-| `internal/safety/structured.go` | Parsed command analysis | Scaffolding; learned approvals deliberately disabled; NOT wired into operator path |
+| `internal/reservation` | Double-entry reservation ledger | Used as library by task placement; `/v2/reservations` exists but returns 501 pending ledger integration; no standalone CLI command |
 | `internal/workload` | Workload profile matching | Powers `axis profile match`; deterministic class inference for 8 workload classes |
 | `internal/llmrouter` | Hybrid AI model routing | Powers `axis llm`; local/cloud provider registry with semantic reflex classification |
 | `internal/cortex` | MCP client for cluster brain | Powers `axis cortex`; FastMCP 3.x Streamable HTTP protocol |
