@@ -1,5 +1,67 @@
 # CHANGELOG
 
+## v0.10.0 — Operator-honest groundwork: shell safety, reservation ledger, mesh scaffolding
+
+**Shell quoting vulnerability fix (PR #96)**
+
+Remote cleanup traps in `runRemote` used `trap 'rm -f QUOTED_PATH' EXIT`, which
+created a nested quoting interaction: `shellescape.Quote` wraps paths in single
+quotes, and a single-quoted path containing a single quote produces an unparseable
+trap body. Replaced with variable assignment pattern
+`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`, which eliminates the nesting
+entirely. The heredoc delimiter changed from `EOF` to `AXIS_EOF`. An adversarial
+test suite covers paths with spaces, single quotes, dollar signs, backticks,
+and semicolons.
+
+**Cobra error handling overhaul (PR #96)**
+
+`os.Exit` and `Fatal` calls in Cobra `RunE` handlers skip Cobra's cleanup. Added
+`ExitCodeError` type carrying both an exit code and a user-facing message, with
+`errors.As`-based unwrapping. Root command now uses `SilenceErrors`/`SilenceUsage`
+to prevent double-printing. All `RunE` handlers in placement, task, agent, and
+chat commands converted. `Fatal()` marked as deprecated.
+
+**v0.10.0 groundwork (PRs #94, #95)**
+
+- `POST /v2/batch/place` returns `501 Not Implemented` instead of synthetic `200 OK`
+- Reservation accounting fails closed when node capacity is unknown
+- Structured safety learned approvals deliberately disabled (program-name-only too broad)
+- Mesh gossip remains internal scaffolding; HMAC present, replay protection not enforced
+- Dashboard/rendering helpers present but not registered as CLI commands
+- Release pipeline and GoReleaser improvements
+
+**AX-005/006/007/024/025 integration (PR #93)**
+
+- Link-local addresses tagged with `scope: "link-local"` instead of silently dropped
+- SSH `IdentitiesOnly yes` from config now respected (skips agent, default keys)
+- `ssh -G` passes `-F` for correct config file resolution on macOS
+- Cached-reads doctrine documented: explicit, operator-facing, no hidden fallbacks
+- Daemon staleness threshold configurable (default 5 min)
+
+---
+
+## v0.9.0 — Cortex MCP client, hybrid AI router, VRAM observation
+
+**`axis cortex` MCP client (PR #88)**
+
+New command connects to the AXIS Cortex cluster brain via MCP protocol, supporting
+tool discovery, resource listing, and prompt execution. Aligns with FastMCP 3.x
+Streamable HTTP protocol. Timeout increased to 45s for recall operations.
+
+**Hybrid AI router (PRs #84–#87)**
+
+Three-phase `axis llm` implementation: provider registry + config + model listing
+(Phase 1), semantic reflex classification + `axis llm` command (Phase 2), cloud
+provider module with OpenRouter/Groq/Anthropic support + secrets management (Phase 3).
+Local model auto-selection when no model is recommended.
+
+**Ollama VRAM observation (PR #76)**
+
+Resident model VRAM usage surfaced in `axis status` output column. Unknown VRAM
+shown explicitly rather than silently omitted.
+
+---
+
 ## v0.8.0 — Empirical placement arc + multiruntime resident models + doctor AI checks
 
 **Empirical placement arc (PRs #66–#71)**

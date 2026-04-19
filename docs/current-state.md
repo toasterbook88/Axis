@@ -11,10 +11,10 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-04-16 EDT
-- Repo version: `0.9.0`
+- Refreshed: 2026-04-18 EDT
+- Repo version: `0.10.0`
 - Latest published GitHub release: `v0.9.0` (2026-04-15T21:47:54Z)
-- Release truth: repo version matches the latest published release
+- Release truth: repo version is ahead of the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -63,6 +63,10 @@ The live repo currently contains:
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 - Protected `main` with PR review, required CI, conversation resolution, and linear history
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
+- Shell-quoting-safe remote cleanup traps: variable assignment pattern (`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`) eliminates nested quoting interaction; adversarial test suite covers spaces, quotes, dollar signs, backticks, semicolons
+- `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated
+- Internal library packages for v0.10.0 groundwork: `internal/mesh/` (gossip peer discovery, HMAC-SHA256 auth, not wired into CLI), `internal/reservation/` (double-entry ledger, wired into task placement as library, no standalone CLI command), `internal/safety/structured.go` (parsed command analysis, learned approvals disabled, not wired into operator path), `internal/api/v2.go` (active read routes + explicit 501 stubs for unimplemented endpoints)
+- `IMPROVEMENTS.md` and `STRUCTURE.md` document the v0.10.0 scaffolding scope; README marks these as "Proposed for v0.10.0 (not yet shipped)"
 
 The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 
@@ -117,7 +121,7 @@ Top-level commands currently registered in the binary:
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, now recovers from corrupt JSON, but semantic validation is still light |
-| `internal/safety` | Execution blocker | Heuristic, but now well unit-tested |
+| `internal/safety` | Execution blocker + structured command analysis | Heuristic substring blocker is well unit-tested; structured command analysis scaffolding exists but learned approvals are deliberately disabled and NOT wired into the operator path |
 | `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; integration coverage still needs to grow, but baseline unit coverage is now solid |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
 | `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
@@ -125,6 +129,11 @@ Top-level commands currently registered in the binary:
 | `internal/runtimectx` | Unified live runtime loader | Centralizes config + discovery + overlay + warning assembly for live reads |
 | `internal/chat` | Structured /api/chat client | Rolling context window, system prompt builder, model catalog |
 | `internal/agent` | Tool-calling agent loop | Read-only tools (status, facts, place) + safety-gated shell with adversarial tests |
+| `internal/mesh` | Gossip peer discovery | Scaffolding only; HMAC-SHA256 auth, 5-state lifecycle; NOT wired into CLI operator path |
+| `internal/reservation` | Double-entry reservation ledger | Used as library by task placement; `/v2/reservations` exists but returns 501 pending ledger integration; no standalone CLI command |
+| `internal/workload` | Workload profile matching | Powers `axis profile match`; deterministic class inference for 8 workload classes |
+| `internal/llmrouter` | Hybrid AI model routing | Powers `axis llm`; local/cloud provider registry with semantic reflex classification |
+| `internal/cortex` | MCP client for cluster brain | Powers `axis cortex`; FastMCP 3.x Streamable HTTP protocol |
 
 ## Verification Snapshot
 
