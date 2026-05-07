@@ -94,18 +94,18 @@ type Resources struct {
 	GPUUtilPercent   *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
 	StorageClass     string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
 	BatteryPercent   *int           `json:"battery_percent,omitempty" yaml:"battery_percent,omitempty"`
-	PowerSource      string         `json:"power_source,omitempty" yaml:"power_source,omitempty"` // ac, battery, unknown
+	PowerSource      string         `json:"power_source,omitempty" yaml:"power_source,omitempty"`   // ac, battery, unknown
 	ThermalState     string         `json:"thermal_state,omitempty" yaml:"thermal_state,omitempty"` // nominal, fair, serious, critical
-	ThermalZones     []ThermalZone `json:"thermal_zones,omitempty" yaml:"thermal_zones,omitempty"`
-	Pressure         string         `json:"pressure" yaml:"pressure"`                               // none, low, medium, high
+	ThermalZones     []ThermalZone  `json:"thermal_zones,omitempty" yaml:"thermal_zones,omitempty"`
+	Pressure         string         `json:"pressure" yaml:"pressure"` // none, low, medium, high
 	PressureStall10  float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
 	PressureSource   string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
 }
 
 // ThermalZone holds a single thermal sensor reading.
 type ThermalZone struct {
-	Type  string  `json:"type" yaml:"type"`                   // e.g. "cpu_0", "gpu", "soc", "battery"
-	TempC float64 `json:"temp_c" yaml:"temp_c"`               // temperature in Celsius
+	Type  string  `json:"type" yaml:"type"`                       // e.g. "cpu_0", "gpu", "soc", "battery"
+	TempC float64 `json:"temp_c" yaml:"temp_c"`                   // temperature in Celsius
 	State string  `json:"state,omitempty" yaml:"state,omitempty"` // nominal, fair, serious, critical
 }
 

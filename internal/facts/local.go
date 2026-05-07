@@ -1567,7 +1567,6 @@ func localThermalLinux() string {
 	}
 }
 
-
 func localThermalZones() []models.ThermalZone {
 	switch runtime.GOOS {
 	case "linux":
