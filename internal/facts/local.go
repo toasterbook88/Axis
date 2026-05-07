@@ -360,7 +360,9 @@ func localResources() (*models.Resources, bool) {
 	if pct, ok := localBatteryPercent(); ok {
 		r.BatteryPercent = &pct
 	}
+	r.PowerSource = localPowerSource()
 	r.ThermalState = localThermalState()
+	r.ThermalZones = localThermalZones()
 
 	return r, partial
 }
@@ -1428,6 +1430,47 @@ func parsePmsetBattery(out string) (int, bool) {
 	return 0, false
 }
 
+func parsePmsetPowerSource(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "ac power") {
+			return "ac"
+		}
+		if strings.Contains(lower, "battery power") {
+			return "battery"
+		}
+	}
+	return ""
+}
+
+func localPowerSource() string {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("pmset", "-g", "batt").Output()
+		if err != nil {
+			return ""
+		}
+		return parsePmsetPowerSource(string(out))
+	case "linux":
+		for _, name := range []string{"BAT0", "BAT1", "BATT", "AC", "ACAD", "ADP1"} {
+			data, err := os.ReadFile(fmt.Sprintf("/sys/class/power_supply/%s/status", name))
+			if err != nil {
+				continue
+			}
+			status := strings.TrimSpace(string(data))
+			switch strings.ToLower(status) {
+			case "charging", "full", "not charging":
+				return "ac"
+			case "discharging":
+				return "battery"
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
 func localBatteryLinux() (int, bool) {
 	// Try common power supply paths
 	for _, name := range []string{"BAT0", "BAT1", "BATT"} {
@@ -1512,6 +1555,101 @@ func localThermalLinux() string {
 	}
 	// Temps in millidegrees Celsius
 	tempC := maxTemp / 1000
+	switch {
+	case tempC >= 95:
+		return "critical"
+	case tempC >= 85:
+		return "serious"
+	case tempC >= 75:
+		return "fair"
+	default:
+		return "nominal"
+	}
+}
+
+
+func localThermalZones() []models.ThermalZone {
+	switch runtime.GOOS {
+	case "linux":
+		return linuxThermalZones()
+	case "darwin":
+		return darwinThermalZones()
+	default:
+		return nil
+	}
+}
+
+func linuxThermalZones() []models.ThermalZone {
+	entries, err := os.ReadDir("/sys/class/thermal")
+	if err != nil {
+		return nil
+	}
+	var zones []models.ThermalZone
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "thermal_zone") {
+			continue
+		}
+		tempData, err := os.ReadFile(fmt.Sprintf("/sys/class/thermal/%s/temp", entry.Name()))
+		if err != nil {
+			continue
+		}
+		tempMilli, err := strconv.Atoi(strings.TrimSpace(string(tempData)))
+		if err != nil {
+			continue
+		}
+		tempC := float64(tempMilli) / 1000.0
+		typeData, _ := os.ReadFile(fmt.Sprintf("/sys/class/thermal/%s/type", entry.Name()))
+		zoneType := strings.TrimSpace(string(typeData))
+		if zoneType == "" {
+			zoneType = entry.Name()
+		}
+		zones = append(zones, models.ThermalZone{
+			Type:  zoneType,
+			TempC: tempC,
+			State: thermalStateFromTempC(tempC),
+		})
+	}
+	return zones
+}
+
+func darwinThermalZones() []models.ThermalZone {
+	out, err := exec.Command("pmset", "-g", "therm").Output()
+	if err != nil {
+		return nil
+	}
+	limit := parseCPUThermalLimit(string(out))
+	if limit == 0 {
+		return nil
+	}
+	state := "nominal"
+	switch {
+	case limit < 50:
+		state = "critical"
+	case limit < 80:
+		state = "serious"
+	case limit < 100:
+		state = "fair"
+	}
+	return []models.ThermalZone{
+		{Type: "cpu", State: state},
+	}
+}
+
+func parseCPUThermalLimit(out string) int {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "CPU_Speed_Limit") {
+			fields := strings.Fields(line)
+			for _, f := range fields {
+				if n, err := strconv.Atoi(f); err == nil {
+					return n
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func thermalStateFromTempC(tempC float64) string {
 	switch {
 	case tempC >= 95:
 		return "critical"

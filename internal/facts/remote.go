@@ -262,7 +262,9 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 	if pct, ok := c.remoteBatteryPercent(ctx, osName); ok {
 		r.BatteryPercent = &pct
 	}
+	r.PowerSource = c.remotePowerSource(ctx, osName)
 	r.ThermalState = c.remoteThermalState(ctx, osName)
+	r.ThermalZones = c.remoteThermalZones(ctx, osName)
 
 	return r, partial
 }
@@ -567,5 +569,83 @@ func (c *RemoteCollector) remoteThermalState(ctx context.Context, osName string)
 		}
 	default:
 		return ""
+	}
+}
+
+func (c *RemoteCollector) remotePowerSource(ctx context.Context, osName string) string {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "pmset -g batt 2>/dev/null")
+		if err != nil {
+			return ""
+		}
+		return parsePmsetPowerSource(out)
+	case "linux":
+		for _, name := range []string{"BAT0", "BAT1", "BATT", "AC", "ACAD", "ADP1"} {
+			out, err := c.Exec.Run(ctx, fmt.Sprintf("cat /sys/class/power_supply/%s/status 2>/dev/null", name))
+			if err != nil {
+				continue
+			}
+			status := strings.TrimSpace(out)
+			switch strings.ToLower(status) {
+			case "charging", "full", "not charging":
+				return "ac"
+			case "discharging":
+				return "battery"
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+func (c *RemoteCollector) remoteThermalZones(ctx context.Context, osName string) []models.ThermalZone {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "linux":
+		out, err := c.Exec.Run(ctx, "for z in /sys/class/thermal/thermal_zone*; do cat \"$z/temp\" 2>/dev/null; echo; cat \"$z/type\" 2>/dev/null; echo; done")
+		if err != nil || out == "" {
+			return nil
+		}
+		var zones []models.ThermalZone
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		for i := 0; i+1 < len(lines); i += 2 {
+			tempMilli, err := strconv.Atoi(strings.TrimSpace(lines[i]))
+			if err != nil {
+				continue
+			}
+			tempC := float64(tempMilli) / 1000.0
+			zoneType := strings.TrimSpace(lines[i+1])
+			if zoneType == "" {
+				zoneType = fmt.Sprintf("zone_%d", len(zones))
+			}
+			zones = append(zones, models.ThermalZone{
+				Type:  zoneType,
+				TempC: tempC,
+				State: thermalStateFromTempC(tempC),
+			})
+		}
+		return zones
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "pmset -g therm 2>/dev/null")
+		if err != nil {
+			return nil
+		}
+		limit := parseCPUThermalLimit(out)
+		if limit == 0 {
+			return nil
+		}
+		state := "nominal"
+		switch {
+		case limit < 50:
+			state = "critical"
+		case limit < 80:
+			state = "serious"
+		case limit < 100:
+			state = "fair"
+		}
+		return []models.ThermalZone{{Type: "cpu", State: state}}
+	default:
+		return nil
 	}
 }
