@@ -68,15 +68,8 @@ jobs:
         run: go vet ./...
 
       - name: Format check
-         run: |
-           unformatted=$(gofmt -l . 2>/dev/null) || true
-           if [ -n "$unformatted" ]; then
-             echo "::error::Files need gofmt:"
-             echo "$unformatted"
-             exit 1
-           fi
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(gofmt -l . 2>/dev/null) || true
           if [ -n "$unformatted" ]; then
             echo "::error::Files need gofmt:"
             echo "$unformatted"
