@@ -1,8 +1,8 @@
 # Distributed Cognitive Architecture: Brain-Inspired Design for AXIS
 
-**Version:** 0.2 (Final Draft)  
+**Version:** 0.3 (Final with High-Resolution Diagrams)  
 **Date:** 2026-05-13  
-**Status:** Proposed for inclusion in the AXIS repository
+**Status:** Ready for review and merge
 
 ---
 
