@@ -1,6 +1,6 @@
 # Distributed Cognitive Architecture: Brain-Inspired Design for AXIS
 
-**Version:** 0.3 (Final with High-Resolution Diagrams)  
+**Version:** 0.4 (Final - Images Fixed)  
 **Date:** 2026-05-13  
 **Status:** Ready for review and merge
 
@@ -87,15 +87,15 @@ AXIS implements a **six-layer cognitive stack**:
 
 ### Figure 1: AXIS Distributed Cognitive Architecture (6-Layer Stack)
 
-![AXIS Distributed Cognitive Architecture](https://raw.githubusercontent.com/toasterbook88/axis/feature/distributed-cognitive-architecture/docs/images/axis-cognitive-architecture.png)
+![AXIS Distributed Cognitive Architecture](docs/images/axis-cognitive-architecture.png)
 
 ### Figure 2: Brain-Inspired Mapping
 
-![Brain-Inspired Mapping](https://raw.githubusercontent.com/toasterbook88/axis/feature/distributed-cognitive-architecture/docs/images/brain-mapping.png)
+![Brain-Inspired Mapping](docs/images/brain-mapping.png)
 
 ### Figure 3: Query Flow in a Distributed Cognitive System
 
-![Query Flow](https://raw.githubusercontent.com/toasterbook88/axis/feature/distributed-cognitive-architecture/docs/images/query-flow.png)
+![Query Flow](docs/images/query-flow.png)
 
 ---
 
