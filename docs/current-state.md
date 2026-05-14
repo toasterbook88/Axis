@@ -11,10 +11,10 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-05-07 EDT
+- Refreshed: 2026-05-14 EDT
 - Repo version: `0.10.1`
-- Latest published GitHub release: `v0.10.0` (2026-04-19T23:05:33Z)
-- Release truth: repo version is ahead of the latest published release
+- Latest published GitHub release: `v0.10.1` (2026-05-08T13:26:01Z)
+- Release truth: repo version matches the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
