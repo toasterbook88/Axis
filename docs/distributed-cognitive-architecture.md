@@ -54,7 +54,7 @@ AXIS implements a **six-layer cognitive stack**:
 
 ### Layer 1: Executive Layer (Prefrontal Cortex)
 **Function**: Planning, goal decomposition, tool selection, and final synthesis.  
-**Implementation**: High-capability leader models + `axis llm route`.  
+**Implementation**: High-capability leader models + `axis llm`.  
 **Target Hardware**: Best GPU or unified memory node.
 
 ### Layer 2: Specialist Modules (Cortical Areas)
@@ -69,7 +69,7 @@ AXIS implements a **six-layer cognitive stack**:
 
 ### Layer 4: Fast Reflex Layer (Basal Ganglia)
 **Function**: Rapid, low-latency responses and validation.  
-**Implementation**: Small quantized models (3B–7B).  
+**Implementation**: Small quantized models (1B–3B).  
 **Target Hardware**: Low-power devices (CPUs, RPis, older laptops).
 
 ### Layer 5: Orchestration Bus (Thalamus)
