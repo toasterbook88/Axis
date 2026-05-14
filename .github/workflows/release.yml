@@ -27,7 +27,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  GO_VERSION: "1.26.2"
+  GO_VERSION: "1.26.3"
 
 permissions:
   contents: write  # GoReleaser needs write to create releases
@@ -69,7 +69,7 @@ jobs:
 
       - name: Format check
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(gofmt -l . 2>/dev/null) || true
           if [ -n "$unformatted" ]; then
             echo "::error::Files need gofmt:"
             echo "$unformatted"
@@ -243,8 +243,8 @@ jobs:
       - name: Test go install
         run: |
           go install github.com/toasterbook88/axis/cmd/axis@${{ github.ref_name }}
-          bindir="$(go env GOBIN)"
+          bindir=$(go env GOBIN)
           if [ -z "$bindir" ]; then
-            bindir="$(go env GOPATH)/bin"
+            bindir=$(go env GOPATH)/bin
           fi
           "$bindir/axis" version

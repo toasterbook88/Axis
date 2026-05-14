@@ -1,3 +1,20 @@
+## v0.10.1 (2026-05-06)
+
+### 🚀 Features
+* Integrated reservation-ledger-wiring enhancements:
+  - Power source detection (AC/battery) for better placement decisions
+  - Thermal state monitoring to avoid throttled nodes
+  - Thermal zones enumeration for detailed thermal monitoring
+
+### 📚 Documentation
+* fac90d9: chore: refresh current-state.md for v0.10.0 release
+
+### 🐛 Bug Fixes
+* None in this release
+
+### 🔧 Maintenance
+* Version bump to 0.10.1
+
 # CHANGELOG
 
 ## v0.10.0 — Operator-honest groundwork: shell safety, reservation ledger, mesh scaffolding
