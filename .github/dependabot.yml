@@ -12,6 +12,13 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "deps"
+    groups:
+      go-modules-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -26,3 +33,10 @@ updates:
       - "ci"
     commit-message:
       prefix: "ci"
+    groups:
+      github-actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
