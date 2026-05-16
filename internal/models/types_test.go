@@ -30,9 +30,6 @@ func sampleNodeFacts() models.NodeFacts {
 			Load1M:           1.25,
 			Load5M:           0.80,
 			Load15M:          0.50,
-			RAMReservableMB:  8192,
-			RAMReservedMB:    1024,
-			RAMAllocatableMB: 7168,
 			DiskTotalGB:      500,
 			DiskFreeGB:       250,
 			GPUs:             []models.GPUInfo{{Model: "NVIDIA MX250", Vendor: "nvidia", Capabilities: []string{"cuda"}}},
@@ -40,6 +37,8 @@ func sampleNodeFacts() models.NodeFacts {
 			Pressure:         "none",
 			PressureSource:   "free-ram",
 		},
+		RAMReservedMB:    1024,
+		RAMAllocatableMB: 7168,
 		Addresses: []models.NetworkAddress{
 			{Kind: "ipv4", Address: "192.168.1.100"},
 			{Kind: "hostname", Address: "test.local"},
@@ -119,11 +118,8 @@ func TestNodeFacts_JSONRoundTrip(t *testing.T) {
 	if decoded.Resources.Load1M != 1.25 || decoded.Resources.Load5M != 0.80 || decoded.Resources.Load15M != 0.50 {
 		t.Errorf("load averages: got %.2f/%.2f/%.2f", decoded.Resources.Load1M, decoded.Resources.Load5M, decoded.Resources.Load15M)
 	}
-	if decoded.Resources.RAMAllocatableMB != 7168 {
-		t.Errorf("ram_allocatable_mb: got %d, want 7168", decoded.Resources.RAMAllocatableMB)
-	}
-	if decoded.Resources.RAMReservableMB != 8192 {
-		t.Errorf("ram_reservable_mb: got %d, want 8192", decoded.Resources.RAMReservableMB)
+	if decoded.RAMAllocatableMB != 7168 {
+		t.Errorf("ram_allocatable_mb: got %d, want 7168", decoded.RAMAllocatableMB)
 	}
 	if decoded.TurboQuant == nil || !decoded.TurboQuant.Supported {
 		t.Fatal("turboquant missing after round-trip")

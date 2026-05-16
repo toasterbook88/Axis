@@ -18,9 +18,10 @@ import (
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
-	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -74,23 +75,19 @@ type RunResponse struct {
 	Summary        *models.ClusterSummary      `json:"summary,omitempty"`
 }
 
-type runIntent struct {
-	command       string
-	label         string
-	matchedScript *scripts.Script
-	matchedSkill  *skills.LearnedSkill
-}
-
 type runnerContext struct {
 	cfg        *config.Config
 	snap       *models.ClusterSnapshot
 	st         *state.ClusterState
 	skillStore *skills.Store
+	ledger     *reservation.Ledger
 }
 
 type snapshotCache interface {
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
+	Ledger() *reservation.Ledger
+	Mesh() *mesh.Mesh
 	Invalidate()
 	RefreshNow(context.Context) error
 }
@@ -418,6 +415,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Snapshot: rc.snap,
 			State:    rc.st,
 			Skills:   rc.skillStore,
+			Ledger:   rc.ledger,
 		}
 
 		res, runErr := runLiveGuarded(ctx, rtCtx, guardedReq)
@@ -448,6 +446,7 @@ func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 		snap:       rt.Snapshot,
 		st:         rt.State,
 		skillStore: rt.Skills,
+		ledger:     rt.Ledger,
 	}, nil
 }
 

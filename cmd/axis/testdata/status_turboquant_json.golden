@@ -18,8 +18,6 @@ STDOUT:
         "load_1m": 0,
         "load_5m": 0,
         "load_15m": 0,
-        "ram_reservable_mb": 8192,
-        "ram_allocatable_mb": 8192,
         "disk_total_gb": 0,
         "disk_free_gb": 0,
         "pressure": "none",
@@ -55,6 +53,7 @@ STDOUT:
           "ollama-present"
         ]
       },
+      "ram_allocatable_mb": 8192,
       "status": "complete",
       "collected_at": "0001-01-01T00:00:00Z"
     }

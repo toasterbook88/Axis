@@ -25,7 +25,7 @@ func TestKnowledgeEndpointTurboQuantGolden(t *testing.T) {
 		[]config.NodeConfig{{Name: "node-a", Hostname: "localhost", SSHUser: "me"}},
 		&state.ClusterState{Nodes: map[string]state.NodeState{}},
 		&skills.Store{},
-		nil,
+		nil, nil,
 	), nil)
 	defer restore()
 

@@ -6,6 +6,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/snapshotview"
@@ -16,6 +17,7 @@ type Context struct {
 	Config   *config.Config
 	Snapshot *models.ClusterSnapshot
 	State    *state.ClusterState
+	Ledger   *reservation.Ledger
 	Skills   *skills.Store
 }
 
@@ -23,6 +25,11 @@ var loadConfig = config.Load
 var discoverNodes = discovery.DiscoverResult
 var buildSnapshot = snapshot.Build
 var loadState = state.Load
+var loadLedger = func() (*reservation.Ledger, error) {
+	l := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	err := l.Load()
+	return l, err
+}
 var applyReservationView = snapshotview.ApplyReservationView
 var loadSkills = skills.Load
 
@@ -46,7 +53,20 @@ func Load(ctx context.Context) (*Context, error) {
 	if err != nil && st == nil {
 		return nil, err
 	}
-	applyReservationView(snap, st)
+
+	ledger, ledgerErr := loadLedger()
+	if ledgerErr != nil && ledger == nil {
+		return nil, ledgerErr
+	}
+	if ledger != nil {
+		for _, n := range snap.Nodes {
+			if n.Resources != nil {
+				ledger.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
+			}
+		}
+	}
+
+	applyReservationView(snap, st, ledger)
 	if err != nil {
 		snap.Warnings = append(snap.Warnings, models.Warning{
 			Kind:    "state",
@@ -69,6 +89,7 @@ func Load(ctx context.Context) (*Context, error) {
 		Config:   cfg,
 		Snapshot: snap,
 		State:    st,
+		Ledger:   ledger,
 		Skills:   skillStore,
 	}, nil
 }

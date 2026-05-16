@@ -23,7 +23,7 @@ func Build(snap *models.ClusterSnapshot, st *state.ClusterState, bestNode string
 	if snapshotView == nil {
 		snapshotView = &models.ClusterSnapshot{}
 	}
-	snapshotview.ApplyReservationView(snapshotView, st)
+	snapshotview.ApplyReservationView(snapshotView, st, nil)
 
 	ollamaMap := make(map[string]models.OllamaInfo)
 	for _, n := range snapshotView.Nodes {

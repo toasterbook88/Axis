@@ -71,7 +71,7 @@ func recoveredMCPRuntimeContextFromDisk(t *testing.T) *runtimectx.Context {
 		Nodes:   nodes,
 		Summary: models.ClusterSummary{TotalNodes: 1, ReachableNodes: 1, TotalRAMMB: 8192, TotalFreeRAMMB: 4096},
 	}
-	daemon.ApplyReservationView(snap, st)
+	daemon.ApplyReservationView(snap, st, nil)
 	if stateErr != nil {
 		snap.Warnings = append(snap.Warnings, models.Warning{
 			Kind:    "state",

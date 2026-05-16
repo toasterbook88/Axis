@@ -211,6 +211,29 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 					CollectedAt: time.Now().UTC(),
 				}
 			}
+
+			// Assign Epistemic identity
+			if nf.Epistemic == nil {
+				verifiedBy := models.VerifiedByMesh
+				// If a node has a Role or was defined statically in config, it's configured
+				if nc.Role != "" {
+					verifiedBy = models.VerifiedByConfig
+				} else if cfg != nil {
+					for _, c := range cfg.Nodes {
+						if c.Name == nc.Name {
+							verifiedBy = models.VerifiedByConfig
+							break
+						}
+					}
+				}
+
+				nf.Epistemic = &models.EpistemicState{
+					Source:     models.SourceLiveProbe,
+					VerifiedBy: verifiedBy,
+					Degraded:   nf.Status != models.StatusComplete,
+				}
+			}
+
 			results[idx] = *nf
 		}(i, node)
 	}

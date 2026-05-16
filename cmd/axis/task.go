@@ -169,8 +169,8 @@ func reservationMBForRequirements(reqs models.TaskRequirements) int64 {
 	return execution.ReservationMBForRequirements(reqs)
 }
 
-func ensureReservationCapacity(snap *models.ClusterSnapshot, st *state.ClusterState, node string, reservationMB int64) error {
-	if !execution.CanReserve(snap, st, node, reservationMB) {
+func ensureReservationCapacity(snap *models.ClusterSnapshot, node string, reservationMB int64) error {
+	if !execution.CanReserve(snap, node, reservationMB) {
 		return fmt.Errorf("node %s cannot reserve %d MB (current reservations exceed cap)", node, reservationMB)
 	}
 	return nil
@@ -515,7 +515,7 @@ func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements
 	if best.Resources != nil {
 		out.RAMFreeMB = best.Resources.RAMFreeMB
 		out.RAMReservableMB = best.Resources.ReservableRAM()
-		out.RAMAllocatableMB = best.Resources.RAMAllocatableMB
+		out.RAMAllocatableMB = best.RAMAllocatableMB
 		out.Pressure = best.Resources.Pressure
 	}
 	out.Tools = toolsList(best)
@@ -555,8 +555,8 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	extraLines := ""
 	if best.Resources != nil {
 		reservable := best.Resources.ReservableRAM()
-		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
-			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved of %dMB reservable)", best.Resources.RAMAllocatableMB, best.Resources.RAMReservedMB, reservable)
+		if best.RAMReservedMB > 0 || best.RAMAllocatableMB > 0 {
+			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved of %dMB reservable)", best.RAMAllocatableMB, best.RAMReservedMB, reservable)
 		} else {
 			ramSummary = fmt.Sprintf("%dMB free", best.Resources.RAMFreeMB)
 		}

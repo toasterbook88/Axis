@@ -2,6 +2,7 @@ package snapshotview
 
 import (
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/state"
 )
 
@@ -59,7 +60,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 // ApplyReservationView overlays locally persisted reservations onto a snapshot
 // so read paths can reason about allocatable RAM without requiring daemon-only
 // semantics.
-func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
+func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, ledger *reservation.Ledger) {
 	if snap == nil {
 		return
 	}
@@ -72,7 +73,10 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 		}
 
 		reserved := int64(0)
-		if st != nil && st.Nodes != nil {
+		if ledger != nil {
+			reserved = ledger.NodeSummaryFor(node.Name).ReservedRAMMB
+		}
+		if reserved <= 0 && st != nil && st.Nodes != nil {
 			if ns, ok := st.Nodes[node.Name]; ok {
 				reserved = ns.ReservedMB
 			}
@@ -81,14 +85,13 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) 
 			reserved = 0
 		}
 		reservable := models.ReservableRAMMB(node.Resources.RAMTotalMB, node.Resources.RAMFreeMB)
-		node.Resources.RAMReservableMB = reservable
-		node.Resources.RAMReservedMB = reserved
+		node.RAMReservedMB = reserved
 
 		allocatable := reservable - reserved
 		if allocatable < 0 {
 			allocatable = 0
 		}
-		node.Resources.RAMAllocatableMB = allocatable
+		node.RAMAllocatableMB = allocatable
 
 		totalReservable += reservable
 		totalReserved += reserved

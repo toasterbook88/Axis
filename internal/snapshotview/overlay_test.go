@@ -146,24 +146,24 @@ func TestCloneSeparatesNodeSlice(t *testing.T) {
 
 func TestApplyReservationViewNilSnapshot(t *testing.T) {
 	// Must not panic.
-	snapshotview.ApplyReservationView(nil, nil)
-	snapshotview.ApplyReservationView(nil, &state.ClusterState{})
+	snapshotview.ApplyReservationView(nil, nil, nil)
+	snapshotview.ApplyReservationView(nil, &state.ClusterState{}, nil)
 }
 
 func TestApplyReservationViewNilState(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{baseNode("alpha", 4096)},
 	}
-	snapshotview.ApplyReservationView(snap, nil)
+	snapshotview.ApplyReservationView(snap, nil, nil)
 	n := snap.Nodes[0]
-	if n.Resources.RAMReservedMB != 0 {
-		t.Errorf("RAMReservedMB: got %d, want 0", n.Resources.RAMReservedMB)
+	if n.RAMReservedMB != 0 {
+		t.Errorf("RAMReservedMB: got %d, want 0", n.RAMReservedMB)
 	}
-	if n.Resources.RAMReservableMB != 4096 {
-		t.Errorf("RAMReservableMB: got %d, want 4096", n.Resources.RAMReservableMB)
+	if n.ReservableRAM() != 4096 {
+		t.Errorf("ReservableRAM: got %d, want 4096", n.ReservableRAM())
 	}
-	if n.Resources.RAMAllocatableMB != 4096 {
-		t.Errorf("RAMAllocatableMB: got %d, want 4096", n.Resources.RAMAllocatableMB)
+	if n.RAMAllocatableMB != 4096 {
+		t.Errorf("RAMAllocatableMB: got %d, want 4096", n.RAMAllocatableMB)
 	}
 }
 
@@ -176,16 +176,16 @@ func TestApplyReservationViewWithReservation(t *testing.T) {
 			"alpha": {ReservedMB: 2048},
 		},
 	}
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 	n := snap.Nodes[0]
-	if n.Resources.RAMReservedMB != 2048 {
-		t.Errorf("RAMReservedMB: got %d, want 2048", n.Resources.RAMReservedMB)
+	if n.RAMReservedMB != 2048 {
+		t.Errorf("RAMReservedMB: got %d, want 2048", n.RAMReservedMB)
 	}
-	if n.Resources.RAMReservableMB != 8192 {
-		t.Errorf("RAMReservableMB: got %d, want 8192", n.Resources.RAMReservableMB)
+	if n.ReservableRAM() != 8192 {
+		t.Errorf("ReservableRAM: got %d, want 8192", n.ReservableRAM())
 	}
-	if n.Resources.RAMAllocatableMB != 6144 {
-		t.Errorf("RAMAllocatableMB: got %d, want 6144", n.Resources.RAMAllocatableMB)
+	if n.RAMAllocatableMB != 6144 {
+		t.Errorf("RAMAllocatableMB: got %d, want 6144", n.RAMAllocatableMB)
 	}
 }
 
@@ -199,12 +199,12 @@ func TestApplyReservationViewAllocatableFloorZero(t *testing.T) {
 			"alpha": {ReservedMB: 4096},
 		},
 	}
-	snapshotview.ApplyReservationView(snap, st)
-	if got := snap.Nodes[0].Resources.RAMReservableMB; got != 1024 {
+	snapshotview.ApplyReservationView(snap, st, nil)
+	if got := snap.Nodes[0].ReservableRAM(); got != 1024 {
 		t.Errorf("reservable should floor at 1024, got %d", got)
 	}
-	if snap.Nodes[0].Resources.RAMAllocatableMB != 0 {
-		t.Errorf("allocatable should floor at 0, got %d", snap.Nodes[0].Resources.RAMAllocatableMB)
+	if snap.Nodes[0].RAMAllocatableMB != 0 {
+		t.Errorf("allocatable should floor at 0, got %d", snap.Nodes[0].RAMAllocatableMB)
 	}
 }
 
@@ -226,13 +226,13 @@ func TestApplyReservationViewKeepsSystemReserveOutOfAllocatablePool(t *testing.T
 		},
 	}
 
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
-	if got := snap.Nodes[0].Resources.RAMAllocatableMB; got != 6656 {
+	if got := snap.Nodes[0].RAMAllocatableMB; got != 6656 {
 		t.Fatalf("RAMAllocatableMB: got %d, want 6656", got)
 	}
-	if got := snap.Nodes[0].Resources.RAMReservableMB; got != 7168 {
-		t.Fatalf("RAMReservableMB: got %d, want 7168", got)
+	if got := snap.Nodes[0].ReservableRAM(); got != 7168 {
+		t.Fatalf("ReservableRAM: got %d, want 7168", got)
 	}
 }
 
@@ -249,7 +249,7 @@ func TestApplyReservationViewSummaryTotals(t *testing.T) {
 			"beta":  {ReservedMB: 512},
 		},
 	}
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
 	wantReserved := int64(1024 + 512)
 	wantReservable := int64(8192 + 4096)
@@ -278,16 +278,16 @@ func TestApplyReservationViewSkipsNodesWithoutResources(t *testing.T) {
 			"beta": {ReservedMB: 512},
 		},
 	}
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
 	if snap.Nodes[0].Resources != nil {
 		t.Error("expected nil resources on first node to remain nil")
 	}
-	if snap.Nodes[1].Resources.RAMAllocatableMB != 1536 {
-		t.Errorf("beta allocatable: got %d, want 1536", snap.Nodes[1].Resources.RAMAllocatableMB)
+	if snap.Nodes[1].RAMAllocatableMB != 1536 {
+		t.Errorf("beta allocatable: got %d, want 1536", snap.Nodes[1].RAMAllocatableMB)
 	}
-	if snap.Nodes[1].Resources.RAMReservableMB != 2048 {
-		t.Errorf("beta reservable: got %d, want 2048", snap.Nodes[1].Resources.RAMReservableMB)
+	if snap.Nodes[1].ReservableRAM() != 2048 {
+		t.Errorf("beta reservable: got %d, want 2048", snap.Nodes[1].ReservableRAM())
 	}
 }
 
@@ -298,21 +298,21 @@ func TestApplyReservationViewUnknownNodeGetsZeroReservation(t *testing.T) {
 	st := &state.ClusterState{
 		Nodes: map[string]state.NodeState{}, // gamma not present
 	}
-	snapshotview.ApplyReservationView(snap, st)
-	if snap.Nodes[0].Resources.RAMReservedMB != 0 {
+	snapshotview.ApplyReservationView(snap, st, nil)
+	if snap.Nodes[0].RAMReservedMB != 0 {
 		t.Error("node not in state should get zero reservation")
 	}
-	if snap.Nodes[0].Resources.RAMReservableMB != 4096 {
-		t.Errorf("expected 4096 reservable, got %d", snap.Nodes[0].Resources.RAMReservableMB)
+	if got := snap.Nodes[0].ReservableRAM(); got != 4096 {
+		t.Errorf("expected 4096 reservable, got %d", got)
 	}
-	if snap.Nodes[0].Resources.RAMAllocatableMB != 4096 {
-		t.Errorf("expected 4096 allocatable, got %d", snap.Nodes[0].Resources.RAMAllocatableMB)
+	if snap.Nodes[0].RAMAllocatableMB != 4096 {
+		t.Errorf("expected 4096 allocatable, got %d", snap.Nodes[0].RAMAllocatableMB)
 	}
 }
 
 func TestApplyReservationViewEmptyNodes(t *testing.T) {
 	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{}}
-	snapshotview.ApplyReservationView(snap, nil)
+	snapshotview.ApplyReservationView(snap, nil, nil)
 	if snap.Summary.TotalReservableMB != 0 || snap.Summary.TotalReservedMB != 0 || snap.Summary.TotalAllocatableMB != 0 {
 		t.Error("empty node list should produce zero totals")
 	}

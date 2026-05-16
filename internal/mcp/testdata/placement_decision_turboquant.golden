@@ -13,7 +13,7 @@
     "turboquant capabilities: backend-probed, ctx-size-flag, flash-attn-flag, llama.cpp-runtime",
     "LLM fit: 96/100 (excellent for small models)",
     "remote node (via SSH)",
-    "8192MB free RAM (of 16384MB total)",
+    "8192MB allocatable (0MB reserved of 8192MB reservable pool; 16384MB total)",
     "pressure: none",
     "8 CPU cores",
     "selected from 2 eligible nodes",
