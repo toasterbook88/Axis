@@ -54,7 +54,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 		Nodes:     deduped,
 	}
 
-	var totalRAM, freeRAM, reservableRAM, allocatableRAM, reservedRAM int64
+	var totalRAM, freeRAM int64
 	reachable := 0
 
 	for _, n := range deduped {
@@ -64,24 +64,6 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 			if n.Resources != nil {
 				totalRAM += n.Resources.RAMTotalMB
 				freeRAM += n.Resources.RAMFreeMB
-				reserved := n.RAMReservedMB
-				if reserved < 0 {
-					reserved = 0
-				}
-				reservedRAM += reserved
-				reservable := n.Resources.ReservableRAM()
-				if reservable < 0 {
-					reservable = 0
-				}
-				reservableRAM += reservable
-				alloc := n.RAMAllocatableMB
-				if alloc <= 0 && (n.Resources.RAMFreeMB > 0 || n.Resources.RAMTotalMB > 0) {
-					alloc = reservable - reserved
-				}
-				if alloc < 0 {
-					alloc = 0
-				}
-				allocatableRAM += alloc
 			}
 		}
 
@@ -130,9 +112,6 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 		ReachableNodes:     reachable,
 		TotalRAMMB:         totalRAM,
 		TotalFreeRAMMB:     freeRAM,
-		TotalReservableMB:  reservableRAM,
-		TotalAllocatableMB: allocatableRAM,
-		TotalReservedMB:    reservedRAM,
 	}
 
 	return snap
