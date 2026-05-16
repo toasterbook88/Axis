@@ -16,6 +16,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
@@ -238,6 +239,7 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, us
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 
+	snapshotview.ApplyReservationView(snap, st, nil)
 	decision := placement.SelectBestNode(placement.InferRequirements(desc), snap.Nodes, st)
 	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
 	return mcpproto.NewToolResultJSON(decision)

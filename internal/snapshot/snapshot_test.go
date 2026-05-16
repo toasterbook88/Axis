@@ -259,10 +259,9 @@ func TestBuild_UsesReservationAwareSummaryWhenPresent(t *testing.T) {
 			Resources: &models.Resources{
 				RAMTotalMB:       8192,
 				RAMFreeMB:        4096,
-				RAMReservableMB:  4096,
-				RAMReservedMB:    1024,
-				RAMAllocatableMB: 3072,
 			},
+			RAMReservedMB:    1024,
+			RAMAllocatableMB: 3072,
 			CollectedAt: ts(),
 		},
 	}

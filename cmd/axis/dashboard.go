@@ -1,14 +1,24 @@
 // Package main extension: dashboard.go contains rendering helpers for proposed
-// dashboard-style CLI views. These helpers are not registered as Cobra command
-// surfaces in this branch.
+// dashboard-style CLI views.
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // --- Color Definitions ---
@@ -22,6 +32,80 @@ var (
 )
 
 // --- Summary Command ---
+
+func summaryCmd() *cobra.Command {
+	var cached bool
+	var cacheAddr string
+
+	cmd := &cobra.Command{
+		Use:   "summary",
+		Short: "Display a visual dashboard of cluster health and resources",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			snap, source, err := collectStatusSnapshot(
+				ctx,
+				cached,
+				false,
+				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+					return daemon.FetchSnapshot(ctx, cacheAddr)
+				},
+				discoverLiveSnapshot,
+			)
+			if err != nil {
+				ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
+				return err
+			}
+
+			meta := daemon.Metadata{}
+			if source != "live" {
+				m, _ := daemon.FetchMeta(ctx, cacheAddr)
+				meta = m
+			}
+
+			view := populateSummaryView(snap, meta)
+			fmt.Print(view.Render())
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&cached, "cached", true, "Use the local daemon snapshot cache by default")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache")
+	return cmd
+}
+
+func populateSummaryView(snap *models.ClusterSnapshot, meta daemon.Metadata) ClusterSummaryView {
+	view := ClusterSummaryView{
+		Version:       meta.Version,
+		NodeCount:     len(snap.Nodes),
+		TotalRAMMB:    snap.Summary.TotalRAMMB,
+		FreeRAMMB:     snap.Summary.TotalFreeRAMMB,
+		ReservedRAMMB: snap.Summary.TotalReservedMB,
+		CacheAge:      time.Duration(meta.CacheAgeSec) * time.Second,
+		IsStale:       meta.Stale,
+		MeshPeers:     meta.MeshPeers,
+	}
+	if view.Version == "" {
+		view.Version = Version
+	}
+	for _, n := range snap.Nodes {
+		switch n.Status {
+		case models.StatusComplete:
+			view.Healthy++
+		case models.StatusPartial:
+			view.Degraded++
+		case models.StatusUnreachable, models.StatusError:
+			view.Unreachable++
+		}
+		if n.Resources != nil {
+			view.GPUCount += len(n.Resources.GPUs)
+		}
+	}
+	for _, w := range snap.Warnings {
+		view.Warnings = append(view.Warnings, fmt.Sprintf("%s: %s", w.Node, w.Message))
+	}
+	return view
+}
 
 // ClusterSummaryView renders a human-friendly cluster overview.
 type ClusterSummaryView struct {
@@ -52,11 +136,15 @@ func (v ClusterSummaryView) Render() string {
 	// Version + Cache
 	colorDim.Fprintf(&b, "  Version: ")
 	colorCyan.Fprintf(&b, "%s", v.Version)
-	colorDim.Fprintf(&b, "    Cache Age: ")
-	if v.IsStale {
-		colorRed.Fprintf(&b, "%s (STALE)\n", v.CacheAge.Round(time.Second))
+	if v.CacheAge > 0 || v.IsStale {
+		colorDim.Fprintf(&b, "    Cache Age: ")
+		if v.IsStale {
+			colorRed.Fprintf(&b, "%s (STALE)\n", v.CacheAge.Round(time.Second))
+		} else {
+			colorGreen.Fprintf(&b, "%s\n", v.CacheAge.Round(time.Second))
+		}
 	} else {
-		colorGreen.Fprintf(&b, "%s\n", v.CacheAge.Round(time.Second))
+		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 
@@ -286,6 +374,72 @@ func RenderDoctorReport(checks []DoctorCheck) string {
 
 // --- Reservation List ---
 
+func reservationsCmd() *cobra.Command {
+	var cacheAddr string
+
+	cmd := &cobra.Command{
+		Use:   "reservations",
+		Short: "Show active resource reservations in the cluster",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Fetch from /v2/reservations
+			client, baseURLAddr := daemon.HttpClientForAddr(cacheAddr)
+			baseURL := daemon.NormalizeAddr(baseURLAddr)
+
+			token, err := auth.LoadOrGenerateToken()
+			if err != nil {
+				return err
+			}
+
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v2/reservations", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("daemon not reachable: %w", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("api error (%d): %s", resp.StatusCode, string(body))
+			}
+
+			var result struct {
+				Entries []struct {
+					ID        string    `json:"id"`
+					Node      string    `json:"node"`
+					RAMMB     int64     `json:"ram_mb"`
+					Owner     string    `json:"owner"`
+					CreatedAt time.Time `json:"created_at"`
+				} `json:"entries"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return err
+			}
+
+			items := make([]ReservationListItem, 0, len(result.Entries))
+			for _, e := range result.Entries {
+				items = append(items, ReservationListItem{
+					ID:      e.ID,
+					Node:    e.Node,
+					RAMMB:   e.RAMMB,
+					Owner:   e.Owner,
+					Age:     time.Since(e.CreatedAt),
+					IsStale: time.Since(e.CreatedAt) > 5*time.Minute,
+				})
+			}
+
+			fmt.Print(RenderReservationTable(items))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache")
+	return cmd
+}
+
 type ReservationListItem struct {
 	ID      string
 	Node    string
@@ -299,27 +453,27 @@ func RenderReservationTable(items []ReservationListItem) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	colorWhite.Fprintf(&b, "  ACTIVE RESERVATIONS\n")
-	b.WriteString("  " + strings.Repeat("─", 70) + "\n")
+	b.WriteString("  " + strings.Repeat("─", 75) + "\n")
 
 	if len(items) == 0 {
 		colorDim.Fprintf(&b, "  No active reservations\n\n")
 		return b.String()
 	}
 
-	colorWhite.Fprintf(&b, "  %-20s %-15s %10s %-20s %10s\n",
+	colorWhite.Fprintf(&b, "  %-20s %-15s %10s %-15s %10s\n",
 		"ID", "NODE", "RAM (MB)", "OWNER", "AGE")
-	b.WriteString("  " + strings.Repeat("─", 70) + "\n")
+	b.WriteString("  " + strings.Repeat("─", 75) + "\n")
 
 	for _, r := range items {
 		ageStr := formatDuration(r.Age)
 		if r.IsStale {
 			ageStr = colorRed.Sprintf("%s (STALE)", ageStr)
 		}
-		fmt.Fprintf(&b, "  %-20s %-15s %10d %-20s %s\n",
-			truncate(r.ID, 20),
+		fmt.Fprintf(&b, "  %-20s %-15s %10d %-15s %s\n",
+			truncateID(r.ID, 20),
 			r.Node,
 			r.RAMMB,
-			truncate(r.Owner, 20),
+			truncateID(r.Owner, 15),
 			ageStr,
 		)
 	}
@@ -335,4 +489,11 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 	}
 	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
+func truncateID(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-3] + "..."
 }

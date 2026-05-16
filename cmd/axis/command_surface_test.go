@@ -18,7 +18,9 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
@@ -161,7 +163,7 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		if addr != "127.0.0.1:5151" {
 			t.Fatalf("addr = %q, want 127.0.0.1:5151", addr)
 		}
-		if d != fake {
+		if d != serveDaemon(fake) {
 			t.Fatalf("expected injected daemon instance")
 		}
 		return nil
@@ -200,7 +202,7 @@ func TestDaemonStartCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		if addr != "127.0.0.1:6262" {
 			t.Fatalf("addr = %q, want 127.0.0.1:6262", addr)
 		}
-		if d != fake {
+		if d != serveDaemon(fake) {
 			t.Fatalf("expected injected daemon instance")
 		}
 		return nil
@@ -927,6 +929,7 @@ type fakeServeDaemon struct {
 	watchedState     bool
 	watchedSkills    bool
 	watchedDiscovery bool
+	watchedMesh      bool
 }
 
 func (f *fakeServeDaemon) Start(ctx context.Context) {
@@ -942,6 +945,8 @@ func (f *fakeServeDaemon) WatchSkills(context.Context, string) { f.watchedSkills
 
 func (f *fakeServeDaemon) WatchDiscovery(context.Context, string) { f.watchedDiscovery = true }
 
+func (f *fakeServeDaemon) WatchMesh(context.Context, mesh.Peer) { f.watchedMesh = true }
+
 func (f *fakeServeDaemon) WaitStopped(context.Context) {}
 
 func (f *fakeServeDaemon) Snapshot() (*models.ClusterSnapshot, bool) {
@@ -951,6 +956,10 @@ func (f *fakeServeDaemon) Snapshot() (*models.ClusterSnapshot, bool) {
 func (f *fakeServeDaemon) Meta() daemon.Metadata {
 	return daemon.Metadata{}
 }
+
+func (f *fakeServeDaemon) Ledger() *reservation.Ledger { return nil }
+
+func (f *fakeServeDaemon) Mesh() *mesh.Mesh { return nil }
 
 func (f *fakeServeDaemon) Invalidate() {}
 

@@ -81,11 +81,11 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 		kv("cpu:", fmt.Sprintf("%d cores (%s)", r.CPUCores, r.CPUModel))
 		kv("ram total:", fmt.Sprintf("%d MB", r.RAMTotalMB))
 		kv("ram free:", fmt.Sprintf("%d MB", r.RAMFreeMB))
-		if r.RAMReservedMB > 0 {
-			kv("ram reserved:", fmt.Sprintf("%d MB", r.RAMReservedMB))
+		if nf.RAMReservedMB > 0 {
+			kv("ram reserved:", fmt.Sprintf("%d MB", nf.RAMReservedMB))
 		}
-		if r.RAMAllocatableMB > 0 {
-			kv("ram alloc:", fmt.Sprintf("%d MB", r.RAMAllocatableMB))
+		if nf.RAMAllocatableMB > 0 {
+			kv("ram alloc:", fmt.Sprintf("%d MB", nf.RAMAllocatableMB))
 		}
 		kv("disk:", fmt.Sprintf("%d GB free / %d GB total", r.DiskFreeGB, r.DiskTotalGB))
 		kv("pressure:", formatPressure(r.Pressure))

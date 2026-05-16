@@ -8,6 +8,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -41,9 +42,9 @@ func TestLoadBuildsRuntimeAndSurfacesRecoverableWarnings(t *testing.T) {
 			}
 		},
 		func() (*state.ClusterState, error) { return stateValue, errors.New("recovered local AXIS state") },
-		func(*models.ClusterSnapshot, *state.ClusterState) {
-			nodes[0].Resources.RAMReservedMB = 512
-			nodes[0].Resources.RAMAllocatableMB = 3584
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {
+			nodes[0].RAMReservedMB = 512
+			nodes[0].RAMAllocatableMB = 3584
 		},
 		func() (*skills.Store, error) { return skillStore, errors.New("recovered learned skills store") },
 	)
@@ -80,7 +81,7 @@ func TestLoadReturnsEmptySnapshotWhenBuilderReturnsNil(t *testing.T) {
 		func() (*state.ClusterState, error) {
 			return &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil
 		},
-		func(*models.ClusterSnapshot, *state.ClusterState) {},
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {},
 		func() (*skills.Store, error) { return &skills.Store{}, nil },
 	)
 	defer restore()
@@ -105,7 +106,7 @@ func TestLoadFailsOnHardStateError(t *testing.T) {
 		func(context.Context, *config.Config) discovery.Result { return discovery.Result{} },
 		func([]models.NodeFacts) *models.ClusterSnapshot { return &models.ClusterSnapshot{} },
 		func() (*state.ClusterState, error) { return nil, errors.New("state hard fail") },
-		func(*models.ClusterSnapshot, *state.ClusterState) {},
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {},
 		func() (*skills.Store, error) { return &skills.Store{}, nil },
 	)
 	defer restore()
@@ -125,7 +126,7 @@ func TestLoadFailsOnHardSkillsError(t *testing.T) {
 		func() (*state.ClusterState, error) {
 			return &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil
 		},
-		func(*models.ClusterSnapshot, *state.ClusterState) {},
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {},
 		func() (*skills.Store, error) { return nil, errors.New("skills hard fail") },
 	)
 	defer restore()
@@ -155,7 +156,7 @@ func TestLoadSurfacesDiscoveryWarnings(t *testing.T) {
 		func() (*state.ClusterState, error) {
 			return &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil
 		},
-		func(*models.ClusterSnapshot, *state.ClusterState) {},
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {},
 		func() (*skills.Store, error) { return &skills.Store{}, nil },
 	)
 	defer restore()
@@ -204,7 +205,7 @@ func stubRuntimeDeps(
 	discoverFn func(context.Context, *config.Config) discovery.Result,
 	buildFn func([]models.NodeFacts) *models.ClusterSnapshot,
 	stateFn func() (*state.ClusterState, error),
-	applyFn func(*models.ClusterSnapshot, *state.ClusterState),
+	applyFn func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger),
 	skillsFn func() (*skills.Store, error),
 ) func() {
 	t.Helper()

@@ -15,7 +15,9 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
 	"github.com/toasterbook88/axis/internal/snapshotview"
@@ -56,6 +58,7 @@ type Metadata struct {
 	Version            string    `json:"version,omitempty"`
 	CacheAgeSec        int       `json:"cache_age_sec,omitempty"`
 	Stale              bool      `json:"stale,omitempty"`
+	MeshPeers          int       `json:"mesh_peers,omitempty"`
 	StaleThresholdSec  int       `json:"stale_threshold_sec,omitempty"`
 	// Phase 3: refresh metrics
 	RefreshCount  int64                      `json:"refresh_count"`
@@ -73,6 +76,8 @@ type Daemon struct {
 	staleThreshold time.Duration
 	snapshotPath   string
 	beaconRegistry *discovery.BeaconRegistry
+	ledger         *reservation.Ledger
+	mesh           *mesh.Mesh
 
 	snapshot      *models.ClusterSnapshot
 	collectedAt   time.Time
@@ -125,6 +130,7 @@ func NewDefault(interval time.Duration) *Daemon {
 	registry := discovery.NewBeaconRegistry()
 	d := New(interval, defaultCollector(registry))
 	d.beaconRegistry = registry
+	d.mesh = mesh.New(mesh.Peer{}, mesh.DefaultConfig(), nil)
 	return d
 }
 
@@ -135,12 +141,23 @@ func New(interval time.Duration, collector Collector) *Daemon {
 	if collector == nil {
 		collector = defaultCollector(nil)
 	}
-	return &Daemon{
+	d := &Daemon{
 		collector:      collector,
 		interval:       interval,
 		staleThreshold: defaultStaleThreshold,
 		snapshotPath:   DefaultSnapshotPath(),
+		ledger:         reservation.NewLedger(reservation.DefaultLimits(), nil),
 	}
+	_ = d.ledger.Load()
+	return d
+}
+
+func (d *Daemon) Ledger() *reservation.Ledger {
+	return d.ledger
+}
+
+func (d *Daemon) Mesh() *mesh.Mesh {
+	return d.mesh
 }
 
 func DefaultSnapshotPath() string {
@@ -314,6 +331,34 @@ func (d *Daemon) watchFileWithFingerprint(ctx context.Context, path, trigger str
 	}()
 }
 
+// WatchMesh starts the mesh gossip layer and refreshes cache on peer events
+func (d *Daemon) WatchMesh(ctx context.Context, self mesh.Peer) {
+	if d.mesh == nil {
+		return
+	}
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+
+		d.mesh.OnPeerJoin = func(p mesh.Peer) {
+			slog.Info("mesh: peer joined", "peer", p.Name)
+			_ = d.RefreshWithTrigger(ctx, RefreshTriggerDiscovery)
+		}
+
+		d.mesh.OnPeerLeave = func(p mesh.Peer) {
+			slog.Info("mesh: peer left", "peer", p.Name)
+			_ = d.RefreshWithTrigger(ctx, RefreshTriggerDiscovery)
+		}
+
+		if err := d.mesh.Start(ctx); err != nil {
+			slog.Error("mesh: failed to start", "error", err)
+		}
+
+		<-ctx.Done()
+		d.mesh.Stop()
+	}()
+}
+
 // WaitStopped blocks until all background goroutines have finished or ctx
 // expires. Call after cancelling the context passed to Start/WatchConfig to
 // ensure in-flight refreshes complete before the process exits.
@@ -400,7 +445,7 @@ func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
 	d.staleNodes = staleNodes
 
 	d.snapshot = snapshotview.Clone(snap)
-	ApplyReservationView(d.snapshot, st)
+	ApplyReservationView(d.snapshot, st, d.ledger)
 	if stateWarning != nil {
 		d.snapshot.Warnings = append(d.snapshot.Warnings, models.Warning{
 			Kind:    "state",
@@ -481,14 +526,11 @@ func (d *Daemon) Meta() Metadata {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	age := 0
+	age := time.Duration(0)
 	stale := false
 	if !d.collectedAt.IsZero() {
-		age = int(time.Since(d.collectedAt).Seconds())
-		if age < 0 {
-			age = 0
-		}
-		stale = time.Since(d.collectedAt) > d.staleThreshold
+		age = time.Since(d.collectedAt)
+		stale = age > d.staleThreshold
 	}
 
 	meta := Metadata{
@@ -502,19 +544,24 @@ func (d *Daemon) Meta() Metadata {
 		LastError:          d.lastError,
 		SnapshotPath:       d.snapshotPath,
 		Version:            Version,
-		CacheAgeSec:        age,
+		CacheAgeSec:        int(age.Seconds()),
 		Stale:              stale,
 		StaleThresholdSec:  int(d.staleThreshold / time.Second),
-		RefreshCount:       d.refreshCount,
-		LastRefreshMs:      d.lastRefreshDuration.Milliseconds(),
-		StaleNodes:         d.staleNodes,
 	}
+	if d.mesh != nil {
+		meta.MeshPeers = len(d.mesh.ActivePeers())
+	}
+	meta.RefreshCount = d.refreshCount
+	meta.LastRefreshMs = d.lastRefreshDuration.Milliseconds()
+	meta.StaleNodes = d.staleNodes
 	if d.snapshot != nil && d.snapshot.Freshness != nil {
 		freshness := *d.snapshot.Freshness
 		meta.Freshness = &freshness
 	}
 
-	if st, err := state.Load(); st != nil {
+	if d.ledger != nil {
+		meta.ReservedMB = d.ledger.Summary().TotalReservedMB
+	} else if st, err := state.Load(); st != nil {
 		for _, ns := range st.Nodes {
 			meta.ReservedMB += ns.ReservedMB
 		}
@@ -528,8 +575,8 @@ func (d *Daemon) Meta() Metadata {
 	return meta
 }
 
-func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node string, mb int64) bool {
-	return execution.CanReserve(snap, st, node, mb)
+func CanReserve(snap *models.ClusterSnapshot, node string, mb int64) bool {
+	return execution.CanReserve(snap, node, mb)
 }
 
 func defaultCollector(registry *discovery.BeaconRegistry) Collector {
@@ -593,6 +640,6 @@ func CloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 // ApplyReservationView overlays locally persisted reservations onto a snapshot
 // so read paths can reason about allocatable RAM without requiring daemon-only
 // semantics.
-func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState) {
-	snapshotview.ApplyReservationView(snap, st)
+func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, ledger *reservation.Ledger) {
+	snapshotview.ApplyReservationView(snap, st, ledger)
 }

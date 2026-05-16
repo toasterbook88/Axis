@@ -12,6 +12,7 @@ import (
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
@@ -370,9 +371,10 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 
 	prevHeartbeat := heartbeatTask
 	heartbeatCalls := 0
-	heartbeatTask = func(st *state.ClusterState, node, execID string) error {
+	heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error {
+		fmt.Printf("DEBUG: heartbeatTask called id=%s\n", ledgerExecID)
 		heartbeatCalls++
-		return st.HeartbeatTask(node, execID)
+		return nil
 	}
 	defer func() { heartbeatTask = prevHeartbeat }()
 
@@ -406,9 +408,9 @@ func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(
 
 	prevHeartbeat := heartbeatTask
 	heartbeatCh := make(chan struct{}, 16)
-	heartbeatTask = func(_ *state.ClusterState, node, execID string) error {
-		if node != "alpha" || execID != "exec-1" {
-			t.Fatalf("unexpected heartbeat target node=%q execID=%q", node, execID)
+	heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error {
+		if ledgerExecID != "exec-1" {
+			t.Fatalf("unexpected heartbeat target execID=%q", ledgerExecID)
 		}
 		heartbeatCh <- struct{}{}
 		return nil
@@ -420,7 +422,7 @@ func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, _, err := runWithReservationHeartbeat(&state.ClusterState{}, "alpha", "exec-1", func() (string, int64, error) {
+		if _, _, err := runWithReservationHeartbeat(&reservation.Ledger{}, "exec-1", func() (string, int64, error) {
 			<-doneRun
 			return "ok", 0, nil
 		}); err != nil {
@@ -648,6 +650,7 @@ func TestRunRemoteUsesVariableBasedTrap(t *testing.T) {
 		"echo hello",
 		nil,
 		[]byte(`{"test":true}`),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("runRemote failed: %v", err)
@@ -704,5 +707,14 @@ func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
 		},
 		State:  &state.ClusterState{Nodes: map[string]state.NodeState{}},
 		Skills: &skills.Store{},
+		Ledger: func() *reservation.Ledger {
+			l := reservation.NewLedger(reservation.DefaultLimits(), nil)
+			for _, n := range nodes {
+				if n.Resources != nil {
+					l.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
+				}
+			}
+			return l
+		}(),
 	}
 }

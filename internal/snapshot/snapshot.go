@@ -28,7 +28,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 			if n.Resources != nil {
 				totalRAM += n.Resources.RAMTotalMB
 				freeRAM += n.Resources.RAMFreeMB
-				reserved := n.Resources.RAMReservedMB
+				reserved := n.RAMReservedMB
 				if reserved < 0 {
 					reserved = 0
 				}
@@ -38,7 +38,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 					reservable = 0
 				}
 				reservableRAM += reservable
-				alloc := n.Resources.RAMAllocatableMB
+				alloc := n.RAMAllocatableMB
 				if alloc <= 0 && (n.Resources.RAMFreeMB > 0 || n.Resources.RAMTotalMB > 0) {
 					alloc = reservable - reserved
 				}

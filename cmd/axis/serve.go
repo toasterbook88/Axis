@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -24,9 +27,12 @@ type serveDaemon interface {
 	WatchState(context.Context, string)
 	WatchSkills(context.Context, string)
 	WatchDiscovery(context.Context, string)
+	WatchMesh(context.Context, mesh.Peer)
 	WaitStopped(context.Context)
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
+	Ledger() *reservation.Ledger
+	Mesh() *mesh.Mesh
 	Invalidate()
 	RefreshNow(context.Context) error
 }
@@ -54,6 +60,14 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) 
 	d.WatchState(ctx, state.Path())
 	d.WatchSkills(ctx, skills.Path())
 	d.WatchDiscovery(ctx, config.DefaultConfigPath())
+
+	// Start mesh (side-by-side with discovery)
+	h, _ := os.Hostname()
+	selfPeer := mesh.Peer{
+		Name:     "localhost", // Advisory name
+		Hostname: h,
+	}
+	d.WatchMesh(ctx, selfPeer)
 
 	protocol := "http"
 	if auth.IsUnixAddr(addr) {

@@ -76,7 +76,7 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 		}
 	}
 
-	nodeAllocatable := allocatableRAM(n, st)
+	nodeAllocatable := allocatableRAM(n)
 	if reqs.MinFreeRAMMB > 0 {
 		minNeeded := effectiveMinFreeRAM(reqs, n)
 		actual := int64(0)
@@ -183,7 +183,7 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 	}
 
 	if n.Resources != nil {
-		allocatable := allocatableRAM(n, st)
+		allocatable := allocatableRAM(n)
 		if reqs.MinFreeRAMMB > 0 {
 			reasoning = append(reasoning,
 				fmt.Sprintf("%dMB allocatable against %dMB requirement", allocatable, effectiveMinFreeRAM(reqs, n)))

@@ -121,12 +121,12 @@ func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
 		nil,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
 			alpha := nodeComplete("alpha", 8192, "low", "git")
-			alpha.Resources.RAMReservedMB = 4096
-			alpha.Resources.RAMAllocatableMB = 4096
+			alpha.RAMReservedMB = 4096
+			alpha.RAMAllocatableMB = 4096
 
 			beta := nodeComplete("beta", 6144, "low", "git")
-			beta.Resources.RAMReservedMB = 0
-			beta.Resources.RAMAllocatableMB = 6144
+			beta.RAMReservedMB = 0
+			beta.RAMAllocatableMB = 6144
 
 			return &models.ClusterSnapshot{
 				Nodes: []models.NodeFacts{alpha, beta},

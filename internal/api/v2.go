@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/mesh"
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
@@ -98,6 +101,7 @@ type V2NodeResponse struct {
 	Pressure   string   `json:"pressure"`
 	GPUs       []string `json:"gpus,omitempty"`
 	Tools      []string `json:"tools,omitempty"`
+	Epistemic  *models.EpistemicState `json:"epistemic,omitempty"`
 }
 
 func (h *v2Handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +146,7 @@ func (h *v2Handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		for _, t := range n.Tools {
 			node.Tools = append(node.Tools, t.Name)
 		}
+		node.Epistemic = n.Epistemic
 		nodes = append(nodes, node)
 	}
 
@@ -171,7 +176,18 @@ func (h *v2Handlers) handleSingleNode(w http.ResponseWriter, name string) {
 func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeError(w, http.StatusNotImplemented, "reservation endpoints not yet implemented")
+		if !h.requireCache(w) {
+			return
+		}
+		ledger := h.cache.Ledger()
+		if ledger == nil {
+			writeError(w, http.StatusServiceUnavailable, "ledger not available")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"cluster":      ledger.Summary(),
+			"reservations": ledger.Entries(),
+		})
 	case http.MethodPost:
 		writeError(w, http.StatusNotImplemented, "manual reservation creation pending ledger integration")
 	default:
@@ -184,7 +200,22 @@ func (h *v2Handlers) handleMesh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeError(w, http.StatusNotImplemented, "mesh integration pending")
+	if !h.requireCache(w) {
+		return
+	}
+	m := h.cache.Mesh()
+	if m == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh not available")
+		return
+	}
+	peers := m.ActivePeers()
+	if peers == nil {
+		peers = []mesh.Peer{} // Ensure we output an empty array instead of null
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"peers": peers,
+		"count": len(peers),
+	})
 }
 
 type V2DryRunRequest struct {

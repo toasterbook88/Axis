@@ -197,8 +197,8 @@ func TestCloneEmptyNodesAndWarnings(t *testing.T) {
 
 func TestApplyReservationViewNilSnapIsNoop(t *testing.T) {
 	// Must not panic.
-	snapshotview.ApplyReservationView(nil, nil)
-	snapshotview.ApplyReservationView(nil, &state.ClusterState{})
+	snapshotview.ApplyReservationView(nil, nil, nil)
+	snapshotview.ApplyReservationView(nil, &state.ClusterState{}, nil)
 }
 
 func TestApplyReservationViewWithNilStateUsesZeroReserved(t *testing.T) {
@@ -214,17 +214,17 @@ func TestApplyReservationViewWithNilStateUsesZeroReserved(t *testing.T) {
 		},
 	}
 
-	snapshotview.ApplyReservationView(snap, nil)
+	snapshotview.ApplyReservationView(snap, nil, nil)
 
 	node := snap.Nodes[0]
-	if node.Resources.RAMReservedMB != 0 {
-		t.Errorf("expected reserved 0, got %d", node.Resources.RAMReservedMB)
+	if node.RAMReservedMB != 0 {
+		t.Errorf("expected reserved 0, got %d", node.RAMReservedMB)
 	}
-	if node.Resources.RAMReservableMB != 4096 {
-		t.Errorf("expected reservable 4096, got %d", node.Resources.RAMReservableMB)
+	if node.ReservableRAM() != 4096 {
+		t.Errorf("expected reservable 4096, got %d", node.ReservableRAM())
 	}
-	if node.Resources.RAMAllocatableMB != 4096 {
-		t.Errorf("expected allocatable 4096, got %d", node.Resources.RAMAllocatableMB)
+	if node.RAMAllocatableMB != 4096 {
+		t.Errorf("expected allocatable 4096, got %d", node.RAMAllocatableMB)
 	}
 	if snap.Summary.TotalReservableMB != 4096 {
 		t.Errorf("expected summary reservable 4096, got %d", snap.Summary.TotalReservableMB)
@@ -264,28 +264,28 @@ func TestApplyReservationViewAppliesReservedFromState(t *testing.T) {
 		},
 	}
 
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
 	alpha := snap.Nodes[0]
-	if alpha.Resources.RAMReservedMB != 1024 {
-		t.Errorf("alpha reserved: got %d, want 1024", alpha.Resources.RAMReservedMB)
+	if alpha.RAMReservedMB != 1024 {
+		t.Errorf("alpha reserved: got %d, want 1024", alpha.RAMReservedMB)
 	}
-	if alpha.Resources.RAMReservableMB != 8192 {
-		t.Errorf("alpha reservable: got %d, want 8192", alpha.Resources.RAMReservableMB)
+	if alpha.ReservableRAM() != 8192 {
+		t.Errorf("alpha reservable: got %d, want 8192", alpha.ReservableRAM())
 	}
-	if alpha.Resources.RAMAllocatableMB != 7168 {
-		t.Errorf("alpha allocatable: got %d, want 7168", alpha.Resources.RAMAllocatableMB)
+	if alpha.RAMAllocatableMB != 7168 {
+		t.Errorf("alpha allocatable: got %d, want 7168", alpha.RAMAllocatableMB)
 	}
 
 	beta := snap.Nodes[1]
-	if beta.Resources.RAMReservedMB != 512 {
-		t.Errorf("beta reserved: got %d, want 512", beta.Resources.RAMReservedMB)
+	if beta.RAMReservedMB != 512 {
+		t.Errorf("beta reserved: got %d, want 512", beta.RAMReservedMB)
 	}
-	if beta.Resources.RAMReservableMB != 4096 {
-		t.Errorf("beta reservable: got %d, want 4096", beta.Resources.RAMReservableMB)
+	if beta.ReservableRAM() != 4096 {
+		t.Errorf("beta reservable: got %d, want 4096", beta.ReservableRAM())
 	}
-	if beta.Resources.RAMAllocatableMB != 3584 {
-		t.Errorf("beta allocatable: got %d, want 3584", beta.Resources.RAMAllocatableMB)
+	if beta.RAMAllocatableMB != 3584 {
+		t.Errorf("beta allocatable: got %d, want 3584", beta.RAMAllocatableMB)
 	}
 
 	if snap.Summary.TotalReservableMB != 12288 {
@@ -317,13 +317,13 @@ func TestApplyReservationViewClampsAllocatableToZero(t *testing.T) {
 		},
 	}
 
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
-	if snap.Nodes[0].Resources.RAMReservableMB != 512 {
-		t.Errorf("expected reservable 512, got %d", snap.Nodes[0].Resources.RAMReservableMB)
+	if snap.Nodes[0].ReservableRAM() != 512 {
+		t.Errorf("expected reservable 512, got %d", snap.Nodes[0].ReservableRAM())
 	}
-	if snap.Nodes[0].Resources.RAMAllocatableMB != 0 {
-		t.Errorf("expected allocatable clamped to 0, got %d", snap.Nodes[0].Resources.RAMAllocatableMB)
+	if snap.Nodes[0].RAMAllocatableMB != 0 {
+		t.Errorf("expected allocatable clamped to 0, got %d", snap.Nodes[0].RAMAllocatableMB)
 	}
 	if snap.Summary.TotalReservableMB != 512 {
 		t.Errorf("expected summary reservable 512, got %d", snap.Summary.TotalReservableMB)
@@ -353,17 +353,17 @@ func TestApplyReservationViewSkipsNodesWithNilResources(t *testing.T) {
 		},
 	}
 
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
 	// bare node has nil resources — must stay nil without panic
 	if snap.Nodes[0].Resources != nil {
 		t.Error("expected nil Resources to remain nil")
 	}
-	if snap.Nodes[1].Resources.RAMAllocatableMB != 3840 {
-		t.Errorf("alpha allocatable: got %d, want 3840", snap.Nodes[1].Resources.RAMAllocatableMB)
+	if snap.Nodes[1].RAMAllocatableMB != 3840 {
+		t.Errorf("alpha allocatable: got %d, want 3840", snap.Nodes[1].RAMAllocatableMB)
 	}
-	if snap.Nodes[1].Resources.RAMReservableMB != 4096 {
-		t.Errorf("alpha reservable: got %d, want 4096", snap.Nodes[1].Resources.RAMReservableMB)
+	if snap.Nodes[1].ReservableRAM() != 4096 {
+		t.Errorf("alpha reservable: got %d, want 4096", snap.Nodes[1].ReservableRAM())
 	}
 	// Only alpha's allocatable counts.
 	if snap.Summary.TotalReservableMB != 4096 {
@@ -392,15 +392,15 @@ func TestApplyReservationViewNodeNotInStateGetsZeroReserved(t *testing.T) {
 		},
 	}
 
-	snapshotview.ApplyReservationView(snap, st)
+	snapshotview.ApplyReservationView(snap, st, nil)
 
-	if snap.Nodes[0].Resources.RAMReservedMB != 0 {
-		t.Errorf("expected reserved 0 for unknown node, got %d", snap.Nodes[0].Resources.RAMReservedMB)
+	if snap.Nodes[0].RAMReservedMB != 0 {
+		t.Errorf("expected reserved 0 for unknown node, got %d", snap.Nodes[0].RAMReservedMB)
 	}
-	if snap.Nodes[0].Resources.RAMReservableMB != 2048 {
-		t.Errorf("expected reservable 2048, got %d", snap.Nodes[0].Resources.RAMReservableMB)
+	if snap.Nodes[0].ReservableRAM() != 2048 {
+		t.Errorf("expected reservable 2048, got %d", snap.Nodes[0].ReservableRAM())
 	}
-	if snap.Nodes[0].Resources.RAMAllocatableMB != 2048 {
-		t.Errorf("expected allocatable 2048, got %d", snap.Nodes[0].Resources.RAMAllocatableMB)
+	if snap.Nodes[0].RAMAllocatableMB != 2048 {
+		t.Errorf("expected allocatable 2048, got %d", snap.Nodes[0].RAMAllocatableMB)
 	}
 }

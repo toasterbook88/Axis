@@ -98,12 +98,12 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 
 	// Resource details
 	if best.Resources != nil {
-		allocatable := freeRAMWithState(best, st)
+		allocatable := freeRAMWithState(best)
 		reservable := reservableRAM(best)
-		if best.Resources.RAMReservedMB > 0 || best.Resources.RAMAllocatableMB > 0 {
+		if best.RAMReservedMB > 0 || best.RAMAllocatableMB > 0 {
 			decision.Reasoning = append(decision.Reasoning,
 				fmt.Sprintf("%dMB allocatable (%dMB reserved of %dMB reservable pool; %dMB total)",
-					allocatable, reservedRAM(best, st), reservable, best.Resources.RAMTotalMB))
+					allocatable, reservedRAM(best), reservable, best.Resources.RAMTotalMB))
 		} else {
 			decision.Reasoning = append(decision.Reasoning,
 				fmt.Sprintf("%dMB free RAM (of %dMB total)", best.Resources.RAMFreeMB, best.Resources.RAMTotalMB))
@@ -153,8 +153,8 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		runnerUp := ranked[1]
 		ruLocal := models.IsLocalNode(runnerUp)
 		ruScore := ComputeTaskFitScore(runnerUp, ruLocal, st, reqs)
-		bestShare := clusterReservationShare(best, st)
-		runnerShare := clusterReservationShare(runnerUp, st)
+		bestShare := clusterReservationShare(best, ranked)
+		runnerShare := clusterReservationShare(runnerUp, ranked)
 		runnerObservation := empiricalObservation(runnerUp, reqs, st)
 		decision.Reasoning = append(decision.Reasoning,
 			fmt.Sprintf("selected from %d eligible nodes", len(ranked)))
@@ -263,11 +263,11 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 			effective := int64(0)
 			if n.Resources != nil {
 				actual = n.Resources.RAMFreeMB
-				effective = freeRAMWithState(n, st)
+				effective = freeRAMWithState(n)
 			}
 			if effective < minNeeded {
 				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB effective (base %dMB, short %dMB)",
+					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB allocatable (free %dMB, short %dMB)",
 						n.Name, minNeeded, effective, actual, minNeeded-effective))
 				continue
 			}
