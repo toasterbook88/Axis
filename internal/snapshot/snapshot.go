@@ -12,16 +12,52 @@ import (
 // Computes cluster-level aggregates, generates warnings, assigns snapshot status.
 // Rule: any node with status != complete → snapshot is degraded.
 func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
+	var deduped []models.NodeFacts
+	seenStableID := make(map[string]bool)
+	seenName := make(map[string]bool)
+
+	// Pass 1: Config nodes win.
+	for _, n := range nodes {
+		isConfig := (n.Epistemic != nil && n.Epistemic.VerifiedBy == models.VerifiedByConfig) || (n.Role != "")
+		if !isConfig {
+			continue
+		}
+		deduped = append(deduped, n)
+		if n.Identity != nil && n.Identity.StableID != "" {
+			seenStableID[n.Identity.StableID] = true
+		}
+		seenName[n.Name] = true
+	}
+
+	// Pass 2: Mesh/Beacon nodes.
+	for _, n := range nodes {
+		isConfig := (n.Epistemic != nil && n.Epistemic.VerifiedBy == models.VerifiedByConfig) || (n.Role != "")
+		if isConfig {
+			continue
+		}
+		if n.Identity != nil && n.Identity.StableID != "" {
+			if seenStableID[n.Identity.StableID] {
+				continue // deduplicated
+			}
+			seenStableID[n.Identity.StableID] = true
+		}
+		if seenName[n.Name] {
+			continue // deduplicated by name to be safe
+		}
+		seenName[n.Name] = true
+		deduped = append(deduped, n)
+	}
+
 	snap := &models.ClusterSnapshot{
 		Timestamp: time.Now().UTC(),
 		Status:    models.SnapshotHealthy,
-		Nodes:     nodes,
+		Nodes:     deduped,
 	}
 
 	var totalRAM, freeRAM, reservableRAM, allocatableRAM, reservedRAM int64
 	reachable := 0
 
-	for _, n := range nodes {
+	for _, n := range deduped {
 		// Count reachable and aggregate resources
 		if n.Status == models.StatusComplete || n.Status == models.StatusPartial {
 			reachable++
@@ -90,7 +126,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 	}
 
 	snap.Summary = models.ClusterSummary{
-		TotalNodes:         len(nodes),
+		TotalNodes:         len(deduped),
 		ReachableNodes:     reachable,
 		TotalRAMMB:         totalRAM,
 		TotalFreeRAMMB:     freeRAM,

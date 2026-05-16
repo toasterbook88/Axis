@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
@@ -69,7 +70,8 @@ type Metadata struct {
 
 type Daemon struct {
 	mu             sync.RWMutex
-	refreshMu      sync.Mutex
+	refreshing     atomic.Bool
+	pendingRefresh chan string
 	wg             sync.WaitGroup // tracks background goroutines for graceful drain
 	collector      Collector
 	interval       time.Duration
@@ -147,6 +149,7 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		staleThreshold: defaultStaleThreshold,
 		snapshotPath:   DefaultSnapshotPath(),
 		ledger:         reservation.NewLedger(reservation.DefaultLimits(), nil),
+		pendingRefresh: make(chan string, 1),
 	}
 	_ = d.ledger.Load()
 	return d
@@ -384,9 +387,32 @@ func (d *Daemon) scheduleRefresh(trigger string) {
 }
 
 func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
-	d.refreshMu.Lock()
-	defer d.refreshMu.Unlock()
+	if !d.refreshing.CompareAndSwap(false, true) {
+		// Already refreshing, queue the trigger (last-trigger overwrite semantics)
+		select {
+		case <-d.pendingRefresh:
+		default:
+		}
+		select {
+		case d.pendingRefresh <- trigger:
+		default:
+		}
+		return nil
+	}
 
+	defer func() {
+		d.refreshing.Store(false)
+		select {
+		case pending := <-d.pendingRefresh:
+			d.scheduleRefresh(pending)
+		default:
+		}
+	}()
+
+	return d.doRefresh(ctx, trigger)
+}
+
+func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	start := time.Now()
 	snap, err := d.collector(ctx)
 	now := time.Now().UTC()
