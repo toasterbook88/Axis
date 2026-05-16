@@ -74,7 +74,7 @@ func recoveredRuntimeContextFromDisk(t *testing.T) *runtimectx.Context {
 		Nodes:   nodes,
 		Summary: summarizeNodes(nodes),
 	}
-	daemon.ApplyReservationView(snap, st)
+	daemon.ApplyReservationView(snap, st, nil)
 	if stateErr != nil {
 		snap.Warnings = append(snap.Warnings, models.Warning{
 			Kind:    "state",

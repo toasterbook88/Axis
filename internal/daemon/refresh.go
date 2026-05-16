@@ -16,6 +16,7 @@ const (
 	RefreshTriggerStateChange  = "state-change"
 	RefreshTriggerSkillsChange = "skills-change"
 	RefreshTriggerBeaconChange = "beacon-change"
+	RefreshTriggerDiscovery    = "discovery"
 	runtimeRefreshTimeout      = 30 * time.Second
 )
 
@@ -35,6 +36,7 @@ func NormalizeRefreshTrigger(trigger string) (string, error) {
 		RefreshTriggerStateChange,
 		RefreshTriggerSkillsChange,
 		RefreshTriggerBeaconChange,
+		RefreshTriggerDiscovery,
 		execution.StateChangeExecutionReserved,
 		execution.StateChangeExecutionFinished:
 		return trigger, nil

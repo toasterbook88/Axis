@@ -198,6 +198,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"ram_mb", req.RAMMB,
 		"owner", req.OwnerSurface,
 	)
+	_ = l.saveLocked()
 	return &req, nil
 }
 
@@ -212,7 +213,7 @@ func (l *Ledger) Release(id string) error {
 	l.totalReleased += e.RAMMB
 	delete(l.entries, id)
 	l.logger.Info("reservation released", "id", id, "node", e.Node, "ram_mb", e.RAMMB)
-	return nil
+	return l.saveLocked()
 }
 
 // Heartbeat updates the liveness timestamp for a reservation.
@@ -224,13 +225,24 @@ func (l *Ledger) Heartbeat(id string) error {
 		return fmt.Errorf("reservation: unknown entry %q for heartbeat", id)
 	}
 	e.LastHeartbeat = l.now()
-	return nil
+	return l.saveLocked()
 }
 
 // Reclaim removes all stale and expired reservations. Returns count reclaimed.
+// This is the primary orphan sweeper for the ledger.
 func (l *Ledger) Reclaim() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.reclaimLocked()
+}
+
+// Reconcile is a semantic alias for Reclaim used during startup or recovery
+// to emphasize the reconciliation pass.
+func (l *Ledger) Reconcile() int {
+	return l.Reclaim()
+}
+
+func (l *Ledger) reclaimLocked() int {
 	now := l.now()
 	reclaimed := 0
 	for id, e := range l.entries {
@@ -245,6 +257,9 @@ func (l *Ledger) Reclaim() int {
 				"reason", l.reclaimReason(e, now),
 			)
 		}
+	}
+	if reclaimed > 0 {
+		_ = l.saveLocked()
 	}
 	return reclaimed
 }

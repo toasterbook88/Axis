@@ -40,11 +40,11 @@ func TestBuildUsesRealLoadAndReservationOverlay(t *testing.T) {
 	if k.Load["alpha"] != 1.5 {
 		t.Fatalf("Load[alpha] = %.2f, want 1.5", k.Load["alpha"])
 	}
-	if k.Snapshot.Nodes[0].Resources.RAMReservedMB != 1024 {
-		t.Fatalf("RAMReservedMB = %d, want 1024", k.Snapshot.Nodes[0].Resources.RAMReservedMB)
+	if k.Snapshot.Nodes[0].RAMReservedMB != 1024 {
+		t.Fatalf("RAMReservedMB = %d, want 1024", k.Snapshot.Nodes[0].RAMReservedMB)
 	}
-	if k.Snapshot.Nodes[0].Resources.RAMAllocatableMB != 3072 {
-		t.Fatalf("RAMAllocatableMB = %d, want 3072", k.Snapshot.Nodes[0].Resources.RAMAllocatableMB)
+	if k.Snapshot.Nodes[0].RAMAllocatableMB != 3072 {
+		t.Fatalf("RAMAllocatableMB = %d, want 3072", k.Snapshot.Nodes[0].RAMAllocatableMB)
 	}
 	if _, ok := k.Ollama["alpha"]; !ok {
 		t.Fatal("expected ollama map entry for alpha")

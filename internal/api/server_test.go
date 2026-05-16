@@ -18,7 +18,9 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
@@ -28,6 +30,8 @@ type fakeCache struct {
 	mu              sync.Mutex
 	snap            *models.ClusterSnapshot
 	meta            daemon.Metadata
+	ledger          *reservation.Ledger
+	meshInstance    *mesh.Mesh
 	invalidated     bool
 	refreshed       bool
 	refreshTriggers []string
@@ -46,6 +50,18 @@ func (f *fakeCache) Meta() daemon.Metadata {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.meta
+}
+
+func (f *fakeCache) Ledger() *reservation.Ledger {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ledger
+}
+
+func (f *fakeCache) Mesh() *mesh.Mesh {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.meshInstance
 }
 
 func (f *fakeCache) Invalidate() {
@@ -373,25 +389,11 @@ func TestV2StubEndpointsStayNon2XX(t *testing.T) {
 		errorContains  string
 	}{
 		{
-			name:           "reservations get",
-			method:         http.MethodGet,
-			path:           "/v2/reservations",
-			expectedStatus: http.StatusNotImplemented,
-			errorContains:  "reservation endpoints not yet implemented",
-		},
-		{
 			name:           "reservations post",
 			method:         http.MethodPost,
 			path:           "/v2/reservations",
 			expectedStatus: http.StatusNotImplemented,
 			errorContains:  "manual reservation creation pending ledger integration",
-		},
-		{
-			name:           "mesh get",
-			method:         http.MethodGet,
-			path:           "/v2/mesh",
-			expectedStatus: http.StatusNotImplemented,
-			errorContains:  "mesh integration pending",
 		},
 		{
 			name:           "mesh method",
@@ -458,6 +460,39 @@ func TestV2StubEndpointsStayNon2XX(t *testing.T) {
 			}
 			if got, _ := payload["error"].(string); !strings.Contains(got, tt.errorContains) {
 				t.Fatalf("expected error containing %q, got %q", tt.errorContains, got)
+			}
+		})
+	}
+}
+
+func TestV2EndpointsReturnSuccess(t *testing.T) {
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	m := mesh.New(mesh.Peer{Name: "self"}, mesh.DefaultConfig(), nil)
+	cache := &fakeCache{
+		meta:         daemon.Metadata{Ready: true},
+		ledger:       ledger,
+		meshInstance: m,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"reservations", "/v2/reservations"},
+		{"mesh", "/v2/mesh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -1148,10 +1183,10 @@ func TestRunTaskStreamReturnsFinalResultWhenRuntimeFails(t *testing.T) {
 	}
 }
 
-func TestRunReturnsNoSuitableNode(t *testing.T) {
+func TestRunReturnsErrorForUnconfiguredRemoteNode(t *testing.T) {
 	rt := testRuntimeContext(
 		[]models.NodeFacts{testNode("mac", "mac.local", 1024, 512, "critical")},
-		nil, nil, &skills.Store{}, nil,
+		nil, nil, &skills.Store{}, nil, nil,
 	)
 	restore := stubLiveRuntime(t, rt, nil)
 	defer restore()
@@ -1159,8 +1194,7 @@ func TestRunReturnsNoSuitableNode(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, nil, "tok")
 
-	// Request 100GB RAM — no node will qualify
-	body := `{"description":"run 100GB inference","mode":"exec","confirm":"YES"}`
+	body := `{"description":"echo ok","mode":"exec","confirm":"YES"}`
 	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1174,14 +1208,14 @@ func TestRunReturnsNoSuitableNode(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Description != "run 100GB inference" {
+	if resp.Description != "echo ok" {
 		t.Errorf("expected description echoed, got %q", resp.Description)
 	}
 	if resp.OK {
-		t.Error("expected ok=false when no node is suitable")
+		t.Error("expected ok=false when node config is missing")
 	}
-	if !strings.Contains(resp.Error, "too small for heavy model") {
-		t.Errorf("expected heavy-model safety detail, got %q", resp.Error)
+	if !strings.Contains(resp.Error, `node "mac" not found in config`) {
+		t.Errorf("expected config error, got %q", resp.Error)
 	}
 }
 
@@ -1194,6 +1228,11 @@ func TestRunEndpointRefreshesCacheOnExecutionStateChanges(t *testing.T) {
 		&state.ClusterState{Nodes: map[string]state.NodeState{}},
 		&skills.Store{},
 		nil,
+		func() *reservation.Ledger {
+			l := reservation.NewLedger(reservation.DefaultLimits(), nil)
+			l.SetNodeCapacity("local", 8192)
+			return l
+		}(),
 	)
 	restoreRuntime := stubLiveRuntime(t, rt, nil)
 	defer restoreRuntime()
@@ -1418,7 +1457,7 @@ func stubLiveRuntime(t *testing.T, rt *runtimectx.Context, err error) func() {
 	}
 }
 
-func testRuntimeContext(nodes []models.NodeFacts, cfgNodes []config.NodeConfig, st *state.ClusterState, store *skills.Store, warnings []models.Warning) *runtimectx.Context {
+func testRuntimeContext(nodes []models.NodeFacts, cfgNodes []config.NodeConfig, st *state.ClusterState, store *skills.Store, warnings []models.Warning, ledger *reservation.Ledger) *runtimectx.Context {
 	return &runtimectx.Context{
 		Config: &config.Config{Nodes: cfgNodes},
 		Snapshot: &models.ClusterSnapshot{
@@ -1429,6 +1468,7 @@ func testRuntimeContext(nodes []models.NodeFacts, cfgNodes []config.NodeConfig, 
 		},
 		State:  st,
 		Skills: store,
+		Ledger: ledger,
 	}
 }
 
@@ -1443,18 +1483,20 @@ func summarizeNodes(nodes []models.NodeFacts) models.ClusterSummary {
 		}
 		summary.TotalRAMMB += node.Resources.RAMTotalMB
 		summary.TotalFreeRAMMB += node.Resources.RAMFreeMB
-		summary.TotalReservableMB += node.Resources.RAMReservableMB
-		summary.TotalReservedMB += node.Resources.RAMReservedMB
-		summary.TotalAllocatableMB += node.Resources.RAMAllocatableMB
+		summary.TotalReservableMB += node.ReservableRAM()
+		summary.TotalReservedMB += node.RAMReservedMB
+		summary.TotalAllocatableMB += node.RAMAllocatableMB
 	}
 	return summary
 }
 
 func testNode(name, hostname string, totalRAM, freeRAM int64, pressure string, tools ...string) models.NodeFacts {
 	node := models.NodeFacts{
-		Name:     name,
-		Hostname: hostname,
-		Status:   models.StatusComplete,
+		Name:               name,
+		Hostname:           hostname,
+		Status:             models.StatusComplete,
+		RAMAllocatableMB:   models.ReservableRAMMB(totalRAM, freeRAM),
+		RAMReservedMB:      0,
 		Resources: &models.Resources{
 			RAMTotalMB: totalRAM,
 			RAMFreeMB:  freeRAM,
@@ -1470,6 +1512,7 @@ func testNode(name, hostname string, totalRAM, freeRAM int64, pressure string, t
 
 func testTurboNode(name, hostname string, verified bool) models.NodeFacts {
 	node := testNode(name, hostname, 16384, 8192, "low", "llama-server")
+	node.RAMAllocatableMB = models.ReservableRAMMB(16384, 8192)
 	node.Resources.PressureSource = "linux-psi"
 	node.Resources.PressureStall10 = 6.5
 	node.TurboQuant = &models.TurboQuantInfo{

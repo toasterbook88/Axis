@@ -12,7 +12,6 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
-	"github.com/toasterbook88/axis/internal/state"
 )
 
 func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
@@ -30,11 +29,10 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMFreeMB:        833,
-					RAMReservableMB:  833,
-					RAMReservedMB:    256,
-					RAMAllocatableMB: 577,
 					Pressure:         "low",
 				},
+				RAMReservedMB:    256,
+				RAMAllocatableMB: 577,
 			},
 		},
 		Summary: models.ClusterSummary{
@@ -73,10 +71,9 @@ func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMFreeMB:        4096,
-					RAMReservableMB:  4096,
-					RAMAllocatableMB: 4096,
 					Pressure:         "none",
 				},
+				RAMAllocatableMB: 4096,
 				Tools: []models.ToolInfo{{Name: "ollama"}},
 				TurboQuant: &models.TurboQuantInfo{
 					Supported:    true,
@@ -224,16 +221,12 @@ func TestEnsureReservationCapacityRejectsOverCapNode(t *testing.T) {
 					RAMTotalMB: 8192,
 					RAMFreeMB:  8192,
 				},
+				RAMReservedMB: 7168,
 			},
 		},
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 7168},
-		},
-	}
 
-	err := ensureReservationCapacity(snap, st, "alpha", 1025)
+	err := ensureReservationCapacity(snap, "alpha", 1025)
 	if err == nil {
 		t.Fatal("expected reservation capacity error")
 	}
@@ -243,28 +236,23 @@ func TestEnsureReservationCapacityRejectsOverCapNode(t *testing.T) {
 }
 
 func TestEnsureReservationCapacityMatchesDaemonCapLogic(t *testing.T) {
-	snap := &models.ClusterSnapshot{
-		Nodes: []models.NodeFacts{
-			{
-				Name:   "alpha",
-				Status: models.StatusComplete,
-				Resources: &models.Resources{
-					RAMTotalMB: 8192,
-					RAMFreeMB:  3072,
-				},
+	nodes := []models.NodeFacts{
+		{
+			Name:   "alpha",
+			Status: models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  3072,
 			},
+			RAMReservedMB: 2048,
 		},
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2048},
-		},
-	}
+	snap := &models.ClusterSnapshot{Nodes: nodes}
 
-	if err := ensureReservationCapacity(snap, st, "alpha", 1024); err != nil {
+	if err := ensureReservationCapacity(snap, "alpha", 1024); err != nil {
 		t.Fatalf("expected reservation to fit cap, got %v", err)
 	}
-	if !daemon.CanReserve(snap, st, "alpha", 1024) {
+	if !daemon.CanReserve(snap, "alpha", 1024) {
 		t.Fatal("expected daemon cap logic to agree with helper")
 	}
 }

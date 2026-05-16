@@ -309,14 +309,10 @@ func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
 		nodeComplete("alpha", 5000, "none"),
 		nodeComplete("beta", 3500, "none"),
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2000},
-			"beta":  {ReservedMB: 500},
-		},
-	}
+	candidates[0].RAMReservedMB = 2000
+	candidates[1].RAMReservedMB = 500
 
-	ranked := RankCandidates(candidates, models.TaskRequirements{}, st)
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	if ranked[0].Name != "beta" {
 		t.Fatalf("expected beta first on lower reservation ratio, got %s", ranked[0].Name)
 	}
@@ -333,22 +329,18 @@ func TestRankPrefersLowerClusterReservationShareWhenReservationRatioTied(t *test
 	beta.Resources.RAMTotalMB = 16384
 	// Reservable = 2000. Reserved = 4000. Allocatable = 0. Ratio = 2.0.
 
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2000},
-			"beta":  {ReservedMB: 4000},
-		},
-	}
+	alpha.RAMReservedMB = 2000
+	beta.RAMReservedMB = 4000
 
-	if gotAlpha, gotBeta := reservationRatio(alpha, st), reservationRatio(beta, st); gotAlpha != gotBeta {
+	if gotAlpha, gotBeta := reservationRatio(alpha), reservationRatio(beta); gotAlpha != gotBeta {
 		t.Fatalf("expected reservation ratio tie, got alpha=%f beta=%f", gotAlpha, gotBeta)
 	}
-	if gotAlpha, gotBeta := clusterReservationShare(alpha, st), clusterReservationShare(beta, st); gotAlpha >= gotBeta {
+	candidates := []models.NodeFacts{beta, alpha}
+	if gotAlpha, gotBeta := clusterReservationShare(alpha, candidates), clusterReservationShare(beta, candidates); gotAlpha >= gotBeta {
 		t.Fatalf("expected alpha to hold lower cluster reservation share, got alpha=%f beta=%f", gotAlpha, gotBeta)
 	}
 
-	candidates := []models.NodeFacts{beta, alpha}
-	ranked := RankCandidates(candidates, models.TaskRequirements{}, st)
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
 	if ranked[0].Name != "alpha" {
 		t.Fatalf("expected alpha first on lower cluster reservation share, got %s", ranked[0].Name)
 	}
@@ -733,14 +725,10 @@ func TestReservedRAMAffectsSelection(t *testing.T) {
 		nodeComplete("alpha", 5000, "none", "git"),
 		nodeComplete("beta", 4200, "none", "git"),
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2000},
-		},
-	}
+	nodes[0].RAMReservedMB = 2000
 	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
 
-	d := SelectBestNode(reqs, nodes, st)
+	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK || d.Node != "beta" {
 		t.Fatalf("expected OK=true node=beta, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
 	}
@@ -751,14 +739,10 @@ func TestAllocatableRAMOutweighsClusterPressureSharePenalty(t *testing.T) {
 		nodeComplete("alpha", 5000, "none", "git"),
 		nodeComplete("beta", 3500, "none", "git"),
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 1000},
-		},
-	}
+	nodes[0].RAMReservedMB = 1000
 	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 1000}
 
-	d := SelectBestNode(reqs, nodes, st)
+	d := SelectBestNode(reqs, nodes, nil)
 	if !d.OK || d.Node != "alpha" {
 		t.Fatalf("expected OK=true node=alpha when allocatable RAM leads, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
 	}
@@ -768,51 +752,39 @@ func TestReservedRAMAppearsInFailureReasoning(t *testing.T) {
 	nodes := []models.NodeFacts{
 		nodeComplete("alpha", 5000, "none", "git"),
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2500},
-		},
-	}
+	nodes[0].RAMReservedMB = 2500
 	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
 
-	d := SelectBestNode(reqs, nodes, st)
+	d := SelectBestNode(reqs, nodes, nil)
 	if d.OK {
 		t.Fatal("expected OK=false")
 	}
 	foundEffective := false
 	for _, r := range d.Reasoning {
-		if contains(r, "effective") && contains(r, "base 5000MB") {
+		if contains(r, "allocatable") && contains(r, "free") {
 			foundEffective = true
 		}
 	}
 	if !foundEffective {
-		t.Errorf("expected effective RAM reasoning, got: %v", d.Reasoning)
+		t.Errorf("expected allocatable RAM reasoning, got: %v", d.Reasoning)
 	}
 }
 
 func TestEffectiveRAMNeverGoesNegative(t *testing.T) {
 	n := nodeComplete("alpha", 400, "high", "git")
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 4096},
-		},
-	}
+	n.RAMReservedMB = 4096
 
-	if got := freeRAMWithState(n, st); got != 0 {
+	if got := freeRAMWithState(n); got != 0 {
 		t.Fatalf("expected effective RAM to clamp at 0, got %d", got)
 	}
 }
 
 func TestFitScoreUsesEffectiveRAM(t *testing.T) {
 	n := nodeComplete("alpha", 5000, "none", "git")
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2048},
-		},
-	}
-
 	base := ComputeFitScore(n, false, nil)
-	effective := ComputeFitScore(n, false, st)
+
+	n.RAMReservedMB = 2048
+	effective := ComputeFitScore(n, false, nil)
 
 	if effective >= base {
 		t.Fatalf("expected reserved RAM to lower fit score, got base=%d effective=%d", base, effective)
@@ -824,12 +796,12 @@ func TestFitScoreUsesEffectiveRAM(t *testing.T) {
 
 func TestCachedAllocatableRAMAffectsSelection(t *testing.T) {
 	alpha := nodeComplete("alpha", 5000, "none", "git")
-	alpha.Resources.RAMReservedMB = 3000
-	alpha.Resources.RAMAllocatableMB = 2000
+	alpha.RAMReservedMB = 3000
+	alpha.RAMAllocatableMB = 2000
 
 	beta := nodeComplete("beta", 4200, "none", "git")
-	beta.Resources.RAMReservedMB = 512
-	beta.Resources.RAMAllocatableMB = 3688
+	beta.RAMReservedMB = 512
+	beta.RAMAllocatableMB = 3688
 
 	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
 	d := SelectBestNode(reqs, []models.NodeFacts{alpha, beta}, nil)
@@ -841,8 +813,8 @@ func TestCachedAllocatableRAMAffectsSelection(t *testing.T) {
 
 func TestSuccessReasoningShowsAllocatableRAM(t *testing.T) {
 	alpha := nodeComplete("alpha", 5000, "none", "git")
-	alpha.Resources.RAMReservedMB = 2048
-	alpha.Resources.RAMAllocatableMB = 2952
+	alpha.RAMReservedMB = 2048
+	alpha.RAMAllocatableMB = 2952
 
 	d := SelectBestNode(models.TaskRequirements{RequiredTools: []string{"git"}}, []models.NodeFacts{alpha}, nil)
 	if !d.OK {
@@ -863,18 +835,14 @@ func TestSuccessReasoningShowsAllocatableRAM(t *testing.T) {
 func TestSuccessReasoningShowsClusterReservationShare(t *testing.T) {
 	alpha := nodeComplete("alpha", 5000, "none", "git")
 	alpha.Resources.RAMTotalMB = 16384
+	alpha.RAMReservedMB = 2000
 
 	beta := nodeComplete("beta", 4000, "none", "git")
 	beta.Resources.RAMTotalMB = 8192
+	beta.RAMReservedMB = 1000
 
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2000},
-			"beta":  {ReservedMB: 1000},
-		},
-	}
-
-	d := SelectBestNode(models.TaskRequirements{RequiredTools: []string{"git"}}, []models.NodeFacts{alpha, beta}, st)
+	nodes := []models.NodeFacts{alpha, beta}
+	d := SelectBestNode(models.TaskRequirements{RequiredTools: []string{"git"}}, nodes, nil)
 	if !d.OK || d.Node != "beta" {
 		t.Fatalf("expected OK=true node=beta, got OK=%v node=%s reasoning=%v", d.OK, d.Node, d.Reasoning)
 	}

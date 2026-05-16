@@ -85,9 +85,6 @@ type Resources struct {
 	Load1M           float64        `json:"load_1m" yaml:"load_1m"`
 	Load5M           float64        `json:"load_5m" yaml:"load_5m"`
 	Load15M          float64        `json:"load_15m" yaml:"load_15m"`
-	RAMReservableMB  int64          `json:"ram_reservable_mb,omitempty" yaml:"ram_reservable_mb,omitempty"`
-	RAMReservedMB    int64          `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
-	RAMAllocatableMB int64          `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
 	DiskTotalGB      int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
 	DiskFreeGB       int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
 	GPUs             []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
@@ -133,10 +130,14 @@ func (r *Resources) ReservableRAM() int64 {
 	if r == nil {
 		return 0
 	}
-	if r.RAMReservableMB > 0 {
-		return r.RAMReservableMB
-	}
 	return ReservableRAMMB(r.RAMTotalMB, r.RAMFreeMB)
+}
+
+func (n NodeFacts) ReservableRAM() int64 {
+	if n.Resources == nil {
+		return 0
+	}
+	return n.Resources.ReservableRAM()
 }
 
 // NetworkAddress represents a single network address with interface metadata.
@@ -224,11 +225,41 @@ type NodeFacts struct {
 	ResidentModels []ResidentModel            `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
 	TurboQuant     *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
 	AppleFM        *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
+	RAMReservedMB    int64                    `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
+	RAMAllocatableMB int64                    `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+
+	// Epistemic state (Truth Classification)
+	Epistemic *EpistemicState `json:"epistemic,omitempty" yaml:"epistemic,omitempty"`
 
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`
 	Error       string     `json:"error,omitempty" yaml:"error,omitempty"`
 	CollectedAt time.Time  `json:"collected_at" yaml:"collected_at"`
+}
+
+// --- Epistemic State (Truth Classification) ---
+
+type EpistemicSource string
+
+const (
+	SourceDaemonCache EpistemicSource = "daemon-cache"
+	SourceLiveProbe   EpistemicSource = "live-probe"
+)
+
+type VerificationMethod string
+
+const (
+	VerifiedByMesh   VerificationMethod = "mesh-hmac"
+	VerifiedByConfig VerificationMethod = "config-trust"
+	VerifiedByLocal  VerificationMethod = "local-trust"
+)
+
+type EpistemicState struct {
+	Source      EpistemicSource    `json:"source" yaml:"source"`
+	VerifiedBy  VerificationMethod `json:"verified_by" yaml:"verified_by"`
+	FreshnessMS int64              `json:"freshness_ms" yaml:"freshness_ms"`
+	Degraded    bool               `json:"degraded" yaml:"degraded"`
+	Warnings    []string           `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // --- Derived State (Snapshot) ---

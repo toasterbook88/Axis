@@ -19,6 +19,7 @@ import (
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -238,18 +239,22 @@ func TestMetaIncludesReservedMB(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 512, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-a"}},
-			"beta":  {ReservedMB: 256, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-b"}},
-		},
-	}
-	if err := st.Save(); err != nil {
-		t.Fatalf("state save: %v", err)
-	}
-
 	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{Status: models.SnapshotHealthy}, nil
+	})
+	d.ledger.SetNodeCapacity("alpha", 8192)
+	d.ledger.SetNodeCapacity("beta", 8192)
+	d.ledger.Reserve(reservation.Entry{
+		ID:          "exec-a",
+		Node:        "alpha",
+		OwnerExecID: "exec-a",
+		RAMMB:       512,
+	})
+	d.ledger.Reserve(reservation.Entry{
+		ID:          "exec-b",
+		Node:        "beta",
+		OwnerExecID: "exec-b",
+		RAMMB:       256,
 	})
 	meta := d.Meta()
 	if meta.ReservedMB != 768 {
@@ -693,15 +698,6 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 768, LastPlacedAt: time.Now().UTC(), ActiveTasks: 1, ActiveExecs: []string{"exec-a"}},
-		},
-	}
-	if err := st.Save(); err != nil {
-		t.Fatalf("state save: %v", err)
-	}
-
 	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{
 			Status: models.SnapshotHealthy,
@@ -717,6 +713,14 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 			},
 		}, nil
 	})
+	d.ledger.SetNodeCapacity("alpha", 8192)
+	d.ledger.Reserve(reservation.Entry{
+		ID:           "exec-a",
+		Node:         "alpha",
+		OwnerExecID:  "exec-a",
+		OwnerSurface: "test",
+		RAMMB:        768,
+	})
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	d.SetSnapshotPath(path)
 
@@ -728,10 +732,10 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("expected cached snapshot")
 	}
-	if got := snap.Nodes[0].Resources.RAMReservedMB; got != 768 {
+	if got := snap.Nodes[0].RAMReservedMB; got != 768 {
 		t.Fatalf("expected reserved RAM 768, got %d", got)
 	}
-	if got := snap.Nodes[0].Resources.RAMAllocatableMB; got != 3328 {
+	if got := snap.Nodes[0].RAMAllocatableMB; got != 3328 {
 		t.Fatalf("expected allocatable RAM 3328, got %d", got)
 	}
 	if got := snap.Summary.TotalReservedMB; got != 768 {
@@ -749,7 +753,7 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("unmarshal snapshot file: %v", err)
 	}
-	if got := persisted.Nodes[0].Resources.RAMAllocatableMB; got != 3328 {
+	if got := persisted.Nodes[0].RAMAllocatableMB; got != 3328 {
 		t.Fatalf("expected persisted allocatable RAM 3328, got %d", got)
 	}
 	if got := persisted.Summary.TotalAllocatableMB; got != 3328 {
@@ -827,16 +831,12 @@ func TestCanReserveUsesReservableRAMCap(t *testing.T) {
 			},
 		},
 	}
-	st := &state.ClusterState{
-		Nodes: map[string]state.NodeState{
-			"alpha": {ReservedMB: 2048},
-		},
-	}
+	snap.Nodes[0].RAMReservedMB = 2048
 
-	if !CanReserve(snap, st, "alpha", 1024) {
+	if !CanReserve(snap, "alpha", 1024) {
 		t.Fatal("expected reservation to fit under cap")
 	}
-	if CanReserve(snap, st, "alpha", 1025) {
+	if CanReserve(snap, "alpha", 1025) {
 		t.Fatal("expected reservation to exceed live reservable cap")
 	}
 }

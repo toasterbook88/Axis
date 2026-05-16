@@ -79,8 +79,8 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 	}
 
 	sort.SliceStable(ranked, func(i, j int) bool {
-		ri := allocatableRAM(ranked[i], st)
-		rj := allocatableRAM(ranked[j], st)
+		ri := allocatableRAM(ranked[i])
+		rj := allocatableRAM(ranked[j])
 		if ri != rj {
 			return ri > rj
 		}
@@ -107,8 +107,8 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return gi > gj
 		}
 
-		hi := headroom(ranked[i], st, reqs)
-		hj := headroom(ranked[j], st, reqs)
+		hi := headroom(ranked[i], candidates, reqs)
+		hj := headroom(ranked[j], candidates, reqs)
 		if hi != hj {
 			return hi > hj
 		}
@@ -133,14 +133,14 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			return pressureRank(pi) < pressureRank(pj)
 		}
 
-		ratioI := reservationRatio(ranked[i], st)
-		ratioJ := reservationRatio(ranked[j], st)
+		ratioI := reservationRatio(ranked[i])
+		ratioJ := reservationRatio(ranked[j])
 		if ratioI != ratioJ {
 			return ratioI < ratioJ
 		}
 
-		shareI := clusterReservationShare(ranked[i], st)
-		shareJ := clusterReservationShare(ranked[j], st)
+		shareI := clusterReservationShare(ranked[i], ranked)
+		shareJ := clusterReservationShare(ranked[j], ranked)
 		if shareI != shareJ {
 			return shareI < shareJ
 		}
@@ -218,26 +218,28 @@ func freeRAM(n models.NodeFacts) int64 {
 	return n.Resources.RAMFreeMB
 }
 
-func reservedRAM(n models.NodeFacts, st *state.ClusterState) int64 {
-	if st != nil && st.Nodes != nil {
-		if ns, ok := st.Nodes[n.Name]; ok {
-			return ns.ReservedMB
-		}
+func reservedRAM(n models.NodeFacts) int64 {
+	if n.RAMReservedMB > 0 {
+		return n.RAMReservedMB
 	}
-	if n.Resources == nil {
-		return 0
-	}
-	return n.Resources.RAMReservedMB
+	return 0
 }
 
-func allocatableRAM(n models.NodeFacts, st *state.ClusterState) int64 {
+func clusterReservationShareSummary(snap *models.ClusterSnapshot, n models.NodeFacts) float64 {
+	if snap == nil {
+		return 0
+	}
+	return clusterReservationShare(n, snap.Nodes)
+}
+
+func allocatableRAM(n models.NodeFacts) int64 {
 	if n.Resources == nil {
 		return 0
 	}
-	if st == nil && n.Resources.RAMAllocatableMB > 0 {
-		return n.Resources.RAMAllocatableMB
+	if n.RAMAllocatableMB > 0 {
+		return n.RAMAllocatableMB
 	}
-	return models.AllocatableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, reservedRAM(n, st))
+	return models.AllocatableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, n.RAMReservedMB)
 }
 
 func reservableRAM(n models.NodeFacts) int64 {
@@ -247,21 +249,21 @@ func reservableRAM(n models.NodeFacts) int64 {
 	return n.Resources.ReservableRAM()
 }
 
-func reservationRatio(n models.NodeFacts, st *state.ClusterState) float64 {
+func reservationRatio(n models.NodeFacts) float64 {
 	reservable := reservableRAM(n)
 	if reservable <= 0 {
 		return 1.0
 	}
-	return float64(reservedRAM(n, st)) / float64(reservable)
+	return float64(n.RAMReservedMB) / float64(reservable)
 }
 
-func clusterReservationShare(n models.NodeFacts, st *state.ClusterState) float64 {
-	clusterReserved := totalReserved(st)
+func clusterReservationShare(n models.NodeFacts, nodes []models.NodeFacts) float64 {
+	clusterReserved := totalReservedFromNodes(nodes)
 	if clusterReserved <= 0 {
 		return 0
 	}
 
-	reserved := reservedRAM(n, st)
+	reserved := n.RAMReservedMB
 	if reserved <= 0 {
 		return 0
 	}
@@ -348,7 +350,7 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 	score := 0
 
 	// Allocatable RAM: 1pt per 256MB, cap 30
-	adjusted := freeRAMWithState(n, st)
+	adjusted := freeRAMWithState(n)
 	ramPts := int(adjusted / 256)
 	if ramPts > 30 {
 		ramPts = 30
@@ -412,11 +414,14 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 	return score
 }
 
-func freeRAMWithState(n models.NodeFacts, st *state.ClusterState) int64 {
-	return allocatableRAM(n, st)
+func freeRAMWithState(n models.NodeFacts) int64 {
+	if n.RAMAllocatableMB > 0 {
+		return n.RAMAllocatableMB
+	}
+	return allocatableRAM(n)
 }
 
-func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequirements) int64 {
+func headroom(n models.NodeFacts, nodes []models.NodeFacts, reqs models.TaskRequirements) int64 {
 	minNeeded := effectiveMinFreeRAM(reqs, n)
 	// When no explicit floor is set, use the profile's peak RAM hint as a
 	// soft sizing signal so the ranker prefers nodes that can comfortably
@@ -426,12 +431,12 @@ func headroom(n models.NodeFacts, st *state.ClusterState, reqs models.TaskRequir
 			minNeeded = hint
 		}
 	}
-	free := freeRAMWithState(n, st)
+	free := freeRAMWithState(n)
 	if free < minNeeded {
 		return -1
 	}
 
-	penalty := clusterPressurePenalty(n, st, minNeeded)
+	penalty := clusterPressurePenalty(n, nodes, minNeeded)
 	adjusted := free - penalty
 	if adjusted < 0 {
 		adjusted = 0
@@ -719,36 +724,27 @@ func turboQuantBackends(n models.NodeFacts) string {
 	return strings.Join(n.TurboQuant.Backends, ", ")
 }
 
-func totalReserved(st *state.ClusterState) int64 {
-	if st == nil || st.Nodes == nil {
-		return 0
-	}
-
+func totalReservedFromNodes(nodes []models.NodeFacts) int64 {
 	var sum int64
-	for _, ns := range st.Nodes {
-		if ns.ReservedMB > 0 {
-			sum += ns.ReservedMB
+	for _, n := range nodes {
+		if n.RAMReservedMB > 0 {
+			sum += n.RAMReservedMB
 		}
 	}
 	return sum
 }
 
-func clusterPressurePenalty(n models.NodeFacts, st *state.ClusterState, requestMB int64) int64 {
-	if st == nil || st.Nodes == nil || requestMB <= 0 {
+func clusterPressurePenalty(n models.NodeFacts, nodes []models.NodeFacts, requestMB int64) int64 {
+	if requestMB <= 0 || n.RAMReservedMB <= 0 {
 		return 0
 	}
 
-	ns, ok := st.Nodes[n.Name]
-	if !ok || ns.ReservedMB <= 0 {
-		return 0
-	}
-
-	clusterReserved := totalReserved(st)
+	clusterReserved := totalReservedFromNodes(nodes)
 	if clusterReserved <= 0 {
 		return 0
 	}
 
-	share := clusterReservationShare(n, st)
+	share := clusterReservationShare(n, nodes)
 	penalty := int64(math.Round(share * float64(requestMB) * 1.5))
 	if penalty < 0 {
 		return 0

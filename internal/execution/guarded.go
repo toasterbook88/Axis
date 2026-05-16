@@ -18,6 +18,7 @@ import (
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
@@ -43,8 +44,12 @@ const (
 )
 
 var executionHeartbeatInterval = 15 * time.Second
-var heartbeatTask = func(st *state.ClusterState, node, execID string) error {
-	return st.HeartbeatTask(node, execID)
+var heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error {
+	fmt.Printf("DEBUG: REAL heartbeatTask called id=%s\n", ledgerExecID)
+	if ledger != nil && ledgerExecID != "" {
+		return ledger.Heartbeat(ledgerExecID)
+	}
+	return nil
 }
 var localExecutionHostname = os.Hostname
 
@@ -97,6 +102,7 @@ type PreparedExecution struct {
 	Owner         state.ExecutionOwner
 	SkillStore    *skills.Store
 	State         *state.ClusterState
+	Ledger        *reservation.Ledger
 	Err           error
 }
 
@@ -268,30 +274,17 @@ func ReservationMBForRequirements(reqs models.TaskRequirements) int64 {
 	return reqs.MinFreeRAMMB + 1024
 }
 
-func CanReserve(snap *models.ClusterSnapshot, st *state.ClusterState, node string, mb int64) bool {
-	if mb <= 0 || snap == nil || st == nil {
+func CanReserve(snap *models.ClusterSnapshot, node string, mb int64) bool {
+	if mb <= 0 || snap == nil {
 		return true
 	}
 
-	var totalRAM, freeRAM int64
 	for _, n := range snap.Nodes {
-		if n.Name == node && n.Resources != nil {
-			totalRAM = n.Resources.RAMTotalMB
-			freeRAM = n.Resources.RAMFreeMB
-			break
+		if n.Name == node {
+			return n.RAMReservedMB+mb <= n.ReservableRAM()
 		}
 	}
-	if totalRAM <= 0 && freeRAM <= 0 {
-		return true
-	}
-
-	capMB := models.ReservableRAMMB(totalRAM, freeRAM)
-
-	ns, ok := st.Nodes[node]
-	if !ok {
-		return mb <= capMB
-	}
-	return ns.ReservedMB+mb <= capMB
+	return true
 }
 
 func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (PreparedExecution, error) {
@@ -328,6 +321,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	}
 	prepared.SkillStore = skillStore
 	prepared.State = rt.State
+	prepared.Ledger = rt.Ledger
 	prepared.Owner = executionOwner(rt, req)
 
 	intent, err := ResolveIntent(req.Description, req.Mode, skillStore)
@@ -358,16 +352,6 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		return prepared, err
 	}
 
-	reservationMB := ReservationMBForRequirements(reqs)
-	prepared.ReservationMB = reservationMB
-	if !CanReserve(rt.Snapshot, rt.State, decision.Node, reservationMB) {
-		err := fmt.Errorf("reservation cap exceeded")
-		prepared.Result.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
-		prepared.Err = err
-		return prepared, err
-	}
-	prepared.Result.Reasoning = append(prepared.Result.Reasoning, fmt.Sprintf("reservation headroom protected: %dMB", reservationMB))
-
 	targetNode, ok := findNodeFacts(rt.Snapshot, decision.Node)
 	if !ok {
 		err := fmt.Errorf("node %q not found in snapshot", decision.Node)
@@ -376,6 +360,31 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		return prepared, err
 	}
 	prepared.TargetNode = targetNode
+
+	// Check for node config if remote
+	var targetConfig config.NodeConfig
+	isLocal := models.IsLocalNode(targetNode)
+	if !isLocal {
+		var ok bool
+		targetConfig, ok = rt.Config.FindNode(decision.Node)
+		if !ok {
+			err := fmt.Errorf("node %q not found in config", decision.Node)
+			prepared.Result.Error = err.Error()
+			prepared.Err = err
+			return prepared, err
+		}
+		prepared.TargetConfig = targetConfig
+	}
+
+	reservationMB := ReservationMBForRequirements(reqs)
+	prepared.ReservationMB = reservationMB
+	if !CanReserve(rt.Snapshot, decision.Node, reservationMB) {
+		err := fmt.Errorf("reservation cap exceeded")
+		prepared.Result.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
+		prepared.Err = err
+		return prepared, err
+	}
+	prepared.Result.Reasoning = append(prepared.Result.Reasoning, fmt.Sprintf("reservation headroom protected: %dMB", reservationMB))
 
 	if err := enforceLocalExecutionSafety(ctx, targetNode, reqs, &prepared.Result); err != nil {
 		prepared.Result.Error = err.Error()
@@ -387,12 +396,13 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.Reasoning = append(prepared.Result.Reasoning, turboPlan.Notes...)
 	commandToRun := turboPlan.Command
 
-	k := knowledge.Build(rt.Snapshot, rt.State, decision.Node)
-	if block := safety.Check(k, commandToRun, skillStore.IsKnownBad); block.Blocked {
+	evaluator := safety.NewEvaluator(safety.DefaultRuleSet())
+	safetyDecision := evaluator.Evaluate(commandToRun, req.OwnerSurface)
+	if safetyDecision.Verdict == safety.VerdictDeny {
 		prepared.Result.Blocked = true
-		prepared.Result.BlockReason = block.Reason
-		prepared.Result.DumbScore = block.Score
-		prepared.Result.Error = block.Reason
+		prepared.Result.BlockReason = strings.Join(safetyDecision.Reasons, "; ")
+		prepared.Result.DumbScore = 100
+		prepared.Result.Error = prepared.Result.BlockReason
 		return prepared, nil
 	}
 
@@ -413,19 +423,6 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	}
 	prepared.Command = commandToRun
 	prepared.ExtraEnv = append(turboPlan.Env, nixPlan.Env...)
-
-	if models.IsLocalNode(targetNode) {
-		return prepared, nil
-	}
-
-	targetConfig, ok := rt.Config.FindNode(decision.Node)
-	if !ok {
-		err := fmt.Errorf("node %q not found in config", decision.Node)
-		prepared.Result.Error = err.Error()
-		prepared.Err = err
-		return prepared, err
-	}
-	prepared.TargetConfig = targetConfig
 
 	return prepared, nil
 }
@@ -452,6 +449,7 @@ func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (Guar
 			prepared.Command,
 			prepared.ExtraEnv,
 			prepared.ContextJSON,
+			prepared.Ledger,
 		)
 	}
 
@@ -468,10 +466,12 @@ func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (Guar
 		prepared.Command,
 		prepared.ExtraEnv,
 		prepared.ContextJSON,
+		prepared.Ledger,
 	)
 }
 
 func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (GuardedExecutionResult, error) {
+	fmt.Printf("DEBUG: RunGuarded starting\n")
 	prepared, err := PrepareGuardedExecution(ctx, rt, req)
 	if err != nil || prepared.Result.Blocked {
 		return prepared.Result, err
@@ -644,6 +644,7 @@ func runLocal(
 	command string,
 	extraEnv []string,
 	contextJSON []byte,
+	ledger *reservation.Ledger,
 ) (GuardedExecutionResult, error) {
 	runtimeChanged := false
 	defer func() {
@@ -679,24 +680,51 @@ func runLocal(
 	env = append(env, extraEnv...)
 
 	var execID string
+	if ledger != nil {
+		execID = fmt.Sprintf("%d-%s", time.Now().UnixNano(), resp.Node)
+		entry := reservation.Entry{
+			ID:           execID,
+			Node:         resp.Node,
+			OwnerExecID:  execID,
+			OwnerSurface: owner.Surface,
+			RAMMB:        reservationMB,
+			Description:  req.Description,
+		}
+		if _, acquireErr := ledger.Reserve(entry); acquireErr != nil {
+			resp.Error = acquireErr.Error()
+			return resp, acquireErr
+		}
+		runtimeChanged = true
+		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
+		defer func() {
+			if releaseErr := ledger.Release(execID); releaseErr != nil && resp.Error == "" {
+				resp.Error = releaseErr.Error()
+			}
+		}()
+	}
 	if st != nil {
 		acquireID, acquireErr := st.AcquireTaskWithOwner(resp.Node, req.Description, reservationMB, owner)
 		if acquireErr != nil {
 			resp.Error = acquireErr.Error()
 			return resp, acquireErr
 		}
-		execID = acquireID
-		runtimeChanged = true
-		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
+		if execID == "" {
+			execID = acquireID
+		}
+		if ledger == nil {
+			runtimeChanged = true
+			notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
+		}
 		defer func() {
-			if releaseErr := st.ReleaseTask(resp.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
+			if releaseErr := st.ReleaseTask(resp.Node, acquireID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
 			}
 		}()
 	}
 
+	fmt.Printf("DEBUG: runLocal about to call runWithReservationHeartbeat id=%s\n", execID)
 	startedAt := time.Now().UTC()
-	out, peakRAMMB, runErr := runWithReservationHeartbeat(st, resp.Node, execID, func() (string, int64, error) {
+	out, peakRAMMB, runErr := runWithReservationHeartbeat(ledger, execID, func() (string, int64, error) {
 		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
 	})
 	elapsed := time.Since(startedAt)
@@ -730,6 +758,7 @@ func runRemote(
 	command string,
 	extraEnv []string,
 	contextJSON []byte,
+	ledger *reservation.Ledger,
 ) (GuardedExecutionResult, error) {
 	runtimeChanged := false
 	defer func() {
@@ -750,17 +779,43 @@ func runRemote(
 	}
 
 	var execID string
+	if ledger != nil {
+		execID = fmt.Sprintf("%d-%s", time.Now().UnixNano(), resp.Node)
+		entry := reservation.Entry{
+			ID:           execID,
+			Node:         resp.Node,
+			OwnerExecID:  execID,
+			OwnerSurface: owner.Surface,
+			RAMMB:        reservationMB,
+			Description:  req.Description,
+		}
+		if _, acquireErr := ledger.Reserve(entry); acquireErr != nil {
+			resp.Error = acquireErr.Error()
+			return resp, acquireErr
+		}
+		runtimeChanged = true
+		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
+		defer func() {
+			if releaseErr := ledger.Release(execID); releaseErr != nil && resp.Error == "" {
+				resp.Error = releaseErr.Error()
+			}
+		}()
+	}
 	if st != nil {
 		acquireID, acquireErr := st.AcquireTaskWithOwner(resp.Node, req.Description, reservationMB, owner)
 		if acquireErr != nil {
 			resp.Error = acquireErr.Error()
 			return resp, acquireErr
 		}
-		execID = acquireID
-		runtimeChanged = true
-		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
+		if execID == "" {
+			execID = acquireID
+		}
+		if ledger == nil {
+			runtimeChanged = true
+			notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
+		}
 		defer func() {
-			if releaseErr := st.ReleaseTask(resp.Node, execID, reservationMB); releaseErr != nil && resp.Error == "" {
+			if releaseErr := st.ReleaseTask(resp.Node, acquireID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
 			}
 		}()
@@ -780,7 +835,7 @@ func runRemote(
 	)
 
 	startedAt := time.Now().UTC()
-	out, _, runErr := runWithReservationHeartbeat(st, resp.Node, execID, func() (string, int64, error) {
+	out, _, runErr := runWithReservationHeartbeat(ledger, execID, func() (string, int64, error) {
 		out, err := runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
 		return out, 0, err
 	})
@@ -803,6 +858,7 @@ func runRemote(
 }
 
 func runLocalWithOutput(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (string, int64, error) {
+	fmt.Printf("DEBUG: runLocalWithOutput command=%s\n", command)
 	if stdout == nil && stderr == nil {
 		out, peak, err := RunLocalShell(ctx, command, env)
 		return string(out), peak, err
@@ -867,14 +923,14 @@ func combinedOutput(stdout, stderr string) string {
 }
 
 func runWithReservationHeartbeat(
-	st *state.ClusterState,
-	node, execID string,
+	ledger *reservation.Ledger,
+	ledgerExecID string,
 	run func() (string, int64, error),
 ) (string, int64, error) {
-	if st == nil || execID == "" {
+	fmt.Printf("DEBUG: runWithReservationHeartbeat reached id=%s ledger=%v\n", ledgerExecID, ledger != nil)
+	if ledger == nil || ledgerExecID == "" {
 		return run()
 	}
-
 	type result struct {
 		out  string
 		peak int64
@@ -887,6 +943,7 @@ func runWithReservationHeartbeat(
 		done <- result{out: out, peak: peak, err: err}
 	}()
 
+	fmt.Printf("DEBUG: ticker interval=%v\n", executionHeartbeatInterval)
 	ticker := time.NewTicker(executionHeartbeatInterval)
 	defer ticker.Stop()
 
@@ -895,7 +952,7 @@ func runWithReservationHeartbeat(
 		case res := <-done:
 			return res.out, res.peak, res.err
 		case <-ticker.C:
-			_ = heartbeatTask(st, node, execID)
+			_ = heartbeatTask(ledger, ledgerExecID)
 		}
 	}
 }
