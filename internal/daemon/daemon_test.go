@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -838,5 +839,63 @@ func TestCanReserveUsesReservableRAMCap(t *testing.T) {
 	}
 	if CanReserve(snap, "alpha", 1025) {
 		t.Fatal("expected reservation to exceed live reservable cap")
+	}
+}
+
+func TestDaemonRefreshCoalescingAndLatency(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	collector := func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{}, nil
+	}
+
+	d := New(10*time.Second, collector)
+	d.snapshotPath = filepath.Join(home, "snap.json")
+
+	// Trigger first refresh
+	ctx := context.Background()
+
+	// We lock the refreshing state by setting refreshing to true manually
+	d.refreshing.Store(true)
+
+	// While it is refreshing, queue skills-change and state-change
+	if err := d.RefreshWithTrigger(ctx, "skills-change"); err != nil {
+		t.Fatalf("first enqueue failed: %v", err)
+	}
+	if err := d.RefreshWithTrigger(ctx, "state-change"); err != nil {
+		t.Fatalf("second enqueue failed: %v", err)
+	}
+
+	// Release manual lock so deferred / scheduled refresh can run
+	d.refreshing.Store(false)
+
+	// Schedule next coalesced run manually using the defer-trigger queue logic
+	d.pendingMu.Lock()
+	var keys []string
+	for k := range d.pendingTriggers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	nextTrigger := strings.Join(keys, ",")
+	d.pendingMu.Unlock()
+
+	if nextTrigger != "skills-change,state-change" {
+		t.Fatalf("expected keys to be sorted coalesced 'skills-change,state-change', got %q", nextTrigger)
+	}
+
+	// Run coalesced refresh manually
+	err := d.RefreshWithTrigger(ctx, nextTrigger)
+	if err != nil {
+		t.Fatalf("manual coalesced refresh failed: %v", err)
+	}
+
+	meta := d.Meta()
+	if meta.LastRefreshTrigger != "skills-change,state-change" {
+		t.Fatalf("expected last trigger to be 'skills-change,state-change', got %q", meta.LastRefreshTrigger)
+	}
+
+	if meta.MaxRefreshLatencyMs < 0 {
+		t.Fatalf("expected non-negative MaxRefreshLatencyMs, got %d", meta.MaxRefreshLatencyMs)
 	}
 }

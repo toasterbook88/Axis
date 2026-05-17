@@ -699,6 +699,8 @@ func runLocal(
 			Node:         resp.Node,
 			OwnerExecID:  execID,
 			OwnerSurface: owner.Surface,
+			OwnerPID:     os.Getpid(),
+			OwnerOrigin:  owner.Origin,
 			RAMMB:        reservationMB,
 			Description:  req.Description,
 		}
@@ -710,25 +712,6 @@ func runLocal(
 		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
 		defer func() {
 			if releaseErr := ledger.Release(execID); releaseErr != nil && resp.Error == "" {
-				resp.Error = releaseErr.Error()
-			}
-		}()
-	}
-	if st != nil {
-		acquireID, acquireErr := st.AcquireTaskWithOwner(resp.Node, req.Description, reservationMB, owner)
-		if acquireErr != nil {
-			resp.Error = acquireErr.Error()
-			return resp, acquireErr
-		}
-		if execID == "" {
-			execID = acquireID
-		}
-		if ledger == nil {
-			runtimeChanged = true
-			notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
-		}
-		defer func() {
-			if releaseErr := st.ReleaseTask(resp.Node, acquireID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
 			}
 		}()
@@ -798,6 +781,8 @@ func runRemote(
 			Node:         resp.Node,
 			OwnerExecID:  execID,
 			OwnerSurface: owner.Surface,
+			OwnerPID:     os.Getpid(),
+			OwnerOrigin:  owner.Origin,
 			RAMMB:        reservationMB,
 			Description:  req.Description,
 		}
@@ -809,25 +794,6 @@ func runRemote(
 		notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
 		defer func() {
 			if releaseErr := ledger.Release(execID); releaseErr != nil && resp.Error == "" {
-				resp.Error = releaseErr.Error()
-			}
-		}()
-	}
-	if st != nil {
-		acquireID, acquireErr := st.AcquireTaskWithOwner(resp.Node, req.Description, reservationMB, owner)
-		if acquireErr != nil {
-			resp.Error = acquireErr.Error()
-			return resp, acquireErr
-		}
-		if execID == "" {
-			execID = acquireID
-		}
-		if ledger == nil {
-			runtimeChanged = true
-			notifyStateChange(ctx, req, StateChangeExecutionReserved, resp)
-		}
-		defer func() {
-			if releaseErr := st.ReleaseTask(resp.Node, acquireID, reservationMB); releaseErr != nil && resp.Error == "" {
 				resp.Error = releaseErr.Error()
 			}
 		}()

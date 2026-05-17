@@ -18,26 +18,33 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 // Entry represents a single reservation on a node.
 type Entry struct {
-	ID            string    `json:"id"`
-	Node          string    `json:"node"`
-	OwnerExecID   string    `json:"owner_exec_id"`
-	OwnerSurface  string    `json:"owner_surface"`
-	OwnerPID      int       `json:"owner_pid,omitempty"`
-	RAMMB         int64     `json:"ram_mb"`
-	VRAMMB        int64     `json:"vram_mb,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	LastHeartbeat time.Time `json:"last_heartbeat"`
-	ExpiresAt     time.Time `json:"expires_at,omitempty"` // 0 = no hard expiry
-	Description   string    `json:"description,omitempty"`
+	ID            string                 `json:"id"`
+	Node          string                 `json:"node"`
+	OwnerExecID   string                 `json:"owner_exec_id"`
+	OwnerSurface  string                 `json:"owner_surface"`
+	OwnerPID      int                    `json:"owner_pid,omitempty"`
+	OwnerOrigin   models.ExecutionOrigin `json:"owner_origin,omitempty"`
+	RAMMB         int64                  `json:"ram_mb"`
+	VRAMMB        int64                  `json:"vram_mb,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	LastHeartbeat time.Time              `json:"last_heartbeat"`
+	ExpiresAt     time.Time              `json:"expires_at,omitempty"` // 0 = no hard expiry
+	Description   string                 `json:"description,omitempty"`
 }
 
 // IsStale returns true if the entry has missed its heartbeat window.
 func (e Entry) IsStale(now time.Time, window time.Duration) bool {
-	return now.Sub(e.LastHeartbeat) > window
+	diff := now.Sub(e.LastHeartbeat)
+	if diff < 0 {
+		return false
+	}
+	return diff > window
 }
 
 // IsExpired returns true if the entry has a hard expiry that has passed.
