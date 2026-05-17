@@ -65,7 +65,8 @@ jobs:
 
       - name: Install runner dependencies
         run: |
-          # Add NixOS system paths to search for existing tools
+          # Add NixOS system paths to search for existing tools and persist across steps
+          echo "/run/current-system/sw/bin" >> $GITHUB_PATH
           export PATH="$PATH:/run/current-system/sw/bin"
           for cmd in awk rg jq; do
             if ! command -v $cmd >/dev/null 2>&1; then
