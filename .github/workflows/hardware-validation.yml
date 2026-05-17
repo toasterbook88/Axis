@@ -66,7 +66,7 @@ jobs:
               if command -v apt-get >/dev/null 2>&1; then
                 sudo apt-get update && sudo apt-get install -y $pkg
               elif command -v nix-env >/dev/null 2>&1; then
-                nix-env -iA nixpkgs.$pkg
+                nix-env -f '<nixpkgs>' -iA $pkg
               else
                 echo "$cmd is required, but neither apt-get nor nix-env is available" >&2
                 exit 1
