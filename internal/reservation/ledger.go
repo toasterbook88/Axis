@@ -198,7 +198,9 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"ram_mb", req.RAMMB,
 		"owner", req.OwnerSurface,
 	)
-	_ = l.saveLocked()
+	if err := l.saveLocked(); err != nil {
+		l.logger.Error("failed to persist ledger", "error", err)
+	}
 	return &req, nil
 }
 

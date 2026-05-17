@@ -53,6 +53,8 @@ var heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error 
 }
 var localExecutionHostname = os.Hostname
 
+var sharedSafetyEvaluator = safety.NewEvaluator(safety.DefaultRuleSet())
+
 type GuardedExecutionRequest struct {
 	Description    string                                                `json:"description"`
 	Mode           string                                                `json:"mode,omitempty"`

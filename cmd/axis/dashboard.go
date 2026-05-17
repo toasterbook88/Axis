@@ -412,9 +412,9 @@ func reservationsCmd() *cobra.Command {
 					ID        string    `json:"id"`
 					Node      string    `json:"node"`
 					RAMMB     int64     `json:"ram_mb"`
-					Owner     string    `json:"owner"`
+					Owner     string    `json:"owner_surface"`
 					CreatedAt time.Time `json:"created_at"`
-				} `json:"entries"`
+				} `json:"reservations"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 				return err
@@ -464,7 +464,14 @@ func RenderReservationTable(items []ReservationListItem) string {
 		"ID", "NODE", "RAM (MB)", "OWNER", "AGE")
 	b.WriteString("  " + strings.Repeat("─", 75) + "\n")
 
-	for _, r := range items {
+	displayItems := items
+	truncated := 0
+	if len(items) > 50 {
+		displayItems = items[:50]
+		truncated = len(items) - 50
+	}
+
+	for _, r := range displayItems {
 		ageStr := formatDuration(r.Age)
 		if r.IsStale {
 			ageStr = colorRed.Sprintf("%s (STALE)", ageStr)
@@ -477,6 +484,11 @@ func RenderReservationTable(items []ReservationListItem) string {
 			ageStr,
 		)
 	}
+
+	if truncated > 0 {
+		colorDim.Fprintf(&b, "\n  ... and %d more reservations.\n", truncated)
+	}
+
 	b.WriteString("\n")
 	return b.String()
 }
@@ -494,6 +506,9 @@ func formatDuration(d time.Duration) string {
 func truncateID(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	if n <= 3 {
+		return s[:n]
 	}
 	return s[:n-3] + "..."
 }
