@@ -92,15 +92,15 @@ func (h *v2Handlers) handleCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 type V2NodeResponse struct {
-	Name       string   `json:"name"`
-	Status     string   `json:"status"`
-	OS         string   `json:"os"`
-	Arch       string   `json:"arch"`
-	RAMTotalMB int64    `json:"ram_total_mb"`
-	RAMFreeMB  int64    `json:"ram_free_mb"`
-	Pressure   string   `json:"pressure"`
-	GPUs       []string `json:"gpus,omitempty"`
-	Tools      []string `json:"tools,omitempty"`
+	Name       string                 `json:"name"`
+	Status     string                 `json:"status"`
+	OS         string                 `json:"os"`
+	Arch       string                 `json:"arch"`
+	RAMTotalMB int64                  `json:"ram_total_mb"`
+	RAMFreeMB  int64                  `json:"ram_free_mb"`
+	Pressure   string                 `json:"pressure"`
+	GPUs       []string               `json:"gpus,omitempty"`
+	Tools      []string               `json:"tools,omitempty"`
 	Epistemic  *models.EpistemicState `json:"epistemic,omitempty"`
 }
 

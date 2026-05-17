@@ -1492,11 +1492,11 @@ func summarizeNodes(nodes []models.NodeFacts) models.ClusterSummary {
 
 func testNode(name, hostname string, totalRAM, freeRAM int64, pressure string, tools ...string) models.NodeFacts {
 	node := models.NodeFacts{
-		Name:               name,
-		Hostname:           hostname,
-		Status:             models.StatusComplete,
-		RAMAllocatableMB:   models.ReservableRAMMB(totalRAM, freeRAM),
-		RAMReservedMB:      0,
+		Name:             name,
+		Hostname:         hostname,
+		Status:           models.StatusComplete,
+		RAMAllocatableMB: models.ReservableRAMMB(totalRAM, freeRAM),
+		RAMReservedMB:    0,
 		Resources: &models.Resources{
 			RAMTotalMB: totalRAM,
 			RAMFreeMB:  freeRAM,

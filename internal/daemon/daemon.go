@@ -151,7 +151,9 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		ledger:         reservation.NewLedger(reservation.DefaultLimits(), nil),
 		pendingRefresh: make(chan string, 1),
 	}
-	_ = d.ledger.Load()
+	if err := d.ledger.Load(); err != nil {
+		slog.Error("failed to load reservation ledger", "error", err)
+	}
 	return d
 }
 
