@@ -47,12 +47,18 @@ jobs:
           go-version-file: go.mod
 
       - name: Download dependencies
+        env:
+          GOTOOLCHAIN: auto
         run: go mod download
 
       - name: Run tests
+        env:
+          GOTOOLCHAIN: auto
         run: go test ./... -count=1
 
       - name: Build
+        env:
+          GOTOOLCHAIN: auto
         run: go build ./...
 
       - name: Install runner dependencies
@@ -92,6 +98,7 @@ jobs:
       - name: Build AXIS binary for facts smoke
         env:
           AXIS_BIN: ${{ runner.temp }}/axis-${{ github.run_id }}
+          GOTOOLCHAIN: auto
         run: go build -o "$AXIS_BIN" ./cmd/axis
 
       - name: Facts JSON smoke
