@@ -28,8 +28,8 @@ func TestBuildContextBlockPrefersNodeWithResources(t *testing.T) {
 				},
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
-					RAMFreeMB:        833,
-					Pressure:         "low",
+					RAMFreeMB: 833,
+					Pressure:  "low",
 				},
 				RAMReservedMB:    256,
 				RAMAllocatableMB: 577,
@@ -70,11 +70,11 @@ func TestBuildContextBlockShowsTurboQuantHint(t *testing.T) {
 				Name:   "mlx-node",
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
-					RAMFreeMB:        4096,
-					Pressure:         "none",
+					RAMFreeMB: 4096,
+					Pressure:  "none",
 				},
 				RAMAllocatableMB: 4096,
-				Tools: []models.ToolInfo{{Name: "ollama"}},
+				Tools:            []models.ToolInfo{{Name: "ollama"}},
 				TurboQuant: &models.TurboQuantInfo{
 					Supported:    true,
 					Verified:     true,
