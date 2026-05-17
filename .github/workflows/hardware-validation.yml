@@ -65,6 +65,8 @@ jobs:
 
       - name: Install runner dependencies
         run: |
+          # Add NixOS system paths to search for existing tools
+          export PATH="$PATH:/run/current-system/sw/bin"
           for cmd in awk rg jq; do
             if ! command -v $cmd >/dev/null 2>&1; then
               echo "$cmd is missing, attempting to install..."
@@ -73,10 +75,10 @@ jobs:
               [ "$cmd" = "rg" ] && pkg="ripgrep"
               if command -v apt-get >/dev/null 2>&1; then
                 sudo apt-get update && sudo apt-get install -y $pkg
-              elif command -v nix-env >/dev/null 2>&1; then
-                nix-env -f '<nixpkgs>' -iA $pkg
+              elif command -v nix >/dev/null 2>&1; then
+                nix profile install nixpkgs#$pkg
               else
-                echo "$cmd is required, but neither apt-get nor nix-env is available" >&2
+                echo "$cmd is required, but neither apt-get nor nix is available" >&2
                 exit 1
               fi
             fi
