@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,10 +64,11 @@ type Metadata struct {
 	MeshPeers          int       `json:"mesh_peers,omitempty"`
 	StaleThresholdSec  int       `json:"stale_threshold_sec,omitempty"`
 	// Phase 3: refresh metrics
-	RefreshCount  int64                      `json:"refresh_count"`
-	LastRefreshMs int64                      `json:"last_refresh_duration_ms,omitempty"`
-	StaleNodes    []string                   `json:"stale_nodes,omitempty"`
-	Freshness     *models.DiscoveryFreshness `json:"freshness,omitempty"`
+	RefreshCount        int64                      `json:"refresh_count"`
+	LastRefreshMs       int64                      `json:"last_refresh_duration_ms,omitempty"`
+	MaxRefreshLatencyMs int64                      `json:"max_refresh_latency_ms,omitempty"`
+	StaleNodes          []string                   `json:"stale_nodes,omitempty"`
+	Freshness           *models.DiscoveryFreshness `json:"freshness,omitempty"`
 }
 
 type Daemon struct {
@@ -92,6 +95,12 @@ type Daemon struct {
 	refreshCount        int64
 	lastRefreshDuration time.Duration
 	staleNodes          []string // nodes that degraded in the last refresh
+
+	pendingMu          sync.Mutex
+	pendingTriggers    map[string]bool
+	pendingRequestedAt time.Time
+	activeRequestedAt  time.Time
+	maxRefreshLatency  time.Duration
 }
 
 type configFingerprint struct {
@@ -144,12 +153,13 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		collector = defaultCollector(nil)
 	}
 	d := &Daemon{
-		collector:      collector,
-		interval:       interval,
-		staleThreshold: defaultStaleThreshold,
-		snapshotPath:   DefaultSnapshotPath(),
-		ledger:         reservation.NewLedger(reservation.DefaultLimits(), nil),
-		pendingRefresh: make(chan string, 1),
+		collector:       collector,
+		interval:        interval,
+		staleThreshold:  defaultStaleThreshold,
+		snapshotPath:    DefaultSnapshotPath(),
+		ledger:          reservation.NewLedger(reservation.DefaultLimits(), nil),
+		pendingRefresh:  make(chan string, 1),
+		pendingTriggers: make(map[string]bool),
 	}
 	if err := d.ledger.Load(); err != nil {
 		slog.Error("failed to load reservation ledger", "error", err)
@@ -390,28 +400,74 @@ func (d *Daemon) scheduleRefresh(trigger string) {
 
 func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
 	if !d.refreshing.CompareAndSwap(false, true) {
-		// Already refreshing, queue the trigger (last-trigger overwrite semantics)
+		// Already refreshing, queue the trigger (coalescing triggers and measuring requestedAt)
+		d.pendingMu.Lock()
+		if d.pendingTriggers == nil {
+			d.pendingTriggers = make(map[string]bool)
+		}
+		d.pendingTriggers[trigger] = true
+		if d.pendingRequestedAt.IsZero() {
+			d.pendingRequestedAt = time.Now()
+		}
+		d.pendingMu.Unlock()
+
 		select {
 		case <-d.pendingRefresh:
 		default:
 		}
 		select {
-		case d.pendingRefresh <- trigger:
+		case d.pendingRefresh <- "coalesced":
 		default:
 		}
 		return nil
 	}
 
+	d.pendingMu.Lock()
+	if !d.pendingRequestedAt.IsZero() {
+		d.activeRequestedAt = d.pendingRequestedAt
+		d.pendingRequestedAt = time.Time{}
+		d.pendingTriggers = make(map[string]bool)
+	} else {
+		d.activeRequestedAt = time.Now()
+	}
+	d.pendingMu.Unlock()
+
 	defer func() {
 		d.refreshing.Store(false)
+
+		var nextTrigger string
+		d.pendingMu.Lock()
+		if len(d.pendingTriggers) > 0 {
+			var keys []string
+			for k := range d.pendingTriggers {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			nextTrigger = strings.Join(keys, ",")
+		}
+		d.pendingMu.Unlock()
+
 		select {
-		case pending := <-d.pendingRefresh:
-			d.scheduleRefresh(pending)
+		case <-d.pendingRefresh:
 		default:
+		}
+
+		if nextTrigger != "" {
+			d.scheduleRefresh(nextTrigger)
 		}
 	}()
 
-	return d.doRefresh(ctx, trigger)
+	err := d.doRefresh(ctx, trigger)
+
+	now := time.Now()
+	d.pendingMu.Lock()
+	latency := now.Sub(d.activeRequestedAt)
+	if latency > d.maxRefreshLatency {
+		d.maxRefreshLatency = latency
+	}
+	d.pendingMu.Unlock()
+
+	return err
 }
 
 func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
@@ -581,6 +637,9 @@ func (d *Daemon) Meta() Metadata {
 	}
 	meta.RefreshCount = d.refreshCount
 	meta.LastRefreshMs = d.lastRefreshDuration.Milliseconds()
+	d.pendingMu.Lock()
+	meta.MaxRefreshLatencyMs = d.maxRefreshLatency.Milliseconds()
+	d.pendingMu.Unlock()
 	meta.StaleNodes = d.staleNodes
 	if d.snapshot != nil && d.snapshot.Freshness != nil {
 		freshness := *d.snapshot.Freshness
@@ -670,4 +729,10 @@ func CloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 // semantics.
 func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, ledger *reservation.Ledger) {
 	snapshotview.ApplyReservationView(snap, st, ledger)
+}
+
+func (d *Daemon) MaxRefreshLatency() time.Duration {
+	d.pendingMu.Lock()
+	defer d.pendingMu.Unlock()
+	return d.maxRefreshLatency
 }

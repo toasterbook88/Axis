@@ -473,16 +473,16 @@ func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 
 	prevShell := RunLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
-		ns, ok := rt.State.Nodes["studio"]
-		if !ok {
-			t.Fatal("expected active reservation state for studio")
+		if rt.Ledger == nil {
+			t.Fatal("expected ledger to be non-nil")
 		}
-		if len(ns.ActiveExecs) != 1 {
-			t.Fatalf("ActiveExecs = %v, want single active exec", ns.ActiveExecs)
+		entries := rt.Ledger.EntriesForNode("studio")
+		if len(entries) != 1 {
+			t.Fatalf("EntriesForNode = %d, want 1", len(entries))
 		}
-		execID := ns.ActiveExecs[0]
-		if got := ns.ExecOrigin[execID]; got != models.NewExecutionOrigin("studio", "localhost", "abc-123") {
-			t.Fatalf("ExecOrigin[%s] = %+v, want studio/localhost/abc-123", execID, got)
+		entry := entries[0]
+		if entry.OwnerOrigin != models.NewExecutionOrigin("studio", "localhost", "abc-123") {
+			t.Fatalf("OwnerOrigin = %+v, want studio/localhost/abc-123", entry.OwnerOrigin)
 		}
 		return []byte("ok\n"), 0, nil
 	}
@@ -523,16 +523,16 @@ func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 	want := models.NewExecutionOrigin("relay", "relay.local", "relay-123")
 	prevShell := RunLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
-		ns, ok := rt.State.Nodes["studio"]
-		if !ok {
-			t.Fatal("expected active reservation state for studio")
+		if rt.Ledger == nil {
+			t.Fatal("expected ledger to be non-nil")
 		}
-		if len(ns.ActiveExecs) != 1 {
-			t.Fatalf("ActiveExecs = %v, want single active exec", ns.ActiveExecs)
+		entries := rt.Ledger.EntriesForNode("studio")
+		if len(entries) != 1 {
+			t.Fatalf("EntriesForNode = %d, want 1", len(entries))
 		}
-		execID := ns.ActiveExecs[0]
-		if got := ns.ExecOrigin[execID]; got != want {
-			t.Fatalf("ExecOrigin[%s] = %+v, want %+v", execID, got, want)
+		entry := entries[0]
+		if entry.OwnerOrigin != want {
+			t.Fatalf("OwnerOrigin = %+v, want %+v", entry.OwnerOrigin, want)
 		}
 		return []byte("ok\n"), 0, nil
 	}
