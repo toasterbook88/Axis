@@ -3,6 +3,8 @@ package execution
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +54,17 @@ var heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error 
 	return nil
 }
 var localExecutionHostname = os.Hostname
+
+var sharedSafetyEvaluator = safety.NewEvaluator(safety.DefaultRuleSet())
+
+func generateExecID(node string) string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Extreme rare fallback
+		return fmt.Sprintf("%d-%s", time.Now().UnixNano(), node)
+	}
+	return fmt.Sprintf("%s-%s", hex.EncodeToString(b), node)
+}
 
 type GuardedExecutionRequest struct {
 	Description    string                                                `json:"description"`
@@ -396,8 +409,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.Reasoning = append(prepared.Result.Reasoning, turboPlan.Notes...)
 	commandToRun := turboPlan.Command
 
-	evaluator := safety.NewEvaluator(safety.DefaultRuleSet())
-	safetyDecision := evaluator.Evaluate(commandToRun, req.OwnerSurface)
+	safetyDecision := sharedSafetyEvaluator.Evaluate(commandToRun, req.OwnerSurface)
 	if safetyDecision.Verdict == safety.VerdictDeny {
 		prepared.Result.Blocked = true
 		prepared.Result.BlockReason = strings.Join(safetyDecision.Reasons, "; ")
@@ -681,7 +693,7 @@ func runLocal(
 
 	var execID string
 	if ledger != nil {
-		execID = fmt.Sprintf("%d-%s", time.Now().UnixNano(), resp.Node)
+		execID = generateExecID(resp.Node)
 		entry := reservation.Entry{
 			ID:           execID,
 			Node:         resp.Node,
@@ -780,7 +792,7 @@ func runRemote(
 
 	var execID string
 	if ledger != nil {
-		execID = fmt.Sprintf("%d-%s", time.Now().UnixNano(), resp.Node)
+		execID = generateExecID(resp.Node)
 		entry := reservation.Entry{
 			ID:           execID,
 			Node:         resp.Node,
