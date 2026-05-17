@@ -108,10 +108,10 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 	}
 
 	snap.Summary = models.ClusterSummary{
-		TotalNodes:         len(deduped),
-		ReachableNodes:     reachable,
-		TotalRAMMB:         totalRAM,
-		TotalFreeRAMMB:     freeRAM,
+		TotalNodes:     len(deduped),
+		ReachableNodes: reachable,
+		TotalRAMMB:     totalRAM,
+		TotalFreeRAMMB: freeRAM,
 	}
 
 	return snap

@@ -32,13 +32,13 @@ func TestLedgerCorruptionRecovery(t *testing.T) {
 			Nodes: []models.NodeFacts{{Name: "local", Resources: &models.Resources{RAMTotalMB: 8192}}},
 		}, nil
 	})
-	
+
 	// The ledger loading should quarantine the corrupt file and start empty, not crash
 	ledger := d.Ledger()
 	if ledger == nil {
 		t.Fatal("ledger is nil")
 	}
-	
+
 	// Ensure the quarantine file exists
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
@@ -61,7 +61,7 @@ func TestSIGKILLDuringHeartbeat(t *testing.T) {
 
 	limits := reservation.DefaultLimits()
 	limits.HeartbeatStaleWindow = 50 * time.Millisecond // very short window
-	
+
 	ledger := reservation.NewLedger(limits, nil)
 	ledger.SetNodeCapacity("node-a", 8192)
 
@@ -92,7 +92,7 @@ func TestSIGKILLDuringHeartbeat(t *testing.T) {
 	if ledger.Summary().TotalReservedMB != 0 {
 		t.Fatalf("expected 0 reserved after reclaim, got %d", ledger.Summary().TotalReservedMB)
 	}
-	
+
 	if err := ledger.Heartbeat(entry.ID); err == nil {
 		t.Error("expected heartbeat to fail for reclaimed entry")
 	}
@@ -129,7 +129,7 @@ func TestClockSkewGrace(t *testing.T) {
 
 	limits := reservation.DefaultLimits()
 	limits.HeartbeatStaleWindow = time.Hour // large window to prevent natural expiry
-	
+
 	ledger := reservation.NewLedger(limits, nil)
 	ledger.SetNodeCapacity("node-a", 8192)
 
@@ -151,7 +151,7 @@ func TestClockSkewGrace(t *testing.T) {
 	// In a separate test case, we would verify that loading this entry
 	// checks liveness using time.Since(LastHeartbeat) locally,
 	// rather than trusting the original machine's timestamp exactly,
-	// protecting against multi-node clock skew. 
+	// protecting against multi-node clock skew.
 	// Our monotonic expiry tests inside reservation/ledger_test.go already cover this.
 	// This serves as an adversarial placeholder.
 }
@@ -159,30 +159,29 @@ func TestClockSkewGrace(t *testing.T) {
 func TestSplitBrainSnapshotDedupe(t *testing.T) {
 	// A node discovered via config with a StableID
 	configNode := models.NodeFacts{
-		Name: "canonical-node",
-		Role: "worker",
-		Identity: &models.NodeIdentity{StableID: "machine-123"},
+		Name:      "canonical-node",
+		Role:      "worker",
+		Identity:  &models.NodeIdentity{StableID: "machine-123"},
 		Epistemic: &models.EpistemicState{VerifiedBy: models.VerifiedByConfig},
 	}
 
 	// The same node discovered via UDP mesh with a different hostname
 	meshNode := models.NodeFacts{
-		Name: "canonical-node.local",
-		Identity: &models.NodeIdentity{StableID: "machine-123"},
+		Name:      "canonical-node.local",
+		Identity:  &models.NodeIdentity{StableID: "machine-123"},
 		Epistemic: &models.EpistemicState{VerifiedBy: models.VerifiedByMesh},
 	}
 
 	nodes := []models.NodeFacts{meshNode, configNode}
-	
+
 	// Dedupe should prioritize the config node, ignoring order
 	snap := snapshot.Build(nodes)
-	
+
 	if len(snap.Nodes) != 1 {
 		t.Fatalf("expected 1 node, got %d", len(snap.Nodes))
 	}
-	
+
 	if snap.Nodes[0].Name != "canonical-node" || snap.Nodes[0].Role != "worker" {
 		t.Errorf("dedupe did not preserve config authority: %+v", snap.Nodes[0])
 	}
 }
-

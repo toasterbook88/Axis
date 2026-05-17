@@ -615,15 +615,10 @@ func TestRunRemoteUsesVariableBasedTrap(t *testing.T) {
 	}
 	defer func() { NewRemoteExecutor = prev }()
 
-	nodes := []models.NodeFacts{
-		{Name: "testnode", Hostname: "testhost", Resources: &models.Resources{RAMFreeMB: 8192, RAMTotalMB: 16384, Pressure: "low"}},
-	}
 	cfgNodes := []config.NodeConfig{{Name: "testnode", Hostname: "testhost", SSHUser: "testuser"}}
 	rt := &runtimectx.Context{
-		Config:   &config.Config{Nodes: cfgNodes},
-		Snapshot: &models.ClusterSnapshot{Status: models.SnapshotHealthy, Nodes: nodes, Summary: models.ClusterSummary{TotalNodes: 1}},
-		State:    &state.ClusterState{Nodes: map[string]state.NodeState{}},
-		Skills:   &skills.Store{},
+		State:  &state.ClusterState{Nodes: map[string]state.NodeState{}},
+		Skills: &skills.Store{},
 	}
 
 	req := GuardedExecutionRequest{

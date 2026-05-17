@@ -211,25 +211,11 @@ func pressureOf(n models.NodeFacts) string {
 	return n.Resources.Pressure
 }
 
-func freeRAM(n models.NodeFacts) int64 {
-	if n.Resources == nil {
-		return 0
-	}
-	return n.Resources.RAMFreeMB
-}
-
 func reservedRAM(n models.NodeFacts) int64 {
 	if n.RAMReservedMB > 0 {
 		return n.RAMReservedMB
 	}
 	return 0
-}
-
-func clusterReservationShareSummary(snap *models.ClusterSnapshot, n models.NodeFacts) float64 {
-	if snap == nil {
-		return 0
-	}
-	return clusterReservationShare(n, snap.Nodes)
 }
 
 func allocatableRAM(n models.NodeFacts) int64 {
@@ -317,13 +303,6 @@ func gpuScore(n models.NodeFacts, reqs models.TaskRequirements) int {
 		}
 	}
 	return best
-}
-
-func gpuPresent(n models.NodeFacts) bool {
-	if n.Resources == nil {
-		return false
-	}
-	return len(n.Resources.GPUs) > 0
 }
 
 // ComputeFitScore returns 0-100 indicating small-model suitability.
@@ -519,20 +498,6 @@ func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts)
 // the node eligible — we don't penalise nodes that haven't been observed yet.
 // Profile-based PeakRAMHint is used as a soft ranking signal only (see
 // RankCandidates), not a hard filter.
-func blocksForEmpiricalPeakRAM(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, nodeAllocatableMB int64, modelName string) bool {
-	tool := inferredToolForObservation(reqs, "")
-	obs, ok := freshObservationForScope(models.ObservationScope{
-		Node:      strings.TrimSpace(n.Name),
-		Workload:  reqs.Workload.Class,
-		Backend:   observationBackend(reqs, tool),
-		Tool:      tool,
-		ModelName: modelName,
-	}, st)
-	if !ok || obs.PeakRAMMB <= 0 {
-		return false
-	}
-	return nodeAllocatableMB < obs.PeakRAMMB
-}
 
 // storageClassPenalty reduces fit score for HDD nodes on heavy inference tasks.
 func storageClassPenalty(n models.NodeFacts, reqs models.TaskRequirements) int {
@@ -758,8 +723,4 @@ func ollamaIsReady(n models.NodeFacts) bool {
 
 func isOllamaBootstrapPossible(n models.NodeFacts) bool {
 	return n.Ollama != nil && n.Ollama.Installed
-}
-
-func ollamaWarm(n models.NodeFacts) bool {
-	return n.Ollama != nil && (n.Ollama.Listening || len(n.Ollama.Models) > 0 || n.Ollama.Running)
 }
