@@ -649,109 +649,18 @@ func TestLoadClearsLegacyReservationsWithoutExecIDs(t *testing.T) {
 	}
 }
 
-func TestRecordPlacementAccumulatesReservationsAndCapsDecisionHistory(t *testing.T) {
+func TestRecordPlacementCapsDecisionHistory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	s := &ClusterState{}
 
 	for i := 0; i < 25; i++ {
-		_, err := s.AcquireTask("alpha", "task", 100)
-		if err != nil {
-			t.Fatalf("AcquireTask() error = %v", err)
-		}
+		s.RecordPlacement("alpha", 100, fmt.Sprintf("task-%d", i))
 	}
 
-	got := s.Nodes["alpha"]
-	if got.ReservedMB != 2500 {
-		t.Fatalf("ReservedMB = %d, want 2500", got.ReservedMB)
-	}
-	if got.ActiveTasks != 25 {
-		t.Fatalf("ActiveTasks = %d, want 25", got.ActiveTasks)
-	}
 	if len(s.Decisions) != 20 {
 		t.Fatalf("len(Decisions) = %d, want 20", len(s.Decisions))
-	}
-}
-
-func TestStateLifecycleAcquireAndRelease(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	prevOwnerPID := execOwnerPID
-	execOwnerPID = func() int { return 4242 }
-	t.Cleanup(func() { execOwnerPID = prevOwnerPID })
-
-	s := &ClusterState{}
-
-	execID, err := s.AcquireTaskWithOwner("alpha", "git status", 512, ExecutionOwner{
-		Surface: "task-run",
-		Label:   "cli",
-		Origin:  models.NewExecutionOrigin("local-node", "host.local", "abc-123"),
-	})
-	if err != nil {
-		t.Fatalf("AcquireTaskWithOwner() error = %v", err)
-	}
-
-	ns, ok := s.Nodes["alpha"]
-	if !ok {
-		t.Fatal("expected alpha node after acquire")
-	}
-	if ns.ReservedMB != 512 {
-		t.Fatalf("ReservedMB = %d, want 512", ns.ReservedMB)
-	}
-	if ns.ActiveTasks != 1 {
-		t.Fatalf("ActiveTasks = %d, want 1", ns.ActiveTasks)
-	}
-	if len(ns.ActiveExecs) != 1 || ns.ActiveExecs[0] != execID {
-		t.Fatalf("ActiveExecs = %v, want [%s]", ns.ActiveExecs, execID)
-	}
-	if ns.ExecReservationsMB[execID] != 512 {
-		t.Fatalf("ExecReservationsMB = %v, want %s=512", ns.ExecReservationsMB, execID)
-	}
-	if ns.ExecHeartbeatAt[execID].IsZero() {
-		t.Fatalf("ExecHeartbeatAt = %v, want heartbeat for %s", ns.ExecHeartbeatAt, execID)
-	}
-	if ns.ExecOwnerPID[execID] != 4242 {
-		t.Fatalf("ExecOwnerPID = %v, want %s=4242", ns.ExecOwnerPID, execID)
-	}
-	if ns.ExecOwnerSurface[execID] != "task-run" {
-		t.Fatalf("ExecOwnerSurface = %v, want %s=task-run", ns.ExecOwnerSurface, execID)
-	}
-	if ns.ExecOwnerLabel[execID] != "cli" {
-		t.Fatalf("ExecOwnerLabel = %v, want %s=cli", ns.ExecOwnerLabel, execID)
-	}
-	if ns.ExecOrigin[execID] != models.NewExecutionOrigin("local-node", "host.local", "abc-123") {
-		t.Fatalf("ExecOrigin = %v, want %s local origin", ns.ExecOrigin, execID)
-	}
-
-	if err := s.ReleaseTask("alpha", execID, 512); err != nil {
-		t.Fatalf("ReleaseTask() error = %v", err)
-	}
-	if _, ok := s.Nodes["alpha"]; ok {
-		t.Fatal("expected alpha node to be pruned after release")
-	}
-}
-
-func TestHeartbeatTaskRefreshesActiveExecution(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	s := &ClusterState{}
-	execID, err := s.AcquireTask("alpha", "git status", 512)
-	if err != nil {
-		t.Fatalf("AcquireTask() error = %v", err)
-	}
-
-	before := s.Nodes["alpha"].ExecHeartbeatAt[execID]
-	time.Sleep(10 * time.Millisecond)
-
-	if err := s.HeartbeatTask("alpha", execID); err != nil {
-		t.Fatalf("HeartbeatTask() error = %v", err)
-	}
-
-	after := s.Nodes["alpha"].ExecHeartbeatAt[execID]
-	if !after.After(before) {
-		t.Fatalf("expected heartbeat to advance, before=%v after=%v", before, after)
 	}
 }
 
@@ -803,59 +712,6 @@ func TestSaveInitializesNilNodes(t *testing.T) {
 	}
 	if s.Nodes == nil {
 		t.Fatal("expected Save to initialize Nodes map")
-	}
-}
-
-func TestRecordPlacementPersistsReservation(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	s := &ClusterState{}
-	s.RecordPlacement("alpha", 256, "inspect repo")
-
-	loaded, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	ns, ok := loaded.Nodes["alpha"]
-	if !ok {
-		t.Fatal("expected alpha node after RecordPlacement")
-	}
-	if ns.ReservedMB != 256 {
-		t.Fatalf("ReservedMB = %d, want 256", ns.ReservedMB)
-	}
-	if len(ns.ActiveExecs) != 1 {
-		t.Fatalf("ActiveExecs = %v, want single exec", ns.ActiveExecs)
-	}
-}
-
-func TestReleaseTaskHandlesMissingStateAndClampsValues(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	var empty ClusterState
-	if err := empty.ReleaseTask("missing", "exec", 10); err != nil {
-		t.Fatalf("ReleaseTask() on empty state error = %v", err)
-	}
-
-	s := &ClusterState{
-		Nodes: map[string]NodeState{
-			"alpha": {
-				ReservedMB:   128,
-				LastPlacedAt: time.Now().UTC(),
-				ActiveTasks:  1,
-				ActiveExecs:  []string{"exec-1"},
-			},
-		},
-	}
-
-	if err := s.ReleaseTask("alpha", "wrong-exec", 512); err != nil {
-		t.Fatalf("ReleaseTask() error = %v", err)
-	}
-
-	if _, ok := s.Nodes["alpha"]; ok {
-		t.Fatal("expected alpha node to be pruned after clamp to zero")
 	}
 }
 

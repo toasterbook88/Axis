@@ -283,6 +283,9 @@ func (h *v2Handlers) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP axis_cache_refresh_duration_ms Duration of last cache refresh\n")
 	fmt.Fprintf(w, "# TYPE axis_cache_refresh_duration_ms gauge\n")
 	fmt.Fprintf(w, "axis_cache_refresh_duration_ms %d\n", meta.LastRefreshMs)
+	fmt.Fprintf(w, "# HELP axis_cache_max_refresh_latency_ms Maximum queue/execution starvation latency of cache refresh\n")
+	fmt.Fprintf(w, "# TYPE axis_cache_max_refresh_latency_ms gauge\n")
+	fmt.Fprintf(w, "axis_cache_max_refresh_latency_ms %d\n", meta.MaxRefreshLatencyMs)
 	fmt.Fprintf(w, "# HELP axis_cache_stale Whether the cache is stale\n")
 	fmt.Fprintf(w, "# TYPE axis_cache_stale gauge\n")
 	if meta.Stale {
