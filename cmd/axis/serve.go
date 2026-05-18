@@ -61,13 +61,16 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) 
 	d.WatchSkills(ctx, skills.Path())
 	d.WatchDiscovery(ctx, config.DefaultConfigPath())
 
-	// Start mesh (side-by-side with discovery)
-	h, _ := os.Hostname()
-	selfPeer := mesh.Peer{
-		Name:     "localhost", // Advisory name
-		Hostname: h,
+	// Start mesh (side-by-side with discovery) if enabled
+	cfg, _ := config.Load(config.DefaultConfigPath())
+	if cfg == nil || cfg.IsMeshEnabled() {
+		h, _ := os.Hostname()
+		selfPeer := mesh.Peer{
+			Name:     "localhost", // Advisory name
+			Hostname: h,
+		}
+		d.WatchMesh(ctx, selfPeer)
 	}
-	d.WatchMesh(ctx, selfPeer)
 
 	protocol := "http"
 	if auth.IsUnixAddr(addr) {

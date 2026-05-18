@@ -196,6 +196,16 @@ func (c *Config) FindNode(name string) (NodeConfig, bool) {
 	return NodeConfig{}, false
 }
 
+// IsMeshEnabled returns whether the mesh gossip layer should be started.
+// For backward compatibility, mesh is enabled when the discovery config
+// is absent. When discovery is explicitly configured, mesh follows Enabled.
+func (c *Config) IsMeshEnabled() bool {
+	if c == nil || c.Discovery == nil {
+		return true
+	}
+	return c.Discovery.Enabled
+}
+
 // Validate checks that all required fields are present.
 func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {

@@ -141,7 +141,11 @@ func NewDefault(interval time.Duration) *Daemon {
 	registry := discovery.NewBeaconRegistry()
 	d := New(interval, defaultCollector(registry))
 	d.beaconRegistry = registry
-	d.mesh = mesh.New(mesh.Peer{}, mesh.DefaultConfig(), nil)
+
+	cfg, _ := config.Load(config.DefaultConfigPath())
+	if cfg == nil || cfg.IsMeshEnabled() {
+		d.mesh = mesh.New(mesh.Peer{}, mesh.DefaultConfig(), nil)
+	}
 	return d
 }
 
