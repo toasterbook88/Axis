@@ -41,6 +41,7 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 
 	got, ok := loaded.Nodes["alpha"]
 	if !ok {
@@ -98,6 +99,7 @@ func TestLoadExpiresStaleReservations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 
 	if _, ok := loaded.Nodes["expired"]; ok {
 		t.Fatal("expected expired reservation to be removed")
@@ -138,6 +140,7 @@ func TestLoadReclaimsStaleActiveReservationsToPerExecCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 
 	ns, ok := loaded.Nodes["alpha"]
 	if !ok {
@@ -256,6 +259,7 @@ func TestLoadDropsAncientActiveReservations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 
 	if _, ok := loaded.Nodes["alpha"]; ok {
 		t.Fatal("expected ancient active reservation to be dropped")
@@ -305,6 +309,7 @@ func TestLoadReclaimsActiveReservationWithDeadOwnerPID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 	if _, ok := loaded.Nodes["alpha"]; ok {
 		t.Fatalf("expected dead-owner reservation to be reclaimed, got %+v", loaded.Nodes["alpha"])
 	}
@@ -588,6 +593,7 @@ func TestLoadReclaimsExecutionsWithStaleHeartbeats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 
 	ns, ok := loaded.Nodes["alpha"]
 	if !ok {
@@ -632,6 +638,8 @@ func TestLoadClearsLegacyReservationsWithoutExecIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
+	_ = loaded.Save()
 	if len(loaded.Nodes) != 0 {
 		t.Fatalf("expected legacy reservations to be cleared, got %v", loaded.Nodes)
 	}
@@ -695,6 +703,7 @@ func TestLoadNormalizesActiveTasksToExecCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	Maintain(loaded)
 
 	ns := loaded.Nodes["alpha"]
 	if ns.ActiveTasks != 2 {

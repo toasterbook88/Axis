@@ -96,25 +96,13 @@ func Load() (*ClusterState, error) {
 		s.Observations = make(map[string]models.ExecutionObservation)
 	}
 
-	mutated := false
-
 	// One-time migrations: only run when state was written before version tracking.
 	if s.Version < currentStateVersion {
 		if migrated := runMigrations(&s); migrated {
-			mutated = true
+			_ = s.Save()
 		}
 	}
 
-	// Maintenance: prune and reclaim stale state on every load.
-	if maintained := runMaintenance(&s); maintained {
-		mutated = true
-	}
-
-	if mutated {
-		if err := s.Save(); err != nil {
-			return nil, err
-		}
-	}
 	return &s, nil
 }
 
@@ -152,9 +140,12 @@ func runMigrations(s *ClusterState) bool {
 	return mutated
 }
 
-// runMaintenance performs ongoing cleanup of stale reservations and expired
-// failure records. These run on every load because they are time-dependent.
-func runMaintenance(s *ClusterState) bool {
+// Maintain performs ongoing cleanup of stale reservations and expired failure
+// records on the provided state. It returns true if the state was modified.
+// Callers that need accurate reservation and failure views should invoke
+// Maintain after Load and before reading state fields. The daemon should also
+// Save() after Maintain when it returns true.
+func Maintain(s *ClusterState) bool {
 	mutated := false
 
 	pruned := s.Failures.Prune()

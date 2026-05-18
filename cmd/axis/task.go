@@ -460,6 +460,9 @@ func taskContextCmd() *cobra.Command {
 			reqs := placement.InferRequirements(desc)
 
 			st, _ := state.Load()
+			if st != nil {
+				state.Maintain(st)
+			}
 			skillStore, _ := skills.Load()
 
 			if format == "json" {
