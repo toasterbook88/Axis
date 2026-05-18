@@ -28,8 +28,11 @@ type ModelCatalog struct {
 }
 
 var recommendedLocalModels = []ModelOption{
-	{Name: "qwen3:1.7b", Description: "best small local default for AXIS"},
-	{Name: "qwen3:0.6b", Description: "lighter local fallback with tool-use support"},
+	{Name: "qwen3.5:4b", Description: "best small local default for AXIS with tool-use"},
+	{Name: "qwen3.5:9b", Description: "stronger local default with tool-use"},
+	{Name: "llama3.1:8b", Description: "strong local alternative with tool-use"},
+	{Name: "qwen3:1.7b", Description: "older qwen3 fallback with tool-use"},
+	{Name: "qwen3:0.6b", Description: "lightweight qwen3 fallback with tool-use"},
 	{Name: "qwen2.5-coder:1.5b", Description: "older coding-focused fallback"},
 }
 
@@ -168,6 +171,26 @@ func formatMissingModelError(model string, installed []string) error {
 		model, available, suggest, model)
 }
 
+// toolCapablePrefixes lists model families known to support Ollama /api/chat
+// tool-calling. When no exact recommended model is installed, the fallback
+// prefers models whose family prefix matches this list over models that do
+// not (e.g. embedding-only or vision-only models).
+var toolCapablePrefixes = []string{
+	"llama3.1", "llama3.2", "llama3.3",
+	"qwen3", "qwen3.5",
+	"qwen2.5-coder", "qwen2.5",
+	"mistral", "mixtral",
+	"phi4", "phi3",
+	"gemma3",
+}
+
+// nonToolFamilies blocks specific model families that share a prefix with a
+// tool-capable family but do not support tool calling (e.g. gemma3n is an
+// embedding/vision variant of gemma3).
+var nonToolFamilies = []string{
+	"gemma3n", // gemma3 supports tools; gemma3n does not
+}
+
 func choosePreferredModel(installed []string) (string, bool) {
 	// Prefer recommended models in priority order.
 	for _, candidate := range recommendedLocalModels {
@@ -176,10 +199,64 @@ func choosePreferredModel(installed []string) (string, bool) {
 		}
 	}
 	// Any installed model beats falling back to a hardcoded name that may not
-	// be present. This handles clusters where the operator has pulled their own
-	// preferred models (e.g. qwen3:4b, llama3.2:latest).
+	// be present. Prefer tool-capable families over non-tool families so that
+	// the agent default doesn't select an embedding-only or vision-only model.
 	if len(installed) > 0 {
+		if best := pickToolCapable(installed); best != "" {
+			return best, true
+		}
 		return installed[0], true
 	}
 	return "", false
+}
+
+// pickToolCapable returns the first installed model whose family prefix is
+// in toolCapablePrefixes, or "" if none match. It explicitly skips families
+// listed in nonToolFamilies to avoid false-positive matches on embedding or
+// vision variants.
+func pickToolCapable(installed []string) string {
+	for _, name := range installed {
+		base := name
+		if idx := strings.LastIndex(name, ":"); idx >= 0 {
+			base = name[:idx]
+		}
+		blocked := false
+		for _, bad := range nonToolFamilies {
+			if strings.HasPrefix(base, bad) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+		for _, prefix := range toolCapablePrefixes {
+			if base == prefix || strings.HasPrefix(base, prefix+"-") {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+// formatToolCapableSuggestion builds a user-facing hint that lists up to three
+// recommended tool-capable models. It avoids hardcoding model names in error
+// messages and stays concise even as the recommended list grows.
+func formatToolCapableSuggestion() string {
+	var names []string
+	for i, opt := range recommendedLocalModels {
+		if i >= 3 {
+			break
+		}
+		names = append(names, opt.Name)
+	}
+	if len(names) == 0 {
+		return "try a tool-capable model"
+	}
+	if len(names) == 1 {
+		return fmt.Sprintf("try %s", names[0])
+	}
+	last := names[len(names)-1]
+	rest := strings.Join(names[:len(names)-1], ", ")
+	return fmt.Sprintf("try a tool-capable model such as %s, or %s", rest, last)
 }

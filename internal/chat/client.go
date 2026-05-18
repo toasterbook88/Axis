@@ -96,6 +96,10 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, tools []ToolDef
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusBadRequest && tools != nil && len(tools) > 0 {
+			suggestion := formatToolCapableSuggestion()
+			return Message{}, fmt.Errorf("server returned 400 Bad Request — model %q may not support tool calling; %s", c.Model, suggestion)
+		}
 		return Message{}, fmt.Errorf("server returned status: %s", resp.Status)
 	}
 
