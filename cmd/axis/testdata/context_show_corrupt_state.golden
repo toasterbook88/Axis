@@ -3,6 +3,7 @@ warning: recovered local AXIS state: quarantined corrupt file $HOME/.axis/state.
 
 STDOUT:
 {
+  "version": 1,
   "nodes": {},
   "recent_decisions": null,
   "updated_at": "<TIME>"

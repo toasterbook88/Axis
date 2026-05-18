@@ -1,13 +1,6 @@
-// Package reservation implements a double-entry reservation ledger for cluster
-// RAM and VRAM accounting. Replaces the heuristic RAM sharing model with
-// explicit per-node, per-execution resource accounting.
-//
-// Design principles:
-//   - Every reservation has an owner (execution ID + surface label)
-//   - Reservations are time-bounded with heartbeat-based liveness
-//   - Over-commitment is configurable but explicit (ratio-based)
-//   - The ledger is the single source of truth for "what is reserved where"
-//
+// Package reservation is SCAFFOLDED — double-entry reservation ledger for cluster RAM and VRAM.
+// Not wired into the stable operator path.
+
 // Integration: The daemon holds the Ledger. Placement consults it for
 // allocatable headroom. Execution creates/releases entries via the Ledger API.
 package reservation

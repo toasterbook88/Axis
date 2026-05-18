@@ -504,3 +504,225 @@ func TestRemoteStorageClassWalksMapperSlaves(t *testing.T) {
 		t.Fatalf("remoteStorageClass = %q, want hdd", got)
 	}
 }
+
+func TestDetectLocalNodeIdentityLinux(t *testing.T) {
+	prev := readLocalIdentityFile
+	t.Cleanup(func() { readLocalIdentityFile = prev })
+
+	readLocalIdentityFile = func(name string) ([]byte, error) {
+		if name == "/etc/machine-id" {
+			return nil, os.ErrNotExist
+		}
+		if name == "/var/lib/dbus/machine-id" {
+			return []byte("abc123\n"), nil
+		}
+		return nil, fmt.Errorf("unexpected file: %s", name)
+	}
+
+	id := detectLocalNodeIdentity(context.Background(), "linux")
+	if id == nil {
+		t.Fatal("expected identity")
+	}
+	if id.StableID != "abc123" || id.Source != "linux-machine-id" {
+		t.Fatalf("unexpected identity: %+v", id)
+	}
+}
+
+func TestDetectLocalNodeIdentityLinuxMissingFiles(t *testing.T) {
+	prev := readLocalIdentityFile
+	t.Cleanup(func() { readLocalIdentityFile = prev })
+
+	readLocalIdentityFile = func(string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+
+	if id := detectLocalNodeIdentity(context.Background(), "linux"); id != nil {
+		t.Fatalf("expected nil identity when files missing, got %+v", id)
+	}
+}
+
+func TestDetectLocalDarwinIdentity(t *testing.T) {
+	prev := runLocalIdentityCommand
+	t.Cleanup(func() { runLocalIdentityCommand = prev })
+
+	runLocalIdentityCommand = func(context.Context, string, ...string) (string, error) {
+		return `  "IOPlatformUUID" = "F47AC10B-58CC-4372-A567-0E02B2C3D479"`, nil
+	}
+
+	id := detectLocalDarwinIdentity(context.Background())
+	if id == nil {
+		t.Fatal("expected darwin identity")
+	}
+	if id.Source != "darwin-platform-uuid" {
+		t.Fatalf("unexpected source: %q", id.Source)
+	}
+}
+
+func TestDetectLocalDarwinIdentityFailure(t *testing.T) {
+	prev := runLocalIdentityCommand
+	t.Cleanup(func() { runLocalIdentityCommand = prev })
+
+	runLocalIdentityCommand = func(context.Context, string, ...string) (string, error) {
+		return "", fmt.Errorf("ioreg not found")
+	}
+
+	if id := detectLocalDarwinIdentity(context.Background()); id != nil {
+		t.Fatalf("expected nil on ioreg failure, got %+v", id)
+	}
+}
+
+func TestEnsureAppleFoundationModelsHelperSourceReadError(t *testing.T) {
+	prev := appleFoundationModelsReadFileFn
+	t.Cleanup(func() { appleFoundationModelsReadFileFn = prev })
+
+	appleFoundationModelsReadFileFn = func(string) ([]byte, error) {
+		return nil, fmt.Errorf("permission denied")
+	}
+
+	if err := ensureAppleFoundationModelsHelperSource("/some/path.swift"); err == nil {
+		t.Fatal("expected read error to propagate")
+	}
+}
+
+func TestEnsureAppleFoundationModelsHelperSourceWriteError(t *testing.T) {
+	prevRead := appleFoundationModelsReadFileFn
+	prevWrite := appleFoundationModelsWriteFileFn
+	t.Cleanup(func() {
+		appleFoundationModelsReadFileFn = prevRead
+		appleFoundationModelsWriteFileFn = prevWrite
+	})
+
+	appleFoundationModelsReadFileFn = func(string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+	appleFoundationModelsWriteFileFn = func(string, []byte, os.FileMode) error {
+		return fmt.Errorf("disk full")
+	}
+
+	if err := ensureAppleFoundationModelsHelperSource("/some/path.swift"); err == nil {
+		t.Fatal("expected write error to propagate")
+	}
+}
+
+func TestAppleFoundationModelsHelperUpToDateStatSourceError(t *testing.T) {
+	prev := appleFoundationModelsReadFileFn
+	t.Cleanup(func() { appleFoundationModelsReadFileFn = prev })
+
+	appleFoundationModelsReadFileFn = func(name string) ([]byte, error) {
+		if strings.Contains(name, ".swift") {
+			return nil, fmt.Errorf("stat error")
+		}
+		return nil, os.ErrNotExist
+	}
+
+	_, err := appleFoundationModelsHelperUpToDate("/some/source.swift", "/some/binary")
+	if err == nil {
+		t.Fatal("expected stat source error to propagate")
+	}
+}
+
+func TestAppleFoundationModelsHelperUpToDateBinaryIsDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	source := filepath.Join(tmpDir, "source.swift")
+	binary := filepath.Join(tmpDir, "binary")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := appleFoundationModelsHelperUpToDate(source, binary)
+	if err == nil {
+		t.Fatal("expected error when binary path is a directory")
+	}
+}
+
+func TestDiscoverOllamaLocalErrorPath(t *testing.T) {
+	prev := runOllamaDiscoveryFn
+	t.Cleanup(func() { runOllamaDiscoveryFn = prev })
+
+	runOllamaDiscoveryFn = func(context.Context) ([]byte, error) {
+		return nil, fmt.Errorf("bash not found")
+	}
+
+	info, models := discoverOllamaLocal(context.Background())
+	if info.Installed {
+		t.Fatal("expected not installed on error")
+	}
+	if info.Error != "bash not found" {
+		t.Fatalf("unexpected error: %q", info.Error)
+	}
+	if models != nil {
+		t.Fatal("expected nil models on error")
+	}
+}
+
+func TestDiscoverOllamaLocalUnparseableJSON(t *testing.T) {
+	prev := runOllamaDiscoveryFn
+	t.Cleanup(func() { runOllamaDiscoveryFn = prev })
+
+	runOllamaDiscoveryFn = func(context.Context) ([]byte, error) {
+		return []byte("not json"), nil
+	}
+
+	info, models := discoverOllamaLocal(context.Background())
+	if info.Installed {
+		t.Fatal("expected not installed when JSON unparseable")
+	}
+	if models != nil {
+		t.Fatal("expected nil models when JSON unparseable")
+	}
+}
+
+func TestDiscoverLlamaServerLocalErrorPath(t *testing.T) {
+	prev := runLlamaServerDiscoveryFn
+	t.Cleanup(func() { runLlamaServerDiscoveryFn = prev })
+
+	runLlamaServerDiscoveryFn = func(context.Context) ([]byte, error) {
+		return nil, fmt.Errorf("bash not found")
+	}
+
+	if models := discoverLlamaServerLocal(context.Background()); models != nil {
+		t.Fatalf("expected nil on error, got %v", models)
+	}
+}
+
+func TestDiscoverLlamaServerLocalUnparseableJSON(t *testing.T) {
+	prev := runLlamaServerDiscoveryFn
+	t.Cleanup(func() { runLlamaServerDiscoveryFn = prev })
+
+	runLlamaServerDiscoveryFn = func(context.Context) ([]byte, error) {
+		return []byte("not json"), nil
+	}
+
+	if models := discoverLlamaServerLocal(context.Background()); models != nil {
+		t.Fatalf("expected nil on unparseable JSON, got %v", models)
+	}
+}
+
+func TestDiscoverMLXLocalErrorPath(t *testing.T) {
+	prev := runMLXDiscoveryFn
+	t.Cleanup(func() { runMLXDiscoveryFn = prev })
+
+	runMLXDiscoveryFn = func(context.Context) ([]byte, error) {
+		return nil, fmt.Errorf("bash not found")
+	}
+
+	if models := discoverMLXLocal(context.Background()); models != nil {
+		t.Fatalf("expected nil on error, got %v", models)
+	}
+}
+
+func TestDiscoverMLXLocalUnparseableJSON(t *testing.T) {
+	prev := runMLXDiscoveryFn
+	t.Cleanup(func() { runMLXDiscoveryFn = prev })
+
+	runMLXDiscoveryFn = func(context.Context) ([]byte, error) {
+		return []byte("not json"), nil
+	}
+
+	if models := discoverMLXLocal(context.Background()); models != nil {
+		t.Fatalf("expected nil on unparseable JSON, got %v", models)
+	}
+}

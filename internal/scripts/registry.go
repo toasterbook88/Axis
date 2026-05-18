@@ -13,6 +13,14 @@ type Script struct {
 	Description   string   `json:"description"`
 	Category      string   `json:"category"`
 	Keywords      []string `json:"keywords,omitempty"`
+
+	// Precomputed lowercase values for fast matching.
+	lowerName        string
+	normName         string
+	lowerCategory    string
+	lowerKeywords    []string
+	lowerTools       []string
+	lowerDescription string
 }
 
 var Registry = map[string][]Script{
@@ -43,6 +51,26 @@ var Registry = map[string][]Script{
 	},
 }
 
+func init() {
+	for _, scripts := range Registry {
+		for i := range scripts {
+			s := &scripts[i]
+			s.lowerName = strings.ToLower(s.Name)
+			s.normName = strings.ReplaceAll(s.lowerName, "-", " ")
+			s.lowerCategory = strings.ToLower(s.Category)
+			s.lowerKeywords = make([]string, len(s.Keywords))
+			for j, kw := range s.Keywords {
+				s.lowerKeywords[j] = strings.ToLower(kw)
+			}
+			s.lowerTools = make([]string, len(s.RequiredTools))
+			for j, tool := range s.RequiredTools {
+				s.lowerTools[j] = strings.ToLower(tool)
+			}
+			s.lowerDescription = strings.ToLower(s.Description)
+		}
+	}
+}
+
 // GetBestScript now uses description + context keywords
 func GetBestScript(desc string) (Script, bool) {
 	lower := strings.ToLower(desc)
@@ -55,8 +83,9 @@ func GetBestScript(desc string) (Script, bool) {
 	var best Script
 	bestScore := 0
 	for _, key := range keys {
+		lowerKey := strings.ToLower(key)
 		for _, s := range Registry[key] {
-			score := scriptMatchScore(lower, key, s)
+			score := scriptMatchScore(lower, lowerKey, s)
 			if score > bestScore {
 				bestScore = score
 				best = s
@@ -69,39 +98,38 @@ func GetBestScript(desc string) (Script, bool) {
 	return best, true
 }
 
-func scriptMatchScore(desc, key string, s Script) int {
+func scriptMatchScore(desc, lowerKey string, s Script) int {
 	score := 0
 
-	if strings.Contains(desc, strings.ToLower(s.Name)) {
+	if strings.Contains(desc, s.lowerName) {
 		score += 100
 	}
 
-	normName := strings.ReplaceAll(strings.ToLower(s.Name), "-", " ")
-	if strings.Contains(desc, normName) {
+	if strings.Contains(desc, s.normName) {
 		score += 90
 	}
 
-	if strings.Contains(desc, strings.ToLower(key)) {
+	if strings.Contains(desc, lowerKey) {
 		score += 60
 	}
 
-	if strings.Contains(desc, strings.ToLower(s.Category)) {
+	if strings.Contains(desc, s.lowerCategory) {
 		score += 25
 	}
 
-	for _, kw := range s.Keywords {
-		if strings.Contains(desc, strings.ToLower(kw)) {
+	for _, kw := range s.lowerKeywords {
+		if strings.Contains(desc, kw) {
 			score += 80
 		}
 	}
 
-	for _, tool := range s.RequiredTools {
-		if strings.Contains(desc, strings.ToLower(tool)) {
+	for _, tool := range s.lowerTools {
+		if strings.Contains(desc, tool) {
 			score += 40
 		}
 	}
 
-	if strings.Contains(desc, strings.ToLower(s.Description)) {
+	if strings.Contains(desc, s.lowerDescription) {
 		score += 30
 	}
 

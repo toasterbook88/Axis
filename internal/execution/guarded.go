@@ -47,7 +47,6 @@ const (
 
 var executionHeartbeatInterval = 15 * time.Second
 var heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error {
-	fmt.Printf("DEBUG: REAL heartbeatTask called id=%s\n", ledgerExecID)
 	if ledger != nil && ledgerExecID != "" {
 		return ledger.Heartbeat(ledgerExecID)
 	}
@@ -483,7 +482,6 @@ func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (Guar
 }
 
 func RunGuarded(ctx context.Context, rt *runtimectx.Context, req GuardedExecutionRequest) (GuardedExecutionResult, error) {
-	fmt.Printf("DEBUG: RunGuarded starting\n")
 	prepared, err := PrepareGuardedExecution(ctx, rt, req)
 	if err != nil || prepared.Result.Blocked {
 		return prepared.Result, err
@@ -717,7 +715,6 @@ func runLocal(
 		}()
 	}
 
-	fmt.Printf("DEBUG: runLocal about to call runWithReservationHeartbeat id=%s\n", execID)
 	startedAt := time.Now().UTC()
 	out, peakRAMMB, runErr := runWithReservationHeartbeat(ledger, execID, func() (string, int64, error) {
 		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
@@ -836,7 +833,6 @@ func runRemote(
 }
 
 func runLocalWithOutput(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (string, int64, error) {
-	fmt.Printf("DEBUG: runLocalWithOutput command=%s\n", command)
 	if stdout == nil && stderr == nil {
 		out, peak, err := RunLocalShell(ctx, command, env)
 		return string(out), peak, err
@@ -905,7 +901,6 @@ func runWithReservationHeartbeat(
 	ledgerExecID string,
 	run func() (string, int64, error),
 ) (string, int64, error) {
-	fmt.Printf("DEBUG: runWithReservationHeartbeat reached id=%s ledger=%v\n", ledgerExecID, ledger != nil)
 	if ledger == nil || ledgerExecID == "" {
 		return run()
 	}
@@ -921,7 +916,6 @@ func runWithReservationHeartbeat(
 		done <- result{out: out, peak: peak, err: err}
 	}()
 
-	fmt.Printf("DEBUG: ticker interval=%v\n", executionHeartbeatInterval)
 	ticker := time.NewTicker(executionHeartbeatInterval)
 	defer ticker.Stop()
 

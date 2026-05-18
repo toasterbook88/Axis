@@ -1,13 +1,7 @@
-// Package safety extension: structured.go adds structured rule-evaluation
-// scaffolding alongside the existing substring-based blocker.
-//
-// The current safety system uses substring matching which risks:
-//   - Over-blocking: "rm -rf" blocks "echo 'rm -rf' in quotes"
-//   - Under-blocking: "r""m -rf /" bypasses substring check
-//   - No context awareness: same rules for local vs remote, admin vs user
-//
-// This groundwork provides:
-//   - Parsed command analysis (split into program + args)
+//go:build safety_scaffolded
+
+// Package safety is EXPERIMENTAL — structured safety evaluation and execution blocker.
+// It is subordinate to observed state and emits warnings automatically.
 //   - Category-based rules (destructive, network, privilege-escalation, etc.)
 //   - Surface-aware rule matching
 //   - Explicit safety reasoning per decision

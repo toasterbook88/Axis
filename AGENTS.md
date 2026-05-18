@@ -153,7 +153,7 @@ HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
-15 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
+21 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
 
 | Command | Purpose |
 | --------- | --------- |
@@ -162,16 +162,22 @@ HDD penalty: −15 for heavy inference.
 | `axis facts [--format json\|yaml]` | Local node facts |
 | `axis status [--cached] [--format]` | Cluster snapshot |
 | `axis task` | Task subcommands: `place`, `context`, `run` |
+| `axis placement explain` | Detailed per-node placement breakdown |
+| `axis profile match` | Workload class inference |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
 | `axis daemon` | Subcommands: `status`, `refresh`, `invalidate`, `restart` |
 | `axis chat [--stream]` | Experimental Ollama chat (advisory only) |
 | `axis agent [--auto-approve]` | Agentic tool-calling assistant |
+| `axis llm` | LLM routing and model management |
+| `axis cortex` | Distributed vector memory / event bus |
 | `axis context show\|clear` | Inspect or clear placement memory |
 | `axis scripts list` | List built-in helper scripts |
 | `axis skills` | Show learned skills/failures |
 | `axis completion` | Shell completions (bash/zsh/fish/powershell) |
 | `axis doctor` | Validate config, SSH connectivity, daemon health |
+| `axis summary` | Cluster summary view |
+| `axis reservations` | Reservation inspection |
 
 ### Exit codes (`cmd/axis/exit.go`)
 

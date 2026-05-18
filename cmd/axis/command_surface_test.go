@@ -159,12 +159,15 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string) error {
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string, pprof bool) error {
 		if addr != "127.0.0.1:5151" {
 			t.Fatalf("addr = %q, want 127.0.0.1:5151", addr)
 		}
 		if d != serveDaemon(fake) {
 			t.Fatalf("expected injected daemon instance")
+		}
+		if pprof {
+			t.Fatal("expected pprof=false by default")
 		}
 		return nil
 	})
@@ -198,12 +201,15 @@ func TestDaemonStartCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string) error {
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string, pprof bool) error {
 		if addr != "127.0.0.1:6262" {
 			t.Fatalf("addr = %q, want 127.0.0.1:6262", addr)
 		}
 		if d != serveDaemon(fake) {
 			t.Fatalf("expected injected daemon instance")
+		}
+		if pprof {
+			t.Fatal("expected pprof=false by default")
 		}
 		return nil
 	})
@@ -228,6 +234,30 @@ func TestDaemonStartCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "AXIS HTTP API listening on http://127.0.0.1:6262") {
 		t.Fatalf("expected daemon start banner, got %q", stdout)
+	}
+}
+
+func TestServeCmdPassesPprofFlag(t *testing.T) {
+	fake := &fakeServeDaemon{}
+	restoreDaemon := stubServeDaemonFactory(t, func(time.Duration) serveDaemon {
+		return fake
+	})
+	defer restoreDaemon()
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string, pprof bool) error {
+		if !pprof {
+			t.Fatal("expected pprof=true when flag is set")
+		}
+		return nil
+	})
+	defer restoreServe()
+
+	_, _, err := captureProcessOutput(t, func() error {
+		cmd := serveCmd()
+		cmd.SetArgs([]string{"--addr", "127.0.0.1:7373", "--pprof"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("serve Execute: %v", err)
 	}
 }
 
@@ -983,7 +1013,7 @@ func stubServeDaemonFactory(t *testing.T, fn func(time.Duration) serveDaemon) fu
 	}
 }
 
-func stubServeHTTPAPI(t *testing.T, fn func(context.Context, string, serveDaemon, string) error) func() {
+func stubServeHTTPAPI(t *testing.T, fn func(context.Context, string, serveDaemon, string, bool) error) func() {
 	t.Helper()
 	prev := serveHTTPAPI
 	serveHTTPAPI = fn

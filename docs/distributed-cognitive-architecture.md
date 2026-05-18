@@ -111,7 +111,7 @@ AXIS implements a **six-layer cognitive stack**:
 
 ## 6. Implementation Roadmap
 
-**Phase 1 (v0.10)**: Model inventory + role-aware placement  
+**Phase 1 (v0.10)**: Model inventory + role-aware placement — shipped in AXIS v0.10.x  
 **Phase 2 (Next 4–8 weeks)**: Enhanced orchestration + unified gateway  
 **Phase 3 (v0.2+)**: Plasticity engine + cross-paradigm support
 

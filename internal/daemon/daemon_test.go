@@ -899,3 +899,51 @@ func TestDaemonRefreshCoalescingAndLatency(t *testing.T) {
 		t.Fatalf("expected non-negative MaxRefreshLatencyMs, got %d", meta.MaxRefreshLatencyMs)
 	}
 }
+
+func TestNewDefaultCreatesMeshWhenNoDiscoveryConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	d := NewDefault(time.Minute)
+	if d.Mesh() == nil {
+		t.Fatal("expected mesh to be created when no discovery config exists")
+	}
+}
+
+func TestNewDefaultCreatesMeshWhenDiscoveryEnabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configBody := []byte("nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: axis\ndiscovery:\n  enabled: true\n")
+	if err := os.WriteFile(configPath, configBody, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	d := NewDefault(time.Minute)
+	if d.Mesh() == nil {
+		t.Fatal("expected mesh to be created when discovery.enabled is true")
+	}
+}
+
+func TestNewDefaultOmitsMeshWhenDiscoveryDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configBody := []byte("nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: axis\ndiscovery:\n  enabled: false\n")
+	if err := os.WriteFile(configPath, configBody, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	d := NewDefault(time.Minute)
+	if d.Mesh() != nil {
+		t.Fatal("expected mesh to be omitted when discovery.enabled is false")
+	}
+}

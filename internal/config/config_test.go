@@ -147,6 +147,26 @@ discovery:
 	}
 }
 
+func TestIsMeshEnabled(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{"nil config", nil, true},
+		{"no discovery", &Config{Nodes: []NodeConfig{{Name: "a", Hostname: "a.local", SSHUser: "u"}}}, true},
+		{"discovery enabled", &Config{Nodes: []NodeConfig{{Name: "a", Hostname: "a.local", SSHUser: "u"}}, Discovery: &DiscoveryConfig{Enabled: true}}, true},
+		{"discovery disabled", &Config{Nodes: []NodeConfig{{Name: "a", Hostname: "a.local", SSHUser: "u"}}, Discovery: &DiscoveryConfig{Enabled: false}}, false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.IsMeshEnabled(); got != tt.want {
+				t.Fatalf("IsMeshEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidate_EmptyNodes(t *testing.T) {
 	cfg := &Config{Nodes: []NodeConfig{}}
 	if err := cfg.Validate(); err == nil {

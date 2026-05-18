@@ -105,17 +105,19 @@ func daemonCmd() *cobra.Command {
 func daemonStartCmd() *cobra.Command {
 	var addr string
 	var refreshInterval time.Duration
+	var pprof bool
 
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start the local AXIS daemon HTTP API with background snapshot refresh",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval)
+			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval, pprof)
 		},
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", api.DefaultAddr(), "Listen address for the local AXIS API (Unix socket or TCP host:port)")
 	cmd.Flags().DurationVar(&refreshInterval, "refresh", time.Minute, "Background snapshot refresh interval")
+	cmd.Flags().BoolVar(&pprof, "pprof", false, "Expose /debug/pprof profiling endpoints")
 	return cmd
 }
 

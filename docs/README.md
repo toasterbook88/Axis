@@ -29,4 +29,4 @@ When docs disagree:
 
 ## Phase Tracking
 
-See [phase-tracking.md](phase-tracking.md) for current status. Phases 1–3 are complete.
+See [phase-tracking.md](phase-tracking.md) for current status. Phases 1–7 are complete.

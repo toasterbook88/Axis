@@ -1,5 +1,5 @@
-// Package placement implements deterministic task placement logic reused by
-// both advisory selection and guarded execution.
+// Package placement is STABLE — deterministic filter, rank, and select for task placement.
+// It is part of the stable operator path.
 package placement
 
 import (
@@ -66,87 +66,131 @@ func isBlockingFailure(class models.FailureClass) bool {
 //
 // 10. Node name ascending (stable tiebreak)
 func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
-	ranked := make([]models.NodeFacts, len(candidates))
-	copy(ranked, candidates)
+	// Precompute cluster-level constants once to avoid O(N) scans inside
+	// the per-node loop and the comparator.
+	clusterReserved := totalReservedFromNodes(candidates)
 
-	// Precompute empirical observations once before sorting so the comparator
-	// uses a consistent snapshot. Calling time.Now() inside the comparator
-	// could produce non-deterministic results if an observation crosses the
-	// staleness boundary mid-sort, potentially violating strict weak ordering.
-	empirical := make(map[string]*models.ExecutionObservation, len(ranked))
-	for _, n := range ranked {
-		empirical[n.Name] = empiricalObservation(n, reqs, st)
+	type rankKey struct {
+		idx                     int
+		allocatableRAM          int64
+		empirical               *models.ExecutionObservation
+		residentModelRank       int
+		preferredBackendRank    int
+		gpuScore                int
+		headroom                int64
+		turboQuantRank          int
+		unifiedMemoryRank       int
+		pressureRank            int
+		reservationRatio        float64
+		clusterReservationShare float64
 	}
 
-	sort.SliceStable(ranked, func(i, j int) bool {
-		ri := allocatableRAM(ranked[i])
-		rj := allocatableRAM(ranked[j])
-		if ri != rj {
-			return ri > rj
+	keys := make([]rankKey, len(candidates))
+	for i, n := range candidates {
+		share := 0.0
+		if clusterReserved > 0 && n.RAMReservedMB > 0 {
+			share = float64(n.RAMReservedMB) / float64(clusterReserved)
 		}
 
-		if cmp := compareObservationPreference(empirical[ranked[i].Name], empirical[ranked[j].Name]); cmp != 0 {
+		// Inline headroom computation using precomputed clusterReserved and
+		// share to avoid redundant O(N) scans inside clusterPressurePenalty.
+		minNeeded := effectiveMinFreeRAM(reqs, n)
+		if minNeeded <= 0 {
+			if hint := workload.PeakRAMHint(reqs.Workload.Class); hint > 0 {
+				minNeeded = hint
+			}
+		}
+		free := freeRAMWithState(n)
+		var hr int64 = -1
+		if free >= minNeeded {
+			var penalty int64
+			if minNeeded > 0 && n.RAMReservedMB > 0 && clusterReserved > 0 {
+				penalty = int64(math.Round(share * float64(minNeeded) * 1.5))
+				if penalty < 0 {
+					penalty = 0
+				}
+			}
+			adjusted := free - penalty
+			if adjusted < 0 {
+				adjusted = 0
+			}
+			hr = adjusted - minNeeded
+		}
+
+		// Precompute empirical observations once before sorting so the comparator
+		// uses a consistent snapshot. Calling time.Now() inside the comparator
+		// could produce non-deterministic results if an observation crosses the
+		// staleness boundary mid-sort, potentially violating strict weak ordering.
+		keys[i] = rankKey{
+			idx:                     i,
+			allocatableRAM:          allocatableRAM(n),
+			empirical:               empiricalObservation(n, reqs, st),
+			residentModelRank:       residentModelRank(n, reqs),
+			preferredBackendRank:    preferredBackendRank(n, reqs),
+			gpuScore:                gpuScore(n, reqs),
+			headroom:                hr,
+			turboQuantRank:          turboQuantRank(n),
+			unifiedMemoryRank:       unifiedMemoryRank(n, reqs),
+			pressureRank:            pressureRank(pressureOf(n)),
+			reservationRatio:        reservationRatio(n),
+			clusterReservationShare: share,
+		}
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		if keys[i].allocatableRAM != keys[j].allocatableRAM {
+			return keys[i].allocatableRAM > keys[j].allocatableRAM
+		}
+
+		if cmp := compareObservationPreference(keys[i].empirical, keys[j].empirical); cmp != 0 {
 			return cmp > 0
 		}
 
-		rmi := residentModelRank(ranked[i], reqs)
-		rmj := residentModelRank(ranked[j], reqs)
-		if rmi != rmj {
-			return rmi > rmj
+		if keys[i].residentModelRank != keys[j].residentModelRank {
+			return keys[i].residentModelRank > keys[j].residentModelRank
 		}
 
-		bi := preferredBackendRank(ranked[i], reqs)
-		bj := preferredBackendRank(ranked[j], reqs)
-		if bi != bj {
-			return bi > bj
+		if keys[i].preferredBackendRank != keys[j].preferredBackendRank {
+			return keys[i].preferredBackendRank > keys[j].preferredBackendRank
 		}
 
-		gi := gpuScore(ranked[i], reqs)
-		gj := gpuScore(ranked[j], reqs)
-		if gi != gj {
-			return gi > gj
+		if keys[i].gpuScore != keys[j].gpuScore {
+			return keys[i].gpuScore > keys[j].gpuScore
 		}
 
-		hi := headroom(ranked[i], candidates, reqs)
-		hj := headroom(ranked[j], candidates, reqs)
-		if hi != hj {
-			return hi > hj
+		if keys[i].headroom != keys[j].headroom {
+			return keys[i].headroom > keys[j].headroom
 		}
 
 		if reqs.PrefersTurboQuant {
-			ti := turboQuantRank(ranked[i])
-			tj := turboQuantRank(ranked[j])
-			if ti != tj {
-				return ti > tj
+			if keys[i].turboQuantRank != keys[j].turboQuantRank {
+				return keys[i].turboQuantRank > keys[j].turboQuantRank
 			}
 		}
 
-		ui := unifiedMemoryRank(ranked[i], reqs)
-		uj := unifiedMemoryRank(ranked[j], reqs)
-		if ui != uj {
-			return ui > uj
+		if keys[i].unifiedMemoryRank != keys[j].unifiedMemoryRank {
+			return keys[i].unifiedMemoryRank > keys[j].unifiedMemoryRank
 		}
 
-		pi := pressureOf(ranked[i])
-		pj := pressureOf(ranked[j])
-		if pi != pj {
-			return pressureRank(pi) < pressureRank(pj)
+		if keys[i].pressureRank != keys[j].pressureRank {
+			return keys[i].pressureRank < keys[j].pressureRank
 		}
 
-		ratioI := reservationRatio(ranked[i])
-		ratioJ := reservationRatio(ranked[j])
-		if ratioI != ratioJ {
-			return ratioI < ratioJ
+		if keys[i].reservationRatio != keys[j].reservationRatio {
+			return keys[i].reservationRatio < keys[j].reservationRatio
 		}
 
-		shareI := clusterReservationShare(ranked[i], ranked)
-		shareJ := clusterReservationShare(ranked[j], ranked)
-		if shareI != shareJ {
-			return shareI < shareJ
+		if keys[i].clusterReservationShare != keys[j].clusterReservationShare {
+			return keys[i].clusterReservationShare < keys[j].clusterReservationShare
 		}
 
-		return ranked[i].Name < ranked[j].Name
+		return candidates[keys[i].idx].Name < candidates[keys[j].idx].Name
 	})
+
+	ranked := make([]models.NodeFacts, len(keys))
+	for i, k := range keys {
+		ranked[i] = candidates[k.idx]
+	}
 
 	return ranked
 }

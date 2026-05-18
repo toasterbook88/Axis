@@ -65,8 +65,8 @@ The live repo currently contains:
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 - Shell-quoting-safe remote cleanup traps: variable assignment pattern (`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`) eliminates nested quoting interaction; adversarial test suite covers spaces, quotes, dollar signs, backticks, semicolons
 - `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated
-- Internal library packages for v0.10.0 groundwork: `internal/mesh/` (gossip peer discovery, HMAC-SHA256 auth, not wired into CLI), `internal/reservation/` (double-entry ledger, wired into task placement as library, no standalone CLI command), `internal/safety/structured.go` (parsed command analysis, learned approvals disabled, not wired into operator path), `internal/api/v2.go` (active read routes + explicit 501 stubs for unimplemented endpoints)
-- `IMPROVEMENTS.md` and `STRUCTURE.md` document the v0.10.0 scaffolding scope; README marks these as "Proposed for v0.10.0 (not yet shipped)"
+- Internal library packages with scaffolding not wired into the CLI operator path: `internal/mesh/` (gossip peer discovery, HMAC-SHA256 auth), `internal/reservation/` (double-entry ledger, wired into task placement as library, no standalone CLI command), `internal/safety/structured.go` (parsed command analysis, learned approvals disabled), `internal/api/v2.go` (active read routes + explicit 501 stubs for unimplemented endpoints)
+- `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
 
 The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 

@@ -1,7 +1,5 @@
-// Package llmrouter implements semantic workload classification and LLM routing
-// for AXIS. The Engine classifies raw user prompts into WorkloadClass values
-// using a lightweight local model (via Ollama) before placement decisions are
-// made, replacing rigid string matchers with natural-language understanding.
+// Package llmrouter is EXPERIMENTAL — semantic workload classification and LLM routing.
+// It is subordinate to observed state and emits warnings automatically.
 //
 // # Design Constraints
 //

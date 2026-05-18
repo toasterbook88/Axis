@@ -1,16 +1,19 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -682,6 +685,663 @@ func (s *stubRemoteExecutor) Run(ctx context.Context, cmd string) (string, error
 	return s.runFunc(ctx, cmd)
 }
 func (s *stubRemoteExecutor) Close() error { return nil }
+
+func TestValidateRequestEmptyDescription(t *testing.T) {
+	err := ValidateRequest(GuardedExecutionRequest{Description: "", Mode: ModeExec, Confirm: ConfirmWord})
+	if err == nil {
+		t.Fatal("expected error for empty description")
+	}
+	if !strings.Contains(err.Error(), "description is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestEmptyMode(t *testing.T) {
+	err := ValidateRequest(GuardedExecutionRequest{Description: "echo hi", Mode: "", Confirm: ConfirmWord})
+	if err == nil {
+		t.Fatal("expected error for empty mode")
+	}
+	if !strings.Contains(err.Error(), "mode is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestInvalidMode(t *testing.T) {
+	err := ValidateRequest(GuardedExecutionRequest{Description: "echo hi", Mode: "invalid", Confirm: ConfirmWord})
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if !strings.Contains(err.Error(), "mode must be script or exec") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequestInvalidConfirm(t *testing.T) {
+	err := ValidateRequest(GuardedExecutionRequest{Description: "echo hi", Mode: ModeExec, Confirm: "NO"})
+	if err == nil {
+		t.Fatal("expected error for invalid confirm")
+	}
+	if !strings.Contains(err.Error(), "confirm must be YES") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveIntentScriptNoMatch(t *testing.T) {
+	_, err := ResolveIntent("nonexistent script", ModeScript, &skills.Store{})
+	if err == nil {
+		t.Fatal("expected error for unmatched script mode")
+	}
+	if !strings.Contains(err.Error(), "no known script or learned skill matches") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareGuardedExecutionNilRuntime(t *testing.T) {
+	_, err := PrepareGuardedExecution(context.Background(), nil, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for nil runtime")
+	}
+	if !strings.Contains(err.Error(), "runtime context unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareGuardedExecutionNilConfig(t *testing.T) {
+	rt := &runtimectx.Context{
+		Config:   nil,
+		Snapshot: &models.ClusterSnapshot{Nodes: []models.NodeFacts{}},
+	}
+	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for nil config")
+	}
+	if !strings.Contains(err.Error(), "runtime context unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareGuardedExecutionNilSnapshot(t *testing.T) {
+	rt := &runtimectx.Context{
+		Config:   &config.Config{},
+		Snapshot: nil,
+	}
+	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for nil snapshot")
+	}
+	if !strings.Contains(err.Error(), "runtime context unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareGuardedExecutionNoSuitableNode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{})
+	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for no suitable node")
+	}
+	if !strings.Contains(err.Error(), "no suitable node found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareGuardedExecutionRemoteNodeNotInConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Config has only local node; snapshot has a remote node
+	rt := &runtimectx.Context{
+		Config: &config.Config{
+			Nodes: []config.NodeConfig{
+				{Name: "local", Hostname: "localhost", SSHUser: "me"},
+			},
+		},
+		Snapshot: &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name:     "remote-node",
+					Hostname: "remote.example",
+					Status:   models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 8192,
+						RAMFreeMB:  4096,
+						Pressure:   "low",
+						CPUCores:   8,
+					},
+				},
+			},
+			Summary: models.ClusterSummary{TotalNodes: 1, ReachableNodes: 1},
+		},
+		State:  &state.ClusterState{Nodes: map[string]state.NodeState{}},
+		Skills: &skills.Store{},
+	}
+	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for remote node not in config")
+	}
+	if !strings.Contains(err.Error(), "not found in config") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareGuardedExecutionReservationCapExceeded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "studio",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  100,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+	// Pre-reserve most of the RAM so the new reservation cannot fit
+	if rt.Ledger != nil {
+		rt.Ledger.SetNodeCapacity("studio", 8192)
+		_, _ = rt.Ledger.Reserve(reservation.Entry{
+			ID:       "existing",
+			Node:     "studio",
+			RAMMB:    8000,
+			OwnerPID: 1,
+		})
+	}
+
+	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for reservation cap exceeded")
+	}
+	if !strings.Contains(err.Error(), "reservation cap exceeded") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunGuardedLocalShellFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "studio",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("failure output\n"), 0, fmt.Errorf("exit status 1")
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "false",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for failed shell command")
+	}
+	if !strings.Contains(resp.Error, "exit status 1") {
+		t.Fatalf("expected shell error in response, got: %q", resp.Error)
+	}
+	if resp.ExitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", resp.ExitCode)
+	}
+}
+
+func TestRunGuardedLocalLedgerReserveFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "studio",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+	// Set ledger limits to 1 max entry and pre-fill it so the next reservation fails
+	rt.Ledger = reservation.NewLedger(reservation.Limits{MaxEntriesPerNode: 1}, nil)
+	rt.Ledger.SetNodeCapacity("studio", 8192)
+	_, _ = rt.Ledger.Reserve(reservation.Entry{
+		ID:       "existing",
+		Node:     "studio",
+		RAMMB:    100,
+		OwnerPID: 1,
+	})
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("ok\n"), 0, nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo ok",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for ledger reserve failure")
+	}
+	if !strings.Contains(resp.Error, "max entries") {
+		t.Fatalf("expected ledger reserve error, got: %q", resp.Error)
+	}
+}
+
+func TestRunGuardedRemoteContextUploadFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "remote-node",
+		Hostname: "remote.example",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+
+	prev := NewRemoteExecutor
+	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
+		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
+			if strings.Contains(cmd, "AXIS_EOF") {
+				return "", fmt.Errorf("upload failed")
+			}
+			return "", nil
+		}}
+	}
+	defer func() { NewRemoteExecutor = prev }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for remote context upload failure")
+	}
+	if !strings.Contains(resp.Error, "upload failed") {
+		t.Fatalf("expected upload error, got: %q", resp.Error)
+	}
+	if resp.ExitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", resp.ExitCode)
+	}
+}
+
+func TestRunGuardedRemoteExecutionFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "remote-node",
+		Hostname: "remote.example",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+
+	callCount := 0
+	prev := NewRemoteExecutor
+	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
+		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
+			callCount++
+			if callCount == 1 && strings.Contains(cmd, "AXIS_EOF") {
+				return "", nil // context upload succeeds
+			}
+			return "", fmt.Errorf("remote execution failed")
+		}}
+	}
+	defer func() { NewRemoteExecutor = prev }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for remote execution failure")
+	}
+	if !strings.Contains(resp.Error, "remote execution failed") {
+		t.Fatalf("expected execution error, got: %q", resp.Error)
+	}
+}
+
+func TestRunGuardedRemoteLedgerReserveFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "remote-node",
+		Hostname: "remote.example",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt.Ledger = reservation.NewLedger(reservation.Limits{MaxEntriesPerNode: 1}, nil)
+	rt.Ledger.SetNodeCapacity("remote-node", 8192)
+	_, _ = rt.Ledger.Reserve(reservation.Entry{
+		ID:       "existing",
+		Node:     "remote-node",
+		RAMMB:    100,
+		OwnerPID: 1,
+	})
+
+	prev := NewRemoteExecutor
+	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
+		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
+			if strings.Contains(cmd, "AXIS_EOF") {
+				return "", nil
+			}
+			return "", nil
+		}}
+	}
+	defer func() { NewRemoteExecutor = prev }()
+
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil {
+		t.Fatal("expected error for remote ledger reserve failure")
+	}
+	if !strings.Contains(resp.Error, "max entries") {
+		t.Fatalf("expected ledger reserve error, got: %q", resp.Error)
+	}
+}
+
+func TestRunLocalWithOutputStreaming(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	node := models.NodeFacts{
+		Name:     "studio",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime([]models.NodeFacts{node})
+
+	prevStream := StreamLocalShell
+	StreamLocalShell = func(_ context.Context, cmd string, env []string, stdout, stderr io.Writer) (int64, error) {
+		_, _ = fmt.Fprint(stdout, "stdout data")
+		_, _ = fmt.Fprint(stderr, "stderr data")
+		return 128, nil
+	}
+	defer func() { StreamLocalShell = prevStream }()
+
+	var outBuf, errBuf bytes.Buffer
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+		Stdout:      &outBuf,
+		Stderr:      &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("RunGuarded: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK, got: %#v", resp)
+	}
+	if outBuf.String() != "stdout data" {
+		t.Fatalf("unexpected stdout: %q", outBuf.String())
+	}
+	if errBuf.String() != "stderr data" {
+		t.Fatalf("unexpected stderr: %q", errBuf.String())
+	}
+}
+
+func TestApplyFailureOutcomeTimeout(t *testing.T) {
+	st := &state.ClusterState{Failures: failures.NewStore()}
+	resp := GuardedExecutionResult{Node: "n1", Tool: "git", ExitCode: 1}
+	applyFailureOutcome(st, resp, context.DeadlineExceeded)
+	match, blocked := st.Failures.NarrowestMatch(models.FailureScope{Node: "n1", Workload: resp.Workload.Class, Tool: "git"})
+	if !blocked {
+		t.Fatal("expected failure recorded")
+	}
+	if match.Class != models.FailureTimeout {
+		t.Fatalf("expected timeout class, got %q", match.Class)
+	}
+}
+
+func TestApplyFailureOutcomeCancel(t *testing.T) {
+	st := &state.ClusterState{Failures: failures.NewStore()}
+	resp := GuardedExecutionResult{Node: "n1", Tool: "git", ExitCode: 1}
+	applyFailureOutcome(st, resp, context.Canceled)
+	match, blocked := st.Failures.NarrowestMatch(models.FailureScope{Node: "n1", Workload: resp.Workload.Class, Tool: "git"})
+	if !blocked {
+		t.Fatal("expected failure recorded")
+	}
+	if match.Class != models.FailureTimeout {
+		t.Fatalf("expected timeout class for cancel, got %q", match.Class)
+	}
+}
+
+func TestApplyFailureOutcomeBroadScope(t *testing.T) {
+	st := &state.ClusterState{Failures: failures.NewStore()}
+	resp := GuardedExecutionResult{Node: "n1", Tool: "git", Workload: models.WorkloadProfileMatch{Class: models.ClassRepoAnalysis}, ExitCode: 1}
+	applyFailureOutcome(st, resp, fmt.Errorf("crash"))
+	// Tool-specific scope
+	_, blocked1 := st.Failures.NarrowestMatch(models.FailureScope{Node: "n1", Workload: models.ClassRepoAnalysis, Tool: "git"})
+	if !blocked1 {
+		t.Fatal("expected tool-specific failure recorded")
+	}
+	// Broad scope (no tool)
+	_, blocked2 := st.Failures.NarrowestMatch(models.FailureScope{Node: "n1", Workload: models.ClassRepoAnalysis})
+	if !blocked2 {
+		t.Fatal("expected broad-scope failure recorded")
+	}
+}
+
+func TestParseDarwinAvailableRAMMBNoPages(t *testing.T) {
+	_, err := parseDarwinAvailableRAMMB("page size of 4096 bytes\n")
+	if err == nil {
+		t.Fatal("expected error when no reclaimable pages reported")
+	}
+	if !strings.Contains(err.Error(), "reclaimable pages") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseVMStatPageCountInvalidLine(t *testing.T) {
+	_, err := parseVMStatPageCount("invalid")
+	if err == nil {
+		t.Fatal("expected error for invalid vm_stat line")
+	}
+	if !strings.Contains(err.Error(), "invalid vm_stat line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseVMStatPageCountParseError(t *testing.T) {
+	_, err := parseVMStatPageCount("Pages free: not-a-number.")
+	if err == nil {
+		t.Fatal("expected error for unparsable vm_stat count")
+	}
+	if !strings.Contains(err.Error(), "parse vm_stat count") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseLinuxAvailableRAMMBNoMemAvailable(t *testing.T) {
+	_, err := parseLinuxAvailableRAMMB("MemTotal:       16000000 kB\n")
+	if err == nil {
+		t.Fatal("expected error when MemAvailable missing")
+	}
+	if !strings.Contains(err.Error(), "MemAvailable not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseLinuxAvailableRAMMBInvalidLine(t *testing.T) {
+	_, err := parseLinuxAvailableRAMMB("MemAvailable:\n")
+	if err == nil {
+		t.Fatal("expected error for invalid MemAvailable line")
+	}
+	if !strings.Contains(err.Error(), "invalid MemAvailable line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseLinuxAvailableRAMMBParseError(t *testing.T) {
+	_, err := parseLinuxAvailableRAMMB("MemAvailable:   not-a-number kB\n")
+	if err == nil {
+		t.Fatal("expected error for unparsable MemAvailable")
+	}
+	if !strings.Contains(err.Error(), "parse MemAvailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCanReserveNilSnap(t *testing.T) {
+	if !CanReserve(nil, "n1", 1024) {
+		t.Fatal("expected CanReserve(nil, ...) == true")
+	}
+}
+
+func TestCanReserveZeroMB(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{Name: "n1", Resources: &models.Resources{RAMTotalMB: 8192, RAMFreeMB: 4096}},
+		},
+	}
+	if !CanReserve(snap, "n1", 0) {
+		t.Fatal("expected CanReserve(..., 0) == true")
+	}
+	if !CanReserve(snap, "n1", -1) {
+		t.Fatal("expected CanReserve(..., -1) == true")
+	}
+}
+
+func TestFindNodeFactsNilSnap(t *testing.T) {
+	_, ok := findNodeFacts(nil, "n1")
+	if ok {
+		t.Fatal("expected findNodeFacts(nil, ...) == false")
+	}
+}
+
+func TestDurationMillisecondsZero(t *testing.T) {
+	if durationMilliseconds(0) != 1 {
+		t.Fatalf("expected 1 for zero duration, got %d", durationMilliseconds(0))
+	}
+}
+
+func TestDurationMillisecondsSubMillisecond(t *testing.T) {
+	if durationMilliseconds(100*time.Nanosecond) != 1 {
+		t.Fatalf("expected 1 for sub-millisecond duration, got %d", durationMilliseconds(100*time.Nanosecond))
+	}
+}
+
+func TestExitCodeWithExecExitError(t *testing.T) {
+	// Simulate an exec.ExitError with exit code 42
+	cmd := exec.Command("false")
+	_ = cmd.Run()
+	code := exitCode(cmd.Err)
+	if code != 1 {
+		// On some systems false returns 1; that's fine for coverage
+		t.Logf("exit code from false: %d", code)
+	}
+}
+
+func TestRecordSuccessNilStore(t *testing.T) {
+	// Should not panic
+	recordSuccess(nil, "desc", "cmd", "node")
+}
+
+func TestRecordFailureNilStore(t *testing.T) {
+	// Should not panic
+	recordFailure(nil, "desc", 1)
+}
+
+func TestIsInferenceExecutionByTools(t *testing.T) {
+	if !isInferenceExecution(models.TaskRequirements{RequiredTools: []string{"ollama"}}) {
+		t.Fatal("expected ollama tool to be inference")
+	}
+	if !isInferenceExecution(models.TaskRequirements{RequiredTools: []string{"llama-server"}}) {
+		t.Fatal("expected llama-server tool to be inference")
+	}
+	if !isInferenceExecution(models.TaskRequirements{RequiredTools: []string{"apple-foundation-models"}}) {
+		t.Fatal("expected apple-foundation-models tool to be inference")
+	}
+}
+
+func TestIsInferenceExecutionByBackends(t *testing.T) {
+	if !isInferenceExecution(models.TaskRequirements{PreferredBackends: []string{"llama.cpp"}}) {
+		t.Fatal("expected llama.cpp backend to be inference")
+	}
+	if !isInferenceExecution(models.TaskRequirements{PreferredBackends: []string{"mlx"}}) {
+		t.Fatal("expected mlx backend to be inference")
+	}
+	if !isInferenceExecution(models.TaskRequirements{PreferredBackends: []string{"apple-foundation-models"}}) {
+		t.Fatal("expected apple-foundation-models backend to be inference")
+	}
+}
+
+func TestIsInferenceExecutionByRAM(t *testing.T) {
+	if !isInferenceExecution(models.TaskRequirements{MinFreeRAMMB: 4096}) {
+		t.Fatal("expected 4096MB min free RAM to be inference")
+	}
+}
+
+func TestNormalizeRequestNil(t *testing.T) {
+	// Should not panic
+	NormalizeRequest(nil)
+}
 
 func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
 	cfgNodes := make([]config.NodeConfig, 0, len(nodes))

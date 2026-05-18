@@ -1,0 +1,10 @@
+goos: linux
+goarch: amd64
+pkg: github.com/toasterbook88/axis/internal/snapshot
+cpu: Intel(R) Core(TM) i9-9900K CPU @ 3.60GHz
+BenchmarkBuild/nodes=1-16         	 5620892	       212.9 ns/op	     448 B/op	       2 allocs/op
+BenchmarkBuild/nodes=10-16        	  444026	      2730 ns/op	   11320 B/op	      14 allocs/op
+BenchmarkBuild/nodes=50-16        	  107335	     11154 ns/op	   50168 B/op	      31 allocs/op
+BenchmarkBuild/nodes=100-16       	   52273	     23536 ns/op	  107384 B/op	      45 allocs/op
+PASS
+ok  	github.com/toasterbook88/axis/internal/snapshot	5.436s

@@ -266,7 +266,7 @@ func TestSSHExecutorConnectUsesResolvedHostnameAndHostKeyAlias(t *testing.T) {
 	}
 }
 
-func startSSHTestServer(t *testing.T, authorized ssh.PublicKey, hostSigner ssh.Signer, responses map[string]sshCommandResponse) *sshTestServer {
+func startSSHTestServer(t testing.TB, authorized ssh.PublicKey, hostSigner ssh.Signer, responses map[string]sshCommandResponse) *sshTestServer {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -377,7 +377,7 @@ func (s *sshTestServer) Port() int {
 	return port
 }
 
-func generateTestKeyPair(t *testing.T) (*rsa.PrivateKey, ssh.Signer) {
+func generateTestKeyPair(t testing.TB) (*rsa.PrivateKey, ssh.Signer) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -390,7 +390,7 @@ func generateTestKeyPair(t *testing.T) (*rsa.PrivateKey, ssh.Signer) {
 	return key, signer
 }
 
-func writeSSHClientEnv(t *testing.T, clientKey *rsa.PrivateKey, hostSigner ssh.Signer, host string, port int) string {
+func writeSSHClientEnv(t testing.TB, clientKey *rsa.PrivateKey, hostSigner ssh.Signer, host string, port int) string {
 	t.Helper()
 	home := t.TempDir()
 	sshDir := filepath.Join(home, ".ssh")
@@ -415,7 +415,7 @@ func writeSSHClientEnv(t *testing.T, clientKey *rsa.PrivateKey, hostSigner ssh.S
 	return home
 }
 
-func stubSSHConfigEnv(t *testing.T, home string) func() {
+func stubSSHConfigEnv(t testing.TB, home string) func() {
 	t.Helper()
 
 	prevHome := os.Getenv("HOME")
@@ -443,7 +443,7 @@ func stubSSHConfigEnv(t *testing.T, home string) func() {
 	}
 }
 
-func stubSSHConfigEnvWithOutput(t *testing.T, home, output string) func() {
+func stubSSHConfigEnvWithOutput(t testing.TB, home, output string) func() {
 	t.Helper()
 
 	prevHome := os.Getenv("HOME")

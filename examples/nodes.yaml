@@ -1,0 +1,71 @@
+# AXIS cluster configuration example
+# Copy to ~/.axis/nodes.yaml and adjust for your environment.
+#
+# Required fields per node: name, hostname, ssh_user
+# Unknown YAML keys are rejected at load time so typos fail fast.
+# SSH key-based authentication must be configured for each remote node.
+
+nodes:
+  - name: workstation-alpha
+    hostname: alpha.example.com
+    ssh_user: operator
+    ssh_port: 22
+    role: primary
+    timeout_sec: 15
+    # stable_id is optional and used for locality matching and deduplication.
+    # It should match the node's observed machine-id or platform UUID.
+    # stable_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+  - name: gpu-worker-beta
+    hostname: beta.example.com
+    ssh_user: operator
+    ssh_port: 22
+    role: worker
+    timeout_sec: 10
+
+  - name: edge-node-gamma
+    hostname: gamma.example.com
+    ssh_user: deploy
+    ssh_port: 2222
+    role: worker
+    timeout_sec: 20
+
+# Optional experimental UDP discovery settings.
+# When enabled, AXIS broadcasts and listens for UDP beacons on the cluster.
+discovery:
+  enabled: true
+  udp_port: 42424
+  beacon_interval_sec: 3
+  # Secret is used for HMAC-SHA256 beacon authentication.
+  # Rotate this value regularly; do not commit it to version control.
+  secret: example-shared-cluster-secret
+
+# Optional chat / agent preferences.
+chat:
+  # Default Ollama model tag when no --model flag is given.
+  default_model: "llama3.2:latest"
+
+# Optional AI inference provider configuration.
+# This section is only needed if you route inference through cloud or
+# additional local endpoints beyond auto-detected Ollama.
+ai_providers:
+  ollama-local:
+    type: local
+    endpoint: http://localhost:11434
+    enabled: true
+  openai:
+    type: cloud
+    api_key_env: OPENAI_API_KEY
+    enabled: false
+    priority: 80
+    models:
+      - name: gpt-4o
+        aliases: ["gpt4"]
+        cost_per_1k: 0.005
+
+# Optional cluster-wide inference preferences.
+inference:
+  default_mode: local
+  prefer: latency
+  max_cost_per_request: 0.10
+  budget_alert_threshold: 5.00

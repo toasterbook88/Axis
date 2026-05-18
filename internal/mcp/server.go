@@ -397,15 +397,6 @@ func currentPlacementInputs(ctx context.Context, useCache bool, cacheAddr string
 	return snap, st, nil
 }
 
-func findNodeConfig(cfg *config.Config, name string) (config.NodeConfig, bool) {
-	for _, n := range cfg.Nodes {
-		if strings.EqualFold(n.Name, name) {
-			return n, true
-		}
-	}
-	return config.NodeConfig{}, false
-}
-
 func runFirstAvailableCommand(ctx context.Context, candidates ...[]string) commandResult {
 	for _, candidate := range candidates {
 		if len(candidate) == 0 {

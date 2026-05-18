@@ -141,7 +141,11 @@ func NewDefault(interval time.Duration) *Daemon {
 	registry := discovery.NewBeaconRegistry()
 	d := New(interval, defaultCollector(registry))
 	d.beaconRegistry = registry
-	d.mesh = mesh.New(mesh.Peer{}, mesh.DefaultConfig(), nil)
+
+	cfg, _ := config.Load(config.DefaultConfigPath())
+	if cfg == nil || cfg.IsMeshEnabled() {
+		d.mesh = mesh.New(mesh.Peer{}, mesh.DefaultConfig(), nil)
+	}
 	return d
 }
 
@@ -479,6 +483,11 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	var stateWarning error
 	if err == nil {
 		st, stateWarning = state.Load()
+		if st != nil {
+			if state.Maintain(st) {
+				_ = st.Save()
+			}
+		}
 		if stateWarning != nil && st == nil {
 			d.mu.Lock()
 			d.nextRefreshAt = now.Add(d.interval)
@@ -649,6 +658,7 @@ func (d *Daemon) Meta() Metadata {
 	if d.ledger != nil {
 		meta.ReservedMB = d.ledger.Summary().TotalReservedMB
 	} else if st, err := state.Load(); st != nil {
+		state.Maintain(st)
 		for _, ns := range st.Nodes {
 			meta.ReservedMB += ns.ReservedMB
 		}
