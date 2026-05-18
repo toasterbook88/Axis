@@ -63,6 +63,9 @@ func recoveredRuntimeContextFromDisk(t *testing.T) *runtimectx.Context {
 	if stateErr != nil && st == nil {
 		t.Fatalf("state.Load failed: %v", stateErr)
 	}
+	if st != nil {
+		state.Maintain(st)
+	}
 	skillStore, skillErr := skills.Load()
 	if skillErr != nil && skillStore == nil {
 		t.Fatalf("skills.Load failed: %v", skillErr)
