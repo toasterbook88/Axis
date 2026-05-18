@@ -1,3 +1,5 @@
+//go:build safety_scaffolded
+
 // Package safety is EXPERIMENTAL — structured safety evaluation and execution blocker.
 // It is subordinate to observed state and emits warnings automatically.
 //   - Category-based rules (destructive, network, privilege-escalation, etc.)

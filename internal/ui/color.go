@@ -48,6 +48,16 @@ var (
 	dim    = color.New(color.Faint)
 )
 
+// ExportedColor printers for direct formatting (e.g. Fprintf / Sprint).
+var (
+	GreenColor  = color.New(color.FgGreen, color.Bold)
+	YellowColor = color.New(color.FgYellow)
+	RedColor    = color.New(color.FgRed, color.Bold)
+	CyanColor   = color.New(color.FgCyan)
+	WhiteColor  = color.New(color.FgWhite, color.Bold)
+	DimColor    = color.New(color.FgHiBlack)
+)
+
 func Bold(a ...interface{}) string   { return bold.Sprint(a...) }
 func Green(a ...interface{}) string  { return green.Sprint(a...) }
 func Yellow(a ...interface{}) string { return yellow.Sprint(a...) }
