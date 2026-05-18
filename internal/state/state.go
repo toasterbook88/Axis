@@ -45,6 +45,7 @@ type TombstoneEntry struct {
 }
 
 type ClusterState struct {
+	Version      int                                    `json:"version,omitempty"`
 	Nodes        map[string]NodeState                   `json:"nodes"`
 	Tombstones   map[string]TombstoneEntry              `json:"tombstones,omitempty"` // legacy
 	Failures     failures.Store                         `json:"failures,omitempty"`
@@ -57,6 +58,7 @@ var quarantineCorruptStateFile = persist.QuarantineCorruptFile
 var execOwnerAlive = processAlive
 
 const (
+	currentStateVersion          = 1
 	staleReservationReclaimAfter = 45 * time.Minute
 	staleReservationHardExpiry   = 24 * time.Hour
 	execHeartbeatStaleAfter      = 2 * time.Minute
@@ -95,12 +97,34 @@ func Load() (*ClusterState, error) {
 	}
 
 	mutated := false
+
+	// One-time migrations: only run when state was written before version tracking.
+	if s.Version < currentStateVersion {
+		if migrated := runMigrations(&s); migrated {
+			mutated = true
+		}
+	}
+
+	// Maintenance: prune and reclaim stale state on every load.
+	if maintained := runMaintenance(&s); maintained {
+		mutated = true
+	}
+
+	if mutated {
+		if err := s.Save(); err != nil {
+			return nil, err
+		}
+	}
+	return &s, nil
+}
+
+// runMigrations performs one-time schema migrations for state written before
+// currentStateVersion. These are idempotent but gated behind version checks to
+// avoid unnecessary work on modern state files.
+func runMigrations(s *ClusterState) bool {
+	mutated := false
 	if len(s.Tombstones) > 0 {
 		for _, t := range s.Tombstones {
-			// Migrate to {Node}-only scope so placement queries on {Node, Workload}
-			// can match via the broad-scope Match semantics.  The legacy TaskPattern
-			// was a free-form string (not a canonical tool name), so including it as
-			// Tool would prevent placement from seeing these records.
 			scope := models.FailureScope{
 				Node: t.NodeName,
 			}
@@ -125,6 +149,13 @@ func Load() (*ClusterState, error) {
 		s.Tombstones = nil
 		mutated = true
 	}
+	return mutated
+}
+
+// runMaintenance performs ongoing cleanup of stale reservations and expired
+// failure records. These run on every load because they are time-dependent.
+func runMaintenance(s *ClusterState) bool {
+	mutated := false
 
 	pruned := s.Failures.Prune()
 	if pruned > 0 {
@@ -168,16 +199,12 @@ func Load() (*ClusterState, error) {
 		s.Nodes[name] = ns
 	}
 
-	if mutated {
-		if err := s.Save(); err != nil {
-			return nil, err
-		}
-	}
-	return &s, nil
+	return mutated
 }
 
 func emptyClusterState() *ClusterState {
 	return &ClusterState{
+		Version:      currentStateVersion,
 		Nodes:        make(map[string]NodeState),
 		Failures:     failures.NewStore(),
 		Observations: make(map[string]models.ExecutionObservation),
@@ -660,6 +687,7 @@ func (s *ClusterState) Save() error {
 	if s.Observations == nil {
 		s.Observations = make(map[string]models.ExecutionObservation)
 	}
+	s.Version = currentStateVersion
 	s.UpdatedAt = time.Now().UTC()
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

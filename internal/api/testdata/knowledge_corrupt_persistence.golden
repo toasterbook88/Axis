@@ -55,6 +55,7 @@
       ]
     },
     "state": {
+      "version": 1,
       "nodes": {},
       "recent_decisions": null,
       "updated_at": "<TIME>"
