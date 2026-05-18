@@ -144,11 +144,12 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 
 		// Process each tool call.
 		for _, tc := range resp.ToolCalls {
+			fmt.Fprintf(a.output, "\n▶ Calling %s...\n", tc.Function.Name)
 			result, err := a.dispatchToolCall(ctx, tc)
 			if err != nil {
 				// Feed the error back to the model for self-correction.
 				errMsg := fmt.Sprintf("Error executing tool %q: %s", tc.Function.Name, err.Error())
-				fmt.Fprintf(a.output, "\n⚠ %s\n", errMsg)
+				fmt.Fprintf(a.output, "⚠ %s\n", errMsg)
 				a.conv.Append(chat.Message{
 					Role:    chat.RoleTool,
 					Content: errMsg,
@@ -156,7 +157,9 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 				continue
 			}
 
-			fmt.Fprintf(a.output, "\n✓ %s returned %d chars\n", tc.Function.Name, len(result))
+			// Print a compact summary line instead of raw char count.
+			summary := formatToolResultSummary(tc.Function.Name, result)
+			fmt.Fprintf(a.output, "✓ %s\n", summary)
 			a.conv.Append(chat.Message{
 				Role:    chat.RoleTool,
 				Content: result,
@@ -166,6 +169,51 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 
 	fmt.Fprintf(a.output, "\n⚠ Agent reached maximum turns (%d). Stopping.\n", a.maxTurns)
 	return nil
+}
+
+// formatToolResultSummary produces a human-readable one-line summary of a
+// tool result for operator feedback.
+func formatToolResultSummary(toolName, result string) string {
+	switch toolName {
+	case "axis_status":
+		// Extract first line (cluster summary).
+		if i := strings.Index(result, "\n"); i > 0 {
+			return toolName + ": " + strings.TrimSpace(result[:i])
+		}
+	case "axis_summary":
+		return toolName + ": " + strings.TrimSpace(result)
+	case "axis_facts":
+		if i := strings.Index(result, "\n"); i > 0 {
+			return toolName + ": " + strings.TrimSpace(result[:i])
+		}
+	case "axis_place":
+		return toolName + ": " + strings.TrimSpace(result)
+	case "axis_reservations":
+		if strings.Contains(result, "Active reservations") {
+			lines := strings.Split(result, "\n")
+			if len(lines) >= 2 {
+				count := 0
+				for _, l := range lines[1:] {
+					if strings.HasPrefix(l, "-") {
+						count++
+					}
+				}
+				return fmt.Sprintf("%s: found %d nodes with active reservations", toolName, count)
+			}
+		}
+		return toolName + ": no active reservations"
+	case "read_file":
+		lines := strings.Count(result, "\n")
+		return fmt.Sprintf("%s: read %d lines (%d chars)", toolName, lines, len(result))
+	case "list_directory":
+		if i := strings.Index(result, "("); i > 0 && strings.Contains(result, " entries)") {
+			return toolName + ": " + strings.TrimSpace(result[strings.Index(result, "Directory:")+len("Directory:"):])
+		}
+		return toolName + ": listed directory"
+	case "run_shell":
+		return toolName + ": executed shell command"
+	}
+	return fmt.Sprintf("%s returned %d chars", toolName, len(result))
 }
 
 // dispatchToolCall handles a single tool call with safety gating and confirmation.
@@ -189,7 +237,6 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	}
 
 	// 4. Read-only tools execute directly (no confirmation needed).
-	fmt.Fprintf(a.output, "\n▶ Executing: %s\n", name)
 	return a.tools.Execute(ctx, name, args)
 }
 

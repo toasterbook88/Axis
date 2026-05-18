@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -107,7 +109,10 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 	tc := &ToolContext{}
 	r := NewToolRegistry(tc)
 
-	expected := []string{"axis_status", "axis_facts", "axis_place", "run_shell"}
+	expected := []string{
+		"axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_reservations", "read_file", "list_directory", "run_shell",
+	}
 	for _, name := range expected {
 		if !r.HasTool(name) {
 			t.Errorf("expected tool %q to be registered", name)
@@ -142,8 +147,8 @@ func TestToolStatusNilSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "no snapshot available") {
-		t.Errorf("expected 'no snapshot available', got: %s", result)
+	if !strings.Contains(result, "No cluster snapshot available") {
+		t.Errorf("expected 'No cluster snapshot available', got: %s", result)
 	}
 }
 
@@ -200,6 +205,103 @@ func TestToolShellBlockedByDesign(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "safety gate") {
 		t.Errorf("expected 'safety gate' error, got: %s", err.Error())
+	}
+}
+
+func TestToolSummary(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Status: "healthy",
+		Nodes:  []models.NodeFacts{{Name: "test-node"}},
+		Summary: models.ClusterSummary{
+			TotalNodes:     1,
+			ReachableNodes: 1,
+		},
+	}
+	tc := &ToolContext{Snapshot: snap}
+	r := NewToolRegistry(tc)
+
+	result, err := r.Execute(context.Background(), "axis_summary", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "1 nodes (1 reachable), status: healthy") {
+		t.Errorf("expected summary result, got: %s", result)
+	}
+}
+
+func TestToolReadFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+	content := []byte("Hello, AXIS!")
+	if err := os.WriteFile(tmpFile, content, 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	// Change to temp dir so relative paths work.
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	result, err := r.Execute(context.Background(), "read_file", json.RawMessage(fmt.Sprintf(`{"path":%q}`, "test.txt")))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Hello, AXIS!") {
+		t.Errorf("expected file content, got: %s", result)
+	}
+}
+
+func TestToolReadFilePathValidation(t *testing.T) {
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	_, err := r.Execute(context.Background(), "read_file", json.RawMessage(`{"path":"../secret.txt"}`))
+	if err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Errorf("expected 'escapes' error, got: %s", err.Error())
+	}
+}
+
+func TestToolListDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		path := filepath.Join(tmpDir, name)
+		if err := os.WriteFile(path, []byte("test"), 0644); err != nil {
+			t.Fatalf("failed to write temp file: %v", err)
+		}
+	}
+
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	result, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":"."}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "a.txt") || !strings.Contains(result, "b.txt") {
+		t.Errorf("expected directory listing with files, got: %s", result)
+	}
+}
+
+func TestToolListDirectoryPathValidation(t *testing.T) {
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	_, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":"/etc/shadow"}`))
+	if err == nil {
+		t.Fatal("expected error for absolute path")
+	}
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Errorf("expected 'escapes' error, got: %s", err.Error())
 	}
 }
 
@@ -676,7 +778,10 @@ func TestExecuteShellExitError(t *testing.T) {
 // --- isReadOnlyTool Tests ---
 
 func TestIsReadOnlyTool(t *testing.T) {
-	readOnly := []string{"axis_status", "axis_facts", "axis_place"}
+	readOnly := []string{
+		"axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_reservations", "read_file", "list_directory",
+	}
 	for _, name := range readOnly {
 		if !isReadOnlyTool(name) {
 			t.Errorf("expected %q to be read-only", name)

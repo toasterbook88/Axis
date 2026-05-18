@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,6 +44,10 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerStatus(tc)
 	r.registerFacts(tc)
 	r.registerPlace(tc)
+	r.registerSummary(tc)
+	r.registerReservations(tc)
+	r.registerReadFile()
+	r.registerListDirectory()
 	r.registerShell()
 	return r
 }
@@ -91,17 +97,13 @@ func (r *ToolRegistry) add(name, description string, params json.RawMessage, exe
 
 func (r *ToolRegistry) registerStatus(tc *ToolContext) {
 	r.add("axis_status",
-		"Return the current AXIS cluster status snapshot as JSON. Use this to answer questions about node health, resources, and cluster state.",
+		"Return a compact human-readable summary of the current AXIS cluster status. Includes node count, health, resources, and warnings. Use this for cluster overview questions.",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			if tc.Snapshot == nil {
-				return `{"error":"no snapshot available — cluster may not be configured"}`, nil
+				return "No cluster snapshot available — cluster may not be configured.", nil
 			}
-			out, err := json.Marshal(tc.Snapshot)
-			if err != nil {
-				return "", fmt.Errorf("marshal snapshot: %w", err)
-			}
-			return string(out), nil
+			return summarizeSnapshot(tc.Snapshot), nil
 		},
 	)
 }
@@ -110,19 +112,15 @@ func (r *ToolRegistry) registerStatus(tc *ToolContext) {
 
 func (r *ToolRegistry) registerFacts(tc *ToolContext) {
 	r.add("axis_facts",
-		"Return local hardware facts for the current machine (CPU, RAM, disk, GPUs, installed tools).",
+		"Return a compact human-readable summary of local hardware facts for the current machine (CPU, RAM, disk, GPUs, installed tools, Ollama status).",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			if tc.Snapshot != nil {
 				if n, ok := models.FindLocalNode(tc.Snapshot.Nodes); ok {
-					out, err := json.Marshal(n)
-					if err != nil {
-						return "", fmt.Errorf("marshal facts: %w", err)
-					}
-					return string(out), nil
+					return summarizeNodeFacts(n), nil
 				}
 			}
-			return `{"error":"local node not found in snapshot"}`, nil
+			return "Local node not found in snapshot.", nil
 		},
 	)
 }
@@ -135,7 +133,7 @@ type placeArgs struct {
 
 func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 	r.add("axis_place",
-		"Select the best node for a task description. Returns a placement decision with node, fit score, and reasoning.",
+		"Select the best node for a task description. Returns a human-readable placement decision with node name, fit score, and reasoning.",
 		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"}},"required":["description"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a placeArgs
@@ -146,17 +144,165 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 				return "", fmt.Errorf("axis_place requires a non-empty \"description\" argument")
 			}
 			if tc.Snapshot == nil || len(tc.Snapshot.Nodes) == 0 {
-				return `{"ok":false,"reasoning":["no nodes available in snapshot"]}`, nil
+				return "Placement: no nodes available in snapshot.", nil
 			}
 			reqs := placement.InferRequirements(a.Description)
 			decision := placement.SelectBestNode(reqs, tc.Snapshot.Nodes, tc.State)
-			out, err := json.Marshal(decision)
-			if err != nil {
-				return "", fmt.Errorf("marshal decision: %w", err)
-			}
-			return string(out), nil
+			return summarizePlacementDecision(decision), nil
 		},
 	)
+}
+
+// --- Tool: axis_summary ---
+
+func (r *ToolRegistry) registerSummary(tc *ToolContext) {
+	r.add("axis_summary",
+		"Return an ultra-compact one-line summary of the cluster (node count, health, total RAM). Good for quick status checks.",
+		json.RawMessage(`{"type":"object","properties":{}}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			if tc.Snapshot == nil {
+				return "No cluster snapshot available.", nil
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "%d nodes (%d reachable), status: %s",
+				tc.Snapshot.Summary.TotalNodes, tc.Snapshot.Summary.ReachableNodes, tc.Snapshot.Status)
+			if tc.Snapshot.Summary.TotalRAMMB > 0 {
+				fmt.Fprintf(&b, ", %d MB RAM total, %d MB free",
+					tc.Snapshot.Summary.TotalRAMMB, tc.Snapshot.Summary.TotalFreeRAMMB)
+			}
+			if len(tc.Snapshot.Warnings) > 0 {
+				fmt.Fprintf(&b, ", %d warnings", len(tc.Snapshot.Warnings))
+			}
+			return b.String(), nil
+		},
+	)
+}
+
+// --- Tool: axis_reservations ---
+
+func (r *ToolRegistry) registerReservations(tc *ToolContext) {
+	r.add("axis_reservations",
+		"List active reservations and task assignments across the cluster.",
+		json.RawMessage(`{"type":"object","properties":{}}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			if tc.State == nil || len(tc.State.Nodes) == 0 {
+				return "No reservation state available.", nil
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "Active reservations for %d nodes:\n", len(tc.State.Nodes))
+			for name, ns := range tc.State.Nodes {
+				if ns.ActiveTasks == 0 && ns.ReservedMB == 0 {
+					continue
+				}
+				fmt.Fprintf(&b, "- %s: %d active tasks, %d MB reserved\n", name, ns.ActiveTasks, ns.ReservedMB)
+				if ns.LastTask != "" {
+					fmt.Fprintf(&b, "  Last task: %s\n", truncate(ns.LastTask, 60))
+				}
+				if len(ns.ActiveExecs) > 0 {
+					fmt.Fprintf(&b, "  Active execs: %s\n", strings.Join(ns.ActiveExecs, ", "))
+				}
+			}
+			return b.String(), nil
+		},
+	)
+}
+
+// --- Tool: read_file ---
+
+type readFileArgs struct {
+	Path string `json:"path"`
+}
+
+func (r *ToolRegistry) registerReadFile() {
+	r.add("read_file",
+		"Read the contents of a file at a given path. Returns the file contents as text. Paths are restricted to the current working directory and its subdirectories for safety.",
+		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative or absolute file path"}},"required":["path"]}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a readFileArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for read_file: expected {\"path\": \"...\"}, got: %s", string(args))
+			}
+			if a.Path == "" {
+				return "", fmt.Errorf("read_file requires a non-empty \"path\" argument")
+			}
+			clean, err := validateToolPath(a.Path)
+			if err != nil {
+				return "", err
+			}
+			data, err := os.ReadFile(clean)
+			if err != nil {
+				return "", fmt.Errorf("cannot read file %q: %w", clean, err)
+			}
+			content := string(data)
+			const maxFileSize = 8000
+			if len(content) > maxFileSize {
+				content = content[:maxFileSize] + "\n... [truncated to 8000 chars]"
+			}
+			return content, nil
+		},
+	)
+}
+
+// --- Tool: list_directory ---
+
+type listDirArgs struct {
+	Path string `json:"path"`
+}
+
+func (r *ToolRegistry) registerListDirectory() {
+	r.add("list_directory",
+		"List files and directories at a given path. Returns a human-readable directory listing. Paths are restricted to the current working directory and its subdirectories for safety.",
+		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative or absolute directory path"}},"required":["path"]}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a listDirArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for list_directory: expected {\"path\": \"...\"}, got: %s", string(args))
+			}
+			if a.Path == "" {
+				a.Path = "."
+			}
+			clean, err := validateToolPath(a.Path)
+			if err != nil {
+				return "", err
+			}
+			entries, err := os.ReadDir(clean)
+			if err != nil {
+				return "", fmt.Errorf("cannot read directory %q: %w", clean, err)
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "Directory: %s (%d entries)\n", clean, len(entries))
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() {
+					name += "/"
+				}
+				b.WriteString(name + "\n")
+			}
+			return b.String(), nil
+		},
+	)
+}
+
+// validateToolPath validates and resolves a path for file tools, preventing
+// directory traversal outside the current working directory.
+func validateToolPath(p string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+	clean := filepath.Clean(p)
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Join(cwd, clean)
+	}
+	// Ensure the resolved path is within cwd.
+	rel, err := filepath.Rel(cwd, clean)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", p, err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("path %q escapes working directory", p)
+	}
+	return clean, nil
 }
 
 // --- Tool: run_shell ---

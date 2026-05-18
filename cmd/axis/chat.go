@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
@@ -32,6 +33,7 @@ func chatCmd() *cobra.Command {
 		useContext bool
 		systemMsg  string
 		format     string
+		resume     bool
 	)
 
 	cmd := &cobra.Command{
@@ -68,6 +70,16 @@ func chatCmd() *cobra.Command {
 			sysPrompt := chat.BuildSystemPrompt(cluster, systemMsg)
 			conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
 
+			// Resume previous conversation if requested.
+			historyPath := chat.PersistPath("chat")
+			if resume {
+				if err := conv.LoadFromFile(historyPath); err != nil {
+					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
+				} else if n := conv.HistoryCount(); n > 0 {
+					fmt.Fprintf(errW, "Resumed %d messages from previous session.\n", n)
+				}
+			}
+
 			fmt.Fprintln(errW, ui.Dim("advisory: chat output is not cluster truth — validate with axis status or axis facts"))
 
 			// Single-shot mode.
@@ -100,19 +112,32 @@ func chatCmd() *cobra.Command {
 				} else {
 					fmt.Fprintln(w)
 				}
+				// Save conversation after single-shot.
+				_ = conv.SaveToFile(historyPath)
 				return nil
 			}
 
-			// Interactive REPL.
+			// Interactive REPL with readline.
 			fmt.Fprintf(errW, "AXIS Chat [%s] — type /help for commands, exit to quit\n\n", ui.Bold(currentModel))
-			scanner := bufio.NewScanner(os.Stdin)
+
+			rl, err := readline.NewEx(&readline.Config{
+				Prompt:          ui.Cyan(">>> "),
+				HistoryFile:     historyPath + ".line",
+				InterruptPrompt: "^C",
+				EOFPrompt:       "exit",
+			})
+			if err != nil {
+				// Fallback to plain scanner if readline fails (e.g., non-TTY).
+				return runPlainREPL(cmd.Context(), client, conv, currentModel, w, errW, timeout, historyPath)
+			}
+			defer rl.Close()
 
 			for {
-				fmt.Fprint(errW, ui.Cyan(">>> "))
-				if !scanner.Scan() {
+				line, err := rl.Readline()
+				if err != nil { // io.EOF or readline.ErrInterrupt
 					break
 				}
-				query := strings.TrimSpace(scanner.Text())
+				query := strings.TrimSpace(line)
 				if query == "" {
 					continue
 				}
@@ -148,6 +173,15 @@ func chatCmd() *cobra.Command {
 				conv.Append(resp)
 				fmt.Fprintln(w)
 			}
+
+			// Save conversation on exit.
+			if n := conv.HistoryCount(); n > 0 {
+				if err := conv.SaveToFile(historyPath); err != nil {
+					fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
+				} else {
+					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", n)
+				}
+			}
 			return nil
 		},
 	}
@@ -158,7 +192,53 @@ func chatCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&useContext, "context", false, "Inject live cluster snapshot into system prompt")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format for single-shot mode (text, json)")
+	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
 	return cmd
+}
+
+// runPlainREPL is the fallback scanner-based REPL when readline is unavailable.
+func runPlainREPL(ctx context.Context, client *chat.Client, conv *chat.Conversation, currentModel string, w, errW io.Writer, timeout time.Duration, historyPath string) error {
+	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Fprint(errW, ui.Cyan(">>> "))
+		if !scanner.Scan() {
+			break
+		}
+		query := strings.TrimSpace(scanner.Text())
+		if query == "" {
+			continue
+		}
+		lower := strings.ToLower(query)
+		if lower == "exit" || lower == "quit" {
+			break
+		}
+		if strings.HasPrefix(query, "/") {
+			nextModel := handleSlashCommand(query, currentModel, conv, errW)
+			if nextModel != "" {
+				currentModel = nextModel
+				client = chat.NewClient(chat.DefaultEndpoint, currentModel)
+			}
+			continue
+		}
+		conv.Append(chat.Message{Role: chat.RoleUser, Content: query})
+		sp := ui.NewSpinner()
+		sp.Start("Thinking...")
+		ctx2, cancel := chatRequestContext(timeout)
+		resp, err := client.ChatStream(ctx2, conv.Messages(), nil, w)
+		sp.Stop("")
+		cancel()
+		if err != nil {
+			fmt.Fprintf(errW, "\n%s\n", ui.Red("Error: ", err))
+			continue
+		}
+		conv.Append(resp)
+		fmt.Fprintln(w)
+	}
+	if n := conv.HistoryCount(); n > 0 {
+		_ = conv.SaveToFile(historyPath)
+	}
+	return nil
 }
 
 // handleSlashCommand processes a slash command and returns a new model name
