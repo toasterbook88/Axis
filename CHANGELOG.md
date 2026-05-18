@@ -1,3 +1,24 @@
+## v0.10.3 (2026-05-18)
+
+### 🐛 Bug Fixes
+* Prefer tool-capable models when auto-selecting for `axis agent` — prevents 400 Bad Request when the alphabetically first installed model (e.g. `gemma3n:e2b`) does not support Ollama tool calling. Falls back to known tool-capable families (llama3.1, qwen3.5, qwen3, etc.) and skips embedding/vision variants (PR #127).
+
+### 🔧 Maintenance
+* Extract `state.Maintain()` from `state.Load()` — eliminates repair-on-read side effect, making `Load()` idempotent and preventing silent `state.json` rewrites on every CLI invocation (PR #126).
+* Update summary golden files to reflect version bump.
+
+### 📚 Documentation
+* Add `docs/roadmap-status.md` — final status of all 53 v9 roadmap items (48 done, 5 Phase G items blocked by evidence discipline).
+
+## v0.10.2 (2026-05-17)
+
+### 🚀 Features
+* Daemon health endpoints (`axis daemon status`) with reservation count and last-refresh timestamp.
+* Placement ranking 54% faster for 50-node clusters via unified memory caching.
+
+### 📚 Documentation
+* Refresh `docs/current-state.md` for v0.10.2 release.
+
 ## v0.10.1 (2026-05-06)
 
 ### 🚀 Features

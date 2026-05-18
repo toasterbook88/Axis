@@ -49,6 +49,32 @@ func TestChoosePreferredModelEmptyReturnsFalse(t *testing.T) {
 	}
 }
 
+func TestChoosePreferredModelPrefersToolCapable(t *testing.T) {
+	// pickToolCapable should prefer a tool-capable model over a
+	// non-tool-capable one even when the non-tool model is first
+	// alphabetically.
+	got, ok := choosePreferredModel([]string{"gemma3n:e2b", "llama3.1:8b", "qwen3:4b"})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got != "llama3.1:8b" {
+		t.Fatalf("expected tool-capable fallback llama3.1:8b, got %q", got)
+	}
+}
+
+func TestChoosePreferredModelFallsBackAlphabeticallyWhenNoToolCapable(t *testing.T) {
+	// When none of the installed models match a known tool-capable family,
+	// the fallback returns the alphabetically first model.
+	// Note: listInstalledModels sorts results, so pass them sorted.
+	got, ok := choosePreferredModel([]string{"all-minilm:latest", "gemma3n:e2b"})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got != "all-minilm:latest" {
+		t.Fatalf("expected alphabetical fallback, got %q", got)
+	}
+}
+
 // TestResolveDefaultModelPicksDeterministicInstalledWhenNoneRecommended
 // verifies the full ResolveDefaultModel path for a node that has its own
 // models but none from the recommended list.
