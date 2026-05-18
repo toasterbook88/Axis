@@ -1,6 +1,6 @@
 # AXIS Architecture Reference
 
-> This document mixes shipped architecture with proposed v0.10.0 extensions.
+> This document mixes shipped architecture with library-only scaffolding.
 > When it disagrees with the live code, trust the code and
 > [docs/current-state.md](current-state.md) first.
 
@@ -35,7 +35,7 @@ The fact plane collects hardware and software facts from cluster nodes.
 | `RemoteCollector` | SSH into remote nodes via `transport.SSHExecutor` |
 | `Discovery` | Fan-out probes (maxParallel=10) with semaphore |
 | `UDP Beacons` | HMAC-SHA256 authenticated node announcements |
-| `Mesh Gossip` | Proposed peer discovery scaffolding; HMAC only, no replay protection enforced in this branch |
+| `Mesh Gossip` | Peer discovery scaffolding; HMAC only, no replay protection; not wired into CLI operator path |
 
 **Facts collected per node:**
 - OS, architecture, hostname, kernel version
@@ -119,7 +119,7 @@ Guarded task execution with pre-flight safety checks and resource reservation.
 Description → Intent Parse → Safety Gate → Placement → Reserve → Execute → Release
 ```
 
-**Proposed safety evaluation (v0.10.0):**
+**Structured safety evaluation (scaffolding, not wired into operator path):**
 - Parsed command analysis (program + args, not substring matching)
 - 7 risk categories: safe, read-only, modify, destructive, network-mutating,
   privilege-escalate, system-critical

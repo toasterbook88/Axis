@@ -26,6 +26,9 @@ func contextCmd() *cobra.Command {
 				}
 				printWarning(err)
 			}
+			if st != nil {
+				state.Maintain(st)
+			}
 			out, _ := json.MarshalIndent(st, "", "  ")
 			fmt.Println(string(out))
 			return nil

@@ -1,4 +1,5 @@
-// Package config loads AXIS node configuration from ~/.axis/nodes.yaml.
+// Package config is STABLE — AXIS node configuration loader with strict YAML parsing.
+// It is part of the stable operator path.
 package config
 
 import (
@@ -194,6 +195,16 @@ func (c *Config) FindNode(name string) (NodeConfig, bool) {
 		}
 	}
 	return NodeConfig{}, false
+}
+
+// IsMeshEnabled returns whether the mesh gossip layer should be started.
+// For backward compatibility, mesh is enabled when the discovery config
+// is absent. When discovery is explicitly configured, mesh follows Enabled.
+func (c *Config) IsMeshEnabled() bool {
+	if c == nil || c.Discovery == nil {
+		return true
+	}
+	return c.Discovery.Enabled
 }
 
 // Validate checks that all required fields are present.

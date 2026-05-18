@@ -1,4 +1,5 @@
-// Package facts collects hardware and software facts from nodes.
+// Package facts is STABLE — local and remote cluster fact collection.
+// It is part of the stable operator path.
 package facts
 
 import (

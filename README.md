@@ -39,7 +39,8 @@ advisory surfaces never override observed state.
 │  Content-aware config watches · Staleness detection             │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 1: FACT PLANE                                            │
-│  SSH hardware probes · UDP beacons · Proposed mesh scaffolding  │
+│  SSH hardware probes · UDP beacons · Mesh gossip scaffolding    │
+│  (mesh is library-only; not wired into the CLI operator path)   │
 │  Local + remote collectors · HMAC-authenticated beacons         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -66,44 +67,6 @@ axis placement explain "run ollama inference on a 7b model"
 axis doctor
 ```
 
-## Proposed for v0.10.0 (not yet shipped)
-
-The items in this section describe proposed capabilities from this branch and
-roadmap work. For shipped behavior, use `docs/current-state.md` and the latest
-published GitHub release.
-
-### 🌐 Mesh Discovery
-Experimental gossip scaffolding for peer discovery. The package authenticates
-message contents with HMAC-SHA256, but freshness and replay protection are not
-enforced yet, and the mesh is not wired into the stable operator path.
-
-```
-Discovered → Verified → Trusted
-     ↓           ↓
-  Suspect → Dead (evicted)
-```
-
-### 📊 Reservation Ledger
-Double-entry resource accounting replaces the heuristic RAM sharing model.
-Per-node, per-execution tracking with configurable overcommit policy,
-heartbeat-based liveness, automatic stale reclaim, and fail-closed rejection
-when node capacity is unknown.
-
-### 🛡️ Structured Safety Engine
-Structured rule-evaluation scaffolding with parsed command analysis and 7 risk
-categories. Program-name-only learned approvals are deliberately disabled in
-this branch, and the existing operator surface remains the authoritative path.
-
-### 🖥️ CLI Dashboard
-Rendering helpers for dashboard-style views, RAM usage bars, node health icons,
-and reservation tables. These helpers are not registered as CLI commands in
-this branch.
-
-### 🔌 Enhanced HTTP API (v2)
-Versioned route scaffolding plus active read-only surfaces. Cluster, node,
-metrics, and doctor routes are wired; reservation, mesh, dry-run, and batch
-placement remain explicit non-2xx placeholders until implemented.
-
 ## Command Surface
 
 ### Stable Operator Path
@@ -123,23 +86,26 @@ placement remain explicit non-2xx placeholders until implemented.
 | `axis daemon status` | Daemon health and cache metadata |
 | `axis daemon refresh` | Trigger immediate cache refresh |
 | `axis daemon invalidate` | Invalidate cached snapshot |
+| `axis daemon restart` | Restart the local cache daemon |
+| `axis serve` | Local HTTP API + daemon cache |
+| `axis llm` | LLM routing and model management |
+| `axis cortex` | Distributed vector memory / event bus |
+| `axis update` | Self-update via GitHub Releases |
+| `axis context show\|clear` | Inspect or clear placement memory |
+| `axis scripts list` | Built-in script catalog |
+| `axis skills` | Learned execution skills |
+| `axis completion` | Shell completions (bash/zsh/fish/powershell) |
 
-### Secondary Commands
+### Experimental / Secondary Surfaces
+
+These commands are shipped but advisory or experimental. They do not override
+observed cluster state.
 
 | Command | Purpose |
 |---------|---------|
-| `axis serve` | Local HTTP API + daemon |
-| `axis llm` | LLM routing and model management |
-| `axis cortex` | Distributed vector memory / event bus |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis chat` | Ollama-backed advisory chat |
 | `axis agent` | Tool-calling agent loop |
-| `axis scripts list` | Built-in script catalog |
-| `axis skills` | Learned execution skills |
-
-Render helpers for proposed dashboard, mesh, and reservation commands live in
-`cmd/axis/dashboard.go`, but those command surfaces are not registered in this
-branch.
 
 ## Placement Algorithm
 
@@ -189,19 +155,12 @@ The placement engine uses a deterministic **Filter → Rank → Select** pipelin
 | `GET /tools` | Yes | MCP tool definitions |
 | `GET /knowledge` | Yes | Cluster knowledge + skills |
 
-### v2 Routes (partial scaffolding in this branch)
+### v2 Routes (internal scaffolding)
 
-| Route | Auth | Status | Purpose |
-|-------|------|--------|---------|
-| `GET /v2/cluster` | Yes | Active | Full cluster overview |
-| `GET /v2/nodes` | Yes | Active | Node list with health |
-| `GET /v2/nodes/:name` | Yes | Active | Single node deep-dive |
-| `GET /v2/reservations` | Yes | Stub (`501`) | Reserved for future reservation wiring |
-| `GET /v2/mesh` | Yes | Stub (`501`) | Reserved for future mesh wiring |
-| `GET/POST /v2/placement/dry-run` | Yes | Stub (`501`) | Reserved for future placement simulation |
-| `GET /v2/metrics` | **No** | Active | Prometheus-compatible metrics |
-| `POST /v2/batch/place` | Yes | Stub (`501`) | Reserved for future batch placement |
-| `GET /v2/doctor` | Yes | Active | Health diagnostics |
+A small set of `/v2/*` read routes (`/v2/cluster`, `/v2/nodes`, `/v2/nodes/:name`,
+`/v2/metrics`, `/v2/doctor`) are active. Several endpoints return `501` as
+explicit placeholders for unimplemented surfaces. These are not the primary
+operator API.
 
 ## Configuration
 
@@ -219,21 +178,6 @@ nodes:
     hostname: 192.168.1.200
     ssh_user: deploy
     role: server
-
-# Proposed future mesh scaffolding in this branch (not wired into config loading)
-# mesh:
-#   enabled: true
-#   listen_addr: ":42426"
-#   gossip_interval: 5s
-#   shared_secret: "your-cluster-secret"
-#   max_peers: 64
-
-# Proposed future reservation policy scaffolding in this branch (not wired yet)
-# reservation:
-#   max_overcommit_ratio: 1.0   # 1.0 = no overcommit
-#   system_reserve_mb: 1024
-#   heartbeat_stale_window: 2m
-#   max_entries_per_node: 32
 ```
 
 ## Build & Test
@@ -254,8 +198,8 @@ Releases are automated via GitHub Actions:
 ```bash
 # 1. Update version in internal/buildinfo/version.go
 # 2. Commit and tag
-git tag v0.10.0
-git push origin v0.10.0
+git tag v0.X.Y
+git push origin v0.X.Y
 
 # 3. release.yml runs automatically:
 #    Test Gate → Version Validation → Security Scan → GoReleaser → Verify Install
@@ -278,10 +222,10 @@ axis/
 │   ├── placement/     Deterministic Filter→Rank→Select
 │   ├── execution/     Guarded task execution
 │   ├── daemon/        Background cache + 7 refresh triggers
-│   ├── api/           HTTP API (v1 + partial v2 scaffolding)
-│   ├── mesh/          Gossip peer discovery scaffolding
-│   ├── reservation/   Resource accounting ledger
-│   ├── safety/        Structured command safety groundwork
+│   ├── api/           HTTP API (v1 + v2 read routes)
+│   ├── mesh/          Gossip peer discovery scaffolding (library-only)
+│   ├── reservation/   Resource accounting ledger (library-only)
+│   ├── safety/        Structured command safety groundwork (scaffolding)
 │   ├── discovery/     SSH + UDP node discovery
 │   ├── mcp/           MCP server (stdio)
 │   ├── agent/         Tool-calling agent loop
@@ -295,7 +239,7 @@ axis/
 
 - **Air-gapped option:** On-device inference via Ollama, no cloud dependency
 - **HMAC-SHA256:** Beacon auth is shipped; mesh gossip scaffolding authenticates payloads but does not yet enforce replay protection
-- **Zero-trust execution:** Existing safety gates are shipped; parsed command analysis groundwork in this branch is not operator-enabled yet
+- **Zero-trust execution:** Existing safety gates are shipped; parsed command analysis scaffolding is not wired into the operator path
 - **Constant-time auth:** Bearer token comparison via `crypto/subtle`
 - **No data exfiltration:** All state persisted locally in `~/.axis/`
 - **govulncheck:** Automated vulnerability scanning in release pipeline

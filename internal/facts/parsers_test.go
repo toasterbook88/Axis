@@ -1,6 +1,8 @@
 package facts
 
 import (
+	"fmt"
+	"net"
 	"testing"
 )
 
@@ -302,6 +304,233 @@ func TestParseVersionString(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := parseVersionString(tt.raw); got != tt.expected {
 				t.Errorf("parseVersionString(%q) = %q, want %q", tt.raw, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParsePmsetPowerSource(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ac_power", "Now drawing from 'AC Power'\n", "ac"},
+		{"battery_power", "Now drawing from 'Battery Power'\n", "battery"},
+		{"empty", "", ""},
+		{"no_match", "Some unrelated output\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parsePmsetPowerSource(tt.input); got != tt.want {
+				t.Errorf("parsePmsetPowerSource() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseCPUThermalLimit(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{"normal", " - CPU_Speed_Limit               = 100\n", 100},
+		{"throttled", " - CPU_Speed_Limit               = 65\n", 65},
+		{"zero", " - CPU_Speed_Limit               = 0\n", 0},
+		{"empty", "", 0},
+		{"no_number", " - CPU_Speed_Limit               = unknown\n", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseCPUThermalLimit(tt.input); got != tt.want {
+				t.Errorf("parseCPUThermalLimit() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestThermalStateFromTempC(t *testing.T) {
+	tests := []struct {
+		tempC float64
+		want  string
+	}{
+		{74.9, "nominal"},
+		{75.0, "fair"},
+		{84.9, "fair"},
+		{85.0, "serious"},
+		{94.9, "serious"},
+		{95.0, "critical"},
+		{100.0, "critical"},
+		{0.0, "nominal"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%.1f", tt.tempC), func(t *testing.T) {
+			if got := thermalStateFromTempC(tt.tempC); got != tt.want {
+				t.Errorf("thermalStateFromTempC(%.1f) = %q, want %q", tt.tempC, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBlockDeviceName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/dev/sda1", "sda1"},
+		{"/dev/nvme0n1", "nvme0n1"},
+		{"sda", "sda"},
+		{"", ""},
+		{"  /dev/mapper/vg-root  ", "vg-root"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := blockDeviceName(tt.input); got != tt.want {
+				t.Errorf("blockDeviceName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasOnlyDigits(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"123", true},
+		{"", false},
+		{"abc", false},
+		{"12a3", false},
+		{"0", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := hasOnlyDigits(tt.input); got != tt.want {
+				t.Errorf("hasOnlyDigits(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLinuxSysfsBlockName(t *testing.T) {
+	tests := []struct {
+		name string
+		info linuxBlockDeviceInfo
+		want string
+	}{
+		{"kname", linuxBlockDeviceInfo{KName: "dm-0"}, "dm-0"},
+		{"name_fallback", linuxBlockDeviceInfo{Name: "/dev/sda1"}, "sda1"},
+		{"empty", linuxBlockDeviceInfo{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := linuxSysfsBlockName(tt.info); got != tt.want {
+				t.Errorf("linuxSysfsBlockName(%+v) = %q, want %q", tt.info, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyLinuxBlockDevice(t *testing.T) {
+	zero := 0
+	one := 1
+	two := 2
+	tests := []struct {
+		name string
+		info linuxBlockDeviceInfo
+		want string
+	}{
+		{"nvme", linuxBlockDeviceInfo{Name: "/dev/nvme0n1"}, "nvme"},
+		{"ssd", linuxBlockDeviceInfo{Name: "/dev/sda", ROTA: &zero}, "ssd"},
+		{"hdd", linuxBlockDeviceInfo{Name: "/dev/sda", ROTA: &one}, "hdd"},
+		{"nil_rota", linuxBlockDeviceInfo{Name: "/dev/sda", ROTA: nil}, "unknown"},
+		{"unknown_rota", linuxBlockDeviceInfo{Name: "/dev/sda", ROTA: &two}, "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyLinuxBlockDevice(tt.info); got != tt.want {
+				t.Errorf("classifyLinuxBlockDevice(%+v) = %q, want %q", tt.info, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFallbackLinuxStorageClass(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		rot  string
+		err  error
+		want string
+	}{
+		{"nvme_source", "/dev/nvme0n1p2", "", nil, "nvme"},
+		{"ssd", "/dev/sda1", "0", nil, "ssd"},
+		{"hdd", "/dev/sda1", "1", nil, "hdd"},
+		{"unknown_rot", "/dev/sda1", "2", nil, "unknown"},
+		{"rot_error", "/dev/sda1", "", fmt.Errorf("no sysfs"), "unknown"},
+		{"empty_base", "", "", nil, "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fallbackLinuxStorageClass(tt.src, func(string) (string, error) {
+				return tt.rot, tt.err
+			})
+			if got != tt.want {
+				t.Errorf("fallbackLinuxStorageClass(%q) = %q, want %q", tt.src, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseNvidiaSMIOutput_Malformed(t *testing.T) {
+	input := `NVIDIA GeForce RTX 4090
+NVIDIA GeForce MX250, 2048`
+	gpus := parseNvidiaSMIOutput(input)
+	if len(gpus) != 2 {
+		t.Fatalf("expected 2 GPUs, got %d", len(gpus))
+	}
+	if gpus[0].VRAMMB != 0 {
+		t.Errorf("gpu[0].VRAM = %d, want 0 for malformed line", gpus[0].VRAMMB)
+	}
+	if gpus[1].VRAMMB != 2048 {
+		t.Errorf("gpu[1].VRAM = %d, want 2048", gpus[1].VRAMMB)
+	}
+}
+
+func TestSubnetFromIPNet(t *testing.T) {
+	_, ipNet, _ := net.ParseCIDR("192.168.1.5/24")
+	if got := subnetFromIPNet(ipNet); got != "192.168.1.0/24" {
+		t.Errorf("subnetFromIPNet(192.168.1.5/24) = %q, want 192.168.1.0/24", got)
+	}
+	if got := subnetFromIPNet(nil); got != "" {
+		t.Errorf("subnetFromIPNet(nil) = %q, want empty", got)
+	}
+}
+
+func TestParseAddressWithOptionalCIDR(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantIP   string
+		wantCIDR string
+	}{
+		{"192.168.1.5/24", "192.168.1.5", "192.168.1.0/24"},
+		{"10.0.0.1", "10.0.0.1", ""},
+		{"2001:db8::1/64", "2001:db8::1", "2001:db8::/64"},
+		{"not-an-ip", "<nil>", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			ip, cidr := parseAddressWithOptionalCIDR(tt.input)
+			ipStr := "<nil>"
+			if ip != nil {
+				ipStr = ip.String()
+			}
+			if ipStr != tt.wantIP {
+				t.Errorf("parseAddressWithOptionalCIDR(%q) ip = %s, want %s", tt.input, ipStr, tt.wantIP)
+			}
+			if cidr != tt.wantCIDR {
+				t.Errorf("parseAddressWithOptionalCIDR(%q) cidr = %q, want %q", tt.input, cidr, tt.wantCIDR)
 			}
 		})
 	}

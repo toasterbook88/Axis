@@ -1,0 +1,20 @@
+
+  ╔══════════════════════════════════════════════╗
+  ║           AXIS CLUSTER SUMMARY              ║
+  ╚══════════════════════════════════════════════╝
+
+  Version: 0.10.2
+
+  NODES
+  ─────────────────────────────────
+  ● Healthy:     0
+    Total:       0
+
+  RESOURCES
+  ─────────────────────────────────
+  RAM:  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 0% 0GB / 0GB
+  GPUs: none detected
+
+  WARNINGS
+  ─────────────────────────────────
+  ⚠ : recovered local AXIS state: quarantined corrupt file ~/.axis/state.json to ~/.axis/state.json.corrupt-20240115T120000Z: unexpected end of JSON input

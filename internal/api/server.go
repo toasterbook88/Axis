@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,16 +101,19 @@ const runtimeRefreshTimeout = 30 * time.Second
 
 var runLiveGuarded = execution.RunGuarded
 
-func Serve(addr string, cache snapshotCache, token string) error {
-	return ServeWithContext(context.Background(), addr, cache, token)
+func Serve(addr string, cache snapshotCache, token string, pprof bool) error {
+	return ServeWithContext(context.Background(), addr, cache, token, pprof)
 }
 
 // ServeWithContext starts the HTTP/Unix API server and blocks until ctx is
 // cancelled or a fatal listen error occurs. On cancellation it performs a
 // graceful shutdown with a 10-second drain before returning nil.
-func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string) error {
+func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string, pprof bool) error {
 	mux := http.NewServeMux()
 	registerRoutes(mux, cache, token)
+	if pprof {
+		registerPprofRoutes(mux)
+	}
 
 	srv := &http.Server{
 		Handler:           mux,
@@ -432,6 +436,14 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	}, token))
 
 	registerV2Routes(mux, cache, token)
+}
+
+func registerPprofRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 }
 
 var loadLiveRuntime = runtimectx.Load

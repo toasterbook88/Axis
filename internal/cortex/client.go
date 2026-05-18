@@ -1,4 +1,4 @@
-// Package cortex provides a client for the Cortex MCP server running on Foundry.
+// Package cortex is EXPERIMENTAL — distributed vector memory and event bus client.
 //
 // Cortex is an optional cluster coordination layer that exposes:
 //   - Distributed vector memory via Qdrant (semantic recall)

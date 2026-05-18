@@ -1,4 +1,5 @@
-// Package discovery enumerates configured nodes and collects facts.
+// Package discovery is STABLE — configured-node fan-out and optional UDP beacon discovery.
+// It is part of the stable operator path.
 package discovery
 
 import (

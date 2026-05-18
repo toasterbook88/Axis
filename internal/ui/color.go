@@ -1,5 +1,5 @@
-// Package ui provides colored, table, and spinner output for the AXIS CLI.
-// All rendering respects --no-color and the NO_COLOR environment variable.
+// Package ui is INTERNAL-ONLY — terminal colors, tables, spinners, and help templates.
+// Pure infrastructure with no operator-facing contract.
 package ui
 
 import (
@@ -46,6 +46,16 @@ var (
 	red    = color.New(color.FgRed)
 	cyan   = color.New(color.FgCyan)
 	dim    = color.New(color.Faint)
+)
+
+// ExportedColor printers for direct formatting (e.g. Fprintf / Sprint).
+var (
+	GreenColor  = color.New(color.FgGreen, color.Bold)
+	YellowColor = color.New(color.FgYellow)
+	RedColor    = color.New(color.FgRed, color.Bold)
+	CyanColor   = color.New(color.FgCyan)
+	WhiteColor  = color.New(color.FgWhite, color.Bold)
+	DimColor    = color.New(color.FgHiBlack)
 )
 
 func Bold(a ...interface{}) string   { return bold.Sprint(a...) }

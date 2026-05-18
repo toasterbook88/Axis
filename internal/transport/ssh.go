@@ -1,5 +1,5 @@
-// Package transport provides command execution abstractions.
-// Today this package is backed by SSH, with room for future transports.
+// Package transport is STABLE — SSH command execution layer with host-key verification.
+// It is part of the stable operator path.
 package transport
 
 import (

@@ -41,11 +41,11 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 	return daemon.NewDefault(refreshInterval)
 }
 
-var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string) error {
-	return api.ServeWithContext(ctx, addr, d, token)
+var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string, pprof bool) error {
+	return api.ServeWithContext(ctx, addr, d, token, pprof)
 }
 
-func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) error {
+func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, pprof bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -61,13 +61,16 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) 
 	d.WatchSkills(ctx, skills.Path())
 	d.WatchDiscovery(ctx, config.DefaultConfigPath())
 
-	// Start mesh (side-by-side with discovery)
-	h, _ := os.Hostname()
-	selfPeer := mesh.Peer{
-		Name:     "localhost", // Advisory name
-		Hostname: h,
+	// Start mesh (side-by-side with discovery) if enabled
+	cfg, _ := config.Load(config.DefaultConfigPath())
+	if cfg == nil || cfg.IsMeshEnabled() {
+		h, _ := os.Hostname()
+		selfPeer := mesh.Peer{
+			Name:     "localhost", // Advisory name
+			Hostname: h,
+		}
+		d.WatchMesh(ctx, selfPeer)
 	}
-	d.WatchMesh(ctx, selfPeer)
 
 	protocol := "http"
 	if auth.IsUnixAddr(addr) {
@@ -78,7 +81,7 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) 
 	// ServeWithContext blocks until ctx is cancelled or a listen error.
 	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then we wait for
 	// the background refresh goroutines to finish.
-	err = serveHTTPAPI(ctx, addr, d, token)
+	err = serveHTTPAPI(ctx, addr, d, token, pprof)
 
 	drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
 	defer cancel()
@@ -90,16 +93,18 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration) 
 func serveCmd() *cobra.Command {
 	var addr string
 	var refreshInterval time.Duration
+	var pprof bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the local AXIS HTTP API with background snapshot refresh",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval)
+			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval, pprof)
 		},
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", api.DefaultAddr(), "Listen address for the local AXIS API (Unix socket or TCP host:port)")
 	cmd.Flags().DurationVar(&refreshInterval, "refresh", time.Minute, "Background snapshot refresh interval")
+	cmd.Flags().BoolVar(&pprof, "pprof", false, "Expose /debug/pprof profiling endpoints")
 	return cmd
 }

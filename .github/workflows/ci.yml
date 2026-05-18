@@ -48,3 +48,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./hack/verify-repo-truth.sh
+
+      - name: Lifecycle lint
+        run: go run hack/lifecycle-check.go
