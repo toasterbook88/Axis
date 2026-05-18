@@ -485,7 +485,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		st, stateWarning = state.Load()
 		if st != nil {
 			if state.Maintain(st) {
-				_ = st.Save()
+				if err := st.Save(); err != nil {
+					slog.Error("failed to save maintained state", "path", state.Path(), "error", err)
+				}
 			}
 		}
 		if stateWarning != nil && st == nil {
@@ -658,7 +660,6 @@ func (d *Daemon) Meta() Metadata {
 	if d.ledger != nil {
 		meta.ReservedMB = d.ledger.Summary().TotalReservedMB
 	} else if st, err := state.Load(); st != nil {
-		state.Maintain(st)
 		for _, ns := range st.Nodes {
 			meta.ReservedMB += ns.ReservedMB
 		}
