@@ -1,3 +1,12 @@
+## v0.10.3 (2026-05-18)
+
+### 🔧 Maintenance
+* Extract `state.Maintain()` from `state.Load()` — eliminates repair-on-read side effect, making `Load()` idempotent and preventing silent `state.json` rewrites on every CLI invocation (PR #126).
+* Update summary golden files to reflect version bump.
+
+### 📚 Documentation
+* Add `docs/roadmap-status.md` — final status of all 53 v9 roadmap items (48 done, 5 Phase G items blocked by evidence discipline).
+
 ## v0.10.1 (2026-05-06)
 
 ### 🚀 Features
