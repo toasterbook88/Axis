@@ -1,4 +1,5 @@
-// Package snapshot assembles a ClusterSnapshot from collected NodeFacts.
+// Package snapshot is STABLE — cluster snapshot assembly from collected NodeFacts.
+// It is part of the stable operator path.
 package snapshot
 
 import (

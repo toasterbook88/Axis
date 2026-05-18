@@ -1011,7 +1011,7 @@ func TestServeUDS(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- Serve(socketPath, cache, token)
+		errChan <- Serve(socketPath, cache, token, false)
 	}()
 
 	// Wait for socket to appear
@@ -1067,7 +1067,7 @@ func TestServeWithContextGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ServeWithContext(ctx, socketPath, cache, "")
+		errChan <- ServeWithContext(ctx, socketPath, cache, "", false)
 	}()
 
 	// Wait for socket
@@ -1109,6 +1109,95 @@ func TestDefaultAddr(t *testing.T) {
 	addr := DefaultAddr()
 	if !strings.HasSuffix(addr, filepath.Join(".axis", "axis.sock")) {
 		t.Errorf("unexpected DefaultAddr %q", addr)
+	}
+}
+
+func TestPprofEndpointsEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "pprof.sock")
+	cache := &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ServeWithContext(ctx, socketPath, cache, "", true)
+	}()
+
+	// Wait for socket to appear
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socketPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+
+	paths := []string{"http://localhost/debug/pprof/", "http://localhost/debug/pprof/cmdline", "http://localhost/debug/pprof/symbol"}
+	for _, p := range paths {
+		req, _ := http.NewRequest(http.MethodGet, p, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", p, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", p, resp.StatusCode)
+		}
+	}
+}
+
+func TestPprofEndpointsDisabledByDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "noprof.sock")
+	cache := &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ServeWithContext(ctx, socketPath, cache, "", false)
+	}()
+
+	// Wait for socket to appear
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socketPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost/debug/pprof/", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /debug/pprof/: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /debug/pprof/ = %d, want 404", resp.StatusCode)
 	}
 }
 

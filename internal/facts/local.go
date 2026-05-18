@@ -31,6 +31,16 @@ var appleFoundationModelsHomeDirFn = os.UserHomeDir
 var appleFoundationModelsReadFileFn = os.ReadFile
 var appleFoundationModelsWriteFileFn = os.WriteFile
 
+var runOllamaDiscoveryFn = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "bash", "-c", OllamaDiscoveryScript).Output()
+}
+var runLlamaServerDiscoveryFn = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "bash", "-c", LlamaServerDiscoveryScript).Output()
+}
+var runMLXDiscoveryFn = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "bash", "-c", MLXDiscoveryScript).Output()
+}
+
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
 	return &LocalCollector{Name: name, Role: role}
@@ -976,7 +986,7 @@ func isTailscaleIP(ip net.IP) bool {
 func discoverOllamaLocal(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
 	info := models.OllamaInfo{Installed: false}
 
-	out, err := exec.CommandContext(ctx, "bash", "-c", OllamaDiscoveryScript).Output()
+	out, err := runOllamaDiscoveryFn(ctx)
 	if err != nil {
 		info.Error = err.Error()
 		return info, nil
@@ -994,7 +1004,7 @@ func discoverOllamaLocal(ctx context.Context) (models.OllamaInfo, []models.Resid
 // returns its resident models. Returns nil if llama-server is not installed or
 // not running.
 func discoverLlamaServerLocal(ctx context.Context) []models.ResidentModel {
-	out, err := exec.CommandContext(ctx, "bash", "-c", LlamaServerDiscoveryScript).Output()
+	out, err := runLlamaServerDiscoveryFn(ctx)
 	if err != nil {
 		return nil
 	}
@@ -1009,7 +1019,7 @@ func discoverLlamaServerLocal(ctx context.Context) []models.ResidentModel {
 // node and queries its /v1/models endpoint to enumerate resident models.
 // Returns nil if mlx_lm is not installed or no server is running.
 func discoverMLXLocal(ctx context.Context) []models.ResidentModel {
-	out, err := exec.CommandContext(ctx, "bash", "-c", MLXDiscoveryScript).Output()
+	out, err := runMLXDiscoveryFn(ctx)
 	if err != nil {
 		return nil
 	}

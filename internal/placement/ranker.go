@@ -1,5 +1,5 @@
-// Package placement implements deterministic task placement logic reused by
-// both advisory selection and guarded execution.
+// Package placement is STABLE — deterministic filter, rank, and select for task placement.
+// It is part of the stable operator path.
 package placement
 
 import (

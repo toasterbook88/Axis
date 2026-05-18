@@ -1,5 +1,5 @@
-// Package models defines core AXIS data types.
-// All types are internal — there is no stable public API surface.
+// Package models is INTERNAL-ONLY — core shared types with no operator-facing contract.
+// Pure infrastructure with no operator-facing contract.
 package models
 
 import (

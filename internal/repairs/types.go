@@ -1,9 +1,5 @@
-// Package repairs provides typed repair-event structures for authority-aware
-// diagnostics. Repair events are emitted as structured slog records and are
-// surfaced to operators via doctor, metrics, and --json/--ndjson output.
-//
-// Scope discipline: v0.11 intentionally avoids event buses, async routing, or
-// subscriber models. Events are emitted synchronously at the point of repair.
+// Package repairs is SCAFFOLDED — typed repair-event structures.
+// Not wired into the stable operator path.
 package repairs
 
 import (

@@ -1,0 +1,21 @@
+  ╔══════════════════════════════════════════════╗
+  ║           AXIS CLUSTER SUMMARY              ║
+  ╚══════════════════════════════════════════════╝
+
+  Version: v1.2.3    Cache Age: 15s
+
+  NODES
+  ─────────────────────────────────
+  ● Healthy:     1
+  ◐ Degraded:    1
+  ○ Unreachable: 1
+    Total:       3
+
+  RESOURCES
+  ─────────────────────────────────
+  RAM:  [█████████████████░░░░░░░░░░░░░] 58% 28GB / 48GB (4GB reserved)
+  GPUs: 1 available
+
+  WARNINGS
+  ─────────────────────────────────
+  ⚠ beta: high CPU load

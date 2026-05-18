@@ -3,7 +3,7 @@
 **Document Version**: 1.0  
 **Last Updated**: 2026-04-08  
 **Status**: Draft - Awaiting Approval  
-**Target Release**: v0.8.0
+**Status**: Shipped in v0.10.x (`axis llm` is live). Originally drafted for v0.8.0.
 
 ---
 

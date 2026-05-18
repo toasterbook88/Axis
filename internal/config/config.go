@@ -1,4 +1,5 @@
-// Package config loads AXIS node configuration from ~/.axis/nodes.yaml.
+// Package config is STABLE — AXIS node configuration loader with strict YAML parsing.
+// It is part of the stable operator path.
 package config
 
 import (

@@ -1,11 +1,5 @@
-// Package secrets provides safe API key resolution for AXIS.
-//
-// Resolution order (first non-empty value wins):
-//  1. Environment variable named by envVar
-//  2. File at path named by filePath (contents trimmed of whitespace)
-//
-// Keys are never logged, printed, or included in error messages.
-// Callers must treat the returned string as sensitive.
+// Package secrets is EXPERIMENTAL — safe API key resolution for AXIS.
+// It is subordinate to observed state and emits warnings automatically.
 package secrets
 
 import (

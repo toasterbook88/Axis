@@ -1,13 +1,5 @@
-// Package mesh contains gossip-based peer discovery scaffolding for AXIS
-// clusters. It is advisory metadata only and is not wired into the stable
-// operator path in this branch.
-//
-// Truth boundary: mesh discovery metadata is NEVER treated as cluster truth.
-// Only the fact plane (SSH probes) produces authoritative NodeFacts.
-//
-// HMAC verification authenticates message contents, but freshness and replay
-// protection are not enforced yet. Treat this package as internal groundwork,
-// not a hardened membership protocol.
+// Package mesh is SCAFFOLDED — gossip-based peer discovery scaffolding.
+// Not wired into the stable operator path.
 package mesh
 
 import (

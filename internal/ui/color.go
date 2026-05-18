@@ -1,5 +1,5 @@
-// Package ui provides colored, table, and spinner output for the AXIS CLI.
-// All rendering respects --no-color and the NO_COLOR environment variable.
+// Package ui is INTERNAL-ONLY — terminal colors, tables, spinners, and help templates.
+// Pure infrastructure with no operator-facing contract.
 package ui
 
 import (
