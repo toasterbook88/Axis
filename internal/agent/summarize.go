@@ -123,13 +123,15 @@ func summarizePlacementDecision(dec models.PlacementDecision) string {
 	return b.String()
 }
 
-// truncate truncates a string to maxLen, appending "..." if truncated.
+// truncate truncates a string to maxLen runes, appending "..." if truncated.
+// Safe for UTF-8 — operates on runes, not bytes.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return string(runes[:maxLen])
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }

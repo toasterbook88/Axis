@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -229,14 +230,22 @@ func (r *ToolRegistry) registerReadFile() {
 			if err != nil {
 				return "", err
 			}
-			data, err := os.ReadFile(clean)
+			f, err := os.Open(clean)
+			if err != nil {
+				return "", fmt.Errorf("cannot read file %q: %w", clean, err)
+			}
+			defer f.Close()
+
+			const maxFileSize = 8000
+			// Read up to maxFileSize+1 to detect truncation.
+			limited := io.LimitReader(f, int64(maxFileSize)+1)
+			data, err := io.ReadAll(limited)
 			if err != nil {
 				return "", fmt.Errorf("cannot read file %q: %w", clean, err)
 			}
 			content := string(data)
-			const maxFileSize = 8000
-			if len(content) > maxFileSize {
-				content = content[:maxFileSize] + "\n... [truncated to 8000 chars]"
+			if len(data) > maxFileSize {
+				content = truncateRune(content, maxFileSize) + "\n... [truncated to 8000 chars]"
 			}
 			return content, nil
 		},
@@ -270,8 +279,13 @@ func (r *ToolRegistry) registerListDirectory() {
 				return "", fmt.Errorf("cannot read directory %q: %w", clean, err)
 			}
 			var b strings.Builder
+			const maxDirEntries = 100
 			fmt.Fprintf(&b, "Directory: %s (%d entries)\n", clean, len(entries))
-			for _, e := range entries {
+			for i, e := range entries {
+				if i >= maxDirEntries {
+					fmt.Fprintf(&b, "... and %d more entries\n", len(entries)-i)
+					break
+				}
 				name := e.Name()
 				if e.IsDir() {
 					name += "/"
@@ -284,7 +298,8 @@ func (r *ToolRegistry) registerListDirectory() {
 }
 
 // validateToolPath validates and resolves a path for file tools, preventing
-// directory traversal outside the current working directory.
+// directory traversal outside the current working directory. Symlinks are
+// resolved before the bounds check to prevent symlink-based escapes.
 func validateToolPath(p string) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -294,15 +309,20 @@ func validateToolPath(p string) (string, error) {
 	if !filepath.IsAbs(clean) {
 		clean = filepath.Join(cwd, clean)
 	}
+	// Resolve symlinks to their real destination.
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve path %q: %w", p, err)
+	}
 	// Ensure the resolved path is within cwd.
-	rel, err := filepath.Rel(cwd, clean)
+	rel, err := filepath.Rel(cwd, resolved)
 	if err != nil {
 		return "", fmt.Errorf("invalid path %q: %w", p, err)
 	}
 	if strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("path %q escapes working directory", p)
 	}
-	return clean, nil
+	return resolved, nil
 }
 
 // --- Tool: run_shell ---
@@ -375,8 +395,20 @@ func ExecuteShell(ctx context.Context, command string) (string, error) {
 
 	// Cap output to prevent blowing up the context window.
 	const maxOutput = 4000
-	if len(output) > maxOutput {
-		output = output[:maxOutput] + "\n... [truncated to 4000 chars]"
+	if len([]rune(output)) > maxOutput {
+		output = truncateRune(output, maxOutput) + "\n... [truncated to 4000 chars]"
 	}
 	return output, nil
+}
+
+// truncateRune truncates a string to maxLen runes, appending "..." if truncated.
+func truncateRune(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
 }

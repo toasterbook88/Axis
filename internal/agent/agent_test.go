@@ -262,8 +262,9 @@ func TestToolReadFilePathValidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for path traversal")
 	}
-	if !strings.Contains(err.Error(), "escapes") {
-		t.Errorf("expected 'escapes' error, got: %s", err.Error())
+	// EvalSymlinks may report lstat failure for non-existent paths outside cwd.
+	if !strings.Contains(err.Error(), "escapes") && !strings.Contains(err.Error(), "cannot resolve") {
+		t.Errorf("expected 'escapes' or 'cannot resolve' error, got: %s", err.Error())
 	}
 }
 

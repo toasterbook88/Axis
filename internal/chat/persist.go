@@ -13,9 +13,12 @@ type conversationHistory struct {
 }
 
 // PersistPath returns the default path for conversation history files.
-func PersistPath(name string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", name+"-history.json")
+func PersistPath(name string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".axis", name+"-history.json"), nil
 }
 
 // SaveToFile writes the conversation (excluding system messages) to the given path.
@@ -32,10 +35,10 @@ func (c *Conversation) SaveToFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal conversation: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create history directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write history file: %w", err)
 	}
 	return nil

@@ -97,8 +97,10 @@ func agentCmd() *cobra.Command {
 			a := agent.New(cfg)
 
 			// Resume previous conversation if requested.
-			historyPath := chat.PersistPath("agent")
-			if resume {
+			historyPath, err := chat.PersistPath("agent")
+			if err != nil {
+				fmt.Fprintf(errW, "warning: cannot determine history path: %v\n", err)
+			} else if resume {
 				if err := a.Conversation().LoadFromFile(historyPath); err != nil {
 					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
 				} else if n := a.Conversation().HistoryCount(); n > 0 {
@@ -118,19 +120,24 @@ func agentCmd() *cobra.Command {
 					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 				}
 				fmt.Fprintln(w)
-				_ = a.Conversation().SaveToFile(historyPath)
+				if historyPath != "" {
+					_ = a.Conversation().SaveToFile(historyPath)
+				}
 				return nil
 			}
 
 			// Interactive REPL with readline.
 			fmt.Fprintf(errW, "AXIS Agent [%s] — max %d turns per query, type exit to quit\n\n", ui.Bold(currentModel), maxTurns)
 
-			rl, err := readline.NewEx(&readline.Config{
+			rlCfg := &readline.Config{
 				Prompt:          ui.Cyan("agent> "),
-				HistoryFile:     historyPath + ".line",
 				InterruptPrompt: "^C",
 				EOFPrompt:       "exit",
-			})
+			}
+			if historyPath != "" {
+				rlCfg.HistoryFile = historyPath + ".line"
+			}
+			rl, err := readline.NewEx(rlCfg)
 			if err != nil {
 				return runPlainAgentREPL(a, w, errW, timeout, historyPath)
 			}
@@ -158,11 +165,11 @@ func agentCmd() *cobra.Command {
 				fmt.Fprintln(w)
 			}
 
-			if n := a.Conversation().HistoryCount(); n > 0 {
+			if historyPath != "" && a.Conversation().HistoryCount() > 0 {
 				if err := a.Conversation().SaveToFile(historyPath); err != nil {
 					fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
 				} else {
-					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", n)
+					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", a.Conversation().HistoryCount())
 				}
 			}
 			return nil
@@ -203,7 +210,7 @@ func runPlainAgentREPL(a *agent.Agent, w, errW io.Writer, timeout time.Duration,
 		cancel()
 		fmt.Fprintln(w)
 	}
-	if n := a.Conversation().HistoryCount(); n > 0 {
+	if historyPath != "" && a.Conversation().HistoryCount() > 0 {
 		_ = a.Conversation().SaveToFile(historyPath)
 	}
 	return nil

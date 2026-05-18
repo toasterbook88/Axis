@@ -71,8 +71,10 @@ func chatCmd() *cobra.Command {
 			conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
 
 			// Resume previous conversation if requested.
-			historyPath := chat.PersistPath("chat")
-			if resume {
+			historyPath, err := chat.PersistPath("chat")
+			if err != nil {
+				fmt.Fprintf(errW, "warning: cannot determine history path: %v\n", err)
+			} else if resume {
 				if err := conv.LoadFromFile(historyPath); err != nil {
 					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
 				} else if n := conv.HistoryCount(); n > 0 {
@@ -113,19 +115,24 @@ func chatCmd() *cobra.Command {
 					fmt.Fprintln(w)
 				}
 				// Save conversation after single-shot.
-				_ = conv.SaveToFile(historyPath)
+				if historyPath != "" {
+					_ = conv.SaveToFile(historyPath)
+				}
 				return nil
 			}
 
 			// Interactive REPL with readline.
 			fmt.Fprintf(errW, "AXIS Chat [%s] — type /help for commands, exit to quit\n\n", ui.Bold(currentModel))
 
-			rl, err := readline.NewEx(&readline.Config{
+			cfg := &readline.Config{
 				Prompt:          ui.Cyan(">>> "),
-				HistoryFile:     historyPath + ".line",
 				InterruptPrompt: "^C",
 				EOFPrompt:       "exit",
-			})
+			}
+			if historyPath != "" {
+				cfg.HistoryFile = historyPath + ".line"
+			}
+			rl, err := readline.NewEx(cfg)
 			if err != nil {
 				// Fallback to plain scanner if readline fails (e.g., non-TTY).
 				return runPlainREPL(cmd.Context(), client, conv, currentModel, w, errW, timeout, historyPath)
@@ -175,11 +182,11 @@ func chatCmd() *cobra.Command {
 			}
 
 			// Save conversation on exit.
-			if n := conv.HistoryCount(); n > 0 {
+			if historyPath != "" && conv.HistoryCount() > 0 {
 				if err := conv.SaveToFile(historyPath); err != nil {
 					fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
 				} else {
-					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", n)
+					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", conv.HistoryCount())
 				}
 			}
 			return nil
@@ -235,7 +242,7 @@ func runPlainREPL(ctx context.Context, client *chat.Client, conv *chat.Conversat
 		conv.Append(resp)
 		fmt.Fprintln(w)
 	}
-	if n := conv.HistoryCount(); n > 0 {
+	if historyPath != "" && conv.HistoryCount() > 0 {
 		_ = conv.SaveToFile(historyPath)
 	}
 	return nil
