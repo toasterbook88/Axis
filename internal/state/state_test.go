@@ -639,10 +639,11 @@ func TestLoadClearsLegacyReservationsWithoutExecIDs(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	Maintain(loaded)
-	_ = loaded.Save()
 	if len(loaded.Nodes) != 0 {
 		t.Fatalf("expected legacy reservations to be cleared, got %v", loaded.Nodes)
 	}
+
+	_ = loaded.Save()
 
 	reloadedData, err := os.ReadFile(path)
 	if err != nil {
