@@ -61,14 +61,15 @@ func summaryCmd() *cobra.Command {
 
 func populateSummaryView(snap *models.ClusterSnapshot, meta daemon.Metadata) ClusterSummaryView {
 	view := ClusterSummaryView{
-		Version:       meta.Version,
-		NodeCount:     len(snap.Nodes),
-		TotalRAMMB:    snap.Summary.TotalRAMMB,
-		FreeRAMMB:     snap.Summary.TotalFreeRAMMB,
-		ReservedRAMMB: snap.Summary.TotalReservedMB,
-		CacheAge:      time.Duration(meta.CacheAgeSec) * time.Second,
-		IsStale:       meta.Stale,
-		MeshPeers:     meta.MeshPeers,
+		Version:          meta.Version,
+		NodeCount:        len(snap.Nodes),
+		TotalRAMMB:       snap.Summary.TotalRAMMB,
+		FreeRAMMB:        snap.Summary.TotalFreeRAMMB,
+		ReservedRAMMB:    snap.Summary.TotalReservedMB,
+		AllocatableRAMMB: snap.Summary.TotalAllocatableMB,
+		CacheAge:         time.Duration(meta.CacheAgeSec) * time.Second,
+		IsStale:          meta.Stale,
+		MeshPeers:        meta.MeshPeers,
 	}
 	if view.Version == "" {
 		view.Version = Version
@@ -94,19 +95,20 @@ func populateSummaryView(snap *models.ClusterSnapshot, meta daemon.Metadata) Clu
 
 // ClusterSummaryView renders a human-friendly cluster overview.
 type ClusterSummaryView struct {
-	Version       string
-	NodeCount     int
-	Healthy       int
-	Degraded      int
-	Unreachable   int
-	TotalRAMMB    int64
-	FreeRAMMB     int64
-	ReservedRAMMB int64
-	GPUCount      int
-	CacheAge      time.Duration
-	IsStale       bool
-	MeshPeers     int
-	Warnings      []string
+	Version          string
+	NodeCount        int
+	Healthy          int
+	Degraded         int
+	Unreachable      int
+	TotalRAMMB       int64
+	FreeRAMMB        int64
+	ReservedRAMMB    int64
+	AllocatableRAMMB int64
+	GPUCount         int
+	CacheAge         time.Duration
+	IsStale          bool
+	MeshPeers        int
+	Warnings         []string
 }
 
 func (v ClusterSummaryView) Render() string {
@@ -162,6 +164,9 @@ func (v ClusterSummaryView) Render() string {
 	fmt.Fprintf(&b, " %dGB / %dGB", usedRAM/1024, v.TotalRAMMB/1024)
 	if v.ReservedRAMMB > 0 {
 		ui.YellowColor.Fprintf(&b, " (%dGB reserved)", v.ReservedRAMMB/1024)
+	}
+	if v.AllocatableRAMMB > 0 {
+		ui.GreenColor.Fprintf(&b, " (%dGB allocatable)", v.AllocatableRAMMB/1024)
 	}
 	b.WriteString("\n")
 
