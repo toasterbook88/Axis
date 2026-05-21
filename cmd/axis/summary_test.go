@@ -30,9 +30,10 @@ func TestSummaryRenderWithNodes(t *testing.T) {
 
 	snap := &models.ClusterSnapshot{
 		Summary: models.ClusterSummary{
-			TotalRAMMB:      48 * 1024,
-			TotalFreeRAMMB:  20 * 1024,
-			TotalReservedMB: 4 * 1024,
+			TotalRAMMB:         48 * 1024,
+			TotalFreeRAMMB:     20 * 1024,
+			TotalReservedMB:    4 * 1024,
+			TotalAllocatableMB: 16 * 1024,
 		},
 		Nodes: []models.NodeFacts{
 			{
@@ -96,9 +97,10 @@ func TestSummaryCommandDaemonCache(t *testing.T) {
 	meta := daemon.Metadata{Version: "v1.0.0", CacheAgeSec: 12, Ready: true}
 	snap := models.ClusterSnapshot{
 		Summary: models.ClusterSummary{
-			TotalRAMMB:      16 * 1024,
-			TotalFreeRAMMB:  8 * 1024,
-			TotalReservedMB: 0,
+			TotalRAMMB:         16 * 1024,
+			TotalFreeRAMMB:     8 * 1024,
+			TotalReservedMB:    0,
+			TotalAllocatableMB: 8 * 1024,
 		},
 		Nodes: []models.NodeFacts{
 			{
@@ -147,9 +149,10 @@ func TestSummaryCommandLiveSnapshot(t *testing.T) {
 
 	snap := &models.ClusterSnapshot{
 		Summary: models.ClusterSummary{
-			TotalRAMMB:      8 * 1024,
-			TotalFreeRAMMB:  4 * 1024,
-			TotalReservedMB: 0,
+			TotalRAMMB:         8 * 1024,
+			TotalFreeRAMMB:     4 * 1024,
+			TotalReservedMB:    0,
+			TotalAllocatableMB: 4 * 1024,
 		},
 		Nodes: []models.NodeFacts{
 			{

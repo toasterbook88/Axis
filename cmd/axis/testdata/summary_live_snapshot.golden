@@ -16,5 +16,5 @@ STDOUT:
 
   RESOURCES
   ─────────────────────────────────
-  RAM:  [███████████████░░░░░░░░░░░░░░░] 50% 4GB / 8GB
+  RAM:  [███████████████░░░░░░░░░░░░░░░] 50% 4GB / 8GB (4GB allocatable)
   GPUs: none detected

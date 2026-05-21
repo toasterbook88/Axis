@@ -160,3 +160,45 @@ func containsReason(reasoning []string, want string) bool {
 	}
 	return false
 }
+
+func TestCommandEntrypoint(t *testing.T) {
+	tests := []struct {
+		command  string
+		expected string
+	}{
+		{"git status", "git"},
+		{"FOO=bar python3 script.py", "python3"},
+		{"  python3   script.py  ", "python3"},
+		{"", ""},
+		{"FOO=bar BAR=baz", ""},
+		{"-flag value", "-flag"},
+	}
+	for _, tt := range tests {
+		got := commandEntrypoint(tt.command)
+		if got != tt.expected {
+			t.Errorf("commandEntrypoint(%q) = %q, want %q", tt.command, got, tt.expected)
+		}
+	}
+}
+
+func TestFirstTurboBackend(t *testing.T) {
+	if got := firstTurboBackend(models.NodeFacts{}); got != "" {
+		t.Errorf("firstTurboBackend(empty) = %q, want empty", got)
+	}
+	node := models.NodeFacts{TurboQuant: &models.TurboQuantInfo{Supported: true, Verified: true, Backends: []string{"mlx", "cuda"}}}
+	if got := firstTurboBackend(node); got != "mlx" {
+		t.Errorf("firstTurboBackend(node) = %q, want mlx", got)
+	}
+}
+
+func TestPrefersBackend(t *testing.T) {
+	if prefersBackend(nil, "mlx") {
+		t.Error("prefersBackend(nil, mlx) = true, want false")
+	}
+	if !prefersBackend([]string{"mlx", "cuda"}, "mlx") {
+		t.Error("prefersBackend([mlx,cuda], mlx) = false, want true")
+	}
+	if prefersBackend([]string{"cuda"}, "mlx") {
+		t.Error("prefersBackend([cuda], mlx) = true, want false")
+	}
+}

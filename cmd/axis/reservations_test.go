@@ -351,3 +351,36 @@ func TestReservationsListText(t *testing.T) {
 	}
 	_ = stderr
 }
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{5 * time.Second, "5s"},
+		{45 * time.Second, "45s"},
+		{1 * time.Minute, "1m0s"},
+		{90 * time.Second, "1m30s"},
+		{45 * time.Minute, "45m0s"},
+		{1 * time.Hour, "1h0m"},
+		{90 * time.Minute, "1h30m"},
+	}
+	for _, tt := range tests {
+		got := formatDuration(tt.d)
+		if got != tt.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
+func TestTruncateID(t *testing.T) {
+	if got := truncateID("abc", 5); got != "abc" {
+		t.Errorf("truncateID(abc, 5) = %q, want abc", got)
+	}
+	if got := truncateID("abcdef", 3); got != "abc" {
+		t.Errorf("truncateID(abcdef, 3) = %q, want abc", got)
+	}
+	if got := truncateID("abcdefgh", 6); got != "abc..." {
+		t.Errorf("truncateID(abcdefgh, 6) = %q, want abc...", got)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -35,6 +36,40 @@ func TestPrepareRequirementsExecKeepsOllamaRequirement(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected ollama requirement to remain, got %v", reqs.RequiredTools)
+	}
+}
+
+func TestPrepareRequirementsScriptInheritsScriptToolsAndRAM(t *testing.T) {
+	intent := Intent{
+		MatchedScript: &scripts.Script{
+			Name:          "test-script",
+			Command:       "echo hello",
+			RequiredTools: []string{"git", "jq"},
+			EstRAMMB:      4096,
+		},
+	}
+	reqs := prepareRequirements("echo hello", ModeScript, intent)
+	if len(reqs.RequiredTools) != 2 || reqs.RequiredTools[0] != "git" || reqs.RequiredTools[1] != "jq" {
+		t.Fatalf("expected script tools, got %v", reqs.RequiredTools)
+	}
+	if reqs.MinFreeRAMMB != 4096 {
+		t.Fatalf("expected 4096MB from script, got %d", reqs.MinFreeRAMMB)
+	}
+}
+
+func TestPrepareRequirementsScriptTakesHigherRAM(t *testing.T) {
+	intent := Intent{
+		MatchedScript: &scripts.Script{
+			Name:          "test-script",
+			Command:       "echo hello",
+			RequiredTools: []string{"git"},
+			EstRAMMB:      8192,
+		},
+	}
+	// InferRequirements for "echo hello" likely returns a low MinFreeRAMMB
+	reqs := prepareRequirements("echo hello", ModeScript, intent)
+	if reqs.MinFreeRAMMB != 8192 {
+		t.Fatalf("expected 8192MB (higher than inferred), got %d", reqs.MinFreeRAMMB)
 	}
 }
 
@@ -1198,6 +1233,18 @@ func TestParseDarwinAvailableRAMMBNoPages(t *testing.T) {
 	}
 }
 
+func TestParseDarwinAvailableRAMMBSuccess(t *testing.T) {
+	out := "page size of 16384 bytes\nPages free: 1000.\nPages inactive: 500.\nPages speculative: 200.\n"
+	got, err := parseDarwinAvailableRAMMB(out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := int64((1000 + 500 + 200) * 16384 / 1024 / 1024)
+	if got != want {
+		t.Fatalf("expected %d MB, got %d", want, got)
+	}
+}
+
 func TestParseVMStatPageCountInvalidLine(t *testing.T) {
 	_, err := parseVMStatPageCount("invalid")
 	if err == nil {
@@ -1215,6 +1262,16 @@ func TestParseVMStatPageCountParseError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse vm_stat count") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseVMStatPageCountSuccess(t *testing.T) {
+	got, err := parseVMStatPageCount("Pages free: 1,234,567.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1234567 {
+		t.Fatalf("expected 1234567, got %d", got)
 	}
 }
 
@@ -1245,6 +1302,17 @@ func TestParseLinuxAvailableRAMMBParseError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse MemAvailable") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseLinuxAvailableRAMMBSuccess(t *testing.T) {
+	out := "MemTotal:       16000000 kB\nMemAvailable:    8192000 kB\n"
+	got, err := parseLinuxAvailableRAMMB(out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 8000 {
+		t.Fatalf("expected 8000 MB, got %d", got)
 	}
 }
 

@@ -189,7 +189,7 @@ func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) 
 			"reservations": ledger.Entries(),
 		})
 	case http.MethodPost:
-		writeError(w, http.StatusNotImplemented, "manual reservation creation pending ledger integration")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

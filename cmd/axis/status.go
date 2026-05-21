@@ -88,7 +88,7 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	fmt.Fprintf(out, "%s (%d nodes, %d healthy)\n\n",
 		ui.Bold("CLUSTER STATUS"), len(snap.Nodes), healthy)
 
-	tbl := ui.NewTable("NAME", "STATUS", "RAM FREE", "PRESSURE", "TOOLS")
+	tbl := ui.NewTable("NAME", "STATUS", "RAM", "PRESSURE", "TOOLS")
 	for _, n := range snap.Nodes {
 		status := formatNodeStatus(n.Status)
 		ram := "—"
@@ -96,7 +96,14 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 		tools := "—"
 
 		if n.Resources != nil {
-			ram = fmt.Sprintf("%d MB", n.Resources.RAMFreeMB)
+			if n.RAMAllocatableMB > 0 {
+				ram = fmt.Sprintf("%d MB", n.RAMAllocatableMB)
+				if n.RAMReservedMB > 0 {
+					ram = fmt.Sprintf("%d MB (%d reserved)", n.RAMAllocatableMB, n.RAMReservedMB)
+				}
+			} else {
+				ram = fmt.Sprintf("%d MB", n.Resources.RAMFreeMB)
+			}
 			pressure = formatPressure(n.Resources.Pressure)
 		}
 		if len(n.Tools) > 0 {

@@ -57,7 +57,7 @@ func TestRemoteCollectorCollectsResidentModelsFromOllamaProbe(t *testing.T) {
 
 func TestRemoteCollectorCollectsResidentModelsFromLlamaServerProbe(t *testing.T) {
 	m := minimalRemoteExec()
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","source":"llama-server-ps"}]}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
@@ -78,11 +78,14 @@ func TestRemoteCollectorCollectsResidentModelsFromLlamaServerProbe(t *testing.T)
 	if got.Source != "llama-server-ps" {
 		t.Errorf("Source = %q, want llama-server-ps", got.Source)
 	}
+	if got.SizeVRAMMB != 4384 {
+		t.Errorf("SizeVRAMMB = %d, want 4384 (model file stat ≈ 4.3 GB)", got.SizeVRAMMB)
+	}
 }
 
 func TestRemoteCollectorCollectsResidentModelsFromMLXProbe(t *testing.T) {
 	m := minimalRemoteExec()
-	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","source":"mlx-lm-api"}]}`}
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_vram_mb":4096,"source":"mlx-lm-api"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
@@ -106,6 +109,9 @@ func TestRemoteCollectorCollectsResidentModelsFromMLXProbe(t *testing.T) {
 	if got.Source != "mlx-lm-api" {
 		t.Errorf("Source = %q, want mlx-lm-api", got.Source)
 	}
+	if got.SizeVRAMMB != 4096 {
+		t.Errorf("SizeVRAMMB = %d, want 4096 (process RSS ≈ 4.0 GB)", got.SizeVRAMMB)
+	}
 }
 
 func TestRemoteCollectorMLXNotInstalledReturnsNoResidentModels(t *testing.T) {
@@ -127,8 +133,8 @@ func TestRemoteCollectorMLXNotInstalledReturnsNoResidentModels(t *testing.T) {
 
 func TestRemoteCollectorMergesOllamaAndLlamaServerResidentModels(t *testing.T) {
 	m := minimalRemoteExec()
-	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","source":"llama-server-ps"}]}`}
+	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","size_vram_mb":4915,"source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
@@ -153,9 +159,9 @@ func TestRemoteCollectorMergesOllamaAndLlamaServerResidentModels(t *testing.T) {
 
 func TestRemoteCollectorMergesAllThreeResidentModelBackends(t *testing.T) {
 	m := minimalRemoteExec()
-	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","source":"llama-server-ps"}]}`}
-	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","source":"mlx-lm-api"}]}`}
+	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","size_vram_mb":4915,"source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_vram_mb":4096,"source":"mlx-lm-api"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
@@ -277,5 +283,49 @@ func TestMLXResidentModelZeroVRAMWhenSizeUnavailable(t *testing.T) {
 	}
 	if got := facts.ResidentModels[0].SizeVRAMMB; got != 0 {
 		t.Errorf("SizeVRAMMB = %d, want 0 when mlx-lm does not report live VRAM", got)
+	}
+}
+
+// TestLlamaServerResidentModelCarriesSizeVRAMMB verifies that the llama-server
+// probe JSON (as emitted by the updated script that stats the model file) is
+// parsed into the SizeVRAMMB field on the ResidentModel struct.
+func TestLlamaServerResidentModelCarriesSizeVRAMMB(t *testing.T) {
+	m := minimalRemoteExec()
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	got := facts.ResidentModels[0]
+	if got.SizeVRAMMB != 4384 {
+		t.Errorf("SizeVRAMMB = %d, want 4384 (model file stat ≈ 4.3 GB)", got.SizeVRAMMB)
+	}
+}
+
+// TestMLXResidentModelCarriesSizeVRAMMB verifies that the MLX probe JSON (as
+// emitted by the updated script that queries process RSS) is parsed into the
+// SizeVRAMMB field on the ResidentModel struct.
+func TestMLXResidentModelCarriesSizeVRAMMB(t *testing.T) {
+	m := minimalRemoteExec()
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_vram_mb":4096,"source":"mlx-lm-api"}]}`}
+	exec := &fakeRemoteExecutor{exact: m}
+
+	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
+	facts, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(facts.ResidentModels) != 1 {
+		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
+	}
+	got := facts.ResidentModels[0]
+	if got.SizeVRAMMB != 4096 {
+		t.Errorf("SizeVRAMMB = %d, want 4096 (process RSS ≈ 4.0 GB)", got.SizeVRAMMB)
 	}
 }

@@ -80,8 +80,10 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				GPU_LAYERS=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--n-gpu-layers"||$i=="-ngl"){print $(i+1);exit}if($i~/^(--n-gpu-layers=|-ngl=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 				PROC="cpu"
 				[ -n "$GPU_LAYERS" ] && [ "$GPU_LAYERS" -gt 0 ] 2>/dev/null && PROC="gpu"
+				SIZE_BYTES=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
+				SIZE_MB=$((SIZE_BYTES / 1048576))
 				MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
-				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"source\":\"llama-server-ps\"}]"
+				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"size_vram_mb\":$SIZE_MB,\"source\":\"llama-server-ps\"}]"
 			fi
 		fi
 		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":8080,\"resident_models\":$RESIDENT}"
@@ -127,6 +129,8 @@ const MLXDiscoveryScript = `set -o pipefail;
 			# Validate PORT_ARG is numeric before accepting it.
 			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then PORT="$PORT_ARG"; fi
 		fi
+		RSS_KB=$(ps -o rss= -p "$PGREP" 2>/dev/null || echo 0)
+		SIZE_MB=$((RSS_KB / 1024))
 		RESIDENT="[]"
 		if [ "$RUNNING" = "true" ] && command -v curl >/dev/null 2>&1; then
 			RESP=$(curl -s --max-time 2 "http://localhost:$PORT/v1/models" 2>/dev/null || echo "")
@@ -141,7 +145,7 @@ try:
         if not mid:
             continue
         name = mid.split('/')[-1]
-        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'source': 'mlx-lm-api'})
+        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'size_vram_mb': $SIZE_MB, 'source': 'mlx-lm-api'})
     print(json.dumps(items))
 except Exception:
     print('[]')
