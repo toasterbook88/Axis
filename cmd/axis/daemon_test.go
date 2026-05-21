@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -118,5 +119,14 @@ func TestDaemonListenAddrAcceptsHTTPURL(t *testing.T) {
 	}
 	if got != "127.0.0.1:42425" {
 		t.Fatalf("expected URL host:port, got %q", got)
+	}
+}
+
+func TestPidAlive(t *testing.T) {
+	if !pidAlive(os.Getpid()) {
+		t.Error("pidAlive(os.Getpid()) = false, want true")
+	}
+	if pidAlive(999999) {
+		t.Error("pidAlive(999999) = true, want false")
 	}
 }
