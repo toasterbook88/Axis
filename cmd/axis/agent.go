@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/api"
@@ -37,6 +39,7 @@ func agentCmd() *cobra.Command {
 		maxTurns    int
 		autoApprove bool
 		systemMsg   string
+		resume      bool
 	)
 
 	cmd := &cobra.Command{
@@ -93,6 +96,18 @@ func agentCmd() *cobra.Command {
 
 			a := agent.New(cfg)
 
+			// Resume previous conversation if requested.
+			historyPath, err := chat.PersistPath("agent")
+			if err != nil {
+				fmt.Fprintf(errW, "warning: cannot determine history path: %v\n", err)
+			} else if resume {
+				if err := a.Conversation().LoadFromFile(historyPath); err != nil {
+					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
+				} else if n := a.Conversation().HistoryCount(); n > 0 {
+					fmt.Fprintf(errW, "Resumed %d messages from previous session.\n", n)
+				}
+			}
+
 			// Single-shot mode.
 			if len(args) > 0 {
 				instruction := strings.Join(args, " ")
@@ -105,19 +120,35 @@ func agentCmd() *cobra.Command {
 					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 				}
 				fmt.Fprintln(w)
+				if historyPath != "" {
+					_ = a.Conversation().SaveToFile(historyPath)
+				}
 				return nil
 			}
 
-			// Interactive REPL.
+			// Interactive REPL with readline.
 			fmt.Fprintf(errW, "AXIS Agent [%s] — max %d turns per query, type exit to quit\n\n", ui.Bold(currentModel), maxTurns)
 
-			scanner := bufio.NewScanner(os.Stdin)
+			rlCfg := &readline.Config{
+				Prompt:          ui.Cyan("agent> "),
+				InterruptPrompt: "^C",
+				EOFPrompt:       "exit",
+			}
+			if historyPath != "" {
+				rlCfg.HistoryFile = historyPath + ".line"
+			}
+			rl, err := readline.NewEx(rlCfg)
+			if err != nil {
+				return runPlainAgentREPL(a, w, errW, timeout, historyPath)
+			}
+			defer rl.Close()
+
 			for {
-				fmt.Fprint(errW, ui.Cyan("agent> "))
-				if !scanner.Scan() {
+				line, err := rl.Readline()
+				if err != nil {
 					break
 				}
-				instruction := strings.TrimSpace(scanner.Text())
+				instruction := strings.TrimSpace(line)
 				if instruction == "" {
 					continue
 				}
@@ -133,6 +164,14 @@ func agentCmd() *cobra.Command {
 				cancel()
 				fmt.Fprintln(w)
 			}
+
+			if historyPath != "" && a.Conversation().HistoryCount() > 0 {
+				if err := a.Conversation().SaveToFile(historyPath); err != nil {
+					fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
+				} else {
+					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", a.Conversation().HistoryCount())
+				}
+			}
 			return nil
 		},
 	}
@@ -143,7 +182,38 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
+	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
 	return cmd
+}
+
+// runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
+func runPlainAgentREPL(a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string) error {
+	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Fprint(errW, ui.Cyan("agent\u003e "))
+		if !scanner.Scan() {
+			break
+		}
+		instruction := strings.TrimSpace(scanner.Text())
+		if instruction == "" {
+			continue
+		}
+		lower := strings.ToLower(instruction)
+		if lower == "exit" || lower == "quit" {
+			break
+		}
+		ctx, cancel := agentRequestContext(timeout)
+		if err := a.Run(ctx, instruction); err != nil {
+			fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), err)
+		}
+		cancel()
+		fmt.Fprintln(w)
+	}
+	if historyPath != "" && a.Conversation().HistoryCount() > 0 {
+		_ = a.Conversation().SaveToFile(historyPath)
+	}
+	return nil
 }
 
 func agentRequestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
