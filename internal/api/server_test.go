@@ -392,8 +392,8 @@ func TestV2StubEndpointsStayNon2XX(t *testing.T) {
 			name:           "reservations post",
 			method:         http.MethodPost,
 			path:           "/v2/reservations",
-			expectedStatus: http.StatusNotImplemented,
-			errorContains:  "manual reservation creation pending ledger integration",
+			expectedStatus: http.StatusMethodNotAllowed,
+			errorContains:  "method not allowed",
 		},
 		{
 			name:           "mesh method",

@@ -225,6 +225,55 @@ func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsWhenDaemonCacheHasZeroNodes(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
+	restorePath := stubDoctorConfigPath(t, func() string {
+		return tmpFile
+	})
+	defer restorePath()
+
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{
+				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+			},
+		}, nil
+	})
+	defer restoreLoad()
+
+	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error {
+		return nil
+	})
+	defer restoreSSH()
+
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{}}, "cached", nil
+	})
+	defer restoreCache()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "0 nodes cached") {
+		t.Fatalf("expected zero-node warning, got %q", out)
+	}
+	if !strings.Contains(out, "hint: check ~/.axis/nodes.yaml") {
+		t.Fatalf("expected config hint, got %q", out)
+	}
+	if !strings.Contains(out, "Core checks passed with advisory warnings") {
+		t.Fatalf("expected advisory summary, got %q", out)
+	}
+}
+
 // --- AI backend doctor check tests ---
 
 func stubDoctorLlamaServer(t *testing.T, fn func(context.Context) doctorBackendStatus) func() {
@@ -241,6 +290,13 @@ func stubDoctorMLX(t *testing.T, fn func(context.Context) doctorBackendStatus) f
 	return func() { doctorProbeMLX = prev }
 }
 
+func stubDoctorOllama(t *testing.T, fn func(context.Context) doctorBackendStatus) func() {
+	t.Helper()
+	prev := doctorProbeOllama
+	doctorProbeOllama = fn
+	return func() { doctorProbeOllama = prev }
+}
+
 func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	t.Helper()
 	restorePath := stubDoctorConfigPath(t, func() string { return filepath.Join(t.TempDir(), "nodes.yaml") })
@@ -250,6 +306,9 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error { return nil })
 	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
 		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "n"}}}, "cached", nil
+	})
+	restoreOllama := stubDoctorOllama(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: false}
 	})
 	restoreLlama := stubDoctorLlamaServer(t, func(context.Context) doctorBackendStatus {
 		return doctorBackendStatus{Installed: false}
@@ -262,6 +321,7 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 		restoreLoad()
 		restoreSSH()
 		restoreCache()
+		restoreOllama()
 		restoreLlama()
 		restoreMLX()
 	}
@@ -335,6 +395,33 @@ func TestDoctorShowsMLXRunningNoModels(t *testing.T) {
 	}
 	if !strings.Contains(out, "no models loaded") {
 		t.Errorf("expected 'no models loaded', got:\n%s", out)
+	}
+}
+
+func TestDoctorShowsOllamaRunning(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreOllama := stubDoctorOllama(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: true, Running: true, Port: 11434, ResidentCount: 3}
+	})
+	defer restoreOllama()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "ollama: running on :11434") {
+		t.Errorf("expected running+port in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "3 models loaded") {
+		t.Errorf("expected '3 models loaded', got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected 'All checks passed', got:\n%s", out)
 	}
 }
 

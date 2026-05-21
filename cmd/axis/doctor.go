@@ -47,6 +47,10 @@ var doctorProbeMLX = func(ctx context.Context) doctorBackendStatus {
 	return runBackendProbeScript(ctx, facts.MLXDiscoveryScript)
 }
 
+var doctorProbeOllama = func(ctx context.Context) doctorBackendStatus {
+	return runBackendProbeScript(ctx, facts.OllamaDiscoveryScript)
+}
+
 // formatResidentModelCount returns a human-readable model count suffix.
 func formatResidentModelCount(n int) string {
 	switch n {
@@ -158,8 +162,15 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 			advisoryWarnings++
 		}
 	} else {
-		fmt.Fprintf(out, "  %s Reachable, %d node(s) cached\n",
-			ui.StatusIcon(true), len(snap.Nodes))
+		if len(snap.Nodes) == 0 {
+			fmt.Fprintf(out, "  %s Reachable, 0 nodes cached\n",
+				ui.StatusIcon(false))
+			fmt.Fprintf(out, "    %s\n", ui.Dim("hint: check ~/.axis/nodes.yaml and run axis status"))
+			advisoryWarnings++
+		} else {
+			fmt.Fprintf(out, "  %s Reachable, %d node(s) cached\n",
+				ui.StatusIcon(true), len(snap.Nodes))
+		}
 	}
 
 	// 4. Local AI backend health (advisory — not counted as core failures)
@@ -169,6 +180,7 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		name  string
 		probe func(context.Context) doctorBackendStatus
 	}{
+		{"ollama", doctorProbeOllama},
 		{"llama-server", doctorProbeLlamaServer},
 		{"mlx", doctorProbeMLX},
 	} {
