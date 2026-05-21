@@ -241,6 +241,13 @@ func stubDoctorMLX(t *testing.T, fn func(context.Context) doctorBackendStatus) f
 	return func() { doctorProbeMLX = prev }
 }
 
+func stubDoctorOllama(t *testing.T, fn func(context.Context) doctorBackendStatus) func() {
+	t.Helper()
+	prev := doctorProbeOllama
+	doctorProbeOllama = fn
+	return func() { doctorProbeOllama = prev }
+}
+
 func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	t.Helper()
 	restorePath := stubDoctorConfigPath(t, func() string { return filepath.Join(t.TempDir(), "nodes.yaml") })
@@ -250,6 +257,9 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error { return nil })
 	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
 		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "n"}}}, "cached", nil
+	})
+	restoreOllama := stubDoctorOllama(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: false}
 	})
 	restoreLlama := stubDoctorLlamaServer(t, func(context.Context) doctorBackendStatus {
 		return doctorBackendStatus{Installed: false}
@@ -262,6 +272,7 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 		restoreLoad()
 		restoreSSH()
 		restoreCache()
+		restoreOllama()
 		restoreLlama()
 		restoreMLX()
 	}
@@ -335,6 +346,33 @@ func TestDoctorShowsMLXRunningNoModels(t *testing.T) {
 	}
 	if !strings.Contains(out, "no models loaded") {
 		t.Errorf("expected 'no models loaded', got:\n%s", out)
+	}
+}
+
+func TestDoctorShowsOllamaRunning(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	restoreOllama := stubDoctorOllama(t, func(context.Context) doctorBackendStatus {
+		return doctorBackendStatus{Installed: true, Running: true, Port: 11434, ResidentCount: 3}
+	})
+	defer restoreOllama()
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "ollama: running on :11434") {
+		t.Errorf("expected running+port in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "3 models loaded") {
+		t.Errorf("expected '3 models loaded', got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected 'All checks passed', got:\n%s", out)
 	}
 }
 
