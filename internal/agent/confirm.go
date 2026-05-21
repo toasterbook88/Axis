@@ -78,7 +78,8 @@ func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 // isReadOnlyTool returns true for tools that only read cluster state.
 func isReadOnlyTool(name string) bool {
 	switch name {
-	case "axis_status", "axis_facts", "axis_place":
+	case "axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_reservations", "read_file", "list_directory":
 		return true
 	}
 	return false
