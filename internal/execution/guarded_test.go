@@ -17,6 +17,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -35,6 +36,40 @@ func TestPrepareRequirementsExecKeepsOllamaRequirement(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected ollama requirement to remain, got %v", reqs.RequiredTools)
+	}
+}
+
+func TestPrepareRequirementsScriptInheritsScriptToolsAndRAM(t *testing.T) {
+	intent := Intent{
+		MatchedScript: &scripts.Script{
+			Name:          "test-script",
+			Command:       "echo hello",
+			RequiredTools: []string{"git", "jq"},
+			EstRAMMB:      4096,
+		},
+	}
+	reqs := prepareRequirements("echo hello", ModeScript, intent)
+	if len(reqs.RequiredTools) != 2 || reqs.RequiredTools[0] != "git" || reqs.RequiredTools[1] != "jq" {
+		t.Fatalf("expected script tools, got %v", reqs.RequiredTools)
+	}
+	if reqs.MinFreeRAMMB != 4096 {
+		t.Fatalf("expected 4096MB from script, got %d", reqs.MinFreeRAMMB)
+	}
+}
+
+func TestPrepareRequirementsScriptTakesHigherRAM(t *testing.T) {
+	intent := Intent{
+		MatchedScript: &scripts.Script{
+			Name:          "test-script",
+			Command:       "echo hello",
+			RequiredTools: []string{"git"},
+			EstRAMMB:      8192,
+		},
+	}
+	// InferRequirements for "echo hello" likely returns a low MinFreeRAMMB
+	reqs := prepareRequirements("echo hello", ModeScript, intent)
+	if reqs.MinFreeRAMMB != 8192 {
+		t.Fatalf("expected 8192MB (higher than inferred), got %d", reqs.MinFreeRAMMB)
 	}
 }
 
