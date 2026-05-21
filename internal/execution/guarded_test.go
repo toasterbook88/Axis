@@ -1198,6 +1198,18 @@ func TestParseDarwinAvailableRAMMBNoPages(t *testing.T) {
 	}
 }
 
+func TestParseDarwinAvailableRAMMBSuccess(t *testing.T) {
+	out := "page size of 16384 bytes\nPages free: 1000.\nPages inactive: 500.\nPages speculative: 200.\n"
+	got, err := parseDarwinAvailableRAMMB(out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := int64((1000 + 500 + 200) * 16384 / 1024 / 1024)
+	if got != want {
+		t.Fatalf("expected %d MB, got %d", want, got)
+	}
+}
+
 func TestParseVMStatPageCountInvalidLine(t *testing.T) {
 	_, err := parseVMStatPageCount("invalid")
 	if err == nil {
@@ -1215,6 +1227,16 @@ func TestParseVMStatPageCountParseError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse vm_stat count") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseVMStatPageCountSuccess(t *testing.T) {
+	got, err := parseVMStatPageCount("Pages free: 1,234,567.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1234567 {
+		t.Fatalf("expected 1234567, got %d", got)
 	}
 }
 
@@ -1245,6 +1267,17 @@ func TestParseLinuxAvailableRAMMBParseError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse MemAvailable") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseLinuxAvailableRAMMBSuccess(t *testing.T) {
+	out := "MemTotal:       16000000 kB\nMemAvailable:    8192000 kB\n"
+	got, err := parseLinuxAvailableRAMMB(out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 8000 {
+		t.Fatalf("expected 8000 MB, got %d", got)
 	}
 }
 
