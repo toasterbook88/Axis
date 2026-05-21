@@ -206,8 +206,11 @@ func formatToolResultSummary(toolName, result string) string {
 		lines := strings.Count(result, "\n")
 		return fmt.Sprintf("%s: read %d lines (%d chars)", toolName, lines, len(result))
 	case "list_directory":
-		if i := strings.Index(result, "("); i > 0 && strings.Contains(result, " entries)") {
-			return toolName + ": " + strings.TrimSpace(result[strings.Index(result, "Directory:")+len("Directory:"):])
+		if i := strings.Index(result, "\n"); i > 0 {
+			line := result[:i]
+			if idx := strings.Index(line, "Directory:"); idx >= 0 {
+				return toolName + ": " + strings.TrimSpace(line[idx+len("Directory:"):])
+			}
 		}
 		return toolName + ": listed directory"
 	case "run_shell":

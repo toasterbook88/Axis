@@ -245,7 +245,7 @@ func (r *ToolRegistry) registerReadFile() {
 			}
 			content := string(data)
 			if len(data) > maxFileSize {
-				content = truncateRune(content, maxFileSize) + "\n... [truncated to 8000 chars]"
+				content = truncateRune(content, maxFileSize) + "\n... [truncated due to size limit]"
 			}
 			return content, nil
 		},
@@ -319,7 +319,7 @@ func validateToolPath(p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid path %q: %w", p, err)
 	}
-	if strings.HasPrefix(rel, "..") {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q escapes working directory", p)
 	}
 	return resolved, nil
