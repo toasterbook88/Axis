@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0
+	github.com/chzyer/readline v1.5.1
 	github.com/fatih/color v1.19.0
 	github.com/mark3labs/mcp-go v0.54.0
 	github.com/mattn/go-isatty v0.0.22
@@ -14,7 +15,6 @@ require (
 )
 
 require (
-	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
