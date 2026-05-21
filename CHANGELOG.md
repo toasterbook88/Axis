@@ -1,3 +1,8 @@
+## Unreleased
+
+### 🔧 Maintenance
+* Extend resident-model VRAM probes to llama-server and MLX backends. `LlamaServerDiscoveryScript` now stats the model file to compute `size_vram_mb`; `MLXDiscoveryScript` now queries process RSS to compute `size_vram_mb`. Previously only Ollama populated this field.
+
 ## v0.10.3 (2026-05-18)
 
 ### 🐛 Bug Fixes
