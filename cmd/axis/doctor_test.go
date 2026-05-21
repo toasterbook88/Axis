@@ -225,6 +225,55 @@ func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsWhenDaemonCacheHasZeroNodes(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
+	restorePath := stubDoctorConfigPath(t, func() string {
+		return tmpFile
+	})
+	defer restorePath()
+
+	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{
+				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+			},
+		}, nil
+	})
+	defer restoreLoad()
+
+	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error {
+		return nil
+	})
+	defer restoreSSH()
+
+	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{}}, "cached", nil
+	})
+	defer restoreCache()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "0 nodes cached") {
+		t.Fatalf("expected zero-node warning, got %q", out)
+	}
+	if !strings.Contains(out, "hint: check ~/.axis/nodes.yaml") {
+		t.Fatalf("expected config hint, got %q", out)
+	}
+	if !strings.Contains(out, "Core checks passed with advisory warnings") {
+		t.Fatalf("expected advisory summary, got %q", out)
+	}
+}
+
 // --- AI backend doctor check tests ---
 
 func stubDoctorLlamaServer(t *testing.T, fn func(context.Context) doctorBackendStatus) func() {
