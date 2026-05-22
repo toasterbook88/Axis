@@ -44,7 +44,7 @@ func profileMatchCmd() *cobra.Command {
 
 			switch format {
 			case "json", "yaml":
-				return printOutput(output, format)
+				return printOutput(cmd.OutOrStdout(), output, format)
 			default:
 				printProfileMatchText(cmd, output)
 				return nil

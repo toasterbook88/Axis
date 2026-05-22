@@ -17,7 +17,7 @@ func skillsCmd() *cobra.Command {
 				}
 				printWarning(err)
 			}
-			printOutput(s, "json")
+			printOutput(cmd.OutOrStdout(), s, "json")
 			return nil
 		},
 	}

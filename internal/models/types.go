@@ -354,10 +354,11 @@ type PlacementDecision struct {
 }
 
 type PlacementCandidateExplanation struct {
-	Node      string   `json:"node" yaml:"node"`
-	FitScore  int      `json:"fit_score" yaml:"fit_score"`
-	IsLocal   bool     `json:"is_local" yaml:"is_local"`
-	Reasoning []string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+	Node       string   `json:"node" yaml:"node"`
+	FitScore   int      `json:"fit_score" yaml:"fit_score"`
+	IsLocal    bool     `json:"is_local" yaml:"is_local"`
+	HeadroomMB int64    `json:"headroom_mb,omitempty" yaml:"headroom_mb,omitempty"`
+	Reasoning  []string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
 }
 
 type PlacementExclusion struct {
