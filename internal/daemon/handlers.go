@@ -12,6 +12,7 @@ import (
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
 )
@@ -74,6 +75,7 @@ func RegisterRoutesWithDeps(mux *http.ServeMux, cache SnapshotCache, deps RouteD
 
 	mux.HandleFunc("/knowledge", knowledgeHandler(deps))
 	mux.HandleFunc("/run", runHandler(cache, deps))
+	mux.HandleFunc("/mesh", meshHandler(cache))
 }
 
 func HealthPayload(meta *Metadata) map[string]any {
@@ -234,6 +236,32 @@ func refreshHandler(cache SnapshotCache) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func meshHandler(cache SnapshotCache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if cache == nil {
+			writeError(w, http.StatusServiceUnavailable, "snapshot cache unavailable")
+			return
+		}
+		m := cache.Mesh()
+		if m == nil {
+			writeError(w, http.StatusServiceUnavailable, "mesh not available")
+			return
+		}
+		peers := m.ActivePeers()
+		if peers == nil {
+			peers = []mesh.Peer{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"peers": peers,
+			"count": len(peers),
+		})
 	}
 }
 

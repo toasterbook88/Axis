@@ -139,20 +139,28 @@ func daemonStartCmd() *cobra.Command {
 	return cmd
 }
 
-func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
+func newDaemonRequest(ctx context.Context, addr, method, path string) (*http.Request, *http.Client, error) {
 	client, baseURLAddr := daemon.HttpClientForAddr(addr)
 	baseURL := daemon.NormalizeAddr(baseURLAddr)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v2/mesh", nil)
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	token, err := auth.LoadOrGenerateToken()
 	if err != nil {
-		return nil, fmt.Errorf("loading api token: %w", err)
+		return nil, nil, fmt.Errorf("loading api token: %w", err)
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req, client, nil
+}
+
+func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
+	req, client, err := newDaemonRequest(ctx, addr, http.MethodGet, "/mesh")
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := client.Do(req)
@@ -163,7 +171,11 @@ func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("mesh query failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			return nil, fmt.Errorf("mesh query failed: %s", resp.Status)
+		}
+		return nil, fmt.Errorf("mesh query failed: %s: %s", resp.Status, msg)
 	}
 
 	var payload struct {
@@ -198,19 +210,7 @@ func printMeshPeers(cmd *cobra.Command, peers []meshPeer) {
 
 	tbl := ui.NewTable("NAME", "HOSTNAME", "STATE", "SOURCE", "LAST SEEN")
 	for _, p := range peers {
-		stateColor := ui.Dim
-		switch p.State {
-		case "trusted":
-			stateColor = ui.Green
-		case "verified":
-			stateColor = ui.Cyan
-		case "discovered":
-			stateColor = ui.Yellow
-		case "suspect":
-			stateColor = ui.Red
-		}
-		lastSeen := humanizeTime(p.LastSeen)
-		tbl.AddRow(ui.Cyan(p.Name), p.Hostname, stateColor(p.State), p.Source, lastSeen)
+		tbl.AddRow(p.Name, p.Hostname, p.State, p.Source, humanizeTime(p.LastSeen))
 	}
 	fmt.Fprintf(out, "%s (%d peers)\n\n", ui.Bold("MESH PEERS"), len(peers))
 	tbl.Render(out)
@@ -221,6 +221,9 @@ func humanizeTime(t time.Time) string {
 		return "—"
 	}
 	d := time.Since(t)
+	if d < 0 {
+		return "just now"
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%ds ago", int(d.Seconds()))
 	}

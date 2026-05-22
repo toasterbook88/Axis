@@ -18,8 +18,8 @@ func TestFetchDaemonMeshReturnsPeers(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("expected GET, got %s", r.Method)
 		}
-		if r.URL.Path != "/v2/mesh" {
-			t.Fatalf("expected /v2/mesh, got %s", r.URL.Path)
+		if r.URL.Path != "/mesh" {
+			t.Fatalf("expected /mesh, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"peers":[{"name":"alpha","hostname":"10.0.0.1","state":"verified","source":"gossip","last_seen":"2026-05-22T22:00:00Z"}],"count":1}`))
@@ -56,8 +56,8 @@ func TestFetchDaemonMeshReturnsEmptyWhenNoPeers(t *testing.T) {
 
 func TestDaemonMeshCommandRendersTable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v2/mesh" {
-			t.Fatalf("expected /v2/mesh, got %s", r.URL.Path)
+		if r.URL.Path != "/mesh" {
+			t.Fatalf("expected /mesh, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"peers":[{"name":"alpha","hostname":"10.0.0.1","state":"verified","source":"gossip","last_seen":"2026-05-22T22:00:00Z"}],"count":1}`))

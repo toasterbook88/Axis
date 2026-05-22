@@ -45,6 +45,7 @@ type SnapshotCache interface {
 	Meta() Metadata
 	Invalidate()
 	RefreshNow(context.Context) error
+	Mesh() *mesh.Mesh
 }
 
 type Metadata struct {
