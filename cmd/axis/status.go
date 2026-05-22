@@ -88,11 +88,13 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	fmt.Fprintf(out, "%s (%d nodes, %d healthy)\n\n",
 		ui.Bold("CLUSTER STATUS"), len(snap.Nodes), healthy)
 
-	tbl := ui.NewTable("NAME", "STATUS", "RAM", "PRESSURE", "TOOLS")
+	tbl := ui.NewTable("NAME", "STATUS", "RAM", "STORAGE", "PRESSURE", "GPU", "TOOLS")
 	for _, n := range snap.Nodes {
 		status := formatNodeStatus(n.Status)
 		ram := "—"
+		storage := "—"
 		pressure := "—"
+		gpu := "—"
 		tools := "—"
 
 		if n.Resources != nil {
@@ -104,7 +106,14 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 			} else {
 				ram = fmt.Sprintf("%d MB", n.Resources.RAMFreeMB)
 			}
+			storage = n.Resources.StorageClass
+			if storage == "" {
+				storage = "—"
+			}
 			pressure = formatPressure(n.Resources.Pressure)
+			if len(n.Resources.GPUs) > 0 {
+				gpu = formatGPUStatus(n.Resources.GPUs)
+			}
 		}
 		if len(n.Tools) > 0 {
 			names := make([]string, 0, len(n.Tools))
@@ -114,7 +123,7 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 			tools = strings.Join(names, ", ")
 		}
 
-		tbl.AddRow(ui.Cyan(n.Name), status, ram, pressure, tools)
+		tbl.AddRow(ui.Cyan(n.Name), status, ram, storage, pressure, gpu, tools)
 	}
 	tbl.Render(out)
 
@@ -260,6 +269,30 @@ func truncateModelList(names []string, max int) string {
 	}
 	visible := strings.Join(names[:max], ", ")
 	return fmt.Sprintf("%s, +%d more", visible, len(names)-max)
+}
+
+func formatGPUBaseName(g models.GPUInfo) string {
+	s := g.Model
+	if g.Vendor != "" && g.Vendor != "unknown" && !strings.Contains(strings.ToLower(s), strings.ToLower(g.Vendor)) {
+		s = fmt.Sprintf("%s %s", g.Vendor, s)
+	}
+	return s
+}
+
+func formatGPUStatus(gpus []models.GPUInfo) string {
+	if len(gpus) == 0 {
+		return "—"
+	}
+	if len(gpus) == 1 {
+		g := gpus[0]
+		s := formatGPUBaseName(g)
+		if g.VRAMMB > 0 {
+			s = fmt.Sprintf("%s (%d MB)", s, g.VRAMMB)
+		}
+		return s
+	}
+	first := formatGPUBaseName(gpus[0])
+	return fmt.Sprintf("%s +%d more", first, len(gpus)-1)
 }
 
 func formatNodeStatus(s models.NodeStatus) string {
