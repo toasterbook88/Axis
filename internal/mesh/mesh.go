@@ -51,6 +51,32 @@ func (s PeerState) String() string {
 	}
 }
 
+func (s PeerState) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
+func (s *PeerState) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	switch str {
+	case "discovered":
+		*s = PeerDiscovered
+	case "verified":
+		*s = PeerVerified
+	case "trusted":
+		*s = PeerTrusted
+	case "suspect":
+		*s = PeerSuspect
+	case "dead":
+		*s = PeerDead
+	default:
+		*s = PeerState(-1)
+	}
+	return nil
+}
+
 // Peer represents a node in the mesh.
 type Peer struct {
 	Name        string    `json:"name"`
