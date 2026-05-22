@@ -75,7 +75,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 						Explanation: explanation,
 					}
 				}
-				return printOutput(payload, "json")
+				return printOutput(cmd.OutOrStdout(), payload, "json")
 			}
 
 			printPlacementExplanationText(cmd.OutOrStdout(), explanation, source, cacheRequested)
@@ -149,11 +149,12 @@ func printPlacementExplanationText(out io.Writer, explanation models.PlacementEx
 			if candidate.IsLocal {
 				locality = ui.Green("local")
 			}
-			fmt.Fprintf(out, "%d. %s (%s, fit %s)\n",
+			fmt.Fprintf(out, "%d. %s (%s, fit %s, headroom %s)\n",
 				i+1,
 				ui.Bold(candidate.Node),
 				locality,
-				ui.Cyan(fmt.Sprintf("%d/100", candidate.FitScore)))
+				ui.Cyan(fmt.Sprintf("%d/100", candidate.FitScore)),
+				ui.Cyan(fmt.Sprintf("%dMB", candidate.HeadroomMB)))
 			for _, reason := range candidate.Reasoning {
 				fmt.Fprintf(out, "   %s %s\n", ui.Dim("-"), reason)
 			}

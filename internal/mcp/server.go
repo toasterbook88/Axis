@@ -201,6 +201,7 @@ func ServeStdio(cached bool, cacheAddr string) error {
 }
 
 func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceRequest, useCache bool, cacheAddr string) ([]mcpproto.ResourceContents, error) {
+	_ = req // protocol-mandated; no parameters to extract
 	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
 	if err != nil {
 		return nil, err
@@ -221,6 +222,7 @@ func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceReque
 }
 
 func clusterSnapshotTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+	_ = req // protocol-mandated; no parameters to extract
 	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
@@ -246,6 +248,7 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, us
 }
 
 func axisHealthTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+	_ = req // protocol-mandated; no parameters to extract
 	if useCache {
 		meta, err := daemon.FetchMeta(ctx, cacheAddr)
 		if err != nil {
