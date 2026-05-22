@@ -1,3 +1,11 @@
+## v0.10.6 (2026-05-22)
+
+### 🚀 Features
+* Surface hidden hardware facts in `axis facts` and `axis status`:
+  - `axis status` table expanded with **STORAGE** and **GPU** columns.
+  - `axis facts` now shows storage class, GPU details (vendor, VRAM, capabilities), thermal state, power source, battery level, load averages, memory topology, and network addresses with interface/speed class.
+  - Refactored GPU name formatting into shared `formatGPUBaseName` helper to ensure consistent vendor redundancy handling and "unknown" filtering across commands.
+
 ## v0.10.5 (2026-05-22)
 
 ### 🚀 Features
