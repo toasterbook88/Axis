@@ -13,8 +13,8 @@ Refresh this section with `./hack/refresh-current-state.sh`.
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
 - Refreshed: 2026-05-22 EDT
 - Repo version: `0.10.5`
-- Latest published GitHub release: `v0.10.4` (2026-05-21T04:02:59Z)
-- Release truth: repo version is ahead of the latest published release
+- Latest published GitHub release: `v0.10.5` (2026-05-22T22:48:57Z)
+- Release truth: repo version matches the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -149,7 +149,7 @@ Refresh this section with `./hack/refresh-current-state.sh`.
     - `coverage gate passed: internal/api 80.2% >= 50.0%`
     - `coverage gate passed: internal/mcp 88.9% >= 35.0%`
     - `coverage gate passed: internal/ui 94.0% >= 80.0%`
-    - `coverage gate passed: total 72.8% >= 45.0%`
+    - `coverage gate passed: total 72.4% >= 45.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
