@@ -1,3 +1,20 @@
+## v0.10.5 (2026-05-22)
+
+### 🚀 Features
+* `axis chat` and `axis agent` UX improvements:
+  - Signal context wiring (Ctrl+C interrupts all modes: single-shot, resume, REPL).
+  - `--verbose` flag prints model auto-detection, turn progress, and tool parameters.
+  - `--dry-run` flag on `axis agent` skips tool execution while preserving reasoning loop.
+  - Cobra output compliance (`--no-color`, redirection) across all chat/agent handlers.
+* Placement explain now displays **headroom** (allocatable minus reserved) per candidate.
+* New Copilot CLI skill: `.github/copilot/skills/pr-review-responder.yml` — codifies the PR lifecycle workflow (prepare → push → monitor → fix → respond → verify).
+
+### 🔧 Maintenance
+* Upgrade `golang.org/x/crypto` v0.51.0 → v0.52.0 to resolve `govulncheck` findings (GO-2026-5013 through GO-2026-5021).
+
+### 📚 Documentation
+* Refresh `docs/current-state.md` for v0.10.5 release.
+
 ## v0.10.4 (2026-05-20)
 
 ### 🔧 Maintenance
