@@ -2,10 +2,12 @@ package placement
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/state"
+	"github.com/toasterbook88/axis/internal/workload"
 )
 
 type candidateEvaluation struct {
@@ -157,7 +159,7 @@ func matchedRequiredTools(n models.NodeFacts, requiredTools []string) []string {
 	return matched
 }
 
-func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) models.PlacementCandidateExplanation {
+func explainEligibleCandidate(n models.NodeFacts, nodes []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, clusterReserved int64) models.PlacementCandidateExplanation {
 	reasoning := make([]string, 0, 4)
 
 	if reason := empiricalReason(empiricalObservation(n, reqs, st)); reason != "" {
@@ -201,11 +203,38 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 		reasoning = append(reasoning, "eligible under current placement rules")
 	}
 
+	// Inline headroom computation using precomputed clusterReserved to avoid
+	// redundant O(N) scans inside Headroom and clusterPressurePenalty.
+	minNeeded := effectiveMinFreeRAM(reqs, n)
+	if minNeeded <= 0 {
+		if hint := workload.PeakRAMHint(reqs.Workload.Class); hint > 0 {
+			minNeeded = hint
+		}
+	}
+	free := freeRAMWithState(n)
+	var headroom int64 = -1
+	if free >= minNeeded {
+		var penalty int64
+		if minNeeded > 0 && n.RAMReservedMB > 0 && clusterReserved > 0 {
+			share := float64(n.RAMReservedMB) / float64(clusterReserved)
+			penalty = int64(math.Round(share * float64(minNeeded) * 1.5))
+			if penalty < 0 {
+				penalty = 0
+			}
+		}
+		adjusted := free - penalty
+		if adjusted < 0 {
+			adjusted = 0
+		}
+		headroom = adjusted - minNeeded
+	}
+
 	return models.PlacementCandidateExplanation{
-		Node:      n.Name,
-		FitScore:  ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs),
-		IsLocal:   models.IsLocalNode(n),
-		Reasoning: reasoning,
+		Node:       n.Name,
+		FitScore:   ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs),
+		IsLocal:    models.IsLocalNode(n),
+		HeadroomMB: headroom,
+		Reasoning:  reasoning,
 	}
 }
 
@@ -225,9 +254,10 @@ func ExplainPlacement(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 	}
 
 	ranked := RankCandidates(eligibleNodes, reqs, st)
+	clusterReserved := totalReservedFromNodes(nodes)
 	eligible := make([]models.PlacementCandidateExplanation, 0, len(ranked))
 	for _, node := range ranked {
-		eligible = append(eligible, explainEligibleCandidate(node, reqs, st))
+		eligible = append(eligible, explainEligibleCandidate(node, nodes, reqs, st, clusterReserved))
 	}
 
 	return models.PlacementExplanation{

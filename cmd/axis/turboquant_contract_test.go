@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -31,19 +32,17 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 		t.Fatalf("planTaskPlacement: %v", err)
 	}
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		return printOutput(placementExplainOutput{
-			Source:      source,
-			Explanation: explanation,
-		}, "json")
-	})
-	if err != nil {
+	var out bytes.Buffer
+	if err := printOutput(&out, placementExplainOutput{
+		Source:      source,
+		Explanation: explanation,
+	}, "json"); err != nil {
 		t.Fatalf("printOutput: %v", err)
 	}
 
 	assertNormalizedGoldenText(t,
 		filepath.Join("testdata", "task_place_turboquant_json.golden"),
-		normalizeGoldenOutput(renderGoldenSections(stderr, normalizeGoldenOutput(stdout))),
+		normalizeGoldenOutput(out.String()),
 	)
 }
 

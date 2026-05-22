@@ -22,6 +22,8 @@ type Agent struct {
 	safety   ShellSafetyGate
 	output   io.Writer
 	maxTurns int
+	verbose  bool
+	dryRun   bool
 
 	// autoApproveAll is toggled when the operator selects "always" in confirmation.
 	autoApproveAll bool
@@ -37,6 +39,8 @@ type Config struct {
 	MaxTokens   int    // Conversation token budget (default: 4096)
 	AutoApprove bool   // Auto-approve safe commands (score < 70)
 	SystemExtra string // Extra text appended to system prompt
+	Verbose     bool   // Emit trace output for tool calls and turns
+	DryRun      bool   // Plan tool calls without executing them
 
 	// Cluster is optional. If non-nil, the agent injects a cluster summary
 	// into the system prompt and uses it for safety checks.
@@ -116,6 +120,8 @@ func New(cfg Config) *Agent {
 		safety:   safetyGate,
 		output:   cfg.Output,
 		maxTurns: cfg.MaxTurns,
+		verbose:  cfg.Verbose,
+		dryRun:   cfg.DryRun,
 	}
 }
 
@@ -126,6 +132,9 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
 
 	for turn := 0; turn < a.maxTurns; turn++ {
+		if a.verbose {
+			fmt.Fprintf(a.output, "\n[Turn %d/%d]\n", turn+1, a.maxTurns)
+		}
 		msgs := a.conv.Messages()
 		toolDefs := a.tools.Defs()
 
@@ -145,6 +154,17 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 		// Process each tool call.
 		for _, tc := range resp.ToolCalls {
 			fmt.Fprintf(a.output, "\n▶ Calling %s...\n", tc.Function.Name)
+			if a.verbose && len(tc.Function.Arguments) > 0 {
+				fmt.Fprintf(a.output, "  → Parameters: %s\n", tc.Function.Arguments)
+			}
+			if a.dryRun {
+				fmt.Fprintf(a.output, "  [dry-run] Skipped execution of %s\n", tc.Function.Name)
+				a.conv.Append(chat.Message{
+					Role:    chat.RoleTool,
+					Content: fmt.Sprintf("[dry-run] %s execution skipped", tc.Function.Name),
+				})
+				continue
+			}
 			result, err := a.dispatchToolCall(ctx, tc)
 			if err != nil {
 				// Feed the error back to the model for self-correction.
@@ -160,6 +180,9 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 			// Print a compact summary line instead of raw char count.
 			summary := formatToolResultSummary(tc.Function.Name, result)
 			fmt.Fprintf(a.output, "✓ %s\n", summary)
+			if a.verbose {
+				fmt.Fprintf(a.output, "  ← Result: %d chars\n", len(result))
+			}
 			a.conv.Append(chat.Message{
 				Role:    chat.RoleTool,
 				Content: result,

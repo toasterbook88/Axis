@@ -93,17 +93,18 @@ func taskPlaceCmd() *cobra.Command {
 						Decision: decision,
 					}
 				}
-				return printOutput(payload, "json")
+				return printOutput(cmd.OutOrStdout(), payload, "json")
 			}
 
 			// Human-readable output
+			w := cmd.OutOrStdout()
 			if !decision.OK {
 				if cacheRequested {
-					fmt.Printf("%s %s\n", ui.Dim("Source:"), source)
+					fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), source)
 				}
-				fmt.Printf("%s %s\n", ui.Red("✗"), "No suitable node found.")
+				fmt.Fprintf(w, "%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
-					fmt.Printf("  %s %s\n", ui.Dim("-"), r)
+					fmt.Fprintf(w, "  %s %s\n", ui.Dim("-"), r)
 				}
 				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
@@ -113,19 +114,19 @@ func taskPlaceCmd() *cobra.Command {
 				locality = ui.Green("local")
 			}
 			if cacheRequested {
-				fmt.Printf("%s %s\n", ui.Dim("Source:"), source)
+				fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), source)
 			}
-			fmt.Printf("%s %s (%s, fit %s)\n",
+			fmt.Fprintf(w, "%s %s (%s, fit %s)\n",
 				ui.Green("✓"),
 				ui.Bold(decision.Node),
 				locality,
 				ui.Cyan(fmt.Sprintf("%d/100", decision.FitScore)))
 			if decision.Tool != "" {
-				fmt.Printf("  %s %s\n", ui.Dim("Tool:"), decision.Tool)
+				fmt.Fprintf(w, "  %s %s\n", ui.Dim("Tool:"), decision.Tool)
 			}
-			fmt.Printf("  %s\n", ui.Dim("Reason:"))
+			fmt.Fprintf(w, "  %s\n", ui.Dim("Reason:"))
 			for _, r := range decision.Reasoning {
-				fmt.Printf("    %s %s\n", ui.Dim("-"), r)
+				fmt.Fprintf(w, "    %s %s\n", ui.Dim("-"), r)
 			}
 			return nil
 		},
@@ -252,8 +253,9 @@ func taskRunCmd() *cobra.Command {
 				return err
 			}
 
+			w := cmd.OutOrStdout()
 			if intent.requiresConfirmation {
-				fmt.Printf("\nSuggested %s for %q:\n%s\n", intent.label, input, intent.command)
+				fmt.Fprintf(w, "\nSuggested %s for %q:\n%s\n", intent.label, input, intent.command)
 				return fmt.Errorf("refusing to execute implicitly; re-run with --script to execute the suggestion or --exec to run a raw command")
 			}
 
@@ -273,27 +275,27 @@ func taskRunCmd() *cobra.Command {
 					scheduleTaskRunDaemonRefresh(trigger)
 				},
 				OnReady: func(resp execution.GuardedExecutionResult) {
-					fmt.Printf("Selected node: %s (fit %d/100)\n", resp.Node, resp.FitScore)
+					fmt.Fprintf(w, "Selected node: %s (fit %d/100)\n", resp.Node, resp.FitScore)
 					for _, reason := range resp.Reasoning {
-						fmt.Printf("  - %s\n", reason)
+						fmt.Fprintf(w, "  - %s\n", reason)
 					}
 					if intent.matchedSkill != nil && scriptFlag {
-						fmt.Printf("\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
+						fmt.Fprintf(w, "\n=== AXIS LEARNED SKILL: %s ===\n%s\n", intent.matchedSkill.ID, intent.matchedSkill.Description)
 					} else if intent.matchedScript != nil && scriptFlag {
-						fmt.Printf("\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
+						fmt.Fprintf(w, "\n=== MOLE FALLBACK SCRIPT: %s ===\n%s\n", intent.matchedScript.Name, intent.matchedScript.Description)
 					}
-					fmt.Printf("\n=== EXECUTING ON %s ===\n%s\n\n", resp.Node, resp.Command)
+					fmt.Fprintf(w, "\n=== EXECUTING ON %s ===\n%s\n\n", resp.Node, resp.Command)
 				},
 			}
 
 			prepared, err := prepareTaskGuarded(ctx, rt, req)
 			if prepared.Result.Blocked {
-				printBlockedResult(prepared.Result)
+				printBlockedResult(cmd.OutOrStdout(), prepared.Result)
 				return nil
 			}
 			if err != nil && prepared.Result.Error == "no suitable node found" {
 				for _, reason := range prepared.Result.Reasoning {
-					fmt.Printf("  - %s\n", reason)
+					fmt.Fprintf(w, "  - %s\n", reason)
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: no suitable node found\n")
 				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
@@ -303,7 +305,7 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			if dryRunFlag {
-				return printDryRunPlan(prepared)
+				return printDryRunPlan(cmd.OutOrStdout(), prepared)
 			}
 
 			if taskRunUsesTTYPrompt() {
@@ -320,7 +322,7 @@ func taskRunCmd() *cobra.Command {
 			resp, err := runTaskRunRequest(ctx, prepared)
 			if err != nil && resp.Error == "no suitable node found" {
 				for _, reason := range resp.Reasoning {
-					fmt.Printf("  - %s\n", reason)
+					fmt.Fprintf(w, "  - %s\n", reason)
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: no suitable node found\n")
 				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
@@ -377,38 +379,38 @@ func confirmTaskRunExecution(cmd *cobra.Command, prepared execution.PreparedExec
 	return answer == "y" || answer == "yes", nil
 }
 
-func printDryRunPlan(prepared execution.PreparedExecution) error {
-	fmt.Println(ui.Bold("=== DRY RUN - Execution Plan ==="))
-	fmt.Println()
-	fmt.Printf("  Node: %s\n", prepared.Result.Node)
-	fmt.Printf("  Mode: %s\n", prepared.Result.Mode)
-	fmt.Printf("  Intent: %s\n", prepared.Result.Intent)
-	fmt.Printf("  Command: %s\n", prepared.Command)
-	fmt.Printf("  Fit score: %d/100\n", prepared.Result.FitScore)
-	fmt.Printf("  Locality: %s\n", localityLabel(prepared.Result.IsLocal))
-	fmt.Printf("  Reservation: %dMB\n", prepared.ReservationMB)
+func printDryRunPlan(w io.Writer, prepared execution.PreparedExecution) error {
+	fmt.Fprintln(w, ui.Bold("=== DRY RUN - Execution Plan ==="))
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  Node: %s\n", prepared.Result.Node)
+	fmt.Fprintf(w, "  Mode: %s\n", prepared.Result.Mode)
+	fmt.Fprintf(w, "  Intent: %s\n", prepared.Result.Intent)
+	fmt.Fprintf(w, "  Command: %s\n", prepared.Command)
+	fmt.Fprintf(w, "  Fit score: %d/100\n", prepared.Result.FitScore)
+	fmt.Fprintf(w, "  Locality: %s\n", localityLabel(prepared.Result.IsLocal))
+	fmt.Fprintf(w, "  Reservation: %dMB\n", prepared.ReservationMB)
 	if prepared.Result.Tool != "" {
-		fmt.Printf("  Tool: %s\n", prepared.Result.Tool)
+		fmt.Fprintf(w, "  Tool: %s\n", prepared.Result.Tool)
 	}
 	if prepared.Requirements.Workload.Class != "" {
-		fmt.Printf("  Workload: %s\n", prepared.Requirements.Workload.Class)
+		fmt.Fprintf(w, "  Workload: %s\n", prepared.Requirements.Workload.Class)
 	}
 	if len(prepared.Result.Reasoning) > 0 {
-		fmt.Println()
-		fmt.Printf("  %s\n", ui.Dim("Reasoning:"))
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  %s\n", ui.Dim("Reasoning:"))
 		for _, r := range prepared.Result.Reasoning {
-			fmt.Printf("    %s %s\n", ui.Dim("-"), r)
+			fmt.Fprintf(w, "    %s %s\n", ui.Dim("-"), r)
 		}
 	}
 	if len(prepared.ExtraEnv) > 0 {
-		fmt.Println()
-		fmt.Printf("  %s\n", ui.Dim("Extra environment:"))
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  %s\n", ui.Dim("Extra environment:"))
 		for _, env := range prepared.ExtraEnv {
-			fmt.Printf("    %s\n", env)
+			fmt.Fprintf(w, "    %s\n", env)
 		}
 	}
-	fmt.Println()
-	fmt.Println(ui.Dim("Nothing was executed. Remove --dry-run to run."))
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, ui.Dim("Nothing was executed. Remove --dry-run to run."))
 	return nil
 }
 
@@ -419,11 +421,11 @@ func localityLabel(isLocal bool) string {
 	return "remote"
 }
 
-func printBlockedResult(resp execution.GuardedExecutionResult) {
-	fmt.Printf("\n=== SAFETY BLOCKED ===\n")
-	fmt.Printf("Reason: %s\n", resp.BlockReason)
-	fmt.Printf("Safety score: %d/100\n", resp.DumbScore)
-	fmt.Println("Nothing was executed. Fix your request.")
+func printBlockedResult(w io.Writer, resp execution.GuardedExecutionResult) {
+	fmt.Fprintf(w, "\n=== SAFETY BLOCKED ===\n")
+	fmt.Fprintf(w, "Reason: %s\n", resp.BlockReason)
+	fmt.Fprintf(w, "Safety score: %d/100\n", resp.DumbScore)
+	fmt.Fprintln(w, "Nothing was executed. Fix your request.")
 }
 
 // === NEW: axis task context <description> — zero-risk token saver ===
@@ -467,7 +469,7 @@ func taskContextCmd() *cobra.Command {
 
 			if format == "json" {
 				out := buildContextJSON(snap, reqs, desc, source, st, skillStore)
-				return printOutput(out, "json")
+				return printOutput(cmd.OutOrStdout(), out, "json")
 			}
 			printContextBlock(snap, reqs, desc, source, st, skillStore)
 			return nil

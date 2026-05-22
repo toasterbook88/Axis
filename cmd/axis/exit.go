@@ -14,6 +14,7 @@ const (
 	ExitErrNoNodesFit   = 3
 	ExitErrCommandFail  = 4
 	ExitErrContextWrite = 5
+	ExitErrIO           = 6
 )
 
 // ExitCodeError wraps an exit code and a user-facing message so Cobra

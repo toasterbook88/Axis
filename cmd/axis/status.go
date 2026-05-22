@@ -60,7 +60,7 @@ func statusCmd() *cobra.Command {
 				if cacheRequested {
 					payload = statusOutput{Source: source, Snapshot: snap}
 				}
-				return printOutput(payload, format)
+				return printOutput(cmd.OutOrStdout(), payload, format)
 			default:
 				printStatusText(cmd, snap, source)
 				return nil

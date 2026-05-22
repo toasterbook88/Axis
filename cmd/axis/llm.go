@@ -133,7 +133,7 @@ func llmCmd() *cobra.Command {
 			}
 
 			if format == "json" || format == "yaml" {
-				return printOutput(result, format)
+				return printOutput(cmd.OutOrStdout(), result, format)
 			}
 
 			// Human-readable output.

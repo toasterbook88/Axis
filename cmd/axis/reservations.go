@@ -86,7 +86,7 @@ func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
 		})
 	}
 
-	fmt.Print(RenderReservationTable(items))
+	fmt.Fprint(cmd.OutOrStdout(), RenderReservationTable(items))
 	return nil
 }
 
@@ -101,9 +101,12 @@ type ReservationListItem struct {
 
 func RenderReservationTable(items []ReservationListItem) string {
 	var b strings.Builder
+	sep := strings.Repeat("─", 75)
 	b.WriteString("\n")
 	ui.WhiteColor.Fprintf(&b, "  ACTIVE RESERVATIONS\n")
-	b.WriteString("  " + strings.Repeat("─", 75) + "\n")
+	b.WriteString("  ")
+	b.WriteString(sep)
+	b.WriteString("\n")
 
 	if len(items) == 0 {
 		ui.DimColor.Fprintf(&b, "  No active reservations\n\n")
@@ -112,7 +115,9 @@ func RenderReservationTable(items []ReservationListItem) string {
 
 	ui.WhiteColor.Fprintf(&b, "  %-20s %-15s %10s %-15s %10s\n",
 		"ID", "NODE", "RAM (MB)", "OWNER", "AGE")
-	b.WriteString("  " + strings.Repeat("─", 75) + "\n")
+	b.WriteString("  ")
+	b.WriteString(sep)
+	b.WriteString("\n")
 
 	displayItems := items
 	truncated := 0

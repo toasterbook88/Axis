@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 
@@ -95,21 +96,21 @@ func versionCmd() *cobra.Command {
 	}
 }
 
-// printOutput marshals data to JSON or YAML and writes to stdout.
-func printOutput(data interface{}, format string) error {
+// printOutput marshals data to JSON or YAML and writes to out.
+func printOutput(out io.Writer, data interface{}, format string) error {
 	switch format {
 	case "yaml":
-		out, err := yaml.Marshal(data)
+		b, err := yaml.Marshal(data)
 		if err != nil {
 			return err
 		}
-		fmt.Print(string(out))
+		fmt.Fprint(out, string(b))
 	default:
-		out, err := json.MarshalIndent(data, "", "  ")
+		b, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(out))
+		fmt.Fprintln(out, string(b))
 	}
 	return nil
 }

@@ -41,7 +41,7 @@ func factsCmd() *cobra.Command {
 
 			switch format {
 			case "json", "yaml":
-				return printOutput(nf, format)
+				return printOutput(cmd.OutOrStdout(), nf, format)
 			default:
 				printFactsText(cmd, nf)
 				return nil

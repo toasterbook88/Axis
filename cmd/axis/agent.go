@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -40,6 +42,8 @@ func agentCmd() *cobra.Command {
 		autoApprove bool
 		systemMsg   string
 		resume      bool
+		verbose     bool
+		dryRun      bool
 	)
 
 	cmd := &cobra.Command{
@@ -53,7 +57,13 @@ func agentCmd() *cobra.Command {
 			"never a source of cluster truth.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
 			currentModel := resolveChatModel(model)
+			if verbose && model == "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
+			}
 			w := cmd.OutOrStdout()
 			errW := cmd.ErrOrStderr()
 
@@ -64,7 +74,7 @@ func agentCmd() *cobra.Command {
 			var k *knowledge.ClusterKnowledge
 			tc := &agent.ToolContext{}
 
-			rt, err := runtimectx.Load(cmd.Context())
+			rt, err := runtimectx.Load(ctx)
 			if err != nil {
 				fmt.Fprintf(errW, "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
 			} else {
@@ -87,6 +97,8 @@ func agentCmd() *cobra.Command {
 				MaxTokens:   maxTokens,
 				AutoApprove: autoApprove,
 				SystemExtra: systemMsg,
+				Verbose:     verbose,
+				DryRun:      dryRun,
 				Cluster:     cluster,
 				Knowledge:   k,
 				ToolContext: tc,
@@ -113,9 +125,9 @@ func agentCmd() *cobra.Command {
 				instruction := strings.Join(args, " ")
 				fmt.Fprintf(errW, "Agent [%s] — max %d turns\n\n", ui.Bold(currentModel), maxTurns)
 
-				ctx, cancel := agentRequestContext(timeout)
+				ctx2, cancel := agentRequestContext(ctx, timeout)
 				defer cancel()
-				if err := a.Run(ctx, instruction); err != nil {
+				if err := a.Run(ctx2, instruction); err != nil {
 					fmt.Fprintf(errW, "error: Agent failed: %v\n", err)
 					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 				}
@@ -139,7 +151,7 @@ func agentCmd() *cobra.Command {
 			}
 			rl, err := readline.NewEx(rlCfg)
 			if err != nil {
-				return runPlainAgentREPL(a, w, errW, timeout, historyPath)
+				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath)
 			}
 			defer rl.Close()
 
@@ -157,8 +169,8 @@ func agentCmd() *cobra.Command {
 					break
 				}
 
-				ctx, cancel := agentRequestContext(timeout)
-				if err := a.Run(ctx, instruction); err != nil {
+				ctx2, cancel := agentRequestContext(ctx, timeout)
+				if err := a.Run(ctx2, instruction); err != nil {
 					fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), err)
 				}
 				cancel()
@@ -183,11 +195,13 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "Emit trace output for tool calls and turns")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Plan tool calls without executing them")
 	return cmd
 }
 
 // runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
-func runPlainAgentREPL(a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string) error {
+func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string) error {
 	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -203,8 +217,8 @@ func runPlainAgentREPL(a *agent.Agent, w, errW io.Writer, timeout time.Duration,
 		if lower == "exit" || lower == "quit" {
 			break
 		}
-		ctx, cancel := agentRequestContext(timeout)
-		if err := a.Run(ctx, instruction); err != nil {
+		ctx2, cancel := agentRequestContext(ctx, timeout)
+		if err := a.Run(ctx2, instruction); err != nil {
 			fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), err)
 		}
 		cancel()
@@ -213,14 +227,17 @@ func runPlainAgentREPL(a *agent.Agent, w, errW io.Writer, timeout time.Duration,
 	if historyPath != "" && a.Conversation().HistoryCount() > 0 {
 		_ = a.Conversation().SaveToFile(historyPath)
 	}
+	if err := scanner.Err(); err != nil {
+		return ExitCodeError{Code: ExitErrIO, Message: fmt.Sprintf("input stream closed: %v", err)}
+	}
 	return nil
 }
 
-func agentRequestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+func agentRequestContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
-		return context.WithCancel(context.Background())
+		return context.WithCancel(parent)
 	}
-	return context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(parent, timeout)
 }
 
 func guardedAgentShellRunner(model string) agent.ShellRunner {
