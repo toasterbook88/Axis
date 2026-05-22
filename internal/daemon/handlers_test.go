@@ -12,6 +12,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
@@ -41,6 +42,8 @@ func (m *mockCache) RefreshWithTrigger(_ context.Context, trigger string) error 
 	m.lastTrigger = trigger
 	return m.refreshErr
 }
+
+func (m *mockCache) Mesh() *mesh.Mesh { return nil }
 
 // newRecordedRequest builds a request and response recorder for a handler test.
 func newRecordedRequest(method, path string, body string) (*httptest.ResponseRecorder, *http.Request) {
@@ -653,6 +656,7 @@ func TestRegisterRoutesExposesExpectedPaths(t *testing.T) {
 		{http.MethodGet, "/snapshot", http.StatusOK},
 		{http.MethodGet, "/snapshot/meta", http.StatusOK},
 		{http.MethodGet, "/tools", http.StatusOK},
+		{http.MethodGet, "/mesh", http.StatusServiceUnavailable}, // mesh not configured in mockCache
 	}
 
 	for _, tc := range paths {
