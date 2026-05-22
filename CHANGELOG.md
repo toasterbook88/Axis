@@ -1,3 +1,17 @@
+## v0.10.7 (2026-05-22)
+
+### 🚀 Features
+* New `axis daemon mesh` subcommand for operator mesh introspection.
+  - Queries the daemon's `/mesh` endpoint and displays active gossip peers in a table.
+  - Shows peer name, hostname, state, source, and relative last-seen time.
+  - Handles empty peer lists and "mesh not available" gracefully.
+
+### 🔧 Internal
+* Added `Mesh() *mesh.Mesh` to the `daemon.SnapshotCache` interface and implemented it on `*Daemon`.
+* Added `/mesh` handler to the daemon router (`internal/daemon/handlers.go`).
+* Added `MarshalJSON`/`UnmarshalJSON` to `mesh.PeerState` so the API serializes states as human-readable strings (`"discovered"`, `"verified"`, `"trusted"`, `"suspect"`, `"dead"`).
+* Refactored daemon HTTP request creation into shared `newDaemonRequest` helper with consistent auth handling.
+
 ## v0.10.6 (2026-05-22)
 
 ### 🚀 Features
