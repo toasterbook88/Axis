@@ -12,7 +12,6 @@ import (
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
-	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
 )
@@ -255,9 +254,6 @@ func meshHandler(cache SnapshotCache) http.HandlerFunc {
 			return
 		}
 		peers := m.ActivePeers()
-		if peers == nil {
-			peers = []mesh.Peer{}
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"peers": peers,
 			"count": len(peers),

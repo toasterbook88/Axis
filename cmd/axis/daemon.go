@@ -20,6 +20,7 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -139,10 +140,14 @@ func daemonStartCmd() *cobra.Command {
 	return cmd
 }
 
-func newDaemonRequest(ctx context.Context, addr, method, path string) (*http.Request, *http.Client, error) {
+func newDaemonRequest(ctx context.Context, addr, method, path string, query url.Values) (*http.Request, *http.Client, error) {
 	client, baseURLAddr := daemon.HttpClientForAddr(addr)
 	baseURL := daemon.NormalizeAddr(baseURLAddr)
-	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, nil)
+	u := baseURL + path
+	if query != nil {
+		u += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -157,8 +162,8 @@ func newDaemonRequest(ctx context.Context, addr, method, path string) (*http.Req
 	return req, client, nil
 }
 
-func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
-	req, client, err := newDaemonRequest(ctx, addr, http.MethodGet, "/mesh")
+func fetchDaemonMesh(ctx context.Context, addr string) ([]mesh.Peer, error) {
+	req, client, err := newDaemonRequest(ctx, addr, http.MethodGet, "/mesh", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -179,8 +184,8 @@ func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
 	}
 
 	var payload struct {
-		Peers []meshPeer `json:"peers"`
-		Count int        `json:"count"`
+		Peers []mesh.Peer `json:"peers"`
+		Count int         `json:"count"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decoding mesh response: %w", err)
@@ -188,20 +193,9 @@ func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
 	return payload.Peers, nil
 }
 
-type meshPeer struct {
-	Name        string    `json:"name"`
-	Hostname    string    `json:"hostname"`
-	Port        int       `json:"port"`
-	StableID    string    `json:"stable_id"`
-	State       string    `json:"state"`
-	Source      string    `json:"source"`
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
-	MissedPings int       `json:"missed_pings"`
-	Generation  uint64    `json:"generation"`
-}
+const maxMeshPeersDisplayed = 50
 
-func printMeshPeers(cmd *cobra.Command, peers []meshPeer) {
+func printMeshPeers(cmd *cobra.Command, peers []mesh.Peer) {
 	out := cmd.OutOrStdout()
 	if len(peers) == 0 {
 		fmt.Fprintln(out, "No active mesh peers.")
@@ -209,11 +203,20 @@ func printMeshPeers(cmd *cobra.Command, peers []meshPeer) {
 	}
 
 	tbl := ui.NewTable("NAME", "HOSTNAME", "STATE", "SOURCE", "LAST SEEN")
-	for _, p := range peers {
-		tbl.AddRow(p.Name, p.Hostname, p.State, p.Source, humanizeTime(p.LastSeen))
+	displayed := peers
+	remaining := 0
+	if len(peers) > maxMeshPeersDisplayed {
+		displayed = peers[:maxMeshPeersDisplayed]
+		remaining = len(peers) - maxMeshPeersDisplayed
+	}
+	for _, p := range displayed {
+		tbl.AddRow(p.Name, p.Hostname, p.State.String(), p.Source, humanizeTime(p.LastSeen))
 	}
 	fmt.Fprintf(out, "%s (%d peers)\n\n", ui.Bold("MESH PEERS"), len(peers))
 	tbl.Render(out)
+	if remaining > 0 {
+		fmt.Fprintf(out, "\n... and %d more peers not shown\n", remaining)
+	}
 }
 
 func humanizeTime(t time.Time) string {
@@ -237,13 +240,10 @@ func humanizeTime(t time.Time) string {
 }
 
 func invalidateDaemonCache(ctx context.Context, addr string) error {
-	client, baseURLAddr := daemon.HttpClientForAddr(addr)
-	baseURL := daemon.NormalizeAddr(baseURLAddr)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/invalidate", nil)
+	req, client, err := newDaemonRequest(ctx, addr, http.MethodPost, "/invalidate", nil)
 	if err != nil {
 		return err
 	}
-
 	return doDaemonActionWithClient(client, req, "daemon invalidate failed")
 }
 
@@ -252,35 +252,23 @@ func refreshDaemonCache(ctx context.Context, addr string) error {
 }
 
 func refreshDaemonCacheWithTrigger(ctx context.Context, addr, trigger string) error {
-	client, baseURLAddr := daemon.HttpClientForAddr(addr)
-	baseURL := daemon.NormalizeAddr(baseURLAddr)
-	endpoint := baseURL + "/refresh"
+	var query url.Values
 	if trigger != "" {
 		normalized, err := daemon.NormalizeRefreshTrigger(trigger)
 		if err != nil {
 			return err
 		}
-		values := url.Values{}
-		values.Set("trigger", normalized)
-		endpoint += "?" + values.Encode()
+		query = url.Values{}
+		query.Set("trigger", normalized)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	req, client, err := newDaemonRequest(ctx, addr, http.MethodPost, "/refresh", query)
 	if err != nil {
 		return err
 	}
-
 	return doDaemonActionWithClient(client, req, "daemon refresh failed")
 }
 
 func doDaemonActionWithClient(client *http.Client, req *http.Request, prefix string) error {
-	token, err := auth.LoadOrGenerateToken()
-	if err != nil {
-		return fmt.Errorf("%s: loading api token: %w", prefix, err)
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
