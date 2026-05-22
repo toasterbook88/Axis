@@ -444,7 +444,10 @@ func freeRAMWithState(n models.NodeFacts) int64 {
 	return allocatableRAM(n)
 }
 
-func headroom(n models.NodeFacts, nodes []models.NodeFacts, reqs models.TaskRequirements) int64 {
+// Headroom computes the effective free RAM headroom for a node after subtracting
+// the task's minimum requirement and a cluster-pressure penalty. Returns -1 if
+// the node cannot meet the minimum. Used by execution and explain surfaces.
+func Headroom(n models.NodeFacts, nodes []models.NodeFacts, reqs models.TaskRequirements) int64 {
 	minNeeded := effectiveMinFreeRAM(reqs, n)
 	// When no explicit floor is set, use the profile's peak RAM hint as a
 	// soft sizing signal so the ranker prefers nodes that can comfortably

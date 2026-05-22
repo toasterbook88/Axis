@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -34,6 +36,7 @@ func chatCmd() *cobra.Command {
 		systemMsg  string
 		format     string
 		resume     bool
+		verbose    bool
 	)
 
 	cmd := &cobra.Command{
@@ -52,14 +55,20 @@ func chatCmd() *cobra.Command {
 			"  /help      — show this help\n",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
 			currentModel := resolveChatModel(model)
+			if verbose && model == "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
+			}
 			w := cmd.OutOrStdout()
 			errW := cmd.ErrOrStderr()
 
 			// Build optional cluster context.
 			var cluster *chat.ClusterSummaryForPrompt
 			if useContext {
-				if snap := loadSnapshotQuietly(cmd.Context()); snap != nil {
+				if snap := loadSnapshotQuietly(ctx); snap != nil {
 					cluster = chat.BuildClusterSummary(snap)
 				}
 			}
@@ -92,7 +101,7 @@ func chatCmd() *cobra.Command {
 				sp := ui.NewSpinner()
 				sp.Start("Thinking...")
 
-				ctx, cancel := chatRequestContext(timeout)
+				ctx2, cancel := chatRequestContext(ctx, timeout)
 				defer cancel()
 
 				// When --format json, suppress streaming to stdout and
@@ -101,7 +110,7 @@ func chatCmd() *cobra.Command {
 				if format == "json" {
 					streamW = io.Discard
 				}
-				resp, err := client.ChatStream(ctx, conv.Messages(), nil, streamW)
+				resp, err := client.ChatStream(ctx2, conv.Messages(), nil, streamW)
 				sp.Stop("")
 
 				if err != nil {
@@ -110,7 +119,7 @@ func chatCmd() *cobra.Command {
 				}
 				if format == "json" {
 					conv.Append(resp)
-					printOutput(resp, format)
+					printOutput(cmd.OutOrStdout(), resp, format)
 				} else {
 					fmt.Fprintln(w)
 				}
@@ -135,7 +144,7 @@ func chatCmd() *cobra.Command {
 			rl, err := readline.NewEx(cfg)
 			if err != nil {
 				// Fallback to plain scanner if readline fails (e.g., non-TTY).
-				return runPlainREPL(cmd.Context(), client, conv, currentModel, w, errW, timeout, historyPath)
+				return runPlainREPL(ctx, client, conv, currentModel, w, errW, timeout, historyPath)
 			}
 			defer rl.Close()
 
@@ -168,8 +177,8 @@ func chatCmd() *cobra.Command {
 				sp := ui.NewSpinner()
 				sp.Start("Thinking...")
 
-				ctx, cancel := chatRequestContext(timeout)
-				resp, err := client.ChatStream(ctx, conv.Messages(), nil, w)
+				ctx2, cancel := chatRequestContext(ctx, timeout)
+				resp, err := client.ChatStream(ctx2, conv.Messages(), nil, w)
 				sp.Stop("")
 				cancel()
 
@@ -200,6 +209,7 @@ func chatCmd() *cobra.Command {
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format for single-shot mode (text, json)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "Print model resolution and other debug info")
 	return cmd
 }
 
@@ -231,7 +241,7 @@ func runPlainREPL(ctx context.Context, client *chat.Client, conv *chat.Conversat
 		conv.Append(chat.Message{Role: chat.RoleUser, Content: query})
 		sp := ui.NewSpinner()
 		sp.Start("Thinking...")
-		ctx2, cancel := chatRequestContext(timeout)
+		ctx2, cancel := chatRequestContext(ctx, timeout)
 		resp, err := client.ChatStream(ctx2, conv.Messages(), nil, w)
 		sp.Stop("")
 		cancel()
@@ -244,6 +254,9 @@ func runPlainREPL(ctx context.Context, client *chat.Client, conv *chat.Conversat
 	}
 	if historyPath != "" && conv.HistoryCount() > 0 {
 		_ = conv.SaveToFile(historyPath)
+	}
+	if err := scanner.Err(); err != nil {
+		return ExitCodeError{Code: ExitErrIO, Message: fmt.Sprintf("input stream closed: %v", err)}
 	}
 	return nil
 }
@@ -322,11 +335,11 @@ func loadSnapshotQuietly(ctx context.Context) *models.ClusterSnapshot {
 	return rt.Snapshot
 }
 
-func chatRequestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+func chatRequestContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
-		return context.WithCancel(context.Background())
+		return context.WithCancel(parent)
 	}
-	return context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(parent, timeout)
 }
 
 func resolveChatModel(requested string) string {

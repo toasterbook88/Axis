@@ -50,7 +50,7 @@ func summaryCmd() *cobra.Command {
 			}
 
 			view := populateSummaryView(snap, meta)
-			fmt.Print(view.Render())
+			fmt.Fprint(cmd.OutOrStdout(), view.Render())
 			return nil
 		},
 	}
@@ -269,12 +269,15 @@ func (n NodeListItem) PressureColor() string {
 
 func RenderNodeTable(nodes []NodeListItem) string {
 	var b strings.Builder
+	sep := strings.Repeat("─", 85)
 	b.WriteString("\n")
 
 	// Header
 	ui.WhiteColor.Fprintf(&b, "  %-3s %-20s %-10s %-8s %10s %10s %8s  %s\n",
 		"", "NAME", "STATUS", "ARCH", "RAM TOTAL", "RAM FREE", "PRESSURE", "GPUS")
-	b.WriteString("  " + strings.Repeat("─", 85) + "\n")
+	b.WriteString("  ")
+	b.WriteString(sep)
+	b.WriteString("\n")
 
 	for _, n := range nodes {
 		name := n.Name
@@ -329,9 +332,12 @@ func (c DoctorCheck) Icon() string {
 
 func RenderDoctorReport(checks []DoctorCheck) string {
 	var b strings.Builder
+	sep := strings.Repeat("─", 50)
 	b.WriteString("\n")
 	ui.WhiteColor.Fprintf(&b, "  AXIS DOCTOR — Cluster Health Report\n")
-	b.WriteString("  " + strings.Repeat("═", 50) + "\n\n")
+	b.WriteString("  ")
+	b.WriteString(strings.Repeat("═", 50))
+	b.WriteString("\n\n")
 
 	pass, warn, fail := 0, 0, 0
 	for _, c := range checks {
@@ -349,7 +355,9 @@ func RenderDoctorReport(checks []DoctorCheck) string {
 		}
 	}
 
-	b.WriteString("\n  " + strings.Repeat("─", 50) + "\n")
+	b.WriteString("\n  ")
+	b.WriteString(sep)
+	b.WriteString("\n")
 	overall := ui.GreenColor.Sprint("HEALTHY")
 	if fail > 0 {
 		overall = ui.RedColor.Sprint("UNHEALTHY")
