@@ -88,9 +88,36 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 			kv("ram alloc:", fmt.Sprintf("%d MB", nf.RAMAllocatableMB))
 		}
 		kv("disk:", fmt.Sprintf("%d GB free / %d GB total", r.DiskFreeGB, r.DiskTotalGB))
+		if r.StorageClass != "" {
+			kv("storage:", r.StorageClass)
+		}
 		kv("pressure:", formatPressure(r.Pressure))
 		if len(r.GPUs) > 0 {
-			kv("gpus:", strings.Join(models.GPUNames(r.GPUs), ", "))
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "  %s\n", ui.Bold("GPUs"))
+			for _, g := range r.GPUs {
+				detail := formatGPUBaseName(g)
+				if g.VRAMMB > 0 {
+					detail = fmt.Sprintf("%s — %d MB VRAM", detail, g.VRAMMB)
+				}
+				if len(g.Capabilities) > 0 {
+					detail = fmt.Sprintf("%s [%s]", detail, strings.Join(g.Capabilities, ", "))
+				}
+				fmt.Fprintf(out, "    %s %s\n", ui.Green("✓"), detail)
+			}
+		}
+		if r.ThermalState != "" {
+			kv("thermal:", formatThermal(r.ThermalState))
+		}
+		if r.PowerSource != "" {
+			kv("power:", r.PowerSource)
+		}
+		if r.BatteryPercent != nil {
+			kv("battery:", fmt.Sprintf("%d%%", *r.BatteryPercent))
+		}
+		kv("load:", fmt.Sprintf("%.2f / %.2f / %.2f", r.Load1M, r.Load5M, r.Load15M))
+		if r.MemoryTopology != "" {
+			kv("memory:", string(r.MemoryTopology))
 		}
 	}
 
@@ -115,5 +142,35 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 		}
 	}
 
+	if len(nf.Addresses) > 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  %s\n", ui.Bold("Addresses"))
+		for _, a := range nf.Addresses {
+			detail := a.Address
+			if a.Interface != "" {
+				detail = fmt.Sprintf("%s (%s)", a.Address, a.Interface)
+			}
+			if a.SpeedClass != "" && a.SpeedClass != "unknown" {
+				detail = fmt.Sprintf("%s [%s]", detail, a.SpeedClass)
+			}
+			fmt.Fprintf(out, "    %s %s\n", ui.Green("✓"), detail)
+		}
+	}
+
 	fmt.Fprintf(out, "\n  %s %s\n", ui.Dim("collected:"), nf.CollectedAt.Format(time.RFC3339))
+}
+
+func formatThermal(state string) string {
+	switch state {
+	case "nominal":
+		return ui.Green("nominal")
+	case "fair":
+		return ui.Yellow("fair")
+	case "serious":
+		return ui.Red("serious")
+	case "critical":
+		return ui.Red("critical")
+	default:
+		return state
+	}
 }
