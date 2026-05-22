@@ -8,9 +8,119 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/execution"
 )
+
+func TestFetchDaemonMeshReturnsPeers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v2/mesh" {
+			t.Fatalf("expected /v2/mesh, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"peers":[{"name":"alpha","hostname":"10.0.0.1","state":"verified","source":"gossip","last_seen":"2026-05-22T22:00:00Z"}],"count":1}`))
+	}))
+	defer server.Close()
+
+	peers, err := fetchDaemonMesh(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("fetchDaemonMesh: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(peers))
+	}
+	if peers[0].Name != "alpha" {
+		t.Fatalf("expected peer name alpha, got %q", peers[0].Name)
+	}
+}
+
+func TestFetchDaemonMeshReturnsEmptyWhenNoPeers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"peers":[],"count":0}`))
+	}))
+	defer server.Close()
+
+	peers, err := fetchDaemonMesh(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("fetchDaemonMesh: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("expected 0 peers, got %d", len(peers))
+	}
+}
+
+func TestDaemonMeshCommandRendersTable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/mesh" {
+			t.Fatalf("expected /v2/mesh, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"peers":[{"name":"alpha","hostname":"10.0.0.1","state":"verified","source":"gossip","last_seen":"2026-05-22T22:00:00Z"}],"count":1}`))
+	}))
+	defer server.Close()
+
+	cmd := daemonCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--cache-addr", server.URL, "mesh"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("daemon mesh: %v", err)
+	}
+	if !strings.Contains(out.String(), "alpha") {
+		t.Fatalf("expected peer name alpha in output, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "MESH PEERS") {
+		t.Fatalf("expected MESH PEERS header, got %q", out.String())
+	}
+}
+
+func TestDaemonMeshCommandHandlesEmptyPeers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"peers":[],"count":0}`))
+	}))
+	defer server.Close()
+
+	cmd := daemonCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--cache-addr", server.URL, "mesh"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("daemon mesh: %v", err)
+	}
+	if !strings.Contains(out.String(), "No active mesh peers") {
+		t.Fatalf("expected no-peers message, got %q", out.String())
+	}
+}
+
+func TestHumanizeTimeFormatsRecent(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		t    time.Time
+		want string
+	}{
+		{time.Time{}, "—"},
+		{now.Add(-5 * time.Second), "5s ago"},
+		{now.Add(-2 * time.Minute), "2m ago"},
+		{now.Add(-3 * time.Hour), "3h ago"},
+		{now.Add(-48 * time.Hour), "2d ago"},
+	}
+	for _, tc := range cases {
+		got := humanizeTime(tc.t)
+		if got != tc.want {
+			t.Errorf("humanizeTime(%v) = %q, want %q", tc.t, got, tc.want)
+		}
+	}
+}
 
 func TestInvalidateDaemonCachePostsToEndpoint(t *testing.T) {
 	var sawPost bool

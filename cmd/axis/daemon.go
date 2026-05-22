@@ -20,6 +20,7 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 func daemonCmd() *cobra.Command {
@@ -56,6 +57,23 @@ func daemonCmd() *cobra.Command {
 			default:
 				fmt.Fprintln(cmd.OutOrStdout(), "daemon cache is fresh")
 			}
+			return nil
+		},
+	})
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "mesh",
+		Short: "Show gossip mesh peers from the local daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			peers, err := fetchDaemonMesh(ctx, cacheAddr)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "mesh query failed: %v\n", err)
+				return err
+			}
+			printMeshPeers(cmd, peers)
 			return nil
 		},
 	})
@@ -119,6 +137,100 @@ func daemonStartCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&refreshInterval, "refresh", time.Minute, "Background snapshot refresh interval")
 	cmd.Flags().BoolVar(&pprof, "pprof", false, "Expose /debug/pprof profiling endpoints")
 	return cmd
+}
+
+func fetchDaemonMesh(ctx context.Context, addr string) ([]meshPeer, error) {
+	client, baseURLAddr := daemon.HttpClientForAddr(addr)
+	baseURL := daemon.NormalizeAddr(baseURLAddr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v2/mesh", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := auth.LoadOrGenerateToken()
+	if err != nil {
+		return nil, fmt.Errorf("loading api token: %w", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("mesh query failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var payload struct {
+		Peers []meshPeer `json:"peers"`
+		Count int        `json:"count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decoding mesh response: %w", err)
+	}
+	return payload.Peers, nil
+}
+
+type meshPeer struct {
+	Name        string    `json:"name"`
+	Hostname    string    `json:"hostname"`
+	Port        int       `json:"port"`
+	StableID    string    `json:"stable_id"`
+	State       string    `json:"state"`
+	Source      string    `json:"source"`
+	FirstSeen   time.Time `json:"first_seen"`
+	LastSeen    time.Time `json:"last_seen"`
+	MissedPings int       `json:"missed_pings"`
+	Generation  uint64    `json:"generation"`
+}
+
+func printMeshPeers(cmd *cobra.Command, peers []meshPeer) {
+	out := cmd.OutOrStdout()
+	if len(peers) == 0 {
+		fmt.Fprintln(out, "No active mesh peers.")
+		return
+	}
+
+	tbl := ui.NewTable("NAME", "HOSTNAME", "STATE", "SOURCE", "LAST SEEN")
+	for _, p := range peers {
+		stateColor := ui.Dim
+		switch p.State {
+		case "trusted":
+			stateColor = ui.Green
+		case "verified":
+			stateColor = ui.Cyan
+		case "discovered":
+			stateColor = ui.Yellow
+		case "suspect":
+			stateColor = ui.Red
+		}
+		lastSeen := humanizeTime(p.LastSeen)
+		tbl.AddRow(ui.Cyan(p.Name), p.Hostname, stateColor(p.State), p.Source, lastSeen)
+	}
+	fmt.Fprintf(out, "%s (%d peers)\n\n", ui.Bold("MESH PEERS"), len(peers))
+	tbl.Render(out)
+}
+
+func humanizeTime(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
 func invalidateDaemonCache(ctx context.Context, addr string) error {
