@@ -13,8 +13,8 @@ Refresh this section with `./hack/refresh-current-state.sh`.
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
 - Refreshed: 2026-05-22 EDT
 - Repo version: `0.10.6`
-- Latest published GitHub release: `v0.10.5` (2026-05-22T22:48:57Z)
-- Release truth: repo version is ahead of the latest published release
+- Latest published GitHub release: `v0.10.6` (2026-05-22T23:10:31Z)
+- Release truth: repo version matches the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
