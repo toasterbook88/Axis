@@ -15,6 +15,7 @@ func mcpCmd() *cobra.Command {
 		Short: "Read-only MCP surfaces for AXIS cluster state and diagnostics",
 	}
 	cmd.AddCommand(mcpServeCmd())
+	cmd.AddCommand(mcpClientCmd())
 	return cmd
 }
 
