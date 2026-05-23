@@ -98,6 +98,9 @@ type GuardedExecutionResult struct {
 	ExitCode       int                         `json:"exit_code,omitempty"`
 	SnapshotStatus models.SnapshotStatus       `json:"snapshot_status,omitempty"`
 	Summary        *models.ClusterSummary      `json:"summary,omitempty"`
+	PeakRAMMB      int64                       `json:"peak_ram_mb,omitempty"`
+	PeakVRAMMB     int64                       `json:"peak_vram_mb,omitempty"`
+	WallTimeMS     int64                       `json:"wall_time_ms,omitempty"`
 }
 
 type PreparedExecution struct {
@@ -727,6 +730,8 @@ func runLocal(
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
 		recordExecutionOutcome(st, reqs, resp, runErr, elapsed, peakRAMMB)
+		resp.PeakRAMMB = peakRAMMB
+		resp.WallTimeMS = durationMilliseconds(elapsed)
 		return resp, runErr
 	}
 
@@ -734,6 +739,8 @@ func runLocal(
 	runtimeChanged = true
 	recordExecutionOutcome(st, reqs, resp, nil, elapsed, peakRAMMB)
 	resp.OK = true
+	resp.PeakRAMMB = peakRAMMB
+	resp.WallTimeMS = durationMilliseconds(elapsed)
 	return resp, nil
 }
 
@@ -822,6 +829,7 @@ func runRemote(
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
 		recordExecutionOutcome(st, reqs, resp, runErr, elapsed, 0)
+		resp.WallTimeMS = durationMilliseconds(elapsed)
 		return resp, runErr
 	}
 
@@ -829,6 +837,7 @@ func runRemote(
 	runtimeChanged = true
 	recordExecutionOutcome(st, reqs, resp, nil, elapsed, 0)
 	resp.OK = true
+	resp.WallTimeMS = durationMilliseconds(elapsed)
 	return resp, nil
 }
 

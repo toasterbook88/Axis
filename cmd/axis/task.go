@@ -328,7 +328,13 @@ func taskRunCmd() *cobra.Command {
 				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
 			if err != nil {
+				if s := formatObservationSummary(resp); s != "" {
+					fmt.Fprintln(w, s)
+				}
 				return err
+			}
+			if s := formatObservationSummary(resp); s != "" {
+				fmt.Fprintln(w, s)
 			}
 			return nil
 		},
@@ -426,6 +432,23 @@ func printBlockedResult(w io.Writer, resp execution.GuardedExecutionResult) {
 	fmt.Fprintf(w, "Reason: %s\n", resp.BlockReason)
 	fmt.Fprintf(w, "Safety score: %d/100\n", resp.DumbScore)
 	fmt.Fprintln(w, "Nothing was executed. Fix your request.")
+}
+
+func formatObservationSummary(resp execution.GuardedExecutionResult) string {
+	if resp.WallTimeMS <= 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("wall %dms", resp.WallTimeMS)}
+	if resp.PeakRAMMB > 0 {
+		parts = append(parts, fmt.Sprintf("peak RAM %dMB", resp.PeakRAMMB))
+	}
+	if resp.PeakVRAMMB > 0 {
+		parts = append(parts, fmt.Sprintf("peak VRAM %dMB", resp.PeakVRAMMB))
+	}
+	if !resp.OK {
+		parts = append(parts, "unsuccessful")
+	}
+	return fmt.Sprintf("Recorded observation: %s", strings.Join(parts, ", "))
 }
 
 // === NEW: axis task context <description> — zero-risk token saver ===

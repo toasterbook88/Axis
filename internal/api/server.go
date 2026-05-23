@@ -74,6 +74,9 @@ type RunResponse struct {
 	ExitCode       int                         `json:"exit_code,omitempty"`
 	SnapshotStatus models.SnapshotStatus       `json:"snapshot_status,omitempty"`
 	Summary        *models.ClusterSummary      `json:"summary,omitempty"`
+	PeakRAMMB      int64                       `json:"peak_ram_mb,omitempty"`
+	PeakVRAMMB     int64                       `json:"peak_vram_mb,omitempty"`
+	WallTimeMS     int64                       `json:"wall_time_ms,omitempty"`
 }
 
 type runnerContext struct {
