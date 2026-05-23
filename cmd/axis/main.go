@@ -67,6 +67,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(doctorCmd())
 	root.AddCommand(summaryCmd())
 	root.AddCommand(reservationsCmd())
+	root.AddCommand(observationsCmd())
 
 	ui.ApplyHelpTemplate(root)
 
