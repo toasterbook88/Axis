@@ -427,13 +427,26 @@ func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
 		return nil
 	}
 
+	// We are the winner: record start time for latency fallback
+	startTime := time.Now()
+
+	// Do the refresh
+	err := d.doRefresh(ctx, trigger)
+
+	// After refresh, process pending triggers that came in while we were refreshing
+	var pendingTriggers map[string]bool
+	var pendingRequestedAt time.Time
+
 	d.pendingMu.Lock()
-	if !d.pendingRequestedAt.IsZero() {
-		d.activeRequestedAt = d.pendingRequestedAt
-		d.pendingRequestedAt = time.Time{}
-		d.pendingTriggers = make(map[string]bool)
+	pendingTriggers = d.pendingTriggers
+	pendingRequestedAt = d.pendingRequestedAt
+	// Clear the pending triggers and reset the requestedAt for next cycle
+	d.pendingTriggers = make(map[string]bool)
+	d.pendingRequestedAt = time.Time{}
+	if !pendingRequestedAt.IsZero() {
+		d.activeRequestedAt = pendingRequestedAt
 	} else {
-		d.activeRequestedAt = time.Now()
+		d.activeRequestedAt = startTime
 	}
 	d.pendingMu.Unlock()
 
@@ -441,16 +454,14 @@ func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
 		d.refreshing.Store(false)
 
 		var nextTrigger string
-		d.pendingMu.Lock()
-		if len(d.pendingTriggers) > 0 {
+		if len(pendingTriggers) > 0 {
 			var keys []string
-			for k := range d.pendingTriggers {
+			for k := range pendingTriggers {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
 			nextTrigger = strings.Join(keys, ",")
 		}
-		d.pendingMu.Unlock()
 
 		select {
 		case <-d.pendingRefresh:
@@ -462,8 +473,7 @@ func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
 		}
 	}()
 
-	err := d.doRefresh(ctx, trigger)
-
+	// Latency measurement
 	now := time.Now()
 	d.pendingMu.Lock()
 	latency := now.Sub(d.activeRequestedAt)
