@@ -45,14 +45,14 @@ func mcpClientListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List configured MCP servers and connection status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientList(cmd.OutOrStdout(), format)
+			return runMCPClientList(cmd.Context(), cmd.OutOrStdout(), format)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
 }
 
-func runMCPClientList(out io.Writer, format string) error {
+func runMCPClientList(ctx context.Context, out io.Writer, format string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -65,7 +65,7 @@ func runMCPClientList(out io.Writer, format string) error {
 	}
 
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -138,7 +138,7 @@ func mcpClientToolsCmd() *cobra.Command {
 		Use:   "tools",
 		Short: "List tools from connected MCP servers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientTools(cmd.OutOrStdout(), server, format)
+			return runMCPClientTools(cmd.Context(), cmd.OutOrStdout(), server, format)
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", "", "Filter to a specific server")
@@ -146,14 +146,14 @@ func mcpClientToolsCmd() *cobra.Command {
 	return cmd
 }
 
-func runMCPClientTools(out io.Writer, server, format string) error {
+func runMCPClientTools(ctx context.Context, out io.Writer, server, format string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -225,7 +225,7 @@ func mcpClientCallCmd() *cobra.Command {
 				if len(args) > 1 {
 					rawArgs = args[1]
 				}
-				return runMCPClientCallAutoRoute(cmd.OutOrStdout(), toolName, rawArgs, pretty)
+				return runMCPClientCallAutoRoute(cmd.Context(), cmd.OutOrStdout(), toolName, rawArgs, pretty)
 			}
 			serverName := args[0]
 			toolName := args[1]
@@ -233,7 +233,7 @@ func mcpClientCallCmd() *cobra.Command {
 			if len(args) > 2 {
 				rawArgs = args[2]
 			}
-			return runMCPClientCall(cmd.OutOrStdout(), serverName, toolName, rawArgs, pretty)
+			return runMCPClientCall(cmd.Context(), cmd.OutOrStdout(), serverName, toolName, rawArgs, pretty)
 		},
 	}
 	cmd.Flags().BoolVar(&pretty, "pretty", false, "Pretty-print JSON output")
@@ -241,14 +241,14 @@ func mcpClientCallCmd() *cobra.Command {
 	return cmd
 }
 
-func runMCPClientCallAutoRoute(out io.Writer, toolName, rawArgs string, pretty bool) error {
+func runMCPClientCallAutoRoute(ctx context.Context, out io.Writer, toolName, rawArgs string, pretty bool) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -275,14 +275,14 @@ func runMCPClientCallAutoRoute(out io.Writer, toolName, rawArgs string, pretty b
 	return nil
 }
 
-func runMCPClientCall(out io.Writer, serverName, toolName, rawArgs string, pretty bool) error {
+func runMCPClientCall(ctx context.Context, out io.Writer, serverName, toolName, rawArgs string, pretty bool) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -316,22 +316,22 @@ func mcpClientResourcesCmd() *cobra.Command {
 		Use:   "resources",
 		Short: "List resources from connected MCP servers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientResources(cmd.OutOrStdout(), server, format)
+			return runMCPClientResources(cmd.Context(), cmd.OutOrStdout(), server, format)
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", "", "Filter to a specific server")
-	cmd.Flags().StringVar(&format, "format", "format", "Output format: text or json")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
 }
 
-func runMCPClientResources(out io.Writer, server, format string) error {
+func runMCPClientResources(ctx context.Context, out io.Writer, server, format string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -381,21 +381,21 @@ func mcpClientReadCmd() *cobra.Command {
 		Short: "Read a resource from a specific MCP server",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientRead(cmd.OutOrStdout(), args[0], args[1], pretty)
+			return runMCPClientRead(cmd.Context(), cmd.OutOrStdout(), args[0], args[1], pretty)
 		},
 	}
 	cmd.Flags().BoolVar(&pretty, "pretty", false, "Pretty-print JSON output")
 	return cmd
 }
 
-func runMCPClientRead(out io.Writer, serverName, uri string, pretty bool) error {
+func runMCPClientRead(ctx context.Context, out io.Writer, serverName, uri string, pretty bool) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -424,7 +424,7 @@ func mcpClientPromptsCmd() *cobra.Command {
 		Use:   "prompts",
 		Short: "List prompts from connected MCP servers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientPrompts(cmd.OutOrStdout(), server, format)
+			return runMCPClientPrompts(cmd.Context(), cmd.OutOrStdout(), server, format)
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", "", "Filter to a specific server")
@@ -432,13 +432,13 @@ func mcpClientPromptsCmd() *cobra.Command {
 	return cmd
 }
 
-func runMCPClientPrompts(out io.Writer, server, format string) error {
+func runMCPClientPrompts(ctx context.Context, out io.Writer, server, format string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -498,20 +498,20 @@ func mcpClientGetPromptCmd() *cobra.Command {
 			if len(args) > 2 {
 				rawArgs = args[2]
 			}
-			return runMCPClientGetPrompt(cmd.OutOrStdout(), serverName, promptName, rawArgs, pretty)
+			return runMCPClientGetPrompt(cmd.Context(), cmd.OutOrStdout(), serverName, promptName, rawArgs, pretty)
 		},
 	}
 	cmd.Flags().BoolVar(&pretty, "pretty", false, "Pretty-print JSON output")
 	return cmd
 }
 
-func runMCPClientGetPrompt(out io.Writer, serverName, promptName, rawArgs string, pretty bool) error {
+func runMCPClientGetPrompt(ctx context.Context, out io.Writer, serverName, promptName, rawArgs string, pretty bool) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -534,19 +534,19 @@ func mcpClientSearchCmd() *cobra.Command {
 		Short: "Search tools by name or description across all connected MCP servers",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientSearch(cmd.OutOrStdout(), args[0])
+			return runMCPClientSearch(cmd.Context(), cmd.OutOrStdout(), args[0])
 		},
 	}
 	return cmd
 }
 
-func runMCPClientSearch(out io.Writer, keyword string) error {
+func runMCPClientSearch(ctx context.Context, out io.Writer, keyword string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -591,7 +591,7 @@ Example file:
 ]`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientBatch(cmd.OutOrStdout(), args[0])
+			return runMCPClientBatch(cmd.Context(), cmd.OutOrStdout(), args[0])
 		},
 	}
 	return cmd
@@ -603,7 +603,7 @@ type batchEntry struct {
 	Args   map[string]any `json:"args,omitempty"`
 }
 
-func runMCPClientBatch(out io.Writer, path string) error {
+func runMCPClientBatch(ctx context.Context, out io.Writer, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read batch file: %w", err)
@@ -618,7 +618,7 @@ func runMCPClientBatch(out io.Writer, path string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -668,19 +668,19 @@ func mcpClientInteractiveCmd() *cobra.Command {
 		Use:   "interactive",
 		Short: "Interactive REPL for exploring and calling MCP servers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientInteractive(cmd.InOrStdin(), cmd.OutOrStdout())
+			return runMCPClientInteractive(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
 	return cmd
 }
 
-func runMCPClientInteractive(in io.Reader, out io.Writer) error {
+func runMCPClientInteractive(ctx context.Context, in io.Reader, out io.Writer) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	reg := mcpclient.NewRegistry()
-	ctx := context.Background()
+
 	reg.ConnectAll(ctx, cfg)
 	defer reg.Close()
 
@@ -771,9 +771,9 @@ func runMCPClientInteractive(in io.Reader, out io.Writer) error {
 				fmt.Fprintln(out, "Usage: call <server> <tool> [json-args]")
 				continue
 			}
-			var rawArgs string
+			rawArgs := ""
 			if len(args) > 2 {
-				rawArgs = args[2]
+				rawArgs = strings.Join(args[2:], " ")
 			}
 			parsedArgs, parseErr := mcpclient.ParseArgs(rawArgs)
 			if parseErr != nil {
@@ -816,9 +816,9 @@ func runMCPClientInteractive(in io.Reader, out io.Writer) error {
 				fmt.Fprintln(out, "Usage: get-prompt <server> <prompt> [json-args]")
 				continue
 			}
-			var rawArgs string
+			rawArgs := ""
 			if len(args) > 2 {
-				rawArgs = args[2]
+				rawArgs = strings.Join(args[2:], " ")
 			}
 			parsedArgs, parseErr := mcpclient.ParseArgs(rawArgs)
 			if parseErr != nil {
@@ -837,7 +837,7 @@ func runMCPClientInteractive(in io.Reader, out io.Writer) error {
 				fmt.Fprintln(out, "Usage: search <keyword>")
 				continue
 			}
-			keywordLower := strings.ToLower(args[0])
+			keywordLower := strings.ToLower(strings.Join(args, " "))
 			for _, te := range reg.ListAllTools() {
 				if strings.Contains(strings.ToLower(te.Tool.Name), keywordLower) ||
 					strings.Contains(strings.ToLower(te.Tool.Description), keywordLower) {

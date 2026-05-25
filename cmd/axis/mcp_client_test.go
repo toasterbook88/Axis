@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestMCPClientListEmptyConfig(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runMCPClientList(&buf, "text")
+	err := runMCPClientList(context.Background(), &buf, "text")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestMCPClientListJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runMCPClientList(&buf, "json")
+	err := runMCPClientList(context.Background(), &buf, "json")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestMCPClientToolsMissingServer(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runMCPClientTools(&buf, "missing", "text")
+	err := runMCPClientTools(context.Background(), &buf, "missing", "text")
 	if err == nil {
 		t.Fatal("expected error for missing server")
 	}
@@ -103,7 +104,7 @@ func TestMCPClientParseArgs(t *testing.T) {
 
 	var buf bytes.Buffer
 	// Call with a non-existent server to test arg parsing path
-	err := runMCPClientCall(&buf, "missing", "tool", `{"key":"value"}`, false)
+	err := runMCPClientCall(context.Background(), &buf, "missing", "tool", `{"key":"value"}`, false)
 	if err == nil {
 		t.Fatal("expected error for missing server")
 	}

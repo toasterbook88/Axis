@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -36,6 +35,11 @@ type CallResult struct {
 	Err    error
 }
 
+// httpStatusCoder is implemented by HTTP response errors that carry a status code.
+type httpStatusCoder interface {
+	StatusCode() int
+}
+
 // isTransientError reports whether an error is likely temporary and worth retrying.
 func isTransientError(err error) bool {
 	if err == nil {
@@ -47,10 +51,14 @@ func isTransientError(err error) bool {
 	if netErr, ok := err.(interface{ Temporary() bool }); ok && netErr.Temporary() {
 		return true
 	}
-	// HTTP 5xx status codes (for HTTP transport)
-	if strings.Contains(err.Error(), "500") || strings.Contains(err.Error(), "502") ||
-		strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "504") {
-		return true
+	// HTTP 5xx status codes — inspect directly via type assertion rather than
+	// fragile string matching.
+	var statusCoder httpStatusCoder
+	if errors.As(err, &statusCoder) {
+		code := statusCoder.StatusCode()
+		if code >= 500 && code < 600 {
+			return true
+		}
 	}
 	return false
 }
@@ -79,6 +87,24 @@ func withRetry(ctx context.Context, fn func() error) error {
 	return err
 }
 
+// callTool performs the actual tool invocation with retry and metrics recording.
+func (r *Registry) callTool(ctx context.Context, sc *ServerConnection, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	var result *mcp.CallToolResult
+	err := withRetry(ctx, func() error {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		req := mcp.CallToolRequest{}
+		req.Params.Name = toolName
+		req.Params.Arguments = args
+		res, callErr := sc.Client.CallTool(cctx, req)
+		result = res
+		return callErr
+	})
+	sc.RecordCall(time.Since(start), err)
+	return result, err
+}
+
 // CallToolWithProgress invokes a tool and prints progress notifications to stderr.
 func (r *Registry) CallToolWithProgress(ctx context.Context, serverName, toolName string, args map[string]any, progressOut io.Writer) CallResult {
 	sc := r.Get(serverName)
@@ -101,21 +127,11 @@ func (r *Registry) CallToolWithProgress(ctx context.Context, serverName, toolNam
 		}
 	})
 
-	start := time.Now()
-	var result *mcp.CallToolResult
-	err := withRetry(ctx, func() error {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := mcp.CallToolRequest{}
-		req.Params.Name = toolName
-		req.Params.Arguments = args
-		res, callErr := sc.Client.CallTool(cctx, req)
-		result = res
-		return callErr
-	})
-	sc.RecordCall(time.Since(start), err)
+	result, err := r.callTool(ctx, sc, toolName, args)
 	return CallResult{Server: serverName, Result: result, Err: err}
 }
+
+// CallTool invokes a tool on a specific server.
 func (r *Registry) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) CallResult {
 	sc := r.Get(serverName)
 	if sc == nil {
@@ -125,19 +141,7 @@ func (r *Registry) CallTool(ctx context.Context, serverName, toolName string, ar
 		return CallResult{Server: serverName, Err: fmt.Errorf("server %q not connected: %v", serverName, sc.Err)}
 	}
 
-	start := time.Now()
-	var result *mcp.CallToolResult
-	err := withRetry(ctx, func() error {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := mcp.CallToolRequest{}
-		req.Params.Name = toolName
-		req.Params.Arguments = args
-		res, callErr := sc.Client.CallTool(cctx, req)
-		result = res
-		return callErr
-	})
-	sc.RecordCall(time.Since(start), err)
+	result, err := r.callTool(ctx, sc, toolName, args)
 	return CallResult{Server: serverName, Result: result, Err: err}
 }
 
