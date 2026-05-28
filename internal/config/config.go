@@ -136,6 +136,21 @@ type InferenceConfig struct {
 	BudgetAlertThreshold float64 `json:"budget_alert_threshold,omitempty" yaml:"budget_alert_threshold,omitempty"`
 }
 
+// MCPServerConfig describes a single external MCP server connection.
+type MCPServerConfig struct {
+	// Transport is "stdio" or "http".
+	Transport string `json:"transport" yaml:"transport"`
+
+	// Command is the executable and arguments for stdio transport.
+	Command []string `json:"command,omitempty" yaml:"command,omitempty"`
+
+	// URL is the endpoint for HTTP/SSE transport.
+	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+
+	// Headers are optional HTTP headers (for http transport).
+	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+}
+
 // Config is the top-level AXIS configuration.
 type Config struct {
 	Nodes       []NodeConfig                `json:"nodes" yaml:"nodes"`
@@ -143,6 +158,7 @@ type Config struct {
 	Chat        *ChatConfig                 `json:"chat,omitempty" yaml:"chat,omitempty"`
 	AIProviders map[string]AIProviderConfig `json:"ai_providers,omitempty" yaml:"ai_providers,omitempty"`
 	Inference   *InferenceConfig            `json:"inference,omitempty" yaml:"inference,omitempty"`
+	MCPServers  map[string]MCPServerConfig  `json:"mcp_servers,omitempty" yaml:"mcp_servers,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.

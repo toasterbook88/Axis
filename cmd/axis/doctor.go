@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -128,6 +129,44 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		coreFailures++
 	} else {
 		fmt.Fprintf(out, "  %s Loaded %d node(s)\n", ui.StatusIcon(true), len(cfg.Nodes))
+
+		// 1.5 MCP server config validation
+		if len(cfg.MCPServers) > 0 {
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "%s MCP servers\n", ui.Cyan("→"))
+			for name, mcpCfg := range cfg.MCPServers {
+				switch strings.ToLower(mcpCfg.Transport) {
+				case "stdio":
+					if len(mcpCfg.Command) == 0 {
+						fmt.Fprintf(out, "  %s %s (stdio): missing command\n", ui.StatusIcon(false), name)
+						advisoryWarnings++
+					} else {
+						cmdPath := mcpCfg.Command[0]
+						if _, err := os.Stat(cmdPath); os.IsNotExist(err) {
+							// Try resolving via PATH
+							if _, lookErr := exec.LookPath(cmdPath); lookErr != nil {
+								fmt.Fprintf(out, "  %s %s (stdio): command not found: %s\n", ui.StatusIcon(false), name, cmdPath)
+								advisoryWarnings++
+							} else {
+								fmt.Fprintf(out, "  %s %s (stdio): %s (found in PATH)\n", ui.StatusIcon(true), name, cmdPath)
+							}
+						} else {
+							fmt.Fprintf(out, "  %s %s (stdio): %s\n", ui.StatusIcon(true), name, cmdPath)
+						}
+					}
+				case "http":
+					if mcpCfg.URL == "" {
+						fmt.Fprintf(out, "  %s %s (http): missing url\n", ui.StatusIcon(false), name)
+						advisoryWarnings++
+					} else {
+						fmt.Fprintf(out, "  %s %s (http): %s\n", ui.StatusIcon(true), name, mcpCfg.URL)
+					}
+				default:
+					fmt.Fprintf(out, "  %s %s (%s): unsupported transport\n", ui.StatusIcon(false), name, mcpCfg.Transport)
+					advisoryWarnings++
+				}
+			}
+		}
 
 		// 2. SSH connectivity check per node
 		fmt.Fprintln(out)
