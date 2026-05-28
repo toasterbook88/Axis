@@ -898,6 +898,10 @@ func TestDaemonRefreshCoalescingAndLatency(t *testing.T) {
 	if meta.MaxRefreshLatencyMs < 0 {
 		t.Fatalf("expected non-negative MaxRefreshLatencyMs, got %d", meta.MaxRefreshLatencyMs)
 	}
+
+	// Grace period for any leaked goroutines from prior watch tests to finish
+	// file operations before t.TempDir() cleanup runs.
+	time.Sleep(100 * time.Millisecond)
 }
 
 func TestNewDefaultCreatesMeshWhenNoDiscoveryConfig(t *testing.T) {
