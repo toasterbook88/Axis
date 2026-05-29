@@ -104,7 +104,7 @@ func TestMCPClientParseArgs(t *testing.T) {
 
 	var buf bytes.Buffer
 	// Call with a non-existent server to test arg parsing path
-	err := runMCPClientCall(context.Background(), &buf, "missing", "tool", `{"key":"value"}`, false)
+	err := runMCPClientCall(context.Background(), &buf, "missing", "tool", `{"key":"value"}`)
 	if err == nil {
 		t.Fatal("expected error for missing server")
 	}

@@ -6,8 +6,10 @@
 package reservation
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -99,6 +101,8 @@ type Ledger struct {
 	// nodeRAM maps node name → total RAM in MB (populated from snapshots).
 	nodeRAM map[string]int64
 
+	lockFile *os.File // file lock for cross-process synchronization
+
 	// Metrics
 	totalReserved   int64
 	totalReleased   int64
@@ -134,6 +138,14 @@ func (l *Ledger) SetNodeCapacity(node string, totalRAMMB int64) {
 func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		if err := l.lockFileLocked(context.Background()); err != nil {
+			return nil, err
+		}
+		defer l.unlockFileLocked()
+	}
 
 	if req.ID == "" {
 		return nil, fmt.Errorf("reservation: entry ID required")
@@ -208,6 +220,15 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 func (l *Ledger) Release(id string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		if err := l.lockFileLocked(context.Background()); err != nil {
+			return err
+		}
+		defer l.unlockFileLocked()
+	}
+
 	e, ok := l.entries[id]
 	if !ok {
 		return fmt.Errorf("reservation: unknown entry %q", id)
@@ -222,6 +243,15 @@ func (l *Ledger) Release(id string) error {
 func (l *Ledger) Heartbeat(id string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		if err := l.lockFileLocked(context.Background()); err != nil {
+			return err
+		}
+		defer l.unlockFileLocked()
+	}
+
 	e, ok := l.entries[id]
 	if !ok {
 		return fmt.Errorf("reservation: unknown entry %q for heartbeat", id)
@@ -235,6 +265,16 @@ func (l *Ledger) Heartbeat(id string) error {
 func (l *Ledger) Reclaim() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		if err := l.lockFileLocked(context.Background()); err != nil {
+			l.logger.Error("failed to acquire file lock for reclaim", "error", err)
+			return 0
+		}
+		defer l.unlockFileLocked()
+	}
+
 	return l.reclaimLocked()
 }
 
