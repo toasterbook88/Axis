@@ -11,10 +11,10 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-05-22 EDT
-- Repo version: `0.10.7`
+- Refreshed: 2026-05-28 EDT
+- Repo version: `0.10.8`
 - Latest published GitHub release: `v0.10.7` (2026-05-22T23:49:15Z)
-- Release truth: repo version matches the latest published release
+- Release truth: repo version is ahead of the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -67,6 +67,7 @@ The live repo currently contains:
 - `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated
 - Internal library packages with scaffolding not wired into the CLI operator path: `internal/mesh/` (gossip peer discovery, HMAC-SHA256 auth), `internal/reservation/` (double-entry ledger, wired into task placement as library, no standalone CLI command), `internal/safety/structured.go` (parsed command analysis, learned approvals disabled), `internal/api/v2.go` (active read routes + explicit 501 stubs for unimplemented endpoints)
 - `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
+- Unified MCP client (`axis mcp client`) with per-server connection caching, retry, batch execution, interactive REPL, placement-aware auto-routing, and progress notifications
 
 The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 
@@ -94,6 +95,7 @@ Top-level commands currently registered in the binary:
 | `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |
 | `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
 | `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
+| `axis mcp client` | Unified MCP client | Subcommands: `list`, `tools`, `call`, `resources`, `read`, `prompts`, `get-prompt`, `search`, `batch`, `interactive`. Per-connection caching (60s TTL), retry with exponential backoff, placement-aware `--auto-route`, progress notifications, and REPL with 10 commands |
 | `axis serve` | Start local HTTP API | Includes execution surface |
 | `axis update` | Self-update binary | Safely replaces only the current executing binary with the latest release, verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--all` to upgrade all `$PATH` matches. `--check` reports only |
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
@@ -125,6 +127,7 @@ Top-level commands currently registered in the binary:
 | `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; integration coverage still needs to grow, but baseline unit coverage is now solid |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
 | `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
+| `internal/mcpclient` | Unified MCP client library | Connection pooling, per-server caching (60s TTL), retry with exponential backoff, progress notifications, placement-aware routing, batch execution, and metrics collection; powers `axis mcp client` |
 | `internal/persist` | Corrupt-file recovery helpers | Small helper package used for quarantine + warning recovery |
 | `internal/runtimectx` | Unified live runtime loader | Centralizes config + discovery + overlay + warning assembly for live reads |
 | `internal/chat` | Structured /api/chat client | Rolling context window, system prompt builder, model catalog |
