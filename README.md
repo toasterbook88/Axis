@@ -1,7 +1,7 @@
 # AXIS
 
 [![CI](https://github.com/toasterbook88/axis/actions/workflows/ci.yml/badge.svg)](https://github.com/toasterbook88/axis/actions/workflows/ci.yml)
-[![Release](https://github.com/toasterbook88/axis/actions/workflows/release.yml/badge.svg)](https://github.com/toasterbook88/axis/actions/workflows/release.yml)
+[![Release](https://github.com/toasterbook88/axis/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/toasterbook88/axis/actions/workflows/release.yml)
 [![Go version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/toasterbook88/axis?include_prereleases)](https://github.com/toasterbook88/axis/releases)
