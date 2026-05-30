@@ -123,7 +123,7 @@ func triangleRequestLeaseTool(ctx context.Context, req mcpproto.CallToolRequest,
 
 	// 1. Expiry Validation
 	if durationSeconds <= 0 {
-		return mcpproto.NewToolResultError("duration_seconds must be greater than zero"), nil
+		durationSeconds = 120 // Default to 2 minutes
 	}
 
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)

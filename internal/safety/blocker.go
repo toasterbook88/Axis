@@ -14,6 +14,8 @@ type BlockResult struct {
 	Score   int    `json:"dumb_score"` // 0-100
 }
 
+var defaultEvaluator = NewEvaluator(DefaultRuleSet())
+
 // Check is the single gatekeeper. Call this first, always.
 func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) bool) BlockResult {
 	lower := strings.ToLower(desc)
@@ -22,6 +24,16 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 	// === Learned bad commands (fast path - highest priority) ===
 	if isKnownBad != nil && isKnownBad(desc) {
 		return BlockResult{Blocked: true, Reason: "this exact command failed before", Score: 92}
+	}
+
+	// === Structured Safety Evaluator (delegation path) ===
+	decision := defaultEvaluator.Evaluate(desc, "agent-run-shell")
+	if decision.Verdict == VerdictDeny {
+		return BlockResult{
+			Blocked: true,
+			Reason:  strings.Join(decision.Reasons, "; "),
+			Score:   100,
+		}
 	}
 
 	// === Hard zero-tolerance patterns (expand forever) ===

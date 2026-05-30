@@ -104,15 +104,30 @@ func TestTriangleTools(t *testing.T) {
 	}
 }
 
-func TestTriangleTools_InvalidDuration(t *testing.T) {
+func TestTriangleTools_DefaultDuration(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+
+	restoreFetch := stubCachedSnapshotFetcher(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				{
+					Name: "test-node",
+					Resources: &models.Resources{
+						RAMTotalMB: 8192,
+						RAMFreeMB:  6144,
+					},
+				},
+			},
+		}, "cache", nil
+	})
+	defer restoreFetch()
 
 	args := map[string]any{
 		"node":             "test-node",
 		"owner_exec_id":    "session-1",
 		"owner_surface":    "Grok",
 		"ram_mb":           1024,
-		"duration_seconds": 0, // invalid
+		"duration_seconds": 0, // should fallback to default 120
 	}
 	req := mcpproto.CallToolRequest{}
 	req.Params.Name = "triangle_request_lease"
@@ -122,8 +137,29 @@ func TestTriangleTools_InvalidDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatal("expected error due to zero duration")
+	if res.IsError {
+		t.Fatalf("expected success with default duration, got error: %v", res.StructuredContent)
+	}
+
+	var reserved map[string]any
+	data, _ := json.Marshal(res.StructuredContent)
+	json.Unmarshal(data, &reserved)
+
+	expiresAtStr, ok := reserved["expires_at"].(string)
+	if !ok || expiresAtStr == "" {
+		t.Fatal("expected expires_at to be present")
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, expiresAtStr)
+	if err != nil {
+		expiresAt, err = time.Parse(time.RFC3339, expiresAtStr)
+		if err != nil {
+			t.Fatalf("failed to parse expires_at: %v", err)
+		}
+	}
+
+	diff := time.Until(expiresAt)
+	if diff < 110*time.Second || diff > 130*time.Second {
+		t.Errorf("expected expires_at to be ~120s in the future, got diff: %v", diff)
 	}
 }
 
