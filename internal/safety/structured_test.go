@@ -1,5 +1,3 @@
-//go:build safety_scaffolded
-
 package safety
 
 import (
