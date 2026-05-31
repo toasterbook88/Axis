@@ -497,6 +497,13 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 			if loadErr := d.ledger.Load(); loadErr != nil {
 				slog.Error("failed to reload reservation ledger during refresh", "error", loadErr)
 			}
+			if snap != nil {
+				for _, n := range snap.Nodes {
+					if n.Resources != nil {
+						d.ledger.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
+					}
+				}
+			}
 		}
 		st, stateWarning = state.Load()
 		if st != nil {
