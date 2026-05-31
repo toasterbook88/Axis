@@ -61,7 +61,7 @@ func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
 		mcpserver.WithRecovery(),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(false, false),
-		mcpserver.WithInstructions("AXIS exposes read-only cluster state and diagnostics. Do not assume any write or execution authority."),
+		mcpserver.WithInstructions("AXIS exposes read-only cluster state, diagnostics, and advisory resource leases. Do not assume any execution authority."),
 	)
 
 	registerResources(s, useCache, cacheAddr)
@@ -194,6 +194,7 @@ func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 		sshConnectivityTestTool,
 	)
 
+	registerTriangleTools(s, useCache, cacheAddr)
 }
 
 func ServeStdio(cached bool, cacheAddr string) error {

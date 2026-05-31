@@ -493,6 +493,11 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	var st *state.ClusterState
 	var stateWarning error
 	if err == nil {
+		if d.ledger != nil {
+			if loadErr := d.ledger.Load(); loadErr != nil {
+				slog.Error("failed to reload reservation ledger during refresh", "error", loadErr)
+			}
+		}
 		st, stateWarning = state.Load()
 		if st != nil {
 			if state.Maintain(st) {

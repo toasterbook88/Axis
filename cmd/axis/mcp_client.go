@@ -225,7 +225,7 @@ func mcpClientCallCmd() *cobra.Command {
 				if len(args) > 1 {
 					rawArgs = args[1]
 				}
-				return runMCPClientCallAutoRoute(cmd.Context(), cmd.OutOrStdout(), toolName, rawArgs, pretty)
+				return runMCPClientCallAutoRoute(cmd.Context(), cmd.OutOrStdout(), toolName, rawArgs)
 			}
 			serverName := args[0]
 			toolName := args[1]
@@ -233,7 +233,7 @@ func mcpClientCallCmd() *cobra.Command {
 			if len(args) > 2 {
 				rawArgs = args[2]
 			}
-			return runMCPClientCall(cmd.Context(), cmd.OutOrStdout(), serverName, toolName, rawArgs, pretty)
+			return runMCPClientCall(cmd.Context(), cmd.OutOrStdout(), serverName, toolName, rawArgs)
 		},
 	}
 	cmd.Flags().BoolVar(&pretty, "pretty", false, "Pretty-print JSON output")
@@ -241,7 +241,7 @@ func mcpClientCallCmd() *cobra.Command {
 	return cmd
 }
 
-func runMCPClientCallAutoRoute(ctx context.Context, out io.Writer, toolName, rawArgs string, pretty bool) error {
+func runMCPClientCallAutoRoute(ctx context.Context, out io.Writer, toolName, rawArgs string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -275,7 +275,7 @@ func runMCPClientCallAutoRoute(ctx context.Context, out io.Writer, toolName, raw
 	return nil
 }
 
-func runMCPClientCall(ctx context.Context, out io.Writer, serverName, toolName, rawArgs string, pretty bool) error {
+func runMCPClientCall(ctx context.Context, out io.Writer, serverName, toolName, rawArgs string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -381,14 +381,14 @@ func mcpClientReadCmd() *cobra.Command {
 		Short: "Read a resource from a specific MCP server",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMCPClientRead(cmd.Context(), cmd.OutOrStdout(), args[0], args[1], pretty)
+			return runMCPClientRead(cmd.Context(), cmd.OutOrStdout(), args[0], args[1])
 		},
 	}
 	cmd.Flags().BoolVar(&pretty, "pretty", false, "Pretty-print JSON output")
 	return cmd
 }
 
-func runMCPClientRead(ctx context.Context, out io.Writer, serverName, uri string, pretty bool) error {
+func runMCPClientRead(ctx context.Context, out io.Writer, serverName, uri string) error {
 	cfg, err := loadMCPClientConfig(config.DefaultConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

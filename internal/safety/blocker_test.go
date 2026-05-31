@@ -1,6 +1,7 @@
 package safety
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/knowledge"
@@ -93,3 +94,18 @@ func TestCheckBlocksGPURequestWhenNoGPUAvailable(t *testing.T) {
 		t.Fatalf("expected score 75, got %d", got.Score)
 	}
 }
+
+func TestCheckDelegatesToStructuredEvaluator(t *testing.T) {
+	// "sudo rm -rf /" is CategoryDestructive and VerdictDeny
+	got := Check(nil, "sudo rm -rf /", nil)
+	if !got.Blocked {
+		t.Fatal("expected structured safety violation to be blocked")
+	}
+	if got.Score != 100 {
+		t.Fatalf("expected score 100, got %d", got.Score)
+	}
+	if !strings.Contains(got.Reason, "matched rule") {
+		t.Fatalf("expected structured reason, got %q", got.Reason)
+	}
+}
+

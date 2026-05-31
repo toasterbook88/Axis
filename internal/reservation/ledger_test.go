@@ -1,12 +1,21 @@
 package reservation
 
 import (
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
 
+func setupTestLedger(t *testing.T, limits Limits) *Ledger {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	return NewLedger(limits, nil)
+}
+
 func TestNewLedger(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	if l == nil {
 		t.Fatal("NewLedger returned nil")
 	}
@@ -16,7 +25,7 @@ func TestNewLedger(t *testing.T) {
 }
 
 func TestReserve_Success(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384) // 16GB
 
 	entry, err := l.Reserve(Entry{
@@ -38,7 +47,7 @@ func TestReserve_Success(t *testing.T) {
 }
 
 func TestReserve_UnknownCapacityRejected(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 
 	_, err := l.Reserve(Entry{
 		ID:           "exec-1",
@@ -56,7 +65,7 @@ func TestReserve_UnknownCapacityRejected(t *testing.T) {
 }
 
 func TestReserve_DuplicateID(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 
 	l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 1024})
@@ -70,7 +79,7 @@ func TestReserve_OvercommitRejection(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxOvercommitRatio = 1.0
 	limits.SystemReserveMB = 1024
-	l := NewLedger(limits, nil)
+	l := setupTestLedger(t, limits)
 	l.SetNodeCapacity("node-a", 8192) // 8GB total, 7GB allocatable
 
 	// Reserve 6GB — OK
@@ -90,7 +99,7 @@ func TestReserve_MaxEntries(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxEntriesPerNode = 2
 	limits.MaxOvercommitRatio = 0 // unlimited
-	l := NewLedger(limits, nil)
+	l := setupTestLedger(t, limits)
 	l.SetNodeCapacity("node-a", 16384)
 
 	l.Reserve(Entry{ID: "e1", Node: "node-a", RAMMB: 100})
@@ -102,7 +111,7 @@ func TestReserve_MaxEntries(t *testing.T) {
 }
 
 func TestRelease(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 	l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 4096})
 
@@ -116,7 +125,7 @@ func TestRelease(t *testing.T) {
 }
 
 func TestRelease_Unknown(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	err := l.Release("nonexistent")
 	if err == nil {
 		t.Error("releasing unknown entry should fail")
@@ -124,7 +133,7 @@ func TestRelease_Unknown(t *testing.T) {
 }
 
 func TestHeartbeat(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	current := base
@@ -146,7 +155,7 @@ func TestHeartbeat(t *testing.T) {
 func TestReclaim_StaleEntries(t *testing.T) {
 	limits := DefaultLimits()
 	limits.HeartbeatStaleWindow = 10 * time.Millisecond
-	l := NewLedger(limits, nil)
+	l := setupTestLedger(t, limits)
 	l.SetNodeCapacity("node-a", 16384)
 	l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 1024})
 
@@ -161,7 +170,7 @@ func TestReclaim_StaleEntries(t *testing.T) {
 }
 
 func TestReclaim_ExpiredEntries(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 
 	l.mu.Lock()
@@ -184,7 +193,7 @@ func TestReclaim_ExpiredEntries(t *testing.T) {
 func TestAllocatableRAM(t *testing.T) {
 	limits := DefaultLimits()
 	limits.SystemReserveMB = 1024
-	l := NewLedger(limits, nil)
+	l := setupTestLedger(t, limits)
 	l.SetNodeCapacity("node-a", 16384) // 16GB
 
 	// Before any reservations
@@ -202,7 +211,7 @@ func TestAllocatableRAM(t *testing.T) {
 }
 
 func TestAllocatableRAM_UnknownNode(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	alloc := l.AllocatableRAM("nonexistent")
 	if alloc != 0 {
 		t.Errorf("unknown node should return 0, got %d", alloc)
@@ -210,7 +219,7 @@ func TestAllocatableRAM_UnknownNode(t *testing.T) {
 }
 
 func TestNodeSummary(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 	l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 4096})
 	l.Reserve(Entry{ID: "exec-2", Node: "node-a", RAMMB: 2048, VRAMMB: 1024})
@@ -228,7 +237,7 @@ func TestNodeSummary(t *testing.T) {
 }
 
 func TestClusterSummary(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 	l.SetNodeCapacity("node-b", 32768)
 	l.Reserve(Entry{ID: "e1", Node: "node-a", RAMMB: 4096})
@@ -247,7 +256,7 @@ func TestClusterSummary(t *testing.T) {
 }
 
 func TestMetrics(t *testing.T) {
-	l := NewLedger(DefaultLimits(), nil)
+	l := setupTestLedger(t, DefaultLimits())
 	l.SetNodeCapacity("node-a", 16384)
 	l.Reserve(Entry{ID: "e1", Node: "node-a", RAMMB: 4096})
 	l.Release("e1")
@@ -282,5 +291,48 @@ func TestEntry_IsExpired(t *testing.T) {
 	e.ExpiresAt = time.Time{} // zero value
 	if e.IsExpired(time.Now()) {
 		t.Error("zero expiry should not be expired")
+	}
+}
+
+func TestLedgerLockTimeout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	l := NewLedger(DefaultLimits(), nil)
+
+	// Open the lock file on a separate file descriptor and acquire exclusive lock
+	lockPath := Path() + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("OpenFile failed: %v", err)
+	}
+	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("Flock failed: %v", err)
+	}
+
+	// Try to Load() - it should fail due to the lock timeout (500ms)
+	start := time.Now()
+	err = l.Load()
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected Load to fail due to lock timeout")
+	}
+
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("expected timeout to take at least 500ms, took %v", elapsed)
+	}
+
+	// Release the lock
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatalf("Flock unlock failed: %v", err)
+	}
+
+	// Now Load() should succeed
+	if err := l.Load(); err != nil {
+		t.Fatalf("Load failed after lock release: %v", err)
 	}
 }

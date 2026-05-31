@@ -159,7 +159,7 @@ func matchedRequiredTools(n models.NodeFacts, requiredTools []string) []string {
 	return matched
 }
 
-func explainEligibleCandidate(n models.NodeFacts, nodes []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, clusterReserved int64) models.PlacementCandidateExplanation {
+func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, clusterReserved int64) models.PlacementCandidateExplanation {
 	reasoning := make([]string, 0, 4)
 
 	if reason := empiricalReason(empiricalObservation(n, reqs, st)); reason != "" {
@@ -257,7 +257,7 @@ func ExplainPlacement(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 	clusterReserved := totalReservedFromNodes(nodes)
 	eligible := make([]models.PlacementCandidateExplanation, 0, len(ranked))
 	for _, node := range ranked {
-		eligible = append(eligible, explainEligibleCandidate(node, nodes, reqs, st, clusterReserved))
+		eligible = append(eligible, explainEligibleCandidate(node, reqs, st, clusterReserved))
 	}
 
 	return models.PlacementExplanation{
