@@ -1,9 +1,13 @@
 package reservation
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/persist"
 )
@@ -19,10 +23,82 @@ type diskFormat struct {
 	Entries []*Entry `json:"entries"`
 }
 
+// LockFile acquires an exclusive lock on the ledger lockfile with a 500ms timeout.
+// It respects context cancellation.
+func (l *Ledger) LockFile(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lockFileLocked(ctx)
+}
+
+func (l *Ledger) lockFileLocked(ctx context.Context) error {
+	if l.lockFile != nil {
+		return nil
+	}
+	path := Path() + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating config directory for lock: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("opening lock file: %w", err)
+	}
+
+	start := time.Now()
+	timeout := 500 * time.Millisecond
+	for {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				f.Close()
+				return err
+			}
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			f.Close()
+			return fmt.Errorf("acquiring file lock: %w", err)
+		}
+		if time.Since(start) > timeout {
+			f.Close()
+			return fmt.Errorf("failed to acquire ledger lock within 500ms — the ledger is currently busy")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	l.lockFile = f
+	return nil
+}
+
+// UnlockFile releases the exclusive lock on the ledger lockfile.
+func (l *Ledger) UnlockFile() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.unlockFileLocked()
+}
+
+func (l *Ledger) unlockFileLocked() {
+	if l.lockFile != nil {
+		_ = syscall.Flock(int(l.lockFile.Fd()), syscall.LOCK_UN)
+		_ = l.lockFile.Close()
+		l.lockFile = nil
+	}
+}
+
 // Load reads the ledger from disk, replacing current entries.
 func (l *Ledger) Load() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		if err := l.lockFileLocked(context.Background()); err != nil {
+			return err
+		}
+		defer l.unlockFileLocked()
+	}
 
 	path := Path()
 	data, err := os.ReadFile(path)
@@ -59,6 +135,15 @@ func (l *Ledger) Load() error {
 func (l *Ledger) Save() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		if err := l.lockFileLocked(context.Background()); err != nil {
+			return err
+		}
+		defer l.unlockFileLocked()
+	}
+
 	return l.saveLocked()
 }
 
