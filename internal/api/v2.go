@@ -10,6 +10,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 )
 
 func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
@@ -19,6 +20,7 @@ func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
 	mux.HandleFunc("/v2/nodes", withAuth(h.handleNodes, token))
 	mux.HandleFunc("/v2/nodes/", withAuth(h.handleNodes, token))
 	mux.HandleFunc("/v2/reservations", withAuth(h.handleReservations, token))
+	mux.HandleFunc("/v2/reservations/", withAuth(h.handleReservations, token))
 	mux.HandleFunc("/v2/mesh", withAuth(h.handleMesh, token))
 	mux.HandleFunc("/v2/placement/dry-run", withAuth(h.handleDryRun, token))
 	mux.HandleFunc("/v2/metrics", h.handleMetrics)
@@ -173,7 +175,21 @@ func (h *v2Handlers) handleSingleNode(w http.ResponseWriter, name string) {
 	writeError(w, http.StatusNotFound, fmt.Sprintf("node %q not found", name))
 }
 
+type V2ReservationRequest struct {
+	ID          string `json:"id,omitempty"`
+	Node        string `json:"node"`
+	RAMMB       int64  `json:"ram_mb"`
+	VRAMMB      int64  `json:"vram_mb,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/v2/reservations/") {
+		suffix := strings.TrimPrefix(r.URL.Path, "/v2/reservations/")
+		h.handleReservationDetail(w, r, suffix)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		if !h.requireCache(w) {
@@ -189,7 +205,114 @@ func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) 
 			"reservations": ledger.Entries(),
 		})
 	case http.MethodPost:
+		if !h.requireCache(w) {
+			return
+		}
+		ledger := h.cache.Ledger()
+		if ledger == nil {
+			writeError(w, http.StatusServiceUnavailable, "ledger not available")
+			return
+		}
+		var req V2ReservationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		req.Node = strings.TrimSpace(req.Node)
+		if req.Node == "" {
+			writeError(w, http.StatusBadRequest, "node is required")
+			return
+		}
+		if req.RAMMB <= 0 {
+			writeError(w, http.StatusBadRequest, "ram_mb must be > 0")
+			return
+		}
+		if req.ID == "" {
+			req.ID = fmt.Sprintf("http-%d", time.Now().UnixNano())
+		}
+		entry, err := ledger.Reserve(reservation.Entry{
+			ID:          req.ID,
+			Node:        req.Node,
+			RAMMB:       req.RAMMB,
+			VRAMMB:      req.VRAMMB,
+			Description: req.Description,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate ID") {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, entry)
+	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *v2Handlers) handleReservationDetail(w http.ResponseWriter, r *http.Request, suffix string) {
+	if suffix == "" {
+		writeError(w, http.StatusNotFound, "reservation ID required")
+		return
+	}
+	parts := strings.Split(suffix, "/")
+	id := parts[0]
+
+	if !h.requireCache(w) {
+		return
+	}
+	ledger := h.cache.Ledger()
+	if ledger == nil {
+		writeError(w, http.StatusServiceUnavailable, "ledger not available")
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "heartbeat" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := ledger.Heartbeat(id); err != nil {
+			if strings.Contains(err.Error(), "unknown entry") {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	if len(parts) > 1 {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		var found *reservation.Entry
+		for _, e := range ledger.Entries() {
+			if e.ID == id {
+				found = &e
+				break
+			}
+		}
+		if found == nil {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("reservation %q not found", id))
+			return
+		}
+		writeJSON(w, http.StatusOK, found)
+	case http.MethodDelete:
+		if err := ledger.Release(id); err != nil {
+			if strings.Contains(err.Error(), "unknown entry") {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

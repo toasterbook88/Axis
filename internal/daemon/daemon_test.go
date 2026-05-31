@@ -762,6 +762,67 @@ func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	}
 }
 
+func TestRefreshRegistersNodeCapacitiesInLedger(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name:   "alpha",
+					Status: models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 16384,
+						RAMFreeMB:  8192,
+					},
+				},
+				{
+					Name:   "beta",
+					Status: models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 8192,
+						RAMFreeMB:  4096,
+					},
+				},
+			},
+		}, nil
+	})
+	// Do NOT call d.ledger.SetNodeCapacity manually — the daemon should do it.
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	// Reserve should now succeed because capacities were auto-registered.
+	_, err := d.ledger.Reserve(reservation.Entry{
+		ID:    "exec-a",
+		Node:  "alpha",
+		RAMMB: 4096,
+	})
+	if err != nil {
+		t.Fatalf("expected reserve to succeed after auto capacity registration: %v", err)
+	}
+	_, err = d.ledger.Reserve(reservation.Entry{
+		ID:    "exec-b",
+		Node:  "beta",
+		RAMMB: 2048,
+	})
+	if err != nil {
+		t.Fatalf("expected reserve on beta to succeed: %v", err)
+	}
+
+	// Node without capacity should still fail.
+	_, err = d.ledger.Reserve(reservation.Entry{
+		ID:    "exec-c",
+		Node:  "gamma",
+		RAMMB: 1024,
+	})
+	if err == nil {
+		t.Fatal("expected reserve on unknown node gamma to fail")
+	}
+}
+
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")

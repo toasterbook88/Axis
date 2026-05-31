@@ -389,13 +389,6 @@ func TestV2StubEndpointsStayNon2XX(t *testing.T) {
 		errorContains  string
 	}{
 		{
-			name:           "reservations post",
-			method:         http.MethodPost,
-			path:           "/v2/reservations",
-			expectedStatus: http.StatusMethodNotAllowed,
-			errorContains:  "method not allowed",
-		},
-		{
 			name:           "mesh method",
 			method:         http.MethodDelete,
 			path:           "/v2/mesh",
@@ -493,6 +486,248 @@ func TestV2EndpointsReturnSuccess(t *testing.T) {
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestV2ReservationsCRUD(t *testing.T) {
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledger.SetNodeCapacity("node-a", 16384)
+	cache := &fakeCache{
+		meta:   daemon.Metadata{Ready: true},
+		ledger: ledger,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	// 1. Create a reservation
+	createBody := `{"id":"r1","node":"node-a","ram_mb":4096,"description":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/v2/reservations", strings.NewReader(createBody))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created reservation.Entry
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created: %v", err)
+	}
+	if created.ID != "r1" {
+		t.Fatalf("expected id=r1, got %q", created.ID)
+	}
+	if created.Node != "node-a" {
+		t.Fatalf("expected node=node-a, got %q", created.Node)
+	}
+
+	// 2. List reservations
+	req = httptest.NewRequest(http.MethodGet, "/v2/reservations", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on list, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var listResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	resList, _ := listResp["reservations"].([]any)
+	if len(resList) != 1 {
+		t.Fatalf("expected 1 reservation in list, got %d", len(resList))
+	}
+
+	// 3. Get single reservation
+	req = httptest.NewRequest(http.MethodGet, "/v2/reservations/r1", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on get, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var gotEntry reservation.Entry
+	if err := json.Unmarshal(rec.Body.Bytes(), &gotEntry); err != nil {
+		t.Fatalf("unmarshal get: %v", err)
+	}
+	if gotEntry.ID != "r1" {
+		t.Fatalf("expected id=r1 on get, got %q", gotEntry.ID)
+	}
+
+	// 4. Heartbeat
+	req = httptest.NewRequest(http.MethodPost, "/v2/reservations/r1/heartbeat", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on heartbeat, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var hbResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &hbResp); err != nil {
+		t.Fatalf("unmarshal heartbeat: %v", err)
+	}
+	if hbResp["ok"] != true {
+		t.Fatalf("expected ok=true on heartbeat, got %#v", hbResp["ok"])
+	}
+
+	// 5. Delete reservation
+	req = httptest.NewRequest(http.MethodDelete, "/v2/reservations/r1", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on delete, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var delResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &delResp); err != nil {
+		t.Fatalf("unmarshal delete: %v", err)
+	}
+	if delResp["ok"] != true {
+		t.Fatalf("expected ok=true on delete, got %#v", delResp["ok"])
+	}
+
+	// 6. Verify deletion
+	req = httptest.NewRequest(http.MethodGet, "/v2/reservations/r1", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
+	}
+}
+
+func TestV2ReservationsCreateValidation(t *testing.T) {
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledger.SetNodeCapacity("node-a", 16384)
+	cache := &fakeCache{
+		meta:   daemon.Metadata{Ready: true},
+		ledger: ledger,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	tests := []struct {
+		name         string
+		body         string
+		expectedCode int
+		errContains  string
+	}{
+		{
+			name:         "missing node",
+			body:         `{"ram_mb":1024}`,
+			expectedCode: http.StatusBadRequest,
+			errContains:  "node is required",
+		},
+		{
+			name:         "missing ram_mb",
+			body:         `{"node":"node-a"}`,
+			expectedCode: http.StatusBadRequest,
+			errContains:  "ram_mb must be > 0",
+		},
+		{
+			name:         "unknown node capacity",
+			body:         `{"node":"unknown","ram_mb":1024}`,
+			expectedCode: http.StatusBadRequest,
+			errContains:  "capacity unknown",
+		},
+		{
+			name:         "duplicate id",
+			body:         `{"id":"dup","node":"node-a","ram_mb":1024}`,
+			expectedCode: http.StatusConflict,
+			errContains:  "duplicate ID",
+		},
+	}
+
+	// Prime the duplicate case
+	ledger.Reserve(reservation.Entry{ID: "dup", Node: "node-a", RAMMB: 512})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v2/reservations", strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tt.expectedCode {
+				t.Fatalf("expected %d, got %d: %s", tt.expectedCode, rec.Code, rec.Body.String())
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if payload["ok"] != false {
+				t.Fatalf("expected ok=false, got %#v", payload["ok"])
+			}
+			if got, _ := payload["error"].(string); !strings.Contains(got, tt.errContains) {
+				t.Fatalf("expected error containing %q, got %q", tt.errContains, got)
+			}
+		})
+	}
+}
+
+func TestV2ReservationsDetailNotFound(t *testing.T) {
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	cache := &fakeCache{
+		meta:   daemon.Metadata{Ready: true},
+		ledger: ledger,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"get missing", http.MethodGet, "/v2/reservations/missing"},
+		{"delete missing", http.MethodDelete, "/v2/reservations/missing"},
+		{"heartbeat missing", http.MethodPost, "/v2/reservations/missing/heartbeat"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestV2ReservationsLedgerUnavailable(t *testing.T) {
+	cache := &fakeCache{
+		meta:   daemon.Metadata{Ready: true},
+		ledger: nil,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"list", http.MethodGet, "/v2/reservations"},
+		{"create", http.MethodPost, "/v2/reservations"},
+		{"get", http.MethodGet, "/v2/reservations/x"},
+		{"delete", http.MethodDelete, "/v2/reservations/x"},
+		{"heartbeat", http.MethodPost, "/v2/reservations/x/heartbeat"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body string
+			if tt.method == http.MethodPost && tt.path == "/v2/reservations" {
+				body = `{"node":"a","ram_mb":1}`
+			}
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 			}
 		})
 	}
