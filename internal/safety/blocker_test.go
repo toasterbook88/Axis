@@ -108,4 +108,3 @@ func TestCheckDelegatesToStructuredEvaluator(t *testing.T) {
 		t.Fatalf("expected structured reason, got %q", got.Reason)
 	}
 }
-
