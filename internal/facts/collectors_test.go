@@ -51,11 +51,29 @@ func (f *fakeRemoteExecutor) Close() error {
 func TestLocalCollectorCollectsFacts(t *testing.T) {
 	// Stub the Apple FM probe so this unit test does not trigger a real Swift
 	// compilation, which can block for well over a minute on first run.
-	prev := runAppleFoundationModelsProbeFn
+	prevAFM := runAppleFoundationModelsProbeFn
 	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
 		return "", fmt.Errorf("apple foundation models unavailable in unit test environment")
 	}
-	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
+	// Stub discovery scripts to avoid hanging on real shell commands in CI.
+	prevOllama := runOllamaDiscoveryFn
+	prevLlama := runLlamaServerDiscoveryFn
+	prevMLX := runMLXDiscoveryFn
+	runOllamaDiscoveryFn = func(context.Context) ([]byte, error) {
+		return []byte(`{"installed":false}`), nil
+	}
+	runLlamaServerDiscoveryFn = func(context.Context) ([]byte, error) {
+		return []byte(`{"installed":false}`), nil
+	}
+	runMLXDiscoveryFn = func(context.Context) ([]byte, error) {
+		return []byte(`{"installed":false}`), nil
+	}
+	t.Cleanup(func() {
+		runAppleFoundationModelsProbeFn = prevAFM
+		runOllamaDiscoveryFn = prevOllama
+		runLlamaServerDiscoveryFn = prevLlama
+		runMLXDiscoveryFn = prevMLX
+	})
 
 	collector := NewLocalCollector("local-node", "worker")
 
