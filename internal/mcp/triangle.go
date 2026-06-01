@@ -159,7 +159,7 @@ func triangleRequestLeaseTool(ctx context.Context, req mcpproto.CallToolRequest,
 	populateLedgerCapacity(ledger, snap)
 
 	if id == "" {
-		id = fmt.Sprintf("lease-%d", time.Now().UnixNano())
+		id = models.GenerateID("lease")
 	}
 
 	expiresAt := time.Now().UTC().Add(time.Duration(durationSeconds) * time.Second)
