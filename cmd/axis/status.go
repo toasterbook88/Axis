@@ -106,6 +106,9 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 			} else {
 				ram = fmt.Sprintf("%d MB", n.Resources.RAMFreeMB)
 			}
+			if n.SystemReserveMB > 0 {
+				ram = fmt.Sprintf("%s [%d sys reserve]", ram, n.SystemReserveMB)
+			}
 			storage = n.Resources.StorageClass
 			if storage == "" {
 				storage = "—"

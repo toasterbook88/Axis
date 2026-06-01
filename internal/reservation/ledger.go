@@ -101,6 +101,10 @@ type Ledger struct {
 	// nodeRAM maps node name → total RAM in MB (populated from snapshots).
 	nodeRAM map[string]int64
 
+	// nodeReserve maps node name → system reserve in MB (per-node override).
+	// When zero or missing, falls back to limits.SystemReserveMB.
+	nodeReserve map[string]int64
+
 	lockFile *os.File // file lock for cross-process synchronization
 
 	// Metrics
@@ -116,11 +120,12 @@ func NewLedger(limits Limits, logger *slog.Logger) *Ledger {
 		logger = slog.Default()
 	}
 	return &Ledger{
-		entries: make(map[string]*Entry),
-		limits:  limits,
-		logger:  logger.With("component", "reservation-ledger"),
-		nodeRAM: make(map[string]int64),
-		now:     time.Now,
+		entries:     make(map[string]*Entry),
+		limits:      limits,
+		logger:      logger.With("component", "reservation-ledger"),
+		nodeRAM:     make(map[string]int64),
+		nodeReserve: make(map[string]int64),
+		now:         time.Now,
 	}
 }
 
@@ -130,6 +135,25 @@ func (l *Ledger) SetNodeCapacity(node string, totalRAMMB int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.nodeRAM[node] = totalRAMMB
+}
+
+// SetNodeReserve updates the system reserve override for a node.
+// A value <= 0 clears the override and falls back to limits.SystemReserveMB.
+func (l *Ledger) SetNodeReserve(node string, reserveMB int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if reserveMB <= 0 {
+		delete(l.nodeReserve, node)
+		return
+	}
+	l.nodeReserve[node] = reserveMB
+}
+
+func (l *Ledger) systemReserveFor(node string) int64 {
+	if r, ok := l.nodeReserve[node]; ok && r > 0 {
+		return r
+	}
+	return l.limits.SystemReserveMB
 }
 
 // Reserve attempts to create a reservation. Returns the Entry on success.
@@ -184,7 +208,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 
 	// Check overcommit ratio
 	if l.limits.MaxOvercommitRatio > 0 {
-		allocatable := totalRAM - l.limits.SystemReserveMB
+		allocatable := totalRAM - l.systemReserveFor(req.Node)
 		if allocatable <= 0 {
 			l.reserveFailures++
 			return nil, fmt.Errorf("reservation: node %q has no allocatable RAM after system reserve", req.Node)
@@ -324,7 +348,7 @@ func (l *Ledger) AllocatableRAM(node string) int64 {
 	if !ok {
 		return 0
 	}
-	allocatable := total - l.limits.SystemReserveMB
+	allocatable := total - l.systemReserveFor(node)
 	var reserved int64
 	for _, e := range l.entries {
 		if e.Node == node {

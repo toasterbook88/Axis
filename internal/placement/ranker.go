@@ -276,7 +276,7 @@ func reservableRAM(n models.NodeFacts) int64 {
 	if n.Resources == nil {
 		return 0
 	}
-	return n.Resources.ReservableRAM()
+	return n.ReservableRAM()
 }
 
 func reservationRatio(n models.NodeFacts) float64 {

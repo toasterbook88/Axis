@@ -336,3 +336,73 @@ func TestLedgerLockTimeout(t *testing.T) {
 		t.Fatalf("Load failed after lock release: %v", err)
 	}
 }
+
+func TestReserve_PerNodeSystemReserve(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxOvercommitRatio = 1.0
+	limits.SystemReserveMB = 1024
+	l := setupTestLedger(t, limits)
+	l.SetNodeCapacity("node-a", 8192) // 8GB total
+	l.SetNodeReserve("node-a", 2048)  // per-node reserve: 2GB → 6GB allocatable
+
+	// Reserve 5GB — OK (5GB < 6GB allocatable)
+	_, err := l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 5120})
+	if err != nil {
+		t.Fatalf("first reserve should succeed: %v", err)
+	}
+
+	// Reserve 2GB more — should fail (5120+2048 = 7168 > 6144 allocatable)
+	_, err = l.Reserve(Entry{ID: "exec-2", Node: "node-a", RAMMB: 2048})
+	if err == nil {
+		t.Error("should reject overcommit with per-node reserve")
+	}
+}
+
+func TestReserve_PerNodeSystemReserveFallsBackToGlobal(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxOvercommitRatio = 1.0
+	limits.SystemReserveMB = 1024
+	l := setupTestLedger(t, limits)
+	l.SetNodeCapacity("node-a", 8192) // 8GB total, no per-node reserve set → 7168 allocatable
+
+	// Reserve exactly 7168 — OK (ratio == 1.0)
+	_, err := l.Reserve(Entry{ID: "exec-1", Node: "node-a", RAMMB: 7168})
+	if err != nil {
+		t.Fatalf("reserve at exact limit should succeed: %v", err)
+	}
+
+	// Reserve 1MB more — should fail
+	_, err = l.Reserve(Entry{ID: "exec-2", Node: "node-a", RAMMB: 1})
+	if err == nil {
+		t.Error("should reject overcommit past exact limit")
+	}
+}
+
+func TestAllocatableRAM_PerNodeReserve(t *testing.T) {
+	limits := DefaultLimits()
+	limits.SystemReserveMB = 1024
+	l := setupTestLedger(t, limits)
+	l.SetNodeCapacity("node-a", 16384) // 16GB
+	l.SetNodeReserve("node-a", 4096)   // per-node reserve: 4GB → 12GB allocatable
+
+	alloc := l.AllocatableRAM("node-a")
+	if alloc != 12288 { // 16384 - 4096
+		t.Errorf("expected 12288 allocatable with per-node reserve, got %d", alloc)
+	}
+}
+
+func TestSetNodeReserve_ClearsOnZeroOrNegative(t *testing.T) {
+	limits := DefaultLimits()
+	l := setupTestLedger(t, limits)
+	l.SetNodeCapacity("node-a", 8192)
+	l.SetNodeReserve("node-a", 2048)
+
+	if l.systemReserveFor("node-a") != 2048 {
+		t.Fatalf("expected per-node reserve 2048, got %d", l.systemReserveFor("node-a"))
+	}
+
+	l.SetNodeReserve("node-a", 0)
+	if l.systemReserveFor("node-a") != limits.SystemReserveMB {
+		t.Fatalf("expected fallback to global reserve %d, got %d", limits.SystemReserveMB, l.systemReserveFor("node-a"))
+	}
+}

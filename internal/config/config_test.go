@@ -147,6 +147,35 @@ discovery:
 	}
 }
 
+func TestLoad_ValidConfigWithSystemReserveMB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	os.WriteFile(path, []byte(`
+nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+    system_reserve_mb: 2048
+  - name: node-b
+    hostname: node-b.local
+    ssh_user: user
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(cfg.Nodes))
+	}
+	if cfg.Nodes[0].SystemReserveMB != 2048 {
+		t.Errorf("node[0].system_reserve_mb: got %d, want 2048", cfg.Nodes[0].SystemReserveMB)
+	}
+	if cfg.Nodes[1].SystemReserveMB != 0 {
+		t.Errorf("node[1].system_reserve_mb: got %d, want 0", cfg.Nodes[1].SystemReserveMB)
+	}
+}
+
 func TestIsMeshEnabled(t *testing.T) {
 	cases := []struct {
 		name string

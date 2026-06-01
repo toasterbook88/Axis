@@ -19,13 +19,14 @@ import (
 // stable_id is an optional operator seed used for locality/dedupe only; it
 // does not override observed node identity.
 type NodeConfig struct {
-	Name       string `json:"name" yaml:"name"`
-	Hostname   string `json:"hostname" yaml:"hostname"`
-	StableID   string `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
-	SSHUser    string `json:"ssh_user" yaml:"ssh_user"`
-	Role       string `json:"role,omitempty" yaml:"role,omitempty"`
-	SSHPort    int    `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
-	TimeoutSec int    `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
+	Name            string `json:"name" yaml:"name"`
+	Hostname        string `json:"hostname" yaml:"hostname"`
+	StableID        string `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
+	SSHUser         string `json:"ssh_user" yaml:"ssh_user"`
+	Role            string `json:"role,omitempty" yaml:"role,omitempty"`
+	SSHPort         int    `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
+	TimeoutSec      int    `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
+	SystemReserveMB int64  `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
 }
 
 // EffectiveSSHPort returns the SSH port, defaulting to 22.

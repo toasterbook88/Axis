@@ -542,7 +542,7 @@ func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements
 	out.Node = best.Name
 	if best.Resources != nil {
 		out.RAMFreeMB = best.Resources.RAMFreeMB
-		out.RAMReservableMB = best.Resources.ReservableRAM()
+		out.RAMReservableMB = best.ReservableRAM()
 		out.RAMAllocatableMB = best.RAMAllocatableMB
 		out.Pressure = best.Resources.Pressure
 	}
@@ -582,7 +582,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	pressure := "unknown"
 	extraLines := ""
 	if best.Resources != nil {
-		reservable := best.Resources.ReservableRAM()
+		reservable := best.ReservableRAM()
 		if best.RAMReservedMB > 0 || best.RAMAllocatableMB > 0 {
 			ramSummary = fmt.Sprintf("%dMB allocatable (%dMB reserved of %dMB reservable)", best.RAMAllocatableMB, best.RAMReservedMB, reservable)
 		} else {
@@ -648,7 +648,7 @@ func clusterSummaryLine(snap *models.ClusterSnapshot) string {
 	totalReservable := snap.Summary.TotalReservableMB
 	if totalReservable <= 0 {
 		for _, node := range snap.Nodes {
-			totalReservable += node.Resources.ReservableRAM()
+			totalReservable += node.ReservableRAM()
 		}
 	}
 	if snap.Summary.TotalAllocatableMB > 0 || snap.Summary.TotalReservedMB > 0 || totalReservable > 0 {
