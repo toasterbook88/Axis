@@ -502,6 +502,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 					if n.Resources != nil {
 						d.ledger.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
 					}
+					d.ledger.SetNodeReserve(n.Name, n.SystemReserveMB)
 				}
 			}
 		}
