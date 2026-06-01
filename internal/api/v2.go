@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -214,7 +215,13 @@ func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		var req V2ReservationRequest
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
@@ -228,7 +235,7 @@ func (h *v2Handlers) handleReservations(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if req.ID == "" {
-			req.ID = fmt.Sprintf("http-%d", time.Now().UnixNano())
+			req.ID = models.GenerateID("http")
 		}
 		entry, err := ledger.Reserve(reservation.Entry{
 			ID:          req.ID,
@@ -292,9 +299,10 @@ func (h *v2Handlers) handleReservationDetail(w http.ResponseWriter, r *http.Requ
 	switch r.Method {
 	case http.MethodGet:
 		var found *reservation.Entry
-		for _, e := range ledger.Entries() {
-			if e.ID == id {
-				found = &e
+		entries := ledger.Entries()
+		for i := range entries {
+			if entries[i].ID == id {
+				found = &entries[i]
 				break
 			}
 		}

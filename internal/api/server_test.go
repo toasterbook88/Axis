@@ -733,6 +733,72 @@ func TestV2ReservationsLedgerUnavailable(t *testing.T) {
 	}
 }
 
+func TestV2ReservationsCreateAutoID(t *testing.T) {
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledger.SetNodeCapacity("node-a", 16384)
+	cache := &fakeCache{
+		meta:   daemon.Metadata{Ready: true},
+		ledger: ledger,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	body := `{"node":"node-a","ram_mb":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/v2/reservations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created reservation.Entry
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("expected auto-generated id, got empty")
+	}
+	if !strings.HasPrefix(created.ID, "http-") {
+		t.Fatalf("expected prefix 'http-', got %q", created.ID)
+	}
+	hexPart := strings.TrimPrefix(created.ID, "http-")
+	if len(hexPart) != 16 {
+		t.Fatalf("expected 16 hex chars after prefix, got %d: %q", len(hexPart), hexPart)
+	}
+}
+
+func TestV2ReservationsCreateOversizedBody(t *testing.T) {
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledger.SetNodeCapacity("node-a", 16384)
+	cache := &fakeCache{
+		meta:   daemon.Metadata{Ready: true},
+		ledger: ledger,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	// Create a JSON body slightly over the 1 MB limit
+	huge := `{"key":"` + strings.Repeat("a", 1<<20+100) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v2/reservations", strings.NewReader(huge))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload["ok"] != false {
+		t.Fatalf("expected ok=false, got %#v", payload["ok"])
+	}
+	got, _ := payload["error"].(string)
+	if !strings.Contains(got, "too large") {
+		t.Fatalf("expected error containing 'too large', got %q", got)
+	}
+}
+
 func TestV2MethodValidationAndCacheState(t *testing.T) {
 	tests := []struct {
 		name           string
