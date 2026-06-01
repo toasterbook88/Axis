@@ -137,7 +137,7 @@ func (n NodeFacts) ReservableRAM() int64 {
 	if n.Resources == nil {
 		return 0
 	}
-	return n.Resources.ReservableRAM()
+	return ReservableRAMMBWithConfig(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, n.SystemReserveMB)
 }
 
 // NetworkAddress represents a single network address with interface metadata.
@@ -227,6 +227,7 @@ type NodeFacts struct {
 	AppleFM          *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
 	RAMReservedMB    int64                      `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
 	RAMAllocatableMB int64                      `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+	SystemReserveMB  int64                      `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
 
 	// Epistemic state (Truth Classification)
 	Epistemic *EpistemicState `json:"epistemic,omitempty" yaml:"epistemic,omitempty"`
