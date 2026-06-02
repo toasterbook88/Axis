@@ -1049,13 +1049,15 @@ func DefaultOllamaKeepAlive(info *models.OllamaInfo) time.Duration {
 	if info == nil {
 		return fallback
 	}
-	if info.DefaultKeepAlive == "" {
+	val := strings.TrimSpace(info.DefaultKeepAlive)
+	if val == "" {
 		return fallback
 	}
-	// `time.ParseDuration` accepts "5m", "1h30m", "-30s", etc. It does
-	// not accept a bare integer (seconds) — Ollama emits e.g. "5m" so
-	// this is fine. Negative durations are clamped to fallback.
-	d, err := time.ParseDuration(info.DefaultKeepAlive)
+	// If it's a bare integer (seconds), append "s" so ParseDuration can parse it.
+	if _, err := strconv.Atoi(val); err == nil {
+		val += "s"
+	}
+	d, err := time.ParseDuration(val)
 	if err != nil || d <= 0 {
 		return fallback
 	}

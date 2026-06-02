@@ -50,23 +50,33 @@ const OllamaDiscoveryScript = `set -o pipefail;
 			RESIDENT=$(printf '%s' "$PS_JSON" | python3 - 2>/dev/null <<'PYEOF' || echo ""
 import json, sys
 try:
-    entries = json.loads(sys.stdin.read() or "")
+    data = json.loads(sys.stdin.read() or "[]")
+    entries = data.get("models", data) if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        entries = []
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        name = e.get("name", "")
+        if not name:
+            continue
+        vram = e.get("size_vram")
+        try:
+            vram_val = int(vram) if vram is not None else 0
+        except (ValueError, TypeError):
+            vram_val = 0
+        out.append(json.dumps({
+            "name": name,
+            "runtime": "ollama",
+            "processor": e.get("processor", "gpu"),
+            "size_vram_mb": vram_val // (1024*1024),
+            "source": "ollama-ps",
+            "expires_at": e.get("expires_at", ""),
+        }))
+    print(",".join(out))
 except Exception:
     sys.exit(0)
-out = []
-for e in entries:
-    name = e.get("name", "")
-    if not name:
-        continue
-    out.append(json.dumps({
-        "name": name,
-        "runtime": "ollama",
-        "processor": e.get("processor", "gpu"),
-        "size_vram_mb": int((e.get("size_vram") or 0) // (1024*1024)),
-        "source": "ollama-ps",
-        "expires_at": e.get("expires_at", ""),
-    }))
-print(",".join(out))
 PYEOF
 )
 		else

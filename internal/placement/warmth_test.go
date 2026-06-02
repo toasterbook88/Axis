@@ -218,14 +218,24 @@ func TestDefaultOllamaKeepAliveFallbacks(t *testing.T) {
 }
 
 // TestDefaultOllamaKeepAliveParses verifies the helper accepts valid
-// duration strings and returns them unchanged.
+// duration strings and bare integers representing seconds, and returns
+// them parsed correctly.
 func TestDefaultOllamaKeepAliveParses(t *testing.T) {
-	info := &models.OllamaInfo{DefaultKeepAlive: "1h"}
-	if got := facts.DefaultOllamaKeepAlive(info); got != time.Hour {
-		t.Fatalf("expected 1h, got %v", got)
+	cases := []struct {
+		input    string
+		expected time.Duration
+	}{
+		{"1h", time.Hour},
+		{"30s", 30 * time.Second},
+		{"300", 5 * time.Minute},
+		{"1200", 20 * time.Minute},
+		{"30", 30 * time.Second},
+		{" 600  ", 10 * time.Minute},
 	}
-	info.DefaultKeepAlive = "30s"
-	if got := facts.DefaultOllamaKeepAlive(info); got != 30*time.Second {
-		t.Fatalf("expected 30s, got %v", got)
+	for _, c := range cases {
+		info := &models.OllamaInfo{DefaultKeepAlive: c.input}
+		if got := facts.DefaultOllamaKeepAlive(info); got != c.expected {
+			t.Errorf("input %q: expected %v, got %v", c.input, c.expected, got)
+		}
 	}
 }
