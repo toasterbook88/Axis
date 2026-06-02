@@ -18,11 +18,6 @@ import (
 // The test reads doc.go directly so the assertion stays in sync with the
 // actual package comment; an out-of-band mirrored copy would drift.
 func TestDoc_DefenseInDepthParagraph(t *testing.T) {
-	// Reference a public symbol from the package so this test file is
-	// compiled as part of the axismcp test binary; otherwise `go test` may
-	// skip the file.
-	_ = NewServer
-
 	data, err := os.ReadFile("doc.go")
 	if err != nil {
 		t.Fatalf("read doc.go: %v", err)

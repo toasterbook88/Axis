@@ -9,7 +9,7 @@
 // They are NOT a security boundary.
 //
 // All write attempts, regardless of how a client sets its hints, pass through
-// the AXIS safety blocker (internal/safety.Block) and the execution layer
+// the AXIS safety checker (internal/safety.Check) and the execution layer
 // (internal/execution). Those layers are independent of MCP and authoritative:
 // a client that mis-declares a read-only tool as write-capable (or vice
 // versa) cannot weaken the safety gate, and a client that suppresses its
