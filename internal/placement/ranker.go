@@ -81,6 +81,7 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 		turboQuantRank          int
 		unifiedMemoryRank       int
 		pressureRank            int
+		modelWarmthRank         int
 		reservationRatio        float64
 		clusterReservationShare float64
 	}
@@ -132,6 +133,7 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			turboQuantRank:          turboQuantRank(n),
 			unifiedMemoryRank:       unifiedMemoryRank(n, reqs),
 			pressureRank:            pressureRank(pressureOf(n)),
+			modelWarmthRank:         modelWarmthRank(n, reqs),
 			reservationRatio:        reservationRatio(n),
 			clusterReservationShare: share,
 		}
@@ -174,6 +176,10 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 
 		if keys[i].pressureRank != keys[j].pressureRank {
 			return keys[i].pressureRank < keys[j].pressureRank
+		}
+
+		if keys[i].modelWarmthRank != keys[j].modelWarmthRank {
+			return keys[i].modelWarmthRank > keys[j].modelWarmthRank
 		}
 
 		if keys[i].reservationRatio != keys[j].reservationRatio {
