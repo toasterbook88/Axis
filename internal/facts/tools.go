@@ -40,13 +40,55 @@ const OllamaDiscoveryScript = `set -o pipefail;
 			LISTENING=true
 		fi
 		GPU=$($OLLAMA_BIN ps 2>/dev/null | grep -o 'gpu:[^ ]*' | head -1)
-		RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; size_mb=0; for(i=1;i<=NF;i++){if($i~/[0-9]+%/){proc=$i" "$(i+1)} if(($i=="GB"||$i=="GiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)*1024+0.5)} if(($i=="MB"||$i=="MiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)+0.5)}} gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"size_vram_mb\":%d,\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc, size_mb }')
+		# 'ollama ps -qq' (added in Ollama 0.3.10) emits JSON: each entry
+		# includes name, expires_at (RFC3339) and size_vram. Parse it
+		# with python3 (always present on nodes with ollama) and emit
+		# one JSON object per model. Falls back to the existing awk
+		# parser when the JSON is unavailable (older Ollama).
+		PS_JSON=$($OLLAMA_BIN ps -qq 2>/dev/null || echo "")
+		if [ -n "$PS_JSON" ]; then
+			RESIDENT=$(printf '%s' "$PS_JSON" | python3 - 2>/dev/null <<'PYEOF' || echo ""
+import json, sys
+try:
+    entries = json.loads(sys.stdin.read() or "")
+except Exception:
+    sys.exit(0)
+out = []
+for e in entries:
+    name = e.get("name", "")
+    if not name:
+        continue
+    out.append(json.dumps({
+        "name": name,
+        "runtime": "ollama",
+        "processor": e.get("processor", "gpu"),
+        "size_vram_mb": int((e.get("size_vram") or 0) // (1024*1024)),
+        "source": "ollama-ps",
+        "expires_at": e.get("expires_at", ""),
+    }))
+print(",".join(out))
+PYEOF
+)
+		else
+			RESIDENT=""
+		fi
+		if [ -z "$RESIDENT" ]; then
+			# Fallback: original awk parser (older Ollama, no 'ps -qq').
+			# No expires_at field is emitted by this path; the local
+			# parser will leave ExpiresAt zero and WarmthScore at 0.
+			RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; size_mb=0; for(i=1;i<=NF;i++){if($i~/[0-9]+%/){proc=$i" "$(i+1)} if(($i=="GB"||$i=="GiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)*1024+0.5)} if(($i=="MB"||$i=="MiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)+0.5)}} gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"size_vram_mb\":%d,\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc, size_mb }')
+		fi
 		if [ -n "$RESIDENT" ]; then
 			RESIDENT="[$RESIDENT]"
 		else
 			RESIDENT="[]"
 		fi
-		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\"}"
+		# Process-level default_keep_alive (added in Ollama 0.3.10). Read
+		# from /api/ps; tolerate older Ollama (or versions that omit
+		# the field) by emitting an empty string. Treat null and any
+		# failure to parse as empty.
+		KEEPALIVE=$(curl -s --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('default_keep_alive'); print('' if v is None else v)" 2>/dev/null || echo "")
+		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\"}"
 	`
 
 // LlamaServerDiscoveryScript is the bash script used to detect a running

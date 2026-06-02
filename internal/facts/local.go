@@ -995,9 +995,71 @@ func discoverOllamaLocal(ctx context.Context) (models.OllamaInfo, []models.Resid
 	// parse the JSON blob
 	var parsed ollamaDiscoveryPayload
 	if json.Unmarshal(out, &parsed) == nil {
+		ApplyOllamaWarmth(&parsed.OllamaInfo, parsed.ResidentModels)
 		return parsed.OllamaInfo, parsed.ResidentModels
 	}
 	return info, nil
+}
+
+// applyOllamaWarmth populates ExpiresAt and WarmthScore for each ResidentModel
+// from Ollama's /api/ps payload. The Ollama probe emits an `expires_at` field
+// per resident model and a process-level `default_keep_alive` duration
+// (Ollama 0.3.10+). Warmth is a continuous score in [0, 1] computed as
+// remaining / total, where total falls back to 5m (Ollama's stock default)
+// when `default_keep_alive` is absent or unparseable. When `expires_at` is
+// missing or already past, WarmthScore is 0 (cold). Both fields are
+// advisory metadata only — placement consumes them as a bounded
+// tiebreaker in internal/placement/ranker.go modelWarmthRank.
+//
+// Exported for testability from internal/placement and from
+// internal/facts tests.
+func ApplyOllamaWarmth(info *models.OllamaInfo, rms []models.ResidentModel) {
+	if len(rms) == 0 {
+		return
+	}
+	now := time.Now()
+	total := DefaultOllamaKeepAlive(info)
+	for i := range rms {
+		rm := &rms[i]
+		if rm.ExpiresAt.IsZero() {
+			continue
+		}
+		if !rm.ExpiresAt.After(now) {
+			rm.WarmthScore = 0
+			continue
+		}
+		remaining := rm.ExpiresAt.Sub(now)
+		score := float64(remaining) / float64(total)
+		if score < 0 {
+			score = 0
+		}
+		if score > 1 {
+			score = 1
+		}
+		rm.WarmthScore = score
+	}
+}
+
+// DefaultOllamaKeepAlive resolves the process-level default_keep_alive
+// duration from an Ollama /api/ps payload, falling back to 5m (Ollama's
+// stock default since 0.3.10) when the field is absent or unparseable.
+// Returns a positive duration on success. Exported for testability.
+func DefaultOllamaKeepAlive(info *models.OllamaInfo) time.Duration {
+	const fallback = 5 * time.Minute
+	if info == nil {
+		return fallback
+	}
+	if info.DefaultKeepAlive == "" {
+		return fallback
+	}
+	// `time.ParseDuration` accepts "5m", "1h30m", "-30s", etc. It does
+	// not accept a bare integer (seconds) — Ollama emits e.g. "5m" so
+	// this is fine. Negative durations are clamped to fallback.
+	d, err := time.ParseDuration(info.DefaultKeepAlive)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 // discoverLlamaServerLocal probes for a running llama-server process and

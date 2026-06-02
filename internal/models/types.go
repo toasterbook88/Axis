@@ -171,17 +171,41 @@ type OllamaInfo struct {
 	Port       int      `json:"port,omitempty" yaml:"port,omitempty"`
 	Models     []string `json:"models,omitempty" yaml:"models,omitempty"`
 	GPUOffload string   `json:"gpu_offload,omitempty" yaml:"gpu_offload,omitempty"`
-	Error      string   `json:"error,omitempty" yaml:"error,omitempty"`
+	// DefaultKeepAlive is the process-level Ollama default keep-alive
+	// duration string (e.g. "5m", "1h"). Populated from /api/ps on
+	// Ollama 0.3.10+; empty when unknown or on older Ollama. The warmth
+	// computation in internal/facts/local.go (applyOllamaWarmth) parses
+	// this and falls back to 5m when empty.
+	DefaultKeepAlive string `json:"default_keep_alive,omitempty" yaml:"default_keep_alive,omitempty"`
+	Error            string `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 // ResidentModel is additive truth-plane metadata describing a model that is
 // currently resident in a node runtime according to a live probe.
+//
+// ExpiresAt and WarmthScore are populated from Ollama's /api/ps
+// `expires_at` and `default_keep_alive` fields (Ollama 0.3.10+). They are
+// optional: when absent (older Ollama, no `keep_alive`, or other runtimes
+// such as llama-server / mlx_lm.server), both fields remain zero and
+// WarmthScore is treated as cold. The fields are advisory metadata only;
+// placement uses them as a bounded tiebreaker, never as a primary signal
+// (see internal/placement/ranker.go modelWarmthRank).
 type ResidentModel struct {
 	Name       string `json:"name" yaml:"name"`
 	Runtime    string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
 	Processor  string `json:"processor,omitempty" yaml:"processor,omitempty"`
 	Source     string `json:"source,omitempty" yaml:"source,omitempty"`
 	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown/not reported by the runtime; currently populated only by the Ollama probe
+
+	// ExpiresAt is the wall-clock time at which the model is expected to
+	// be unloaded by the runtime. Zero when unknown.
+	ExpiresAt time.Time `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
+
+	// WarmthScore is a continuous 0.0–1.0 measure of how recently the
+	// model was loaded, derived from ExpiresAt and the runtime's
+	// default_keep_alive. 1.0 = freshly loaded, 0.0 = expired or unknown.
+	// Always non-negative; clamped to [0, 1] at compute time.
+	WarmthScore float64 `json:"warmth_score,omitempty" yaml:"warmth_score,omitempty"`
 }
 
 // TurboQuantInfo records whether a node appears able to run a TurboQuant-like
