@@ -206,8 +206,44 @@ func relevantResidentModels(n models.NodeFacts, reqs models.TaskRequirements) []
 	return relevant
 }
 
+// residentModelRank returns a higher score for nodes with a relevant
+// resident model already loaded. Currently a count; reserved for
+// future qualitative scoring (warmth is layered on as a separate
+// modelWarmthRank tiebreaker in ranker.go, not folded into this).
 func residentModelRank(n models.NodeFacts, reqs models.TaskRequirements) int {
 	return len(relevantResidentModels(n, reqs))
+}
+
+// modelWarmthRank returns a bounded rank ∈ {0, 1, 2} for the warmth
+// of the relevant resident model on a node: 0 = cold (unknown, expired,
+// or zero), 1 = warm (>0.5), 2 = hot (>0.9). When no relevant model is
+// loaded, returns 0. Used as a tiebreaker at position 10 in
+// RankCandidates — never a primary signal.
+func modelWarmthRank(n models.NodeFacts, reqs models.TaskRequirements) int {
+	relevant := relevantResidentModels(n, reqs)
+	if len(relevant) == 0 {
+		return 0
+	}
+	best := 0.0
+	for _, m := range relevant {
+		if m.WarmthScore > best {
+			best = m.WarmthScore
+		}
+	}
+	return warmthToRank(best)
+}
+
+// warmthToRank maps a continuous [0, 1] score to a 0/1/2 rank.
+// Boundaries: 0 = cold, 1 = warm (>0.5), 2 = hot (>0.9).
+func warmthToRank(score float64) int {
+	switch {
+	case score > 0.9:
+		return 2
+	case score > 0.5:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func residentModelReason(n models.NodeFacts, reqs models.TaskRequirements) string {
