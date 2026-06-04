@@ -65,6 +65,7 @@ Classification is based on live code inspection (`internal/`), test coverage, op
 | `internal/execution` | experimental | Guarded execution path; early-stage; high risk |
 | `internal/facts` | stable | Local + SSH fact collection; core to the fact plane |
 | `internal/failures` | stable | Failure-scope hashing and expiry; used by stable placement |
+| `internal/git` | stable | Local git repository workspace querying; core to repo-aware context |
 | `internal/knowledge` | stable | Execution context builder; heavily covered; stable contract |
 | `internal/llmrouter` | experimental | Hybrid local/cloud routing; new surface |
 | `internal/mcp` | experimental | Read-only MCP server; optional diagnostic layer |

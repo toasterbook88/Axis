@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -206,6 +207,22 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 			),
 		),
 		sshConnectivityTestTool,
+	)
+
+	s.AddTool(
+		mcpproto.NewTool(
+			"git_status",
+			mcpproto.WithDescription("Return the local Git repository status (branch, HEAD commit, dirty files, ahead/behind counts)"),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+		),
+		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			_ = req
+			gitState, err := git.GetRepoState(".")
+			if err != nil {
+				return mcpproto.NewToolResultError(err.Error()), nil
+			}
+			return mcpproto.NewToolResultJSON(gitState)
+		},
 	)
 
 	registerTriangleTools(s, cache.useCache, cache.cacheAddr)

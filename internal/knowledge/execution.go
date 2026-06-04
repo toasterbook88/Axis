@@ -29,6 +29,9 @@ func ExecutionContextJSON(
 		"decision":  decision,
 		"task_desc": taskDesc,
 	}
+	if k.Git != nil {
+		payload["git"] = k.Git
+	}
 	if script != nil {
 		payload["script"] = script
 	}
