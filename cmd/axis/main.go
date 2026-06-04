@@ -20,6 +20,7 @@ const Version = buildinfo.Version
 func main() {
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(ExitCode(err))
 	}
 }
