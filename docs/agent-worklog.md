@@ -13,8 +13,8 @@ This file is the canonical coordination surface for active AXIS work.
 ## Repo State
 
 - Branch: `main`
-- Reviewed HEAD: `b76589a`
-- Last updated: `2026-04-18 10:30 EDT`
+- Reviewed HEAD: `6d7a789`
+- Last updated: `2026-06-04 19:30 EDT`
 - Note: `Reviewed HEAD` is the source state this worklog update was based on. A worklog-only commit will advance repository HEAD.
 
 ## Active Tasks
@@ -89,3 +89,6 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-007 | Claude (Antigravity) | `b8bf6fa` | IdentitiesOnly yes from SSH config now respected: skips agent and default key names; ssh -G passes -F for correct config resolution; 5 new tests. Full suite green. |
 | AX-024 | Claude (Antigravity) | `ed41449` | Cached-reads doctrine: explicit, operator-facing, no hidden fallbacks, no MCP/HTTP escalation. Added to doctrine.md. |
 | AX-025 | Claude (Antigravity) | `ed41449` | Staleness threshold configurable (default 5 min), SetStaleThreshold method, stale_threshold_sec in metadata, freshness policy documented. Full suite green. |
+| AX-027 | Claude (Antigravity) | `39e9a2f` | Phase C: Git Intelligence implementation. Query local git repository workspace details (branch, commit hash, commit subject, dirty status, ahead/behind counts) safely. Expose `git_status` tool in MCP, print Git state in `axis task context`. Address review feedback on DirtyCount and regex porcelain parsing. |
+| AX-028 | Claude (Antigravity) | `6d7a789` | Print Cobra execution errors to stderr in `main()`, fixing silent exits under `SilenceErrors: true` for ExitCodeError occurrences. |
+| AX-029 | Claude (Antigravity) | config | Cluster stabilization: Resolved Foundry connection failure by replacing `foundry.local` with its direct IP `192.168.1.249` (bypassing avahi name conflicts) and configuring `~/.axis/cortex.token`. Verified cortex status and cluster status. |
