@@ -510,6 +510,7 @@ func TestBuildContextBlockIncludesGit(t *testing.T) {
 			Commit:     "1234567890abcdef",
 			Subject:    "add test features",
 			IsDirty:    true,
+			DirtyCount: 2,
 			DirtyFiles: []string{"file1.go", "file2.go"},
 			AheadCount: 1,
 		}, nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type RepoState struct {
 	Commit      string   `json:"commit,omitempty"`
 	Subject     string   `json:"subject,omitempty"`
 	IsDirty     bool     `json:"is_dirty"`
+	DirtyCount  int      `json:"dirty_count,omitempty"`
 	DirtyFiles  []string `json:"dirty_files,omitempty"`
 	AheadCount  int      `json:"ahead_count,omitempty"`
 	BehindCount int      `json:"behind_count,omitempty"`
@@ -69,18 +71,21 @@ func GetRepoState(dir string) (RepoState, error) {
 	if statusLines, err := runGitCmd(ctx, dir, "status", "--porcelain"); err == nil {
 		if statusLines != "" {
 			state.IsDirty = true
-			lines := strings.Split(statusLines, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
+			var rawLines []string
+			for _, line := range strings.Split(statusLines, "\n") {
+				if line != "" {
+					rawLines = append(rawLines, line)
 				}
-				// Format: " M path/to/file" or "?? path/to/file"
-				parts := strings.SplitN(line, " ", 2)
-				if len(parts) == 2 {
-					state.DirtyFiles = append(state.DirtyFiles, strings.TrimSpace(parts[1]))
-				} else {
-					state.DirtyFiles = append(state.DirtyFiles, line)
+			}
+			state.DirtyCount = len(rawLines)
+			const maxFiles = 10
+			re := regexp.MustCompile("^.{2} (.+)$")
+			for i, line := range rawLines {
+				if i >= maxFiles {
+					break
+				}
+				if matches := re.FindStringSubmatch(line); len(matches) == 2 {
+					state.DirtyFiles = append(state.DirtyFiles, matches[1])
 				}
 			}
 		}

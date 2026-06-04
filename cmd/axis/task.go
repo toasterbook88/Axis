@@ -644,7 +644,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 			gitDetails += fmt.Sprintf(" - %s", gitState.Subject)
 		}
 		if gitState.IsDirty {
-			gitDetails += fmt.Sprintf(" [dirty: %d files]", len(gitState.DirtyFiles))
+			gitDetails += fmt.Sprintf(" [dirty: %d files]", gitState.DirtyCount)
 		} else {
 			gitDetails += " [clean]"
 		}

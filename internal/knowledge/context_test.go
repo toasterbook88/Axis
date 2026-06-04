@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -117,14 +118,25 @@ func TestClusterKnowledgeJSON(t *testing.T) {
 }
 
 func TestClusterKnowledgeIncludesGit(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{
+			IsRepo: true,
+			Branch: "feature-test",
+		}, nil
+	}
+	t.Cleanup(func() {
+		GetGitRepoState = prevGit
+	})
+
 	k := Build(&models.ClusterSnapshot{}, nil, "")
 	if k.Git == nil {
-		t.Fatal("expected Git field to be populated (assuming tests run inside a git repo)")
+		t.Fatal("expected Git field to be populated")
 	}
 	if !k.Git.IsRepo {
 		t.Fatal("expected k.Git.IsRepo to be true")
 	}
-	if k.Git.Branch == "" {
-		t.Fatal("expected k.Git.Branch to be non-empty")
+	if k.Git.Branch != "feature-test" {
+		t.Fatalf("expected branch 'feature-test', got %q", k.Git.Branch)
 	}
 }

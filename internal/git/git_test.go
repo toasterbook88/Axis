@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,8 +72,35 @@ func TestGetRepoState(t *testing.T) {
 	if !state.IsDirty {
 		t.Fatal("expected IsDirty to be true after writing file")
 	}
+	if state.DirtyCount != 1 {
+		t.Fatalf("expected DirtyCount to be 1, got %d", state.DirtyCount)
+	}
 	if len(state.DirtyFiles) != 1 || !strings.Contains(state.DirtyFiles[0], "dummy.txt") {
 		t.Fatalf("expected dirty file list to contain dummy.txt, got %v", state.DirtyFiles)
+	}
+
+	// Create 11 more files (total 12 dirty files) to verify truncation to 10
+	for i := 1; i <= 11; i++ {
+		f := filepath.Join(tmpDir, filepath.Clean(filepath.Join("/", filepath.Base(filepath.Join("dummy", strconv.Itoa(i)+".txt")))))
+		if err := os.WriteFile(f, []byte("hello"), 0644); err != nil {
+			t.Fatalf("failed to write dummy file %d: %v", i, err)
+		}
+	}
+
+	state, err = GetRepoState(tmpDir)
+	if err != nil {
+		t.Fatalf("GetRepoState failed: %v", err)
+	}
+	if state.DirtyCount != 12 {
+		t.Fatalf("expected DirtyCount to be 12, got %d", state.DirtyCount)
+	}
+	if len(state.DirtyFiles) != 10 {
+		t.Fatalf("expected DirtyFiles to be truncated to 10, got %d (files: %v)", len(state.DirtyFiles), state.DirtyFiles)
+	}
+
+	// Cleanup the extra 11 files to keep test clean
+	for i := 1; i <= 11; i++ {
+		_ = os.Remove(filepath.Join(tmpDir, filepath.Clean(filepath.Join("/", filepath.Base(filepath.Join("dummy", strconv.Itoa(i)+".txt"))))))
 	}
 
 	// Add and commit
