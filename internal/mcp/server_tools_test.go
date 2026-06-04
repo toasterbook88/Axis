@@ -442,3 +442,18 @@ func TestCurrentPlacementInputsStateError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestGitStatusTool(t *testing.T) {
+	s := NewServer(false, "", nil)
+	tool, ok := s.ListTools()["git_status"]
+	if !ok {
+		t.Fatal("expected git_status tool to be registered")
+	}
+	res, err := tool.Handler(context.Background(), toolRequest(nil))
+	if err != nil {
+		t.Fatalf("git_status handler: %v", err)
+	}
+	if res.IsError {
+		t.Fatal("expected success")
+	}
+}

@@ -34,6 +34,7 @@ var packageStates = map[string]string{
 	"internal/execution":    Experimental,
 	"internal/facts":        Stable,
 	"internal/failures":     Stable,
+	"internal/git":          Stable,
 	"internal/knowledge":    Stable,
 	"internal/llmrouter":    Experimental,
 	"internal/mcp":          Experimental,
