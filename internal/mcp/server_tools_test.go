@@ -20,12 +20,12 @@ import (
 )
 
 func TestNewServer(t *testing.T) {
-	s := NewServer(false, "")
+	s := NewServer(false, "", nil)
 	if s == nil {
 		t.Fatal("expected non-nil server")
 	}
 
-	sCached := NewServer(true, "http://localhost:8080")
+	sCached := NewServer(true, "http://localhost:8080", nil)
 	if sCached == nil {
 		t.Fatal("expected non-nil cached server")
 	}

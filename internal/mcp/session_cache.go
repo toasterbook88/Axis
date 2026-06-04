@@ -83,7 +83,7 @@ func (c *SessionCache) GetPlacementInputs(ctx context.Context, sessionID string)
 	snapCopy := daemon.CloneSnapshot(snap)
 	var stateCopy *state.ClusterState
 	if st != nil {
-		// ClusterState can just be shallow copied since it is mostly read-only metadata
+		// ClusterState is treated as a shared reference since it is read-only metadata.
 		stateCopy = st
 	}
 
