@@ -116,6 +116,7 @@ type Daemon struct {
 // snapshotHook records a subscriber to the OnSnapshotChanged event plus its
 // per-subscriber content hash used for debounce.
 type snapshotHook struct {
+	mu       sync.Mutex
 	fn       SnapshotChangedFunc
 	lastHash [sha256.Size]byte
 	lastSet  bool
@@ -682,13 +683,17 @@ func (d *Daemon) dispatchSnapshotHooks(snap *models.ClusterSnapshot, trigger str
 
 	hash := hashSnapshot(snap)
 	for _, h := range hooks {
+		h.mu.Lock()
 		if h.lastSet && h.lastHash == hash {
+			h.mu.Unlock()
 			continue
 		}
 		// Update before invocation so a re-entrant call from inside the hook
 		// does not see a stale hash.
 		h.lastHash = hash
 		h.lastSet = true
+		h.mu.Unlock()
+
 		func(h *snapshotHook) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -702,7 +707,8 @@ func (d *Daemon) dispatchSnapshotHooks(snap *models.ClusterSnapshot, trigger str
 }
 
 // hashSnapshot computes a deterministic SHA-256 over a snapshot's stable
-// fields. It intentionally ignores VolatileInfo and Warnings ordering so
+// fields. It intentionally zeroes out the Timestamp field so that refresh
+// timestamps do not defeat the debounce logic.
 // background updates that only refresh cosmetic metadata do not invalidate
 // per-subscriber debounce.
 //

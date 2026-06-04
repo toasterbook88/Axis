@@ -54,7 +54,7 @@ var newMCPRemoteExecutor = func(nc config.NodeConfig) mcpRemoteExecutor {
 	return transport.NewSSHExecutor(nc.Hostname, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveTimeout())
 }
 
-func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
+func NewServer(useCache bool, cacheAddr string, d *daemon.Daemon) *mcpserver.MCPServer {
 	hooks := &mcpserver.Hooks{}
 	s := mcpserver.NewMCPServer(
 		"axis",
@@ -72,6 +72,12 @@ func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
 		cache.Invalidate(session.SessionID())
 	})
 
+	if d != nil {
+		d.AddOnSnapshotChanged(func(snap *models.ClusterSnapshot, trigger string) {
+			cache.InvalidateAll()
+		})
+	}
+
 	registerResources(s, cache)
 	registerTools(s, cache)
 
@@ -82,7 +88,7 @@ func registerResources(s *mcpserver.MCPServer, cache *SessionCache) {
 	snapResource := mcpproto.NewResource(
 		clusterSnapshotURI,
 		"Cluster Snapshot",
-		mcpproto.WithResourceDescription("Current AXIS cluster state as JSON"),
+		mcpproto.WithResourceDescription("Active snapshot of all nodes in the cluster"),
 		mcpproto.WithMIMEType("application/json"),
 	)
 	s.AddResource(snapResource, func(ctx context.Context, req mcpproto.ReadResourceRequest) ([]mcpproto.ResourceContents, error) {
@@ -206,7 +212,7 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 }
 
 func ServeStdio(cached bool, cacheAddr string) error {
-	return mcpserver.ServeStdio(NewServer(cached, cacheAddr))
+	return mcpserver.ServeStdio(NewServer(cached, cacheAddr, nil))
 }
 
 func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceRequest, cache *SessionCache) ([]mcpproto.ResourceContents, error) {

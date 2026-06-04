@@ -33,7 +33,7 @@ func TestTriangleTools(t *testing.T) {
 	})
 	defer restoreFetch()
 
-	s := NewServer(true, "http://localhost:42425")
+	s := NewServer(true, "http://localhost:42425", nil)
 	if s == nil {
 		t.Fatal("expected non-nil server")
 	}

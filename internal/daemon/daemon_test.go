@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1154,5 +1155,35 @@ func TestHashSnapshotIgnoresTimestamp(t *testing.T) {
 
 	if h1 != h2 {
 		t.Errorf("expected hashSnapshot to ignore Timestamp, but got different hashes: %x vs %x", h1, h2)
+	}
+}
+
+func TestDaemonSnapshotChangedHooksConcurrent(t *testing.T) {
+	d := New(10*time.Second, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+		}, nil
+	})
+
+	var wg sync.WaitGroup
+	var count int32
+
+	d.AddOnSnapshotChanged(func(snap *models.ClusterSnapshot, trigger string) {
+		atomic.AddInt32(&count, 1)
+	})
+
+	// Run concurrent refreshes to trigger potential data race on lastHash/lastSet
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.RefreshWithTrigger(context.Background(), "manual")
+		}()
+	}
+
+	wg.Wait()
+	// Since the snapshot doesn't change, the hook should only fire once!
+	if atomic.LoadInt32(&count) != 1 {
+		t.Fatalf("expected hook to be called exactly once, got %d", count)
 	}
 }
