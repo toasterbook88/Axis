@@ -115,3 +115,16 @@ func TestClusterKnowledgeJSON(t *testing.T) {
 		t.Fatal("expected JSON output")
 	}
 }
+
+func TestClusterKnowledgeIncludesGit(t *testing.T) {
+	k := Build(&models.ClusterSnapshot{}, nil, "")
+	if k.Git == nil {
+		t.Fatal("expected Git field to be populated (assuming tests run inside a git repo)")
+	}
+	if !k.Git.IsRepo {
+		t.Fatal("expected k.Git.IsRepo to be true")
+	}
+	if k.Git.Branch == "" {
+		t.Fatal("expected k.Git.Branch to be non-empty")
+	}
+}

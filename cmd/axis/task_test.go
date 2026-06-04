@@ -9,6 +9,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
@@ -497,5 +498,52 @@ func TestTaskRunCmdNonTTYSkipsConfirmationPrompt(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("expected no confirmation prompt on non-tty, got %q", got)
+	}
+}
+
+func TestBuildContextBlockIncludesGit(t *testing.T) {
+	prevGit := getGitRepoState
+	getGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{
+			IsRepo:     true,
+			Branch:     "feature-test",
+			Commit:     "1234567890abcdef",
+			Subject:    "add test features",
+			IsDirty:    true,
+			DirtyFiles: []string{"file1.go", "file2.go"},
+			AheadCount: 1,
+		}, nil
+	}
+	t.Cleanup(func() {
+		getGitRepoState = prevGit
+	})
+
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "alpha",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  4096,
+				},
+				RAMAllocatableMB: 4096,
+			},
+		},
+		Summary: models.ClusterSummary{
+			TotalNodes:         1,
+			TotalFreeRAMMB:     4096,
+			TotalReservableMB:  4096,
+			TotalAllocatableMB: 4096,
+		},
+	}
+
+	out := buildContextBlock(snap, models.TaskRequirements{}, "run inference", "daemon-cache", nil, nil)
+	if !strings.Contains(out, "- Git: branch feature-test (commit 12345678) - add test features [dirty: 2 files] [ahead 1, behind 0]") {
+		t.Fatalf("expected git details in context block, got:\n%s", out)
+	}
+
+	outJSON := buildContextJSON(snap, models.TaskRequirements{}, "run inference", "daemon-cache", nil, nil)
+	if outJSON.Git == nil || outJSON.Git.Branch != "feature-test" {
+		t.Fatalf("expected git details in JSON, got: %+v", outJSON.Git)
 	}
 }

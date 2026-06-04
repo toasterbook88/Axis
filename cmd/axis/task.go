@@ -15,6 +15,7 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -37,6 +38,7 @@ var taskRunStderrIsTerminal = ui.StderrIsTerminal
 var signalTaskRunDaemonRefresh = func(ctx context.Context, trigger string) error {
 	return refreshDaemonCacheWithTrigger(ctx, api.DefaultAddr(), trigger)
 }
+var getGitRepoState = git.GetRepoState
 
 func taskCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -512,18 +514,19 @@ func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 // ContextOutput is the structured JSON form of the context block — suitable
 // for programmatic injection into LLM system prompts.
 type ContextOutput struct {
-	Node             string    `json:"node"`
-	FitScore         int       `json:"fit_score"`
-	RAMFreeMB        int64     `json:"ram_free_mb"`
-	RAMReservableMB  int64     `json:"ram_reservable_mb,omitempty"`
-	RAMAllocatableMB int64     `json:"ram_allocatable_mb,omitempty"`
-	Pressure         string    `json:"pressure"`
-	Tools            []string  `json:"tools"`
-	RecentDecisions  []string  `json:"recent_decisions,omitempty"`
-	Skills           []string  `json:"skills,omitempty"`
-	Source           string    `json:"source"`
-	Task             string    `json:"task"`
-	GeneratedAt      time.Time `json:"generated_at"`
+	Node             string         `json:"node"`
+	FitScore         int            `json:"fit_score"`
+	RAMFreeMB        int64          `json:"ram_free_mb"`
+	RAMReservableMB  int64          `json:"ram_reservable_mb,omitempty"`
+	RAMAllocatableMB int64          `json:"ram_allocatable_mb,omitempty"`
+	Pressure         string         `json:"pressure"`
+	Tools            []string       `json:"tools"`
+	RecentDecisions  []string       `json:"recent_decisions,omitempty"`
+	Skills           []string       `json:"skills,omitempty"`
+	Source           string         `json:"source"`
+	Task             string         `json:"task"`
+	GeneratedAt      time.Time      `json:"generated_at"`
+	Git              *git.RepoState `json:"git,omitempty"`
 }
 
 func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) ContextOutput {
@@ -564,6 +567,10 @@ func buildContextJSON(snap *models.ClusterSnapshot, reqs models.TaskRequirements
 		for _, s := range skillStore.Skills {
 			out.Skills = append(out.Skills, s.Description)
 		}
+	}
+	gitState, _ := getGitRepoState(".")
+	if gitState.IsRepo {
+		out.Git = &gitState
 	}
 	return out
 }
@@ -624,6 +631,27 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 			names = names[:5]
 		}
 		extraLines += "\n- Known skills: " + strings.Join(names, ", ")
+	}
+
+	gitState, _ := getGitRepoState(".")
+	if gitState.IsRepo {
+		commitShort := gitState.Commit
+		if len(commitShort) > 8 {
+			commitShort = commitShort[:8]
+		}
+		gitDetails := fmt.Sprintf("branch %s (commit %s)", gitState.Branch, commitShort)
+		if gitState.Subject != "" {
+			gitDetails += fmt.Sprintf(" - %s", gitState.Subject)
+		}
+		if gitState.IsDirty {
+			gitDetails += fmt.Sprintf(" [dirty: %d files]", len(gitState.DirtyFiles))
+		} else {
+			gitDetails += " [clean]"
+		}
+		if gitState.AheadCount > 0 || gitState.BehindCount > 0 {
+			gitDetails += fmt.Sprintf(" [ahead %d, behind %d]", gitState.AheadCount, gitState.BehindCount)
+		}
+		extraLines += "\n- Git: " + gitDetails
 	}
 
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
