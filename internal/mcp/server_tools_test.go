@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/auth"
@@ -58,7 +59,7 @@ func TestClusterSnapshotResource(t *testing.T) {
 	}, nil)
 	defer restore()
 
-	contents, err := clusterSnapshotResource(context.Background(), mcpproto.ReadResourceRequest{}, false, "")
+	contents, err := clusterSnapshotResource(context.Background(), mcpproto.ReadResourceRequest{}, NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("clusterSnapshotResource: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestClusterSnapshotResourceError(t *testing.T) {
 	restore := stubMCPRuntime(t, nil, errors.New("runtime down"))
 	defer restore()
 
-	_, err := clusterSnapshotResource(context.Background(), mcpproto.ReadResourceRequest{}, false, "")
+	_, err := clusterSnapshotResource(context.Background(), mcpproto.ReadResourceRequest{}, NewSessionCache(30*time.Second, false, ""))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -126,7 +127,7 @@ func TestAxisHealthToolCached(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := axisHealthTool(context.Background(), toolRequest(nil), true, server.URL)
+	result, err := axisHealthTool(context.Background(), toolRequest(nil), NewSessionCache(30*time.Second, true, server.URL))
 	if err != nil {
 		t.Fatalf("axisHealthTool: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestAxisHealthToolLive(t *testing.T) {
 	}, nil)
 	defer restore()
 
-	result, err := axisHealthTool(context.Background(), toolRequest(nil), false, "")
+	result, err := axisHealthTool(context.Background(), toolRequest(nil), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("axisHealthTool: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestAxisHealthToolLiveNilSnapshot(t *testing.T) {
 	}, nil)
 	defer restore()
 
-	result, err := axisHealthTool(context.Background(), toolRequest(nil), false, "")
+	result, err := axisHealthTool(context.Background(), toolRequest(nil), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("axisHealthTool: %v", err)
 	}

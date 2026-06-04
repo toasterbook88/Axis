@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/config"
@@ -93,7 +94,7 @@ func TestPlacementDecisionToolUsesLiveRuntimeStateAndWarnings(t *testing.T) {
 
 	result, err := placementDecisionTool(context.Background(), toolRequest(map[string]any{
 		"description": "analyze a git repo",
-	}), false, "")
+	}), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("placementDecisionTool: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestPlacementDecisionToolCachedPathAppendsRecoveredStateWarning(t *testing.
 
 	result, err := placementDecisionTool(context.Background(), toolRequest(map[string]any{
 		"description": "analyze a git repo",
-	}), true, "ignored")
+	}), NewSessionCache(30*time.Second, true, "ignored"))
 	if err != nil {
 		t.Fatalf("placementDecisionTool: %v", err)
 	}

@@ -3,6 +3,7 @@ package axismcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -22,7 +23,7 @@ func TestClusterSnapshotToolReturnsFreshnessFromLiveRuntime(t *testing.T) {
 	}, nil)
 	defer restore()
 
-	result, err := clusterSnapshotTool(context.Background(), toolRequest(nil), false, "")
+	result, err := clusterSnapshotTool(context.Background(), toolRequest(nil), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("clusterSnapshotTool() error = %v", err)
 	}

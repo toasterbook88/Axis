@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/execution"
@@ -102,7 +104,32 @@ type Daemon struct {
 	pendingRequestedAt time.Time
 	activeRequestedAt  time.Time
 	maxRefreshLatency  time.Duration
+
+	// Snapshot change subscribers (O-10). Hooks are invoked once per refresh
+	// whose content hash differs from the previous one for that subscriber,
+	// so a periodic RefreshTriggerInterval tick with unchanged cluster state
+	// does not fire hooks (OQ-5 resolution).
+	hooksMu       sync.Mutex
+	snapshotHooks map[string]*snapshotHook
 }
+
+// snapshotHook records a subscriber to the OnSnapshotChanged event plus its
+// per-subscriber content hash used for debounce.
+type snapshotHook struct {
+	fn       SnapshotChangedFunc
+	lastHash [sha256.Size]byte
+	lastSet  bool
+}
+
+// SnapshotChangedFunc is invoked by the daemon after a successful refresh
+// whose content hash differs from the previous one for this subscriber. The
+// hook runs synchronously on the refresh goroutine but the daemon
+// intentionally does not hold its write lock during dispatch (callers must
+// be safe to call without holding d.mu).
+//
+// Implementations should be non-blocking; a slow handler will stall the next
+// refresh tick. The trigger label is one of the RefreshTrigger* constants.
+type SnapshotChangedFunc func(snap *models.ClusterSnapshot, trigger string)
 
 type configFingerprint struct {
 	exists bool
@@ -165,6 +192,7 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		ledger:          reservation.NewLedger(reservation.DefaultLimits(), nil),
 		pendingRefresh:  make(chan string, 1),
 		pendingTriggers: make(map[string]bool),
+		snapshotHooks:   make(map[string]*snapshotHook),
 	}
 	if err := d.ledger.Load(); err != nil {
 		slog.Error("failed to load reservation ledger", "error", err)
@@ -530,7 +558,6 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	}
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	d.nextRefreshAt = now.Add(d.interval)
 	d.lastTrigger = trigger
@@ -542,6 +569,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 
 	if err != nil {
 		d.lastError = err.Error()
+		d.mu.Unlock()
 		return err
 	}
 
@@ -574,6 +602,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	if skillStore, skillErr := skills.Load(); skillErr != nil {
 		if skillStore == nil {
 			d.lastError = skillErr.Error()
+			d.mu.Unlock()
 			return skillErr
 		}
 		d.snapshot.Warnings = append(d.snapshot.Warnings, models.Warning{
@@ -584,14 +613,116 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	d.collectedAt = now
 	d.lastError = ""
 
+	snapCopy := d.snapshot
+	d.mu.Unlock()
+
 	if d.snapshotPath == "" {
+		// No persistence configured, but still need to fire hooks if content
+		// changed (test paths and in-process consumers rely on this).
+		d.dispatchSnapshotHooks(snapCopy, trigger)
 		return nil
 	}
-	if err := persistSnapshot(d.snapshotPath, d.snapshot); err != nil {
+	if err := persistSnapshot(d.snapshotPath, snapCopy); err != nil {
+		d.mu.Lock()
 		d.lastError = err.Error()
+		d.mu.Unlock()
 		return err
 	}
+	d.dispatchSnapshotHooks(snapCopy, trigger)
 	return nil
+}
+
+// AddOnSnapshotChanged registers a subscriber that will be invoked after each
+// successful refresh whose content hash differs from the previous one seen
+// by that subscriber. The returned function unregisters the hook.
+//
+// The daemon's interval refresh can produce a byte-identical snapshot when
+// the cluster is idle; hooks are debounced per-subscriber so an idle cluster
+// does not generate redundant notifications (OQ-5).
+//
+// The hook runs on the refresh goroutine after d.mu has been released. It
+// must not call back into d.Snapshot() with a long-held read lock; clone the
+// snapshot first if persistence is required beyond the callback.
+//
+// This API is intended for in-process consumers (MCP server, HTTP cache
+// watcher). It is not part of the public HTTP surface.
+func (d *Daemon) AddOnSnapshotChanged(fn SnapshotChangedFunc) (remove func()) {
+	if fn == nil {
+		return func() {}
+	}
+	id := uuid.NewString()
+	d.hooksMu.Lock()
+	if d.snapshotHooks == nil {
+		d.snapshotHooks = make(map[string]*snapshotHook)
+	}
+	d.snapshotHooks[id] = &snapshotHook{fn: fn}
+	d.hooksMu.Unlock()
+	return func() {
+		d.hooksMu.Lock()
+		delete(d.snapshotHooks, id)
+		d.hooksMu.Unlock()
+	}
+}
+
+// dispatchSnapshotHooks fires every registered hook whose stored hash differs
+// from the SHA-256 of snap. Must not be called with d.mu held.
+//
+// Errors from individual hooks are logged and swallowed; one bad subscriber
+// must not block the others or the next refresh.
+func (d *Daemon) dispatchSnapshotHooks(snap *models.ClusterSnapshot, trigger string) {
+	if snap == nil {
+		return
+	}
+	d.hooksMu.Lock()
+	hooks := make([]*snapshotHook, 0, len(d.snapshotHooks))
+	for _, h := range d.snapshotHooks {
+		hooks = append(hooks, h)
+	}
+	d.hooksMu.Unlock()
+
+	hash := hashSnapshot(snap)
+	for _, h := range hooks {
+		if h.lastSet && h.lastHash == hash {
+			continue
+		}
+		// Update before invocation so a re-entrant call from inside the hook
+		// does not see a stale hash.
+		h.lastHash = hash
+		h.lastSet = true
+		func(h *snapshotHook) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("daemon: snapshot hook panic recovered",
+						"trigger", trigger, "panic", r)
+				}
+			}()
+			h.fn(snap, trigger)
+		}(h)
+	}
+}
+
+// hashSnapshot computes a deterministic SHA-256 over a snapshot's stable
+// fields. It intentionally ignores VolatileInfo and Warnings ordering so
+// background updates that only refresh cosmetic metadata do not invalidate
+// per-subscriber debounce.
+//
+// Falls back to the marshalled JSON if the struct shape ever drifts; the
+// default path covers all current callers.
+func hashSnapshot(snap *models.ClusterSnapshot) [sha256.Size]byte {
+	if snap == nil {
+		return [sha256.Size]byte{}
+	}
+	// Shallow copy the snapshot to zero out the Timestamp so it doesn't defeat the debounce.
+	snapCopy := *snap
+	snapCopy.Timestamp = time.Time{}
+
+	// Use the canonical JSON for stability. A malformed snapshot will hash
+	// to the empty struct, which still produces a deterministic value.
+	data, err := json.Marshal(&snapCopy)
+	if err != nil {
+		return [sha256.Size]byte{}
+	}
+	return sha256.Sum256(data)
 }
 
 func fingerprintFile(path string) (configFingerprint, error) {
