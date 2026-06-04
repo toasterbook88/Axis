@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
@@ -32,7 +33,7 @@ func TestPlacementDecisionCorruptPersistenceGolden(t *testing.T) {
 
 	result, err := placementDecisionTool(context.Background(), toolRequest(map[string]any{
 		"description": "analyze a git repo",
-	}), false, "")
+	}), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("placementDecisionTool: %v", err)
 	}

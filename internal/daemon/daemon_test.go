@@ -1012,3 +1012,147 @@ func TestNewDefaultOmitsMeshWhenDiscoveryDisabled(t *testing.T) {
 		t.Fatal("expected mesh to be omitted when discovery.enabled is false")
 	}
 }
+
+func TestDaemonSnapshotChangedHooks(t *testing.T) {
+	var count int32
+	var lastTrigger string
+	var lastSnap *models.ClusterSnapshot
+
+	// Set up a collector that returns different snapshots
+	var mockSnap atomic.Pointer[models.ClusterSnapshot]
+	mockSnap.Store(&models.ClusterSnapshot{
+		Status: models.SnapshotHealthy,
+		Summary: models.ClusterSummary{
+			TotalFreeRAMMB: 1024,
+		},
+	})
+
+	d := New(10*time.Second, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return mockSnap.Load(), nil
+	})
+
+	// Register a subscriber hook
+	remove := d.AddOnSnapshotChanged(func(snap *models.ClusterSnapshot, trigger string) {
+		atomic.AddInt32(&count, 1)
+		lastTrigger = trigger
+		lastSnap = snap
+
+		// Test deadlock avoidance: call d.Snapshot() which acquires d.mu lock.
+		// If d.mu was held during the dispatch, this would deadlock.
+		_, _ = d.Snapshot()
+	})
+	defer remove()
+
+	// 1. Initial refresh should trigger the hook since it's the first time
+	if err := d.RefreshWithTrigger(context.Background(), "manual"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if atomic.LoadInt32(&count) != 1 {
+		t.Fatalf("expected hook to be called once, got %d", count)
+	}
+	if lastTrigger != "manual" {
+		t.Fatalf("expected trigger 'manual', got %q", lastTrigger)
+	}
+	if lastSnap.Summary.TotalFreeRAMMB != 1024 {
+		t.Fatalf("expected RAM 1024, got %d", lastSnap.Summary.TotalFreeRAMMB)
+	}
+
+	// 2. Trigger again with identical snapshot content -> should NOT fire (debounced)
+	if err := d.RefreshWithTrigger(context.Background(), "manual"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if atomic.LoadInt32(&count) != 1 {
+		t.Fatalf("expected hook count to remain 1, got %d (debounce failed)", count)
+	}
+
+	// 3. Update snapshot content and refresh -> should fire
+	mockSnap.Store(&models.ClusterSnapshot{
+		Status: models.SnapshotHealthy,
+		Summary: models.ClusterSummary{
+			TotalFreeRAMMB: 2048,
+		},
+	})
+
+	if err := d.RefreshWithTrigger(context.Background(), "discovery"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if atomic.LoadInt32(&count) != 2 {
+		t.Fatalf("expected hook count to be 2, got %d", count)
+	}
+	if lastTrigger != "discovery" {
+		t.Fatalf("expected trigger 'discovery', got %q", lastTrigger)
+	}
+	if lastSnap.Summary.TotalFreeRAMMB != 2048 {
+		t.Fatalf("expected RAM 2048, got %d", lastSnap.Summary.TotalFreeRAMMB)
+	}
+
+	// 4. Remove hook and update snapshot -> should NOT fire
+	remove()
+
+	mockSnap.Store(&models.ClusterSnapshot{
+		Status: models.SnapshotHealthy,
+		Summary: models.ClusterSummary{
+			TotalFreeRAMMB: 4096,
+		},
+	})
+
+	if err := d.RefreshWithTrigger(context.Background(), "manual"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if atomic.LoadInt32(&count) != 2 {
+		t.Fatalf("expected hook count to remain 2 after removal, got %d", count)
+	}
+}
+
+func TestDaemonSnapshotChangedHooksPanicRecovery(t *testing.T) {
+	d := New(10*time.Second, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+		}, nil
+	})
+
+	called := false
+	d.AddOnSnapshotChanged(func(snap *models.ClusterSnapshot, trigger string) {
+		panic("intentional hook panic")
+	})
+	d.AddOnSnapshotChanged(func(snap *models.ClusterSnapshot, trigger string) {
+		called = true
+	})
+
+	// Should not crash the daemon refresh
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh failed due to hook panic: %v", err)
+	}
+
+	if !called {
+		t.Fatal("expected second hook to be called despite first hook panicking")
+	}
+}
+
+func TestHashSnapshotIgnoresTimestamp(t *testing.T) {
+	snap1 := &models.ClusterSnapshot{
+		Status:    models.SnapshotHealthy,
+		Timestamp: time.Now(),
+		Nodes: []models.NodeFacts{
+			{Name: "node-1"},
+		},
+	}
+	snap2 := &models.ClusterSnapshot{
+		Status:    models.SnapshotHealthy,
+		Timestamp: time.Now().Add(5 * time.Minute),
+		Nodes: []models.NodeFacts{
+			{Name: "node-1"},
+		},
+	}
+
+	h1 := hashSnapshot(snap1)
+	h2 := hashSnapshot(snap2)
+
+	if h1 != h2 {
+		t.Errorf("expected hashSnapshot to ignore Timestamp, but got different hashes: %x vs %x", h1, h2)
+	}
+}

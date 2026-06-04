@@ -55,6 +55,7 @@ var newMCPRemoteExecutor = func(nc config.NodeConfig) mcpRemoteExecutor {
 }
 
 func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
+	hooks := &mcpserver.Hooks{}
 	s := mcpserver.NewMCPServer(
 		"axis",
 		buildinfo.Version,
@@ -62,15 +63,22 @@ func NewServer(useCache bool, cacheAddr string) *mcpserver.MCPServer {
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(false, false),
 		mcpserver.WithInstructions("AXIS exposes read-only cluster state, diagnostics, and advisory resource leases. Do not assume any execution authority."),
+		mcpserver.WithHooks(hooks),
 	)
 
-	registerResources(s, useCache, cacheAddr)
-	registerTools(s, useCache, cacheAddr)
+	cache := NewSessionCache(30*time.Second, useCache, cacheAddr)
+
+	s.GetHooks().AddOnUnregisterSession(func(ctx context.Context, session mcpserver.ClientSession) {
+		cache.Invalidate(session.SessionID())
+	})
+
+	registerResources(s, cache)
+	registerTools(s, cache)
 
 	return s
 }
 
-func registerResources(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
+func registerResources(s *mcpserver.MCPServer, cache *SessionCache) {
 	snapResource := mcpproto.NewResource(
 		clusterSnapshotURI,
 		"Cluster Snapshot",
@@ -78,11 +86,11 @@ func registerResources(s *mcpserver.MCPServer, useCache bool, cacheAddr string) 
 		mcpproto.WithMIMEType("application/json"),
 	)
 	s.AddResource(snapResource, func(ctx context.Context, req mcpproto.ReadResourceRequest) ([]mcpproto.ResourceContents, error) {
-		return clusterSnapshotResource(ctx, req, useCache, cacheAddr)
+		return clusterSnapshotResource(ctx, req, cache)
 	})
 }
 
-func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
+func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 	s.AddTool(
 		mcpproto.NewTool(
 			"cluster_snapshot",
@@ -90,7 +98,7 @@ func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 			mcpproto.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-			return clusterSnapshotTool(ctx, req, useCache, cacheAddr)
+			return clusterSnapshotTool(ctx, req, cache)
 		},
 	)
 
@@ -106,7 +114,7 @@ func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 			),
 		),
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-			return placementDecisionTool(ctx, req, useCache, cacheAddr)
+			return placementDecisionTool(ctx, req, cache)
 		},
 	)
 
@@ -117,7 +125,7 @@ func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 			mcpproto.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
-			return axisHealthTool(ctx, req, useCache, cacheAddr)
+			return axisHealthTool(ctx, req, cache)
 		},
 	)
 
@@ -194,16 +202,16 @@ func registerTools(s *mcpserver.MCPServer, useCache bool, cacheAddr string) {
 		sshConnectivityTestTool,
 	)
 
-	registerTriangleTools(s, useCache, cacheAddr)
+	registerTriangleTools(s, cache.useCache, cache.cacheAddr)
 }
 
 func ServeStdio(cached bool, cacheAddr string) error {
 	return mcpserver.ServeStdio(NewServer(cached, cacheAddr))
 }
 
-func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceRequest, useCache bool, cacheAddr string) ([]mcpproto.ResourceContents, error) {
+func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceRequest, cache *SessionCache) ([]mcpproto.ResourceContents, error) {
 	_ = req // protocol-mandated; no parameters to extract
-	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
+	snap, err := cache.GetSnapshot(ctx, GetSessionID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -222,43 +230,45 @@ func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceReque
 	}, nil
 }
 
-func clusterSnapshotTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+func clusterSnapshotTool(ctx context.Context, req mcpproto.CallToolRequest, cache *SessionCache) (*mcpproto.CallToolResult, error) {
 	_ = req // protocol-mandated; no parameters to extract
-	snap, err := currentSnapshot(ctx, useCache, cacheAddr)
+	snap, err := cache.GetSnapshot(ctx, GetSessionID(ctx))
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 	return mcpproto.NewToolResultJSON(snap)
 }
 
-func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, cache *SessionCache) (*mcpproto.CallToolResult, error) {
 	desc, err := req.RequireString("description")
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 
-	snap, st, err := currentPlacementInputs(ctx, useCache, cacheAddr)
+	snap, st, err := cache.GetPlacementInputs(ctx, GetSessionID(ctx))
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
 
-	snapshotview.ApplyReservationView(snap, st, nil)
-	decision := placement.SelectBestNode(placement.InferRequirements(desc), snap.Nodes, st)
-	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snap.Warnings)
+	snapCopy := daemon.CloneSnapshot(snap)
+
+	snapshotview.ApplyReservationView(snapCopy, st, nil)
+	decision := placement.SelectBestNode(placement.InferRequirements(desc), snapCopy.Nodes, st)
+	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snapCopy.Warnings)
 	return mcpproto.NewToolResultJSON(decision)
 }
 
-func axisHealthTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {
+func axisHealthTool(ctx context.Context, req mcpproto.CallToolRequest, cache *SessionCache) (*mcpproto.CallToolResult, error) {
 	_ = req // protocol-mandated; no parameters to extract
-	if useCache {
-		meta, err := daemon.FetchMeta(ctx, cacheAddr)
+	if cache.useCache {
+		meta, err := daemon.FetchMeta(ctx, cache.cacheAddr)
 		if err != nil {
 			return mcpproto.NewToolResultError(err.Error()), nil
 		}
 		return mcpproto.NewToolResultJSON(daemon.HealthPayload(&meta))
 	}
 
-	snap, err := currentSnapshot(ctx, false, cacheAddr)
+	snap, err := cache.GetSnapshot(ctx, GetSessionID(ctx))
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}

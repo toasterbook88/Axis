@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -35,7 +36,7 @@ func TestClusterSnapshotToolTurboQuantGolden(t *testing.T) {
 	}, nil)
 	defer restore()
 
-	result, err := clusterSnapshotTool(context.Background(), toolRequest(nil), false, "")
+	result, err := clusterSnapshotTool(context.Background(), toolRequest(nil), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("clusterSnapshotTool: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestPlacementDecisionToolTurboQuantGolden(t *testing.T) {
 
 	result, err := placementDecisionTool(context.Background(), toolRequest(map[string]any{
 		"description": "book-length model analysis 128k",
-	}), false, "")
+	}), NewSessionCache(30*time.Second, false, ""))
 	if err != nil {
 		t.Fatalf("placementDecisionTool: %v", err)
 	}
