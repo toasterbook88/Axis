@@ -402,3 +402,64 @@ func writeMCPConfig(t *testing.T, home string, content string) {
 		t.Fatalf("write config: %v", err)
 	}
 }
+
+func TestNewServerWiresDaemonCacheInvalidation(t *testing.T) {
+	fetchCount := 0
+	restore := stubMCPRuntime(t, nil, nil)
+	defer restore()
+
+	loadMCPRuntime = func(ctx context.Context) (*runtimectx.Context, error) {
+		fetchCount++
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Status: models.SnapshotHealthy,
+			},
+		}, nil
+	}
+
+	d := daemon.New(10*time.Second, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+		}, nil
+	})
+
+	s := NewServer(false, "", d)
+	if s == nil {
+		t.Fatal("expected non-nil server")
+	}
+
+	tool, ok := s.ListTools()["cluster_snapshot"]
+	if !ok {
+		t.Fatal("expected cluster_snapshot tool to be registered")
+	}
+
+	ctx := context.Background()
+	_, err := tool.Handler(ctx, toolRequest(nil))
+	if err != nil {
+		t.Fatalf("tool call: %v", err)
+	}
+	if fetchCount != 1 {
+		t.Fatalf("expected 1 fetch, got %d", fetchCount)
+	}
+
+	_, err = tool.Handler(ctx, toolRequest(nil))
+	if err != nil {
+		t.Fatalf("tool call: %v", err)
+	}
+	if fetchCount != 1 {
+		t.Fatalf("expected cache hit, got %d", fetchCount)
+	}
+
+	err = d.RefreshWithTrigger(ctx, "manual")
+	if err != nil {
+		t.Fatalf("daemon refresh: %v", err)
+	}
+
+	_, err = tool.Handler(ctx, toolRequest(nil))
+	if err != nil {
+		t.Fatalf("tool call: %v", err)
+	}
+	if fetchCount != 2 {
+		t.Fatalf("expected cache invalidation to trigger fresh fetch, got %d", fetchCount)
+	}
+}
