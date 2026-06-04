@@ -1132,3 +1132,27 @@ func TestDaemonSnapshotChangedHooksPanicRecovery(t *testing.T) {
 		t.Fatal("expected second hook to be called despite first hook panicking")
 	}
 }
+
+func TestHashSnapshotIgnoresTimestamp(t *testing.T) {
+	snap1 := &models.ClusterSnapshot{
+		Status:    models.SnapshotHealthy,
+		Timestamp: time.Now(),
+		Nodes: []models.NodeFacts{
+			{Name: "node-1"},
+		},
+	}
+	snap2 := &models.ClusterSnapshot{
+		Status:    models.SnapshotHealthy,
+		Timestamp: time.Now().Add(5 * time.Minute),
+		Nodes: []models.NodeFacts{
+			{Name: "node-1"},
+		},
+	}
+
+	h1 := hashSnapshot(snap1)
+	h2 := hashSnapshot(snap2)
+
+	if h1 != h2 {
+		t.Errorf("expected hashSnapshot to ignore Timestamp, but got different hashes: %x vs %x", h1, h2)
+	}
+}

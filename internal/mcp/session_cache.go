@@ -14,6 +14,7 @@ import (
 type mcpCacheEntry struct {
 	snapshot *models.ClusterSnapshot
 	state    *state.ClusterState
+	hasState bool
 	cachedAt time.Time
 }
 
@@ -56,6 +57,8 @@ func (c *SessionCache) GetSnapshot(ctx context.Context, sessionID string) (*mode
 		c.entries[sessionID] = &mcpCacheEntry{}
 	}
 	c.entries[sessionID].snapshot = snapCopy
+	c.entries[sessionID].state = nil
+	c.entries[sessionID].hasState = false
 	c.entries[sessionID].cachedAt = time.Now()
 	c.mu.Unlock()
 
@@ -67,7 +70,7 @@ func (c *SessionCache) GetPlacementInputs(ctx context.Context, sessionID string)
 	entry, ok := c.entries[sessionID]
 	c.mu.Unlock()
 
-	if ok && time.Since(entry.cachedAt) < c.ttl && entry.snapshot != nil && entry.state != nil {
+	if ok && time.Since(entry.cachedAt) < c.ttl && entry.snapshot != nil && entry.hasState {
 		return daemon.CloneSnapshot(entry.snapshot), entry.state, nil
 	}
 
@@ -90,6 +93,7 @@ func (c *SessionCache) GetPlacementInputs(ctx context.Context, sessionID string)
 	}
 	c.entries[sessionID].snapshot = snapCopy
 	c.entries[sessionID].state = stateCopy
+	c.entries[sessionID].hasState = true
 	c.entries[sessionID].cachedAt = time.Now()
 	c.mu.Unlock()
 

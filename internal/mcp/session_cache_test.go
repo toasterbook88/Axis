@@ -231,3 +231,66 @@ func TestSessionCacheInvalidation(t *testing.T) {
 		t.Fatalf("expected session-2 to fetch again after InvalidateAll, got %d", fetchCount)
 	}
 }
+
+func TestSessionCachePlacementInputsCachingNilState(t *testing.T) {
+	fetchCount := 0
+
+	restore := stubMCPRuntime(t, nil, nil)
+	defer restore()
+	loadMCPRuntime = func(ctx context.Context) (*runtimectx.Context, error) {
+		fetchCount++
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Status: models.SnapshotHealthy,
+			},
+			State: nil, // Legitimately nil state
+		}, nil
+	}
+
+	cache := NewSessionCache(100*time.Millisecond, false, "")
+
+	ctx := context.Background()
+	_, st1, err := cache.GetPlacementInputs(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fetchCount != 1 {
+		t.Fatalf("expected 1 fetch, got %d", fetchCount)
+	}
+	if st1 != nil {
+		t.Fatalf("expected state to be nil, got %+v", st1)
+	}
+
+	// Fetch again - should hit cache (and not call loadMCPRuntime) despite state being nil
+	_, st2, err := cache.GetPlacementInputs(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fetchCount != 1 {
+		t.Fatalf("expected cache hit (no new fetch), got fetch count %d", fetchCount)
+	}
+	if st2 != nil {
+		t.Fatalf("expected cached state to be nil, got %+v", st2)
+	}
+
+	// Wait for TTL expiration to force a GetSnapshot cache miss/update
+	time.Sleep(150 * time.Millisecond)
+
+	// Now call GetSnapshot - should invalidate/clear the cached state
+	_, err = cache.GetSnapshot(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fetchCount != 2 {
+		t.Fatalf("expected new fetch on GetSnapshot, got %d", fetchCount)
+	}
+
+	// Now calling GetPlacementInputs should trigger a fetch again because GetSnapshot cleared hasState
+	_, _, err = cache.GetPlacementInputs(ctx, "session-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fetchCount != 3 {
+		t.Fatalf("expected fetch since state was invalidated, got %d", fetchCount)
+	}
+}

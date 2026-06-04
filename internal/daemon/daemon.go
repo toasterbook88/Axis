@@ -712,9 +712,13 @@ func hashSnapshot(snap *models.ClusterSnapshot) [sha256.Size]byte {
 	if snap == nil {
 		return [sha256.Size]byte{}
 	}
+	// Shallow copy the snapshot to zero out the Timestamp so it doesn't defeat the debounce.
+	snapCopy := *snap
+	snapCopy.Timestamp = time.Time{}
+
 	// Use the canonical JSON for stability. A malformed snapshot will hash
 	// to the empty struct, which still produces a deterministic value.
-	data, err := json.Marshal(snap)
+	data, err := json.Marshal(&snapCopy)
 	if err != nil {
 		return [sha256.Size]byte{}
 	}
