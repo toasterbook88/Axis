@@ -140,6 +140,17 @@ func (n NodeFacts) ReservableRAM() int64 {
 	return ReservableRAMMBWithConfig(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, n.SystemReserveMB)
 }
 
+// NetworkClass represents the performance and route class of a node connection.
+type NetworkClass string
+
+const (
+	NetworkClassDirectLAN NetworkClass = "direct-lan"       // Local LAN or Thunderbolt
+	NetworkClassVPN       NetworkClass = "vpn"              // WireGuard/OpenVPN
+	NetworkClassTailscale NetworkClass = "tailscale-direct" // Tailscale direct UDP
+	NetworkClassRelayed   NetworkClass = "relayed"          // High-latency or DERP-relayed path
+	NetworkClassUnknown   NetworkClass = "unknown"
+)
+
 // NetworkAddress represents a single network address with interface metadata.
 // Kind is one of: ipv4, ipv6, hostname.
 // Scope is one of: global, link-local (empty means global for backward compat).
@@ -252,6 +263,10 @@ type NodeFacts struct {
 	RAMReservedMB    int64                      `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
 	RAMAllocatableMB int64                      `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
 	SystemReserveMB  int64                      `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
+
+	// Network telemetry (Phase D)
+	SSHHandshakeLatencyMs int64        `json:"ssh_handshake_latency_ms,omitempty" yaml:"ssh_handshake_latency_ms,omitempty"`
+	NetworkClass          NetworkClass `json:"network_class,omitempty" yaml:"network_class,omitempty"`
 
 	// Epistemic state (Truth Classification)
 	Epistemic *EpistemicState `json:"epistemic,omitempty" yaml:"epistemic,omitempty"`

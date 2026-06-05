@@ -415,6 +415,9 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 		score += 10
 	}
 
+	// Network class adjustment (Phase D)
+	score += scoreNetworkClass(n)
+
 	if reqs.PrefersTurboQuant {
 		score += turboQuantFitBonus(n, reqs)
 	}
@@ -776,4 +779,19 @@ func ollamaIsReady(n models.NodeFacts) bool {
 
 func isOllamaBootstrapPossible(n models.NodeFacts) bool {
 	return n.Ollama != nil && n.Ollama.Installed
+}
+
+func scoreNetworkClass(n models.NodeFacts) int {
+	switch n.NetworkClass {
+	case models.NetworkClassDirectLAN:
+		return 20
+	case models.NetworkClassTailscale:
+		return 5
+	case models.NetworkClassVPN:
+		return -20
+	case models.NetworkClassRelayed:
+		return -20
+	default:
+		return 0
+	}
 }
