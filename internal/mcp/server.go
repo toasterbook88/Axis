@@ -41,7 +41,13 @@ var eventInterests = struct {
 func registerEventInterest(eventName, subscriber string) {
 	eventInterests.Lock()
 	defer eventInterests.Unlock()
-	eventInterests.byEvent[eventName] = append(eventInterests.byEvent[eventName], subscriber)
+	subs := eventInterests.byEvent[eventName]
+	for _, s := range subs {
+		if s == subscriber {
+			return
+		}
+	}
+	eventInterests.byEvent[eventName] = append(subs, subscriber)
 }
 
 var (

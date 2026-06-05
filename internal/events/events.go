@@ -140,7 +140,9 @@ func RegisterListener(l Listener, filters ...string) func() {
 		defer listenerMu.Unlock()
 		for i, entry := range listeners {
 			if entry.id == id {
-				listeners = append(listeners[:i], listeners[i+1:]...)
+				copy(listeners[i:], listeners[i+1:])
+				listeners[len(listeners)-1] = listenerEntry{}
+				listeners = listeners[:len(listeners)-1]
 				break
 			}
 		}
@@ -204,7 +206,11 @@ func SetEventBufferSize(size int) {
 	defer bufferMu.Unlock()
 	bufferSize = size
 	if len(eventBuffer) > bufferSize {
-		eventBuffer = eventBuffer[len(eventBuffer)-bufferSize:]
+		discardCount := len(eventBuffer) - bufferSize
+		for i := 0; i < discardCount; i++ {
+			eventBuffer[i] = Event{}
+		}
+		eventBuffer = eventBuffer[discardCount:]
 	}
 }
 
@@ -247,6 +253,7 @@ func processEvent(evt Event) {
 	bufferMu.Lock()
 	eventBuffer = append(eventBuffer, evt)
 	if len(eventBuffer) > bufferSize {
+		eventBuffer[0] = Event{}
 		eventBuffer = eventBuffer[1:]
 	}
 	bufferMu.Unlock()

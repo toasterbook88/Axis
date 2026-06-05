@@ -74,11 +74,12 @@ func postWithRetry(url string, body []byte) error {
 
 		resp, err := httpClient.Do(req)
 		if err == nil {
-			defer resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				resp.Body.Close()
 				return nil
 			}
 			lastErr = fmt.Errorf("http status %d", resp.StatusCode)
+			resp.Body.Close()
 		} else {
 			lastErr = err
 		}
@@ -102,6 +103,9 @@ type WebhookDeadLetter struct {
 }
 
 func writeDeadLetter(targetURL string, errMsg string, evt Event) error {
+	logMu.Lock()
+	defer logMu.Unlock()
+
 	path := defaultLogPath()
 	dir := filepath.Dir(path)
 	dlPath := filepath.Join(dir, "webhook-deadletter.jsonl")

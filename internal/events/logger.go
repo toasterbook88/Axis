@@ -1,7 +1,6 @@
 package events
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -197,15 +196,17 @@ func getRecentEventsFromFile(limit int) ([]Event, error) {
 		if err != nil {
 			continue
 		}
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
+		dec := json.NewDecoder(f)
+		for {
 			var evt Event
-			if err := json.Unmarshal(scanner.Bytes(), &evt); err == nil {
-				allEvents = append(allEvents, evt)
+			if err := dec.Decode(&evt); err != nil {
+				if err == io.EOF {
+					break
+				}
+				slog.Error("failed decoding event", "path", files[i], "error", err)
+				break
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			slog.Error("failed scanning events file", "path", files[i], "error", err)
+			allEvents = append(allEvents, evt)
 		}
 		_ = f.Close()
 	}
