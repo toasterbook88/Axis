@@ -52,6 +52,9 @@ func TestSSHExecutorConnectRunClose(t *testing.T) {
 	if exec.client == nil {
 		t.Fatal("expected ssh client after connect")
 	}
+	if exec.HandshakeLatencyMs() <= 0 {
+		t.Fatalf("expected positive handshake latency, got %d", exec.HandshakeLatencyMs())
+	}
 
 	out, err := exec.Run(context.Background(), "echo hi")
 	if err != nil {

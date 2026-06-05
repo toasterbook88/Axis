@@ -559,6 +559,45 @@ func TestFitScore_LocalBonus(t *testing.T) {
 	}
 }
 
+func TestFitScore_NetworkClass(t *testing.T) {
+	n := nodeComplete("test", 2000, "low")
+
+	// Base score when NetworkClass is empty / unknown
+	base := ComputeFitScore(n, false, nil)
+
+	// Direct LAN should get +20
+	nDirect := n
+	nDirect.NetworkClass = models.NetworkClassDirectLAN
+	scoreDirect := ComputeFitScore(nDirect, false, nil)
+	if scoreDirect-base != 20 {
+		t.Errorf("expected direct-lan bonus of 20, got %d", scoreDirect-base)
+	}
+
+	// Tailscale direct should get +5
+	nTailscale := n
+	nTailscale.NetworkClass = models.NetworkClassTailscale
+	scoreTailscale := ComputeFitScore(nTailscale, false, nil)
+	if scoreTailscale-base != 5 {
+		t.Errorf("expected tailscale-direct bonus of 5, got %d", scoreTailscale-base)
+	}
+
+	// VPN should get -20
+	nVPN := n
+	nVPN.NetworkClass = models.NetworkClassVPN
+	scoreVPN := ComputeFitScore(nVPN, false, nil)
+	if scoreVPN-base != -20 {
+		t.Errorf("expected vpn penalty of -20, got %d", scoreVPN-base)
+	}
+
+	// Relayed should get -20
+	nRelayed := n
+	nRelayed.NetworkClass = models.NetworkClassRelayed
+	scoreRelayed := ComputeFitScore(nRelayed, false, nil)
+	if scoreRelayed-base != -20 {
+		t.Errorf("expected relayed penalty of -20, got %d", scoreRelayed-base)
+	}
+}
+
 func TestFitScore_TurboQuantLongContextBonus(t *testing.T) {
 	n := nodeTurboQuant("mlx", 4000, "none", "mlx")
 	reqs := models.TaskRequirements{

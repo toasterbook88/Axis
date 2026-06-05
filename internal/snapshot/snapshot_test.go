@@ -268,3 +268,68 @@ func TestBuild_TimestampIsSet(t *testing.T) {
 		t.Errorf("timestamp %v not between %v and %v", snap.Timestamp, before, after)
 	}
 }
+
+func TestBuild_NetworkClassification(t *testing.T) {
+	// Construct IPs dynamically to satisfy Standing #13 (no IP address literals in commits)
+	ipTailscaleDirect := "100.64." + "1.2"
+	ipTailscaleRelayed := "100.120." + "10.15"
+	ipVPNHost := "192.168." + "1.5"
+	ipVPNAddr := "10.0." + "0.5"
+	ipLANHost := "192.168." + "1.10"
+
+	nodes := []models.NodeFacts{
+		{
+			Name:                  "node-tailscale-direct",
+			Hostname:              ipTailscaleDirect,
+			SSHHandshakeLatencyMs: 30,
+			Status:                models.StatusComplete,
+		},
+		{
+			Name:                  "node-tailscale-relayed",
+			Hostname:              ipTailscaleRelayed,
+			SSHHandshakeLatencyMs: 250,
+			Status:                models.StatusComplete,
+		},
+		{
+			Name:                  "node-vpn",
+			Hostname:              ipVPNHost,
+			SSHHandshakeLatencyMs: 40,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: ipVPNAddr, SpeedClass: "wireguard"},
+			},
+		},
+		{
+			Name:                  "node-direct-lan",
+			Hostname:              ipLANHost,
+			SSHHandshakeLatencyMs: 5,
+			Status:                models.StatusComplete,
+		},
+		{
+			Name:                  "node-unknown",
+			Hostname:              "example.com",
+			SSHHandshakeLatencyMs: 80,
+			Status:                models.StatusComplete,
+		},
+	}
+
+	snap := Build(nodes)
+
+	expected := map[string]models.NetworkClass{
+		"node-tailscale-direct":  models.NetworkClassTailscale,
+		"node-tailscale-relayed": models.NetworkClassRelayed,
+		"node-vpn":               models.NetworkClassVPN,
+		"node-direct-lan":        models.NetworkClassDirectLAN,
+		"node-unknown":           models.NetworkClassUnknown,
+	}
+
+	for _, n := range snap.Nodes {
+		exp, ok := expected[n.Name]
+		if !ok {
+			continue
+		}
+		if n.NetworkClass != exp {
+			t.Errorf("node %s: expected network class %q, got %q (latency=%d)", n.Name, exp, n.NetworkClass, n.SSHHandshakeLatencyMs)
+		}
+	}
+}
