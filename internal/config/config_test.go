@@ -484,3 +484,31 @@ chat:
 		t.Fatalf("chat.default_model = %q, want %q", cfg.Chat.DefaultModel, "llama3.2:latest")
 	}
 }
+
+func TestLoad_Webhooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+webhooks:
+  - "https://hooks.slack.com/services/123"
+  - "http://localhost:8080/events"
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with webhooks: %v", err)
+	}
+	if len(cfg.Webhooks) != 2 {
+		t.Fatalf("expected 2 webhooks, got %d", len(cfg.Webhooks))
+	}
+	if cfg.Webhooks[0] != "https://hooks.slack.com/services/123" {
+		t.Errorf("webhook[0] = %q", cfg.Webhooks[0])
+	}
+	if cfg.Webhooks[1] != "http://localhost:8080/events" {
+		t.Errorf("webhook[1] = %q", cfg.Webhooks[1])
+	}
+}

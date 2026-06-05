@@ -17,6 +17,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
@@ -350,9 +351,23 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.Intent = intent.Label
 	prepared.Result.Command = intent.Command
 
+	// Advisory placement event
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskPlacementRequested, map[string]any{
+		events.PayloadKeyTaskID: req.Description,
+	})
+
 	reqs := prepareRequirements(req.Description, req.Mode, intent)
 	prepared.Requirements = reqs
 	decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
+
+	// Advisory placement decision event (post-decision)
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskPlacementRequested, map[string]any{
+		events.PayloadKeyTaskID: req.Description,
+		events.PayloadKeyNode:   decision.Node,
+		"fit_score":             decision.FitScore,
+		"ok":                    decision.OK,
+		"phase":                 "decision",
+	})
 	prepared.Result.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, rt.Snapshot.Warnings)
 	prepared.Result.Node = decision.Node
 	prepared.Result.Tool = decision.Tool
@@ -399,6 +414,11 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		prepared.Err = err
 		return prepared, err
 	}
+	// Advisory event for external observers (MCP agents, hooks, etc.)
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskExecutionReserved, map[string]any{
+		events.PayloadKeyNode:   decision.Node,
+		events.PayloadKeyTaskID: req.Description, // best effort identifier
+	})
 	prepared.Result.Reasoning = append(prepared.Result.Reasoning, fmt.Sprintf("reservation headroom protected: %dMB", reservationMB))
 
 	if err := enforceLocalExecutionSafety(ctx, targetNode, reqs, &prepared.Result); err != nil {
@@ -986,6 +1006,24 @@ func recordFailure(skillStore *skills.Store, description string, exitCode int) {
 func notifyStateChange(ctx context.Context, req GuardedExecutionRequest, trigger string, resp GuardedExecutionResult) {
 	if req.OnStateChange != nil {
 		req.OnStateChange(ctx, trigger, resp)
+	}
+
+	// Also emit the canonical events package event for external consumers (MCP, future hooks).
+	eventName := ""
+	switch trigger {
+	case StateChangeExecutionReserved:
+		eventName = events.EventTaskExecutionReserved
+	case StateChangeExecutionFinished:
+		eventName = events.EventTaskExecutionFinished
+	}
+
+	if eventName != "" {
+		events.EmitToBuffer(events.NoopEmitter{}, eventName, map[string]any{
+			events.PayloadKeyNode:    resp.Node,
+			events.PayloadKeyTaskID:  req.Description,
+			events.PayloadKeyTrigger: trigger,
+			events.PayloadKeyResult:  resp.OK,
+		})
 	}
 }
 

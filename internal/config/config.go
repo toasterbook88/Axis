@@ -160,6 +160,7 @@ type Config struct {
 	AIProviders map[string]AIProviderConfig `json:"ai_providers,omitempty" yaml:"ai_providers,omitempty"`
 	Inference   *InferenceConfig            `json:"inference,omitempty" yaml:"inference,omitempty"`
 	MCPServers  map[string]MCPServerConfig  `json:"mcp_servers,omitempty" yaml:"mcp_servers,omitempty"`
+	Webhooks    []string                    `json:"webhooks,omitempty" yaml:"webhooks,omitempty"`
 }
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.
