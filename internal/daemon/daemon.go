@@ -19,6 +19,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
@@ -515,6 +516,11 @@ func (d *Daemon) refreshWithTrigger(ctx context.Context, trigger string) error {
 }
 
 func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
+	// Advisory pre-refresh event
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventDaemonRefreshPre, map[string]any{
+		events.PayloadKeyTrigger: trigger,
+	})
+
 	start := time.Now()
 	snap, err := d.collector(ctx)
 	now := time.Now().UTC()
@@ -594,6 +600,13 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 
 	d.snapshot = snapshotview.Clone(snap)
 	ApplyReservationView(d.snapshot, st, d.ledger)
+
+	// Advisory snapshot collected event
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventSnapshotCollected, map[string]any{
+		events.PayloadKeyTrigger: trigger,
+		"node_count":             len(snap.Nodes),
+	})
+
 	if stateWarning != nil {
 		d.snapshot.Warnings = append(d.snapshot.Warnings, models.Warning{
 			Kind:    "state",
@@ -616,6 +629,12 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 
 	snapCopy := d.snapshot
 	d.mu.Unlock()
+
+	// Emit advisory post-refresh event for external observers (MCP agents, hooks, etc.)
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventDaemonRefreshPost, map[string]any{
+		events.PayloadKeyTrigger: trigger,
+		"nodes":                  len(snapCopy.Nodes),
+	})
 
 	if d.snapshotPath == "" {
 		// No persistence configured, but still need to fire hooks if content
@@ -706,14 +725,9 @@ func (d *Daemon) dispatchSnapshotHooks(snap *models.ClusterSnapshot, trigger str
 	}
 }
 
-// hashSnapshot computes a deterministic SHA-256 over a snapshot's stable
-// fields. It intentionally zeroes out the Timestamp field so that refresh
-// timestamps do not defeat the debounce logic.
-// background updates that only refresh cosmetic metadata do not invalidate
-// per-subscriber debounce.
-//
-// Falls back to the marshalled JSON if the struct shape ever drifts; the
-// default path covers all current callers.
+// hashSnapshot computes a deterministic SHA-256 over the entire snapshot by
+// marshaling its fields to JSON. It intentionally zeroes out the Timestamp
+// field first so that refresh timestamps do not defeat the debounce logic.
 func hashSnapshot(snap *models.ClusterSnapshot) [sha256.Size]byte {
 	if snap == nil {
 		return [sha256.Size]byte{}

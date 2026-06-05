@@ -7,9 +7,12 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/buildinfo"
+	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -19,7 +22,9 @@ const Version = buildinfo.Version
 
 func main() {
 	root := newRootCmd()
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	_ = events.FlushEvents(1 * time.Second)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(ExitCode(err))
 	}
@@ -39,6 +44,14 @@ func newRootCmd() *cobra.Command {
 			"cluster truth unless backed by a live snapshot or probe.",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			ui.Init(noColor)
+			// Initialize and register Cortex client globally (optional cluster integration)
+			if client, err := buildCortexClient(5 * time.Second); err == nil {
+				events.SetCortexClient(client)
+			}
+			// Register webhooks globally if configured
+			if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg != nil {
+				events.SetWebhooks(cfg.Webhooks)
+			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
