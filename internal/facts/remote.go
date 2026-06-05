@@ -48,6 +48,10 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	}
 	defer c.Exec.Close()
 
+	if exposer, ok := c.Exec.(interface{ HandshakeLatencyMs() int64 }); ok {
+		facts.SSHHandshakeLatencyMs = exposer.HandshakeLatencyMs()
+	}
+
 	partial := false
 
 	// Detect OS

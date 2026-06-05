@@ -83,16 +83,22 @@ type Executor interface {
 // SSHExecutor executes commands on a remote node via SSH.
 // This is the current remote transport mechanism.
 type SSHExecutor struct {
-	Host       string
-	Port       int
-	User       string
-	TimeoutSec int
-	client     *ssh.Client
+	Host               string
+	Port               int
+	User               string
+	TimeoutSec         int
+	client             *ssh.Client
+	handshakeLatencyMs int64
 }
 
 // NewSSHExecutor creates an SSH executor for a remote node.
 func NewSSHExecutor(host string, port int, user string, timeoutSec int) *SSHExecutor {
 	return &SSHExecutor{Host: host, Port: port, User: user, TimeoutSec: timeoutSec}
+}
+
+// HandshakeLatencyMs returns the measured duration of the SSH connection and handshake.
+func (e *SSHExecutor) HandshakeLatencyMs() int64 {
+	return e.handshakeLatencyMs
 }
 
 // Connect establishes the SSH client connection.
@@ -113,6 +119,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	timeout := time.Duration(e.TimeoutSec) * time.Second
 
 	dialer := net.Dialer{Timeout: timeout}
+	start := time.Now()
 	conn, err := dialer.DialContext(ctx, "tcp", dialAddr)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -141,6 +148,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		}
 		return fmt.Errorf("ssh handshake %s: %w", dialAddr, err)
 	}
+	e.handshakeLatencyMs = time.Since(start).Milliseconds()
 	// The connect deadline is only for dialing and handshake. Clear it once the
 	// SSH client is established so later session I/O isn't capped by an old ctx.
 	if err := conn.SetDeadline(time.Time{}); err != nil {

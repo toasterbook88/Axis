@@ -199,6 +199,10 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 		reasoning = append(reasoning, fmt.Sprintf("required tools available: %s", strings.Join(matched, ", ")))
 	}
 
+	if n.NetworkClass != "" && n.NetworkClass != models.NetworkClassUnknown {
+		reasoning = append(reasoning, fmt.Sprintf("network connection class: %s (latency: %dms)", n.NetworkClass, n.SSHHandshakeLatencyMs))
+	}
+
 	if len(reasoning) == 0 {
 		reasoning = append(reasoning, "eligible under current placement rules")
 	}
