@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -234,6 +235,15 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"ram_mb", req.RAMMB,
 		"owner", req.OwnerSurface,
 	)
+
+	// Advisory event for external observers
+	events.Emit(events.NoopEmitter{}, events.EventReservationGranted, map[string]any{
+		events.PayloadKeyNode: req.Node,
+		"id":                  req.ID,
+		"ram_mb":              req.RAMMB,
+		"owner":               req.OwnerSurface,
+	})
+
 	if err := l.saveLocked(); err != nil {
 		l.logger.Error("failed to persist ledger", "error", err)
 	}
@@ -260,6 +270,14 @@ func (l *Ledger) Release(id string) error {
 	l.totalReleased += e.RAMMB
 	delete(l.entries, id)
 	l.logger.Info("reservation released", "id", id, "node", e.Node, "ram_mb", e.RAMMB)
+
+	// Advisory event
+	events.Emit(events.NoopEmitter{}, events.EventReservationReleased, map[string]any{
+		"id":     id,
+		"node":   e.Node,
+		"ram_mb": e.RAMMB,
+	})
+
 	return l.saveLocked()
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
@@ -13,6 +14,7 @@ import (
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
@@ -24,6 +26,33 @@ import (
 
 const (
 	clusterSnapshotURI = "cluster://snapshot"
+)
+
+// eventInterests is a very simple in-memory registry for advisory event interests
+// from MCP clients (AI agents). This is the starting point for future event-driven
+// integration. It is intentionally lightweight and advisory.
+var eventInterests = struct {
+	sync.Mutex
+	byEvent map[string][]string // event name -> list of "subscribers" (client identifiers or callback tools)
+}{
+	byEvent: make(map[string][]string),
+}
+
+func registerEventInterest(eventName, subscriber string) {
+	eventInterests.Lock()
+	defer eventInterests.Unlock()
+	subs := eventInterests.byEvent[eventName]
+	for _, s := range subs {
+		if s == subscriber {
+			return
+		}
+	}
+	eventInterests.byEvent[eventName] = append(subs, subscriber)
+}
+
+var (
+	activeMCPListenerCancel func()
+	activeMCPListenerMu     sync.Mutex
 )
 
 type commandResult struct {
@@ -78,6 +107,26 @@ func NewServer(useCache bool, cacheAddr string, d *daemon.Daemon) *mcpserver.MCP
 			cache.InvalidateAll()
 		})
 	}
+
+	// Set up push-based MCP notifications on AXIS events
+	activeMCPListenerMu.Lock()
+	if activeMCPListenerCancel != nil {
+		activeMCPListenerCancel()
+	}
+	cancel := events.RegisterListener(func(evt events.Event) {
+		s.SendNotificationToAllClients("notifications/resources/updated", map[string]any{
+			"uri": "cluster://snapshot",
+			"event": map[string]any{
+				"id":        evt.ID,
+				"sequence":  evt.Sequence,
+				"name":      evt.Name,
+				"payload":   evt.Payload,
+				"timestamp": evt.Timestamp,
+			},
+		})
+	})
+	activeMCPListenerCancel = cancel
+	activeMCPListenerMu.Unlock()
 
 	registerResources(s, cache)
 	registerTools(s, cache)
@@ -225,6 +274,48 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 		},
 	)
 
+	// Advisory lifecycle events (read-only observation for external agents)
+	s.AddTool(
+		mcpproto.NewTool(
+			"list_lifecycle_events",
+			mcpproto.WithDescription("List the canonical lifecycle events emitted by AXIS (for observation and advisory integration by AI agents)"),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+		),
+		listLifecycleEventsTool,
+	)
+
+	s.AddTool(
+		mcpproto.NewTool(
+			"get_recent_events",
+			mcpproto.WithDescription("Return the most recent lifecycle events emitted by AXIS (advisory/observational)"),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+			mcpproto.WithInteger(
+				"limit",
+				mcpproto.Description("Maximum number of events to return (default 20)"),
+			),
+		),
+		getRecentEventsTool,
+	)
+
+	// Advisory event interest registration (for external AI agents / MCP clients)
+	s.AddTool(
+		mcpproto.NewTool(
+			"register_event_interest",
+			mcpproto.WithDescription("Register interest in specific AXIS lifecycle events (advisory/observational only). This is the first step toward event-driven integration."),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+			mcpproto.WithString(
+				"events",
+				mcpproto.Required(),
+				mcpproto.Description("Comma-separated list of event names (from list_lifecycle_events) the caller is interested in"),
+			),
+			mcpproto.WithString(
+				"callback_tool",
+				mcpproto.Description("Optional name of a tool the caller exposes that AXIS could invoke in a future bidirectional setup (currently informational)"),
+			),
+		),
+		registerEventInterestTool,
+	)
+
 	registerTriangleTools(s, cache.useCache, cache.cacheAddr)
 }
 
@@ -238,6 +329,11 @@ func clusterSnapshotResource(ctx context.Context, req mcpproto.ReadResourceReque
 	if err != nil {
 		return nil, err
 	}
+
+	// Advisory event when the snapshot resource is read via MCP
+	events.EmitToBuffer(events.NoopEmitter{}, events.EventSnapshotCollected, map[string]any{
+		"source": "mcp_resource",
+	})
 
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
@@ -475,4 +571,91 @@ func runCommand(ctx context.Context, name string, args ...string) commandResult 
 
 func toolResultJSON(v any) (*mcpproto.CallToolResult, error) {
 	return mcpproto.NewToolResultJSON(v)
+}
+
+// listLifecycleEventsTool returns the current set of canonical lifecycle events
+// that external agents can observe via MCP. This is read-only and advisory.
+func listLifecycleEventsTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+	_ = ctx
+	_ = req
+
+	eventsList := []string{
+		events.EventTaskPlacementRequested,
+		events.EventTaskExecutionPre,
+		events.EventTaskExecutionReserved,
+		events.EventTaskExecutionStarted,
+		events.EventTaskExecutionPost,
+		events.EventTaskExecutionFinished,
+		events.EventReservationRequested,
+		events.EventReservationGranted,
+		events.EventReservationReleased,
+		events.EventDaemonRefreshPre,
+		events.EventDaemonRefreshPost,
+		events.EventSnapshotCollected,
+	}
+
+	interests := make(map[string][]string)
+	eventInterests.Lock()
+	for _, name := range eventsList {
+		if subs, ok := eventInterests.byEvent[name]; ok {
+			interests[name] = subs
+		}
+	}
+	eventInterests.Unlock()
+
+	return mcpproto.NewToolResultJSON(map[string]any{
+		"events":      eventsList,
+		"interests":   interests,
+		"description": "These events are emitted by AXIS for observation. They are advisory only and do not grant execution authority. 'interests' shows current registrations from MCP clients.",
+	})
+}
+
+// registerEventInterestTool allows an MCP client (AI agent) to declare interest
+// in specific lifecycle events. This is the beginning of a subscription/registration
+// surface. Currently advisory and informational.
+func registerEventInterestTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+	_ = ctx
+
+	eventsStr, err := req.RequireString("events")
+	if err != nil {
+		return mcpproto.NewToolResultError("events (comma-separated) is required"), nil
+	}
+
+	callbackTool := req.GetString("callback_tool", "")
+
+	subscriber := "unknown-mcp-client"
+	if callbackTool != "" {
+		subscriber = callbackTool
+	}
+
+	registered := []string{}
+	for _, name := range strings.Split(eventsStr, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			registerEventInterest(name, subscriber)
+			registered = append(registered, name)
+		}
+	}
+
+	return mcpproto.NewToolResultJSON(map[string]any{
+		"registered":    registered,
+		"callback_tool": callbackTool,
+		"note":          "Interest recorded. Full bidirectional callbacks are a future enhancement. Events remain advisory.",
+	})
+}
+
+// getRecentEventsTool allows MCP clients to poll the most recent lifecycle events.
+func getRecentEventsTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+	_ = ctx
+
+	limit := 20
+	if l, err := req.RequireInt("limit"); err == nil && l > 0 {
+		limit = int(l)
+	}
+
+	recent := events.GetRecentEvents(limit)
+	return mcpproto.NewToolResultJSON(map[string]any{
+		"events": recent,
+		"count":  len(recent),
+	})
 }

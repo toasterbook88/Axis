@@ -32,6 +32,7 @@ var packageStates = map[string]string{
 	"internal/daemon":       Stable,
 	"internal/discovery":    Stable,
 	"internal/execution":    Experimental,
+	"internal/events":       Stable,
 	"internal/facts":        Stable,
 	"internal/failures":     Stable,
 	"internal/git":          Stable,
@@ -70,9 +71,17 @@ var stableExperimentalAllowList = map[string]map[string]bool{
 		"internal/execution": true,
 		"internal/safety":    true,
 		"internal/skills":    true,
+		"internal/cortex":    true,
 	},
 	"internal/runtimectx": {
 		"internal/skills": true,
+		"internal/cortex": true,
+	},
+	"internal/knowledge": {
+		"internal/cortex": true,
+	},
+	"internal/events": {
+		"internal/cortex": true,
 	},
 }
 

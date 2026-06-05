@@ -1159,6 +1159,7 @@ func TestHashSnapshotIgnoresTimestamp(t *testing.T) {
 }
 
 func TestDaemonSnapshotChangedHooksConcurrent(t *testing.T) {
+	t.Parallel()
 	d := New(10*time.Second, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{
 			Status: models.SnapshotHealthy,
@@ -1185,5 +1186,49 @@ func TestDaemonSnapshotChangedHooksConcurrent(t *testing.T) {
 	// Since the snapshot doesn't change, the hook should only fire once!
 	if atomic.LoadInt32(&count) != 1 {
 		t.Fatalf("expected hook to be called exactly once, got %d", count)
+	}
+}
+
+func TestHashSnapshotFieldsTripwire(t *testing.T) {
+	t.Parallel()
+	snap := &models.ClusterSnapshot{
+		Status:    models.SnapshotHealthy,
+		Timestamp: time.Now(),
+		Nodes: []models.NodeFacts{
+			{Name: "node-1"},
+		},
+		Warnings: []models.Warning{{Node: "node-1", Kind: "test", Message: "warning-1"}},
+	}
+
+	baseHash := hashSnapshot(snap)
+
+	// Changing Timestamp should not change hash
+	snapTime := *snap
+	snapTime.Timestamp = snap.Timestamp.Add(time.Hour)
+	if hashSnapshot(&snapTime) != baseHash {
+		t.Error("expected changing Timestamp to not change snapshot hash")
+	}
+
+	// Changing Status should change hash
+	snapStatus := *snap
+	snapStatus.Status = models.SnapshotDegraded
+	if hashSnapshot(&snapStatus) == baseHash {
+		t.Error("expected changing Status to change snapshot hash")
+	}
+
+	// Changing Nodes should change hash
+	snapNodes := *snap
+	snapNodes.Nodes = []models.NodeFacts{
+		{Name: "node-2"},
+	}
+	if hashSnapshot(&snapNodes) == baseHash {
+		t.Error("expected changing Nodes to change snapshot hash")
+	}
+
+	// Changing Warnings should change hash
+	snapWarnings := *snap
+	snapWarnings.Warnings = []models.Warning{{Node: "node-1", Kind: "test", Message: "warning-2"}}
+	if hashSnapshot(&snapWarnings) == baseHash {
+		t.Error("expected changing Warnings to change snapshot hash")
 	}
 }
