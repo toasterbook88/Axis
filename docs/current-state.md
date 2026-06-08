@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Refreshed: 2026-06-04 EDT
+- Refreshed: 2026-06-08 EDT
 - Repo version: `0.10.9`
 - Latest published GitHub release: `v0.10.9` (2026-06-01T21:14:59Z)
 - Release truth: repo version matches the latest published release
@@ -149,11 +149,11 @@ Refresh this section with `./hack/refresh-current-state.sh`.
 - `go build ./...` -> passes
 - `./hack/coverage-check.sh` -> passes
   - Coverage gates:
-    - `coverage gate passed: internal/knowledge 90.9% >= 90.0%`
+    - `coverage gate passed: internal/knowledge 92.9% >= 90.0%`
     - `coverage gate passed: internal/api 80.9% >= 50.0%`
-    - `coverage gate passed: internal/mcp 86.4% >= 35.0%`
+    - `coverage gate passed: internal/mcp 87.4% >= 35.0%`
     - `coverage gate passed: internal/ui 94.0% >= 80.0%`
-    - `coverage gate passed: total 69.2% >= 45.0%`
+    - `coverage gate passed: total 69.6% >= 45.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
