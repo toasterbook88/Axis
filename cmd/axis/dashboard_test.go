@@ -63,3 +63,41 @@ func TestDoctorCheckIcon(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderNodeTable(t *testing.T) {
+	nodes := []NodeListItem{
+		{
+			Name:     "alpha",
+			Status:   "complete",
+			Arch:     "arm64",
+			RAMTotal: 16384,
+			RAMFree:  8192,
+			Pressure: "low",
+			GPUs:     []string{"Apple M3 Max"},
+			IsLocal:  true,
+		},
+		{
+			Name:     "beta",
+			Status:   "unreachable",
+			Arch:     "amd64",
+			RAMTotal: 32768,
+			RAMFree:  0,
+			Pressure: "high",
+			GPUs:     nil,
+			IsLocal:  false,
+		},
+	}
+	out := RenderNodeTable(nodes)
+	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
+		t.Fatalf("expected node names in table, got %q", out)
+	}
+	if !strings.Contains(out, "arm64") || !strings.Contains(out, "amd64") {
+		t.Fatalf("expected architectures in table, got %q", out)
+	}
+	if !strings.Contains(out, "Apple M3 Max") {
+		t.Fatalf("expected GPU model in table, got %q", out)
+	}
+	if !strings.Contains(out, "local") {
+		t.Fatalf("expected local label in table, got %q", out)
+	}
+}

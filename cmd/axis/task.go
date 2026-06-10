@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -48,6 +49,8 @@ func taskCmd() *cobra.Command {
 	cmd.AddCommand(taskPlaceCmd())
 	cmd.AddCommand(taskContextCmd())
 	cmd.AddCommand(taskRunCmd())
+	cmd.AddCommand(taskHistoryCmd())
+	cmd.AddCommand(taskLogsCmd())
 	return cmd
 }
 
@@ -763,4 +766,136 @@ func turboQuantContextStatus(node models.NodeFacts) string {
 
 func turboQuantExecutionMode(node models.NodeFacts) string {
 	return turboexec.ExecutionMode(node)
+}
+
+func taskHistoryCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "history",
+		Short: "Display task execution history",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadPlacementState()
+			if err != nil {
+				return fmt.Errorf("failed to load state: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			if len(st.TaskHistory) == 0 {
+				fmt.Fprintln(out, "No task execution history found.")
+				return nil
+			}
+
+			fmt.Fprintln(out, ui.Bold("AXIS Task Execution History"))
+			tbl := ui.NewTable("EXEC ID", "TIMESTAMP", "NODE", "EXIT CODE", "PEAK RAM", "DURATION", "COMMAND")
+			for i := len(st.TaskHistory) - 1; i >= 0; i-- {
+				rec := st.TaskHistory[i]
+				execIDShort := rec.ExecID
+				parts := strings.SplitN(rec.ExecID, "-", 2)
+				if len(parts) == 2 && len(parts[0]) > 8 {
+					execIDShort = parts[0][:8] + "..." + "-" + parts[1]
+				}
+
+				exitStr := ui.Green("0")
+				if rec.ExitCode != 0 {
+					exitStr = ui.Red(fmt.Sprintf("%d", rec.ExitCode))
+				}
+
+				ramStr := "—"
+				if rec.PeakRAMMB > 0 {
+					ramStr = fmt.Sprintf("%d MB", rec.PeakRAMMB)
+				}
+
+				durationStr := fmt.Sprintf("%dms", rec.WallTimeMS)
+				if rec.WallTimeMS >= 1000 {
+					durationStr = fmt.Sprintf("%.2fs", float64(rec.WallTimeMS)/1000.0)
+				}
+
+				cmdShort := rec.Description
+				if len(cmdShort) > 40 {
+					cmdShort = cmdShort[:37] + "..."
+				}
+
+				tbl.AddRow(
+					execIDShort,
+					rec.Timestamp.Local().Format("2006-01-02 15:04:05"),
+					ui.Cyan(rec.Node),
+					exitStr,
+					ramStr,
+					durationStr,
+					cmdShort,
+				)
+			}
+			tbl.Render(out)
+			fmt.Fprintln(out)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func taskLogsCmd() *cobra.Command {
+	var follow bool
+	cmd := &cobra.Command{
+		Use:   "logs [exec-id]",
+		Short: "Display standard output and error logs for a task execution",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			execID := strings.TrimSpace(args[0])
+			if strings.ContainsAny(execID, "/\\") || strings.Contains(execID, "..") {
+				return fmt.Errorf("invalid execution ID: %q", execID)
+			}
+			home, _ := os.UserHomeDir()
+			logDir := filepath.Join(home, ".axis", "logs")
+
+			logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
+			if _, err := os.Stat(logPath); os.IsNotExist(err) {
+				// Try wildcard prefix/substring matching in logs directory
+				files, err := filepath.Glob(filepath.Join(logDir, fmt.Sprintf("task-*%s*.log", execID)))
+				if err == nil && len(files) > 0 {
+					logPath = files[0]
+				} else {
+					return fmt.Errorf("no logs found matching execution ID %q", execID)
+				}
+			}
+
+			file, err := os.Open(logPath)
+			if err != nil {
+				return fmt.Errorf("failed to open log file: %w", err)
+			}
+			defer file.Close()
+
+			out := cmd.OutOrStdout()
+			if !follow {
+				_, err = io.Copy(out, file)
+				return err
+			}
+
+			// Print existing contents first
+			_, err = io.Copy(out, file)
+			if err != nil {
+				return err
+			}
+
+			reader := bufio.NewReader(file)
+			for {
+				select {
+				case <-cmd.Context().Done():
+					return nil
+				default:
+				}
+
+				line, err := reader.ReadString('\n')
+				if len(line) > 0 {
+					fmt.Fprint(out, line)
+				}
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						time.Sleep(250 * time.Millisecond)
+						continue
+					}
+					return err
+				}
+			}
+		},
+	}
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream new logs as they are written")
+	return cmd
 }

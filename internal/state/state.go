@@ -44,6 +44,20 @@ type TombstoneEntry struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+type TaskExecutionRecord struct {
+	ExecID      string    `json:"exec_id"`
+	Description string    `json:"description"`
+	Command     string    `json:"command"`
+	Node        string    `json:"node"`
+	IsLocal     bool      `json:"is_local"`
+	ExitCode    int       `json:"exit_code"`
+	PeakRAMMB   int64     `json:"peak_ram_mb"`
+	PeakVRAMMB  int64     `json:"peak_vram_mb"`
+	WallTimeMS  int64     `json:"wall_time_ms"`
+	Timestamp   time.Time `json:"timestamp"`
+	Error       string    `json:"error,omitempty"`
+}
+
 type ClusterState struct {
 	Version      int                                    `json:"version,omitempty"`
 	Nodes        map[string]NodeState                   `json:"nodes"`
@@ -51,6 +65,7 @@ type ClusterState struct {
 	Failures     failures.Store                         `json:"failures,omitempty"`
 	Observations map[string]models.ExecutionObservation `json:"observations,omitempty"`
 	Decisions    []string                               `json:"recent_decisions"` // last 20 for context
+	TaskHistory  []TaskExecutionRecord                  `json:"task_history,omitempty"`
 	UpdatedAt    time.Time                              `json:"updated_at"`
 }
 
@@ -698,4 +713,11 @@ func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc str
 		s.Decisions = s.Decisions[len(s.Decisions)-20:]
 	}
 	_ = s.Save()
+}
+
+func (s *ClusterState) RecordTaskExecution(rec TaskExecutionRecord) {
+	s.TaskHistory = append(s.TaskHistory, rec)
+	if len(s.TaskHistory) > 100 {
+		s.TaskHistory = s.TaskHistory[len(s.TaskHistory)-100:]
+	}
 }

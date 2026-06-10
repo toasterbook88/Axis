@@ -418,10 +418,20 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 
 	prevShell := RunLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
-		time.Sleep(35 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond)
 		return []byte("ok\n"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()
+
+	prevStream := StreamLocalShell
+	StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (int64, error) {
+		time.Sleep(150 * time.Millisecond)
+		if stdout != nil {
+			_, _ = stdout.Write([]byte("ok\n"))
+		}
+		return 0, nil
+	}
+	defer func() { StreamLocalShell = prevStream }()
 
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "echo ok",

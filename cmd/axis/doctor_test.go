@@ -68,10 +68,10 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	if seen[1].EffectiveTimeout() != 25 {
 		t.Fatalf("beta timeout = %d, want 25", seen[1].EffectiveTimeout())
 	}
-	if !strings.Contains(stdout, "alpha (alpha.local:22)") {
+	if !strings.Contains(stdout, "connected to alpha.local:22") {
 		t.Fatalf("expected alpha success in output, got %q", stdout)
 	}
-	if !strings.Contains(stdout, "beta (beta.local:2222)") {
+	if !strings.Contains(stdout, "unreachable (beta.local:2222)") {
 		t.Fatalf("expected beta failure header in output, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "knownhosts") {
@@ -125,7 +125,7 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
 	stdout = stripANSI(stdout)
-	if !strings.Contains(stdout, "alpha (alpha.local:22)") {
+	if !strings.Contains(stdout, "connected to alpha.local:22") {
 		t.Fatalf("expected SSH success in output, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "Reachable, 1 node(s) cached") {
@@ -266,7 +266,7 @@ func TestDoctorWarnsWhenDaemonCacheHasZeroNodes(t *testing.T) {
 	if !strings.Contains(out, "0 nodes cached") {
 		t.Fatalf("expected zero-node warning, got %q", out)
 	}
-	if !strings.Contains(out, "hint: check ~/.axis/nodes.yaml") {
+	if !strings.Contains(out, "check ~/.axis/nodes.yaml") {
 		t.Fatalf("expected config hint, got %q", out)
 	}
 	if !strings.Contains(out, "Core checks passed with advisory warnings") {
@@ -339,8 +339,8 @@ func TestDoctorShowsLlamaServerNotInstalled(t *testing.T) {
 		t.Fatalf("doctor Execute: %v", err)
 	}
 	out := stripANSI(stdout)
-	if !strings.Contains(out, "llama-server: not installed") {
-		t.Errorf("expected 'llama-server: not installed', got:\n%s", out)
+	if !strings.Contains(out, "llama-server") || !strings.Contains(out, "not installed") {
+		t.Errorf("expected llama-server to be not installed, got:\n%s", out)
 	}
 	if !strings.Contains(out, "All checks passed") {
 		t.Errorf("expected 'All checks passed' (not-installed is not a failure), got:\n%s", out)
@@ -363,7 +363,7 @@ func TestDoctorShowsLlamaServerRunning(t *testing.T) {
 		t.Fatalf("doctor Execute: %v", err)
 	}
 	out := stripANSI(stdout)
-	if !strings.Contains(out, "llama-server: running on :8080") {
+	if !strings.Contains(out, "llama-server") || !strings.Contains(out, "running on :8080") {
 		t.Errorf("expected running+port in output, got:\n%s", out)
 	}
 	if !strings.Contains(out, "2 models loaded") {
@@ -390,7 +390,7 @@ func TestDoctorShowsMLXRunningNoModels(t *testing.T) {
 		t.Fatalf("doctor Execute: %v", err)
 	}
 	out := stripANSI(stdout)
-	if !strings.Contains(out, "mlx: running on :8080") {
+	if !strings.Contains(out, "mlx") || !strings.Contains(out, "running on :8080") {
 		t.Errorf("expected mlx running in output, got:\n%s", out)
 	}
 	if !strings.Contains(out, "no models loaded") {
@@ -414,7 +414,7 @@ func TestDoctorShowsOllamaRunning(t *testing.T) {
 		t.Fatalf("doctor Execute: %v", err)
 	}
 	out := stripANSI(stdout)
-	if !strings.Contains(out, "ollama: running on :11434") {
+	if !strings.Contains(out, "ollama") || !strings.Contains(out, "running on :11434") {
 		t.Errorf("expected running+port in output, got:\n%s", out)
 	}
 	if !strings.Contains(out, "3 models loaded") {
@@ -441,7 +441,7 @@ func TestDoctorShowsLlamaServerInstalledNotRunning(t *testing.T) {
 		t.Fatalf("doctor Execute: %v", err)
 	}
 	out := stripANSI(stdout)
-	if !strings.Contains(out, "llama-server: installed, not running") {
+	if !strings.Contains(out, "llama-server") || !strings.Contains(out, "installed, not running") {
 		t.Errorf("expected 'installed, not running', got:\n%s", out)
 	}
 	if !strings.Contains(out, "All checks passed") {

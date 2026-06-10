@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -29,13 +30,23 @@ func TestRunGuardedPropagatesPeakRAMMBToObservation(t *testing.T) {
 	reqs := prepareRequirements("git status", ModeExec, Intent{})
 	scope := placement.ObservationScopeForRequirements("studio", reqs, "")
 
-	// Stub RunLocalShell to return a specific peak RSS (512 MB) so the test
+	// Stub RunLocalShell and StreamLocalShell to return a specific peak RSS (512 MB) so the test
 	// doesn't depend on real process state being populated in the test runner.
 	prevShell := RunLocalShell
+	prevStream := StreamLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		return []byte("ok"), 512, nil
 	}
-	defer func() { RunLocalShell = prevShell }()
+	StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (int64, error) {
+		if stdout != nil {
+			_, _ = stdout.Write([]byte("ok"))
+		}
+		return 512, nil
+	}
+	defer func() {
+		RunLocalShell = prevShell
+		StreamLocalShell = prevStream
+	}()
 
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "git status",
@@ -83,11 +94,22 @@ func TestRunGuardedRecordsObservationAndClearsMatchingFailuresOnSuccess(t *testi
 	}, "previous crash", []string{"exit code 1"})
 
 	prevShell := RunLocalShell
+	prevStream := StreamLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		time.Sleep(5 * time.Millisecond)
 		return []byte("ok"), 0, nil
 	}
-	defer func() { RunLocalShell = prevShell }()
+	StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (int64, error) {
+		time.Sleep(5 * time.Millisecond)
+		if stdout != nil {
+			_, _ = stdout.Write([]byte("ok"))
+		}
+		return 0, nil
+	}
+	defer func() {
+		RunLocalShell = prevShell
+		StreamLocalShell = prevStream
+	}()
 
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "git status",

@@ -275,7 +275,7 @@ func allocatableRAM(n models.NodeFacts) int64 {
 	if n.RAMAllocatableMB > 0 {
 		return n.RAMAllocatableMB
 	}
-	return models.AllocatableRAMMB(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, n.RAMReservedMB)
+	return models.AllocatableRAMMBWithConfig(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, n.RAMReservedMB, n.SystemReserveMB)
 }
 
 func reservableRAM(n models.NodeFacts) int64 {

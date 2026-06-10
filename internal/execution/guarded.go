@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -80,6 +81,7 @@ type GuardedExecutionRequest struct {
 }
 
 type GuardedExecutionResult struct {
+	ExecID         string                      `json:"exec_id,omitempty"`
 	OK             bool                        `json:"ok"`
 	Description    string                      `json:"description"`
 	Mode           string                      `json:"mode,omitempty"`
@@ -457,6 +459,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	}
 	prepared.Command = commandToRun
 	prepared.ExtraEnv = append(turboPlan.Env, nixPlan.Env...)
+	prepared.Result.ExecID = generateExecID(prepared.Result.Node)
 
 	return prepared, nil
 }
@@ -712,9 +715,39 @@ func runLocal(
 	)
 	env = append(env, extraEnv...)
 
-	var execID string
-	if ledger != nil {
+	execID := resp.ExecID
+	if execID == "" {
 		execID = generateExecID(resp.Node)
+		resp.ExecID = execID
+	}
+
+	var logFile *os.File
+	home, _ := os.UserHomeDir()
+	logDir := filepath.Join(home, ".axis", "logs")
+	if err := os.MkdirAll(logDir, 0755); err == nil {
+		logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
+		if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			logFile = lf
+			defer logFile.Close()
+		}
+	}
+
+	stdoutWriter := req.Stdout
+	stderrWriter := req.Stderr
+	if logFile != nil {
+		if stdoutWriter == nil {
+			stdoutWriter = logFile
+		} else {
+			stdoutWriter = io.MultiWriter(stdoutWriter, logFile)
+		}
+		if stderrWriter == nil {
+			stderrWriter = logFile
+		} else {
+			stderrWriter = io.MultiWriter(stderrWriter, logFile)
+		}
+	}
+
+	if ledger != nil {
 		entry := reservation.Entry{
 			ID:           execID,
 			Node:         resp.Node,
@@ -740,7 +773,7 @@ func runLocal(
 
 	startedAt := time.Now().UTC()
 	out, peakRAMMB, runErr := runWithReservationHeartbeat(ledger, execID, func() (string, int64, error) {
-		return runLocalWithOutput(ctx, command, env, req.Stdout, req.Stderr)
+		return runLocalWithOutput(ctx, command, env, stdoutWriter, stderrWriter)
 	})
 	elapsed := time.Since(startedAt)
 	resp.Output = out
@@ -797,9 +830,39 @@ func runRemote(
 		return resp, err
 	}
 
-	var execID string
-	if ledger != nil {
+	execID := resp.ExecID
+	if execID == "" {
 		execID = generateExecID(resp.Node)
+		resp.ExecID = execID
+	}
+
+	var logFile *os.File
+	home, _ := os.UserHomeDir()
+	logDir := filepath.Join(home, ".axis", "logs")
+	if err := os.MkdirAll(logDir, 0755); err == nil {
+		logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
+		if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			logFile = lf
+			defer logFile.Close()
+		}
+	}
+
+	stdoutWriter := req.Stdout
+	stderrWriter := req.Stderr
+	if logFile != nil {
+		if stdoutWriter == nil {
+			stdoutWriter = logFile
+		} else {
+			stdoutWriter = io.MultiWriter(stdoutWriter, logFile)
+		}
+		if stderrWriter == nil {
+			stderrWriter = logFile
+		} else {
+			stderrWriter = io.MultiWriter(stderrWriter, logFile)
+		}
+	}
+
+	if ledger != nil {
 		entry := reservation.Entry{
 			ID:           execID,
 			Node:         resp.Node,
@@ -838,7 +901,7 @@ func runRemote(
 
 	startedAt := time.Now().UTC()
 	out, _, runErr := runWithReservationHeartbeat(ledger, execID, func() (string, int64, error) {
-		out, err := runRemoteWithOutput(ctx, executor, runCmd, req.Stdout, req.Stderr)
+		out, err := runRemoteWithOutput(ctx, executor, runCmd, stdoutWriter, stderrWriter)
 		return out, 0, err
 	})
 	elapsed := time.Since(startedAt)
@@ -1102,6 +1165,24 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 	} else {
 		applySuccessOutcome(st, resp)
 	}
+
+	rec := state.TaskExecutionRecord{
+		ExecID:      resp.ExecID,
+		Description: resp.Description,
+		Command:     resp.Command,
+		Node:        resp.Node,
+		IsLocal:     resp.IsLocal,
+		ExitCode:    resp.ExitCode,
+		PeakRAMMB:   peakRAMMB,
+		PeakVRAMMB:  resp.PeakVRAMMB,
+		WallTimeMS:  durationMilliseconds(elapsed),
+		Timestamp:   time.Now().UTC(),
+	}
+	if runErr != nil {
+		rec.Error = runErr.Error()
+	}
+	st.RecordTaskExecution(rec)
+
 	_ = st.Save()
 }
 

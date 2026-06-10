@@ -141,7 +141,7 @@ func TestRunGuardedRemoteTimeoutPropagatesAndReleasesReservation(t *testing.T) {
 		t: t,
 		steps: []scriptedRemoteStep{
 			{method: "run"},
-			{method: "run", waitForContextDone: true},
+			{method: "stream", waitForContextDone: true},
 		},
 	}
 	restore := stubExecutionRemoteFactory(t, func(config.NodeConfig) RemoteExecutor {
