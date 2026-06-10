@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,8 @@ func runInitWizard(cmd *cobra.Command) error {
 
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt: ui.Cyan(">>> "),
+		Stdin:  io.NopCloser(cmd.InOrStdin()),
+		Stdout: cmd.OutOrStdout(),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize interactive prompt: %w", err)
@@ -199,7 +202,7 @@ func runInitWizard(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 

@@ -418,7 +418,7 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 
 	prevShell := RunLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
-		time.Sleep(35 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond)
 		return []byte("ok\n"), 0, nil
 	}
 	defer func() { RunLocalShell = prevShell }()

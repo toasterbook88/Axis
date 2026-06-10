@@ -302,7 +302,7 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 	if err != nil && ui.StdinIsTerminal() && ui.StdoutIsTerminal() {
 		fmt.Fprint(out, "No configuration found. Would you like to run the setup wizard (axis init) now? [y/N]: ")
 		var answer string
-		_, _ = fmt.Scanln(&answer)
+		_, _ = fmt.Fscanln(cmd.InOrStdin(), &answer)
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		if answer == "y" || answer == "yes" {
 			// Trigger setup wizard (we will run the init command logic)

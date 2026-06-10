@@ -839,6 +839,9 @@ func taskLogsCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			execID := strings.TrimSpace(args[0])
+			if strings.ContainsAny(execID, "/\\") || strings.Contains(execID, "..") {
+				return fmt.Errorf("invalid execution ID: %q", execID)
+			}
 			home, _ := os.UserHomeDir()
 			logDir := filepath.Join(home, ".axis", "logs")
 
@@ -880,6 +883,9 @@ func taskLogsCmd() *cobra.Command {
 				}
 
 				line, err := reader.ReadString('\n')
+				if len(line) > 0 {
+					fmt.Fprint(out, line)
+				}
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						time.Sleep(250 * time.Millisecond)
@@ -887,7 +893,6 @@ func taskLogsCmd() *cobra.Command {
 					}
 					return err
 				}
-				fmt.Fprint(out, line)
 			}
 		},
 	}

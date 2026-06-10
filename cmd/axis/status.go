@@ -41,6 +41,8 @@ func statusCmd() *cobra.Command {
 			cacheRequested := cached || cachedOnly
 
 			if watch {
+				ticker := time.NewTicker(watchInterval)
+				defer ticker.Stop()
 				for {
 					select {
 					case <-cmd.Context().Done():
@@ -61,10 +63,10 @@ func statusCmd() *cobra.Command {
 					fetchCancel()
 
 					// Clear terminal screen and move cursor to home
-					fmt.Print("\033[H\033[2J")
+					fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
 
 					if err != nil {
-						ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
+						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 					} else {
 						printStatusText(cmd, snap, source)
 					}
@@ -72,7 +74,7 @@ func statusCmd() *cobra.Command {
 					select {
 					case <-cmd.Context().Done():
 						return nil
-					case <-time.After(watchInterval):
+					case <-ticker.C:
 					}
 				}
 			}

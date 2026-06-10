@@ -118,4 +118,17 @@ func TestTaskLogsCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "no logs found matching execution ID") {
 		t.Fatalf("unexpected error message: %v", err)
 	}
+
+	// Test path traversal rejection
+	_, _, err = captureProcessOutput(t, func() error {
+		cmd := taskLogsCmd()
+		cmd.SetArgs([]string{"../../etc/passwd"})
+		return cmd.Execute()
+	})
+	if err == nil {
+		t.Fatal("expected error for path traversal log ID")
+	}
+	if !strings.Contains(err.Error(), "invalid execution ID") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
 }

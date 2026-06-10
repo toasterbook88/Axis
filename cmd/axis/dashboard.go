@@ -29,6 +29,8 @@ func summaryCmd() *cobra.Command {
 		Short: "Display a visual dashboard of cluster health and resources",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if watch {
+				ticker := time.NewTicker(watchInterval)
+				defer ticker.Stop()
 				for {
 					select {
 					case <-cmd.Context().Done():
@@ -55,10 +57,10 @@ func summaryCmd() *cobra.Command {
 					fetchCancel()
 
 					// Clear terminal screen and move cursor to home
-					fmt.Print("\033[H\033[2J")
+					fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
 
 					if err != nil {
-						ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
+						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 					} else {
 						view := populateSummaryView(snap, meta)
 						fmt.Fprint(cmd.OutOrStdout(), view.Render())
@@ -67,7 +69,7 @@ func summaryCmd() *cobra.Command {
 					select {
 					case <-cmd.Context().Done():
 						return nil
-					case <-time.After(watchInterval):
+					case <-ticker.C:
 					}
 				}
 			}
