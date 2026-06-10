@@ -62,6 +62,8 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(updateCmd())
 	root.AddCommand(versionCmd())
+	root.AddCommand(initCmd())
+	root.AddCommand(meshCmd())
 	root.AddCommand(factsCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(taskCmd())

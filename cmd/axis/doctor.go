@@ -114,107 +114,138 @@ func doctorCmd() *cobra.Command {
 
 func runDoctor(cmd *cobra.Command, strict bool) error {
 	out := cmd.OutOrStdout()
-	fmt.Fprintln(out, ui.Bold("AXIS Doctor"))
-	fmt.Fprintln(out)
-
-	coreFailures := 0
-	advisoryWarnings := 0
+	var checks []DoctorCheck
 
 	// 1. Config check
 	cfgPath := doctorConfigPath()
-	fmt.Fprintf(out, "%s Config: %s\n", ui.Cyan("→"), cfgPath)
 	cfg, err := loadDoctorConfig(cfgPath)
 	if err != nil {
-		ui.FprintError(out, fmt.Sprintf("Config: %v", err), "cp nodes.example.yaml ~/.axis/nodes.yaml")
-		coreFailures++
+		checks = append(checks, DoctorCheck{
+			Name:    "Configuration File",
+			Status:  "fail",
+			Message: fmt.Sprintf("Failed to load: %v", err),
+			Fix:     "cp nodes.example.yaml ~/.axis/nodes.yaml",
+		})
 	} else {
-		fmt.Fprintf(out, "  %s Loaded %d node(s)\n", ui.StatusIcon(true), len(cfg.Nodes))
+		checks = append(checks, DoctorCheck{
+			Name:    "Configuration File",
+			Status:  "pass",
+			Message: fmt.Sprintf("Loaded %d node(s) from %s", len(cfg.Nodes), cfgPath),
+		})
 
 		// 1.5 MCP server config validation
-		if len(cfg.MCPServers) > 0 {
-			fmt.Fprintln(out)
-			fmt.Fprintf(out, "%s MCP servers\n", ui.Cyan("→"))
-			for name, mcpCfg := range cfg.MCPServers {
-				switch strings.ToLower(mcpCfg.Transport) {
-				case "stdio":
-					if len(mcpCfg.Command) == 0 {
-						fmt.Fprintf(out, "  %s %s (stdio): missing command\n", ui.StatusIcon(false), name)
-						advisoryWarnings++
-					} else {
-						cmdPath := mcpCfg.Command[0]
-						if _, err := os.Stat(cmdPath); os.IsNotExist(err) {
-							// Try resolving via PATH
-							if _, lookErr := exec.LookPath(cmdPath); lookErr != nil {
-								fmt.Fprintf(out, "  %s %s (stdio): command not found: %s\n", ui.StatusIcon(false), name, cmdPath)
-								advisoryWarnings++
-							} else {
-								fmt.Fprintf(out, "  %s %s (stdio): %s (found in PATH)\n", ui.StatusIcon(true), name, cmdPath)
-							}
+		for name, mcpCfg := range cfg.MCPServers {
+			switch strings.ToLower(mcpCfg.Transport) {
+			case "stdio":
+				if len(mcpCfg.Command) == 0 {
+					checks = append(checks, DoctorCheck{
+						Name:    fmt.Sprintf("MCP Server %q Config", name),
+						Status:  "warn",
+						Message: "missing command",
+					})
+				} else {
+					cmdPath := mcpCfg.Command[0]
+					if _, err := os.Stat(cmdPath); os.IsNotExist(err) {
+						if _, lookErr := exec.LookPath(cmdPath); lookErr != nil {
+							checks = append(checks, DoctorCheck{
+								Name:    fmt.Sprintf("MCP Server %q Command", name),
+								Status:  "warn",
+								Message: fmt.Sprintf("command not found: %s", cmdPath),
+							})
 						} else {
-							fmt.Fprintf(out, "  %s %s (stdio): %s\n", ui.StatusIcon(true), name, cmdPath)
+							checks = append(checks, DoctorCheck{
+								Name:    fmt.Sprintf("MCP Server %q Command", name),
+								Status:  "pass",
+								Message: fmt.Sprintf("%s (found in PATH)", cmdPath),
+							})
 						}
-					}
-				case "http":
-					if mcpCfg.URL == "" {
-						fmt.Fprintf(out, "  %s %s (http): missing url\n", ui.StatusIcon(false), name)
-						advisoryWarnings++
 					} else {
-						fmt.Fprintf(out, "  %s %s (http): %s\n", ui.StatusIcon(true), name, mcpCfg.URL)
+						checks = append(checks, DoctorCheck{
+							Name:    fmt.Sprintf("MCP Server %q Command", name),
+							Status:  "pass",
+							Message: cmdPath,
+						})
 					}
-				default:
-					fmt.Fprintf(out, "  %s %s (%s): unsupported transport\n", ui.StatusIcon(false), name, mcpCfg.Transport)
-					advisoryWarnings++
 				}
+			case "http":
+				if mcpCfg.URL == "" {
+					checks = append(checks, DoctorCheck{
+						Name:    fmt.Sprintf("MCP Server %q Config", name),
+						Status:  "warn",
+						Message: "missing url",
+					})
+				} else {
+					checks = append(checks, DoctorCheck{
+						Name:    fmt.Sprintf("MCP Server %q URL", name),
+						Status:  "pass",
+						Message: mcpCfg.URL,
+					})
+				}
+			default:
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("MCP Server %q Transport", name),
+					Status:  "warn",
+					Message: fmt.Sprintf("unsupported transport: %s", mcpCfg.Transport),
+				})
 			}
 		}
 
 		// 2. SSH connectivity check per node
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s SSH connectivity\n", ui.Cyan("→"))
 		for _, n := range cfg.Nodes {
 			addr := net.JoinHostPort(n.Hostname, fmt.Sprintf("%d", n.EffectiveSSHPort()))
 			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(n.EffectiveTimeout())*time.Second)
 			sshErr := doctorCheckNodeSSH(sshCtx, n)
 			cancel()
 			if sshErr != nil {
-				fmt.Fprintf(out, "  %s %s (%s): %v\n", ui.StatusIcon(false), n.Name, addr, sshErr)
-				coreFailures++
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("SSH: %s", n.Name),
+					Status:  "fail",
+					Message: fmt.Sprintf("unreachable (%s): %v", addr, sshErr),
+				})
 			} else {
-				fmt.Fprintf(out, "  %s %s (%s)\n", ui.StatusIcon(true), n.Name, addr)
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("SSH: %s", n.Name),
+					Status:  "pass",
+					Message: fmt.Sprintf("connected to %s", addr),
+				})
 			}
 		}
 	}
 
 	// 3. Daemon health check
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%s Daemon cache\n", ui.Cyan("→"))
 	daemonAddr := api.DefaultAddr()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	snap, _, daemonErr := fetchStatusSnapshot(ctx, daemonAddr)
+	cancel()
 	if daemonErr != nil || snap == nil {
-		fmt.Fprintf(out, "  %s Not reachable at %s\n", ui.StatusIcon(false), daemonAddr)
-		fmt.Fprintf(out, "    %s\n", ui.Dim("hint: start with: axis serve"))
+		status := "warn"
 		if strict {
-			coreFailures++
-		} else {
-			advisoryWarnings++
+			status = "fail"
 		}
+		checks = append(checks, DoctorCheck{
+			Name:    "Daemon Cache",
+			Status:  status,
+			Message: fmt.Sprintf("Not reachable at %s", daemonAddr),
+			Fix:     "start with: axis serve",
+		})
 	} else {
 		if len(snap.Nodes) == 0 {
-			fmt.Fprintf(out, "  %s Reachable, 0 nodes cached\n",
-				ui.StatusIcon(false))
-			fmt.Fprintf(out, "    %s\n", ui.Dim("hint: check ~/.axis/nodes.yaml and run axis status"))
-			advisoryWarnings++
+			checks = append(checks, DoctorCheck{
+				Name:    "Daemon Cache",
+				Status:  "warn",
+				Message: "Reachable, 0 nodes cached",
+				Fix:     "check ~/.axis/nodes.yaml and run axis status",
+			})
 		} else {
-			fmt.Fprintf(out, "  %s Reachable, %d node(s) cached\n",
-				ui.StatusIcon(true), len(snap.Nodes))
+			checks = append(checks, DoctorCheck{
+				Name:    "Daemon Cache",
+				Status:  "pass",
+				Message: fmt.Sprintf("Reachable, %d node(s) cached", len(snap.Nodes)),
+			})
 		}
 	}
 
-	// 4. Local AI backend health (advisory — not counted as core failures)
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%s AI backends (local)\n", ui.Cyan("→"))
+	// 4. Local AI backend health
 	for _, b := range []struct {
 		name  string
 		probe func(context.Context) doctorBackendStatus
@@ -223,45 +254,62 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		{"llama-server", doctorProbeLlamaServer},
 		{"mlx", doctorProbeMLX},
 	} {
-		// Each backend gets its own independent timeout derived from the
-		// command context so that Ctrl-C cancels immediately and a slow
-		// first probe never starves the second.
 		bCtx, bCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		s := b.probe(bCtx)
 		bCancel()
 		switch {
 		case s.Err != nil:
-			fmt.Fprintf(out, "  %s %s: probe error: %v\n", ui.StatusIcon(false), b.name, s.Err)
-			advisoryWarnings++
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("AI Backend: %s", b.name),
+				Status:  "warn",
+				Message: fmt.Sprintf("probe error: %v", s.Err),
+			})
 		case !s.Installed:
-			fmt.Fprintf(out, "  %s %s: not installed\n", ui.Dim("–"), b.name)
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("AI Backend: %s", b.name),
+				Status:  "pass",
+				Message: "not installed",
+			})
 		case !s.Running:
-			fmt.Fprintf(out, "  %s %s: installed, not running\n", ui.StatusIcon(true), b.name)
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("AI Backend: %s", b.name),
+				Status:  "pass",
+				Message: "installed, not running",
+			})
 		default:
 			portStr := ""
 			if s.Port > 0 {
 				portStr = fmt.Sprintf(" on :%d", s.Port)
 			}
 			modelStr := formatResidentModelCount(s.ResidentCount)
-			fmt.Fprintf(out, "  %s %s: running%s%s\n", ui.StatusIcon(true), b.name, portStr, modelStr)
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("AI Backend: %s", b.name),
+				Status:  "pass",
+				Message: fmt.Sprintf("running%s%s", portStr, modelStr),
+			})
 		}
 	}
 
-	// 5. Binary info
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%s Binary\n", ui.Cyan("→"))
-	self, _ := os.Executable()
-	fmt.Fprintf(out, "  %s %s\n", ui.Dim("path:"), self)
-	fmt.Fprintf(out, "  %s %s\n", ui.Dim("version:"), Version)
+	// Print visual report using RenderDoctorReport
+	fmt.Fprint(out, RenderDoctorReport(checks))
 
-	fmt.Fprintln(out)
-	switch {
-	case coreFailures > 0:
-		ui.FprintWarning(out, "Some checks failed (see above)")
-	case advisoryWarnings > 0:
-		ui.FprintWarning(out, "Core checks passed with advisory warnings")
-	default:
-		ui.FprintSuccess(out, "All checks passed")
+	// Print binary path info
+	self, _ := os.Executable()
+	ui.DimColor.Fprintf(out, "  Binary Path: %s\n", self)
+	ui.DimColor.Fprintf(out, "  Version:     %s\n\n", Version)
+
+	// Active Remediation for missing config
+	if err != nil && ui.StdinIsTerminal() && ui.StdoutIsTerminal() {
+		fmt.Fprint(out, "No configuration found. Would you like to run the setup wizard (axis init) now? [y/N]: ")
+		var answer string
+		_, _ = fmt.Scanln(&answer)
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer == "y" || answer == "yes" {
+			// Trigger setup wizard (we will run the init command logic)
+			fmt.Fprintln(out, "\nStarting setup wizard...")
+			return runInitWizard(cmd)
+		}
 	}
+
 	return nil
 }

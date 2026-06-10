@@ -21,11 +21,57 @@ import (
 func summaryCmd() *cobra.Command {
 	var cached bool
 	var cacheAddr string
+	var watch bool
+	var watchInterval time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "summary",
 		Short: "Display a visual dashboard of cluster health and resources",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if watch {
+				for {
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					default:
+					}
+
+					fetchCtx, fetchCancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+					snap, source, err := collectStatusSnapshot(
+						fetchCtx,
+						cached,
+						false,
+						func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+							return daemon.FetchSnapshot(ctx, cacheAddr)
+						},
+						discoverLiveSnapshot,
+					)
+
+					meta := daemon.Metadata{}
+					if err == nil && source != "live" {
+						m, _ := daemon.FetchMeta(fetchCtx, cacheAddr)
+						meta = m
+					}
+					fetchCancel()
+
+					// Clear terminal screen and move cursor to home
+					fmt.Print("\033[H\033[2J")
+
+					if err != nil {
+						ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
+					} else {
+						view := populateSummaryView(snap, meta)
+						fmt.Fprint(cmd.OutOrStdout(), view.Render())
+					}
+
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					case <-time.After(watchInterval):
+					}
+				}
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
@@ -56,6 +102,8 @@ func summaryCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&cached, "cached", true, "Use the local daemon snapshot cache by default")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Watch summary in real-time")
+	cmd.Flags().DurationVarP(&watchInterval, "watch-interval", "i", 3*time.Second, "Watch refresh interval")
 	return cmd
 }
 
@@ -358,12 +406,14 @@ func RenderDoctorReport(checks []DoctorCheck) string {
 	b.WriteString("\n  ")
 	b.WriteString(sep)
 	b.WriteString("\n")
-	overall := ui.GreenColor.Sprint("HEALTHY")
+	var summary string
 	if fail > 0 {
-		overall = ui.RedColor.Sprint("UNHEALTHY")
+		summary = ui.RedColor.Sprint("Some checks failed")
 	} else if warn > 0 {
-		overall = ui.YellowColor.Sprint("DEGRADED")
+		summary = ui.YellowColor.Sprint("Core checks passed with advisory warnings")
+	} else {
+		summary = ui.GreenColor.Sprint("All checks passed")
 	}
-	fmt.Fprintf(&b, "  Overall: %s  (%d pass, %d warn, %d fail)\n\n", overall, pass, warn, fail)
+	fmt.Fprintf(&b, "  Overall: %s  (%d pass, %d warn, %d fail)\n\n", summary, pass, warn, fail)
 	return b.String()
 }

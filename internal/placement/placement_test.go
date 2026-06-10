@@ -1508,3 +1508,41 @@ func TestExplainPlacementEmitsExcludedReasonsForCommonFilters(t *testing.T) {
 		t.Fatalf("expected empirical peak RAM reason, got %q", reasonsByNode["tiny"])
 	}
 }
+
+func TestRankerRespectsCustomSystemReserve(t *testing.T) {
+	nodeA := nodeComplete("nodeA", 6000, "none")
+	nodeA.SystemReserveMB = 3000
+
+	nodeB := nodeComplete("nodeB", 5500, "none")
+	nodeB.SystemReserveMB = 0
+
+	candidates := []models.NodeFacts{nodeA, nodeB}
+	ranked := RankCandidates(candidates, models.TaskRequirements{}, nil)
+	if ranked[0].Name != "nodeB" {
+		t.Fatalf("expected nodeB first, got %s", ranked[0].Name)
+	}
+
+	nodeB.SystemReserveMB = 4500
+	candidates = []models.NodeFacts{nodeA, nodeB}
+	ranked = RankCandidates(candidates, models.TaskRequirements{}, nil)
+	if ranked[0].Name != "nodeA" {
+		t.Fatalf("expected nodeA first after Node B reserve increased, got %s", ranked[0].Name)
+	}
+}
+
+func TestFilterCandidatesRespectsCustomSystemReserve(t *testing.T) {
+	node := nodeComplete("nodeA", 6000, "none")
+	node.SystemReserveMB = 3000
+
+	reqs := models.TaskRequirements{MinFreeRAMMB: 5500}
+	filtered := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(filtered) != 0 {
+		t.Fatalf("expected node to be filtered out, got %v", names(filtered))
+	}
+
+	reqs.MinFreeRAMMB = 4500
+	filtered = FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(filtered) != 1 || filtered[0].Name != "nodeA" {
+		t.Fatalf("expected node to qualify, got %v", names(filtered))
+	}
+}

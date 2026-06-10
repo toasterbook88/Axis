@@ -92,6 +92,7 @@ func NewServer(useCache bool, cacheAddr string, d *daemon.Daemon) *mcpserver.MCP
 		mcpserver.WithRecovery(),
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(false, false),
+		mcpserver.WithPromptCapabilities(false),
 		mcpserver.WithInstructions("AXIS exposes read-only cluster state, diagnostics, and advisory resource leases. Do not assume any execution authority."),
 		mcpserver.WithHooks(hooks),
 	)
@@ -130,6 +131,7 @@ func NewServer(useCache bool, cacheAddr string, d *daemon.Daemon) *mcpserver.MCP
 
 	registerResources(s, cache)
 	registerTools(s, cache)
+	registerPrompts(s)
 
 	return s
 }
@@ -658,4 +660,32 @@ func getRecentEventsTool(ctx context.Context, req mcpproto.CallToolRequest) (*mc
 		"events": recent,
 		"count":  len(recent),
 	})
+}
+
+func registerPrompts(s *mcpserver.MCPServer) {
+	skillsDir := getSkillsDir()
+	skills, err := loadSkills(skillsDir)
+	if err != nil {
+		return
+	}
+
+	for _, sk := range skills {
+		s.AddPrompt(
+			mcpproto.NewPrompt(
+				sk.Name,
+				mcpproto.WithPromptDescription(sk.Description),
+			),
+			func(ctx context.Context, req mcpproto.GetPromptRequest) (*mcpproto.GetPromptResult, error) {
+				return mcpproto.NewGetPromptResult(
+					sk.Description,
+					[]mcpproto.PromptMessage{
+						mcpproto.NewPromptMessage(
+							mcpproto.RoleUser,
+							mcpproto.NewTextContent(sk.Body),
+						),
+					},
+				), nil
+			},
+		)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -61,6 +62,24 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	hostname, _ := os.Hostname()
 	facts.Hostname = hostname
 	facts.Identity = detectLocalNodeIdentity(ctx, facts.OS)
+
+	cfgPath := os.Getenv("AXIS_CONFIG")
+	if cfgPath == "" {
+		home, _ := os.UserHomeDir()
+		cfgPath = filepath.Join(home, ".axis", "nodes.yaml")
+	}
+	if _, err := os.Stat(cfgPath); err == nil {
+		if cfg, err := config.Load(cfgPath); err == nil {
+			if nc, ok := cfg.FindNode(c.Name); ok {
+				facts.SystemReserveMB = nc.SystemReserveMB
+			} else if nc, ok := cfg.FindNode(facts.Hostname); ok {
+				facts.SystemReserveMB = nc.SystemReserveMB
+			}
+		}
+	}
+	if facts.SystemReserveMB <= 0 {
+		facts.SystemReserveMB = 1024
+	}
 
 	// OS version
 	if v, err := localOSVersion(); err != nil {
