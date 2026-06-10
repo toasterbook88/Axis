@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -317,6 +318,19 @@ func serveSSHConn(conn net.Conn, config *ssh.ServerConfig, responses map[string]
 	go ssh.DiscardRequests(reqs)
 
 	for newChannel := range chans {
+		if newChannel.ChannelType() == "direct-tcpip" {
+			channel, requests, err := newChannel.Accept()
+			if err != nil {
+				continue
+			}
+			go ssh.DiscardRequests(requests)
+			go func(ch ssh.Channel) {
+				defer ch.Close()
+				_, _ = io.Copy(ch, ch)
+			}(channel)
+			continue
+		}
+
 		if newChannel.ChannelType() != "session" {
 			newChannel.Reject(ssh.UnknownChannelType, "unsupported channel type")
 			continue
@@ -471,5 +485,61 @@ func stubSSHConfigEnvWithOutput(t testing.TB, home, output string) func() {
 		} else {
 			_ = os.Setenv("SSH_AUTH_SOCK", prevSock)
 		}
+	}
+}
+
+func TestSSHExecutorPortForwarding(t *testing.T) {
+	clientKey, clientSigner := generateTestKeyPair(t)
+	_, hostSigner := generateTestKeyPair(t)
+
+	server := startSSHTestServer(t, clientSigner.PublicKey(), hostSigner, nil)
+	defer server.Close()
+
+	home := writeSSHClientEnv(t, clientKey, hostSigner, server.Host(), server.Port())
+	restore := stubSSHConfigEnv(t, home)
+	defer restore()
+
+	exec := NewSSHExecutor(server.Host(), server.Port(), "axis", 5)
+	if err := exec.Connect(context.Background()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer exec.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	localPort, stopForward, err := exec.ForwardLocal(ctx, 0, 9999)
+	if err != nil {
+		t.Fatalf("ForwardLocal failed: %v", err)
+	}
+	defer stopForward()
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("failed to dial local port %d: %v", localPort, err)
+	}
+	defer conn.Close()
+
+	payload := []byte("hello port forwarding!")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatalf("failed to write payload: %v", err)
+	}
+
+	buf := make([]byte, len(payload))
+	_, err = io.ReadFull(conn, buf)
+	if err != nil {
+		t.Fatalf("failed to read echoed payload: %v", err)
+	}
+
+	if string(buf) != string(payload) {
+		t.Fatalf("expected echoed %q, got %q", string(payload), string(buf))
+	}
+
+	stopForward()
+
+	conn2, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), 200*time.Millisecond)
+	if err == nil {
+		conn2.Close()
+		t.Fatalf("expected dial to fail after stopForward")
 	}
 }
