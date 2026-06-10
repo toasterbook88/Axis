@@ -71,6 +71,7 @@ type GuardedExecutionRequest struct {
 	Description    string                                                `json:"description"`
 	Mode           string                                                `json:"mode,omitempty"`
 	Confirm        string                                                `json:"confirm,omitempty"`
+	ExposePorts    string                                                `json:"expose_ports,omitempty"`
 	OwnerSurface   string                                                `json:"-"`
 	OwnerLabel     string                                                `json:"-"`
 	OriginOverride models.ExecutionOrigin                                `json:"-"`
@@ -147,6 +148,10 @@ type RemoteExecutor interface {
 type StreamingRemoteExecutor interface {
 	RemoteExecutor
 	Stream(context.Context, string, io.Writer, io.Writer) error
+}
+
+type PortForwardingRemoteExecutor interface {
+	ForwardLocal(ctx context.Context, localPort, remotePort int) (int, func(), error)
 }
 
 var NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
@@ -747,6 +752,10 @@ func runLocal(
 		}
 	}
 
+	if req.ExposePorts != "" && stderrWriter != nil {
+		fmt.Fprintf(stderrWriter, "[AXIS] Warning: Expose ports %q ignored for local execution.\n", req.ExposePorts)
+	}
+
 	if ledger != nil {
 		entry := reservation.Entry{
 			ID:           execID,
@@ -859,6 +868,32 @@ func runRemote(
 			stderrWriter = logFile
 		} else {
 			stderrWriter = io.MultiWriter(stderrWriter, logFile)
+		}
+	}
+
+	if req.ExposePorts != "" {
+		local, remote, err := ParseExposePorts(req.ExposePorts)
+		if err != nil {
+			resp.Error = err.Error()
+			resp.ExitCode = 1
+			return resp, err
+		}
+		forwarder, ok := executor.(PortForwardingRemoteExecutor)
+		if !ok {
+			err := fmt.Errorf("executor does not support port forwarding")
+			resp.Error = err.Error()
+			resp.ExitCode = 1
+			return resp, err
+		}
+		boundPort, stopForward, err := forwarder.ForwardLocal(ctx, local, remote)
+		if err != nil {
+			resp.Error = err.Error()
+			resp.ExitCode = 1
+			return resp, err
+		}
+		defer stopForward()
+		if stderrWriter != nil {
+			fmt.Fprintf(stderrWriter, "[AXIS] Ephemeral SSH port forwarding active: 127.0.0.1:%d -> remote:%d\n", boundPort, remote)
 		}
 	}
 
@@ -1194,4 +1229,27 @@ func exitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return 1
+}
+
+func ParseExposePorts(s string) (local, remote int, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, 0, nil
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) == 1 {
+		p, err := strconv.Atoi(parts[0])
+		if err != nil || p < 1 || p > 65535 {
+			return 0, 0, fmt.Errorf("invalid port: %q", s)
+		}
+		return 0, p, nil
+	} else if len(parts) == 2 {
+		l, err1 := strconv.Atoi(parts[0])
+		r, err2 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil || l < 0 || l > 65535 || r < 1 || r > 65535 {
+			return 0, 0, fmt.Errorf("invalid ports: %q", s)
+		}
+		return l, r, nil
+	}
+	return 0, 0, fmt.Errorf("invalid port format: %q (expected local:remote or remote)", s)
 }
