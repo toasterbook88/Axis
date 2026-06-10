@@ -1474,6 +1474,9 @@ func TestParseExposePorts(t *testing.T) {
 		{"8080:0", 0, 0, true, "invalid ports:"},
 		{"0", 0, 0, true, "invalid port:"},
 		{"-5", 0, 0, true, "invalid port:"},
+		{"99999", 0, 0, true, "invalid port:"},
+		{"8080:99999", 0, 0, true, "invalid ports:"},
+		{"99999:8080", 0, 0, true, "invalid ports:"},
 	}
 
 	for _, tt := range tests {
@@ -1653,13 +1656,13 @@ func TestRunLocalExposeWarning(t *testing.T) {
 	}
 	defer func() { RunLocalShell = prevShell }()
 
-	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "echo ok",
 		Mode:        ModeExec,
 		Confirm:     ConfirmWord,
 		ExposePorts: "8080:9090",
-		Stdout:      &stdout,
+		Stderr:      &stderr,
 	})
 	if err != nil {
 		t.Fatalf("RunGuarded: %v", err)
@@ -1668,8 +1671,8 @@ func TestRunLocalExposeWarning(t *testing.T) {
 		t.Fatalf("expected OK response, got %#v", resp)
 	}
 
-	outStr := stdout.String()
-	if !strings.Contains(outStr, "[AXIS] Warning: Expose ports \"8080:9090\" ignored for local execution.") {
-		t.Fatalf("expected warning message about ignoring expose ports, got: %q", outStr)
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "[AXIS] Warning: Expose ports \"8080:9090\" ignored for local execution.") {
+		t.Fatalf("expected warning message about ignoring expose ports, got: %q", errStr)
 	}
 }

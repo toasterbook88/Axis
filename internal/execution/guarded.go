@@ -752,8 +752,8 @@ func runLocal(
 		}
 	}
 
-	if req.ExposePorts != "" && stdoutWriter != nil {
-		fmt.Fprintf(stdoutWriter, "[AXIS] Warning: Expose ports %q ignored for local execution.\n", req.ExposePorts)
+	if req.ExposePorts != "" && stderrWriter != nil {
+		fmt.Fprintf(stderrWriter, "[AXIS] Warning: Expose ports %q ignored for local execution.\n", req.ExposePorts)
 	}
 
 	if ledger != nil {
@@ -892,8 +892,8 @@ func runRemote(
 			return resp, err
 		}
 		defer stopForward()
-		if stdoutWriter != nil {
-			fmt.Fprintf(stdoutWriter, "[AXIS] Ephemeral SSH port forwarding active: 127.0.0.1:%d -> remote:%d\n", boundPort, remote)
+		if stderrWriter != nil {
+			fmt.Fprintf(stderrWriter, "[AXIS] Ephemeral SSH port forwarding active: 127.0.0.1:%d -> remote:%d\n", boundPort, remote)
 		}
 	}
 
@@ -1239,14 +1239,14 @@ func ParseExposePorts(s string) (local, remote int, err error) {
 	parts := strings.Split(s, ":")
 	if len(parts) == 1 {
 		p, err := strconv.Atoi(parts[0])
-		if err != nil || p <= 0 {
+		if err != nil || p < 1 || p > 65535 {
 			return 0, 0, fmt.Errorf("invalid port: %q", s)
 		}
 		return 0, p, nil
 	} else if len(parts) == 2 {
 		l, err1 := strconv.Atoi(parts[0])
 		r, err2 := strconv.Atoi(parts[1])
-		if err1 != nil || err2 != nil || l < 0 || r <= 0 {
+		if err1 != nil || err2 != nil || l < 0 || l > 65535 || r < 1 || r > 65535 {
 			return 0, 0, fmt.Errorf("invalid ports: %q", s)
 		}
 		return l, r, nil

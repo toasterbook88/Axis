@@ -283,6 +283,10 @@ func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort in
 	boundPort, _ := strconv.Atoi(portStr)
 
 	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
 	var wg sync.WaitGroup
 
 	go func() {
