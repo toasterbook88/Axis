@@ -55,6 +55,7 @@ type RunRequest struct {
 }
 
 type RunResponse struct {
+	ExecID         string                      `json:"exec_id,omitempty"`
 	OK             bool                        `json:"ok"`
 	Description    string                      `json:"description"`
 	Mode           string                      `json:"mode,omitempty"`

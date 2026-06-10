@@ -512,3 +512,14 @@ webhooks:
 		t.Errorf("webhook[1] = %q", cfg.Webhooks[1])
 	}
 }
+
+func TestValidate_NegativeSystemReserveMB(t *testing.T) {
+	cfg := &Config{Nodes: []NodeConfig{
+		{Name: "n", Hostname: "x.local", SSHUser: "u", SystemReserveMB: -500},
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for negative system_reserve_mb")
+	} else if !strings.Contains(err.Error(), "system_reserve_mb cannot be negative") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}

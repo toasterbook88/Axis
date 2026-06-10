@@ -241,6 +241,9 @@ func (c *Config) Validate() error {
 		if n.SSHUser == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)
 		}
+		if n.SystemReserveMB < 0 {
+			return fmt.Errorf("config: node[%d] (%s) system_reserve_mb cannot be negative: %d", i, n.Name, n.SystemReserveMB)
+		}
 		n.StableID = models.NormalizeStableID(n.StableID)
 	}
 	return nil

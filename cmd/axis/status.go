@@ -31,14 +31,56 @@ func statusCmd() *cobra.Command {
 	var cached bool
 	var cachedOnly bool
 	var cacheAddr string
+	var watch bool
+	var watchInterval time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Collect cluster snapshot from all configured nodes",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cacheRequested := cached || cachedOnly
+
+			if watch {
+				ticker := time.NewTicker(watchInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					default:
+					}
+
+					fetchCtx, fetchCancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+					snap, source, err := collectStatusSnapshot(
+						fetchCtx,
+						cacheRequested,
+						cachedOnly,
+						func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+							return fetchStatusSnapshot(ctx, cacheAddr)
+						},
+						loadStatusLiveSnapshot,
+					)
+					fetchCancel()
+
+					// Clear terminal screen and move cursor to home
+					fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
+
+					if err != nil {
+						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
+					} else {
+						printStatusText(cmd, snap, source)
+					}
+
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					case <-ticker.C:
+					}
+				}
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			cacheRequested := cached || cachedOnly
 
 			snap, source, err := collectStatusSnapshot(
 				ctx,
@@ -72,6 +114,8 @@ func statusCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
 	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Watch status in real-time")
+	cmd.Flags().DurationVarP(&watchInterval, "watch-interval", "i", 3*time.Second, "Watch refresh interval")
 	return cmd
 }
 
@@ -88,47 +132,39 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	fmt.Fprintf(out, "%s (%d nodes, %d healthy)\n\n",
 		ui.Bold("CLUSTER STATUS"), len(snap.Nodes), healthy)
 
-	tbl := ui.NewTable("NAME", "STATUS", "RAM", "STORAGE", "PRESSURE", "GPU", "TOOLS")
+	var listItems []NodeListItem
 	for _, n := range snap.Nodes {
-		status := formatNodeStatus(n.Status)
-		ram := "—"
-		storage := "—"
-		pressure := "—"
-		gpu := "—"
-		tools := "—"
+		var ramTotal, ramFree int
+		var pressure string
+		var gpus []string
+		var osName, arch string
 
 		if n.Resources != nil {
-			if n.RAMAllocatableMB > 0 {
-				ram = fmt.Sprintf("%d MB", n.RAMAllocatableMB)
-				if n.RAMReservedMB > 0 {
-					ram = fmt.Sprintf("%d MB (%d reserved)", n.RAMAllocatableMB, n.RAMReservedMB)
-				}
-			} else {
-				ram = fmt.Sprintf("%d MB", n.Resources.RAMFreeMB)
-			}
-			if n.SystemReserveMB > 0 {
-				ram = fmt.Sprintf("%s [%d sys reserve]", ram, n.SystemReserveMB)
-			}
-			storage = n.Resources.StorageClass
-			if storage == "" {
-				storage = "—"
-			}
-			pressure = formatPressure(n.Resources.Pressure)
-			if len(n.Resources.GPUs) > 0 {
-				gpu = formatGPUStatus(n.Resources.GPUs)
+			ramTotal = int(n.Resources.RAMTotalMB)
+			ramFree = int(n.Resources.RAMFreeMB)
+			pressure = string(n.Resources.Pressure)
+			for _, g := range n.Resources.GPUs {
+				gpus = append(gpus, g.Model)
 			}
 		}
-		if len(n.Tools) > 0 {
-			names := make([]string, 0, len(n.Tools))
-			for _, t := range n.Tools {
-				names = append(names, t.Name)
-			}
-			tools = strings.Join(names, ", ")
-		}
+		osName = n.OS
+		arch = n.Arch
 
-		tbl.AddRow(ui.Cyan(n.Name), status, ram, storage, pressure, gpu, tools)
+		listItems = append(listItems, NodeListItem{
+			Name:     n.Name,
+			Status:   string(n.Status),
+			OS:       osName,
+			Arch:     arch,
+			RAMTotal: ramTotal,
+			RAMFree:  ramFree,
+			Pressure: pressure,
+			GPUs:     gpus,
+			IsLocal:  models.IsLocalNode(n),
+			Reserved: n.RAMReservedMB,
+		})
 	}
-	tbl.Render(out)
+
+	fmt.Fprint(out, RenderNodeTable(listItems))
 
 	printResidentModelsSection(out, snap.Nodes)
 
@@ -280,37 +316,6 @@ func formatGPUBaseName(g models.GPUInfo) string {
 		s = fmt.Sprintf("%s %s", g.Vendor, s)
 	}
 	return s
-}
-
-func formatGPUStatus(gpus []models.GPUInfo) string {
-	if len(gpus) == 0 {
-		return "—"
-	}
-	if len(gpus) == 1 {
-		g := gpus[0]
-		s := formatGPUBaseName(g)
-		if g.VRAMMB > 0 {
-			s = fmt.Sprintf("%s (%d MB)", s, g.VRAMMB)
-		}
-		return s
-	}
-	first := formatGPUBaseName(gpus[0])
-	return fmt.Sprintf("%s +%d more", first, len(gpus)-1)
-}
-
-func formatNodeStatus(s models.NodeStatus) string {
-	switch s {
-	case models.StatusComplete:
-		return ui.Green("✓ complete")
-	case models.StatusPartial:
-		return ui.Yellow("~ partial")
-	case models.StatusUnreachable:
-		return ui.Red("✗ unreachable")
-	case models.StatusError:
-		return ui.Red("✗ error")
-	default:
-		return string(s)
-	}
 }
 
 func formatPressure(p string) string {
