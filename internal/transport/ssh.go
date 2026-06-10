@@ -263,6 +263,85 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 	return err
 }
 
+// ForwardLocal listens on a local port and forwards connections to a remote port on the host.
+// If localPort is 0, it dynamically binds to a random free local port.
+// Returns the bound local port, a cancellation function to stop forwarding, and any error.
+func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort int) (int, func(), error) {
+	if e.client == nil {
+		if err := e.Connect(ctx); err != nil {
+			return 0, nil, err
+		}
+	}
+
+	localAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
+	listener, err := net.Listen("tcp", localAddr)
+	if err != nil {
+		return 0, nil, fmt.Errorf("local listen failed: %w", err)
+	}
+
+	_, portStr, _ := net.SplitHostPort(listener.Addr().String())
+	boundPort, _ := strconv.Atoi(portStr)
+
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+
+	go func() {
+		defer listener.Close()
+		for {
+			localConn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return // closed intentionally
+				default:
+					return
+				}
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				e.handleForwardConnection(ctx, localConn, remotePort)
+			}()
+		}
+	}()
+
+	closeFn := func() {
+		cancel()
+		_ = listener.Close()
+		wg.Wait()
+	}
+
+	return boundPort, closeFn, nil
+}
+
+func (e *SSHExecutor) handleForwardConnection(ctx context.Context, localConn net.Conn, remotePort int) {
+	defer localConn.Close()
+
+	remoteAddr := fmt.Sprintf("127.0.0.1:%d", remotePort)
+	remoteConn, err := e.client.Dial("tcp", remoteAddr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssh port-forward remote dial failed to %s: %v\n", remoteAddr, err)
+		return
+	}
+	defer remoteConn.Close()
+
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(remoteConn, localConn)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(localConn, remoteConn)
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+}
+
 func handshakeDeadlineExceeded(ctx context.Context, err error) bool {
 	if ctx == nil || err == nil {
 		return false

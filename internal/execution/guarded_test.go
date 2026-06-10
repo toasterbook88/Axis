@@ -1451,3 +1451,225 @@ func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
 		}(),
 	}
 }
+
+func TestParseExposePorts(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantLocal   int
+		wantRemote  int
+		wantErr     bool
+		errContains string
+	}{
+		{"", 0, 0, false, ""},
+		{"   ", 0, 0, false, ""},
+		{"8080", 0, 8080, false, ""},
+		{"8080:8080", 8080, 8080, false, ""},
+		{"0:8080", 0, 8080, false, ""},
+		{"abc", 0, 0, true, "invalid port:"},
+		{"8080:abc", 0, 0, true, "invalid ports:"},
+		{"abc:8080", 0, 0, true, "invalid ports:"},
+		{"-1:8080", 0, 0, true, "invalid ports:"},
+		{"8080:-80", 0, 0, true, "invalid ports:"},
+		{"8080:8080:8080", 0, 0, true, "invalid port format:"},
+		{"8080:0", 0, 0, true, "invalid ports:"},
+		{"0", 0, 0, true, "invalid port:"},
+		{"-5", 0, 0, true, "invalid port:"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			local, remote, err := ParseExposePorts(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input %q, got nil", tt.input)
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error for input %q: %v", tt.input, err)
+				}
+				if local != tt.wantLocal || remote != tt.wantRemote {
+					t.Fatalf("input %q: got (%d, %d), want (%d, %d)", tt.input, local, remote, tt.wantLocal, tt.wantRemote)
+				}
+			}
+		})
+	}
+}
+
+type stubPortForwardingExecutor struct {
+	stubRemoteExecutor
+	forwardCalled bool
+	localVal      int
+	remoteVal     int
+	retPort       int
+	retErr        error
+}
+
+func (s *stubPortForwardingExecutor) ForwardLocal(ctx context.Context, localPort, remotePort int) (int, func(), error) {
+	s.forwardCalled = true
+	s.localVal = localPort
+	s.remoteVal = remotePort
+	return s.retPort, func() {}, s.retErr
+}
+
+func TestRunRemoteWithPortForwarding(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var capturedExecutor *stubPortForwardingExecutor
+	prev := NewRemoteExecutor
+	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
+		capturedExecutor = &stubPortForwardingExecutor{
+			retPort: 12345,
+		}
+		capturedExecutor.runFunc = func(_ context.Context, cmd string) (string, error) {
+			return "output\n", nil
+		}
+		return capturedExecutor
+	}
+	defer func() { NewRemoteExecutor = prev }()
+
+	cfgNodes := []config.NodeConfig{{Name: "testnode", Hostname: "testhost", SSHUser: "testuser"}}
+	rt := &runtimectx.Context{
+		State:  &state.ClusterState{Nodes: map[string]state.NodeState{}},
+		Skills: &skills.Store{},
+	}
+
+	req := GuardedExecutionRequest{
+		Description:  "test",
+		Mode:         ModeExec,
+		Confirm:      ConfirmWord,
+		ExposePorts:  "8080:9090",
+		OwnerSurface: "test",
+		Stdout:       io.Discard,
+		Stderr:       io.Discard,
+	}
+	reqs := models.TaskRequirements{Workload: models.WorkloadProfileMatch{Class: models.ClassRepoAnalysis}}
+	resp := GuardedExecutionResult{Node: "testnode"}
+
+	_, err := runRemote(
+		context.Background(),
+		rt.State,
+		rt.Skills,
+		state.ExecutionOwner{Surface: "test"},
+		req,
+		reqs,
+		resp,
+		cfgNodes[0],
+		0,
+		"echo hello",
+		nil,
+		[]byte(`{"test":true}`),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("runRemote failed: %v", err)
+	}
+
+	if capturedExecutor == nil {
+		t.Fatal("executor was not instantiated")
+	}
+	if !capturedExecutor.forwardCalled {
+		t.Fatal("expected ForwardLocal to be called")
+	}
+	if capturedExecutor.localVal != 8080 || capturedExecutor.remoteVal != 9090 {
+		t.Fatalf("expected local=8080 remote=9090, got local=%d remote=%d", capturedExecutor.localVal, capturedExecutor.remoteVal)
+	}
+}
+
+func TestRunRemotePortForwardingNotSupported(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	prev := NewRemoteExecutor
+	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
+		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
+			return "output\n", nil
+		}}
+	}
+	defer func() { NewRemoteExecutor = prev }()
+
+	cfgNodes := []config.NodeConfig{{Name: "testnode", Hostname: "testhost", SSHUser: "testuser"}}
+	rt := &runtimectx.Context{
+		State:  &state.ClusterState{Nodes: map[string]state.NodeState{}},
+		Skills: &skills.Store{},
+	}
+
+	req := GuardedExecutionRequest{
+		Description:  "test",
+		Mode:         ModeExec,
+		Confirm:      ConfirmWord,
+		ExposePorts:  "8080:9090",
+		OwnerSurface: "test",
+		Stdout:       io.Discard,
+		Stderr:       io.Discard,
+	}
+	reqs := models.TaskRequirements{Workload: models.WorkloadProfileMatch{Class: models.ClassRepoAnalysis}}
+	resp := GuardedExecutionResult{Node: "testnode"}
+
+	_, err := runRemote(
+		context.Background(),
+		rt.State,
+		rt.Skills,
+		state.ExecutionOwner{Surface: "test"},
+		req,
+		reqs,
+		resp,
+		cfgNodes[0],
+		0,
+		"echo hello",
+		nil,
+		[]byte(`{"test":true}`),
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected error due to executor not supporting port forwarding")
+	}
+	if !strings.Contains(err.Error(), "executor does not support port forwarding") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunLocalExposeWarning(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	rt := testGuardedRuntime([]models.NodeFacts{
+		{
+			Name:     "studio",
+			Hostname: "localhost",
+			Status:   models.StatusComplete,
+			Resources: &models.Resources{
+				RAMTotalMB: 8192,
+				RAMFreeMB:  4096,
+				Pressure:   "low",
+				CPUCores:   8,
+			},
+		},
+	})
+
+	prevShell := RunLocalShell
+	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
+		return []byte("ok\n"), 0, nil
+	}
+	defer func() { RunLocalShell = prevShell }()
+
+	var stdout bytes.Buffer
+	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo ok",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+		ExposePorts: "8080:9090",
+		Stdout:      &stdout,
+	})
+	if err != nil {
+		t.Fatalf("RunGuarded: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected OK response, got %#v", resp)
+	}
+
+	outStr := stdout.String()
+	if !strings.Contains(outStr, "[AXIS] Warning: Expose ports \"8080:9090\" ignored for local execution.") {
+		t.Fatalf("expected warning message about ignoring expose ports, got: %q", outStr)
+	}
+}

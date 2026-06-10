@@ -237,12 +237,18 @@ func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *s
 
 func taskRunCmd() *cobra.Command {
 	var execFlag, scriptFlag, dryRunFlag bool
+	var exposePortsFlag string
 	cmd := &cobra.Command{
 		Use:   "run [description-or-command]",
 		Short: "Run task on best node (explicit only — advisory placement first)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
+			if exposePortsFlag != "" {
+				if _, _, err := execution.ParseExposePorts(exposePortsFlag); err != nil {
+					return fmt.Errorf("invalid --expose flag: %w", err)
+				}
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 
@@ -273,6 +279,7 @@ func taskRunCmd() *cobra.Command {
 				Description:  input,
 				Mode:         mode,
 				Confirm:      execution.ConfirmWord,
+				ExposePorts:  exposePortsFlag,
 				OwnerSurface: execution.OwnerSurfaceTaskRun,
 				Stdout:       os.Stdout,
 				Stderr:       os.Stderr,
@@ -347,6 +354,7 @@ func taskRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
 	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show the execution plan without running anything")
+	cmd.Flags().StringVar(&exposePortsFlag, "expose", "", "expose port: [local:]remote (e.g. 8080:8080 or just 8080)")
 	return cmd
 }
 
