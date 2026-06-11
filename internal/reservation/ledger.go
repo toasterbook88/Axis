@@ -166,7 +166,9 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
-		if err := l.lockFileLocked(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
 			return nil, err
 		}
 		defer l.unlockFileLocked()
@@ -265,7 +267,9 @@ func (l *Ledger) Release(id string) error {
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
-		if err := l.lockFileLocked(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
 			return err
 		}
 		defer l.unlockFileLocked()
@@ -296,7 +300,9 @@ func (l *Ledger) Heartbeat(id string) error {
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
-		if err := l.lockFileLocked(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
 			return err
 		}
 		defer l.unlockFileLocked()
@@ -318,7 +324,9 @@ func (l *Ledger) Reclaim() int {
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
-		if err := l.lockFileLocked(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
 			l.logger.Error("failed to acquire file lock for reclaim", "error", err)
 			return 0
 		}

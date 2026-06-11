@@ -797,7 +797,7 @@ func runLocal(
 			OwnerOrigin:  owner.Origin,
 			RAMMB:        reservationMB,
 			Description:  req.Description,
-			ExpiresAt:    time.Now().Add(5 * time.Minute),
+			ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 		}
 		if _, acquireErr := ledger.Reserve(entry); acquireErr != nil {
 			resp.Error = acquireErr.Error()
@@ -939,7 +939,7 @@ func runRemote(
 			OwnerOrigin:  owner.Origin,
 			RAMMB:        reservationMB,
 			Description:  req.Description,
-			ExpiresAt:    time.Now().Add(5 * time.Minute),
+			ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 		}
 		if _, acquireErr := ledger.Reserve(entry); acquireErr != nil {
 			resp.Error = acquireErr.Error()

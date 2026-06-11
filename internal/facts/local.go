@@ -410,10 +410,7 @@ func localPressureSignal() (source string, level string, stall10 float64, someAv
 		if !ok {
 			return "", "", 0, 0, 0, false
 		}
-		someAvg, fullAvg, okDouble := parseLinuxPSI(string(data))
-		if !okDouble {
-			return "", "", 0, 0, 0, false
-		}
+		someAvg, fullAvg, _ := parseLinuxPSI(string(data))
 		return "linux-psi", linuxPressureLevel(stall10), stall10, someAvg, fullAvg, true
 	case "darwin":
 		out, err := exec.Command("sysctl", "-n", "kern.memorystatus_vm_pressure_level").Output()

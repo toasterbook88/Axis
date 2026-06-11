@@ -287,10 +287,7 @@ func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName strin
 		if !ok {
 			return "", "", 0, 0, 0, false
 		}
-		someAvg, fullAvg, okDouble := parseLinuxPSI(out)
-		if !okDouble {
-			return "", "", 0, 0, 0, false
-		}
+		someAvg, fullAvg, _ := parseLinuxPSI(out)
 		return "linux-psi", linuxPressureLevel(stall10), stall10, someAvg, fullAvg, true
 	case "darwin":
 		out, err := c.Exec.Run(ctx, "sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null")

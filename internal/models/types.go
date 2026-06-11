@@ -170,6 +170,7 @@ func (n *NodeFacts) PopulateMemoryMetrics() {
 		allocatable = 0
 	}
 	n.Resources.RAMAllocatableMB = allocatable
+	n.RAMAllocatableMB = allocatable
 }
 
 // NetworkClass represents the performance and route class of a node connection.
