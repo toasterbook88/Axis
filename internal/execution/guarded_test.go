@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1852,6 +1853,44 @@ func TestHandleDirtyWorkingTreeDirtyInteractiveStash(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found in PATH, skipping stash test")
 	}
+
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+
+	runCmd := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("failed to run git %v: %v", args, err)
+		}
+	}
+
+	runCmd("init")
+	runCmd("config", "user.name", "Test User")
+	runCmd("config", "user.email", "test@example.com")
+
+	filePath := filepath.Join(tempDir, "file.txt")
+	if err := os.WriteFile(filePath, []byte("original content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd("add", "file.txt")
+	runCmd("commit", "-m", "initial commit")
+
+	if err := os.WriteFile(filePath, []byte("dirty content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWd)
+	}()
 
 	prevGit := GetGitRepoState
 	GetGitRepoState = func(dir string) (git.RepoState, error) {
