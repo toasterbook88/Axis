@@ -112,9 +112,7 @@ func TestPrepareRequirementsAppleFoundationModelsUsesExplicitHelper(t *testing.T
 
 func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	defer events.FlushEvents(1 * time.Second)
-
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "macbook",
 			Hostname: "localhost",
@@ -166,7 +164,7 @@ func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 func TestRunGuardedLocalInferenceUsesLiveMemoryPreflight(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -218,7 +216,7 @@ func TestRunGuardedLocalInferenceUsesLiveMemoryPreflight(t *testing.T) {
 func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -270,7 +268,7 @@ func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) 
 func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -316,7 +314,7 @@ func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
 func TestPrepareGuardedExecutionDefersOnReadyAndStateMutation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -356,7 +354,7 @@ func TestPrepareGuardedExecutionDefersOnReadyAndStateMutation(t *testing.T) {
 func TestRunPreparedExecutionCallsOnReadyDuringExecution(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -404,7 +402,7 @@ func TestRunPreparedExecutionCallsOnReadyDuringExecution(t *testing.T) {
 func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -519,7 +517,7 @@ func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(
 func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -568,7 +566,7 @@ func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -849,7 +847,7 @@ func TestPrepareGuardedExecutionNilSnapshot(t *testing.T) {
 func TestPrepareGuardedExecutionNoSuitableNode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{})
+	rt := testGuardedRuntime(t, []models.NodeFacts{})
 	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
 		Description: "echo hi",
 		Mode:        ModeExec,
@@ -920,7 +918,7 @@ func TestPrepareGuardedExecutionReservationCapExceeded(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	// Pre-reserve most of the RAM so the new reservation cannot fit
 	if rt.Ledger != nil {
 		rt.Ledger.SetNodeCapacity("studio", 8192)
@@ -959,7 +957,7 @@ func TestRunGuardedLocalShellFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	prevShell := RunLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
@@ -997,7 +995,7 @@ func TestRunGuardedLocalLedgerReserveFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	// Set ledger limits to 1 max entry and pre-fill it so the next reservation fails
 	rt.Ledger = reservation.NewLedger(reservation.Limits{MaxEntriesPerNode: 1}, nil)
 	rt.Ledger.SetNodeCapacity("studio", 8192)
@@ -1041,7 +1039,7 @@ func TestRunGuardedRemoteContextUploadFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	prev := NewRemoteExecutor
 	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
@@ -1084,7 +1082,7 @@ func TestRunGuardedRemoteExecutionFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	callCount := 0
 	prev := NewRemoteExecutor
@@ -1126,7 +1124,7 @@ func TestRunGuardedRemoteLedgerReserveFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	rt.Ledger = reservation.NewLedger(reservation.Limits{MaxEntriesPerNode: 1}, nil)
 	rt.Ledger.SetNodeCapacity("remote-node", 8192)
 	_, _ = rt.Ledger.Reserve(reservation.Entry{
@@ -1174,7 +1172,7 @@ func TestRunLocalWithOutputStreaming(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	prevStream := StreamLocalShell
 	StreamLocalShell = func(_ context.Context, cmd string, env []string, stdout, stderr io.Writer) (int64, error) {
@@ -1436,7 +1434,10 @@ func TestNormalizeRequestNil(t *testing.T) {
 	NormalizeRequest(nil)
 }
 
-func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
+func testGuardedRuntime(t *testing.T, nodes []models.NodeFacts) *runtimectx.Context {
+	t.Cleanup(func() {
+		events.FlushEvents(1 * time.Second)
+	})
 	cfgNodes := make([]config.NodeConfig, 0, len(nodes))
 	for _, node := range nodes {
 		cfgNodes = append(cfgNodes, config.NodeConfig{
@@ -1651,7 +1652,7 @@ func TestRunRemotePortForwardingNotSupported(t *testing.T) {
 func TestRunLocalExposeWarning(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",

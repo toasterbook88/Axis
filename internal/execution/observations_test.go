@@ -26,7 +26,7 @@ func TestRunGuardedPropagatesPeakRAMMBToObservation(t *testing.T) {
 		},
 		Tools: []models.ToolInfo{{Name: "git", Path: "/usr/bin/git"}},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	reqs := prepareRequirements("git status", ModeExec, Intent{})
 	scope := placement.ObservationScopeForRequirements("studio", reqs, "")
 
@@ -84,7 +84,7 @@ func TestRunGuardedRecordsObservationAndClearsMatchingFailuresOnSuccess(t *testi
 		},
 		Tools: []models.ToolInfo{{Name: "git", Path: "/usr/bin/git"}},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	rt.State.Failures = failures.NewStore()
 	reqs := prepareRequirements("git status", ModeExec, Intent{})
 	scope := placement.ObservationScopeForRequirements("studio", reqs, "")
