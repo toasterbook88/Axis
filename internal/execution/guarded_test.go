@@ -14,6 +14,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
@@ -111,6 +112,7 @@ func TestPrepareRequirementsAppleFoundationModelsUsesExplicitHelper(t *testing.T
 
 func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	defer events.FlushEvents(1 * time.Second)
 
 	rt := testGuardedRuntime([]models.NodeFacts{
 		{
