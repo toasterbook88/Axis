@@ -19,6 +19,8 @@ a real snapshot or live probe.
   state.
 - Optional HTTP, MCP, and execution surfaces must not weaken the fact plane.
 
+Lifecycle events (see `internal/events/events.go`) are provided for observation and advisory integration by external agents. They are strictly observational and advisory. Agents may subscribe to events via MCP but must not assume control or execution authority.
+
 ## Release State
 
 The repo version constant lives in `internal/buildinfo/version.go`.  The latest

@@ -726,13 +726,17 @@ func runLocal(
 		return resp, err
 	}
 
-	env := append(os.Environ(),
-		"AXIS_CONTEXT_FILE="+contextFile.Name(),
-		"BEST_NODE="+resp.Node,
-		"AXIS_EXECUTION_MODE="+req.Mode,
-		"AXIS_CONFIRM="+req.Confirm,
+	envVars := []string{
+		"AXIS_CONTEXT_FILE=" + contextFile.Name(),
+		"BEST_NODE=" + resp.Node,
+		"AXIS_EXECUTION_MODE=" + req.Mode,
+		"AXIS_CONFIRM=" + req.Confirm,
 		fmt.Sprintf("AXIS_RESERVATION_MB=%d", reservationMB),
-	)
+	}
+	if resp.ExecID != "" {
+		envVars = append(envVars, "AXIS_EXECUTION_PARENT_ID="+resp.ExecID)
+	}
+	env := append(os.Environ(), envVars...)
 	env = append(env, extraEnv...)
 
 	execID := resp.ExecID
@@ -936,11 +940,15 @@ func runRemote(
 		}()
 	}
 
-	env := append([]string{
+	envVars := []string{
 		"AXIS_EXECUTION_MODE=" + req.Mode,
 		"AXIS_CONFIRM=" + req.Confirm,
 		fmt.Sprintf("AXIS_RESERVATION_MB=%d", reservationMB),
-	}, extraEnv...)
+	}
+	if resp.ExecID != "" {
+		envVars = append(envVars, "AXIS_EXECUTION_PARENT_ID="+resp.ExecID)
+	}
+	env := append(envVars, extraEnv...)
 
 	runCmd := fmt.Sprintf(
 		"%s _axis_ctx=%s; trap 'rm -f \"$_axis_ctx\"' EXIT; bash -lc %s",
@@ -1282,6 +1290,11 @@ func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, st
 	}
 
 	fmt.Fprintf(stderr, "⚠️  WARNING: Working tree is dirty (%d files modified).\n", gitState.DirtyCount)
+
+	if os.Getenv("AXIS_FORCE_DIRTY") == "true" {
+		fmt.Fprintln(stderr, "[AXIS] AXIS_FORCE_DIRTY=true detected: proceeding with dirty tree.")
+		return true, func() {}, nil
+	}
 
 	isTerm := IsTerminalFunc(req.Stdin)
 

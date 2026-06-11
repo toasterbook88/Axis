@@ -14,6 +14,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
@@ -111,8 +112,7 @@ func TestPrepareRequirementsAppleFoundationModelsUsesExplicitHelper(t *testing.T
 
 func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "macbook",
 			Hostname: "localhost",
@@ -164,7 +164,7 @@ func TestRunGuardedBlocksLocalInferenceOnConstrainedMac(t *testing.T) {
 func TestRunGuardedLocalInferenceUsesLiveMemoryPreflight(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -216,7 +216,7 @@ func TestRunGuardedLocalInferenceUsesLiveMemoryPreflight(t *testing.T) {
 func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -268,7 +268,7 @@ func TestRunGuardedFailsClosedWhenLocalMemoryPreflightUnavailable(t *testing.T) 
 func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -314,7 +314,7 @@ func TestRunGuardedEmitsExecutionStateChanges(t *testing.T) {
 func TestPrepareGuardedExecutionDefersOnReadyAndStateMutation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -354,7 +354,7 @@ func TestPrepareGuardedExecutionDefersOnReadyAndStateMutation(t *testing.T) {
 func TestRunPreparedExecutionCallsOnReadyDuringExecution(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -402,7 +402,7 @@ func TestRunPreparedExecutionCallsOnReadyDuringExecution(t *testing.T) {
 func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -517,7 +517,7 @@ func TestRunWithReservationHeartbeatKeepsHeartbeatingAfterCancelUntilRunReturns(
 func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -566,7 +566,7 @@ func TestRunGuardedPersistsExecutionOriginFromLocalRuntime(t *testing.T) {
 func TestRunGuardedUsesOriginOverrideWhenPresent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -847,7 +847,7 @@ func TestPrepareGuardedExecutionNilSnapshot(t *testing.T) {
 func TestPrepareGuardedExecutionNoSuitableNode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{})
+	rt := testGuardedRuntime(t, []models.NodeFacts{})
 	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
 		Description: "echo hi",
 		Mode:        ModeExec,
@@ -918,7 +918,7 @@ func TestPrepareGuardedExecutionReservationCapExceeded(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	// Pre-reserve most of the RAM so the new reservation cannot fit
 	if rt.Ledger != nil {
 		rt.Ledger.SetNodeCapacity("studio", 8192)
@@ -957,7 +957,7 @@ func TestRunGuardedLocalShellFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	prevShell := RunLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
@@ -995,7 +995,7 @@ func TestRunGuardedLocalLedgerReserveFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	// Set ledger limits to 1 max entry and pre-fill it so the next reservation fails
 	rt.Ledger = reservation.NewLedger(reservation.Limits{MaxEntriesPerNode: 1}, nil)
 	rt.Ledger.SetNodeCapacity("studio", 8192)
@@ -1039,7 +1039,7 @@ func TestRunGuardedRemoteContextUploadFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	prev := NewRemoteExecutor
 	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
@@ -1082,7 +1082,7 @@ func TestRunGuardedRemoteExecutionFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	callCount := 0
 	prev := NewRemoteExecutor
@@ -1124,7 +1124,7 @@ func TestRunGuardedRemoteLedgerReserveFailure(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	rt.Ledger = reservation.NewLedger(reservation.Limits{MaxEntriesPerNode: 1}, nil)
 	rt.Ledger.SetNodeCapacity("remote-node", 8192)
 	_, _ = rt.Ledger.Reserve(reservation.Entry{
@@ -1172,7 +1172,7 @@ func TestRunLocalWithOutputStreaming(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 
 	prevStream := StreamLocalShell
 	StreamLocalShell = func(_ context.Context, cmd string, env []string, stdout, stderr io.Writer) (int64, error) {
@@ -1434,7 +1434,10 @@ func TestNormalizeRequestNil(t *testing.T) {
 	NormalizeRequest(nil)
 }
 
-func testGuardedRuntime(nodes []models.NodeFacts) *runtimectx.Context {
+func testGuardedRuntime(t *testing.T, nodes []models.NodeFacts) *runtimectx.Context {
+	t.Cleanup(func() {
+		events.FlushEvents(1 * time.Second)
+	})
 	cfgNodes := make([]config.NodeConfig, 0, len(nodes))
 	for _, node := range nodes {
 		cfgNodes = append(cfgNodes, config.NodeConfig{
@@ -1649,7 +1652,7 @@ func TestRunRemotePortForwardingNotSupported(t *testing.T) {
 func TestRunLocalExposeWarning(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	rt := testGuardedRuntime([]models.NodeFacts{
+	rt := testGuardedRuntime(t, []models.NodeFacts{
 		{
 			Name:     "studio",
 			Hostname: "localhost",
@@ -1747,6 +1750,42 @@ func TestHandleDirtyWorkingTreeDirtyNonInteractive(t *testing.T) {
 	}
 	if !strings.Contains(errStr, "Non-interactive environment: proceeding") {
 		t.Fatalf("expected non-interactive message, got %q", errStr)
+	}
+}
+
+func TestHandleDirtyWorkingTreeForceDirtyEnv(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: true, DirtyCount: 4}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	prevTerm := IsTerminalFunc
+	IsTerminalFunc = func(r io.Reader) bool { return true }
+	defer func() { IsTerminalFunc = prevTerm }()
+
+	t.Setenv("AXIS_FORCE_DIRTY", "true")
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: os.Stdin,
+	}
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup function")
+	}
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "WARNING: Working tree is dirty (4 files modified)") {
+		t.Fatalf("expected warning message, got %q", errStr)
+	}
+	if !strings.Contains(errStr, "AXIS_FORCE_DIRTY=true detected: proceeding") {
+		t.Fatalf("expected AXIS_FORCE_DIRTY message, got %q", errStr)
 	}
 }
 

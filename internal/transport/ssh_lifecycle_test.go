@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -542,4 +543,56 @@ func TestSSHExecutorPortForwarding(t *testing.T) {
 		conn2.Close()
 		t.Fatalf("expected dial to fail after stopForward")
 	}
+}
+
+func TestSSHExecutorPortForwardingCollision(t *testing.T) {
+	clientKey, clientSigner := generateTestKeyPair(t)
+	_, hostSigner := generateTestKeyPair(t)
+
+	server := startSSHTestServer(t, clientSigner.PublicKey(), hostSigner, nil)
+	defer server.Close()
+
+	home := writeSSHClientEnv(t, clientKey, hostSigner, server.Host(), server.Port())
+	restore := stubSSHConfigEnv(t, home)
+	defer restore()
+
+	exec := NewSSHExecutor(server.Host(), server.Port(), "axis", 5)
+	if err := exec.Connect(context.Background()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer exec.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Occupy a local port first
+	occupiedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to bind occupied port: %v", err)
+	}
+	defer occupiedListener.Close()
+
+	_, occupiedPortStr, _ := net.SplitHostPort(occupiedListener.Addr().String())
+	occupiedPort, _ := strconv.Atoi(occupiedPortStr)
+
+	// Attempt to forward on the occupied port, should fall back dynamically
+	boundPort, stopForward, err := exec.ForwardLocal(ctx, occupiedPort, 9999)
+	if err != nil {
+		t.Fatalf("ForwardLocal failed: %v", err)
+	}
+	defer stopForward()
+
+	if boundPort == occupiedPort {
+		t.Fatalf("expected boundPort to be different from occupiedPort %d, but got %d", occupiedPort, boundPort)
+	}
+	if boundPort <= 0 {
+		t.Fatalf("expected positive boundPort, got %d", boundPort)
+	}
+
+	// Make sure the port forward is functional by dialing the new port
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", boundPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("failed to dial local port %d: %v", boundPort, err)
+	}
+	conn.Close()
 }

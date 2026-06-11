@@ -306,6 +306,12 @@ func TestBuild_NetworkClassification(t *testing.T) {
 			Status:                models.StatusComplete,
 		},
 		{
+			Name:                  "node-vpn-by-subnet",
+			Hostname:              "10.254." + "254.254",
+			SSHHandshakeLatencyMs: 45,
+			Status:                models.StatusComplete,
+		},
+		{
 			Name:                  "node-unknown",
 			Hostname:              "example.com",
 			SSHHandshakeLatencyMs: 80,
@@ -319,6 +325,7 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		"node-tailscale-direct":  models.NetworkClassTailscale,
 		"node-tailscale-relayed": models.NetworkClassRelayed,
 		"node-vpn":               models.NetworkClassVPN,
+		"node-vpn-by-subnet":     models.NetworkClassVPN,
 		"node-direct-lan":        models.NetworkClassDirectLAN,
 		"node-unknown":           models.NetworkClassUnknown,
 	}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -315,5 +316,58 @@ func TestApplyReservationViewEmptyNodes(t *testing.T) {
 	snapshotview.ApplyReservationView(snap, nil, nil)
 	if snap.Summary.TotalReservableMB != 0 || snap.Summary.TotalReservedMB != 0 || snap.Summary.TotalAllocatableMB != 0 {
 		t.Error("empty node list should produce zero totals")
+	}
+}
+
+func TestApplyReservationViewParentInheritance(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "node-a",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  8192,
+				},
+				SystemReserveMB: 0,
+			},
+		},
+	}
+
+	// Create a Ledger and set capacity
+	limits := reservation.DefaultLimits()
+	limits.SystemReserveMB = 0
+	t.Setenv("HOME", t.TempDir())
+	ledger := reservation.NewLedger(limits, nil)
+	ledger.SetNodeCapacity("node-a", 8192)
+
+	// Reserve parent reservation of 4096MB
+	_, err := ledger.Reserve(reservation.Entry{
+		ID:           "parent-id",
+		Node:         "node-a",
+		RAMMB:        4096,
+		OwnerExecID:  "parent-id",
+		OwnerSurface: "test",
+	})
+	if err != nil {
+		t.Fatalf("failed to reserve: %v", err)
+	}
+
+	// Without AXIS_EXECUTION_PARENT_ID, reservation should be applied normally
+	snapshotview.ApplyReservationView(snap, nil, ledger)
+	if snap.Nodes[0].RAMReservedMB != 4096 {
+		t.Errorf("expected 4096MB reserved, got %d", snap.Nodes[0].RAMReservedMB)
+	}
+	if snap.Nodes[0].RAMAllocatableMB != 3072 {
+		t.Errorf("expected 3072MB allocatable, got %d", snap.Nodes[0].RAMAllocatableMB)
+	}
+
+	// With AXIS_EXECUTION_PARENT_ID set to parent-id, reservation should be inherited (subtracted)
+	t.Setenv("AXIS_EXECUTION_PARENT_ID", "parent-id")
+	snapshotview.ApplyReservationView(snap, nil, ledger)
+	if snap.Nodes[0].RAMReservedMB != 0 {
+		t.Errorf("expected 0MB reserved after parent subtraction, got %d", snap.Nodes[0].RAMReservedMB)
+	}
+	if snap.Nodes[0].RAMAllocatableMB != 7168 {
+		t.Errorf("expected 7168MB allocatable after parent subtraction, got %d", snap.Nodes[0].RAMAllocatableMB)
 	}
 }

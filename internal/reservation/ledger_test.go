@@ -406,3 +406,86 @@ func TestSetNodeReserve_ClearsOnZeroOrNegative(t *testing.T) {
 		t.Fatalf("expected fallback to global reserve %d, got %d", limits.SystemReserveMB, l.systemReserveFor("node-a"))
 	}
 }
+
+func TestReserve_ParentReservationInheritance(t *testing.T) {
+	limits := DefaultLimits()
+	limits.SystemReserveMB = 0
+	l := setupTestLedger(t, limits)
+	l.SetNodeCapacity("node-a", 8192)
+
+	// Create parent reservation of 6000MB
+	parentReq := Entry{
+		ID:           "parent-exec-id",
+		Node:         "node-a",
+		RAMMB:        6000,
+		OwnerExecID:  "parent-exec-id",
+		OwnerSurface: "test",
+	}
+	parentEntry, err := l.Reserve(parentReq)
+	if err != nil {
+		t.Fatalf("failed to reserve parent: %v", err)
+	}
+	if parentEntry == nil {
+		t.Fatal("expected parent entry to be created")
+	}
+
+	// Try to create another reservation of 3000MB on node-a, should fail
+	childReq := Entry{
+		ID:           "child-exec-id",
+		Node:         "node-a",
+		RAMMB:        3000,
+		OwnerSurface: "test",
+	}
+	_, err = l.Reserve(childReq)
+	if err == nil {
+		t.Fatal("expected reservation of 3000MB to fail (6000 + 3000 > 8192)")
+	}
+
+	// Set AXIS_EXECUTION_PARENT_ID to parent-exec-id
+	t.Setenv("AXIS_EXECUTION_PARENT_ID", "parent-exec-id")
+
+	// Try again, should succeed because parent reservation (6000MB) is deducted
+	childEntry, err := l.Reserve(childReq)
+	if err != nil {
+		t.Fatalf("expected child reservation to succeed, got error: %v", err)
+	}
+	if childEntry == nil {
+		t.Fatal("expected child entry to be created")
+	}
+
+	// Clean env, delete reservations, try again with OwnerExecID match
+	t.Setenv("AXIS_EXECUTION_PARENT_ID", "")
+	err = l.Release("child-exec-id")
+	if err != nil {
+		t.Fatalf("release child failed: %v", err)
+	}
+	err = l.Release("parent-exec-id")
+	if err != nil {
+		t.Fatalf("release parent failed: %v", err)
+	}
+
+	// Re-add parent with ID = "some-id", OwnerExecID = "parent-exec-id"
+	parentReq.ID = "some-id"
+	parentReq.OwnerExecID = "parent-exec-id"
+	_, err = l.Reserve(parentReq)
+	if err != nil {
+		t.Fatalf("failed to reserve parent: %v", err)
+	}
+
+	// Try child of 3000MB without parent env, should fail
+	childReq.ID = "child-exec-id"
+	_, err = l.Reserve(childReq)
+	if err == nil {
+		t.Fatal("expected reservation of 3000MB to fail")
+	}
+
+	// Set AXIS_EXECUTION_PARENT_ID to parent-exec-id (matches OwnerExecID)
+	t.Setenv("AXIS_EXECUTION_PARENT_ID", "parent-exec-id")
+	childEntry, err = l.Reserve(childReq)
+	if err != nil {
+		t.Fatalf("expected child reservation to succeed by matching OwnerExecID, got error: %v", err)
+	}
+	if childEntry == nil {
+		t.Fatal("expected child entry to be created")
+	}
+}

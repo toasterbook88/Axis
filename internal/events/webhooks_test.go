@@ -24,13 +24,13 @@ func TestWebhookDispatchSuccess(t *testing.T) {
 	var receivedEvent Event
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&called, 1)
 		body, _ := io.ReadAll(r.Body)
 		var ev Event
 		_ = json.Unmarshal(body, &ev)
 		mu.Lock()
 		receivedEvent = ev
 		mu.Unlock()
+		atomic.AddInt32(&called, 1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
