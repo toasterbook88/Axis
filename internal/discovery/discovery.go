@@ -237,6 +237,7 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 
 			// Propagate config-driven per-node system reserve into observed facts.
 			nf.SystemReserveMB = nc.SystemReserveMB
+			nf.PopulateMemoryMetrics()
 
 			results[idx] = *nf
 		}(i, node)

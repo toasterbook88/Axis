@@ -94,7 +94,9 @@ func (l *Ledger) Load() error {
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
-		if err := l.lockFileLocked(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
 			return err
 		}
 		defer l.unlockFileLocked()
@@ -138,7 +140,9 @@ func (l *Ledger) Save() error {
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
-		if err := l.lockFileLocked(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
 			return err
 		}
 		defer l.unlockFileLocked()

@@ -396,6 +396,84 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 		score += 10
 	}
 
+	// Gradient penalty (up to -25 points) for memory pressure
+	somePressure := n.Resources.MemoryPSISomeAvg10
+	if somePressure <= 0 && n.Resources.PressureSource == "linux-psi" {
+		somePressure = n.Resources.PressureStall10
+	}
+	psiPenalty := int(somePressure * 0.25)
+	if psiPenalty > 25 {
+		psiPenalty = 25
+	}
+	score -= psiPenalty
+
+	// Check load average relative to CPU cores (up to -15 points)
+	if n.Resources.CPUCores > 0 {
+		loadRatio := n.Resources.Load1M / float64(n.Resources.CPUCores)
+		if loadRatio > 1.5 {
+			loadPenalty := int((loadRatio - 1.5) * 10)
+			if loadPenalty > 15 {
+				loadPenalty = 15
+			}
+			score -= loadPenalty
+		}
+	}
+
+	// Cluster Skew Penalty (up to -15 points) for nodes that increase skew
+	if st != nil && len(st.Nodes) > 1 {
+		taskMem := reqs.GetMemoryRequestMB()
+		if taskMem <= 0 {
+			taskMem = 1024 // default fallback
+		}
+
+		type nodeLease struct {
+			name  string
+			lease float64
+		}
+		var leases []nodeLease
+		for name, ns := range st.Nodes {
+			leases = append(leases, nodeLease{name: name, lease: float64(ns.ReservedMB)})
+		}
+		hasCurrent := false
+		for _, l := range leases {
+			if l.name == n.Name {
+				hasCurrent = true
+				break
+			}
+		}
+		if !hasCurrent {
+			leases = append(leases, nodeLease{name: n.Name, lease: float64(n.RAMReservedMB)})
+		}
+
+		currentVals := make([]float64, len(leases))
+		for i, l := range leases {
+			currentVals[i] = l.lease
+		}
+		currentSkew := stdDev(currentVals)
+
+		futureVals := make([]float64, len(leases))
+		for i, l := range leases {
+			if l.name == n.Name {
+				futureVals[i] = l.lease + float64(taskMem)
+			} else {
+				futureVals[i] = l.lease
+			}
+		}
+		futureSkew := stdDev(futureVals)
+
+		if futureSkew > currentSkew && futureSkew > 0 {
+			skewDiff := futureSkew - currentSkew
+			penalty := int(math.Round((skewDiff / futureSkew) * 30.0))
+			if penalty > 15 {
+				penalty = 15
+			}
+			if penalty < 5 && skewDiff > 0 {
+				penalty = 5
+			}
+			score -= penalty
+		}
+	}
+
 	// GPU — capability-weighted score (up to 25 pts)
 	gpuPts := gpuScore(n, reqs)
 	if gpuPts > 25 {
@@ -512,6 +590,9 @@ func turboQuantAdjustedMinFreeRAM(minNeeded int64) int64 {
 func blocksForRuntimePressure(reqs models.TaskRequirements, n models.NodeFacts) bool {
 	if !heavyInferenceTask(reqs) || n.Resources == nil {
 		return false
+	}
+	if n.Resources.MemoryPSIFullAvg10 > 70.0 {
+		return true
 	}
 	switch strings.ToLower(n.Resources.PressureSource) {
 	case "linux-psi":
@@ -805,4 +886,22 @@ func hasThunderboltLink(n models.NodeFacts) bool {
 		}
 	}
 	return false
+}
+
+func stdDev(vals []float64) float64 {
+	if len(vals) <= 1 {
+		return 0.0
+	}
+	var sum float64
+	for _, v := range vals {
+		sum += v
+	}
+	mean := sum / float64(len(vals))
+	var variance float64
+	for _, v := range vals {
+		diff := v - mean
+		variance += diff * diff
+	}
+	variance /= float64(len(vals))
+	return math.Sqrt(variance)
 }

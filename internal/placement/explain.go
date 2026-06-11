@@ -45,7 +45,10 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 	}
 
 	if blocksForRuntimePressure(reqs, n) {
-		if n.Resources != nil && n.Resources.PressureSource == "linux-psi" {
+		if n.Resources != nil && n.Resources.MemoryPSIFullAvg10 > 70.0 {
+			eval.ExclusionReasons = append(eval.ExclusionReasons,
+				fmt.Sprintf("severe memory pressure: full avg10 memory stall is %.2f%% (> 70%%)", n.Resources.MemoryPSIFullAvg10))
+		} else if n.Resources != nil && n.Resources.PressureSource == "linux-psi" {
 			eval.ExclusionReasons = append(eval.ExclusionReasons,
 				fmt.Sprintf("critical runtime memory pressure via linux-psi avg10=%.2f", n.Resources.PressureStall10))
 		} else if n.Resources != nil && n.Resources.PressureSource == "darwin-vm-pressure" {
@@ -79,7 +82,16 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 	}
 
 	nodeAllocatable := allocatableRAM(n)
-	if reqs.MinFreeRAMMB > 0 {
+	reqMem := reqs.GetMemoryRequestMB()
+	if reqMem > 0 && nodeAllocatable < reqMem {
+		var allocatableMB int64
+		if n.Resources != nil {
+			allocatableMB = n.Resources.RAMAllocatableMB
+		}
+		eval.ExclusionReasons = append(eval.ExclusionReasons,
+			fmt.Sprintf("insufficient headroom: need %dMB memory request, have %dMB effective headroom (total allocatable %dMB, leased %dMB)",
+				reqMem, nodeAllocatable, allocatableMB, n.RAMReservedMB))
+	} else if reqs.MinFreeRAMMB > 0 {
 		minNeeded := effectiveMinFreeRAM(reqs, n)
 		actual := int64(0)
 		if n.Resources != nil {
@@ -186,6 +198,24 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 
 	if n.Resources != nil {
 		allocatable := allocatableRAM(n)
+		effHeadroom := n.Resources.RAMAllocatableMB - n.RAMReservedMB
+		if effHeadroom < 0 {
+			effHeadroom = 0
+		}
+		reasoning = append(reasoning,
+			fmt.Sprintf("%dMB allocatable headroom (%dMB allocatable capacity, %dMB leased/reserved)",
+				effHeadroom, n.Resources.RAMAllocatableMB, n.RAMReservedMB))
+
+		if n.Resources.PressureSource == "linux-psi" {
+			reasoning = append(reasoning,
+				fmt.Sprintf("memory pressure avg10: some=%.2f%%, full=%.2f%% (source: %s)",
+					n.Resources.MemoryPSISomeAvg10, n.Resources.MemoryPSIFullAvg10, n.Resources.PressureSource))
+		} else if n.Resources.PressureSource == "darwin-vm-pressure" {
+			reasoning = append(reasoning,
+				fmt.Sprintf("memory pressure: %s (some=%.2f%%, full=%.2f%% mapped)",
+					n.Resources.Pressure, n.Resources.MemoryPSISomeAvg10, n.Resources.MemoryPSIFullAvg10))
+		}
+
 		if reqs.MinFreeRAMMB > 0 {
 			reasoning = append(reasoning,
 				fmt.Sprintf("%dMB allocatable against %dMB requirement", allocatable, effectiveMinFreeRAM(reqs, n)))

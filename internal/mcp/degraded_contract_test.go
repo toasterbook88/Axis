@@ -131,6 +131,9 @@ func normalizeMCPDegradedOutput(s string, home string) string {
 
 func assertMCPGoldenText(t *testing.T, path string, actual string) {
 	t.Helper()
+	if os.Getenv("UPDATE_GOLDEN") == "true" {
+		_ = os.WriteFile(path, []byte(actual), 0644)
+	}
 	expectedBytes, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read golden %s: %v", path, err)

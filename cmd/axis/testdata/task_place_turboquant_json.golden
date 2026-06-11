@@ -36,6 +36,8 @@
         "headroom_mb": 7168,
         "reasoning": [
           "turboquant-aware backend verified: mlx",
+          "0MB allocatable headroom (0MB allocatable capacity, 0MB leased/reserved)",
+          "memory pressure: none (some=0.00%, full=0.00% mapped)",
           "8192MB allocatable against 1024MB requirement",
           "required tools available: ollama"
         ]

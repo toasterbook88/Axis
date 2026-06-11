@@ -237,6 +237,7 @@ func (d *Daemon) Start(ctx context.Context) {
 	d.nextRefreshAt = time.Now().UTC().Add(d.interval)
 	d.mu.Unlock()
 
+	// Periodic cache refresh loop
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
@@ -251,6 +252,25 @@ func (d *Daemon) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				_ = d.refreshWithTrigger(ctx, RefreshTriggerInterval)
+			}
+		}
+	}()
+
+	// Periodic lease eviction loop (every 10 seconds)
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		evictTicker := time.NewTicker(10 * time.Second)
+		defer evictTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-evictTicker.C:
+				if d.ledger != nil {
+					d.ledger.Prune()
+				}
 			}
 		}
 	}()

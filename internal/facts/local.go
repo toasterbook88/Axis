@@ -91,6 +91,7 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	// Resources
 	res, partial := localResources()
 	facts.Resources = res
+	facts.PopulateMemoryMetrics()
 	if partial {
 		facts.Status = models.StatusPartial
 	}
@@ -354,10 +355,12 @@ func localResources() (*models.Resources, bool) {
 		r.PressureSource = "free-ram"
 	}
 
-	if source, level, stall10, ok := localPressureSignal(); ok {
+	if source, level, stall10, someAvg10, fullAvg10, ok := localPressureSignal(); ok {
 		r.Pressure = mergePressureLevels(r.Pressure, level)
 		r.PressureSource = source
 		r.PressureStall10 = stall10
+		r.MemoryPSISomeAvg10 = someAvg10
+		r.MemoryPSIFullAvg10 = fullAvg10
 	}
 
 	if load1, load5, load15, err := localLoadAverages(); err != nil {
@@ -396,30 +399,32 @@ func localResources() (*models.Resources, bool) {
 	return r, partial
 }
 
-func localPressureSignal() (string, string, float64, bool) {
+func localPressureSignal() (source string, level string, stall10 float64, someAvg float64, fullAvg float64, ok bool) {
 	switch runtime.GOOS {
 	case "linux":
 		data, err := os.ReadFile("/proc/pressure/memory")
 		if err != nil {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
 		stall10, ok := parseLinuxPressureStall10(string(data))
 		if !ok {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
-		return "linux-psi", linuxPressureLevel(stall10), stall10, true
+		someAvg, fullAvg, _ := parseLinuxPSI(string(data))
+		return "linux-psi", linuxPressureLevel(stall10), stall10, someAvg, fullAvg, true
 	case "darwin":
 		out, err := exec.Command("sysctl", "-n", "kern.memorystatus_vm_pressure_level").Output()
 		if err != nil {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
 		level, ok := parseDarwinMemoryPressureLevel(string(out))
 		if !ok {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
-		return "darwin-vm-pressure", darwinPressureLevel(level), 0, true
+		someAvg, fullAvg := MapDarwinPressureToPSI(level)
+		return "darwin-vm-pressure", darwinPressureLevel(level), 0, someAvg, fullAvg, true
 	default:
-		return "", "", 0, false
+		return "", "", 0, 0, 0, false
 	}
 }
 
