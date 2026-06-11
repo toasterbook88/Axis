@@ -69,18 +69,20 @@ func generateExecID(node string) string {
 }
 
 type GuardedExecutionRequest struct {
-	Description    string                                                `json:"description"`
-	Mode           string                                                `json:"mode,omitempty"`
-	Confirm        string                                                `json:"confirm,omitempty"`
-	ExposePorts    string                                                `json:"expose_ports,omitempty"`
-	OwnerSurface   string                                                `json:"-"`
-	OwnerLabel     string                                                `json:"-"`
-	OriginOverride models.ExecutionOrigin                                `json:"-"`
-	Stdout         io.Writer                                             `json:"-"`
-	Stderr         io.Writer                                             `json:"-"`
-	Stdin          io.Reader                                             `json:"-"`
-	OnReady        func(GuardedExecutionResult)                          `json:"-"`
-	OnStateChange  func(context.Context, string, GuardedExecutionResult) `json:"-"`
+	Description     string                                                `json:"description"`
+	Mode            string                                                `json:"mode,omitempty"`
+	Confirm         string                                                `json:"confirm,omitempty"`
+	ExposePorts     string                                                `json:"expose_ports,omitempty"`
+	MemoryRequestMB int64                                                 `json:"memory_request_mb,omitempty"`
+	MemoryMaxMB     int64                                                 `json:"memory_max_mb,omitempty"`
+	OwnerSurface    string                                                `json:"-"`
+	OwnerLabel      string                                                `json:"-"`
+	OriginOverride  models.ExecutionOrigin                                `json:"-"`
+	Stdout          io.Writer                                             `json:"-"`
+	Stderr          io.Writer                                             `json:"-"`
+	Stdin           io.Reader                                             `json:"-"`
+	OnReady         func(GuardedExecutionResult)                          `json:"-"`
+	OnStateChange   func(context.Context, string, GuardedExecutionResult) `json:"-"`
 }
 
 type GuardedExecutionResult struct {
@@ -299,6 +301,10 @@ func ResolveIntent(description, mode string, skillStore *skills.Store) (Intent, 
 }
 
 func ReservationMBForRequirements(reqs models.TaskRequirements) int64 {
+	reqMem := reqs.GetMemoryRequestMB()
+	if reqMem > 0 {
+		return reqMem
+	}
 	return reqs.MinFreeRAMMB + 1024
 }
 
@@ -369,6 +375,12 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	})
 
 	reqs := prepareRequirements(req.Description, req.Mode, intent)
+	if req.MemoryRequestMB > 0 {
+		reqs.MemoryRequestMB = req.MemoryRequestMB
+	}
+	if req.MemoryMaxMB > 0 {
+		reqs.MemoryMaxMB = req.MemoryMaxMB
+	}
 	prepared.Requirements = reqs
 	decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
 
@@ -785,6 +797,7 @@ func runLocal(
 			OwnerOrigin:  owner.Origin,
 			RAMMB:        reservationMB,
 			Description:  req.Description,
+			ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 		}
 		if _, acquireErr := ledger.Reserve(entry); acquireErr != nil {
 			resp.Error = acquireErr.Error()
@@ -926,6 +939,7 @@ func runRemote(
 			OwnerOrigin:  owner.Origin,
 			RAMMB:        reservationMB,
 			Description:  req.Description,
+			ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 		}
 		if _, acquireErr := ledger.Reserve(entry); acquireErr != nil {
 			resp.Error = acquireErr.Error()

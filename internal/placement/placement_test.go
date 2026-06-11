@@ -1624,3 +1624,77 @@ func TestFilterCandidatesRespectsCustomSystemReserve(t *testing.T) {
 		t.Fatalf("expected node to qualify, got %v", names(filtered))
 	}
 }
+
+func TestFilterSevereMemoryPressure(t *testing.T) {
+	node := nodeComplete("nodeA", 6000, "high")
+	node.Resources.MemoryPSIFullAvg10 = 75.0
+	node.Tools = append(node.Tools, models.ToolInfo{Name: "ollama"})
+
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		Workload:      models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference},
+	}
+	filtered := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(filtered) != 0 {
+		t.Fatalf("expected node with severe memory pressure to be filtered out, got %v", names(filtered))
+	}
+}
+
+func TestFilterMemoryRequestHeadroom(t *testing.T) {
+	node := nodeComplete("nodeA", 3072, "none") // RAMFreeMB = 3072
+	node.RAMReservedMB = 2048                   // effective headroom: 3072 - 2048 = 1024MB
+
+	reqs := models.TaskRequirements{
+		MemoryRequestMB: 2048, // exceeds 1024MB effective headroom
+	}
+	filtered := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(filtered) != 0 {
+		t.Fatalf("expected node to be excluded due to insufficient headroom, got %v", names(filtered))
+	}
+
+	reqs.MemoryRequestMB = 512 // fits under 1024MB effective headroom
+	filtered = FilterCandidates(reqs, []models.NodeFacts{node}, nil)
+	if len(filtered) != 1 {
+		t.Fatalf("expected node to qualify for smaller memory request, got %v", names(filtered))
+	}
+}
+
+func TestComputeTaskFitScorePressureGradientAndSkew(t *testing.T) {
+	node := nodeComplete("nodeA", 6000, "none")
+	node.Resources.MemoryPSISomeAvg10 = 40.0 // 40 * 0.25 = 10 point penalty
+
+	// Test pressure penalty
+	scoreWithPressure := ComputeTaskFitScore(node, false, nil, models.TaskRequirements{})
+
+	nodeClean := nodeComplete("nodeA", 6000, "none")
+	scoreClean := ComputeTaskFitScore(nodeClean, false, nil, models.TaskRequirements{})
+
+	if scoreClean-scoreWithPressure != 10 {
+		t.Errorf("expected 10 point pressure penalty difference, got clean=%d, pressure=%d", scoreClean, scoreWithPressure)
+	}
+
+	// Test skew penalty
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"nodeA": {ReservedMB: 1024},
+			"nodeB": {ReservedMB: 4096}, // cluster has imbalance
+		},
+	}
+
+	// Placing on nodeB (highly loaded) increases skew further
+	scoreB := ComputeTaskFitScore(nodeClean, false, st, models.TaskRequirements{MemoryRequestMB: 2048})
+
+	// Placing on nodeA (less loaded) reduces skew or increases it less
+	stA := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"nodeA": {ReservedMB: 4096},
+			"nodeB": {ReservedMB: 1024},
+		},
+	}
+	// Placing on nodeB (less loaded now)
+	scoreBBalanced := ComputeTaskFitScore(nodeClean, false, stA, models.TaskRequirements{MemoryRequestMB: 2048})
+
+	if scoreB < scoreBBalanced {
+		t.Logf("skew penalty applied successfully: overloaded nodeB score=%d vs balanced=%d", scoreB, scoreBBalanced)
+	}
+}

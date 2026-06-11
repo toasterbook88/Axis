@@ -111,3 +111,51 @@ func darwinPressureLevel(level int) string {
 		return "none"
 	}
 }
+
+// parseLinuxPSI reads the memory pressure data and extracts both "some" avg10 and "full" avg10 values.
+func parseLinuxPSI(data string) (some float64, full float64, ok bool) {
+	hasSome := false
+	hasFull := false
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		var isSome bool
+		if strings.HasPrefix(line, "some ") {
+			isSome = true
+		} else if strings.HasPrefix(line, "full ") {
+			isSome = false
+		} else {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			if !strings.HasPrefix(field, "avg10=") {
+				continue
+			}
+			value := strings.TrimPrefix(field, "avg10=")
+			val, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return 0, 0, false
+			}
+			if isSome {
+				some = val
+				hasSome = true
+			} else {
+				full = val
+				hasFull = true
+			}
+			break
+		}
+	}
+	return some, full, hasSome && hasFull
+}
+
+// MapDarwinPressureToPSI maps Darwin vm pressure level (1, 2, 4) to nominal memory PSI levels (some, full).
+func MapDarwinPressureToPSI(level int) (float64, float64) {
+	switch level {
+	case 2: // warning -> medium
+		return 30.0, 10.0
+	case 4: // critical -> high
+		return 75.0, 40.0
+	default:
+		return 0.0, 0.0
+	}
+}
