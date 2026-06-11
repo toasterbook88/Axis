@@ -5,17 +5,22 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/ui"
 	"github.com/toasterbook88/axis/internal/workload"
+	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 )
 
 const llmCloudFallbackTimeout = 5 * time.Second
@@ -26,12 +31,15 @@ type llmInferenceResult struct {
 }
 
 var (
-	loadLLMConfig           = config.Load
-	llmConfigPath           = config.DefaultConfigPath
-	buildLLMRegistry        = llmrouter.NewRegistryFromConfig
-	selectLLMCloudFallback  = llmrouter.SelectCloudFallback
-	llmClassifyWithProvider = llmrouter.ClassifyWithProvider
-	confirmLLMCloudFallback = defaultConfirmLLMCloudFallback
+	loadLLMConfig             = config.Load
+	llmConfigPath             = config.DefaultConfigPath
+	buildLLMRegistry          = llmrouter.NewRegistryFromConfig
+	selectLLMCloudFallback    = llmrouter.SelectCloudFallback
+	llmClassifyWithProvider   = llmrouter.ClassifyWithProvider
+	confirmLLMCloudFallback   = defaultConfirmLLMCloudFallback
+	llmSelectModelInteractive = selectModelInteractive
+	llmIsTerminal             = func(fd int) bool { return term.IsTerminal(fd) }
+	llmWarmupDelay            = 200 * time.Millisecond
 )
 
 var llmInferRequirementsFn = func(prompt string, engine *llmrouter.Engine) llmInferenceResult {
@@ -114,7 +122,11 @@ func llmCmd() *cobra.Command {
 			sp.Start("Classifying locally...")
 			inference := llmInferRequirementsFn(prompt, engine)
 			sp.Stop("")
-			inference = maybeLLMCloudFallback(cmd.Context(), prompt, inference, cmd.InOrStdin(), errW)
+			localModelName := model
+			if localModelName == "" {
+				localModelName = "granite3.1-moe:1b"
+			}
+			inference = maybeLLMCloudFallback(cmd.Context(), prompt, inference, cmd.InOrStdin(), errW, localModelName)
 
 			result := llmResult{
 				Prompt:     prompt,
@@ -152,10 +164,12 @@ func llmCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, yaml")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show routing decision without executing (classification preview only)")
 
+	cmd.AddCommand(llmSelectCmd())
+
 	return cmd
 }
 
-func maybeLLMCloudFallback(ctx context.Context, prompt string, current llmInferenceResult, in io.Reader, errW io.Writer) llmInferenceResult {
+func maybeLLMCloudFallback(ctx context.Context, prompt string, current llmInferenceResult, in io.Reader, errW io.Writer, localModel string) llmInferenceResult {
 	if current.sig.Source != llmrouter.SourceReflex {
 		return current
 	}
@@ -189,10 +203,15 @@ func maybeLLMCloudFallback(ctx context.Context, prompt string, current llmInfere
 			fmt.Sprintf("cloud fallback skipped: estimated cost $%.4f exceeds max $%.4f", decision.EstCost, maxCost))
 	}
 
+	nodeName := resolveLocalNodeName(ctx)
+	showWarmupAndOOMAlert(errW, localModel, nodeName)
+
 	if !confirmLLMCloudFallback(in, errW, decision) {
 		return appendLLMNote(current,
 			fmt.Sprintf("cloud fallback skipped: operator declined %s/%s", decision.Provider, decision.Model))
 	}
+
+	fmt.Fprintf(errW, "🔀 Fallback: Redirecting execution to %s (Cloud)...\n", decision.Model)
 
 	sendCtx, cancel := context.WithTimeout(ctx, llmCloudFallbackTimeout)
 	class, sig, err := llmClassifyWithProvider(sendCtx, provider, prompt, decision.Model)
@@ -314,4 +333,249 @@ func truncate(s string, max int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:max-1]) + "…"
+}
+
+func llmSelectCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "select",
+		Short: "Interactively select the active model for task routing",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			defer cancel()
+
+			snap, _, err := collectStatusSnapshot(
+				ctx,
+				true, // cached
+				false,
+				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+					return daemon.FetchSnapshot(ctx, api.DefaultAddr())
+				},
+				discoverLiveSnapshot,
+			)
+
+			var options []string
+			var optionValues []string
+
+			if err == nil && snap != nil {
+				for _, n := range snap.Nodes {
+					for _, rm := range n.ResidentModels {
+						warmth := "Cold"
+						if rm.WarmthScore > 0 {
+							warmth = "Warm"
+						}
+						sizeStr := ""
+						if strings.Contains(strings.ToLower(rm.Name), "llama3") {
+							sizeStr = "8B, "
+						} else if strings.Contains(strings.ToLower(rm.Name), "qwen2.5") {
+							sizeStr = "1.5B, "
+						}
+						tag := fmt.Sprintf("%s:%s", rm.Runtime, rm.Name)
+						label := fmt.Sprintf("%s (%sresident on %s - %s)", tag, sizeStr, n.Name, warmth)
+
+						duplicated := false
+						for _, val := range optionValues {
+							if val == tag {
+								duplicated = true
+								break
+							}
+						}
+						if !duplicated {
+							options = append(options, label)
+							optionValues = append(optionValues, tag)
+						}
+					}
+				}
+			}
+
+			cfg, err := loadLLMConfig(llmConfigPath())
+			if err == nil && cfg != nil {
+				for pName, prov := range cfg.AIProviders {
+					if prov.Type == "cloud" {
+						for _, m := range prov.Models {
+							tag := fmt.Sprintf("%s:%s", pName, m.Name)
+							label := fmt.Sprintf("%s (Cloud - Always available)", tag)
+
+							duplicated := false
+							for _, val := range optionValues {
+								if val == tag {
+									duplicated = true
+									break
+								}
+							}
+							if !duplicated {
+								options = append(options, label)
+								optionValues = append(optionValues, tag)
+							}
+						}
+					}
+				}
+			}
+
+			if len(options) == 0 {
+				options = append(options, "google:gemini-2.5-pro (Cloud - Always available)")
+				optionValues = append(optionValues, "google:gemini-2.5-pro")
+			} else {
+				hasGemini := false
+				for _, val := range optionValues {
+					if strings.Contains(val, "gemini-2.5-pro") {
+						hasGemini = true
+						break
+					}
+				}
+				if !hasGemini {
+					options = append(options, "google:gemini-2.5-pro (Cloud - Always available)")
+					optionValues = append(optionValues, "google:gemini-2.5-pro")
+				}
+			}
+
+			if !llmIsTerminal(int(os.Stdin.Fd())) {
+				fmt.Fprintln(cmd.OutOrStdout(), "Available models for task routing:")
+				for _, opt := range options {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", opt)
+				}
+				return nil
+			}
+
+			idx, selectErr := llmSelectModelInteractive(cmd.OutOrStdout(), cmd.InOrStdin(), options)
+			if selectErr != nil {
+				return selectErr
+			}
+
+			selectedModelValue := optionValues[idx]
+
+			if cfg == nil {
+				cfg = &config.Config{}
+			}
+			if cfg.Chat == nil {
+				cfg.Chat = &config.ChatConfig{}
+			}
+			cfg.Chat.DefaultModel = selectedModelValue
+
+			data, marshalErr := yaml.Marshal(cfg)
+			if marshalErr != nil {
+				return fmt.Errorf("failed to marshal config: %w", marshalErr)
+			}
+
+			cfgPath := llmConfigPath()
+			writeErr := os.WriteFile(cfgPath, data, 0600)
+			if writeErr != nil {
+				return fmt.Errorf("failed to write config to %s: %w", cfgPath, writeErr)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Selected active model: %s\n", selectedModelValue)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func selectModelInteractive(w io.Writer, in io.Reader, options []string) (int, error) {
+	if len(options) == 0 {
+		return -1, fmt.Errorf("no options available")
+	}
+
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return -1, fmt.Errorf("failed to make raw terminal: %w", err)
+	}
+	defer func() {
+		_ = term.Restore(fd, oldState)
+	}()
+
+	currentIdx := 0
+	first := true
+
+	renderMenu := func() {
+		if !first {
+			fmt.Fprintf(w, "\033[%dA\r", len(options)+1)
+		}
+		first = false
+		fmt.Fprintf(w, "? Select active model for task routing:\r\n")
+		for i, opt := range options {
+			if i == currentIdx {
+				fmt.Fprintf(w, "  %s %s\r\n", ui.Cyan("▸"), ui.Bold(opt))
+			} else {
+				fmt.Fprintf(w, "    %s\r\n", opt)
+			}
+		}
+	}
+
+	renderMenu()
+
+	buf := make([]byte, 3)
+	for {
+		n, err := in.Read(buf)
+		if err != nil {
+			return -1, err
+		}
+
+		if n == 1 {
+			if buf[0] == '\r' || buf[0] == '\n' {
+				return currentIdx, nil
+			}
+			if buf[0] == 3 || buf[0] == 27 {
+				return -1, fmt.Errorf("selection aborted")
+			}
+		} else if n == 3 && buf[0] == 27 && buf[1] == '[' {
+			switch buf[2] {
+			case 'A': // Up arrow
+				if currentIdx > 0 {
+					currentIdx--
+					renderMenu()
+				}
+			case 'B': // Down arrow
+				if currentIdx < len(options)-1 {
+					currentIdx++
+					renderMenu()
+				}
+			}
+		}
+	}
+}
+
+func resolveLocalNodeName(ctx context.Context) string {
+	snap, _, err := collectStatusSnapshot(
+		ctx,
+		true, // cached
+		false,
+		func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+			return daemon.FetchSnapshot(ctx, api.DefaultAddr())
+		},
+		discoverLiveSnapshot,
+	)
+	if err == nil && snap != nil {
+		if n, ok := models.FindLocalNode(snap.Nodes); ok {
+			return n.Name
+		}
+	}
+	hostname, _ := os.Hostname()
+	if hostname != "" {
+		return hostname
+	}
+	return "localhost"
+}
+
+func showWarmupAndOOMAlert(w io.Writer, model, node string) {
+	if !llmIsTerminal(int(os.Stderr.Fd())) || llmWarmupDelay <= 0 {
+		fmt.Fprintf(w, "⚠️  OOM Alert: %s RAM limit exceeded.\n", node)
+		return
+	}
+
+	steps := []struct {
+		pct int
+		eta int
+	}{
+		{20, 8},
+		{40, 6},
+		{60, 4},
+		{80, 2},
+	}
+	for _, step := range steps {
+		bars := strings.Repeat("|", step.pct/10)
+		dots := strings.Repeat(".", 10-step.pct/10)
+		fmt.Fprintf(w, "\r\033[K🔄 Warm-up: Loading %s on %s [%s%s] %d%% (ETA %ds)", model, node, bars, dots, step.pct, step.eta)
+		time.Sleep(llmWarmupDelay)
+	}
+	fmt.Fprintf(w, "\r\033[K⚠️  OOM Alert: %s RAM limit exceeded.\n", node)
 }

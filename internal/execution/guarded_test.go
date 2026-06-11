@@ -1750,6 +1750,42 @@ func TestHandleDirtyWorkingTreeDirtyNonInteractive(t *testing.T) {
 	}
 }
 
+func TestHandleDirtyWorkingTreeForceDirtyEnv(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: true, DirtyCount: 4}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	prevTerm := IsTerminalFunc
+	IsTerminalFunc = func(r io.Reader) bool { return true }
+	defer func() { IsTerminalFunc = prevTerm }()
+
+	t.Setenv("AXIS_FORCE_DIRTY", "true")
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: os.Stdin,
+	}
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup function")
+	}
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "WARNING: Working tree is dirty (4 files modified)") {
+		t.Fatalf("expected warning message, got %q", errStr)
+	}
+	if !strings.Contains(errStr, "AXIS_FORCE_DIRTY=true detected: proceeding") {
+		t.Fatalf("expected AXIS_FORCE_DIRTY message, got %q", errStr)
+	}
+}
+
 func TestHandleDirtyWorkingTreeDirtyInteractiveAbort(t *testing.T) {
 	prevGit := GetGitRepoState
 	GetGitRepoState = func(dir string) (git.RepoState, error) {

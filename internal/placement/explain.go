@@ -199,6 +199,21 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 		reasoning = append(reasoning, fmt.Sprintf("required tools available: %s", strings.Join(matched, ", ")))
 	}
 
+	isLocal := models.IsLocalNode(n)
+	if isLocal {
+		reasoning = append(reasoning, "+10 Local Node Bonus")
+	} else if hasThunderboltLink(n) {
+		reasoning = append(reasoning, "+15 High-Speed Compute-Pair Link (Thunderbolt)")
+	}
+
+	if n.NetworkClass == models.NetworkClassTailscale {
+		reasoning = append(reasoning, "-20 VPN Latency Penalty (Tailscale overlay detected)")
+	} else if n.NetworkClass == models.NetworkClassVPN {
+		reasoning = append(reasoning, "-20 VPN Latency Penalty")
+	} else if n.NetworkClass == models.NetworkClassRelayed {
+		reasoning = append(reasoning, "-20 VPN Latency Penalty")
+	}
+
 	if n.NetworkClass != "" && n.NetworkClass != models.NetworkClassUnknown {
 		reasoning = append(reasoning, fmt.Sprintf("network connection class: %s (latency: %dms)", n.NetworkClass, n.SSHHandshakeLatencyMs))
 	}

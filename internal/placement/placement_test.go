@@ -1,6 +1,7 @@
 package placement
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -559,6 +560,83 @@ func TestFitScore_LocalBonus(t *testing.T) {
 	}
 }
 
+func TestFitScore_ThunderboltBonus(t *testing.T) {
+	n := nodeComplete("test", 2000, "low")
+	base := ComputeTaskFitScore(n, false, nil, models.TaskRequirements{})
+
+	nThunderbolt := n
+	nThunderbolt.Addresses = []models.NetworkAddress{
+		{Address: "169.254.1.5", SpeedClass: "thunderbolt"},
+	}
+	boost := ComputeTaskFitScore(nThunderbolt, false, nil, models.TaskRequirements{})
+
+	if boost-base != 15 {
+		t.Errorf("expected Thunderbolt bonus of 15, got %d", boost-base)
+	}
+}
+
+func TestExplain_NetworkReasoning(t *testing.T) {
+	nLocal := nodeComplete("local-node", 2000, "low")
+	nLocal.NetworkClass = models.NetworkClassDirectLAN
+	if h, err := os.Hostname(); err == nil {
+		nLocal.Hostname = h
+	}
+
+	nRemote := nodeComplete("remote-node", 2000, "low")
+	nRemote.NetworkClass = models.NetworkClassTailscale
+	nRemote.Addresses = []models.NetworkAddress{
+		{Address: "169.254.1.5", SpeedClass: "thunderbolt"},
+	}
+
+	nodes := []models.NodeFacts{nLocal, nRemote}
+	reqs := models.TaskRequirements{}
+	explanation := ExplainPlacement(reqs, nodes, nil)
+
+	var localExp, remoteExp *models.PlacementCandidateExplanation
+	for i := range explanation.Eligible {
+		cand := &explanation.Eligible[i]
+		if cand.Node == "local-node" {
+			localExp = cand
+		} else if cand.Node == "remote-node" {
+			remoteExp = cand
+		}
+	}
+
+	if localExp == nil {
+		t.Fatal("expected local-node in explanation")
+	}
+	if remoteExp == nil {
+		t.Fatal("expected remote-node in explanation")
+	}
+
+	hasLocalBonus := false
+	for _, r := range localExp.Reasoning {
+		if r == "+10 Local Node Bonus" {
+			hasLocalBonus = true
+		}
+	}
+	if !hasLocalBonus {
+		t.Errorf("expected local-node to have '+10 Local Node Bonus' in reasoning, got %v", localExp.Reasoning)
+	}
+
+	hasTB := false
+	hasTailscalePenalty := false
+	for _, r := range remoteExp.Reasoning {
+		if r == "+15 High-Speed Compute-Pair Link (Thunderbolt)" {
+			hasTB = true
+		}
+		if r == "-20 VPN Latency Penalty (Tailscale overlay detected)" {
+			hasTailscalePenalty = true
+		}
+	}
+	if !hasTB {
+		t.Errorf("expected remote-node to have '+15 High-Speed Compute-Pair Link (Thunderbolt)', got %v", remoteExp.Reasoning)
+	}
+	if !hasTailscalePenalty {
+		t.Errorf("expected remote-node to have '-20 VPN Latency Penalty (Tailscale overlay detected)', got %v", remoteExp.Reasoning)
+	}
+}
+
 func TestFitScore_NetworkClass(t *testing.T) {
 	n := nodeComplete("test", 2000, "low")
 
@@ -573,12 +651,12 @@ func TestFitScore_NetworkClass(t *testing.T) {
 		t.Errorf("expected direct-lan bonus of 20, got %d", scoreDirect-base)
 	}
 
-	// Tailscale direct should get +5
+	// Tailscale direct should get -20
 	nTailscale := n
 	nTailscale.NetworkClass = models.NetworkClassTailscale
 	scoreTailscale := ComputeFitScore(nTailscale, false, nil)
-	if scoreTailscale-base != 5 {
-		t.Errorf("expected tailscale-direct bonus of 5, got %d", scoreTailscale-base)
+	if scoreTailscale-base != -20 {
+		t.Errorf("expected tailscale penalty of -20, got %d", scoreTailscale-base)
 	}
 
 	// VPN should get -20

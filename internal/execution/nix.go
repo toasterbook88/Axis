@@ -25,6 +25,8 @@ var nixToolPackages = map[string]string{
 	"jq":      "nixpkgs#jq",
 	"node":    "nixpkgs#nodejs",
 	"python3": "nixpkgs#python3",
+	"python":  "nixpkgs#python3",
+	"pip":     "nixpkgs#python3",
 }
 
 func PlanNixWrapper(node models.NodeFacts, reqs models.TaskRequirements, command string) NixPlan {

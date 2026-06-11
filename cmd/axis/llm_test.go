@@ -5,13 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+func init() {
+	llmWarmupDelay = 0
+}
 
 type llmTestProvider struct {
 	name string
@@ -419,7 +426,7 @@ func TestMaybeLLMCloudFallbackUpgradesReflexResult(t *testing.T) {
 		},
 	}
 
-	result := maybeLLMCloudFallback(context.Background(), "go build ./...", current, strings.NewReader("YES\n"), &bytes.Buffer{})
+	result := maybeLLMCloudFallback(context.Background(), "go build ./...", current, strings.NewReader("YES\n"), &bytes.Buffer{}, "granite3.1-moe:1b")
 	if result.sig.Source != llmrouter.SourceSemantic {
 		t.Fatalf("source = %q, want semantic", result.sig.Source)
 	}
@@ -473,7 +480,7 @@ func TestMaybeLLMCloudFallbackHonorsCostCap(t *testing.T) {
 		},
 	}
 
-	result := maybeLLMCloudFallback(context.Background(), "review repo", current, strings.NewReader("YES\n"), &bytes.Buffer{})
+	result := maybeLLMCloudFallback(context.Background(), "review repo", current, strings.NewReader("YES\n"), &bytes.Buffer{}, "granite3.1-moe:1b")
 	if confirmCalled {
 		t.Fatal("confirmation should not run when cost cap blocks the call")
 	}
@@ -498,5 +505,132 @@ func TestDefaultConfirmLLMCloudFallback(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "cloud fallback required") {
 		t.Fatalf("stderr = %q, want confirmation prompt", stderr.String())
+	}
+}
+
+func TestLLMSelectCmdNonInteractive(t *testing.T) {
+	tempDir := t.TempDir()
+	tempConfigPath := filepath.Join(tempDir, "nodes.yaml")
+
+	initialConfig := `
+nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: me
+`
+	if err := os.WriteFile(tempConfigPath, []byte(initialConfig), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevPath := llmConfigPath
+	llmConfigPath = func() string { return tempConfigPath }
+	defer func() { llmConfigPath = prevPath }()
+
+	prevTerm := llmIsTerminal
+	llmIsTerminal = func(fd int) bool { return false }
+	defer func() { llmIsTerminal = prevTerm }()
+
+	cmd := llmSelectCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("execute select command: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Available models for task routing:") {
+		t.Fatalf("unexpected non-interactive output:\n%s", out)
+	}
+	if !strings.Contains(out, "google:gemini-2.5-pro") {
+		t.Fatalf("expected gemini fallback model in output, got:\n%s", out)
+	}
+}
+
+func TestLLMSelectCmdInteractive(t *testing.T) {
+	tempDir := t.TempDir()
+	tempConfigPath := filepath.Join(tempDir, "nodes.yaml")
+
+	initialConfig := `
+nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: me
+`
+	if err := os.WriteFile(tempConfigPath, []byte(initialConfig), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevPath := llmConfigPath
+	llmConfigPath = func() string { return tempConfigPath }
+	defer func() { llmConfigPath = prevPath }()
+
+	prevTerm := llmIsTerminal
+	llmIsTerminal = func(fd int) bool { return true }
+	defer func() { llmIsTerminal = prevTerm }()
+
+	prevSelect := llmSelectModelInteractive
+	llmSelectModelInteractive = func(w io.Writer, in io.Reader, options []string) (int, error) {
+		// Mock picking the first option
+		return 0, nil
+	}
+	defer func() { llmSelectModelInteractive = prevSelect }()
+
+	cmd := llmSelectCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("execute select command: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Selected active model: google:gemini-2.5-pro") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+
+	// Verify it wrote the default model back to nodes.yaml
+	cfg, err := loadLLMConfig(tempConfigPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Chat == nil || cfg.Chat.DefaultModel != "google:gemini-2.5-pro" {
+		t.Fatalf("expected Chat.DefaultModel to be 'google:gemini-2.5-pro', got %v", cfg.Chat)
+	}
+}
+
+func TestLLMFallbackTransitionAndAlerts(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Test non-terminal path: should instantly output OOM Alert.
+	prevTerm := llmIsTerminal
+	llmIsTerminal = func(fd int) bool { return false }
+	defer func() { llmIsTerminal = prevTerm }()
+
+	showWarmupAndOOMAlert(&buf, "llama3", "NixOS")
+	got := buf.String()
+	if !strings.Contains(got, "⚠️  OOM Alert: NixOS RAM limit exceeded.") {
+		t.Errorf("expected OOM Alert in output, got %q", got)
+	}
+
+	// Test terminal path animation.
+	buf.Reset()
+	llmIsTerminal = func(fd int) bool { return true }
+
+	prevDelay := llmWarmupDelay
+	llmWarmupDelay = 1 * time.Millisecond
+	defer func() { llmWarmupDelay = prevDelay }()
+
+	showWarmupAndOOMAlert(&buf, "llama3", "NixOS")
+	gotInteractive := buf.String()
+	if !strings.Contains(gotInteractive, "🔄 Warm-up:") {
+		t.Errorf("expected Warm-up spinner in output, got %q", gotInteractive)
+	}
+	if !strings.Contains(gotInteractive, "⚠️  OOM Alert: NixOS RAM limit exceeded.") {
+		t.Errorf("expected OOM Alert in output, got %q", gotInteractive)
 	}
 }

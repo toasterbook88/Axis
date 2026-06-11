@@ -120,6 +120,7 @@ func populateSummaryView(snap *models.ClusterSnapshot, meta daemon.Metadata) Clu
 		CacheAge:         time.Duration(meta.CacheAgeSec) * time.Second,
 		IsStale:          meta.Stale,
 		MeshPeers:        meta.MeshPeers,
+		Nodes:            snap.Nodes,
 	}
 	if view.Version == "" {
 		view.Version = Version
@@ -159,6 +160,7 @@ type ClusterSummaryView struct {
 	IsStale          bool
 	MeshPeers        int
 	Warnings         []string
+	Nodes            []models.NodeFacts
 }
 
 func (v ClusterSummaryView) Render() string {
@@ -226,6 +228,63 @@ func (v ClusterSummaryView) Render() string {
 		ui.GreenColor.Fprintf(&b, "%d available\n", v.GPUCount)
 	} else {
 		ui.DimColor.Fprintf(&b, "none detected\n")
+	}
+
+	// Topology
+	var topoLines []string
+	var m3, m1, nixos, foundry, latitude models.NodeFacts
+	hasM3, hasM1, hasNixos, hasFoundry, hasLatitude := false, false, false, false, false
+	for _, n := range v.Nodes {
+		name := strings.ToLower(n.Name)
+		if strings.Contains(name, "m3") {
+			m3 = n
+			hasM3 = true
+		} else if strings.Contains(name, "m1") {
+			m1 = n
+			hasM1 = true
+		} else if strings.Contains(name, "nixos") {
+			nixos = n
+			hasNixos = true
+		} else if strings.Contains(name, "foundry") {
+			foundry = n
+			hasFoundry = true
+		} else if strings.Contains(name, "latitude") {
+			latitude = n
+			hasLatitude = true
+		}
+	}
+
+	if hasM3 && hasM1 {
+		var line strings.Builder
+		ui.WhiteColor.Fprintf(&line, "%-10s", m3.Name)
+		ui.CyanColor.Fprintf(&line, " <======== (Thunderbolt: 10 Gbps) ========> ")
+		ui.WhiteColor.Fprintf(&line, "%s", m1.Name)
+		topoLines = append(topoLines, line.String())
+	}
+	if hasNixos && hasFoundry {
+		var line strings.Builder
+		ui.WhiteColor.Fprintf(&line, "%-10s", nixos.Name)
+		ui.GreenColor.Fprintf(&line, " <........ (Gigabit LAN: 1 Gbps)  ........> ")
+		ui.WhiteColor.Fprintf(&line, "%s", foundry.Name)
+		topoLines = append(topoLines, line.String())
+	}
+	if hasLatitude && hasNixos {
+		var line strings.Builder
+		ui.WhiteColor.Fprintf(&line, "%-10s", latitude.Name)
+		ui.YellowColor.Fprintf(&line, " <-------- (Tailscale VPN)        --------> ")
+		ui.WhiteColor.Fprintf(&line, "%s", nixos.Name)
+		topoLines = append(topoLines, line.String())
+	}
+
+	if len(topoLines) > 0 {
+		b.WriteString("\n")
+		ui.WhiteColor.Fprintf(&b, "  ⚡ CLUSTER TOPOLOGY\n")
+		b.WriteString("  ==================\n")
+		for _, line := range topoLines {
+			b.WriteString("  ")
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
 	}
 
 	// Mesh

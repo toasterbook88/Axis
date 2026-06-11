@@ -143,6 +143,10 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 				if bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127 {
 					isTailscale = true
 				}
+				// WireGuard / AXIS VPN default range: 10.0.0.0/8
+				if bytes[0] == 10 {
+					isVPN = true
+				}
 			} else if ip.Is6() {
 				// Tailscale IPv6 range starts with fd7a:115c:a1e0::/48
 				bytes := ip.As16()
