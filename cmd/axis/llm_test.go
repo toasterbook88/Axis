@@ -14,6 +14,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
 func init() {
@@ -510,6 +511,8 @@ func TestDefaultConfirmLLMCloudFallback(t *testing.T) {
 
 func TestLLMSelectCmdNonInteractive(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	tempConfigPath := filepath.Join(tempDir, "nodes.yaml")
 
 	initialConfig := `
@@ -529,6 +532,14 @@ nodes:
 	prevTerm := llmIsTerminal
 	llmIsTerminal = func(fd int) bool { return false }
 	defer func() { llmIsTerminal = prevTerm }()
+
+	prevStatusRuntime := loadStatusRuntime
+	loadStatusRuntime = func(ctx context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{},
+		}, nil
+	}
+	defer func() { loadStatusRuntime = prevStatusRuntime }()
 
 	cmd := llmSelectCmd()
 	var stdout, stderr bytes.Buffer
@@ -551,6 +562,8 @@ nodes:
 
 func TestLLMSelectCmdInteractive(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	tempConfigPath := filepath.Join(tempDir, "nodes.yaml")
 
 	initialConfig := `
@@ -577,6 +590,14 @@ nodes:
 		return 0, nil
 	}
 	defer func() { llmSelectModelInteractive = prevSelect }()
+
+	prevStatusRuntime := loadStatusRuntime
+	loadStatusRuntime = func(ctx context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{},
+		}, nil
+	}
+	defer func() { loadStatusRuntime = prevStatusRuntime }()
 
 	cmd := llmSelectCmd()
 	var stdout, stderr bytes.Buffer
