@@ -236,19 +236,20 @@ func (v ClusterSummaryView) Render() string {
 	hasM3, hasM1, hasNixos, hasFoundry, hasLatitude := false, false, false, false, false
 	for _, n := range v.Nodes {
 		name := strings.ToLower(n.Name)
-		if strings.Contains(name, "m3") {
+		switch name {
+		case "m3 pro", "m3":
 			m3 = n
 			hasM3 = true
-		} else if strings.Contains(name, "m1") {
+		case "m1 scout", "m1":
 			m1 = n
 			hasM1 = true
-		} else if strings.Contains(name, "nixos") {
+		case "nixos":
 			nixos = n
 			hasNixos = true
-		} else if strings.Contains(name, "foundry") {
+		case "foundry":
 			foundry = n
 			hasFoundry = true
-		} else if strings.Contains(name, "latitude") {
+		case "latitude":
 			latitude = n
 			hasLatitude = true
 		}

@@ -279,8 +279,7 @@ func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort in
 		// Try to bind dynamically
 		fallbackListener, fallbackErr := net.Listen("tcp", "127.0.0.1:0")
 		if fallbackErr == nil {
-			_, portStr, _ := net.SplitHostPort(fallbackListener.Addr().String())
-			boundPort, _ := strconv.Atoi(portStr)
+			boundPort := fallbackListener.Addr().(*net.TCPAddr).Port
 			fmt.Fprintf(os.Stderr, "[AXIS] Warning: Local port %d is already in use. Bound dynamically to 127.0.0.1:%d instead.\n", localPort, boundPort)
 			listener = fallbackListener
 			err = nil
@@ -290,8 +289,7 @@ func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort in
 		return 0, nil, fmt.Errorf("local listen failed: %w", err)
 	}
 
-	_, portStr, _ := net.SplitHostPort(listener.Addr().String())
-	boundPort, _ := strconv.Atoi(portStr)
+	boundPort := listener.Addr().(*net.TCPAddr).Port
 
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {

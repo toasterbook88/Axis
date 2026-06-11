@@ -606,10 +606,14 @@ nodes:
 func TestLLMFallbackTransitionAndAlerts(t *testing.T) {
 	var buf bytes.Buffer
 
+	// Stub writer terminal state
+	isWriterTerm := false
+	prevWriterTerm := llmWriterIsTerminal
+	llmWriterIsTerminal = func(w io.Writer) bool { return isWriterTerm }
+	defer func() { llmWriterIsTerminal = prevWriterTerm }()
+
 	// Test non-terminal path: should instantly output OOM Alert.
-	prevTerm := llmIsTerminal
-	llmIsTerminal = func(fd int) bool { return false }
-	defer func() { llmIsTerminal = prevTerm }()
+	isWriterTerm = false
 
 	showWarmupAndOOMAlert(&buf, "llama3", "NixOS")
 	got := buf.String()
@@ -619,7 +623,7 @@ func TestLLMFallbackTransitionAndAlerts(t *testing.T) {
 
 	// Test terminal path animation.
 	buf.Reset()
-	llmIsTerminal = func(fd int) bool { return true }
+	isWriterTerm = true
 
 	prevDelay := llmWarmupDelay
 	llmWarmupDelay = 1 * time.Millisecond

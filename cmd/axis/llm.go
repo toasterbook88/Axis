@@ -39,7 +39,13 @@ var (
 	confirmLLMCloudFallback   = defaultConfirmLLMCloudFallback
 	llmSelectModelInteractive = selectModelInteractive
 	llmIsTerminal             = func(fd int) bool { return term.IsTerminal(fd) }
-	llmWarmupDelay            = 200 * time.Millisecond
+	llmWriterIsTerminal       = func(w io.Writer) bool {
+		if f, ok := w.(*os.File); ok {
+			return term.IsTerminal(int(f.Fd()))
+		}
+		return false
+	}
+	llmWarmupDelay = 200 * time.Millisecond
 )
 
 var llmInferRequirementsFn = func(prompt string, engine *llmrouter.Engine) llmInferenceResult {
@@ -557,7 +563,7 @@ func resolveLocalNodeName(ctx context.Context) string {
 }
 
 func showWarmupAndOOMAlert(w io.Writer, model, node string) {
-	if !llmIsTerminal(int(os.Stderr.Fd())) || llmWarmupDelay <= 0 {
+	if !llmWriterIsTerminal(w) || llmWarmupDelay <= 0 {
 		fmt.Fprintf(w, "⚠️  OOM Alert: %s RAM limit exceeded.\n", node)
 		return
 	}
