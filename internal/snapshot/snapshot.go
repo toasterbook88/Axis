@@ -62,6 +62,7 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 	for i := range deduped {
 		deduped[i].NetworkClass = classifyNetwork(&deduped[i])
 		n := &deduped[i]
+		n.PopulateMemoryMetrics()
 
 		// Count reachable and aggregate resources
 		if n.Status == models.StatusComplete || n.Status == models.StatusPartial {

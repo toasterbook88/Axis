@@ -334,6 +334,11 @@ func (l *Ledger) Reconcile() int {
 	return l.Reclaim()
 }
 
+// Prune is a synonym for Reclaim to support the lease eviction loop interface.
+func (l *Ledger) Prune() int {
+	return l.Reclaim()
+}
+
 func (l *Ledger) reclaimLocked() int {
 	now := l.now()
 	reclaimed := 0

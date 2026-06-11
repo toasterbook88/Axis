@@ -238,6 +238,8 @@ func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *s
 func taskRunCmd() *cobra.Command {
 	var execFlag, scriptFlag, dryRunFlag bool
 	var exposePortsFlag string
+	var memoryRequestMB int64
+	var memoryMaxMB int64
 	cmd := &cobra.Command{
 		Use:   "run [description-or-command]",
 		Short: "Run task on best node (explicit only — advisory placement first)",
@@ -276,13 +278,15 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			req := execution.GuardedExecutionRequest{
-				Description:  input,
-				Mode:         mode,
-				Confirm:      execution.ConfirmWord,
-				ExposePorts:  exposePortsFlag,
-				OwnerSurface: execution.OwnerSurfaceTaskRun,
-				Stdout:       os.Stdout,
-				Stderr:       os.Stderr,
+				Description:     input,
+				Mode:            mode,
+				Confirm:         execution.ConfirmWord,
+				ExposePorts:     exposePortsFlag,
+				MemoryRequestMB: memoryRequestMB,
+				MemoryMaxMB:     memoryMaxMB,
+				OwnerSurface:    execution.OwnerSurfaceTaskRun,
+				Stdout:          os.Stdout,
+				Stderr:          os.Stderr,
 				OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
 					scheduleTaskRunDaemonRefresh(trigger)
 				},
@@ -355,6 +359,8 @@ func taskRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
 	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show the execution plan without running anything")
 	cmd.Flags().StringVar(&exposePortsFlag, "expose", "", "expose port: [local:]remote (e.g. 8080:8080 or just 8080)")
+	cmd.Flags().Int64Var(&memoryRequestMB, "memory-request", 0, "explicit memory request in MB")
+	cmd.Flags().Int64Var(&memoryMaxMB, "memory-max", 0, "explicit memory max in MB")
 	return cmd
 }
 

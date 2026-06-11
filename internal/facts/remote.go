@@ -129,6 +129,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if partial {
 		facts.Status = models.StatusPartial
 	}
+	facts.PopulateMemoryMetrics()
 	return facts, nil
 }
 
@@ -189,10 +190,12 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 		r.PressureSource = "free-ram"
 	}
 
-	if source, level, stall10, ok := c.remotePressureSignal(ctx, osName); ok {
+	if source, level, stall10, someAvg10, fullAvg10, ok := c.remotePressureSignal(ctx, osName); ok {
 		r.Pressure = mergePressureLevels(r.Pressure, level)
 		r.PressureSource = source
 		r.PressureStall10 = stall10
+		r.MemoryPSISomeAvg10 = someAvg10
+		r.MemoryPSIFullAvg10 = fullAvg10
 	}
 
 	var loadCmd string
@@ -273,30 +276,35 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 	return r, partial
 }
 
-func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName string) (string, string, float64, bool) {
+func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName string) (source string, level string, stall10 float64, someAvg float64, fullAvg float64, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(osName)) {
 	case "linux":
 		out, err := c.Exec.Run(ctx, "cat /proc/pressure/memory 2>/dev/null")
 		if err != nil || strings.TrimSpace(out) == "" {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
 		stall10, ok := parseLinuxPressureStall10(out)
 		if !ok {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
-		return "linux-psi", linuxPressureLevel(stall10), stall10, true
+		someAvg, fullAvg, okDouble := parseLinuxPSI(out)
+		if !okDouble {
+			return "", "", 0, 0, 0, false
+		}
+		return "linux-psi", linuxPressureLevel(stall10), stall10, someAvg, fullAvg, true
 	case "darwin":
 		out, err := c.Exec.Run(ctx, "sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null")
 		if err != nil || strings.TrimSpace(out) == "" {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
 		level, ok := parseDarwinMemoryPressureLevel(out)
 		if !ok {
-			return "", "", 0, false
+			return "", "", 0, 0, 0, false
 		}
-		return "darwin-vm-pressure", darwinPressureLevel(level), 0, true
+		someAvg, fullAvg := MapDarwinPressureToPSI(level)
+		return "darwin-vm-pressure", darwinPressureLevel(level), 0, someAvg, fullAvg, true
 	default:
-		return "", "", 0, false
+		return "", "", 0, 0, 0, false
 	}
 }
 

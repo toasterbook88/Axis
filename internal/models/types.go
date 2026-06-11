@@ -76,27 +76,32 @@ func (g GPUInfo) HasCapability(cap string) bool {
 
 // Resources holds observed hardware resource metrics.
 type Resources struct {
-	CPUCores        int            `json:"cpu_cores" yaml:"cpu_cores"`
-	CPUModel        string         `json:"cpu_model" yaml:"cpu_model"`
-	RAMTotalMB      int64          `json:"ram_total_mb" yaml:"ram_total_mb"`
-	RAMFreeMB       int64          `json:"ram_free_mb" yaml:"ram_free_mb"`
-	MemoryTopology  MemoryTopology `json:"memory_topology,omitempty" yaml:"memory_topology,omitempty"`
-	MemoryClass     int            `json:"memory_class,omitempty" yaml:"memory_class,omitempty"`
-	Load1M          float64        `json:"load_1m" yaml:"load_1m"`
-	Load5M          float64        `json:"load_5m" yaml:"load_5m"`
-	Load15M         float64        `json:"load_15m" yaml:"load_15m"`
-	DiskTotalGB     int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
-	DiskFreeGB      int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
-	GPUs            []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
-	GPUUtilPercent  *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
-	StorageClass    string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
-	BatteryPercent  *int           `json:"battery_percent,omitempty" yaml:"battery_percent,omitempty"`
-	PowerSource     string         `json:"power_source,omitempty" yaml:"power_source,omitempty"`   // ac, battery, unknown
-	ThermalState    string         `json:"thermal_state,omitempty" yaml:"thermal_state,omitempty"` // nominal, fair, serious, critical
-	ThermalZones    []ThermalZone  `json:"thermal_zones,omitempty" yaml:"thermal_zones,omitempty"`
-	Pressure        string         `json:"pressure" yaml:"pressure"` // none, low, medium, high
-	PressureStall10 float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
-	PressureSource  string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
+	CPUCores              int            `json:"cpu_cores" yaml:"cpu_cores"`
+	CPUModel              string         `json:"cpu_model" yaml:"cpu_model"`
+	RAMTotalMB            int64          `json:"ram_total_mb" yaml:"ram_total_mb"`
+	RAMFreeMB             int64          `json:"ram_free_mb" yaml:"ram_free_mb"`
+	RAMSystemReservedMB   int64          `json:"ram_system_reserved_mb" yaml:"ram_system_reserved_mb"`
+	RAMEvictionReservedMB int64          `json:"ram_eviction_reserved_mb" yaml:"ram_eviction_reserved_mb"`
+	RAMAllocatableMB      int64          `json:"ram_allocatable_mb" yaml:"ram_allocatable_mb"`
+	MemoryPSISomeAvg10    float64        `json:"memory_psi_some_avg10,omitempty" yaml:"memory_psi_some_avg10,omitempty"`
+	MemoryPSIFullAvg10    float64        `json:"memory_psi_full_avg10,omitempty" yaml:"memory_psi_full_avg10,omitempty"`
+	MemoryTopology        MemoryTopology `json:"memory_topology,omitempty" yaml:"memory_topology,omitempty"`
+	MemoryClass           int            `json:"memory_class,omitempty" yaml:"memory_class,omitempty"`
+	Load1M                float64        `json:"load_1m" yaml:"load_1m"`
+	Load5M                float64        `json:"load_5m" yaml:"load_5m"`
+	Load15M               float64        `json:"load_15m" yaml:"load_15m"`
+	DiskTotalGB           int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
+	DiskFreeGB            int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
+	GPUs                  []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
+	GPUUtilPercent        *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
+	StorageClass          string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
+	BatteryPercent        *int           `json:"battery_percent,omitempty" yaml:"battery_percent,omitempty"`
+	PowerSource           string         `json:"power_source,omitempty" yaml:"power_source,omitempty"`   // ac, battery, unknown
+	ThermalState          string         `json:"thermal_state,omitempty" yaml:"thermal_state,omitempty"` // nominal, fair, serious, critical
+	ThermalZones          []ThermalZone  `json:"thermal_zones,omitempty" yaml:"thermal_zones,omitempty"`
+	Pressure              string         `json:"pressure" yaml:"pressure"` // none, low, medium, high
+	PressureStall10       float64        `json:"pressure_stall_10,omitempty" yaml:"pressure_stall_10,omitempty"`
+	PressureSource        string         `json:"pressure_source,omitempty" yaml:"pressure_source,omitempty"`
 }
 
 // ThermalZone holds a single thermal sensor reading.
@@ -138,6 +143,33 @@ func (n NodeFacts) ReservableRAM() int64 {
 		return 0
 	}
 	return ReservableRAMMBWithConfig(n.Resources.RAMTotalMB, n.Resources.RAMFreeMB, n.SystemReserveMB)
+}
+
+// PopulateMemoryMetrics calculates and fills SystemReserved, EvictionReserved, and Allocatable fields on Resources.
+func (n *NodeFacts) PopulateMemoryMetrics() {
+	if n.Resources == nil {
+		return
+	}
+	sysReserve := n.SystemReserveMB
+	if sysReserve <= 0 {
+		sysReserve = 1024
+	}
+	n.Resources.RAMSystemReservedMB = sysReserve
+
+	// Eviction reserves: default safety floor of 512MB (or 5% of total RAM)
+	evictionFloor := int64(512)
+	pctFloor := n.Resources.RAMTotalMB / 20 // 5%
+	if pctFloor > evictionFloor {
+		evictionFloor = pctFloor
+	}
+	n.Resources.RAMEvictionReservedMB = evictionFloor
+
+	// Calculate Allocatable
+	allocatable := n.Resources.RAMTotalMB - n.Resources.RAMSystemReservedMB - n.Resources.RAMEvictionReservedMB
+	if allocatable < 0 {
+		allocatable = 0
+	}
+	n.Resources.RAMAllocatableMB = allocatable
 }
 
 // NetworkClass represents the performance and route class of a node connection.
@@ -376,9 +408,16 @@ type TaskRequirements struct {
 	Workload            WorkloadProfileMatch `json:"workload,omitempty" yaml:"workload,omitempty"`
 	RequiredTools       []string             `json:"required_tools,omitempty" yaml:"required_tools,omitempty"`
 	MinFreeRAMMB        int64                `json:"min_free_ram_mb,omitempty" yaml:"min_free_ram_mb,omitempty"`
+	MemoryRequestMB     int64                `json:"memory_request_mb,omitempty" yaml:"memory_request_mb,omitempty"`
+	MemoryMaxMB         int64                `json:"memory_max_mb,omitempty" yaml:"memory_max_mb,omitempty"`
 	ContextWindowTokens int                  `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
 	PrefersTurboQuant   bool                 `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
 	PreferredBackends   []string             `json:"preferred_backends,omitempty" yaml:"preferred_backends,omitempty"`
+}
+
+// GetMemoryRequestMB returns MemoryRequestMB if > 0.
+func (r TaskRequirements) GetMemoryRequestMB() int64 {
+	return r.MemoryRequestMB
 }
 
 // PlacementDecision is the output of the placement engine.
