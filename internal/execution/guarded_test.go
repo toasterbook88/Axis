@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/failures"
+	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -21,6 +23,17 @@ import (
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
+
+func TestMain(m *testing.M) {
+	// Stub git status to be clean by default for all execution tests
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: false}, nil
+	}
+	code := m.Run()
+	GetGitRepoState = prevGit
+	os.Exit(code)
+}
 
 func TestPrepareRequirementsExecKeepsOllamaRequirement(t *testing.T) {
 	reqs := prepareRequirements("ollama run llama3", ModeExec, Intent{})
@@ -1675,4 +1688,161 @@ func TestRunLocalExposeWarning(t *testing.T) {
 	if !strings.Contains(errStr, "[AXIS] Warning: Expose ports \"8080:9090\" ignored for local execution.") {
 		t.Fatalf("expected warning message about ignoring expose ports, got: %q", errStr)
 	}
+}
+
+func TestHandleDirtyWorkingTreeClean(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: false}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: os.Stdin,
+	}
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup function")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
+func TestHandleDirtyWorkingTreeDirtyNonInteractive(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: true, DirtyCount: 3}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	prevTerm := IsTerminalFunc
+	IsTerminalFunc = func(r io.Reader) bool { return false }
+	defer func() { IsTerminalFunc = prevTerm }()
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: os.Stdin,
+	}
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup function")
+	}
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "WARNING: Working tree is dirty (3 files modified)") {
+		t.Fatalf("expected warning message, got %q", errStr)
+	}
+	if !strings.Contains(errStr, "Non-interactive environment: proceeding") {
+		t.Fatalf("expected non-interactive message, got %q", errStr)
+	}
+}
+
+func TestHandleDirtyWorkingTreeDirtyInteractiveAbort(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: true, DirtyCount: 5}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	prevTerm := IsTerminalFunc
+	IsTerminalFunc = func(r io.Reader) bool { return true }
+	defer func() { IsTerminalFunc = prevTerm }()
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: strings.NewReader("a\n"),
+	}
+	ok, _, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err == nil {
+		t.Fatal("expected abortion error")
+	}
+	if ok {
+		t.Fatal("expected ok to be false")
+	}
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "WARNING: Working tree is dirty (5 files modified)") {
+		t.Fatalf("expected warning message, got %q", errStr)
+	}
+	if !strings.Contains(errStr, "Execution aborted by operator") {
+		t.Fatalf("expected abort message, got %q", errStr)
+	}
+}
+
+func TestHandleDirtyWorkingTreeDirtyInteractiveProceed(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: true, DirtyCount: 2}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	prevTerm := IsTerminalFunc
+	IsTerminalFunc = func(r io.Reader) bool { return true }
+	defer func() { IsTerminalFunc = prevTerm }()
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: strings.NewReader("p\n"),
+	}
+	ok, _, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "Proceeding with dirty tree anyway") {
+		t.Fatalf("expected proceed message, got %q", errStr)
+	}
+}
+
+func TestHandleDirtyWorkingTreeDirtyInteractiveStash(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH, skipping stash test")
+	}
+
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(dir string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, IsDirty: true, DirtyCount: 1}, nil
+	}
+	defer func() { GetGitRepoState = prevGit }()
+
+	prevTerm := IsTerminalFunc
+	IsTerminalFunc = func(r io.Reader) bool { return true }
+	defer func() { IsTerminalFunc = prevTerm }()
+
+	var stderr bytes.Buffer
+	req := GuardedExecutionRequest{
+		Stdin: strings.NewReader("s\n"),
+	}
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup function")
+	}
+
+	errStr := stderr.String()
+	if !strings.Contains(errStr, "Stashing local changes") {
+		t.Fatalf("expected stash message, got %q", errStr)
+	}
+
+	cleanup()
 }
