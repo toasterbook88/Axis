@@ -19,6 +19,7 @@ import (
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/events"
+	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
@@ -77,6 +78,7 @@ type GuardedExecutionRequest struct {
 	OriginOverride models.ExecutionOrigin                                `json:"-"`
 	Stdout         io.Writer                                             `json:"-"`
 	Stderr         io.Writer                                             `json:"-"`
+	Stdin          io.Reader                                             `json:"-"`
 	OnReady        func(GuardedExecutionResult)                          `json:"-"`
 	OnStateChange  func(context.Context, string, GuardedExecutionResult) `json:"-"`
 }
@@ -202,6 +204,9 @@ func NormalizeRequest(req *GuardedExecutionRequest) {
 	req.OwnerSurface = strings.TrimSpace(req.OwnerSurface)
 	req.OwnerLabel = strings.TrimSpace(req.OwnerLabel)
 	req.OriginOverride = req.OriginOverride.Normalized()
+	if req.Stdin == nil {
+		req.Stdin = os.Stdin
+	}
 }
 
 func ValidateRequest(req GuardedExecutionRequest) error {
@@ -472,6 +477,16 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (GuardedExecutionResult, error) {
 	if prepared.Err != nil || prepared.Result.Blocked {
 		return prepared.Result, prepared.Err
+	}
+
+	if prepared.Request.OwnerSurface == OwnerSurfaceTaskRun {
+		ok, cleanup, err := handleDirtyWorkingTree(ctx, prepared.Request, prepared.Request.Stdout, prepared.Request.Stderr)
+		if err != nil || !ok {
+			prepared.Result.Error = err.Error()
+			prepared.Result.ExitCode = 1
+			return prepared.Result, err
+		}
+		defer cleanup()
 	}
 
 	if prepared.Request.OnReady != nil {
@@ -1252,4 +1267,83 @@ func ParseExposePorts(s string) (local, remote int, err error) {
 		return l, r, nil
 	}
 	return 0, 0, fmt.Errorf("invalid port format: %q (expected local:remote or remote)", s)
+}
+
+var GetGitRepoState = git.GetRepoState
+
+func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, stdout, stderr io.Writer) (bool, func(), error) {
+	gitState, err := GetGitRepoState(".")
+	if err != nil || !gitState.IsRepo || !gitState.IsDirty {
+		return true, func() {}, nil
+	}
+
+	if stderr != nil {
+		fmt.Fprintf(stderr, "⚠️  WARNING: Working tree is dirty (%d files modified).\n", gitState.DirtyCount)
+	}
+
+	isTerm := IsTerminalFunc(req.Stdin)
+
+	if !isTerm {
+		if stderr != nil {
+			fmt.Fprintln(stderr, "[AXIS] Non-interactive environment: proceeding with dirty tree.")
+		}
+		return true, func() {}, nil
+	}
+
+	if stderr != nil {
+		fmt.Fprintln(stderr, "[s] Stash changes and proceed")
+		fmt.Fprintln(stderr, "[p] Proceed with dirty tree anyway")
+		fmt.Fprintln(stderr, "[a] Abort execution (default)")
+		fmt.Fprint(stderr, "Select action: ")
+	}
+
+	var buf [1]byte
+	_, _ = req.Stdin.Read(buf[:])
+	choice := strings.ToLower(strings.TrimSpace(string(buf[:])))
+
+	switch choice {
+	case "s":
+		if stderr != nil {
+			fmt.Fprintln(stderr, "[AXIS] Stashing local changes...")
+		}
+		stashCmd := exec.CommandContext(ctx, "git", "stash", "-u")
+		var stashStderr bytes.Buffer
+		stashCmd.Stderr = &stashStderr
+		if err := stashCmd.Run(); err != nil {
+			return false, func() {}, fmt.Errorf("git stash failed: %w (details: %s)", err, stashStderr.String())
+		}
+
+		cleanup := func() {
+			if stderr != nil {
+				fmt.Fprintln(stderr, "[AXIS] Restoring stashed changes...")
+			}
+			popCmd := exec.CommandContext(context.Background(), "git", "stash", "pop")
+			_ = popCmd.Run()
+		}
+		return true, cleanup, nil
+
+	case "p":
+		if stderr != nil {
+			fmt.Fprintln(stderr, "[AXIS] Proceeding with dirty tree anyway.")
+		}
+		return true, func() {}, nil
+
+	default:
+		if stderr != nil {
+			fmt.Fprintln(stderr, "[AXIS] Execution aborted by operator.")
+		}
+		return false, func() {}, fmt.Errorf("execution aborted: working tree is dirty")
+	}
+}
+
+var IsTerminalFunc = func(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok || f == nil {
+		return false
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
