@@ -87,6 +87,7 @@ type SSHExecutor struct {
 	Port               int
 	User               string
 	TimeoutSec         int
+	mu                 sync.RWMutex
 	client             *ssh.Client
 	handshakeLatencyMs int64
 }
@@ -98,14 +99,19 @@ func NewSSHExecutor(host string, port int, user string, timeoutSec int) *SSHExec
 
 // HandshakeLatencyMs returns the measured duration of the SSH connection and handshake.
 func (e *SSHExecutor) HandshakeLatencyMs() int64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.handshakeLatencyMs
 }
 
 // Connect establishes the SSH client connection.
 func (e *SSHExecutor) Connect(ctx context.Context) error {
+	e.mu.Lock()
 	if e.client != nil {
+		e.mu.Unlock()
 		return nil
 	}
+	e.mu.Unlock()
 
 	resolved := e.resolveSSHConfig(ctx)
 	dialAddr := net.JoinHostPort(resolvedDialHost(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
@@ -148,20 +154,30 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		}
 		return fmt.Errorf("ssh handshake %s: %w", dialAddr, err)
 	}
-	e.handshakeLatencyMs = time.Since(start).Milliseconds()
+	handshakeLatencyMs := time.Since(start).Milliseconds()
 	// The connect deadline is only for dialing and handshake. Clear it once the
 	// SSH client is established so later session I/O isn't capped by an old ctx.
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		conn.Close()
 		return fmt.Errorf("ssh clear deadline %s: %w", dialAddr, err)
 	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.client != nil {
+		sshConn.Close()
+		return nil
+	}
 	e.client = ssh.NewClient(sshConn, chans, reqs)
+	e.handshakeLatencyMs = handshakeLatencyMs
 
 	return nil
 }
 
 // Close terminates the SSH client connection.
 func (e *SSHExecutor) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.client != nil {
 		err := e.client.Close()
 		e.client = nil
@@ -172,7 +188,10 @@ func (e *SSHExecutor) Close() error {
 
 // Run executes a command via SSH and returns stdout.
 func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
-	if e.client == nil {
+	e.mu.RLock()
+	client := e.client
+	e.mu.RUnlock()
+	if client == nil {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
@@ -182,9 +201,15 @@ func (e *SSHExecutor) Run(ctx context.Context, cmd string) (string, error) {
 			}
 			return "", err
 		}
+		e.mu.RLock()
+		client = e.client
+		e.mu.RUnlock()
+	}
+	if client == nil {
+		return "", fmt.Errorf("ssh client not connected")
 	}
 
-	session, err := e.client.NewSession()
+	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("ssh session: %w", err)
 	}
@@ -226,16 +251,25 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 		return err
 	}
 
-	if e.client == nil {
+	e.mu.RLock()
+	client := e.client
+	e.mu.RUnlock()
+	if client == nil {
 		if err := e.Connect(ctx); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
 			return err
 		}
+		e.mu.RLock()
+		client = e.client
+		e.mu.RUnlock()
+	}
+	if client == nil {
+		return fmt.Errorf("ssh client not connected")
 	}
 
-	session, err := e.client.NewSession()
+	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("ssh session: %w", err)
 	}
@@ -267,29 +301,53 @@ func (e *SSHExecutor) Stream(ctx context.Context, cmd string, stdout, stderr io.
 // If localPort is 0, it dynamically binds to a random free local port.
 // Returns the bound local port, a cancellation function to stop forwarding, and any error.
 func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort int) (int, func(), error) {
-	if e.client == nil {
+	e.mu.RLock()
+	client := e.client
+	e.mu.RUnlock()
+	if client == nil {
 		if err := e.Connect(ctx); err != nil {
 			return 0, nil, err
 		}
+		e.mu.RLock()
+		client = e.client
+		e.mu.RUnlock()
+	}
+	if client == nil {
+		return 0, nil, fmt.Errorf("ssh client not connected")
 	}
 
 	localAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
 	listener, err := net.Listen("tcp", localAddr)
+	if err != nil && localPort != 0 {
+		// Try to bind dynamically
+		fallbackListener, fallbackErr := net.Listen("tcp", "127.0.0.1:0")
+		if fallbackErr == nil {
+			boundPort := fallbackListener.Addr().(*net.TCPAddr).Port
+			fmt.Fprintf(os.Stderr, "[AXIS] Warning: Local port %d is already in use. Bound dynamically to 127.0.0.1:%d instead.\n", localPort, boundPort)
+			listener = fallbackListener
+			err = nil
+		}
+	}
 	if err != nil {
 		return 0, nil, fmt.Errorf("local listen failed: %w", err)
 	}
 
-	_, portStr, _ := net.SplitHostPort(listener.Addr().String())
-	boundPort, _ := strconv.Atoi(portStr)
+	boundPort := listener.Addr().(*net.TCPAddr).Port
 
 	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	var acceptWg sync.WaitGroup
+
+	acceptWg.Add(1)
 	go func() {
+		defer acceptWg.Done()
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	var wg sync.WaitGroup
 
+	acceptWg.Add(1)
 	go func() {
+		defer acceptWg.Done()
 		defer listener.Close()
 		for {
 			localConn, err := listener.Accept()
@@ -313,6 +371,7 @@ func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort in
 	closeFn := func() {
 		cancel()
 		_ = listener.Close()
+		acceptWg.Wait()
 		wg.Wait()
 	}
 
@@ -322,8 +381,16 @@ func (e *SSHExecutor) ForwardLocal(ctx context.Context, localPort, remotePort in
 func (e *SSHExecutor) handleForwardConnection(ctx context.Context, localConn net.Conn, remotePort int) {
 	defer localConn.Close()
 
+	e.mu.RLock()
+	client := e.client
+	e.mu.RUnlock()
+	if client == nil {
+		fmt.Fprintf(os.Stderr, "ssh port-forward remote dial failed: client not connected\n")
+		return
+	}
+
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", remotePort)
-	remoteConn, err := e.client.Dial("tcp", remoteAddr)
+	remoteConn, err := client.Dial("tcp", remoteAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ssh port-forward remote dial failed to %s: %v\n", remoteAddr, err)
 		return

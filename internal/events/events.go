@@ -197,6 +197,35 @@ var (
 	bufferSize  = 100
 )
 
+// =============================================================================
+// Event Interest Registry (for MCP clients and future hooks)
+// =============================================================================
+
+var (
+	interests  = make(map[string][]string) // eventName -> list of subscribers/callbacks
+	interestMu sync.Mutex
+)
+
+// RegisterInterest records that a subscriber (e.g. an MCP client or callback tool)
+// is interested in a particular event. This is advisory.
+func RegisterInterest(eventName, subscriber string) {
+	interestMu.Lock()
+	defer interestMu.Unlock()
+	interests[eventName] = append(interests[eventName], subscriber)
+}
+
+// GetInterests returns a copy of current event interests.
+func GetInterests() map[string][]string {
+	interestMu.Lock()
+	defer interestMu.Unlock()
+
+	out := make(map[string][]string, len(interests))
+	for k, v := range interests {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
 // SetEventBufferSize adjusts the maximum number of events kept in the in-memory buffer.
 func SetEventBufferSize(size int) {
 	if size < 1 {

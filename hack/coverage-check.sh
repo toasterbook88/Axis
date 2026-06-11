@@ -9,6 +9,11 @@ check_threshold() {
   local actual="$2"
   local minimum="$3"
 
+  if [ -z "$actual" ]; then
+    printf 'coverage gate failed: %s coverage value is empty\n' "$label" >&2
+    return 1
+  fi
+
   if awk -v actual="$actual" -v minimum="$minimum" 'BEGIN { exit !(actual + 0 >= minimum + 0) }'; then
     printf 'coverage gate passed: %s %.1f%% >= %.1f%%\n' "$label" "$actual" "$minimum"
     return 0
@@ -20,13 +25,28 @@ check_threshold() {
 
 package_coverage() {
   local pkg="$1"
-  go test "$pkg" -cover | sed -n 's/.*coverage: \([0-9.][0-9.]*\)%.*/\1/p'
+  local tmp_out
+  tmp_out="$(mktemp)"
+  if ! go test "$pkg" -cover > "$tmp_out" 2>&1; then
+    echo "ERROR: go test $pkg -cover failed:" >&2
+    cat "$tmp_out" >&2
+    rm -f "$tmp_out"
+    return 1
+  fi
+  local cov
+  cov="$(sed -n 's/.*coverage: \([0-9.][0-9.]*\)%.*/\1/p' "$tmp_out")"
+  rm -f "$tmp_out"
+  echo "$cov"
 }
 
 total_profile="$(mktemp)"
 trap 'rm -f "$total_profile"' EXIT
 
-go test ./... -coverprofile="$total_profile" >/dev/null
+if ! go test ./... -coverprofile="$total_profile" >/dev/null; then
+  echo "ERROR: go test ./... -coverprofile failed. Re-running tests to show failure logs:" >&2
+  go test ./... -coverprofile="$total_profile" -count=1
+  exit 1
+fi
 
 total_cov="$(go tool cover -func="$total_profile" | awk '/^total:/ {gsub("%", "", $3); print $3}')"
 knowledge_cov="$(package_coverage ./internal/knowledge)"

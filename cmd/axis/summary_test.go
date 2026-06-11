@@ -230,3 +230,35 @@ func TestSummaryStaleCacheIndicator(t *testing.T) {
 		t.Fatalf("expected stale cache age indicator, got:\n%s", out)
 	}
 }
+
+func TestSummaryRenderTopology(t *testing.T) {
+	color.NoColor = true
+	defer func() { color.NoColor = false }()
+
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{Name: "M3 Pro"},
+			{Name: "M1 Scout"},
+			{Name: "NixOS"},
+			{Name: "Foundry"},
+			{Name: "Latitude"},
+		},
+	}
+
+	view := populateSummaryView(snap, daemon.Metadata{})
+	out := view.Render()
+
+	expectedLines := []string{
+		"⚡ CLUSTER TOPOLOGY",
+		"==================",
+		"M3 Pro     <======== (Thunderbolt: 10 Gbps) ========> M1 Scout",
+		"NixOS      <........ (Gigabit LAN: 1 Gbps)  ........> Foundry",
+		"Latitude   <-------- (Tailscale VPN)        --------> NixOS",
+	}
+
+	for _, expected := range expectedLines {
+		if !strings.Contains(out, expected) {
+			t.Errorf("expected output to contain %q, but got:\n%s", expected, out)
+		}
+	}
+}

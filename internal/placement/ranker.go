@@ -413,6 +413,8 @@ func ComputeTaskFitScore(n models.NodeFacts, isLocal bool, st *state.ClusterStat
 	// Local bonus
 	if isLocal {
 		score += 10
+	} else if hasThunderboltLink(n) {
+		score += 15
 	}
 
 	// Network class adjustment (Phase D)
@@ -786,7 +788,7 @@ func scoreNetworkClass(n models.NodeFacts) int {
 	case models.NetworkClassDirectLAN:
 		return 20
 	case models.NetworkClassTailscale:
-		return 5
+		return -20
 	case models.NetworkClassVPN:
 		return -20
 	case models.NetworkClassRelayed:
@@ -794,4 +796,13 @@ func scoreNetworkClass(n models.NodeFacts) int {
 	default:
 		return 0
 	}
+}
+
+func hasThunderboltLink(n models.NodeFacts) bool {
+	for _, addr := range n.Addresses {
+		if addr.SpeedClass == "thunderbolt" || strings.HasPrefix(addr.Address, "169.254.1.") {
+			return true
+		}
+	}
+	return false
 }

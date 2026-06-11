@@ -1,6 +1,8 @@
 package snapshotview
 
 import (
+	"os"
+
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/state"
@@ -75,6 +77,14 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, 
 		reserved := int64(0)
 		if ledger != nil {
 			reserved = ledger.NodeSummaryFor(node.Name).ReservedRAMMB
+			if parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID"); parentID != "" {
+				for _, entry := range ledger.Entries() {
+					if entry.Node == node.Name && (entry.ID == parentID || entry.OwnerExecID == parentID) {
+						reserved -= entry.RAMMB
+						break
+					}
+				}
+			}
 		}
 		if reserved <= 0 && st != nil && st.Nodes != nil {
 			if ns, ok := st.Nodes[node.Name]; ok {

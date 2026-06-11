@@ -195,11 +195,19 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	// Check per-node cap
 	nodeCount := 0
 	var nodeReserved int64
+	var parentEntry *Entry
+	parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID")
 	for _, e := range l.entries {
 		if e.Node == req.Node {
 			nodeCount++
 			nodeReserved += e.RAMMB
+			if parentID != "" && (e.ID == parentID || e.OwnerExecID == parentID) {
+				parentEntry = e
+			}
 		}
+	}
+	if parentEntry != nil {
+		nodeReserved -= parentEntry.RAMMB
 	}
 
 	if l.limits.MaxEntriesPerNode > 0 && nodeCount >= l.limits.MaxEntriesPerNode {

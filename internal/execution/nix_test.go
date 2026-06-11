@@ -202,3 +202,37 @@ func TestPrefersBackend(t *testing.T) {
 		t.Error("prefersBackend([cuda], mlx) = true, want false")
 	}
 }
+
+func TestPlanNixWrapperPythonPip(t *testing.T) {
+	node := models.NodeFacts{
+		Name: "node-a",
+		Tools: []models.ToolInfo{
+			{Name: "nix"},
+		},
+		Resources: &models.Resources{Pressure: "low"},
+	}
+
+	// Test python command auto-wrap
+	planPython := PlanNixWrapper(node, models.TaskRequirements{
+		RequiredTools: []string{"python"},
+	}, "python script.py")
+
+	if !planPython.Enabled {
+		t.Fatal("expected nix wrapper to be enabled for python")
+	}
+	if len(planPython.Packages) != 1 || planPython.Packages[0] != "nixpkgs#python3" {
+		t.Fatalf("expected nixpkgs#python3 package, got %v", planPython.Packages)
+	}
+
+	// Test pip command auto-wrap
+	planPip := PlanNixWrapper(node, models.TaskRequirements{
+		RequiredTools: []string{"pip"},
+	}, "pip install -r requirements.txt")
+
+	if !planPip.Enabled {
+		t.Fatal("expected nix wrapper to be enabled for pip")
+	}
+	if len(planPip.Packages) != 1 || planPip.Packages[0] != "nixpkgs#python3" {
+		t.Fatalf("expected nixpkgs#python3 package, got %v", planPip.Packages)
+	}
+}
