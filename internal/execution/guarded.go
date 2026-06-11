@@ -1272,40 +1272,51 @@ func ParseExposePorts(s string) (local, remote int, err error) {
 var GetGitRepoState = git.GetRepoState
 
 func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, stdout, stderr io.Writer) (bool, func(), error) {
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+
 	gitState, err := GetGitRepoState(".")
 	if err != nil || !gitState.IsRepo || !gitState.IsDirty {
 		return true, func() {}, nil
 	}
 
-	if stderr != nil {
-		fmt.Fprintf(stderr, "⚠️  WARNING: Working tree is dirty (%d files modified).\n", gitState.DirtyCount)
-	}
+	fmt.Fprintf(stderr, "⚠️  WARNING: Working tree is dirty (%d files modified).\n", gitState.DirtyCount)
 
 	isTerm := IsTerminalFunc(req.Stdin)
 
 	if !isTerm {
-		if stderr != nil {
-			fmt.Fprintln(stderr, "[AXIS] Non-interactive environment: proceeding with dirty tree.")
-		}
+		fmt.Fprintln(stderr, "[AXIS] Non-interactive environment: proceeding with dirty tree.")
 		return true, func() {}, nil
 	}
 
-	if stderr != nil {
-		fmt.Fprintln(stderr, "[s] Stash changes and proceed")
-		fmt.Fprintln(stderr, "[p] Proceed with dirty tree anyway")
-		fmt.Fprintln(stderr, "[a] Abort execution (default)")
-		fmt.Fprint(stderr, "Select action: ")
-	}
+	fmt.Fprintln(stderr, "[s] Stash changes and proceed")
+	fmt.Fprintln(stderr, "[p] Proceed with dirty tree anyway")
+	fmt.Fprintln(stderr, "[a] Abort execution (default)")
+	fmt.Fprint(stderr, "Select action: ")
 
-	var buf [1]byte
-	_, _ = req.Stdin.Read(buf[:])
-	choice := strings.ToLower(strings.TrimSpace(string(buf[:])))
+	var line []byte
+	var temp [1]byte
+	for {
+		n, err := req.Stdin.Read(temp[:])
+		if n > 0 {
+			if temp[0] == '\n' {
+				break
+			}
+			line = append(line, temp[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+	choice := strings.ToLower(strings.TrimSpace(string(line)))
+	if len(choice) > 0 {
+		choice = choice[:1]
+	}
 
 	switch choice {
 	case "s":
-		if stderr != nil {
-			fmt.Fprintln(stderr, "[AXIS] Stashing local changes...")
-		}
+		fmt.Fprintln(stderr, "[AXIS] Stashing local changes...")
 		stashCmd := exec.CommandContext(ctx, "git", "stash", "-u")
 		var stashStderr bytes.Buffer
 		stashCmd.Stderr = &stashStderr
@@ -1314,24 +1325,20 @@ func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, st
 		}
 
 		cleanup := func() {
-			if stderr != nil {
-				fmt.Fprintln(stderr, "[AXIS] Restoring stashed changes...")
-			}
+			fmt.Fprintln(stderr, "[AXIS] Restoring stashed changes...")
 			popCmd := exec.CommandContext(context.Background(), "git", "stash", "pop")
-			_ = popCmd.Run()
+			if err := popCmd.Run(); err != nil {
+				fmt.Fprintf(stderr, "[AXIS] Warning: failed to restore stashed changes: %v\n", err)
+			}
 		}
 		return true, cleanup, nil
 
 	case "p":
-		if stderr != nil {
-			fmt.Fprintln(stderr, "[AXIS] Proceeding with dirty tree anyway.")
-		}
+		fmt.Fprintln(stderr, "[AXIS] Proceeding with dirty tree anyway.")
 		return true, func() {}, nil
 
 	default:
-		if stderr != nil {
-			fmt.Fprintln(stderr, "[AXIS] Execution aborted by operator.")
-		}
+		fmt.Fprintln(stderr, "[AXIS] Execution aborted by operator.")
 		return false, func() {}, fmt.Errorf("execution aborted: working tree is dirty")
 	}
 }
