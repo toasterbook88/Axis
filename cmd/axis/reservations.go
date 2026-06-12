@@ -3,18 +3,26 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
+	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -32,6 +40,7 @@ func reservationsCmd() *cobra.Command {
 	cmd.AddCommand(reservationsListCmd())
 	cmd.AddCommand(reservationsInspectCmd())
 	cmd.AddCommand(reservationsReleaseCmd())
+	cmd.AddCommand(reservationsDoctorCmd())
 	return cmd
 }
 
@@ -361,4 +370,346 @@ func reservationsReleaseCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "Release even if not owned by the current process")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
+}
+
+type DoctorFinding struct {
+	Type     string `json:"type"` // "stale", "expired", "orphaned", "drift", "leak"
+	Node     string `json:"node"`
+	EntryID  string `json:"entry_id,omitempty"`
+	Severity string `json:"severity"` // "warning", "error"
+	Message  string `json:"message"`
+}
+
+var reservationsDoctorProcessAlive = func(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			return false
+		}
+		_ = proc
+		return true
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func isNodeLocal(nodeName string, snap *models.ClusterSnapshot, cfg *config.Config) bool {
+	if snap != nil {
+		for _, n := range snap.Nodes {
+			if n.Name == nodeName {
+				return models.IsLocalNode(n)
+			}
+		}
+	}
+	if cfg != nil {
+		for _, n := range cfg.Nodes {
+			if n.Name == nodeName {
+				return models.IsLocalConfig(n.Name, n.Hostname, n.StableID)
+			}
+		}
+	}
+	h, err := os.Hostname()
+	if err == nil {
+		return models.IsLocalTarget(nodeName, h)
+	}
+	return false
+}
+
+func getBestSnapshot(ctx context.Context, cacheAddr string) (*models.ClusterSnapshot, error) {
+	snap, _, err := daemon.FetchSnapshot(ctx, cacheAddr)
+	if err == nil {
+		return snap, nil
+	}
+
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".axis", "snapshot.json")
+	if data, err := os.ReadFile(path); err == nil {
+		var snap models.ClusterSnapshot
+		if err := json.Unmarshal(data, &snap); err == nil {
+			return &snap, nil
+		}
+	}
+
+	rt, err := runtimectx.Load(ctx)
+	if err == nil && rt.Snapshot != nil {
+		return rt.Snapshot, nil
+	}
+
+	return &models.ClusterSnapshot{}, nil
+}
+
+func reservationsDoctorCmd() *cobra.Command {
+	var fix bool
+	var format string
+	var staleWindow time.Duration
+	var cacheAddr string
+
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Diagnose reservation inconsistencies, stale leases, and memory leaks",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReservationsDoctor(cmd, fix, format, staleWindow, cacheAddr)
+		},
+	}
+
+	cmd.Flags().BoolVar(&fix, "fix", false, "Automatically release stale and orphaned reservations")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+	cmd.Flags().DurationVar(&staleWindow, "stale-window", 2*time.Minute, "Stale heartbeat threshold (e.g. 2m)")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache")
+
+	return cmd
+}
+
+func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWindow time.Duration, cacheAddr string) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// 1. Read ledger file directly to inspect raw entries before Load cleans them
+	var diskEntries []reservation.Entry
+	ledgerPath := reservation.Path()
+	if data, err := os.ReadFile(ledgerPath); err == nil {
+		var df struct {
+			Entries []reservation.Entry `json:"entries"`
+		}
+		if err := json.Unmarshal(data, &df); err == nil {
+			diskEntries = df.Entries
+		}
+	}
+
+	st, err := state.Load()
+	if err != nil {
+		if st == nil {
+			st = &state.ClusterState{Nodes: make(map[string]state.NodeState)}
+		}
+	}
+
+	cfg, cfgErr := config.Load(config.DefaultConfigPath())
+	if cfgErr != nil {
+		cfg = &config.Config{}
+	}
+
+	snap, err := getBestSnapshot(ctx, cacheAddr)
+	if err != nil {
+		snap = &models.ClusterSnapshot{}
+	}
+
+	now := time.Now()
+	var findings []DoctorFinding
+	var fixed []DoctorFinding
+
+	nodesSet := make(map[string]bool)
+	for _, e := range diskEntries {
+		nodesSet[e.Node] = true
+	}
+	for nodeName := range st.Nodes {
+		nodesSet[nodeName] = true
+	}
+
+	// Check for stale, expired, and orphaned reservations
+	for _, e := range diskEntries {
+		isStale := e.IsStale(now, staleWindow)
+		isExpired := e.IsExpired(now)
+
+		if isExpired {
+			finding := DoctorFinding{
+				Type:     "expired",
+				Node:     e.Node,
+				EntryID:  e.ID,
+				Severity: "warning",
+				Message:  fmt.Sprintf("Reservation expired at %s", e.ExpiresAt.Format(time.RFC3339)),
+			}
+			findings = append(findings, finding)
+		} else if isStale {
+			finding := DoctorFinding{
+				Type:     "stale",
+				Node:     e.Node,
+				EntryID:  e.ID,
+				Severity: "warning",
+				Message:  fmt.Sprintf("Heartbeat stale (last seen %s)", e.LastHeartbeat.Format(time.RFC3339)),
+			}
+			findings = append(findings, finding)
+		} else {
+			isLocal := isNodeLocal(e.Node, snap, cfg)
+			if isLocal && e.OwnerPID > 0 && !reservationsDoctorProcessAlive(e.OwnerPID) {
+				finding := DoctorFinding{
+					Type:     "orphaned",
+					Node:     e.Node,
+					EntryID:  e.ID,
+					Severity: "warning",
+					Message:  fmt.Sprintf("Owner PID %d is no longer alive", e.OwnerPID),
+				}
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	// If fix is requested, perform remediation
+	if fix && len(findings) > 0 {
+		ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+		if err := ledger.LockFile(ctx); err != nil {
+			return fmt.Errorf("acquiring write lock on ledger: %w", err)
+		}
+		defer ledger.UnlockFile()
+
+		// Load ledger (this automatically reclaims stale/expired entries!)
+		if err := ledger.Load(); err != nil {
+			return fmt.Errorf("loading reservation ledger: %w", err)
+		}
+
+		// Re-fetch remaining entries to see what is left to release manually
+		remainingMap := make(map[string]bool)
+		for _, re := range ledger.Entries() {
+			remainingMap[re.ID] = true
+		}
+
+		// Go through our findings and perform release
+		for _, f := range findings {
+			if f.Type == "expired" || f.Type == "stale" {
+				// These were automatically reclaimed by ledger.Load()
+				fixed = append(fixed, f)
+			} else if f.Type == "orphaned" {
+				// Check if still in ledger
+				if remainingMap[f.EntryID] {
+					if err := ledger.Release(f.EntryID); err == nil {
+						fixed = append(fixed, f)
+					}
+				}
+			}
+		}
+	}
+
+	// Calculate current entries after possible fixes
+	var currentEntries []reservation.Entry
+	if fix {
+		// Read ledger entries from memory
+		ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+		if err := ledger.Load(); err == nil {
+			currentEntries = ledger.Entries()
+		} else {
+			currentEntries = diskEntries
+		}
+	} else {
+		currentEntries = diskEntries
+	}
+
+	// Calculate drift per node
+	for nodeName := range nodesSet {
+		var ledgerReservedMB int64
+		for _, e := range currentEntries {
+			if e.Node == nodeName {
+				ledgerReservedMB += e.RAMMB
+			}
+		}
+
+		stateReservedMB := int64(0)
+		if nodeState, ok := st.Nodes[nodeName]; ok {
+			stateReservedMB = nodeState.ReservedMB
+		}
+
+		if ledgerReservedMB != stateReservedMB {
+			findings = append(findings, DoctorFinding{
+				Type:     "drift",
+				Node:     nodeName,
+				Severity: "warning",
+				Message:  fmt.Sprintf("Ledger total reserved RAM (%d MB) drifts from State total reserved RAM (%d MB)", ledgerReservedMB, stateReservedMB),
+			})
+		}
+	}
+
+	// Calculate memory leaks per node
+	for nodeName := range nodesSet {
+		var ledgerReservedMB int64
+		for _, e := range currentEntries {
+			if e.Node == nodeName {
+				ledgerReservedMB += e.RAMMB
+			}
+		}
+
+		var capacityMB int64
+		foundNode := false
+		for _, n := range snap.Nodes {
+			if n.Name == nodeName {
+				foundNode = true
+				if n.Resources != nil {
+					capacityMB = n.Resources.RAMTotalMB
+				}
+				break
+			}
+		}
+
+		if foundNode && capacityMB > 0 && ledgerReservedMB > capacityMB {
+			findings = append(findings, DoctorFinding{
+				Type:     "leak",
+				Node:     nodeName,
+				Severity: "error",
+				Message:  fmt.Sprintf("Total reserved RAM (%d MB) exceeds physical capacity (%d MB)", ledgerReservedMB, capacityMB),
+			})
+		}
+	}
+
+	healthy := len(findings) == 0
+
+	switch format {
+	case "json":
+		type JSONResult struct {
+			Healthy  bool            `json:"healthy"`
+			Findings []DoctorFinding `json:"findings"`
+			Fixed    []DoctorFinding `json:"fixed,omitempty"`
+		}
+		res := JSONResult{
+			Healthy:  healthy,
+			Findings: findings,
+			Fixed:    fixed,
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+	default:
+		out := cmd.OutOrStdout()
+		if healthy {
+			fmt.Fprintln(out, "No issues found. Cluster reservations are healthy.")
+			return nil
+		}
+
+		fmt.Fprintf(out, "Reservations Doctor report:\n\n")
+		tbl := ui.NewTable("SEVERITY", "CATEGORY", "NODE", "RESERVATION ID", "DETAILS")
+		for _, f := range findings {
+			sevStr := f.Severity
+			if f.Severity == "error" {
+				sevStr = ui.Red("ERROR")
+			} else if f.Severity == "warning" {
+				sevStr = ui.Yellow("WARNING")
+			}
+
+			entryID := f.EntryID
+			if entryID == "" {
+				entryID = "—"
+			}
+
+			tbl.AddRow(
+				sevStr,
+				strings.ToUpper(f.Type),
+				f.Node,
+				truncateID(entryID, 20),
+				f.Message,
+			)
+		}
+		tbl.Render(out)
+
+		if fix && len(fixed) > 0 {
+			fmt.Fprintf(out, "\nSuccessfully fixed %d issue(s):\n", len(fixed))
+			for _, f := range fixed {
+				fmt.Fprintf(out, "  - Released %s reservation %s on node %s\n", f.Type, f.EntryID, f.Node)
+			}
+		}
+
+		return nil
+	}
 }
