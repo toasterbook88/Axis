@@ -2,12 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 func TestReservationsListEmpty(t *testing.T) {
@@ -382,5 +386,303 @@ func TestTruncateID(t *testing.T) {
 	}
 	if got := truncateID("abcdefgh", 6); got != "abc..." {
 		t.Errorf("truncateID(abcdefgh, 6) = %q, want abc...", got)
+	}
+}
+
+func TestReservationsDoctorHealthy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// Create a clean layout: create .axis directory
+	err := os.MkdirAll(filepath.Join(home, ".axis"), 0755)
+	if err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "localhost"
+	}
+
+	// 1. Setup healthy ledger (only 1 valid active entry)
+	now := time.Now().UTC()
+	type diskFormat struct {
+		Entries []*reservation.Entry `json:"entries"`
+	}
+	df := diskFormat{
+		Entries: []*reservation.Entry{
+			{
+				ID:            "valid-1",
+				Node:          hostname,
+				RAMMB:         1024,
+				CreatedAt:     now,
+				LastHeartbeat: now,
+			},
+		},
+	}
+	ledgerData, _ := json.Marshal(df)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "ledger.json"), ledgerData, 0644)
+
+	// 2. Setup matching state.json
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			hostname: {
+				ReservedMB: 1024,
+			},
+		},
+	}
+	stateData, _ := json.Marshal(st)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "state.json"), stateData, 0644)
+
+	// 3. Setup matching snapshot.json (capacity is 4096MB, which is > 1024MB)
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:     hostname,
+				Hostname: hostname,
+				Resources: &models.Resources{
+					RAMTotalMB: 4096,
+				},
+			},
+		},
+	}
+	snapData, _ := json.Marshal(snap)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "snapshot.json"), snapData, 0644)
+
+	// 4. Setup nodes.yaml config
+	cfgData := fmt.Sprintf("nodes:\n  - name: %s\n    hostname: %s\n", hostname, hostname)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "nodes.yaml"), []byte(cfgData), 0644)
+
+	// Run doctor command in text mode
+	cmd := reservationsDoctorCmd()
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd.SetArgs([]string{"--format", "text"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor healthy failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "No issues found") {
+		t.Errorf("expected healthy message, got:\n%s", stdout)
+	}
+
+	// Run doctor command in json mode
+	cmd = reservationsDoctorCmd()
+	stdout, stderr, err = captureProcessOutput(t, func() error {
+		cmd.SetArgs([]string{"--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor healthy json failed: %v", err)
+	}
+
+	var res struct {
+		Healthy  bool            `json:"healthy"`
+		Findings []DoctorFinding `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("unmarshal json result failed: %v\noutput: %s", err, stdout)
+	}
+	if !res.Healthy {
+		t.Errorf("expected healthy=true, got false")
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("expected 0 findings, got %d", len(res.Findings))
+	}
+}
+
+func TestReservationsDoctorFindingsAndFix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	err := os.MkdirAll(filepath.Join(home, ".axis"), 0755)
+	if err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "localhost"
+	}
+
+	// Mock processAlive helper
+	oldProcessAlive := reservationsDoctorProcessAlive
+	reservationsDoctorProcessAlive = func(pid int) bool {
+		if pid == 999999 {
+			return false
+		}
+		return true
+	}
+	defer func() {
+		reservationsDoctorProcessAlive = oldProcessAlive
+	}()
+
+	// Setup doctor findings:
+	// - expired-1: expired (ExpiresAt in the past)
+	// - stale-1: stale (LastHeartbeat 5 minutes ago)
+	// - orphaned-1: local, OwnerPID = 999999 (not alive)
+	// - valid-1: valid active entry (RAMMB = 1024)
+	now := time.Now().UTC()
+	type diskFormat struct {
+		Entries []*reservation.Entry `json:"entries"`
+	}
+	df := diskFormat{
+		Entries: []*reservation.Entry{
+			{
+				ID:            "expired-1",
+				Node:          hostname,
+				RAMMB:         1024,
+				ExpiresAt:     now.Add(-1 * time.Minute),
+				CreatedAt:     now.Add(-10 * time.Minute),
+				LastHeartbeat: now,
+			},
+			{
+				ID:            "stale-1",
+				Node:          hostname,
+				RAMMB:         1024,
+				CreatedAt:     now.Add(-10 * time.Minute),
+				LastHeartbeat: now.Add(-5 * time.Minute),
+			},
+			{
+				ID:            "orphaned-1",
+				Node:          hostname,
+				RAMMB:         1024,
+				OwnerPID:      999999,
+				CreatedAt:     now,
+				LastHeartbeat: now,
+			},
+			{
+				ID:            "valid-1",
+				Node:          hostname,
+				RAMMB:         1024,
+				CreatedAt:     now,
+				LastHeartbeat: now,
+			},
+		},
+	}
+	ledgerData, _ := json.Marshal(df)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "ledger.json"), ledgerData, 0644)
+
+	// State.json: Node ReservedMB is 9999 (but ledger total has 4096 initially -> drift)
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			hostname: {
+				ReservedMB: 9999,
+			},
+		},
+	}
+	stateData, _ := json.Marshal(st)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "state.json"), stateData, 0644)
+
+	// Snapshot.json: RAMTotalMB is 512 (but ledger total has 4096 initially -> leak)
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:     hostname,
+				Hostname: hostname,
+				Resources: &models.Resources{
+					RAMTotalMB: 512,
+				},
+			},
+		},
+	}
+	snapData, _ := json.Marshal(snap)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "snapshot.json"), snapData, 0644)
+
+	cfgData := fmt.Sprintf("nodes:\n  - name: %s\n    hostname: %s\n", hostname, hostname)
+	_ = os.WriteFile(filepath.Join(home, ".axis", "nodes.yaml"), []byte(cfgData), 0644)
+
+	// 1. Run doctor without --fix
+	cmd := reservationsDoctorCmd()
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd.SetArgs([]string{"--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor findings json failed: %v\nstderr: %s", err, stderr)
+	}
+
+	var res struct {
+		Healthy  bool            `json:"healthy"`
+		Findings []DoctorFinding `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("unmarshal json findings failed: %v\noutput: %s", err, stdout)
+	}
+
+	if res.Healthy {
+		t.Errorf("expected healthy=false, got true")
+	}
+
+	// Verify all expected categories are present
+	foundTypes := make(map[string]bool)
+	for _, f := range res.Findings {
+		foundTypes[f.Type] = true
+	}
+	for _, tName := range []string{"expired", "stale", "orphaned", "drift", "leak"} {
+		if !foundTypes[tName] {
+			t.Errorf("missing expected finding type: %s", tName)
+		}
+	}
+
+	// Run in text format to ensure it prints the table
+	cmdText := reservationsDoctorCmd()
+	stdoutText, _, _ := captureProcessOutput(t, func() error {
+		cmdText.SetArgs([]string{"--format", "text"})
+		return cmdText.Execute()
+	})
+	for _, tName := range []string{"EXPIRED", "STALE", "ORPHANED", "DRIFT", "LEAK"} {
+		if !strings.Contains(stdoutText, tName) {
+			t.Errorf("expected text output to contain %q, got:\n%s", tName, stdoutText)
+		}
+	}
+
+	// 2. Run doctor with --fix
+	cmdFix := reservationsDoctorCmd()
+	stdoutFix, _, err := captureProcessOutput(t, func() error {
+		cmdFix.SetArgs([]string{"--fix", "--format", "json"})
+		return cmdFix.Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor fix json failed: %v", err)
+	}
+
+	var resFix struct {
+		Healthy  bool            `json:"healthy"`
+		Findings []DoctorFinding `json:"findings"`
+		Fixed    []DoctorFinding `json:"fixed"`
+	}
+	if err := json.Unmarshal([]byte(stdoutFix), &resFix); err != nil {
+		t.Fatalf("unmarshal json fix failed: %v\noutput: %s", err, stdoutFix)
+	}
+
+	if len(resFix.Fixed) != 3 {
+		t.Errorf("expected 3 fixed entries, got %d", len(resFix.Fixed))
+	}
+
+	fixedIDs := make(map[string]bool)
+	for _, f := range resFix.Fixed {
+		fixedIDs[f.EntryID] = true
+	}
+	for _, id := range []string{"expired-1", "stale-1", "orphaned-1"} {
+		if !fixedIDs[id] {
+			t.Errorf("expected %s to be fixed", id)
+		}
+	}
+
+	// Verify entries were actually removed from the ledger on disk
+	ledger2 := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	if err := ledger2.Load(); err != nil {
+		t.Fatalf("failed to reload ledger: %v", err)
+	}
+	entries := ledger2.Entries()
+	if len(entries) != 1 {
+		t.Errorf("expected 1 remaining entry in ledger, got %d", len(entries))
+	}
+	if entries[0].ID != "valid-1" {
+		t.Errorf("expected remaining entry to be valid-1, got %s", entries[0].ID)
 	}
 }
