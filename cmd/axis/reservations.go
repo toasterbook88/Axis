@@ -389,7 +389,7 @@ var reservationsDoctorProcessAlive = func(pid int) bool {
 		if err != nil {
 			return false
 		}
-		_ = proc
+		proc.Release()
 		return true
 	}
 	proc, err := os.FindProcess(pid)
@@ -473,6 +473,8 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 		ctx = context.Background()
 	}
 
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+
 	// 1. Read ledger file directly to inspect raw entries before Load cleans them
 	var diskEntries []reservation.Entry
 	ledgerPath := reservation.Path()
@@ -554,7 +556,6 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 
 	// If fix is requested, perform remediation
 	if fix && len(findings) > 0 {
-		ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 		if err := ledger.LockFile(ctx); err != nil {
 			return fmt.Errorf("acquiring write lock on ledger: %w", err)
 		}
@@ -590,13 +591,7 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 	// Calculate current entries after possible fixes
 	var currentEntries []reservation.Entry
 	if fix {
-		// Read ledger entries from memory
-		ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
-		if err := ledger.Load(); err == nil {
-			currentEntries = ledger.Entries()
-		} else {
-			currentEntries = diskEntries
-		}
+		currentEntries = ledger.Entries()
 	} else {
 		currentEntries = diskEntries
 	}

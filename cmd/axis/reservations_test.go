@@ -392,6 +392,7 @@ func TestTruncateID(t *testing.T) {
 func TestReservationsDoctorHealthy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	// Create a clean layout: create .axis directory
 	err := os.MkdirAll(filepath.Join(home, ".axis"), 0755)
@@ -495,6 +496,7 @@ func TestReservationsDoctorHealthy(t *testing.T) {
 func TestReservationsDoctorFindingsAndFix(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	err := os.MkdirAll(filepath.Join(home, ".axis"), 0755)
 	if err != nil {
