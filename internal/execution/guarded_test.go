@@ -32,7 +32,21 @@ func TestMain(m *testing.M) {
 	GetGitRepoState = func(dir string) (git.RepoState, error) {
 		return git.RepoState{IsRepo: true, IsDirty: false}, nil
 	}
+
+	// Redirect the asynchronous event log away from per-test HOME/.axis dirs.
+	// The event worker keeps files open briefly; writing into t.TempDir()
+	// can race with Go's TempDir cleanup and cause flaky "directory not
+	// empty" failures.
+	eventLogDir, err := os.MkdirTemp("", "axis-execution-events-*")
+	if err != nil {
+		panic(fmt.Sprintf("failed to create temp directory: %v", err))
+	}
+	events.SetLogPath(filepath.Join(eventLogDir, "events.jsonl"))
+
+	// Run tests and clean up immediately since defer does not run before os.Exit.
 	code := m.Run()
+	events.FlushEvents(2 * time.Second)
+	_ = os.RemoveAll(eventLogDir)
 	GetGitRepoState = prevGit
 	os.Exit(code)
 }
