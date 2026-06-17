@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/safety"
@@ -48,8 +51,12 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerSummary(tc)
 	r.registerReservations(tc)
 	r.registerReadFile()
+	r.registerWriteFile()
+	r.registerEditFile()
 	r.registerListDirectory()
+	r.registerGrepSearch()
 	r.registerShell()
+	r.registerGitTools()
 	return r
 }
 
@@ -236,7 +243,7 @@ func (r *ToolRegistry) registerReadFile() {
 			}
 			defer f.Close()
 
-			const maxFileSize = 8000
+			const maxFileSize = 32000
 			// Read up to maxFileSize+1 to detect truncation.
 			limited := io.LimitReader(f, int64(maxFileSize)+1)
 			data, err := io.ReadAll(limited)
@@ -329,6 +336,7 @@ func validateToolPath(p string) (string, error) {
 
 type shellArgs struct {
 	Command string `json:"command"`
+	Cwd     string `json:"cwd,omitempty"`
 }
 
 // ShellSafetyGate is called before executing any shell command. It receives
@@ -347,13 +355,17 @@ func DefaultSafetyGate(k *knowledge.ClusterKnowledge) ShellSafetyGate {
 	}
 }
 
-// shellTimeout is the maximum duration for a single shell command.
-const shellTimeout = 30 * time.Second
-
 func (r *ToolRegistry) registerShell() {
 	r.add("run_shell",
 		"Execute a shell command through the agent execution gate. CLI callers may route this through guarded AXIS execution with placement and reservation protection; destructive commands will still be blocked.",
-		json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"The shell command to execute"}},"required":["command"]}`),
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"command":{"type":"string","description":"The shell command to execute"},
+				"cwd":{"type":"string","description":"Optional working directory to execute the command in"}
+			},
+			"required":["command"]
+		}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a shellArgs
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -369,36 +381,43 @@ func (r *ToolRegistry) registerShell() {
 	)
 }
 
-// ExecuteShell runs a local shell command with timeout and captures output.
-// This is the fallback shell runner when no guarded AXIS executor is wired in.
+// ExecuteShell runs a local shell command with a default 30s timeout and captures output.
+// This is kept for backward compatibility.
 func ExecuteShell(ctx context.Context, command string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, shellTimeout)
-	defer cancel()
+	return ExecuteShellWithTimeout(30*time.Second)(ctx, command)
+}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+// ExecuteShellWithTimeout returns a ShellRunner configured with a specific command timeout.
+func ExecuteShellWithTimeout(timeout time.Duration) ShellRunner {
+	return func(ctx context.Context, command string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 
-	err := cmd.Run()
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n[stderr] " + stderr.String()
-	}
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
 
-	if ctx.Err() == context.DeadlineExceeded {
-		return output + "\n[timeout after 30s]", fmt.Errorf("command timed out after 30s")
-	}
-	if err != nil {
-		return output + "\n[exit error] " + err.Error(), nil
-	}
+		err := cmd.Run()
+		output := stdout.String()
+		if stderr.Len() > 0 {
+			output += "\n[stderr] " + stderr.String()
+		}
 
-	// Cap output to prevent blowing up the context window.
-	const maxOutput = 4000
-	if len([]rune(output)) > maxOutput {
-		output = truncateRune(output, maxOutput) + "\n... [truncated to 4000 chars]"
+		if ctx.Err() == context.DeadlineExceeded {
+			return output + fmt.Sprintf("\n[timeout after %v]", timeout), fmt.Errorf("command timed out after %v", timeout)
+		}
+		if err != nil {
+			return output + "\n[exit error] " + err.Error(), nil
+		}
+
+		// Cap output to prevent blowing up the context window.
+		const maxOutput = 16000
+		if len([]rune(output)) > maxOutput {
+			output = truncateRune(output, maxOutput) + fmt.Sprintf("\n... [truncated to %d chars]", maxOutput)
+		}
+		return output, nil
 	}
-	return output, nil
 }
 
 // truncateRune truncates a string to maxLen runes, appending "..." if truncated.
@@ -411,4 +430,288 @@ func truncateRune(s string, maxLen int) string {
 		return string(runes[:maxLen])
 	}
 	return string(runes[:maxLen-3]) + "..."
+}
+
+// validateToolPathForWrite validates and resolves a path for writing files,
+// supporting files and directories that do not exist yet.
+func validateToolPathForWrite(p string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+	clean := filepath.Clean(p)
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Join(cwd, clean)
+	}
+
+	// Since the file/directory may not exist, resolve the closest existing ancestor.
+	dir := filepath.Dir(clean)
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve path %q: %w", p, err)
+	}
+
+	relDir, err := filepath.Rel(dir, clean)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", p, err)
+	}
+	resolved := filepath.Join(resolvedDir, relDir)
+
+	rel, err := filepath.Rel(cwd, resolved)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", p, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes working directory", p)
+	}
+	return resolved, nil
+}
+
+// --- Tool: write_file ---
+
+type writeFileArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+func (r *ToolRegistry) registerWriteFile() {
+	r.add("write_file",
+		"Create a new file or overwrite an existing file with the specified content. Paths are restricted to the current working directory and its subdirectories for safety.",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"path":{"type":"string","description":"Relative or absolute file path"},
+				"content":{"type":"string","description":"The contents to write to the file"}
+			},
+			"required":["path","content"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a writeFileArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for write_file: %w", err)
+			}
+			if a.Path == "" {
+				return "", fmt.Errorf("write_file requires a non-empty \"path\" argument")
+			}
+			clean, err := validateToolPathForWrite(a.Path)
+			if err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(filepath.Dir(clean), 0755); err != nil {
+				return "", fmt.Errorf("cannot create parent directory: %w", err)
+			}
+			if err := os.WriteFile(clean, []byte(a.Content), 0644); err != nil {
+				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
+			}
+			return fmt.Sprintf("Successfully wrote %d bytes to %s", len(a.Content), a.Path), nil
+		},
+	)
+}
+
+// --- Tool: edit_file ---
+
+type editFileArgs struct {
+	Path               string `json:"path"`
+	TargetContent      string `json:"target_content"`
+	ReplacementContent string `json:"replacement_content"`
+}
+
+func (r *ToolRegistry) registerEditFile() {
+	r.add("edit_file",
+		"Replace a specific block of text in an existing file. The target_content must match exactly and be unique within the file.",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"path":{"type":"string","description":"Relative or absolute file path"},
+				"target_content":{"type":"string","description":"The exact block of text to be replaced"},
+				"replacement_content":{"type":"string","description":"The new text to replace the target block"}
+			},
+			"required":["path","target_content","replacement_content"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a editFileArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for edit_file: %w", err)
+			}
+			if a.Path == "" {
+				return "", fmt.Errorf("edit_file requires a non-empty \"path\" argument")
+			}
+			clean, err := validateToolPath(a.Path)
+			if err != nil {
+				return "", err
+			}
+			data, err := os.ReadFile(clean)
+			if err != nil {
+				return "", fmt.Errorf("cannot read file %q: %w", clean, err)
+			}
+			content := string(data)
+			count := strings.Count(content, a.TargetContent)
+			if count == 0 {
+				return "", fmt.Errorf("target_content not found in file %q", clean)
+			}
+			if count > 1 {
+				return "", fmt.Errorf("target_content is not unique in file %q (found %d occurrences)", clean, count)
+			}
+			newContent := strings.Replace(content, a.TargetContent, a.ReplacementContent, 1)
+			if err := os.WriteFile(clean, []byte(newContent), 0644); err != nil {
+				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
+			}
+			return fmt.Sprintf("Successfully replaced target content in %s", a.Path), nil
+		},
+	)
+}
+
+// --- Tool: grep_search ---
+
+type grepArgs struct {
+	Query string `json:"query"`
+	Path  string `json:"path,omitempty"`
+}
+
+func (r *ToolRegistry) registerGrepSearch() {
+	r.add("grep_search",
+		"Search recursively for a pattern in text files within a directory. Skips binary files and hidden directories.",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"query":{"type":"string","description":"The search term or pattern to look for"},
+				"path":{"type":"string","description":"Directory or file to search (defaults to '.')"}
+			},
+			"required":["query"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a grepArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for grep_search: %w", err)
+			}
+			if a.Query == "" {
+				return "", fmt.Errorf("grep_search requires a non-empty \"query\" argument")
+			}
+			searchPath := a.Path
+			if searchPath == "" {
+				searchPath = "."
+			}
+			clean, err := validateToolPath(searchPath)
+			if err != nil {
+				return "", err
+			}
+
+			var matches []string
+			maxMatches := 50
+			limitErr := fmt.Errorf("match limit reached")
+			err = filepath.Walk(clean, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if len(matches) >= maxMatches {
+					return limitErr
+				}
+				if info.IsDir() {
+					name := info.Name()
+					if name != "." && name != ".." && strings.HasPrefix(name, ".") {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				name := info.Name()
+				if strings.HasPrefix(name, ".") {
+					return nil
+				}
+
+				f, err := os.Open(path)
+				if err != nil {
+					return nil
+				}
+				defer f.Close()
+
+				buf := make([]byte, 512)
+				n, _ := f.Read(buf)
+				for i := 0; i < n; i++ {
+					if buf[i] == 0 {
+						return nil
+					}
+				}
+
+				_, _ = f.Seek(0, 0)
+				scanner := bufio.NewScanner(f)
+				lineNum := 0
+				for scanner.Scan() {
+					lineNum++
+					line := scanner.Text()
+					if strings.Contains(line, a.Query) {
+						rel, _ := filepath.Rel(clean, path)
+						if rel == "" || rel == "." {
+							rel = filepath.Base(path)
+						}
+						matches = append(matches, fmt.Sprintf("%s:%d: %s", rel, lineNum, strings.TrimSpace(line)))
+						if len(matches) >= maxMatches {
+							break
+						}
+					}
+				}
+				return nil
+			})
+			if err != nil && err != limitErr {
+				return "", fmt.Errorf("search error: %w", err)
+			}
+			if len(matches) == 0 {
+				return fmt.Sprintf("No matches found for %q", a.Query), nil
+			}
+			return strings.Join(matches, "\n"), nil
+		},
+	)
+}
+
+// RegisterMCPTools registers all tools from connected MCP servers.
+func (r *ToolRegistry) RegisterMCPTools(mcpRegistry *mcpclient.Registry) {
+	if mcpRegistry == nil {
+		return
+	}
+	for _, entry := range mcpRegistry.ListAllTools() {
+		server := entry.Server
+		toolName := entry.Tool.Name
+		agentToolName := fmt.Sprintf("mcp_%s_%s", server, toolName)
+
+		paramSchema, err := json.Marshal(entry.Tool.InputSchema)
+		if err != nil {
+			continue
+		}
+
+		r.add(agentToolName, entry.Tool.Description, json.RawMessage(paramSchema), func(ctx context.Context, args json.RawMessage) (string, error) {
+			var mcpArgs map[string]any
+			if len(args) > 0 {
+				if err := json.Unmarshal(args, &mcpArgs); err != nil {
+					return "", fmt.Errorf("invalid JSON arguments for MCP tool: %w", err)
+				}
+			}
+			res := mcpRegistry.CallTool(ctx, server, toolName, mcpArgs)
+			if res.Err != nil {
+				return "", res.Err
+			}
+
+			var parts []string
+			for _, content := range res.Result.Content {
+				if tc, ok := content.(mcp.TextContent); ok {
+					parts = append(parts, tc.Text)
+				} else if ic, ok := content.(mcp.ImageContent); ok {
+					parts = append(parts, fmt.Sprintf("[image: %s %d bytes]", ic.MIMEType, len(ic.Data)))
+				} else {
+					b, _ := json.MarshalIndent(content, "", "  ")
+					parts = append(parts, string(b))
+				}
+			}
+			return strings.Join(parts, "\n"), nil
+		})
+	}
 }

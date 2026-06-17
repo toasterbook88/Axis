@@ -250,3 +250,23 @@ func rewriteClientToServer(t *testing.T, rawURL string) *http.Client {
 		}),
 	}
 }
+
+func TestIsModelToolCapable(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"qwen3.5:4b", true},
+		{"llama3.1:8b", true},
+		{"gemma3n:e2b", false},
+		{"custom-unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := IsModelToolCapable(tt.model)
+		if got != tt.want {
+			t.Errorf("IsModelToolCapable(%q) = %v, want %v", tt.model, got, tt.want)
+		}
+	}
+}

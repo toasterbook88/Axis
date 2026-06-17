@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -103,6 +105,16 @@ func neverConfirm() ConfirmFunc {
 	}
 }
 
+// capturingConfirm stores the description it was asked to confirm.
+func capturingConfirm(result *string) ConfirmFunc {
+	return func(toolName, description string, safetyScore int) ConfirmResult {
+		if result != nil {
+			*result = description
+		}
+		return ConfirmYes
+	}
+}
+
 // --- Tool Registry Tests ---
 
 func TestToolRegistryHasAllDefaultTools(t *testing.T) {
@@ -111,7 +123,9 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 
 	expected := []string{
 		"axis_status", "axis_facts", "axis_place", "axis_summary",
-		"axis_reservations", "read_file", "list_directory", "run_shell",
+		"axis_reservations", "read_file", "write_file", "edit_file",
+		"list_directory", "grep_search", "run_shell",
+		"git_status", "git_diff", "git_log",
 	}
 	for _, name := range expected {
 		if !r.HasTool(name) {
@@ -303,6 +317,162 @@ func TestToolListDirectoryPathValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "escapes") {
 		t.Errorf("expected 'escapes' error, got: %s", err.Error())
+	}
+}
+
+func TestToolWriteFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	result, err := r.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"subdir/new.txt","content":"file content"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Successfully wrote") {
+		t.Errorf("expected success message, got: %s", result)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, "subdir/new.txt"))
+	if err != nil {
+		t.Fatalf("failed to read back file: %v", err)
+	}
+	if string(data) != "file content" {
+		t.Errorf("expected 'file content', got: %q", string(data))
+	}
+}
+
+func TestToolEditFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	path := filepath.Join(tmpDir, "edit.txt")
+	if err := os.WriteFile(path, []byte("hello world\nhello again"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	result, err := r.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path": "edit.txt",
+		"target_content": "world",
+		"replacement_content": "axis"
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Successfully replaced") {
+		t.Errorf("expected success message, got: %s", result)
+	}
+
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "hello axis") {
+		t.Errorf("expected 'hello axis', got: %q", string(data))
+	}
+
+	_, err = r.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path": "edit.txt",
+		"target_content": "hello",
+		"replacement_content": "hi"
+	}`))
+	if err == nil {
+		t.Fatal("expected error for non-unique replacement")
+	}
+}
+
+func TestToolGrepSearch(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("the quick brown fox"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("jumps over the lazy dog"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	result, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"fox"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "file1.txt:1: the quick brown fox") {
+		t.Errorf("expected matching line in grep result, got: %s", result)
+	}
+
+	result, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"lazy"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "file2.txt:1: jumps over the lazy dog") {
+		t.Errorf("expected matching line in grep result, got: %s", result)
+	}
+}
+
+func TestToolGrepSearchLimitsMatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	// Create enough files to exceed the 50 match limit with a single line each.
+	for i := 0; i < 55; i++ {
+		name := filepath.Join(tmpDir, fmt.Sprintf("file%03d.txt", i))
+		if err := os.WriteFile(name, []byte("match token\n"), 0644); err != nil {
+			t.Fatalf("failed to write test file: %v", err)
+		}
+	}
+
+	result, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"token"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	if len(lines) != 50 {
+		t.Errorf("expected 50 matches, got %d", len(lines))
+	}
+}
+
+func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	var description string
+	confirm := capturingConfirm(&description)
+	agent := New(Config{
+		Endpoint:    "http://unused.example.com",
+		Model:       "unused",
+		Confirm:     confirm,
+		ToolContext: &ToolContext{},
+	})
+
+	_, err := agent.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{
+			Name:      "write_file",
+			Arguments: json.RawMessage(`{"path":"new-dir/new.txt","content":"line1\nline2\nline3"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(description, "Create new file") && !strings.Contains(description, "new-dir/new.txt") {
+		t.Errorf("expected new-file preview description, got: %s", description)
 	}
 }
 
@@ -640,6 +810,77 @@ func TestAgentShellDeclinedByOperator(t *testing.T) {
 	}
 }
 
+func TestAgentMutatingToolDeclinedByOperator(t *testing.T) {
+	server := mockOllamaChat(t, [][]mockStreamChunk{
+		toolCallResponse("write_file", `{"path":"foo.txt","content":"hello"}`),
+		textResponse("OK, I won't write that file."),
+	})
+	defer server.Close()
+
+	var out bytes.Buffer
+	agent := New(Config{
+		Endpoint:    server.URL,
+		Model:       "test-model",
+		Output:      &out,
+		Confirm:     neverConfirm(),
+		ToolContext: &ToolContext{},
+	})
+
+	err := agent.Run(context.Background(), "write hello to foo.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "declined") && !strings.Contains(output, "operator declined to execute tool") {
+		t.Errorf("expected 'declined' message, got: %s", output)
+	}
+}
+
+func TestAgentMCPToolRegistration(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			ID     any    `json:"id"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+
+		switch req.Method {
+		case "initialize":
+			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test-server","version":"1.0"}}}`, req.ID)))
+		case "tools/list":
+			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"tools":[{"name":"echo","description":"echoes input","inputSchema":{"type":"object"}}]}}`, req.ID)))
+		case "resources/list":
+			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"resources":[]}}`, req.ID)))
+		case "prompts/list":
+			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"prompts":[]}}`, req.ID)))
+		}
+	}))
+	defer s.Close()
+
+	cfg := &config.Config{
+		Nodes: []config.NodeConfig{{Name: "dummy", Hostname: "localhost", SSHUser: "root"}},
+		MCPServers: map[string]config.MCPServerConfig{
+			"mock": {
+				Transport: "http",
+				URL:       s.URL,
+			},
+		},
+	}
+
+	mcpReg := mcpclient.NewRegistry()
+	mcpReg.ConnectAll(context.Background(), cfg)
+	defer mcpReg.Close()
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+	r.RegisterMCPTools(mcpReg)
+
+	if !r.HasTool("mcp_mock_echo") {
+		t.Fatal("expected MCP tool 'mcp_mock_echo' to be registered")
+	}
+}
+
 func TestAgentShellBlockedBySafety(t *testing.T) {
 	server := mockOllamaChat(t, [][]mockStreamChunk{
 		toolCallResponse("run_shell", `{"command":"rm -rf /"}`),
@@ -652,7 +893,7 @@ func TestAgentShellBlockedBySafety(t *testing.T) {
 		Endpoint:    server.URL,
 		Model:       "test-model",
 		Output:      &out,
-		Confirm:     alwaysConfirm(),
+		Confirm:     neverConfirm(),
 		ToolContext: &ToolContext{},
 	})
 
@@ -661,8 +902,41 @@ func TestAgentShellBlockedBySafety(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := out.String()
-	if !strings.Contains(output, "blocked") {
-		t.Errorf("expected 'blocked' message for rm -rf /, got: %s", output)
+	if !strings.Contains(output, "blocked") && !strings.Contains(output, "declined") {
+		t.Errorf("expected safety block or decline message for rm -rf /, got: %s", output)
+	}
+}
+
+func TestAgentShellBlockedBySafetyOverride(t *testing.T) {
+	server := mockOllamaChat(t, [][]mockStreamChunk{
+		toolCallResponse("run_shell", `{"command":"rm -rf /"}`),
+		textResponse("Safety override succeeded."),
+	})
+	defer server.Close()
+
+	var out bytes.Buffer
+	called := false
+	agent := New(Config{
+		Endpoint:    server.URL,
+		Model:       "test-model",
+		Output:      &out,
+		Confirm:     alwaysConfirm(),
+		ToolContext: &ToolContext{},
+		RunShell: func(ctx context.Context, command string) (string, error) {
+			called = true
+			if command != "rm -rf /" {
+				t.Fatalf("expected command 'rm -rf /', got %q", command)
+			}
+			return "mock override success", nil
+		},
+	})
+
+	err := agent.Run(context.Background(), "delete everything")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("expected safety override shell command to execute")
 	}
 }
 

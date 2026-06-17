@@ -260,3 +260,12 @@ func formatToolCapableSuggestion() string {
 	rest := strings.Join(names[:len(names)-1], ", ")
 	return fmt.Sprintf("try a tool-capable model such as %s, or %s", rest, last)
 }
+
+// IsModelToolCapable checks if the given model tag is known to support tool calling.
+// It matches against known toolCapablePrefixes and excludes nonToolFamilies.
+func IsModelToolCapable(model string) bool {
+	if model == "" {
+		return false
+	}
+	return pickToolCapable([]string{model}) != ""
+}

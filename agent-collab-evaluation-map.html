@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Collab Evaluation Map</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #151819;
+      --muted: #5b6468;
+      --line: #cfd8dc;
+      --paper: #f7f8f5;
+      --panel: #ffffff;
+      --axis: #0f6f61;
+      --collab: #7b4b18;
+      --skill: #355c9a;
+      --tree: #6b3a72;
+      --risk: #b3261e;
+      --ok: #287044;
+      --warn: #a15c00;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: end;
+      padding-bottom: 18px;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .stamp {
+      border: 1px solid var(--ink);
+      padding: 10px 12px;
+      min-width: 210px;
+      background: var(--panel);
+    }
+
+    .stamp strong {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-top: 5px solid var(--ink);
+      padding: 14px;
+      min-height: 176px;
+    }
+
+    .axis {
+      border-top-color: var(--axis);
+    }
+
+    .collab {
+      border-top-color: var(--collab);
+    }
+
+    .skill {
+      border-top-color: var(--skill);
+    }
+
+    .tree {
+      border-top-color: var(--tree);
+    }
+
+    .label {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 3px 7px;
+      border: 1px solid currentColor;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .label.axis {
+      color: var(--axis);
+    }
+
+    .label.collab {
+      color: var(--collab);
+    }
+
+    .label.skill {
+      color: var(--skill);
+    }
+
+    .label.tree {
+      color: var(--tree);
+    }
+
+    dl {
+      display: grid;
+      grid-template-columns: 90px minmax(0, 1fr);
+      gap: 6px 8px;
+      margin: 12px 0 0;
+      font-size: 13px;
+    }
+
+    dt {
+      color: var(--muted);
+    }
+
+    dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .section {
+      margin-top: 24px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 16px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(130px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .step {
+      position: relative;
+      border: 1px solid var(--line);
+      padding: 12px;
+      min-height: 126px;
+      background: #fbfcfa;
+    }
+
+    .step::after {
+      content: ">";
+      position: absolute;
+      right: -12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .step:last-child::after {
+      content: "";
+    }
+
+    .number {
+      display: inline-grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      margin-bottom: 8px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: white;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr 1.3fr;
+      border: 1px solid var(--line);
+      margin-top: 10px;
+    }
+
+    .matrix > div {
+      padding: 10px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      min-height: 48px;
+    }
+
+    .matrix > div:nth-child(3n) {
+      border-right: 0;
+    }
+
+    .matrix .head {
+      background: #eef2f0;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .ok {
+      background: #e4f2e9;
+      color: var(--ok);
+    }
+
+    .warn {
+      background: #fff0d8;
+      color: var(--warn);
+    }
+
+    .risk {
+      background: #fde8e6;
+      color: var(--risk);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 18px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    code {
+      background: #eef2f0;
+      padding: 2px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    @media (max-width: 900px) {
+      header,
+      .grid,
+      .split,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .step::after {
+        content: "v";
+        right: 16px;
+        top: auto;
+        bottom: -18px;
+      }
+
+      .matrix {
+        grid-template-columns: 1fr;
+      }
+
+      .matrix > div,
+      .matrix > div:nth-child(3n) {
+        border-right: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p>Read-only baseline inventory and reconciliation plan</p>
+        <h1>Agent Collab Evaluation Map</h1>
+      </div>
+      <div class="stamp">
+        <strong>Status</strong>
+        No files edited, moved, archived, or deleted
+      </div>
+    </header>
+
+    <section class="grid" aria-label="current state cards">
+      <article class="card axis">
+        <span class="label axis">AXIS repo</span>
+        <h2>Verified anchor</h2>
+        <p>Use live code, git state, and current-state docs as the baseline for all reconciliation.</p>
+        <dl>
+          <dt>HEAD</dt>
+          <dd><code>8efe91b</code> / PR #169</dd>
+          <dt>Release</dt>
+          <dd><code>v0.11.0</code></dd>
+          <dt>Dirty</dt>
+          <dd><code>.agent_state.json</code> untracked</dd>
+        </dl>
+      </article>
+
+      <article class="card collab">
+        <span class="label collab">agent-collab</span>
+        <h2>Coordination layer</h2>
+        <p>Useful doctrine and memory, but the status blocks lag behind current AXIS reality.</p>
+        <dl>
+          <dt>Status</dt>
+          <dd><span class="pill warn">stale</span></dd>
+          <dt>Claims</dt>
+          <dd>PR #146, <code>v0.10.8</code></dd>
+          <dt>Action</dt>
+          <dd>Reconcile, do not rewrite history</dd>
+        </dl>
+      </article>
+
+      <article class="card skill">
+        <span class="label skill">Skill Bank</span>
+        <h2>Prompt/tool layer</h2>
+        <p>The repository is clean and manifest-consistent, but validation is too shallow.</p>
+        <dl>
+          <dt>HEAD</dt>
+          <dd><code>7f15a80</code></dd>
+          <dt>Skills</dt>
+          <dd>25 source, 25 local mirror</dd>
+          <dt>Hooks</dt>
+          <dd>5 declared</dd>
+        </dl>
+      </article>
+
+      <article class="card tree">
+        <span class="label tree">Tree repo</span>
+        <h2>Durable memory layer</h2>
+        <p>The local working copy is dirty, so it needs archive-first review before sync or normalization.</p>
+        <dl>
+          <dt>HEAD</dt>
+          <dd><code>4b28824</code></dd>
+          <dt>Status</dt>
+          <dd><span class="pill risk">dirty</span></dd>
+          <dt>Rule</dt>
+          <dd>Archive before touching</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section class="section">
+      <h2>Why Baseline Inventory Comes First</h2>
+      <div class="flow">
+        <div class="step">
+          <span class="number">1</span>
+          <h3>Observe</h3>
+          <p>Read git state, manifests, current docs, and dirty worktrees without changing them.</p>
+        </div>
+        <div class="step">
+          <span class="number">2</span>
+          <h3>Compare</h3>
+          <p>Cross-check old coordination claims against current AXIS code and release state.</p>
+        </div>
+        <div class="step">
+          <span class="number">3</span>
+          <h3>Classify</h3>
+          <p>Mark items as current, shipped, superseded, stale, or needing operator decision.</p>
+        </div>
+        <div class="step">
+          <span class="number">4</span>
+          <h3>Archive</h3>
+          <p>Before future edits, preserve originals with timestamped manifests and checksums.</p>
+        </div>
+        <div class="step">
+          <span class="number">5</span>
+          <h3>Reconcile</h3>
+          <p>Update coordination files so later agents start from accurate shared context.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Staleness Matrix</h2>
+      <div class="matrix" role="table" aria-label="staleness matrix">
+        <div class="head">Surface</div>
+        <div class="head">Finding</div>
+        <div class="head">Meaning</div>
+
+        <div><code>BLACKBOARD.md</code></div>
+        <div><span class="pill risk">stale</span></div>
+        <div>Top snapshot still points to PR #146 and <code>v0.10.8</code>, while AXIS is at PR #169 and <code>v0.11.0</code>.</div>
+
+        <div><code>TASKS.md</code></div>
+        <div><span class="pill warn">mixed</span></div>
+        <div>Contains good historical context, but several active tasks are already shipped or superseded.</div>
+
+        <div><code>OPEN.md</code></div>
+        <div><span class="pill warn">needs triage</span></div>
+        <div>Research items should be reclassified before any agent uses them as a work queue.</div>
+
+        <div><code>axis-skill-bank</code></div>
+        <div><span class="pill ok">clean repo</span></div>
+        <div>Manifest and counts line up, but validator should be strengthened before trusting every skill.</div>
+
+        <div><code>agent-collab/tree</code></div>
+        <div><span class="pill risk">dirty</span></div>
+        <div>Uncommitted local changes must be archived and reviewed before sync, push, or normalization.</div>
+      </div>
+    </section>
+
+    <section class="section split">
+      <div>
+        <h2>Next Safe Action</h2>
+        <p>Archive current coordination files, then reconcile them against verified AXIS state.</p>
+        <ul>
+          <li>Archive <code>BLACKBOARD.md</code>, <code>TASKS.md</code>, and <code>OPEN.md</code>.</li>
+          <li>Create an archive manifest with source, destination, timestamp, checksum, and reason.</li>
+          <li>Append a new reconciliation entry rather than erasing old history.</li>
+          <li>Classify stale items as shipped, superseded, still active, or operator-gated.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Guardrails</h2>
+        <p>The cleanup must preserve private/public boundaries and avoid destructive changes.</p>
+        <ul>
+          <li>Never delete; archive first.</li>
+          <li>Do not promote private paths, hostnames, session IDs, or topology into public AXIS docs.</li>
+          <li>Treat Skill Bank prompts as advisory until validated against live code.</li>
+          <li>Keep AXIS code state as the anchor for shipped behavior.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

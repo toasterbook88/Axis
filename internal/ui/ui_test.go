@@ -318,3 +318,11 @@ func TestPrintWarningToStderr(t *testing.T) {
 func TestPrintSuccessToStderr(t *testing.T) {
 	PrintSuccess("test success")
 }
+
+func TestStripANSI(t *testing.T) {
+	styled := Bold("hello") + Green(" world")
+	stripped := stripANSI(styled)
+	if stripped != "hello world" {
+		t.Errorf("stripANSI(%q) = %q, want 'hello world'", styled, stripped)
+	}
+}

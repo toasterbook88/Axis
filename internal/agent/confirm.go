@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // ConfirmResult is the operator's response to a tool-execution prompt.
@@ -26,19 +28,32 @@ type ConfirmFunc func(toolName, description string, safetyScore int) ConfirmResu
 // DefaultConfirm reads from stdin, writing the prompt to w.
 func DefaultConfirm(r io.Reader, w io.Writer) ConfirmFunc {
 	return func(toolName, description string, safetyScore int) ConfirmResult {
-		colorPrefix := ""
+		boldTool := ui.Bold(toolName)
+		boldRisk := ""
 		if safetyScore >= 70 {
-			colorPrefix = "[HIGH RISK] "
+			boldRisk = ui.Red(" [HIGH RISK]")
 		} else if safetyScore >= 40 {
-			colorPrefix = "[CAUTION] "
+			boldRisk = ui.Yellow(" [CAUTION]")
 		}
 
-		fmt.Fprintf(w, "\n%s▶ Agent wants to execute: %s\n", colorPrefix, toolName)
-		fmt.Fprintf(w, "  %s\n", description)
+		fmt.Fprintf(w, "\n%s %s%s\n", ui.Cyan("▶"), ui.Bold("Agent wants to execute:"), boldRisk)
+		fmt.Fprintf(w, "  Tool: %s\n", boldTool)
 		if safetyScore > 0 {
-			fmt.Fprintf(w, "  Safety score: %d/100\n", safetyScore)
+			fmt.Fprintf(w, "  Safety Score: %d/100\n", safetyScore)
 		}
-		fmt.Fprintf(w, "  [y]es / [n]o / [a]lways / ne[v]er: ")
+		fmt.Fprintf(w, "  Details:\n")
+		// Indent the description lines
+		lines := strings.Split(description, "\n")
+		for _, l := range lines {
+			fmt.Fprintf(w, "    %s\n", l)
+		}
+		fmt.Fprintf(w, "\n  %s (%s/%s/%s/%s): ",
+			ui.Bold("Confirm action?"),
+			ui.Green("y")+"es",
+			ui.Red("n")+"o",
+			ui.Yellow("a")+"lways",
+			ui.Dim("v")+"er",
+		)
 
 		scanner := bufio.NewScanner(r)
 		if scanner.Scan() {
@@ -79,8 +94,21 @@ func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 func isReadOnlyTool(name string) bool {
 	switch name {
 	case "axis_status", "axis_facts", "axis_place", "axis_summary",
-		"axis_reservations", "read_file", "list_directory":
+		"axis_reservations", "read_file", "list_directory", "grep_search":
 		return true
+	}
+	if strings.HasPrefix(name, "mcp_") {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "read") ||
+			strings.Contains(lower, "list") ||
+			strings.Contains(lower, "get") ||
+			strings.Contains(lower, "recall") ||
+			strings.Contains(lower, "status") ||
+			strings.Contains(lower, "health") ||
+			strings.Contains(lower, "search") ||
+			strings.Contains(lower, "show") {
+			return true
+		}
 	}
 	return false
 }
