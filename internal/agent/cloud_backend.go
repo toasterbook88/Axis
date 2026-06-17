@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
-	"github.com/toasterbook88/axis/internal/config"
 )
 
 // CloudBackend implements ChatBackend for cloud providers (OpenAI-compatible and Anthropic).
@@ -29,39 +28,6 @@ type CloudBackend struct {
 	tokensIn  int
 	tokensOut int
 	totalCost float64
-}
-
-// NewCloudBackend creates a new CloudBackend using the configuration of the specified provider.
-func NewCloudBackend(cfg *config.Config, providerName, model string) (*CloudBackend, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
-	}
-	pCfg, ok := cfg.AIProviders[providerName]
-	if !ok {
-		return nil, fmt.Errorf("provider %q not found in config", providerName)
-	}
-
-	// Resolve API key.
-	var apiKey string
-	if pCfg.APIKeyEnv != "" {
-		apiKey = strings.TrimSpace(pCfg.APIKeyEnv)
-		// If it looks like an environment variable name, resolve it.
-		if !strings.Contains(apiKey, " ") && !strings.Contains(apiKey, "/") {
-			// It might be the actual ENV var name or we resolve it.
-			// Let's resolve env var first:
-			val := strings.TrimSpace(pCfg.APIKeyEnv)
-			if strings.HasPrefix(val, "$") {
-				val = val[1:]
-			}
-			apiKey = strings.TrimSpace(fmt.Sprintf("%s", pCfg.APIKeyEnv)) // wait, we resolve actual value
-		}
-	}
-	// We will resolve the API key properly in the caller or registry, or we can just accept APIKey passed directly,
-	// or resolve it here. Wait, let's look at how registry.go does it:
-	// apiKey, err := secrets.ResolveOrEmpty(providerCfg.APIKeyEnv, providerCfg.APIKeyFile)
-	// That's perfect. So we can just pass the resolved API key into the constructor or resolve it here.
-	// To make it easy, let's accept APIKey directly as a constructor argument:
-	return nil, fmt.Errorf("use NewCloudBackendWithKey")
 }
 
 // NewCloudBackendWithKey creates a new CloudBackend with a pre-resolved API key.
@@ -165,6 +131,8 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 	indexMap := make(map[int]int)
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	usageReported := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -184,6 +152,7 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		if len(chunk.Choices) == 0 {
 			if chunk.Usage != nil {
 				b.accumulateTokens(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
+				usageReported = true
 			}
 			continue
 		}
@@ -228,20 +197,27 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 	result.ToolCalls = accumulatedTools
 
 	// If token usage wasn't reported in the stream, estimate it.
-	b.mu.Lock()
-	if b.tokensIn == 0 {
-		// Estimate prompt tokens (roughly chars / 4)
+	if !usageReported {
 		pLen := 0
 		for _, m := range msgs {
 			pLen += len(m.Content)
+			for _, tc := range m.ToolCalls {
+				pLen += len(tc.Function.Name) + len(tc.Function.Arguments)
+			}
+		}
+		for _, tc := range result.ToolCalls {
+			pLen += len(tc.Function.Name) + len(tc.Function.Arguments)
 		}
 		estIn := pLen / 4
+		if estIn == 0 {
+			estIn = 1
+		}
 		estOut := len(result.Content) / 4
-		b.tokensIn += estIn
-		b.tokensOut += estOut
-		b.totalCost += (float64(estIn+estOut) / 1000.0) * b.costPer1K
+		if estOut == 0 {
+			estOut = 1
+		}
+		b.accumulateTokens(estIn, estOut)
 	}
-	b.mu.Unlock()
 
 	return result, nil
 }
@@ -379,6 +355,8 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 	blockToToolID := make(map[int]string)
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	usageReported := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -426,10 +404,12 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		case "message_delta":
 			if event.Usage != nil {
 				b.accumulateTokens(0, event.Usage.OutputTokens)
+				usageReported = true
 			}
 		case "message_start":
 			if event.Message != nil && event.Message.Usage != nil {
 				b.accumulateTokens(event.Message.Usage.InputTokens, 0)
+				usageReported = true
 			}
 		}
 	}
@@ -445,6 +425,29 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		}
 	}
 	result.ToolCalls = accumulatedTools
+
+	// If token usage wasn't reported in the stream, estimate it.
+	if !usageReported {
+		pLen := 0
+		for _, m := range msgs {
+			pLen += len(m.Content)
+			for _, tc := range m.ToolCalls {
+				pLen += len(tc.Function.Name) + len(tc.Function.Arguments)
+			}
+		}
+		for _, tc := range result.ToolCalls {
+			pLen += len(tc.Function.Name) + len(tc.Function.Arguments)
+		}
+		estIn := pLen / 4
+		if estIn == 0 {
+			estIn = 1
+		}
+		estOut := len(result.Content) / 4
+		if estOut == 0 {
+			estOut = 1
+		}
+		b.accumulateTokens(estIn, estOut)
+	}
 
 	return result, nil
 }

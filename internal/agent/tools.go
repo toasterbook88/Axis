@@ -609,12 +609,13 @@ func (r *ToolRegistry) registerGrepSearch() {
 
 			var matches []string
 			maxMatches := 50
+			limitErr := fmt.Errorf("match limit reached")
 			err = filepath.Walk(clean, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
 				}
 				if len(matches) >= maxMatches {
-					return filepath.SkipDir
+					return limitErr
 				}
 				if info.IsDir() {
 					name := info.Name()
@@ -661,7 +662,7 @@ func (r *ToolRegistry) registerGrepSearch() {
 				}
 				return nil
 			})
-			if err != nil {
+			if err != nil && err != limitErr {
 				return "", fmt.Errorf("search error: %w", err)
 			}
 			if len(matches) == 0 {

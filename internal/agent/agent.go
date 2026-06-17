@@ -351,7 +351,7 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 				Content string `json:"content"`
 			}
 			if err := json.Unmarshal(args, &wArgs); err == nil && wArgs.Path != "" {
-				cleanPath, err := validateToolPath(wArgs.Path)
+				cleanPath, err := validateToolPathForWrite(wArgs.Path)
 				if err == nil {
 					if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
 						oldContent, err := os.ReadFile(cleanPath)

@@ -105,6 +105,16 @@ func neverConfirm() ConfirmFunc {
 	}
 }
 
+// capturingConfirm stores the description it was asked to confirm.
+func capturingConfirm(result *string) ConfirmFunc {
+	return func(toolName, description string, safetyScore int) ConfirmResult {
+		if result != nil {
+			*result = description
+		}
+		return ConfirmYes
+	}
+}
+
 // --- Tool Registry Tests ---
 
 func TestToolRegistryHasAllDefaultTools(t *testing.T) {
@@ -407,6 +417,62 @@ func TestToolGrepSearch(t *testing.T) {
 	}
 	if !strings.Contains(result, "file2.txt:1: jumps over the lazy dog") {
 		t.Errorf("expected matching line in grep result, got: %s", result)
+	}
+}
+
+func TestToolGrepSearchLimitsMatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := &ToolContext{}
+	r := NewToolRegistry(tc)
+
+	// Create enough files to exceed the 50 match limit with a single line each.
+	for i := 0; i < 55; i++ {
+		name := filepath.Join(tmpDir, fmt.Sprintf("file%03d.txt", i))
+		if err := os.WriteFile(name, []byte("match token\n"), 0644); err != nil {
+			t.Fatalf("failed to write test file: %v", err)
+		}
+	}
+
+	result, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"token"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	if len(lines) != 50 {
+		t.Errorf("expected 50 matches, got %d", len(lines))
+	}
+}
+
+func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	var description string
+	confirm := capturingConfirm(&description)
+	agent := New(Config{
+		Endpoint:    "http://unused.example.com",
+		Model:       "unused",
+		Confirm:     confirm,
+		ToolContext: &ToolContext{},
+	})
+
+	_, err := agent.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{
+			Name:      "write_file",
+			Arguments: json.RawMessage(`{"path":"new-dir/new.txt","content":"line1\nline2\nline3"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(description, "Create new file") && !strings.Contains(description, "new-dir/new.txt") {
+		t.Errorf("expected new-file preview description, got: %s", description)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -141,5 +142,60 @@ func TestCloudBackend_Anthropic(t *testing.T) {
 	expectedCost := (40.0 / 1000.0) * 0.015
 	if cost != expectedCost {
 		t.Errorf("expected cost %f, got %f", expectedCost, cost)
+	}
+}
+
+func TestCloudBackend_OpenAI_MultiTurnEstimate(t *testing.T) {
+	// Mock provider that never reports usage, forcing estimation each turn.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend := NewCloudBackendWithKey("openai", server.URL, "mock-key", "gpt-4o", 0.002)
+	for i := 0; i < 2; i++ {
+		_, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hello"}}, nil, io.Discard)
+		if err != nil {
+			t.Fatalf("turn %d: unexpected error: %v", i, err)
+		}
+	}
+	tokensIn, tokensOut, cost := backend.Stats()
+	if tokensIn <= 0 {
+		t.Errorf("expected positive prompt tokens after two turns, got %d", tokensIn)
+	}
+	if tokensOut <= 0 {
+		t.Errorf("expected positive completion tokens after two turns, got %d", tokensOut)
+	}
+	if cost <= 0 {
+		t.Errorf("expected positive cost after two turns, got %f", cost)
+	}
+}
+
+func TestCloudBackend_Anthropic_MultiTurnEstimate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"hi\"}}\n\n")
+	}))
+	defer server.Close()
+
+	backend := NewCloudBackendWithKey("anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	for i := 0; i < 2; i++ {
+		_, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hello"}}, nil, io.Discard)
+		if err != nil {
+			t.Fatalf("turn %d: unexpected error: %v", i, err)
+		}
+	}
+	tokensIn, tokensOut, cost := backend.Stats()
+	if tokensIn <= 0 {
+		t.Errorf("expected positive prompt tokens after two turns, got %d", tokensIn)
+	}
+	if tokensOut <= 0 {
+		t.Errorf("expected positive completion tokens after two turns, got %d", tokensOut)
+	}
+	if cost <= 0 {
+		t.Errorf("expected positive cost after two turns, got %f", cost)
 	}
 }
