@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 )
 
 // Table renders aligned columns via stdlib tabwriter.
@@ -23,24 +22,90 @@ func (t *Table) AddRow(cols ...string) {
 	t.rows = append(t.rows, cols)
 }
 
-// Render writes the formatted table to w.
-// Headers are bold; columns are tab-aligned.
+// Render writes the formatted table to w using thin unicode borders.
 func (t *Table) Render(w io.Writer) {
-	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
+	if len(t.headers) == 0 {
+		return
+	}
 
-	// Header row
-	colored := make([]string, len(t.headers))
+	// Calculate maximum width for each column (excluding ANSI formatting codes)
+	widths := make([]int, len(t.headers))
 	for i, h := range t.headers {
-		colored[i] = Bold(h)
+		widths[i] = len(stripANSI(h))
 	}
-	fmt.Fprintln(tw, strings.Join(colored, "\t"))
-
-	// Data rows
 	for _, row := range t.rows {
-		fmt.Fprintln(tw, strings.Join(row, "\t"))
+		for i, val := range row {
+			if i < len(widths) {
+				plainLen := len(stripANSI(val))
+				if plainLen > widths[i] {
+					widths[i] = plainLen
+				}
+			}
+		}
 	}
 
-	tw.Flush()
+	// Prepare horizontal dividers
+	var top []string
+	var mid []string
+	var bot []string
+	for _, w := range widths {
+		dash := strings.Repeat("─", w+2)
+		top = append(top, dash)
+		mid = append(mid, dash)
+		bot = append(bot, dash)
+	}
+
+	// 1. Top border
+	fmt.Fprintf(w, "┌%s┐\n", strings.Join(top, "┬"))
+
+	// 2. Header row
+	var headParts []string
+	for i, h := range t.headers {
+		plainHead := stripANSI(h)
+		pad := widths[i] - len(plainHead)
+		headParts = append(headParts, fmt.Sprintf(" %s%s ", Bold(h), strings.Repeat(" ", pad)))
+	}
+	fmt.Fprintf(w, "│%s│\n", strings.Join(headParts, "│"))
+
+	// 3. Middle border
+	fmt.Fprintf(w, "├%s┤\n", strings.Join(mid, "┼"))
+
+	// 4. Data rows
+	for _, row := range t.rows {
+		var rowParts []string
+		for i := 0; i < len(t.headers); i++ {
+			val := ""
+			if i < len(row) {
+				val = row[i]
+			}
+			plainLen := len(stripANSI(val))
+			pad := widths[i] - plainLen
+			rowParts = append(rowParts, fmt.Sprintf(" %s%s ", val, strings.Repeat(" ", pad)))
+		}
+		fmt.Fprintf(w, "│%s│\n", strings.Join(rowParts, "│"))
+	}
+
+	// 5. Bottom border
+	fmt.Fprintf(w, "└%s┘\n", strings.Join(bot, "┴"))
+}
+
+func stripANSI(str string) string {
+	var sb strings.Builder
+	inEscape := false
+	for i := 0; i < len(str); i++ {
+		if str[i] == '\033' || str[i] == '\u001b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if str[i] == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		sb.WriteByte(str[i])
+	}
+	return sb.String()
 }
 
 // RowCount returns the number of data rows.

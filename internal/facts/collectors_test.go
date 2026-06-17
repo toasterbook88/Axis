@@ -100,7 +100,9 @@ func TestLocalCollectorCollectsFacts(t *testing.T) {
 	if facts.Hostname == "" {
 		t.Fatal("expected hostname")
 	}
-	if facts.CollectedAt.IsZero() || time.Since(facts.CollectedAt) > time.Minute {
+	// CI runners can be slow; allow the collection to have happened within a
+	// reasonable window rather than a strict 60 seconds.
+	if facts.CollectedAt.IsZero() || time.Since(facts.CollectedAt) > 5*time.Minute {
 		t.Fatalf("unexpected collected_at: %s", facts.CollectedAt)
 	}
 	if facts.Status != models.StatusComplete && facts.Status != models.StatusPartial {

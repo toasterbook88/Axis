@@ -12,6 +12,8 @@ const (
 
 // ToolCall represents a tool invocation requested by the model.
 type ToolCall struct {
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
 	Function ToolCallFunction `json:"function"`
 }
 
@@ -23,9 +25,10 @@ type ToolCallFunction struct {
 
 // Message is a single turn in a conversation (compatible with Ollama /api/chat).
 type Message struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // Conversation holds an ordered sequence of messages with token-budget awareness.

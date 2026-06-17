@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -201,6 +202,21 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 
 	switch checkResp.StatusCode {
 	case http.StatusOK:
+		if !IsModelToolCapable(c.Model) {
+			var show struct {
+				Modelfile string `json:"modelfile"`
+				Template  string `json:"template"`
+			}
+			if err := json.NewDecoder(checkResp.Body).Decode(&show); err == nil {
+				hasTools := strings.Contains(show.Template, ".Tools") ||
+					strings.Contains(strings.ToLower(show.Template), "tools") ||
+					strings.Contains(show.Modelfile, ".Tools") ||
+					strings.Contains(strings.ToLower(show.Modelfile), "tools")
+				if !hasTools && w != nil {
+					fmt.Fprintf(w, "Warning: model %q may not support tool calling. For best results, %s.\n", c.Model, formatToolCapableSuggestion())
+				}
+			}
+		}
 		return nil
 	case http.StatusNotFound:
 		// Try to list installed models so the operator knows what to use.
