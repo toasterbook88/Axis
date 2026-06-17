@@ -571,3 +571,66 @@ func TestClientChatStreamNilWriter(t *testing.T) {
 		t.Errorf("content = %q, want ok", result.Content)
 	}
 }
+
+func TestClientEnsureRunning_ToolCapabilitiesWarning(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		showResp    string
+		wantWarning bool
+	}{
+		{
+			name:        "known tool capable model - no warning",
+			model:       "qwen3.5:4b",
+			showResp:    `{"modelfile":"","template":""}`,
+			wantWarning: false,
+		},
+		{
+			name:        "unknown model, template has tools - no warning",
+			model:       "custom-model",
+			showResp:    `{"modelfile":"","template":"{{.Tools}}"}`,
+			wantWarning: false,
+		},
+		{
+			name:        "unknown model, modelfile has tools - no warning",
+			model:       "custom-model",
+			showResp:    `{"modelfile":"PARAMETER tools [...]","template":""}`,
+			wantWarning: false,
+		},
+		{
+			name:        "unknown model, neither has tools - warning expected",
+			model:       "custom-model",
+			showResp:    `{"modelfile":"basic system message","template":"no helpers template"}`,
+			wantWarning: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/":
+					w.WriteHeader(http.StatusOK)
+				case "/api/show":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tt.showResp))
+				default:
+					t.Fatalf("unexpected path: %s", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client := NewClient(server.URL, tt.model)
+			var buf bytes.Buffer
+			err := client.EnsureRunning(context.Background(), &buf)
+			if err != nil {
+				t.Fatalf("EnsureRunning returned error: %v", err)
+			}
+
+			hasWarning := strings.Contains(buf.String(), "may not support tool calling")
+			if hasWarning != tt.wantWarning {
+				t.Errorf("warning status = %v (output: %q), want %v", hasWarning, buf.String(), tt.wantWarning)
+			}
+		})
+	}
+}
