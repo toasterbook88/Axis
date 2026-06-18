@@ -707,23 +707,24 @@ var (
 )
 
 func redactCommandFromDecision(dec string) string {
-	start := strings.IndexByte(dec, '\'')
-	if start >= 0 {
-		end := strings.IndexByte(dec[start+1:], '\'')
-		if end >= 0 {
-			actualEnd := start + 1 + end
-			return dec[:start] + "'[REDACTED]'" + redactCommandFromDecision(dec[actualEnd+1:])
+	var sb strings.Builder
+	i := 0
+	for i < len(dec) {
+		ch := dec[i]
+		if ch == '\'' || ch == '"' {
+			end := strings.IndexByte(dec[i+1:], ch)
+			if end >= 0 {
+				sb.WriteByte(ch)
+				sb.WriteString("[REDACTED]")
+				sb.WriteByte(ch)
+				i += 1 + end + 1
+				continue
+			}
 		}
+		sb.WriteByte(ch)
+		i++
 	}
-	startDouble := strings.IndexByte(dec, '"')
-	if startDouble >= 0 {
-		endDouble := strings.IndexByte(dec[startDouble+1:], '"')
-		if endDouble >= 0 {
-			actualEnd := startDouble + 1 + endDouble
-			return dec[:startDouble] + `"[REDACTED]"` + redactCommandFromDecision(dec[actualEnd+1:])
-		}
-	}
-	return dec
+	return sb.String()
 }
 
 func sanitizeAndRedactEvidence(payload string) string {
@@ -748,19 +749,14 @@ func truncatePayload(payload string, maxBytes int) string {
 		return payload
 	}
 	limit := maxBytes - 3
-	r := []rune(payload)
-	var sb strings.Builder
-	byteCount := 0
-	for _, runeVal := range r {
-		runeLen := len(string(runeVal))
-		if byteCount+runeLen > limit {
+	truncateIdx := 0
+	for idx := range payload {
+		if idx > limit {
 			break
 		}
-		sb.WriteRune(runeVal)
-		byteCount += runeLen
+		truncateIdx = idx
 	}
-	sb.WriteString("...")
-	return sb.String()
+	return payload[:truncateIdx] + "..."
 }
 
 func (a *Agent) retrieveEvidence(userPrompt string) string {

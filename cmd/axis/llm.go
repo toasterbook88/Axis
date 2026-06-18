@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/llmrouter"
+	"github.com/toasterbook88/axis/internal/lockutil"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -397,16 +397,20 @@ func writeAtomicTempYAML(dir string, rootNode *yaml.Node) (string, error) {
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(rootNode); err != nil {
+		enc.Close()
+		f.Close()
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("marshal yaml AST: %w", err)
 	}
 	enc.Close()
 
 	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("write temp config: %w", err)
 	}
 	if err := f.Sync(); err != nil {
+		f.Close()
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("fsync temp config: %w", err)
 	}
@@ -424,15 +428,15 @@ func writeConfigSafely(configPath string, rootNode *yaml.Node, originalHash stri
 	}
 
 	lockPath := configPath + ".lock"
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	lockFile, err := lockutil.OpenLock(lockPath)
 	if err != nil {
-		return fmt.Errorf("open lock file: %w", err)
+		return err
 	}
 	defer lockFile.Close()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFile.LockEx(); err != nil {
 		return fmt.Errorf("acquire config lock: %w", err)
 	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer lockFile.Unlock()
 
 	currentHash := ""
 	if _, err := os.Lstat(configPath); err == nil {
@@ -607,10 +611,12 @@ func writeAtomicTempFile(dir string, content []byte) (string, error) {
 	defer f.Close()
 
 	if _, err := f.Write(content); err != nil {
+		f.Close()
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("write temp key file: %w", err)
 	}
 	if err := f.Sync(); err != nil {
+		f.Close()
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("fsync temp key file: %w", err)
 	}

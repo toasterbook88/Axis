@@ -544,34 +544,36 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 		client, baseURLAddr := daemon.HttpClientForAddr(cacheAddr)
 		baseURL := daemon.NormalizeAddr(baseURLAddr)
 		if token, tokenErr := auth.LoadOrGenerateToken(); tokenErr == nil {
-			reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/v2/reservations", nil)
+			ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req, reqErr := http.NewRequestWithContext(ctx2, http.MethodGet, baseURL+"/v2/reservations", nil)
 			if reqErr == nil {
 				req.Header.Set("Authorization", "Bearer "+token)
 				resp, respErr := client.Do(req)
-				if respErr == nil && resp.StatusCode == 200 {
+				if respErr == nil {
 					defer resp.Body.Close()
-					var result struct {
-						Entries []reservation.Entry `json:"reservations"`
-					}
-					if json.NewDecoder(resp.Body).Decode(&result) == nil {
-						daemonFetched = true
-						now := time.Now()
-						limits := reservation.DefaultLimits()
-						for _, e := range result.Entries {
-							items = append(items, ReservationListItem{
-								ID:      e.ID,
-								Node:    e.Node,
-								RAMMB:   e.RAMMB,
-								Owner:   e.OwnerSurface,
-								Age:     now.Sub(e.CreatedAt),
-								IsStale: e.ClassifyLiveness(now, limits) != reservation.LivenessActive,
-							})
+					if resp.StatusCode == 200 {
+						var result struct {
+							Entries []reservation.Entry `json:"reservations"`
+						}
+						if json.NewDecoder(resp.Body).Decode(&result) == nil {
+							daemonFetched = true
+							now := time.Now()
+							limits := reservation.DefaultLimits()
+							for _, e := range result.Entries {
+								items = append(items, ReservationListItem{
+									ID:      e.ID,
+									Node:    e.Node,
+									RAMMB:   e.RAMMB,
+									Owner:   e.OwnerSurface,
+									Age:     now.Sub(e.CreatedAt),
+									IsStale: e.ClassifyLiveness(now, limits) != reservation.LivenessActive,
+								})
+							}
 						}
 					}
 				}
 			}
-			cancel()
 		}
 
 		if !daemonFetched {

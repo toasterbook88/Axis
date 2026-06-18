@@ -386,6 +386,12 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	}
 	prepared.Requirements = reqs
 
+	if rt == nil || rt.Snapshot == nil {
+		err := fmt.Errorf("cluster snapshot is not available")
+		prepared.Result.Error = err.Error()
+		prepared.Err = err
+		return prepared, err
+	}
 	nodesToEvaluate := rt.Snapshot.Nodes
 	if req.RequestedNode != "" {
 		var matchedNode *models.NodeFacts
