@@ -206,11 +206,12 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 			fmt.Sprintf("%dMB allocatable headroom (%dMB allocatable capacity, %dMB leased/reserved)",
 				effHeadroom, n.Resources.RAMAllocatableMB, n.RAMReservedMB))
 
-		if n.Resources.PressureSource == "linux-psi" {
+		switch n.Resources.PressureSource {
+		case "linux-psi":
 			reasoning = append(reasoning,
 				fmt.Sprintf("memory pressure avg10: some=%.2f%%, full=%.2f%% (source: %s)",
 					n.Resources.MemoryPSISomeAvg10, n.Resources.MemoryPSIFullAvg10, n.Resources.PressureSource))
-		} else if n.Resources.PressureSource == "darwin-vm-pressure" {
+		case "darwin-vm-pressure":
 			reasoning = append(reasoning,
 				fmt.Sprintf("memory pressure: %s (some=%.2f%%, full=%.2f%% mapped)",
 					n.Resources.Pressure, n.Resources.MemoryPSISomeAvg10, n.Resources.MemoryPSIFullAvg10))
@@ -236,11 +237,12 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 		reasoning = append(reasoning, "+15 High-Speed Compute-Pair Link (Thunderbolt)")
 	}
 
-	if n.NetworkClass == models.NetworkClassTailscale {
+	switch n.NetworkClass {
+	case models.NetworkClassTailscale:
 		reasoning = append(reasoning, "-20 VPN Latency Penalty (Tailscale overlay detected)")
-	} else if n.NetworkClass == models.NetworkClassVPN {
+	case models.NetworkClassVPN:
 		reasoning = append(reasoning, "-20 VPN Latency Penalty")
-	} else if n.NetworkClass == models.NetworkClassRelayed {
+	case models.NetworkClassRelayed:
 		reasoning = append(reasoning, "-20 VPN Latency Penalty")
 	}
 

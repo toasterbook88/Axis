@@ -34,7 +34,10 @@ func TestCloudBackend_OpenAI(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend := NewCloudBackendWithKey("openai", server.URL, "mock-key", "gpt-4o", 0.002)
+	backend, err := NewCloudBackendWithKey("openrouter", "openai", server.URL, "mock-key", "gpt-4o", 0.002)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	var streamOut bytes.Buffer
 	msgs := []chat.Message{{Role: chat.RoleUser, Content: "read foo.txt"}}
@@ -100,7 +103,10 @@ func TestCloudBackend_Anthropic(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend := NewCloudBackendWithKey("anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	backend, err := NewCloudBackendWithKey("anthropic", "anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	var streamOut bytes.Buffer
 	msgs := []chat.Message{
@@ -154,7 +160,10 @@ func TestCloudBackend_OpenAI_MultiTurnEstimate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend := NewCloudBackendWithKey("openai", server.URL, "mock-key", "gpt-4o", 0.002)
+	backend, err := NewCloudBackendWithKey("openrouter", "openai", server.URL, "mock-key", "gpt-4o", 0.002)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	for i := 0; i < 2; i++ {
 		_, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hello"}}, nil, io.Discard)
 		if err != nil {
@@ -181,7 +190,10 @@ func TestCloudBackend_Anthropic_MultiTurnEstimate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend := NewCloudBackendWithKey("anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	backend, err := NewCloudBackendWithKey("anthropic", "anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	for i := 0; i < 2; i++ {
 		_, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hello"}}, nil, io.Discard)
 		if err != nil {

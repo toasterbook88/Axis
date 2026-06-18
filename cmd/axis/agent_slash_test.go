@@ -19,7 +19,7 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	var w, errW bytes.Buffer
 
 	// Test /help
-	handled, shouldExit, err := handleREPLSlashCommand("/help", a, &w, &errW, nil, false)
+	handled, shouldExit, err := handleREPLSlashCommand("/help", a, &w, &errW, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 
 	// Test /context
 	errW.Reset()
-	handled, shouldExit, err = handleREPLSlashCommand("/context", a, &w, &errW, nil, false)
+	handled, shouldExit, err = handleREPLSlashCommand("/context", a, &w, &errW, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	if a.Conversation().Len() <= 1 {
 		t.Fatal("expected conversation to have messages")
 	}
-	handled, shouldExit, err = handleREPLSlashCommand("/clear", a, &w, &errW, nil, false)
+	handled, shouldExit, err = handleREPLSlashCommand("/clear", a, &w, &errW, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	}
 
 	// Test /exit
-	handled, shouldExit, err = handleREPLSlashCommand("/exit", a, &w, &errW, nil, false)
+	handled, shouldExit, err = handleREPLSlashCommand("/exit", a, &w, &errW, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
