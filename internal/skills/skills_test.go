@@ -105,15 +105,28 @@ func TestRecordSuccessAggregatesExistingSkill(t *testing.T) {
 	s := newStore()
 
 	s.RecordSuccess("git status", "git status --short", "node-a")
+	if s.Skills[0].PreferredNode != "node-a" {
+		t.Fatalf("expected preferred node node-a, got %q", s.Skills[0].PreferredNode)
+	}
+
 	s.RecordSuccess("git status", "git status --short", "node-b")
+	// Tie breaker: "node-a" < "node-b" alphabetically, so node-a remains preferred
+	if s.Skills[0].PreferredNode != "node-a" {
+		t.Fatalf("expected preferred node node-a under tie, got %q", s.Skills[0].PreferredNode)
+	}
+
+	s.RecordSuccess("git status", "git status --short", "node-b")
+	if s.Skills[0].PreferredNode != "node-b" {
+		t.Fatalf("expected preferred node to update to node-b, got %q", s.Skills[0].PreferredNode)
+	}
 
 	if len(s.Skills) != 1 {
 		t.Fatalf("expected one learned skill, got %d", len(s.Skills))
 	}
-	if s.Skills[0].SuccessCount != 2 {
-		t.Fatalf("expected success count 2, got %d", s.Skills[0].SuccessCount)
+	if s.Skills[0].SuccessCount != 3 {
+		t.Fatalf("expected success count 3, got %d", s.Skills[0].SuccessCount)
 	}
-	if s.Skills[0].NodeCount["node-a"] != 1 || s.Skills[0].NodeCount["node-b"] != 1 {
+	if s.Skills[0].NodeCount["node-a"] != 1 || s.Skills[0].NodeCount["node-b"] != 2 {
 		t.Fatalf("expected node counts to be tracked, got %+v", s.Skills[0].NodeCount)
 	}
 }

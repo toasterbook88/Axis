@@ -27,8 +27,10 @@ var ErrNotFound = errors.New("api key not found: neither env var nor file contai
 func Resolve(envVar, filePath string) (string, error) {
 	// Env var takes priority.
 	if envVar != "" {
-		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
-			return val, nil
+		if val, exists := os.LookupEnv(envVar); exists {
+			if trimmed := strings.TrimSpace(val); trimmed != "" {
+				return trimmed, nil
+			}
 		}
 	}
 

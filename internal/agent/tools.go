@@ -15,12 +15,16 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/safety"
+	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
+	"sync/atomic"
 )
 
 // ToolRegistry maps tool names to their definitions and executors.
@@ -32,10 +36,67 @@ type ToolRegistry struct {
 // ToolExecutor runs a tool and returns its string result.
 type ToolExecutor func(ctx context.Context, args json.RawMessage) (string, error)
 
-// ToolContext holds runtime state available to tool executors.
+type RuntimeView struct {
+	Config    *config.Config
+	Snapshot  *models.ClusterSnapshot
+	State     *state.ClusterState
+	Ledger    *reservation.Ledger
+	Skills    *skills.Store
+	Knowledge *knowledge.ClusterKnowledge
+}
+
+// ToolContext holds runtime state available to tool executors. The current
+// view is accessed atomically and reloaded on demand via the Reload callback.
 type ToolContext struct {
-	Snapshot *models.ClusterSnapshot
-	State    *state.ClusterState
+	current atomic.Pointer[RuntimeView]
+	Reload  func(context.Context) (*RuntimeView, error)
+}
+
+// NewToolContext creates a new ToolContext with an initial view.
+func NewToolContext(initial *RuntimeView, reload func(context.Context) (*RuntimeView, error)) *ToolContext {
+	if initial == nil {
+		return nil
+	}
+	tc := &ToolContext{
+		Reload: reload,
+	}
+	tc.current.Store(initial)
+	return tc
+}
+
+// Current returns the current atomically replaceable RuntimeView.
+func (tc *ToolContext) Current() *RuntimeView {
+	if tc == nil {
+		return nil
+	}
+	return tc.current.Load()
+}
+
+// ReloadCurrent reloads the current view using the Reload callback.
+func (tc *ToolContext) ReloadCurrent(ctx context.Context) error {
+	if tc == nil {
+		return fmt.Errorf("nil tool context")
+	}
+	if tc.Reload == nil {
+		return fmt.Errorf("no reload function defined")
+	}
+	view, err := tc.Reload(ctx)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("reload returned nil view")
+	}
+	if view.Config == nil || view.Snapshot == nil || view.State == nil {
+		return fmt.Errorf("reload returned incomplete view (Config, Snapshot, or State is nil)")
+	}
+	tc.current.Store(view)
+	return nil
+}
+
+// GetView returns the current atomically replaceable RuntimeView.
+func (tc *ToolContext) GetView() *RuntimeView {
+	return tc.Current()
 }
 
 // ShellRunner executes an approved shell command and returns the tool-visible
@@ -57,6 +118,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerGrepSearch()
 	r.registerShell()
 	r.registerGitTools()
+	r.registerRemoteExecutionTool()
 	return r
 }
 
@@ -108,10 +170,11 @@ func (r *ToolRegistry) registerStatus(tc *ToolContext) {
 		"Return a compact human-readable summary of the current AXIS cluster status. Includes node count, health, resources, and warnings. Use this for cluster overview questions.",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			if tc.Snapshot == nil {
+			view := tc.GetView()
+			if view == nil || view.Snapshot == nil {
 				return "No cluster snapshot available — cluster may not be configured.", nil
 			}
-			return summarizeSnapshot(tc.Snapshot), nil
+			return summarizeSnapshot(view.Snapshot), nil
 		},
 	)
 }
@@ -123,8 +186,9 @@ func (r *ToolRegistry) registerFacts(tc *ToolContext) {
 		"Return a compact human-readable summary of local hardware facts for the current machine (CPU, RAM, disk, GPUs, installed tools, Ollama status).",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			if tc.Snapshot != nil {
-				if n, ok := models.FindLocalNode(tc.Snapshot.Nodes); ok {
+			view := tc.GetView()
+			if view != nil && view.Snapshot != nil {
+				if n, ok := models.FindLocalNode(view.Snapshot.Nodes); ok {
 					return summarizeNodeFacts(n), nil
 				}
 			}
@@ -151,11 +215,12 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 			if a.Description == "" {
 				return "", fmt.Errorf("axis_place requires a non-empty \"description\" argument")
 			}
-			if tc.Snapshot == nil || len(tc.Snapshot.Nodes) == 0 {
+			view := tc.GetView()
+			if view == nil || view.Snapshot == nil || len(view.Snapshot.Nodes) == 0 {
 				return "Placement: no nodes available in snapshot.", nil
 			}
 			reqs := placement.InferRequirements(a.Description)
-			decision := placement.SelectBestNode(reqs, tc.Snapshot.Nodes, tc.State)
+			decision := placement.SelectBestNode(reqs, view.Snapshot.Nodes, view.State)
 			return summarizePlacementDecision(decision), nil
 		},
 	)
@@ -168,18 +233,19 @@ func (r *ToolRegistry) registerSummary(tc *ToolContext) {
 		"Return an ultra-compact one-line summary of the cluster (node count, health, total RAM). Good for quick status checks.",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			if tc.Snapshot == nil {
+			view := tc.GetView()
+			if view == nil || view.Snapshot == nil {
 				return "No cluster snapshot available.", nil
 			}
 			var b strings.Builder
 			fmt.Fprintf(&b, "%d nodes (%d reachable), status: %s",
-				tc.Snapshot.Summary.TotalNodes, tc.Snapshot.Summary.ReachableNodes, tc.Snapshot.Status)
-			if tc.Snapshot.Summary.TotalRAMMB > 0 {
+				view.Snapshot.Summary.TotalNodes, view.Snapshot.Summary.ReachableNodes, view.Snapshot.Status)
+			if view.Snapshot.Summary.TotalRAMMB > 0 {
 				fmt.Fprintf(&b, ", %d MB RAM total, %d MB free",
-					tc.Snapshot.Summary.TotalRAMMB, tc.Snapshot.Summary.TotalFreeRAMMB)
+					view.Snapshot.Summary.TotalRAMMB, view.Snapshot.Summary.TotalFreeRAMMB)
 			}
-			if len(tc.Snapshot.Warnings) > 0 {
-				fmt.Fprintf(&b, ", %d warnings", len(tc.Snapshot.Warnings))
+			if len(view.Snapshot.Warnings) > 0 {
+				fmt.Fprintf(&b, ", %d warnings", len(view.Snapshot.Warnings))
 			}
 			return b.String(), nil
 		},
@@ -193,12 +259,13 @@ func (r *ToolRegistry) registerReservations(tc *ToolContext) {
 		"List active reservations and task assignments across the cluster.",
 		json.RawMessage(`{"type":"object","properties":{}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			if tc.State == nil || len(tc.State.Nodes) == 0 {
+			view := tc.GetView()
+			if view == nil || view.State == nil || len(view.State.Nodes) == 0 {
 				return "No reservation state available.", nil
 			}
 			var b strings.Builder
-			fmt.Fprintf(&b, "Active reservations for %d nodes:\n", len(tc.State.Nodes))
-			for name, ns := range tc.State.Nodes {
+			fmt.Fprintf(&b, "Active reservations for %d nodes:\n", len(view.State.Nodes))
+			for name, ns := range view.State.Nodes {
 				if ns.ActiveTasks == 0 && ns.ReservedMB == 0 {
 					continue
 				}
@@ -297,7 +364,8 @@ func (r *ToolRegistry) registerListDirectory() {
 				if e.IsDir() {
 					name += "/"
 				}
-				b.WriteString(name + "\n")
+				b.WriteString(name)
+				b.WriteByte('\n')
 			}
 			return b.String(), nil
 		},
@@ -345,8 +413,14 @@ type shellArgs struct {
 type ShellSafetyGate func(command string) (allow bool, reason string, score int)
 
 // DefaultSafetyGate uses the safety package to gate shell commands.
-func DefaultSafetyGate(k *knowledge.ClusterKnowledge) ShellSafetyGate {
+func DefaultSafetyGate(tc *ToolContext) ShellSafetyGate {
 	return func(command string) (bool, string, int) {
+		var k *knowledge.ClusterKnowledge
+		if tc != nil {
+			if view := tc.GetView(); view != nil {
+				k = view.Knowledge
+			}
+		}
 		result := safety.Check(k, command, nil)
 		if result.Blocked {
 			return false, fmt.Sprintf("blocked (score %d/100): %s", result.Score, result.Reason), result.Score
@@ -659,6 +733,9 @@ func (r *ToolRegistry) registerGrepSearch() {
 							break
 						}
 					}
+				}
+				if err := scanner.Err(); err != nil {
+					return nil
 				}
 				return nil
 			})

@@ -1,3 +1,21 @@
+## Unreleased
+
+### 🔒 Security
+* `axis agent` now classifies LLM backends as local or remote and restricts untrusted evidence for remote backends.
+  - Added `BackendSecurityClass` to `agent.Config` and `Agent`; constructor code paths must declare locality explicitly.
+  - Remote backends receive only structured skill metadata (ID, success count, timestamps, preferred node, node success counts); free-form descriptions, decision summaries, and raw commands are excluded.
+  - Local backends continue to receive descriptions and decision summaries; raw command text is redacted by default and only included when `--allow-raw-command-evidence` is set.
+
+### 🔧 Internal
+* Encapsulated `ToolContext` in `internal/agent`: the current runtime view is stored in an unexported `atomic.Pointer` and reloaded atomically via `NewToolContext`, `Current`, and `ReloadCurrent`. Incomplete reloads preserve the previous view.
+* Hardened `axis llm configure` and `axis llm select` key/config file transactions:
+  - Symlink rejection via `os.Lstat`.
+  - `O_CREATE|O_EXCL` temporary files with `fsync`, atomic rename, and parent-directory `fsync`.
+  - Advisory file locking on `nodes.yaml.lock` and SHA-256 hash check to detect concurrent modification.
+  - `llm configure` rolls back only a newly created key file when YAML validation fails; pre-existing keys survive.
+  - Inferred cloud provider `kind` is persisted into `nodes.yaml` AST automatically.
+
+
 ## v0.10.7 (2026-05-22)
 
 ### 🚀 Features

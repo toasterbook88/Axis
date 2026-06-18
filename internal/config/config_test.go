@@ -287,10 +287,11 @@ ai_providers:
       - name: granite3.1-moe:1b
         aliases: ["fast", "cheap"]
         cost_per_1k: 0
-  openai:
+  groq:
     type: cloud
-    api_key_env: OPENAI_API_KEY
-    api_key_file: ~/.config/axis/openai.key
+    kind: groq
+    api_key_env: GROQ_API_KEY
+    api_key_file: ~/.config/axis/groq.key
     priority: 5
     enabled: false
 `), 0644); err != nil {
@@ -326,15 +327,15 @@ ai_providers:
 		t.Fatalf("ollama.models[0].aliases = %+v, want 2 aliases", ollama.Models[0].Aliases)
 	}
 
-	openai := cfg.AIProviders["openai"]
-	if openai.APIKeyEnv != "OPENAI_API_KEY" {
-		t.Errorf("openai.api_key_env = %q", openai.APIKeyEnv)
+	groq := cfg.AIProviders["groq"]
+	if groq.APIKeyEnv != "GROQ_API_KEY" {
+		t.Errorf("groq.api_key_env = %q", groq.APIKeyEnv)
 	}
-	if openai.APIKeyFile != "~/.config/axis/openai.key" {
-		t.Errorf("openai.api_key_file = %q", openai.APIKeyFile)
+	if groq.APIKeyFile != "~/.config/axis/groq.key" {
+		t.Errorf("groq.api_key_file = %q", groq.APIKeyFile)
 	}
-	if openai.Enabled {
-		t.Error("openai.enabled should be false")
+	if groq.Enabled {
+		t.Error("groq.enabled should be false")
 	}
 }
 

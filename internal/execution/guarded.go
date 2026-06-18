@@ -46,6 +46,7 @@ const (
 	OwnerSurfaceTaskRun       = "task-run"
 	OwnerSurfaceHTTPRun       = "http-run"
 	OwnerSurfaceAgentRunShell = "agent-run-shell"
+	OwnerSurfaceAgentRunTask  = "agent-run-task"
 )
 
 var executionHeartbeatInterval = 15 * time.Second
@@ -75,6 +76,7 @@ type GuardedExecutionRequest struct {
 	ExposePorts     string                                                `json:"expose_ports,omitempty"`
 	MemoryRequestMB int64                                                 `json:"memory_request_mb,omitempty"`
 	MemoryMaxMB     int64                                                 `json:"memory_max_mb,omitempty"`
+	RequestedNode   string                                                `json:"requested_node,omitempty"`
 	OwnerSurface    string                                                `json:"-"`
 	OwnerLabel      string                                                `json:"-"`
 	OriginOverride  models.ExecutionOrigin                                `json:"-"`
@@ -205,6 +207,7 @@ func NormalizeRequest(req *GuardedExecutionRequest) {
 	req.Confirm = strings.TrimSpace(req.Confirm)
 	req.OwnerSurface = strings.TrimSpace(req.OwnerSurface)
 	req.OwnerLabel = strings.TrimSpace(req.OwnerLabel)
+	req.RequestedNode = strings.TrimSpace(req.RequestedNode)
 	req.OriginOverride = req.OriginOverride.Normalized()
 	if req.Stdin == nil {
 		req.Stdin = os.Stdin
@@ -382,7 +385,29 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		reqs.MemoryMaxMB = req.MemoryMaxMB
 	}
 	prepared.Requirements = reqs
-	decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
+
+	nodesToEvaluate := rt.Snapshot.Nodes
+	if req.RequestedNode != "" {
+		var matchedNode *models.NodeFacts
+		for _, n := range rt.Snapshot.Nodes {
+			if strings.EqualFold(n.Name, req.RequestedNode) {
+				nodeCopy := n
+				matchedNode = &nodeCopy
+				break
+			}
+		}
+		if matchedNode == nil {
+			err := fmt.Errorf("requested node %q not found in snapshot", req.RequestedNode)
+			prepared.Result.Error = err.Error()
+			prepared.Err = err
+			return prepared, err
+		}
+		req.RequestedNode = matchedNode.Name
+		prepared.Request.RequestedNode = matchedNode.Name
+		nodesToEvaluate = []models.NodeFacts{*matchedNode}
+	}
+
+	decision := placement.SelectBestNode(reqs, nodesToEvaluate, rt.State)
 
 	// Advisory placement decision event (post-decision)
 	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskPlacementRequested, map[string]any{
@@ -400,7 +425,12 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.IsLocal = decision.IsLocal
 
 	if !decision.OK {
-		err := fmt.Errorf("no suitable node found")
+		var err error
+		if req.RequestedNode != "" {
+			err = fmt.Errorf("requested node %q rejected by placement: %s", req.RequestedNode, strings.Join(decision.Reasoning, "; "))
+		} else {
+			err = fmt.Errorf("no suitable node found")
+		}
 		prepared.Result.Error = err.Error()
 		prepared.Err = err
 		return prepared, err
@@ -433,7 +463,12 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	reservationMB := ReservationMBForRequirements(reqs)
 	prepared.ReservationMB = reservationMB
 	if !CanReserve(rt.Snapshot, decision.Node, reservationMB) {
-		err := fmt.Errorf("reservation cap exceeded")
+		var err error
+		if req.RequestedNode != "" {
+			err = fmt.Errorf("requested node %q rejected by placement: reservation cap exceeded (%d MB request)", req.RequestedNode, reservationMB)
+		} else {
+			err = fmt.Errorf("reservation cap exceeded")
+		}
 		prepared.Result.Error = fmt.Sprintf("node %s cannot reserve %d MB (current reservations exceed cap)", decision.Node, reservationMB)
 		prepared.Err = err
 		return prepared, err
@@ -492,7 +527,7 @@ func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (Guar
 	}
 
 	if prepared.Request.OwnerSurface == OwnerSurfaceTaskRun {
-		ok, cleanup, err := handleDirtyWorkingTree(ctx, prepared.Request, prepared.Request.Stdout, prepared.Request.Stderr)
+		ok, cleanup, err := handleDirtyWorkingTree(ctx, prepared.Request, prepared.Request.Stderr)
 		if err != nil || !ok {
 			prepared.Result.Error = err.Error()
 			prepared.Result.ExitCode = 1
@@ -1293,7 +1328,7 @@ func ParseExposePorts(s string) (local, remote int, err error) {
 
 var GetGitRepoState = git.GetRepoState
 
-func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, stdout, stderr io.Writer) (bool, func(), error) {
+func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, stderr io.Writer) (bool, func(), error) {
 	if stderr == nil {
 		stderr = os.Stderr
 	}

@@ -166,20 +166,6 @@ func (p *cloudProvider) EstimateCost(prompt, model string) float64 {
 	return (float64(estimatedTokens) / 1000.0) * selected.CostPer1K
 }
 
-// costFromTokens calculates cost using actual API-reported token counts.
-// Falls back to the heuristic estimate if actual tokens are unavailable.
-func (p *cloudProvider) costFromTokens(prompt, model string, tokensIn, tokensOut int) float64 {
-	actualTokens := tokensIn + tokensOut
-	if actualTokens <= 0 {
-		return p.EstimateCost(prompt, model)
-	}
-	selected, ok := p.lookupModel(model)
-	if !ok || selected.CostPer1K <= 0 {
-		return 0
-	}
-	return (float64(actualTokens) / 1000.0) * selected.CostPer1K
-}
-
 func (p *cloudProvider) Send(ctx context.Context, prompt, model string) (GenerateResult, error) {
 	selected, ok := p.lookupModel(model)
 	if !ok {
@@ -438,19 +424,25 @@ func newConfiguredCloudProvider(name string, cfg config.AIProviderConfig, apiKey
 		return nil, fmt.Errorf("provider %s: no models configured", name)
 	}
 
-	if err := validateEndpointSecurity(cfg.Endpoint, name); err != nil {
+	pKind := strings.ToLower(strings.TrimSpace(cfg.Kind))
+	if pKind == "" {
+		pKind = string(detectCloudProviderKind(name, cfg.Endpoint))
+	}
+
+	resolvedEndpoint, err := ResolveEndpoint(pKind, cfg.Endpoint)
+	if err != nil {
 		return nil, err
 	}
 
 	providerCfg := CloudProviderConfig{
 		Name:     name,
-		Endpoint: cfg.Endpoint,
+		Endpoint: resolvedEndpoint,
 		APIKey:   apiKey,
 		Priority: cfg.Priority,
 		Models:   models,
 	}
 
-	switch detectCloudProviderKind(name, cfg.Endpoint) {
+	switch cloudProviderKind(pKind) {
 	case cloudProviderOpenRouter:
 		return NewOpenRouterProvider(providerCfg), nil
 	case cloudProviderGroq:
@@ -458,8 +450,28 @@ func newConfiguredCloudProvider(name string, cfg config.AIProviderConfig, apiKey
 	case cloudProviderAnthropic:
 		return NewAnthropicProvider(providerCfg), nil
 	default:
-		return nil, fmt.Errorf("provider %s: unsupported cloud provider", name)
+		return nil, fmt.Errorf("provider %s: unsupported cloud provider kind %q", name, pKind)
 	}
+}
+
+// ResolveEndpoint validates the endpoint and returns the default base URL for the given provider kind if empty.
+func ResolveEndpoint(kind, endpoint string) (string, error) {
+	trimmed := strings.TrimSpace(endpoint)
+	if err := validateEndpointSecurity(trimmed, kind); err != nil {
+		return "", err
+	}
+	if trimmed != "" {
+		return strings.TrimRight(trimmed, "/"), nil
+	}
+	switch strings.ToLower(kind) {
+	case "openrouter":
+		return openRouterDefaultBaseURL, nil
+	case "groq":
+		return groqDefaultBaseURL, nil
+	case "anthropic", "claude":
+		return anthropicDefaultBaseURL, nil
+	}
+	return "", fmt.Errorf("unsupported provider kind: %q", kind)
 }
 
 // validateEndpointSecurity rejects non-HTTPS endpoints unless the hostname

@@ -1719,7 +1719,7 @@ func TestHandleDirtyWorkingTreeClean(t *testing.T) {
 	req := GuardedExecutionRequest{
 		Stdin: os.Stdin,
 	}
-	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, &stderr)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1749,7 +1749,7 @@ func TestHandleDirtyWorkingTreeDirtyNonInteractive(t *testing.T) {
 	req := GuardedExecutionRequest{
 		Stdin: os.Stdin,
 	}
-	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, &stderr)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1785,7 +1785,7 @@ func TestHandleDirtyWorkingTreeForceDirtyEnv(t *testing.T) {
 	req := GuardedExecutionRequest{
 		Stdin: os.Stdin,
 	}
-	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, &stderr)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1819,7 +1819,7 @@ func TestHandleDirtyWorkingTreeDirtyInteractiveAbort(t *testing.T) {
 	req := GuardedExecutionRequest{
 		Stdin: strings.NewReader("a\n"),
 	}
-	ok, _, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	ok, _, err := handleDirtyWorkingTree(context.Background(), req, &stderr)
 	if err == nil {
 		t.Fatal("expected abortion error")
 	}
@@ -1850,7 +1850,7 @@ func TestHandleDirtyWorkingTreeDirtyInteractiveProceed(t *testing.T) {
 	req := GuardedExecutionRequest{
 		Stdin: strings.NewReader("p\n"),
 	}
-	ok, _, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	ok, _, err := handleDirtyWorkingTree(context.Background(), req, &stderr)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1920,7 +1920,7 @@ func TestHandleDirtyWorkingTreeDirtyInteractiveStash(t *testing.T) {
 	req := GuardedExecutionRequest{
 		Stdin: strings.NewReader("s\n"),
 	}
-	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, nil, &stderr)
+	ok, cleanup, err := handleDirtyWorkingTree(context.Background(), req, &stderr)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -1937,4 +1937,58 @@ func TestHandleDirtyWorkingTreeDirtyInteractiveStash(t *testing.T) {
 	}
 
 	cleanup()
+}
+
+func TestPrepareGuardedExecutionRequestedNode(t *testing.T) {
+	nodeA := models.NodeFacts{
+		Name:     "node-a",
+		Hostname: "127.0.0.1",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 8192,
+			RAMFreeMB:  4096,
+			CPUCores:   4,
+		},
+	}
+	nodeB := models.NodeFacts{
+		Name:     "node-b",
+		Hostname: "127.0.0.2",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 4096,
+			RAMFreeMB:  2048,
+			CPUCores:   2,
+		},
+	}
+	rt := testGuardedRuntime(t, []models.NodeFacts{nodeA, nodeB})
+
+	// Test 1: Requested node node-b (should select node-b specifically even if node-a has higher fit score / CPU / RAM)
+	req := GuardedExecutionRequest{
+		Description:   "run task",
+		Mode:          ModeExec,
+		Confirm:       ConfirmWord,
+		RequestedNode: "node-b",
+	}
+	prep, err := PrepareGuardedExecution(context.Background(), rt, req)
+	if err != nil {
+		t.Fatalf("PrepareGuardedExecution: %v", err)
+	}
+	if prep.Result.Node != "node-b" {
+		t.Fatalf("expected node-b to be selected, got: %q", prep.Result.Node)
+	}
+
+	// Test 2: Non-existent node (should fail)
+	reqInvalid := GuardedExecutionRequest{
+		Description:   "run task",
+		Mode:          ModeExec,
+		Confirm:       ConfirmWord,
+		RequestedNode: "non-existent-node",
+	}
+	_, errInvalid := PrepareGuardedExecution(context.Background(), rt, reqInvalid)
+	if errInvalid == nil {
+		t.Fatal("expected error for non-existent requested node")
+	}
+	if !strings.Contains(errInvalid.Error(), "not found in snapshot") {
+		t.Fatalf("expected not found error, got: %v", errInvalid)
+	}
 }

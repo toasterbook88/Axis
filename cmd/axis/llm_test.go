@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"gopkg.in/yaml.v3"
 )
 
 func init() {
@@ -658,4 +660,444 @@ func TestLLMFallbackTransitionAndAlerts(t *testing.T) {
 	if !strings.Contains(gotInteractive, "⚠️  OOM Alert: NixOS RAM limit exceeded.") {
 		t.Errorf("expected OOM Alert in output, got %q", gotInteractive)
 	}
+}
+
+type lineByLineReader struct {
+	lines []string
+	idx   int
+}
+
+func (r *lineByLineReader) Read(p []byte) (n int, err error) {
+	if r.idx >= len(r.lines) {
+		return 0, io.EOF
+	}
+	line := r.lines[r.idx] + "\n"
+	r.idx++
+	n = copy(p, line)
+	return n, nil
+}
+
+func TestLLMConfigureCmd_CloudProviderSecretFile(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+
+	tempConfigPath := filepath.Join(tempDir, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(tempConfigPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	initialConfig := `# This is a comment at the top of nodes.yaml
+nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: me # user comment
+`
+	if err := os.WriteFile(tempConfigPath, []byte(initialConfig), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Stub buildLLMRegistry
+	prevBuildRegistry := buildLLMRegistry
+	buildLLMRegistry = func(cfg *config.Config) (*llmrouter.Registry, error) {
+		reg := llmrouter.NewRegistry()
+		reg.Register(&llmTestProvider{name: "openrouter"})
+		return reg, nil
+	}
+	defer func() { buildLLMRegistry = prevBuildRegistry }()
+
+	cmd := llmConfigureCmd()
+	cmd.SetArgs([]string{"openrouter"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	// Simulated user input:
+	// 1. Enter provider type: cloud
+	// 2. Enable this provider?: y
+	// 3. Enter provider priority: 60
+	// 4. Enter cloud provider endpoint: (blank)
+	// 5. Enter API key value: my-super-secret-key
+	// 6. Enter option: 1
+	reader := &lineByLineReader{
+		lines: []string{"cloud", "y", "60", "", "my-super-secret-key", "1"},
+	}
+	cmd.SetIn(reader)
+
+	// Run command
+	err := cmd.ExecuteContext(context.Background())
+	if err != nil {
+		t.Fatalf("execute configure command: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// Verify backup was created
+	backupPath := tempConfigPath + ".bak"
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		t.Errorf("expected backup file %s to be created", backupPath)
+	}
+
+	// Verify secrets file was created
+	secretsFile := filepath.Join(tempDir, ".axis", "secrets", "openrouter.key")
+	if _, err := os.Stat(secretsFile); os.IsNotExist(err) {
+		t.Fatalf("expected secrets file %s to be created", secretsFile)
+	}
+	secBytes, err := os.ReadFile(secretsFile)
+	if err != nil {
+		t.Fatalf("read secrets file: %v", err)
+	}
+	if string(secBytes) != "my-super-secret-key" {
+		t.Errorf("expected secret content 'my-super-secret-key', got %q", string(secBytes))
+	}
+
+	// Check file permissions of secrets file
+	info, err := os.Stat(secretsFile)
+	if err != nil {
+		t.Fatalf("stat secrets file: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("expected secret file permission 0600, got %o", perm)
+	}
+
+	// Verify updated config
+	updatedBytes, err := os.ReadFile(tempConfigPath)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	updatedContent := string(updatedBytes)
+
+	if !strings.Contains(updatedContent, "# This is a comment at the top of nodes.yaml") {
+		t.Error("expected top comment to be preserved")
+	}
+	if !strings.Contains(updatedContent, "# user comment") {
+		t.Error("expected inline user comment to be preserved")
+	}
+	if strings.Contains(updatedContent, "my-super-secret-key") {
+		t.Error("expected raw API key value to NOT be stored in nodes.yaml")
+	}
+	if !strings.Contains(updatedContent, "api_key_file:") {
+		t.Error("expected api_key_file reference in updated nodes.yaml")
+	}
+}
+
+func TestLLMConfigureCmd_CloudProviderEnvVar(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+
+	tempConfigPath := filepath.Join(tempDir, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(tempConfigPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	initialConfig := `nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: me
+`
+	if err := os.WriteFile(tempConfigPath, []byte(initialConfig), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Stub buildLLMRegistry
+	prevBuildRegistry := buildLLMRegistry
+	buildLLMRegistry = func(cfg *config.Config) (*llmrouter.Registry, error) {
+		reg := llmrouter.NewRegistry()
+		reg.Register(&llmTestProvider{name: "openrouter"})
+		return reg, nil
+	}
+	defer func() { buildLLMRegistry = prevBuildRegistry }()
+
+	cmd := llmConfigureCmd()
+	cmd.SetArgs([]string{"openrouter"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	// Simulated user input:
+	// 1. Enter provider type: cloud
+	// 2. Enable this provider?: y
+	// 3. Enter provider priority: 60
+	// 4. Enter cloud provider endpoint: (blank)
+	// 5. Enter API key value: my-secret
+	// 6. Enter option: 2
+	// 7. Enter environment variable name: MY_OPENAI_API_KEY
+	reader := &lineByLineReader{
+		lines: []string{"cloud", "y", "60", "", "my-secret", "2", "MY_OPENAI_API_KEY"},
+	}
+	cmd.SetIn(reader)
+
+	// Run command
+	err := cmd.ExecuteContext(context.Background())
+	if err != nil {
+		t.Fatalf("execute configure command: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// Verify updated config
+	updatedBytes, err := os.ReadFile(tempConfigPath)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	updatedContent := string(updatedBytes)
+
+	if strings.Contains(updatedContent, "my-secret") {
+		t.Error("expected raw API key value to NOT be stored in nodes.yaml")
+	}
+	if !strings.Contains(updatedContent, "api_key_env: MY_OPENAI_API_KEY") {
+		t.Error("expected api_key_env reference in updated nodes.yaml")
+	}
+}
+
+func TestWriteKeyFileSecurelyRejectsSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "real.key")
+	link := filepath.Join(tmp, "link.key")
+	if err := os.WriteFile(target, []byte("old"), 0600); err != nil {
+		t.Fatalf("write target key: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	_, err := writeKeyFileSecurely(link, []byte("secret"), strings.NewReader("yes\n"), io.Discard)
+	if err == nil {
+		t.Fatal("expected error for symlink key path")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection, got: %v", err)
+	}
+}
+
+func TestWriteConfigSafelyDetectsConcurrentModification(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "nodes.yaml")
+	initial := "nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: me\n"
+	if err := os.WriteFile(path, []byte(initial), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	hash, err := computeFileHash(path)
+	if err != nil {
+		t.Fatalf("compute hash: %v", err)
+	}
+
+	// Simulate a concurrent edit.
+	modified := "nodes:\n  - name: other\n    hostname: localhost\n    ssh_user: me\n"
+	if err := os.WriteFile(path, []byte(modified), 0600); err != nil {
+		t.Fatalf("modify config: %v", err)
+	}
+
+	rootNode := yaml.Node{
+		Kind: yaml.DocumentNode,
+		Content: []*yaml.Node{
+			{Kind: yaml.MappingNode, Tag: "!!map"},
+		},
+	}
+	if err := writeConfigSafely(path, &rootNode, hash); err == nil {
+		t.Fatal("expected concurrent modification error")
+	} else if !strings.Contains(err.Error(), "concurrent modification") {
+		t.Fatalf("expected concurrent modification message, got: %v", err)
+	}
+}
+
+func TestLLMConfigureCmd_RollbackNewKeyOnConfigFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+
+	tempConfigPath := filepath.Join(tempDir, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(tempConfigPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	initialConfig := "nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: me\n"
+	if err := os.WriteFile(tempConfigPath, []byte(initialConfig), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevBuildRegistry := buildLLMRegistry
+	buildLLMRegistry = func(cfg *config.Config) (*llmrouter.Registry, error) {
+		reg := llmrouter.NewRegistry()
+		reg.Register(&llmTestProvider{name: "openrouter"})
+		return reg, nil
+	}
+	defer func() { buildLLMRegistry = prevBuildRegistry }()
+
+	prevLoad := loadLLMConfig
+	loadLLMConfig = func(path string) (*config.Config, error) {
+		return nil, errors.New("forced validation failure")
+	}
+	defer func() { loadLLMConfig = prevLoad }()
+
+	cmd := llmConfigureCmd()
+	cmd.SetArgs([]string{"openrouter"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	reader := &lineByLineReader{lines: []string{"cloud", "y", "60", "", "my-secret-key", "1"}}
+	cmd.SetIn(reader)
+
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected configure command to fail")
+	}
+	if !strings.Contains(stderr.String(), "forced validation failure") {
+		t.Fatalf("expected validation failure in stderr, got: %s", stderr.String())
+	}
+
+	secretsFile := filepath.Join(tempDir, ".axis", "secrets", "openrouter.key")
+	if _, statErr := os.Stat(secretsFile); !os.IsNotExist(statErr) {
+		t.Fatalf("expected newly created key file to be rolled back, but it exists")
+	}
+}
+
+func TestLLMConfigureCmd_PreexistingKeySurvivesConfigFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
+
+	tempConfigPath := filepath.Join(tempDir, ".axis", "nodes.yaml")
+	secretsDir := filepath.Join(tempDir, ".axis", "secrets")
+	if err := os.MkdirAll(filepath.Dir(tempConfigPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	initialConfig := "nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: me\n"
+	if err := os.WriteFile(tempConfigPath, []byte(initialConfig), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.MkdirAll(secretsDir, 0700); err != nil {
+		t.Fatalf("mkdir secrets: %v", err)
+	}
+	preexistingKey := filepath.Join(secretsDir, "openrouter.key")
+	if err := os.WriteFile(preexistingKey, []byte("old-key"), 0600); err != nil {
+		t.Fatalf("write preexisting key: %v", err)
+	}
+
+	prevBuildRegistry := buildLLMRegistry
+	buildLLMRegistry = func(cfg *config.Config) (*llmrouter.Registry, error) {
+		reg := llmrouter.NewRegistry()
+		reg.Register(&llmTestProvider{name: "openrouter"})
+		return reg, nil
+	}
+	defer func() { buildLLMRegistry = prevBuildRegistry }()
+
+	prevLoad := loadLLMConfig
+	loadLLMConfig = func(path string) (*config.Config, error) {
+		return nil, errors.New("forced validation failure")
+	}
+	defer func() { loadLLMConfig = prevLoad }()
+
+	cmd := llmConfigureCmd()
+	cmd.SetArgs([]string{"openrouter"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	reader := &lineByLineReader{lines: []string{"cloud", "y", "60", "", "my-secret-key", "1", "yes"}}
+	cmd.SetIn(reader)
+
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected configure command to fail")
+	}
+
+	if _, statErr := os.Stat(preexistingKey); os.IsNotExist(statErr) {
+		t.Fatal("expected pre-existing key file to survive failure")
+	}
+	content, readErr := os.ReadFile(preexistingKey)
+	if readErr != nil {
+		t.Fatalf("read preexisting key: %v", readErr)
+	}
+	if string(content) != "my-secret-key" {
+		t.Fatalf("expected key to contain new content after overwrite, got %q", string(content))
+	}
+}
+
+func TestMigrateASTProvidersInfersKind(t *testing.T) {
+	root := yaml.Node{
+		Kind: yaml.DocumentNode,
+		Content: []*yaml.Node{
+			{
+				Kind: yaml.MappingNode,
+				Tag:  "!!map",
+				Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Value: "ai_providers"},
+					{
+						Kind: yaml.MappingNode,
+						Tag:  "!!map",
+						Content: []*yaml.Node{
+							{Kind: yaml.ScalarNode, Value: "openrouter"},
+							{
+								Kind: yaml.MappingNode,
+								Tag:  "!!map",
+								Content: []*yaml.Node{
+									{Kind: yaml.ScalarNode, Value: "type"},
+									{Kind: yaml.ScalarNode, Value: "cloud"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	migrateASTProviders(&root)
+
+	providers := root.Content[0].Content[1]
+	openrouter := providers.Content[1]
+	for i := 0; i < len(openrouter.Content); i += 2 {
+		if openrouter.Content[i].Value == "kind" {
+			if openrouter.Content[i+1].Value != "openrouter" {
+				t.Fatalf("expected kind openrouter, got %q", openrouter.Content[i+1].Value)
+			}
+			return
+		}
+	}
+	t.Fatal("expected kind key to be added to provider")
+}
+
+func TestMigrateASTProvidersLeavesExistingKind(t *testing.T) {
+	root := yaml.Node{
+		Kind: yaml.DocumentNode,
+		Content: []*yaml.Node{
+			{
+				Kind: yaml.MappingNode,
+				Tag:  "!!map",
+				Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Value: "ai_providers"},
+					{
+						Kind: yaml.MappingNode,
+						Tag:  "!!map",
+						Content: []*yaml.Node{
+							{Kind: yaml.ScalarNode, Value: "openrouter"},
+							{
+								Kind: yaml.MappingNode,
+								Tag:  "!!map",
+								Content: []*yaml.Node{
+									{Kind: yaml.ScalarNode, Value: "type"},
+									{Kind: yaml.ScalarNode, Value: "cloud"},
+									{Kind: yaml.ScalarNode, Value: "kind"},
+									{Kind: yaml.ScalarNode, Value: "anthropic"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	migrateASTProviders(&root)
+
+	providers := root.Content[0].Content[1]
+	openrouter := providers.Content[1]
+	for i := 0; i < len(openrouter.Content); i += 2 {
+		if openrouter.Content[i].Value == "kind" {
+			if openrouter.Content[i+1].Value != "anthropic" {
+				t.Fatalf("expected existing kind to be preserved, got %q", openrouter.Content[i+1].Value)
+			}
+			return
+		}
+	}
+	t.Fatal("expected kind key to remain")
 }

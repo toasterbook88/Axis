@@ -118,14 +118,14 @@ func capturingConfirm(result *string) ConfirmFunc {
 // --- Tool Registry Tests ---
 
 func TestToolRegistryHasAllDefaultTools(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	expected := []string{
 		"axis_status", "axis_facts", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "write_file", "edit_file",
 		"list_directory", "grep_search", "run_shell",
-		"git_status", "git_diff", "git_log",
+		"git_status", "git_diff", "git_log", "axis_run_task",
 	}
 	for _, name := range expected {
 		if !r.HasTool(name) {
@@ -138,7 +138,7 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 }
 
 func TestToolRegistryUnknownTool(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	_, err := r.Execute(context.Background(), "nonexistent_tool", nil)
@@ -154,7 +154,7 @@ func TestToolRegistryUnknownTool(t *testing.T) {
 }
 
 func TestToolStatusNilSnapshot(t *testing.T) {
-	tc := &ToolContext{Snapshot: nil}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	result, err := r.Execute(context.Background(), "axis_status", nil)
@@ -171,7 +171,7 @@ func TestToolStatusWithSnapshot(t *testing.T) {
 		Status: "healthy",
 		Nodes:  []models.NodeFacts{{Name: "test-node"}},
 	}
-	tc := &ToolContext{Snapshot: snap}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
 	r := NewToolRegistry(tc)
 
 	result, err := r.Execute(context.Background(), "axis_status", nil)
@@ -184,7 +184,7 @@ func TestToolStatusWithSnapshot(t *testing.T) {
 }
 
 func TestToolPlaceMissingArgs(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	_, err := r.Execute(context.Background(), "axis_place", json.RawMessage(`{}`))
@@ -197,7 +197,7 @@ func TestToolPlaceMissingArgs(t *testing.T) {
 }
 
 func TestToolPlaceMalformedJSON(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	_, err := r.Execute(context.Background(), "axis_place", json.RawMessage(`not json`))
@@ -210,7 +210,7 @@ func TestToolPlaceMalformedJSON(t *testing.T) {
 }
 
 func TestToolShellBlockedByDesign(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	_, err := r.Execute(context.Background(), "run_shell", json.RawMessage(`{"command":"echo hello"}`))
@@ -231,7 +231,7 @@ func TestToolSummary(t *testing.T) {
 			ReachableNodes: 1,
 		},
 	}
-	tc := &ToolContext{Snapshot: snap}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
 	r := NewToolRegistry(tc)
 
 	result, err := r.Execute(context.Background(), "axis_summary", nil)
@@ -256,7 +256,7 @@ func TestToolReadFile(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	result, err := r.Execute(context.Background(), "read_file", json.RawMessage(fmt.Sprintf(`{"path":%q}`, "test.txt")))
@@ -269,7 +269,7 @@ func TestToolReadFile(t *testing.T) {
 }
 
 func TestToolReadFilePathValidation(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	_, err := r.Execute(context.Background(), "read_file", json.RawMessage(`{"path":"../secret.txt"}`))
@@ -295,7 +295,7 @@ func TestToolListDirectory(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	result, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":"."}`))
@@ -308,7 +308,7 @@ func TestToolListDirectory(t *testing.T) {
 }
 
 func TestToolListDirectoryPathValidation(t *testing.T) {
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	_, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":"/etc/shadow"}`))
@@ -326,7 +326,7 @@ func TestToolWriteFile(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	result, err := r.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"subdir/new.txt","content":"file content"}`))
@@ -352,7 +352,7 @@ func TestToolEditFile(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	path := filepath.Join(tmpDir, "edit.txt")
@@ -393,7 +393,7 @@ func TestToolGrepSearch(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("the quick brown fox"), 0644); err != nil {
@@ -426,7 +426,7 @@ func TestToolGrepSearchLimitsMatches(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	// Create enough files to exceed the 50 match limit with a single line each.
@@ -610,13 +610,14 @@ func TestAgentToolCallThenTextResponse(t *testing.T) {
 		Nodes:  []models.NodeFacts{{Name: "test-node"}},
 	}
 
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
 	var out bytes.Buffer
 	agent := New(Config{
 		Endpoint:    server.URL,
 		Model:       "test-model",
 		Output:      &out,
 		Confirm:     alwaysConfirm(),
-		ToolContext: &ToolContext{Snapshot: snap},
+		ToolContext: tc,
 	})
 
 	err := agent.Run(context.Background(), "how many nodes?")
@@ -872,7 +873,7 @@ func TestAgentMCPToolRegistration(t *testing.T) {
 	mcpReg.ConnectAll(context.Background(), cfg)
 	defer mcpReg.Close()
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 	r.RegisterMCPTools(mcpReg)
 
