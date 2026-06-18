@@ -77,6 +77,9 @@ func DefaultConfirm(r io.Reader, w io.Writer) ConfirmFunc {
 // anything risky.
 func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 	return func(toolName, description string, safetyScore int) ConfirmResult {
+		if toolName == "axis_run_task" {
+			return fallback(toolName, description, safetyScore)
+		}
 		// Read-only AXIS tools never need confirmation.
 		if isReadOnlyTool(toolName) {
 			return ConfirmYes

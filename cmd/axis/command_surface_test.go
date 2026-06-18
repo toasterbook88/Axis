@@ -275,7 +275,13 @@ func TestGuardedAgentShellRunnerUsesRunGuardedAndSignalsRefresh(t *testing.T) {
 		signalAgentDaemonRefresh = prevSignal
 	})
 
-	rt := &runtimectx.Context{}
+	rt := &runtimectx.Context{
+		Snapshot: &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				{Name: "studio", Hostname: "localhost"},
+			},
+		},
+	}
 	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
 		return rt, nil
 	}
@@ -356,6 +362,15 @@ func TestGuardedAgentShellRunnerPrefersDaemonRunWhenAvailable(t *testing.T) {
 		Config: &config.Config{
 			Nodes: []config.NodeConfig{
 				{Name: "studio", Hostname: "localhost", SSHUser: "me", StableID: "abc-123"},
+			},
+		},
+		Snapshot: &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				{
+					Name:     "studio",
+					Hostname: "localhost",
+					Identity: &models.NodeIdentity{StableID: "abc-123"},
+				},
 			},
 		},
 	}

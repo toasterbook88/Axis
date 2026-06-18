@@ -42,7 +42,8 @@ func summarizeSnapshot(snap *models.ClusterSnapshot) string {
 				line += fmt.Sprintf(", GPUs: %s", strings.Join(gpuNames, ", "))
 			}
 		}
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 
 	if len(snap.Warnings) > 0 {

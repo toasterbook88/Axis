@@ -48,6 +48,33 @@ func (e Entry) IsExpired(now time.Time) bool {
 	return !e.ExpiresAt.IsZero() && now.After(e.ExpiresAt)
 }
 
+type LivenessState string
+
+const (
+	LivenessActive  LivenessState = "active"
+	LivenessStale   LivenessState = "stale"
+	LivenessExpired LivenessState = "expired"
+)
+
+// ClassifyLiveness classifies the entry's liveness state based on full limits.
+func (e Entry) ClassifyLiveness(now time.Time, limits Limits) LivenessState {
+	if e.IsExpired(now) {
+		return LivenessExpired
+	}
+	if !e.LastHeartbeat.IsZero() {
+		diff := now.Sub(e.LastHeartbeat)
+		if diff > 0 && diff > limits.HeartbeatStaleWindow {
+			return LivenessStale
+		}
+	} else {
+		diff := now.Sub(e.CreatedAt)
+		if diff > 0 && diff > limits.LegacyStaleWindow {
+			return LivenessStale
+		}
+	}
+	return LivenessActive
+}
+
 // NodeSummary aggregates reservation state for a single node.
 type NodeSummary struct {
 	Node           string  `json:"node"`
@@ -79,6 +106,8 @@ type Limits struct {
 	HeartbeatStaleWindow time.Duration `yaml:"heartbeat_stale_window" json:"heartbeat_stale_window"`
 	// MaxEntriesPerNode caps concurrent reservations per node.
 	MaxEntriesPerNode int `yaml:"max_entries_per_node" json:"max_entries_per_node"`
+	// LegacyStaleWindow is the legacy fallback stale window for zero heartbeats.
+	LegacyStaleWindow time.Duration `yaml:"legacy_stale_window" json:"legacy_stale_window"`
 }
 
 // DefaultLimits returns conservative defaults.
@@ -88,6 +117,7 @@ func DefaultLimits() Limits {
 		SystemReserveMB:      1024,
 		HeartbeatStaleWindow: 2 * time.Minute,
 		MaxEntriesPerNode:    32,
+		LegacyStaleWindow:    45 * time.Minute,
 	}
 }
 
@@ -351,7 +381,8 @@ func (l *Ledger) reclaimLocked() int {
 	now := l.now()
 	reclaimed := 0
 	for id, e := range l.entries {
-		if e.IsStale(now, l.limits.HeartbeatStaleWindow) || e.IsExpired(now) {
+		liveness := e.ClassifyLiveness(now, l.limits)
+		if liveness == LivenessExpired || liveness == LivenessStale {
 			l.totalReclaimed += e.RAMMB
 			delete(l.entries, id)
 			reclaimed++
@@ -359,7 +390,7 @@ func (l *Ledger) reclaimLocked() int {
 				"id", id,
 				"node", e.Node,
 				"ram_mb", e.RAMMB,
-				"reason", l.reclaimReason(e, now),
+				"reason", string(liveness),
 			)
 		}
 	}
@@ -369,13 +400,6 @@ func (l *Ledger) reclaimLocked() int {
 		}
 	}
 	return reclaimed
-}
-
-func (l *Ledger) reclaimReason(e *Entry, now time.Time) string {
-	if e.IsExpired(now) {
-		return "expired"
-	}
-	return "heartbeat-stale"
 }
 
 // AllocatableRAM returns the allocatable RAM on a node after subtracting
@@ -416,7 +440,7 @@ func (l *Ledger) NodeSummaryFor(node string) NodeSummary {
 		}
 		summary.ReservedRAMMB += e.RAMMB
 		summary.ReservedVRAMMB += e.VRAMMB
-		if e.IsStale(now, l.limits.HeartbeatStaleWindow) {
+		if e.ClassifyLiveness(now, l.limits) != LivenessActive {
 			summary.StaleEntries++
 		} else {
 			summary.ActiveEntries++
@@ -450,7 +474,7 @@ func (l *Ledger) Summary() ClusterSummary {
 		ns.ReservedVRAMMB += e.VRAMMB
 		cs.TotalReservedMB += e.RAMMB
 		cs.TotalVRAMMB += e.VRAMMB
-		if e.IsStale(now, l.limits.HeartbeatStaleWindow) {
+		if e.ClassifyLiveness(now, l.limits) != LivenessActive {
 			ns.StaleEntries++
 			cs.StaleEntries++
 		} else {

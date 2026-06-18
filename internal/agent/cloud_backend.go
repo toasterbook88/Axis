@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/llmrouter"
 )
 
 // CloudBackend implements ChatBackend for cloud providers (OpenAI-compatible and Anthropic).
 type CloudBackend struct {
 	providerName string
+	providerKind string
 	endpoint     string
 	apiKey       string
 	model        string
@@ -31,15 +33,20 @@ type CloudBackend struct {
 }
 
 // NewCloudBackendWithKey creates a new CloudBackend with a pre-resolved API key.
-func NewCloudBackendWithKey(providerName, endpoint, apiKey, model string, costPer1K float64) *CloudBackend {
+func NewCloudBackendWithKey(providerKind, providerName, endpoint, apiKey, model string, costPer1K float64) (*CloudBackend, error) {
+	resolved, err := llmrouter.ResolveEndpoint(providerKind, endpoint)
+	if err != nil {
+		return nil, err
+	}
 	return &CloudBackend{
 		providerName: providerName,
-		endpoint:     strings.TrimRight(endpoint, "/"),
+		providerKind: providerKind,
+		endpoint:     resolved,
 		apiKey:       apiKey,
 		model:        model,
 		costPer1K:    costPer1K,
 		client:       &http.Client{Timeout: 120 * time.Second}, // longer timeout for agent loops
-	}
+	}, nil
 }
 
 // Stats returns the accumulated prompt tokens, completion tokens, and cost.
@@ -51,7 +58,7 @@ func (b *CloudBackend) Stats() (int, int, float64) {
 
 // ChatStream satisfies the ChatBackend interface.
 func (b *CloudBackend) ChatStream(ctx context.Context, msgs []chat.Message, tools []chat.ToolDef, w io.Writer) (chat.Message, error) {
-	isAnthropic := strings.Contains(strings.ToLower(b.providerName), "anthropic") || strings.Contains(strings.ToLower(b.endpoint), "anthropic")
+	isAnthropic := strings.EqualFold(b.providerKind, "anthropic")
 
 	if isAnthropic {
 		return b.streamAnthropic(ctx, msgs, tools, w)

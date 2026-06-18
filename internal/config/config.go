@@ -88,6 +88,9 @@ type AIProviderConfig struct {
 	// Type is "local" or "cloud".
 	Type string `json:"type" yaml:"type"`
 
+	// Kind is "openrouter", "groq", "anthropic", etc.
+	Kind string `json:"kind,omitempty" yaml:"kind,omitempty"`
+
 	// Endpoint is the base URL for the provider.
 	// Cloud providers use a fixed default when this is unset.
 	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
@@ -179,6 +182,9 @@ func Load(path string) (*Config, error) {
 	if err := decodeStrict(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if err := cfg.MigrateProviders(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -225,16 +231,65 @@ func (c *Config) IsMeshEnabled() bool {
 	return c.Discovery.Enabled
 }
 
+// MigrateProviders infers missing Kind for cloud providers and canonicalizes it.
+func (c *Config) MigrateProviders() error {
+	for name, prov := range c.AIProviders {
+		if strings.EqualFold(prov.Type, "cloud") {
+			kind := strings.ToLower(strings.TrimSpace(prov.Kind))
+			if kind == "" {
+				inferred := ""
+				nameLower := strings.ToLower(name)
+				epLower := strings.ToLower(prov.Endpoint)
+
+				matchesOpenRouter := strings.Contains(nameLower, "openrouter") || strings.Contains(epLower, "openrouter.ai")
+				matchesGroq := strings.Contains(nameLower, "groq") || strings.Contains(epLower, "groq.com")
+				matchesAnthropic := strings.Contains(nameLower, "anthropic") || strings.Contains(nameLower, "claude") || strings.Contains(epLower, "anthropic.com")
+
+				count := 0
+				if matchesOpenRouter {
+					inferred = "openrouter"
+					count++
+				}
+				if matchesGroq {
+					inferred = "groq"
+					count++
+				}
+				if matchesAnthropic {
+					inferred = "anthropic"
+					count++
+				}
+
+				if count == 1 {
+					prov.Kind = inferred
+				} else {
+					return fmt.Errorf("provider %q: missing kind and could not make unambiguous inference from name/endpoint", name)
+				}
+			} else {
+				prov.Kind = kind
+			}
+			c.AIProviders[name] = prov
+		}
+	}
+	return nil
+}
+
 // Validate checks that all required fields are present.
 func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {
 		return fmt.Errorf("config: no nodes defined")
 	}
+	nodeNames := make(map[string]bool)
 	for i := range c.Nodes {
 		n := &c.Nodes[i]
 		if n.Name == "" {
 			return fmt.Errorf("config: node[%d] missing name", i)
 		}
+		lowerName := strings.ToLower(n.Name)
+		if nodeNames[lowerName] {
+			return fmt.Errorf("config: duplicate node name %q (case-insensitive)", n.Name)
+		}
+		nodeNames[lowerName] = true
+
 		if n.Hostname == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing hostname", i, n.Name)
 		}
@@ -246,5 +301,15 @@ func (c *Config) Validate() error {
 		}
 		n.StableID = models.NormalizeStableID(n.StableID)
 	}
+
+	for name, prov := range c.AIProviders {
+		if strings.EqualFold(prov.Type, "cloud") {
+			kind := strings.ToLower(strings.TrimSpace(prov.Kind))
+			if kind != "openrouter" && kind != "groq" && kind != "anthropic" {
+				return fmt.Errorf("provider %q: unsupported cloud provider kind %q", name, prov.Kind)
+			}
+		}
+	}
+
 	return nil
 }

@@ -6,31 +6,53 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/skills"
+	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/ui"
 )
+
+// TaskRequest represents the arguments for a cluster task execution.
+type TaskRequest struct {
+	Description     string `json:"description"`
+	Mode            string `json:"mode,omitempty"`
+	TargetNode      string `json:"target_node,omitempty"`
+	MemoryRequestMB int64  `json:"memory_request_mb,omitempty"`
+	MemoryMaxMB     int64  `json:"memory_max_mb,omitempty"`
+	ExposePorts     string `json:"expose_ports,omitempty"`
+}
+
+// TaskRunner executes an approved cluster task.
+type TaskRunner func(ctx context.Context, prepared execution.PreparedExecution) (string, error)
 
 // Agent drives a multi-turn tool-calling loop on top of the chat client.
 // It is strictly a consumer of the fact plane — its output is never cluster truth.
 type Agent struct {
-	client    ChatBackend
-	conv      *chat.Conversation
-	tools     *ToolRegistry
-	confirm   ConfirmFunc
-	runShell  ShellRunner
-	safety    ShellSafetyGate
-	output    io.Writer
-	maxTurns  int
-	maxTokens int
-	verbose   bool
-	dryRun    bool
-
+	client                  ChatBackend
+	conv                    *chat.Conversation
+	tools                   *ToolRegistry
+	confirm                 ConfirmFunc
+	runShell                ShellRunner
+	runTask                 TaskRunner
+	safety                  ShellSafetyGate
+	output                  io.Writer
+	maxTurns                int
+	maxTokens               int
+	verbose                 bool
+	dryRun                  bool
+	toolContext             *ToolContext
+	model                   string
+	allowRawCommandEvidence bool
+	securityClass           BackendSecurityClass
 	// autoApproveAll is toggled when the operator selects "always" in confirmation.
 	autoApproveAll bool
 	// blockAll is toggled when the operator selects "never" in confirmation.
@@ -39,17 +61,18 @@ type Agent struct {
 
 // Config configures an Agent.
 type Config struct {
-	Endpoint     string        // Ollama endpoint (default: chat.DefaultEndpoint)
-	Model        string        // Ollama model name
-	Backend      ChatBackend   // Optional custom backend override
-	MaxTurns     int           // Maximum agent loop iterations (default: 10)
-	MaxTokens    int           // Conversation token budget (default: 4096)
-	AutoApprove  bool          // Auto-approve safe commands (score < 70)
-	SystemExtra  string        // Extra text appended to system prompt
-	Verbose      bool          // Emit trace output for tool calls and turns
-	DryRun       bool          // Plan tool calls without executing them
-	ShellTimeout time.Duration // Timeout for run_shell commands (default: 5m)
-
+	Endpoint                string               // Ollama endpoint (default: chat.DefaultEndpoint)
+	Model                   string               // Ollama model name
+	Backend                 ChatBackend          // Optional custom backend override
+	MaxTurns                int                  // Maximum agent loop iterations (default: 10)
+	MaxTokens               int                  // Conversation token budget (default: 4096)
+	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
+	SystemExtra             string               // Extra text appended to system prompt
+	Verbose                 bool                 // Emit trace output for tool calls and turns
+	DryRun                  bool                 // Plan tool calls without executing them
+	ShellTimeout            time.Duration        // Timeout for run_shell commands (default: 5m)
+	AllowRawCommandEvidence bool                 // Include raw command text in local evidence
+	BackendSecurityClass    BackendSecurityClass // Local or remote backend trust classification
 	// Cluster is optional. If non-nil, the agent injects a cluster summary
 	// into the system prompt and uses it for safety checks.
 	Cluster *chat.ClusterSummaryForPrompt
@@ -69,6 +92,9 @@ type Config struct {
 	// RunShell executes an approved shell command. If nil, the agent falls back
 	// to a direct local shell helper.
 	RunShell ShellRunner
+
+	// RunTask executes an approved remote/cluster task.
+	RunTask TaskRunner
 
 	// MCPRegistry is a connected registry of external MCP servers (optional).
 	MCPRegistry *mcpclient.Registry
@@ -118,16 +144,18 @@ func New(cfg Config) *Agent {
 		"- `list_directory` to list directory entries.\n" +
 		"- `grep_search` to find a pattern or query recursively within text files.\n" +
 		"- `run_shell` to execute a shell command.\n" +
+		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control.\n" +
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +
 		"\nExternal capabilities and MCP services are auto-registered. You can invoke any external tool prefixed with `mcp_` (e.g. `mcp_cortex_recall` or `mcp_cortex_remember` to interact with the Cortex shared vector memory).\n"
+
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
 
 	// Build tool registry.
 	tc := cfg.ToolContext
 	if tc == nil {
-		tc = &ToolContext{}
+		tc = NewToolContext(&RuntimeView{}, nil)
 	}
 	tools := NewToolRegistry(tc)
 	if cfg.MCPRegistry != nil {
@@ -144,7 +172,7 @@ func New(cfg Config) *Agent {
 	}
 
 	// Build safety gate.
-	safetyGate := DefaultSafetyGate(cfg.Knowledge)
+	safetyGate := DefaultSafetyGate(tc)
 	if cfg.ShellTimeout <= 0 {
 		cfg.ShellTimeout = 5 * time.Minute
 	}
@@ -154,17 +182,22 @@ func New(cfg Config) *Agent {
 	}
 
 	return &Agent{
-		client:    client,
-		conv:      conv,
-		tools:     tools,
-		confirm:   confirm,
-		runShell:  runShell,
-		safety:    safetyGate,
-		output:    cfg.Output,
-		maxTurns:  cfg.MaxTurns,
-		maxTokens: cfg.MaxTokens,
-		verbose:   cfg.Verbose,
-		dryRun:    cfg.DryRun,
+		client:                  client,
+		conv:                    conv,
+		tools:                   tools,
+		confirm:                 confirm,
+		runShell:                runShell,
+		runTask:                 cfg.RunTask,
+		safety:                  safetyGate,
+		output:                  cfg.Output,
+		maxTurns:                cfg.MaxTurns,
+		maxTokens:               cfg.MaxTokens,
+		verbose:                 cfg.Verbose,
+		dryRun:                  cfg.DryRun,
+		toolContext:             tc,
+		model:                   cfg.Model,
+		allowRawCommandEvidence: cfg.AllowRawCommandEvidence,
+		securityClass:           cfg.BackendSecurityClass,
 	}
 }
 
@@ -181,9 +214,33 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 		msgs := a.conv.Messages()
 		toolDefs := a.tools.Defs()
 
+		// Clone msgs list and dynamically merge evidence into the first system message.
+		clonedMsgs := make([]chat.Message, len(msgs))
+		copy(clonedMsgs, msgs)
+
+		evidence := a.retrieveEvidence(userPrompt)
+		if evidence != "" {
+			systemMsgIdx := -1
+			for i, m := range clonedMsgs {
+				if m.Role == chat.RoleSystem {
+					systemMsgIdx = i
+					break
+				}
+			}
+			if systemMsgIdx >= 0 {
+				if clonedMsgs[systemMsgIdx].Content != "" {
+					clonedMsgs[systemMsgIdx].Content += "\n\n" + evidence
+				} else {
+					clonedMsgs[systemMsgIdx].Content = evidence
+				}
+			} else {
+				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: evidence}}, clonedMsgs...)
+			}
+		}
+
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
-		resp, err := a.client.ChatStream(ctx, msgs, toolDefs, cw)
+		resp, err := a.client.ChatStream(ctx, clonedMsgs, toolDefs, cw)
 		cw.Close()
 		if err != nil {
 			return fmt.Errorf("chat stream (turn %d): %w", turn, err)
@@ -333,9 +390,27 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 		return "", fmt.Errorf("malformed JSON arguments for tool %q: %s", name, string(args))
 	}
 
+	clusterTools := map[string]bool{
+		"axis_status":       true,
+		"axis_facts":        true,
+		"axis_place":        true,
+		"axis_summary":      true,
+		"axis_reservations": true,
+		"axis_run_task":     true,
+	}
+
+	if clusterTools[name] && a.toolContext != nil && a.toolContext.Reload != nil {
+		if err := a.toolContext.ReloadCurrent(ctx); err != nil {
+			return "", fmt.Errorf("failed to refresh cluster runtime context: %w", err)
+		}
+	}
+
 	// 3. Special handling for shell commands.
 	if name == "run_shell" {
 		return a.dispatchShell(ctx, args)
+	}
+	if name == "axis_run_task" {
+		return a.dispatchRunTask(ctx, args)
 	}
 
 	// 3.5. Confirmation for mutating tools (e.g. write_file, edit_file, or mutating MCP tools).
@@ -474,6 +549,98 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	return a.runShell(ctx, cmdToRun)
 }
 
+// dispatchRunTask handles the axis_run_task tool with safety gating and confirmation.
+func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (string, error) {
+	// 1. JSON unmarshal and validation first.
+	var rArgs TaskRequest
+	if err := json.Unmarshal(args, &rArgs); err != nil {
+		return "", fmt.Errorf("invalid arguments for axis_run_task: expected {\"description\": \"...\"}, got: %s", string(args))
+	}
+	if rArgs.Description == "" {
+		return "", fmt.Errorf("axis_run_task requires a non-empty \"description\" argument")
+	}
+
+	// 2. Validate runner delegate configuration before safety or confirmation gates.
+	if a.runTask == nil {
+		return "", fmt.Errorf("runTask runner delegate not configured")
+	}
+
+	// 3. Check session-level block.
+	if a.blockAll {
+		return "", fmt.Errorf("operator has blocked all tool execution for this session")
+	}
+
+	// 4. Construct context and request for PrepareGuardedExecution.
+	view := a.toolContext.GetView()
+	rt := &runtimectx.Context{
+		Config:   view.Config,
+		Snapshot: view.Snapshot,
+		State:    view.State,
+		Ledger:   view.Ledger,
+		Skills:   view.Skills,
+	}
+
+	mode := execution.ModeExec
+	if strings.ToLower(rArgs.Mode) == "script" {
+		mode = execution.ModeScript
+	}
+
+	req := execution.GuardedExecutionRequest{
+		Description:     rArgs.Description,
+		Mode:            mode,
+		Confirm:         execution.ConfirmWord,
+		RequestedNode:   rArgs.TargetNode,
+		MemoryRequestMB: rArgs.MemoryRequestMB,
+		MemoryMaxMB:     rArgs.MemoryMaxMB,
+		ExposePorts:     rArgs.ExposePorts,
+		OwnerSurface:    execution.OwnerSurfaceAgentRunTask,
+		OwnerLabel:      strings.TrimSpace(a.model),
+	}
+
+	prepared, err := execution.PrepareGuardedExecution(ctx, rt, req)
+	if err != nil {
+		return "", err
+	}
+
+	// 5. Check safety verdict (Authoritative from PrepareGuardedExecution).
+	// If denied, terminate immediately before confirmation.
+	if prepared.Result.Blocked || prepared.Result.DumbScore >= 80 {
+		return "", fmt.Errorf("safety block: task execution blocked (score: %d): %s", prepared.Result.DumbScore, prepared.Result.BlockReason)
+	}
+
+	// 6. Confirmation gate (Always required, no automatic/model bypasses).
+	descParts := []string{fmt.Sprintf("Run command: %s", prepared.Command)}
+	if prepared.Result.Node != "" {
+		descParts = append(descParts, fmt.Sprintf("Target Node: %s", prepared.Result.Node))
+	}
+	if rArgs.MemoryRequestMB > 0 {
+		descParts = append(descParts, fmt.Sprintf("Memory Request: %d MB", rArgs.MemoryRequestMB))
+	}
+	if rArgs.ExposePorts != "" {
+		descParts = append(descParts, fmt.Sprintf("Expose Ports: %s", rArgs.ExposePorts))
+	}
+	promptDesc := strings.Join(descParts, "\n")
+
+	// Risk scores (0 < score < 80) add stronger warning text.
+	if prepared.Result.DumbScore > 0 {
+		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d) - REASON: %s]\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
+	}
+
+	decision := a.confirm("axis_run_task", promptDesc, prepared.Result.DumbScore)
+	switch decision {
+	case ConfirmNo:
+		return "", fmt.Errorf("operator declined to execute: %s", prepared.Command)
+	case ConfirmNever:
+		a.blockAll = true
+		return "", fmt.Errorf("operator has blocked all tool execution for this session")
+	case ConfirmAlways, ConfirmYes:
+		// Proceed. For axis_run_task, ConfirmAlways does not bypass future run_task prompts.
+	}
+
+	// 7. Execute the prepared execution.
+	return a.runTask(ctx, prepared)
+}
+
 func (a *Agent) ToolNames() string {
 	names := make([]string, 0, len(a.tools.executors))
 	for n := range a.tools.executors {
@@ -497,9 +664,10 @@ func (a *Agent) MaxTokens() int {
 	return a.maxTokens
 }
 
-// SetBackend changes the active LLM backend.
-func (a *Agent) SetBackend(client ChatBackend) {
+// SetBackend changes the active LLM backend and its trust classification.
+func (a *Agent) SetBackend(client ChatBackend, securityClass BackendSecurityClass) {
 	a.client = client
+	a.securityClass = securityClass
 }
 
 // AgentStats holds session statistics.
@@ -522,4 +690,190 @@ func (a *Agent) Stats() AgentStats {
 		}
 	}
 	return AgentStats{}
+}
+
+type BackendSecurityClass int
+
+const (
+	BackendRemote BackendSecurityClass = iota
+	BackendLocal
+)
+
+var (
+	bearerRegex        = regexp.MustCompile(`(?i)(bearer\s+)[a-zA-Z0-9\-\._~\+\/]+=*`)
+	apiKeyHeaderRegex  = regexp.MustCompile(`(?i)(x-api-key:\s*)\S+`)
+	authHeaderRegex    = regexp.MustCompile(`(?i)(authorization:\s*)\S+`)
+	genericSecretRegex = regexp.MustCompile(`(?i)(key|password|secret|token|passwd|credential)(["':=\s]+)([a-zA-Z0-9\-_]{8,})`)
+)
+
+func redactCommandFromDecision(dec string) string {
+	var sb strings.Builder
+	i := 0
+	for i < len(dec) {
+		ch := dec[i]
+		if ch == '\'' || ch == '"' {
+			end := strings.IndexByte(dec[i+1:], ch)
+			if end >= 0 {
+				sb.WriteByte(ch)
+				sb.WriteString("[REDACTED]")
+				sb.WriteByte(ch)
+				i += 1 + end + 1
+				continue
+			}
+		}
+		sb.WriteByte(ch)
+		i++
+	}
+	return sb.String()
+}
+
+func sanitizeAndRedactEvidence(payload string) string {
+	var sb strings.Builder
+	for _, r := range payload {
+		if r < 32 && r != '\n' && r != '\t' {
+			sb.WriteRune(' ')
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	s := sb.String()
+	s = bearerRegex.ReplaceAllString(s, "${1}[REDACTED]")
+	s = apiKeyHeaderRegex.ReplaceAllString(s, "${1}[REDACTED]")
+	s = authHeaderRegex.ReplaceAllString(s, "${1}[REDACTED]")
+	s = genericSecretRegex.ReplaceAllString(s, "${1}${2}[REDACTED]")
+	return s
+}
+
+func truncatePayload(payload string, maxBytes int) string {
+	if len(payload) <= maxBytes {
+		return payload
+	}
+	limit := maxBytes - 3
+	truncateIdx := 0
+	for idx := range payload {
+		if idx > limit {
+			break
+		}
+		truncateIdx = idx
+	}
+	return payload[:truncateIdx] + "..."
+}
+
+func (a *Agent) retrieveEvidence(userPrompt string) string {
+	var recentDecisions []string
+	if a.toolContext != nil {
+		view := a.toolContext.GetView()
+		if view != nil && view.State != nil {
+			recentDecisions = view.State.Decisions
+		}
+	}
+	if len(recentDecisions) == 0 {
+		if st, err := state.Load(); err == nil && st != nil {
+			recentDecisions = st.Decisions
+		}
+	}
+
+	var matchedSkill skills.LearnedSkill
+	var matched bool
+	if a.toolContext != nil {
+		view := a.toolContext.GetView()
+		if view != nil && view.Skills != nil {
+			matchedSkill, matched = view.Skills.BestMatch(userPrompt)
+		}
+	}
+	if !matched {
+		if sk, err := skills.Load(); err == nil && sk != nil {
+			matchedSkill, matched = sk.BestMatch(userPrompt)
+		}
+	}
+
+	if a.securityClass == BackendRemote {
+		return a.remoteEvidence(matchedSkill, matched)
+	}
+	return a.localEvidence(recentDecisions, matchedSkill, matched)
+}
+
+func (a *Agent) remoteEvidence(skill skills.LearnedSkill, matched bool) string {
+	if !matched {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Relevant learned skill matching current query:\n")
+	b.WriteString(fmt.Sprintf("- ID: %s\n", skill.ID))
+	b.WriteString(fmt.Sprintf("  Success Count: %d\n", skill.SuccessCount))
+	b.WriteString(fmt.Sprintf("  Last Used: %s\n", skill.LastUsed.Format(time.RFC3339)))
+	if skill.PreferredNode != "" {
+		b.WriteString(fmt.Sprintf("  Preferred Node: %s\n", skill.PreferredNode))
+	}
+	if len(skill.NodeCount) > 0 {
+		var nodesCountStr []string
+		for n, c := range skill.NodeCount {
+			nodesCountStr = append(nodesCountStr, fmt.Sprintf("%s: %d successes", n, c))
+		}
+		b.WriteString(fmt.Sprintf("  Node success counts: %s\n", strings.Join(nodesCountStr, ", ")))
+	}
+	return wrapEvidence(b.String())
+}
+
+func (a *Agent) localEvidence(recentDecisions []string, skill skills.LearnedSkill, matched bool) string {
+	excludeRawCommands := !a.allowRawCommandEvidence
+
+	var decisionsStr []string
+	if len(recentDecisions) > 0 {
+		last := recentDecisions
+		if len(last) > 5 {
+			last = last[len(last)-5:]
+		}
+		for _, dec := range last {
+			d := dec
+			if excludeRawCommands {
+				d = redactCommandFromDecision(d)
+			}
+			decisionsStr = append(decisionsStr, fmt.Sprintf("- %s", d))
+		}
+	}
+
+	var b strings.Builder
+	if len(decisionsStr) > 0 {
+		b.WriteString("Recent placement decisions:\n")
+		b.WriteString(strings.Join(decisionsStr, "\n"))
+		b.WriteString("\n")
+	}
+	if matched {
+		b.WriteString("Relevant learned skill matching current query:\n")
+		b.WriteString(fmt.Sprintf("- Description: %s\n", skill.Description))
+		if excludeRawCommands {
+			b.WriteString("  Suggested Command: [REDACTED]\n")
+		} else {
+			b.WriteString(fmt.Sprintf("  Suggested Command: %s\n", skill.Command))
+		}
+		b.WriteString(fmt.Sprintf("  Success Count: %d\n", skill.SuccessCount))
+		b.WriteString(fmt.Sprintf("  Last Used: %s\n", skill.LastUsed.Format(time.RFC3339)))
+		if skill.PreferredNode != "" {
+			b.WriteString(fmt.Sprintf("  Preferred Node: %s\n", skill.PreferredNode))
+		}
+		if len(skill.NodeCount) > 0 {
+			var nodesCountStr []string
+			for n, c := range skill.NodeCount {
+				nodesCountStr = append(nodesCountStr, fmt.Sprintf("%s: %d successes", n, c))
+			}
+			b.WriteString(fmt.Sprintf("  Node success counts: %s\n", strings.Join(nodesCountStr, ", ")))
+		}
+	}
+
+	payload := b.String()
+	if payload == "" {
+		return ""
+	}
+	sanitizedPayload := sanitizeAndRedactEvidence(payload)
+	return wrapEvidence(sanitizedPayload)
+}
+
+func wrapEvidence(payload string) string {
+	// Wrapper overhead:
+	// prefix: "<untrusted_historical_evidence>\n" (31 bytes)
+	// suffix: "\n</untrusted_historical_evidence>" (32 bytes)
+	// Total overhead: 63 bytes. Max payload: 2048 - 63 = 1985.
+	truncatedPayload := truncatePayload(payload, 1985)
+	return "<untrusted_historical_evidence>\n" + truncatedPayload + "\n</untrusted_historical_evidence>"
 }

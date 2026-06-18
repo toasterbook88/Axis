@@ -595,9 +595,10 @@ func TestExplain_NetworkReasoning(t *testing.T) {
 	var localExp, remoteExp *models.PlacementCandidateExplanation
 	for i := range explanation.Eligible {
 		cand := &explanation.Eligible[i]
-		if cand.Node == "local-node" {
+		switch cand.Node {
+		case "local-node":
 			localExp = cand
-		} else if cand.Node == "remote-node" {
+		case "remote-node":
 			remoteExp = cand
 		}
 	}

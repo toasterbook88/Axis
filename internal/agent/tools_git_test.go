@@ -42,7 +42,7 @@ func TestGitTools(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(origDir)
 
-	tc := &ToolContext{}
+	tc := NewToolContext(&RuntimeView{}, nil)
 	r := NewToolRegistry(tc)
 
 	// 1. Test git_status (Empty/Clean)

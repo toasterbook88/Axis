@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,6 +85,34 @@ func (s *Store) RecordSuccess(desc, command, node string) {
 				s.Skills[i].NodeCount = make(map[string]int)
 			}
 			s.Skills[i].NodeCount[node]++
+
+			// Derive preferred node dynamically
+			maxCount := 0
+			for _, c := range s.Skills[i].NodeCount {
+				if c > maxCount {
+					maxCount = c
+				}
+			}
+			var candidates []string
+			for n, c := range s.Skills[i].NodeCount {
+				if c == maxCount {
+					candidates = append(candidates, n)
+				}
+			}
+			sort.Strings(candidates)
+
+			foundCurrent := false
+			for _, cand := range candidates {
+				if cand == s.Skills[i].PreferredNode {
+					foundCurrent = true
+					break
+				}
+			}
+			if foundCurrent && s.Skills[i].PreferredNode != "" {
+				// preserve
+			} else if len(candidates) > 0 {
+				s.Skills[i].PreferredNode = candidates[0]
+			}
 			return
 		}
 	}

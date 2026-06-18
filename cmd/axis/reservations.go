@@ -71,27 +71,23 @@ func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
 	}
 
 	var result struct {
-		Entries []struct {
-			ID        string    `json:"id"`
-			Node      string    `json:"node"`
-			RAMMB     int64     `json:"ram_mb"`
-			Owner     string    `json:"owner_surface"`
-			CreatedAt time.Time `json:"created_at"`
-		} `json:"reservations"`
+		Entries []reservation.Entry `json:"reservations"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return err
 	}
 
 	items := make([]ReservationListItem, 0, len(result.Entries))
+	now := time.Now()
+	limits := reservation.DefaultLimits()
 	for _, e := range result.Entries {
 		items = append(items, ReservationListItem{
 			ID:      e.ID,
 			Node:    e.Node,
 			RAMMB:   e.RAMMB,
-			Owner:   e.Owner,
-			Age:     time.Since(e.CreatedAt),
-			IsStale: time.Since(e.CreatedAt) > 5*time.Minute,
+			Owner:   e.OwnerSurface,
+			Age:     now.Sub(e.CreatedAt),
+			IsStale: e.ClassifyLiveness(now, limits) != reservation.LivenessActive,
 		})
 	}
 
@@ -517,9 +513,12 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 	}
 
 	// Check for stale, expired, and orphaned reservations
+	limits := reservation.DefaultLimits()
+	limits.HeartbeatStaleWindow = staleWindow
 	for _, e := range diskEntries {
-		isStale := e.IsStale(now, staleWindow)
-		isExpired := e.IsExpired(now)
+		liveness := e.ClassifyLiveness(now, limits)
+		isExpired := (liveness == reservation.LivenessExpired)
+		isStale := (liveness == reservation.LivenessStale)
 
 		if isExpired {
 			finding := DoctorFinding{
@@ -574,10 +573,11 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 
 		// Go through our findings and perform release
 		for _, f := range findings {
-			if f.Type == "expired" || f.Type == "stale" {
+			switch f.Type {
+			case "expired", "stale":
 				// These were automatically reclaimed by ledger.Load()
 				fixed = append(fixed, f)
-			} else if f.Type == "orphaned" {
+			case "orphaned":
 				// Check if still in ledger
 				if remainingMap[f.EntryID] {
 					if err := ledger.Release(f.EntryID); err == nil {
@@ -677,9 +677,10 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 		tbl := ui.NewTable("SEVERITY", "CATEGORY", "NODE", "RESERVATION ID", "DETAILS")
 		for _, f := range findings {
 			sevStr := f.Severity
-			if f.Severity == "error" {
+			switch f.Severity {
+			case "error":
 				sevStr = ui.Red("ERROR")
-			} else if f.Severity == "warning" {
+			case "warning":
 				sevStr = ui.Yellow("WARNING")
 			}
 
