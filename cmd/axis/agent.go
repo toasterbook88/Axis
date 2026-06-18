@@ -142,6 +142,9 @@ func agentCmd() *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
+				if newRt == nil {
+					return nil, fmt.Errorf("loaded runtime context is nil")
+				}
 				bestNode := ""
 				if newRt.Snapshot != nil && len(newRt.Snapshot.Nodes) > 0 {
 					bestNode = newRt.Snapshot.Nodes[0].Name
@@ -580,6 +583,12 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 			if err != nil {
 				return true, false, fmt.Errorf("failed to load cluster status fallback: %w", err)
 			}
+			if freshRt == nil {
+				return true, false, fmt.Errorf("failed to load cluster status fallback: runtime context is nil")
+			}
+			if err != nil {
+				return true, false, fmt.Errorf("failed to load cluster status fallback: %w", err)
+			}
 			if freshRt.Ledger != nil {
 				now := time.Now()
 				limits := reservation.DefaultLimits()
@@ -603,6 +612,9 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 		freshRt, err := runtimectx.Load(context.Background())
 		if err != nil {
 			return true, false, fmt.Errorf("failed to load skills: %w", err)
+		}
+		if freshRt == nil {
+			return true, false, fmt.Errorf("failed to load skills: runtime context is nil")
 		}
 		if freshRt.Skills == nil || len(freshRt.Skills.Skills) == 0 {
 			fmt.Fprintln(w, "\nLearned skills:")
@@ -646,6 +658,9 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 		freshRt, err := runtimectx.Load(context.Background())
 		if err != nil {
 			return true, false, fmt.Errorf("failed to load cluster status: %w", err)
+		}
+		if freshRt == nil {
+			return true, false, fmt.Errorf("failed to load cluster status: runtime context is nil")
 		}
 
 		type modelItem struct {
@@ -694,6 +709,16 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 			fmt.Fprintln(w, "No models found (neither local Ollama models nor enabled cloud providers).")
 			return true, false, nil
 		}
+
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].modelType != items[j].modelType {
+				return items[i].modelType < items[j].modelType
+			}
+			if items[i].source != items[j].source {
+				return items[i].source < items[j].source
+			}
+			return items[i].name < items[j].name
+		})
 
 		fmt.Fprintln(w, "\nAvailable Models:")
 		tbl := ui.NewTable("INDEX", "MODEL NAME", "PROVIDER/SOURCE", "TYPE")
