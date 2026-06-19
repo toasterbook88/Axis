@@ -45,6 +45,13 @@ func (sc *ServerConnection) Connected() bool {
 	return sc.InitResult != nil && sc.Err == nil
 }
 
+// ConnectedAt returns the timestamp when the connection was established.
+func (sc *ServerConnection) ConnectedAt() time.Time {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.connectedAt
+}
+
 // ToolCount returns the number of discovered tools.
 func (sc *ServerConnection) ToolCount() int {
 	sc.mu.RLock()
