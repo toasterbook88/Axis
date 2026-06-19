@@ -248,10 +248,24 @@ func SetEventBufferSize(size int) {
 // =============================================================================
 
 var (
-	eventQueue     = make(chan Event, 1000)
-	workerOnce     sync.Once
-	inflightEvents sync.WaitGroup
+	eventQueue      = make(chan Event, 1000)
+	workerOnce      sync.Once
+	inflightCounter int
+	inflightMu      sync.Mutex
+	flushChans      []chan struct{}
 )
+
+func inflightAdd(delta int) {
+	inflightMu.Lock()
+	inflightCounter += delta
+	if inflightCounter == 0 {
+		for _, ch := range flushChans {
+			close(ch)
+		}
+		flushChans = nil
+	}
+	inflightMu.Unlock()
+}
 
 func startWorker() {
 	workerOnce.Do(func() {
@@ -266,7 +280,7 @@ func eventWorker() {
 }
 
 func processEvent(evt Event) {
-	defer inflightEvents.Done()
+	defer inflightAdd(-1)
 
 	// 1. Allocate sequence number under flock
 	seq, err := allocateSequence()
@@ -292,9 +306,9 @@ func processEvent(evt Event) {
 	cClient := cortexClient
 	cortexMu.Unlock()
 	if cClient != nil {
-		inflightEvents.Add(1)
+		inflightAdd(1)
 		go func(ev Event) {
-			defer inflightEvents.Done()
+			defer inflightAdd(-1)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			envelope := PublishEnvelope{
@@ -316,15 +330,28 @@ func processEvent(evt Event) {
 // FlushEvents blocks until all enqueued events and their async webhook/Cortex
 // dispatches have been processed, or until the timeout is reached.
 func FlushEvents(timeout time.Duration) bool {
-	c := make(chan struct{})
-	go func() {
-		inflightEvents.Wait()
-		close(c)
-	}()
+	inflightMu.Lock()
+	if inflightCounter == 0 {
+		inflightMu.Unlock()
+		return true
+	}
+	ch := make(chan struct{})
+	flushChans = append(flushChans, ch)
+	inflightMu.Unlock()
+
 	select {
-	case <-c:
+	case <-ch:
 		return true
 	case <-time.After(timeout):
+		inflightMu.Lock()
+		for i, c := range flushChans {
+			if c == ch {
+				flushChans[i] = flushChans[len(flushChans)-1]
+				flushChans = flushChans[:len(flushChans)-1]
+				break
+			}
+		}
+		inflightMu.Unlock()
 		return false
 	}
 }
@@ -340,11 +367,11 @@ func EmitToBuffer(e Emitter, name string, payload map[string]any) {
 
 	startWorker()
 
-	inflightEvents.Add(1)
+	inflightAdd(1)
 	select {
 	case eventQueue <- evt:
 	default:
-		inflightEvents.Done()
+		inflightAdd(-1)
 		slog.Warn("event queue full, discarding event", "name", evt.Name)
 	}
 }
