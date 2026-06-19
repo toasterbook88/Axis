@@ -17,7 +17,7 @@ const (
 	defaultMaxLinkAge     = 5 * time.Minute
 	defaultMaxNodes       = 8
 	allowedClockSkew      = 30 * time.Second
-	mib                    = int64(1024 * 1024)
+	mib                   = int64(1024 * 1024)
 	floatEpsilon          = 1e-9
 )
 
