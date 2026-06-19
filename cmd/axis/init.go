@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -47,6 +51,7 @@ func runInitWizard(cmd *cobra.Command) error {
 	defer rl.Close()
 
 	// 1. Get local node name
+	fmt.Fprintln(out, ui.Cyan("⬢ Local Configuration"))
 	defaultName, _ := os.Hostname()
 	if defaultName == "" {
 		defaultName = "localhost"
@@ -88,12 +93,14 @@ func runInitWizard(cmd *cobra.Command) error {
 	}
 
 	// 3. Ask to scan for neighbor AXIS nodes
+	fmt.Fprintln(out, ui.Cyan("\n⬢ Mesh Gossip Scan"))
 	fmt.Fprint(out, "Would you like to scan the network for active AXIS gossip nodes? [Y/n]: ")
 	line, err = rl.Readline()
 	if err == nil {
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans == "" || ans == "y" || ans == "yes" {
-			fmt.Fprintln(out, "Scanning for mesh beacons (3 seconds)...")
+			spin := ui.NewSpinner()
+			spin.Start("Scanning for active AXIS gossip nodes (3 seconds)...")
 			tempCfg := &config.Config{
 				Discovery: &config.DiscoveryConfig{
 					Enabled: true,
@@ -105,6 +112,7 @@ func runInitWizard(cmd *cobra.Command) error {
 			discovery.WatchBeaconChanges(scanCtx, tempCfg, registry, nil)
 			<-scanCtx.Done()
 			scanCancel()
+			spin.Stop(fmt.Sprintf("%s Scan complete.", ui.Green("✓")))
 
 			discovered := registry.Snapshot()
 			if len(discovered) == 0 {
@@ -125,8 +133,22 @@ func runInitWizard(cmd *cobra.Command) error {
 					choice := strings.ToLower(strings.TrimSpace(line))
 					if choice == "" || choice == "y" || choice == "yes" {
 						n.SSHUser = sshUser // enforce configured SSH user
-						nodes = append(nodes, n)
-						fmt.Fprintf(out, "Added node %s.\n", n.Name)
+						if verifySSHConnectionFn(cmd.Context(), n.Hostname, n.EffectiveSSHPort(), n.SSHUser, n.EffectiveTimeout(), out) {
+							nodes = append(nodes, n)
+							fmt.Fprintf(out, "Added node %s.\n", n.Name)
+						} else {
+							fmt.Fprintf(out, "Add node %s anyway? [y/N]: ", n.Name)
+							line, err = rl.Readline()
+							if err == nil {
+								ans := strings.ToLower(strings.TrimSpace(line))
+								if ans == "y" || ans == "yes" {
+									nodes = append(nodes, n)
+									fmt.Fprintf(out, "Added node %s.\n", n.Name)
+								} else {
+									fmt.Fprintf(out, "Skipped node %s.\n", n.Name)
+								}
+							}
+						}
 					}
 				}
 			}
@@ -134,8 +156,9 @@ func runInitWizard(cmd *cobra.Command) error {
 	}
 
 	// 4. Manual entry fallback
+	fmt.Fprintln(out, ui.Cyan("\n⬢ Remote Node Configuration"))
 	for {
-		fmt.Fprint(out, "\nWould you like to manually add a remote worker node? [y/N]: ")
+		fmt.Fprint(out, "Would you like to manually add a remote worker node? [y/N]: ")
 		line, err = rl.Readline()
 		if err != nil {
 			return err
@@ -167,20 +190,77 @@ func runInitWizard(cmd *cobra.Command) error {
 			continue
 		}
 
-		nodes = append(nodes, config.NodeConfig{
+		fmt.Fprintf(out, "Enter SSH port for remote node [default: 22]: ")
+		line, err = rl.Readline()
+		if err != nil {
+			return err
+		}
+		portStr := strings.TrimSpace(line)
+		sshPort := 22
+		if portStr != "" {
+			if p, pErr := strconv.Atoi(portStr); pErr == nil && p > 0 {
+				sshPort = p
+			} else {
+				fmt.Fprintln(errW, "Invalid port, using default (22)")
+			}
+		}
+
+		fmt.Fprintf(out, "Enter timeout in seconds for SSH operations [default: 10]: ")
+		line, err = rl.Readline()
+		if err != nil {
+			return err
+		}
+		timeoutStr := strings.TrimSpace(line)
+		timeoutSec := 10
+		if timeoutStr != "" {
+			if t, tErr := strconv.Atoi(timeoutStr); tErr == nil && t > 0 {
+				timeoutSec = t
+			} else {
+				fmt.Fprintln(errW, "Invalid timeout, using default (10)")
+			}
+		}
+
+		n := config.NodeConfig{
 			Name:       remoteName,
 			Hostname:   remoteHost,
 			SSHUser:    sshUser,
 			Role:       "worker",
-			TimeoutSec: 10,
-		})
-		fmt.Fprintf(out, "Added node %s (%s) to config.\n\n", remoteName, remoteHost)
+			SSHPort:    sshPort,
+			TimeoutSec: timeoutSec,
+		}
+
+		if verifySSHConnectionFn(cmd.Context(), n.Hostname, n.EffectiveSSHPort(), n.SSHUser, n.EffectiveTimeout(), out) {
+			nodes = append(nodes, n)
+			fmt.Fprintf(out, "Added node %s (%s) to config.\n\n", remoteName, remoteHost)
+		} else {
+			fmt.Fprintf(out, "Add node %s anyway? [y/N]: ", remoteName)
+			line, err = rl.Readline()
+			if err != nil {
+				return err
+			}
+			ans := strings.ToLower(strings.TrimSpace(line))
+			if ans == "y" || ans == "yes" {
+				nodes = append(nodes, n)
+				fmt.Fprintf(out, "Added node %s (%s) to config.\n\n", remoteName, remoteHost)
+			} else {
+				fmt.Fprintf(out, "Skipped node %s.\n\n", remoteName)
+			}
+		}
 	}
 
 	// 5. Save configuration
+	var discoveryCfg *config.DiscoveryConfig
+	if len(nodes) > 1 {
+		discoveryCfg = &config.DiscoveryConfig{
+			Enabled:        true,
+			UDPPort:        42424,
+			BeaconInterval: 3,
+			Secret:         generateRandomSecret(),
+		}
+	}
 	cfg := &config.Config{
 		Nodes:     nodes,
-		Discovery: &config.DiscoveryConfig{Enabled: len(nodes) > 1},
+		Discovery: discoveryCfg,
 	}
 
 	home, _ := os.UserHomeDir()
@@ -208,4 +288,31 @@ func runInitWizard(cmd *cobra.Command) error {
 
 	fmt.Fprintf(out, "\n%s Configuration written successfully to %s\n\n", ui.Green("✓"), cfgPath)
 	return nil
+}
+
+var verifySSHConnectionFn = verifySSHConnection
+
+func verifySSHConnection(ctx context.Context, host string, port int, user string, timeoutSec int, out io.Writer) bool {
+	spin := ui.NewSpinner()
+	spin.Start(fmt.Sprintf("Verifying SSH connection to [%s]:%d as %s...", host, port, user))
+	exec := transport.NewSSHExecutor(host, port, user, timeoutSec)
+	defer exec.Close()
+
+	dialCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
+	if err := exec.Connect(dialCtx); err != nil {
+		spin.Stop(fmt.Sprintf("%s Connection failed: %v", ui.Red("✗"), err))
+		return false
+	}
+	spin.Stop(fmt.Sprintf("%s Connection verified successfully!", ui.Green("✓")))
+	return true
+}
+
+func generateRandomSecret() string {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "axis-default-gossip-secret"
+	}
+	return hex.EncodeToString(bytes)
 }

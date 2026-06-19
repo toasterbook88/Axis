@@ -26,6 +26,13 @@ func NewRegistry() *Registry {
 	}
 }
 
+// Add registers a ServerConnection for testing.
+func (r *Registry) Add(conn *ServerConnection) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.servers[conn.Name] = conn
+}
+
 // ConnectAll connects to every MCP server defined in the AXIS config.
 // Errors are stored per-server and surfaced via the connection's Err field;
 // the function never returns an error itself.
