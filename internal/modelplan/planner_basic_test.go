@@ -118,3 +118,91 @@ func TestNormalizeManifestAddsKVCachePerLayer(t *testing.T) {
 		t.Fatalf("total/minimum = %d/%d, want 204/102", total, minimum)
 	}
 }
+
+func TestBetterLink(t *testing.T) {
+	now := time.Now()
+	link1 := LinkObservation{
+		SourceNode:      "node-a",
+		DestinationNode: "node-b",
+		BandwidthMBps:   1000,
+		LatencyP95MS:    1,
+		MeasuredAt:      now,
+	}
+	link2 := LinkObservation{
+		SourceNode:      "node-a",
+		DestinationNode: "node-c",
+		BandwidthMBps:   1000,
+		LatencyP95MS:    1,
+		MeasuredAt:      now,
+	}
+
+	// Under the old code, betterLink(link1, link2) would return true because of alphabetical tie-breaker "node-b" < "node-c".
+	// But they have identical bandwidth and latency, so they should NOT be better than each other.
+	if betterLink(link1, link2) {
+		t.Errorf("betterLink(link1, link2) returned true for identical link qualities")
+	}
+	if betterLink(link2, link1) {
+		t.Errorf("betterLink(link2, link1) returned true for identical link qualities")
+	}
+}
+
+func TestTopologyOrdersPrefersBetterCandidateOnEqualLinkQuality(t *testing.T) {
+	now := time.Now()
+	// node-a is start. node-b and node-c are remaining.
+	// node-c has more memory than node-b.
+	nodeA := candidate{node: models.NodeFacts{Name: "node-a"}, usableMemoryMB: 1000}
+	nodeB := candidate{node: models.NodeFacts{Name: "node-b"}, usableMemoryMB: 1000}
+	nodeC := candidate{node: models.NodeFacts{Name: "node-c"}, usableMemoryMB: 2000}
+
+	subset := []candidate{nodeC, nodeA, nodeB} // sorted by memory
+	links := indexedLinks{
+		linkKey{source: "node-a", destination: "node-b"}: {
+			SourceNode:      "node-a",
+			DestinationNode: "node-b",
+			BandwidthMBps:   1000,
+			LatencyP95MS:    1,
+			MeasuredAt:      now,
+			Source:          "test",
+		},
+		linkKey{source: "node-a", destination: "node-c"}: {
+			SourceNode:      "node-a",
+			DestinationNode: "node-c",
+			BandwidthMBps:   1000,
+			LatencyP95MS:    1,
+			MeasuredAt:      now,
+			Source:          "test",
+		},
+		linkKey{source: "node-b", destination: "node-c"}: {
+			SourceNode:      "node-b",
+			DestinationNode: "node-c",
+			BandwidthMBps:   1000,
+			LatencyP95MS:    1,
+			MeasuredAt:      now,
+			Source:          "test",
+		},
+		linkKey{source: "node-c", destination: "node-b"}: {
+			SourceNode:      "node-c",
+			DestinationNode: "node-b",
+			BandwidthMBps:   1000,
+			LatencyP95MS:    1,
+			MeasuredAt:      now,
+			Source:          "test",
+		},
+	}
+
+	orders := topologyOrders(subset, "node-a", links)
+	if len(orders) != 1 {
+		t.Fatalf("expected 1 order, got %d", len(orders))
+	}
+
+	// The sequence of nodes must prefer node-c (better candidate) over node-b,
+	// so order must be node-a -> node-c -> node-b.
+	expected := []string{"node-a", "node-c", "node-b"}
+	actual := make([]string, len(orders[0].nodes))
+	for i, n := range orders[0].nodes {
+		actual[i] = n.node.Name
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("topologyOrders order = %v, want %v", actual, expected)
+	}
+}

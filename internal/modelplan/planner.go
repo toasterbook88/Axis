@@ -452,7 +452,7 @@ func betterLink(left, right LinkObservation) bool {
 	if math.Abs(left.LatencyP95MS-right.LatencyP95MS) > floatEpsilon {
 		return left.LatencyP95MS < right.LatencyP95MS
 	}
-	return strings.ToLower(left.DestinationNode) < strings.ToLower(right.DestinationNode)
+	return false
 }
 
 type candidatePlan struct {
