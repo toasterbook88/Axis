@@ -1,5 +1,7 @@
 ## Unreleased
 
+## v0.12.1 (2026-06-18)
+
 ### 🔒 Security
 * `axis agent` now classifies LLM backends as local or remote and restricts untrusted evidence for remote backends.
   - Added `BackendSecurityClass` to `agent.Config` and `Agent`; constructor code paths must declare locality explicitly.
@@ -14,6 +16,12 @@
   - Advisory file locking on `nodes.yaml.lock` and SHA-256 hash check to detect concurrent modification.
   - `llm configure` rolls back only a newly created key file when YAML validation fails; pre-existing keys survive.
   - Inferred cloud provider `kind` is persisted into `nodes.yaml` AST automatically.
+* Fixed portability and resource-handling issues from PR 173 review:
+  - Replaced direct `syscall.Flock` with portable `internal/lockutil` package.
+  - Closed temporary files before removal to support Windows cleanup.
+  - Always close HTTP response bodies and defer context cancellation in the `/reservations` slash handler.
+  - Rewrote command redaction with a single-pass parser and optimized payload truncation.
+  - Added a nil guard for runtime snapshots during guarded execution preparation.
 
 
 ## v0.10.7 (2026-05-22)

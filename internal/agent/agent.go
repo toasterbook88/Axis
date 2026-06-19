@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -572,6 +573,9 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 
 	// 4. Construct context and request for PrepareGuardedExecution.
 	view := a.toolContext.GetView()
+	if view == nil {
+		return "", fmt.Errorf("runtime view is not available")
+	}
 	rt := &runtimectx.Context{
 		Config:   view.Config,
 		Snapshot: view.Snapshot,
@@ -806,13 +810,22 @@ func (a *Agent) remoteEvidence(skill skills.LearnedSkill, matched bool) string {
 		b.WriteString(fmt.Sprintf("  Preferred Node: %s\n", skill.PreferredNode))
 	}
 	if len(skill.NodeCount) > 0 {
-		var nodesCountStr []string
-		for n, c := range skill.NodeCount {
-			nodesCountStr = append(nodesCountStr, fmt.Sprintf("%s: %d successes", n, c))
-		}
-		b.WriteString(fmt.Sprintf("  Node success counts: %s\n", strings.Join(nodesCountStr, ", ")))
+		b.WriteString(fmt.Sprintf("  Node success counts: %s\n", formatNodeCounts(skill.NodeCount)))
 	}
 	return wrapEvidence(b.String())
+}
+
+func formatNodeCounts(counts map[string]int) string {
+	nodes := make([]string, 0, len(counts))
+	for n := range counts {
+		nodes = append(nodes, n)
+	}
+	sort.Strings(nodes)
+	parts := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		parts = append(parts, fmt.Sprintf("%s: %d successes", n, counts[n]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (a *Agent) localEvidence(recentDecisions []string, skill skills.LearnedSkill, matched bool) string {
@@ -853,11 +866,7 @@ func (a *Agent) localEvidence(recentDecisions []string, skill skills.LearnedSkil
 			b.WriteString(fmt.Sprintf("  Preferred Node: %s\n", skill.PreferredNode))
 		}
 		if len(skill.NodeCount) > 0 {
-			var nodesCountStr []string
-			for n, c := range skill.NodeCount {
-				nodesCountStr = append(nodesCountStr, fmt.Sprintf("%s: %d successes", n, c))
-			}
-			b.WriteString(fmt.Sprintf("  Node success counts: %s\n", strings.Join(nodesCountStr, ", ")))
+			b.WriteString(fmt.Sprintf("  Node success counts: %s\n", formatNodeCounts(skill.NodeCount)))
 		}
 	}
 
