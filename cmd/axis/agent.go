@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -349,12 +351,22 @@ func agentCmd() *cobra.Command {
 			}
 			rl, err := readline.NewEx(rlCfg)
 			if err != nil {
-				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, rt)
+				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, rt, mcpReg)
 			}
 			defer rl.Close()
 
+			session := &agentREPLSession{
+				Agent:       a,
+				MCPRegistry: mcpReg,
+				Runtime:     loadAgentShellRuntime,
+				Selector:    &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: rl, out: w},
+				In:          rl,
+				Out:         w,
+				ErrOut:      errW,
+			}
+
 			for {
-				line, err := rl.Readline()
+				line, err := session.In.Readline()
 				if err != nil {
 					break
 				}
@@ -368,9 +380,9 @@ func agentCmd() *cobra.Command {
 				}
 
 				if strings.HasPrefix(instruction, "/") {
-					handled, shouldExit, slashErr := handleREPLSlashCommand(instruction, a, w, errW, rt)
+					handled, shouldExit, slashErr := handleREPLSlashCommand(session, instruction)
 					if slashErr != nil {
-						fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), slashErr)
+						fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), slashErr)
 					}
 					if handled {
 						if shouldExit {
@@ -381,11 +393,11 @@ func agentCmd() *cobra.Command {
 				}
 
 				ctx2, cancel := agentRequestContext(ctx, timeout)
-				if err := a.Run(ctx2, instruction); err != nil {
-					fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), err)
+				if err := session.Agent.Run(ctx2, instruction); err != nil {
+					fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), err)
 				}
 				cancel()
-				fmt.Fprintln(w)
+				fmt.Fprintln(session.Out)
 			}
 
 			if historyPath != "" && a.Conversation().HistoryCount() > 0 {
@@ -414,16 +426,130 @@ func agentCmd() *cobra.Command {
 	return cmd
 }
 
+type LineReader interface {
+	Readline() (string, error)
+}
+
+type ScannerLineReader struct {
+	scanner *bufio.Scanner
+}
+
+func (s *ScannerLineReader) Readline() (string, error) {
+	if !s.scanner.Scan() {
+		if err := s.scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
+	}
+	return s.scanner.Text(), nil
+}
+
+type agentREPLSession struct {
+	Agent       *agent.Agent
+	MCPRegistry *mcpclient.Registry
+	Runtime     func(context.Context) (*runtimectx.Context, error)
+	Selector    ui.Selector
+	In          LineReader
+	Out         io.Writer
+	ErrOut      io.Writer
+}
+
+type REPLSelector struct {
+	terminal ui.TerminalIO
+	in       LineReader
+	out      io.Writer
+}
+
+func (s *REPLSelector) Select(ctx context.Context, title string, options []ui.SelectOption) (ui.SelectResult, error) {
+	if s.terminal.IsTTY() {
+		res, err := ui.Select(ctx, s.terminal, title, options)
+		if err == nil {
+			return res, nil
+		}
+	}
+
+	if !s.terminal.IsTTY() {
+		fmt.Fprintln(s.out, title)
+		for _, opt := range options {
+			status := ""
+			if opt.Disabled {
+				status = " (disabled)"
+			}
+			lbl := ui.StripANSIAndControls(opt.Label)
+			det := ui.StripANSIAndControls(opt.Detail)
+			if det != "" {
+				fmt.Fprintf(s.out, "  - %s: %s%s\n", lbl, det, status)
+			} else {
+				fmt.Fprintf(s.out, "  - %s%s\n", lbl, status)
+			}
+		}
+		return ui.SelectResult{Selected: false}, nil
+	}
+
+	fmt.Fprintln(s.out, title)
+	for i, opt := range options {
+		status := ""
+		if opt.Disabled {
+			status = " (disabled)"
+		}
+		fmt.Fprintf(s.out, "  [%d] %s - %s%s\n", i+1, opt.Label, opt.Detail, status)
+	}
+
+	for {
+		fmt.Fprint(s.out, "Enter choice number: ")
+		line, err := s.in.Readline()
+		if err != nil {
+			return ui.SelectResult{Selected: false}, err
+		}
+		line = strings.TrimSpace(line)
+		var choice int
+		_, err = fmt.Sscanf(line, "%d", &choice)
+		if err != nil || choice < 1 || choice > len(options) || options[choice-1].Disabled {
+			fmt.Fprintln(s.out, "Invalid choice, please try again.")
+			continue
+		}
+		return ui.SelectResult{
+			ID:       options[choice-1].ID,
+			Index:    choice - 1,
+			Selected: true,
+		}, nil
+	}
+}
+
+type ModelChoice struct {
+	ID            string
+	Model         string
+	ProviderName  string
+	ProviderKind  string
+	Node          string
+	Endpoint      string
+	SecurityClass agent.BackendSecurityClass
+	Disabled      bool
+}
+
 // runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
-func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, rt *runtimectx.Context) error {
+func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, rt *runtimectx.Context, mcpReg *mcpclient.Registry) error {
 	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
 	scanner := bufio.NewScanner(os.Stdin)
+	inReader := &ScannerLineReader{scanner: scanner}
+
+	session := &agentREPLSession{
+		Agent:       a,
+		MCPRegistry: mcpReg,
+		Runtime:     loadAgentShellRuntime,
+		Selector:    &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: inReader, out: w},
+		In:          inReader,
+		Out:         w,
+		ErrOut:      errW,
+	}
+
 	for {
-		fmt.Fprint(errW, ui.Cyan("✨ axis ❯ "))
-		if !scanner.Scan() {
+		fmt.Fprint(session.ErrOut, ui.Cyan("✨ axis ❯ "))
+		line, err := session.In.Readline()
+		if err != nil {
 			break
 		}
-		instruction := strings.TrimSpace(scanner.Text())
+		instruction := strings.TrimSpace(line)
 		if instruction == "" {
 			continue
 		}
@@ -433,9 +559,9 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 		}
 
 		if strings.HasPrefix(instruction, "/") {
-			handled, shouldExit, slashErr := handleREPLSlashCommand(instruction, a, w, errW, rt)
+			handled, shouldExit, slashErr := handleREPLSlashCommand(session, instruction)
 			if slashErr != nil {
-				fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), slashErr)
+				fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), slashErr)
 			}
 			if handled {
 				if shouldExit {
@@ -446,12 +572,13 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 		}
 
 		ctx2, cancel := agentRequestContext(ctx, timeout)
-		if err := a.Run(ctx2, instruction); err != nil {
-			fmt.Fprintf(errW, "\n%s %v\n", ui.Red("Error:"), err)
+		if err := session.Agent.Run(ctx2, instruction); err != nil {
+			fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), err)
 		}
 		cancel()
-		fmt.Fprintln(w)
+		fmt.Fprintln(session.Out)
 	}
+
 	if historyPath != "" && a.Conversation().HistoryCount() > 0 {
 		_ = a.Conversation().SaveToFile(historyPath)
 	}
@@ -461,12 +588,17 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 	return nil
 }
 
-func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *runtimectx.Context) (bool, bool, error) {
+func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool, error) {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return false, false, nil
 	}
 	cmd := strings.ToLower(parts[0])
+
+	a := session.Agent
+	w := session.Out
+	errW := session.ErrOut
+	rt, _ := session.Runtime(context.Background())
 	switch cmd {
 	case "/exit", "/quit":
 		return true, true, nil
@@ -480,6 +612,7 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 		fmt.Fprintln(errW, "  /tools         List available tools")
 		fmt.Fprintln(errW, "  /model <name>  Switch LLM model mid-session")
 		fmt.Fprintln(errW, "  /models        List available models and switch interactively")
+		fmt.Fprintln(errW, "  /mcp           Manage and view connected MCP servers")
 		fmt.Fprintln(errW, "  /nodes         Show cluster nodes status")
 		fmt.Fprintln(errW, "  /reservations  Show active ledger reservations")
 		fmt.Fprintln(errW, "  /skills        Show learned skills from history")
@@ -654,117 +787,216 @@ func handleREPLSlashCommand(line string, a *agent.Agent, w, errW io.Writer, rt *
 		fmt.Fprintln(w)
 		return true, false, nil
 
-	case "/models":
-		freshRt, err := runtimectx.Load(context.Background())
-		if err != nil {
-			return true, false, fmt.Errorf("failed to load cluster status: %w", err)
-		}
-		if freshRt == nil {
-			return true, false, fmt.Errorf("failed to load cluster status: runtime context is nil")
-		}
+	case "/models", "/model":
+		choices := collectModelChoices(rt)
 
-		type modelItem struct {
-			name      string
-			source    string
-			modelType string // local | cloud
-		}
-		var items []modelItem
+		if cmd == "/model" && len(parts) >= 2 {
+			newModel := parts[1]
 
-		// Gather local models from snapshot nodes
-		if freshRt.Snapshot != nil {
-			seenModels := make(map[string]bool)
-			for _, n := range freshRt.Snapshot.Nodes {
-				if n.Ollama != nil && n.Ollama.Installed {
-					for _, mName := range n.Ollama.Models {
-						key := n.Name + ":" + mName
-						if !seenModels[key] {
-							seenModels[key] = true
-							items = append(items, modelItem{
-								name:      mName,
-								source:    fmt.Sprintf("Local (Ollama on %s)", n.Name),
-								modelType: "local",
-							})
-						}
-					}
+			var chosen ModelChoice
+			found := false
+			for _, c := range choices {
+				if strings.EqualFold(c.Model, newModel) && !c.Disabled {
+					chosen = c
+					found = true
+					break
 				}
 			}
-		}
 
-		// Gather cloud models
-		if freshRt.Config != nil {
-			for pName, pCfg := range freshRt.Config.AIProviders {
-				if pCfg.Enabled {
-					for _, m := range pCfg.Models {
-						items = append(items, modelItem{
-							name:      m.Name,
-							source:    fmt.Sprintf("Cloud (%s)", pName),
-							modelType: "cloud",
-						})
-					}
+			if !found {
+				chosen = ModelChoice{
+					ID:            "local:" + newModel,
+					Model:         newModel,
+					ProviderName:  "ollama",
+					ProviderKind:  "local",
+					Endpoint:      chat.DefaultEndpoint,
+					SecurityClass: agent.BackendLocal,
 				}
 			}
+
+			err := switchAgentToModelChoice(session, chosen)
+			if err != nil {
+				return true, false, err
+			}
+			return true, false, nil
 		}
 
-		if len(items) == 0 {
+		if len(choices) == 0 {
 			fmt.Fprintln(w, "No models found (neither local Ollama models nor enabled cloud providers).")
 			return true, false, nil
 		}
 
-		sort.Slice(items, func(i, j int) bool {
-			if items[i].modelType != items[j].modelType {
-				return items[i].modelType < items[j].modelType
+		var selectOptions []ui.SelectOption
+		for _, choice := range choices {
+			detail := fmt.Sprintf("%s - %s", choice.ProviderName, choice.ProviderKind)
+			if choice.ProviderKind == "local" {
+				if choice.Node != "" {
+					detail = fmt.Sprintf("Remote node %s (%s)", choice.Node, choice.Endpoint)
+				} else {
+					detail = fmt.Sprintf("Local node (%s)", choice.Endpoint)
+				}
 			}
-			if items[i].source != items[j].source {
-				return items[i].source < items[j].source
-			}
-			return items[i].name < items[j].name
-		})
 
-		fmt.Fprintln(w, "\nAvailable Models:")
-		tbl := ui.NewTable("INDEX", "MODEL NAME", "PROVIDER/SOURCE", "TYPE")
-		for idx, item := range items {
-			tbl.AddRow(
-				fmt.Sprintf("  [%d]", idx+1),
-				item.name,
-				item.source,
-				item.modelType,
-			)
+			disabled := choice.Disabled
+			if choice.ProviderKind == "local" && choice.Node != "" && choice.Endpoint == "" {
+				disabled = true
+				detail += " (unsupported: no valid IP/hostname)"
+			} else if choice.ProviderKind == "local" && choice.Node != "" && choice.Disabled {
+				detail += " (unreachable)"
+			}
+
+			selectOptions = append(selectOptions, ui.SelectOption{
+				ID:       choice.ID,
+				Label:    choice.Model,
+				Detail:   detail,
+				Disabled: disabled,
+			})
 		}
-		tbl.Render(w)
-		fmt.Fprintln(w)
 
-		fmt.Fprint(w, "Select a model by index number (or press Enter to cancel): ")
-		scanner := bufio.NewScanner(os.Stdin)
-		if scanner.Scan() {
-			text := strings.TrimSpace(scanner.Text())
-			if text == "" {
-				fmt.Fprintln(w, "Cancelled.")
-				return true, false, nil
-			}
-			var index int
-			if _, err := fmt.Sscanf(text, "%d", &index); err != nil || index < 1 || index > len(items) {
-				fmt.Fprintf(errW, "Invalid index: %q\n", text)
-				return true, false, nil
-			}
-			selected := items[index-1]
-			err := switchAgentModel(a, freshRt, selected.name, errW)
-			if err != nil {
-				return true, false, err
-			}
+		res, err := session.Selector.Select(context.Background(), "Select active model for task routing:", selectOptions)
+		if err != nil {
+			return true, false, err
 		}
-		return true, false, nil
-
-	case "/model":
-		if len(parts) < 2 {
-			fmt.Fprintln(errW, "Error: /model requires a model name, e.g. /model llama3.2:3b or /model claude-3-5-sonnet")
+		if !res.Selected {
 			return true, false, nil
 		}
-		newModel := parts[1]
-		err := switchAgentModel(a, rt, newModel, errW)
+
+		var chosen ModelChoice
+		for _, c := range choices {
+			if c.ID == res.ID {
+				chosen = c
+				break
+			}
+		}
+
+		err = switchAgentToModelChoice(session, chosen)
 		if err != nil {
 			return true, false, err
 		}
 		return true, false, nil
+
+	case "/mcp":
+		mcpReg := session.MCPRegistry
+		if mcpReg == nil || len(mcpReg.Names()) == 0 {
+			fmt.Fprintln(errW, "No MCP servers configured or connected.")
+			return true, false, nil
+		}
+
+		for {
+			names := mcpReg.Names()
+			var serverOptions []ui.SelectOption
+			for _, name := range names {
+				s := mcpReg.Get(name)
+				status := "[not initialized]"
+				if s.Err != nil {
+					status = "[failed]"
+				} else if s.InitResult != nil {
+					status = "[ready]"
+				}
+				serverOptions = append(serverOptions, ui.SelectOption{
+					ID:     name,
+					Label:  name,
+					Detail: fmt.Sprintf("Transport: %s %s", s.Transport, status),
+				})
+			}
+
+			serverIdx, err := session.Selector.Select(context.Background(), "Select an MCP Server:", serverOptions)
+			if err != nil {
+				return true, false, err
+			}
+			if !serverIdx.Selected {
+				return true, false, nil
+			}
+
+			sc := mcpReg.Get(names[serverIdx.Index])
+
+			for {
+				actions := []ui.SelectOption{
+					{ID: "tools", Label: "List Tools", Detail: "Show all tools exposed by this server"},
+					{ID: "resources", Label: "List Resources", Detail: "Show all data resources exposed by this server"},
+					{ID: "diagnostics", Label: "Show Server Status & Diagnostics", Detail: "Run a live ping and show connection details"},
+					{ID: "back", Label: "Back", Detail: "Return to the server menu"},
+				}
+
+				actionIdx, err := session.Selector.Select(context.Background(), fmt.Sprintf("MCP Server %q Actions:", sc.Name), actions)
+				if err != nil {
+					return true, false, err
+				}
+				if !actionIdx.Selected || actionIdx.ID == "back" {
+					break
+				}
+
+				switch actionIdx.ID {
+				case "tools":
+					tools := sc.CachedTools()
+					if len(tools) == 0 {
+						fmt.Fprintln(w, "\nNo tools exposed by this server.")
+					} else {
+						fmt.Fprintf(w, "\nTools exposed by %s:\n", sc.Name)
+						for _, t := range tools {
+							name := sanitizeDiagnosticsText(t.Name)
+							desc := sanitizeDiagnosticsText(t.Description)
+							fmt.Fprintf(w, "  - \033[36m%s\033[0m: %s\n", name, desc)
+						}
+						fmt.Fprintln(w)
+					}
+				case "resources":
+					resources := sc.CachedResources()
+					if len(resources) == 0 {
+						fmt.Fprintln(w, "\nNo resources exposed by this server.")
+					} else {
+						fmt.Fprintf(w, "\nResources exposed by %s:\n", sc.Name)
+						for _, r := range resources {
+							name := sanitizeDiagnosticsText(r.Name)
+							uri := sanitizeDiagnosticsText(r.URI)
+							desc := sanitizeDiagnosticsText(r.Description)
+							fmt.Fprintf(w, "  - \033[36m%s\033[0m (%s): %s\n", name, uri, desc)
+						}
+						fmt.Fprintln(w)
+					}
+				case "diagnostics":
+					fmt.Fprintf(w, "\nMCP Server Details: %s\n", sanitizeDiagnosticsText(sc.Name))
+					fmt.Fprintf(w, "  Transport: %s\n", sanitizeDiagnosticsText(sc.Transport))
+					if sc.InitResult != nil {
+						fmt.Fprintf(w, "  Initial Handshake: \033[32msuccess\033[0m\n")
+						fmt.Fprintf(w, "    Protocol Version: %s\n", sanitizeDiagnosticsText(sc.InitResult.ProtocolVersion))
+						if sc.InitResult.ServerInfo.Name != "" {
+							sName := sanitizeDiagnosticsText(sc.InitResult.ServerInfo.Name)
+							sVer := sanitizeDiagnosticsText(sc.InitResult.ServerInfo.Version)
+							fmt.Fprintf(w, "    Server Name:      %s (%s)\n", sName, sVer)
+						}
+					} else {
+						fmt.Fprintf(w, "  Initial Handshake: \033[31mfailed / not initialized\033[0m\n")
+					}
+
+					pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					var pingErr error
+					var pingDur time.Duration
+					if sc.Client != nil {
+						start := time.Now()
+						pingErr = sc.Client.Ping(pingCtx)
+						pingDur = time.Since(start)
+					} else {
+						pingErr = fmt.Errorf("client is nil")
+					}
+					pingCancel()
+
+					fmt.Fprintf(w, "  Live Probe (Ping):\n")
+					if pingErr == nil {
+						fmt.Fprintf(w, "    Status:   \033[32mconnected\033[0m (latency: %v)\n", pingDur)
+					} else {
+						pErrStr := sanitizeDiagnosticsText(pingErr.Error())
+						fmt.Fprintf(w, "    Status:   \033[31mfailed / unreachable\033[0m (%s)\n", pErrStr)
+					}
+
+					if !sc.ConnectedAt().IsZero() {
+						fmt.Fprintf(w, "    Handshake Time:   %s\n", sc.ConnectedAt().Format(time.RFC3339))
+					}
+					fmt.Fprintf(w, "    Probe Time:       %s\n", time.Now().Format(time.RFC3339))
+					fmt.Fprintln(w)
+				}
+			}
+		}
 
 	case "/clear":
 		a.Conversation().Clear()
@@ -966,5 +1198,256 @@ func switchAgentModel(a *agent.Agent, rt *runtimectx.Context, newModel string, e
 	}
 
 	a.SetBackend(newBackend, securityClass)
+	a.SetModel(newModel)
 	return nil
+}
+
+func resolveNodeEndpoint(n models.NodeFacts) (string, error) {
+	if models.IsLocalNode(n) {
+		port := 11434
+		if n.Ollama != nil && n.Ollama.Port > 0 {
+			port = n.Ollama.Port
+		}
+		return fmt.Sprintf("http://localhost:%d", port), nil
+	}
+
+	if n.Ollama == nil || !n.Ollama.Installed {
+		return "", fmt.Errorf("Ollama is not installed on remote node %s", n.Name)
+	}
+
+	port := n.Ollama.Port
+	if port <= 0 {
+		port = 11434
+	}
+
+	var targetHost string
+	for _, addr := range n.Addresses {
+		if addr.Scope != "link-local" && addr.Address != "" {
+			targetHost = addr.Address
+			break
+		}
+	}
+	if targetHost == "" {
+		targetHost = n.Hostname
+	}
+	if targetHost == "" {
+		return "", fmt.Errorf("remote node %s has no valid network address or hostname", n.Name)
+	}
+
+	return fmt.Sprintf("http://%s:%d", targetHost, port), nil
+}
+
+func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) error {
+	a := session.Agent
+	errW := session.ErrOut
+	var backend agent.ChatBackend
+	var err error
+
+	if choice.ProviderKind == "cloud" {
+		rt, loadErr := session.Runtime(context.Background())
+		if loadErr != nil {
+			return fmt.Errorf("failed to load cluster status for cloud provider: %w", loadErr)
+		}
+		var pCfg config.AIProviderConfig
+		var found bool
+		for pName, p := range rt.Config.AIProviders {
+			if strings.EqualFold(pName, choice.ProviderName) {
+				pCfg = p
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("cloud provider %q not configured", choice.ProviderName)
+		}
+
+		var key string
+		key, err = secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
+		if err != nil || key == "" {
+			return fmt.Errorf("API key for cloud provider %q not found or empty", choice.ProviderName)
+		}
+
+		var costPer1K float64
+		for _, m := range pCfg.Models {
+			if strings.EqualFold(m.Name, choice.Model) {
+				costPer1K = m.CostPer1K
+				break
+			}
+			for _, alias := range m.Aliases {
+				if strings.EqualFold(alias, choice.Model) {
+					costPer1K = m.CostPer1K
+					break
+				}
+			}
+		}
+
+		backend, err = agent.NewCloudBackendWithKey(pCfg.Kind, choice.ProviderName, pCfg.Endpoint, key, choice.Model, costPer1K)
+		if err != nil {
+			return fmt.Errorf("invalid cloud backend config: %w", err)
+		}
+		fmt.Fprintf(errW, "Switched to cloud provider %q, model %q\n", choice.ProviderName, choice.Model)
+	} else {
+		if choice.Endpoint == "" {
+			return fmt.Errorf("invalid empty endpoint for model %s", choice.Model)
+		}
+		backend = chat.NewClient(choice.Endpoint, choice.Model)
+		if choice.Node != "" {
+			fmt.Fprintf(errW, "Switched to model %q on remote node %q (%s)\n", choice.Model, choice.Node, choice.Endpoint)
+		} else {
+			fmt.Fprintf(errW, "Switched to local Ollama model %q (%s)\n", choice.Model, choice.Endpoint)
+		}
+	}
+
+	a.SetBackend(backend, choice.SecurityClass)
+	a.SetModel(choice.Model)
+	return nil
+}
+
+var probeEndpointFn = func(url string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
+	var choices []ModelChoice
+	if rt == nil {
+		return choices
+	}
+
+	if rt.Snapshot != nil {
+		// Identify unique remote Ollama endpoints to probe concurrently
+		type probeResult struct {
+			endpoint string
+			ok       bool
+		}
+		endpointToNodes := make(map[string][]models.NodeFacts)
+		for _, n := range rt.Snapshot.Nodes {
+			if n.Ollama != nil && n.Ollama.Installed && !models.IsLocalNode(n) {
+				endpoint, err := resolveNodeEndpoint(n)
+				if err == nil && endpoint != "" {
+					endpointToNodes[endpoint] = append(endpointToNodes[endpoint], n)
+				}
+			}
+		}
+
+		ch := make(chan probeResult, len(endpointToNodes))
+		var wg sync.WaitGroup
+		for ep := range endpointToNodes {
+			wg.Add(1)
+			go func(endpoint string) {
+				defer wg.Done()
+				ok := probeEndpointFn(endpoint + "/api/tags")
+				ch <- probeResult{endpoint: endpoint, ok: ok}
+			}(ep)
+		}
+
+		// Wait in background and close channel when done
+		go func() {
+			wg.Wait()
+			close(ch)
+		}()
+
+		probeMap := make(map[string]bool)
+		for res := range ch {
+			probeMap[res.endpoint] = res.ok
+		}
+
+		seen := make(map[string]bool)
+		for _, n := range rt.Snapshot.Nodes {
+			if n.Ollama != nil && n.Ollama.Installed {
+				endpoint, err := resolveNodeEndpoint(n)
+				disabled := false
+				if err != nil {
+					disabled = true
+				} else if !models.IsLocalNode(n) {
+					// Mark as disabled if probe failed
+					if !probeMap[endpoint] {
+						disabled = true
+					}
+				}
+				for _, mName := range n.Ollama.Models {
+					key := n.Name + ":" + mName
+					if !seen[key] {
+						seen[key] = true
+						var nodeLabel string
+						var securityClass agent.BackendSecurityClass
+
+						if models.IsLocalNode(n) {
+							nodeLabel = ""
+							securityClass = agent.BackendLocal
+						} else {
+							nodeLabel = n.Name
+							securityClass = agent.BackendLocal
+						}
+
+						choices = append(choices, ModelChoice{
+							ID:            key,
+							Model:         mName,
+							ProviderName:  "ollama",
+							ProviderKind:  "local",
+							Node:          nodeLabel,
+							Endpoint:      endpoint,
+							SecurityClass: securityClass,
+							Disabled:      disabled,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	if rt.Config != nil {
+		for pName, pCfg := range rt.Config.AIProviders {
+			if pCfg.Enabled {
+				for _, m := range pCfg.Models {
+					choices = append(choices, ModelChoice{
+						ID:            fmt.Sprintf("cloud:%s:%s", pName, m.Name),
+						Model:         m.Name,
+						ProviderName:  pName,
+						ProviderKind:  "cloud",
+						Node:          "",
+						Endpoint:      pCfg.Endpoint,
+						SecurityClass: agent.BackendRemote,
+						Disabled:      false,
+					})
+				}
+			}
+		}
+	}
+
+	sort.Slice(choices, func(i, j int) bool {
+		if choices[i].ProviderKind != choices[j].ProviderKind {
+			return choices[i].ProviderKind < choices[j].ProviderKind
+		}
+		if choices[i].ProviderName != choices[j].ProviderName {
+			return choices[i].ProviderName < choices[j].ProviderName
+		}
+		return choices[i].Model < choices[j].Model
+	})
+
+	return choices
+}
+
+var tokenRegex = regexp.MustCompile(`(?i)(bearer|token|key|auth|password|secret|credential)[=:\s]+[A-Za-z0-9\-_./\+=]+`)
+var urlSecretRegex = regexp.MustCompile(`(?i)(token|key|password|pass|secret|auth)=[^&\s]+`)
+
+func redactSecrets(s string) string {
+	s = tokenRegex.ReplaceAllString(s, "$1=[REDACTED]")
+	s = urlSecretRegex.ReplaceAllString(s, "$1=[REDACTED]")
+	return s
+}
+
+func sanitizeDiagnosticsText(s string) string {
+	s = ui.StripANSIAndControls(s)
+	return redactSecrets(s)
 }

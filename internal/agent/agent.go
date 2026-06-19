@@ -57,7 +57,8 @@ type Agent struct {
 	// autoApproveAll is toggled when the operator selects "always" in confirmation.
 	autoApproveAll bool
 	// blockAll is toggled when the operator selects "never" in confirmation.
-	blockAll bool
+	blockAll    bool
+	mcpRegistry *mcpclient.Registry
 }
 
 // Config configures an Agent.
@@ -199,6 +200,7 @@ func New(cfg Config) *Agent {
 		model:                   cfg.Model,
 		allowRawCommandEvidence: cfg.AllowRawCommandEvidence,
 		securityClass:           cfg.BackendSecurityClass,
+		mcpRegistry:             cfg.MCPRegistry,
 	}
 }
 
@@ -668,10 +670,30 @@ func (a *Agent) MaxTokens() int {
 	return a.maxTokens
 }
 
+// MCPRegistry returns the connected MCP client registry.
+func (a *Agent) MCPRegistry() *mcpclient.Registry {
+	return a.mcpRegistry
+}
+
 // SetBackend changes the active LLM backend and its trust classification.
 func (a *Agent) SetBackend(client ChatBackend, securityClass BackendSecurityClass) {
 	a.client = client
 	a.securityClass = securityClass
+}
+
+// Backend returns the active LLM backend.
+func (a *Agent) Backend() ChatBackend {
+	return a.client
+}
+
+// Model returns the current active model name.
+func (a *Agent) Model() string {
+	return a.model
+}
+
+// SetModel updates the current active model name.
+func (a *Agent) SetModel(model string) {
+	a.model = model
 }
 
 // AgentStats holds session statistics.
