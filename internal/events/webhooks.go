@@ -50,9 +50,9 @@ func dispatchWebhooks(evt Event) {
 	}
 
 	for _, url := range urls {
-		inflightEvents.Add(1)
+		inflightAdd(1)
 		go func(targetURL string, body []byte) {
-			defer inflightEvents.Done()
+			defer inflightAdd(-1)
 			if err := postWithRetry(targetURL, body); err != nil {
 				slog.Error("failed to dispatch webhook", "url", targetURL, "event", evt.Name, "error", err)
 				_ = writeDeadLetter(targetURL, err.Error(), evt)
