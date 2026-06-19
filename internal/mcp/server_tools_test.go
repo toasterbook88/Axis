@@ -518,6 +518,7 @@ func TestLifecycleEventTools(t *testing.T) {
 	// Test get_recent_events
 	events.SetEventBufferSize(10)
 	events.EmitToBuffer(nil, "task.placement.requested", map[string]any{"task_id": "test-task"})
+	events.FlushEvents(1 * time.Second)
 
 	getTool, ok := s.ListTools()["get_recent_events"]
 	if !ok {
