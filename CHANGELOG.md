@@ -1,5 +1,20 @@
 ## Unreleased
 
+## v0.12.2 (2026-06-19)
+
+### 🚀 Features
+* **Distributed Model Planner (PR #175):**
+  - Snapshot-backed multi-node pipeline and single-node advisory placement planner.
+  - Support for exact layer memory mapping, context window cache scaling, and freshness validation.
+* **Interactive CLI UI:**
+  - Added interactive selection dropdown UI, live remote Ollama probing, `/mcp` diagnostics, and active SSH verification during initialization.
+
+### 🐛 Bug Fixes
+* **Planner Tie-Breaker Logic:**
+  - Fixed `betterLink` selection logic bug where alphabetical sorting on identical link qualities incorrectly overrode downstream candidate memory checks (`betterCandidate`).
+* **Test Stability:**
+  - Resolved an asynchronous race condition in the MCP lifecycle event test suite (`TestLifecycleEventTools`).
+
 ## v0.12.1 (2026-06-18)
 
 ### 🔒 Security
