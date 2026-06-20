@@ -237,8 +237,9 @@ func parseCommand(raw string) (string, []string) {
 // shellSplit does basic shell-style word splitting.
 // Handles single and double quotes but not full POSIX parsing.
 func shellSplit(s string) []string {
-	var parts []string
+	parts := make([]string, 0, 8)
 	var current strings.Builder
+	current.Grow(len(s))
 	inSingle := false
 	inDouble := false
 	escaped := false
