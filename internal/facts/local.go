@@ -947,6 +947,20 @@ func parseAddressWithOptionalCIDR(raw string) (net.IP, string) {
 // interface based on its name and IP address. This enables topology-aware
 // decisions (e.g., preferring Thunderbolt links for heavy data transfers).
 func classifyInterfaceSpeed(ifName string, ip net.IP) string {
+	if runtime.GOOS == "linux" {
+		speedPath := fmt.Sprintf("/sys/class/net/%s/speed", ifName)
+		if data, err := os.ReadFile(speedPath); err == nil {
+			if speed, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if speed >= 10000 {
+					return "10gbe"
+				}
+				if speed >= 1000 {
+					return "gigabit"
+				}
+			}
+		}
+	}
+
 	lower := strings.ToLower(ifName)
 
 	// Overlay / VPN tunnels — detect by interface name
