@@ -7,7 +7,7 @@ require (
 	github.com/chzyer/readline v1.5.1
 	github.com/fatih/color v1.19.0
 	github.com/google/uuid v1.6.0
-	github.com/mark3labs/mcp-go v0.54.1
+	github.com/mark3labs/mcp-go v0.55.0
 	github.com/mattn/go-isatty v0.0.22
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.53.0
