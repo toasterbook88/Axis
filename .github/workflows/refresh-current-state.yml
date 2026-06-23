@@ -16,7 +16,7 @@ jobs:
     name: Refresh current-state.md
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
