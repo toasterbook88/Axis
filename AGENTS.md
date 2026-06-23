@@ -69,6 +69,7 @@ Verification steps:
 - `go build ./...`
 - `./hack/coverage-check.sh` — enforces per-package and total coverage gates
 - `./hack/verify-repo-truth.sh` — enforces release-tag and doc-fact accuracy
+- `./hack/verify-doc-facts.sh` — enforces code/doc agreement: exit codes, command count, MCP tool count, and CHANGELOG completeness (no network)
 
 Coverage gates (from `hack/coverage-check.sh`):
 
@@ -263,6 +264,7 @@ reason, or add heavy dependencies without strong justification.
 | -------- | --------- |
 | `hack/coverage-check.sh` | Per-package and total coverage gates |
 | `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
+| `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, CHANGELOG) |
 | `hack/refresh-current-state.sh` | Rebuild `docs/current-state.md` |
 | `hack/compare-release-versions.go` | Compare repo vs published release tag |
 | `hack/apple-foundation-models.swift` | Probe Apple Foundation Models support |
