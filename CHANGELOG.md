@@ -38,6 +38,67 @@
   - Rewrote command redaction with a single-pass parser and optimized payload truncation.
   - Added a nil guard for runtime snapshots during guarded execution preparation.
 
+## v0.12.0 (2026-06-17)
+
+### 🚀 Features
+* **Cloud LLMs + premium terminal UI/UX (#171):** Support cloud LLM backends with local capability checks and a premium terminal UI/UX.
+* **Reservations doctor (#169):** `axis reservations doctor` diagnoses reservation inconsistencies, stale leases, and memory leaks.
+* **Pressure-aware lease-based cluster RAM balancer (#166):** Scheduler shifts from instantaneous free memory to allocatable headroom, leased soft-claims, and Linux kernel PSI.
+* **Cluster topology, interactive LLM select, nested parent reservations (#165).**
+* **Git-aware interactive preflight checks for dirty trees (#164).**
+* **Dynamic local-port forwarding over SSH for remote tasks (#163).**
+
+### 🔧 Maintenance
+* Make stash preflight test hermetic; refresh docs (#168).
+* Make LLM select command tests hermetic (#167).
+* Bump go-modules-minor-patch group with 2 updates (#170).
+
+## v0.11.0 (2026-06-10)
+
+### 🚀 Features
+* **Structured AXIS lifecycle events + flock rotation (#160).**
+* **Git Intelligence for workspace context (#156).**
+* **`axis init` CLI command, mesh gossip peer diagnostics, and topology (#161).**
+* **Generic SSH connection latency and path classification (#159).**
+* **Per-session MCP cache and daemon snapshot hook deadlock fix (#153).**
+* **Ollama warmth lifetime scoring as a bounded placement tiebreaker (#151).**
+
+### 🐛 Bug Fixes
+* Print CLI execution errors to stderr before exiting (#157).
+* Resolve daemon data race and wire MCP snapshot cache invalidation (#155).
+
+### 📚 Documentation
+* MCP defense-in-depth paragraph and assertion test (#150).
+* Update agent worklog (#158).
+
+### 🔧 Maintenance
+* Bump Go toolchain 1.26.3 → 1.26.4 (#154).
+* Bump actions/checkout 6.0.2 → 6.0.3 (#152).
+
+## v0.10.9 (2026-06-01)
+
+### 🚀 Features
+* **Phase 1 advisory leases and structured safety evaluator (#144):** Adds the Triangle advisory lease MCP tools (`triangle_request_lease`, `triangle_release_lease`, `triangle_heartbeat_lease`) and the structured safety evaluator.
+* **Per-node configurable system RAM reserve (#147).**
+
+### 🐛 Bug Fixes
+* Resolve PR #145 post-merge bugs in api/v2 and mcp (#146).
+* Make `TestLocalCollectorCollectsFacts` hermetic (#148).
+* Correct release badge to track tag pushes (#143).
+
+### 🔧 Maintenance
+* Add safety benchmarks and enable structured evaluator tests (#145).
+* Version bump to v0.10.9 (#149).
+
+## v0.10.8 (2026-05-29)
+
+### 🚀 Features
+* **Unified MCP client (#140):** prompts, caching, retry, batch, REPL, metrics, and auto-routing.
+* **Execution observations in `axis task run` + `axis observations` CLI (#139).**
+
+### 🔧 Maintenance
+* Bump `github.com/mark3labs/mcp-go` 0.54.0 → 0.54.1 (#141).
+* Release v0.10.8 (#142).
 
 ## v0.10.7 (2026-05-22)
 
@@ -128,8 +189,6 @@
 
 ### 🔧 Maintenance
 * Version bump to 0.10.1
-
-# CHANGELOG
 
 ## v0.10.0 — Operator-honest groundwork: shell safety, reservation ledger, mesh scaffolding
 

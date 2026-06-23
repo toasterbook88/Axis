@@ -93,7 +93,7 @@ publishes via GoReleaser (`darwin`/`linux` × `amd64`/`arm64`).
 ### Stable operator path
 
 ```text
-cmd/axis/             Cobra CLI — one file per subcommand (15 commands)
+cmd/axis/             Cobra CLI — one file per subcommand (24 commands)
 internal/config/      Load ~/.axis/nodes.yaml; strict YAML parsing
 internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
                       pressure, thermal, battery, network, TurboQuant, AFM
@@ -109,7 +109,9 @@ internal/transport/   SSH execution layer (host-key verification must stay on)
 ```text
 internal/daemon/      Background snapshot refresh, in-memory cache
 internal/api/         Optional local HTTP API (axis serve)
-internal/mcp/         Read-only MCP server (axis mcp serve), 10 tools
+internal/mcp/         MCP server (axis mcp serve): 17 tools (14 read-only
+                      diagnostics + 3 advisory lease primitives); see
+                      docs/runbooks/mcp-network-tools.md for the full list
 internal/chat/        Structured Ollama /api/chat client (subordinate to facts)
 internal/agent/       Tool-calling agent loop with safety-gated shell
 internal/execution/   Guarded execution: safety → reserve → run → release
@@ -155,7 +157,7 @@ HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
-21 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
+24 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
 
 | Command | Purpose |
 | --------- | --------- |
@@ -180,6 +182,9 @@ HDD penalty: −15 for heavy inference.
 | `axis doctor` | Validate config, SSH connectivity, daemon health |
 | `axis summary` | Cluster summary view |
 | `axis reservations` | Reservation inspection |
+| `axis init` | Interactive cluster configuration wizard |
+| `axis mesh` | Gossip mesh peer diagnostics (subcommands: `properties`, `neighbors`) |
+| `axis observations` | Show execution observations tracked by the cluster |
 
 ### Exit codes (`cmd/axis/exit.go`)
 
@@ -191,6 +196,7 @@ HDD penalty: −15 for heavy inference.
 | 3 | `ExitErrNoNodesFit` | No nodes satisfy task requirements |
 | 4 | `ExitErrCommandFail` | Command execution failure |
 | 5 | `ExitErrContextWrite` | Context write failure |
+| 6 | `ExitErrIO` | I/O failure |
 
 ## Configuration
 

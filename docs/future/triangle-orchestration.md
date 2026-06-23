@@ -133,6 +133,15 @@ All components below were confirmed present and functional via live `axis` binar
 
 All tools carry `readOnlyHint: true`. The server instructions state: "AXIS exposes read-only cluster state and diagnostics. Do not assume any write or execution authority."
 
+**[ANNOTATION — VERIFIED (v0.12.2), supersedes the v0.10.7 count above]**
+
+The live MCP server now registers **17 tools** (not 10), confirmed in `internal/mcp/server.go` (`registerTools`) and `internal/mcp/triangle.go` (`registerTriangleTools`):
+
+- **14 read-only diagnostics** (all carry `WithReadOnlyHintAnnotation(true)`): `cluster_snapshot`, `placement_decision`, `axis_health`, `axis_tools`, `ip_addr`, `tailscale_status`, `tailscale_ping`, `wireguard_status`, `docker_ps`, `ssh_connectivity_test`, `git_status`, `list_lifecycle_events`, `get_recent_events`, `register_event_interest`.
+- **3 advisory lease primitives** (not marked read-only — they write to the local reservation ledger): `triangle_request_lease`, `triangle_release_lease`, `triangle_heartbeat_lease`.
+
+`triangle_delegate_task` still does **not** exist, and there is still no execution routing engine. The server instructions now read: "AXIS exposes read-only cluster state, diagnostics, and advisory resource leases. Do not assume any execution authority." The full current list is mirrored in `docs/runbooks/mcp-network-tools.md`.
+
 ---
 
 ## 4. Proposed Triangle Architecture
