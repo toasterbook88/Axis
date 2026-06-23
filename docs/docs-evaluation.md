@@ -17,7 +17,7 @@ Per `docs/README.md`, the established truth hierarchy in this repository is:
 3. `docs/agent-worklog.md`
 4. Older design docs, white papers, roadmaps, and evaluations (this document falls here)
 
-**This file is an evaluation snapshot, not canonical truth.** It will age. When it disagrees with live code, `current-state.md`, `doctrine.md`, `architecture.md`, or `lifecycle.md`, those sources take precedence.
+**This file is an evaluation snapshot, not canonical truth.** It will age. When it disagrees with live code, `current-state.md`, `doctrine.md`, `architecture.md`, or `lifecycle.md`, those sources take precedence. Current canonical state lives in `docs/current-state.md` (CI-validated).
 
 This document was created at the explicit request of the operator after a complete evaluation pass. It does not modify any other files.
 

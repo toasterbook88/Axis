@@ -36,7 +36,7 @@ The live repo currently contains:
 - Content-aware `nodes.yaml`, semantic `state.json`, and `skills.json` watch refreshes in the daemon cache, plus explicit execution-state and long-lived UDP beacon refresh triggers, with refresh-trigger metadata surfaced through daemon health/status
 - Typed discovery freshness metadata on live and cached snapshots (`source`, expected/observed window, additive beacon count, completion state, warning)
 - A CLI task execution path (`axis task run`)
-- A read-only MCP server for cluster diagnostics, with a per-session cache (`SessionCache`) with a 30s TTL to prevent redundant live discoveries
+- A read-only diagnostics + advisory lease MCP server for cluster state, with a per-session cache (`SessionCache`) with a 30s TTL to prevent redundant live discoveries
 - In-process snapshot-change hooks on the daemon supporting subscriber callbacks with lock-free dispatch and panic recovery
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
 - Recoverable persistence for corrupt local state/skills files via quarantine + warning
@@ -95,7 +95,7 @@ Top-level commands currently registered in the binary:
 | `axis agent` | Agentic tool-calling assistant | Read-only cluster tools + safety-gated shell; `--auto-approve` for safe commands |
 | `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |
 | `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
-| `axis mcp serve` | Start read-only MCP server | `stdio` transport only |
+| `axis mcp serve` | Start MCP server (read-only diagnostics + advisory leases) | `stdio` transport only |
 | `axis mcp client` | Unified MCP client | Subcommands: `list`, `tools`, `call`, `resources`, `read`, `prompts`, `get-prompt`, `search`, `batch`, `interactive`. Per-connection caching (60s TTL), retry with exponential backoff, placement-aware `--auto-route`, progress notifications, and REPL with 10 commands |
 | `axis serve` | Start local HTTP API | Includes execution surface |
 | `axis update` | Self-update binary | Safely replaces only the current executing binary with the latest release, verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--all` to upgrade all `$PATH` matches. `--check` reports only |
