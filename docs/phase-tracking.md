@@ -10,4 +10,4 @@
 | Phase 6 | **Completed** | Trust-and-foundations work: GPU/storage/network enrichment, stable identity, and failure-memory placement signals |
 | Phase 7 | **Completed** | Runtime hardening: streamed `/run`, reservation durability, forwarded provenance, and discovery freshness |
 
-Current release: **v0.10.2**
+Current release: **v0.12.2**

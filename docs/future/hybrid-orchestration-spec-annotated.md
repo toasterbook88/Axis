@@ -131,6 +131,11 @@ The system divides responsibilities between two core Advisory layers:
 - These tools interact with the local `reservation.Ledger` and save directly to `~/.axis/ledger.json`.
 - The instructions were updated to: "AXIS exposes read-only cluster state, diagnostics, and advisory resource leases. Do not assume any execution authority."
 
+**[ANNOTATION — VERIFIED (v0.12.2)]**
+
+- `internal/mcp/server.go` (`registerTools`) plus `internal/mcp/triangle.go` (`registerTriangleTools`) now register **17 tools** total: 14 read-only diagnostics (all `WithReadOnlyHintAnnotation(true)`) + the same 3 advisory lease tools (`triangle_request_lease`, `triangle_release_lease`, `triangle_heartbeat_lease`).
+- `triangle_delegate_task` still does not exist; there is still no execution routing engine. Full current list: `docs/runbooks/mcp-network-tools.md`.
+
 ---
 
 ## 6. Failure Mode & Mitigation Matrix (Original)
