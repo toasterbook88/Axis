@@ -943,20 +943,34 @@ func parseAddressWithOptionalCIDR(raw string) (net.IP, string) {
 	return net.ParseIP(raw), ""
 }
 
-// classifyInterfaceSpeed heuristically determines the speed class of a network
-// interface based on its name and IP address. This enables topology-aware
-// decisions (e.g., preferring Thunderbolt links for heavy data transfers).
+// readSysfsLinkSpeed reads the negotiated link speed (Mbps) for a Linux network
+// interface from /sys/class/net/<iface>/speed. It returns an error when sysfs
+// is unavailable (a missing interface, or non-numeric content) so
+// classifyInterfaceSpeed can fall back to the name/IP heuristic. It is a
+// package-level var so tests can stub it for deterministic classification
+// independent of the host's real interfaces — e.g. a CI runner whose eth0
+// genuinely reports a 10GbE link via sysfs.
+var readSysfsLinkSpeed = func(ifName string) (int, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/speed", ifName))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(data)))
+}
+
+// classifyInterfaceSpeed determines the speed class of a network interface. On
+// Linux it first consults the exact negotiated link speed from sysfs (≥10000 →
+// "10gbe", ≥1000 → "gigabit"); otherwise it falls back to a name/IP heuristic.
+// This enables topology-aware decisions (e.g., preferring Thunderbolt links
+// for heavy data transfers).
 func classifyInterfaceSpeed(ifName string, ip net.IP) string {
 	if runtime.GOOS == "linux" {
-		speedPath := fmt.Sprintf("/sys/class/net/%s/speed", ifName)
-		if data, err := os.ReadFile(speedPath); err == nil {
-			if speed, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-				if speed >= 10000 {
-					return "10gbe"
-				}
-				if speed >= 1000 {
-					return "gigabit"
-				}
+		if speed, err := readSysfsLinkSpeed(ifName); err == nil {
+			if speed >= 10000 {
+				return "10gbe"
+			}
+			if speed >= 1000 {
+				return "gigabit"
 			}
 		}
 	}
