@@ -14,8 +14,8 @@ across multiple machines and editor sessions.
 
 | Session | Machine | Repo Path | Branch | Owner | Scope | Avoid Touching |
 | --- | --- | --- | --- | --- | --- | --- |
-| `codex-runtime` | local macOS | `/Users/smithanator/axis-1` | `session-codex-runtime-core` | Codex | SSH transport, `axis doctor`, workload inference, related tests/goldens | install/distribution files unless required |
-| `gemini-distribution` | NixOS / Antigravity | `/home/axis/Github-Axis/axis` | `session-gemini-install-distribution` | Gemini | installer, flake, updater policy, install docs | `internal/workload/*`, transport/runtime-core files |
+| `codex-runtime` | local macOS | `$HOME/axis` | `session-codex-runtime-core` | Codex | SSH transport, `axis doctor`, workload inference, related tests/goldens | install/distribution files unless required |
+| `gemini-distribution` | NixOS / Antigravity | `$HOME/axis` | `session-gemini-install-distribution` | Gemini | installer, flake, updater policy, install docs | `internal/workload/*`, transport/runtime-core files |
 
 ## File Ownership
 
