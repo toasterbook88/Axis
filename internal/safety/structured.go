@@ -243,30 +243,37 @@ func shellSplit(s string) []string {
 	inSingle := false
 	inDouble := false
 	escaped := false
+	wordStarted := false
 
 	for _, r := range s {
 		if escaped {
 			current.WriteRune(r)
 			escaped = false
+			wordStarted = true
 			continue
 		}
 		switch {
 		case r == '\\' && !inSingle:
 			escaped = true
+			wordStarted = true
 		case r == '\'' && !inDouble:
 			inSingle = !inSingle
+			wordStarted = true
 		case r == '"' && !inSingle:
 			inDouble = !inDouble
+			wordStarted = true
 		case r == ' ' && !inSingle && !inDouble:
-			if current.Len() > 0 {
+			if wordStarted {
 				parts = append(parts, current.String())
 				current.Reset()
+				wordStarted = false
 			}
 		default:
 			current.WriteRune(r)
+			wordStarted = true
 		}
 	}
-	if current.Len() > 0 {
+	if wordStarted {
 		parts = append(parts, current.String())
 	}
 	return parts

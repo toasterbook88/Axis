@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -174,7 +175,76 @@ func NewDefault(interval time.Duration) *Daemon {
 
 	cfg, _ := config.Load(config.DefaultConfigPath())
 	if cfg == nil || cfg.IsMeshEnabled() {
-		d.mesh = mesh.New(mesh.Peer{}, mesh.DefaultConfig(), nil)
+		var selfPeer mesh.Peer
+		var seedPeers []mesh.Peer
+
+		if cfg != nil {
+			// Find the local node config
+			var localNode config.NodeConfig
+			var foundLocal bool
+			for _, n := range cfg.Nodes {
+				if models.IsLocalConfig(n.Name, n.Hostname, n.StableID) {
+					localNode = n
+					foundLocal = true
+					break
+				}
+			}
+
+			udpPort := 42426
+			if cfg.Discovery != nil && cfg.Discovery.UDPPort > 0 {
+				udpPort = cfg.Discovery.UDPPort
+			}
+
+			if foundLocal {
+				selfPeer = mesh.Peer{
+					Name:       localNode.Name,
+					Hostname:   localNode.Hostname,
+					Port:       udpPort,
+					StableID:   localNode.StableID,
+					State:      mesh.PeerTrusted,
+					Source:     "config",
+					FirstSeen:  time.Now().UTC(),
+					LastSeen:   time.Now().UTC(),
+					Generation: 1,
+				}
+			}
+
+			for _, n := range cfg.Nodes {
+				// Don't add ourselves as a seed
+				if foundLocal && n.Name == localNode.Name {
+					continue
+				}
+				seedPeers = append(seedPeers, mesh.Peer{
+					Name:       n.Name,
+					Hostname:   n.Hostname,
+					Port:       udpPort,
+					StableID:   n.StableID,
+					State:      mesh.PeerTrusted,
+					Source:     "config",
+					FirstSeen:  time.Now().UTC(),
+					LastSeen:   time.Now().UTC(),
+					Generation: 1,
+				})
+			}
+		}
+
+		meshCfg := mesh.DefaultConfig()
+		if cfg != nil && cfg.Discovery != nil {
+			if cfg.Discovery.UDPPort > 0 {
+				meshCfg.ListenAddr = fmt.Sprintf(":%d", cfg.Discovery.UDPPort)
+			}
+			if cfg.Discovery.BeaconInterval > 0 {
+				meshCfg.GossipInterval = time.Duration(cfg.Discovery.BeaconInterval) * time.Second
+			}
+			if cfg.Discovery.Secret != "" {
+				meshCfg.SharedSecret = cfg.Discovery.Secret
+			}
+		}
+
+		d.mesh = mesh.New(selfPeer, meshCfg, nil)
+		for _, seed := range seedPeers {
+			d.mesh.AddSeed(seed)
+		}
 	}
 	return d
 }
