@@ -1,5 +1,23 @@
 ## Unreleased
 
+## v0.12.3 (2026-06-29)
+
+### 🚀 Features
+* **Network & Topology Enrichment:**
+  - Wire local identity and ignore docker bridges.
+  - Add secondary disk probing.
+  - Measure explicit network `speed_class` via sysfs to improve deterministic classification across hosts.
+
+### 🐛 Bug Fixes
+* **Parser & Facts Refinement:**
+  - Normalize timestamps to UTC to resolve cross-timezone issues.
+  - Add execution timeout to the local `df` command and fix trailing space parsing for mount points.
+  - Optimize `shellSplit` allocations and improve word tracking logic in the structured safety parser.
+
+### 🔧 Maintenance
+* Dependency bumps: `github.com/mark3labs/mcp-go` (v0.55.1), `actions/checkout` (v7.0.0), `actions/setup-go` (v6.5.0).
+* Documentation: sanitize local paths in `session-handoff.md` and reconcile stale facts.
+
 ## v0.12.2 (2026-06-19)
 
 ### 🚀 Features
