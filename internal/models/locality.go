@@ -162,7 +162,12 @@ func localInterfaceIPs() []string {
 		if !ok || ipNet.IP == nil {
 			continue
 		}
-		ips = append(ips, ipNet.IP.String())
+		ipStr := ipNet.IP.String()
+		// Filter out standard docker/private bridge IPs to avoid false local matching
+		if ipStr == "172.17.0.1" || strings.HasPrefix(ipStr, "172.18.") || strings.HasPrefix(ipStr, "172.19.") || strings.HasPrefix(ipStr, "172.20.") || strings.HasPrefix(ipStr, "172.21.") || strings.HasPrefix(ipStr, "172.22.") || strings.HasPrefix(ipStr, "172.23.") || strings.HasPrefix(ipStr, "172.24.") || strings.HasPrefix(ipStr, "172.25.") || strings.HasPrefix(ipStr, "172.26.") {
+			continue
+		}
+		ips = append(ips, ipStr)
 	}
 	return ips
 }

@@ -1,4 +1,4 @@
-// Package reservation is SCAFFOLDED — double-entry reservation ledger for cluster RAM and VRAM.
+// Package reservation is EXPERIMENTAL — double-entry reservation ledger for cluster RAM and VRAM.
 // Not wired into the stable operator path.
 
 // Integration: The daemon holds the Ledger. Placement consults it for

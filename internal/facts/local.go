@@ -379,6 +379,12 @@ func localResources() (*models.Resources, bool) {
 		r.DiskFreeGB = free
 	}
 
+	// Secondary Disk (best-effort)
+	if totalExt, freeExt, err := localDiskExt(); err == nil {
+		r.DiskTotalGB_Ext = totalExt
+		r.DiskFreeGB_Ext = freeExt
+	}
+
 	// GPU (best-effort, never causes partial)
 	r.GPUs = localGPUs()
 	if util, ok := localGPUUtilPercent(); ok {
@@ -742,6 +748,45 @@ func parseDFOutput(out string) (int64, int64, error) {
 	}
 
 	return 0, 0, fmt.Errorf("unexpected df fields")
+}
+
+func localDiskExt() (int64, int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "df", "-kP").Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	return parseDFOutputExt(string(out))
+}
+
+func parseDFOutputExt(out string) (int64, int64, error) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 {
+		return 0, 0, fmt.Errorf("unexpected df output")
+	}
+
+	var totalExt, freeExt int64
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		mount := strings.Join(fields[5:], " ")
+		if strings.HasPrefix(mount, "/mnt/") || strings.HasPrefix(mount, "/media/") || strings.HasPrefix(mount, "/Volumes/") {
+			totalKB, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				continue
+			}
+			freeKB, err := strconv.ParseInt(fields[3], 10, 64)
+			if err != nil {
+				continue
+			}
+			totalExt += totalKB
+			freeExt += freeKB
+		}
+	}
+	return totalExt / (1024 * 1024), freeExt / (1024 * 1024), nil
 }
 
 func localGPUs() []models.GPUInfo {

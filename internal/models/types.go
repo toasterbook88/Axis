@@ -92,6 +92,8 @@ type Resources struct {
 	Load15M               float64        `json:"load_15m" yaml:"load_15m"`
 	DiskTotalGB           int64          `json:"disk_total_gb" yaml:"disk_total_gb"`
 	DiskFreeGB            int64          `json:"disk_free_gb" yaml:"disk_free_gb"`
+	DiskTotalGB_Ext       int64          `json:"disk_total_gb_ext,omitempty" yaml:"disk_total_gb_ext,omitempty"`
+	DiskFreeGB_Ext        int64          `json:"disk_free_gb_ext,omitempty" yaml:"disk_free_gb_ext,omitempty"`
 	GPUs                  []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
 	GPUUtilPercent        *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
 	StorageClass          string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
