@@ -203,8 +203,8 @@ func NewDefault(interval time.Duration) *Daemon {
 					StableID:   localNode.StableID,
 					State:      mesh.PeerTrusted,
 					Source:     "config",
-					FirstSeen:  time.Now(),
-					LastSeen:   time.Now(),
+					FirstSeen:  time.Now().UTC(),
+					LastSeen:   time.Now().UTC(),
 					Generation: 1,
 				}
 			}
@@ -221,8 +221,8 @@ func NewDefault(interval time.Duration) *Daemon {
 					StableID:   n.StableID,
 					State:      mesh.PeerTrusted,
 					Source:     "config",
-					FirstSeen:  time.Now(),
-					LastSeen:   time.Now(),
+					FirstSeen:  time.Now().UTC(),
+					LastSeen:   time.Now().UTC(),
 					Generation: 1,
 				})
 			}

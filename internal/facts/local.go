@@ -751,7 +751,9 @@ func parseDFOutput(out string) (int64, int64, error) {
 }
 
 func localDiskExt() (int64, int64, error) {
-	out, err := exec.Command("df", "-kP").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "df", "-kP").Output()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -770,7 +772,7 @@ func parseDFOutputExt(out string) (int64, int64, error) {
 		if len(fields) < 6 {
 			continue
 		}
-		mount := fields[5]
+		mount := strings.Join(fields[5:], " ")
 		if strings.HasPrefix(mount, "/mnt/") || strings.HasPrefix(mount, "/media/") || strings.HasPrefix(mount, "/Volumes/") {
 			totalKB, err := strconv.ParseInt(fields[1], 10, 64)
 			if err != nil {
@@ -780,11 +782,11 @@ func parseDFOutputExt(out string) (int64, int64, error) {
 			if err != nil {
 				continue
 			}
-			totalExt += totalKB / (1024 * 1024)
-			freeExt += freeKB / (1024 * 1024)
+			totalExt += totalKB
+			freeExt += freeKB
 		}
 	}
-	return totalExt, freeExt, nil
+	return totalExt / (1024 * 1024), freeExt / (1024 * 1024), nil
 }
 
 func localGPUs() []models.GPUInfo {
