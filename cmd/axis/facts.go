@@ -149,7 +149,7 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
 		fmt.Fprintf(out, "  %s\n", ui.Bold("Addresses"))
 		hiddenCount := 0
 		for _, a := range nf.Addresses {
-			show := verbose || a.Kind == "ipv4" || a.SpeedClass == "tailscale" || a.SpeedClass == "wireguard" || a.SpeedClass == "thunderbolt"
+			show := verbose || a.Kind == "ipv4" || (a.Kind == "ipv6" && a.Scope != "link-local") || a.SpeedClass == "tailscale" || a.SpeedClass == "wireguard" || a.SpeedClass == "thunderbolt"
 			if !show {
 				hiddenCount++
 				continue

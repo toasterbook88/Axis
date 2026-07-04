@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -219,7 +218,7 @@ func agentCmd() *cobra.Command {
 
 				sel := &REPLSelector{
 					terminal: ui.NewStdTerminal(os.Stdin, w),
-					in:       &ScannerLineReader{scanner: bufio.NewScanner(os.Stdin)},
+					in:       &UnbufferedLineReader{reader: os.Stdin},
 					out:      w,
 				}
 				res, err := sel.Select(ctx, "Select model to use for the AXIS Agent session:", selectOptions)
@@ -540,18 +539,31 @@ type LineReader interface {
 	Readline() (string, error)
 }
 
-type ScannerLineReader struct {
-	scanner *bufio.Scanner
+type UnbufferedLineReader struct {
+	reader io.Reader
 }
 
-func (s *ScannerLineReader) Readline() (string, error) {
-	if !s.scanner.Scan() {
-		if err := s.scanner.Err(); err != nil {
+func (u *UnbufferedLineReader) Readline() (string, error) {
+	var buf []byte
+	b := make([]byte, 1)
+	for {
+		n, err := u.reader.Read(b)
+		if n > 0 {
+			if b[0] == '\n' {
+				if len(buf) > 0 && buf[len(buf)-1] == '\r' {
+					buf = buf[:len(buf)-1]
+				}
+				return string(buf), nil
+			}
+			buf = append(buf, b[0])
+		}
+		if err != nil {
+			if err == io.EOF && len(buf) > 0 {
+				return string(buf), nil
+			}
 			return "", err
 		}
-		return "", io.EOF
 	}
-	return s.scanner.Text(), nil
 }
 
 type agentREPLSession struct {
@@ -640,8 +652,7 @@ type ModelChoice struct {
 // runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
 func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, mcpReg *mcpclient.Registry) error {
 	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
-	scanner := bufio.NewScanner(os.Stdin)
-	inReader := &ScannerLineReader{scanner: scanner}
+	inReader := &UnbufferedLineReader{reader: os.Stdin}
 
 	session := &agentREPLSession{
 		Agent:       a,
@@ -657,6 +668,9 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 		fmt.Fprint(session.ErrOut, ui.Cyan("✨ axis ❯ "))
 		line, err := session.In.Readline()
 		if err != nil {
+			if err != io.EOF {
+				return ExitCodeError{Code: ExitErrIO, Message: fmt.Sprintf("input stream closed: %v", err)}
+			}
 			break
 		}
 		instruction := strings.TrimSpace(line)
@@ -692,9 +706,7 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 	if historyPath != "" && a.Conversation().HistoryCount() > 0 {
 		_ = a.Conversation().SaveToFile(historyPath)
 	}
-	if err := scanner.Err(); err != nil {
-		return ExitCodeError{Code: ExitErrIO, Message: fmt.Sprintf("input stream closed: %v", err)}
-	}
+
 	return nil
 }
 
