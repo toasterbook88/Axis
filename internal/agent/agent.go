@@ -655,6 +655,13 @@ func (a *Agent) ToolNames() string {
 	return strings.Join(names, ", ")
 }
 
+func (a *Agent) ToolDefs() []chat.ToolDef {
+	if a.tools == nil {
+		return nil
+	}
+	return a.tools.defs
+}
+
 // Conversation returns the underlying conversation for inspection/testing.
 func (a *Agent) Conversation() *chat.Conversation {
 	return a.conv

@@ -12,10 +12,16 @@ func ApplyHelpTemplate(root *cobra.Command) {
 
 const usageTpl = `{{bold "USAGE"}}
   {{.UseLine}}{{if .HasAvailableSubCommands}} <command> [flags]{{end}}
-{{if .HasAvailableSubCommands}}
-{{bold "COMMANDS"}}{{range .Commands}}{{if .IsAvailableCommand}}
+{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}
+{{if .Groups}}{{range $group := .Groups}}
+{{bold .Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) .IsAvailableCommand)}}
   {{rpad .Name .NamePadding}}  {{.Short}}{{end}}{{end}}
-{{end}}{{if .HasAvailableLocalFlags}}
+{{end}}{{if not .AllChildCommandsHaveGroup}}
+{{bold "ADDITIONAL COMMANDS"}}{{range $cmds}}{{if (and (eq .GroupID "") (or .IsAvailableCommand (eq .Name "help")))}}
+  {{rpad .Name .NamePadding}}  {{.Short}}{{end}}{{end}}
+{{end}}{{else}}{{bold "COMMANDS"}}{{range $cmds}}{{if .IsAvailableCommand}}
+  {{rpad .Name .NamePadding}}  {{.Short}}{{end}}{{end}}
+{{end}}{{end}}{{if .HasAvailableLocalFlags}}
 {{bold "FLAGS"}}
 {{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}
 {{end}}{{if .HasAvailableInheritedFlags}}

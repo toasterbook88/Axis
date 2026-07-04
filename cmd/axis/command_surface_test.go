@@ -662,7 +662,7 @@ func TestStatusCmdMarksLiveFallbackWhenCacheFails(t *testing.T) {
 	if !strings.Contains(stdout, `"source": "live-fallback"`) {
 		t.Fatalf("expected live-fallback source, got %q", stdout)
 	}
-	if !strings.Contains(stdout, `"kind": "cache"`) || !strings.Contains(stdout, `daemon cache unavailable; fell back to live snapshot: context deadline exceeded`) {
+	if !strings.Contains(stdout, `"kind": "cache"`) || !strings.Contains(stdout, `using live snapshot (daemon cache unavailable)`) {
 		t.Fatalf("expected cache warning in JSON output, got %q", stdout)
 	}
 }

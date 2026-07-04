@@ -73,7 +73,7 @@ func TestCollectStatusSnapshotFallsBackToLiveWhenCacheFails(t *testing.T) {
 	if snap.Warnings[0].Kind != "cache" {
 		t.Fatalf("warning kind = %q, want cache", snap.Warnings[0].Kind)
 	}
-	if got := snap.Warnings[0].Message; got != "daemon cache unavailable; fell back to live snapshot: context deadline exceeded" {
+	if got := snap.Warnings[0].Message; got != "using live snapshot (daemon cache unavailable)" {
 		t.Fatalf("warning message = %q", got)
 	}
 }

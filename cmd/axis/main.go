@@ -60,30 +60,100 @@ func newRootCmd() *cobra.Command {
 
 	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
 
-	root.AddCommand(updateCmd())
-	root.AddCommand(versionCmd())
-	root.AddCommand(initCmd())
-	root.AddCommand(meshCmd())
-	root.AddCommand(factsCmd())
-	root.AddCommand(statusCmd())
-	root.AddCommand(taskCmd())
-	root.AddCommand(placementCmd())
-	root.AddCommand(mcpCmd())
-	root.AddCommand(serveCmd())
-	root.AddCommand(daemonCmd())
-	root.AddCommand(llmCmd())
-	root.AddCommand(cortexCmd())
-	root.AddCommand(chatCmd())
-	root.AddCommand(agentCmd())
-	root.AddCommand(contextCmd())
-	root.AddCommand(profileCmd())
-	root.AddCommand(scriptsCmd())
-	root.AddCommand(skillsCmd())
-	root.AddCommand(completionCmd())
-	root.AddCommand(doctorCmd())
-	root.AddCommand(summaryCmd())
-	root.AddCommand(reservationsCmd())
-	root.AddCommand(observationsCmd())
+	root.AddGroup(&cobra.Group{
+		ID:    "cluster",
+		Title: "CLUSTER OPERATIONS",
+	})
+	root.AddGroup(&cobra.Group{
+		ID:    "task",
+		Title: "TASK MANAGEMENT",
+	})
+	root.AddGroup(&cobra.Group{
+		ID:    "setup",
+		Title: "SETUP & DAEMON",
+	})
+	root.AddGroup(&cobra.Group{
+		ID:    "ai",
+		Title: "AI ASSISTANCE & MCP",
+	})
+	root.AddGroup(&cobra.Group{
+		ID:    "meta",
+		Title: "METADATA & UTILITIES",
+	})
+
+	cmdUpdate := updateCmd()
+	cmdUpdate.GroupID = "meta"
+	cmdVersion := versionCmd()
+	cmdVersion.GroupID = "meta"
+	cmdInit := initCmd()
+	cmdInit.GroupID = "setup"
+	cmdMesh := meshCmd()
+	cmdMesh.GroupID = "setup"
+	cmdFacts := factsCmd()
+	cmdFacts.GroupID = "cluster"
+	cmdStatus := statusCmd()
+	cmdStatus.GroupID = "cluster"
+	cmdTask := taskCmd()
+	cmdTask.GroupID = "task"
+	cmdPlacement := placementCmd()
+	cmdPlacement.GroupID = "task"
+	cmdMcp := mcpCmd()
+	cmdMcp.GroupID = "ai"
+	cmdServe := serveCmd()
+	cmdServe.GroupID = "setup"
+	cmdDaemon := daemonCmd()
+	cmdDaemon.GroupID = "setup"
+	cmdLlm := llmCmd()
+	cmdLlm.GroupID = "ai"
+	cmdCortex := cortexCmd()
+	cmdCortex.GroupID = "ai"
+	cmdChat := chatCmd()
+	cmdChat.GroupID = "ai"
+	cmdAgent := agentCmd()
+	cmdAgent.GroupID = "ai"
+	cmdContext := contextCmd()
+	cmdContext.GroupID = "meta"
+	cmdProfile := profileCmd()
+	cmdProfile.GroupID = "task"
+	cmdScripts := scriptsCmd()
+	cmdScripts.GroupID = "meta"
+	cmdSkills := skillsCmd()
+	cmdSkills.GroupID = "meta"
+	cmdCompletion := completionCmd()
+	cmdCompletion.GroupID = "meta"
+	cmdDoctor := doctorCmd()
+	cmdDoctor.GroupID = "cluster"
+	cmdSummary := summaryCmd()
+	cmdSummary.GroupID = "cluster"
+	cmdReservations := reservationsCmd()
+	cmdReservations.GroupID = "task"
+	cmdObservations := observationsCmd()
+	cmdObservations.GroupID = "task"
+
+	root.AddCommand(cmdUpdate)
+	root.AddCommand(cmdVersion)
+	root.AddCommand(cmdInit)
+	root.AddCommand(cmdMesh)
+	root.AddCommand(cmdFacts)
+	root.AddCommand(cmdStatus)
+	root.AddCommand(cmdTask)
+	root.AddCommand(cmdPlacement)
+	root.AddCommand(cmdMcp)
+	root.AddCommand(cmdServe)
+	root.AddCommand(cmdDaemon)
+	root.AddCommand(cmdLlm)
+	root.AddCommand(cmdCortex)
+	root.AddCommand(cmdChat)
+	root.AddCommand(cmdAgent)
+	root.AddCommand(cmdContext)
+	root.AddCommand(cmdProfile)
+	root.AddCommand(cmdScripts)
+	root.AddCommand(cmdSkills)
+	root.AddCommand(cmdCompletion)
+	root.AddCommand(cmdDoctor)
+	root.AddCommand(cmdSummary)
+	root.AddCommand(cmdReservations)
+	root.AddCommand(cmdObservations)
 
 	ui.ApplyHelpTemplate(root)
 
@@ -96,6 +166,8 @@ func versionCmd() *cobra.Command {
 		Short: "Print AXIS version and build info",
 		Run: func(cmd *cobra.Command, args []string) {
 			out := cmd.OutOrStdout()
+			ui.PrintLogo(out, Version)
+			fmt.Fprintln(out)
 			fmt.Fprintf(out, "axis %s\n", Version)
 			if buildinfo.Commit != "" {
 				fmt.Fprintf(out, "  commit:   %s\n", buildinfo.Commit)

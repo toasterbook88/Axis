@@ -773,7 +773,7 @@ func parseDFOutputExt(out string) (int64, int64, error) {
 			continue
 		}
 		mount := strings.Join(fields[5:], " ")
-		if strings.HasPrefix(mount, "/mnt/") || strings.HasPrefix(mount, "/media/") || strings.HasPrefix(mount, "/Volumes/") {
+		if mount == "/mnt" || strings.HasPrefix(mount, "/mnt/") || mount == "/media" || strings.HasPrefix(mount, "/media/") || mount == "/Volumes" || strings.HasPrefix(mount, "/Volumes/") {
 			totalKB, err := strconv.ParseInt(fields[1], 10, 64)
 			if err != nil {
 				continue
@@ -936,6 +936,10 @@ func localAddresses() []models.NetworkAddress {
 	}
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		lowerName := strings.ToLower(iface.Name)
+		if strings.HasPrefix(lowerName, "docker") || strings.HasPrefix(lowerName, "br-") || strings.HasPrefix(lowerName, "veth") || strings.HasPrefix(lowerName, "virbr") {
 			continue
 		}
 		ifAddrs, err := iface.Addrs()

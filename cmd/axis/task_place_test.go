@@ -73,7 +73,7 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 	if decision.Node != "live-node" {
 		t.Fatalf("expected live-node, got %q", decision.Node)
 	}
-	if joined := strings.Join(decision.Reasoning, "\n"); !strings.Contains(joined, "daemon cache unavailable; fell back to live snapshot: context deadline exceeded") {
+	if joined := strings.Join(decision.Reasoning, "\n"); !strings.Contains(joined, "using live snapshot (daemon cache unavailable)") {
 		t.Fatalf("expected cache fallback reasoning, got %q", joined)
 	}
 }

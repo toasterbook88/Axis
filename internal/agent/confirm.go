@@ -52,7 +52,7 @@ func DefaultConfirm(r io.Reader, w io.Writer) ConfirmFunc {
 			ui.Green("y")+"es",
 			ui.Red("n")+"o",
 			ui.Yellow("a")+"lways",
-			ui.Dim("v")+"er",
+			"ne"+ui.Dim("v")+"er",
 		)
 
 		scanner := bufio.NewScanner(r)
@@ -91,6 +91,11 @@ func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 		// High-risk: delegate to fallback (usually interactive).
 		return fallback(toolName, description, safetyScore)
 	}
+}
+
+// IsReadOnlyTool returns true for tools that only read cluster state.
+func IsReadOnlyTool(name string) bool {
+	return isReadOnlyTool(name)
 }
 
 // isReadOnlyTool returns true for tools that only read cluster state.
