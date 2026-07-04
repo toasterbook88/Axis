@@ -21,6 +21,7 @@ import (
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
@@ -32,6 +33,7 @@ import (
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/secrets"
 	"github.com/toasterbook88/axis/internal/ui"
+	"golang.org/x/term"
 )
 
 var loadAgentShellRuntime = runtimectx.Load
@@ -57,6 +59,7 @@ func agentCmd() *cobra.Command {
 		provider                string
 		cloudModel              string
 		allowRawCommandEvidence bool
+		selectModel             bool
 	)
 
 	cmd := &cobra.Command{
@@ -177,6 +180,74 @@ func agentCmd() *cobra.Command {
 
 			// Determine which backend to use.
 			var backend agent.ChatBackend
+
+			hasDefaultModel := false
+			if rt != nil && rt.Config != nil && rt.Config.Chat != nil && strings.TrimSpace(rt.Config.Chat.DefaultModel) != "" {
+				hasDefaultModel = true
+			}
+
+			if selectModel || (model == "" && !hasDefaultModel && term.IsTerminal(int(os.Stdin.Fd()))) {
+				choices := collectModelChoices(rt)
+				if len(choices) == 0 {
+					return ExitCodeError{Code: ExitErrConfigLoad, Message: "no models found (neither local Ollama models nor enabled cloud providers)"}
+				}
+				var selectOptions []ui.SelectOption
+				for _, choice := range choices {
+					detail := fmt.Sprintf("%s - %s", choice.ProviderName, choice.ProviderKind)
+					if choice.ProviderKind == "local" {
+						if choice.Node != "" {
+							detail = fmt.Sprintf("Remote node %s (%s)", choice.Node, choice.Endpoint)
+						} else {
+							detail = fmt.Sprintf("Local node (%s)", choice.Endpoint)
+						}
+					}
+					disabled := choice.Disabled
+					if choice.ProviderKind == "local" && choice.Node != "" && choice.Endpoint == "" {
+						disabled = true
+						detail += " (unsupported: no valid IP/hostname)"
+					} else if choice.ProviderKind == "local" && choice.Node != "" && choice.Disabled {
+						detail += " (unreachable)"
+					}
+
+					selectOptions = append(selectOptions, ui.SelectOption{
+						ID:       choice.ID,
+						Label:    choice.Model,
+						Detail:   detail,
+						Disabled: disabled,
+					})
+				}
+
+				sel := &REPLSelector{
+					terminal: ui.NewStdTerminal(os.Stdin, w),
+					in:       &ScannerLineReader{scanner: bufio.NewScanner(os.Stdin)},
+					out:      w,
+				}
+				res, err := sel.Select(ctx, "Select model to use for the AXIS Agent session:", selectOptions)
+				if err != nil {
+					return fmt.Errorf("select model: %w", err)
+				}
+				if !res.Selected {
+					return fmt.Errorf("model selection aborted")
+				}
+
+				var chosen ModelChoice
+				for _, c := range choices {
+					if c.ID == res.ID {
+						chosen = c
+						break
+					}
+				}
+
+				currentModel = chosen.Model
+				if chosen.ProviderKind == "cloud" {
+					provider = "cloud"
+					cloudModel = chosen.Model
+				} else {
+					provider = "local"
+					model = chosen.Model
+				}
+			}
+
 			resolvedModel := currentModel
 
 			providerMode := strings.ToLower(strings.TrimSpace(provider))
@@ -339,19 +410,57 @@ func agentCmd() *cobra.Command {
 			}
 
 			// Interactive REPL with readline.
-			fmt.Fprintf(errW, "AXIS Agent [%s] — max %d turns per query, type exit to quit\n\n", ui.Bold(currentModel), maxTurns)
+			ui.PrintLogo(errW, buildinfo.Version)
+
+			providerName := "Local Ollama"
+			if useCloud {
+				providerName = "Cloud (" + bestCloudProviderName + ")"
+			}
+			mcpCount := 0
+			if mcpReg != nil {
+				mcpCount = len(mcpReg.Names())
+			}
+			printAgentSessionDetails(errW, currentModel, providerName, autoApprove, mcpCount, maxTurns)
+
+			var completerItems []readline.PrefixCompleterInterface
+			completerItems = append(completerItems,
+				readline.PcItem("/help"),
+				readline.PcItem("/clear"),
+				readline.PcItem("/context"),
+				readline.PcItem("/history"),
+				readline.PcItem("/tools"),
+				readline.PcItem("/models"),
+				readline.PcItem("/mcp"),
+				readline.PcItem("/nodes"),
+				readline.PcItem("/reservations"),
+				readline.PcItem("/skills"),
+				readline.PcItem("/exit"),
+				readline.PcItem("/quit"),
+			)
+
+			// Collect available models dynamically for /model <name> autocomplete
+			var modelCompleterItems []readline.PrefixCompleterInterface
+			for _, choice := range collectModelChoices(rt) {
+				if !choice.Disabled {
+					modelCompleterItems = append(modelCompleterItems, readline.PcItem(choice.Model))
+				}
+			}
+			completerItems = append(completerItems, readline.PcItem("/model", modelCompleterItems...))
+
+			completer := readline.NewPrefixCompleter(completerItems...)
 
 			rlCfg := &readline.Config{
 				Prompt:          ui.Cyan("✨ axis ❯ "),
 				InterruptPrompt: "^C",
 				EOFPrompt:       "exit",
+				AutoComplete:    completer,
 			}
 			if historyPath != "" {
 				rlCfg.HistoryFile = historyPath + ".line"
 			}
 			rl, err := readline.NewEx(rlCfg)
 			if err != nil {
-				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, rt, mcpReg)
+				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, mcpReg)
 			}
 			defer rl.Close()
 
@@ -423,6 +532,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&provider, "provider", "auto", "Inference provider to use (local, cloud, auto)")
 	cmd.Flags().StringVar(&cloudModel, "cloud-model", "", "Model name for cloud provider")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
+	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
 	return cmd
 }
 
@@ -528,7 +638,7 @@ type ModelChoice struct {
 }
 
 // runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
-func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, rt *runtimectx.Context, mcpReg *mcpclient.Registry) error {
+func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, mcpReg *mcpclient.Registry) error {
 	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
 	scanner := bufio.NewScanner(os.Stdin)
 	inReader := &ScannerLineReader{scanner: scanner}
@@ -719,9 +829,7 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 			if freshRt == nil {
 				return true, false, fmt.Errorf("failed to load cluster status fallback: runtime context is nil")
 			}
-			if err != nil {
-				return true, false, fmt.Errorf("failed to load cluster status fallback: %w", err)
-			}
+
 			if freshRt.Ledger != nil {
 				now := time.Now()
 				limits := reservation.DefaultLimits()
@@ -785,6 +893,50 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		fmt.Fprintln(w, "\nLearned skills:")
 		tbl.Render(w)
 		fmt.Fprintln(w)
+
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return true, false, nil
+		}
+
+		var skillOptions []ui.SelectOption
+		skillOptions = append(skillOptions, ui.SelectOption{
+			ID:     "none",
+			Label:  "Cancel (do not run any skill)",
+			Detail: "",
+		})
+		for _, s := range freshRt.Skills.Skills {
+			skillOptions = append(skillOptions, ui.SelectOption{
+				ID:     s.ID,
+				Label:  s.Description,
+				Detail: fmt.Sprintf("Command: %s", s.Command),
+			})
+		}
+
+		res, err := session.Selector.Select(context.Background(), "Execute a learned skill:", skillOptions)
+		if err != nil {
+			return true, false, err
+		}
+		if !res.Selected || res.ID == "none" {
+			return true, false, nil
+		}
+
+		var chosenCommand string
+		for _, s := range freshRt.Skills.Skills {
+			if s.ID == res.ID {
+				chosenCommand = s.Command
+				break
+			}
+		}
+
+		if chosenCommand != "" {
+			fmt.Fprintf(w, "\nRunning skill command: %s\n", ui.Bold(chosenCommand))
+			ctx2, cancel := agentRequestContext(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := session.Agent.Run(ctx2, chosenCommand); err != nil {
+				fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), err)
+			}
+			fmt.Fprintln(session.Out)
+		}
 		return true, false, nil
 
 	case "/models", "/model":
@@ -933,11 +1085,19 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 						fmt.Fprintln(w, "\nNo tools exposed by this server.")
 					} else {
 						fmt.Fprintf(w, "\nTools exposed by %s:\n", sc.Name)
+						tbl := ui.NewTable("TOOL NAME", "SAFETY", "DESCRIPTION")
 						for _, t := range tools {
 							name := sanitizeDiagnosticsText(t.Name)
 							desc := sanitizeDiagnosticsText(t.Description)
-							fmt.Fprintf(w, "  - \033[36m%s\033[0m: %s\n", name, desc)
+
+							safety := ui.YellowColor.Sprint("Execute")
+							if agent.IsReadOnlyTool(name) || agent.IsReadOnlyTool("mcp_"+sc.Name+"_"+name) {
+								safety = ui.GreenColor.Sprint("Read-Only")
+							}
+
+							tbl.AddRow(name, safety, desc)
 						}
+						tbl.Render(w)
 						fmt.Fprintln(w)
 					}
 				case "resources":
@@ -946,12 +1106,14 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 						fmt.Fprintln(w, "\nNo resources exposed by this server.")
 					} else {
 						fmt.Fprintf(w, "\nResources exposed by %s:\n", sc.Name)
+						tbl := ui.NewTable("RESOURCE NAME", "URI", "DESCRIPTION")
 						for _, r := range resources {
 							name := sanitizeDiagnosticsText(r.Name)
 							uri := sanitizeDiagnosticsText(r.URI)
 							desc := sanitizeDiagnosticsText(r.Description)
-							fmt.Fprintf(w, "  - \033[36m%s\033[0m (%s): %s\n", name, uri, desc)
+							tbl.AddRow(name, uri, desc)
 						}
+						tbl.Render(w)
 						fmt.Fprintln(w)
 					}
 				case "diagnostics":
@@ -1006,29 +1168,89 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 	case "/context":
 		tokens := a.ContextTokens()
 		limit := a.MaxTokens()
-		fmt.Fprintf(errW, "Conversation context:\n  Tokens used:  %d\n  Token budget: %d\n", tokens, limit)
+		pct := 0.0
+		if limit > 0 {
+			pct = float64(tokens) / float64(limit)
+		}
+
+		barWidth := 20
+		filled := int(pct * float64(barWidth))
+		if filled > barWidth {
+			filled = barWidth
+		}
+		if filled < 0 {
+			filled = 0
+		}
+
+		barStr := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+		var coloredBar string
+		if pct <= 0.60 {
+			coloredBar = ui.GreenColor.Sprint(barStr)
+		} else if pct <= 0.85 {
+			coloredBar = ui.YellowColor.Sprint(barStr)
+		} else {
+			coloredBar = ui.RedColor.Sprint(barStr)
+		}
+
+		fmt.Fprintf(errW, "\nConversation Context Budget:\n")
+		fmt.Fprintf(errW, "  [%s] %.1f%% (Tokens used: %d / %d budget)\n\n", coloredBar, pct*100, tokens, limit)
 		return true, false, nil
 
 	case "/history":
 		msgs := a.Conversation().Messages()
-		fmt.Fprintf(errW, "Conversation History (%d message(s)):\n", len(msgs))
+		fmt.Fprintf(errW, "\nConversation History (%d message(s)):\n", len(msgs))
 		for i, m := range msgs {
 			short := m.Content
-			if len(short) > 60 {
-				short = short[:57] + "..."
+			runes := []rune(short)
+			if len(runes) > 60 {
+				short = string(runes[:57]) + "..."
+			} else {
+				short = string(runes)
 			}
 			short = strings.ReplaceAll(short, "\n", " ")
-			fmt.Fprintf(errW, "  [%d] %s: %s\n", i, m.Role, short)
+
+			var roleLabel string
+			switch strings.ToLower(m.Role) {
+			case "user":
+				roleLabel = ui.CyanColor.Sprint("user")
+			case "assistant":
+				roleLabel = ui.GreenColor.Sprint("assistant")
+			case "system":
+				roleLabel = ui.WhiteColor.Sprint("system")
+			case "tool":
+				roleLabel = ui.YellowColor.Sprint("tool")
+			default:
+				roleLabel = m.Role
+			}
+
+			fmt.Fprintf(errW, "  [%d] %s: %s\n", i, roleLabel, short)
 			if len(m.ToolCalls) > 0 {
 				for _, tc := range m.ToolCalls {
-					fmt.Fprintf(errW, "      → Tool call: %s\n", tc.Function.Name)
+					fmt.Fprintf(errW, "      %s %s\n", ui.Dim("→ Tool call:"), ui.Bold(tc.Function.Name))
 				}
 			}
 		}
+		fmt.Fprintln(errW)
 		return true, false, nil
 
 	case "/tools":
-		fmt.Fprintf(errW, "Available Tools:\n  %s\n", a.ToolNames())
+		defs := a.ToolDefs()
+		if len(defs) == 0 {
+			fmt.Fprintln(w, "\nNo tools registered.")
+			return true, false, nil
+		}
+		tbl := ui.NewTable("TOOL NAME", "SAFETY", "DESCRIPTION")
+		for _, d := range defs {
+			safety := ui.YellowColor.Sprint("Execute")
+			if agent.IsReadOnlyTool(d.Function.Name) {
+				safety = ui.GreenColor.Sprint("Read-Only")
+			}
+			tbl.AddRow(d.Function.Name, safety, d.Function.Description)
+		}
+		fmt.Fprintln(w, "\nAvailable Tools:")
+		tbl.Render(w)
+		fmt.Fprintln(w)
 		return true, false, nil
 	}
 	return false, false, nil
@@ -1121,85 +1343,6 @@ func guardedAgentTaskRunner() agent.TaskRunner {
 		resp, runErr := execution.RunPreparedExecution(ctx, prepared)
 		return marshalGuardedExecutionPayload(resp, runErr)
 	}
-}
-
-func switchAgentModel(a *agent.Agent, rt *runtimectx.Context, newModel string, errW io.Writer) error {
-	var newBackend agent.ChatBackend
-	var useCloud = false
-	var bestCloudProviderName string
-	var bestCloudProvider config.AIProviderConfig
-	var bestCloudAPIKey string
-
-	if rt != nil && rt.Config != nil {
-		for pName, pCfg := range rt.Config.AIProviders {
-			if pCfg.Enabled && strings.EqualFold(pCfg.Type, "cloud") {
-				for _, m := range pCfg.Models {
-					if strings.EqualFold(m.Name, newModel) {
-						key, err := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
-						if err == nil && key != "" {
-							bestCloudProviderName = pName
-							bestCloudProvider = pCfg
-							bestCloudAPIKey = key
-							useCloud = true
-							break
-						}
-					}
-					for _, alias := range m.Aliases {
-						if strings.EqualFold(alias, newModel) {
-							key, err := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
-							if err == nil && key != "" {
-								bestCloudProviderName = pName
-								bestCloudProvider = pCfg
-								bestCloudAPIKey = key
-								useCloud = true
-								break
-							}
-						}
-					}
-				}
-			}
-			if useCloud {
-				break
-			}
-		}
-	}
-
-	if useCloud {
-		var costPer1K float64
-		for _, m := range bestCloudProvider.Models {
-			if strings.EqualFold(m.Name, newModel) {
-				costPer1K = m.CostPer1K
-				break
-			}
-			for _, alias := range m.Aliases {
-				if strings.EqualFold(alias, newModel) {
-					costPer1K = m.CostPer1K
-					break
-				}
-			}
-		}
-
-		var err error
-		newBackend, err = agent.NewCloudBackendWithKey(bestCloudProvider.Kind, bestCloudProviderName, bestCloudProvider.Endpoint, bestCloudAPIKey, newModel, costPer1K)
-		if err != nil {
-			return fmt.Errorf("invalid cloud backend config: %w", err)
-		}
-	}
-
-	var securityClass agent.BackendSecurityClass
-	if useCloud {
-		securityClass = agent.BackendRemote
-		fmt.Fprintf(errW, "Switched to cloud provider %q, model %q\n", bestCloudProviderName, newModel)
-	} else {
-		securityClass = agent.BackendLocal
-		endpoint := chat.DefaultEndpoint
-		newBackend = chat.NewClient(endpoint, newModel)
-		fmt.Fprintf(errW, "Switched to local Ollama model %q\n", newModel)
-	}
-
-	a.SetBackend(newBackend, securityClass)
-	a.SetModel(newModel)
-	return nil
 }
 
 func resolveNodeEndpoint(n models.NodeFacts) (string, error) {
@@ -1450,4 +1593,39 @@ func redactSecrets(s string) string {
 func sanitizeDiagnosticsText(s string) string {
 	s = ui.StripANSIAndControls(s)
 	return redactSecrets(s)
+}
+
+func printAgentSessionDetails(w io.Writer, model string, provider string, autoApprove bool, mcpCount int, maxTurns int) {
+	safetyStr := "Strict Operator Approval"
+	if autoApprove {
+		safetyStr = "Auto-Approve safe (<70)"
+	}
+	mcpStr := "None connected"
+	if mcpCount > 0 {
+		mcpStr = fmt.Sprintf("%d connected", mcpCount)
+	}
+
+	printRow := func(label, value string, isBold bool) {
+		valPlain := ui.StripANSIAndControls(value)
+		pad := 38 - len(valPlain)
+		if pad < 0 {
+			pad = 0
+		}
+		valDisp := value
+		if isBold {
+			valDisp = ui.Bold(value)
+		}
+		fmt.Fprintf(w, "  │  %s:  %s%s │\n", label, valDisp, strings.Repeat(" ", pad))
+	}
+
+	ui.WhiteColor.Fprintln(w, "  ┌────────────────────────────────────────────────────────┐")
+	ui.WhiteColor.Fprintln(w, "  │                     SESSION ACTIVE                     │")
+	ui.WhiteColor.Fprintln(w, "  ├────────────────────────────────────────────────────────┤")
+	printRow("Active Model", model, true)
+	printRow("Provider    ", provider, false)
+	printRow("Safety Gate ", safetyStr, false)
+	printRow("MCP Servers ", mcpStr, false)
+	printRow("Max Turns   ", fmt.Sprintf("%d", maxTurns), false)
+	ui.WhiteColor.Fprintln(w, "  └────────────────────────────────────────────────────────┘")
+	fmt.Fprintln(w)
 }

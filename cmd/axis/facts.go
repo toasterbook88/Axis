@@ -20,6 +20,7 @@ var collectLocalFacts = func(ctx context.Context, hostname string) (*models.Node
 
 func factsCmd() *cobra.Command {
 	var format string
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "facts",
@@ -43,17 +44,18 @@ func factsCmd() *cobra.Command {
 			case "json", "yaml":
 				return printOutput(cmd.OutOrStdout(), nf, format)
 			default:
-				printFactsText(cmd, nf)
+				printFactsText(cmd, nf, verbose)
 				return nil
 			}
 		},
 	}
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show all network addresses (default hides local IPv6 and temporary addresses)")
 	return cmd
 }
 
-func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
+func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
 	out := cmd.OutOrStdout()
 
 	fmt.Fprintf(out, "%s %s\n\n", ui.Bold("NODE FACTS"), ui.Cyan(nf.Name))
@@ -145,7 +147,13 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 	if len(nf.Addresses) > 0 {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "  %s\n", ui.Bold("Addresses"))
+		hiddenCount := 0
 		for _, a := range nf.Addresses {
+			show := verbose || a.Kind == "ipv4" || a.SpeedClass == "tailscale" || a.SpeedClass == "wireguard" || a.SpeedClass == "thunderbolt"
+			if !show {
+				hiddenCount++
+				continue
+			}
 			detail := a.Address
 			if a.Interface != "" {
 				detail = fmt.Sprintf("%s (%s)", a.Address, a.Interface)
@@ -154,6 +162,9 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts) {
 				detail = fmt.Sprintf("%s [%s]", detail, a.SpeedClass)
 			}
 			fmt.Fprintf(out, "    %s %s\n", ui.Green("✓"), detail)
+		}
+		if hiddenCount > 0 {
+			ui.DimColor.Fprintf(out, "    (... and %d more addresses, use --verbose to show all)\n", hiddenCount)
 		}
 	}
 

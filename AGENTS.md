@@ -71,15 +71,7 @@ Verification steps:
 - `./hack/verify-repo-truth.sh` — enforces release-tag and doc-fact accuracy
 - `./hack/verify-doc-facts.sh` — enforces code/doc agreement: exit codes, command count, MCP tool count, and CHANGELOG completeness (no network)
 
-Coverage gates (from `hack/coverage-check.sh`):
-
-| Package | Minimum |
-| --------- | --------- |
-| `internal/knowledge` | 90% |
-| `internal/ui` | 80% |
-| `internal/api` | 50% |
-| `internal/mcp` | 35% |
-| total | 45% |
+Coverage gates are authoritative in `hack/coverage-check.sh`.
 
 ### Release Pipeline
 
@@ -90,6 +82,19 @@ Triggered by `v*` tag push. Validates that the tag matches
 publishes via GoReleaser (`darwin`/`linux` × `amd64`/`arm64`).
 
 ## Architecture
+
+AXIS is a 5-layer stack where each layer depends only on layers below it. Advisory surfaces (chat, agent, MCP, HTTP) never override the fact plane.
+
+```text
+Layer 5  Advisory     internal/chat  internal/agent  internal/mcp  internal/api
+Layer 4  Execution    internal/execution  internal/safety  internal/reservation
+                        internal/scripts  internal/skills
+Layer 3  Placement    internal/placement  internal/workload
+Layer 2  Snapshot     internal/snapshot  internal/daemon  internal/snapshotview
+                        internal/runtimectx
+Layer 1  Fact Plane   internal/facts  internal/discovery  internal/mesh
+                        internal/transport (SSH)
+```
 
 ### Stable operator path
 

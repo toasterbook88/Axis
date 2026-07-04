@@ -360,7 +360,7 @@ func collectStatusSnapshot(
 		if liveSnap != nil {
 			appendWarningIfMissing(liveSnap, models.Warning{
 				Kind:    "cache",
-				Message: fmt.Sprintf("daemon cache unavailable; fell back to live snapshot: %v", err),
+				Message: "using live snapshot (daemon cache unavailable)",
 			})
 		}
 		return liveSnap, fallbackSource(liveSource), nil

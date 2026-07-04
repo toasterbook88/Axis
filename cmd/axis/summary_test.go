@@ -237,11 +237,37 @@ func TestSummaryRenderTopology(t *testing.T) {
 
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
-			{Name: "M3 Pro"},
-			{Name: "M1 Scout"},
-			{Name: "NixOS"},
-			{Name: "Foundry"},
-			{Name: "Latitude"},
+			{
+				Name: "M3 Pro",
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "10.0.1.1", Subnet: "10.0.1.0/24", SpeedClass: "thunderbolt"},
+				},
+			},
+			{
+				Name: "M1 Scout",
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "10.0.1.2", Subnet: "10.0.1.0/24", SpeedClass: "thunderbolt"},
+				},
+			},
+			{
+				Name: "NixOS",
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "192.168.1.1", Subnet: "192.168.1.0/24", SpeedClass: "gigabit"},
+					{Kind: "ipv4", Address: "100.64.0.1", Subnet: "100.64.0.0/10", SpeedClass: "tailscale"},
+				},
+			},
+			{
+				Name: "Foundry",
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "192.168.1.2", Subnet: "192.168.1.0/24", SpeedClass: "gigabit"},
+				},
+			},
+			{
+				Name: "Latitude",
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "100.64.0.2", Subnet: "100.64.0.0/10", SpeedClass: "tailscale"},
+				},
+			},
 		},
 	}
 
@@ -251,8 +277,8 @@ func TestSummaryRenderTopology(t *testing.T) {
 	expectedLines := []string{
 		"⚡ CLUSTER TOPOLOGY",
 		"==================",
-		"M3 Pro     <======== (Thunderbolt: 10 Gbps) ========> M1 Scout",
-		"NixOS      <........ (Gigabit LAN: 1 Gbps)  ........> Foundry",
+		"M1 Scout   <======== (Thunderbolt: 10 Gbps) ========> M3 Pro",
+		"Foundry    <........ (Gigabit LAN: 1 Gbps)  ........> NixOS",
 		"Latitude   <-------- (Tailscale VPN)        --------> NixOS",
 	}
 

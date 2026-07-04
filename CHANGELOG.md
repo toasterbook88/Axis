@@ -3,62 +3,70 @@
 ## v0.12.3 (2026-06-29)
 
 ### 🚀 Features
+
 * **Network & Topology Enrichment:**
-  - Wire local identity and ignore docker bridges.
-  - Add secondary disk probing.
-  - Measure explicit network `speed_class` via sysfs to improve deterministic classification across hosts.
+  * Wire local identity and ignore docker bridges.
+  * Add secondary disk probing.
+  * Measure explicit network `speed_class` via sysfs to improve deterministic classification across hosts.
 
 ### 🐛 Bug Fixes
+
 * **Parser & Facts Refinement:**
-  - Normalize timestamps to UTC to resolve cross-timezone issues.
-  - Add execution timeout to the local `df` command and fix trailing space parsing for mount points.
-  - Optimize `shellSplit` allocations and improve word tracking logic in the structured safety parser.
+  * Normalize timestamps to UTC to resolve cross-timezone issues.
+  * Add execution timeout to the local `df` command and fix trailing space parsing for mount points.
+  * Optimize `shellSplit` allocations and improve word tracking logic in the structured safety parser.
 
 ### 🔧 Maintenance
+
 * Dependency bumps: `github.com/mark3labs/mcp-go` (v0.55.1), `actions/checkout` (v7.0.0), `actions/setup-go` (v6.5.0).
 * Documentation: sanitize local paths in `session-handoff.md` and reconcile stale facts.
 
 ## v0.12.2 (2026-06-19)
 
 ### 🚀 Features
+
 * **Distributed Model Planner (PR #175):**
-  - Snapshot-backed multi-node pipeline and single-node advisory placement planner.
-  - Support for exact layer memory mapping, context window cache scaling, and freshness validation.
+  * Snapshot-backed multi-node pipeline and single-node advisory placement planner.
+  * Support for exact layer memory mapping, context window cache scaling, and freshness validation.
 * **Interactive CLI UI:**
-  - Added interactive selection dropdown UI, live remote Ollama probing, `/mcp` diagnostics, and active SSH verification during initialization.
+  * Added interactive selection dropdown UI, live remote Ollama probing, `/mcp` diagnostics, and active SSH verification during initialization.
 
 ### 🐛 Bug Fixes
+
 * **Planner Tie-Breaker Logic:**
-  - Fixed `betterLink` selection logic bug where alphabetical sorting on identical link qualities incorrectly overrode downstream candidate memory checks (`betterCandidate`).
+  * Fixed `betterLink` selection logic bug where alphabetical sorting on identical link qualities incorrectly overrode downstream candidate memory checks (`betterCandidate`).
 * **Test Stability:**
-  - Resolved an asynchronous race condition in the MCP lifecycle event test suite (`TestLifecycleEventTools`).
+  * Resolved an asynchronous race condition in the MCP lifecycle event test suite (`TestLifecycleEventTools`).
 
 ## v0.12.1 (2026-06-18)
 
 ### 🔒 Security
+
 * `axis agent` now classifies LLM backends as local or remote and restricts untrusted evidence for remote backends.
-  - Added `BackendSecurityClass` to `agent.Config` and `Agent`; constructor code paths must declare locality explicitly.
-  - Remote backends receive only structured skill metadata (ID, success count, timestamps, preferred node, node success counts); free-form descriptions, decision summaries, and raw commands are excluded.
-  - Local backends continue to receive descriptions and decision summaries; raw command text is redacted by default and only included when `--allow-raw-command-evidence` is set.
+  * Added `BackendSecurityClass` to `agent.Config` and `Agent`; constructor code paths must declare locality explicitly.
+  * Remote backends receive only structured skill metadata (ID, success count, timestamps, preferred node, node success counts); free-form descriptions, decision summaries, and raw commands are excluded.
+  * Local backends continue to receive descriptions and decision summaries; raw command text is redacted by default and only included when `--allow-raw-command-evidence` is set.
 
 ### 🔧 Internal
+
 * Encapsulated `ToolContext` in `internal/agent`: the current runtime view is stored in an unexported `atomic.Pointer` and reloaded atomically via `NewToolContext`, `Current`, and `ReloadCurrent`. Incomplete reloads preserve the previous view.
 * Hardened `axis llm configure` and `axis llm select` key/config file transactions:
-  - Symlink rejection via `os.Lstat`.
-  - `O_CREATE|O_EXCL` temporary files with `fsync`, atomic rename, and parent-directory `fsync`.
-  - Advisory file locking on `nodes.yaml.lock` and SHA-256 hash check to detect concurrent modification.
-  - `llm configure` rolls back only a newly created key file when YAML validation fails; pre-existing keys survive.
-  - Inferred cloud provider `kind` is persisted into `nodes.yaml` AST automatically.
+  * Symlink rejection via `os.Lstat`.
+  * `O_CREATE|O_EXCL` temporary files with `fsync`, atomic rename, and parent-directory `fsync`.
+  * Advisory file locking on `nodes.yaml.lock` and SHA-256 hash check to detect concurrent modification.
+  * `llm configure` rolls back only a newly created key file when YAML validation fails; pre-existing keys survive.
+  * Inferred cloud provider `kind` is persisted into `nodes.yaml` AST automatically.
 * Fixed portability and resource-handling issues from PR 173 review:
-  - Replaced direct `syscall.Flock` with portable `internal/lockutil` package.
-  - Closed temporary files before removal to support Windows cleanup.
-  - Always close HTTP response bodies and defer context cancellation in the `/reservations` slash handler.
-  - Rewrote command redaction with a single-pass parser and optimized payload truncation.
-  - Added a nil guard for runtime snapshots during guarded execution preparation.
+  * Replaced direct `syscall.Flock` with portable `internal/lockutil` package.
+  * Closed temporary files before removal to support Windows cleanup.
+  * Always close HTTP response bodies and defer context cancellation in the `/reservations` slash handler.
+  * Rewrote command redaction with a single-pass parser and optimized payload truncation.
+  * Added a nil guard for runtime snapshots during guarded execution preparation.
 
 ## v0.12.0 (2026-06-17)
 
 ### 🚀 Features
+
 * **Cloud LLMs + premium terminal UI/UX (#171):** Support cloud LLM backends with local capability checks and a premium terminal UI/UX.
 * **Reservations doctor (#169):** `axis reservations doctor` diagnoses reservation inconsistencies, stale leases, and memory leaks.
 * **Pressure-aware lease-based cluster RAM balancer (#166):** Scheduler shifts from instantaneous free memory to allocatable headroom, leased soft-claims, and Linux kernel PSI.
@@ -67,6 +75,7 @@
 * **Dynamic local-port forwarding over SSH for remote tasks (#163).**
 
 ### 🔧 Maintenance
+
 * Make stash preflight test hermetic; refresh docs (#168).
 * Make LLM select command tests hermetic (#167).
 * Bump go-modules-minor-patch group with 2 updates (#170).
@@ -74,6 +83,7 @@
 ## v0.11.0 (2026-06-10)
 
 ### 🚀 Features
+
 * **Structured AXIS lifecycle events + flock rotation (#160).**
 * **Git Intelligence for workspace context (#156).**
 * **`axis init` CLI command, mesh gossip peer diagnostics, and topology (#161).**
@@ -82,51 +92,61 @@
 * **Ollama warmth lifetime scoring as a bounded placement tiebreaker (#151).**
 
 ### 🐛 Bug Fixes
+
 * Print CLI execution errors to stderr before exiting (#157).
 * Resolve daemon data race and wire MCP snapshot cache invalidation (#155).
 
 ### 📚 Documentation
+
 * MCP defense-in-depth paragraph and assertion test (#150).
 * Update agent worklog (#158).
 
 ### 🔧 Maintenance
+
 * Bump Go toolchain 1.26.3 → 1.26.4 (#154).
 * Bump actions/checkout 6.0.2 → 6.0.3 (#152).
 
 ## v0.10.9 (2026-06-01)
 
 ### 🚀 Features
+
 * **Phase 1 advisory leases and structured safety evaluator (#144):** Adds the Triangle advisory lease MCP tools (`triangle_request_lease`, `triangle_release_lease`, `triangle_heartbeat_lease`) and the structured safety evaluator.
 * **Per-node configurable system RAM reserve (#147).**
 
 ### 🐛 Bug Fixes
+
 * Resolve PR #145 post-merge bugs in api/v2 and mcp (#146).
 * Make `TestLocalCollectorCollectsFacts` hermetic (#148).
 * Correct release badge to track tag pushes (#143).
 
 ### 🔧 Maintenance
+
 * Add safety benchmarks and enable structured evaluator tests (#145).
 * Version bump to v0.10.9 (#149).
 
 ## v0.10.8 (2026-05-29)
 
 ### 🚀 Features
+
 * **Unified MCP client (#140):** prompts, caching, retry, batch, REPL, metrics, and auto-routing.
 * **Execution observations in `axis task run` + `axis observations` CLI (#139).**
 
 ### 🔧 Maintenance
+
 * Bump `github.com/mark3labs/mcp-go` 0.54.0 → 0.54.1 (#141).
 * Release v0.10.8 (#142).
 
 ## v0.10.7 (2026-05-22)
 
 ### 🚀 Features
+
 * New `axis daemon mesh` subcommand for operator mesh introspection.
-  - Queries the daemon's `/mesh` endpoint and displays active gossip peers in a table.
-  - Shows peer name, hostname, state, source, and relative last-seen time.
-  - Handles empty peer lists and "mesh not available" gracefully.
+  * Queries the daemon's `/mesh` endpoint and displays active gossip peers in a table.
+  * Shows peer name, hostname, state, source, and relative last-seen time.
+  * Handles empty peer lists and "mesh not available" gracefully.
 
 ### 🔧 Internal
+
 * Added `Mesh() *mesh.Mesh` to the `daemon.SnapshotCache` interface and implemented it on `*Daemon`.
 * Added `/mesh` handler to the daemon router (`internal/daemon/handlers.go`).
 * Added `MarshalJSON`/`UnmarshalJSON` to `mesh.PeerState` so the API serializes states as human-readable strings (`"discovered"`, `"verified"`, `"trusted"`, `"suspect"`, `"dead"`).
@@ -135,77 +155,93 @@
 ## v0.10.6 (2026-05-22)
 
 ### 🚀 Features
+
 * Surface hidden hardware facts in `axis facts` and `axis status`:
-  - `axis status` table expanded with **STORAGE** and **GPU** columns.
-  - `axis facts` now shows storage class, GPU details (vendor, VRAM, capabilities), thermal state, power source, battery level, load averages, memory topology, and network addresses with interface/speed class.
-  - Refactored GPU name formatting into shared `formatGPUBaseName` helper to ensure consistent vendor redundancy handling and "unknown" filtering across commands.
+  * `axis status` table expanded with **STORAGE** and **GPU** columns.
+  * `axis facts` now shows storage class, GPU details (vendor, VRAM, capabilities), thermal state, power source, battery level, load averages, memory topology, and network addresses with interface/speed class.
+  * Refactored GPU name formatting into shared `formatGPUBaseName` helper to ensure consistent vendor redundancy handling and "unknown" filtering across commands.
 
 ## v0.10.5 (2026-05-22)
 
 ### 🚀 Features
+
 * `axis chat` and `axis agent` UX improvements:
-  - Signal context wiring (Ctrl+C interrupts all modes: single-shot, resume, REPL).
-  - `--verbose` flag prints model auto-detection, turn progress, and tool parameters.
-  - `--dry-run` flag on `axis agent` skips tool execution while preserving reasoning loop.
-  - Cobra output compliance (`--no-color`, redirection) across all chat/agent handlers.
+  * Signal context wiring (Ctrl+C interrupts all modes: single-shot, resume, REPL).
+  * `--verbose` flag prints model auto-detection, turn progress, and tool parameters.
+  * `--dry-run` flag on `axis agent` skips tool execution while preserving reasoning loop.
+  * Cobra output compliance (`--no-color`, redirection) across all chat/agent handlers.
 * Placement explain now displays **headroom** (allocatable minus reserved) per candidate.
 * New Copilot CLI skill: `.github/copilot/skills/pr-review-responder.yml` — codifies the PR lifecycle workflow (prepare → push → monitor → fix → respond → verify).
 
 ### 🔧 Maintenance
+
 * Upgrade `golang.org/x/crypto` v0.51.0 → v0.52.0 to resolve `govulncheck` findings (GO-2026-5013 through GO-2026-5021).
 
 ### 📚 Documentation
+
 * Refresh `docs/current-state.md` for v0.10.5 release.
 
 ## v0.10.4 (2026-05-20)
 
 ### 🔧 Maintenance
+
 * Extend resident-model VRAM probes to llama-server and MLX backends. `LlamaServerDiscoveryScript` now stats the model file to compute `size_vram_mb`; `MLXDiscoveryScript` now queries process RSS to compute `size_vram_mb`. Previously only Ollama populated this field.
 
 ### 📊 Observability
+
 * `axis summary` now displays allocatable RAM alongside reserved RAM, making the cluster RAM accounting model explicit to operators. Uses `snap.Summary.TotalAllocatableMB` computed by the reservation overlay.
 * `axis status` table now shows **allocatable RAM** as the primary metric (replacing raw "RAM FREE"). When a node carries active reservations, the reserved amount is shown in parentheses (e.g. `6144 MB (1024 reserved)`). Falls back to raw free RAM when the reservation overlay has not been applied.
 
 ### 🔧 API & Doctor
+
 * `POST /v2/reservations` now returns `405 Method Not Allowed` instead of `501 Not Implemented`, making the read-only API contract explicit per `docs/decisions/v2-reservations-endpoint.md`.
 * `axis doctor` now probes the **Ollama** local AI backend alongside llama-server and MLX, ensuring parity with the primary inference backend used throughout the project.
 
 ## v0.10.3 (2026-05-18)
 
 ### 🐛 Bug Fixes
+
 * Prefer tool-capable models when auto-selecting for `axis agent` — prevents 400 Bad Request when the alphabetically first installed model (e.g. `gemma3n:e2b`) does not support Ollama tool calling. Falls back to known tool-capable families (llama3.1, qwen3.5, qwen3, etc.) and skips embedding/vision variants (PR #127).
 
 ### 🔧 Maintenance
+
 * Extract `state.Maintain()` from `state.Load()` — eliminates repair-on-read side effect, making `Load()` idempotent and preventing silent `state.json` rewrites on every CLI invocation (PR #126).
 * Update summary golden files to reflect version bump.
 
 ### 📚 Documentation
+
 * Add `docs/roadmap-status.md` — final status of all 53 v9 roadmap items (48 done, 5 Phase G items blocked by evidence discipline).
 
 ## v0.10.2 (2026-05-17)
 
 ### 🚀 Features
+
 * Daemon health endpoints (`axis daemon status`) with reservation count and last-refresh timestamp.
 * Placement ranking 54% faster for 50-node clusters via unified memory caching.
 
 ### 📚 Documentation
+
 * Refresh `docs/current-state.md` for v0.10.2 release.
 
 ## v0.10.1 (2026-05-06)
 
 ### 🚀 Features
+
 * Integrated reservation-ledger-wiring enhancements:
-  - Power source detection (AC/battery) for better placement decisions
-  - Thermal state monitoring to avoid throttled nodes
-  - Thermal zones enumeration for detailed thermal monitoring
+  * Power source detection (AC/battery) for better placement decisions
+  * Thermal state monitoring to avoid throttled nodes
+  * Thermal zones enumeration for detailed thermal monitoring
 
 ### 📚 Documentation
+
 * fac90d9: chore: refresh current-state.md for v0.10.0 release
 
 ### 🐛 Bug Fixes
+
 * None in this release
 
 ### 🔧 Maintenance
+
 * Version bump to 0.10.1
 
 ## v0.10.0 — Operator-honest groundwork: shell safety, reservation ledger, mesh scaffolding
@@ -231,20 +267,20 @@ chat commands converted. `Fatal()` marked as deprecated.
 
 **v0.10.0 groundwork (PRs #94, #95)**
 
-- `POST /v2/batch/place` returns `501 Not Implemented` instead of synthetic `200 OK`
-- Reservation accounting fails closed when node capacity is unknown
-- Structured safety learned approvals deliberately disabled (program-name-only too broad)
-- Mesh gossip remains internal scaffolding; HMAC present, replay protection not enforced
-- Dashboard/rendering helpers present but not registered as CLI commands
-- Release pipeline and GoReleaser improvements
+* `POST /v2/batch/place` returns `501 Not Implemented` instead of synthetic `200 OK`
+* Reservation accounting fails closed when node capacity is unknown
+* Structured safety learned approvals deliberately disabled (program-name-only too broad)
+* Mesh gossip remains internal scaffolding; HMAC present, replay protection not enforced
+* Dashboard/rendering helpers present but not registered as CLI commands
+* Release pipeline and GoReleaser improvements
 
 **AX-005/006/007/024/025 integration (PR #93)**
 
-- Link-local addresses tagged with `scope: "link-local"` instead of silently dropped
-- SSH `IdentitiesOnly yes` from config now respected (skips agent, default keys)
-- `ssh -G` passes `-F` for correct config file resolution on macOS
-- Cached-reads doctrine documented: explicit, operator-facing, no hidden fallbacks
-- Daemon staleness threshold configurable (default 5 min)
+* Link-local addresses tagged with `scope: "link-local"` instead of silently dropped
+* SSH `IdentitiesOnly yes` from config now respected (skips agent, default keys)
+* `ssh -G` passes `-F` for correct config file resolution on macOS
+* Cached-reads doctrine documented: explicit, operator-facing, no hidden fallbacks
+* Daemon staleness threshold configurable (default 5 min)
 
 ---
 
@@ -278,19 +314,19 @@ The v0.8.0 release lands the full empirical placement arc. Prior releases tracke
 execution observations but only used them as soft ranking bonuses. v0.8.0 makes
 empirical history load-bearing:
 
-- **Per-model observation scoping** (#69): `ObservationScope` now carries a
+* **Per-model observation scoping** (#69): `ObservationScope` now carries a
   `ModelName` field so different models on the same node accumulate independent
   peak-RAM histories. Observation key derivation uses SHA-256 over the base scope
   fields (node, workload class, backend, tool), conditionally extending the hash
   input with model name when known to prevent cross-model contamination while
   preserving existing keys for unscoped observations.
 
-- **MLX resident model detection** (#70): `axis facts` and cluster snapshots now
+* **MLX resident model detection** (#70): `axis facts` and cluster snapshots now
   include models served by `mlx_lm.server` alongside the existing Ollama collector.
   MLX models are discovered via the `/v1/models` HTTP endpoint and tagged with
   `runtime: mlx`, `source: mlx-lm-api`.
 
-- **Hard `PeakRAMMB` pre-filter** (#71): `FilterCandidates` now excludes any node
+* **Hard `PeakRAMMB` pre-filter** (#71): `FilterCandidates` now excludes any node
   whose freshly-observed `PeakRAMMB` exceeds the node's current allocatable RAM
   before the ranking phase begins. The filter short-circuits on stale or missing
   observations (safe default: allow). `inferenceModelName` is hoisted outside the
@@ -309,24 +345,24 @@ green, llama.cpp: yellow, mlx: cyan, apple-fm: green).
 
 `axis doctor` now probes local AI backends as advisory checks:
 
-- `llama-server` and `mlx` are probed via the same discovery scripts used by
+* `llama-server` and `mlx` are probed via the same discovery scripts used by
   `axis facts`, keeping the doctor and fact-collection views consistent.
-- Each probe reports installed / running / port / model-count state.
-- Probe errors (e.g. `bash: command not found`) surface `stderr` for actionability
+* Each probe reports installed / running / port / model-count state.
+* Probe errors (e.g. `bash: command not found`) surface `stderr` for actionability
   instead of emitting an opaque exit-code message.
-- Each backend gets an independent 5-second timeout derived from the command
+* Each backend gets an independent 5-second timeout derived from the command
   context, preventing a slow first probe from starving the second.
-- `--strict` flag now also promotes daemon-cache failure to a core failure (existing
+* `--strict` flag now also promotes daemon-cache failure to a core failure (existing
   behaviour documented and tested in this release).
 
 **Earlier arc PRs in this series**
 
-- **#66** — Exact-scope execution observations separate from failure memory
-- **#67** — `freshObservation` scoping helper and ranking integration
-- **#68** — TurboQuant-aware backend grading for long-context placement hints
+* **#66** — Exact-scope execution observations separate from failure memory
+* **#67** — `freshObservation` scoping helper and ranking integration
+* **#68** — TurboQuant-aware backend grading for long-context placement hints
 
 ---
 
 ## v0.7.0
 
-See GitHub release notes: https://github.com/toasterbook88/axis/releases/tag/v0.7.0
+See GitHub release notes: <https://github.com/toasterbook88/axis/releases/tag/v0.7.0>

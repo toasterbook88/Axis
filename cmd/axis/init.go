@@ -36,6 +36,8 @@ func runInitWizard(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
 
+	ui.PrintLogo(out, Version)
+	fmt.Fprintln(out)
 	fmt.Fprintln(out, ui.Bold("AXIS Interactive Setup Wizard"))
 	fmt.Fprintln(out, "This wizard will guide you to configure your local and remote AXIS nodes.")
 	fmt.Fprintln(out)
@@ -286,7 +288,8 @@ func runInitWizard(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
-	fmt.Fprintf(out, "\n%s Configuration written successfully to %s\n\n", ui.Green("✓"), cfgPath)
+	fmt.Fprintf(out, "\n%s Configuration written successfully to %s\n", ui.Green("✓"), cfgPath)
+	fmt.Fprintf(out, "  %s Run '%s' to view your cluster dashboard.\n\n", ui.Cyan("→"), ui.Bold("axis summary"))
 	return nil
 }
 

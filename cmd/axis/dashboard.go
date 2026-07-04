@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -169,7 +170,7 @@ func (v ClusterSummaryView) Render() string {
 	// Header
 	b.WriteString("\n")
 	ui.WhiteColor.Fprintf(&b, "  ╔══════════════════════════════════════════════╗\n")
-	ui.WhiteColor.Fprintf(&b, "  ║           AXIS CLUSTER SUMMARY              ║\n")
+	ui.WhiteColor.Fprintf(&b, "  ║           AXIS CLUSTER SUMMARY               ║\n")
 	ui.WhiteColor.Fprintf(&b, "  ╚══════════════════════════════════════════════╝\n\n")
 
 	// Version + Cache
@@ -232,48 +233,89 @@ func (v ClusterSummaryView) Render() string {
 
 	// Topology
 	var topoLines []string
-	var m3, m1, nixos, foundry, latitude models.NodeFacts
-	hasM3, hasM1, hasNixos, hasFoundry, hasLatitude := false, false, false, false, false
-	for _, n := range v.Nodes {
-		name := strings.ToLower(n.Name)
-		switch name {
-		case "m3 pro", "m3":
-			m3 = n
-			hasM3 = true
-		case "m1 scout", "m1":
-			m1 = n
-			hasM1 = true
-		case "nixos":
-			nixos = n
-			hasNixos = true
-		case "foundry":
-			foundry = n
-			hasFoundry = true
-		case "latitude":
-			latitude = n
-			hasLatitude = true
+	type linkKey struct {
+		nodeA string
+		nodeB string
+	}
+	type linkVal struct {
+		speedClass string
+		subnet     string
+	}
+	links := make(map[linkKey]linkVal)
+
+	for i := 0; i < len(v.Nodes); i++ {
+		for j := i + 1; j < len(v.Nodes); j++ {
+			nodeA := v.Nodes[i]
+			nodeB := v.Nodes[j]
+
+			bestSpeed := ""
+			bestSubnet := ""
+			for _, addrA := range nodeA.Addresses {
+				if addrA.Subnet == "" || strings.HasSuffix(addrA.Subnet, "/32") || strings.HasSuffix(addrA.Subnet, "/128") {
+					continue
+				}
+				if strings.HasPrefix(addrA.Interface, "docker") || strings.HasPrefix(addrA.Interface, "br-") || strings.HasPrefix(addrA.Interface, "veth") || strings.HasPrefix(addrA.Interface, "lo") {
+					continue
+				}
+
+				for _, addrB := range nodeB.Addresses {
+					if addrA.Subnet == addrB.Subnet {
+						speed := addrA.SpeedClass
+						if speedPriority(addrB.SpeedClass) > speedPriority(speed) {
+							speed = addrB.SpeedClass
+						}
+						if speedPriority(speed) > speedPriority(bestSpeed) {
+							bestSpeed = speed
+							bestSubnet = addrA.Subnet
+						}
+					}
+				}
+			}
+
+			if bestSpeed != "" {
+				key := linkKey{nodeA: nodeA.Name, nodeB: nodeB.Name}
+				if key.nodeA > key.nodeB {
+					key.nodeA, key.nodeB = key.nodeB, key.nodeA
+				}
+				links[key] = linkVal{speedClass: bestSpeed, subnet: bestSubnet}
+			}
 		}
 	}
 
-	if hasM3 && hasM1 {
-		var line strings.Builder
-		ui.WhiteColor.Fprintf(&line, "%-10s", m3.Name)
-		ui.CyanColor.Fprintf(&line, " <======== (Thunderbolt: 10 Gbps) ========> ")
-		ui.WhiteColor.Fprintf(&line, "%s", m1.Name)
-		topoLines = append(topoLines, line.String())
+	var keys []linkKey
+	for k := range links {
+		keys = append(keys, k)
 	}
-	if hasNixos && hasFoundry {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].nodeA != keys[j].nodeA {
+			return keys[i].nodeA < keys[j].nodeA
+		}
+		return keys[i].nodeB < keys[j].nodeB
+	})
+
+	for _, k := range keys {
+		l := links[k]
 		var line strings.Builder
-		ui.WhiteColor.Fprintf(&line, "%-10s", nixos.Name)
-		ui.GreenColor.Fprintf(&line, " <........ (Gigabit LAN: 1 Gbps)  ........> ")
-		ui.WhiteColor.Fprintf(&line, "%s", foundry.Name)
-		topoLines = append(topoLines, line.String())
-	}
-	if hasLatitude && hasNixos {
-		var line strings.Builder
-		ui.WhiteColor.Fprintf(&line, "%-10s", latitude.Name)
-		ui.YellowColor.Fprintf(&line, " <-------- (Tailscale VPN)        --------> ")
-		ui.WhiteColor.Fprintf(&line, "%s", nixos.Name)
+		ui.WhiteColor.Fprintf(&line, "%-10s", k.nodeA)
+
+		switch l.speedClass {
+		case "thunderbolt":
+			ui.CyanColor.Fprintf(&line, " <======== (Thunderbolt: 10 Gbps) ========> ")
+		case "10gbe":
+			ui.CyanColor.Fprintf(&line, " <======== (10 GbE LAN: 10 Gbps)  ========> ")
+		case "gigabit":
+			ui.GreenColor.Fprintf(&line, " <........ (Gigabit LAN: 1 Gbps)  ........> ")
+		case "wifi":
+			ui.YellowColor.Fprintf(&line, " <~~~~~~~~ (Wi-Fi Wireless)        ~~~~~~~~> ")
+		case "tailscale":
+			ui.YellowColor.Fprintf(&line, " <-------- (Tailscale VPN)        --------> ")
+		case "wireguard":
+			ui.YellowColor.Fprintf(&line, " <-------- (WireGuard VPN)        --------> ")
+		default:
+			ui.DimColor.Fprintf(&line, " <-------- (Network Link)          --------> ")
+		}
+
+		ui.WhiteColor.Fprintf(&line, "%s", k.nodeB)
 		topoLines = append(topoLines, line.String())
 	}
 
@@ -391,8 +433,15 @@ func RenderNodeTable(nodes []NodeListItem) string {
 
 	for _, n := range nodes {
 		name := n.Name
+		visibleNameLen := len(name)
 		if n.IsLocal {
 			name = name + " " + ui.CyanColor.Sprint("(local)")
+			visibleNameLen += len(" (local)")
+		}
+		// Pad name to 20 visible characters.
+		namePad := ""
+		if visibleNameLen < 20 {
+			namePad = strings.Repeat(" ", 20-visibleNameLen)
 		}
 
 		gpuStr := ""
@@ -403,14 +452,21 @@ func RenderNodeTable(nodes []NodeListItem) string {
 			}
 		}
 
-		fmt.Fprintf(&b, "  %s %-20s %-10s %-8s %8dMB %8dMB %8s  %s\n",
+		pressureStr := n.PressureColor()
+		pressureVisible := len(strings.ToLower(n.Pressure))
+		pressurePad := ""
+		if pressureVisible < 8 {
+			pressurePad = strings.Repeat(" ", 8-pressureVisible)
+		}
+
+		fmt.Fprintf(&b, "  %s %s%s %-10s %-8s %8dMB %8dMB %s%s  %s\n",
 			n.StatusIcon(),
-			name,
+			name, namePad,
 			n.Status,
 			n.Arch,
 			n.RAMTotal,
 			n.RAMFree,
-			n.PressureColor(),
+			pressurePad, pressureStr,
 			gpuStr,
 		)
 	}
@@ -478,4 +534,23 @@ func RenderDoctorReport(checks []DoctorCheck) string {
 	}
 	fmt.Fprintf(&b, "  Overall: %s  (%d pass, %d warn, %d fail)\n\n", summary, pass, warn, fail)
 	return b.String()
+}
+
+func speedPriority(s string) int {
+	switch s {
+	case "thunderbolt":
+		return 7
+	case "10gbe":
+		return 6
+	case "gigabit":
+		return 5
+	case "wifi":
+		return 4
+	case "tailscale":
+		return 3
+	case "wireguard":
+		return 2
+	default:
+		return 1
+	}
 }
