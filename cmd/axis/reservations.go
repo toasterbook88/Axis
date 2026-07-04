@@ -60,27 +60,36 @@ func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
+	var entries []reservation.Entry
+	var isFallback bool
+
 	if err != nil {
-		return fmt.Errorf("daemon not reachable: %w", err)
+		isFallback = true
+		ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+		if loadErr := ledger.Load(); loadErr == nil {
+			entries = ledger.Entries()
+		} else if !os.IsNotExist(loadErr) {
+			return fmt.Errorf("daemon not reachable and failed to load local ledger: %w", loadErr)
+		}
+	} else {
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("api error (%d): %s", resp.StatusCode, string(body))
+		}
+		var result struct {
+			Entries []reservation.Entry `json:"reservations"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return err
+		}
+		entries = result.Entries
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("api error (%d): %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Entries []reservation.Entry `json:"reservations"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-
-	items := make([]ReservationListItem, 0, len(result.Entries))
+	items := make([]ReservationListItem, 0, len(entries))
 	now := time.Now()
 	limits := reservation.DefaultLimits()
-	for _, e := range result.Entries {
+	for _, e := range entries {
 		items = append(items, ReservationListItem{
 			ID:      e.ID,
 			Node:    e.Node,
@@ -89,6 +98,10 @@ func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
 			Age:     now.Sub(e.CreatedAt),
 			IsStale: e.ClassifyLiveness(now, limits) != reservation.LivenessActive,
 		})
+	}
+
+	if isFallback {
+		ui.FprintWarning(cmd.ErrOrStderr(), "using local ledger (daemon cache unavailable)")
 	}
 
 	fmt.Fprint(cmd.OutOrStdout(), RenderReservationTable(items))

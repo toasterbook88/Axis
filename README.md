@@ -48,13 +48,19 @@ advisory surfaces never override observed state.
 ## Quick Start
 
 ```bash
-# Install
+# Install (Recommended)
+curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh | bash
+
+# Or install via Go (Requires Go 1.26+)
 go install github.com/toasterbook88/axis/cmd/axis@latest
+
+# Configure your cluster (Interactive Wizard)
+axis init
 
 # Inspect the local machine
 axis facts
 
-# Inspect the full cluster (requires ~/.axis/nodes.yaml)
+# Inspect the full cluster
 axis status
 
 # Ask where to run a task
@@ -74,13 +80,16 @@ axis doctor
 | Command | Purpose |
 |---------|---------|
 | `axis version` | Print build version, commit, and Go version |
+| `axis init` | Interactive cluster configuration wizard |
 | `axis facts` | Local hardware/tool snapshot (`--format json\|yaml`) |
 | `axis status` | Live cluster snapshot (`--cached`, `--cached-only`) |
+| `axis summary` | Cluster summary view |
 | `axis task place` | Advisory placement with reasoning (`--cached`) |
 | `axis placement explain` | Detailed per-node placement breakdown |
 | `axis profile match` | Workload class inference (no snapshot needed) |
 | `axis task context` | Compact context block (`--format json`, `--cached`) |
 | `axis task run` | Guarded task execution with safety gates |
+| `axis reservations` | Reservation inspection |
 | `axis doctor` | Comprehensive health diagnostics |
 | `axis daemon start` | Background snapshot refresh daemon |
 | `axis daemon status` | Daemon health and cache metadata |
