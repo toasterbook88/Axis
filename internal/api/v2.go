@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/reservation"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
@@ -361,6 +362,7 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 	}
 	desc := r.URL.Query().Get("description")
 	if desc == "" && r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 		var req V2DryRunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
 			desc = req.Description
@@ -386,7 +388,7 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reqs := placement.InferRequirements(desc)
-	decision := placement.SelectBestNode(reqs, snap.Nodes, rc.st)
+	decision := placement.SelectBestNode(reqs, snap.Nodes, rc.State)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"description":  desc,
@@ -427,12 +429,21 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req V2BatchPlaceRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
 	results := make([]V2BatchPlaceResult, 0, len(req.Tasks))
+
+	workingState := &state.ClusterState{Nodes: make(map[string]state.NodeState)}
+	if rc.State != nil && rc.State.Nodes != nil {
+		for k, v := range rc.State.Nodes {
+			workingState.Nodes[k] = v
+		}
+	}
+
 	for _, task := range req.Tasks {
 		desc := strings.TrimSpace(task.Description)
 		if desc == "" {
@@ -447,8 +458,14 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		reqs := placement.InferRequirements(desc)
-		decision := placement.SelectBestNode(reqs, snap.Nodes, rc.st)
+		decision := placement.SelectBestNode(reqs, snap.Nodes, workingState)
 		
+		if decision.OK && decision.Node != "" {
+			ns := workingState.Nodes[decision.Node]
+			ns.ReservedMB += reqs.MemoryRequestMB
+			workingState.Nodes[decision.Node] = ns
+		}
+
 		results = append(results, V2BatchPlaceResult{
 			ID:       task.ID,
 			Decision: decision,

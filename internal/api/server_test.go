@@ -1858,3 +1858,75 @@ func testTurboNode(name, hostname string, verified bool) models.NodeFacts {
 	}
 	return node
 }
+
+func TestV2PlacementDryRun(t *testing.T) {
+	cache := &fakeCache{
+		meta: daemon.Metadata{Ready: true},
+		snap: &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name: "node-a",
+					Status: models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 16384,
+						RAMAllocatableMB: 12000,
+						RAMFreeMB: 8000,
+					},
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	// Get logic
+	req := httptest.NewRequest(http.MethodGet, "/v2/placement/dry-run?description=run+llama3", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Post logic
+	body := `{"description":"run llama3"}`
+	req = httptest.NewRequest(http.MethodPost, "/v2/placement/dry-run", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestV2BatchPlace(t *testing.T) {
+	cache := &fakeCache{
+		meta: daemon.Metadata{Ready: true},
+		snap: &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{
+					Name: "node-a",
+					Status: models.StatusComplete,
+					Resources: &models.Resources{
+						RAMTotalMB: 16384,
+						RAMAllocatableMB: 12000,
+						RAMFreeMB: 8000,
+					},
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	body := `{"tasks":[{"id":"1","description":"small task"},{"id":"2","description":"another task"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v2/batch/place", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
