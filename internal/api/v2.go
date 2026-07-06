@@ -11,6 +11,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/reservation"
 )
 
@@ -370,7 +371,28 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "description required")
 		return
 	}
-	writeError(w, http.StatusNotImplemented, "dry-run placement wiring pending")
+	if !h.requireCache(w) {
+		return
+	}
+	snap, ok := h.cache.Snapshot()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "snapshot cache not ready")
+		return
+	}
+	rc, err := loadRunnerContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	reqs := placement.InferRequirements(desc)
+	decision := placement.SelectBestNode(reqs, snap.Nodes, rc.st)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"description":  desc,
+		"requirements": reqs,
+		"decision":     decision,
+	})
 }
 
 type V2BatchPlaceRequest struct {
@@ -381,9 +403,8 @@ type V2BatchPlaceRequest struct {
 }
 
 type V2BatchPlaceResult struct {
-	ID     string `json:"id"`
-	OK     bool   `json:"ok"`
-	Reason string `json:"reason,omitempty"`
+	ID       string                   `json:"id"`
+	Decision models.PlacementDecision `json:"decision"`
 }
 
 func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +412,53 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeError(w, http.StatusNotImplemented, "batch placement is not implemented")
+	if !h.requireCache(w) {
+		return
+	}
+	snap, ok := h.cache.Snapshot()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "snapshot cache not ready")
+		return
+	}
+	rc, err := loadRunnerContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var req V2BatchPlaceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	results := make([]V2BatchPlaceResult, 0, len(req.Tasks))
+	for _, task := range req.Tasks {
+		desc := strings.TrimSpace(task.Description)
+		if desc == "" {
+			results = append(results, V2BatchPlaceResult{
+				ID: task.ID,
+				Decision: models.PlacementDecision{
+					OK:        false,
+					Reasoning: []string{"description required"},
+				},
+			})
+			continue
+		}
+		
+		reqs := placement.InferRequirements(desc)
+		decision := placement.SelectBestNode(reqs, snap.Nodes, rc.st)
+		
+		results = append(results, V2BatchPlaceResult{
+			ID:       task.ID,
+			Decision: decision,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": results,
+		"count":   len(results),
+	})
 }
 
 func (h *v2Handlers) handleMetrics(w http.ResponseWriter, r *http.Request) {

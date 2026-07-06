@@ -153,33 +153,7 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	}
 }
 
-func TestV2BatchPlaceReturnsNotImplemented(t *testing.T) {
-	mux := http.NewServeMux()
-	registerRoutes(mux, &fakeCache{
-		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
-		meta: daemon.Metadata{Ready: true},
-	}, "test-token")
 
-	req := httptest.NewRequest(http.MethodPost, "/v2/batch/place", strings.NewReader(`{"tasks":[{"id":"t1","description":"demo"}]}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", rec.Code)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if payload["ok"] != false {
-		t.Fatalf("expected ok=false, got %#v", payload["ok"])
-	}
-	if got, _ := payload["error"].(string); !strings.Contains(got, "not implemented") {
-		t.Fatalf("expected honest not-implemented error, got %q", got)
-	}
-}
 
 func TestV2ClusterEndpointSummarizesSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
@@ -396,40 +370,11 @@ func TestV2StubEndpointsStayNon2XX(t *testing.T) {
 			errorContains:  "method not allowed",
 		},
 		{
-			name:           "dry run missing description",
-			method:         http.MethodGet,
-			path:           "/v2/placement/dry-run",
-			expectedStatus: http.StatusBadRequest,
-			errorContains:  "description required",
-		},
-		{
-			name:           "dry run get with description",
-			method:         http.MethodGet,
-			path:           "/v2/placement/dry-run?description=demo",
-			expectedStatus: http.StatusNotImplemented,
-			errorContains:  "dry-run placement wiring pending",
-		},
-		{
-			name:           "dry run post with description",
-			method:         http.MethodPost,
-			path:           "/v2/placement/dry-run",
-			body:           `{"description":"demo"}`,
-			expectedStatus: http.StatusNotImplemented,
-			errorContains:  "dry-run placement wiring pending",
-		},
-		{
 			name:           "history get",
 			method:         http.MethodGet,
 			path:           "/v2/history",
 			expectedStatus: http.StatusNotImplemented,
 			errorContains:  "execution history wiring pending",
-		},
-		{
-			name:           "batch wrong method",
-			method:         http.MethodGet,
-			path:           "/v2/batch/place",
-			expectedStatus: http.StatusMethodNotAllowed,
-			errorContains:  "method not allowed",
 		},
 	}
 
