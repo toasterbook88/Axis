@@ -34,44 +34,12 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 			Reason:  strings.Join(decision.Reasons, "; "),
 			Score:   100,
 		}
+	} else if decision.Verdict == VerdictPrompt {
+		r.Score = 70
+		r.Reason = strings.Join(decision.Reasons, "; ")
 	}
 
-	// === Hard zero-tolerance patterns (expand forever) ===
-	hardBlocks := []struct {
-		pattern string
-		reason  string
-		score   int
-	}{
-		{"> /dev/null", "redirecting output to null (likely dangerous)", 70},
-		{"rm -rf /", "trying to nuke root filesystem", 100},
-		{"rm -rf *", "dangerous recursive delete", 95},
-		{"sudo rm -rf", "sudo + rm -rf = instant regret", 98},
-		{"> /dev", "redirecting to raw device", 92},
-		{"dd if", "low-level disk destruction", 90},
-		{"while true", "unbounded infinite loop", 85},
-		{"fork bomb", "resource exhaustion attack", 88},
-		{":(){ :|:& };:}", "classic fork bomb", 100},
-		{"70b", "70B model on tiny cluster", 82},
-		{"format", "formatting drives without confirmation", 80},
-		{"mkfs", "formatting drives without confirmation", 85},
-	}
 
-	for _, b := range hardBlocks {
-		if strings.Contains(lower, b.pattern) {
-			return BlockResult{Blocked: b.score >= 80, Reason: b.reason, Score: b.score}
-		}
-	}
-
-	// === Explicit safe list (prevents false positives on common safe patterns) ===
-	safePatterns := []string{
-		"echo ", "printf ", "ls ", "cat ", "git status", "git log", "go version",
-		"ollama list", "docker ps", "ps aux", "top", "df -h",
-	}
-	for _, safe := range safePatterns {
-		if strings.Contains(lower, safe) {
-			return r
-		}
-	}
 
 	// === Live cluster-aware checks ===
 	if k != nil {
