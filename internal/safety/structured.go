@@ -55,8 +55,9 @@ type Decision struct {
 type Rule struct {
 	Name        string   `yaml:"name" json:"name"`
 	Description string   `yaml:"description" json:"description"`
-	Programs    []string `yaml:"programs" json:"programs"`         // glob patterns for program name
-	ArgPatterns []string `yaml:"arg_patterns" json:"arg_patterns"` // glob patterns matched against joined args
+	Programs    []string `yaml:"programs" json:"programs,omitempty"`         // glob patterns for program name
+	ArgPatterns []string `yaml:"arg_patterns" json:"arg_patterns,omitempty"` // glob patterns matched against joined args
+	RawPatterns []string `yaml:"raw_patterns" json:"raw_patterns,omitempty"` // substring match against raw command
 	Category    Category `yaml:"category" json:"category"`
 	Verdict     Verdict  `yaml:"verdict" json:"verdict"`
 	Priority    int      `yaml:"priority" json:"priority"`           // higher = evaluated first
@@ -111,6 +112,16 @@ func DefaultRuleSet() RuleSet {
 			{Name: "git-force-push", Programs: []string{"git"}, ArgPatterns: []string{"push --force*", "push -f*"}, Category: CategoryDestructive, Verdict: VerdictPrompt, Priority: 150},
 			{Name: "git-push", Programs: []string{"git"}, ArgPatterns: []string{"push*"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 75},
 
+			// Legacy hardblocks migrated from blocker.go
+			{Name: "legacy-hardblock-dev-null", RawPatterns: []string{"> /dev/null"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 220, Description: "redirecting output to null"},
+			{Name: "legacy-hardblock-dev", RawPatterns: []string{"> /dev"}, Category: CategoryDestructive, Verdict: VerdictDeny, Priority: 210, Description: "redirecting to raw device"},
+			{Name: "legacy-hardblock-forkbomb", RawPatterns: []string{"fork bomb", ":(){ :|:& };:"}, Category: CategoryDestructive, Verdict: VerdictDeny, Priority: 210, Description: "fork bomb"},
+			{Name: "legacy-hardblock-loop", RawPatterns: []string{"while true"}, Category: CategorySystemCritical, Verdict: VerdictDeny, Priority: 210, Description: "unbounded infinite loop"},
+			{Name: "legacy-hardblock-format", RawPatterns: []string{"format ", "mkfs"}, Category: CategorySystemCritical, Verdict: VerdictDeny, Priority: 210, Description: "formatting drives"},
+			{Name: "legacy-hardblock-heavy-model", RawPatterns: []string{"70b"}, Category: CategorySystemCritical, Verdict: VerdictDeny, Priority: 210, Description: "70B model on tiny cluster"},
+			{Name: "legacy-hardblock-root-rm", RawPatterns: []string{"rm -rf /", "rm -rf *", "sudo rm -rf"}, Category: CategoryDestructive, Verdict: VerdictDeny, Priority: 210, Description: "recursive destructive rm"},
+			{Name: "legacy-safelist", RawPatterns: []string{"echo ", "printf ", "ls ", "cat ", "git status", "git log", "go version", "ollama list", "docker ps", "ps aux", "top", "df -h"}, Category: CategorySafe, Verdict: VerdictAllow, Priority: 99, Description: "explicit safe list"},
+
 			// Catch-all for unknown commands
 			{Name: "unknown-fallback", Programs: []string{"*"}, Category: CategoryUnknown, Verdict: VerdictPrompt, Priority: 0},
 		},
@@ -150,13 +161,29 @@ func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
 	joinedArgs := strings.Join(args, " ")
 
 	for _, rule := range e.rules {
-		if !matchesProgram(program, rule.Programs) {
-			continue
-		}
-
 		// If rule has surface restriction, check it
 		if len(rule.Surfaces) > 0 && !containsString(rule.Surfaces, surface) {
 			continue
+		}
+
+		if len(rule.RawPatterns) > 0 {
+			matched := false
+			lowerCmd := strings.ToLower(rawCmd)
+			for _, pattern := range rule.RawPatterns {
+				if strings.Contains(lowerCmd, strings.ToLower(pattern)) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		if len(rule.Programs) > 0 {
+			if !matchesProgram(program, rule.Programs) {
+				continue
+			}
 		}
 
 		// If rule has arg patterns, at least one must match
