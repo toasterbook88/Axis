@@ -19,9 +19,10 @@ func TestInitCmd(t *testing.T) {
 	// Mock input for readline:
 	// 1. local node name -> "my-local-node"
 	// 2. SSH user -> "my-ssh-user"
-	// 3. Scan network [Y/n] -> "n"
-	// 4. Manually add remote worker [y/N] -> "n"
-	input := "my-local-node\nmy-ssh-user\nn\nn\n"
+	// 3. Scan Tailscale [Y/n] -> "n"
+	// 4. Scan network [Y/n] -> "n"
+	// 5. Manually add remote worker [y/N] -> "n"
+	input := "my-local-node\nmy-ssh-user\nn\nn\nn\n"
 	inBuf := bytes.NewBufferString(input)
 	outBuf := new(bytes.Buffer)
 	errBuf := new(bytes.Buffer)
@@ -65,14 +66,15 @@ func TestInitCmdManualRemote(t *testing.T) {
 	// Mock input for readline:
 	// 1. local node name -> "my-local-node"
 	// 2. SSH user -> "my-ssh-user"
-	// 3. Scan network [Y/n] -> "n"
-	// 4. Manually add remote worker [y/N] -> "y"
-	// 5. Remote node name -> "remote-worker"
-	// 6. Remote host -> "192.168.1.100"
-	// 7. SSH port -> "2222"
-	// 8. Timeout -> "15"
-	// 9. Manually add another remote worker -> "n"
-	input := "my-local-node\nmy-ssh-user\nn\ny\nremote-worker\n192.168.1.100\n2222\n15\nn\n"
+	// 3. Scan Tailscale [Y/n] -> "n"
+	// 4. Scan network [Y/n] -> "n"
+	// 5. Manually add remote worker [y/N] -> "y"
+	// 6. Remote node name -> "remote-worker"
+	// 7. Remote host -> "192.168.1.100"
+	// 8. SSH port -> "2222"
+	// 9. Timeout -> "15"
+	// 10. Manually add another remote worker -> "n"
+	input := "my-local-node\nmy-ssh-user\nn\nn\ny\nremote-worker\n192.168.1.100\n2222\n15\nn\n"
 	inBuf := bytes.NewBufferString(input)
 	outBuf := new(bytes.Buffer)
 	errBuf := new(bytes.Buffer)

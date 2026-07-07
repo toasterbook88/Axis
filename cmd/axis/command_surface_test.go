@@ -761,7 +761,7 @@ func TestPrintWarningWritesStderr(t *testing.T) {
 }
 
 func TestResolveChatModelUsesRequestedValue(t *testing.T) {
-	if got := resolveChatModel(" llama3 "); got != "llama3" {
+	if got := resolveChatModel(" llama3 ", nil); got != "llama3" {
 		t.Fatalf("resolveChatModel() = %q, want llama3", got)
 	}
 }
@@ -772,7 +772,7 @@ func TestResolveChatModelFallsBackToResolver(t *testing.T) {
 	})
 	defer restore()
 
-	if got := resolveChatModel(""); got != "default-model" {
+	if got := resolveChatModel("", nil); got != "default-model" {
 		t.Fatalf("resolveChatModel() = %q, want default-model", got)
 	}
 }
@@ -886,6 +886,11 @@ func TestChatCmdSingleShotStreamsResponse(t *testing.T) {
 	})
 	defer restoreResolve()
 
+	restoreRuntime := stubChatRuntimeLoader(t, func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
+	})
+	defer restoreRuntime()
+
 	cmd := chatCmd()
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
@@ -937,6 +942,11 @@ func TestChatCmdSingleShotJSONSuppressesStreaming(t *testing.T) {
 		return "test-model"
 	})
 	defer restoreResolve()
+
+	restoreRuntime := stubChatRuntimeLoader(t, func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
+	})
+	defer restoreRuntime()
 
 	stdout, _, err := captureProcessOutput(t, func() error {
 		cmd := chatCmd()
@@ -1092,12 +1102,15 @@ func stubDefaultChatModelResolver(t *testing.T, fn func(context.Context) string)
 }
 
 func stubFormatChatCatalog(t *testing.T, fn func(context.Context, string) string) func() {
-	t.Helper()
 	prev := formatChatCatalog
 	formatChatCatalog = fn
-	return func() {
-		formatChatCatalog = prev
-	}
+	return func() { formatChatCatalog = prev }
+}
+
+func stubChatRuntimeLoader(t *testing.T, fn func(context.Context) (*runtimectx.Context, error)) func() {
+	prev := loadRuntimeContext
+	loadRuntimeContext = fn
+	return func() { loadRuntimeContext = prev }
 }
 
 func containsString(values []string, want string) bool {

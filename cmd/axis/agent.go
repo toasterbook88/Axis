@@ -105,7 +105,8 @@ func agentCmd() *cobra.Command {
 				}
 			}()
 
-			currentModel := resolveChatModel(model)
+			rt, _ := runtimectx.Load(ctx)
+			currentModel := resolveChatModel(model, rt)
 			if verbose && model == "" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
 			}

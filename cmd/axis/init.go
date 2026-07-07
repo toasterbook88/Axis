@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -94,7 +97,96 @@ func runInitWizard(cmd *cobra.Command) error {
 		},
 	}
 
-	// 3. Ask to scan for neighbor AXIS nodes
+	// 3. Tailscale Auto-Discovery
+	fmt.Fprintln(out, ui.Cyan("\n⬢ Tailscale Auto-Discovery"))
+	fmt.Fprint(out, "Would you like to scan for Tailscale peers? [Y/n]: ")
+	line, err = rl.Readline()
+	if err == nil {
+		ans := strings.ToLower(strings.TrimSpace(line))
+		if ans == "" || ans == "y" || ans == "yes" {
+			spin := ui.NewSpinner()
+			spin.Start("Scanning Tailscale network...")
+
+			tsOut, err := exec.CommandContext(cmd.Context(), "tailscale", "status", "--json").Output()
+			if err != nil {
+				spin.Stop(fmt.Sprintf("%s Tailscale not found or not running.", ui.Red("✗")))
+			} else {
+				spin.Stop(fmt.Sprintf("%s Tailscale scan complete.", ui.Green("✓")))
+				var tsStatus struct {
+					Peer map[string]struct {
+						HostName     string   `json:"HostName"`
+						TailscaleIPs []string `json:"TailscaleIPs"`
+						Online       bool     `json:"Online"`
+						OS           string   `json:"OS"`
+					} `json:"Peer"`
+				}
+				if err = json.Unmarshal(tsOut, &tsStatus); err != nil {
+					fmt.Fprintf(out, "Failed to parse Tailscale status: %v\n", err)
+				} else {
+					type peerInfo struct {
+						HostName     string
+						TailscaleIPs []string
+						Online       bool
+						OS           string
+					}
+					var peers []peerInfo
+					for _, peer := range tsStatus.Peer {
+						if len(peer.TailscaleIPs) > 0 {
+							peers = append(peers, peerInfo{
+								HostName:     peer.HostName,
+								TailscaleIPs: peer.TailscaleIPs,
+								Online:       peer.Online,
+								OS:           peer.OS,
+							})
+						}
+					}
+					sort.Slice(peers, func(i, j int) bool {
+						return peers[i].HostName < peers[j].HostName
+					})
+
+					found := 0
+					for _, peer := range peers {
+						found++
+						fmt.Fprintf(out, "  - Found: %s (%s) [Online: %v, OS: %s]\n", peer.HostName, peer.TailscaleIPs[0], peer.Online, peer.OS)
+						fmt.Fprintf(out, "    Add this node? [Y/n]: ")
+						line, err = rl.Readline()
+						if err != nil {
+							break
+						}
+						choice := strings.ToLower(strings.TrimSpace(line))
+						if choice == "" || choice == "y" || choice == "yes" {
+							n := config.NodeConfig{
+								Name:       peer.HostName,
+								Hostname:   peer.TailscaleIPs[0],
+								SSHUser:    sshUser,
+								Role:       "worker",
+								SSHPort:    22,
+								TimeoutSec: 10,
+							}
+							if verifySSHConnectionFn(cmd.Context(), n.Hostname, n.EffectiveSSHPort(), n.SSHUser, n.EffectiveTimeout(), out) {
+								nodes = append(nodes, n)
+								fmt.Fprintf(out, "Added node %s.\n", n.Name)
+							} else {
+								fmt.Fprintf(out, "Add node %s anyway? [y/N]: ", n.Name)
+								line, err = rl.Readline()
+								if err == nil && (strings.ToLower(strings.TrimSpace(line)) == "y" || strings.ToLower(strings.TrimSpace(line)) == "yes") {
+									nodes = append(nodes, n)
+									fmt.Fprintf(out, "Added node %s.\n", n.Name)
+								} else {
+									fmt.Fprintf(out, "Skipped node %s.\n", n.Name)
+								}
+							}
+						}
+					}
+					if found == 0 {
+						fmt.Fprintln(out, "No active Tailscale peers found.")
+					}
+				}
+			}
+		}
+	}
+
+	// 4. Mesh Gossip Scan
 	fmt.Fprintln(out, ui.Cyan("\n⬢ Mesh Gossip Scan"))
 	fmt.Fprint(out, "Would you like to scan the network for active AXIS gossip nodes? [Y/n]: ")
 	line, err = rl.Readline()

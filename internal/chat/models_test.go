@@ -12,7 +12,7 @@ import (
 )
 
 func TestChoosePreferredModel(t *testing.T) {
-	got, ok := choosePreferredModel([]string{"llama3.2:3b", "qwen3:0.6b"})
+	got, ok := ChoosePreferredModel([]string{"llama3.2:3b", "qwen3:0.6b"})
 	if !ok {
 		t.Fatal("expected preferred model match")
 	}
@@ -27,7 +27,7 @@ func TestChoosePreferredModel(t *testing.T) {
 // sorts the installed set so this fallback stays deterministic across runs.
 func TestChoosePreferredModelFallsBackToSortedInstalled(t *testing.T) {
 	installed := []string{"llama3.2:latest", "mistral:7b", "qwen3:4b"}
-	got, ok := choosePreferredModel(installed)
+	got, ok := ChoosePreferredModel(installed)
 	if !ok {
 		t.Fatal("expected ok=true when installed models exist but none are recommended")
 	}
@@ -37,13 +37,13 @@ func TestChoosePreferredModelFallsBackToSortedInstalled(t *testing.T) {
 }
 
 // TestChoosePreferredModelEmptyReturnsFalse confirms the only case where
-// choosePreferredModel legitimately returns false: no models installed at all.
+// ChoosePreferredModel legitimately returns false: no models installed at all.
 func TestChoosePreferredModelEmptyReturnsFalse(t *testing.T) {
-	_, ok := choosePreferredModel(nil)
+	_, ok := ChoosePreferredModel(nil)
 	if ok {
 		t.Fatal("expected ok=false for empty installed list")
 	}
-	_, ok = choosePreferredModel([]string{})
+	_, ok = ChoosePreferredModel([]string{})
 	if ok {
 		t.Fatal("expected ok=false for empty installed list")
 	}
@@ -53,7 +53,7 @@ func TestChoosePreferredModelPrefersToolCapable(t *testing.T) {
 	// pickToolCapable should prefer a tool-capable model over a
 	// non-tool-capable one even when the non-tool model is first
 	// alphabetically.
-	got, ok := choosePreferredModel([]string{"gemma3n:e2b", "llama3.1:8b", "qwen3:4b"})
+	got, ok := ChoosePreferredModel([]string{"gemma3n:e2b", "llama3.1:8b", "qwen3:4b"})
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
@@ -66,7 +66,7 @@ func TestChoosePreferredModelFallsBackAlphabeticallyWhenNoToolCapable(t *testing
 	// When none of the installed models match a known tool-capable family,
 	// the fallback returns the alphabetically first model.
 	// Note: listInstalledModels sorts results, so pass them sorted.
-	got, ok := choosePreferredModel([]string{"all-minilm:latest", "gemma3n:e2b"})
+	got, ok := ChoosePreferredModel([]string{"all-minilm:latest", "gemma3n:e2b"})
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
