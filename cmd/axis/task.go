@@ -237,7 +237,7 @@ func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *s
 
 func taskRunCmd() *cobra.Command {
 	var execFlag, scriptFlag, dryRunFlag bool
-	var exposePortsFlag string
+	var exposePortFlag string
 	var memoryRequestMB int64
 	var memoryMaxMB int64
 	cmd := &cobra.Command{
@@ -246,9 +246,9 @@ func taskRunCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input := args[0]
-			if exposePortsFlag != "" {
-				if _, _, err := execution.ParseExposePorts(exposePortsFlag); err != nil {
-					return fmt.Errorf("invalid --expose flag: %w", err)
+			if exposePortFlag != "" {
+				if _, _, err := execution.ParseExposePorts(exposePortFlag); err != nil {
+					return fmt.Errorf("invalid --expose-port flag: %w", err)
 				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -281,7 +281,7 @@ func taskRunCmd() *cobra.Command {
 				Description:     input,
 				Mode:            mode,
 				Confirm:         execution.ConfirmWord,
-				ExposePorts:     exposePortsFlag,
+				ExposePorts:     exposePortFlag,
 				MemoryRequestMB: memoryRequestMB,
 				MemoryMaxMB:     memoryMaxMB,
 				OwnerSurface:    execution.OwnerSurfaceTaskRun,
@@ -358,7 +358,7 @@ func taskRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
 	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show the execution plan without running anything")
-	cmd.Flags().StringVar(&exposePortsFlag, "expose", "", "expose port: [local:]remote (e.g. 8080:8080 or just 8080)")
+	cmd.Flags().StringVar(&exposePortFlag, "expose", "", "expose port: <remote>[:<local>] (e.g. 8080:8080 or just 8080)")
 	cmd.Flags().Int64Var(&memoryRequestMB, "memory-request", 0, "explicit memory request in MB")
 	cmd.Flags().Int64Var(&memoryMaxMB, "memory-max", 0, "explicit memory max in MB")
 	return cmd
