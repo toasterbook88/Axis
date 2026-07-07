@@ -945,7 +945,7 @@ func runRemote(
 	}
 
 	if req.ExposePorts != "" {
-		local, remote, err := ParseExposePorts(req.ExposePorts)
+		remote, local, err := ParseExposePorts(req.ExposePorts)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.ExitCode = 1
@@ -1309,7 +1309,7 @@ func exitCode(err error) int {
 	return 1
 }
 
-func ParseExposePorts(s string) (local, remote int, err error) {
+func ParseExposePorts(s string) (remote, local int, err error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, 0, nil
@@ -1320,16 +1320,16 @@ func ParseExposePorts(s string) (local, remote int, err error) {
 		if err != nil || p < 1 || p > 65535 {
 			return 0, 0, fmt.Errorf("invalid port: %q", s)
 		}
-		return 0, p, nil
+		return p, 0, nil
 	} else if len(parts) == 2 {
-		l, err1 := strconv.Atoi(parts[0])
-		r, err2 := strconv.Atoi(parts[1])
+		r, err1 := strconv.Atoi(parts[0])
+		l, err2 := strconv.Atoi(parts[1])
 		if err1 != nil || err2 != nil || l < 0 || l > 65535 || r < 1 || r > 65535 {
 			return 0, 0, fmt.Errorf("invalid ports: %q", s)
 		}
-		return l, r, nil
+		return r, l, nil
 	}
-	return 0, 0, fmt.Errorf("invalid port format: %q (expected local:remote or remote)", s)
+	return 0, 0, fmt.Errorf("invalid port format: %q (expected remote:local or remote)", s)
 }
 
 var GetGitRepoState = git.GetRepoState
