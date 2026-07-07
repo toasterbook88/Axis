@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -119,12 +120,32 @@ func runInitWizard(cmd *cobra.Command) error {
 						OS           string   `json:"OS"`
 					} `json:"Peer"`
 				}
-				if err := json.Unmarshal(tsOut, &tsStatus); err == nil {
-					found := 0
+				if err = json.Unmarshal(tsOut, &tsStatus); err != nil {
+					fmt.Fprintf(out, "Failed to parse Tailscale status: %v\n", err)
+				} else {
+					type peerInfo struct {
+						HostName     string
+						TailscaleIPs []string
+						Online       bool
+						OS           string
+					}
+					var peers []peerInfo
 					for _, peer := range tsStatus.Peer {
-						if len(peer.TailscaleIPs) == 0 {
-							continue
+						if len(peer.TailscaleIPs) > 0 {
+							peers = append(peers, peerInfo{
+								HostName:     peer.HostName,
+								TailscaleIPs: peer.TailscaleIPs,
+								Online:       peer.Online,
+								OS:           peer.OS,
+							})
 						}
+					}
+					sort.Slice(peers, func(i, j int) bool {
+						return peers[i].HostName < peers[j].HostName
+					})
+
+					found := 0
+					for _, peer := range peers {
 						found++
 						fmt.Fprintf(out, "  - Found: %s (%s) [Online: %v, OS: %s]\n", peer.HostName, peer.TailscaleIPs[0], peer.Online, peer.OS)
 						fmt.Fprintf(out, "    Add this node? [Y/n]: ")
