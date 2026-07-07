@@ -83,7 +83,7 @@ type RunResponse struct {
 type runnerContext struct {
 	cfg        *config.Config
 	snap       *models.ClusterSnapshot
-	st         *state.ClusterState
+	State      *state.ClusterState
 	skillStore *skills.Store
 	ledger     *reservation.Ledger
 }
@@ -330,7 +330,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		}
 
 		payload := KnowledgeResponse{
-			Knowledge: knowledge.Build(rc.snap, rc.st, ""),
+			Knowledge: knowledge.Build(rc.snap, rc.State, ""),
 			Skills:    rc.skillStore.Skills,
 			Failures:  rc.skillStore.Failures,
 		}
@@ -421,7 +421,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		rtCtx := &runtimectx.Context{
 			Config:   rc.cfg,
 			Snapshot: rc.snap,
-			State:    rc.st,
+			State:    rc.State,
 			Skills:   rc.skillStore,
 			Ledger:   rc.ledger,
 		}
@@ -460,7 +460,7 @@ func loadRunnerContext(ctx context.Context) (*runnerContext, error) {
 	return &runnerContext{
 		cfg:        rt.Config,
 		snap:       rt.Snapshot,
-		st:         rt.State,
+		State:      rt.State,
 		skillStore: rt.Skills,
 		ledger:     rt.Ledger,
 	}, nil
