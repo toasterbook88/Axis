@@ -17,7 +17,7 @@
 ### 🔧 Maintenance
 
 * Update Go dependencies.
-* Save/speed class allocations optimizations.
+* Safety/speed class allocations optimizations.
 
 ## v0.12.3 (2026-06-29)
 
