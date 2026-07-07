@@ -85,6 +85,7 @@ func chatCmd() *cobra.Command {
 				if decision.OK && !decision.IsLocal {
 					if targetConfig, ok := rt.Config.FindNode(decision.Node); ok {
 						executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
+						defer executor.Close()
 						boundPort, stopForward, err := executor.ForwardLocal(ctx, 0, 11434)
 						if err != nil {
 							fmt.Fprintf(errW, "%s Failed to tunnel to %s: %v (falling back to local)\n", ui.Yellow("!"), decision.Node, err)

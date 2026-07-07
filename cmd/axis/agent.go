@@ -105,7 +105,10 @@ func agentCmd() *cobra.Command {
 				}
 			}()
 
-			rt, _ := runtimectx.Load(ctx)
+			rt, err := runtimectx.Load(ctx)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
+			}
 			currentModel := resolveChatModel(model, rt)
 			if verbose && model == "" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
@@ -120,10 +123,7 @@ func agentCmd() *cobra.Command {
 			var k *knowledge.ClusterKnowledge
 			var initialView *agent.RuntimeView
 
-			rt, err := runtimectx.Load(ctx)
-			if err != nil {
-				fmt.Fprintf(errW, "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
-			} else {
+			if rt != nil {
 				if rt.Snapshot != nil {
 					cluster = chat.BuildClusterSummary(rt.Snapshot)
 					bestNode := ""
