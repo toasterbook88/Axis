@@ -1860,6 +1860,12 @@ func testTurboNode(name, hostname string, verified bool) models.NodeFacts {
 }
 
 func TestV2PlacementDryRun(t *testing.T) {
+	prev := loadLiveRuntime
+	loadLiveRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{State: &state.ClusterState{}}, nil
+	}
+	defer func() { loadLiveRuntime = prev }()
+
 	cache := &fakeCache{
 		meta: daemon.Metadata{Ready: true},
 		snap: &models.ClusterSnapshot{
@@ -1901,6 +1907,12 @@ func TestV2PlacementDryRun(t *testing.T) {
 }
 
 func TestV2BatchPlace(t *testing.T) {
+	prev := loadLiveRuntime
+	loadLiveRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{State: &state.ClusterState{}}, nil
+	}
+	defer func() { loadLiveRuntime = prev }()
+
 	cache := &fakeCache{
 		meta: daemon.Metadata{Ready: true},
 		snap: &models.ClusterSnapshot{
