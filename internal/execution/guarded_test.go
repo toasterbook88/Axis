@@ -1486,23 +1486,24 @@ func testGuardedRuntime(t *testing.T, nodes []models.NodeFacts) *runtimectx.Cont
 func TestParseExposePorts(t *testing.T) {
 	tests := []struct {
 		input       string
-		wantLocal   int
 		wantRemote  int
+		wantLocal   int
 		wantErr     bool
 		errContains string
 	}{
 		{"", 0, 0, false, ""},
 		{"   ", 0, 0, false, ""},
-		{"8080", 0, 8080, false, ""},
+		{"8080", 8080, 0, false, ""},
 		{"8080:8080", 8080, 8080, false, ""},
-		{"0:8080", 0, 8080, false, ""},
+		{"8080:9090", 8080, 9090, false, ""},
+		{"8080:0", 8080, 0, false, ""},
+		{"0:8080", 0, 0, true, "invalid ports:"},
 		{"abc", 0, 0, true, "invalid port:"},
 		{"8080:abc", 0, 0, true, "invalid ports:"},
 		{"abc:8080", 0, 0, true, "invalid ports:"},
 		{"-1:8080", 0, 0, true, "invalid ports:"},
 		{"8080:-80", 0, 0, true, "invalid ports:"},
 		{"8080:8080:8080", 0, 0, true, "invalid port format:"},
-		{"8080:0", 0, 0, true, "invalid ports:"},
 		{"0", 0, 0, true, "invalid port:"},
 		{"-5", 0, 0, true, "invalid port:"},
 		{"99999", 0, 0, true, "invalid port:"},
@@ -1512,7 +1513,7 @@ func TestParseExposePorts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			local, remote, err := ParseExposePorts(tt.input)
+			remote, local, err := ParseExposePorts(tt.input)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for input %q, got nil", tt.input)
@@ -1522,10 +1523,11 @@ func TestParseExposePorts(t *testing.T) {
 				}
 			} else {
 				if err != nil {
-					t.Fatalf("unexpected error for input %q: %v", tt.input, err)
+					t.Fatalf("expected no error for input %q, got %v", tt.input, err)
 				}
-				if local != tt.wantLocal || remote != tt.wantRemote {
-					t.Fatalf("input %q: got (%d, %d), want (%d, %d)", tt.input, local, remote, tt.wantLocal, tt.wantRemote)
+				if remote != tt.wantRemote || local != tt.wantLocal {
+					t.Errorf("for input %q: got remote=%d, local=%d; want remote=%d, local=%d",
+						tt.input, remote, local, tt.wantRemote, tt.wantLocal)
 				}
 			}
 		})
@@ -1607,8 +1609,8 @@ func TestRunRemoteWithPortForwarding(t *testing.T) {
 	if !capturedExecutor.forwardCalled {
 		t.Fatal("expected ForwardLocal to be called")
 	}
-	if capturedExecutor.localVal != 8080 || capturedExecutor.remoteVal != 9090 {
-		t.Fatalf("expected local=8080 remote=9090, got local=%d remote=%d", capturedExecutor.localVal, capturedExecutor.remoteVal)
+	if capturedExecutor.localVal != 9090 || capturedExecutor.remoteVal != 8080 {
+		t.Fatalf("expected local=9090 remote=8080, got local=%d remote=%d", capturedExecutor.localVal, capturedExecutor.remoteVal)
 	}
 }
 
