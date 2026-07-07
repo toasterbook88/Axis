@@ -16,7 +16,9 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -26,6 +28,7 @@ var formatChatCatalog = func(ctx context.Context, currentModel string) string {
 	return chat.FormatModelCatalog(chat.BuildModelCatalog(ctx, currentModel))
 }
 var chatEndpoint = chat.DefaultEndpoint
+var loadRuntimeContext = runtimectx.Load
 
 func chatCmd() *cobra.Command {
 	var (
@@ -58,7 +61,10 @@ func chatCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			currentModel := resolveChatModel(model)
+			// Load runtime context for auto-routing and context injection.
+			rt, _ := loadRuntimeContext(ctx)
+			
+			currentModel := resolveChatModel(model, rt)
 			if verbose && model == "" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
 			}
@@ -67,14 +73,35 @@ func chatCmd() *cobra.Command {
 
 			// Build optional cluster context.
 			var cluster *chat.ClusterSummaryForPrompt
-			if useContext {
-				if snap := loadSnapshotQuietly(ctx); snap != nil {
-					cluster = chat.BuildClusterSummary(snap)
+			if useContext && rt != nil && rt.Snapshot != nil {
+				cluster = chat.BuildClusterSummary(rt.Snapshot)
+			}
+
+			// --- Intelligent Auto-Routing (Phase E) ---
+			endpoint := chatEndpoint
+			if rt != nil && rt.Snapshot != nil && rt.State != nil {
+				reqs := placement.InferRequirements(fmt.Sprintf("ollama run %s", currentModel))
+				decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
+				if decision.OK && !decision.IsLocal {
+					if targetConfig, ok := rt.Config.FindNode(decision.Node); ok {
+						executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
+						defer executor.Close()
+						boundPort, stopForward, err := executor.ForwardLocal(ctx, 0, 11434)
+						if err != nil {
+							fmt.Fprintf(errW, "%s Failed to tunnel to %s: %v (falling back to local)\n", ui.Yellow("!"), decision.Node, err)
+						} else {
+							defer stopForward()
+							endpoint = fmt.Sprintf("http://127.0.0.1:%d", boundPort)
+							fmt.Fprintf(errW, "%s Auto-routed %s to %s (zero-latency inference tunnel active)\n", ui.Green("✓"), ui.Bold(currentModel), ui.Bold(decision.Node))
+						}
+					}
+				} else if decision.OK && decision.IsLocal && verbose {
+					fmt.Fprintf(errW, "Routed to local node (%s)\n", decision.Node)
 				}
 			}
 
 			// Build client and conversation.
-			client := chat.NewClient(chatEndpoint, currentModel)
+			client := chat.NewClient(endpoint, currentModel)
 			conv := chat.NewConversation(maxTokens)
 			sysPrompt := chat.BuildSystemPrompt(cluster, systemMsg)
 			conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
@@ -342,14 +369,14 @@ func chatRequestContext(parent context.Context, timeout time.Duration) (context.
 	return context.WithTimeout(parent, timeout)
 }
 
-func resolveChatModel(requested string) string {
-	return resolveChatModelFromPath(requested, config.DefaultConfigPath())
+func resolveChatModel(requested string, rt *runtimectx.Context) string {
+	return resolveChatModelFromPath(requested, config.DefaultConfigPath(), rt)
 }
 
 // resolveChatModelFromPath is the testable core of resolveChatModel. cfgPath
 // allows tests to inject a temporary config file without touching the real
 // ~/.axis/nodes.yaml.
-func resolveChatModelFromPath(requested, cfgPath string) string {
+func resolveChatModelFromPath(requested, cfgPath string, rt *runtimectx.Context) string {
 	// Explicit --model flag always wins.
 	if strings.TrimSpace(requested) != "" {
 		return strings.TrimSpace(requested)
@@ -362,7 +389,19 @@ func resolveChatModelFromPath(requested, cfgPath string) string {
 	} else if !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "warning: failed to load chat config from %s: %v\n", cfgPath, err)
 	}
-	// Auto-detect: pick the best available installed model.
+	// Auto-detect: pick the best available resident model across all nodes (warm cache awareness)
+	if rt != nil && rt.Snapshot != nil {
+		var allInstalled []string
+		for _, node := range rt.Snapshot.Nodes {
+			for _, m := range node.ResidentModels {
+				allInstalled = append(allInstalled, m.Name)
+			}
+		}
+		if best, ok := chat.ChoosePreferredModel(allInstalled); ok {
+			return best
+		}
+	}
+	// Fallback: pick the best available locally installed model.
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	return resolveDefaultChatModel(ctx)
