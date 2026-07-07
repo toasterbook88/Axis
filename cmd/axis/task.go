@@ -358,7 +358,7 @@ func taskRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&execFlag, "exec", false, "run raw command (required for safety)")
 	cmd.Flags().BoolVar(&scriptFlag, "script", false, "run multi-line script")
 	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show the execution plan without running anything")
-	cmd.Flags().StringVar(&exposePortFlag, "expose", "", "expose port: <remote>[:<local>] (e.g. 8080:8080 or just 8080)")
+	cmd.Flags().StringVar(&exposePortFlag, "expose-port", "", "expose port: <remote>[:<local>] (e.g. 8080:8080 or just 8080)")
 	cmd.Flags().Int64Var(&memoryRequestMB, "memory-request", 0, "explicit memory request in MB")
 	cmd.Flags().Int64Var(&memoryMaxMB, "memory-max", 0, "explicit memory max in MB")
 	return cmd
