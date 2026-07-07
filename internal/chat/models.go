@@ -52,7 +52,7 @@ type ollamaTagsResponse struct {
 func ResolveDefaultModel(ctx context.Context) string {
 	installed, err := listInstalledModels(ctx, defaultOllamaEndpoint)
 	if err == nil {
-		if best, ok := choosePreferredModel(installed); ok {
+		if best, ok := ChoosePreferredModel(installed); ok {
 			return best
 		}
 	}
@@ -71,7 +71,7 @@ func BuildModelCatalog(ctx context.Context, current string) ModelCatalog {
 	if err == nil {
 		catalog.InstalledAvailable = true
 		catalog.Installed = installed
-		if best, ok := choosePreferredModel(installed); ok {
+		if best, ok := ChoosePreferredModel(installed); ok {
 			catalog.Default = best
 		}
 	}
@@ -191,7 +191,7 @@ var nonToolFamilies = []string{
 	"gemma3n", // gemma3 supports tools; gemma3n does not
 }
 
-func choosePreferredModel(installed []string) (string, bool) {
+func ChoosePreferredModel(installed []string) (string, bool) {
 	// Prefer recommended models in priority order.
 	for _, candidate := range recommendedLocalModels {
 		if slices.Contains(installed, candidate.Name) {

@@ -34,7 +34,7 @@ chat:
 
 	// Resolve the model using the temporary config path directly so the test
 	// stays independent of the default config location.
-	got := resolveChatModelFromPath("", cfgPath)
+	got := resolveChatModelFromPath("", cfgPath, nil)
 	if got != "llama3.2:latest" {
 		t.Fatalf("resolveChatModel() = %q, want %q", got, "llama3.2:latest")
 	}

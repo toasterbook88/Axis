@@ -70,3 +70,6 @@ axis-current
 # Local state / one-off reports (not source)
 /.agent_state.json
 /agent-collab-evaluation-map.html
+.obsidian/
+*.base
+*.canvas
