@@ -1,5 +1,24 @@
 ## Unreleased
 
+## v0.13.0 (2026-07-07)
+
+### 🚀 Features
+
+* **Routing & Placement:**
+  * Implement Intelligent Auto-Routing for `axis chat` with zero-latency SSH tunneling and `modelWarmthRank` support.
+  * Implement v2 placement endpoints.
+* **Execution & Safety:**
+  * Add `--expose-port` flag for task execution.
+  * Swap old blocker with the new Structured Safety Engine.
+* **UX & Networking:**
+  * Zero-config Tailscale auto-discovery for cluster setup.
+  * Agent REPL UX improvements.
+
+### 🔧 Maintenance
+
+* Update Go dependencies.
+* Save/speed class allocations optimizations.
+
 ## v0.12.3 (2026-06-29)
 
 ### 🚀 Features
