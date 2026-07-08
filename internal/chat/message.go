@@ -133,3 +133,57 @@ func (c *Conversation) compactOldest() {
 		}
 	}
 }
+
+// SummarizableMessages returns messages older than the last `protectLast`
+// that are candidates for LLM-backed summarization. System messages are
+// excluded (they are always preserved verbatim). The returned slice is a
+// copy; indices refer to positions in the current message list.
+func (c *Conversation) SummarizableMessages(protectLast int) []Message {
+	n := len(c.messages) - protectLast
+	if n < 0 {
+		n = 0
+	}
+	var out []Message
+	for i, m := range c.messages {
+		if i >= n {
+			break
+		}
+		if m.Role == RoleSystem {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// ReplaceRange replaces c.messages[start:end] with the given replacement
+// messages. Indices are clamped to valid bounds. A no-op if start > end.
+func (c *Conversation) ReplaceRange(start, end int, replacement []Message) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(c.messages) {
+		end = len(c.messages)
+	}
+	if start > end {
+		return
+	}
+	tail := c.messages[end:]
+	head := c.messages[:start]
+	merged := make([]Message, 0, len(head)+len(replacement)+len(tail))
+	merged = append(merged, head...)
+	merged = append(merged, replacement...)
+	merged = append(merged, tail...)
+	c.messages = merged
+}
+
+// FirstNonSystemIndex returns the index of the first message that is not a
+// system message, or -1 if all messages are system messages.
+func (c *Conversation) FirstNonSystemIndex() int {
+	for i, m := range c.messages {
+		if m.Role != RoleSystem {
+			return i
+		}
+	}
+	return -1
+}
