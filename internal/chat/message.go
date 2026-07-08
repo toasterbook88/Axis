@@ -73,6 +73,14 @@ func (c *Conversation) Clear() {
 	c.messages = kept
 }
 
+// RestoreAll replaces the entire message list with the given messages. Used
+// by rollback_session to rewind the conversation to a prior snapshot. The
+// caller is responsible for ensuring the snapshot is a valid conversation
+// (e.g. starts with a system message).
+func (c *Conversation) RestoreAll(msgs []Message) {
+	c.messages = append([]Message(nil), msgs...)
+}
+
 // Len returns the number of messages.
 func (c *Conversation) Len() int { return len(c.messages) }
 
