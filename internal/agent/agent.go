@@ -160,6 +160,8 @@ func New(cfg Config) *Agent {
 		"- `symbol_search` to find symbol definitions (functions/types/consts) by name — Go-aware via AST, generic for other languages.\n" +
 		"- `run_shell` to execute a shell command.\n" +
 		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control.\n" +
+		"- `run_on_node` to run a shell command on a specific named cluster node via SSH (e.g. tests on nixos, a build on foundry).\n" +
+		"- `remote_read_file` / `remote_grep` / `remote_list` to read files, grep, and list directories on remote cluster nodes (read-only, no confirmation).\n" +
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +
@@ -167,6 +169,7 @@ func New(cfg Config) *Agent {
 		"- `review_changes` to review uncommitted changes the session has made.\n" +
 		"- `web_fetch` to fetch a URL and return readable text (docs, issues, articles, endpoints).\n" +
 		"- `web_search` to search the web (DuckDuckGo, no API key needed) and return top results.\n" +
+		"\nYou operate across a cluster of computers. A live cluster snapshot (node health, free memory, resident models) is provided each turn — use it to choose the right node for work (e.g. GPU tasks on the GPU node, avoid nodes under memory pressure) and to adapt if a node's state changes.\n" +
 		"\nFor multi-step work, use the `todo` tool to break the task into a tracked plan and mark progress as you go (ops: init, append, start, done, drop, view). This keeps long tasks organized.\n" +
 		"\nExternal capabilities and MCP services are auto-registered. You can invoke any external tool prefixed with `mcp_` (e.g. `mcp_cortex_recall` or `mcp_cortex_remember` to interact with the Cortex shared vector memory).\n"
 
@@ -261,6 +264,27 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 				}
 			} else {
 				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: evidence}}, clonedMsgs...)
+			}
+		}
+		// Inject a live cluster snapshot so the agent continuously knows node
+		// health, free memory, and resident models — and can adapt placement
+		// mid-task (e.g. reroute when a node hits memory pressure).
+		if clusterCtx := a.clusterContextSnippet(); clusterCtx != "" {
+			systemMsgIdx := -1
+			for i, m := range clonedMsgs {
+				if m.Role == chat.RoleSystem {
+					systemMsgIdx = i
+					break
+				}
+			}
+			if systemMsgIdx >= 0 {
+				if clonedMsgs[systemMsgIdx].Content != "" {
+					clonedMsgs[systemMsgIdx].Content += "\n\n" + clusterCtx
+				} else {
+					clonedMsgs[systemMsgIdx].Content = clusterCtx
+				}
+			} else {
+				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: clusterCtx}}, clonedMsgs...)
 			}
 		}
 
@@ -886,6 +910,24 @@ func truncatePayload(payload string, maxBytes int) string {
 		truncateIdx = idx
 	}
 	return payload[:truncateIdx] + "..."
+}
+
+// clusterContextSnippet returns a compact live cluster snapshot for injection
+// into the system prompt each turn, so the agent stays aware of node health,
+// free memory, and resident models and can adapt placement mid-task.
+func (a *Agent) clusterContextSnippet() string {
+	if a.toolContext == nil {
+		return ""
+	}
+	view := a.toolContext.GetView()
+	if view == nil || view.Snapshot == nil {
+		return ""
+	}
+	summary := summarizeSnapshot(view.Snapshot)
+	if summary == "" {
+		return ""
+	}
+	return "<live_cluster_context>\n" + summary + "\n</live_cluster_context>"
 }
 
 func (a *Agent) retrieveEvidence(userPrompt string) string {
