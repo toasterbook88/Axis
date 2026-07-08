@@ -126,6 +126,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerShell()
 	r.registerGitTools()
 	r.registerRemoteExecutionTool()
+	r.registerSubAgent()
 	r.registerRunOnNode(tc)
 	r.registerRemoteReadFile(tc)
 	r.registerRemoteGrep(tc)

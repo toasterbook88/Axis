@@ -67,9 +67,10 @@ type Agent struct {
 	mcpRegistry *mcpclient.Registry
 	// dispatchMu serializes operator confirmation prompts and the shared
 	// autoApproveAll/blockAll state across concurrent tool dispatches. The
-	// expensive execution (tool exec, shell, remote task) runs unlocked so
-	// independent calls proceed in parallel.
 	dispatchMu sync.Mutex
+	// subAgentDepth tracks nesting of spawn_subagent calls to prevent runaway
+	// recursion. The root agent is depth 0; children inherit depth+1.
+	subAgentDepth int
 }
 
 // Config configures an Agent.
@@ -162,6 +163,7 @@ func New(cfg Config) *Agent {
 		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control.\n" +
 		"- `run_on_node` to run a shell command on a specific named cluster node via SSH (e.g. tests on nixos, a build on foundry).\n" +
 		"- `remote_read_file` / `remote_grep` / `remote_list` to read files, grep, and list directories on remote cluster nodes (read-only, no confirmation).\n" +
+		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node — use this to parallelize work across nodes (e.g. tests on nixos while a build runs on foundry).\n" +
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +
@@ -501,6 +503,9 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	}
 	if name == "axis_run_task" {
 		return a.dispatchRunTask(ctx, args)
+	}
+	if name == "spawn_subagent" {
+		return a.dispatchSubagent(ctx, args)
 	}
 
 	// 3.5. Confirmation for mutating tools (e.g. write_file, edit_file, or mutating MCP tools).
