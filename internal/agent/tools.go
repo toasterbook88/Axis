@@ -34,6 +34,9 @@ type ToolRegistry struct {
 	// todos is the session-scoped todo list, owned by the registry so the
 	// todo tool persists state across turns without external plumbing.
 	todos *todoStore
+	// checkpoints snapshots file content before each mutation so undo_last
+	// and review_changes can recover prior state within a session.
+	checkpoints *checkpointer
 }
 
 // ToolExecutor runs a tool and returns its string result.
@@ -106,8 +109,9 @@ func (tc *ToolContext) GetView() *RuntimeView {
 // output. CLI callers can route this through guarded AXIS execution.
 type ShellRunner func(context.Context, string) (string, error)
 
+// NewToolRegistry creates the default set of agent tools.
 func NewToolRegistry(tc *ToolContext) *ToolRegistry {
-	r := &ToolRegistry{executors: make(map[string]ToolExecutor), todos: newTodoStore()}
+	r := &ToolRegistry{executors: make(map[string]ToolExecutor), todos: newTodoStore(), checkpoints: newCheckpointer()}
 	r.registerStatus(tc)
 	r.registerFacts(tc)
 	r.registerPlace(tc)
@@ -123,6 +127,11 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerGitTools()
 	r.registerRemoteExecutionTool()
 	r.registerTodo(r.todos)
+	r.registerUndoLast()
+	r.registerReviewChanges()
+	r.registerWebFetch()
+	r.registerWebSearch()
+	r.registerSymbolSearch()
 	return r
 }
 
@@ -589,6 +598,7 @@ func (r *ToolRegistry) registerWriteFile() {
 			if err := os.MkdirAll(filepath.Dir(clean), 0755); err != nil {
 				return "", fmt.Errorf("cannot create parent directory: %w", err)
 			}
+			r.checkpoints.snapshot(clean)
 			if err := os.WriteFile(clean, []byte(a.Content), 0644); err != nil {
 				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
 			}
@@ -660,6 +670,7 @@ func (r *ToolRegistry) registerEditFile() {
 			if err != nil {
 				return "", fmt.Errorf("edit_file %q: %w", clean, err)
 			}
+			r.checkpoints.snapshot(clean)
 			if err := os.WriteFile(clean, []byte(newContent), 0644); err != nil {
 				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
 			}
@@ -729,6 +740,7 @@ func (r *ToolRegistry) registerMultiEdit() {
 				}
 				content = next
 			}
+			r.checkpoints.snapshot(clean)
 			if err := os.WriteFile(clean, []byte(content), 0644); err != nil {
 				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
 			}

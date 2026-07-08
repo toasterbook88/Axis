@@ -102,7 +102,8 @@ func IsReadOnlyTool(name string) bool {
 func isReadOnlyTool(name string) bool {
 	switch name {
 	case "axis_status", "axis_facts", "axis_place", "axis_summary",
-		"axis_reservations", "read_file", "list_directory", "grep_search", "todo":
+		"axis_reservations", "read_file", "list_directory", "grep_search",
+		"todo", "symbol_search", "web_fetch", "web_search", "review_changes":
 		return true
 	}
 	if strings.HasPrefix(name, "mcp_") {
