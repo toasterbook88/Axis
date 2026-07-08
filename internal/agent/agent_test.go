@@ -124,8 +124,8 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 	expected := []string{
 		"axis_status", "axis_facts", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "write_file", "edit_file",
-		"list_directory", "grep_search", "run_shell",
-		"git_status", "git_diff", "git_log", "axis_run_task",
+		"multi_edit", "list_directory", "grep_search", "run_shell",
+		"git_status", "git_diff", "git_log", "axis_run_task", "todo",
 	}
 	for _, name := range expected {
 		if !r.HasTool(name) {

@@ -153,7 +153,8 @@ func New(cfg Config) *Agent {
 		"\nYou have first-class tools to inspect and modify the workspace directly:\n" +
 		"- `read_file` to read the contents of a file.\n" +
 		"- `write_file` to create or overwrite a file with new content.\n" +
-		"- `edit_file` to replace a specific, unique block of text inside a file.\n" +
+		"- `edit_file` to replace a specific block of text inside a file (unique by default; set replace_all=true to replace every occurrence).\n" +
+		"- `multi_edit` to apply several text replacements to one file in a single call — prefer this over repeated edit_file calls.\n" +
 		"- `list_directory` to list directory entries.\n" +
 		"- `grep_search` to find a pattern or query recursively within text files.\n" +
 		"- `run_shell` to execute a shell command.\n" +
@@ -161,6 +162,7 @@ func New(cfg Config) *Agent {
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +
+		"\nFor multi-step work, use the `todo` tool to break the task into a tracked plan and mark progress as you go (ops: init, append, start, done, drop, view). This keeps long tasks organized.\n" +
 		"\nExternal capabilities and MCP services are auto-registered. You can invoke any external tool prefixed with `mcp_` (e.g. `mcp_cortex_recall` or `mcp_cortex_remember` to interact with the Cortex shared vector memory).\n"
 
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})

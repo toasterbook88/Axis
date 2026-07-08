@@ -31,6 +31,9 @@ import (
 type ToolRegistry struct {
 	defs      []chat.ToolDef
 	executors map[string]ToolExecutor
+	// todos is the session-scoped todo list, owned by the registry so the
+	// todo tool persists state across turns without external plumbing.
+	todos *todoStore
 }
 
 // ToolExecutor runs a tool and returns its string result.
@@ -103,9 +106,8 @@ func (tc *ToolContext) GetView() *RuntimeView {
 // output. CLI callers can route this through guarded AXIS execution.
 type ShellRunner func(context.Context, string) (string, error)
 
-// NewToolRegistry creates the default set of agent tools.
 func NewToolRegistry(tc *ToolContext) *ToolRegistry {
-	r := &ToolRegistry{executors: make(map[string]ToolExecutor)}
+	r := &ToolRegistry{executors: make(map[string]ToolExecutor), todos: newTodoStore()}
 	r.registerStatus(tc)
 	r.registerFacts(tc)
 	r.registerPlace(tc)
@@ -114,11 +116,13 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerReadFile()
 	r.registerWriteFile()
 	r.registerEditFile()
+	r.registerMultiEdit()
 	r.registerListDirectory()
 	r.registerGrepSearch()
 	r.registerShell()
 	r.registerGitTools()
 	r.registerRemoteExecutionTool()
+	r.registerTodo(r.todos)
 	return r
 }
 
@@ -599,17 +603,40 @@ type editFileArgs struct {
 	Path               string `json:"path"`
 	TargetContent      string `json:"target_content"`
 	ReplacementContent string `json:"replacement_content"`
+	ReplaceAll         bool   `json:"replace_all,omitempty"`
+}
+
+// applyStrReplace performs a single string replacement on content. When
+// replaceAll is false the old string must occur exactly once (anchor-unique),
+// otherwise an error is returned so the caller can self-correct rather than
+// silently editing the wrong location.
+func applyStrReplace(content, old, new string, replaceAll bool) (string, error) {
+	if old == "" {
+		return "", fmt.Errorf("old_string/target_content is empty")
+	}
+	count := strings.Count(content, old)
+	if count == 0 {
+		return "", fmt.Errorf("target text not found in file (0 occurrences)")
+	}
+	if !replaceAll && count > 1 {
+		return "", fmt.Errorf("target text is not unique (found %d occurrences); set replace_all=true to replace all, or provide more surrounding context to make it unique", count)
+	}
+	if replaceAll {
+		return strings.ReplaceAll(content, old, new), nil
+	}
+	return strings.Replace(content, old, new, 1), nil
 }
 
 func (r *ToolRegistry) registerEditFile() {
 	r.add("edit_file",
-		"Replace a specific block of text in an existing file. The target_content must match exactly and be unique within the file.",
+		"Replace a specific block of text in an existing file. The target_content must match exactly. By default it must be unique in the file; set replace_all=true to replace every occurrence. For multiple edits to the same file, prefer multi_edit.",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
 				"path":{"type":"string","description":"Relative or absolute file path"},
 				"target_content":{"type":"string","description":"The exact block of text to be replaced"},
-				"replacement_content":{"type":"string","description":"The new text to replace the target block"}
+				"replacement_content":{"type":"string","description":"The new text to replace the target block"},
+				"replace_all":{"type":"boolean","description":"Replace every occurrence (default false, requires unique match)","default":false}
 			},
 			"required":["path","target_content","replacement_content"]
 		}`),
@@ -629,19 +656,83 @@ func (r *ToolRegistry) registerEditFile() {
 			if err != nil {
 				return "", fmt.Errorf("cannot read file %q: %w", clean, err)
 			}
-			content := string(data)
-			count := strings.Count(content, a.TargetContent)
-			if count == 0 {
-				return "", fmt.Errorf("target_content not found in file %q", clean)
+			newContent, err := applyStrReplace(string(data), a.TargetContent, a.ReplacementContent, a.ReplaceAll)
+			if err != nil {
+				return "", fmt.Errorf("edit_file %q: %w", clean, err)
 			}
-			if count > 1 {
-				return "", fmt.Errorf("target_content is not unique in file %q (found %d occurrences)", clean, count)
-			}
-			newContent := strings.Replace(content, a.TargetContent, a.ReplacementContent, 1)
 			if err := os.WriteFile(clean, []byte(newContent), 0644); err != nil {
 				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
 			}
+			n := strings.Count(string(data), a.TargetContent)
+			if a.ReplaceAll {
+				return fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path), nil
+			}
 			return fmt.Sprintf("Successfully replaced target content in %s", a.Path), nil
+		},
+	)
+}
+
+// --- Tool: multi_edit ---
+
+type multiEditArgs struct {
+	Path  string `json:"path"`
+	Edits []struct {
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all,omitempty"`
+	} `json:"edits"`
+}
+
+func (r *ToolRegistry) registerMultiEdit() {
+	r.add("multi_edit",
+		"Apply multiple text replacements to a single file in one call. Each edit replaces old_string with new_string; edits apply in order to the evolving content. By default each old_string must be unique at apply time; set replace_all=true on an edit to replace all occurrences. The file is written once after all edits succeed. Prefer this over repeated edit_file calls to cut round-trips.",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"path":{"type":"string","description":"Relative or absolute file path"},
+				"edits":{"type":"array","items":{
+					"type":"object",
+					"properties":{
+						"old_string":{"type":"string","description":"Exact text to find"},
+						"new_string":{"type":"string","description":"Replacement text"},
+						"replace_all":{"type":"boolean","description":"Replace all occurrences (default false, unique match required)","default":false}
+					},
+					"required":["old_string","new_string"]
+				}}
+			},
+			"required":["path","edits"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a multiEditArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for multi_edit: %w", err)
+			}
+			if a.Path == "" {
+				return "", fmt.Errorf("multi_edit requires a non-empty \"path\" argument")
+			}
+			if len(a.Edits) == 0 {
+				return "", fmt.Errorf("multi_edit requires at least one edit")
+			}
+			clean, err := validateToolPath(a.Path)
+			if err != nil {
+				return "", err
+			}
+			data, err := os.ReadFile(clean)
+			if err != nil {
+				return "", fmt.Errorf("cannot read file %q: %w", clean, err)
+			}
+			content := string(data)
+			for i, e := range a.Edits {
+				next, err := applyStrReplace(content, e.OldString, e.NewString, e.ReplaceAll)
+				if err != nil {
+					return "", fmt.Errorf("multi_edit %q edit #%d: %w", clean, i+1, err)
+				}
+				content = next
+			}
+			if err := os.WriteFile(clean, []byte(content), 0644); err != nil {
+				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
+			}
+			return fmt.Sprintf("Applied %d edit(s) to %s", len(a.Edits), a.Path), nil
 		},
 	)
 }
