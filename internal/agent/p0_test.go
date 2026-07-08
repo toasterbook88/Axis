@@ -80,7 +80,7 @@ func TestParallelToolDispatchRunsConcurrently(t *testing.T) {
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			i := atomic.AddInt32(&idx, 1) - 1
 			cur := atomic.AddInt32(&inFlight, 1)
-			if cur > maxInFlight {
+			if cur > atomic.LoadInt32(&maxInFlight) {
 				atomic.StoreInt32(&maxInFlight, cur)
 			}
 			startTimes[i] = time.Now()
