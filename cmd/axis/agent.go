@@ -51,6 +51,7 @@ func agentCmd() *cobra.Command {
 		maxTokens               int
 		maxTurns                int
 		autoApprove             bool
+		autonomy                string
 		systemMsg               string
 		resume                  bool
 		verbose                 bool
@@ -74,6 +75,9 @@ func agentCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+			if _, err := agent.ParseAutonomyMode(autonomy); err != nil {
+				return err
+			}
 
 			var a *agent.Agent
 			defer func() {
@@ -364,7 +368,7 @@ func agentCmd() *cobra.Command {
 				MaxTurns:                maxTurns,
 				MaxTokens:               maxTokens,
 				AutoApprove:             autoApprove,
-				SystemExtra:             systemMsg,
+				Autonomy:                agent.AutonomyMode(autonomy),
 				Verbose:                 verbose,
 				DryRun:                  dryRun,
 				AllowRawCommandEvidence: allowRawCommandEvidence,
@@ -420,7 +424,7 @@ func agentCmd() *cobra.Command {
 			if mcpReg != nil {
 				mcpCount = len(mcpReg.Names())
 			}
-			printAgentSessionDetails(errW, currentModel, providerName, autoApprove, mcpCount, maxTurns)
+			printAgentSessionDetails(errW, currentModel, providerName, autoApprove, autonomy, mcpCount, maxTurns)
 
 			var completerItems []readline.PrefixCompleterInterface
 			completerItems = append(completerItems,
@@ -525,6 +529,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
+	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but safety-blocked)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Emit trace output for tool calls and turns")
@@ -1608,10 +1613,17 @@ func sanitizeDiagnosticsText(s string) string {
 	return redactSecrets(s)
 }
 
-func printAgentSessionDetails(w io.Writer, model string, provider string, autoApprove bool, mcpCount int, maxTurns int) {
+func printAgentSessionDetails(w io.Writer, model string, provider string, autoApprove bool, autonomy string, mcpCount int, maxTurns int) {
 	safetyStr := "Strict Operator Approval"
 	if autoApprove {
 		safetyStr = "Auto-Approve safe (<70)"
+	}
+	// Autonomy mode overrides the safety-gate label when set.
+	switch agent.AutonomyMode(autonomy) {
+	case agent.AutonomyEdit:
+		safetyStr = "Autonomy: edit (auto-approve edits)"
+	case agent.AutonomyFull:
+		safetyStr = "Autonomy: full (auto-approve all but safety-blocked)"
 	}
 	mcpStr := "None connected"
 	if mcpCount > 0 {
