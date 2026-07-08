@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
@@ -21,6 +22,11 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/ui"
 )
+
+// maxParallelTools caps the number of tool calls dispatched concurrently
+// within a single agent turn. Prevents fan-out from overwhelming local
+// resources (file handles, SSH connections, subprocesses).
+const maxParallelTools = 6
 
 // TaskRequest represents the arguments for a cluster task execution.
 type TaskRequest struct {
@@ -59,6 +65,12 @@ type Agent struct {
 	// blockAll is toggled when the operator selects "never" in confirmation.
 	blockAll    bool
 	mcpRegistry *mcpclient.Registry
+	// dispatchMu serializes operator confirmation prompts and the shared
+	// autoApproveAll/blockAll state across concurrent tool dispatches. The
+	dispatchMu sync.Mutex
+	// subAgentDepth tracks nesting of spawn_subagent calls to prevent runaway
+	// recursion. The root agent is depth 0; children inherit depth+1.
+	subAgentDepth int
 }
 
 // Config configures an Agent.
@@ -142,14 +154,25 @@ func New(cfg Config) *Agent {
 		"\nYou have first-class tools to inspect and modify the workspace directly:\n" +
 		"- `read_file` to read the contents of a file.\n" +
 		"- `write_file` to create or overwrite a file with new content.\n" +
-		"- `edit_file` to replace a specific, unique block of text inside a file.\n" +
+		"- `edit_file` to replace a specific block of text inside a file (unique by default; set replace_all=true to replace every occurrence).\n" +
+		"- `multi_edit` to apply several text replacements to one file in a single call — prefer this over repeated edit_file calls.\n" +
 		"- `list_directory` to list directory entries.\n" +
 		"- `grep_search` to find a pattern or query recursively within text files.\n" +
+		"- `symbol_search` to find symbol definitions (functions/types/consts) by name — Go-aware via AST, generic for other languages.\n" +
 		"- `run_shell` to execute a shell command.\n" +
 		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control.\n" +
+		"- `run_on_node` to run a shell command on a specific named cluster node via SSH (e.g. tests on nixos, a build on foundry).\n" +
+		"- `remote_read_file` / `remote_grep` / `remote_list` to read files, grep, and list directories on remote cluster nodes (read-only, no confirmation).\n" +
+		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node — use this to parallelize work across nodes (e.g. tests on nixos while a build runs on foundry).\n" +
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +
+		"- `undo_last` to undo the most recent file edit (restores prior content from the session checkpoint).\n" +
+		"- `review_changes` to review uncommitted changes the session has made.\n" +
+		"- `web_fetch` to fetch a URL and return readable text (docs, issues, articles, endpoints).\n" +
+		"- `web_search` to search the web (DuckDuckGo, no API key needed) and return top results.\n" +
+		"\nYou operate across a cluster of computers. A live cluster snapshot (node health, free memory, resident models) is provided each turn — use it to choose the right node for work (e.g. GPU tasks on the GPU node, avoid nodes under memory pressure) and to adapt if a node's state changes.\n" +
+		"\nFor multi-step work, use the `todo` tool to break the task into a tracked plan and mark progress as you go (ops: init, append, start, done, drop, view). This keeps long tasks organized.\n" +
 		"\nExternal capabilities and MCP services are auto-registered. You can invoke any external tool prefixed with `mcp_` (e.g. `mcp_cortex_recall` or `mcp_cortex_remember` to interact with the Cortex shared vector memory).\n"
 
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
@@ -214,6 +237,11 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 		if a.verbose {
 			fmt.Fprintf(a.output, "\n%s\n", ui.Dim(fmt.Sprintf("─── Turn %d/%d ──────────────────────────────────────────────────", turn+1, a.maxTurns)))
 		}
+		// Proactively compress older conversation turns before sending context
+		// to the model, so long sessions stay within the token budget.
+		if err := a.compactContext(ctx); err != nil && a.verbose {
+			fmt.Fprintf(a.output, "  %s compaction skipped: %v\n", ui.Dim("♻"), err)
+		}
 		msgs := a.conv.Messages()
 		toolDefs := a.tools.Defs()
 
@@ -240,6 +268,27 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: evidence}}, clonedMsgs...)
 			}
 		}
+		// Inject a live cluster snapshot so the agent continuously knows node
+		// health, free memory, and resident models — and can adapt placement
+		// mid-task (e.g. reroute when a node hits memory pressure).
+		if clusterCtx := a.clusterContextSnippet(); clusterCtx != "" {
+			systemMsgIdx := -1
+			for i, m := range clonedMsgs {
+				if m.Role == chat.RoleSystem {
+					systemMsgIdx = i
+					break
+				}
+			}
+			if systemMsgIdx >= 0 {
+				if clonedMsgs[systemMsgIdx].Content != "" {
+					clonedMsgs[systemMsgIdx].Content += "\n\n" + clusterCtx
+				} else {
+					clonedMsgs[systemMsgIdx].Content = clusterCtx
+				}
+			} else {
+				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: clusterCtx}}, clonedMsgs...)
+			}
+		}
 
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
@@ -256,7 +305,11 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 			return nil
 		}
 
-		// Process each tool call.
+		// Process tool calls. Dry-run calls are handled inline (instant); live
+		// calls dispatch concurrently with a bounded worker pool so independent
+		// reads/runs proceed in parallel. Results are appended to the conversation
+		// in the original tool-call order so tool_call_id alignment is preserved.
+		var liveCalls []chat.ToolCall
 		for _, tc := range resp.ToolCalls {
 			fmt.Fprintf(a.output, "\n%s Calling %s...\n", ui.Cyan("▶"), ui.Bold(tc.Function.Name))
 			if a.verbose && len(tc.Function.Arguments) > 0 {
@@ -271,30 +324,63 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 				})
 				continue
 			}
-			result, err := a.dispatchToolCall(ctx, tc)
-			if err != nil {
-				// Feed the error back to the model for self-correction.
-				errMsg := fmt.Sprintf("Error executing tool %q: %s", tc.Function.Name, err.Error())
-				fmt.Fprintf(a.output, "  %s %s\n", ui.Red("⚠"), errMsg)
+			liveCalls = append(liveCalls, tc)
+		}
+
+		if len(liveCalls) > 0 {
+			type toolResult struct {
+				result string
+				err    error
+			}
+			results := make([]toolResult, len(liveCalls))
+			var outMu sync.Mutex
+			var wg sync.WaitGroup
+			concurrency := len(liveCalls)
+			if concurrency > maxParallelTools {
+				concurrency = maxParallelTools
+			}
+			sem := make(chan struct{}, concurrency)
+			for i, tc := range liveCalls {
+				wg.Add(1)
+				go func(i int, tc chat.ToolCall) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					result, err := a.dispatchToolCall(ctx, tc)
+					outMu.Lock()
+					if err != nil {
+						errMsg := fmt.Sprintf("Error executing tool %q: %s", tc.Function.Name, err.Error())
+						fmt.Fprintf(a.output, "  %s %s\n", ui.Red("⚠"), errMsg)
+					} else {
+						summary := formatToolResultSummary(tc.Function.Name, result)
+						fmt.Fprintf(a.output, "%s %s\n", ui.Green("✓"), summary)
+						if a.verbose {
+							fmt.Fprintf(a.output, "  %s Result: %d chars\n", ui.Dim("←"), len(result))
+						}
+					}
+					outMu.Unlock()
+					results[i] = toolResult{result: result, err: err}
+				}(i, tc)
+			}
+			wg.Wait()
+
+			// Append to conversation in original order (tool_call_id alignment).
+			for i, tc := range liveCalls {
+				if results[i].err != nil {
+					errMsg := fmt.Sprintf("Error executing tool %q: %s", tc.Function.Name, results[i].err.Error())
+					a.conv.Append(chat.Message{
+						Role:       chat.RoleTool,
+						ToolCallID: tc.ID,
+						Content:    errMsg,
+					})
+					continue
+				}
 				a.conv.Append(chat.Message{
 					Role:       chat.RoleTool,
 					ToolCallID: tc.ID,
-					Content:    errMsg,
+					Content:    results[i].result,
 				})
-				continue
 			}
-
-			// Print a compact summary line instead of raw char count.
-			summary := formatToolResultSummary(tc.Function.Name, result)
-			fmt.Fprintf(a.output, "%s %s\n", ui.Green("✓"), summary)
-			if a.verbose {
-				fmt.Fprintf(a.output, "  %s Result: %d chars\n", ui.Dim("←"), len(result))
-			}
-			a.conv.Append(chat.Message{
-				Role:       chat.RoleTool,
-				ToolCallID: tc.ID,
-				Content:    result,
-			})
 		}
 	}
 
@@ -403,7 +489,10 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	}
 
 	if clusterTools[name] && a.toolContext != nil && a.toolContext.Reload != nil {
-		if err := a.toolContext.ReloadCurrent(ctx); err != nil {
+		a.dispatchMu.Lock()
+		err := a.toolContext.ReloadCurrent(ctx)
+		a.dispatchMu.Unlock()
+		if err != nil {
 			return "", fmt.Errorf("failed to refresh cluster runtime context: %w", err)
 		}
 	}
@@ -415,66 +504,83 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	if name == "axis_run_task" {
 		return a.dispatchRunTask(ctx, args)
 	}
+	if name == "spawn_subagent" {
+		return a.dispatchSubagent(ctx, args)
+	}
 
 	// 3.5. Confirmation for mutating tools (e.g. write_file, edit_file, or mutating MCP tools).
-	if !isReadOnlyTool(name) && !a.autoApproveAll {
-		if a.blockAll {
-			return "", fmt.Errorf("operator has blocked all tool execution for this session")
-		}
-
-		description := fmt.Sprintf("Execute tool %s with arguments: %s", name, string(args))
-		if name == "write_file" {
-			var wArgs struct {
-				Path    string `json:"path"`
-				Content string `json:"content"`
+	// Serialized across concurrent dispatches so operator prompts never interleave
+	// and the autoApproveAll/blockAll toggles are race-free. The expensive tool
+	// execution below runs unlocked so independent calls stay parallel.
+	if !isReadOnlyTool(name) {
+		a.dispatchMu.Lock()
+		approved := a.autoApproveAll
+		blocked := a.blockAll
+		a.dispatchMu.Unlock()
+		if !approved {
+			a.dispatchMu.Lock()
+			if blocked || a.blockAll {
+				a.dispatchMu.Unlock()
+				return "", fmt.Errorf("operator has blocked all tool execution for this session")
 			}
-			if err := json.Unmarshal(args, &wArgs); err == nil && wArgs.Path != "" {
-				cleanPath, err := validateToolPathForWrite(wArgs.Path)
-				if err == nil {
-					if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
-						oldContent, err := os.ReadFile(cleanPath)
-						if err == nil {
-							diffText := ui.FormatDiff(string(oldContent), wArgs.Content)
-							description = fmt.Sprintf("Overwrite file %s\n\nProposed Changes:\n%s", wArgs.Path, diffText)
-						}
-					} else {
-						// New file
-						var preview []string
-						lines := strings.Split(wArgs.Content, "\n")
-						for i, l := range lines {
-							if i >= 10 {
-								preview = append(preview, ui.DimColor.Sprint("... (truncated)"))
-								break
+
+			description := fmt.Sprintf("Execute tool %s with arguments: %s", name, string(args))
+			if name == "write_file" {
+				var wArgs struct {
+					Path    string `json:"path"`
+					Content string `json:"content"`
+				}
+				if err := json.Unmarshal(args, &wArgs); err == nil && wArgs.Path != "" {
+					cleanPath, err := validateToolPathForWrite(wArgs.Path)
+					if err == nil {
+						if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
+							oldContent, err := os.ReadFile(cleanPath)
+							if err == nil {
+								diffText := ui.FormatDiff(string(oldContent), wArgs.Content)
+								description = fmt.Sprintf("Overwrite file %s\n\nProposed Changes:\n%s", wArgs.Path, diffText)
 							}
-							preview = append(preview, ui.GreenColor.Sprint("+ "+l))
+						} else {
+							// New file
+							var preview []string
+							lines := strings.Split(wArgs.Content, "\n")
+							for i, l := range lines {
+								if i >= 10 {
+									preview = append(preview, ui.DimColor.Sprint("... (truncated)"))
+									break
+								}
+								preview = append(preview, ui.GreenColor.Sprint("+ "+l))
+							}
+							description = fmt.Sprintf("Create new file %s\n\nProposed Content:\n%s", wArgs.Path, strings.Join(preview, "\n"))
 						}
-						description = fmt.Sprintf("Create new file %s\n\nProposed Content:\n%s", wArgs.Path, strings.Join(preview, "\n"))
 					}
 				}
+			} else if name == "edit_file" {
+				var eArgs struct {
+					Path               string `json:"path"`
+					TargetContent      string `json:"target_content"`
+					ReplacementContent string `json:"replacement_content"`
+				}
+				if err := json.Unmarshal(args, &eArgs); err == nil && eArgs.Path != "" {
+					diffText := ui.FormatDiff(eArgs.TargetContent, eArgs.ReplacementContent)
+					description = fmt.Sprintf("Edit file %s\n\nProposed Changes:\n%s", eArgs.Path, diffText)
+				}
 			}
-		} else if name == "edit_file" {
-			var eArgs struct {
-				Path               string `json:"path"`
-				TargetContent      string `json:"target_content"`
-				ReplacementContent string `json:"replacement_content"`
-			}
-			if err := json.Unmarshal(args, &eArgs); err == nil && eArgs.Path != "" {
-				diffText := ui.FormatDiff(eArgs.TargetContent, eArgs.ReplacementContent)
-				description = fmt.Sprintf("Edit file %s\n\nProposed Changes:\n%s", eArgs.Path, diffText)
-			}
-		}
 
-		decision := a.confirm(name, description, 0)
-		switch decision {
-		case ConfirmNo:
-			return "", fmt.Errorf("operator declined to execute tool: %s", name)
-		case ConfirmAlways:
-			a.autoApproveAll = true
-		case ConfirmNever:
-			a.blockAll = true
-			return "", fmt.Errorf("operator has blocked all tool execution for this session")
-		case ConfirmYes:
-			// proceed
+			decision := a.confirm(name, description, 0)
+			switch decision {
+			case ConfirmNo:
+				a.dispatchMu.Unlock()
+				return "", fmt.Errorf("operator declined to execute tool: %s", name)
+			case ConfirmAlways:
+				a.autoApproveAll = true
+				a.dispatchMu.Unlock()
+			case ConfirmNever:
+				a.blockAll = true
+				a.dispatchMu.Unlock()
+				return "", fmt.Errorf("operator has blocked all tool execution for this session")
+			case ConfirmYes:
+				a.dispatchMu.Unlock()
+			}
 		}
 	}
 
@@ -493,9 +599,12 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	}
 
 	// Session-level block.
+	a.dispatchMu.Lock()
 	if a.blockAll {
+		a.dispatchMu.Unlock()
 		return "", fmt.Errorf("operator has blocked all shell commands for this session")
 	}
+	a.dispatchMu.Unlock()
 
 	// Safety gate.
 	allowed, reason, safetyScore := a.safety(sa.Command)
@@ -508,7 +617,11 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	}
 
 	// Confirmation (unless auto-approved or session-level always, and not safety-blocked).
-	if !a.autoApproveAll || forceConfirm {
+	// Serialized across concurrent dispatches.
+	a.dispatchMu.Lock()
+	needsConfirm := !a.autoApproveAll || forceConfirm
+	a.dispatchMu.Unlock()
+	if needsConfirm {
 		promptDesc := sa.Command
 		if sa.Cwd != "" {
 			promptDesc = fmt.Sprintf("[in %s] %s", sa.Cwd, sa.Command)
@@ -516,9 +629,11 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
+		a.dispatchMu.Lock()
 		decision := a.confirm("run_shell", promptDesc, safetyScore)
 		switch decision {
 		case ConfirmNo:
+			a.dispatchMu.Unlock()
 			if forceConfirm {
 				return "", fmt.Errorf("operator declined to execute safety-blocked command: %s (safety block: %s)", sa.Command, reason)
 			}
@@ -527,10 +642,13 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 			if !forceConfirm {
 				a.autoApproveAll = true
 			}
+			a.dispatchMu.Unlock()
 		case ConfirmNever:
 			a.blockAll = true
+			a.dispatchMu.Unlock()
 			return "", fmt.Errorf("operator has blocked all shell commands for this session")
 		case ConfirmYes:
+			a.dispatchMu.Unlock()
 			// proceed
 		}
 	}
@@ -569,9 +687,12 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	// 3. Check session-level block.
+	a.dispatchMu.Lock()
 	if a.blockAll {
+		a.dispatchMu.Unlock()
 		return "", fmt.Errorf("operator has blocked all tool execution for this session")
 	}
+	a.dispatchMu.Unlock()
 
 	// 4. Construct context and request for PrepareGuardedExecution.
 	view := a.toolContext.GetView()
@@ -632,14 +753,18 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d) - REASON: %s]\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
 	}
 
+	a.dispatchMu.Lock()
 	decision := a.confirm("axis_run_task", promptDesc, prepared.Result.DumbScore)
 	switch decision {
 	case ConfirmNo:
+		a.dispatchMu.Unlock()
 		return "", fmt.Errorf("operator declined to execute: %s", prepared.Command)
 	case ConfirmNever:
 		a.blockAll = true
+		a.dispatchMu.Unlock()
 		return "", fmt.Errorf("operator has blocked all tool execution for this session")
 	case ConfirmAlways, ConfirmYes:
+		a.dispatchMu.Unlock()
 		// Proceed. For axis_run_task, ConfirmAlways does not bypass future run_task prompts.
 	}
 
@@ -790,6 +915,24 @@ func truncatePayload(payload string, maxBytes int) string {
 		truncateIdx = idx
 	}
 	return payload[:truncateIdx] + "..."
+}
+
+// clusterContextSnippet returns a compact live cluster snapshot for injection
+// into the system prompt each turn, so the agent stays aware of node health,
+// free memory, and resident models and can adapt placement mid-task.
+func (a *Agent) clusterContextSnippet() string {
+	if a.toolContext == nil {
+		return ""
+	}
+	view := a.toolContext.GetView()
+	if view == nil || view.Snapshot == nil {
+		return ""
+	}
+	summary := summarizeSnapshot(view.Snapshot)
+	if summary == "" {
+		return ""
+	}
+	return "<live_cluster_context>\n" + summary + "\n</live_cluster_context>"
 }
 
 func (a *Agent) retrieveEvidence(userPrompt string) string {
