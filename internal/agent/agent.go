@@ -81,6 +81,7 @@ type Config struct {
 	MaxTurns                int                  // Maximum agent loop iterations (default: 10)
 	MaxTokens               int                  // Conversation token budget (default: 4096)
 	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
+	Autonomy                AutonomyMode         // Autonomy mode: default, edit, or full (controls auto-approval breadth)
 	SystemExtra             string               // Extra text appended to system prompt
 	Verbose                 bool                 // Emit trace output for tool calls and turns
 	DryRun                  bool                 // Plan tool calls without executing them
@@ -194,6 +195,12 @@ func New(cfg Config) *Agent {
 	}
 	if cfg.AutoApprove {
 		confirm = AutoApproveConfirm(70, confirm)
+	}
+	// Autonomy mode takes precedence over the legacy AutoApprove flag,
+	// wrapping the (possibly already-auto-approving) confirm with the
+	// mode-specific policy.
+	if cfg.Autonomy != "" && cfg.Autonomy != AutonomyDefault {
+		confirm = autonomyConfirm(cfg.Autonomy, confirm)
 	}
 
 	// Build safety gate.

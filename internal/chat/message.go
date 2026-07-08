@@ -29,6 +29,9 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	// RouterChoice records which backend handled this turn when a routing
+	// backend is in use. Not serialized to the wire (internal telemetry only).
+	RouterChoice string `json:"-"`
 }
 
 // Conversation holds an ordered sequence of messages with token-budget awareness.
