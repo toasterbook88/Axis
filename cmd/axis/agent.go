@@ -58,6 +58,7 @@ func agentCmd() *cobra.Command {
 		dryRun                  bool
 		provider                string
 		cloudModel              string
+		cheapModel              string
 		allowRawCommandEvidence bool
 		selectModel             bool
 	)
@@ -356,6 +357,22 @@ func agentCmd() *cobra.Command {
 					fmt.Fprintf(errW, "Using cloud provider %q with model %q\n", bestCloudProviderName, targetModel)
 				}
 			}
+			// Multi-model routing: if a cheap model is configured, route simple
+			// turns (status reads, short prompts) to it and hard turns (code edits,
+			// implementation) to the primary model — cutting cost on long runs.
+			if cheapModel != "" && useCloud && bestCloudProviderName != "" {
+				cheapBackend, cerr := agent.NewCloudBackendWithKey(bestCloudProvider.Kind, bestCloudProviderName, bestCloudProvider.Endpoint, bestCloudAPIKey, cheapModel, 0)
+				if cerr == nil {
+					rb := agent.NewRoutingBackend(backend, cheapBackend, nil)
+					if verbose {
+						rb.SetVerbose(errW)
+						fmt.Fprintf(errW, "Multi-model routing: primary=%q cheap=%q\n", resolvedModel, cheapModel)
+					}
+					backend = rb
+				} else if verbose {
+					fmt.Fprintf(errW, "Warning: cheap-model %q not configured for provider %q: %v\n", cheapModel, bestCloudProviderName, cerr)
+				}
+			}
 			securityClass := agent.BackendLocal
 			if useCloud {
 				securityClass = agent.BackendRemote
@@ -536,6 +553,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Plan tool calls without executing them")
 	cmd.Flags().StringVar(&provider, "provider", "auto", "Inference provider to use (local, cloud, auto)")
 	cmd.Flags().StringVar(&cloudModel, "cloud-model", "", "Model name for cloud provider")
+	cmd.Flags().StringVar(&cheapModel, "cheap-model", "", "Cheap/fast model for simple turns (enables multi-model routing; uses the same cloud provider as --cloud-model)")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
 	return cmd
