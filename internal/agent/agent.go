@@ -193,7 +193,13 @@ func New(cfg Config) *Agent {
 	if cfg.MCPRegistry != nil {
 		tools.RegisterMCPTools(cfg.MCPRegistry)
 	}
-
+	// When Cortex cluster-memory tools are connected, make them first-class:
+	// instruct the model to recall before non-trivial work, remember discoveries,
+	// lock shared files before mutation, and publish significant events — so
+	// multi-agent cluster work stays coherent across sessions and nodes.
+	if tools.HasTool("mcp_cortex_recall") || tools.HasTool("mcp_cortex_remember") {
+		conv.Append(chat.Message{Role: chat.RoleSystem, Content: cortexMemoryGuidance()})
+	}
 	// Build confirmation function.
 	confirm := cfg.Confirm
 	if confirm == nil {
