@@ -71,6 +71,12 @@ type Agent struct {
 	// subAgentDepth tracks nesting of spawn_subagent calls to prevent runaway
 	// recursion. The root agent is depth 0; children inherit depth+1.
 	subAgentDepth int
+	// backgroundTasks tracks async commands started by run_background so the
+	// agent can poll them with check_task without blocking the loop.
+	backgroundTasks *backgroundTaskStore
+	// branchStack holds session branch snapshots for branch_session /
+	// rollback_session, letting the model try risky approaches and rewind.
+	branchStack []branchSnapshot
 }
 
 // Config configures an Agent.
@@ -172,10 +178,10 @@ func New(cfg Config) *Agent {
 		"- `review_changes` to review uncommitted changes the session has made.\n" +
 		"- `web_fetch` to fetch a URL and return readable text (docs, issues, articles, endpoints).\n" +
 		"- `web_search` to search the web (DuckDuckGo, no API key needed) and return top results.\n" +
-		"\nYou operate across a cluster of computers. A live cluster snapshot (node health, free memory, resident models) is provided each turn — use it to choose the right node for work (e.g. GPU tasks on the GPU node, avoid nodes under memory pressure) and to adapt if a node's state changes.\n" +
+		"- `run_background` to start a long-running command (build, tests, training) in the background and get a task id; use `check_task` to poll its output and `list_background_tasks` to see all running tasks. This lets you keep working while long jobs run.\n" +
+		"- `branch_session` / `rollback_session` to snapshot the conversation and rewind to it if a risky approach fails (file changes are not auto-reverted — use undo_last for those).\n" +
 		"\nFor multi-step work, use the `todo` tool to break the task into a tracked plan and mark progress as you go (ops: init, append, start, done, drop, view). This keeps long tasks organized.\n" +
 		"\nExternal capabilities and MCP services are auto-registered. You can invoke any external tool prefixed with `mcp_` (e.g. `mcp_cortex_recall` or `mcp_cortex_remember` to interact with the Cortex shared vector memory).\n"
-
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
 
 	// Build tool registry.
@@ -231,6 +237,7 @@ func New(cfg Config) *Agent {
 		allowRawCommandEvidence: cfg.AllowRawCommandEvidence,
 		securityClass:           cfg.BackendSecurityClass,
 		mcpRegistry:             cfg.MCPRegistry,
+		backgroundTasks:         newBackgroundTaskStore(),
 	}
 }
 
@@ -513,6 +520,29 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	}
 	if name == "spawn_subagent" {
 		return a.dispatchSubagent(ctx, args)
+	}
+	if name == "run_background" {
+		return a.dispatchRunBackground(ctx, args)
+	}
+	if name == "check_task" {
+		return a.dispatchCheckTask(ctx, args)
+	}
+	if name == "list_background_tasks" {
+		return a.listBackgroundTasks(), nil
+	}
+	if name == "branch_session" {
+		var ba struct {
+			Label string `json:"label,omitempty"`
+		}
+		_ = json.Unmarshal(args, &ba)
+		return a.branchSession(ba.Label)
+	}
+	if name == "rollback_session" {
+		var ra struct {
+			Label string `json:"label,omitempty"`
+		}
+		_ = json.Unmarshal(args, &ra)
+		return a.rollbackSession(ra.Label)
 	}
 
 	// 3.5. Confirmation for mutating tools (e.g. write_file, edit_file, or mutating MCP tools).
