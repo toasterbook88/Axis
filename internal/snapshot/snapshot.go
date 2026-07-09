@@ -230,8 +230,17 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 // too; the VPN-specific 10.0/10.8/10.254 subnets are handled by the existing
 // isVPN path when they are the SSH target rather than a LAN address.
 func isPrivateLAN(ip netip.Addr) bool {
+	// Normalize IPv4-mapped IPv6 (e.g. ::ffff:192.168.1.1) to plain IPv4 so the
+	// subnet checks below apply. Without this, Is4() returns false for mapped
+	// addresses and a private LAN would be missed.
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return true
+	}
 	if !ip.Is4() {
-		return ip.IsLoopback() || ip.IsLinkLocalUnicast()
+		// IPv6: treat Unique Local Addresses (fc00::/7) — the IPv6 equivalent of
+		// RFC1918 — as private LAN. IsPrivate covers ULA.
+		return ip.IsPrivate()
 	}
 	b := ip.As4()
 	// Link-local (169.254.0.0/16) — Thunderbolt point-to-point, APIPA.

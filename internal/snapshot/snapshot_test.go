@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
@@ -362,6 +363,41 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		}
 		if n.NetworkClass != exp {
 			t.Errorf("node %s: expected network class %q, got %q (latency=%d)", n.Name, exp, n.NetworkClass, n.SSHHandshakeLatencyMs)
+		}
+	}
+}
+
+func TestIsPrivateLAN(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{"192.168 lan", "192.168.1.219", true},
+		{"172.16 lan", "172.16.0.1", true},
+		{"172.31 lan", "172.31.255.1", true},
+		{"172.32 not private", "172.32.0.1", false},
+		{"10.x lan (non-vpn)", "10.1.2.3", true},
+		{"10.0 vpn subnet excluded", "10.0.0.5", false},
+		{"10.8 vpn subnet excluded", "10.8.0.5", false},
+		{"10.254 vpn subnet excluded", "10.254.254.254", false},
+		{"169.254 link-local/thunderbolt", "169.254.1.2", true},
+		{"tailscale CGNAT not private", "100.64.1.2", false},
+		{"public not private", "8.8.8.8", false},
+		{"loopback", "127.0.0.1", true},
+		// IPv4-mapped IPv6 must be recognized as the underlying private IPv4.
+		{"ipv4-mapped ipv6 lan", "::ffff:192.168.1.219", true},
+		{"ipv4-mapped ipv6 public", "::ffff:8.8.8.8", false},
+		// IPv6 Unique Local Address (fc00::/7) is the IPv6 RFC1918 equivalent.
+		{"ipv6 ula fd00", "fd00::1", true},
+		{"ipv6 ula fc00", "fc00::1", true},
+		{"ipv6 link-local", "fe80::1", true},
+		{"ipv6 public", "2001:4860:4860::8888", false},
+	}
+	for _, c := range cases {
+		ip := netip.MustParseAddr(c.ip)
+		if got := isPrivateLAN(ip); got != c.want {
+			t.Errorf("isPrivateLAN(%s) = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
