@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
@@ -292,11 +293,35 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		},
 		{
 			Name:                  "node-vpn",
-			Hostname:              ipVPNHost,
+			Hostname:              ipVPNAddr, // SSH target is the VPN IP
 			SSHHandshakeLatencyMs: 40,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
 				{Address: ipVPNAddr, SpeedClass: "wireguard"},
+			},
+		},
+		// A node reached over a LAN IP but also carrying a VPN interface: the
+		// route in use is the LAN, so it must be direct-lan (not VPN).
+		{
+			Name:                  "node-lan-with-vpn-iface",
+			Hostname:              ipVPNHost, // LAN SSH target
+			SSHHandshakeLatencyMs: 40,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: ipVPNAddr, SpeedClass: "wireguard"},
+			},
+		},
+		// The regression case: a node reached over the LAN (192.168.x) that also
+		// has a Tailscale interface. Previously classified tailscale-direct and
+		// penalized -20; the route in use is the LAN, so it is direct-lan.
+		{
+			Name:                  "node-lan-with-tailscale",
+			Hostname:              "192.168." + "1.219",
+			SSHHandshakeLatencyMs: 42,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: "192.168." + "1.219", SpeedClass: "gigabit"},
+				{Address: "100.64." + "1.10", SpeedClass: "tailscale"},
 			},
 		},
 		{
@@ -318,16 +343,17 @@ func TestBuild_NetworkClassification(t *testing.T) {
 			Status:                models.StatusComplete,
 		},
 	}
-
 	snap := Build(nodes)
 
 	expected := map[string]models.NetworkClass{
-		"node-tailscale-direct":  models.NetworkClassTailscale,
-		"node-tailscale-relayed": models.NetworkClassRelayed,
-		"node-vpn":               models.NetworkClassVPN,
-		"node-vpn-by-subnet":     models.NetworkClassVPN,
-		"node-direct-lan":        models.NetworkClassDirectLAN,
-		"node-unknown":           models.NetworkClassUnknown,
+		"node-tailscale-direct":   models.NetworkClassTailscale,
+		"node-tailscale-relayed":  models.NetworkClassRelayed,
+		"node-vpn":                models.NetworkClassVPN,
+		"node-vpn-by-subnet":      models.NetworkClassVPN,
+		"node-direct-lan":         models.NetworkClassDirectLAN,
+		"node-lan-with-vpn-iface": models.NetworkClassDirectLAN,
+		"node-lan-with-tailscale": models.NetworkClassDirectLAN,
+		"node-unknown":            models.NetworkClassUnknown,
 	}
 
 	for _, n := range snap.Nodes {
@@ -337,6 +363,41 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		}
 		if n.NetworkClass != exp {
 			t.Errorf("node %s: expected network class %q, got %q (latency=%d)", n.Name, exp, n.NetworkClass, n.SSHHandshakeLatencyMs)
+		}
+	}
+}
+
+func TestIsPrivateLAN(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{"192.168 lan", "192.168.1.219", true},
+		{"172.16 lan", "172.16.0.1", true},
+		{"172.31 lan", "172.31.255.1", true},
+		{"172.32 not private", "172.32.0.1", false},
+		{"10.x lan (non-vpn)", "10.1.2.3", true},
+		{"10.0 vpn subnet excluded", "10.0.0.5", false},
+		{"10.8 vpn subnet excluded", "10.8.0.5", false},
+		{"10.254 vpn subnet excluded", "10.254.254.254", false},
+		{"169.254 link-local/thunderbolt", "169.254.1.2", true},
+		{"tailscale CGNAT not private", "100.64.1.2", false},
+		{"public not private", "8.8.8.8", false},
+		{"loopback", "127.0.0.1", true},
+		// IPv4-mapped IPv6 must be recognized as the underlying private IPv4.
+		{"ipv4-mapped ipv6 lan", "::ffff:192.168.1.219", true},
+		{"ipv4-mapped ipv6 public", "::ffff:8.8.8.8", false},
+		// IPv6 Unique Local Address (fc00::/7) is the IPv6 RFC1918 equivalent.
+		{"ipv6 ula fd00", "fd00::1", true},
+		{"ipv6 ula fc00", "fc00::1", true},
+		{"ipv6 link-local", "fe80::1", true},
+		{"ipv6 public", "2001:4860:4860::8888", false},
+	}
+	for _, c := range cases {
+		ip := netip.MustParseAddr(c.ip)
+		if got := isPrivateLAN(ip); got != c.want {
+			t.Errorf("isPrivateLAN(%s) = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
