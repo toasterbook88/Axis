@@ -100,8 +100,8 @@ type runBackgroundArgs struct {
 }
 
 type checkTaskArgs struct {
-	ID      string        `json:"id"`
-	WaitFor time.Duration `json:"wait_for,omitempty"`
+	ID      string `json:"id"`
+	WaitFor string `json:"wait_for,omitempty"`
 }
 
 // runBackgroundTask launches the command in a goroutine and returns its task
@@ -122,6 +122,7 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 	a.backgroundTasks.add(task)
 
 	go func() {
+		defer cancel()
 		var out string
 		var runErr error
 		if args.Node != "" {
@@ -170,15 +171,29 @@ func (a *Agent) checkBackgroundTask(ctx context.Context, args checkTaskArgs) (st
 		return "", fmt.Errorf("no background task with id %q", args.ID)
 	}
 
+	// wait_for arrives as a string (e.g. "30s") since encoding/json cannot
+	// unmarshal a JSON string into time.Duration directly.
+	var waitFor time.Duration
+	if strings.TrimSpace(args.WaitFor) != "" {
+		parsed, err := time.ParseDuration(args.WaitFor)
+		if err != nil {
+			return "", fmt.Errorf("invalid wait_for duration %q: %w", args.WaitFor, err)
+		}
+		waitFor = parsed
+	}
+
 	running, _, _, _ := task.status()
-	if running && args.WaitFor > 0 {
-		deadline := time.Now().Add(args.WaitFor)
+	if running && waitFor > 0 {
+		deadline := time.Now().Add(waitFor)
+		// Use a ticker instead of time.After to avoid accumulating leaked
+		// timers across loop iterations.
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
 		for time.Now().Before(deadline) {
 			select {
 			case <-ctx.Done():
-				running, _, _, _ = task.status()
 				return formatTaskStatus(task), nil
-			case <-time.After(100 * time.Millisecond):
+			case <-ticker.C:
 			}
 			running, _, _, _ = task.status()
 			if !running {

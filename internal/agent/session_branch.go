@@ -21,16 +21,29 @@ type branchSnapshot struct {
 // returns a label the model can refer back to. The model can then take a risky
 // path; if it fails, rollback_session restores the conversation to this point.
 func (a *Agent) branchSession(label string) (string, error) {
+	// Serialize against concurrent tool dispatch: branch_session/rollback_session
+	// are read-only tools that run without the mutating-confirm gate, so they
+	// must lock dispatchMu to avoid racing on a.branchStack and a.conv.
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+
 	msgs := a.conv.Messages()
-	// Deep-ish copy: Message is mostly value types, but ToolCalls is a slice —
-	// copy it so later mutations to the live conversation don't corrupt the
-	// snapshot (Go slices share backing arrays on shallow copy).
+	// Deep copy: Message is mostly value types, but ToolCalls is a slice and
+	// ToolCall.Function.Arguments is a json.RawMessage ([]byte) — copy both so
+	// later mutations to the live conversation don't corrupt the snapshot.
 	snap := make([]chat.Message, len(msgs))
 	for i, m := range msgs {
 		snap[i] = m
 		if len(m.ToolCalls) > 0 {
 			tc := make([]chat.ToolCall, len(m.ToolCalls))
-			copy(tc, m.ToolCalls)
+			for j, call := range m.ToolCalls {
+				tc[j] = call
+				if len(call.Function.Arguments) > 0 {
+					argsCopy := make(json.RawMessage, len(call.Function.Arguments))
+					copy(argsCopy, call.Function.Arguments)
+					tc[j].Function.Arguments = argsCopy
+				}
+			}
 			snap[i].ToolCalls = tc
 		}
 	}
@@ -47,6 +60,10 @@ func (a *Agent) branchSession(label string) (string, error) {
 // restores that specific branch (and any branches above it). File changes are
 // not auto-reverted — use undo_last for file-level rollback.
 func (a *Agent) rollbackSession(label string) (string, error) {
+	// Serialize against concurrent tool dispatch (see branchSession).
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+
 	if len(a.branchStack) == 0 {
 		return "", fmt.Errorf("no session branches to roll back to (call branch_session first)")
 	}
