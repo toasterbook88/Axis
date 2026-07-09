@@ -153,8 +153,6 @@ func TestToolsEndpointIncludesExecutionSurface(t *testing.T) {
 	}
 }
 
-
-
 func TestV2ClusterEndpointSummarizesSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, &fakeCache{
@@ -1872,12 +1870,12 @@ func TestV2PlacementDryRun(t *testing.T) {
 			Status: models.SnapshotHealthy,
 			Nodes: []models.NodeFacts{
 				{
-					Name: "node-a",
+					Name:   "node-a",
 					Status: models.StatusComplete,
 					Resources: &models.Resources{
-						RAMTotalMB: 16384,
+						RAMTotalMB:       16384,
 						RAMAllocatableMB: 12000,
-						RAMFreeMB: 8000,
+						RAMFreeMB:        8000,
 					},
 				},
 			},
@@ -1919,12 +1917,12 @@ func TestV2BatchPlace(t *testing.T) {
 			Status: models.SnapshotHealthy,
 			Nodes: []models.NodeFacts{
 				{
-					Name: "node-a",
+					Name:   "node-a",
 					Status: models.StatusComplete,
 					Resources: &models.Resources{
-						RAMTotalMB: 16384,
+						RAMTotalMB:       16384,
 						RAMAllocatableMB: 12000,
-						RAMFreeMB: 8000,
+						RAMFreeMB:        8000,
 					},
 				},
 			},

@@ -63,7 +63,7 @@ func chatCmd() *cobra.Command {
 
 			// Load runtime context for auto-routing and context injection.
 			rt, _ := loadRuntimeContext(ctx)
-			
+
 			currentModel := resolveChatModel(model, rt)
 			if verbose && model == "" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)

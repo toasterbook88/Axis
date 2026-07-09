@@ -39,8 +39,6 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 		r.Reason = strings.Join(decision.Reasons, "; ")
 	}
 
-
-
 	// === Live cluster-aware checks ===
 	if k != nil {
 		appleFoundationHelper := strings.Contains(lower, "xcrun swift") &&

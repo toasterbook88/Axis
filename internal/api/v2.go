@@ -456,10 +456,10 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		
+
 		reqs := placement.InferRequirements(desc)
 		decision := placement.SelectBestNode(reqs, snap.Nodes, workingState)
-		
+
 		if decision.OK && decision.Node != "" {
 			ns := workingState.Nodes[decision.Node]
 			ns.ReservedMB += reqs.MemoryRequestMB
