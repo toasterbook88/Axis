@@ -1,5 +1,26 @@
 ## Unreleased
 
+## v0.14.0 (2026-07-09)
+
+### 🚀 Features
+
+* **Agent Harness (P0–P3):** Turn `axis agent` into a distributed, cluster-native agent harness (32 tools, was 13).
+  * Parallel tool dispatch within a turn (bounded worker pool); results append in tool-call order. LLM-backed context compaction at 70% of the token budget.
+  * Robust editing: `multi_edit` (batch edits to one file, atomic on failure), `edit_file` `replace_all`, `undo_last`/`review_changes` via a session checkpointer.
+  * In-session plan tracking (`todo`) and conversation branching (`branch_session`/`rollback_session`).
+  * `symbol_search` (Go-AST-aware definition lookup + generic fallback), `web_fetch`/`web_search`.
+  * Remote tool surface: `run_on_node`, `remote_read_file`, `remote_grep`, `remote_list` — the cluster as an extended workspace.
+  * Cluster-aware context: a live cluster snapshot (node health, free RAM, resident models) injected into the system prompt every turn.
+  * Distributed sub-agents: `spawn_subagent` delegates a focused sub-task to a child agent running its own tool loop on a target cluster node.
+  * Autonomy modes (`--autonomy default/edit/full`) and multi-model routing (`--cheap-model`).
+  * Background/async tasks: `run_background`/`check_task`/`list_background_tasks`.
+  * Cortex as native cluster memory + coordination: when Cortex MCP tools are connected, the agent proactively recalls, remembers, locks shared files, and publishes events.
+* **Placement:** Route-based network classification — a node reached over a private LAN address is classified `direct-lan` even if it also carries a Tailscale/VPN interface (previously penalized −20 for the overlay interface alone). Handles IPv4-mapped IPv6 and IPv6 ULA.
+
+### 🔧 Maintenance
+
+* Bump Go toolchain to 1.26.5 (fixes GO-2026-5856, Encrypted Client Hello privacy leak in crypto/tls).
+
 ## v0.13.0 (2026-07-07)
 
 ### 🚀 Features
