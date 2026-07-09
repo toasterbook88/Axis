@@ -128,6 +128,8 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 		"run_shell", "git_status", "git_diff", "git_log", "axis_run_task",
 		"spawn_subagent", "run_on_node", "remote_read_file", "remote_grep", "remote_list",
 		"todo", "undo_last", "review_changes", "web_fetch", "web_search",
+		"run_background", "check_task", "list_background_tasks",
+		"branch_session", "rollback_session",
 	}
 	for _, name := range expected {
 		if !r.HasTool(name) {

@@ -137,6 +137,8 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerWebFetch()
 	r.registerWebSearch()
 	r.registerSymbolSearch()
+	r.registerBackgroundTools()
+	r.registerSessionBranchTools()
 	return r
 }
 
