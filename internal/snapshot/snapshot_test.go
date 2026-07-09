@@ -292,11 +292,35 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		},
 		{
 			Name:                  "node-vpn",
-			Hostname:              ipVPNHost,
+			Hostname:              ipVPNAddr, // SSH target is the VPN IP
 			SSHHandshakeLatencyMs: 40,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
 				{Address: ipVPNAddr, SpeedClass: "wireguard"},
+			},
+		},
+		// A node reached over a LAN IP but also carrying a VPN interface: the
+		// route in use is the LAN, so it must be direct-lan (not VPN).
+		{
+			Name:                  "node-lan-with-vpn-iface",
+			Hostname:              ipVPNHost, // LAN SSH target
+			SSHHandshakeLatencyMs: 40,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: ipVPNAddr, SpeedClass: "wireguard"},
+			},
+		},
+		// The regression case: a node reached over the LAN (192.168.x) that also
+		// has a Tailscale interface. Previously classified tailscale-direct and
+		// penalized -20; the route in use is the LAN, so it is direct-lan.
+		{
+			Name:                  "node-lan-with-tailscale",
+			Hostname:              "192.168." + "1.219",
+			SSHHandshakeLatencyMs: 42,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: "192.168." + "1.219", SpeedClass: "gigabit"},
+				{Address: "100.64." + "1.10", SpeedClass: "tailscale"},
 			},
 		},
 		{
@@ -318,16 +342,17 @@ func TestBuild_NetworkClassification(t *testing.T) {
 			Status:                models.StatusComplete,
 		},
 	}
-
 	snap := Build(nodes)
 
 	expected := map[string]models.NetworkClass{
-		"node-tailscale-direct":  models.NetworkClassTailscale,
-		"node-tailscale-relayed": models.NetworkClassRelayed,
-		"node-vpn":               models.NetworkClassVPN,
-		"node-vpn-by-subnet":     models.NetworkClassVPN,
-		"node-direct-lan":        models.NetworkClassDirectLAN,
-		"node-unknown":           models.NetworkClassUnknown,
+		"node-tailscale-direct":   models.NetworkClassTailscale,
+		"node-tailscale-relayed":  models.NetworkClassRelayed,
+		"node-vpn":                models.NetworkClassVPN,
+		"node-vpn-by-subnet":      models.NetworkClassVPN,
+		"node-direct-lan":         models.NetworkClassDirectLAN,
+		"node-lan-with-vpn-iface": models.NetworkClassDirectLAN,
+		"node-lan-with-tailscale": models.NetworkClassDirectLAN,
+		"node-unknown":            models.NetworkClassUnknown,
 	}
 
 	for _, n := range snap.Nodes {

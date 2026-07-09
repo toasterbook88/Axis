@@ -173,6 +173,25 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 			isVPN = true
 		}
 	}
+	// The configured SSH target (hostname) is the route actually in use. A node
+	// may have a Tailscale/VPN interface but be reached over the LAN — the
+	// route in use is what matters for placement, not the interface list. So if
+	// the hostname is a private LAN address, prefer direct-lan unless latency
+	// shows the LAN route itself is degraded.
+	if hostIP, err := netip.ParseAddr(n.Hostname); err == nil && isPrivateLAN(hostIP) {
+		if n.SSHHandshakeLatencyMs >= 150 {
+			return models.NetworkClassRelayed
+		}
+		return models.NetworkClassDirectLAN
+	}
+	// mDNS or unparseable hostname: if a LAN address exists and latency is
+	// clearly local, the route is the LAN (overlay interfaces are present but
+	// not in use).
+	if _, err := netip.ParseAddr(n.Hostname); err != nil {
+		if hasPrivateLANAddress(n) && n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 30 {
+			return models.NetworkClassDirectLAN
+		}
+	}
 
 	if isTailscale {
 		// Sub-classify based on SSHHandshakeLatencyMs:
@@ -202,4 +221,50 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 	}
 
 	return models.NetworkClassUnknown
+}
+
+// isPrivateLAN reports whether an IP is a private LAN address: RFC1918
+// (192.168.x, 10.x, 172.16-31.x) or link-local (169.254.x, e.g. Thunderbolt).
+// It deliberately returns false for the Tailscale CGNAT range (100.64.0.0/10),
+// which is an overlay, not a LAN. 10.x is included because genuine LANs use it
+// too; the VPN-specific 10.0/10.8/10.254 subnets are handled by the existing
+// isVPN path when they are the SSH target rather than a LAN address.
+func isPrivateLAN(ip netip.Addr) bool {
+	if !ip.Is4() {
+		return ip.IsLoopback() || ip.IsLinkLocalUnicast()
+	}
+	b := ip.As4()
+	// Link-local (169.254.0.0/16) — Thunderbolt point-to-point, APIPA.
+	if b[0] == 169 && b[1] == 254 {
+		return true
+	}
+	// 192.168.0.0/16
+	if b[0] == 192 && b[1] == 168 {
+		return true
+	}
+	// 172.16.0.0 – 172.31.255.255
+	if b[0] == 172 && b[1] >= 16 && b[1] <= 31 {
+		return true
+	}
+	// 10.0.0.0/8 (private), EXCEPT the VPN-specific subnets the existing
+	// classifier treats as VPN (10.0/10.8/10.254) — those are disambiguated by
+	// the isVPN path when they are the SSH target.
+	if b[0] == 10 {
+		if b[1] == 0 || b[1] == 8 || b[1] == 254 {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// hasPrivateLANAddress reports whether any of the node's addresses is a
+// private LAN IP, used for the mDNS-hostname fallback.
+func hasPrivateLANAddress(n *models.NodeFacts) bool {
+	for _, addr := range n.Addresses {
+		if ip, err := netip.ParseAddr(addr.Address); err == nil && isPrivateLAN(ip) {
+			return true
+		}
+	}
+	return false
 }
