@@ -1,10 +1,11 @@
 name: CI
 
+# Push only on main (avoid double-running the full suite for every in-repo PR
+# push). PRs use pull_request; merge queue uses merge_group.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
-    branches: ["**"]
   merge_group:
 
 env:
@@ -30,6 +31,9 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Lint (gofmt + go vet)
+        run: make lint
+
       - name: Run tests
         run: go test ./... -count=1
 
@@ -46,6 +50,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
+
       - name: Repo truth guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -13,7 +13,7 @@ Refresh this section with `./hack/refresh-current-state.sh`.
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
 - Refreshed: 2026-07-09 EDT
 - Repo version: `0.14.0`
-- Latest published GitHub release: `v0.14.0` (2026-07-09T14:58:04Z)
+- Latest published GitHub release: `v0.14.0`
 - Release truth: repo version matches the latest published release
 <!-- END GENERATED CURRENT STATE FACTS -->
 
@@ -27,7 +27,7 @@ The live repo currently contains:
 - Cluster snapshot assembly and advisory placement
 - A local chat surface backed by Ollama
 - A local HTTP API with task execution
-- A daemon-backed cached snapshot seam behind `axis serve`
+- A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
 - Explicit cached status reads via `axis status --cached`
 - Explicit cached placement reads via `axis task place --cached`
 - Explicit cached context reads via `axis task context --cached`
@@ -62,7 +62,7 @@ The live repo currently contains:
 - `axis doctor` probes local AI backends (llama-server and MLX) and reports installed/running/port/model-count state as advisory checks; probe errors surface stderr for actionability without blocking core SSH/config checks
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- Protected `main` with PR review, required CI, conversation resolution, and linear history
+- Protected `main` with required CI status checks (`Test & Build`, `govulncheck`), squash-only merges, and delete-branch-on-merge. Approving reviews and conversation resolution are **not** required by branch rules today (solo-operator workflow: explicit operator merge after green checks). Linear history via squash.
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 - Shell-quoting-safe remote cleanup traps: variable assignment pattern (`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`) eliminates nested quoting interaction; adversarial test suite covers spaces, quotes, dollar signs, backticks, semicolons
 - `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated

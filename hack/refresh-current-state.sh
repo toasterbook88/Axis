@@ -117,7 +117,7 @@ cat >"$facts_tmp" <<EOF
 $facts_start
 - Refreshed: $refreshed_at
 - Repo version: \`$axis_version\`
-- Latest published GitHub release: \`$latest_release_tag\` ($latest_release_published)
+- Latest published GitHub release: \`$latest_release_tag\`
 - Release truth: $release_truth
 $facts_end
 EOF

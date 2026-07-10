@@ -45,13 +45,19 @@ Source of truth: [`Makefile`](Makefile).
 
 ```bash
 make build          # CGO_ENABLED=0 go build -trimpath with LDFLAGS
-make install        # Build + copy to $GOPATH/bin
+make install-user   # Build + install to ~/.local/bin (preferred)
+make install        # Build + copy to $GOPATH/bin (legacy)
 make test           # go test ./... -count=1 -timeout 180s
 make test-race      # go test ./... -count=1 -timeout 180s -race
-make lint           # gofmt -l + go vet
+make lint           # gofmt -l (fails if dirty) + go vet
 make coverage       # ./hack/coverage-check.sh
 make clean          # rm -f axis
 ```
+
+After `make install-user` on a daemon host: `axis daemon restart && axis daemon status`.
+`axis version` must print `commit:` — that line distinguishes tip-of-main from a GitHub release with the same semver.
+Never `gh release create` before the tag workflow; GoReleaser owns GitHub Releases.
+
 
 Requires Go 1.26.1+ (`go.mod` is authoritative for the minimum; use the latest
 1.26 patch release). Remote node tests require SSH

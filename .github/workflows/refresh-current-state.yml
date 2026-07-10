@@ -1,60 +1,34 @@
+# Disabled 2026-07-10.
+#
+# This workflow failed at "Create PR" on every scheduled/release run for months
+# (GITHUB_TOKEN cannot satisfy main branch protection). Committing live GitHub
+# release timestamps also forced thrash PRs and fought verify-repo-truth.
+#
+# GitHub Releases are the release authority. docs/current-state.md generated
+# facts track repo version + latest tag name + ahead/matches only (no
+# published_at). Re-enable only with a working automation identity AND a
+# design that does not dual-write mutable release metadata into main.
 name: Refresh Current State
 
 on:
-  release:
-    types: [published]
-  schedule:
-    # Run after Dependabot (Monday 9:30 AM ET)
-    - cron: "30 13 * * 1"
   workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why re-enable was attempted (should be rare)"
+        required: false
+        default: "manual debug only"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   refresh:
-    name: Refresh current-state.md
+    name: Refresh current-state.md (disabled)
+    if: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v6.5.0
-        with:
-          go-version-file: go.mod
-
-      - name: Install ripgrep
+      - name: Disabled
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
-
-      - name: Refresh current-state.md
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./hack/refresh-current-state.sh
-
-      - name: Check for changes
-        id: diff
-        run: |
-          git diff --quiet docs/current-state.md && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Create PR with updated state
-        if: steps.diff.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          BRANCH="chore/auto-refresh-current-state-$(date +%Y%m%d)"
-          git checkout -b "$BRANCH"
-          git add docs/current-state.md
-          git commit -m "chore: auto-refresh current-state.md"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "chore: auto-refresh current-state.md" \
-            --body "Automated refresh of \`docs/current-state.md\` triggered by release publish or schedule." \
-            --base main \
-            --head "$BRANCH"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "refresh-current-state workflow is intentionally disabled."
+          echo "See workflow file header for rationale."
+          exit 1
