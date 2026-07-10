@@ -1445,6 +1445,63 @@ func TestPprofEndpointsDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestPprofEndpointsRequireAuthWhenTokenSet(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "pprofauth.sock")
+	cache := &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+	}
+
+	const token = "test-token-value"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- ServeWithContext(ctx, socketPath, cache, token, true)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socketPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+
+	// Without the bearer token, the profiling endpoint must be rejected.
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost/debug/pprof/cmdline", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /debug/pprof/cmdline (no auth): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /debug/pprof/cmdline (no auth) = %d, want 401", resp.StatusCode)
+	}
+
+	// With the bearer token, the endpoint is reachable.
+	req, _ = http.NewRequest(http.MethodGet, "http://localhost/debug/pprof/cmdline", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /debug/pprof/cmdline (auth): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /debug/pprof/cmdline (auth) = %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestRunTaskReturnsErrorWhenRuntimeFails(t *testing.T) {
 	restore := stubLiveRuntime(t, nil, errors.New("node discovery failed"))
 	defer restore()

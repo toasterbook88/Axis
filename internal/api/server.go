@@ -116,7 +116,7 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	mux := http.NewServeMux()
 	registerRoutes(mux, cache, token)
 	if pprof {
-		registerPprofRoutes(mux)
+		registerPprofRoutes(mux, token)
 	}
 
 	srv := &http.Server{
@@ -442,12 +442,17 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	registerV2Routes(mux, cache, token)
 }
 
-func registerPprofRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+// registerPprofRoutes wires the profiling handlers behind the same bearer-token
+// auth as every other non-health route. These endpoints expose the process
+// command line (which can leak flags/tokens) and allow profile/trace-driven
+// resource exhaustion, so they must never be reachable unauthenticated when the
+// API is bound to a TCP address.
+func registerPprofRoutes(mux *http.ServeMux, token string) {
+	mux.HandleFunc("/debug/pprof/", withAuth(pprof.Index, token))
+	mux.HandleFunc("/debug/pprof/cmdline", withAuth(pprof.Cmdline, token))
+	mux.HandleFunc("/debug/pprof/profile", withAuth(pprof.Profile, token))
+	mux.HandleFunc("/debug/pprof/symbol", withAuth(pprof.Symbol, token))
+	mux.HandleFunc("/debug/pprof/trace", withAuth(pprof.Trace, token))
 }
 
 var loadLiveRuntime = runtimectx.Load
