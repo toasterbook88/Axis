@@ -21,6 +21,7 @@ import (
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/skills"
@@ -28,8 +29,7 @@ import (
 )
 
 func DefaultAddr() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "axis.sock")
+	return persist.AxisPath("axis.sock")
 }
 
 type ToolDef struct {

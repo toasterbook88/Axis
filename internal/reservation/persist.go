@@ -14,8 +14,7 @@ import (
 
 // Path returns the path to the ledger persistence file.
 func Path() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "ledger.json")
+	return persist.AxisPath("ledger.json")
 }
 
 // diskFormat represents the serialized ledger.

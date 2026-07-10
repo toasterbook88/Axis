@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
@@ -281,8 +281,7 @@ func (d *Daemon) Mesh() *mesh.Mesh {
 }
 
 func DefaultSnapshotPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "snapshot.json")
+	return persist.AxisPath("snapshot.json")
 }
 
 func (d *Daemon) SetSnapshotPath(path string) {
@@ -981,15 +980,11 @@ func persistSnapshot(path string, snap *models.ClusterSnapshot) error {
 	if snap == nil {
 		return errors.New("nil snapshot")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return persist.WriteFileAtomic(path, data, 0o644)
 }
 
 func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
