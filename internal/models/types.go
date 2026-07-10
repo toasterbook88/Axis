@@ -241,7 +241,8 @@ type ResidentModel struct {
 	Runtime    string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
 	Processor  string `json:"processor,omitempty" yaml:"processor,omitempty"`
 	Source     string `json:"source,omitempty" yaml:"source,omitempty"`
-	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown/not reported by the runtime; currently populated only by the Ollama probe
+	Port       int    `json:"port,omitempty" yaml:"port,omitempty"`                 // Port the runtime is listening on (if applicable)
+	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown/not reported by the runtime
 
 	// ExpiresAt is the wall-clock time at which the model is expected to
 	// be unloaded by the runtime. Zero when unknown.
