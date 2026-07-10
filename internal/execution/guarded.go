@@ -573,6 +573,7 @@ func RunPreparedExecution(ctx context.Context, prepared PreparedExecution) (Guar
 		prepared.Requirements,
 		prepared.Result,
 		prepared.TargetConfig,
+		prepared.TargetNode.ResolvedDialTarget,
 		prepared.ReservationMB,
 		prepared.Command,
 		prepared.ExtraEnv,
@@ -888,6 +889,7 @@ func runRemote(
 	reqs models.TaskRequirements,
 	resp GuardedExecutionResult,
 	targetConfig config.NodeConfig,
+	resolvedDialTarget string,
 	reservationMB int64,
 	command string,
 	extraEnv []string,
@@ -902,6 +904,13 @@ func runRemote(
 	}()
 
 	executor := NewRemoteExecutor(targetConfig)
+	// Route over the discovered fast path (e.g. GbE/Thunderbolt) when available,
+	// keeping targetConfig for SSH identity/host-key verification.
+	if resolvedDialTarget != "" {
+		if sshExec, ok := executor.(*transport.SSHExecutor); ok {
+			sshExec.ResolvedDialTarget = resolvedDialTarget
+		}
+	}
 	defer executor.Close()
 
 	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())

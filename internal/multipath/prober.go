@@ -109,13 +109,8 @@ func isDockerBridgeAddr(ip string) bool {
 	parsed = parsed.Unmap()
 	if parsed.Is4() {
 		b := parsed.As4()
-		// Docker default bridge: 172.17.0.0/16
-		if b[0] == 172 && b[1] == 17 {
-			return true
-		}
-		// Docker user-defined bridges: 172.18.0.0/16, 172.19.0.0/16, etc.
-		// (172.18.0.0/16 to 172.31.255.255)
-		if b[0] == 172 && b[1] >= 18 && b[1] <= 31 {
+		// Docker default and user-defined bridges: 172.16.0.0/12
+		if b[0] == 172 && b[1] >= 16 && b[1] <= 31 {
 			return true
 		}
 	}
@@ -123,6 +118,12 @@ func isDockerBridgeAddr(ip string) bool {
 }
 
 func isTailscaleAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if ip.Is4() {
+		b := ip.As4()
+		// Tailscale IPv4 CGNAT: 100.64.0.0/10
+		return b[0] == 100 && b[1] >= 64 && b[1] <= 127
+	}
 	// Tailscale IPv6: fd7a:115c:a1e0::/48
 	b := ip.As16()
 	return b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 && b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
