@@ -87,6 +87,7 @@ type SSHExecutor struct {
 	Port               int
 	User               string
 	TimeoutSec         int
+	ResolvedDialTarget string
 	mu                 sync.RWMutex
 	client             *ssh.Client
 	handshakeLatencyMs int64
@@ -95,6 +96,17 @@ type SSHExecutor struct {
 // NewSSHExecutor creates an SSH executor for a remote node.
 func NewSSHExecutor(host string, port int, user string, timeoutSec int) *SSHExecutor {
 	return &SSHExecutor{Host: host, Port: port, User: user, TimeoutSec: timeoutSec}
+}
+
+// NewSSHExecutorWithDialTarget creates an SSH executor with a specific IP override.
+func NewSSHExecutorWithDialTarget(host string, port int, user string, timeoutSec int, resolvedDialTarget string) *SSHExecutor {
+	return &SSHExecutor{
+		Host:               host,
+		Port:               port,
+		User:               user,
+		TimeoutSec:         timeoutSec,
+		ResolvedDialTarget: resolvedDialTarget,
+	}
 }
 
 // HandshakeLatencyMs returns the measured duration of the SSH connection and handshake.
@@ -114,7 +126,6 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	e.mu.Unlock()
 
 	resolved := e.resolveSSHConfig(ctx)
-	dialAddr := net.JoinHostPort(resolvedDialHost(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
 	hostKeyAddr := net.JoinHostPort(resolvedHostKeyName(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
 
 	config, err := e.sshConfig(resolved, hostKeyAddr)
@@ -123,45 +134,73 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	}
 
 	timeout := time.Duration(e.TimeoutSec) * time.Second
-
 	dialer := net.Dialer{Timeout: timeout}
-	start := time.Now()
-	conn, err := dialer.DialContext(ctx, "tcp", dialAddr)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+
+	// Helper to try a specific dial address while keeping hostKeyAddr for SSH crypto
+	tryDial := func(dialAddr string) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, int64, error) {
+		start := time.Now()
+		conn, err := dialer.DialContext(ctx, "tcp", dialAddr)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, nil, 0, ctxErr
+			}
+			return nil, nil, nil, 0, fmt.Errorf("ssh dial %s: %w", dialAddr, err)
 		}
-		return fmt.Errorf("ssh dial %s: %w", dialAddr, err)
+
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadline = time.Now().Add(timeout)
+		}
+		conn.SetDeadline(deadline)
+
+		sshConn, chans, reqs, err := ssh.NewClientConn(conn, hostKeyAddr, config)
+		if err != nil {
+			conn.Close()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, nil, 0, ctxErr
+			}
+			if handshakeDeadlineExceeded(ctx, err) {
+				return nil, nil, nil, 0, context.DeadlineExceeded
+			}
+			if hint := handshakeRemediation(err, resolvedHostKeyName(resolved, e.Host), resolvedPort(resolved, e.Port)); hint != "" {
+				return nil, nil, nil, 0, fmt.Errorf("ssh handshake %s: %w; remediation: %s", dialAddr, err, hint)
+			}
+			return nil, nil, nil, 0, fmt.Errorf("ssh dial %s: %w", dialAddr, err)
+		}
+
+		// Clear deadline after handshake
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			conn.Close()
+			return nil, nil, nil, 0, fmt.Errorf("ssh clear deadline %s: %w", dialAddr, err)
+		}
+
+		return sshConn, chans, reqs, time.Since(start).Milliseconds(), nil
 	}
 
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(timeout)
-	}
-	conn.SetDeadline(deadline)
+	var sshConn ssh.Conn
+	var chans <-chan ssh.NewChannel
+	var reqs <-chan *ssh.Request
+	var handshakeLatencyMs int64
 
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, hostKeyAddr, config)
-	if err != nil {
-		conn.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+	// 1. Try the dynamic fast-path (ResolvedDialTarget) first
+	if e.ResolvedDialTarget != "" {
+		dialAddr := net.JoinHostPort(e.ResolvedDialTarget, strconv.Itoa(resolvedPort(resolved, e.Port)))
+		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(dialAddr)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// Fast-path failed (e.g. DPI firewall blocked SSH handshake on a fast TCP link).
+			// We swallow the error and fall back to the logical OS resolution.
+			sshConn = nil
 		}
-		if handshakeDeadlineExceeded(ctx, err) {
-			return context.DeadlineExceeded
-		}
-		if hint := handshakeRemediation(err, resolvedHostKeyName(resolved, e.Host), resolvedPort(resolved, e.Port)); hint != "" {
-			return fmt.Errorf("ssh handshake %s: %w; remediation: %s", dialAddr, err, hint)
-		}
-		return fmt.Errorf("ssh handshake %s: %w", dialAddr, err)
-	}
-	handshakeLatencyMs := time.Since(start).Milliseconds()
-	// The connect deadline is only for dialing and handshake. Clear it once the
-	// SSH client is established so later session I/O isn't capped by an old ctx.
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		conn.Close()
-		return fmt.Errorf("ssh clear deadline %s: %w", dialAddr, err)
 	}
 
+	// 2. Fall back to the logical host resolution
+	if sshConn == nil {
+		logicalAddr := net.JoinHostPort(resolvedDialHost(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
+		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(logicalAddr)
+		if err != nil {
+			return err
+		}
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.client != nil {

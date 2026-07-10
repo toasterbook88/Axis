@@ -290,22 +290,26 @@ type NodeFacts struct {
 	// SSHTarget is the configured dial address (IP or hostname) used to reach
 	// this node over SSH. Placement network classification must prefer this over
 	// Hostname and over the remote interface inventory: a node may advertise a
-	// Tailscale address while being reached over the LAN.
-	SSHTarget        string                     `json:"ssh_target,omitempty" yaml:"ssh_target,omitempty"`
-	Identity         *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
-	OS               string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
-	OSVersion        string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
-	Arch             string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Resources        *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Addresses        []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	Tools            []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Ollama           *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
-	ResidentModels   []ResidentModel            `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
-	TurboQuant       *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
-	AppleFM          *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
-	RAMReservedMB    int64                      `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
-	RAMAllocatableMB int64                      `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
-	SystemReserveMB  int64                      `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
+	SSHTarget string `json:"ssh_target,omitempty" yaml:"ssh_target,omitempty"`
+	// ResolvedDialTarget is the dynamically discovered fastest IP address to
+	// reach this node (e.g. via concurrent TCP pinging of its Addresses).
+	// This allows "SDN-lite" routing over the fastest link (like a GbE switch)
+	// while maintaining the logical SSHTarget for SSH identity/auth checks.
+	ResolvedDialTarget string                     `json:"resolved_dial_target,omitempty" yaml:"resolved_dial_target,omitempty"`
+	Identity           *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
+	OS                 string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
+	OSVersion          string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
+	Arch               string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
+	Resources          *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Addresses          []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Tools              []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama             *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	ResidentModels     []ResidentModel            `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
+	TurboQuant         *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
+	AppleFM            *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
+	RAMReservedMB      int64                      `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
+	RAMAllocatableMB   int64                      `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+	SystemReserveMB    int64                      `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
 
 	// Network telemetry (Phase D)
 	SSHHandshakeLatencyMs int64        `json:"ssh_handshake_latency_ms,omitempty" yaml:"ssh_handshake_latency_ms,omitempty"`
