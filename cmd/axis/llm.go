@@ -952,7 +952,10 @@ func llmConfigureCmd() *cobra.Command {
 
 			var priority int
 			priorityStr := promptString(in, out, "Enter provider priority (0-100)", "50")
-			fmt.Sscanf(priorityStr, "%d", &priority)
+			if _, err := fmt.Sscanf(priorityStr, "%d", &priority); err != nil {
+				fmt.Fprintf(errW, "%s invalid priority %q, defaulting to 50\n", ui.Yellow("⚠"), priorityStr)
+				priority = 50
+			}
 
 			var endpoint string
 			if strings.EqualFold(providerType, "local") {

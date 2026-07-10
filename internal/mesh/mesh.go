@@ -289,7 +289,12 @@ func (m *Mesh) listenLoop(ctx context.Context) {
 			return
 		default:
 		}
-		m.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		if err := m.conn.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			m.logger.Warn("mesh: set read deadline", "err", err)
+		}
 		n, addr, err := m.conn.ReadFromUDP(buf)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
@@ -501,9 +506,12 @@ func (m *Mesh) broadcastPeerList() {
 	for _, target := range targets {
 		addr, err := net.ResolveUDPAddr("udp", target)
 		if err != nil {
+			m.logger.Debug("mesh: resolve gossip target", "target", target, "err", err)
 			continue
 		}
-		m.conn.WriteToUDP(data, addr)
+		if _, err := m.conn.WriteToUDP(data, addr); err != nil {
+			m.logger.Debug("mesh: send gossip", "target", target, "err", err)
+		}
 	}
 }
 

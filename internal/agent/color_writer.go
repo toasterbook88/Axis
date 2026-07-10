@@ -42,6 +42,9 @@ func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 				_, err = io.WriteString(cw.w, "```\033[36;1m")
 				cw.inCodeBlock = true
 			}
+			if err != nil {
+				return len(p), err
+			}
 			cw.buf = cw.buf[3:]
 			continue
 		}
@@ -56,6 +59,9 @@ func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 					// Enter inline code (yellow)
 					_, err = io.WriteString(cw.w, "`\033[33m")
 					cw.inInline = true
+				}
+				if err != nil {
+					return len(p), err
 				}
 				cw.buf = cw.buf[1:]
 				continue
@@ -75,13 +81,18 @@ func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 // Close flushes any remaining buffered text and resets styles.
 func (cw *ColorWriter) Close() error {
 	if len(cw.buf) > 0 {
-		_, _ = cw.w.Write([]byte(cw.buf))
+		if _, err := cw.w.Write([]byte(cw.buf)); err != nil {
+			cw.buf = ""
+			return err
+		}
 		cw.buf = ""
 	}
 	if cw.inCodeBlock || cw.inInline {
-		_, _ = io.WriteString(cw.w, "\033[0m")
 		cw.inCodeBlock = false
 		cw.inInline = false
+		if _, err := io.WriteString(cw.w, "\033[0m"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

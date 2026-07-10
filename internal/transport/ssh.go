@@ -151,7 +151,10 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		if !ok {
 			deadline = time.Now().Add(timeout)
 		}
-		conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			conn.Close()
+			return nil, nil, nil, 0, fmt.Errorf("ssh set deadline %s: %w", dialAddr, err)
+		}
 
 		sshConn, chans, reqs, err := ssh.NewClientConn(conn, hostKeyAddr, config)
 		if err != nil {
