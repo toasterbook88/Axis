@@ -60,8 +60,8 @@ make coverage
 5. Create and push a tag matching `version.go` (lightweight tags are fine today):
 
 ```bash
-git tag v0.14.1
-git push origin v0.14.1
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 The release workflow verifies the tag matches `internal/buildinfo/version.go`,
