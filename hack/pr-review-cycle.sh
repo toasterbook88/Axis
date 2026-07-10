@@ -9,7 +9,7 @@
 #   ./hack/pr-review-cycle.sh <pr-number> [--wait-bots SEC]
 #
 # Exit codes:
-#   0  required checks green; review state printed (operator decides next)
+#   0  required checks green; no unresolved threads (operator may still evaluate)
 #   1  tool failure, timeout, or required checks not green
 #   2  checks green but unresolved review threads remain (judgment needed)
 #
@@ -43,6 +43,18 @@ while (($# > 0)); do
   esac
 done
 
+if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+  echo "error: PR number must be an integer, got: $PR" >&2
+  exit 1
+fi
+
+for dep in gh jq; do
+  if ! command -v "$dep" >/dev/null 2>&1; then
+    echo "error: required dependency not found: $dep" >&2
+    exit 1
+  fi
+done
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -50,7 +62,8 @@ cd "$repo_root"
 REQUIRED_CHECKS=("Test & Build" "govulncheck")
 
 echo "== PR #${PR} =="
-gh pr view "$PR" --json url,title,state,headRefOid --jq '{url,title,state,head: .headRefOid[0:7]}'
+pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
+echo "$pr_json" | jq '{url,title,state,head: .headRefOid[0:7]}'
 
 echo "== Required checks (fail-closed) =="
 # Official gate: only required contexts; watch until done; non-zero on failure.
@@ -61,19 +74,23 @@ if ! gh pr checks "$PR" --required --watch --fail-fast --interval 15; then
   exit 1
 fi
 
-# Explicit presence check: --required can pass vacuously in some edge cases if
-# contexts are misconfigured; verify our named checks show pass.
-checks_json="$(gh pr view "$PR" --json statusCheckRollup)"
+# Re-fetch rollup after watch; accept CheckRun (name/conclusion) and StatusContext (context/state).
+pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
 for name in "${REQUIRED_CHECKS[@]}"; do
-  # statusCheckRollup entries use .name and .conclusion
-  conclusion="$(echo "$checks_json" | jq -r --arg n "$name" '
-    [.statusCheckRollup[]? | select(.name == $n) | .conclusion] | first // empty
+  conclusion="$(echo "$pr_json" | jq -r --arg n "$name" '
+    [
+      .statusCheckRollup[]?
+      | select((.name // "") == $n or (.context // "") == $n)
+      | (.conclusion // .state // "")
+    ] | map(select(. != "")) | first // empty
   ')"
   if [[ -z "$conclusion" ]]; then
     echo "error: required check context missing from rollup: $name" >&2
     exit 1
   fi
-  if [[ "$conclusion" != "SUCCESS" ]]; then
+  # Normalize: SUCCESS (CheckRun) or success (StatusContext)
+  conclusion_up="$(printf '%s' "$conclusion" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$conclusion_up" != "SUCCESS" ]]; then
     echo "error: required check not SUCCESS: $name=$conclusion" >&2
     exit 1
   fi
@@ -83,7 +100,7 @@ echo "required checks: green"
 echo "== Bot SLA wait (${WAIT_BOTS}s; not a quality gate) =="
 sleep "$WAIT_BOTS"
 
-head_oid="$(gh pr view "$PR" --json headRefOid --jq .headRefOid)"
+head_oid="$(echo "$pr_json" | jq -r .headRefOid)"
 echo "== Review state (head ${head_oid:0:7}) =="
 
 # Full review thread state via GraphQL (not first-page REST only).
@@ -133,7 +150,7 @@ echo "--- Review bodies ---"
 echo "$thread_json" | jq -r '
   .data.repository.pullRequest.reviews.nodes[]?
   | select((.body // "") != "")
-  | "### @\(.author.login) \(.state) commit=\(.commit.oid[0:7] // "?")\n\(.body)\n"
+  | "### @\(.author.login) \(.state) commit=\(.commit.oid[0:7] // \"?\")\n\(.body)\n"
 '
 
 echo "--- General PR comments ---"
@@ -147,10 +164,10 @@ echo "$thread_json" | jq -r --arg head "$head_oid" '
   .data.repository.pullRequest.reviewThreads.nodes[]?
   | . as $t
   | ($t.comments.nodes[0] // {}) as $c
-  | "thread resolved=\($t.isResolved) outdated=\($t.isOutdated) path=\($t.path // "?")\n  @\($c.author.login // "?") head_match=\(($c.commit.oid // "") == $head)\n  \($c.body // "")\n  \($c.url // "")\n"
+  | "thread resolved=\($t.isResolved) outdated=\($t.isOutdated) path=\($t.path // \"?\")\n  @\($c.author.login // \"?\") head_match=\(($c.commit.oid // \"\") == $head)\n  \($c.body // \"\")\n  \($c.url // \"\")\n"
 '
 
-unresolved="$(echo "$thread_json" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false)] | length')"
+unresolved="$(echo "$thread_json" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false)] | length')"
 echo "unresolved_threads=${unresolved}"
 
 echo
