@@ -128,81 +128,61 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 		return models.NetworkClassUnknown
 	}
 
-	// 1. If it is the local node, it has direct-lan quality (effectively 0ms RTT)
+	// Local node: effectively 0ms RTT on the loopback/local path.
 	if models.IsLocalNode(*n) {
 		return models.NetworkClassDirectLAN
 	}
 
-	isTailscale := false
-	isVPN := false
+	// The dial target is the route actually in use. Prefer SSHTarget (configured
+	// dial address preserved through fact collection) over Hostname, which the
+	// remote collector overwrites with the observed machine hostname (e.g.
+	// "nixos") after connect. Falling back to Hostname keeps older snapshots
+	// and tests that only set Hostname working.
+	target := dialTarget(n)
 
-	checkIP := func(ipStr string) {
-		if ip, err := netip.ParseAddr(ipStr); err == nil {
-			if ip.Is4() {
-				// Tailscale IPv4 range: 100.64.0.0/10
-				bytes := ip.As4()
-				if bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127 {
-					isTailscale = true
-				}
-				// WireGuard / AXIS VPN default ranges:
-				// - 10.8.0.0/16 (standard WireGuard)
-				// - 10.0.0.0/16 (AXIS VPN / local tunnels)
-				// - 10.254.0.0/16 (test VPN subnet)
-				if bytes[0] == 10 && (bytes[1] == 0 || bytes[1] == 8 || bytes[1] == 254) {
-					isVPN = true
-				}
-			} else if ip.Is6() {
-				// Tailscale IPv6 range starts with fd7a:115c:a1e0::/48
-				bytes := ip.As16()
-				if bytes[0] == 0xfd && bytes[1] == 0x7a && bytes[2] == 0x11 && bytes[3] == 0x5c && bytes[4] == 0xa1 && bytes[5] == 0xe0 {
-					isTailscale = true
-				}
-			}
-		}
-	}
-
-	// Check the hostname (which might be an IP address)
-	checkIP(n.Hostname)
-
-	// Check all node addresses
-	for _, addr := range n.Addresses {
-		checkIP(addr.Address)
-		if addr.SpeedClass == "tailscale" {
-			isTailscale = true
-		} else if addr.SpeedClass == "wireguard" || addr.SpeedClass == "vpn" || addr.SpeedClass == "netbird" || addr.SpeedClass == "zerotier" {
-			isVPN = true
-		}
-	}
-	// The configured SSH target (hostname) is the route actually in use. A node
-	// may have a Tailscale/VPN interface but be reached over the LAN — the
-	// route in use is what matters for placement, not the interface list. So if
-	// the hostname is a private LAN address, prefer direct-lan unless latency
-	// shows the LAN route itself is degraded.
-	if hostIP, err := netip.ParseAddr(n.Hostname); err == nil && isPrivateLAN(hostIP) {
-		if n.SSHHandshakeLatencyMs >= 150 {
-			return models.NetworkClassRelayed
-		}
-		return models.NetworkClassDirectLAN
-	}
-	// mDNS or unparseable hostname: if a LAN address exists and latency is
-	// clearly local, the route is the LAN (overlay interfaces are present but
-	// not in use).
-	if _, err := netip.ParseAddr(n.Hostname); err != nil {
-		if hasPrivateLANAddress(n) && n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 30 {
+	// 1. Dial target is a parseable IP: classify by the path we actually used.
+	// Interface inventory is irrelevant here — a node may advertise Tailscale
+	// while being reached over the LAN.
+	if hostIP, err := netip.ParseAddr(target); err == nil {
+		if isPrivateLAN(hostIP) {
+			// Route is LAN regardless of SSH handshake cost (crypto/sleep can
+			// push handshake well above RTT). Do not reclassify LAN as relayed.
 			return models.NetworkClassDirectLAN
 		}
+		if isTailscaleAddr(hostIP) {
+			if n.SSHHandshakeLatencyMs >= 150 {
+				return models.NetworkClassRelayed
+			}
+			return models.NetworkClassTailscale
+		}
+		if isVPNAddr(hostIP) {
+			if n.SSHHandshakeLatencyMs >= 150 {
+				return models.NetworkClassRelayed
+			}
+			return models.NetworkClassVPN
+		}
 	}
 
+	// 2. Non-IP dial target (mDNS / machine name) or missing SSHTarget on an
+	// older snapshot: if the node has a private LAN address and handshake
+	// latency is in the LAN range, the route is LAN. SSH handshake on a
+	// gigabit LAN is typically 20–80ms (crypto, not RTT), so the gate is 100ms
+	// — not 30ms.
+	if hasPrivateLANAddress(n) && n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 100 {
+		return models.NetworkClassDirectLAN
+	}
+
+	// 3. Overlay only when the dial target itself (or its speed-class metadata
+	// when target is an address string we already handled) is overlay. Scan
+	// address inventory solely as a last-resort signal when there is no LAN
+	// path evidence at all.
+	isTailscale, isVPN := classifyOverlayFromTargetAndInventory(n, target)
 	if isTailscale {
-		// Sub-classify based on SSHHandshakeLatencyMs:
-		// If SSHHandshakeLatencyMs < 60ms -> tailscale-direct
-		// If SSHHandshakeLatencyMs >= 150ms -> relayed (DERP)
 		if n.SSHHandshakeLatencyMs >= 150 {
 			return models.NetworkClassRelayed
 		}
 		return models.NetworkClassTailscale
 	}
-
 	if isVPN {
 		if n.SSHHandshakeLatencyMs >= 150 {
 			return models.NetworkClassRelayed
@@ -210,17 +190,81 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 		return models.NetworkClassVPN
 	}
 
-	// Fallback to LAN if latency is very low
-	if n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 20 {
+	// 4. Latency-only fallbacks.
+	if n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 50 {
 		return models.NetworkClassDirectLAN
 	}
-
-	// If latency is very high, classify as relayed
 	if n.SSHHandshakeLatencyMs >= 150 {
 		return models.NetworkClassRelayed
 	}
-
 	return models.NetworkClassUnknown
+}
+
+// dialTarget returns the address used to reach the node. SSHTarget is the
+// configured dial string preserved by the remote collector; Hostname is the
+// observed machine name and is only a fallback for older data.
+func dialTarget(n *models.NodeFacts) string {
+	if n.SSHTarget != "" {
+		return n.SSHTarget
+	}
+	return n.Hostname
+}
+
+func isTailscaleAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if ip.Is4() {
+		b := ip.As4()
+		// Tailscale IPv4 CGNAT: 100.64.0.0/10
+		return b[0] == 100 && b[1] >= 64 && b[1] <= 127
+	}
+	// Tailscale IPv6: fd7a:115c:a1e0::/48
+	b := ip.As16()
+	return b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 && b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
+}
+
+func isVPNAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !ip.Is4() {
+		return false
+	}
+	b := ip.As4()
+	// WireGuard / AXIS VPN default ranges:
+	// - 10.8.0.0/16 (standard WireGuard)
+	// - 10.0.0.0/16 (AXIS VPN / local tunnels)
+	// - 10.254.0.0/16 (test VPN subnet)
+	return b[0] == 10 && (b[1] == 0 || b[1] == 8 || b[1] == 254)
+}
+
+// classifyOverlayFromTargetAndInventory returns overlay flags only when there
+// is no private-LAN dial evidence. Prefer dial-target string; fall back to
+// address inventory speed classes when the dial target is a bare name.
+func classifyOverlayFromTargetAndInventory(n *models.NodeFacts, target string) (isTailscale, isVPN bool) {
+	if ip, err := netip.ParseAddr(target); err == nil {
+		if isTailscaleAddr(ip) {
+			return true, false
+		}
+		if isVPNAddr(ip) {
+			return false, true
+		}
+		return false, false
+	}
+	// Bare name with no LAN evidence: inventory is the only signal left.
+	for _, addr := range n.Addresses {
+		if addr.SpeedClass == "tailscale" {
+			isTailscale = true
+		} else if addr.SpeedClass == "wireguard" || addr.SpeedClass == "vpn" || addr.SpeedClass == "netbird" || addr.SpeedClass == "zerotier" {
+			isVPN = true
+		}
+		if ip, err := netip.ParseAddr(addr.Address); err == nil {
+			if isTailscaleAddr(ip) {
+				isTailscale = true
+			}
+			if isVPNAddr(ip) {
+				isVPN = true
+			}
+		}
+	}
+	return isTailscale, isVPN
 }
 
 // isPrivateLAN reports whether an IP is a private LAN address: RFC1918

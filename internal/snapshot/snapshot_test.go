@@ -317,11 +317,51 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		{
 			Name:                  "node-lan-with-tailscale",
 			Hostname:              "192.168." + "1.219",
+			SSHTarget:             "192.168." + "1.219",
 			SSHHandshakeLatencyMs: 42,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
 				{Address: "192.168." + "1.219", SpeedClass: "gigabit"},
 				{Address: "100.64." + "1.10", SpeedClass: "tailscale"},
+			},
+		},
+		// Production shape: remote collector overwrites Hostname with the
+		// observed machine name ("nixos") while SSHTarget keeps the dial IP.
+		// Classification must use SSHTarget, not Hostname or Tailscale ifaces.
+		{
+			Name:                  "node-prod-hostname-overwrite",
+			Hostname:              "nixos",              // observed machine hostname
+			SSHTarget:             "192.168." + "1.219", // configured dial IP
+			SSHHandshakeLatencyMs: 42,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: "192.168." + "1.219", SpeedClass: "gigabit"},
+				{Address: "100.64." + "1.10", SpeedClass: "tailscale"},
+			},
+		},
+		// Production shape without SSHTarget (older snapshot): machine name +
+		// LAN address + handshake in the LAN range must still be direct-lan.
+		// 42ms exceeds the old 30ms gate that caused false Tailscale penalties.
+		{
+			Name:                  "node-prod-mdns-lan-42ms",
+			Hostname:              "foundry",
+			SSHHandshakeLatencyMs: 42,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: "192.168." + "1.249", SpeedClass: "gigabit"},
+			},
+		},
+		// High SSH handshake on a true LAN dial target must stay direct-lan —
+		// handshake cost is not path class (crypto/load, not RTT).
+		{
+			Name:                  "node-lan-high-handshake",
+			Hostname:              "m1.local",
+			SSHTarget:             "192.168." + "1.189",
+			SSHHandshakeLatencyMs: 242,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: "192.168." + "1.189", SpeedClass: "gigabit"},
+				{Address: "100.64." + "2.2", SpeedClass: "tailscale"},
 			},
 		},
 		{
@@ -346,14 +386,17 @@ func TestBuild_NetworkClassification(t *testing.T) {
 	snap := Build(nodes)
 
 	expected := map[string]models.NetworkClass{
-		"node-tailscale-direct":   models.NetworkClassTailscale,
-		"node-tailscale-relayed":  models.NetworkClassRelayed,
-		"node-vpn":                models.NetworkClassVPN,
-		"node-vpn-by-subnet":      models.NetworkClassVPN,
-		"node-direct-lan":         models.NetworkClassDirectLAN,
-		"node-lan-with-vpn-iface": models.NetworkClassDirectLAN,
-		"node-lan-with-tailscale": models.NetworkClassDirectLAN,
-		"node-unknown":            models.NetworkClassUnknown,
+		"node-tailscale-direct":        models.NetworkClassTailscale,
+		"node-tailscale-relayed":       models.NetworkClassRelayed,
+		"node-vpn":                     models.NetworkClassVPN,
+		"node-vpn-by-subnet":           models.NetworkClassVPN,
+		"node-direct-lan":              models.NetworkClassDirectLAN,
+		"node-lan-with-vpn-iface":      models.NetworkClassDirectLAN,
+		"node-lan-with-tailscale":      models.NetworkClassDirectLAN,
+		"node-prod-hostname-overwrite": models.NetworkClassDirectLAN,
+		"node-prod-mdns-lan-42ms":      models.NetworkClassDirectLAN,
+		"node-lan-high-handshake":      models.NetworkClassDirectLAN,
+		"node-unknown":                 models.NetworkClassUnknown,
 	}
 
 	for _, n := range snap.Nodes {
