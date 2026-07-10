@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"gopkg.in/yaml.v3"
 )
 
@@ -168,8 +168,7 @@ type Config struct {
 
 // DefaultConfigPath returns ~/.axis/nodes.yaml.
 func DefaultConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "nodes.yaml")
+	return persist.AxisPath("nodes.yaml")
 }
 
 // Load reads and validates a config file.

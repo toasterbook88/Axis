@@ -22,6 +22,7 @@ import (
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -800,8 +801,7 @@ func runLocal(
 	}
 
 	var logFile *os.File
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".axis", "logs")
+	logDir := persist.AxisPath("logs")
 	if err := os.MkdirAll(logDir, 0755); err == nil {
 		logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
 		if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
@@ -928,8 +928,7 @@ func runRemote(
 	}
 
 	var logFile *os.File
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".axis", "logs")
+	logDir := persist.AxisPath("logs")
 	if err := os.MkdirAll(logDir, 0755); err == nil {
 		logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
 		if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
