@@ -62,7 +62,7 @@ The live repo currently contains:
 - `axis doctor` probes local AI backends (llama-server and MLX) and reports installed/running/port/model-count state as advisory checks; probe errors surface stderr for actionability without blocking core SSH/config checks
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
-- Protected `main` with required CI status checks (`Test & Build`, `govulncheck`), squash-only merges, and delete-branch-on-merge. Approving reviews and conversation resolution are **not** required by branch rules today (solo-operator workflow: explicit operator merge after green checks). Linear history via squash.
+- Protected `main` with required CI status checks (`Test & Build`, `govulncheck`), squash-only merges, and required conversation resolution. Approving reviews are **not** required by branch rules today (solo-operator workflow: explicit operator merge after green checks and thread resolution). Linear history via squash.
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 - Shell-quoting-safe remote cleanup traps: variable assignment pattern (`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`) eliminates nested quoting interaction; adversarial test suite covers spaces, quotes, dollar signs, backticks, semicolons
 - `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated

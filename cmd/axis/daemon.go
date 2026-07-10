@@ -360,6 +360,9 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 }
 
 func daemonListenAddr(addr string) (string, error) {
+	if strings.HasPrefix(addr, "/") || strings.HasPrefix(addr, "unix://") {
+		return strings.TrimPrefix(addr, "unix://"), nil
+	}
 	normalized := daemon.NormalizeAddr(addr)
 	u, err := url.Parse(normalized)
 	if err != nil {
@@ -375,6 +378,23 @@ func daemonListenAddr(addr string) (string, error) {
 }
 
 func findDaemonPID(addr string) (int, error) {
+	if strings.HasPrefix(addr, "/") {
+		// Use fuser to find the process holding the unix socket. fuser writes
+		// PIDs to stdout and extra info to stderr.
+		out, err := exec.Command("fuser", addr).Output()
+		if err != nil {
+			// Not an error if fuser is missing or no process is found.
+			return 0, nil
+		}
+		fields := strings.Fields(string(out))
+		for _, f := range fields {
+			if pid, err := strconv.Atoi(strings.TrimSpace(f)); err == nil && pid > 0 {
+				return pid, nil
+			}
+		}
+		return 0, nil
+	}
+
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return 0, fmt.Errorf("split host/port: %w", err)
