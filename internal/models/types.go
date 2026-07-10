@@ -283,7 +283,14 @@ type NodeFacts struct {
 	Role string `json:"role,omitempty" yaml:"role,omitempty"`
 
 	// Observed state
-	Hostname         string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	// Hostname is the machine's observed hostname (uname/os.Hostname), not the
+	// dial target used to reach the node. Use SSHTarget for the route in use.
+	Hostname string `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	// SSHTarget is the configured dial address (IP or hostname) used to reach
+	// this node over SSH. Placement network classification must prefer this over
+	// Hostname and over the remote interface inventory: a node may advertise a
+	// Tailscale address while being reached over the LAN.
+	SSHTarget        string                     `json:"ssh_target,omitempty" yaml:"ssh_target,omitempty"`
 	Identity         *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
 	OS               string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
 	OSVersion        string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0

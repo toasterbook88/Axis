@@ -35,8 +35,13 @@ func NewRemoteCollector(name, role, hostname string, exec transport.Executor) *R
 //   - subsequent command fail → partial
 func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error) {
 	facts := &models.NodeFacts{
-		Name:        c.NodeName,
-		Role:        c.Role,
+		Name: c.NodeName,
+		Role: c.Role,
+		// SSHTarget is the configured dial address. Hostname is overwritten below
+		// with the observed machine hostname after connect; classification must
+		// keep using SSHTarget for the route in use.
+		SSHTarget:   c.Hostname,
+		Hostname:    c.Hostname, // fallback until observed hostname is collected
 		Status:      models.StatusComplete,
 		CollectedAt: time.Now().UTC(),
 	}
