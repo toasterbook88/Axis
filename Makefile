@@ -34,7 +34,7 @@ test-race:
 	go test ./... -count=1 -timeout 180s -race
 
 lint:
-	@unformatted=$$(gofmt -l .); \
+	@unformatted=$$(gofmt -l .) || exit $$?; \
 	if [ -n "$$unformatted" ]; then \
 		echo "Files need gofmt:"; \
 		echo "$$unformatted"; \
