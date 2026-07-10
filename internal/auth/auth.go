@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 const (
@@ -16,8 +18,7 @@ const (
 
 // TokenPath returns ~/.axis/token
 func TokenPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "token")
+	return persist.AxisPath("token")
 }
 
 // LoadOrGenerateToken attempts to load the token from environment or file,
@@ -85,44 +86,13 @@ func GenerateToken() (string, error) {
 // Uses a temp file + rename to avoid partial writes on crash.
 func SaveToken(token string) error {
 	path := TokenPath()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	// Create the directory with restrictive 0700 permissions before delegating
+	// the atomic write; WriteFileAtomic's own MkdirAll will not loosen an
+	// already-existing directory.
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-
-	tmp, err := os.CreateTemp(dir, "token.*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-
-	ok := false
-	defer func() {
-		if !ok {
-			tmp.Close()
-			os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmp.Write([]byte(token)); err != nil {
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	ok = true
-	// Enforce permissions on the destination even if it previously existed
-	// with broader permissions.
-	return os.Chmod(path, 0600)
+	return persist.WriteFileAtomic(path, []byte(token), 0600)
 }
 
 // IsUnixAddr returns true if the address is a Unix socket path.

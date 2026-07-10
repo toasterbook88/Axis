@@ -80,8 +80,7 @@ const (
 )
 
 func Path() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "state.json")
+	return persist.AxisPath("state.json")
 }
 
 func Load() (*ClusterState, error) {
