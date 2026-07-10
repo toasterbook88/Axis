@@ -77,11 +77,12 @@ func TestIsDockerBridgeAddr(t *testing.T) {
 		address string
 		want    bool
 	}{
+		{address: "172.16.0.1", want: true}, // low end of 172.16.0.0/12
 		{address: "172.17.0.1", want: true},
 		{address: "172.18.10.2", want: true},
 		{address: "172.31.255.254", want: true},
 		{address: "::ffff:172.17.1.2", want: true},
-		{address: "172.16.0.1", want: false},
+		{address: "172.15.0.1", want: false},
 		{address: "172.32.0.1", want: false},
 		{address: "192.168.1.10", want: false},
 		{address: "fd00::1", want: false},
@@ -104,7 +105,12 @@ func TestIsTailscaleAddr(t *testing.T) {
 	}{
 		{address: "fd7a:115c:a1e0::1", want: true},
 		{address: "fd7a:115c:a1e1::1", want: false},
-		{address: "100.64.0.1", want: false},
+		{address: "100.64.0.1", want: true},        // IPv4 CGNAT low
+		{address: "100.127.255.254", want: true},   // IPv4 CGNAT high
+		{address: "100.63.0.1", want: false},       // just below CGNAT
+		{address: "100.128.0.1", want: false},      // just above CGNAT
+		{address: "::ffff:100.64.0.1", want: true}, // v4-mapped CGNAT must still match
+		{address: "192.168.1.1", want: false},
 	}
 
 	for _, tt := range tests {

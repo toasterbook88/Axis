@@ -1175,7 +1175,7 @@ func discoverLlamaServerLocal(ctx context.Context) []models.ResidentModel {
 	}
 	var parsed llamaServerDiscoveryPayload
 	if json.Unmarshal(out, &parsed) == nil && parsed.Installed {
-		return parsed.ResidentModels
+		return withResidentPort(parsed.ResidentModels, parsed.Port)
 	}
 	return nil
 }
@@ -1190,7 +1190,7 @@ func discoverMLXLocal(ctx context.Context) []models.ResidentModel {
 	}
 	var parsed mlxDiscoveryPayload
 	if json.Unmarshal(out, &parsed) == nil && parsed.Installed {
-		return parsed.ResidentModels
+		return withResidentPort(parsed.ResidentModels, parsed.Port)
 	}
 	return nil
 }

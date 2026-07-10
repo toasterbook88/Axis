@@ -383,12 +383,18 @@ func findDaemonPID(addr string) (int, error) {
 		// PIDs to stdout and extra info to stderr.
 		out, err := exec.Command("fuser", addr).Output()
 		if err != nil {
-			// Not an error if fuser is missing or no process is found.
-			return 0, nil
+			// fuser is absent on macOS and minimal images; fall back to lsof,
+			// which is portable and understands socket paths (-Fp prints "p<pid>").
+			out, err = exec.Command("lsof", "-Fp", "--", addr).Output()
+			if err != nil {
+				// Not an error if neither tool is available or no process is found.
+				return 0, nil
+			}
 		}
 		fields := strings.Fields(string(out))
 		for _, f := range fields {
-			if pid, err := strconv.Atoi(strings.TrimSpace(f)); err == nil && pid > 0 {
+			clean := strings.TrimPrefix(strings.TrimSpace(f), "p")
+			if pid, err := strconv.Atoi(clean); err == nil && pid > 0 {
 				return pid, nil
 			}
 		}
