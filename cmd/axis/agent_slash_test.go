@@ -191,8 +191,8 @@ func TestResolveNodeEndpoint(t *testing.T) {
 			{Address: "192.168.1.100", Scope: "global"},
 		},
 	}
-
-	endpoint, err := resolveNodeEndpoint(remoteNode)
+	// 1. Should pick SSHTarget if available
+	endpoint, err := resolveNodeEndpoint(remoteNode, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -209,7 +209,8 @@ func TestResolveNodeEndpoint(t *testing.T) {
 		},
 		Hostname: "remote-host-only",
 	}
-	endpoint, err = resolveNodeEndpoint(remoteNodeNoAddr)
+	// 2. Should fallback to Hostname if no valid addresses
+	endpoint, err = resolveNodeEndpoint(remoteNodeNoAddr, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -225,7 +226,8 @@ func TestResolveNodeEndpoint(t *testing.T) {
 			Port:      11434,
 		},
 	}
-	_, err = resolveNodeEndpoint(remoteNodeInvalid)
+	// 3. Should return error if no valid addresses and no hostname
+	_, err = resolveNodeEndpoint(remoteNodeInvalid, 0)
 	if err == nil {
 		t.Fatal("expected error resolving remote node with no valid address or hostname")
 	}

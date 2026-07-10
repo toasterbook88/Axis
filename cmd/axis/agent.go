@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"regexp"
@@ -1019,9 +1020,9 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 			detail := fmt.Sprintf("%s - %s", choice.ProviderName, choice.ProviderKind)
 			if choice.ProviderKind == "local" {
 				if choice.Node != "" {
-					detail = fmt.Sprintf("Remote node %s (%s)", choice.Node, choice.Endpoint)
+					detail = fmt.Sprintf("Remote node %s [%s] (%s)", choice.Node, choice.ProviderName, choice.Endpoint)
 				} else {
-					detail = fmt.Sprintf("Local node (%s)", choice.Endpoint)
+					detail = fmt.Sprintf("Local node [%s] (%s)", choice.ProviderName, choice.Endpoint)
 				}
 			}
 
@@ -1029,7 +1030,7 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 			if choice.ProviderKind == "local" && choice.Node != "" && choice.Endpoint == "" {
 				disabled = true
 				detail += " (unsupported: no valid IP/hostname)"
-			} else if choice.ProviderKind == "local" && choice.Node != "" && choice.Disabled {
+			} else if choice.ProviderKind == "local" && disabled {
 				detail += " (unreachable)"
 			}
 
@@ -1381,39 +1382,69 @@ func guardedAgentTaskRunner() agent.TaskRunner {
 	}
 }
 
-func resolveNodeEndpoint(n models.NodeFacts) (string, error) {
-	if models.IsLocalNode(n) {
-		port := 11434
-		if n.Ollama != nil && n.Ollama.Port > 0 {
-			port = n.Ollama.Port
-		}
-		return fmt.Sprintf("http://localhost:%d", port), nil
-	}
-
-	if n.Ollama == nil || !n.Ollama.Installed {
-		return "", fmt.Errorf("Ollama is not installed on remote node %s", n.Name)
-	}
-
-	port := n.Ollama.Port
+// resolveNodeEndpoint determines the reachable HTTP endpoint for a given node
+// and port. If port is 0, it defaults to 11434. It prioritizes the explicitly
+// configured SSHTarget (since that is the known dial route), followed by
+// private LAN addresses, over other overlay/docker interfaces.
+func resolveNodeEndpoint(n models.NodeFacts, port int) (string, error) {
 	if port <= 0 {
 		port = 11434
 	}
 
+	if models.IsLocalNode(n) {
+		return fmt.Sprintf("http://localhost:%d", port), nil
+	}
+
 	var targetHost string
-	for _, addr := range n.Addresses {
-		if addr.Scope != "link-local" && addr.Address != "" {
-			targetHost = addr.Address
-			break
+
+	// 1. Prefer the configured dial target if it's a parseable IP.
+	if n.SSHTarget != "" {
+		if _, err := netip.ParseAddr(n.SSHTarget); err == nil {
+			targetHost = n.SSHTarget
 		}
 	}
+
+	// 2. Fallback to searching addresses, preferring private LAN.
+	if targetHost == "" {
+		for _, addr := range n.Addresses {
+			if addr.Scope != "link-local" && addr.Address != "" {
+				if ip, err := netip.ParseAddr(addr.Address); err == nil {
+					if isPrivateLAN(ip) {
+						targetHost = addr.Address
+						break
+					}
+					// keep first valid address if no LAN found
+					if targetHost == "" {
+						targetHost = addr.Address
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Absolute fallback to hostname (machine name).
 	if targetHost == "" {
 		targetHost = n.Hostname
 	}
+
 	if targetHost == "" {
 		return "", fmt.Errorf("remote node %s has no valid network address or hostname", n.Name)
 	}
 
 	return fmt.Sprintf("http://%s:%d", targetHost, port), nil
+}
+
+func isPrivateLAN(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	if ip.Is4() {
+		return ip.IsPrivate()
+	}
+	// IPv6 ULA (fc00::/7)
+	b := ip.As16()
+	return b[0]&0xfe == 0xfc
 }
 
 func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) error {
@@ -1504,17 +1535,28 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 	}
 
 	if rt.Snapshot != nil {
-		// Identify unique remote Ollama endpoints to probe concurrently
+		// Identify unique remote endpoints to probe concurrently
 		type probeResult struct {
 			endpoint string
 			ok       bool
 		}
 		endpointToNodes := make(map[string][]models.NodeFacts)
 		for _, n := range rt.Snapshot.Nodes {
+			// Probe Ollama instances
 			if n.Ollama != nil && n.Ollama.Installed && !models.IsLocalNode(n) {
-				endpoint, err := resolveNodeEndpoint(n)
+				endpoint, err := resolveNodeEndpoint(n, n.Ollama.Port)
 				if err == nil && endpoint != "" {
-					endpointToNodes[endpoint] = append(endpointToNodes[endpoint], n)
+					endpointToNodes[endpoint+"/api/tags"] = append(endpointToNodes[endpoint+"/api/tags"], n)
+				}
+			}
+			// Probe MLX/llama.cpp resident models
+			for _, rm := range n.ResidentModels {
+				if (rm.Runtime == "mlx" || rm.Runtime == "llama.cpp") && !models.IsLocalNode(n) && rm.Port > 0 {
+					endpoint, err := resolveNodeEndpoint(n, rm.Port)
+					if err == nil && endpoint != "" {
+						// OpenAI-compatible /v1/models probe
+						endpointToNodes[endpoint+"/v1/models"] = append(endpointToNodes[endpoint+"/v1/models"], n)
+					}
 				}
 			}
 		}
@@ -1525,7 +1567,7 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 			wg.Add(1)
 			go func(endpoint string) {
 				defer wg.Done()
-				ok := probeEndpointFn(endpoint + "/api/tags")
+				ok := probeEndpointFn(endpoint)
 				ch <- probeResult{endpoint: endpoint, ok: ok}
 			}(ep)
 		}
@@ -1543,32 +1585,29 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 
 		seen := make(map[string]bool)
 		for _, n := range rt.Snapshot.Nodes {
+			var nodeLabel string
+			var securityClass agent.BackendSecurityClass
+			if models.IsLocalNode(n) {
+				nodeLabel = ""
+				securityClass = agent.BackendLocal
+			} else {
+				nodeLabel = n.Name
+				securityClass = agent.BackendLocal
+			}
+
+			// Add Ollama models
 			if n.Ollama != nil && n.Ollama.Installed {
-				endpoint, err := resolveNodeEndpoint(n)
+				endpoint, err := resolveNodeEndpoint(n, n.Ollama.Port)
 				disabled := false
 				if err != nil {
 					disabled = true
-				} else if !models.IsLocalNode(n) {
-					// Mark as disabled if probe failed
-					if !probeMap[endpoint] {
-						disabled = true
-					}
+				} else if !models.IsLocalNode(n) && !probeMap[endpoint+"/api/tags"] {
+					disabled = true
 				}
 				for _, mName := range n.Ollama.Models {
-					key := n.Name + ":" + mName
+					key := n.Name + ":ollama:" + mName
 					if !seen[key] {
 						seen[key] = true
-						var nodeLabel string
-						var securityClass agent.BackendSecurityClass
-
-						if models.IsLocalNode(n) {
-							nodeLabel = ""
-							securityClass = agent.BackendLocal
-						} else {
-							nodeLabel = n.Name
-							securityClass = agent.BackendLocal
-						}
-
 						choices = append(choices, ModelChoice{
 							ID:            key,
 							Model:         mName,
@@ -1580,6 +1619,34 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 							Disabled:      disabled,
 						})
 					}
+				}
+			}
+
+			// Add Resident Models (llama.cpp / MLX / etc)
+			for _, rm := range n.ResidentModels {
+				if rm.Runtime == "ollama" {
+					continue // already covered above
+				}
+				endpoint, err := resolveNodeEndpoint(n, rm.Port)
+				disabled := false
+				if err != nil || rm.Port <= 0 {
+					disabled = true
+				} else if !models.IsLocalNode(n) && !probeMap[endpoint+"/v1/models"] {
+					disabled = true
+				}
+				key := n.Name + ":" + rm.Runtime + ":" + rm.Name
+				if !seen[key] {
+					seen[key] = true
+					choices = append(choices, ModelChoice{
+						ID:            key,
+						Model:         rm.Name,
+						ProviderName:  rm.Runtime,
+						ProviderKind:  "local",
+						Node:          nodeLabel,
+						Endpoint:      endpoint,
+						SecurityClass: securityClass,
+						Disabled:      disabled,
+					})
 				}
 			}
 		}
