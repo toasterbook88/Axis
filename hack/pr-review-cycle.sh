@@ -1,101 +1,184 @@
 #!/usr/bin/env bash
-# Optimized PR review cycle for AXIS (solo-operator + bot reviews).
+# PR review cycle helper for AXIS (Cranium / Bash 4+; not stock macOS bash 3.2).
 #
-# Goal: compress the loop
-#   push → checks → bot comments → evaluate → fix if credible → reply →
-#   re-check → merge
-# without requiring bot-thread resolution as a branch rule, and without
-# waiting forever for Gemini/Copilot.
+# Purpose: compress the solo-operator loop
+#   checks green → collect full review state → print for evaluation
+# without fail-open check parsing and without auto-merge.
 #
 # Usage:
-#   ./hack/pr-review-cycle.sh <pr-number> [--wait-bots SEC] [--merge]
+#   ./hack/pr-review-cycle.sh <pr-number> [--wait-bots SEC]
 #
-# Default --wait-bots is 120s after checks go green (bots usually land by then).
-# Exit codes: 0 ready/merged, 2 needs human judgment, 1 tool failure.
+# Exit codes:
+#   0  required checks green; no unresolved threads (operator may still evaluate)
+#   1  tool failure, timeout, or required checks not green
+#   2  checks green but unresolved review threads remain (judgment needed)
+#
+# Does NOT: auto-patch, auto-reply, auto-resolve, or merge.
+# Bot comments are advisory; evaluate credibility before applying.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <pr-number> [--wait-bots SEC] [--merge]" >&2
+  echo "Usage: $0 <pr-number> [--wait-bots SEC]" >&2
   exit 1
 fi
 
 PR="$1"
 shift
 WAIT_BOTS=120
-DO_MERGE=0
 while (($# > 0)); do
   case "$1" in
-    --wait-bots) WAIT_BOTS="$2"; shift 2 ;;
-    --merge) DO_MERGE=1; shift ;;
-    *) echo "unknown arg: $1" >&2; exit 1 ;;
+    --wait-bots)
+      WAIT_BOTS="$2"
+      shift 2
+      ;;
+    --merge)
+      echo "error: --merge removed; this script is fail-closed and will not merge" >&2
+      echo "merge manually after evaluating comments: gh pr merge $PR --squash" >&2
+      exit 1
+      ;;
+    *)
+      echo "unknown arg: $1" >&2
+      exit 1
+      ;;
   esac
+done
+
+if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+  echo "error: PR number must be an integer, got: $PR" >&2
+  exit 1
+fi
+
+for dep in gh jq; do
+  if ! command -v "$dep" >/dev/null 2>&1; then
+    echo "error: required dependency not found: $dep" >&2
+    exit 1
+  fi
 done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-echo "== PR #$PR =="
-gh pr view "$PR" --json url,title,state,statusCheckRollup,reviewDecision --jq '{url,title,state,reviewDecision}'
+# Required status contexts (must match branch protection).
+REQUIRED_CHECKS=("Test & Build" "govulncheck")
 
-echo "== Wait for required checks =="
-# Poll until Test & Build and govulncheck are not pending (or timeout ~15m)
-deadline=$((SECONDS + 900))
-while (( SECONDS < deadline )); do
-  mapfile -t lines < <(gh pr checks "$PR" 2>/dev/null || true)
-  pending=0
-  failed=0
-  for line in "${lines[@]}"; do
-    # format: NAME  STATUS  ...
-    name=$(echo "$line" | awk '{print $1}')
-    status=$(echo "$line" | awk '{print $2}')
-    case "$name" in
-      Test|govulncheck)
-        # "Test & Build" splits — match Build line too via full line
-        ;;
-    esac
-    if echo "$line" | grep -qE 'Test & Build|govulncheck'; then
-      if echo "$line" | grep -qiE 'pending|queued|in_progress'; then
-        pending=1
-      fi
-      if echo "$line" | grep -qiE 'fail'; then
-        failed=1
-      fi
-    fi
-  done
-  if (( failed )); then
-    echo "Required check failed:" >&2
-    gh pr checks "$PR" >&2 || true
+echo "== PR #${PR} =="
+pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
+echo "$pr_json" | jq '{url,title,state,head: .headRefOid[0:7]}'
+
+echo "== Required checks (fail-closed) =="
+# Official gate: only required contexts; watch until done; non-zero on failure.
+# See: https://cli.github.com/manual/gh_pr_checks
+if ! gh pr checks "$PR" --required --watch --fail-fast --interval 15; then
+  echo "error: required checks failed or did not complete successfully" >&2
+  gh pr checks "$PR" >&2 || true
+  exit 1
+fi
+
+# Re-fetch rollup after watch; accept CheckRun (name/conclusion) and StatusContext (context/state).
+pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
+for name in "${REQUIRED_CHECKS[@]}"; do
+  conclusion="$(echo "$pr_json" | jq -r --arg n "$name" '
+    [
+      .statusCheckRollup[]?
+      | select((.name // "") == $n or (.context // "") == $n)
+      | (.conclusion // .state // "")
+    ] | map(select(. != "")) | first // empty
+  ')"
+  if [[ -z "$conclusion" ]]; then
+    echo "error: required check context missing from rollup: $name" >&2
     exit 1
   fi
-  if (( pending == 0 )); then
-    break
+  # Normalize: SUCCESS (CheckRun) or success (StatusContext)
+  conclusion_up="$(printf '%s' "$conclusion" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$conclusion_up" != "SUCCESS" ]]; then
+    echo "error: required check not SUCCESS: $name=$conclusion" >&2
+    exit 1
   fi
-  sleep 15
 done
-gh pr checks "$PR" || true
+echo "required checks: green"
 
-echo "== Wait ${WAIT_BOTS}s for bot review comments (non-blocking SLA) =="
+echo "== Bot SLA wait (${WAIT_BOTS}s; not a quality gate) =="
 sleep "$WAIT_BOTS"
 
-echo "== Inline review comments =="
-comments_json="$(gh api "repos/toasterbook88/Axis/pulls/${PR}/comments")"
-count=$(echo "$comments_json" | jq 'length')
-echo "inline_count=$count"
-echo "$comments_json" | jq -r '.[] | "---\n@\(.user.login) \(.path):\(.line // .original_line)\n\(.body)\nURL: \(.html_url)\n"'
+head_oid="$(echo "$pr_json" | jq -r .headRefOid)"
+echo "== Review state (head ${head_oid:0:7}) =="
+
+# Full review thread state via GraphQL (not first-page REST only).
+thread_json="$(gh api graphql -f query="
+query {
+  repository(owner: \"toasterbook88\", name: \"Axis\") {
+    pullRequest(number: ${PR}) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          isOutdated
+          path
+          comments(first: 50) {
+            nodes {
+              author { login }
+              body
+              createdAt
+              outdated
+              url
+              originalCommit { oid }
+              commit { oid }
+            }
+          }
+        }
+      }
+      reviews(first: 50) {
+        nodes {
+          author { login }
+          state
+          body
+          submittedAt
+          commit { oid }
+        }
+      }
+      comments(first: 50) {
+        nodes {
+          author { login }
+          body
+          createdAt
+        }
+      }
+    }
+  }
+}")"
+
+echo "--- Review bodies ---"
+echo "$thread_json" | jq -r '
+  .data.repository.pullRequest.reviews.nodes[]?
+  | select((.body // "") != "")
+  | "### @\(.author.login) \(.state) commit=\(.commit.oid[0:7] // \"?\")\n\(.body)\n"
+'
+
+echo "--- General PR comments ---"
+echo "$thread_json" | jq -r '
+  .data.repository.pullRequest.comments.nodes[]?
+  | "### @\(.author.login) @ \(.createdAt)\n\(.body)\n"
+'
+
+echo "--- Inline threads ---"
+echo "$thread_json" | jq -r --arg head "$head_oid" '
+  .data.repository.pullRequest.reviewThreads.nodes[]?
+  | . as $t
+  | ($t.comments.nodes[0] // {}) as $c
+  | "thread resolved=\($t.isResolved) outdated=\($t.isOutdated) path=\($t.path // \"?\")\n  @\($c.author.login // \"?\") head_match=\(($c.commit.oid // \"\") == $head)\n  \($c.body // \"\")\n  \($c.url // \"\")\n"
+'
+
+unresolved="$(echo "$thread_json" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false)] | length')"
+echo "unresolved_threads=${unresolved}"
 
 echo
-echo "EVALUATION RULES (operator/agent):"
-echo "  1. Credible + cheap (docs, error-masking, clear bugs) → apply, commit, push, reply."
-echo "  2. Wrong or speculative → reply with evidence; do NOT change code."
-echo "  3. Do not wait for more bots after SLA; do not require thread resolution to merge."
-echo "  4. Re-run: push triggers PR CI once (push-to-main only on main)."
-echo "  5. Merge only when Test & Build + govulncheck are green."
-echo
+echo "OPERATOR NEXT STEPS"
+echo "  1. Evaluate each unresolved/current-head comment for credibility."
+echo "  2. If credible and cheap: patch, push, re-run this script."
+echo "  3. Reply on threads; resolve only after handling."
+echo "  4. Merge manually when green: gh pr merge ${PR} --squash"
+echo "  This script will not merge."
 
-if (( DO_MERGE == 1 )); then
-  echo "== Merge (squash) =="
-  gh pr merge "$PR" --squash --delete-branch
-  echo "merged"
-else
-  echo "Dry run complete. Fix/reply as needed, push, re-run this script, then --merge."
+if [[ "$unresolved" != "0" ]]; then
+  exit 2
 fi
+exit 0
