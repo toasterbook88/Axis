@@ -8,45 +8,67 @@ test, and contribute effectively.
 ```bash
 git clone https://github.com/toasterbook88/axis.git
 cd axis
-go build -o axis ./cmd/axis/
+make build                 # ./axis with commit/date ldflags
+make install-user          # ~/.local/bin/axis (preferred on Cranium)
+# make install              # $GOPATH/bin/axis (legacy; often not on PATH)
 ```
 
-Requires Go 1.26.1+.
+Requires Go 1.26.1+ (`go.mod` is authoritative).
+
+Prove which binary you are running:
+
+```bash
+which -a axis
+axis version               # must show commit: + built: when installed via Make
+# commit c32c761 (etc.) = tip of main; release tags embed the tagged commit
+```
+
+After installing a new binary on a host that uses the daemon:
+
+```bash
+axis daemon restart && axis daemon status
+```
 
 ## Running Tests
 
 ```bash
-go test ./...
-go test -race ./...
-./hack/coverage-check.sh
+make lint
+make test
+make test-race
+make coverage
 ```
 
 ## Releasing
 
-AXIS release artifacts are built from signed `v*` tags by GitHub Actions and
-GoReleaser.
+AXIS release artifacts are built from `v*` tags by GitHub Actions and GoReleaser.
+**GoReleaser creates the GitHub Release.** Do not run `gh release create` before
+the tag workflow — that breaks repo-truth gates and leaves releases without assets.
 
-1. Update `internal/buildinfo/version.go`.
-2. Run the full local validation set:
-
-```bash
-go test ./... -count=1
-go test -race ./... -count=1
-go build ./...
-./hack/coverage-check.sh
-```
-
-3. Commit the version bump.
-4. Create and push a signed tag such as `v0.7.0`.
-
-The release workflow verifies that the pushed tag matches
-`internal/buildinfo/version.go` before publishing binaries.
-
-Format the code before submitting:
+1. Update `internal/buildinfo/version.go` and `CHANGELOG.md`.
+2. Ensure generated facts in `docs/current-state.md` describe repo version relative
+   to the **previous** published tag as "ahead" (tag name only; no live timestamps).
+3. Run local validation:
 
 ```bash
-gofmt -w .
+make lint
+make test
+make test-race
+make coverage
 ```
+
+4. Merge the release-prep PR to `main`.
+5. Create and push a tag matching `version.go` (lightweight tags are fine today):
+
+```bash
+git tag v0.14.1
+git push origin v0.14.1
+```
+
+The release workflow verifies the tag matches `internal/buildinfo/version.go`,
+then GoReleaser publishes multi-arch assets. Operators install with
+`axis update` or `install.sh`.
+
+Format the code before submitting (`make lint` must pass).
 
 ## Scope Discipline
 
