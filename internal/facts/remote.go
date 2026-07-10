@@ -438,7 +438,7 @@ func (c *RemoteCollector) discoverLlamaServerRobust(ctx context.Context) []model
 	}
 	var parsed llamaServerDiscoveryPayload
 	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
-		return parsed.ResidentModels
+		return withResidentPort(parsed.ResidentModels, parsed.Port)
 	}
 	return nil
 }
@@ -453,7 +453,7 @@ func (c *RemoteCollector) discoverMLXRobust(ctx context.Context) []models.Reside
 	}
 	var parsed mlxDiscoveryPayload
 	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
-		return parsed.ResidentModels
+		return withResidentPort(parsed.ResidentModels, parsed.Port)
 	}
 	return nil
 }

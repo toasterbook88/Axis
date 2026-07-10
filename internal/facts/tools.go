@@ -18,6 +18,22 @@ type ollamaDiscoveryPayload struct {
 	ResidentModels []models.ResidentModel `json:"resident_models,omitempty"`
 }
 
+// withResidentPort stamps the runtime's listening port onto each resident
+// model. The discovery scripts report the server port at the top level of the
+// payload rather than per-model, so callers copy it down here. A model that
+// already carries an explicit port is left untouched.
+func withResidentPort(rms []models.ResidentModel, port int) []models.ResidentModel {
+	if port <= 0 {
+		return rms
+	}
+	for i := range rms {
+		if rms[i].Port == 0 {
+			rms[i].Port = port
+		}
+	}
+	return rms
+}
+
 // OllamaDiscoveryScript is the bash script used to robustly discover Ollama state
 // and models across both local and remote nodes.
 const OllamaDiscoveryScript = `set -o pipefail;
