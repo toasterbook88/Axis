@@ -12,6 +12,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/facts"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/multipath"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
@@ -210,6 +211,13 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 					Status:      models.StatusError,
 					Error:       err.Error(),
 					CollectedAt: time.Now().UTC(),
+				}
+			}
+
+			if nf != nil && nf.Status != models.StatusUnreachable && len(nf.Addresses) > 0 && !models.IsLocalNode(*nf) {
+				bestIP := multipath.Probe(nodeCtx, nc.EffectiveSSHPort(), nf.Addresses)
+				if bestIP != "" {
+					nf.ResolvedDialTarget = bestIP
 				}
 			}
 
