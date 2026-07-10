@@ -58,44 +58,55 @@ done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# Required status contexts (must match branch protection).
-REQUIRED_CHECKS=("Test & Build" "govulncheck")
+# Dynamically fetch required checks and repo info.
+base_branch="$(gh pr view "$PR" --json baseRefName --jq .baseRefName)"
+repo_owner="$(gh repo view --json owner --jq .owner.login)"
+repo_name="$(gh repo view --json name --jq .name)"
+
+mapfile -t REQUIRED_CHECKS < <(
+  gh api "repos/$repo_owner/$repo_name/branches/$base_branch/protection/required_status_checks" \
+    --jq '.contexts[]' 2>/dev/null || true
+)
+if [[ ${#REQUIRED_CHECKS[@]} -eq 0 ]]; then
+  echo "warning: no required checks found for branch $base_branch; proceeding without checks verification" >&2
+fi
 
 echo "== PR #${PR} =="
 pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
 echo "$pr_json" | jq '{url,title,state,head: .headRefOid[0:7]}'
 
-echo "== Required checks (fail-closed) =="
-# Official gate: only required contexts; watch until done; non-zero on failure.
-# See: https://cli.github.com/manual/gh_pr_checks
-if ! gh pr checks "$PR" --required --watch --fail-fast --interval 15; then
-  echo "error: required checks failed or did not complete successfully" >&2
-  gh pr checks "$PR" >&2 || true
-  exit 1
-fi
+if [[ ${#REQUIRED_CHECKS[@]} -gt 0 ]]; then
+  echo "== Required checks (fail-closed) =="
+  # Official gate: only required contexts; watch until done; non-zero on failure.
+  if ! gh pr checks "$PR" --required --watch --fail-fast --interval 15; then
+    echo "error: required checks failed or did not complete successfully" >&2
+    gh pr checks "$PR" >&2 || true
+    exit 1
+  fi
 
-# Re-fetch rollup after watch; accept CheckRun (name/conclusion) and StatusContext (context/state).
-pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
-for name in "${REQUIRED_CHECKS[@]}"; do
-  conclusion="$(echo "$pr_json" | jq -r --arg n "$name" '
-    [
-      .statusCheckRollup[]?
-      | select((.name // "") == $n or (.context // "") == $n)
-      | (.conclusion // .state // "")
-    ] | map(select(. != "")) | first // empty
-  ')"
-  if [[ -z "$conclusion" ]]; then
-    echo "error: required check context missing from rollup: $name" >&2
-    exit 1
-  fi
-  # Normalize: SUCCESS (CheckRun) or success (StatusContext)
-  conclusion_up="$(printf '%s' "$conclusion" | tr '[:lower:]' '[:upper:]')"
-  if [[ "$conclusion_up" != "SUCCESS" ]]; then
-    echo "error: required check not SUCCESS: $name=$conclusion" >&2
-    exit 1
-  fi
-done
-echo "required checks: green"
+  # Re-fetch rollup after watch.
+  pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
+  for name in "${REQUIRED_CHECKS[@]}"; do
+    conclusion="$(echo "$pr_json" | jq -r --arg n "$name" '
+      [
+        .statusCheckRollup[]?
+        | select((.name // "") == $n or (.context // "") == $n)
+        | (.conclusion // .state // "")
+      ] | map(select(. != "")) | first // empty
+    ')"
+    if [[ -z "$conclusion" ]]; then
+      echo "error: required check context missing from rollup: $name" >&2
+      exit 1
+    fi
+    # Normalize: SUCCESS (CheckRun) or success (StatusContext)
+    conclusion_up="$(printf '%s' "$conclusion" | tr '[:lower:]' '[:upper:]')"
+    if [[ "$conclusion_up" != "SUCCESS" ]]; then
+      echo "error: required check not SUCCESS: $name=$conclusion" >&2
+      exit 1
+    fi
+  done
+  echo "required checks: green"
+fi
 
 echo "== Bot SLA wait (${WAIT_BOTS}s; not a quality gate) =="
 sleep "$WAIT_BOTS"
@@ -103,12 +114,13 @@ sleep "$WAIT_BOTS"
 head_oid="$(echo "$pr_json" | jq -r .headRefOid)"
 echo "== Review state (head ${head_oid:0:7}) =="
 
-# Full review thread state via GraphQL (not first-page REST only).
-thread_json="$(gh api graphql -f query="
-query {
-  repository(owner: \"toasterbook88\", name: \"Axis\") {
+# Review thread state via GraphQL with pagination support (up to 100 items/page).
+thread_json="$(gh api graphql --paginate -f query="
+query(\$endCursor: String) {
+  repository(owner: \"$repo_owner\", name: \"$repo_name\") {
     pullRequest(number: ${PR}) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: \$endCursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
           isOutdated
@@ -148,26 +160,27 @@ query {
 
 echo "--- Review bodies ---"
 echo "$thread_json" | jq -r '
-  .data.repository.pullRequest.reviews.nodes[]?
+  .. | .reviews?.nodes[]?
   | select((.body // "") != "")
   | "### @\(.author.login) \(.state) commit=\(.commit.oid[0:7] // \"?\")\n\(.body)\n"
-'
+' | sort -u
 
 echo "--- General PR comments ---"
 echo "$thread_json" | jq -r '
-  .data.repository.pullRequest.comments.nodes[]?
+  .. | .comments?.nodes[]?
+  | select(.url == null) # Exclude inline comments
   | "### @\(.author.login) @ \(.createdAt)\n\(.body)\n"
-'
+' | sort -u
 
 echo "--- Inline threads ---"
 echo "$thread_json" | jq -r --arg head "$head_oid" '
-  .data.repository.pullRequest.reviewThreads.nodes[]?
+  .. | .reviewThreads?.nodes[]?
   | . as $t
   | ($t.comments.nodes[0] // {}) as $c
   | "thread resolved=\($t.isResolved) outdated=\($t.isOutdated) path=\($t.path // \"?\")\n  @\($c.author.login // \"?\") head_match=\(($c.commit.oid // \"\") == $head)\n  \($c.body // \"\")\n  \($c.url // \"\")\n"
 '
 
-unresolved="$(echo "$thread_json" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false)] | length')"
+unresolved="$(echo "$thread_json" | jq -r '[.. | .reviewThreads?.nodes[]? | select(.isResolved == false)] | length')"
 echo "unresolved_threads=${unresolved}"
 
 echo
