@@ -1,3 +1,16 @@
+## v0.14.1 (2026-07-10)
+
+### Fixes
+* **Placement network class:** Classify by SSH dial target (`NodeFacts.SSHTarget`), not observed machine hostname. LAN-reached nodes no longer take a false Tailscale/VPN −20 penalty when overlay interfaces are present. Tailscale IPv6 ULA and public-dial edge cases handled. (#206)
+* **make lint fail-closed:** Propagate `gofmt` process failures so a missing/crashing gofmt cannot pass CI. (#208)
+* **CI:** Run push CI only on `main` (stop double Test & Build on in-repo PR pushes); invoke `make lint` in CI; remove permanently disabled Claude review workflow. (#207)
+
+### Maintenance
+* **`make install-user`:** Install to `~/.local/bin` with commit/date ldflags (matches operator `axis update` path). (#207)
+* **Release truth:** Drop live `published_at` timestamps from generated `docs/current-state.md` facts; disable broken auto-refresh workflow that could not open PRs under branch protection. GitHub Releases remain authority. (#207)
+* **Docs:** Honest merge-policy description; tag-only GoReleaser release process; daemon restart guidance. (#207)
+* **`hack/pr-review-cycle.sh`:** Fail-closed required-check helper for the solo-operator PR loop (collection only; no auto-merge). (#208)
+
 ## Unreleased
 
 ## v0.14.0 (2026-07-09)
