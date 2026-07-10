@@ -30,6 +30,9 @@ install-user: build
 test:
 	go test ./... -count=1 -timeout 180s
 
+test-race:
+	go test ./... -count=1 -timeout 180s -race
+
 lint:
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
