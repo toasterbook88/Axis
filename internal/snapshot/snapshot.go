@@ -143,12 +143,10 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 	// 1. Dial target is a parseable IP: classify by the path we actually used.
 	// Interface inventory is irrelevant here — a node may advertise Tailscale
 	// while being reached over the LAN.
+	//
+	// Order matters: Tailscale IPv6 (fd7a:115c:a1e0::/48) is ULA and would look
+	// "private" to isPrivateLAN — check overlay first.
 	if hostIP, err := netip.ParseAddr(target); err == nil {
-		if isPrivateLAN(hostIP) {
-			// Route is LAN regardless of SSH handshake cost (crypto/sleep can
-			// push handshake well above RTT). Do not reclassify LAN as relayed.
-			return models.NetworkClassDirectLAN
-		}
 		if isTailscaleAddr(hostIP) {
 			if n.SSHHandshakeLatencyMs >= 150 {
 				return models.NetworkClassRelayed
@@ -161,21 +159,26 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 			}
 			return models.NetworkClassVPN
 		}
+		if isPrivateLAN(hostIP) {
+			// Route is LAN regardless of SSH handshake cost (crypto/sleep can
+			// push handshake well above RTT). Do not reclassify LAN as relayed.
+			return models.NetworkClassDirectLAN
+		}
+		// Parseable non-overlay, non-LAN IP (public / other): do not fall through
+		// to inventory-based LAN inference — the dial path is not private LAN.
+	} else {
+		// 2. Non-IP dial target (mDNS / machine name) or missing SSHTarget on an
+		// older snapshot: if the node has a private LAN address and handshake
+		// latency is in the LAN range, the route is LAN. SSH handshake on a
+		// gigabit LAN is typically 20–80ms (crypto, not RTT), so the gate is 100ms
+		// — not 30ms. Only applies when the dial target is not a parseable IP.
+		if hasPrivateLANAddress(n) && n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 100 {
+			return models.NetworkClassDirectLAN
+		}
 	}
 
-	// 2. Non-IP dial target (mDNS / machine name) or missing SSHTarget on an
-	// older snapshot: if the node has a private LAN address and handshake
-	// latency is in the LAN range, the route is LAN. SSH handshake on a
-	// gigabit LAN is typically 20–80ms (crypto, not RTT), so the gate is 100ms
-	// — not 30ms.
-	if hasPrivateLANAddress(n) && n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 100 {
-		return models.NetworkClassDirectLAN
-	}
-
-	// 3. Overlay only when the dial target itself (or its speed-class metadata
-	// when target is an address string we already handled) is overlay. Scan
-	// address inventory solely as a last-resort signal when there is no LAN
-	// path evidence at all.
+	// 3. Overlay only for bare-name dial targets (inventory last resort).
+	// Parseable IPs already returned above or deliberately left unclassified.
 	isTailscale, isVPN := classifyOverlayFromTargetAndInventory(n, target)
 	if isTailscale {
 		if n.SSHHandshakeLatencyMs >= 150 {
@@ -190,9 +193,12 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 		return models.NetworkClassVPN
 	}
 
-	// 4. Latency-only fallbacks.
-	if n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 50 {
-		return models.NetworkClassDirectLAN
+	// 4. Latency-only fallbacks for non-IP dial targets only. A public dial IP
+	// must not become direct-lan just because handshake was fast.
+	if _, err := netip.ParseAddr(target); err != nil {
+		if n.SSHHandshakeLatencyMs > 0 && n.SSHHandshakeLatencyMs < 50 {
+			return models.NetworkClassDirectLAN
+		}
 	}
 	if n.SSHHandshakeLatencyMs >= 150 {
 		return models.NetworkClassRelayed
@@ -235,17 +241,14 @@ func isVPNAddr(ip netip.Addr) bool {
 	return b[0] == 10 && (b[1] == 0 || b[1] == 8 || b[1] == 254)
 }
 
-// classifyOverlayFromTargetAndInventory returns overlay flags only when there
-// is no private-LAN dial evidence. Prefer dial-target string; fall back to
-// address inventory speed classes when the dial target is a bare name.
+// classifyOverlayFromTargetAndInventory returns overlay flags only when the
+// dial target is a bare name. Parseable IP targets are already classified in
+// step 1 of classifyNetwork (including public IPs), so this helper returns
+// false,false for any parseable IP and only scans inventory for bare names.
 func classifyOverlayFromTargetAndInventory(n *models.NodeFacts, target string) (isTailscale, isVPN bool) {
-	if ip, err := netip.ParseAddr(target); err == nil {
-		if isTailscaleAddr(ip) {
-			return true, false
-		}
-		if isVPNAddr(ip) {
-			return false, true
-		}
+	if _, err := netip.ParseAddr(target); err == nil {
+		// Dial target is a concrete IP already handled (or deliberately left
+		// unclassified as public/other) — inventory must not re-penalize.
 		return false, false
 	}
 	// Bare name with no LAN evidence: inventory is the only signal left.

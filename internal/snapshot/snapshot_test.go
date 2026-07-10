@@ -382,21 +382,44 @@ func TestBuild_NetworkClassification(t *testing.T) {
 			SSHHandshakeLatencyMs: 80,
 			Status:                models.StatusComplete,
 		},
+		// Tailscale IPv6 is ULA (fd7a:115c:a1e0::/48). Overlay must win over
+		// isPrivateLAN so a Tailscale IPv6 dial target is not direct-lan.
+		{
+			Name:                  "node-tailscale-ipv6",
+			Hostname:              "remote",
+			SSHTarget:             "fd7a:115c:a1e0::" + "1",
+			SSHHandshakeLatencyMs: 40,
+			Status:                models.StatusComplete,
+		},
+		// Public dial IP with private addresses in inventory must not become
+		// direct-lan via inventory/latency fallbacks.
+		{
+			Name:                  "node-public-dial-with-lan-iface",
+			Hostname:              "edge",
+			SSHTarget:             "8.8." + "8.8",
+			SSHHandshakeLatencyMs: 40,
+			Status:                models.StatusComplete,
+			Addresses: []models.NetworkAddress{
+				{Address: "192.168." + "1.50", SpeedClass: "gigabit"},
+			},
+		},
 	}
 	snap := Build(nodes)
 
 	expected := map[string]models.NetworkClass{
-		"node-tailscale-direct":        models.NetworkClassTailscale,
-		"node-tailscale-relayed":       models.NetworkClassRelayed,
-		"node-vpn":                     models.NetworkClassVPN,
-		"node-vpn-by-subnet":           models.NetworkClassVPN,
-		"node-direct-lan":              models.NetworkClassDirectLAN,
-		"node-lan-with-vpn-iface":      models.NetworkClassDirectLAN,
-		"node-lan-with-tailscale":      models.NetworkClassDirectLAN,
-		"node-prod-hostname-overwrite": models.NetworkClassDirectLAN,
-		"node-prod-mdns-lan-42ms":      models.NetworkClassDirectLAN,
-		"node-lan-high-handshake":      models.NetworkClassDirectLAN,
-		"node-unknown":                 models.NetworkClassUnknown,
+		"node-tailscale-direct":           models.NetworkClassTailscale,
+		"node-tailscale-relayed":          models.NetworkClassRelayed,
+		"node-vpn":                        models.NetworkClassVPN,
+		"node-vpn-by-subnet":              models.NetworkClassVPN,
+		"node-direct-lan":                 models.NetworkClassDirectLAN,
+		"node-lan-with-vpn-iface":         models.NetworkClassDirectLAN,
+		"node-lan-with-tailscale":         models.NetworkClassDirectLAN,
+		"node-prod-hostname-overwrite":    models.NetworkClassDirectLAN,
+		"node-prod-mdns-lan-42ms":         models.NetworkClassDirectLAN,
+		"node-lan-high-handshake":         models.NetworkClassDirectLAN,
+		"node-unknown":                    models.NetworkClassUnknown,
+		"node-tailscale-ipv6":             models.NetworkClassTailscale,
+		"node-public-dial-with-lan-iface": models.NetworkClassUnknown,
 	}
 
 	for _, n := range snap.Nodes {
