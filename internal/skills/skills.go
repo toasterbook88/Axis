@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -36,8 +35,7 @@ type Store struct {
 var quarantineCorruptSkillsFile = persist.QuarantineCorruptFile
 
 func Path() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "skills.json")
+	return persist.AxisPath("skills.json")
 }
 
 func path() string {

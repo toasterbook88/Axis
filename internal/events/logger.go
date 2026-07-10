@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 var (
@@ -22,8 +24,7 @@ func defaultLogPath() string {
 	if logPathVal != "" {
 		return logPathVal
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".axis", "events.jsonl")
+	return persist.AxisPath("events.jsonl")
 }
 
 // SetLogPath overrides the log path, primarily for testing.
