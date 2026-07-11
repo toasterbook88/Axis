@@ -70,6 +70,16 @@ func TestEvaluate_AllowsSafePipeline(t *testing.T) {
 	}
 }
 
+func TestEvaluate_AllowsSafeTrailingShellSeparators(t *testing.T) {
+	eval := NewEvaluator(DefaultRuleSet())
+	for _, cmd := range []string{"hostname;", "hostname\n", "hostname &"} {
+		d := eval.Evaluate(cmd, "agent-run-shell")
+		if d.Verdict != VerdictAllow {
+			t.Errorf("expected allow for %q, got %s: %v", cmd, d.Verdict, d.Reasons)
+		}
+	}
+}
+
 func TestEvaluate_PromptCommands(t *testing.T) {
 	eval := NewEvaluator(DefaultRuleSet())
 	prompt := []string{

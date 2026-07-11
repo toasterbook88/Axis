@@ -317,7 +317,17 @@ func splitShellSegments(raw string) ([]string, error) {
 		switch ch {
 		case '(', ')':
 			return nil, fmt.Errorf("subshell syntax is not supported")
-		case '\n', ';', '|':
+		case '\n', ';':
+			if strings.TrimSpace(raw[i+1:]) == "" {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+				return segments, nil
+			}
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		case '|':
 			if err := flush(); err != nil {
 				return nil, err
 			}
@@ -329,6 +339,12 @@ func splitShellSegments(raw string) ([]string, error) {
 			if (i > 0 && (raw[i-1] == '>' || raw[i-1] == '<')) || (i+1 < len(raw) && raw[i+1] == '>') {
 				current.WriteByte(ch)
 				continue
+			}
+			if i+1 >= len(raw) || strings.TrimSpace(raw[i+1:]) == "" {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+				return segments, nil
 			}
 			if err := flush(); err != nil {
 				return nil, err

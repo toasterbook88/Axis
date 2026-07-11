@@ -96,7 +96,12 @@ func Load() (*ClusterState, error) {
 	// One-time migrations: only run when state was written before version tracking.
 	if s.Version < currentStateVersion {
 		if migrated := runMigrations(s); migrated {
-			_ = s.Save()
+			if err := Update(func(latest *ClusterState) error {
+				runMigrations(latest)
+				return nil
+			}); err != nil {
+				return s, err
+			}
 		}
 	}
 
@@ -112,7 +117,7 @@ func Update(mutator func(*ClusterState) error) error {
 	}
 
 	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -754,7 +759,7 @@ func (s *ClusterState) saveTo(path string) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	return persist.WriteFileAtomic(path, data, 0o644)

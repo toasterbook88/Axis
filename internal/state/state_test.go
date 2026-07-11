@@ -37,6 +37,13 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".axis", "state.json")); err != nil {
 		t.Fatalf("expected state file to exist: %v", err)
 	}
+	info, err := os.Stat(filepath.Join(home, ".axis"))
+	if err != nil {
+		t.Fatalf("stat state directory: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("state directory permissions = %o, want 700", info.Mode().Perm())
+	}
 
 	loaded, err := Load()
 	if err != nil {
