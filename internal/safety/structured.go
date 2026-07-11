@@ -94,6 +94,7 @@ func DefaultRuleSet() RuleSet {
 
 			// Destructive commands — always block without prompt
 			{Name: "recursive-delete", Programs: []string{"rm"}, ArgPatterns: []string{"-rf *", "-fr *", "-rf/*"}, Category: CategoryDestructive, Verdict: VerdictDeny, Priority: 200},
+			{Name: "delete", Programs: []string{"rm", "rmdir"}, Category: CategoryDestructive, Verdict: VerdictDeny, Priority: 180},
 			{Name: "format-disk", Programs: []string{"mkfs*", "dd", "fdisk", "diskutil"}, Category: CategorySystemCritical, Verdict: VerdictDeny, Priority: 200},
 			{Name: "wipe-commands", Programs: []string{"shred", "srm", "wipefs"}, Category: CategoryDestructive, Verdict: VerdictDeny, Priority: 200},
 
@@ -151,6 +152,51 @@ func NewEvaluator(rs RuleSet) *Evaluator {
 
 // Evaluate assesses a command string and returns a safety decision.
 func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
+	segments, err := splitShellSegments(rawCmd)
+	if err != nil {
+		return Decision{
+			Verdict:     VerdictDeny,
+			Category:    CategoryUnknown,
+			RawCmd:      rawCmd,
+			Reasons:     []string{"shell command cannot be analyzed safely: " + err.Error()},
+			MatchedRule: "shell-parse-fail-closed",
+			EvalAt:      time.Now(),
+		}
+	}
+
+	var prompt *Decision
+	for _, segment := range segments {
+		decision := e.evaluateSegment(segment, surface)
+		if decision.Verdict == VerdictDeny {
+			decision.RawCmd = rawCmd
+			return decision
+		}
+		if decision.Verdict == VerdictPrompt && prompt == nil {
+			copy := decision
+			prompt = &copy
+		}
+	}
+	if prompt != nil {
+		prompt.RawCmd = rawCmd
+		return *prompt
+	}
+	if len(segments) == 0 {
+		return Decision{
+			Verdict:     VerdictDeny,
+			Category:    CategoryUnknown,
+			RawCmd:      rawCmd,
+			Reasons:     []string{"empty shell command"},
+			MatchedRule: "shell-parse-fail-closed",
+			EvalAt:      time.Now(),
+		}
+	}
+
+	decision := e.evaluateSegment(segments[0], surface)
+	decision.RawCmd = rawCmd
+	return decision
+}
+
+func (e *Evaluator) evaluateSegment(rawCmd string, surface string) Decision {
 	program, args := parseCommand(rawCmd)
 	d := Decision{
 		Program: program,
@@ -213,6 +259,99 @@ func (e *Evaluator) Evaluate(rawCmd string, surface string) Decision {
 	d.Category = CategoryUnknown
 	d.Reasons = append(d.Reasons, "no matching safety rule found")
 	return d
+}
+
+// splitShellSegments separates a shell list into independently evaluated
+// commands. Nested evaluation is rejected because safely interpreting it
+// requires a complete shell parser.
+func splitShellSegments(raw string) ([]string, error) {
+	var (
+		segments []string
+		current  strings.Builder
+		inSingle bool
+		inDouble bool
+		escaped  bool
+	)
+
+	flush := func() error {
+		segment := strings.TrimSpace(current.String())
+		current.Reset()
+		if segment == "" {
+			return fmt.Errorf("empty command segment")
+		}
+		segments = append(segments, segment)
+		return nil
+	}
+
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if escaped {
+			current.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' && !inSingle {
+			current.WriteByte(ch)
+			escaped = true
+			continue
+		}
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			current.WriteByte(ch)
+			continue
+		}
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			current.WriteByte(ch)
+			continue
+		}
+
+		if !inSingle && (ch == '`' || (ch == '$' && i+1 < len(raw) && raw[i+1] == '(')) {
+			return nil, fmt.Errorf("nested command evaluation is not supported")
+		}
+		if inSingle || inDouble {
+			current.WriteByte(ch)
+			continue
+		}
+
+		switch ch {
+		case '(', ')':
+			return nil, fmt.Errorf("subshell syntax is not supported")
+		case '\n', ';', '|':
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			if ch == '|' && i+1 < len(raw) && raw[i+1] == '|' {
+				i++
+			}
+		case '&':
+			// Preserve redirection forms such as 2>&1 and &>file.
+			if (i > 0 && (raw[i-1] == '>' || raw[i-1] == '<')) || (i+1 < len(raw) && raw[i+1] == '>') {
+				current.WriteByte(ch)
+				continue
+			}
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			if i+1 < len(raw) && raw[i+1] == '&' {
+				i++
+			}
+		default:
+			current.WriteByte(ch)
+		}
+	}
+
+	if escaped || inSingle || inDouble {
+		return nil, fmt.Errorf("unterminated quote or escape")
+	}
+	if strings.TrimSpace(current.String()) != "" {
+		if err := flush(); err != nil {
+			return nil, err
+		}
+	} else if len(segments) > 0 {
+		return nil, fmt.Errorf("trailing shell operator")
+	}
+	return segments, nil
 }
 
 // LearnAllow is intentionally disabled until approvals can be scoped more

@@ -86,12 +86,6 @@ func (s *backgroundTaskStore) snapshot() []*backgroundTask {
 	return out
 }
 
-func (s *backgroundTaskStore) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.tasks)
-}
-
 // --- run_background / check_task / list_background_tasks args ---
 
 type runBackgroundArgs struct {

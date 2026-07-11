@@ -50,13 +50,11 @@ func LoadOrGenerateToken() (string, error) {
 	if err == nil {
 		token := strings.TrimSpace(string(data))
 		// Validate: token must be non-empty and the expected 64-char hex length.
-		if len(token) == 64 {
+		if decoded, decodeErr := hex.DecodeString(token); decodeErr == nil && len(decoded) == 32 {
 			return token, nil
 		}
 		// Token file is corrupted or empty; regenerate under the lock.
-	}
-
-	if !os.IsNotExist(err) {
+	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("reading token file: %w", err)
 	}
 

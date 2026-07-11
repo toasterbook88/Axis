@@ -991,6 +991,36 @@ func TestAgentShellExecutesWhenApproved(t *testing.T) {
 	}
 }
 
+func TestDispatchShellQuotesWorkingDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(home)
+	dir := filepath.Join(home, "work;printf injected")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	var got string
+	a := New(Config{
+		Confirm: alwaysConfirm(),
+		RunShell: func(_ context.Context, command string) (string, error) {
+			got = command
+			return "ok", nil
+		},
+	})
+	args, err := json.Marshal(shellArgs{Command: "echo safe", Cwd: dir})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	if _, err := a.dispatchShell(context.Background(), args); err != nil {
+		t.Fatalf("dispatchShell: %v", err)
+	}
+
+	want := fmt.Sprintf("cd %s && echo safe", shellQuote(dir))
+	if got != want {
+		t.Fatalf("RunShell command = %q, want %q", got, want)
+	}
+}
+
 func TestAgentNeverBlocksAllFutureShell(t *testing.T) {
 	// First call: operator selects "never" → second shell call should auto-block.
 	neverOnce := func() ConfirmFunc {

@@ -89,9 +89,9 @@ func TestFinalAssistantText(t *testing.T) {
 
 func TestBuildSubAgentSystemPromptMentionsTarget(t *testing.T) {
 	s := buildSubAgentSystemPrompt("foundry", "extra context here")
-	// The target node is conveyed via the `extra` block by the dispatcher;
-	// the prompt must carry the extra context and the sub-agent role.
-	if !strings.Contains(s, "extra context here") || !strings.Contains(s, "sub-agent") {
-		t.Fatalf("prompt missing extra/role: %q", s)
+	for _, want := range []string{"extra context here", "sub-agent", `target node is "foundry"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("prompt missing %q: %q", want, s)
+		}
 	}
 }
