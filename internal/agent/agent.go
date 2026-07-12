@@ -702,7 +702,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		if err != nil {
 			return "", err
 		}
-		cmdToRun = fmt.Sprintf("cd %s && %s", cleanCwd, sa.Command)
+		cmdToRun = fmt.Sprintf("cd %s && %s", shellQuote(cleanCwd), sa.Command)
 	}
 
 	if sa.Cwd != "" {

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/toasterbook88/axis/internal/persist"
@@ -17,21 +18,19 @@ import (
 
 var (
 	logMu      sync.RWMutex
-	logPathVal string
+	logPathVal atomic.Value
 )
 
 func defaultLogPath() string {
-	if logPathVal != "" {
-		return logPathVal
+	if value := logPathVal.Load(); value != nil && value.(string) != "" {
+		return value.(string)
 	}
 	return persist.AxisPath("events.jsonl")
 }
 
 // SetLogPath overrides the log path, primarily for testing.
 func SetLogPath(path string) {
-	logMu.Lock()
-	defer logMu.Unlock()
-	logPathVal = path
+	logPathVal.Store(path)
 }
 
 // allocateSequence increments and returns a monotonic sequence number from event-sequence file under flock.

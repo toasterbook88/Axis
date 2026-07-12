@@ -170,6 +170,9 @@ func buildSubAgentSystemPrompt(targetNode, extra string) string {
 	b.WriteString("- `run_shell` for a local shell command.\n")
 	b.WriteString("- `axis_status` / `axis_facts` / `axis_place` for cluster state and placement.\n")
 	b.WriteString("- `git_status` / `git_diff` / `git_log` if a repository is present.\n\n")
+	if targetNode = strings.TrimSpace(targetNode); targetNode != "" {
+		fmt.Fprintf(&b, "Your assigned target node is %q. Prefer remote tools scoped to that node unless observed state requires another choice.\n\n", targetNode)
+	}
 	if extra != "" {
 		b.WriteString(extra)
 		b.WriteString("\n\n")

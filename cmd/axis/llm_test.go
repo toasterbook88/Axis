@@ -62,6 +62,7 @@ func stubLLMCloudFallbacks(t *testing.T) func() {
 	prevSelect := selectLLMCloudFallback
 	prevClassify := llmClassifyWithProvider
 	prevConfirm := confirmLLMCloudFallback
+	prevResolveNode := llmResolveLocalNodeName
 
 	loadLLMConfig = config.Load
 	llmConfigPath = config.DefaultConfigPath
@@ -69,6 +70,7 @@ func stubLLMCloudFallbacks(t *testing.T) func() {
 	selectLLMCloudFallback = llmrouter.SelectCloudFallback
 	llmClassifyWithProvider = llmrouter.ClassifyWithProvider
 	confirmLLMCloudFallback = defaultConfirmLLMCloudFallback
+	llmResolveLocalNodeName = func(context.Context) string { return "local" }
 
 	return func() {
 		loadLLMConfig = prevLoad
@@ -77,6 +79,7 @@ func stubLLMCloudFallbacks(t *testing.T) func() {
 		selectLLMCloudFallback = prevSelect
 		llmClassifyWithProvider = prevClassify
 		confirmLLMCloudFallback = prevConfirm
+		llmResolveLocalNodeName = prevResolveNode
 	}
 }
 

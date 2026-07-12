@@ -44,6 +44,42 @@ func TestEvaluate_DeniedCommands(t *testing.T) {
 	}
 }
 
+func TestEvaluate_DeniesDangerousCommandsInShellLists(t *testing.T) {
+	eval := NewEvaluator(DefaultRuleSet())
+	commands := []string{
+		"echo ok;sudo systemctl stop ssh",
+		"printf ok && rm -rf /tmp/data",
+		"echo ok; rm -r /tmp/data",
+		"cat /etc/hosts | sudo tee /etc/hosts",
+		"echo $(sudo id)",
+		"echo `sudo id`",
+	}
+	for _, cmd := range commands {
+		d := eval.Evaluate(cmd, "agent-run-shell")
+		if d.Verdict != VerdictDeny {
+			t.Errorf("expected deny for %q, got %s (rule: %s)", cmd, d.Verdict, d.MatchedRule)
+		}
+	}
+}
+
+func TestEvaluate_AllowsSafePipeline(t *testing.T) {
+	eval := NewEvaluator(DefaultRuleSet())
+	d := eval.Evaluate("cat /etc/hosts | head -5", "agent-run-shell")
+	if d.Verdict != VerdictAllow {
+		t.Fatalf("expected safe pipeline to be allowed, got %s: %v", d.Verdict, d.Reasons)
+	}
+}
+
+func TestEvaluate_AllowsSafeTrailingShellSeparators(t *testing.T) {
+	eval := NewEvaluator(DefaultRuleSet())
+	for _, cmd := range []string{"hostname;", "hostname\n", "hostname &"} {
+		d := eval.Evaluate(cmd, "agent-run-shell")
+		if d.Verdict != VerdictAllow {
+			t.Errorf("expected allow for %q, got %s: %v", cmd, d.Verdict, d.Reasons)
+		}
+	}
+}
+
 func TestEvaluate_PromptCommands(t *testing.T) {
 	eval := NewEvaluator(DefaultRuleSet())
 	prompt := []string{

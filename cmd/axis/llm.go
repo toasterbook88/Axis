@@ -44,6 +44,7 @@ var (
 	llmClassifyWithProvider   = llmrouter.ClassifyWithProvider
 	confirmLLMCloudFallback   = defaultConfirmLLMCloudFallback
 	llmSelectModelInteractive = selectModelInteractive
+	llmResolveLocalNodeName   = defaultResolveLocalNodeName
 	llmIsTerminal             = func(fd int) bool { return term.IsTerminal(fd) }
 	llmWriterIsTerminal       = func(w io.Writer) bool {
 		if f, ok := w.(*os.File); ok {
@@ -216,7 +217,7 @@ func maybeLLMCloudFallback(ctx context.Context, prompt string, current llmInfere
 			fmt.Sprintf("cloud fallback skipped: estimated cost $%.4f exceeds max $%.4f", decision.EstCost, maxCost))
 	}
 
-	nodeName := resolveLocalNodeName(ctx)
+	nodeName := llmResolveLocalNodeName(ctx)
 	showWarmupAndOOMAlert(errW, localModel, nodeName)
 
 	if !confirmLLMCloudFallback(in, errW, decision) {
@@ -843,7 +844,7 @@ func selectModelInteractive(w io.Writer, in io.Reader, options []string) (int, e
 	}
 }
 
-func resolveLocalNodeName(ctx context.Context) string {
+func defaultResolveLocalNodeName(ctx context.Context) string {
 	snap, _, err := collectStatusSnapshot(
 		ctx,
 		true, // cached

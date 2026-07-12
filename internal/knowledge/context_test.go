@@ -66,6 +66,12 @@ func TestBuildIsNilSafe(t *testing.T) {
 }
 
 func TestExecutionContextJSONPreservesTopLevelKeys(t *testing.T) {
+	prevGit := GetGitRepoState
+	GetGitRepoState = func(string) (git.RepoState, error) {
+		return git.RepoState{IsRepo: true, Branch: "feature-test"}, nil
+	}
+	t.Cleanup(func() { GetGitRepoState = prevGit })
+
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
 			{
@@ -85,7 +91,14 @@ func TestExecutionContextJSONPreservesTopLevelKeys(t *testing.T) {
 	}
 	decision := models.PlacementDecision{Node: "alpha", OK: true}
 
-	data, err := ExecutionContextJSON(snap, st, decision, "run tests", nil, nil)
+	data, err := ExecutionContextJSON(
+		snap,
+		st,
+		decision,
+		"run tests",
+		map[string]any{"name": "test-script"},
+		map[string]any{"name": "test-skill"},
+	)
 	if err != nil {
 		t.Fatalf("ExecutionContextJSON() error = %v", err)
 	}
@@ -95,7 +108,7 @@ func TestExecutionContextJSONPreservesTopLevelKeys(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 
-	for _, key := range []string{"timestamp", "best_node", "snapshot", "state", "ollama", "load", "decision", "task_desc"} {
+	for _, key := range []string{"timestamp", "best_node", "snapshot", "state", "ollama", "load", "decision", "task_desc", "git", "script", "skill"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("expected key %q in execution payload", key)
 		}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1272,7 +1273,7 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 		return
 	}
 	scope := placement.ObservationScopeForRequirements(resp.Node, reqs, resp.Tool)
-	st.RecordObservation(models.ExecutionObservation{
+	observation := models.ExecutionObservation{
 		Scope:       scope,
 		ObservedAt:  time.Now().UTC(),
 		SampleCount: 1,
@@ -1280,11 +1281,6 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 		WallTimeMS:  durationMilliseconds(elapsed),
 		PeakRAMMB:   peakRAMMB,
 		ModelName:   scope.ModelName,
-	})
-	if runErr != nil {
-		applyFailureOutcome(st, resp, runErr)
-	} else {
-		applySuccessOutcome(st, resp)
 	}
 
 	rec := state.TaskExecutionRecord{
@@ -1302,9 +1298,23 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 	if runErr != nil {
 		rec.Error = runErr.Error()
 	}
-	st.RecordTaskExecution(rec)
+	apply := func(target *state.ClusterState) {
+		target.RecordObservation(observation)
+		if runErr != nil {
+			applyFailureOutcome(target, resp, runErr)
+		} else {
+			applySuccessOutcome(target, resp)
+		}
+		target.RecordTaskExecution(rec)
+	}
 
-	_ = st.Save()
+	apply(st)
+	if err := state.Update(func(latest *state.ClusterState) error {
+		apply(latest)
+		return nil
+	}); err != nil {
+		slog.Warn("execution outcome persistence failed", "exec_id", resp.ExecID, "error", err)
+	}
 }
 
 func exitCode(err error) int {

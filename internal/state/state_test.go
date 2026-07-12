@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".axis", "state.json")); err != nil {
 		t.Fatalf("expected state file to exist: %v", err)
 	}
+	info, err := os.Stat(filepath.Join(home, ".axis"))
+	if err != nil {
+		t.Fatalf("stat state directory: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("state directory permissions = %o, want 700", info.Mode().Perm())
+	}
 
 	loaded, err := Load()
 	if err != nil {
@@ -61,6 +69,85 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	}
 	if len(loaded.Decisions) != 1 || loaded.Decisions[0] != "alpha: build project" {
 		t.Fatalf("Decisions = %v, want single round-tripped decision", loaded.Decisions)
+	}
+}
+
+func TestUpdatePreservesConcurrentTaskHistory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	const writers = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errCh <- Update(func(st *ClusterState) error {
+				st.RecordTaskExecution(TaskExecutionRecord{ExecID: fmt.Sprintf("exec-%d", i)})
+				return nil
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.TaskHistory) != writers {
+		t.Fatalf("TaskHistory length = %d, want %d", len(loaded.TaskHistory), writers)
+	}
+}
+
+func TestUpdateRecoversCorruptStateAndPersistsMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, ".axis", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	corrupt := []byte("{not-json")
+	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err := Update(func(st *ClusterState) error {
+		st.RecordTaskExecution(TaskExecutionRecord{ExecID: "recovered-exec"})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	matches, err := filepath.Glob(path + ".corrupt-*")
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("quarantined backups = %v, want exactly one", matches)
+	}
+	backup, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("ReadFile(backup) error = %v", err)
+	}
+	if string(backup) != string(corrupt) {
+		t.Fatalf("backup contents = %q, want %q", backup, corrupt)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() replacement error = %v", err)
+	}
+	if len(loaded.TaskHistory) != 1 || loaded.TaskHistory[0].ExecID != "recovered-exec" {
+		t.Fatalf("replacement TaskHistory = %+v", loaded.TaskHistory)
 	}
 }
 

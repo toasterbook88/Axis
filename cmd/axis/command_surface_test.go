@@ -1102,12 +1102,14 @@ func stubDefaultChatModelResolver(t *testing.T, fn func(context.Context) string)
 }
 
 func stubFormatChatCatalog(t *testing.T, fn func(context.Context, string) string) func() {
+	t.Helper()
 	prev := formatChatCatalog
 	formatChatCatalog = fn
 	return func() { formatChatCatalog = prev }
 }
 
 func stubChatRuntimeLoader(t *testing.T, fn func(context.Context) (*runtimectx.Context, error)) func() {
+	t.Helper()
 	prev := loadRuntimeContext
 	loadRuntimeContext = fn
 	return func() { loadRuntimeContext = prev }
