@@ -1359,6 +1359,7 @@ func TestDefaultAddr(t *testing.T) {
 func TestPprofEndpointsEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	socketPath := filepath.Join(tmpDir, "pprof.sock")
+	token := "pprof-token"
 	cache := &fakeCache{
 		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
 	}
@@ -1368,7 +1369,7 @@ func TestPprofEndpointsEnabled(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ServeWithContext(ctx, socketPath, cache, "", true)
+		errChan <- ServeWithContext(ctx, socketPath, cache, token, true)
 	}()
 
 	// Wait for socket to appear
@@ -1391,6 +1392,7 @@ func TestPprofEndpointsEnabled(t *testing.T) {
 	paths := []string{"http://localhost/debug/pprof/", "http://localhost/debug/pprof/cmdline", "http://localhost/debug/pprof/symbol"}
 	for _, p := range paths {
 		req, _ := http.NewRequest(http.MethodGet, p, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("GET %s: %v", p, err)
@@ -1499,6 +1501,17 @@ func TestPprofEndpointsRequireAuthWhenTokenSet(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("GET /debug/pprof/cmdline (auth) = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestPprofEndpointsRejectEmptyToken(t *testing.T) {
+	mux := http.NewServeMux()
+	registerPprofRoutes(mux, "")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("empty-token pprof status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

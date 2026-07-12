@@ -2,11 +2,14 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/failures"
@@ -85,6 +88,66 @@ func Path() string {
 
 func Load() (*ClusterState, error) {
 	path := Path()
+	s, err := loadStateFile(path)
+	if err != nil {
+		return s, err
+	}
+
+	// One-time migrations: only run when state was written before version tracking.
+	if s.Version < currentStateVersion {
+		if migrated := runMigrations(s); migrated {
+			if err := Update(func(latest *ClusterState) error {
+				runMigrations(latest)
+				return nil
+			}); err != nil {
+				return s, err
+			}
+		}
+	}
+
+	return s, nil
+}
+
+// Update serializes a read-modify-write transaction against the latest state
+// on disk. Use it for additive mutations that may race with other AXIS
+// processes, such as execution observations and task history.
+func Update(mutator func(*ClusterState) error) error {
+	if mutator == nil {
+		return fmt.Errorf("state update requires a mutator")
+	}
+
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening state lock: %w", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("locking state: %w", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	latest, loadErr := loadStateFile(path)
+	if loadErr != nil {
+		var warning *persist.RecoveryWarning
+		if latest == nil || !errors.As(loadErr, &warning) {
+			return loadErr
+		}
+		slog.Warn("recovered corrupt state during update", "path", path, "backup", warning.BackupPath, "error", warning.Cause)
+	}
+	if latest.Version < currentStateVersion {
+		runMigrations(latest)
+	}
+	if err := mutator(latest); err != nil {
+		return err
+	}
+	return latest.saveTo(path)
+}
+
+func loadStateFile(path string) (*ClusterState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -92,6 +155,7 @@ func Load() (*ClusterState, error) {
 		}
 		return nil, err
 	}
+
 	var s ClusterState
 	if err := json.Unmarshal(data, &s); err != nil {
 		warnErr := quarantineCorruptStateFile(path, err)
@@ -109,14 +173,6 @@ func Load() (*ClusterState, error) {
 	if s.Observations == nil {
 		s.Observations = make(map[string]models.ExecutionObservation)
 	}
-
-	// One-time migrations: only run when state was written before version tracking.
-	if s.Version < currentStateVersion {
-		if migrated := runMigrations(&s); migrated {
-			_ = s.Save()
-		}
-	}
-
 	return &s, nil
 }
 
@@ -683,6 +739,10 @@ func sumExecReservations(m map[string]int64) int64 {
 }
 
 func (s *ClusterState) Save() error {
+	return s.saveTo(Path())
+}
+
+func (s *ClusterState) saveTo(path string) error {
 	if s.Nodes == nil {
 		s.Nodes = make(map[string]NodeState)
 	}
@@ -699,19 +759,24 @@ func (s *ClusterState) Save() error {
 		return err
 	}
 
-	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	return persist.WriteFileAtomic(path, data, 0o644)
 }
 
 func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc string) {
-	s.Decisions = append(s.Decisions, node+": "+taskDesc)
-	if len(s.Decisions) > 20 {
-		s.Decisions = s.Decisions[len(s.Decisions)-20:]
+	record := func(target *ClusterState) {
+		target.Decisions = append(target.Decisions, node+": "+taskDesc)
+		if len(target.Decisions) > 20 {
+			target.Decisions = target.Decisions[len(target.Decisions)-20:]
+		}
 	}
-	_ = s.Save()
+	record(s)
+	_ = Update(func(latest *ClusterState) error {
+		record(latest)
+		return nil
+	})
 }
 
 func (s *ClusterState) RecordTaskExecution(rec TaskExecutionRecord) {

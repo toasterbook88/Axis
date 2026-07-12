@@ -11,6 +11,12 @@ axis daemon start --pprof
 ```
 
 By default, profiling is **disabled**. When enabled, the following endpoints are mounted under `/debug/pprof/`:
+They use the same bearer token as the rest of the AXIS API. The examples below
+load the generated token from `~/.axis/token`:
+
+```bash
+TOKEN=$(cat ~/.axis/token)
+```
 
 | Endpoint | Description |
 |----------|-------------|
@@ -41,16 +47,16 @@ Use `curl` or a browser to trigger the CPU profiler, then analyze the result wit
 
 ```bash
 # Default 30-second CPU profile
-curl -o cpu.prof http://localhost:7373/debug/pprof/profile
+curl -H "Authorization: Bearer $TOKEN" -o cpu.prof http://localhost:7373/debug/pprof/profile
 
 # Custom duration (e.g., 60 seconds)
-curl -o cpu.prof 'http://localhost:7373/debug/pprof/profile?seconds=60'
+curl -H "Authorization: Bearer $TOKEN" -o cpu.prof 'http://localhost:7373/debug/pprof/profile?seconds=60'
 ```
 
 For a Unix socket listener (the default):
 
 ```bash
-curl --unix-socket ~/.axis/axis.sock -o cpu.prof http://localhost/debug/pprof/profile?seconds=30
+curl --unix-socket ~/.axis/axis.sock -H "Authorization: Bearer $TOKEN" -o cpu.prof http://localhost/debug/pprof/profile?seconds=30
 ```
 
 ### Step 2 — Analyze interactively
@@ -88,10 +94,10 @@ Heap profiles are instantaneous snapshots; they do not require a sampling durati
 
 ```bash
 # TCP listener
-curl -o heap.prof http://localhost:7373/debug/pprof/heap
+curl -H "Authorization: Bearer $TOKEN" -o heap.prof http://localhost:7373/debug/pprof/heap
 
 # Unix socket listener
-curl --unix-socket ~/.axis/axis.sock -o heap.prof http://localhost/debug/pprof/heap
+curl --unix-socket ~/.axis/axis.sock -H "Authorization: Bearer $TOKEN" -o heap.prof http://localhost/debug/pprof/heap
 ```
 
 ### Step 2 — Analyze in-use memory
@@ -115,12 +121,12 @@ Common commands:
 
 ```bash
 # Capture baseline
-curl -o heap1.prof http://localhost:7373/debug/pprof/heap
+curl -H "Authorization: Bearer $TOKEN" -o heap1.prof http://localhost:7373/debug/pprof/heap
 
 # ... run workload ...
 
 # Capture after workload
-curl -o heap2.prof http://localhost:7373/debug/pprof/heap
+curl -H "Authorization: Bearer $TOKEN" -o heap2.prof http://localhost:7373/debug/pprof/heap
 
 # Diff them
 go tool pprof -http=:8080 --diff_base=heap1.prof heap2.prof
@@ -133,7 +139,7 @@ go tool pprof -http=:8080 --diff_base=heap1.prof heap2.prof
 Execution traces capture goroutine scheduling, blocking, and syscall events.
 
 ```bash
-curl -o trace.out 'http://localhost:7373/debug/pprof/trace?seconds=5'
+curl -H "Authorization: Bearer $TOKEN" -o trace.out 'http://localhost:7373/debug/pprof/trace?seconds=5'
 go tool trace trace.out
 ```
 
@@ -165,10 +171,11 @@ The profiling endpoints expose:
 | Goal | Command |
 |------|---------|
 | Start with profiling | `axis serve --pprof` |
-| CPU profile (30s) | `curl -o cpu.prof http://localhost:7373/debug/pprof/profile` |
-| CPU profile (custom) | `curl -o cpu.prof 'http://localhost:7373/debug/pprof/profile?seconds=60'` |
-| Heap snapshot | `curl -o heap.prof http://localhost:7373/debug/pprof/heap` |
-| Execution trace (5s) | `curl -o trace.out 'http://localhost:7373/debug/pprof/trace?seconds=5'` |
+| Load API token | `TOKEN=$(cat ~/.axis/token)` |
+| CPU profile (30s) | `curl -H "Authorization: Bearer $TOKEN" -o cpu.prof http://localhost:7373/debug/pprof/profile` |
+| CPU profile (custom) | `curl -H "Authorization: Bearer $TOKEN" -o cpu.prof 'http://localhost:7373/debug/pprof/profile?seconds=60'` |
+| Heap snapshot | `curl -H "Authorization: Bearer $TOKEN" -o heap.prof http://localhost:7373/debug/pprof/heap` |
+| Execution trace (5s) | `curl -H "Authorization: Bearer $TOKEN" -o trace.out 'http://localhost:7373/debug/pprof/trace?seconds=5'` |
 | Interactive analysis | `go tool pprof cpu.prof` |
 | Web UI | `go tool pprof -http=:8080 cpu.prof` |
 | Trace viewer | `go tool trace trace.out` |

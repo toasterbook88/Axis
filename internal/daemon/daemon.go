@@ -633,7 +633,11 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		st, stateWarning = state.Load()
 		if st != nil {
 			if state.Maintain(st) {
-				if err := st.Save(); err != nil {
+				if err := state.Update(func(latest *state.ClusterState) error {
+					state.Maintain(latest)
+					st = latest
+					return nil
+				}); err != nil {
 					slog.Error("failed to save maintained state", "path", state.Path(), "error", err)
 				}
 			}

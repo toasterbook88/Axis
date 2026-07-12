@@ -448,11 +448,20 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 // resource exhaustion, so they must never be reachable unauthenticated when the
 // API is bound to a TCP address.
 func registerPprofRoutes(mux *http.ServeMux, token string) {
-	mux.HandleFunc("/debug/pprof/", withAuth(pprof.Index, token))
-	mux.HandleFunc("/debug/pprof/cmdline", withAuth(pprof.Cmdline, token))
-	mux.HandleFunc("/debug/pprof/profile", withAuth(pprof.Profile, token))
-	mux.HandleFunc("/debug/pprof/symbol", withAuth(pprof.Symbol, token))
-	mux.HandleFunc("/debug/pprof/trace", withAuth(pprof.Trace, token))
+	mux.HandleFunc("/debug/pprof/", withRequiredAuth(pprof.Index, token))
+	mux.HandleFunc("/debug/pprof/cmdline", withRequiredAuth(pprof.Cmdline, token))
+	mux.HandleFunc("/debug/pprof/profile", withRequiredAuth(pprof.Profile, token))
+	mux.HandleFunc("/debug/pprof/symbol", withRequiredAuth(pprof.Symbol, token))
+	mux.HandleFunc("/debug/pprof/trace", withRequiredAuth(pprof.Trace, token))
+}
+
+func withRequiredAuth(next http.HandlerFunc, token string) http.HandlerFunc {
+	if token == "" {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusUnauthorized, "api token is not configured")
+		}
+	}
+	return withAuth(next, token)
 }
 
 var loadLiveRuntime = runtimectx.Load

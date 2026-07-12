@@ -108,3 +108,10 @@ func TestCheckDelegatesToStructuredEvaluator(t *testing.T) {
 		t.Fatalf("expected structured reason, got %q", got.Reason)
 	}
 }
+
+func TestCheckBlocksDangerousTrailingShellSegment(t *testing.T) {
+	got := Check(nil, "echo ok; sudo systemctl stop ssh", nil)
+	if !got.Blocked || got.Score != 100 {
+		t.Fatalf("expected compound command to be blocked, got %+v", got)
+	}
+}
