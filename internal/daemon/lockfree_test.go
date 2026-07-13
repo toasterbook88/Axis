@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -75,6 +76,43 @@ func TestDaemonReadsLockFreeDuringRefresh(t *testing.T) {
 
 	if got := d.Meta().RefreshCount; got < 101 {
 		t.Fatalf("expected at least 101 refreshes, got %d", got)
+	}
+}
+
+func TestRefreshPublishesSnapshotWhenSkillsLoadFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".axis"), 0o755); err != nil {
+		t.Fatalf("create axis directory: %v", err)
+	}
+
+	var sequence atomic.Int64
+	d := New(time.Hour, func(context.Context) (*models.ClusterSnapshot, error) {
+		n := sequence.Add(1)
+		return &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{{Name: "node-" + string(rune('0'+n))}},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	if err := d.RefreshNow(context.Background()); err != nil {
+		t.Fatalf("initial RefreshNow: %v", err)
+	}
+
+	skillsPath := filepath.Join(home, ".axis", "skills.json")
+	if err := os.Mkdir(skillsPath, 0o755); err != nil {
+		t.Fatalf("make skills path unreadable to Load: %v", err)
+	}
+	if err := d.RefreshNow(context.Background()); err == nil {
+		t.Fatal("expected RefreshNow to fail when skills.json is a directory")
+	}
+
+	snapshot, ok := d.Snapshot()
+	if !ok || snapshot == nil {
+		t.Fatal("expected fresh snapshot to remain published after skills failure")
+	}
+	if got := snapshot.Nodes[0].Name; got != "node-2" {
+		t.Fatalf("expected newly collected snapshot node-2, got %q", got)
 	}
 }
 

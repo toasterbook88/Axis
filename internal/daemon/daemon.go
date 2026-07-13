@@ -733,6 +733,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	if skillStore, skillErr := skills.Load(); skillErr != nil {
 		if skillStore == nil {
 			d.lastError = skillErr.Error()
+			d.snapshotPublished.Store(d.snapshot)
 			d.publishMetadataLocked()
 			d.mu.Unlock()
 			return skillErr
