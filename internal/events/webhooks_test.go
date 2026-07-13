@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 func TestSetWebhooksRejectsInvalidURL(t *testing.T) {
@@ -41,6 +43,8 @@ func TestWebhookDispatchSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
+	netutil.AllowInternalHost("127.0.0.1")
+	defer netutil.ResetInternalAllowlist()
 	SetWebhooks([]string{server.URL})
 	defer SetWebhooks(nil)
 
@@ -110,6 +114,8 @@ func TestWebhookDeadLetter(t *testing.T) {
 	}))
 	defer server.Close()
 
+	netutil.AllowInternalHost("127.0.0.1")
+	defer netutil.ResetInternalAllowlist()
 	SetWebhooks([]string{server.URL})
 	defer SetWebhooks(nil)
 
