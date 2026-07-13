@@ -279,3 +279,4 @@ reason, or add heavy dependencies without strong justification.
 | `hack/refresh-current-state.sh` | Rebuild `docs/current-state.md` |
 | `hack/compare-release-versions.go` | Compare repo vs published release tag |
 | `hack/apple-foundation-models.swift` | Probe Apple Foundation Models support |
+| `hack/verify-plan-progress.sh` | Verify execution-plan progress matrix test references and completed tests |
