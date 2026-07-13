@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+func TestSetWebhooksRejectsInvalidURL(t *testing.T) {
+	if err := SetWebhooks([]string{"file:///tmp/events"}); err == nil {
+		t.Fatal("expected invalid webhook URL error")
+	}
+}
+
 func TestWebhookDispatchSuccess(t *testing.T) {
 	tempDir := t.TempDir()
 	SetLogPath(filepath.Join(tempDir, "events.jsonl"))

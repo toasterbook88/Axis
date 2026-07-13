@@ -42,7 +42,7 @@ func newRootCmd() *cobra.Command {
 			"deterministic placement, and explicit local control surfaces.\n\n" +
 			"Chat helpers are experimental and must not be treated as authoritative " +
 			"cluster truth unless backed by a live snapshot or probe.",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			ui.Init(noColor)
 			// Initialize and register Cortex client globally (optional cluster integration)
 			if client, err := buildCortexClient(5 * time.Second); err == nil {
@@ -50,8 +50,11 @@ func newRootCmd() *cobra.Command {
 			}
 			// Register webhooks globally if configured
 			if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg != nil {
-				events.SetWebhooks(cfg.Webhooks)
+				if err := events.SetWebhooks(cfg.Webhooks); err != nil {
+					return err
+				}
 			}
+			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()

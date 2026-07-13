@@ -39,7 +39,9 @@ func NewClient(endpoint, model string) *Client {
 	return &Client{
 		Endpoint: endpoint,
 		Model:    model,
-		http:     &http.Client{},
+		// Streaming duration is governed by the request context; a client-level
+		// timeout would terminate otherwise healthy long-running responses.
+		http: &http.Client{Timeout: 0},
 	}
 }
 

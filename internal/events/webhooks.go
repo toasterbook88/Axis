@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 var (
@@ -20,11 +22,17 @@ var (
 )
 
 // SetWebhooks registers a list of webhook URLs for operational event dispatching.
-func SetWebhooks(urls []string) {
+func SetWebhooks(urls []string) error {
+	for _, targetURL := range urls {
+		if err := netutil.ValidateOutboundURL(targetURL); err != nil {
+			return fmt.Errorf("webhook URL %q: %w", targetURL, err)
+		}
+	}
 	webhookMu.Lock()
 	defer webhookMu.Unlock()
 	webhookURLs = make([]string, len(urls))
 	copy(webhookURLs, urls)
+	return nil
 }
 
 // getWebhooks returns a copy of the registered webhook URLs.

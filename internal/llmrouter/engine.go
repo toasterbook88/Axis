@@ -119,7 +119,7 @@ func NewEngine(opts ...Option) *Engine {
 		ollamaEndpoint: "http://localhost:11434",
 		model:          "granite3.1-moe:1b",
 		timeout:        150 * time.Millisecond,
-		httpClient:     &http.Client{},
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
 	for _, o := range opts {
 		o(e)
