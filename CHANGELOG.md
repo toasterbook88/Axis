@@ -1,3 +1,21 @@
+## v0.14.2 (2026-07-12)
+
+### 🚀 Features
+* **Transport:** SSH multipath routing with endpoint authority. (#213)
+* **Agent:** Endpoint authority and resident model picker. (#212)
+
+### 🐛 Bug Fixes
+* **Multipath:** Activate multipath routing + resident-model ports; filter Docker bridge IPs and fix `probeSSH` return. (#214, #219)
+* **API:** Require bearer-token auth on `/debug/pprof` endpoints. (#216)
+* **State/API:** Harden state updates and API safeguards. (#220)
+* **Error handling:** Propagate errors that were silently swallowed. (#217)
+* Close P0 residuals (daemon restart, PR helper, docs). (#211)
+
+### 🔧 Maintenance
+* **Refactor:** Consolidate `~/.axis` path and atomic-write duplication into `persist`. (#218)
+* **Tests:** Cover previously untested internal packages. (#215)
+* **Docs:** Post-release current-state facts (v0.14.1). (#210)
+
 ## v0.14.1 (2026-07-10)
 
 ### Fixes
