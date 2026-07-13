@@ -64,12 +64,13 @@ func ValidateOutboundURL(rawURL string) error {
 		return nil
 	}
 
-	// Hostname: resolve best-effort. If any resolved address is internal, block.
-	// A resolution failure is not treated as a validation failure — there is
-	// nothing to prove internal, and unit tests must not depend on DNS.
+	// Hostname: resolve and block if any address is internal. Resolution
+	// failures fail closed — a name we cannot vet must not be allowed through,
+	// otherwise DNS rebinding / intermittent DNS defeats the check. Operators
+	// with an unresolvable-at-config-time internal target must allowlist it.
 	ips, lookupErr := net.LookupIP(host)
 	if lookupErr != nil {
-		return nil
+		return fmt.Errorf("outbound URL host %q could not be resolved for validation: %w (allowlist it explicitly to permit)", host, lookupErr)
 	}
 	for _, ip := range ips {
 		if isInternalIP(ip) {

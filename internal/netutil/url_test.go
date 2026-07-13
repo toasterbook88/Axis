@@ -8,7 +8,8 @@ func TestValidateOutboundURL(t *testing.T) {
 		rawURL  string
 		wantErr bool
 	}{
-		{name: "https public", rawURL: "https://example.com/api"},
+		{name: "https public ip", rawURL: "https://8.8.8.8/api"},
+		{name: "unresolvable host fails closed", rawURL: "https://host.invalid/api", wantErr: true},
 		{name: "empty", wantErr: true},
 		{name: "file", rawURL: "file:///tmp/data", wantErr: true},
 		{name: "javascript", rawURL: "javascript:alert(1)", wantErr: true},

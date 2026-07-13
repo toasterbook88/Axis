@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/events"
+	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -52,6 +53,11 @@ func newRootCmd() *cobra.Command {
 			// advisory surface; a misconfigured URL must not block core fact-plane
 			// commands, so degrade gracefully with a warning instead of aborting.
 			if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg != nil {
+				// Hydrate the SSRF allowlist before validating webhook URLs so
+				// operator-approved internal targets (LAN/MCP/Thunderbolt) pass.
+				for _, host := range cfg.AllowedInternalHosts {
+					netutil.AllowInternalHost(host)
+				}
 				if err := events.SetWebhooks(cfg.Webhooks); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 				}
