@@ -77,7 +77,7 @@ TUI render path (shared context for UX claims):
 | Item | Fix | Status | Tests |
 | --- | --- | --- | --- |
 | #1 | Decouple safety from knowledge | [ ] | internal/safety/blocker_iface_test.go::TestCheckDecoupledFromKnowledge |
-| #2 | Bound event dispatch fan-out | [ ] | internal/events/bounded_test.go::TestEventBusBoundedDispatch |
+| #2 | Bound event dispatch fan-out | [x] | internal/events/bounded_test.go::TestEventBusBoundedDispatch |
 | #3 | Make daemon snapshot reads lock-free | [x] | internal/daemon/lockfree_test.go::TestDaemonReadsLockFreeDuringRefresh, internal/daemon/lockfree_test.go::BenchmarkSnapshotUnderRefresh |
 | #4 | Narrow persistence lock scope | [ ] | internal/reservation/persist_lock_test.go::TestSaveDoesNotHoldMutexDuringIO |
 | #5 | Add missing timeout/input/URL hardening | [x] | internal/ui/select_panic_test.go::TestSelectRecoversInputPanic |

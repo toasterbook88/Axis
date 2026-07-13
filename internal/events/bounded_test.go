@@ -8,15 +8,19 @@ import (
 )
 
 func TestEventBusBoundedDispatch(t *testing.T) {
-	t.Skip("RED: pending fix #2 — see EXECUTION-PLAN.md")
+	// Drain the queue before returning so the burst does not leak into other
+	// tests that share the process-global event bus.
+	defer FlushEvents(2 * time.Second)
 
 	const eventCount = 1000
 	var release sync.WaitGroup
 	release.Add(eventCount)
-	RegisterListener(func(Event) {
+	unregister := RegisterListener(func(Event) {
 		time.Sleep(time.Millisecond)
 		release.Done()
 	})
+	// Remove the listener so it does not fire for other tests sharing the bus.
+	defer unregister()
 	before := runtime.NumGoroutine()
 	for i := 0; i < eventCount; i++ {
 		EmitToBuffer(NoopEmitter{}, EventTaskExecutionStarted, nil)

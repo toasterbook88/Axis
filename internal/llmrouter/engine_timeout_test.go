@@ -2,15 +2,14 @@ package llmrouter
 
 import (
 	"testing"
-	"time"
 )
 
-func TestNewEngineHTTPClientHasTimeout(t *testing.T) {
+// The classification budget is enforced per-call via context.WithTimeout in
+// Classify (WithTimeout is authoritative). The HTTP client must NOT carry a
+// hard client-level Timeout, which would silently cap that per-call budget.
+func TestNewEngineHTTPClientHasNoHardTimeout(t *testing.T) {
 	engine := NewEngine()
-	if engine.httpClient.Timeout <= 0 {
-		t.Fatalf("expected non-zero HTTP client timeout, got %s", engine.httpClient.Timeout)
-	}
-	if engine.httpClient.Timeout != 30*time.Second {
-		t.Fatalf("expected 30s HTTP client timeout, got %s", engine.httpClient.Timeout)
+	if engine.httpClient.Timeout != 0 {
+		t.Fatalf("expected no client-level HTTP timeout (context-bounded), got %s", engine.httpClient.Timeout)
 	}
 }

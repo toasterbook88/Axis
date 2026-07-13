@@ -159,13 +159,74 @@ func notifyListeners(evt Event) {
 	}
 	listenerMu.Unlock()
 
+	if len(active) == 0 {
+		return
+	}
+	startDispatchPool()
 	for _, l := range active {
-		go func(fn Listener, e Event) {
-			defer func() {
-				_ = recover()
-			}()
-			fn(e)
-		}(l, evt)
+		enqueueDispatch(dispatchJob{fn: l, evt: evt})
+	}
+}
+
+// =============================================================================
+// Bounded Listener Dispatch Pool
+// =============================================================================
+//
+// Listener callbacks run on a fixed-size worker pool fed by a buffered channel
+// rather than one goroutine per (listener, event). This bounds goroutine and
+// memory growth under bursty emission. When the queue is full the oldest
+// pending job is dropped (listeners are advisory/observational — never on the
+// critical path), so emitters never block.
+
+const (
+	dispatchWorkers   = 8
+	dispatchQueueSize = 256
+)
+
+type dispatchJob struct {
+	fn  Listener
+	evt Event
+}
+
+var (
+	dispatchQueue chan dispatchJob
+	dispatchOnce  sync.Once
+)
+
+func startDispatchPool() {
+	dispatchOnce.Do(func() {
+		dispatchQueue = make(chan dispatchJob, dispatchQueueSize)
+		for i := 0; i < dispatchWorkers; i++ {
+			go dispatchWorker()
+		}
+	})
+}
+
+func dispatchWorker() {
+	for job := range dispatchQueue {
+		func() {
+			defer func() { _ = recover() }()
+			job.fn(job.evt)
+		}()
+	}
+}
+
+// enqueueDispatch offers a job to the pool without ever blocking. If the queue
+// is full it drops the oldest queued job to make room; if it is still full it
+// drops the incoming job.
+func enqueueDispatch(job dispatchJob) {
+	select {
+	case dispatchQueue <- job:
+		return
+	default:
+	}
+	select {
+	case <-dispatchQueue:
+	default:
+	}
+	select {
+	case dispatchQueue <- job:
+	default:
 	}
 }
 
