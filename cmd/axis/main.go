@@ -48,10 +48,12 @@ func newRootCmd() *cobra.Command {
 			if client, err := buildCortexClient(5 * time.Second); err == nil {
 				events.SetCortexClient(client)
 			}
-			// Register webhooks globally if configured
+			// Register webhooks globally if configured. Webhooks are an optional
+			// advisory surface; a misconfigured URL must not block core fact-plane
+			// commands, so degrade gracefully with a warning instead of aborting.
 			if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg != nil {
 				if err := events.SetWebhooks(cfg.Webhooks); err != nil {
-					return err
+					fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 				}
 			}
 			return nil
