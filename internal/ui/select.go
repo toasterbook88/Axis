@@ -287,8 +287,7 @@ func Select(
 
 		action, err := readKey(terminal.In(), inFd, true)
 		if err != nil {
-			clearLines(w, numLines)
-			fmt.Fprint(w, "\r\033[2K")
+			clearLines(w, numLines+1)
 			return SelectResult{}, err
 		}
 
@@ -316,8 +315,7 @@ func Select(
 				}
 			}
 		case ActionEnter:
-			clearLines(w, numLines)
-			fmt.Fprint(w, "\r\033[2K")
+			clearLines(w, numLines+1)
 			if options[selected].Disabled {
 				continue
 			}
@@ -329,13 +327,11 @@ func Select(
 				Selected: true,
 			}, nil
 		case ActionCancel:
-			clearLines(w, numLines)
-			fmt.Fprint(w, "\r\033[2K")
+			clearLines(w, numLines+1)
 			fmt.Fprintf(w, "%s \033[90m(cancelled)\033[0m\r\n", cleanTitle)
 			return SelectResult{Selected: false}, nil
 		}
 
-		clearLines(w, numLines)
-		fmt.Fprint(w, "\r\033[2K")
+		clearLines(w, numLines+1)
 	}
 }
