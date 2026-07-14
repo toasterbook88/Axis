@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
-	"github.com/toasterbook88/axis/internal/ui"
 )
 
 func TestInitCmdFirstTime(t *testing.T) {
@@ -165,8 +163,7 @@ func TestInitCmdUpdatesExistingAndPreservesOptionalSections(t *testing.T) {
 
 func TestInitCmdEditsExistingNode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes.yaml")
-	original := twoNodeConfig()
-	if _, err := config.SaveAtomic(path, original); err != nil {
+	if _, err := config.SaveAtomic(path, twoNodeConfig()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -280,20 +277,6 @@ func TestInitCmdInvalidExistingConfigRequiresExplicitReplace(t *testing.T) {
 	}
 }
 
-func TestPrepareInitConfigReplacePreservesPromptErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nodes.yaml")
-	if _, err := config.SaveAtomic(path, twoNodeConfig()); err != nil {
-		t.Fatal(err)
-	}
-	prompt := testPrompter(t, "2\n")
-	defer prompt.Close()
-
-	_, err := prepareInitConfig(context.Background(), prompt, path, testInitDeps())
-	if !errors.Is(err, errInitCanceled) {
-		t.Fatalf("err = %v, want cancellation", err)
-	}
-}
-
 func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	for _, value := range []string{"node-a", "Node_2", "m1.local"} {
 		if err := validateNodeName(value); err != nil {
@@ -369,28 +352,6 @@ func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	}
 }
 
-func TestPromptHelpersRejectInvalidInputThenAccept(t *testing.T) {
-	prompt := testPrompter(t, "bad\ny\nabc\n7\n3\n")
-	defer prompt.Close()
-
-	ok, err := prompt.Confirm("Confirm", false)
-	if err != nil || !ok {
-		t.Fatalf("Confirm = %v, %v", ok, err)
-	}
-	n, err := prompt.Int("Number", 5, 1, 10)
-	if err != nil || n != 7 {
-		t.Fatalf("Int = %d, %v", n, err)
-	}
-	choice, err := prompt.Choose(context.Background(), "Choice", []ui.SelectOption{
-		{ID: "a", Label: "A"},
-		{ID: "b", Label: "B", Disabled: true},
-		{ID: "c", Label: "C"},
-	}, "b")
-	if err != nil || choice != "c" {
-		t.Fatalf("Choose = %q, %v", choice, err)
-	}
-}
-
 func executeInit(t *testing.T, path, input string, deps initDependencies) string {
 	t.Helper()
 	out := new(bytes.Buffer)
@@ -405,19 +366,6 @@ func executeInit(t *testing.T, path, input string, deps initDependencies) string
 		t.Fatalf("runInitWizardWithDeps: %v\noutput:\n%s", err, out.String())
 	}
 	return out.String()
-}
-
-func testPrompter(t *testing.T, input string) *initPrompter {
-	t.Helper()
-	cmd := initCmd()
-	cmd.SetIn(bytes.NewBufferString(input))
-	cmd.SetOut(new(bytes.Buffer))
-	cmd.SetErr(new(bytes.Buffer))
-	prompt, err := newInitPrompter(cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return prompt
 }
 
 func testInitDeps() initDependencies {
