@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -278,7 +279,21 @@ func TestInitCmdInvalidExistingConfigRequiresExplicitReplace(t *testing.T) {
 	}
 }
 
-func TestInitValidationHelpers(t *testing.T) {
+func TestPrepareInitConfigReplacePreservesPromptErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	if _, err := config.SaveAtomic(path, twoNodeConfig()); err != nil {
+		t.Fatal(err)
+	}
+	prompt := testPrompter(t, "2\n")
+	defer prompt.Close()
+
+	_, err := prepareInitConfig(context.Background(), prompt, path, testInitDeps())
+	if !errors.Is(err, errInitCanceled) {
+		t.Fatalf("err = %v, want cancellation", err)
+	}
+}
+
+func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	for _, value := range []string{"node-a", "Node_2", "m1.local"} {
 		if err := validateNodeName(value); err != nil {
 			t.Errorf("validateNodeName(%q): %v", value, err)
@@ -292,8 +307,82 @@ func TestInitValidationHelpers(t *testing.T) {
 	if err := validateHostname("https://node.local"); err == nil {
 		t.Fatal("URL should not be accepted as hostname")
 	}
+	if err := validateHostname("two words"); err == nil {
+		t.Fatal("hostname with whitespace should be rejected")
+	}
 	if err := validateSSHUser("two users"); err == nil {
 		t.Fatal("SSH user with whitespace should be rejected")
+	}
+	if got := normalizeSuggestedName("weird host.local"); got != "weird-host" {
+		t.Fatalf("normalizeSuggestedName = %q", got)
+	}
+	if got := normalizeSuggestedName("...bad..."); got != "bad" {
+		t.Fatalf("normalizeSuggestedName trim = %q", got)
+	}
+	if got := normalizedRole("PRIMARY"); got != "primary" {
+		t.Fatalf("normalizedRole primary = %q", got)
+	}
+	if got := normalizedRole("other"); got != "worker" {
+		t.Fatalf("normalizedRole fallback = %q", got)
+	}
+	if got := enabledLabel(true); got != "enabled" {
+		t.Fatalf("enabledLabel(true) = %q", got)
+	}
+	if got := enabledLabel(false); got != "disabled" {
+		t.Fatalf("enabledLabel(false) = %q", got)
+	}
+
+	cfg := twoNodeConfig()
+	if idx, found := findNodeIndex(cfg, "REMOTE"); !found || idx != 1 {
+		t.Fatalf("findNodeIndex = %d, %v", idx, found)
+	}
+	if duplicateHostname(cfg, "10.0.0.2", -1) != true {
+		t.Fatal("expected duplicate hostname")
+	}
+	if duplicateHostname(cfg, "10.0.0.2", 1) != false {
+		t.Fatal("expected duplicate hostname exception")
+	}
+	if got := defaultNodeUser(&config.Config{}, "fallback"); got != "fallback" {
+		t.Fatalf("defaultNodeUser fallback = %q", got)
+	}
+
+	clone := cloneConfig(cfg)
+	clone.Nodes[0].Name = "changed"
+	clone.Webhooks = append(clone.Webhooks, "new")
+	if cfg.Nodes[0].Name == "changed" || len(cfg.Webhooks) != 0 {
+		t.Fatal("cloneConfig did not isolate slices")
+	}
+
+	optional := &config.Config{
+		Chat:                 &config.ChatConfig{DefaultModel: "m"},
+		AIProviders:          map[string]config.AIProviderConfig{"p": {Type: "local"}},
+		Inference:            &config.InferenceConfig{DefaultMode: "local"},
+		MCPServers:           map[string]config.MCPServerConfig{"mcp": {Transport: "stdio"}},
+		Webhooks:             []string{"https://example.com"},
+		AllowedInternalHosts: []string{"127.0.0.1"},
+	}
+	target := &config.Config{}
+	preserveOptionalConfig(target, optional)
+	if target.Chat == nil || target.AIProviders == nil || target.Inference == nil || target.MCPServers == nil || len(target.Webhooks) != 1 || len(target.AllowedInternalHosts) != 1 {
+		t.Fatalf("optional config not preserved: %+v", target)
+	}
+}
+
+func TestPromptHelpersRejectInvalidInputThenAccept(t *testing.T) {
+	prompt := testPrompter(t, "bad\ny\nabc\n7\n3\n")
+	defer prompt.Close()
+
+	ok, err := prompt.Confirm("Confirm", false)
+	if err != nil || !ok {
+		t.Fatalf("Confirm = %v, %v", ok, err)
+	}
+	n, err := prompt.Int("Number", 5, 1, 10)
+	if err != nil || n != 7 {
+		t.Fatalf("Int = %d, %v", n, err)
+	}
+	choice, err := prompt.Choose(context.Background(), "Choice", []uiOption(), "b")
+	if err != nil || choice != "c" {
+		t.Fatalf("Choose = %q, %v", choice, err)
 	}
 }
 
@@ -311,6 +400,27 @@ func executeInit(t *testing.T, path, input string, deps initDependencies) string
 		t.Fatalf("runInitWizardWithDeps: %v\noutput:\n%s", err, out.String())
 	}
 	return out.String()
+}
+
+func testPrompter(t *testing.T, input string) *initPrompter {
+	t.Helper()
+	cmd := initCmd()
+	cmd.SetIn(bytes.NewBufferString(input))
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	prompt, err := newInitPrompter(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prompt
+}
+
+func uiOption() []ui.SelectOption {
+	return []ui.SelectOption{
+		{ID: "a", Label: "A"},
+		{ID: "b", Label: "B", Disabled: true},
+		{ID: "c", Label: "C"},
+	}
 }
 
 func testInitDeps() initDependencies {
