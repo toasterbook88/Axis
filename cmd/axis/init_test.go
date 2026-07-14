@@ -61,6 +61,8 @@ func TestInitCmdFirstTimeAddsDiscoveredTailscalePeer(t *testing.T) {
 		"",
 		"",
 		"",
+		"",
+		"",
 	}, "\n")
 	out := executeInit(t, path, input, deps)
 
@@ -179,6 +181,8 @@ func TestInitCmdEditsExistingNode(t *testing.T) {
 		"n",
 		"5",
 		"",
+		"",
+		"",
 	}, "\n") + "\n"
 	out := executeInit(t, path, input, testInitDeps())
 
@@ -207,6 +211,8 @@ func TestInitCmdRemovesExistingNode(t *testing.T) {
 		"2",
 		"y",
 		"5",
+		"",
+		"",
 		"",
 	}, "\n") + "\n"
 	out := executeInit(t, path, input, testInitDeps())
@@ -237,6 +243,8 @@ func TestInitCmdEnablesDiscoveryOnExistingConfig(t *testing.T) {
 		"42425",
 		"5",
 		"5",
+		"",
+		"",
 		"",
 	}, "\n") + "\n"
 	out := executeInit(t, path, input, testInitDeps())
