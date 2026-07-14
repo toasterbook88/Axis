@@ -246,16 +246,21 @@ file outputs for degraded-state recovery.
 
 ## Dependencies
 
-7 direct dependencies (`go.mod`):
+12 direct dependencies (`go.mod`; versions authoritative in go.mod):
 
 | Module | Purpose |
 | -------- | --------- |
 | `al.essio.dev/pkg/shellescape` | Shell argument escaping |
+| `github.com/chzyer/readline` | Interactive line editing (agent/chat flows) |
 | `github.com/fatih/color` | Terminal color output |
+| `github.com/google/uuid` | Event/reservation/provenance identifiers |
 | `github.com/mark3labs/mcp-go` | MCP protocol implementation |
+| `github.com/mattn/go-isatty` | Terminal detection for UI/color decisions |
 | `github.com/spf13/cobra` | CLI framework |
 | `golang.org/x/crypto` | SSH (agent, knownhosts, keys) |
 | `golang.org/x/mod` | Module version comparison |
+| `golang.org/x/sys` | Extended syscalls (signals, platform specifics) |
+| `golang.org/x/term` | Terminal primitives (raw mode, size queries) |
 | `gopkg.in/yaml.v3` | YAML parsing |
 
 ## Scope Discipline
