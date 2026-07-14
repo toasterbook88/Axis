@@ -5,15 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
@@ -21,393 +22,879 @@ import (
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
-	"gopkg.in/yaml.v3"
 )
+
+var errInitCanceled = errors.New("axis init cancelled")
 
 func initCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Run the interactive cluster configuration wizard",
+		Short: "Configure AXIS interactively",
+		Long: "Create a new AXIS cluster configuration or safely update the existing one. " +
+			"All input is validated before an atomic write.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInitWizard(cmd)
 		},
 	}
+	cmd.Flags().String("config", "", "configuration path (default: ~/.axis/nodes.yaml)")
 	return cmd
 }
 
+type initDependencies struct {
+	hostname          func() (string, error)
+	defaultUser       func() string
+	loadConfig        func(string) (*config.Config, error)
+	saveConfig        func(string, *config.Config) (config.SaveResult, error)
+	verifySSH         func(context.Context, string, int, string, int, io.Writer) bool
+	discoverTailscale func(context.Context) ([]config.NodeConfig, error)
+	discoverMesh      func(context.Context) ([]config.NodeConfig, error)
+}
+
+func defaultInitDependencies() initDependencies {
+	return initDependencies{
+		hostname:          os.Hostname,
+		defaultUser:       currentSSHUser,
+		loadConfig:        config.Load,
+		saveConfig:        config.SaveAtomic,
+		verifySSH:         verifySSHConnectionFn,
+		discoverTailscale: discoverTailscalePeersFn,
+		discoverMesh:      discoverMeshPeersFn,
+	}
+}
+
 func runInitWizard(cmd *cobra.Command) error {
+	return runInitWizardWithDeps(cmd, defaultInitDependencies())
+}
+
+func runInitWizardWithDeps(cmd *cobra.Command, deps initDependencies) error {
 	out := cmd.OutOrStdout()
-	errW := cmd.ErrOrStderr()
+	cfgPath, err := cmd.Flags().GetString("config")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfgPath) == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+
+	prompt, err := newInitPrompter(cmd)
+	if err != nil {
+		return fmt.Errorf("initialize interactive prompt: %w", err)
+	}
+	defer prompt.Close()
 
 	ui.PrintLogo(out, Version)
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, ui.Bold("AXIS Interactive Setup Wizard"))
-	fmt.Fprintln(out, "This wizard will guide you to configure your local and remote AXIS nodes.")
-	fmt.Fprintln(out)
+	fmt.Fprintln(out, ui.Bold("Configure AXIS"))
+	fmt.Fprintf(out, "Cluster seed: %s\n\n", cfgPath)
 
-	rl, err := readline.NewEx(&readline.Config{
-		Prompt: ui.Cyan(">>> "),
-		Stdin:  io.NopCloser(cmd.InOrStdin()),
-		Stdout: cmd.OutOrStdout(),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to initialize interactive prompt: %w", err)
+	cfg, err := prepareInitConfig(cmd.Context(), prompt, cfgPath, deps)
+	if errors.Is(err, errInitCanceled) {
+		fmt.Fprintln(out, "No changes written.")
+		return nil
 	}
-	defer rl.Close()
-
-	// 1. Get local node name
-	fmt.Fprintln(out, ui.Cyan("⬢ Local Configuration"))
-	defaultName, _ := os.Hostname()
-	if defaultName == "" {
-		defaultName = "localhost"
-	}
-	fmt.Fprintf(out, "Enter a name for the local node [default: %s]: ", defaultName)
-	line, err := rl.Readline()
 	if err != nil {
 		return err
 	}
-	localName := strings.TrimSpace(line)
-	if localName == "" {
-		localName = defaultName
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("generated configuration is invalid: %w", err)
 	}
 
-	// 2. Get SSH User
-	defaultUser := os.Getenv("USER")
-	if defaultUser == "" {
-		defaultUser = "root"
-	}
-	fmt.Fprintf(out, "Enter the SSH user name for remote node connections [default: %s]: ", defaultUser)
-	line, err = rl.Readline()
+	printConfigReview(out, cfg, cfgPath)
+	confirmed, err := prompt.Confirm("Write this configuration?", true)
 	if err != nil {
+		if errors.Is(err, errInitCanceled) {
+			fmt.Fprintln(out, "No changes written.")
+			return nil
+		}
 		return err
 	}
-	sshUser := strings.TrimSpace(line)
-	if sshUser == "" {
-		sshUser = defaultUser
+	if !confirmed {
+		fmt.Fprintln(out, "No changes written.")
+		return nil
 	}
 
-	// Create nodes slice starting with local node
-	nodes := []config.NodeConfig{
-		{
-			Name:       localName,
-			Hostname:   "localhost",
-			SSHUser:    sshUser,
-			Role:       "primary",
-			TimeoutSec: 10,
-		},
+	result, err := deps.saveConfig(cfgPath, cfg)
+	if err != nil {
+		return fmt.Errorf("save configuration: %w", err)
+	}
+	if !result.Changed {
+		fmt.Fprintf(out, "\n%s Configuration already matches %s\n", ui.Green("✓"), cfgPath)
+		return nil
 	}
 
-	// 3. Tailscale Auto-Discovery
-	fmt.Fprintln(out, ui.Cyan("\n⬢ Tailscale Auto-Discovery"))
-	fmt.Fprint(out, "Would you like to scan for Tailscale peers? [Y/n]: ")
-	line, err = rl.Readline()
-	if err == nil {
-		ans := strings.ToLower(strings.TrimSpace(line))
-		if ans == "" || ans == "y" || ans == "yes" {
-			spin := ui.NewSpinner()
-			spin.Start("Scanning Tailscale network...")
+	fmt.Fprintf(out, "\n%s Configuration saved to %s\n", ui.Green("✓"), cfgPath)
+	if result.BackupPath != "" {
+		fmt.Fprintf(out, "  Previous configuration: %s\n", result.BackupPath)
+	}
+	fmt.Fprintf(out, "  Next: %s\n", ui.Bold("axis doctor"))
+	fmt.Fprintf(out, "  Then: %s\n\n", ui.Bold("axis summary"))
+	return nil
+}
 
-			tsOut, err := exec.CommandContext(cmd.Context(), "tailscale", "status", "--json").Output()
-			if err != nil {
-				spin.Stop(fmt.Sprintf("%s Tailscale not found or not running.", ui.Red("✗")))
-			} else {
-				spin.Stop(fmt.Sprintf("%s Tailscale scan complete.", ui.Green("✓")))
-				var tsStatus struct {
-					Peer map[string]struct {
-						HostName     string   `json:"HostName"`
-						TailscaleIPs []string `json:"TailscaleIPs"`
-						Online       bool     `json:"Online"`
-						OS           string   `json:"OS"`
-					} `json:"Peer"`
-				}
-				if err = json.Unmarshal(tsOut, &tsStatus); err != nil {
-					fmt.Fprintf(out, "Failed to parse Tailscale status: %v\n", err)
-				} else {
-					type peerInfo struct {
-						HostName     string
-						TailscaleIPs []string
-						Online       bool
-						OS           string
-					}
-					var peers []peerInfo
-					for _, peer := range tsStatus.Peer {
-						if len(peer.TailscaleIPs) > 0 {
-							peers = append(peers, peerInfo{
-								HostName:     peer.HostName,
-								TailscaleIPs: peer.TailscaleIPs,
-								Online:       peer.Online,
-								OS:           peer.OS,
-							})
-						}
-					}
-					sort.Slice(peers, func(i, j int) bool {
-						return peers[i].HostName < peers[j].HostName
-					})
+func prepareInitConfig(ctx context.Context, prompt *initPrompter, cfgPath string, deps initDependencies) (*config.Config, error) {
+	_, statErr := os.Stat(cfgPath)
+	if errors.Is(statErr, os.ErrNotExist) {
+		fmt.Fprintln(prompt.out, ui.Cyan("First-time setup"))
+		fmt.Fprintln(prompt.out, "We will identify this machine, add any remote nodes, then review before writing.")
+		fmt.Fprintln(prompt.out)
+		return firstTimeConfig(ctx, prompt, deps)
+	}
+	if statErr != nil {
+		return nil, fmt.Errorf("inspect existing configuration: %w", statErr)
+	}
 
-					found := 0
-					for _, peer := range peers {
-						found++
-						fmt.Fprintf(out, "  - Found: %s (%s) [Online: %v, OS: %s]\n", peer.HostName, peer.TailscaleIPs[0], peer.Online, peer.OS)
-						fmt.Fprintf(out, "    Add this node? [Y/n]: ")
-						line, err = rl.Readline()
-						if err != nil {
-							break
-						}
-						choice := strings.ToLower(strings.TrimSpace(line))
-						if choice == "" || choice == "y" || choice == "yes" {
-							n := config.NodeConfig{
-								Name:       peer.HostName,
-								Hostname:   peer.TailscaleIPs[0],
-								SSHUser:    sshUser,
-								Role:       "worker",
-								SSHPort:    22,
-								TimeoutSec: 10,
-							}
-							if verifySSHConnectionFn(cmd.Context(), n.Hostname, n.EffectiveSSHPort(), n.SSHUser, n.EffectiveTimeout(), out) {
-								nodes = append(nodes, n)
-								fmt.Fprintf(out, "Added node %s.\n", n.Name)
-							} else {
-								fmt.Fprintf(out, "Add node %s anyway? [y/N]: ", n.Name)
-								line, err = rl.Readline()
-								if err == nil && (strings.ToLower(strings.TrimSpace(line)) == "y" || strings.ToLower(strings.TrimSpace(line)) == "yes") {
-									nodes = append(nodes, n)
-									fmt.Fprintf(out, "Added node %s.\n", n.Name)
-								} else {
-									fmt.Fprintf(out, "Skipped node %s.\n", n.Name)
-								}
-							}
-						}
-					}
-					if found == 0 {
-						fmt.Fprintln(out, "No active Tailscale peers found.")
-					}
-				}
-			}
+	existing, loadErr := deps.loadConfig(cfgPath)
+	if loadErr != nil {
+		fmt.Fprintf(prompt.out, "%s Existing configuration is invalid:\n  %v\n\n", ui.Red("!"), loadErr)
+		replace, err := prompt.Confirm("Replace it with a new validated configuration?", false)
+		if err != nil || !replace {
+			return nil, errInitCanceled
 		}
+		return firstTimeConfig(ctx, prompt, deps)
 	}
 
-	// 4. Mesh Gossip Scan
-	fmt.Fprintln(out, ui.Cyan("\n⬢ Mesh Gossip Scan"))
-	fmt.Fprint(out, "Would you like to scan the network for active AXIS gossip nodes? [Y/n]: ")
-	line, err = rl.Readline()
-	if err == nil {
-		ans := strings.ToLower(strings.TrimSpace(line))
-		if ans == "" || ans == "y" || ans == "yes" {
-			spin := ui.NewSpinner()
-			spin.Start("Scanning for active AXIS gossip nodes (3 seconds)...")
-			tempCfg := &config.Config{
-				Discovery: &config.DiscoveryConfig{
-					Enabled: true,
-					UDPPort: 42424,
-				},
-			}
-			registry := discovery.NewBeaconRegistry()
-			scanCtx, scanCancel := context.WithTimeout(cmd.Context(), 3*time.Second)
-			discovery.WatchBeaconChanges(scanCtx, tempCfg, registry, nil)
-			<-scanCtx.Done()
-			scanCancel()
-			spin.Stop(fmt.Sprintf("%s Scan complete.", ui.Green("✓")))
+	fmt.Fprintln(prompt.out, ui.Cyan("Existing configuration detected"))
+	fmt.Fprintf(prompt.out, "%d node(s), UDP discovery %s. Optional chat, provider, MCP, and webhook settings will be preserved.\n\n",
+		len(existing.Nodes), enabledLabel(existing.Discovery != nil && existing.Discovery.Enabled))
 
-			discovered := registry.Snapshot()
-			if len(discovered) == 0 {
-				fmt.Fprintln(out, "No active gossip nodes detected.")
-			} else {
-				fmt.Fprintf(out, "Found %d discovered node(s):\n", len(discovered))
-				for _, n := range discovered {
-					// Don't add local localhost again
-					if n.Hostname == "127.0.0.1" || n.Hostname == "localhost" {
-						continue
-					}
-					fmt.Fprintf(out, "  - Name: %s, IP: %s, Role: %s\n", n.Name, n.Hostname, n.Role)
-					fmt.Fprintf(out, "    Add this node to configuration? [Y/n]: ")
-					line, err = rl.Readline()
-					if err != nil {
-						break
-					}
-					choice := strings.ToLower(strings.TrimSpace(line))
-					if choice == "" || choice == "y" || choice == "yes" {
-						n.SSHUser = sshUser // enforce configured SSH user
-						if verifySSHConnectionFn(cmd.Context(), n.Hostname, n.EffectiveSSHPort(), n.SSHUser, n.EffectiveTimeout(), out) {
-							nodes = append(nodes, n)
-							fmt.Fprintf(out, "Added node %s.\n", n.Name)
-						} else {
-							fmt.Fprintf(out, "Add node %s anyway? [y/N]: ", n.Name)
-							line, err = rl.Readline()
-							if err == nil {
-								ans := strings.ToLower(strings.TrimSpace(line))
-								if ans == "y" || ans == "yes" {
-									nodes = append(nodes, n)
-									fmt.Fprintf(out, "Added node %s.\n", n.Name)
-								} else {
-									fmt.Fprintf(out, "Skipped node %s.\n", n.Name)
-								}
-							}
-						}
-					}
-				}
-			}
+	choice, err := prompt.Choose(ctx, "What would you like to do?", []ui.SelectOption{
+		{ID: "update", Label: "Review and update", Detail: "edit the existing configuration in place"},
+		{ID: "replace", Label: "Start over", Detail: "build a replacement configuration"},
+		{ID: "cancel", Label: "Exit", Detail: "leave the file unchanged"},
+	}, "update")
+	if err != nil {
+		return nil, err
+	}
+	switch choice {
+	case "update":
+		return updateConfig(ctx, prompt, cloneConfig(existing), deps)
+	case "replace":
+		ok, err := prompt.Confirm("Replace the current node and discovery settings?", false)
+		if err != nil || !ok {
+			return nil, errInitCanceled
 		}
+		fresh, err := firstTimeConfig(ctx, prompt, deps)
+		if err != nil {
+			return nil, err
+		}
+		preserveOptionalConfig(fresh, existing)
+		return fresh, nil
+	default:
+		return nil, errInitCanceled
+	}
+}
+
+func firstTimeConfig(ctx context.Context, prompt *initPrompter, deps initDependencies) (*config.Config, error) {
+	fmt.Fprintln(prompt.out, ui.Cyan("1/3  This machine"))
+	host, _ := deps.hostname()
+	host = normalizeSuggestedName(host)
+	if host == "" {
+		host = "local"
+	}
+	name, err := prompt.Text("Node name", host, validateNodeName)
+	if err != nil {
+		return nil, err
+	}
+	user, err := prompt.Text("SSH user", deps.defaultUser(), validateSSHUser)
+	if err != nil {
+		return nil, err
 	}
 
-	// 4. Manual entry fallback
-	fmt.Fprintln(out, ui.Cyan("\n⬢ Remote Node Configuration"))
+	cfg := &config.Config{Nodes: []config.NodeConfig{{
+		Name:       name,
+		Hostname:   "localhost",
+		SSHUser:    user,
+		Role:       "primary",
+		TimeoutSec: 10,
+	}}}
+	fmt.Fprintf(prompt.out, "%s Local node configured.\n\n", ui.Green("✓"))
+
+	fmt.Fprintln(prompt.out, ui.Cyan("2/3  Remote nodes"))
+	if err := remoteNodeMenu(ctx, prompt, cfg, deps, true); err != nil {
+		return nil, err
+	}
+
+	fmt.Fprintln(prompt.out, ui.Cyan("3/3  Discovery"))
+	if err := configureDiscovery(prompt, cfg, len(cfg.Nodes) > 1); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func updateConfig(ctx context.Context, prompt *initPrompter, cfg *config.Config, deps initDependencies) (*config.Config, error) {
 	for {
-		fmt.Fprint(out, "Would you like to manually add a remote worker node? [y/N]: ")
-		line, err = rl.Readline()
+		fmt.Fprintf(prompt.out, "\n%s  %d node(s) · discovery %s\n", ui.Cyan("Configuration"), len(cfg.Nodes), enabledLabel(cfg.Discovery != nil && cfg.Discovery.Enabled))
+		choice, err := prompt.Choose(ctx, "Choose an action", []ui.SelectOption{
+			{ID: "add", Label: "Add nodes", Detail: "manual, Tailscale, or AXIS beacon discovery"},
+			{ID: "edit", Label: "Edit a node", Detail: "change identity or SSH settings", Disabled: len(cfg.Nodes) == 0},
+			{ID: "remove", Label: "Remove a node", Detail: "delete a seed entry", Disabled: len(cfg.Nodes) <= 1},
+			{ID: "discovery", Label: "Discovery settings", Detail: "enable or disable authenticated UDP discovery"},
+			{ID: "review", Label: "Review and save", Detail: "validate the complete configuration"},
+			{ID: "cancel", Label: "Exit without saving"},
+		}, "review")
 		if err != nil {
-			return err
+			return nil, err
 		}
-		ans := strings.ToLower(strings.TrimSpace(line))
-		if ans != "y" && ans != "yes" {
-			break
-		}
-
-		fmt.Fprint(out, "Enter remote node name (e.g. node-b): ")
-		line, err = rl.Readline()
-		if err != nil {
-			return err
-		}
-		remoteName := strings.TrimSpace(line)
-		if remoteName == "" {
-			fmt.Fprintln(errW, "Node name cannot be empty")
-			continue
-		}
-
-		fmt.Fprintf(out, "Enter remote node hostname or IP (e.g. 192.168.1.50): ")
-		line, err = rl.Readline()
-		if err != nil {
-			return err
-		}
-		remoteHost := strings.TrimSpace(line)
-		if remoteHost == "" {
-			fmt.Fprintln(errW, "Hostname cannot be empty")
-			continue
-		}
-
-		fmt.Fprintf(out, "Enter SSH port for remote node [default: 22]: ")
-		line, err = rl.Readline()
-		if err != nil {
-			return err
-		}
-		portStr := strings.TrimSpace(line)
-		sshPort := 22
-		if portStr != "" {
-			if p, pErr := strconv.Atoi(portStr); pErr == nil && p > 0 {
-				sshPort = p
-			} else {
-				fmt.Fprintln(errW, "Invalid port, using default (22)")
+		switch choice {
+		case "add":
+			if err := remoteNodeMenu(ctx, prompt, cfg, deps, false); err != nil {
+				return nil, err
 			}
-		}
-
-		fmt.Fprintf(out, "Enter timeout in seconds for SSH operations [default: 10]: ")
-		line, err = rl.Readline()
-		if err != nil {
-			return err
-		}
-		timeoutStr := strings.TrimSpace(line)
-		timeoutSec := 10
-		if timeoutStr != "" {
-			if t, tErr := strconv.Atoi(timeoutStr); tErr == nil && t > 0 {
-				timeoutSec = t
-			} else {
-				fmt.Fprintln(errW, "Invalid timeout, using default (10)")
+		case "edit":
+			if err := editNode(ctx, prompt, cfg, deps); err != nil {
+				return nil, err
 			}
+		case "remove":
+			if err := removeNode(ctx, prompt, cfg); err != nil {
+				return nil, err
+			}
+		case "discovery":
+			if err := configureDiscovery(prompt, cfg, cfg.Discovery != nil && cfg.Discovery.Enabled); err != nil {
+				return nil, err
+			}
+		case "review":
+			if err := cfg.Validate(); err != nil {
+				fmt.Fprintf(prompt.out, "%s %v\n", ui.Red("Invalid configuration:"), err)
+				continue
+			}
+			return cfg, nil
+		default:
+			return nil, errInitCanceled
 		}
+	}
+}
 
-		n := config.NodeConfig{
-			Name:       remoteName,
-			Hostname:   remoteHost,
-			SSHUser:    sshUser,
-			Role:       "worker",
-			SSHPort:    sshPort,
-			TimeoutSec: timeoutSec,
+func remoteNodeMenu(ctx context.Context, prompt *initPrompter, cfg *config.Config, deps initDependencies, firstTime bool) error {
+	for {
+		options := []ui.SelectOption{
+			{ID: "manual", Label: "Add manually", Detail: "hostname or IP plus SSH settings"},
+			{ID: "tailscale", Label: "Scan Tailscale", Detail: "review online peers before adding"},
+			{ID: "mesh", Label: "Scan AXIS beacons", Detail: "listen for three seconds"},
 		}
-
-		if verifySSHConnectionFn(cmd.Context(), n.Hostname, n.EffectiveSSHPort(), n.SSHUser, n.EffectiveTimeout(), out) {
-			nodes = append(nodes, n)
-			fmt.Fprintf(out, "Added node %s (%s) to config.\n\n", remoteName, remoteHost)
+		if firstTime {
+			options = append(options, ui.SelectOption{ID: "done", Label: "Continue", Detail: "finish adding remote nodes"})
 		} else {
-			fmt.Fprintf(out, "Add node %s anyway? [y/N]: ", remoteName)
-			line, err = rl.Readline()
+			options = append(options, ui.SelectOption{ID: "done", Label: "Back"})
+		}
+		choice, err := prompt.Choose(ctx, "Add remote nodes", options, "done")
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "manual":
+			node, keep, err := promptManualNode(ctx, prompt, cfg, deps)
 			if err != nil {
 				return err
 			}
-			ans := strings.ToLower(strings.TrimSpace(line))
-			if ans == "y" || ans == "yes" {
-				nodes = append(nodes, n)
-				fmt.Fprintf(out, "Added node %s (%s) to config.\n\n", remoteName, remoteHost)
-			} else {
-				fmt.Fprintf(out, "Skipped node %s.\n\n", remoteName)
+			if keep {
+				cfg.Nodes = append(cfg.Nodes, node)
+				fmt.Fprintf(prompt.out, "%s Added %s.\n", ui.Green("✓"), node.Name)
+			}
+		case "tailscale":
+			fmt.Fprintln(prompt.out, "Scanning Tailscale peers...")
+			candidates, err := deps.discoverTailscale(ctx)
+			if err != nil {
+				fmt.Fprintf(prompt.out, "%s %v\n", ui.Red("Tailscale scan unavailable:"), err)
+				continue
+			}
+			if err := reviewCandidates(ctx, prompt, cfg, candidates, deps); err != nil {
+				return err
+			}
+		case "mesh":
+			fmt.Fprintln(prompt.out, "Listening for AXIS beacons for 3 seconds...")
+			candidates, err := deps.discoverMesh(ctx)
+			if err != nil {
+				fmt.Fprintf(prompt.out, "%s %v\n", ui.Red("Beacon scan unavailable:"), err)
+				continue
+			}
+			if err := reviewCandidates(ctx, prompt, cfg, candidates, deps); err != nil {
+				return err
+			}
+		default:
+			return nil
+		}
+	}
+}
+
+func promptManualNode(ctx context.Context, prompt *initPrompter, cfg *config.Config, deps initDependencies) (config.NodeConfig, bool, error) {
+	name, err := prompt.Text("Node name", "", func(value string) error {
+		if err := validateNodeName(value); err != nil {
+			return err
+		}
+		if _, found := findNodeIndex(cfg, value); found {
+			return fmt.Errorf("a node named %q already exists", value)
+		}
+		return nil
+	})
+	if err != nil {
+		return config.NodeConfig{}, false, err
+	}
+	host, err := prompt.Text("Hostname or IP", "", validateHostname)
+	if err != nil {
+		return config.NodeConfig{}, false, err
+	}
+	if duplicateHostname(cfg, host, -1) {
+		return config.NodeConfig{}, false, fmt.Errorf("hostname %q is already configured", host)
+	}
+	user, err := prompt.Text("SSH user", defaultNodeUser(cfg, deps.defaultUser()), validateSSHUser)
+	if err != nil {
+		return config.NodeConfig{}, false, err
+	}
+	port, err := prompt.Int("SSH port", 22, 1, 65535)
+	if err != nil {
+		return config.NodeConfig{}, false, err
+	}
+	timeout, err := prompt.Int("Connection timeout (seconds)", 10, 1, 300)
+	if err != nil {
+		return config.NodeConfig{}, false, err
+	}
+	node := config.NodeConfig{Name: name, Hostname: host, SSHUser: user, Role: "worker", SSHPort: port, TimeoutSec: timeout}
+	return verifyCandidate(ctx, prompt, node, deps)
+}
+
+func reviewCandidates(ctx context.Context, prompt *initPrompter, cfg *config.Config, candidates []config.NodeConfig, deps initDependencies) error {
+	if len(candidates) == 0 {
+		fmt.Fprintln(prompt.out, "No eligible nodes found.")
+		return nil
+	}
+	fmt.Fprintf(prompt.out, "Found %d candidate(s).\n", len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Hostname == "localhost" || candidate.Hostname == "127.0.0.1" {
+			continue
+		}
+		if _, found := findNodeIndex(cfg, candidate.Name); found || duplicateHostname(cfg, candidate.Hostname, -1) {
+			fmt.Fprintf(prompt.out, "  - %s (%s): already configured\n", candidate.Name, candidate.Hostname)
+			continue
+		}
+		candidate.SSHUser = defaultNodeUser(cfg, deps.defaultUser())
+		candidate.Role = "worker"
+		if candidate.SSHPort <= 0 {
+			candidate.SSHPort = 22
+		}
+		if candidate.TimeoutSec <= 0 {
+			candidate.TimeoutSec = 10
+		}
+		add, err := prompt.Confirm(fmt.Sprintf("Add %s (%s)?", candidate.Name, candidate.Hostname), true)
+		if err != nil {
+			return err
+		}
+		if !add {
+			continue
+		}
+		node, keep, err := verifyCandidate(ctx, prompt, candidate, deps)
+		if err != nil {
+			return err
+		}
+		if keep {
+			cfg.Nodes = append(cfg.Nodes, node)
+			fmt.Fprintf(prompt.out, "%s Added %s.\n", ui.Green("✓"), node.Name)
+		}
+	}
+	return nil
+}
+
+func verifyCandidate(ctx context.Context, prompt *initPrompter, node config.NodeConfig, deps initDependencies) (config.NodeConfig, bool, error) {
+	check, err := prompt.Confirm("Verify SSH before adding?", true)
+	if err != nil {
+		return config.NodeConfig{}, false, err
+	}
+	if !check || deps.verifySSH(ctx, node.Hostname, node.EffectiveSSHPort(), node.SSHUser, node.EffectiveTimeout(), prompt.out) {
+		return node, true, nil
+	}
+	keep, err := prompt.Confirm("SSH verification failed. Keep this node anyway?", false)
+	return node, keep, err
+}
+
+func editNode(ctx context.Context, prompt *initPrompter, cfg *config.Config, deps initDependencies) error {
+	idx, err := chooseNode(ctx, prompt, cfg, "Edit which node?")
+	if err != nil {
+		return err
+	}
+	current := cfg.Nodes[idx]
+	name, err := prompt.Text("Node name", current.Name, func(value string) error {
+		if err := validateNodeName(value); err != nil {
+			return err
+		}
+		if other, found := findNodeIndex(cfg, value); found && other != idx {
+			return fmt.Errorf("a node named %q already exists", value)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	host, err := prompt.Text("Hostname or IP", current.Hostname, validateHostname)
+	if err != nil {
+		return err
+	}
+	if duplicateHostname(cfg, host, idx) {
+		return fmt.Errorf("hostname %q is already configured", host)
+	}
+	user, err := prompt.Text("SSH user", current.SSHUser, validateSSHUser)
+	if err != nil {
+		return err
+	}
+	role, err := prompt.Choose(ctx, "Node role", []ui.SelectOption{
+		{ID: "primary", Label: "Primary"},
+		{ID: "worker", Label: "Worker"},
+	}, normalizedRole(current.Role))
+	if err != nil {
+		return err
+	}
+	port, err := prompt.Int("SSH port", current.EffectiveSSHPort(), 1, 65535)
+	if err != nil {
+		return err
+	}
+	timeout, err := prompt.Int("Connection timeout (seconds)", current.EffectiveTimeout(), 1, 300)
+	if err != nil {
+		return err
+	}
+	updated := current
+	updated.Name, updated.Hostname, updated.SSHUser, updated.Role = name, host, user, role
+	updated.SSHPort, updated.TimeoutSec = port, timeout
+	if host != "localhost" && host != "127.0.0.1" {
+		verify, err := prompt.Confirm("Verify the updated SSH settings?", true)
+		if err != nil {
+			return err
+		}
+		if verify && !deps.verifySSH(ctx, host, port, user, timeout, prompt.out) {
+			keep, err := prompt.Confirm("Verification failed. Keep these edits?", false)
+			if err != nil || !keep {
+				return err
 			}
 		}
 	}
+	cfg.Nodes[idx] = updated
+	fmt.Fprintf(prompt.out, "%s Updated %s.\n", ui.Green("✓"), updated.Name)
+	return nil
+}
 
-	// 5. Save configuration
-	var discoveryCfg *config.DiscoveryConfig
-	if len(nodes) > 1 {
-		discoveryCfg = &config.DiscoveryConfig{
-			Enabled:        true,
-			UDPPort:        42424,
-			BeaconInterval: 3,
-			Secret:         generateRandomSecret(),
+func removeNode(ctx context.Context, prompt *initPrompter, cfg *config.Config) error {
+	idx, err := chooseNode(ctx, prompt, cfg, "Remove which node?")
+	if err != nil {
+		return err
+	}
+	node := cfg.Nodes[idx]
+	ok, err := prompt.Confirm(fmt.Sprintf("Remove %s (%s)?", node.Name, node.Hostname), false)
+	if err != nil || !ok {
+		return err
+	}
+	cfg.Nodes = append(cfg.Nodes[:idx], cfg.Nodes[idx+1:]...)
+	fmt.Fprintf(prompt.out, "%s Removed %s.\n", ui.Green("✓"), node.Name)
+	return nil
+}
+
+func configureDiscovery(prompt *initPrompter, cfg *config.Config, defaultEnabled bool) error {
+	enabled, err := prompt.Confirm("Enable authenticated UDP discovery?", defaultEnabled)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		cfg.Discovery = &config.DiscoveryConfig{Enabled: false}
+		fmt.Fprintln(prompt.out, "UDP discovery disabled.")
+		return nil
+	}
+	port := 42424
+	interval := 3
+	secret := ""
+	if cfg.Discovery != nil {
+		if cfg.Discovery.UDPPort > 0 {
+			port = cfg.Discovery.UDPPort
+		}
+		if cfg.Discovery.BeaconInterval > 0 {
+			interval = cfg.Discovery.BeaconInterval
+		}
+		secret = cfg.Discovery.Secret
+	}
+	port, err = prompt.Int("UDP port", port, 1, 65535)
+	if err != nil {
+		return err
+	}
+	interval, err = prompt.Int("Beacon interval (seconds)", interval, 1, 300)
+	if err != nil {
+		return err
+	}
+	if secret == "" {
+		secret, err = generateRandomSecret()
+		if err != nil {
+			return fmt.Errorf("generate discovery secret: %w", err)
 		}
 	}
-	cfg := &config.Config{
-		Nodes:     nodes,
-		Discovery: discoveryCfg,
-	}
-
-	home, _ := os.UserHomeDir()
-	cfgDir := filepath.Join(home, ".axis")
-	cfgPath := filepath.Join(cfgDir, "nodes.yaml")
-
-	if err := os.MkdirAll(cfgDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	if _, err := os.Stat(cfgPath); err == nil {
-		bakPath := cfgPath + ".bak"
-		fmt.Fprintf(out, "Existing config found. Backing up to %s\n", bakPath)
-		_ = os.Rename(cfgPath, bakPath)
-	}
-
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	fmt.Fprintf(out, "\n%s Configuration written successfully to %s\n", ui.Green("✓"), cfgPath)
-	fmt.Fprintf(out, "  %s Run '%s' to view your cluster dashboard.\n\n", ui.Cyan("→"), ui.Bold("axis summary"))
+	cfg.Discovery = &config.DiscoveryConfig{Enabled: true, UDPPort: port, BeaconInterval: interval, Secret: secret}
+	fmt.Fprintln(prompt.out, "Discovery secret generated and stored with the configuration; it will not be printed.")
 	return nil
+}
+
+func chooseNode(ctx context.Context, prompt *initPrompter, cfg *config.Config, title string) (int, error) {
+	options := make([]ui.SelectOption, 0, len(cfg.Nodes))
+	for i, node := range cfg.Nodes {
+		options = append(options, ui.SelectOption{ID: strconv.Itoa(i), Label: node.Name, Detail: node.Hostname})
+	}
+	choice, err := prompt.Choose(ctx, title, options, "0")
+	if err != nil {
+		return 0, err
+	}
+	idx, err := strconv.Atoi(choice)
+	if err != nil || idx < 0 || idx >= len(cfg.Nodes) {
+		return 0, fmt.Errorf("invalid node selection %q", choice)
+	}
+	return idx, nil
+}
+
+func printConfigReview(out io.Writer, cfg *config.Config, path string) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, ui.Cyan("Review"))
+	fmt.Fprintf(out, "  Path:      %s\n", path)
+	fmt.Fprintf(out, "  Nodes:     %d\n", len(cfg.Nodes))
+	fmt.Fprintf(out, "  Discovery: %s\n", enabledLabel(cfg.Discovery != nil && cfg.Discovery.Enabled))
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  %-18s %-9s %-24s %s\n", "NAME", "ROLE", "HOST", "SSH")
+	for _, node := range cfg.Nodes {
+		fmt.Fprintf(out, "  %-18s %-9s %-24s %s@%s:%d\n",
+			node.Name, normalizedRole(node.Role), node.Hostname, node.SSHUser, node.Hostname, node.EffectiveSSHPort())
+	}
+	if cfg.Discovery != nil && cfg.Discovery.Enabled {
+		fmt.Fprintf(out, "\n  UDP discovery uses port %d every %ds; secret configured.\n", cfg.Discovery.UDPPort, cfg.Discovery.BeaconInterval)
+	}
+	fmt.Fprintln(out)
+}
+
+type initPrompter struct {
+	rl       *readline.Instance
+	out      io.Writer
+	terminal *ui.StdTerminal
+}
+
+func newInitPrompter(cmd *cobra.Command) (*initPrompter, error) {
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          "",
+		Stdin:           io.NopCloser(cmd.InOrStdin()),
+		Stdout:          cmd.OutOrStdout(),
+		InterruptPrompt: "^C",
+		EOFPrompt:       "",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &initPrompter{
+		rl:       rl,
+		out:      cmd.OutOrStdout(),
+		terminal: ui.NewStdTerminal(cmd.InOrStdin(), cmd.OutOrStdout()),
+	}, nil
+}
+
+func (p *initPrompter) Close() error { return p.rl.Close() }
+
+func (p *initPrompter) Text(label, defaultValue string, validate func(string) error) (string, error) {
+	for {
+		prompt := label
+		if defaultValue != "" {
+			prompt += fmt.Sprintf(" [%s]", defaultValue)
+		}
+		p.rl.SetPrompt(ui.Cyan("› ") + prompt + ": ")
+		line, err := p.rl.Readline()
+		if errors.Is(err, readline.ErrInterrupt) || errors.Is(err, io.EOF) {
+			return "", errInitCanceled
+		}
+		if err != nil {
+			return "", err
+		}
+		value := strings.TrimSpace(line)
+		if value == "" {
+			value = defaultValue
+		}
+		if validate != nil {
+			if err := validate(value); err != nil {
+				fmt.Fprintf(p.out, "  %s %v\n", ui.Red("!"), err)
+				continue
+			}
+		}
+		return value, nil
+	}
+}
+
+func (p *initPrompter) Confirm(label string, defaultYes bool) (bool, error) {
+	hint := "y/N"
+	if defaultYes {
+		hint = "Y/n"
+	}
+	for {
+		value, err := p.Text(label+" ["+hint+"]", "", nil)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(value) {
+		case "":
+			return defaultYes, nil
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(p.out, "  Enter yes or no.")
+		}
+	}
+}
+
+func (p *initPrompter) Int(label string, defaultValue, minValue, maxValue int) (int, error) {
+	value, err := p.Text(label, strconv.Itoa(defaultValue), func(raw string) error {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return fmt.Errorf("enter a whole number")
+		}
+		if n < minValue || n > maxValue {
+			return fmt.Errorf("enter a value from %d to %d", minValue, maxValue)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(value)
+}
+
+func (p *initPrompter) Choose(ctx context.Context, title string, options []ui.SelectOption, defaultID string) (string, error) {
+	if p.terminal.IsTTY() {
+		result, err := ui.Select(ctx, p.terminal, title, options)
+		if err != nil {
+			return "", err
+		}
+		if !result.Selected {
+			return "", errInitCanceled
+		}
+		return result.ID, nil
+	}
+
+	fmt.Fprintln(p.out, title)
+	defaultNumber := 0
+	for i, option := range options {
+		status := ""
+		if option.Disabled {
+			status = " (unavailable)"
+		}
+		fmt.Fprintf(p.out, "  %d) %s", i+1, option.Label)
+		if option.Detail != "" {
+			fmt.Fprintf(p.out, " — %s", option.Detail)
+		}
+		fmt.Fprintln(p.out, status)
+		if option.ID == defaultID {
+			defaultNumber = i + 1
+		}
+	}
+	for {
+		defaultText := ""
+		if defaultNumber > 0 {
+			defaultText = strconv.Itoa(defaultNumber)
+		}
+		raw, err := p.Text("Selection", defaultText, nil)
+		if err != nil {
+			return "", err
+		}
+		n, err := strconv.Atoi(raw)
+		if err == nil && n >= 1 && n <= len(options) && !options[n-1].Disabled {
+			return options[n-1].ID, nil
+		}
+		for _, option := range options {
+			if !option.Disabled && strings.EqualFold(raw, option.ID) {
+				return option.ID, nil
+			}
+		}
+		fmt.Fprintln(p.out, "  Choose one of the available options.")
+	}
+}
+
+func validateNodeName(value string) error {
+	if value == "" {
+		return errors.New("node name is required")
+	}
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return errors.New("use only letters, numbers, '.', '_' or '-'")
+	}
+	return nil
+}
+
+func validateHostname(value string) error {
+	if value == "" {
+		return errors.New("hostname or IP is required")
+	}
+	if strings.Contains(value, "://") {
+		return errors.New("enter a hostname or IP, not a URL")
+	}
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return errors.New("hostname or IP cannot contain whitespace")
+	}
+	return nil
+}
+
+func validateSSHUser(value string) error {
+	if value == "" {
+		return errors.New("SSH user is required")
+	}
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return errors.New("SSH user cannot contain whitespace")
+	}
+	return nil
+}
+
+func cloneConfig(source *config.Config) *config.Config {
+	clone := *source
+	clone.Nodes = append([]config.NodeConfig(nil), source.Nodes...)
+	clone.Webhooks = append([]string(nil), source.Webhooks...)
+	clone.AllowedInternalHosts = append([]string(nil), source.AllowedInternalHosts...)
+	if source.Discovery != nil {
+		discoveryClone := *source.Discovery
+		clone.Discovery = &discoveryClone
+	}
+	return &clone
+}
+
+func preserveOptionalConfig(target, source *config.Config) {
+	target.Chat = source.Chat
+	target.AIProviders = source.AIProviders
+	target.Inference = source.Inference
+	target.MCPServers = source.MCPServers
+	target.Webhooks = append([]string(nil), source.Webhooks...)
+	target.AllowedInternalHosts = append([]string(nil), source.AllowedInternalHosts...)
+}
+
+func findNodeIndex(cfg *config.Config, name string) (int, bool) {
+	for i, node := range cfg.Nodes {
+		if strings.EqualFold(node.Name, name) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func duplicateHostname(cfg *config.Config, hostname string, except int) bool {
+	for i, node := range cfg.Nodes {
+		if i != except && strings.EqualFold(node.Hostname, hostname) {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultNodeUser(cfg *config.Config, fallback string) string {
+	for _, node := range cfg.Nodes {
+		if node.SSHUser != "" {
+			return node.SSHUser
+		}
+	}
+	return fallback
+}
+
+func normalizedRole(role string) string {
+	if strings.EqualFold(role, "primary") {
+		return "primary"
+	}
+	return "worker"
+}
+
+func enabledLabel(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func normalizeSuggestedName(host string) string {
+	host = strings.TrimSpace(host)
+	if dot := strings.IndexByte(host, '.'); dot > 0 {
+		host = host[:dot]
+	}
+	var b strings.Builder
+	for _, r := range host {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-._")
+}
+
+func currentSSHUser() string {
+	for _, key := range []string{"USER", "LOGNAME", "USERNAME"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return "root"
 }
 
 var verifySSHConnectionFn = verifySSHConnection
 
 func verifySSHConnection(ctx context.Context, host string, port int, user string, timeoutSec int, out io.Writer) bool {
-	spin := ui.NewSpinner()
-	spin.Start(fmt.Sprintf("Verifying SSH connection to [%s]:%d as %s...", host, port, user))
-	exec := transport.NewSSHExecutor(host, port, user, timeoutSec)
-	defer exec.Close()
-
+	fmt.Fprintf(out, "Checking SSH to %s@%s:%d... ", user, host, port)
+	sshExec := transport.NewSSHExecutor(host, port, user, timeoutSec)
+	defer sshExec.Close()
 	dialCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
-
-	if err := exec.Connect(dialCtx); err != nil {
-		spin.Stop(fmt.Sprintf("%s Connection failed: %v", ui.Red("✗"), err))
+	if err := sshExec.Connect(dialCtx); err != nil {
+		fmt.Fprintf(out, "%s\n  %v\n", ui.Red("failed"), err)
 		return false
 	}
-	spin.Stop(fmt.Sprintf("%s Connection verified successfully!", ui.Green("✓")))
+	fmt.Fprintln(out, ui.Green("connected"))
 	return true
 }
 
-func generateRandomSecret() string {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "axis-default-gossip-secret"
+var discoverTailscalePeersFn = discoverTailscalePeers
+
+func discoverTailscalePeers(ctx context.Context) ([]config.NodeConfig, error) {
+	output, err := exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
+	if err != nil {
+		return nil, err
 	}
-	return hex.EncodeToString(bytes)
+	var status struct {
+		Peer map[string]struct {
+			HostName     string   `json:"HostName"`
+			TailscaleIPs []string `json:"TailscaleIPs"`
+			Online       bool     `json:"Online"`
+		} `json:"Peer"`
+	}
+	if err := json.Unmarshal(output, &status); err != nil {
+		return nil, fmt.Errorf("parse tailscale status: %w", err)
+	}
+	peers := make([]config.NodeConfig, 0, len(status.Peer))
+	for _, peer := range status.Peer {
+		if !peer.Online || len(peer.TailscaleIPs) == 0 {
+			continue
+		}
+		name := normalizeSuggestedName(peer.HostName)
+		if name == "" {
+			name = normalizeSuggestedName(peer.TailscaleIPs[0])
+		}
+		peers = append(peers, config.NodeConfig{Name: name, Hostname: peer.TailscaleIPs[0], Role: "worker", SSHPort: 22, TimeoutSec: 10})
+	}
+	sort.Slice(peers, func(i, j int) bool { return peers[i].Name < peers[j].Name })
+	return peers, nil
+}
+
+var discoverMeshPeersFn = discoverMeshPeers
+
+func discoverMeshPeers(ctx context.Context) ([]config.NodeConfig, error) {
+	scanCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	registry := discovery.NewBeaconRegistry()
+	discovery.WatchBeaconChanges(scanCtx, &config.Config{Discovery: &config.DiscoveryConfig{Enabled: true, UDPPort: 42424}}, registry, nil)
+	<-scanCtx.Done()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	peers := registry.Snapshot()
+	sort.Slice(peers, func(i, j int) bool { return peers[i].Name < peers[j].Name })
+	return peers, nil
+}
+
+func generateRandomSecret() (string, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(secret), nil
 }
