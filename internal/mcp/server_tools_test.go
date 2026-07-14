@@ -466,10 +466,11 @@ func TestLifecycleEventTools(t *testing.T) {
 		t.Fatalf("ResetTestLog: %v", err)
 	}
 	t.Cleanup(func() {
-		events.SetLogPath("")
+		// Drain while still pointing at the temp log, then clear the override.
 		if err := events.FlushEvents(5 * time.Second); err != nil {
 			t.Errorf("FlushEvents cleanup: %v", err)
 		}
+		events.SetLogPath("")
 	})
 
 	s := NewServer(false, "", nil)
@@ -586,10 +587,11 @@ func TestMCPPushNotifications(t *testing.T) {
 		t.Fatalf("ResetTestLog: %v", err)
 	}
 	t.Cleanup(func() {
-		events.SetLogPath("")
+		// Drain while still pointing at the temp log, then clear the override.
 		if err := events.FlushEvents(5 * time.Second); err != nil {
 			t.Errorf("FlushEvents cleanup: %v", err)
 		}
+		events.SetLogPath("")
 	})
 	events.SetEventBufferSize(10)
 	events.SetCortexClient(nil)
