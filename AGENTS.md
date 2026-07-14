@@ -3,10 +3,7 @@
 Instructions for AI agents (Claude Code, GitHub Copilot, MCP consumers)
 working in this repository.
 
-For the canonical agent rules see also
-[`.github/copilot-instructions.md`](.github/copilot-instructions.md). This file
-exists as the single orientation entry point; where it conflicts with that
-file, the more specific file wins.
+This file exists as the single orientation entry point and authoritative source of truth for repository facts, architecture, and constraints.
 
 ## Truth Rule
 

@@ -5,7 +5,6 @@
 ```
 axis/                           STATUS    NOTES
 ├── .github/
-│   ├── copilot-instructions.md ✅         Agent orientation
 │   └── workflows/
 │       ├── ci.yml              ✅         Push/PR test pipeline
 │       └── release.yml         🆕 NEW    Tag-triggered release pipeline
