@@ -5,6 +5,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -390,11 +391,18 @@ func processEvent(evt Event) {
 
 // FlushEvents blocks until all enqueued events and their async webhook/Cortex
 // dispatches have been processed, or until the timeout is reached.
-func FlushEvents(timeout time.Duration) bool {
+// It returns nil on success and a non-nil error on timeout. Callers that
+// require a drained bus (tests asserting log contents, TestMain cleanup)
+// must check the error. Best-effort process exit may discard it.
+//
+// FlushEvents does not wait for in-process listener pool callbacks
+// (notifyListeners); file append and sequence allocation complete inside the
+// worker before listeners are enqueued.
+func FlushEvents(timeout time.Duration) error {
 	inflightMu.Lock()
 	if inflightCounter == 0 {
 		inflightMu.Unlock()
-		return true
+		return nil
 	}
 	ch := make(chan struct{})
 	flushChans = append(flushChans, ch)
@@ -402,7 +410,7 @@ func FlushEvents(timeout time.Duration) bool {
 
 	select {
 	case <-ch:
-		return true
+		return nil
 	case <-time.After(timeout):
 		inflightMu.Lock()
 		for i, c := range flushChans {
@@ -413,7 +421,7 @@ func FlushEvents(timeout time.Duration) bool {
 			}
 		}
 		inflightMu.Unlock()
-		return false
+		return fmt.Errorf("FlushEvents: timeout after %s", timeout)
 	}
 }
 
