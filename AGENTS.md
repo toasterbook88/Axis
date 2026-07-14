@@ -3,7 +3,11 @@
 Instructions for AI agents (Claude Code, GitHub Copilot, MCP consumers)
 working in this repository.
 
-This file exists as the single orientation entry point and authoritative source of truth for repository facts, architecture, and constraints.
+This file is the **canonical** repository knowledge and architecture source
+(repository facts, architecture, scope rules, and verification requirements).
+[`.github/copilot-instructions.md`](.github/copilot-instructions.md) is a
+supported **thin entry point** for Copilot surfaces: it restates the Truth Rule
+and points here. Do not treat that file as a second full copy of these rules.
 
 ## Truth Rule
 
@@ -291,12 +295,19 @@ reason, or add heavy dependencies without strong justification.
 
 ### Claude
 
-- **Do not promote advisory surfaces to live behavior.** Scaffolding in `internal/mesh`, `internal/reservation`, and `internal/safety/structured` is library-only and is **not** wired into the operator CLI path. Do not wire them up without updating `docs/current-state.md` and passing `verify-repo-truth.sh`.
+- **Do not invent inactive integrations.** Describe packages by their live wiring, not by outdated scaffolding headers:
+  - `internal/mesh` is started from `axis serve` via the daemon (`WatchMesh` when mesh is enabled/default) and is exposed for diagnostics through `axis mesh` and HTTP mesh handlers.
+  - `internal/reservation` backs the daemon reservation ledger, guarded execution reserve/release, snapshot overlays, `axis reservations` (list/inspect/release/doctor), and API `/v2/reservations`.
+  - Do not claim mesh or reservation are “library-only” or “not wired into the operator CLI path” while those surfaces exist.
+- **`internal/safety` structured evaluator** (`structured.go`): included in default builds and used by the stable blocker (`safety.Check` → `NewEvaluator`/`Evaluate`) and by guarded execution. Learned approvals remain disabled. Package `doc.go` text that claims a `safety_scaffolded` build-tag gate is stale relative to the code; do not restate that claim.
 - **Truth over features**: Do not weaken the fact plane to support an advisory surface (`axis chat`, `axis agent`).
+- Do not describe roadmap material or scaffolding as shipped runtime behavior. When wiring changes, update `docs/current-state.md` and pass `verify-repo-truth.sh` / `verify-doc-facts.sh`.
 
 ### Copilot
 
-When assisting with AXIS, Copilot should adhere to these critical guardrails:
+Copilot surfaces should load [`.github/copilot-instructions.md`](.github/copilot-instructions.md)
+(thin pointer + Truth Rule) and then follow this file for full guidance.
+Guardrails that matter for every edit:
 
 - **Truth Rule**: Do not make release or state claims without code/current-state proof. No generated output may present itself as cluster truth unless backed by a real snapshot or live probe.
 - **Surgical Changes**: Prefer small, explicit changes. Do not touch adjacent code that isn't broken.

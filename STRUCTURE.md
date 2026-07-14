@@ -5,6 +5,7 @@
 ```
 axis/                           STATUS    NOTES
 ├── .github/
+│   ├── copilot-instructions.md ✅         Thin Copilot entry point → AGENTS.md
 │   └── workflows/
 │       ├── ci.yml              ✅         Push/PR test pipeline
 │       └── release.yml         🆕 NEW    Tag-triggered release pipeline
