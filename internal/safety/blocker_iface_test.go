@@ -1,9 +1,27 @@
 package safety
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/toasterbook88/axis/internal/models"
+)
 
 func TestCheckDecoupledFromKnowledge(t *testing.T) {
-	t.Skip("RED: pending fix #1 — see EXECUTION-PLAN.md")
+	tiny := &models.ClusterSnapshot{
+		Summary: models.ClusterSummary{TotalAllocatableMB: 1024},
+		Nodes: []models.NodeFacts{{
+			Name:      "cpu-only",
+			Resources: &models.Resources{CPUCores: 4},
+		}},
+	}
 
-	t.Fatal("expected Check to accept consumer-side safety inputs without knowledge.ClusterKnowledge")
+	if result := Check(tiny, "run a large model", nil); !result.Blocked {
+		t.Fatalf("expected large model request to be blocked, got %+v", result)
+	}
+	if result := Check(tiny, "run gpu workload", nil); !result.Blocked {
+		t.Fatalf("expected GPU request to be blocked, got %+v", result)
+	}
+	if result := Check(tiny, "echo hello", nil); result.Blocked {
+		t.Fatalf("expected benign request to be allowed, got %+v", result)
+	}
 }

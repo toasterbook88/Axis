@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -320,6 +321,8 @@ func runHandler(cache SnapshotCache, deps RouteDeps) http.HandlerFunc {
 		}
 		req.OwnerSurface = execution.OwnerSurfaceHTTPRun
 		req.OwnerLabel = requestCallerLabel(r)
+		req.Events = events.GuardedExecutionSink{}
+		req.BuildContextJSON = knowledge.ExecutionContextJSON
 		if hasForwardedOrigin {
 			req.OriginOverride = forwardedOrigin
 		}

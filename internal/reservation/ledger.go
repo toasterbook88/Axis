@@ -14,9 +14,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+// EventEmitter receives advisory reservation lifecycle events. It is optional;
+// callers that do not configure one retain the ledger's core behavior.
+type EventEmitter func(name string, payload map[string]any)
+
+var emitEvent EventEmitter
+
+// SetEventEmitter configures the advisory reservation event sink.
+func SetEventEmitter(emitter EventEmitter) {
+	emitEvent = emitter
+}
+
+func emitReservationEvent(name string, payload map[string]any) {
+	if emitEvent != nil {
+		emitEvent(name, payload)
+	}
+}
 
 // Entry represents a single reservation on a node.
 type Entry struct {
@@ -293,11 +309,11 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	)
 
 	// Advisory event for external observers
-	events.Emit(events.NoopEmitter{}, events.EventReservationGranted, map[string]any{
-		events.PayloadKeyNode: req.Node,
-		"id":                  req.ID,
-		"ram_mb":              req.RAMMB,
-		"owner":               req.OwnerSurface,
+	emitReservationEvent("reservation.granted", map[string]any{
+		"node":   req.Node,
+		"id":     req.ID,
+		"ram_mb": req.RAMMB,
+		"owner":  req.OwnerSurface,
 	})
 
 	if err := l.writeSnapshot(snap); err != nil {
@@ -343,7 +359,7 @@ func (l *Ledger) Release(id string) error {
 	l.logger.Info("reservation released", "id", id, "node", released.Node, "ram_mb", released.RAMMB)
 
 	// Advisory event
-	events.Emit(events.NoopEmitter{}, events.EventReservationReleased, map[string]any{
+	emitReservationEvent("reservation.released", map[string]any{
 		"id":     id,
 		"node":   released.Node,
 		"ram_mb": released.RAMMB,
