@@ -58,7 +58,6 @@ After `make install-user` on a daemon host: `axis daemon restart && axis daemon 
 `axis version` must print `commit:` — that line distinguishes tip-of-main from a GitHub release with the same semver.
 Never `gh release create` before the tag workflow; GoReleaser owns GitHub Releases.
 
-
 Requires Go 1.26.1+ (`go.mod` is authoritative for the minimum; use the latest
 1.26 patch release). Remote node tests require SSH
 key-based auth.

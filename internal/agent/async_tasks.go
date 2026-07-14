@@ -128,7 +128,7 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 			task.appendOutput([]byte(out))
 		}
 		if runErr != nil {
-			task.appendOutput([]byte(fmt.Sprintf("\n[error: %s]\n", runErr.Error())))
+			task.appendOutput(fmt.Appendf(nil, "\n[error: %s]\n", runErr.Error()))
 		}
 		task.mu.Lock()
 		task.done = true
