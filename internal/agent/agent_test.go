@@ -853,13 +853,13 @@ func TestAgentMCPToolRegistration(t *testing.T) {
 
 		switch req.Method {
 		case "initialize":
-			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test-server","version":"1.0"}}}`, req.ID)))
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test-server","version":"1.0"}}}`, req.ID)
 		case "tools/list":
-			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"tools":[{"name":"echo","description":"echoes input","inputSchema":{"type":"object"}}]}}`, req.ID)))
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"tools":[{"name":"echo","description":"echoes input","inputSchema":{"type":"object"}}]}}`, req.ID)
 		case "resources/list":
-			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"resources":[]}}`, req.ID)))
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"resources":[]}}`, req.ID)
 		case "prompts/list":
-			w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%v,"result":{"prompts":[]}}`, req.ID)))
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"prompts":[]}}`, req.ID)
 		}
 	}))
 	defer s.Close()

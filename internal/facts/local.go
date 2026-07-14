@@ -1433,10 +1433,6 @@ func parseLinuxBlockDeviceInfo(out string) (linuxBlockDeviceInfo, error) {
 	return resp.Blockdevices[0], nil
 }
 
-func localLinuxBlockDeviceInfo(device string) (linuxBlockDeviceInfo, error) {
-	return localLinuxBlockDeviceInfoContext(context.Background(), device)
-}
-
 func localLinuxBlockDeviceInfoContext(ctx context.Context, device string) (linuxBlockDeviceInfo, error) {
 	out, err := exec.CommandContext(ctx, "lsblk", "-J", "-n", "-p", "-o", "NAME,KNAME,PKNAME,TYPE,ROTA", device).Output()
 	if err != nil {
