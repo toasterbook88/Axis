@@ -47,7 +47,7 @@ func TestInitCmdFirstTime(t *testing.T) {
 func TestInitCmdExistingConfigNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes.yaml")
 	original := &config.Config{
-		Nodes: []config.NodeConfig{{Name: "local", Hostname: "localhost", SSHUser: "operator", Role: "primary", TimeoutSec: 10}},
+		Nodes:     []config.NodeConfig{{Name: "local", Hostname: "localhost", SSHUser: "operator", Role: "primary", TimeoutSec: 10}},
 		Discovery: &config.DiscoveryConfig{Enabled: false},
 	}
 	if _, err := config.SaveAtomic(path, original); err != nil {
