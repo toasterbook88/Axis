@@ -36,7 +36,7 @@ Current defined events (as of this writing):
 
 These names are the source of truth. When adding new events, update the constants in `internal/events/events.go` first.
 
-**Important Boundary**: All events are **advisory and observational only**. External agents may observe these events and provide advisory input via MCP, but they must never be granted direct control over execution, placement, or reservations. This respects the core Axis principle: "Optional HTTP, MCP, and execution surfaces must not weaken the fact plane." (See AGENTS.md and .github/copilot-instructions.md)
+**Important Boundary**: All events are **advisory and observational only**. External agents may observe these events and provide advisory input via MCP, but they must never be granted direct control over execution, placement, or reservations. This respects the core Axis principle: "Optional HTTP, MCP, and execution surfaces must not weaken the fact plane." (See `AGENTS.md`; Copilot surfaces also load the thin entry point `.github/copilot-instructions.md`.)
 
 ### Two-Way Integration Model
 
@@ -101,8 +101,8 @@ When adding new hook points or MCP surfaces:
 
 **See also**:
 - `docs/runbooks/mcp-network-tools.md`
-- `.github/copilot-instructions.md`
-- `AGENTS.md`
+- `AGENTS.md` (canonical repository knowledge and architecture)
+- `.github/copilot-instructions.md` (thin Copilot entry point → `AGENTS.md`)
 
 ## Current Implementation Status
 

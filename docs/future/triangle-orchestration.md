@@ -259,7 +259,7 @@ graph TD
 
 Triangle was cross-checked against the canonical sources and **strongly aligns**:
 
-- **Truth Rule** (`AGENTS.md:11-21`, `.github/copilot-instructions.md`, binary help text): "No generated output may present itself as cluster truth unless it is backed by a real snapshot or live probe." `axis facts/status/task place/context` are primary. `axis chat` and `axis agent` are "experimental helpers subordinate to observed state." Triangle must remain a consumer, never a source.
+- **Truth Rule** (`AGENTS.md` Truth Rule section; thin restatement in `.github/copilot-instructions.md`; binary help text): "No generated output may present itself as cluster truth unless it is backed by a real snapshot or live probe." `axis facts/status/task place/context` are primary. `axis chat` and `axis agent` are "experimental helpers subordinate to observed state." Triangle must remain a consumer, never a source.
 - **What AXIS Is Not** (`docs/doctrine.md:33-46`): "a general-purpose orchestrator", "a background scheduler", "a hidden agent runtime". The core product is strictly the fact plane pipeline.
 - **Layers are subordinate** (`docs/architecture.md:20-22`): "Advisory surfaces (chat, agent, MCP) never override the fact plane."
 - **Avoid heavyweight trap** (`docs/sovereign-grid-architecture.md:7`): "avoiding the trap of becoming a heavyweight, centralized orchestrator." Axis must remain "a stateless, fast-executing Go binary".
@@ -320,7 +320,7 @@ This proposal underwent exhaustive re-verification (2026-05-28) against the live
 - No `internal/triangle*` exists (as stated).
 
 **Documentation Audits**:
-- `AGENTS.md`, `.github/copilot-instructions.md`, `docs/doctrine.md`, `docs/architecture.md`, `docs/sovereign-grid-architecture.md` (exact "Constellations", "Execution Leases", "heavyweight... trap", "Universal MCP Context Provider"), `docs/future-roadmap.md` (fact-plane primary, scope risks), `GEMINI.md` (gitignored cluster notes + 5-layer restatement).
+- `AGENTS.md` (canonical agent/repository knowledge), `.github/copilot-instructions.md` (thin Copilot entry point → `AGENTS.md`), `docs/doctrine.md`, `docs/architecture.md`, `docs/sovereign-grid-architecture.md` (exact "Constellations", "Execution Leases", "heavyweight... trap", "Universal MCP Context Provider"), `docs/future-roadmap.md` (fact-plane primary, scope risks), `GEMINI.md` (gitignored cluster notes + 5-layer restatement).
 
 **Remote GitHub (toasterbook88/axis via gh CLI)**:
 - 0 open issues.
