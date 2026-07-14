@@ -279,3 +279,23 @@ reason, or add heavy dependencies without strong justification.
 | `hack/compare-release-versions.go` | Compare repo vs published release tag |
 | `hack/apple-foundation-models.swift` | Probe Apple Foundation Models support |
 | `hack/verify-plan-progress.sh` | Verify execution-plan progress matrix test references and completed tests |
+
+## Agent-Specific Guidelines
+
+### Gemini
+
+- Do not duplicate build commands, core types, or coverage gates here. Rely on `AGENTS.md`.
+- Adhere strictly to the Truth Rule and scope discipline documented in `AGENTS.md`.
+
+### Claude
+
+- **Do not promote advisory surfaces to live behavior.** Scaffolding in `internal/mesh`, `internal/reservation`, and `internal/safety/structured` is library-only and is **not** wired into the operator CLI path. Do not wire them up without updating `docs/current-state.md` and passing `verify-repo-truth.sh`.
+- **Truth over features**: Do not weaken the fact plane to support an advisory surface (`axis chat`, `axis agent`).
+
+### Copilot
+
+When assisting with AXIS, Copilot should adhere to these critical guardrails:
+
+- **Truth Rule**: Do not make release or state claims without code/current-state proof. No generated output may present itself as cluster truth unless backed by a real snapshot or live probe.
+- **Surgical Changes**: Prefer small, explicit changes. Do not touch adjacent code that isn't broken.
+- **Verification**: Run Makefile gates (`make test`, `make lint`) to verify any changes before proposing them.
