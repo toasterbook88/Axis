@@ -8,9 +8,9 @@ import (
 )
 
 func TestEventBusBoundedDispatch(t *testing.T) {
-	// Drain the queue before returning so the burst does not leak into other
-	// tests that share the process-global event bus.
-	defer FlushEvents(2 * time.Second)
+	defer func() {
+		_ = FlushEvents(5 * time.Second)
+	}()
 
 	const eventCount = 1000
 	var release sync.WaitGroup

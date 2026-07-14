@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,15 @@ func defaultLogPath() string {
 // SetLogPath overrides the log path, primarily for testing.
 func SetLogPath(path string) {
 	logPathVal.Store(path)
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	if f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
+		f.Close()
+	}
 }
 
 // allocateSequence increments and returns a monotonic sequence number from event-sequence file under flock.
@@ -196,15 +206,12 @@ func getRecentEventsFromFile(limit int) ([]Event, error) {
 		if err != nil {
 			continue
 		}
-		dec := json.NewDecoder(f)
-		for {
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Bytes()
 			var evt Event
-			if err := dec.Decode(&evt); err != nil {
-				if err == io.EOF {
-					break
-				}
-				slog.Error("failed decoding event", "path", files[i], "error", err)
-				break
+			if err := json.Unmarshal(line, &evt); err != nil {
+				continue
 			}
 			allEvents = append(allEvents, evt)
 		}

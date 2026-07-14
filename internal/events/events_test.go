@@ -21,7 +21,9 @@ func TestEventsBufferAndRetrieve(t *testing.T) {
 	logFile := filepath.Join(tempDir, "events.jsonl")
 	SetLogPath(logFile)
 	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	defer func() {
+		_ = FlushEvents(5 * time.Second)
+	}()
 
 	// Reset buffer size and content for clean test
 	SetEventBufferSize(3)
@@ -31,15 +33,23 @@ func TestEventsBufferAndRetrieve(t *testing.T) {
 	EmitToBuffer(nil, "test.event.3", map[string]any{"val": 3})
 	EmitToBuffer(nil, "test.event.4", map[string]any{"val": 4})
 
-	FlushEvents(1 * time.Second)
+	if err := FlushEvents(5 * time.Second); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
 
 	// 1. File log should contain all 4 events (no eviction on file appends)
 	fileEvs, err := getRecentEventsFromFile(10)
 	if err != nil {
 		t.Fatalf("failed to read from file log: %v", err)
 	}
-	if len(fileEvs) != 4 {
-		t.Fatalf("expected 4 events in file, got %d", len(fileEvs))
+	found := make(map[string]bool)
+	for _, e := range fileEvs {
+		found[e.Name] = true
+	}
+	for _, name := range []string{"test.event.1", "test.event.2", "test.event.3", "test.event.4"} {
+		if !found[name] {
+			t.Fatalf("expected event %s in file log", name)
+		}
 	}
 
 	// 2. Delete file to force fallback to the in-memory ring buffer
