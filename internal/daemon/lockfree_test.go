@@ -150,7 +150,7 @@ func BenchmarkSnapshotUnderRefresh(b *testing.B) {
 	})
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = d.Snapshot()
 		_ = d.Meta()
 	}
