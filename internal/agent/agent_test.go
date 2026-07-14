@@ -851,15 +851,16 @@ func TestAgentMCPToolRegistration(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&req)
 		w.Header().Set("Content-Type", "application/json")
 
+		idBytes, _ := json.Marshal(req.ID)
 		switch req.Method {
 		case "initialize":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test-server","version":"1.0"}}}`, req.ID)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test-server","version":"1.0"}}}`, idBytes)
 		case "tools/list":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"tools":[{"name":"echo","description":"echoes input","inputSchema":{"type":"object"}}]}}`, req.ID)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"echoes input","inputSchema":{"type":"object"}}]}}`, idBytes)
 		case "resources/list":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"resources":[]}}`, req.ID)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"resources":[]}}`, idBytes)
 		case "prompts/list":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"prompts":[]}}`, req.ID)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"prompts":[]}}`, idBytes)
 		}
 	}))
 	defer s.Close()
