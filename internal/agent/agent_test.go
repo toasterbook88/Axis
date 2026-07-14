@@ -16,6 +16,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 // Mock types mirroring the chat package's internal streaming types.
@@ -872,6 +873,9 @@ func TestAgentMCPToolRegistration(t *testing.T) {
 			},
 		},
 	}
+
+	netutil.AllowInternalHost("127.0.0.1")
+	defer netutil.ResetInternalAllowlist()
 
 	mcpReg := mcpclient.NewRegistry()
 	mcpReg.ConnectAll(context.Background(), cfg)

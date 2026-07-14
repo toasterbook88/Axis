@@ -514,6 +514,35 @@ webhooks:
 	}
 }
 
+func TestLoad_AllowedInternalHosts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+allowed_internal_hosts:
+  - "axis.lan"
+  - "127.0.0.1"
+  - "169.254.1.2"
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with allowed_internal_hosts: %v", err)
+	}
+	want := []string{"axis.lan", "127.0.0.1", "169.254.1.2"}
+	if len(cfg.AllowedInternalHosts) != len(want) {
+		t.Fatalf("expected %d allowed hosts, got %d", len(want), len(cfg.AllowedInternalHosts))
+	}
+	for i, h := range want {
+		if cfg.AllowedInternalHosts[i] != h {
+			t.Errorf("allowed_internal_hosts[%d] = %q, want %q", i, cfg.AllowedInternalHosts[i], h)
+		}
+	}
+}
+
 func TestValidate_NegativeSystemReserveMB(t *testing.T) {
 	cfg := &Config{Nodes: []NodeConfig{
 		{Name: "n", Hostname: "x.local", SSHUser: "u", SystemReserveMB: -500},

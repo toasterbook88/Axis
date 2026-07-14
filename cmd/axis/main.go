@@ -13,6 +13,7 @@ import (
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/events"
+	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -42,16 +43,26 @@ func newRootCmd() *cobra.Command {
 			"deterministic placement, and explicit local control surfaces.\n\n" +
 			"Chat helpers are experimental and must not be treated as authoritative " +
 			"cluster truth unless backed by a live snapshot or probe.",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			ui.Init(noColor)
 			// Initialize and register Cortex client globally (optional cluster integration)
 			if client, err := buildCortexClient(5 * time.Second); err == nil {
 				events.SetCortexClient(client)
 			}
-			// Register webhooks globally if configured
+			// Register webhooks globally if configured. Webhooks are an optional
+			// advisory surface; a misconfigured URL must not block core fact-plane
+			// commands, so degrade gracefully with a warning instead of aborting.
 			if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg != nil {
-				events.SetWebhooks(cfg.Webhooks)
+				// Hydrate the SSRF allowlist before validating webhook URLs so
+				// operator-approved internal targets (LAN/MCP/Thunderbolt) pass.
+				for _, host := range cfg.AllowedInternalHosts {
+					netutil.AllowInternalHost(host)
+				}
+				if err := events.SetWebhooks(cfg.Webhooks); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+				}
 			}
+			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()

@@ -14,6 +14,7 @@ import (
 var termMakeRaw = term.MakeRaw
 var termRestore = term.Restore
 var termGetSize = term.GetSize
+var readKeyFunc = readKey
 
 // SelectOption represents a selectable line in the dropdown menu.
 type SelectOption struct {
@@ -142,7 +143,7 @@ func Select(
 	terminal TerminalIO,
 	title string,
 	options []SelectOption,
-) (SelectResult, error) {
+) (result SelectResult, err error) {
 	if len(options) == 0 {
 		return SelectResult{}, fmt.Errorf("select: no options provided")
 	}
@@ -181,14 +182,6 @@ func Select(
 	defer termRestore(inFd, oldState)
 	hideCursor(w)
 	defer showCursor(w)
-
-	defer func() {
-		if r := recover(); r != nil {
-			termRestore(inFd, oldState)
-			showCursor(w)
-			panic(r)
-		}
-	}()
 
 	selected := 0
 	for selected < len(options) && options[selected].Disabled {
@@ -285,7 +278,7 @@ func Select(
 			numLines++
 		}
 
-		action, err := readKey(terminal.In(), inFd, true)
+		action, err := readKeySafely(terminal.In(), inFd, true)
 		if err != nil {
 			clearLines(w, numLines+1)
 			return SelectResult{}, err
@@ -334,4 +327,13 @@ func Select(
 
 		clearLines(w, numLines+1)
 	}
+}
+
+func readKeySafely(in io.Reader, fd int, isTTY bool) (action KeyAction, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("select input handler panic: %v", r)
+		}
+	}()
+	return readKeyFunc(in, fd, isTTY)
 }
