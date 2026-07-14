@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 func TestInitCmdFirstTime(t *testing.T) {
@@ -380,7 +381,11 @@ func TestPromptHelpersRejectInvalidInputThenAccept(t *testing.T) {
 	if err != nil || n != 7 {
 		t.Fatalf("Int = %d, %v", n, err)
 	}
-	choice, err := prompt.Choose(context.Background(), "Choice", []uiOption(), "b")
+	choice, err := prompt.Choose(context.Background(), "Choice", []ui.SelectOption{
+		{ID: "a", Label: "A"},
+		{ID: "b", Label: "B", Disabled: true},
+		{ID: "c", Label: "C"},
+	}, "b")
 	if err != nil || choice != "c" {
 		t.Fatalf("Choose = %q, %v", choice, err)
 	}
@@ -413,14 +418,6 @@ func testPrompter(t *testing.T, input string) *initPrompter {
 		t.Fatal(err)
 	}
 	return prompt
-}
-
-func uiOption() []ui.SelectOption {
-	return []ui.SelectOption{
-		{ID: "a", Label: "A"},
-		{ID: "b", Label: "B", Disabled: true},
-		{ID: "c", Label: "C"},
-	}
 }
 
 func testInitDeps() initDependencies {
