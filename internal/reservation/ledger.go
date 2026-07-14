@@ -136,6 +136,11 @@ type Ledger struct {
 	// When zero or missing, falls back to limits.SystemReserveMB.
 	nodeReserve map[string]int64
 
+	// fileMu serializes disk persistence (file-lock bookkeeping + marshal +
+	// atomic write) across goroutines. It is always acquired before mu when
+	// both are needed. Holding it during I/O leaves mu free so concurrent
+	// readers are not blocked while the ledger is written to disk.
+	fileMu   sync.Mutex
 	lockFile *os.File // file lock for cross-process synchronization
 
 	// Metrics
@@ -191,8 +196,8 @@ func (l *Ledger) systemReserveFor(node string) int64 {
 // Fails if node capacity is unknown or if it would violate overcommit limits
 // or per-node caps.
 func (l *Ledger) Reserve(req Entry) (*Entry, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -204,70 +209,81 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		defer l.unlockFileLocked()
 	}
 
-	if req.ID == "" {
-		return nil, fmt.Errorf("reservation: entry ID required")
-	}
-	if req.Node == "" {
-		return nil, fmt.Errorf("reservation: node required")
-	}
-	if req.RAMMB <= 0 {
-		return nil, fmt.Errorf("reservation: RAM must be > 0")
-	}
-	totalRAM, ok := l.nodeRAM[req.Node]
-	if !ok || totalRAM <= 0 {
-		l.reserveFailures++
-		return nil, fmt.Errorf("reservation: node %q capacity unknown", req.Node)
-	}
+	var snap []*Entry
+	result, err := func() (*Entry, error) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
 
-	// Check existing
-	if _, exists := l.entries[req.ID]; exists {
-		return nil, fmt.Errorf("reservation: duplicate ID %q", req.ID)
-	}
+		if req.ID == "" {
+			return nil, fmt.Errorf("reservation: entry ID required")
+		}
+		if req.Node == "" {
+			return nil, fmt.Errorf("reservation: node required")
+		}
+		if req.RAMMB <= 0 {
+			return nil, fmt.Errorf("reservation: RAM must be > 0")
+		}
+		totalRAM, ok := l.nodeRAM[req.Node]
+		if !ok || totalRAM <= 0 {
+			l.reserveFailures++
+			return nil, fmt.Errorf("reservation: node %q capacity unknown", req.Node)
+		}
 
-	// Check per-node cap
-	nodeCount := 0
-	var nodeReserved int64
-	var parentEntry *Entry
-	parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID")
-	for _, e := range l.entries {
-		if e.Node == req.Node {
-			nodeCount++
-			nodeReserved += e.RAMMB
-			if parentID != "" && (e.ID == parentID || e.OwnerExecID == parentID) {
-				parentEntry = e
+		// Check existing
+		if _, exists := l.entries[req.ID]; exists {
+			return nil, fmt.Errorf("reservation: duplicate ID %q", req.ID)
+		}
+
+		// Check per-node cap
+		nodeCount := 0
+		var nodeReserved int64
+		var parentEntry *Entry
+		parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID")
+		for _, e := range l.entries {
+			if e.Node == req.Node {
+				nodeCount++
+				nodeReserved += e.RAMMB
+				if parentID != "" && (e.ID == parentID || e.OwnerExecID == parentID) {
+					parentEntry = e
+				}
 			}
 		}
-	}
-	if parentEntry != nil {
-		nodeReserved -= parentEntry.RAMMB
-	}
-
-	if l.limits.MaxEntriesPerNode > 0 && nodeCount >= l.limits.MaxEntriesPerNode {
-		l.reserveFailures++
-		return nil, fmt.Errorf("reservation: node %q at max entries (%d)", req.Node, l.limits.MaxEntriesPerNode)
-	}
-
-	// Check overcommit ratio
-	if l.limits.MaxOvercommitRatio > 0 {
-		allocatable := totalRAM - l.systemReserveFor(req.Node)
-		if allocatable <= 0 {
-			l.reserveFailures++
-			return nil, fmt.Errorf("reservation: node %q has no allocatable RAM after system reserve", req.Node)
+		if parentEntry != nil {
+			nodeReserved -= parentEntry.RAMMB
 		}
-		newTotal := nodeReserved + req.RAMMB
-		ratio := float64(newTotal) / float64(allocatable)
-		if ratio > l.limits.MaxOvercommitRatio {
-			l.reserveFailures++
-			return nil, fmt.Errorf("reservation: node %q would exceed overcommit ratio (%.2f > %.2f, reserved=%dMB, allocatable=%dMB)",
-				req.Node, ratio, l.limits.MaxOvercommitRatio, newTotal, allocatable)
-		}
-	}
 
-	now := l.now()
-	req.CreatedAt = now
-	req.LastHeartbeat = now
-	l.entries[req.ID] = &req
-	l.totalReserved += req.RAMMB
+		if l.limits.MaxEntriesPerNode > 0 && nodeCount >= l.limits.MaxEntriesPerNode {
+			l.reserveFailures++
+			return nil, fmt.Errorf("reservation: node %q at max entries (%d)", req.Node, l.limits.MaxEntriesPerNode)
+		}
+
+		// Check overcommit ratio
+		if l.limits.MaxOvercommitRatio > 0 {
+			allocatable := totalRAM - l.systemReserveFor(req.Node)
+			if allocatable <= 0 {
+				l.reserveFailures++
+				return nil, fmt.Errorf("reservation: node %q has no allocatable RAM after system reserve", req.Node)
+			}
+			newTotal := nodeReserved + req.RAMMB
+			ratio := float64(newTotal) / float64(allocatable)
+			if ratio > l.limits.MaxOvercommitRatio {
+				l.reserveFailures++
+				return nil, fmt.Errorf("reservation: node %q would exceed overcommit ratio (%.2f > %.2f, reserved=%dMB, allocatable=%dMB)",
+					req.Node, ratio, l.limits.MaxOvercommitRatio, newTotal, allocatable)
+			}
+		}
+
+		now := l.now()
+		req.CreatedAt = now
+		req.LastHeartbeat = now
+		l.entries[req.ID] = &req
+		l.totalReserved += req.RAMMB
+		snap = l.snapshotEntriesLocked()
+		return &req, nil
+	}()
+	if err != nil {
+		return nil, err
+	}
 
 	l.logger.Info("reservation created",
 		"id", req.ID,
@@ -284,16 +300,16 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"owner":               req.OwnerSurface,
 	})
 
-	if err := l.saveLocked(); err != nil {
+	if err := l.writeSnapshot(snap); err != nil {
 		l.logger.Error("failed to persist ledger", "error", err)
 	}
-	return &req, nil
+	return result, nil
 }
 
 // Release removes a reservation by ID.
 func (l *Ledger) Release(id string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -305,28 +321,41 @@ func (l *Ledger) Release(id string) error {
 		defer l.unlockFileLocked()
 	}
 
-	e, ok := l.entries[id]
-	if !ok {
-		return fmt.Errorf("reservation: unknown entry %q", id)
+	var snap []*Entry
+	var released Entry
+	err := func() error {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		e, ok := l.entries[id]
+		if !ok {
+			return fmt.Errorf("reservation: unknown entry %q", id)
+		}
+		l.totalReleased += e.RAMMB
+		released = *e
+		delete(l.entries, id)
+		snap = l.snapshotEntriesLocked()
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
-	l.totalReleased += e.RAMMB
-	delete(l.entries, id)
-	l.logger.Info("reservation released", "id", id, "node", e.Node, "ram_mb", e.RAMMB)
+
+	l.logger.Info("reservation released", "id", id, "node", released.Node, "ram_mb", released.RAMMB)
 
 	// Advisory event
 	events.Emit(events.NoopEmitter{}, events.EventReservationReleased, map[string]any{
 		"id":     id,
-		"node":   e.Node,
-		"ram_mb": e.RAMMB,
+		"node":   released.Node,
+		"ram_mb": released.RAMMB,
 	})
 
-	return l.saveLocked()
+	return l.writeSnapshot(snap)
 }
 
 // Heartbeat updates the liveness timestamp for a reservation.
 func (l *Ledger) Heartbeat(id string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -338,19 +367,29 @@ func (l *Ledger) Heartbeat(id string) error {
 		defer l.unlockFileLocked()
 	}
 
-	e, ok := l.entries[id]
-	if !ok {
-		return fmt.Errorf("reservation: unknown entry %q for heartbeat", id)
+	var snap []*Entry
+	err := func() error {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		e, ok := l.entries[id]
+		if !ok {
+			return fmt.Errorf("reservation: unknown entry %q for heartbeat", id)
+		}
+		e.LastHeartbeat = l.now()
+		snap = l.snapshotEntriesLocked()
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
-	e.LastHeartbeat = l.now()
-	return l.saveLocked()
+	return l.writeSnapshot(snap)
 }
 
 // Reclaim removes all stale and expired reservations. Returns count reclaimed.
 // This is the primary orphan sweeper for the ledger.
 func (l *Ledger) Reclaim() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -363,7 +402,20 @@ func (l *Ledger) Reclaim() int {
 		defer l.unlockFileLocked()
 	}
 
-	return l.reclaimLocked()
+	l.mu.Lock()
+	reclaimed := l.reclaimInMemoryLocked()
+	var snap []*Entry
+	if reclaimed > 0 {
+		snap = l.snapshotEntriesLocked()
+	}
+	l.mu.Unlock()
+
+	if reclaimed > 0 {
+		if err := l.writeSnapshot(snap); err != nil {
+			l.logger.Error("failed to persist ledger during reclaim", "error", err)
+		}
+	}
+	return reclaimed
 }
 
 // Reconcile is a semantic alias for Reclaim used during startup or recovery
@@ -377,7 +429,10 @@ func (l *Ledger) Prune() int {
 	return l.Reclaim()
 }
 
-func (l *Ledger) reclaimLocked() int {
+// reclaimInMemoryLocked removes stale/expired entries from the in-memory map
+// and returns the count reclaimed. The caller must hold l.mu and is responsible
+// for persisting a snapshot afterwards (outside l.mu).
+func (l *Ledger) reclaimInMemoryLocked() int {
 	now := l.now()
 	reclaimed := 0
 	for id, e := range l.entries {
@@ -392,11 +447,6 @@ func (l *Ledger) reclaimLocked() int {
 				"ram_mb", e.RAMMB,
 				"reason", string(liveness),
 			)
-		}
-	}
-	if reclaimed > 0 {
-		if err := l.saveLocked(); err != nil {
-			l.logger.Error("failed to persist ledger during reclaim", "error", err)
 		}
 	}
 	return reclaimed

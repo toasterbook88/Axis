@@ -76,6 +76,20 @@ type Metadata struct {
 	Freshness           *models.DiscoveryFreshness `json:"freshness,omitempty"`
 }
 
+type daemonMetadata struct {
+	interval            time.Duration
+	staleThreshold      time.Duration
+	snapshotPath        string
+	collectedAt         time.Time
+	nextRefreshAt       time.Time
+	lastTrigger         string
+	lastConfigAt        time.Time
+	lastError           string
+	refreshCount        int64
+	lastRefreshDuration time.Duration
+	staleNodes          []string
+}
+
 type Daemon struct {
 	mu             sync.RWMutex
 	refreshing     atomic.Bool
@@ -113,6 +127,9 @@ type Daemon struct {
 	// does not fire hooks (OQ-5 resolution).
 	hooksMu       sync.Mutex
 	snapshotHooks map[string]*snapshotHook
+
+	snapshotPublished atomic.Pointer[models.ClusterSnapshot]
+	metaPublished     atomic.Pointer[daemonMetadata]
 }
 
 // snapshotHook records a subscriber to the OnSnapshotChanged event plus its
@@ -269,6 +286,7 @@ func New(interval time.Duration, collector Collector) *Daemon {
 	if err := d.ledger.Load(); err != nil {
 		slog.Error("failed to load reservation ledger", "error", err)
 	}
+	d.publishMetadataLocked()
 	return d
 }
 
@@ -288,6 +306,7 @@ func (d *Daemon) SetSnapshotPath(path string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.snapshotPath = path
+	d.publishMetadataLocked()
 }
 
 // SetStaleThreshold configures how old the cache must be before it is
@@ -299,11 +318,13 @@ func (d *Daemon) SetStaleThreshold(threshold time.Duration) {
 		threshold = defaultStaleThreshold
 	}
 	d.staleThreshold = threshold
+	d.publishMetadataLocked()
 }
 
 func (d *Daemon) Start(ctx context.Context) {
 	d.mu.Lock()
 	d.nextRefreshAt = time.Now().UTC().Add(d.interval)
+	d.publishMetadataLocked()
 	d.mu.Unlock()
 
 	// Periodic cache refresh loop
@@ -652,6 +673,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 			d.lastError = stateWarning.Error()
 			d.refreshCount++
 			d.lastRefreshDuration = time.Since(start)
+			d.publishMetadataLocked()
 			d.mu.Unlock()
 			return stateWarning
 		}
@@ -669,6 +691,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 
 	if err != nil {
 		d.lastError = err.Error()
+		d.publishMetadataLocked()
 		d.mu.Unlock()
 		return err
 	}
@@ -676,9 +699,10 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	// Detect nodes that degraded since the last refresh (complete → error/unreachable).
 	// These are surfaced in Metadata.StaleNodes for operator visibility.
 	var staleNodes []string
-	if d.snapshot != nil && snap != nil {
-		prevStatus := make(map[string]models.NodeStatus, len(d.snapshot.Nodes))
-		for _, n := range d.snapshot.Nodes {
+	previousSnapshot := d.snapshotPublished.Load()
+	if previousSnapshot != nil && snap != nil {
+		prevStatus := make(map[string]models.NodeStatus, len(previousSnapshot.Nodes))
+		for _, n := range previousSnapshot.Nodes {
 			prevStatus[n.Name] = n.Status
 		}
 		for _, n := range snap.Nodes {
@@ -709,6 +733,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	if skillStore, skillErr := skills.Load(); skillErr != nil {
 		if skillStore == nil {
 			d.lastError = skillErr.Error()
+			d.collectedAt = now
+			d.snapshotPublished.Store(d.snapshot)
+			d.publishMetadataLocked()
 			d.mu.Unlock()
 			return skillErr
 		}
@@ -721,6 +748,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	d.lastError = ""
 
 	snapCopy := d.snapshot
+	snapshotPath := d.snapshotPath
+	d.snapshotPublished.Store(snapCopy)
+	d.publishMetadataLocked()
 	d.mu.Unlock()
 
 	// Emit advisory post-refresh event for external observers (MCP agents, hooks, etc.)
@@ -729,15 +759,16 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		"nodes":                  len(snapCopy.Nodes),
 	})
 
-	if d.snapshotPath == "" {
+	if snapshotPath == "" {
 		// No persistence configured, but still need to fire hooks if content
 		// changed (test paths and in-process consumers rely on this).
 		d.dispatchSnapshotHooks(snapCopy, trigger)
 		return nil
 	}
-	if err := persistSnapshot(d.snapshotPath, snapCopy); err != nil {
+	if err := persistSnapshot(snapshotPath, snapCopy); err != nil {
 		d.mu.Lock()
 		d.lastError = err.Error()
+		d.publishMetadataLocked()
 		d.mu.Unlock()
 		return err
 	}
@@ -864,12 +895,11 @@ func fingerprintStateFile(path string) (configFingerprint, error) {
 }
 
 func (d *Daemon) Snapshot() (*models.ClusterSnapshot, bool) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if d.snapshot == nil {
+	snapshot := d.snapshotPublished.Load()
+	if snapshot == nil {
 		return nil, false
 	}
-	return snapshotview.Clone(d.snapshot), true
+	return snapshotview.Clone(snapshot), true
 }
 
 func (d *Daemon) Invalidate() {
@@ -878,6 +908,8 @@ func (d *Daemon) Invalidate() {
 	d.snapshot = nil
 	d.collectedAt = time.Time{}
 	d.lastError = ""
+	d.snapshotPublished.Store(nil)
+	d.publishMetadataLocked()
 	d.mu.Unlock()
 
 	if path != "" {
@@ -886,47 +918,51 @@ func (d *Daemon) Invalidate() {
 }
 
 func (d *Daemon) Meta() Metadata {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
+	snapshot := d.snapshotPublished.Load()
+	metaState := d.metaPublished.Load()
+	if metaState == nil {
+		metaState = &daemonMetadata{}
+	}
 	age := time.Duration(0)
 	stale := false
-	if !d.collectedAt.IsZero() {
-		age = time.Since(d.collectedAt)
-		stale = age > d.staleThreshold
+	if !metaState.collectedAt.IsZero() {
+		age = time.Since(metaState.collectedAt)
+		stale = age > metaState.staleThreshold
 	}
 
 	meta := Metadata{
 		Source:             "daemon-cache",
-		Ready:              d.snapshot != nil,
-		RefreshIntervalSec: int(d.interval / time.Second),
-		LastRefreshTrigger: d.lastTrigger,
-		LastConfigEventAt:  d.lastConfigAt,
-		CollectedAt:        d.collectedAt,
-		NextRefreshAt:      d.nextRefreshAt,
-		LastError:          d.lastError,
-		SnapshotPath:       d.snapshotPath,
+		Ready:              snapshot != nil,
+		RefreshIntervalSec: int(metaState.interval / time.Second),
+		LastRefreshTrigger: metaState.lastTrigger,
+		LastConfigEventAt:  metaState.lastConfigAt,
+		CollectedAt:        metaState.collectedAt,
+		NextRefreshAt:      metaState.nextRefreshAt,
+		LastError:          metaState.lastError,
+		SnapshotPath:       metaState.snapshotPath,
 		Version:            Version,
 		CacheAgeSec:        int(age.Seconds()),
 		Stale:              stale,
-		StaleThresholdSec:  int(d.staleThreshold / time.Second),
+		StaleThresholdSec:  int(metaState.staleThreshold / time.Second),
 	}
-	if d.mesh != nil {
-		meta.MeshPeers = len(d.mesh.ActivePeers())
+	mesh := d.mesh
+	if mesh != nil {
+		meta.MeshPeers = len(mesh.ActivePeers())
 	}
-	meta.RefreshCount = d.refreshCount
-	meta.LastRefreshMs = d.lastRefreshDuration.Milliseconds()
+	meta.RefreshCount = metaState.refreshCount
+	meta.LastRefreshMs = metaState.lastRefreshDuration.Milliseconds()
 	d.pendingMu.Lock()
 	meta.MaxRefreshLatencyMs = d.maxRefreshLatency.Milliseconds()
 	d.pendingMu.Unlock()
-	meta.StaleNodes = d.staleNodes
-	if d.snapshot != nil && d.snapshot.Freshness != nil {
-		freshness := *d.snapshot.Freshness
+	meta.StaleNodes = append([]string(nil), metaState.staleNodes...)
+	if snapshot != nil && snapshot.Freshness != nil {
+		freshness := *snapshot.Freshness
 		meta.Freshness = &freshness
 	}
 
-	if d.ledger != nil {
-		meta.ReservedMB = d.ledger.Summary().TotalReservedMB
+	ledger := d.ledger
+	if ledger != nil {
+		meta.ReservedMB = ledger.Summary().TotalReservedMB
 	} else if st, err := state.Load(); st != nil {
 		for _, ns := range st.Nodes {
 			meta.ReservedMB += ns.ReservedMB
@@ -939,6 +975,22 @@ func (d *Daemon) Meta() Metadata {
 	}
 
 	return meta
+}
+
+func (d *Daemon) publishMetadataLocked() {
+	d.metaPublished.Store(&daemonMetadata{
+		interval:            d.interval,
+		staleThreshold:      d.staleThreshold,
+		snapshotPath:        d.snapshotPath,
+		collectedAt:         d.collectedAt,
+		nextRefreshAt:       d.nextRefreshAt,
+		lastTrigger:         d.lastTrigger,
+		lastConfigAt:        d.lastConfigAt,
+		lastError:           d.lastError,
+		refreshCount:        d.refreshCount,
+		lastRefreshDuration: d.lastRefreshDuration,
+		staleNodes:          append([]string(nil), d.staleNodes...),
+	})
 }
 
 func CanReserve(snap *models.ClusterSnapshot, node string, mb int64) bool {

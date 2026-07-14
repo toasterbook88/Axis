@@ -119,7 +119,9 @@ func NewEngine(opts ...Option) *Engine {
 		ollamaEndpoint: "http://localhost:11434",
 		model:          "granite3.1-moe:1b",
 		timeout:        150 * time.Millisecond,
-		httpClient:     &http.Client{},
+		// No client-level Timeout: the per-call budget is enforced via
+		// context.WithTimeout in Classify, so WithTimeout() is authoritative.
+		httpClient: &http.Client{},
 	}
 	for _, o := range opts {
 		o(e)

@@ -23,7 +23,8 @@ func NewOllamaClient(endpoint, model string) *OllamaClient {
 	return &OllamaClient{
 		Endpoint: endpoint,
 		Model:    model,
-		client:   &http.Client{},
+		// Streaming duration is governed by the request context.
+		client: &http.Client{Timeout: 0},
 	}
 }
 

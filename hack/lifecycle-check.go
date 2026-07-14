@@ -42,6 +42,7 @@ var packageStates = map[string]string{
 	"internal/mesh":         Scaffolded,
 	"internal/multipath":    Scaffolded,
 	"internal/models":       InternalOnly,
+	"internal/netutil":      InternalOnly,
 	"internal/persist":      InternalOnly,
 	"internal/placement":    Stable,
 	"internal/repairs":      Scaffolded,

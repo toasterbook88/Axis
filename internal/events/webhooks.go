@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 var (
@@ -17,14 +20,30 @@ var (
 	webhookMu   sync.RWMutex
 	httpClient  = &http.Client{Timeout: 5 * time.Second}
 	backoffBase = 1 * time.Second
+
+	// dispatchCtx bounds all in-flight webhook posts and their backoff waits so
+	// they can be cancelled (e.g. on shutdown) instead of blocking on a long
+	// retry schedule.
+	dispatchCtx, dispatchCancel = context.WithCancel(context.Background())
 )
 
+// ShutdownWebhooks cancels any in-flight webhook dispatch and pending retries.
+func ShutdownWebhooks() {
+	dispatchCancel()
+}
+
 // SetWebhooks registers a list of webhook URLs for operational event dispatching.
-func SetWebhooks(urls []string) {
+func SetWebhooks(urls []string) error {
+	for _, targetURL := range urls {
+		if err := netutil.ValidateOutboundURL(targetURL); err != nil {
+			return fmt.Errorf("webhook URL %q: %w", targetURL, err)
+		}
+	}
 	webhookMu.Lock()
 	defer webhookMu.Unlock()
 	webhookURLs = make([]string, len(urls))
 	copy(webhookURLs, urls)
+	return nil
 }
 
 // getWebhooks returns a copy of the registered webhook URLs.
@@ -66,7 +85,7 @@ func postWithRetry(url string, body []byte) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= 3; attempt++ {
-		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(dispatchCtx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
@@ -85,7 +104,13 @@ func postWithRetry(url string, body []byte) error {
 		}
 
 		if attempt < 3 {
-			time.Sleep(backoff)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-dispatchCtx.Done():
+				timer.Stop()
+				return dispatchCtx.Err()
+			}
 			backoff *= 2
 		}
 	}

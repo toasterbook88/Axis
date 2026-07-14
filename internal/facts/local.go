@@ -82,14 +82,14 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	}
 
 	// OS version
-	if v, err := localOSVersion(); err != nil {
+	if v, err := localOSVersion(ctx); err != nil {
 		facts.Status = models.StatusPartial
 	} else {
 		facts.OSVersion = v
 	}
 
 	// Resources
-	res, partial := localResources()
+	res, partial := localResources(ctx)
 	facts.Resources = res
 	facts.PopulateMemoryMetrics()
 	if partial {
@@ -317,27 +317,27 @@ func appleFoundationModelsHelperUpToDate(helperSource, helperBinary string) (boo
 	return !binaryInfo.ModTime().Before(sourceInfo.ModTime()), nil
 }
 
-func localOSVersion() (string, error) {
+func localOSVersion(ctx context.Context) (string, error) {
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("sw_vers", "-productVersion").Output()
+		out, err := exec.CommandContext(ctx, "sw_vers", "-productVersion").Output()
 		if err != nil {
 			return "", err
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
-	out, err := exec.Command("uname", "-r").Output()
+	out, err := exec.CommandContext(ctx, "uname", "-r").Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-func localResources() (*models.Resources, bool) {
+func localResources(ctx context.Context) (*models.Resources, bool) {
 	r := &models.Resources{Pressure: "none"}
 	partial := false
 
 	// CPU
-	if cores, model, err := localCPU(); err != nil {
+	if cores, model, err := localCPU(ctx); err != nil {
 		partial = true
 	} else {
 		r.CPUCores = cores
@@ -346,7 +346,7 @@ func localResources() (*models.Resources, bool) {
 	r.MemoryTopology, r.MemoryClass = detectMemoryTopology(runtime.GOOS, runtime.GOARCH, r.CPUModel)
 
 	// RAM
-	if total, free, err := localRAM(); err != nil {
+	if total, free, err := localRAM(ctx); err != nil {
 		partial = true
 	} else {
 		r.RAMTotalMB = total
@@ -355,7 +355,7 @@ func localResources() (*models.Resources, bool) {
 		r.PressureSource = "free-ram"
 	}
 
-	if source, level, stall10, someAvg10, fullAvg10, ok := localPressureSignal(); ok {
+	if source, level, stall10, someAvg10, fullAvg10, ok := localPressureSignal(ctx); ok {
 		r.Pressure = mergePressureLevels(r.Pressure, level)
 		r.PressureSource = source
 		r.PressureStall10 = stall10
@@ -363,7 +363,7 @@ func localResources() (*models.Resources, bool) {
 		r.MemoryPSIFullAvg10 = fullAvg10
 	}
 
-	if load1, load5, load15, err := localLoadAverages(); err != nil {
+	if load1, load5, load15, err := localLoadAverages(ctx); err != nil {
 		partial = true
 	} else {
 		r.Load1M = load1
@@ -372,7 +372,7 @@ func localResources() (*models.Resources, bool) {
 	}
 
 	// Disk
-	if total, free, err := localDisk(); err != nil {
+	if total, free, err := localDisk(ctx); err != nil {
 		partial = true
 	} else {
 		r.DiskTotalGB = total
@@ -380,32 +380,32 @@ func localResources() (*models.Resources, bool) {
 	}
 
 	// Secondary Disk (best-effort)
-	if totalExt, freeExt, err := localDiskExt(); err == nil {
+	if totalExt, freeExt, err := localDiskExt(ctx); err == nil {
 		r.DiskTotalGB_Ext = totalExt
 		r.DiskFreeGB_Ext = freeExt
 	}
 
 	// GPU (best-effort, never causes partial)
-	r.GPUs = localGPUs()
-	if util, ok := localGPUUtilPercent(); ok {
+	r.GPUs = localGPUs(ctx)
+	if util, ok := localGPUUtilPercent(ctx); ok {
 		r.GPUUtilPercent = &util
 	}
 
 	// Storage class (best-effort)
-	r.StorageClass = localStorageClass()
+	r.StorageClass = localStorageClass(ctx)
 
 	// Thermal and power (best-effort)
-	if pct, ok := localBatteryPercent(); ok {
+	if pct, ok := localBatteryPercent(ctx); ok {
 		r.BatteryPercent = &pct
 	}
-	r.PowerSource = localPowerSource()
-	r.ThermalState = localThermalState()
-	r.ThermalZones = localThermalZones()
+	r.PowerSource = localPowerSource(ctx)
+	r.ThermalState = localThermalState(ctx)
+	r.ThermalZones = localThermalZones(ctx)
 
 	return r, partial
 }
 
-func localPressureSignal() (source string, level string, stall10 float64, someAvg float64, fullAvg float64, ok bool) {
+func localPressureSignal(ctx context.Context) (source string, level string, stall10 float64, someAvg float64, fullAvg float64, ok bool) {
 	switch runtime.GOOS {
 	case "linux":
 		data, err := os.ReadFile("/proc/pressure/memory")
@@ -419,7 +419,7 @@ func localPressureSignal() (source string, level string, stall10 float64, someAv
 		someAvg, fullAvg, _ := parseLinuxPSI(string(data))
 		return "linux-psi", linuxPressureLevel(stall10), stall10, someAvg, fullAvg, true
 	case "darwin":
-		out, err := exec.Command("sysctl", "-n", "kern.memorystatus_vm_pressure_level").Output()
+		out, err := exec.CommandContext(ctx, "sysctl", "-n", "kern.memorystatus_vm_pressure_level").Output()
 		if err != nil {
 			return "", "", 0, 0, 0, false
 		}
@@ -451,22 +451,22 @@ func computePressure(totalMB, freeMB int64) string {
 	}
 }
 
-func localCPU() (int, string, error) {
+func localCPU(ctx context.Context) (int, string, error) {
 	if runtime.GOOS == "darwin" {
-		cOut, err := exec.Command("sysctl", "-n", "hw.ncpu").Output()
+		cOut, err := exec.CommandContext(ctx, "sysctl", "-n", "hw.ncpu").Output()
 		if err == nil {
 			cores, _ := strconv.Atoi(strings.TrimSpace(string(cOut)))
-			mOut, _ := exec.Command("sysctl", "-n", "machdep.cpu.brand_string").Output()
+			mOut, _ := exec.CommandContext(ctx, "sysctl", "-n", "machdep.cpu.brand_string").Output()
 			model := strings.TrimSpace(string(mOut))
 			if model == "" {
 				// Apple Silicon doesn't have machdep.cpu.brand_string
-				mOut, _ = exec.Command("sysctl", "-n", "hw.model").Output()
+				mOut, _ = exec.CommandContext(ctx, "sysctl", "-n", "hw.model").Output()
 				model = strings.TrimSpace(string(mOut))
 			}
 			return cores, model, nil
 		}
 
-		if out, err := exec.Command("system_profiler", "SPHardwareDataType").Output(); err == nil {
+		if out, err := exec.CommandContext(ctx, "system_profiler", "SPHardwareDataType").Output(); err == nil {
 			var cores int
 			var model string
 			for _, line := range strings.Split(string(out), "\n") {
@@ -485,7 +485,7 @@ func localCPU() (int, string, error) {
 			}
 		}
 
-		if out, err := exec.Command("hostinfo").Output(); err == nil {
+		if out, err := exec.CommandContext(ctx, "hostinfo").Output(); err == nil {
 			for _, line := range strings.Split(string(out), "\n") {
 				trimmed := strings.TrimSpace(line)
 				if strings.Contains(trimmed, "processors are logically available.") {
@@ -503,20 +503,20 @@ func localCPU() (int, string, error) {
 		return 0, "", err
 	}
 	// Linux
-	cOut, err := exec.Command("nproc").Output()
+	cOut, err := exec.CommandContext(ctx, "nproc").Output()
 	if err != nil {
 		return 0, "", err
 	}
 	cores, _ := strconv.Atoi(strings.TrimSpace(string(cOut)))
-	mOut, _ := exec.Command("bash", "-c", `grep -m1 'model name' /proc/cpuinfo | cut -d: -f2`).Output()
+	mOut, _ := exec.CommandContext(ctx, "bash", "-c", `grep -m1 'model name' /proc/cpuinfo | cut -d: -f2`).Output()
 	return cores, strings.TrimSpace(string(mOut)), nil
 }
 
-func localRAM() (int64, int64, error) {
+func localRAM(ctx context.Context) (int64, int64, error) {
 	if runtime.GOOS == "darwin" {
-		totalMB := darwinTotalRAMMB()
+		totalMB := darwinTotalRAMMB(ctx)
 
-		vmOut, err := exec.Command("vm_stat").Output()
+		vmOut, err := exec.CommandContext(ctx, "vm_stat").Output()
 		freeMB := int64(0)
 		if err == nil {
 			freeMB = parseDarwinFreeRAM(string(vmOut))
@@ -616,9 +616,9 @@ func parseLinuxMeminfo(data string) (int64, int64, error) {
 	return total / 1024, available / 1024, nil
 }
 
-func localLoadAverages() (float64, float64, float64, error) {
+func localLoadAverages(ctx context.Context) (float64, float64, float64, error) {
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("sysctl", "-n", "vm.loadavg").Output()
+		out, err := exec.CommandContext(ctx, "sysctl", "-n", "vm.loadavg").Output()
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -658,15 +658,15 @@ func parseLoadavgFields(data string) (float64, float64, float64, error) {
 	return load1, load5, load15, nil
 }
 
-func darwinTotalRAMMB() int64 {
-	if out, err := exec.Command("sysctl", "-n", "hw.memsize").Output(); err == nil {
+func darwinTotalRAMMB(ctx context.Context) int64 {
+	if out, err := exec.CommandContext(ctx, "sysctl", "-n", "hw.memsize").Output(); err == nil {
 		totalBytes, _ := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 		if totalBytes > 0 {
 			return totalBytes / (1024 * 1024)
 		}
 	}
 
-	if out, err := exec.Command("hostinfo").Output(); err == nil {
+	if out, err := exec.CommandContext(ctx, "hostinfo").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "Primary memory available:") {
@@ -685,7 +685,7 @@ func darwinTotalRAMMB() int64 {
 		}
 	}
 
-	if out, err := exec.Command("system_profiler", "SPHardwareDataType").Output(); err == nil {
+	if out, err := exec.CommandContext(ctx, "system_profiler", "SPHardwareDataType").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "Memory:") {
@@ -716,8 +716,8 @@ func parseKBField(line string) int64 {
 	return v
 }
 
-func localDisk() (int64, int64, error) {
-	out, err := exec.Command("df", "-kP", "/").Output()
+func localDisk(ctx context.Context) (int64, int64, error) {
+	out, err := exec.CommandContext(ctx, "df", "-kP", "/").Output()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -750,8 +750,8 @@ func parseDFOutput(out string) (int64, int64, error) {
 	return 0, 0, fmt.Errorf("unexpected df fields")
 }
 
-func localDiskExt() (int64, int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func localDiskExt(ctx context.Context) (int64, int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "df", "-kP").Output()
 	if err != nil {
@@ -789,15 +789,15 @@ func parseDFOutputExt(out string) (int64, int64, error) {
 	return totalExt / (1024 * 1024), freeExt / (1024 * 1024), nil
 }
 
-func localGPUs() []models.GPUInfo {
+func localGPUs(ctx context.Context) []models.GPUInfo {
 	if runtime.GOOS == "darwin" {
-		return localGPUsDarwin()
+		return localGPUsDarwin(ctx)
 	}
-	return localGPUsLinux()
+	return localGPUsLinux(ctx)
 }
 
-func localGPUsDarwin() []models.GPUInfo {
-	out, err := exec.Command("system_profiler", "SPDisplaysDataType").Output()
+func localGPUsDarwin(ctx context.Context) []models.GPUInfo {
+	out, err := exec.CommandContext(ctx, "system_profiler", "SPDisplaysDataType").Output()
 	if err != nil {
 		return nil
 	}
@@ -865,12 +865,12 @@ func parseVRAMMB(s string) int {
 	return val
 }
 
-func localGPUsLinux() []models.GPUInfo {
+func localGPUsLinux(ctx context.Context) []models.GPUInfo {
 	// Try nvidia-smi first for NVIDIA GPUs
-	gpus := localGPUsNvidiaSMI()
+	gpus := localGPUsNvidiaSMI(ctx)
 
 	// Fallback: lspci for non-NVIDIA or if nvidia-smi unavailable
-	lspciGPUs := localGPUsLspci()
+	lspciGPUs := localGPUsLspci(ctx)
 	for _, g := range lspciGPUs {
 		if g.Vendor == "nvidia" && len(gpus) > 0 {
 			continue // nvidia-smi gave better data
@@ -880,8 +880,8 @@ func localGPUsLinux() []models.GPUInfo {
 	return gpus
 }
 
-func localGPUsNvidiaSMI() []models.GPUInfo {
-	out, err := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
+func localGPUsNvidiaSMI(ctx context.Context) []models.GPUInfo {
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil
 	}
@@ -912,8 +912,8 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 	return gpus
 }
 
-func localGPUsLspci() []models.GPUInfo {
-	out, err := exec.Command("bash", "-c", `lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`).Output()
+func localGPUsLspci(ctx context.Context) []models.GPUInfo {
+	out, err := exec.CommandContext(ctx, "bash", "-c", `lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
@@ -1195,10 +1195,10 @@ func discoverMLXLocal(ctx context.Context) []models.ResidentModel {
 	return nil
 }
 
-func localGPUUtilPercent() (float64, bool) {
+func localGPUUtilPercent(ctx context.Context) (float64, bool) {
 	switch runtime.GOOS {
 	case "darwin":
-		out, err := exec.Command("ioreg", "-r", "-c", "AGXAccelerator").Output()
+		out, err := exec.CommandContext(ctx, "ioreg", "-r", "-c", "AGXAccelerator").Output()
 		if err != nil {
 			return 0, false
 		}
@@ -1217,7 +1217,7 @@ func localGPUUtilPercent() (float64, bool) {
 		}
 		return 0, false
 	case "linux":
-		out, err := exec.Command("nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits").Output()
+		out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits").Output()
 		if err != nil {
 			return 0, false
 		}
@@ -1247,19 +1247,19 @@ func parseLinuxGPUUtilPercent(out string) (float64, bool) {
 
 // --- Storage Class Detection ---
 
-func localStorageClass() string {
+func localStorageClass(ctx context.Context) string {
 	switch runtime.GOOS {
 	case "darwin":
-		return localStorageClassDarwin()
+		return localStorageClassDarwin(ctx)
 	case "linux":
-		return localStorageClassLinux()
+		return localStorageClassLinux(ctx)
 	default:
 		return "unknown"
 	}
 }
 
-func localStorageClassDarwin() string {
-	out, err := exec.Command("diskutil", "info", "/").Output()
+func localStorageClassDarwin(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "diskutil", "info", "/").Output()
 	if err != nil {
 		return "unknown"
 	}
@@ -1290,14 +1290,16 @@ func parseDiskutilStorageClass(out string) string {
 	return "unknown"
 }
 
-func localStorageClassLinux() string {
-	out, err := exec.Command("bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null`).Output()
+func localStorageClassLinux(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "bash", "-c", `findmnt -n -o SOURCE / 2>/dev/null`).Output()
 	if err != nil {
 		return "unknown"
 	}
 	return resolveLinuxStorageClass(
 		strings.TrimSpace(string(out)),
-		localLinuxBlockDeviceInfo,
+		func(device string) (linuxBlockDeviceInfo, error) {
+			return localLinuxBlockDeviceInfoContext(ctx, device)
+		},
 		localLinuxBlockDeviceSlaves,
 		localLinuxRotational,
 	)
@@ -1432,7 +1434,11 @@ func parseLinuxBlockDeviceInfo(out string) (linuxBlockDeviceInfo, error) {
 }
 
 func localLinuxBlockDeviceInfo(device string) (linuxBlockDeviceInfo, error) {
-	out, err := exec.Command("lsblk", "-J", "-n", "-p", "-o", "NAME,KNAME,PKNAME,TYPE,ROTA", device).Output()
+	return localLinuxBlockDeviceInfoContext(context.Background(), device)
+}
+
+func localLinuxBlockDeviceInfoContext(ctx context.Context, device string) (linuxBlockDeviceInfo, error) {
+	out, err := exec.CommandContext(ctx, "lsblk", "-J", "-n", "-p", "-o", "NAME,KNAME,PKNAME,TYPE,ROTA", device).Output()
 	if err != nil {
 		return linuxBlockDeviceInfo{}, err
 	}
@@ -1567,10 +1573,10 @@ func hasOnlyDigits(s string) bool {
 
 // --- Battery / Thermal Detection ---
 
-func localBatteryPercent() (int, bool) {
+func localBatteryPercent(ctx context.Context) (int, bool) {
 	switch runtime.GOOS {
 	case "darwin":
-		return localBatteryDarwin()
+		return localBatteryDarwin(ctx)
 	case "linux":
 		return localBatteryLinux()
 	default:
@@ -1578,8 +1584,8 @@ func localBatteryPercent() (int, bool) {
 	}
 }
 
-func localBatteryDarwin() (int, bool) {
-	out, err := exec.Command("pmset", "-g", "batt").Output()
+func localBatteryDarwin(ctx context.Context) (int, bool) {
+	out, err := exec.CommandContext(ctx, "pmset", "-g", "batt").Output()
 	if err != nil {
 		return 0, false
 	}
@@ -1618,10 +1624,10 @@ func parsePmsetPowerSource(out string) string {
 	return ""
 }
 
-func localPowerSource() string {
+func localPowerSource(ctx context.Context) string {
 	switch runtime.GOOS {
 	case "darwin":
-		out, err := exec.Command("pmset", "-g", "batt").Output()
+		out, err := exec.CommandContext(ctx, "pmset", "-g", "batt").Output()
 		if err != nil {
 			return ""
 		}
@@ -1660,10 +1666,10 @@ func localBatteryLinux() (int, bool) {
 	return 0, false
 }
 
-func localThermalState() string {
+func localThermalState(ctx context.Context) string {
 	switch runtime.GOOS {
 	case "darwin":
-		return localThermalDarwin()
+		return localThermalDarwin(ctx)
 	case "linux":
 		return localThermalLinux()
 	default:
@@ -1671,8 +1677,8 @@ func localThermalState() string {
 	}
 }
 
-func localThermalDarwin() string {
-	out, err := exec.Command("pmset", "-g", "therm").Output()
+func localThermalDarwin(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "pmset", "-g", "therm").Output()
 	if err != nil {
 		return ""
 	}
@@ -1742,12 +1748,12 @@ func localThermalLinux() string {
 	}
 }
 
-func localThermalZones() []models.ThermalZone {
+func localThermalZones(ctx context.Context) []models.ThermalZone {
 	switch runtime.GOOS {
 	case "linux":
 		return linuxThermalZones()
 	case "darwin":
-		return darwinThermalZones()
+		return darwinThermalZones(ctx)
 	default:
 		return nil
 	}
@@ -1786,8 +1792,8 @@ func linuxThermalZones() []models.ThermalZone {
 	return zones
 }
 
-func darwinThermalZones() []models.ThermalZone {
-	out, err := exec.Command("pmset", "-g", "therm").Output()
+func darwinThermalZones(ctx context.Context) []models.ThermalZone {
+	out, err := exec.CommandContext(ctx, "pmset", "-g", "therm").Output()
 	if err != nil {
 		return nil
 	}

@@ -268,7 +268,10 @@ func TestMetaMarksStaleSnapshots(t *testing.T) {
 	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{Status: models.SnapshotHealthy}, nil
 	})
+	d.mu.Lock()
 	d.collectedAt = time.Now().UTC().Add(-6 * time.Minute)
+	d.publishMetadataLocked()
+	d.mu.Unlock()
 
 	meta := d.Meta()
 	if !meta.Stale {

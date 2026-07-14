@@ -25,8 +25,8 @@ type diskFormat struct {
 // LockFile acquires an exclusive lock on the ledger lockfile with a 500ms timeout.
 // It respects context cancellation.
 func (l *Ledger) LockFile(ctx context.Context) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 	return l.lockFileLocked(ctx)
 }
 
@@ -73,8 +73,8 @@ func (l *Ledger) lockFileLocked(ctx context.Context) error {
 
 // UnlockFile releases the exclusive lock on the ledger lockfile.
 func (l *Ledger) UnlockFile() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 	l.unlockFileLocked()
 }
 
@@ -88,8 +88,8 @@ func (l *Ledger) unlockFileLocked() {
 
 // Load reads the ledger from disk, replacing current entries.
 func (l *Ledger) Load() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -116,26 +116,37 @@ func (l *Ledger) Load() error {
 		return warnErr
 	}
 
+	l.mu.Lock()
 	l.entries = make(map[string]*Entry)
 	l.totalReserved = 0
 	for _, e := range df.Entries {
 		l.entries[e.ID] = e
 		l.totalReserved += e.RAMMB
 	}
+	// Startup reconciliation pass (in-memory only; persist after unlocking mu).
+	reclaimed := l.reclaimInMemoryLocked()
+	var snap []*Entry
+	if reclaimed > 0 {
+		snap = l.snapshotEntriesLocked()
+	}
+	l.mu.Unlock()
 
-	// Startup reconciliation pass
-	reclaimed := l.reclaimLocked()
 	if reclaimed > 0 {
 		l.logger.Info("startup reconciliation complete", "reclaimed", reclaimed)
+		if err := l.writeSnapshot(snap); err != nil {
+			l.logger.Error("failed to persist ledger during startup reconciliation", "error", err)
+		}
 	}
 
 	return nil
 }
 
-// Save writes the ledger to disk.
+// Save writes the ledger to disk. The in-memory mutex is held only long enough
+// to snapshot the entries; the marshal and atomic write run under the file lock
+// with mu released, so readers are not blocked during persistence I/O.
 func (l *Ledger) Save() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -147,21 +158,35 @@ func (l *Ledger) Save() error {
 		defer l.unlockFileLocked()
 	}
 
-	return l.saveLocked()
+	l.mu.RLock()
+	snap := l.snapshotEntriesLocked()
+	l.mu.RUnlock()
+
+	return l.writeSnapshot(snap)
 }
 
-func (l *Ledger) saveLocked() error {
+// snapshotEntriesLocked returns independent copies of every entry. The caller
+// must hold l.mu (read or write). The copies are safe to marshal after mu is
+// released because Entry contains only value-typed fields.
+func (l *Ledger) snapshotEntriesLocked() []*Entry {
+	out := make([]*Entry, 0, len(l.entries))
+	for _, e := range l.entries {
+		cp := *e
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// writeSnapshot marshals entries and atomically writes them to disk. It must be
+// called with the file lock held (fileMu) but WITHOUT l.mu, so the marshal and
+// write never block in-memory readers.
+func (l *Ledger) writeSnapshot(entries []*Entry) error {
 	path := Path()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 
-	out := make([]*Entry, 0, len(l.entries))
-	for _, e := range l.entries {
-		out = append(out, e)
-	}
-
-	df := diskFormat{Entries: out}
+	df := diskFormat{Entries: entries}
 	data, err := json.MarshalIndent(df, "", "  ")
 	if err != nil {
 		return err

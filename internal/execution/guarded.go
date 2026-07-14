@@ -1412,6 +1412,9 @@ func handleDirtyWorkingTree(ctx context.Context, req GuardedExecutionRequest, st
 
 		cleanup := func() {
 			fmt.Fprintln(stderr, "[AXIS] Restoring stashed changes...")
+			// Use a background context so the stash is always restored, even
+			// when the execution context was cancelled or timed out — otherwise
+			// the operator's stashed uncommitted changes would be lost.
 			popCmd := exec.CommandContext(context.Background(), "git", "stash", "pop")
 			if err := popCmd.Run(); err != nil {
 				fmt.Fprintf(stderr, "[AXIS] Warning: failed to restore stashed changes: %v\n", err)

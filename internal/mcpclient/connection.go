@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 // ServerConnection holds the state of a single MCP server connection.
@@ -174,6 +175,9 @@ func connectStdio(ctx context.Context, name string, cfg config.MCPServerConfig) 
 func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (*ServerConnection, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("mcp server %q: http transport requires url", name)
+	}
+	if err := netutil.ValidateOutboundURL(cfg.URL); err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
 
 	var opts []transport.StreamableHTTPCOption
