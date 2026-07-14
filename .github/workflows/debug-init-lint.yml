@@ -1,0 +1,43 @@
+name: Debug init lint
+
+on:
+  pull_request:
+    paths:
+      - cmd/axis/init.go
+      - cmd/axis/init_test.go
+      - internal/config/save.go
+      - internal/config/save_test.go
+      - .github/workflows/debug-init-lint.yml
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  lint-log:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - name: Capture lint output
+        shell: bash
+        run: |
+          set +e
+          make lint > lint.log 2>&1
+          status=$?
+          cat lint.log
+          echo "$status" > lint.exit
+          exit 0
+      - name: Upload lint diagnostics
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: init-lint-diagnostics
+          path: |
+            lint.log
+            lint.exit
+          if-no-files-found: error
