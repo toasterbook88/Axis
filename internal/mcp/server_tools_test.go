@@ -462,9 +462,15 @@ func TestGitStatusTool(t *testing.T) {
 
 func TestLifecycleEventTools(t *testing.T) {
 	tempDir := t.TempDir()
-	events.SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer events.SetLogPath("")
-	defer events.FlushEvents(1 * time.Second)
+	if err := events.ResetTestLog(filepath.Join(tempDir, "events.jsonl")); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() {
+		events.SetLogPath("")
+		if err := events.FlushEvents(5 * time.Second); err != nil {
+			t.Errorf("FlushEvents cleanup: %v", err)
+		}
+	})
 
 	s := NewServer(false, "", nil)
 
@@ -518,7 +524,9 @@ func TestLifecycleEventTools(t *testing.T) {
 	// Test get_recent_events
 	events.SetEventBufferSize(10)
 	events.EmitToBuffer(nil, "task.placement.requested", map[string]any{"task_id": "test-task"})
-	events.FlushEvents(1 * time.Second)
+	if err := events.FlushEvents(5 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
 
 	getTool, ok := s.ListTools()["get_recent_events"]
 	if !ok {
@@ -574,9 +582,15 @@ func (m *mockClientSession) NotificationChannel() chan<- mcpproto.JSONRPCNotific
 
 func TestMCPPushNotifications(t *testing.T) {
 	tempDir := t.TempDir()
-	events.SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer events.SetLogPath("")
-	defer events.FlushEvents(1 * time.Second)
+	if err := events.ResetTestLog(filepath.Join(tempDir, "events.jsonl")); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() {
+		events.SetLogPath("")
+		if err := events.FlushEvents(5 * time.Second); err != nil {
+			t.Errorf("FlushEvents cleanup: %v", err)
+		}
+	})
 	events.SetEventBufferSize(10)
 	events.SetCortexClient(nil)
 

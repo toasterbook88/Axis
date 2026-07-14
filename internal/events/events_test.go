@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -17,13 +16,7 @@ import (
 )
 
 func TestEventsBufferAndRetrieve(t *testing.T) {
-	tempDir := t.TempDir()
-	logFile := filepath.Join(tempDir, "events.jsonl")
-	SetLogPath(logFile)
-	defer SetLogPath("")
-	defer func() {
-		_ = FlushEvents(5 * time.Second)
-	}()
+	logFile := isolateEventBus(t, t.TempDir())
 
 	// Reset buffer size and content for clean test
 	SetEventBufferSize(3)
@@ -33,22 +26,27 @@ func TestEventsBufferAndRetrieve(t *testing.T) {
 	EmitToBuffer(nil, "test.event.3", map[string]any{"val": 3})
 	EmitToBuffer(nil, "test.event.4", map[string]any{"val": 4})
 
-	if err := FlushEvents(5 * time.Second); err != nil {
+	if err := FlushEvents(15 * time.Second); err != nil {
 		t.Fatalf("flush failed: %v", err)
 	}
 
-	// 1. File log should contain all 4 events (no eviction on file appends)
+	// 1. File log should contain exactly these 4 events (no eviction on file appends).
+	// Exact count detects contamination from the process-global event bus.
 	fileEvs, err := getRecentEventsFromFile(10)
 	if err != nil {
 		t.Fatalf("failed to read from file log: %v", err)
 	}
-	found := make(map[string]bool)
-	for _, e := range fileEvs {
-		found[e.Name] = true
+	if len(fileEvs) != 4 {
+		names := make([]string, len(fileEvs))
+		for i, e := range fileEvs {
+			names[i] = e.Name
+		}
+		t.Fatalf("expected 4 events in file, got %d names=%v", len(fileEvs), names)
 	}
-	for _, name := range []string{"test.event.1", "test.event.2", "test.event.3", "test.event.4"} {
-		if !found[name] {
-			t.Fatalf("expected event %s in file log", name)
+	wantNames := []string{"test.event.1", "test.event.2", "test.event.3", "test.event.4"}
+	for i, want := range wantNames {
+		if fileEvs[i].Name != want {
+			t.Fatalf("file event %d: want %q, got %q", i, want, fileEvs[i].Name)
 		}
 	}
 
@@ -75,9 +73,7 @@ func TestEventsBufferAndRetrieve(t *testing.T) {
 
 func TestEventsListenerRegistry(t *testing.T) {
 	tempDir := t.TempDir()
-	SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	_ = isolateEventBus(t, tempDir)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -95,7 +91,9 @@ func TestEventsListenerRegistry(t *testing.T) {
 	defer cancel()
 
 	EmitToBuffer(nil, "test.listener.event", map[string]any{"hello": "world"})
-	FlushEvents(1 * time.Second)
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
 
 	// Wait for listener callback with timeout
 	c := make(chan struct{})
@@ -148,19 +146,18 @@ func TestCortexEventPublishing(t *testing.T) {
 	host, portStr, _ := net.SplitHostPort(u.Host)
 	port, _ := strconv.Atoi(portStr)
 
-	// Create Cortex client pointing to test server
+	// Isolate log first (clears any prior cortex client), then attach the test client.
+	tempDir := t.TempDir()
+	_ = isolateEventBus(t, tempDir)
+
 	cClient := cortex.NewClientWithOptions(host, "test-token", port, 6333, 1*time.Second)
 	SetCortexClient(cClient)
-	defer SetCortexClient(nil)
-
-	// Emit event which should trigger Cortex async publish
-	tempDir := t.TempDir()
-	SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	t.Cleanup(func() { SetCortexClient(nil) })
 
 	EmitToBuffer(nil, "test.cortex.event", map[string]any{"data": "test"})
-	FlushEvents(1 * time.Second)
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
 
 	// Wait up to 1s for async publish goroutine to call the test server
 	deadline := time.Now().Add(1 * time.Second)
@@ -190,9 +187,7 @@ func TestCortexEventPublishing(t *testing.T) {
 
 func TestEventFiltering(t *testing.T) {
 	tempDir := t.TempDir()
-	SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	_ = isolateEventBus(t, tempDir)
 
 	var mu sync.Mutex
 	var taskEvents []Event
@@ -218,7 +213,9 @@ func TestEventFiltering(t *testing.T) {
 
 	EmitToBuffer(nil, "task.started", map[string]any{"id": 1})
 	EmitToBuffer(nil, "reservation.released", map[string]any{"id": 2})
-	FlushEvents(1 * time.Second)
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
 
 	// Wait for callbacks
 	c := make(chan struct{})
@@ -252,9 +249,7 @@ func TestEventFiltering(t *testing.T) {
 
 func TestEventSchema(t *testing.T) {
 	tempDir := t.TempDir()
-	SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	_ = isolateEventBus(t, tempDir)
 
 	var mu sync.Mutex
 	var received Event
@@ -272,7 +267,9 @@ func TestEventSchema(t *testing.T) {
 	defer cancel()
 
 	EmitToBuffer(nil, "test.schema.event", map[string]any{"foo": "bar"})
-	FlushEvents(1 * time.Second)
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
 
 	// Wait for callback
 	c := make(chan struct{})

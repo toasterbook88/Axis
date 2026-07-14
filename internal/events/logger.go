@@ -1,7 +1,6 @@
 package events
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,18 +28,34 @@ func defaultLogPath() string {
 	return persist.AxisPath("events.jsonl")
 }
 
-// SetLogPath overrides the log path, primarily for testing.
+// SetLogPath overrides the event log path. It does not create directories or
+// truncate files. Empty path restores the default (~/.axis/events.jsonl).
+// For isolated tests that need a clean empty log, use ResetTestLog.
 func SetLogPath(path string) {
 	logPathVal.Store(path)
+}
+
+// ResetTestLog prepares an isolated event log for tests: creates parent
+// directories, truncates/creates an empty file at path, then sets the log path.
+// The path is stored only after the file is successfully prepared. Prefer this
+// over SetLogPath when a test requires a clean file and known isolation.
+func ResetTestLog(path string) error {
 	if path == "" {
-		return
+		logPathVal.Store("")
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
+		return fmt.Errorf("ResetTestLog mkdir: %w", err)
 	}
-	if f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
-		f.Close()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("ResetTestLog create: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("ResetTestLog close: %w", err)
+	}
+	logPathVal.Store(path)
+	return nil
 }
 
 // allocateSequence increments and returns a monotonic sequence number from event-sequence file under flock.
@@ -200,18 +215,25 @@ func getRecentEventsFromFile(limit int) ([]Event, error) {
 	}
 
 	var allEvents []Event
-	// Read oldest to newest
+	// Read oldest to newest. json.Decoder streams values with no 64 KiB line
+	// limit (unlike bufio.Scanner's default MaxScanTokenSize), so large
+	// payloads remain readable.
 	for i := len(files) - 1; i >= 0; i-- {
 		f, err := os.Open(files[i])
 		if err != nil {
 			continue
 		}
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			line := scanner.Bytes()
+		dec := json.NewDecoder(f)
+		for {
 			var evt Event
-			if err := json.Unmarshal(line, &evt); err != nil {
-				continue
+			if err := dec.Decode(&evt); err != nil {
+				if err == io.EOF {
+					break
+				}
+				// Log and stop this file: a corrupt record leaves the stream
+				// position undefined for further Decode calls.
+				slog.Error("failed decoding event", "path", files[i], "error", err)
+				break
 			}
 			allEvents = append(allEvents, evt)
 		}

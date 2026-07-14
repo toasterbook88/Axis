@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -11,8 +12,10 @@ import (
 func TestJSONLLogger(t *testing.T) {
 	tempDir := t.TempDir()
 	tempLog := filepath.Join(tempDir, "test_events.jsonl")
-	SetLogPath(tempLog)
-	defer SetLogPath("")
+	if err := ResetTestLog(tempLog); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
 
 	// Verify initially empty
 	evs, err := getRecentEventsFromFile(10)
@@ -62,8 +65,10 @@ func TestJSONLLogger(t *testing.T) {
 func TestFlockSequenceAllocation(t *testing.T) {
 	tempDir := t.TempDir()
 	tempLog := filepath.Join(tempDir, "events.jsonl")
-	SetLogPath(tempLog)
-	defer SetLogPath("")
+	if err := ResetTestLog(tempLog); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
 
 	var wg sync.WaitGroup
 	numGoroutines := 10
@@ -111,8 +116,10 @@ func TestFlockSequenceAllocation(t *testing.T) {
 func TestFlockLogRotation(t *testing.T) {
 	tempDir := t.TempDir()
 	tempLog := filepath.Join(tempDir, "events.jsonl")
-	SetLogPath(tempLog)
-	defer SetLogPath("")
+	if err := ResetTestLog(tempLog); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
 
 	// 1. Write an initial event
 	evt := NewEvent("test.event.a", map[string]any{"data": "a"})
@@ -154,5 +161,45 @@ func TestFlockLogRotation(t *testing.T) {
 	}
 	if evs[0].Name != "test.event.a" || evs[1].Name != "test.event.b" {
 		t.Errorf("unexpected events order/names: %+v", evs)
+	}
+}
+
+func TestLargeJSONLEventReadable(t *testing.T) {
+	// Regression: getRecentEventsFromFile must read events larger than
+	// bufio.MaxScanTokenSize (64 KiB) and still return following events.
+	tempDir := t.TempDir()
+	tempLog := filepath.Join(tempDir, "events.jsonl")
+	if err := ResetTestLog(tempLog); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
+
+	bigPayload := strings.Repeat("z", 70*1024)
+	big := NewEvent("test.event.large", map[string]any{"blob": bigPayload})
+	small := NewEvent("test.event.small", map[string]any{"ok": true})
+	if err := appendEventToFile(big); err != nil {
+		t.Fatalf("append large: %v", err)
+	}
+	if err := appendEventToFile(small); err != nil {
+		t.Fatalf("append small: %v", err)
+	}
+
+	evs, err := getRecentEventsFromFile(10)
+	if err != nil {
+		t.Fatalf("getRecentEventsFromFile: %v", err)
+	}
+	if len(evs) != 2 {
+		names := make([]string, len(evs))
+		for i, e := range evs {
+			names[i] = e.Name
+		}
+		t.Fatalf("expected 2 events after large line, got %d names=%v", len(evs), names)
+	}
+	if evs[0].Name != "test.event.large" || evs[1].Name != "test.event.small" {
+		t.Fatalf("unexpected names: %q, %q", evs[0].Name, evs[1].Name)
+	}
+	blob, _ := evs[0].Payload["blob"].(string)
+	if len(blob) != 70*1024 {
+		t.Fatalf("large payload length = %d, want %d", len(blob), 70*1024)
 	}
 }

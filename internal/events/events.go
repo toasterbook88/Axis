@@ -391,6 +391,13 @@ func processEvent(evt Event) {
 
 // FlushEvents blocks until all enqueued events and their async webhook/Cortex
 // dispatches have been processed, or until the timeout is reached.
+// It returns nil on success and a non-nil error on timeout. Callers that
+// require a drained bus (tests asserting log contents, TestMain cleanup)
+// must check the error. Best-effort process exit may discard it.
+//
+// FlushEvents does not wait for in-process listener pool callbacks
+// (notifyListeners); file append and sequence allocation complete inside the
+// worker before listeners are enqueued.
 func FlushEvents(timeout time.Duration) error {
 	inflightMu.Lock()
 	if inflightCounter == 0 {
