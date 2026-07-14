@@ -23,9 +23,7 @@ func TestSetWebhooksRejectsInvalidURL(t *testing.T) {
 
 func TestWebhookDispatchSuccess(t *testing.T) {
 	tempDir := t.TempDir()
-	SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	_ = isolateEventBus(t, tempDir)
 
 	var called int32
 	var mu sync.Mutex
@@ -105,9 +103,7 @@ func TestWebhookDeadLetter(t *testing.T) {
 	defer func() { backoffBase = originalBackoff }()
 
 	tempDir := t.TempDir()
-	SetLogPath(filepath.Join(tempDir, "events.jsonl"))
-	defer SetLogPath("")
-	defer FlushEvents(1 * time.Second)
+	_ = isolateEventBus(t, tempDir)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -120,7 +116,9 @@ func TestWebhookDeadLetter(t *testing.T) {
 	defer SetWebhooks(nil)
 
 	EmitToBuffer(nil, "test.deadletter.event", map[string]any{"data": "dead"})
-	FlushEvents(1 * time.Second)
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
 
 	// Verify that the dead-letter log is written
 	dlPath := filepath.Join(tempDir, "webhook-deadletter.jsonl")
