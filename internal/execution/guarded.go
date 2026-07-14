@@ -19,9 +19,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/toasterbook88/axis/internal/config"
-	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/git"
-	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/placement"
@@ -62,6 +60,26 @@ var localExecutionHostname = os.Hostname
 
 var sharedSafetyEvaluator = safety.NewEvaluator(safety.DefaultRuleSet())
 
+// ExecutionEventSink receives advisory execution-lifecycle events. Optional;
+// nil disables emission.
+type ExecutionEventSink interface {
+	PlacementRequested(taskID string)
+	PlacementDecided(taskID, node string, fitScore int, ok bool)
+	ExecutionReserved(taskID, node string)
+	StateChanged(taskID, node, trigger string, ok bool)
+}
+
+// ExecutionContextBuilder assembles the script/skill execution-context JSON.
+// Optional; nil yields no context.
+type ExecutionContextBuilder func(
+	snap *models.ClusterSnapshot,
+	st *state.ClusterState,
+	decision models.PlacementDecision,
+	taskDesc string,
+	script any,
+	skill any,
+) ([]byte, error)
+
 func generateExecID(node string) string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -72,21 +90,23 @@ func generateExecID(node string) string {
 }
 
 type GuardedExecutionRequest struct {
-	Description     string                                                `json:"description"`
-	Mode            string                                                `json:"mode,omitempty"`
-	Confirm         string                                                `json:"confirm,omitempty"`
-	ExposePorts     string                                                `json:"expose_ports,omitempty"`
-	MemoryRequestMB int64                                                 `json:"memory_request_mb,omitempty"`
-	MemoryMaxMB     int64                                                 `json:"memory_max_mb,omitempty"`
-	RequestedNode   string                                                `json:"requested_node,omitempty"`
-	OwnerSurface    string                                                `json:"-"`
-	OwnerLabel      string                                                `json:"-"`
-	OriginOverride  models.ExecutionOrigin                                `json:"-"`
-	Stdout          io.Writer                                             `json:"-"`
-	Stderr          io.Writer                                             `json:"-"`
-	Stdin           io.Reader                                             `json:"-"`
-	OnReady         func(GuardedExecutionResult)                          `json:"-"`
-	OnStateChange   func(context.Context, string, GuardedExecutionResult) `json:"-"`
+	Description      string                                                `json:"description"`
+	Mode             string                                                `json:"mode,omitempty"`
+	Confirm          string                                                `json:"confirm,omitempty"`
+	ExposePorts      string                                                `json:"expose_ports,omitempty"`
+	MemoryRequestMB  int64                                                 `json:"memory_request_mb,omitempty"`
+	MemoryMaxMB      int64                                                 `json:"memory_max_mb,omitempty"`
+	RequestedNode    string                                                `json:"requested_node,omitempty"`
+	OwnerSurface     string                                                `json:"-"`
+	OwnerLabel       string                                                `json:"-"`
+	OriginOverride   models.ExecutionOrigin                                `json:"-"`
+	Stdout           io.Writer                                             `json:"-"`
+	Stderr           io.Writer                                             `json:"-"`
+	Stdin            io.Reader                                             `json:"-"`
+	OnReady          func(GuardedExecutionResult)                          `json:"-"`
+	OnStateChange    func(context.Context, string, GuardedExecutionResult) `json:"-"`
+	Events           ExecutionEventSink                                    `json:"-"`
+	BuildContextJSON ExecutionContextBuilder                               `json:"-"`
 }
 
 type GuardedExecutionResult struct {
@@ -375,9 +395,9 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.Command = intent.Command
 
 	// Advisory placement event
-	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskPlacementRequested, map[string]any{
-		events.PayloadKeyTaskID: req.Description,
-	})
+	if req.Events != nil {
+		req.Events.PlacementRequested(req.Description)
+	}
 
 	reqs := prepareRequirements(req.Description, req.Mode, intent)
 	if req.MemoryRequestMB > 0 {
@@ -418,13 +438,9 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	decision := placement.SelectBestNode(reqs, nodesToEvaluate, rt.State)
 
 	// Advisory placement decision event (post-decision)
-	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskPlacementRequested, map[string]any{
-		events.PayloadKeyTaskID: req.Description,
-		events.PayloadKeyNode:   decision.Node,
-		"fit_score":             decision.FitScore,
-		"ok":                    decision.OK,
-		"phase":                 "decision",
-	})
+	if req.Events != nil {
+		req.Events.PlacementDecided(req.Description, decision.Node, decision.FitScore, decision.OK)
+	}
 	prepared.Result.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, rt.Snapshot.Warnings)
 	prepared.Result.Node = decision.Node
 	prepared.Result.Tool = decision.Tool
@@ -482,10 +498,9 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		return prepared, err
 	}
 	// Advisory event for external observers (MCP agents, hooks, etc.)
-	events.EmitToBuffer(events.NoopEmitter{}, events.EventTaskExecutionReserved, map[string]any{
-		events.PayloadKeyNode:   decision.Node,
-		events.PayloadKeyTaskID: req.Description, // best effort identifier
-	})
+	if req.Events != nil {
+		req.Events.ExecutionReserved(req.Description, decision.Node)
+	}
 	prepared.Result.Reasoning = append(prepared.Result.Reasoning, fmt.Sprintf("reservation headroom protected: %dMB", reservationMB))
 
 	if err := enforceLocalExecutionSafety(ctx, targetNode, reqs, &prepared.Result); err != nil {
@@ -507,13 +522,15 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		return prepared, nil
 	}
 
-	contextJSON, err := knowledge.ExecutionContextJSON(rt.Snapshot, rt.State, decision, req.Description, intent.MatchedScript, intent.MatchedSkill)
-	if err != nil {
-		prepared.Result.Error = err.Error()
-		prepared.Err = err
-		return prepared, err
+	if req.BuildContextJSON != nil {
+		contextJSON, err := req.BuildContextJSON(rt.Snapshot, rt.State, decision, req.Description, intent.MatchedScript, intent.MatchedSkill)
+		if err != nil {
+			prepared.Result.Error = err.Error()
+			prepared.Err = err
+			return prepared, err
+		}
+		prepared.ContextJSON = contextJSON
 	}
-	prepared.ContextJSON = contextJSON
 
 	nixPlan := PlanNixExecution(targetNode, reqs, commandToRun)
 	prepared.Result.Command = commandToRun
@@ -1193,22 +1210,8 @@ func notifyStateChange(ctx context.Context, req GuardedExecutionRequest, trigger
 		req.OnStateChange(ctx, trigger, resp)
 	}
 
-	// Also emit the canonical events package event for external consumers (MCP, future hooks).
-	eventName := ""
-	switch trigger {
-	case StateChangeExecutionReserved:
-		eventName = events.EventTaskExecutionReserved
-	case StateChangeExecutionFinished:
-		eventName = events.EventTaskExecutionFinished
-	}
-
-	if eventName != "" {
-		events.EmitToBuffer(events.NoopEmitter{}, eventName, map[string]any{
-			events.PayloadKeyNode:    resp.Node,
-			events.PayloadKeyTaskID:  req.Description,
-			events.PayloadKeyTrigger: trigger,
-			events.PayloadKeyResult:  resp.OK,
-		})
+	if req.Events != nil {
+		req.Events.StateChanged(req.Description, resp.Node, trigger, resp.OK)
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mcpclient"
@@ -1318,12 +1319,14 @@ func guardedAgentShellRunner(model string) agent.ShellRunner {
 		}
 
 		req := execution.GuardedExecutionRequest{
-			Description:   command,
-			Mode:          execution.ModeExec,
-			Confirm:       execution.ConfirmWord,
-			RequestedNode: localNodeName,
-			OwnerSurface:  execution.OwnerSurfaceAgentRunShell,
-			OwnerLabel:    strings.TrimSpace(model),
+			Description:      command,
+			Mode:             execution.ModeExec,
+			Confirm:          execution.ConfirmWord,
+			RequestedNode:    localNodeName,
+			OwnerSurface:     execution.OwnerSurfaceAgentRunShell,
+			OwnerLabel:       strings.TrimSpace(model),
+			Events:           events.GuardedExecutionSink{},
+			BuildContextJSON: knowledge.ExecutionContextJSON,
 			OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
 				scheduleAgentDaemonRefresh(trigger)
 			},

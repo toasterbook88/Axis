@@ -15,8 +15,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/git"
+	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -278,15 +280,17 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			req := execution.GuardedExecutionRequest{
-				Description:     input,
-				Mode:            mode,
-				Confirm:         execution.ConfirmWord,
-				ExposePorts:     exposePortFlag,
-				MemoryRequestMB: memoryRequestMB,
-				MemoryMaxMB:     memoryMaxMB,
-				OwnerSurface:    execution.OwnerSurfaceTaskRun,
-				Stdout:          os.Stdout,
-				Stderr:          os.Stderr,
+				Description:      input,
+				Mode:             mode,
+				Confirm:          execution.ConfirmWord,
+				ExposePorts:      exposePortFlag,
+				MemoryRequestMB:  memoryRequestMB,
+				MemoryMaxMB:      memoryMaxMB,
+				OwnerSurface:     execution.OwnerSurfaceTaskRun,
+				Stdout:           os.Stdout,
+				Stderr:           os.Stderr,
+				Events:           events.GuardedExecutionSink{},
+				BuildContextJSON: knowledge.ExecutionContextJSON,
 				OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
 					scheduleTaskRunDaemonRefresh(trigger)
 				},

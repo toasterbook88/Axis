@@ -441,7 +441,11 @@ func DefaultSafetyGate(tc *ToolContext) ShellSafetyGate {
 				k = view.Knowledge
 			}
 		}
-		result := safety.Check(k, command, nil)
+		var snap *models.ClusterSnapshot
+		if k != nil {
+			snap = &k.Snapshot
+		}
+		result := safety.Check(snap, command, nil)
 		if result.Blocked {
 			return false, fmt.Sprintf("blocked (score %d/100): %s", result.Score, result.Reason), result.Score
 		}

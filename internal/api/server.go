@@ -17,6 +17,7 @@ import (
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mesh"
@@ -383,11 +384,13 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		}
 
 		guardedReq := execution.GuardedExecutionRequest{
-			Description:  req.Description,
-			Mode:         req.Mode,
-			Confirm:      req.Confirm,
-			OwnerSurface: execution.OwnerSurfaceHTTPRun,
-			OwnerLabel:   requestCallerLabel(r),
+			Description:      req.Description,
+			Mode:             req.Mode,
+			Confirm:          req.Confirm,
+			OwnerSurface:     execution.OwnerSurfaceHTTPRun,
+			OwnerLabel:       requestCallerLabel(r),
+			Events:           events.GuardedExecutionSink{},
+			BuildContextJSON: knowledge.ExecutionContextJSON,
 			OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
 				scheduleCacheRefresh(cache, trigger)
 			},
