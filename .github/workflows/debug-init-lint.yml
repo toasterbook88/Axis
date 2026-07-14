@@ -1,4 +1,4 @@
-name: Debug init lint
+name: Debug init diagnostics
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  lint-log:
+  diagnostics:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
@@ -24,20 +24,24 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go mod download
-      - name: Capture lint output
+      - name: Capture lint and test output
         shell: bash
         run: |
           set +e
           make lint > lint.log 2>&1
-          status=$?
+          echo "$?" > lint.exit
+          go test ./... -count=1 > test.log 2>&1
+          echo "$?" > test.exit
           cat lint.log
-          echo "$status" > lint.exit
+          cat test.log
           exit 0
-      - name: Upload lint diagnostics
+      - name: Upload diagnostics
         uses: actions/upload-artifact@v7.0.0
         with:
-          name: init-lint-diagnostics
+          name: init-diagnostics
           path: |
             lint.log
             lint.exit
+            test.log
+            test.exit
           if-no-files-found: error
