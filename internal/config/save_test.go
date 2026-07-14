@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSaveAtomicCreatesSecureConfig(t *testing.T) {
@@ -104,6 +105,43 @@ func TestSaveAtomicValidatesBeforeMutation(t *testing.T) {
 	if string(got) != string(original) {
 		t.Fatalf("file mutated on validation failure: %q", got)
 	}
+}
+
+func TestNextBackupPathUsesBaseWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	now := mustParseTime(t, "2026-07-14T12:00:00Z")
+	got := nextBackupPath(path, now)
+	want := path + ".bak-20260714T120000Z"
+	if got != want {
+		t.Fatalf("nextBackupPath = %q, want %q", got, want)
+	}
+}
+
+func TestNextBackupPathSkipsExistingAndAvoidsInfiniteLoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	now := mustParseTime(t, "2026-07-14T12:00:00Z")
+	base := path + ".bak-20260714T120000Z"
+	if err := os.WriteFile(base, []byte("a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(base+"-1", []byte("b"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := nextBackupPath(path, now)
+	if got != base+"-2" {
+		t.Fatalf("nextBackupPath = %q, want %q", got, base+"-2")
+	}
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts.UTC()
 }
 
 func testSaveConfig(name string) *Config {

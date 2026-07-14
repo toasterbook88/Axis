@@ -320,21 +320,42 @@ func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	if idx, found := findNodeIndex(cfg, "REMOTE"); !found || idx != 1 {
 		t.Fatalf("findNodeIndex = %d, %v", idx, found)
 	}
-	if duplicateHostname(cfg, "10.0.0.2", -1) != true {
-		t.Fatal("expected duplicate hostname")
+	if duplicateHostPort(cfg, "10.0.0.2", 22, -1) != true {
+		t.Fatal("expected duplicate host:port")
 	}
-	if duplicateHostname(cfg, "10.0.0.2", 1) != false {
-		t.Fatal("expected duplicate hostname exception")
+	if duplicateHostPort(cfg, "10.0.0.2", 22, 1) != false {
+		t.Fatal("expected duplicate host:port exception")
+	}
+	if duplicateHostPort(cfg, "10.0.0.2", 2222, -1) != false {
+		t.Fatal("same host different port should be allowed")
 	}
 	if got := defaultNodeUser(&config.Config{}, "fallback"); got != "fallback" {
 		t.Fatalf("defaultNodeUser fallback = %q", got)
 	}
 
+	cfg.AIProviders = map[string]config.AIProviderConfig{
+		"p": {Type: "local", Models: []config.AIModelConfig{{Name: "m1"}}},
+	}
+	cfg.MCPServers = map[string]config.MCPServerConfig{
+		"mcp": {Transport: "stdio", Command: []string{"cmd"}, Headers: map[string]string{"A": "1"}},
+	}
 	clone := cloneConfig(cfg)
 	clone.Nodes[0].Name = "changed"
 	clone.Webhooks = append(clone.Webhooks, "new")
+	clone.AIProviders["p"] = config.AIProviderConfig{Type: "cloud"}
+	clone.AIProviders["extra"] = config.AIProviderConfig{Type: "local"}
+	mcp := clone.MCPServers["mcp"]
+	mcp.Command[0] = "changed"
+	mcp.Headers["A"] = "2"
+	clone.MCPServers["mcp"] = mcp
 	if cfg.Nodes[0].Name == "changed" || len(cfg.Webhooks) != 0 {
 		t.Fatal("cloneConfig did not isolate slices")
+	}
+	if cfg.AIProviders["p"].Type != "local" || len(cfg.AIProviders) != 1 {
+		t.Fatal("cloneConfig did not isolate AIProviders map")
+	}
+	if cfg.MCPServers["mcp"].Command[0] != "cmd" || cfg.MCPServers["mcp"].Headers["A"] != "1" {
+		t.Fatal("cloneConfig did not isolate MCPServers nested data")
 	}
 
 	optional := &config.Config{

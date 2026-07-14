@@ -334,9 +334,6 @@ func promptManualNode(ctx context.Context, prompt *initPrompter, cfg *config.Con
 	if err != nil {
 		return config.NodeConfig{}, false, err
 	}
-	if duplicateHostname(cfg, host, -1) {
-		return config.NodeConfig{}, false, fmt.Errorf("hostname %q is already configured", host)
-	}
 	user, err := prompt.Text("SSH user", defaultNodeUser(cfg, deps.defaultUser()), validateSSHUser)
 	if err != nil {
 		return config.NodeConfig{}, false, err
@@ -344,6 +341,10 @@ func promptManualNode(ctx context.Context, prompt *initPrompter, cfg *config.Con
 	port, err := prompt.Int("SSH port", 22, 1, 65535)
 	if err != nil {
 		return config.NodeConfig{}, false, err
+	}
+	if duplicateHostPort(cfg, host, port, -1) {
+		fmt.Fprintf(prompt.out, "%s %s:%d is already configured.\n", ui.Red("Error:"), host, port)
+		return config.NodeConfig{}, false, nil
 	}
 	timeout, err := prompt.Int("Connection timeout (seconds)", 10, 1, 300)
 	if err != nil {
@@ -363,7 +364,7 @@ func reviewCandidates(ctx context.Context, prompt *initPrompter, cfg *config.Con
 		if candidate.Hostname == "localhost" || candidate.Hostname == "127.0.0.1" {
 			continue
 		}
-		if _, found := findNodeIndex(cfg, candidate.Name); found || duplicateHostname(cfg, candidate.Hostname, -1) {
+		if _, found := findNodeIndex(cfg, candidate.Name); found || duplicateHostPort(cfg, candidate.Hostname, candidate.EffectiveSSHPort(), -1) {
 			fmt.Fprintf(prompt.out, "  - %s (%s): already configured\n", candidate.Name, candidate.Hostname)
 			continue
 		}
@@ -428,9 +429,6 @@ func editNode(ctx context.Context, prompt *initPrompter, cfg *config.Config, dep
 	if err != nil {
 		return err
 	}
-	if duplicateHostname(cfg, host, idx) {
-		return fmt.Errorf("hostname %q is already configured", host)
-	}
 	user, err := prompt.Text("SSH user", current.SSHUser, validateSSHUser)
 	if err != nil {
 		return err
@@ -446,6 +444,10 @@ func editNode(ctx context.Context, prompt *initPrompter, cfg *config.Config, dep
 	if err != nil {
 		return err
 	}
+	if duplicateHostPort(cfg, host, port, idx) {
+		fmt.Fprintf(prompt.out, "%s %s:%d is already configured.\n", ui.Red("Error:"), host, port)
+		return nil
+	}
 	timeout, err := prompt.Int("Connection timeout (seconds)", current.EffectiveTimeout(), 1, 300)
 	if err != nil {
 		return err
@@ -460,8 +462,11 @@ func editNode(ctx context.Context, prompt *initPrompter, cfg *config.Config, dep
 		}
 		if verify && !deps.verifySSH(ctx, host, port, user, timeout, prompt.out) {
 			keep, err := prompt.Confirm("Verification failed. Keep these edits?", false)
-			if err != nil || !keep {
+			if err != nil {
 				return err
+			}
+			if !keep {
+				return nil
 			}
 		}
 	}
@@ -749,6 +754,39 @@ func cloneConfig(source *config.Config) *config.Config {
 		discoveryClone := *source.Discovery
 		clone.Discovery = &discoveryClone
 	}
+	if source.Chat != nil {
+		chatClone := *source.Chat
+		clone.Chat = &chatClone
+	}
+	if source.Inference != nil {
+		infClone := *source.Inference
+		clone.Inference = &infClone
+	}
+	if source.AIProviders != nil {
+		clone.AIProviders = make(map[string]config.AIProviderConfig, len(source.AIProviders))
+		for k, v := range source.AIProviders {
+			if v.Models != nil {
+				v.Models = append([]config.AIModelConfig(nil), v.Models...)
+			}
+			clone.AIProviders[k] = v
+		}
+	}
+	if source.MCPServers != nil {
+		clone.MCPServers = make(map[string]config.MCPServerConfig, len(source.MCPServers))
+		for k, v := range source.MCPServers {
+			if v.Command != nil {
+				v.Command = append([]string(nil), v.Command...)
+			}
+			if v.Headers != nil {
+				headersClone := make(map[string]string, len(v.Headers))
+				for hk, hv := range v.Headers {
+					headersClone[hk] = hv
+				}
+				v.Headers = headersClone
+			}
+			clone.MCPServers[k] = v
+		}
+	}
 	return &clone
 }
 
@@ -770,9 +808,21 @@ func findNodeIndex(cfg *config.Config, name string) (int, bool) {
 	return 0, false
 }
 
-func duplicateHostname(cfg *config.Config, hostname string, except int) bool {
+// duplicateHostPort reports whether another node already uses the same
+// hostname and SSH port. Same host with different ports is allowed (containers,
+// port-forwarded VMs, multi-instance hosts).
+func duplicateHostPort(cfg *config.Config, hostname string, port int, except int) bool {
+	if port <= 0 {
+		port = 22
+	}
 	for i, node := range cfg.Nodes {
-		if i != except && strings.EqualFold(node.Hostname, hostname) {
+		if i == except {
+			continue
+		}
+		if !strings.EqualFold(node.Hostname, hostname) {
+			continue
+		}
+		if node.EffectiveSSHPort() == port {
 			return true
 		}
 	}

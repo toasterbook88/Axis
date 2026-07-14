@@ -131,10 +131,16 @@ func copyFileSecure(src io.Reader, dst string) error {
 func nextBackupPath(path string, now time.Time) string {
 	base := path + ".bak-" + now.Format("20060102T150405Z")
 	candidate := base
-	for i := 1; ; i++ {
-		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+	// Cap iterations so a permission error (or other non-NotExist Stat
+	// failure) cannot hang SaveAtomic forever. Any Stat error other than
+	// "exists" means the path is usable for a create attempt; the subsequent
+	// O_EXCL write will surface real filesystem problems.
+	for i := 1; i <= 1000; i++ {
+		_, err := os.Stat(candidate)
+		if err != nil {
 			return candidate
 		}
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
+	return fmt.Sprintf("%s-%d", base, now.UnixNano())
 }
