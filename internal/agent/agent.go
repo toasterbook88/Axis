@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/knowledge"
@@ -756,15 +757,17 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	req := execution.GuardedExecutionRequest{
-		Description:     rArgs.Description,
-		Mode:            mode,
-		Confirm:         execution.ConfirmWord,
-		RequestedNode:   rArgs.TargetNode,
-		MemoryRequestMB: rArgs.MemoryRequestMB,
-		MemoryMaxMB:     rArgs.MemoryMaxMB,
-		ExposePorts:     rArgs.ExposePorts,
-		OwnerSurface:    execution.OwnerSurfaceAgentRunTask,
-		OwnerLabel:      strings.TrimSpace(a.model),
+		Description:      rArgs.Description,
+		Mode:             mode,
+		Confirm:          execution.ConfirmWord,
+		RequestedNode:    rArgs.TargetNode,
+		MemoryRequestMB:  rArgs.MemoryRequestMB,
+		MemoryMaxMB:      rArgs.MemoryMaxMB,
+		ExposePorts:      rArgs.ExposePorts,
+		OwnerSurface:     execution.OwnerSurfaceAgentRunTask,
+		OwnerLabel:       strings.TrimSpace(a.model),
+		Events:           events.GuardedExecutionSink{},
+		BuildContextJSON: knowledge.ExecutionContextJSON,
 	}
 
 	prepared, err := execution.PrepareGuardedExecution(ctx, rt, req)

@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -39,15 +38,13 @@ func TestCheckReturnsNonBlockingLowScorePattern(t *testing.T) {
 }
 
 func TestCheckBlocksHeavyModelOnSmallCluster(t *testing.T) {
-	k := &knowledge.ClusterKnowledge{
-		Snapshot: models.ClusterSnapshot{
-			Summary: models.ClusterSummary{
-				TotalFreeRAMMB: 2048,
-			},
+	snap := &models.ClusterSnapshot{
+		Summary: models.ClusterSummary{
+			TotalFreeRAMMB: 2048,
 		},
 	}
 
-	got := Check(k, "run large model inference", nil)
+	got := Check(snap, "run large model inference", nil)
 	if !got.Blocked {
 		t.Fatal("expected heavy model to be blocked on small cluster")
 	}
@@ -57,36 +54,32 @@ func TestCheckBlocksHeavyModelOnSmallCluster(t *testing.T) {
 }
 
 func TestCheckAllowsExplicitAppleFoundationModelsHelperOnSmallCluster(t *testing.T) {
-	k := &knowledge.ClusterKnowledge{
-		Snapshot: models.ClusterSnapshot{
-			Summary: models.ClusterSummary{
-				TotalFreeRAMMB: 2048,
-			},
+	snap := &models.ClusterSnapshot{
+		Summary: models.ClusterSummary{
+			TotalFreeRAMMB: 2048,
 		},
 	}
 
-	got := Check(k, "xcrun swift hack/apple-foundation-models.swift --self-test", nil)
+	got := Check(snap, "xcrun swift hack/apple-foundation-models.swift --self-test", nil)
 	if got.Blocked {
 		t.Fatalf("expected explicit apple helper to bypass heavy-model heuristic, got %+v", got)
 	}
 }
 
 func TestCheckBlocksGPURequestWhenNoGPUAvailable(t *testing.T) {
-	k := &knowledge.ClusterKnowledge{
-		Snapshot: models.ClusterSnapshot{
-			Summary: models.ClusterSummary{
-				TotalFreeRAMMB: 8192,
-			},
-			Nodes: []models.NodeFacts{
-				{
-					Name:      "cpu-only",
-					Resources: &models.Resources{CPUCores: 8},
-				},
+	snap := &models.ClusterSnapshot{
+		Summary: models.ClusterSummary{
+			TotalFreeRAMMB: 8192,
+		},
+		Nodes: []models.NodeFacts{
+			{
+				Name:      "cpu-only",
+				Resources: &models.Resources{CPUCores: 8},
 			},
 		},
 	}
 
-	got := Check(k, "run gpu workload", nil)
+	got := Check(snap, "run gpu workload", nil)
 	if !got.Blocked {
 		t.Fatal("expected gpu request to be blocked without gpu")
 	}

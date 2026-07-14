@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 // BlockResult is final verdict. Score >= 80 = instant block.
@@ -17,7 +17,7 @@ type BlockResult struct {
 var defaultEvaluator = NewEvaluator(DefaultRuleSet())
 
 // Check is the single gatekeeper. Call this first, always.
-func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) bool) BlockResult {
+func Check(snap *models.ClusterSnapshot, desc string, isKnownBad func(string) bool) BlockResult {
 	lower := strings.ToLower(desc)
 	r := BlockResult{Score: 0}
 
@@ -40,13 +40,13 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 	}
 
 	// === Live cluster-aware checks ===
-	if k != nil {
+	if snap != nil {
 		appleFoundationHelper := strings.Contains(lower, "xcrun swift") &&
 			strings.Contains(lower, "hack/apple-foundation-models.swift") &&
 			(strings.Contains(lower, "--prompt") || strings.Contains(lower, "--self-test"))
-		clusterAllocatable := k.Snapshot.Summary.TotalAllocatableMB
+		clusterAllocatable := snap.Summary.TotalAllocatableMB
 		if clusterAllocatable <= 0 {
-			clusterAllocatable = k.Snapshot.Summary.TotalFreeRAMMB
+			clusterAllocatable = snap.Summary.TotalFreeRAMMB
 		}
 		if !appleFoundationHelper &&
 			(strings.Contains(lower, "model") || strings.Contains(lower, "inference") || strings.Contains(lower, "large")) &&
@@ -58,8 +58,8 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 			}
 		}
 
-		if len(k.Snapshot.Nodes) > 0 {
-			best := k.Snapshot.Nodes[0]
+		if len(snap.Nodes) > 0 {
+			best := snap.Nodes[0]
 			if best.Resources != nil && best.Resources.RAMFreeMB < 1024 && strings.Contains(lower, "large") {
 				return BlockResult{
 					Blocked: true,
@@ -69,7 +69,7 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 			}
 		}
 
-		if strings.Contains(lower, "gpu") && !hasGPU(k) {
+		if strings.Contains(lower, "gpu") && !hasGPU(snap) {
 			return BlockResult{Blocked: true, Reason: "no GPU node available", Score: 75}
 		}
 	}
@@ -77,8 +77,8 @@ func Check(k *knowledge.ClusterKnowledge, desc string, isKnownBad func(string) b
 	return r
 }
 
-func hasGPU(k *knowledge.ClusterKnowledge) bool {
-	for _, n := range k.Snapshot.Nodes {
+func hasGPU(snap *models.ClusterSnapshot) bool {
+	for _, n := range snap.Nodes {
 		if n.Resources != nil && len(n.Resources.GPUs) > 0 {
 			return true
 		}
