@@ -167,7 +167,9 @@ func executeInit(t *testing.T, path, input string, deps initDependencies) string
 	t.Helper()
 	out := new(bytes.Buffer)
 	cmd := initCmd()
-	cmd.SetArgs([]string{"--config", path})
+	if err := cmd.Flags().Set("config", path); err != nil {
+		t.Fatal(err)
+	}
 	cmd.SetIn(bytes.NewBufferString(input))
 	cmd.SetOut(out)
 	cmd.SetErr(out)
