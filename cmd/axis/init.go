@@ -148,7 +148,10 @@ func prepareInitConfig(ctx context.Context, prompt *initPrompter, cfgPath string
 	if loadErr != nil {
 		fmt.Fprintf(prompt.out, "%s Existing configuration is invalid:\n  %v\n\n", ui.Red("!"), loadErr)
 		replace, err := prompt.Confirm("Replace it with a new validated configuration?", false)
-		if err != nil || !replace {
+		if err != nil {
+			return nil, err
+		}
+		if !replace {
 			return nil, errInitCanceled
 		}
 		return firstTimeConfig(ctx, prompt, deps)
@@ -171,7 +174,10 @@ func prepareInitConfig(ctx context.Context, prompt *initPrompter, cfgPath string
 		return updateConfig(ctx, prompt, cloneConfig(existing), deps)
 	case "replace":
 		ok, err := prompt.Confirm("Replace the current node and discovery settings?", false)
-		if err != nil || !ok {
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, errInitCanceled
 		}
 		fresh, err := firstTimeConfig(ctx, prompt, deps)
@@ -520,14 +526,20 @@ func configureDiscovery(prompt *initPrompter, cfg *config.Config, defaultEnabled
 	if err != nil {
 		return err
 	}
+	generated := false
 	if secret == "" {
 		secret, err = generateRandomSecret()
 		if err != nil {
 			return fmt.Errorf("generate discovery secret: %w", err)
 		}
+		generated = true
 	}
 	cfg.Discovery = &config.DiscoveryConfig{Enabled: true, UDPPort: port, BeaconInterval: interval, Secret: secret}
-	fmt.Fprintln(prompt.out, "Discovery secret generated and stored with the configuration; it will not be printed.")
+	if generated {
+		fmt.Fprintln(prompt.out, "Discovery secret generated and stored with the configuration; it will not be printed.")
+	} else {
+		fmt.Fprintln(prompt.out, "Existing discovery secret preserved.")
+	}
 	return nil
 }
 
