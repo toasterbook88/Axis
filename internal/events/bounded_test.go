@@ -8,9 +8,9 @@ import (
 )
 
 func TestEventBusBoundedDispatch(t *testing.T) {
-	// Drain the queue before returning so the burst does not leak into other
-	// tests that share the process-global event bus.
-	defer FlushEvents(2 * time.Second)
+	// Own temp log + sequence dir so 1000 flocked writes do not contend on
+	// the shared ~/.axis path used by other packages under go test ./...
+	_ = isolateEventBus(t, t.TempDir())
 
 	const eventCount = 1000
 	var release sync.WaitGroup
@@ -28,5 +28,11 @@ func TestEventBusBoundedDispatch(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := runtime.NumGoroutine() - before; got > 32 {
 		t.Fatalf("event dispatch spawned too many goroutines: %d", got)
+	}
+
+	// Require a successful drain before the test returns so the next test's
+	// ResetTestLog cannot capture late task.execution.started writes.
+	if err := FlushEvents(30 * time.Second); err != nil {
+		t.Fatalf("drain after burst: %v", err)
 	}
 }

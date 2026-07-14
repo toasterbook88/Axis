@@ -41,11 +41,15 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(fmt.Sprintf("failed to create temp directory: %v", err))
 	}
-	events.SetLogPath(filepath.Join(eventLogDir, "events.jsonl"))
+	if err := events.ResetTestLog(filepath.Join(eventLogDir, "events.jsonl")); err != nil {
+		panic(fmt.Sprintf("ResetTestLog: %v", err))
+	}
 
 	// Run tests and clean up immediately since defer does not run before os.Exit.
 	code := m.Run()
-	events.FlushEvents(2 * time.Second)
+	if err := events.FlushEvents(5 * time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: FlushEvents after execution tests: %v\n", err)
+	}
 	_ = os.RemoveAll(eventLogDir)
 	GetGitRepoState = prevGit
 	os.Exit(code)
@@ -1452,7 +1456,9 @@ func TestNormalizeRequestNil(t *testing.T) {
 
 func testGuardedRuntime(t *testing.T, nodes []models.NodeFacts) *runtimectx.Context {
 	t.Cleanup(func() {
-		events.FlushEvents(1 * time.Second)
+		if err := events.FlushEvents(5 * time.Second); err != nil {
+			t.Errorf("FlushEvents cleanup: %v", err)
+		}
 	})
 	cfgNodes := make([]config.NodeConfig, 0, len(nodes))
 	for _, node := range nodes {
