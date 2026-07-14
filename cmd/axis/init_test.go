@@ -44,6 +44,41 @@ func TestInitCmdFirstTime(t *testing.T) {
 	}
 }
 
+func TestInitCmdFirstTimeAddsDiscoveredTailscalePeer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".axis", "nodes.yaml")
+	deps := testInitDeps()
+	deps.discoverTailscale = func(context.Context) ([]config.NodeConfig, error) {
+		return []config.NodeConfig{{Name: "worker.local", Hostname: "100.64.0.2", SSHPort: 22, TimeoutSec: 10}}, nil
+	}
+	input := strings.Join([]string{
+		"local-node",
+		"operator",
+		"2",
+		"",
+		"n",
+		"4",
+		"",
+		"",
+		"",
+		"",
+	}, "\n")
+	out := executeInit(t, path, input, deps)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load generated config: %v\noutput:\n%s", err, out)
+	}
+	if len(cfg.Nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2\noutput:\n%s", len(cfg.Nodes), out)
+	}
+	if cfg.Nodes[1].Name != "worker.local" || cfg.Nodes[1].Hostname != "100.64.0.2" || cfg.Nodes[1].SSHUser != "operator" {
+		t.Fatalf("unexpected discovered node: %+v", cfg.Nodes[1])
+	}
+	if cfg.Discovery == nil || !cfg.Discovery.Enabled || cfg.Discovery.Secret == "" {
+		t.Fatalf("discovery not enabled for multi-node setup: %+v", cfg.Discovery)
+	}
+}
+
 func TestInitCmdExistingConfigNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes.yaml")
 	original := &config.Config{
@@ -124,6 +159,97 @@ func TestInitCmdUpdatesExistingAndPreservesOptionalSections(t *testing.T) {
 	}
 }
 
+func TestInitCmdEditsExistingNode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	original := twoNodeConfig()
+	if _, err := config.SaveAtomic(path, original); err != nil {
+		t.Fatal(err)
+	}
+
+	input := strings.Join([]string{
+		"",
+		"2",
+		"2",
+		"remote-renamed",
+		"10.0.0.3",
+		"",
+		"",
+		"",
+		"20",
+		"n",
+		"5",
+		"",
+	}, "\n") + "\n"
+	out := executeInit(t, path, input, testInitDeps())
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load edited config: %v\noutput:\n%s", err, out)
+	}
+	if len(cfg.Nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2", len(cfg.Nodes))
+	}
+	remote := cfg.Nodes[1]
+	if remote.Name != "remote-renamed" || remote.Hostname != "10.0.0.3" || remote.TimeoutSec != 20 || remote.Role != "worker" {
+		t.Fatalf("unexpected edited node: %+v", remote)
+	}
+}
+
+func TestInitCmdRemovesExistingNode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	if _, err := config.SaveAtomic(path, twoNodeConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	input := strings.Join([]string{
+		"",
+		"3",
+		"2",
+		"y",
+		"5",
+		"",
+	}, "\n") + "\n"
+	out := executeInit(t, path, input, testInitDeps())
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load edited config: %v\noutput:\n%s", err, out)
+	}
+	if len(cfg.Nodes) != 1 || cfg.Nodes[0].Name != "local" {
+		t.Fatalf("unexpected nodes after remove: %+v", cfg.Nodes)
+	}
+}
+
+func TestInitCmdEnablesDiscoveryOnExistingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	original := &config.Config{
+		Nodes:     []config.NodeConfig{{Name: "local", Hostname: "localhost", SSHUser: "operator", Role: "primary", TimeoutSec: 10}},
+		Discovery: &config.DiscoveryConfig{Enabled: false},
+	}
+	if _, err := config.SaveAtomic(path, original); err != nil {
+		t.Fatal(err)
+	}
+
+	input := strings.Join([]string{
+		"",
+		"4",
+		"y",
+		"42425",
+		"5",
+		"5",
+		"",
+	}, "\n") + "\n"
+	out := executeInit(t, path, input, testInitDeps())
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load edited config: %v\noutput:\n%s", err, out)
+	}
+	if cfg.Discovery == nil || !cfg.Discovery.Enabled || cfg.Discovery.UDPPort != 42425 || cfg.Discovery.BeaconInterval != 5 || cfg.Discovery.Secret == "" {
+		t.Fatalf("unexpected discovery config: %+v", cfg.Discovery)
+	}
+}
+
 func TestInitCmdInvalidExistingConfigRequiresExplicitReplace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes.yaml")
 	original := []byte("nodes: [not valid\n")
@@ -192,5 +318,15 @@ func testInitDeps() initDependencies {
 		discoverMesh: func(context.Context) ([]config.NodeConfig, error) {
 			return nil, nil
 		},
+	}
+}
+
+func twoNodeConfig() *config.Config {
+	return &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "local", Hostname: "localhost", SSHUser: "operator", Role: "primary", TimeoutSec: 10},
+			{Name: "remote", Hostname: "10.0.0.2", SSHUser: "operator", Role: "worker", SSHPort: 22, TimeoutSec: 10},
+		},
+		Discovery: &config.DiscoveryConfig{Enabled: false},
 	}
 }
