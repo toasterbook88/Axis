@@ -49,6 +49,30 @@ func NewCloudBackendWithKey(providerKind, providerName, endpoint, apiKey, model 
 	}, nil
 }
 
+// NewOpenAICompatibleBackend creates a ChatBackend for local OpenAI-compatible
+// servers (MLX, llama.cpp, etc.). endpoint is a base URL such as
+// http://host:8080; /v1 is appended when missing. apiKey is optional (many
+// local servers ignore auth); when non-empty it is sent as Bearer.
+func NewOpenAICompatibleBackend(endpoint, model, apiKey string) (*CloudBackend, error) {
+	base := strings.TrimSpace(endpoint)
+	if base == "" {
+		return nil, fmt.Errorf("openai-compatible endpoint is empty")
+	}
+	base = strings.TrimRight(base, "/")
+	// Accept either http://host:port or http://host:port/v1.
+	if !strings.HasSuffix(base, "/v1") {
+		base = base + "/v1"
+	}
+	return &CloudBackend{
+		providerName: "openai-compatible",
+		providerKind: "openai",
+		endpoint:     base,
+		apiKey:       apiKey,
+		model:        model,
+		client:       &http.Client{Timeout: 120 * time.Second},
+	}, nil
+}
+
 // Stats returns the accumulated prompt tokens, completion tokens, and cost.
 func (b *CloudBackend) Stats() (int, int, float64) {
 	b.mu.RLock()
@@ -117,7 +141,9 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		return chat.Message{}, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+	if strings.TrimSpace(b.apiKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+b.apiKey)
+	}
 
 	resp, err := b.client.Do(req)
 	if err != nil {
