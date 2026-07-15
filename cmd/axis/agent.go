@@ -116,9 +116,17 @@ func agentCmd() *cobra.Command {
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
 			}
+			// Display / last-resort resolution (always non-empty when possible).
 			currentModel := resolveChatModel(model, rt)
-			if verbose && model == "" {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
+			// Startup request: explicit --model, else chat.default_model / warm preferred.
+			// Empty means "pick from catalog" (first usable local, then priority cloud).
+			startupRequestedModel := effectiveStartupRequestedModel(model, rt)
+			if verbose && strings.TrimSpace(model) == "" {
+				if startupRequestedModel != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", startupRequestedModel)
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
+				}
 			}
 			w := cmd.OutOrStdout()
 			errW := cmd.ErrOrStderr()
@@ -193,8 +201,10 @@ func agentCmd() *cobra.Command {
 				hasDefaultModel = true
 			}
 
+			choices := collectModelChoices(rt)
+			var explicitTarget *ModelChoice
+
 			if selectModel || (model == "" && !hasDefaultModel && term.IsTerminal(int(os.Stdin.Fd()))) {
-				choices := collectModelChoices(rt)
 				if len(choices) == 0 {
 					return ExitCodeError{Code: ExitErrConfigLoad, Message: "no models found (neither local Ollama models nor enabled cloud providers)"}
 				}
@@ -203,19 +213,15 @@ func agentCmd() *cobra.Command {
 					detail := fmt.Sprintf("%s - %s", choice.ProviderName, choice.ProviderKind)
 					if choice.ProviderKind == "local" {
 						if choice.Node != "" {
-							detail = fmt.Sprintf("Remote node %s (%s)", choice.Node, choice.Endpoint)
+							detail = fmt.Sprintf("Remote node %s (%s) [%s]", choice.Node, choice.Endpoint, choice.Protocol)
 						} else {
-							detail = fmt.Sprintf("Local node (%s)", choice.Endpoint)
+							detail = fmt.Sprintf("Local (%s) [%s]", choice.Endpoint, choice.Protocol)
 						}
 					}
 					disabled := choice.Disabled
-					if choice.ProviderKind == "local" && choice.Node != "" && choice.Endpoint == "" {
-						disabled = true
-						detail += " (unsupported: no valid IP/hostname)"
-					} else if choice.ProviderKind == "local" && choice.Node != "" && choice.Disabled {
-						detail += " (unreachable)"
+					if choice.DisabledReason != "" && disabled {
+						detail += " (" + choice.DisabledReason + ")"
 					}
-
 					selectOptions = append(selectOptions, ui.SelectOption{
 						ID:       choice.ID,
 						Label:    choice.Model,
@@ -244,145 +250,61 @@ func agentCmd() *cobra.Command {
 						break
 					}
 				}
-
-				currentModel = chosen.Model
+				if chosen.Model == "" {
+					return fmt.Errorf("selected model id %q not found", res.ID)
+				}
+				explicitTarget = &chosen
+				// Interactive local/remote selection forces local provider mode for auto policy.
+				if chosen.ProviderKind != "cloud" && strings.EqualFold(provider, "auto") {
+					provider = "local"
+				}
 				if chosen.ProviderKind == "cloud" {
 					provider = "cloud"
-					cloudModel = chosen.Model
-				} else {
-					provider = "local"
-					model = chosen.Model
-				}
-			}
-
-			resolvedModel := currentModel
-
-			providerMode := strings.ToLower(strings.TrimSpace(provider))
-			if providerMode == "" {
-				providerMode = "auto"
-			}
-
-			var bestCloudProviderName string
-			var bestCloudProvider config.AIProviderConfig
-			var bestCloudAPIKey string
-
-			if rt != nil && rt.Config != nil {
-				var cloudProviders []struct {
-					name string
-					cfg  config.AIProviderConfig
-					key  string
-				}
-				for pName, pCfg := range rt.Config.AIProviders {
-					if pCfg.Enabled && strings.EqualFold(pCfg.Type, "cloud") {
-						key, err := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
-						if err == nil && key != "" {
-							cloudProviders = append(cloudProviders, struct {
-								name string
-								cfg  config.AIProviderConfig
-								key  string
-							}{pName, pCfg, key})
-						}
+					if cloudModel == "" {
+						cloudModel = chosen.Model
 					}
 				}
-
-				if len(cloudProviders) > 0 {
-					sort.Slice(cloudProviders, func(i, j int) bool {
-						if cloudProviders[i].cfg.Priority != cloudProviders[j].cfg.Priority {
-							return cloudProviders[i].cfg.Priority > cloudProviders[j].cfg.Priority
-						}
-						return cloudProviders[i].name < cloudProviders[j].name
-					})
-					bestCloudProviderName = cloudProviders[0].name
-					bestCloudProvider = cloudProviders[0].cfg
-					bestCloudAPIKey = cloudProviders[0].key
-				}
 			}
 
-			useCloud := false
-			switch providerMode {
-			case "cloud":
-				if bestCloudProviderName == "" {
-					return ExitCodeError{Code: ExitErrConfigLoad, Message: "no enabled cloud providers with valid API keys found in config"}
-				}
-				useCloud = true
-			case "auto":
-				if bestCloudProviderName != "" {
-					useCloud = true
-				}
+			// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
+			activeTarget, cloudOpts, err := resolveStartupModelTarget(startupRequestedModel, provider, cloudModel, explicitTarget, rt, choices)
+			if err != nil {
+				return ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
 			}
 
-			if useCloud {
-				targetModel := cloudModel
-				if targetModel == "" {
-					bestModel := ""
-					bestCost := 0.0
-					for _, m := range bestCloudProvider.Models {
-						if m.Name == "" {
-							continue
-						}
-						if bestModel == "" {
-							bestModel = m.Name
-						}
-						if m.CostPer1K > 0 && (bestCost == 0 || m.CostPer1K < bestCost) {
-							bestCost = m.CostPer1K
-							bestModel = m.Name
-						}
-					}
-					targetModel = bestModel
-				}
-
-				if targetModel == "" {
-					return ExitCodeError{Code: ExitErrConfigLoad, Message: fmt.Sprintf("no models configured for cloud provider %q", bestCloudProviderName)}
-				}
-
-				var costPer1K float64
-				for _, m := range bestCloudProvider.Models {
-					if strings.EqualFold(m.Name, targetModel) {
-						costPer1K = m.CostPer1K
-						break
-					}
-					for _, alias := range m.Aliases {
-						if strings.EqualFold(alias, targetModel) {
-							costPer1K = m.CostPer1K
-							break
-						}
-					}
-				}
-
-				var err error
-				backend, err = agent.NewCloudBackendWithKey(bestCloudProvider.Kind, bestCloudProviderName, bestCloudProvider.Endpoint, bestCloudAPIKey, targetModel, costPer1K)
-				if err != nil {
-					return ExitCodeError{Code: ExitErrConfigLoad, Message: fmt.Sprintf("invalid cloud backend config: %v", err)}
-				}
-				resolvedModel = targetModel
-				if verbose {
-					fmt.Fprintf(errW, "Using cloud provider %q with model %q\n", bestCloudProviderName, targetModel)
-				}
+			backend, err = agent.BuildBackend(activeTarget, cloudOpts)
+			if err != nil {
+				return ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
 			}
-			// Multi-model routing: if a cheap model is configured, route simple
-			// turns (status reads, short prompts) to it and hard turns (code edits,
-			// implementation) to the primary model — cutting cost on long runs.
-			if cheapModel != "" && useCloud && bestCloudProviderName != "" {
-				cheapBackend, cerr := agent.NewCloudBackendWithKey(bestCloudProvider.Kind, bestCloudProviderName, bestCloudProvider.Endpoint, bestCloudAPIKey, cheapModel, 0)
+
+			// Multi-model routing: cheap model on the same cloud provider only.
+			if cheapModel != "" && activeTarget.Protocol == agent.ProtocolCloud {
+				cheapTarget, cheapOpts, cerr := resolveCheapCloudTarget(rt, activeTarget, cheapModel)
 				if cerr == nil {
-					rb := agent.NewRoutingBackend(backend, cheapBackend, nil)
-					if verbose {
-						rb.SetVerbose(errW)
-						fmt.Fprintf(errW, "Multi-model routing: primary=%q cheap=%q\n", resolvedModel, cheapModel)
+					cheapBackend, berr := agent.BuildBackend(cheapTarget, cheapOpts)
+					if berr == nil {
+						rb := agent.NewRoutingBackend(backend, cheapBackend, nil)
+						if verbose {
+							rb.SetVerbose(errW)
+							fmt.Fprintf(errW, "Multi-model routing: primary=%q cheap=%q\n", activeTarget.Model, cheapTarget.Model)
+						}
+						backend = rb
+					} else if verbose {
+						fmt.Fprintf(errW, "Warning: cheap-model %q not available: %v\n", cheapModel, berr)
 					}
-					backend = rb
 				} else if verbose {
-					fmt.Fprintf(errW, "Warning: cheap-model %q not configured for provider %q: %v\n", cheapModel, bestCloudProviderName, cerr)
+					fmt.Fprintf(errW, "Warning: cheap-model %q not available: %v\n", cheapModel, cerr)
 				}
 			}
-			securityClass := agent.BackendLocal
-			if useCloud {
-				securityClass = agent.BackendRemote
+
+			endpoint := activeTarget.Endpoint
+			if endpoint == "" {
+				endpoint = chat.DefaultEndpoint
 			}
 
 			cfg := agent.Config{
-				Endpoint:                chat.DefaultEndpoint,
-				Model:                   resolvedModel,
+				Endpoint:                endpoint,
+				Model:                   activeTarget.Model,
 				Backend:                 backend,
 				MaxTurns:                maxTurns,
 				MaxTokens:               maxTokens,
@@ -391,7 +313,7 @@ func agentCmd() *cobra.Command {
 				Verbose:                 verbose,
 				DryRun:                  dryRun,
 				AllowRawCommandEvidence: allowRawCommandEvidence,
-				BackendSecurityClass:    securityClass,
+				BackendSecurityClass:    activeTarget.SecurityClass,
 				Cluster:                 cluster,
 				Knowledge:               k,
 				ToolContext:             tc,
@@ -417,7 +339,7 @@ func agentCmd() *cobra.Command {
 			// Single-shot mode.
 			if len(args) > 0 {
 				instruction := strings.Join(args, " ")
-				fmt.Fprintf(errW, "Agent [%s] — max %d turns\n\n", ui.Bold(currentModel), maxTurns)
+				fmt.Fprintf(errW, "Agent [%s] — max %d turns\n\n", ui.Bold(activeTarget.Model), maxTurns)
 
 				ctx2, cancel := agentRequestContext(ctx, timeout)
 				defer cancel()
@@ -435,15 +357,11 @@ func agentCmd() *cobra.Command {
 			// Interactive REPL with readline.
 			ui.PrintLogo(errW, buildinfo.Version)
 
-			providerName := "Local Ollama"
-			if useCloud {
-				providerName = "Cloud (" + bestCloudProviderName + ")"
-			}
 			mcpCount := 0
 			if mcpReg != nil {
 				mcpCount = len(mcpReg.Names())
 			}
-			printAgentSessionDetails(errW, currentModel, providerName, autoApprove, autonomy, mcpCount, maxTurns)
+			printAgentSessionDetails(errW, activeTarget, autoApprove, autonomy, mcpCount, maxTurns)
 
 			var completerItems []readline.PrefixCompleterInterface
 			completerItems = append(completerItems,
@@ -483,18 +401,19 @@ func agentCmd() *cobra.Command {
 			}
 			rl, err := readline.NewEx(rlCfg)
 			if err != nil {
-				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, mcpReg)
+				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, mcpReg, activeTarget)
 			}
 			defer rl.Close()
 
 			session := &agentREPLSession{
-				Agent:       a,
-				MCPRegistry: mcpReg,
-				Runtime:     loadAgentShellRuntime,
-				Selector:    &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: rl, out: w},
-				In:          rl,
-				Out:         w,
-				ErrOut:      errW,
+				Agent:        a,
+				MCPRegistry:  mcpReg,
+				Runtime:      loadAgentShellRuntime,
+				Selector:     &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: rl, out: w},
+				In:           rl,
+				Out:          w,
+				ErrOut:       errW,
+				ActiveTarget: activeTarget,
 			}
 
 			for {
@@ -593,13 +512,14 @@ func (u *UnbufferedLineReader) Readline() (string, error) {
 }
 
 type agentREPLSession struct {
-	Agent       *agent.Agent
-	MCPRegistry *mcpclient.Registry
-	Runtime     func(context.Context) (*runtimectx.Context, error)
-	Selector    ui.Selector
-	In          LineReader
-	Out         io.Writer
-	ErrOut      io.Writer
+	Agent        *agent.Agent
+	MCPRegistry  *mcpclient.Registry
+	Runtime      func(context.Context) (*runtimectx.Context, error)
+	Selector     ui.Selector
+	In           LineReader
+	Out          io.Writer
+	ErrOut       io.Writer
+	ActiveTarget ModelChoice
 }
 
 type REPLSelector struct {
@@ -664,30 +584,23 @@ func (s *REPLSelector) Select(ctx context.Context, title string, options []ui.Se
 	}
 }
 
-type ModelChoice struct {
-	ID            string
-	Model         string
-	ProviderName  string
-	ProviderKind  string
-	Node          string
-	Endpoint      string
-	SecurityClass agent.BackendSecurityClass
-	Disabled      bool
-}
+// ModelChoice is an alias for agent.ModelTarget (canonical model identity).
+type ModelChoice = agent.ModelTarget
 
 // runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
-func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, mcpReg *mcpclient.Registry) error {
+func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, mcpReg *mcpclient.Registry, activeTarget ModelChoice) error {
 	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
 	inReader := &UnbufferedLineReader{reader: os.Stdin}
 
 	session := &agentREPLSession{
-		Agent:       a,
-		MCPRegistry: mcpReg,
-		Runtime:     loadAgentShellRuntime,
-		Selector:    &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: inReader, out: w},
-		In:          inReader,
-		Out:         w,
-		ErrOut:      errW,
+		Agent:        a,
+		MCPRegistry:  mcpReg,
+		Runtime:      loadAgentShellRuntime,
+		Selector:     &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: inReader, out: w},
+		In:           inReader,
+		Out:          w,
+		ErrOut:       errW,
+		ActiveTarget: activeTarget,
 	}
 
 	for {
@@ -981,31 +894,12 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		choices := collectModelChoices(rt)
 
 		if cmd == "/model" && len(parts) >= 2 {
-			newModel := parts[1]
-
-			var chosen ModelChoice
-			found := false
-			for _, c := range choices {
-				if strings.EqualFold(c.Model, newModel) && !c.Disabled {
-					chosen = c
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				chosen = ModelChoice{
-					ID:            "local:" + newModel,
-					Model:         newModel,
-					ProviderName:  "ollama",
-					ProviderKind:  "local",
-					Endpoint:      chat.DefaultEndpoint,
-					SecurityClass: agent.BackendLocal,
-				}
-			}
-
-			err := switchAgentToModelChoice(session, chosen)
+			ref := strings.Join(parts[1:], " ")
+			chosen, err := findModelTargetByRef(choices, ref)
 			if err != nil {
+				return true, false, err
+			}
+			if err := switchAgentToModelChoice(session, chosen); err != nil {
 				return true, false, err
 			}
 			return true, false, nil
@@ -1451,69 +1345,497 @@ func isPrivateLAN(ip netip.Addr) bool {
 }
 
 func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) error {
-	a := session.Agent
+	opts, err := cloudOptsForTarget(session.Runtime, &choice)
+	if err != nil {
+		return err
+	}
+	backend, err := agent.BuildBackend(choice, opts)
+	if err != nil {
+		return err
+	}
+	session.Agent.SetBackend(backend, choice.SecurityClass)
+	session.Agent.SetModel(choice.Model)
+	session.ActiveTarget = choice
 	errW := session.ErrOut
-	var backend agent.ChatBackend
-	var err error
-
-	if choice.ProviderKind == "cloud" {
-		rt, loadErr := session.Runtime(context.Background())
-		if loadErr != nil {
-			return fmt.Errorf("failed to load cluster status for cloud provider: %w", loadErr)
-		}
-		var pCfg config.AIProviderConfig
-		var found bool
-		for pName, p := range rt.Config.AIProviders {
-			if strings.EqualFold(pName, choice.ProviderName) {
-				pCfg = p
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("cloud provider %q not configured", choice.ProviderName)
-		}
-
-		var key string
-		key, err = secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
-		if err != nil || key == "" {
-			return fmt.Errorf("API key for cloud provider %q not found or empty", choice.ProviderName)
-		}
-
-		var costPer1K float64
-		for _, m := range pCfg.Models {
-			if strings.EqualFold(m.Name, choice.Model) {
-				costPer1K = m.CostPer1K
-				break
-			}
-			for _, alias := range m.Aliases {
-				if strings.EqualFold(alias, choice.Model) {
-					costPer1K = m.CostPer1K
-					break
-				}
-			}
-		}
-
-		backend, err = agent.NewCloudBackendWithKey(pCfg.Kind, choice.ProviderName, pCfg.Endpoint, key, choice.Model, costPer1K)
-		if err != nil {
-			return fmt.Errorf("invalid cloud backend config: %w", err)
-		}
+	switch choice.Protocol {
+	case agent.ProtocolCloud:
 		fmt.Fprintf(errW, "Switched to cloud provider %q, model %q\n", choice.ProviderName, choice.Model)
-	} else {
-		if choice.Endpoint == "" {
-			return fmt.Errorf("invalid empty endpoint for model %s", choice.Model)
+	case agent.ProtocolOpenAI:
+		if choice.Node != "" {
+			fmt.Fprintf(errW, "Switched to %s model %q on node %q (%s)\n", choice.ProviderName, choice.Model, choice.Node, choice.Endpoint)
+		} else {
+			fmt.Fprintf(errW, "Switched to %s model %q (%s)\n", choice.ProviderName, choice.Model, choice.Endpoint)
 		}
-		backend = chat.NewClient(choice.Endpoint, choice.Model)
+	default:
 		if choice.Node != "" {
 			fmt.Fprintf(errW, "Switched to model %q on remote node %q (%s)\n", choice.Model, choice.Node, choice.Endpoint)
 		} else {
 			fmt.Fprintf(errW, "Switched to local Ollama model %q (%s)\n", choice.Model, choice.Endpoint)
 		}
 	}
-
-	a.SetBackend(backend, choice.SecurityClass)
-	a.SetModel(choice.Model)
 	return nil
+}
+
+// cloudOptsForTarget resolves cloud credentials when target.Protocol is cloud.
+// target is a pointer so provider-name casing normalization is retained by callers.
+func cloudOptsForTarget(loadRT func(context.Context) (*runtimectx.Context, error), target *ModelChoice) (agent.CloudBackendOptions, error) {
+	var opts agent.CloudBackendOptions
+	if target == nil {
+		return opts, fmt.Errorf("cloud target is nil")
+	}
+	if target.Protocol != agent.ProtocolCloud {
+		return opts, nil
+	}
+	if loadRT == nil {
+		return opts, fmt.Errorf("runtime loader required for cloud model %q", target.Model)
+	}
+	rt, err := loadRT(context.Background())
+	if err != nil {
+		return opts, fmt.Errorf("load runtime for cloud provider: %w", err)
+	}
+	if rt == nil || rt.Config == nil {
+		return opts, fmt.Errorf("cloud provider %q not configured", target.ProviderName)
+	}
+	pCfg, ok := rt.Config.AIProviders[target.ProviderName]
+	if !ok {
+		for name, p := range rt.Config.AIProviders {
+			if strings.EqualFold(name, target.ProviderName) {
+				pCfg = p
+				ok = true
+				target.ProviderName = name
+				break
+			}
+		}
+	}
+	if !ok {
+		return opts, fmt.Errorf("cloud provider %q not configured", target.ProviderName)
+	}
+	key, err := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
+	if err != nil || key == "" {
+		return opts, fmt.Errorf("API key for cloud provider %q not found or empty", target.ProviderName)
+	}
+	opts.APIKey = key
+	opts.ProviderKind = pCfg.Kind
+	if m, found := findModelInProvider(pCfg, target.Model); found {
+		opts.CostPer1K = m.CostPer1K
+		// Prefer the canonical configured name for telemetry consistency.
+		target.Model = m.Name
+	}
+	return opts, nil
+}
+
+// findModelInProvider matches a model name or alias within a provider config.
+func findModelInProvider(pCfg config.AIProviderConfig, name string) (config.AIModelConfig, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return config.AIModelConfig{}, false
+	}
+	for _, m := range pCfg.Models {
+		if strings.EqualFold(m.Name, name) {
+			return m, true
+		}
+		for _, alias := range m.Aliases {
+			if strings.EqualFold(alias, name) {
+				return m, true
+			}
+		}
+	}
+	return config.AIModelConfig{}, false
+}
+
+// credentialedCloudProvider is an enabled cloud provider with a resolvable API key.
+type credentialedCloudProvider struct {
+	name string
+	cfg  config.AIProviderConfig
+	key  string
+}
+
+// listCredentialedCloudProviders returns enabled cloud providers that have a
+// non-empty API key, ordered by Priority descending then provider name ascending.
+func listCredentialedCloudProviders(rt *runtimectx.Context) []credentialedCloudProvider {
+	if rt == nil || rt.Config == nil {
+		return nil
+	}
+	var out []credentialedCloudProvider
+	for pName, pCfg := range rt.Config.AIProviders {
+		if !pCfg.Enabled || !strings.EqualFold(pCfg.Type, "cloud") {
+			continue
+		}
+		key, err := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
+		if err != nil || key == "" {
+			continue
+		}
+		out = append(out, credentialedCloudProvider{name: pName, cfg: pCfg, key: key})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].cfg.Priority != out[j].cfg.Priority {
+			return out[i].cfg.Priority > out[j].cfg.Priority
+		}
+		return out[i].name < out[j].name
+	})
+	return out
+}
+
+// cheapestModelInProvider picks the lowest positive CostPer1K model; if none
+// have a positive cost, the first named model is used.
+func cheapestModelInProvider(pCfg config.AIProviderConfig) (config.AIModelConfig, bool) {
+	var best config.AIModelConfig
+	var found bool
+	bestCost := 0.0
+	for _, m := range pCfg.Models {
+		if strings.TrimSpace(m.Name) == "" {
+			continue
+		}
+		if !found {
+			best = m
+			found = true
+			if m.CostPer1K > 0 {
+				bestCost = m.CostPer1K
+			}
+			continue
+		}
+		if m.CostPer1K > 0 && (bestCost == 0 || m.CostPer1K < bestCost) {
+			best = m
+			bestCost = m.CostPer1K
+		}
+	}
+	return best, found
+}
+
+func cloudChoiceFromProvider(p credentialedCloudProvider, m config.AIModelConfig) ModelChoice {
+	return ModelChoice{
+		ID:            fmt.Sprintf("cloud:%s:%s", p.name, m.Name),
+		Model:         m.Name,
+		Protocol:      agent.ProtocolCloud,
+		ProviderName:  p.name,
+		ProviderKind:  "cloud",
+		Endpoint:      p.cfg.Endpoint,
+		SecurityClass: agent.BackendRemote,
+	}
+}
+
+func cloudOptsFromProvider(p credentialedCloudProvider, m config.AIModelConfig) agent.CloudBackendOptions {
+	return agent.CloudBackendOptions{
+		ProviderKind: p.cfg.Kind,
+		APIKey:       p.key,
+		CostPer1K:    m.CostPer1K,
+	}
+}
+
+// listValidCloudModelChoices returns provider-qualified model ids for error messages.
+func listValidCloudModelChoices(providers []credentialedCloudProvider) []string {
+	var ids []string
+	for _, p := range providers {
+		for _, m := range p.cfg.Models {
+			if strings.TrimSpace(m.Name) == "" {
+				continue
+			}
+			ids = append(ids, fmt.Sprintf("%s:%s", p.name, m.Name))
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// resolveCloudStartupTarget selects a cloud ModelTarget using credential-valid
+// providers ordered by Priority. When requestedModel is non-empty it must match
+// a configured model (name or alias) or an error is returned.
+func resolveCloudStartupTarget(rt *runtimectx.Context, requestedModel string) (ModelChoice, agent.CloudBackendOptions, error) {
+	providers := listCredentialedCloudProviders(rt)
+	if len(providers) == 0 {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("no enabled cloud providers with valid API keys found in config")
+	}
+	req := strings.TrimSpace(requestedModel)
+	if req != "" {
+		// Support "provider:model" qualified form as well as bare model name.
+		if prov, model, ok := splitProviderModel(req); ok {
+			for _, p := range providers {
+				if !strings.EqualFold(p.name, prov) {
+					continue
+				}
+				if m, found := findModelInProvider(p.cfg, model); found {
+					return cloudChoiceFromProvider(p, m), cloudOptsFromProvider(p, m), nil
+				}
+			}
+		}
+		for _, p := range providers {
+			if m, found := findModelInProvider(p.cfg, req); found {
+				return cloudChoiceFromProvider(p, m), cloudOptsFromProvider(p, m), nil
+			}
+		}
+		valid := listValidCloudModelChoices(providers)
+		if len(valid) == 0 {
+			return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("cloud model %q not found; no models configured on credentialed providers", req)
+		}
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf(
+			"cloud model %q not found among credentialed providers; valid choices: %s",
+			req, strings.Join(valid, ", "))
+	}
+
+	// No explicit model: highest-priority provider, then cheapest model on that provider.
+	p := providers[0]
+	m, ok := cheapestModelInProvider(p.cfg)
+	if !ok {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("no models configured for cloud provider %q", p.name)
+	}
+	return cloudChoiceFromProvider(p, m), cloudOptsFromProvider(p, m), nil
+}
+
+// splitProviderModel parses "provider:model" (exactly one colon separating non-empty parts).
+func splitProviderModel(ref string) (provider, model string, ok bool) {
+	ref = strings.TrimSpace(ref)
+	i := strings.Index(ref, ":")
+	if i <= 0 || i >= len(ref)-1 {
+		return "", "", false
+	}
+	// Avoid treating model tags like "llama3.2:latest" as provider-qualified when
+	// the left side is not a known provider — callers try provider match first,
+	// then bare-name match. Here we only split; matchers verify provider exists.
+	return ref[:i], ref[i+1:], true
+}
+
+// resolveCheapCloudTarget builds a cheap-routing target on the same provider as
+// primary, re-resolving cost from config. The cheap model must be configured on
+// that provider (name or alias).
+func resolveCheapCloudTarget(rt *runtimectx.Context, primary ModelChoice, cheapModel string) (ModelChoice, agent.CloudBackendOptions, error) {
+	cheapModel = strings.TrimSpace(cheapModel)
+	if cheapModel == "" {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("cheap model name is empty")
+	}
+	if primary.Protocol != agent.ProtocolCloud || primary.ProviderName == "" {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("cheap-model requires an active cloud provider")
+	}
+	if rt == nil || rt.Config == nil {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("runtime config required for cheap-model")
+	}
+	pCfg, ok := rt.Config.AIProviders[primary.ProviderName]
+	if !ok {
+		for name, p := range rt.Config.AIProviders {
+			if strings.EqualFold(name, primary.ProviderName) {
+				pCfg = p
+				ok = true
+				primary.ProviderName = name
+				break
+			}
+		}
+	}
+	if !ok {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("cloud provider %q not configured", primary.ProviderName)
+	}
+	m, found := findModelInProvider(pCfg, cheapModel)
+	if !found {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf(
+			"cheap-model %q is not configured on provider %q", cheapModel, primary.ProviderName)
+	}
+	key, err := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
+	if err != nil || key == "" {
+		return ModelChoice{}, agent.CloudBackendOptions{}, fmt.Errorf("API key for cloud provider %q not found or empty", primary.ProviderName)
+	}
+	target := ModelChoice{
+		ID:            fmt.Sprintf("cloud:%s:%s", primary.ProviderName, m.Name),
+		Model:         m.Name,
+		Protocol:      agent.ProtocolCloud,
+		ProviderName:  primary.ProviderName,
+		ProviderKind:  "cloud",
+		Endpoint:      pCfg.Endpoint,
+		SecurityClass: agent.BackendRemote,
+	}
+	opts := agent.CloudBackendOptions{
+		ProviderKind: pCfg.Kind,
+		APIKey:       key,
+		CostPer1K:    m.CostPer1K,
+	}
+	return target, opts, nil
+}
+
+// effectiveStartupRequestedModel returns the model name that should drive startup
+// selection when --model is empty: chat.default_model, then warm-resident preferred.
+// Returns "" when neither is available so the catalog can pick first usable local.
+func effectiveStartupRequestedModel(flag string, rt *runtimectx.Context) string {
+	if s := strings.TrimSpace(flag); s != "" {
+		return s
+	}
+	// Prefer runtime config when available (tests inject rt.Config).
+	if rt != nil && rt.Config != nil && rt.Config.Chat != nil {
+		if s := strings.TrimSpace(rt.Config.Chat.DefaultModel); s != "" {
+			return s
+		}
+	} else {
+		if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg.Chat != nil {
+			if s := strings.TrimSpace(cfg.Chat.DefaultModel); s != "" {
+				return s
+			}
+		}
+	}
+	if rt != nil && rt.Snapshot != nil {
+		var allInstalled []string
+		for _, node := range rt.Snapshot.Nodes {
+			for _, m := range node.ResidentModels {
+				allInstalled = append(allInstalled, m.Name)
+			}
+		}
+		if best, ok := chat.ChoosePreferredModel(allInstalled); ok {
+			return best
+		}
+	}
+	return ""
+}
+
+func syntheticLocalOllamaTarget(name string) ModelChoice {
+	return ModelChoice{
+		ID:            "local:ollama:" + name,
+		Model:         name,
+		Protocol:      agent.ProtocolOllama,
+		ProviderName:  "ollama",
+		ProviderKind:  "local",
+		Endpoint:      chat.DefaultEndpoint,
+		SecurityClass: agent.BackendLocal,
+	}
+}
+
+// findModelTargetByRef resolves /model <ref> against the catalog.
+// Prefer exact ID, then unique model name among non-disabled choices.
+func findModelTargetByRef(choices []ModelChoice, ref string) (ModelChoice, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ModelChoice{}, fmt.Errorf("model name is empty")
+	}
+	for _, c := range choices {
+		if c.ID == ref && !c.Disabled {
+			return c, nil
+		}
+	}
+	var matches []ModelChoice
+	for _, c := range choices {
+		if !c.Disabled && strings.EqualFold(c.Model, ref) {
+			matches = append(matches, c)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		var ids []string
+		for _, m := range matches {
+			ids = append(ids, m.ID)
+		}
+		return ModelChoice{}, fmt.Errorf("model %q is ambiguous; specify an id: %s", ref, strings.Join(ids, ", "))
+	}
+	return ModelChoice{}, fmt.Errorf("model %q not found in catalog; use /models to list choices or ollama pull %s", ref, ref)
+}
+
+// resolveStartupModelTarget picks the active ModelTarget for a new agent session.
+// explicitTarget, when non-nil, is the interactive selection (always wins).
+// requestedModel should be the effective operator request (explicit --model,
+// chat.default_model, or warm preferred) — not only the raw flag.
+//
+// Policy for provider=auto: prefer reachable local/remote ollama (or openai-local)
+// over cloud; cloud only when no usable local target exists. Explicit --provider
+// local/cloud and interactive selection are never overridden by auto-cloud.
+// Explicit --cloud-model always requires a credentialed configured match (no silent fallback).
+func resolveStartupModelTarget(
+	requestedModel, providerFlag, cloudModelFlag string,
+	explicit *ModelChoice,
+	rt *runtimectx.Context,
+	choices []ModelChoice,
+) (ModelChoice, agent.CloudBackendOptions, error) {
+	providerMode := strings.ToLower(strings.TrimSpace(providerFlag))
+	if providerMode == "" {
+		providerMode = "auto"
+	}
+
+	if explicit != nil && explicit.Model != "" {
+		opts, err := cloudOptsForTarget(func(context.Context) (*runtimectx.Context, error) { return rt, nil }, explicit)
+		return *explicit, opts, err
+	}
+
+	// Catalog helpers
+	usable := func(c ModelChoice) bool { return !c.Disabled && c.Model != "" }
+	firstLocal := func() (ModelChoice, bool) {
+		for _, c := range choices {
+			if usable(c) && c.ProviderKind == "local" && c.Protocol == agent.ProtocolOllama {
+				return c, true
+			}
+		}
+		for _, c := range choices {
+			if usable(c) && c.ProviderKind == "local" {
+				return c, true
+			}
+		}
+		return ModelChoice{}, false
+	}
+	matchLocalModel := func(name string) (ModelChoice, bool) {
+		var matches []ModelChoice
+		for _, c := range choices {
+			if usable(c) && c.ProviderKind == "local" && strings.EqualFold(c.Model, name) {
+				matches = append(matches, c)
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0], true
+		}
+		if len(matches) > 1 {
+			// Prefer local node ollama
+			for _, c := range matches {
+				if c.Node == "" && c.Protocol == agent.ProtocolOllama {
+					return c, true
+				}
+			}
+			return matches[0], true
+		}
+		return ModelChoice{}, false
+	}
+
+	reqModel := strings.TrimSpace(requestedModel)
+	cloudReq := strings.TrimSpace(cloudModelFlag)
+
+	switch providerMode {
+	case "cloud":
+		// Only --cloud-model is an explicit cloud model request. When empty, select the
+		// highest-priority credentialed provider and its cheapest configured model.
+		// Do not treat chat.default_model / local preferred names as cloud model names.
+		return resolveCloudStartupTarget(rt, cloudReq)
+
+	case "local":
+		if reqModel != "" {
+			if t, ok := matchLocalModel(reqModel); ok {
+				return t, agent.CloudBackendOptions{}, nil
+			}
+			// Explicit local model not in catalog: bind to default local ollama endpoint
+			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
+		}
+		if t, ok := firstLocal(); ok {
+			return t, agent.CloudBackendOptions{}, nil
+		}
+		// Fallback local default name
+		name := resolveChatModel("", rt)
+		return syntheticLocalOllamaTarget(name), agent.CloudBackendOptions{}, nil
+
+	default: // auto
+		// Explicit --cloud-model is operator intent: resolve cloud or fail (never ignore).
+		if cloudReq != "" {
+			return resolveCloudStartupTarget(rt, cloudReq)
+		}
+		// Effective requested model (flag / default_model / preferred) matching local catalog
+		if reqModel != "" {
+			if t, ok := matchLocalModel(reqModel); ok {
+				return t, agent.CloudBackendOptions{}, nil
+			}
+			// Honor operator/default name even when not yet in the snapshot catalog.
+			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
+		}
+		// Prefer any usable local target from the catalog
+		if t, ok := firstLocal(); ok {
+			return t, agent.CloudBackendOptions{}, nil
+		}
+		// Else credentialed cloud by priority + cheapest model on that provider
+		if t, opts, err := resolveCloudStartupTarget(rt, ""); err == nil {
+			return t, opts, nil
+		}
+		// Last resort: local ollama with resolved default name
+		name := resolveChatModel("", rt)
+		return syntheticLocalOllamaTarget(name), agent.CloudBackendOptions{}, nil
+	}
 }
 
 var probeEndpointFn = func(url string) bool {
@@ -1589,66 +1911,84 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 		seen := make(map[string]bool)
 		for _, n := range rt.Snapshot.Nodes {
 			var nodeLabel string
-			var securityClass agent.BackendSecurityClass
 			if models.IsLocalNode(n) {
 				nodeLabel = ""
-				securityClass = agent.BackendLocal
 			} else {
 				nodeLabel = n.Name
-				securityClass = agent.BackendLocal
 			}
 
 			// Add Ollama models
 			if n.Ollama != nil && n.Ollama.Installed {
 				endpoint, err := resolveNodeEndpoint(n, n.Ollama.Port)
 				disabled := false
+				reason := ""
 				if err != nil {
 					disabled = true
+					reason = "no valid endpoint"
+					endpoint = ""
 				} else if !models.IsLocalNode(n) && !probeMap[endpoint+"/api/tags"] {
 					disabled = true
+					reason = "unreachable"
+				}
+				// Local security: process-local. Remote node HTTP is still cluster LAN.
+				sec := agent.BackendLocal
+				if !models.IsLocalNode(n) {
+					sec = agent.BackendRemote
 				}
 				for _, mName := range n.Ollama.Models {
 					key := n.Name + ":ollama:" + mName
 					if !seen[key] {
 						seen[key] = true
 						choices = append(choices, ModelChoice{
-							ID:            key,
-							Model:         mName,
-							ProviderName:  "ollama",
-							ProviderKind:  "local",
-							Node:          nodeLabel,
-							Endpoint:      endpoint,
-							SecurityClass: securityClass,
-							Disabled:      disabled,
+							ID:             key,
+							Model:          mName,
+							Protocol:       agent.ProtocolOllama,
+							ProviderName:   "ollama",
+							ProviderKind:   "local",
+							Node:           nodeLabel,
+							Endpoint:       endpoint,
+							SecurityClass:  sec,
+							Disabled:       disabled,
+							DisabledReason: reason,
 						})
 					}
 				}
 			}
 
-			// Add Resident Models (llama.cpp / MLX / etc)
+			// Add Resident Models (llama.cpp / MLX / etc) — OpenAI-compatible protocol
 			for _, rm := range n.ResidentModels {
 				if rm.Runtime == "ollama" {
 					continue // already covered above
 				}
 				endpoint, err := resolveNodeEndpoint(n, rm.Port)
 				disabled := false
+				reason := ""
 				if err != nil || rm.Port <= 0 {
 					disabled = true
+					reason = "no valid endpoint"
+					endpoint = ""
 				} else if !models.IsLocalNode(n) && !probeMap[endpoint+"/v1/models"] {
 					disabled = true
+					reason = "unreachable"
+				}
+				sec := agent.BackendLocal
+				if !models.IsLocalNode(n) {
+					sec = agent.BackendRemote
 				}
 				key := n.Name + ":" + rm.Runtime + ":" + rm.Name
 				if !seen[key] {
 					seen[key] = true
 					choices = append(choices, ModelChoice{
-						ID:            key,
-						Model:         rm.Name,
-						ProviderName:  rm.Runtime,
-						ProviderKind:  "local",
-						Node:          nodeLabel,
-						Endpoint:      endpoint,
-						SecurityClass: securityClass,
-						Disabled:      disabled,
+						ID:             key,
+						Model:          rm.Name,
+						Protocol:       agent.ProtocolOpenAI,
+						ProviderName:   rm.Runtime,
+						ProviderKind:   "local",
+						Node:           nodeLabel,
+						Endpoint:       endpoint,
+						SecurityClass:  sec,
+						Disabled:       disabled,
+						DisabledReason: reason,
 					})
 				}
 			}
@@ -1657,17 +1997,28 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 
 	if rt.Config != nil {
 		for pName, pCfg := range rt.Config.AIProviders {
-			if pCfg.Enabled {
+			if pCfg.Enabled && strings.EqualFold(pCfg.Type, "cloud") {
+				key, keyErr := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
+				disabled := keyErr != nil || key == ""
+				reason := ""
+				if disabled {
+					reason = "API key not found"
+				}
 				for _, m := range pCfg.Models {
+					if m.Name == "" {
+						continue
+					}
 					choices = append(choices, ModelChoice{
-						ID:            fmt.Sprintf("cloud:%s:%s", pName, m.Name),
-						Model:         m.Name,
-						ProviderName:  pName,
-						ProviderKind:  "cloud",
-						Node:          "",
-						Endpoint:      pCfg.Endpoint,
-						SecurityClass: agent.BackendRemote,
-						Disabled:      false,
+						ID:             fmt.Sprintf("cloud:%s:%s", pName, m.Name),
+						Model:          m.Name,
+						Protocol:       agent.ProtocolCloud,
+						ProviderName:   pName,
+						ProviderKind:   "cloud",
+						Node:           "",
+						Endpoint:       pCfg.Endpoint,
+						SecurityClass:  agent.BackendRemote,
+						Disabled:       disabled,
+						DisabledReason: reason,
 					})
 				}
 			}
@@ -1701,12 +2052,11 @@ func sanitizeDiagnosticsText(s string) string {
 	return redactSecrets(s)
 }
 
-func printAgentSessionDetails(w io.Writer, model string, provider string, autoApprove bool, autonomy string, mcpCount int, maxTurns int) {
+func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool, autonomy string, mcpCount int, maxTurns int) {
 	safetyStr := "Strict Operator Approval"
 	if autoApprove {
 		safetyStr = "Auto-Approve safe (<70)"
 	}
-	// Autonomy mode overrides the safety-gate label when set.
 	switch agent.AutonomyMode(autonomy) {
 	case agent.AutonomyEdit:
 		safetyStr = "Autonomy: edit (auto-approve edits)"
@@ -1731,11 +2081,24 @@ func printAgentSessionDetails(w io.Writer, model string, provider string, autoAp
 		fmt.Fprintf(w, "  │  %s:  %s%s │\n", label, valDisp, strings.Repeat(" ", pad))
 	}
 
+	endpoint := target.Endpoint
+	if endpoint == "" {
+		endpoint = "(default)"
+	}
+	provider := target.DisplayProvider()
+	if target.Protocol != "" {
+		provider = fmt.Sprintf("%s [%s]", provider, target.Protocol)
+	}
+
 	ui.WhiteColor.Fprintln(w, "  ┌────────────────────────────────────────────────────────┐")
 	ui.WhiteColor.Fprintln(w, "  │                     SESSION ACTIVE                     │")
 	ui.WhiteColor.Fprintln(w, "  ├────────────────────────────────────────────────────────┤")
-	printRow("Active Model", model, true)
+	printRow("Active Model", target.Model, true)
 	printRow("Provider    ", provider, false)
+	printRow("Endpoint    ", endpoint, false)
+	if target.Node != "" {
+		printRow("Node        ", target.Node, false)
+	}
 	printRow("Safety Gate ", safetyStr, false)
 	printRow("MCP Servers ", mcpStr, false)
 	printRow("Max Turns   ", fmt.Sprintf("%d", maxTurns), false)
