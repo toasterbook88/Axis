@@ -101,6 +101,34 @@ func TestSpawnSubagentChildHasBackgroundTaskStore(t *testing.T) {
 	}
 }
 
+func TestBuildChildAgentInheritsDryRunAndEvidenceFlags(t *testing.T) {
+	parent := New(Config{
+		Backend:                 &subAgentBackend{answer: "done"},
+		Output:                  io.Discard,
+		Confirm:                 alwaysConfirm(),
+		ToolContext:             NewToolContext(&RuntimeView{}, nil),
+		DryRun:                  true,
+		AllowRawCommandEvidence: true,
+	})
+	child := parent.buildChildAgent(2, "nixos", "extra")
+	if !child.dryRun {
+		t.Fatal("child dryRun should inherit parent --dry-run")
+	}
+	if !child.allowRawCommandEvidence {
+		t.Fatal("child allowRawCommandEvidence should inherit parent setting")
+	}
+	// Parent defaults: child should get false when parent is false.
+	parent2 := New(Config{
+		Backend:     &subAgentBackend{},
+		Output:      io.Discard,
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+	child2 := parent2.buildChildAgent(1, "", "")
+	if child2.dryRun || child2.allowRawCommandEvidence {
+		t.Fatalf("child2 unexpectedly true: dryRun=%v evidence=%v", child2.dryRun, child2.allowRawCommandEvidence)
+	}
+}
+
 func TestFinalAssistantText(t *testing.T) {
 	conv := chat.NewConversation(4096)
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys"})
