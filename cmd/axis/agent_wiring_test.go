@@ -153,3 +153,52 @@ func TestBuildAgentSessionConfigRunOnNodeUsesGuardedSurface(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 }
+
+func TestGuardedAgentCommandRunnerNilRuntimeErrors(t *testing.T) {
+	prevLoad := loadAgentShellRuntime
+	t.Cleanup(func() { loadAgentShellRuntime = prevLoad })
+	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return nil, nil
+	}
+	_, err := guardedAgentCommandRunner("m", "nixos")(context.Background(), "echo x")
+	if err == nil || !strings.Contains(err.Error(), "nil loader result") {
+		t.Fatalf("expected nil-runtime error, got %v", err)
+	}
+}
+
+func TestGuardedAgentShellRunnerOwnerLabelFollowsModel(t *testing.T) {
+	prevLoad := loadAgentShellRuntime
+	prevRun := runGuardedAgentShell
+	prevDaemonMeta := fetchAgentDaemonMeta
+	t.Cleanup(func() {
+		loadAgentShellRuntime = prevLoad
+		runGuardedAgentShell = prevRun
+		fetchAgentDaemonMeta = prevDaemonMeta
+	})
+	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "studio", Hostname: "localhost"}},
+			},
+		}, nil
+	}
+	fetchAgentDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
+		return daemon.Metadata{}, errors.New("no daemon")
+	}
+	var labels []string
+	runGuardedAgentShell = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		labels = append(labels, req.OwnerLabel)
+		return execution.GuardedExecutionResult{OK: true, Node: req.RequestedNode, Output: "ok"}, nil
+	}
+
+	// Startup runner with model A, then a refreshed runner as after /model B.
+	if _, err := guardedAgentShellRunner("model-a")(context.Background(), "echo 1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardedAgentShellRunner("model-b")(context.Background(), "echo 2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 2 || labels[0] != "model-a" || labels[1] != "model-b" {
+		t.Fatalf("OwnerLabel sequence = %v, want [model-a model-b]", labels)
+	}
+}

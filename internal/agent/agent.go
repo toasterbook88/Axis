@@ -957,6 +957,19 @@ func (a *Agent) SetModel(model string) {
 	a.model = model
 }
 
+// SetRunShell replaces the local shell runner (e.g. after /model so OwnerLabel
+// provenance matches the live model on the guarded path).
+func (a *Agent) SetRunShell(r ShellRunner) {
+	if r != nil {
+		a.runShell = r
+	}
+}
+
+// SetRunOnNode replaces the node shell runner (paired with SetRunShell after /model).
+func (a *Agent) SetRunOnNode(r NodeShellRunner) {
+	a.runOnNode = r
+}
+
 // AgentStats holds session statistics.
 type AgentStats struct {
 	TokensIn  int

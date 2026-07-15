@@ -47,6 +47,84 @@ func TestRunBackgroundReturnsIDAndRunsCommand(t *testing.T) {
 	t.Fatalf("task did not complete in time")
 }
 
+func TestRunBackgroundRemoteRequiresRunOnNode(t *testing.T) {
+	a := newAsyncTestAgent(t) // no RunOnNode
+	_, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"echo x","node":"nixos"}`))
+	if err == nil || !strings.Contains(err.Error(), "Layer 4") {
+		t.Fatalf("expected Layer 4 contract error, got %v", err)
+	}
+}
+
+func TestRunBackgroundRemoteUsesRunOnNode(t *testing.T) {
+	var sawNode, sawCmd string
+	a := New(Config{
+		Backend:     &scriptedBackend{responses: []chat.Message{{Role: "assistant", Content: "done"}}},
+		MaxTurns:    1,
+		MaxTokens:   4096,
+		Output:      io.Discard,
+		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+		RunOnNode: func(_ context.Context, node, command string) (string, error) {
+			sawNode, sawCmd = node, command
+			return `{"ok":true,"node":"nixos","output":"remote-bg"}`, nil
+		},
+	})
+	out, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"uname -a","node":"nixos"}`))
+	if err != nil {
+		t.Fatalf("dispatchRunBackground: %v", err)
+	}
+	if !strings.Contains(out, "bg-1") {
+		t.Fatalf("expected task id, got %s", out)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s, _ := a.dispatchCheckTask(context.Background(), json.RawMessage(`{"id":"bg-1"}`))
+		if strings.Contains(s, "completed") {
+			if sawNode != "nixos" || sawCmd != "uname -a" {
+				t.Fatalf("RunOnNode saw node=%q cmd=%q", sawNode, sawCmd)
+			}
+			if !strings.Contains(s, "remote-bg") {
+				t.Fatalf("completed missing remote output: %s", s)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("remote background task did not complete")
+}
+
+func TestSetRunShellAndRunOnNodeRefresh(t *testing.T) {
+	var shellCalls, nodeCalls int
+	a := New(Config{
+		Output:  io.Discard,
+		Confirm: alwaysConfirm(),
+		RunShell: func(context.Context, string) (string, error) {
+			shellCalls++
+			return "old-shell", nil
+		},
+		RunOnNode: func(context.Context, string, string) (string, error) {
+			nodeCalls++
+			return "old-node", nil
+		},
+	})
+	a.SetRunShell(func(context.Context, string) (string, error) {
+		shellCalls += 10
+		return "new-shell", nil
+	})
+	a.SetRunOnNode(func(context.Context, string, string) (string, error) {
+		nodeCalls += 10
+		return "new-node", nil
+	})
+	out, err := a.runShell(context.Background(), "echo")
+	if err != nil || out != "new-shell" || shellCalls != 10 {
+		t.Fatalf("shell refresh failed: out=%q calls=%d err=%v", out, shellCalls, err)
+	}
+	out, err = a.runOnNode(context.Background(), "n", "echo")
+	if err != nil || out != "new-node" || nodeCalls != 10 {
+		t.Fatalf("node refresh failed: out=%q calls=%d err=%v", out, nodeCalls, err)
+	}
+}
+
 func TestCheckTaskRunningState(t *testing.T) {
 	a := newAsyncTestAgent(t)
 	// Start a command that sleeps briefly so we can observe the running state.

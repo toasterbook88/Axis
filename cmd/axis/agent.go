@@ -1262,6 +1262,9 @@ func guardedAgentCommandRunner(model, requestedNode string) agent.ShellRunner {
 		if err != nil {
 			return "", fmt.Errorf("load runtime context for guarded execution: %w", err)
 		}
+		if rt == nil {
+			return "", fmt.Errorf("runtime context unavailable for guarded execution (nil loader result)")
+		}
 
 		nodeName := strings.TrimSpace(requestedNode)
 		ownerSurface := execution.OwnerSurfaceAgentRunShell
@@ -1421,6 +1424,12 @@ func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) err
 	}
 	session.Agent.SetBackend(backend, choice.SecurityClass)
 	session.Agent.SetModel(choice.Model)
+	// Refresh guarded runners so OwnerLabel provenance tracks the live model
+	// after /model (Layer 4 contract — not the startup-captured name).
+	session.Agent.SetRunShell(guardedAgentShellRunner(choice.Model))
+	session.Agent.SetRunOnNode(func(ctx context.Context, node, command string) (string, error) {
+		return guardedAgentCommandRunner(choice.Model, node)(ctx, command)
+	})
 	session.ActiveTarget = choice
 	errW := session.ErrOut
 	switch choice.Protocol {

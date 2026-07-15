@@ -99,16 +99,20 @@ type checkTaskArgs struct {
 }
 
 // runBackgroundTask launches the command in a goroutine and returns its task
-// ID immediately. The command runs via the agent's shell runner (local) or
-// remote SSH (when node is set). Output is captured for later polling.
+// ID immediately. Local commands use RunShell (guarded). Remote commands use
+// RunOnNode (guarded with RequestedNode pin) — never raw SSH bypass.
 func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (string, error) {
 	if strings.TrimSpace(args.Command) == "" {
 		return "", fmt.Errorf("run_background requires a non-empty \"command\" argument")
 	}
+	node := strings.TrimSpace(args.Node)
+	if node != "" && a.runOnNode == nil {
+		return "", fmt.Errorf("runOnNode runner unavailable; Layer 4 contract violation for remote background")
+	}
 	taskCtx, cancel := context.WithCancel(ctx)
 	task := &backgroundTask{
 		command:   args.Command,
-		node:      args.Node,
+		node:      node,
 		startedAt: time.Now(),
 		cancel:    cancel,
 	}
@@ -119,8 +123,8 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 		defer cancel()
 		var out string
 		var runErr error
-		if args.Node != "" {
-			out, runErr = runRemote(taskCtx, a.toolContext, args.Node, args.Command)
+		if node != "" {
+			out, runErr = a.runOnNode(taskCtx, node, args.Command)
 		} else {
 			out, runErr = a.runShell(taskCtx, args.Command)
 		}
@@ -257,7 +261,8 @@ func (a *Agent) listBackgroundTasks() string {
 
 // dispatchRunBackground is the confirmation-gated entry point for the
 // run_background tool. run_background is mutating (it runs a command), so it
-// confirms like run_shell before launching the async task.
+// confirms like run_shell before launching the async task. Remote (node set)
+// requires a configured RunOnNode runner (Layer 4); there is no raw-SSH path.
 func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage) (string, error) {
 	var a0 runBackgroundArgs
 	if err := json.Unmarshal(args, &a0); err != nil {
@@ -265,6 +270,9 @@ func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage)
 	}
 	if strings.TrimSpace(a0.Command) == "" {
 		return "", fmt.Errorf("run_background requires a non-empty \"command\" argument")
+	}
+	if strings.TrimSpace(a0.Node) != "" && a.runOnNode == nil {
+		return "", fmt.Errorf("runOnNode runner unavailable; Layer 4 contract violation for remote background")
 	}
 	// Session-level block.
 	a.dispatchMu.Lock()
