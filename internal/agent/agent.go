@@ -167,6 +167,12 @@ func New(cfg Config) *Agent {
 		}
 	}
 
+	// Inject nearest AGENTS.md (project rules) when present — truthful workspace
+	// context for the operator's repo, subordinate to the Truth Rule.
+	if path, content, ok := loadRepoInstructions("."); ok {
+		sysPrompt += formatRepoInstructionsBlock(path, content)
+	}
+
 	sysPrompt += "\n\nYou have access to tools. When you need cluster data or file operations, use the tools rather than guessing. " +
 		"If a tool call fails, read the error and try a corrected call. " +
 		"Never fabricate tool results.\n" +
@@ -178,9 +184,9 @@ func New(cfg Config) *Agent {
 		"- `list_directory` to list directory entries.\n" +
 		"- `grep_search` to find a pattern or query recursively within text files.\n" +
 		"- `symbol_search` to find symbol definitions (functions/types/consts) by name — Go-aware via AST, generic for other languages.\n" +
-		"- `run_shell` to execute a shell command.\n" +
-		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control.\n" +
-		"- `run_on_node` to run a shell command on a specific named cluster node via SSH (e.g. tests on nixos, a build on foundry).\n" +
+		"- `run_shell` to execute a shell command (Layer-4 guarded execution on the local node; returns a guarded JSON result).\n" +
+		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control (Layer-4 guarded).\n" +
+		"- `run_on_node` to run a shell command on a specific named cluster node through Layer-4 guarded execution with a requested-node pin (returns a guarded JSON result).\n" +
 		"- `remote_read_file` / `remote_grep` / `remote_list` to read files, grep, and list directories on remote cluster nodes (read-only, no confirmation).\n" +
 		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node — use this to parallelize work across nodes (e.g. tests on nixos while a build runs on foundry).\n" +
 		"- `git_status` to view repository status.\n" +
