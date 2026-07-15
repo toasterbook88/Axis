@@ -94,20 +94,17 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 		}
 	}
 
-	// Test /model <name> (direct switch)
+	// Test /model <name> unknown is rejected (no silent synthetic local)
 	errW.Reset()
 	handled, shouldExit, err = handleREPLSlashCommand(session, "/model my-model-abc")
-	if err != nil {
-		t.Fatalf("unexpected error on direct model switch: %v", err)
+	if err == nil {
+		t.Fatal("expected error for unknown model name")
 	}
 	if !handled {
 		t.Error("expected /model with args to be handled")
 	}
-	if !strings.Contains(errW.String(), "Switched to local Ollama model") {
-		t.Errorf("expected switch log message, got %q", errW.String())
-	}
-	if a.Model() != "my-model-abc" {
-		t.Errorf("expected active model to switch to my-model-abc, got %q", a.Model())
+	if a.Model() == "my-model-abc" {
+		t.Errorf("model should not switch on unknown name")
 	}
 
 	// Test /exit
@@ -251,13 +248,14 @@ func TestSwitchAgentToModelChoiceRemoteOllama(t *testing.T) {
 	}
 
 	choice := ModelChoice{
-		ID:            "remote-node:gemma:7b",
+		ID:            "remote-node:ollama:gemma:7b",
 		Model:         "gemma:7b",
+		Protocol:      agent.ProtocolOllama,
 		ProviderName:  "ollama",
 		ProviderKind:  "local",
 		Node:          "remote-node",
 		Endpoint:      "http://192.168.1.100:11434",
-		SecurityClass: agent.BackendLocal,
+		SecurityClass: agent.BackendRemote,
 	}
 
 	err := switchAgentToModelChoice(session, choice)
