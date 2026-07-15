@@ -92,7 +92,7 @@ Top-level commands currently registered in the binary:
 | `axis daemon status` | Inspect daemon freshness | Reports cache readiness, age, version metadata |
 | `axis daemon restart` | Restart daemon | Restart the local cache seam |
 | `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
-| `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; `--auto-approve` for safe commands; `--system` appends to system prompt |
+| `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; injects nearest `AGENTS.md` into the system prompt when present; `--auto-approve` for safe commands; `--system` appends to system prompt |
 | `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |
 | `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
 | `axis mcp serve` | Start MCP server (read-only diagnostics + advisory leases) | `stdio` transport only |
