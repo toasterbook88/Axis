@@ -101,13 +101,25 @@ type checkTaskArgs struct {
 // runBackgroundTask launches the command in a goroutine and returns its task
 // ID immediately. Local commands use RunShell (guarded). Remote commands use
 // RunOnNode (guarded with RequestedNode pin) — never raw SSH bypass.
+//
+// Runners are snapshotted before the goroutine starts so a concurrent /model
+// SetRunShell/SetRunOnNode cannot change provenance mid-flight for this job.
 func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (string, error) {
 	if strings.TrimSpace(args.Command) == "" {
 		return "", fmt.Errorf("run_background requires a non-empty \"command\" argument")
 	}
+	if a.backgroundTasks == nil {
+		return "", fmt.Errorf("background task store not configured")
+	}
 	node := strings.TrimSpace(args.Node)
-	if node != "" && a.runOnNode == nil {
+	// Snapshot runners under lock before launch (stable for this task's lifetime).
+	runLocal := a.shellRunner()
+	runNode := a.nodeRunner()
+	if node != "" && runNode == nil {
 		return "", fmt.Errorf("runOnNode runner unavailable; Layer 4 contract violation for remote background")
+	}
+	if node == "" && runLocal == nil {
+		return "", fmt.Errorf("runShell runner unavailable for local background")
 	}
 	taskCtx, cancel := context.WithCancel(ctx)
 	task := &backgroundTask{
@@ -124,9 +136,9 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 		var out string
 		var runErr error
 		if node != "" {
-			out, runErr = a.runOnNode(taskCtx, node, args.Command)
+			out, runErr = runNode(taskCtx, node, args.Command)
 		} else {
-			out, runErr = a.runShell(taskCtx, args.Command)
+			out, runErr = runLocal(taskCtx, args.Command)
 		}
 		if out != "" {
 			task.appendOutput([]byte(out))
@@ -271,7 +283,7 @@ func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage)
 	if strings.TrimSpace(a0.Command) == "" {
 		return "", fmt.Errorf("run_background requires a non-empty \"command\" argument")
 	}
-	if strings.TrimSpace(a0.Node) != "" && a.runOnNode == nil {
+	if strings.TrimSpace(a0.Node) != "" && a.nodeRunner() == nil {
 		return "", fmt.Errorf("runOnNode runner unavailable; Layer 4 contract violation for remote background")
 	}
 	// Session-level block.

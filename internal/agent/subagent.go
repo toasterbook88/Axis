@@ -74,54 +74,13 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 		maxTurns = defaultSubAgentMaxTurns
 	}
 
-	// Build the child's tool registry, scoped to the target node. The child
-	// can read/run on the cluster plus use local helpers, but does not get the
-	// parent's todo/checkpoint state (those are session-scoped to the parent).
-	tc := a.toolContext
-	if tc == nil {
-		tc = NewToolContext(&RuntimeView{}, nil)
-	}
-	childTools := NewToolRegistry(tc)
-	// Note: NewToolRegistry registers the full default set; the sub-agent system
-	// prompt narrows focus to the target node so the child gravitates toward the
-	// remote tools rather than duplicating the parent's local work.
-
-	// Inherit the parent's auto-approve / block state so operator decisions
-	// carry into the sub-agent (e.g. an auto-approve session runs sub-agents
-	// unattended; otherwise run_on_node inside the child still prompts).
-	confirm := a.confirm
-	if a.autoApproveAll {
-		confirm = func(toolName, description string, score int) ConfirmResult { return ConfirmYes }
-	}
-
 	sysExtra := fmt.Sprintf("You are a focused sub-agent (depth %d) delegated a single sub-task. "+
 		"Operate primarily on the cluster node %q using run_on_node / remote_read_file / remote_grep / remote_list. "+
 		"Investigate, run what's needed, then return a concise final answer to the parent agent. "+
 		"Do not spawn further sub-agents.",
 		a.subAgentDepth+1, firstNonEmpty(sa.TargetNode, "chosen by placement"))
 
-	child := &Agent{
-		client:         a.client,
-		conv:           chat.NewConversation(a.maxTokens),
-		tools:          childTools,
-		confirm:        confirm,
-		runShell:       a.runShell,
-		runOnNode:      a.runOnNode,
-		runTask:        a.runTask,
-		safety:         a.safety,
-		output:         a.output,
-		maxTurns:       maxTurns,
-		maxTokens:      a.maxTokens,
-		verbose:        a.verbose,
-		toolContext:    tc,
-		model:          a.model,
-		securityClass:  a.securityClass,
-		mcpRegistry:    a.mcpRegistry,
-		autoApproveAll: a.autoApproveAll,
-		subAgentDepth:  a.subAgentDepth + 1,
-	}
-	// Build a scoped system prompt.
-	child.conv.Append(chat.Message{Role: chat.RoleSystem, Content: buildSubAgentSystemPrompt(sa.TargetNode, sysExtra)})
+	child := a.buildChildAgent(maxTurns, sa.TargetNode, sysExtra)
 
 	if a.verbose {
 		fmt.Fprintf(a.output, "\n%s Spawning sub-agent (depth %d, target=%s, max_turns=%d)\n",
@@ -138,6 +97,55 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 		return "(sub-agent completed without a final text answer)", nil
 	}
 	return answer, nil
+}
+
+// buildChildAgent constructs a scoped child Agent for spawn_subagent.
+// The child gets its own backgroundTasks store (registry exposes async tools)
+// and a snapshot of the parent's shell runners under runnerMu.
+func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agent {
+	tc := a.toolContext
+	if tc == nil {
+		tc = NewToolContext(&RuntimeView{}, nil)
+	}
+	childTools := NewToolRegistry(tc)
+
+	confirm := a.confirm
+	if a.autoApproveAll {
+		confirm = func(toolName, description string, score int) ConfirmResult { return ConfirmYes }
+	}
+
+	// Snapshot parent runners under lock so child construction does not race
+	// with a concurrent /model runner refresh on the parent.
+	a.runnerMu.RLock()
+	parentShell := a.runShell
+	parentOnNode := a.runOnNode
+	a.runnerMu.RUnlock()
+
+	child := &Agent{
+		client:         a.client,
+		conv:           chat.NewConversation(a.maxTokens),
+		tools:          childTools,
+		confirm:        confirm,
+		runShell:       parentShell,
+		runOnNode:      parentOnNode,
+		runTask:        a.runTask,
+		safety:         a.safety,
+		output:         a.output,
+		maxTurns:       maxTurns,
+		maxTokens:      a.maxTokens,
+		verbose:        a.verbose,
+		toolContext:    tc,
+		model:          a.model,
+		securityClass:  a.securityClass,
+		mcpRegistry:    a.mcpRegistry,
+		autoApproveAll: a.autoApproveAll,
+		subAgentDepth:  a.subAgentDepth + 1,
+		// Own store: child registry exposes run_background/check_task/list_*.
+		// Sharing the parent's store would mix IDs across agent scopes.
+		backgroundTasks: newBackgroundTaskStore(),
+	}
+	child.conv.Append(chat.Message{Role: chat.RoleSystem, Content: buildSubAgentSystemPrompt(targetNode, sysExtra)})
+	return child
 }
 
 // finalAssistantText returns the content of the last assistant message in the

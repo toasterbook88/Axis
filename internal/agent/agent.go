@@ -70,6 +70,9 @@ type Agent struct {
 	// dispatchMu serializes operator confirmation prompts and the shared
 	// autoApproveAll/blockAll state across concurrent tool dispatches. The
 	dispatchMu sync.Mutex
+	// runnerMu protects runShell/runOnNode against concurrent /model refresh
+	// while tool dispatch and background launches read them.
+	runnerMu sync.RWMutex
 	// subAgentDepth tracks nesting of spawn_subagent calls to prevent runaway
 	// recursion. The root agent is depth 0; children inherit depth+1.
 	subAgentDepth int
@@ -723,7 +726,11 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	} else {
 		fmt.Fprintf(a.output, "\n▶ Executing shell: %s\n", sa.Command)
 	}
-	return a.runShell(ctx, cmdToRun)
+	runLocal := a.shellRunner()
+	if runLocal == nil {
+		return "", fmt.Errorf("runShell runner unavailable")
+	}
+	return runLocal(ctx, cmdToRun)
 }
 
 // dispatchRunOnNode handles the run_on_node tool with safety gating and confirmation,
@@ -742,7 +749,8 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 	if strings.TrimSpace(a0.Command) == "" {
 		return "", fmt.Errorf("run_on_node requires a non-empty \"command\" argument")
 	}
-	if a.runOnNode == nil {
+	runNode := a.nodeRunner()
+	if runNode == nil {
 		return "", fmt.Errorf("run_on_node runner not configured; node commands must use guarded execution")
 	}
 
@@ -794,7 +802,7 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 	}
 
 	fmt.Fprintf(a.output, "\n▶ Executing on %s: %s\n", a0.Node, a0.Command)
-	return a.runOnNode(ctx, a0.Node, a0.Command)
+	return runNode(ctx, a0.Node, a0.Command)
 }
 
 // dispatchRunTask handles the axis_run_task tool with safety gating and confirmation.
@@ -960,14 +968,35 @@ func (a *Agent) SetModel(model string) {
 // SetRunShell replaces the local shell runner (e.g. after /model so OwnerLabel
 // provenance matches the live model on the guarded path).
 func (a *Agent) SetRunShell(r ShellRunner) {
-	if r != nil {
-		a.runShell = r
+	if r == nil {
+		return
 	}
+	a.runnerMu.Lock()
+	a.runShell = r
+	a.runnerMu.Unlock()
 }
 
 // SetRunOnNode replaces the node shell runner (paired with SetRunShell after /model).
 func (a *Agent) SetRunOnNode(r NodeShellRunner) {
+	a.runnerMu.Lock()
 	a.runOnNode = r
+	a.runnerMu.Unlock()
+}
+
+// shellRunner snapshots the current local shell runner under lock.
+func (a *Agent) shellRunner() ShellRunner {
+	a.runnerMu.RLock()
+	r := a.runShell
+	a.runnerMu.RUnlock()
+	return r
+}
+
+// nodeRunner snapshots the current node shell runner under lock.
+func (a *Agent) nodeRunner() NodeShellRunner {
+	a.runnerMu.RLock()
+	r := a.runOnNode
+	a.runnerMu.RUnlock()
+	return r
 }
 
 // AgentStats holds session statistics.

@@ -3,8 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,14 +118,90 @@ func TestSetRunShellAndRunOnNodeRefresh(t *testing.T) {
 		nodeCalls += 10
 		return "new-node", nil
 	})
-	out, err := a.runShell(context.Background(), "echo")
+	out, err := a.shellRunner()(context.Background(), "echo")
 	if err != nil || out != "new-shell" || shellCalls != 10 {
 		t.Fatalf("shell refresh failed: out=%q calls=%d err=%v", out, shellCalls, err)
 	}
-	out, err = a.runOnNode(context.Background(), "n", "echo")
+	out, err = a.nodeRunner()(context.Background(), "n", "echo")
 	if err != nil || out != "new-node" || nodeCalls != 10 {
 		t.Fatalf("node refresh failed: out=%q calls=%d err=%v", out, nodeCalls, err)
 	}
+}
+
+func TestBackgroundTaskSnapshotsRunnerAcrossModelRefresh(t *testing.T) {
+	// Background jobs must keep the runner snapshotted at launch even if /model
+	// swaps runners concurrently (race detector + determinism).
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var which atomic.Int32
+	a := New(Config{
+		Output:  io.Discard,
+		Confirm: alwaysConfirm(),
+		RunShell: func(context.Context, string) (string, error) {
+			which.Store(1)
+			close(started)
+			<-release
+			return "runner-v1", nil
+		},
+	})
+	out, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"sleep-like"}`))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(out, "bg-1") {
+		t.Fatalf("got %s", out)
+	}
+	<-started
+	// Swap runners while the background job is mid-flight.
+	a.SetRunShell(func(context.Context, string) (string, error) {
+		which.Store(2)
+		return "runner-v2", nil
+	})
+	close(release)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s, _ := a.dispatchCheckTask(context.Background(), json.RawMessage(`{"id":"bg-1"}`))
+		if strings.Contains(s, "completed") {
+			if !strings.Contains(s, "runner-v1") {
+				t.Fatalf("expected snapshotted runner-v1 output, got: %s", s)
+			}
+			if which.Load() != 1 {
+				t.Fatalf("expected only v1 runner invoked, which=%d", which.Load())
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("background task did not complete")
+}
+
+func TestBackgroundRunnerRefreshRace(t *testing.T) {
+	// Stress: concurrent background launches + SetRunShell must not race under -race.
+	a := New(Config{
+		Output:  io.Discard,
+		Confirm: alwaysConfirm(),
+		RunShell: func(context.Context, string) (string, error) {
+			time.Sleep(5 * time.Millisecond)
+			return "ok", nil
+		},
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"echo race"}`))
+		}()
+		go func(n int) {
+			defer wg.Done()
+			a.SetRunShell(func(context.Context, string) (string, error) {
+				return fmt.Sprintf("v%d", n), nil
+			})
+		}(i)
+	}
+	wg.Wait()
+	// Drain tasks briefly so goroutines finish.
+	time.Sleep(200 * time.Millisecond)
 }
 
 func TestCheckTaskRunningState(t *testing.T) {
