@@ -29,23 +29,19 @@ func TestNodeNames(t *testing.T) {
 	}
 }
 
-func TestRunOnNodeUnknownNodeErrors(t *testing.T) {
+func TestRunOnNodeRegistryRequiresAgentDispatch(t *testing.T) {
+	// Direct registry execution must not open raw SSH — agent dispatch + guarded runner only.
 	tc := NewToolContext(&RuntimeView{
 		Config: &config.Config{Nodes: []config.NodeConfig{{Name: "only", Hostname: "h"}}},
 	}, nil)
 	r := NewToolRegistry(tc)
 	_, err := execTool(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "ghost", "command": "ls"}))
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("expected not-found error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "safety gate") {
+		t.Fatalf("expected safety-gate dispatch error, got %v", err)
 	}
-}
-
-func TestRunOnNodeNoConfigErrors(t *testing.T) {
-	tc := NewToolContext(&RuntimeView{}, nil)
-	r := NewToolRegistry(tc)
-	_, err := execTool(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "any", "command": "ls"}))
-	if err == nil || !strings.Contains(err.Error(), "config") {
-		t.Fatalf("expected config-unavailable error, got %v", err)
+	_, err = execTool(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "any", "command": "ls"}))
+	if err == nil || !strings.Contains(err.Error(), "safety gate") {
+		t.Fatalf("expected safety-gate dispatch error, got %v", err)
 	}
 }
 
