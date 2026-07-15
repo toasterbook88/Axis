@@ -42,11 +42,12 @@ const (
 	StateChangeExecutionReserved = "execution-reserved"
 	StateChangeExecutionFinished = "execution-finished"
 
-	OwnerSurfaceGuardedExec   = "guarded-exec"
-	OwnerSurfaceTaskRun       = "task-run"
-	OwnerSurfaceHTTPRun       = "http-run"
-	OwnerSurfaceAgentRunShell = "agent-run-shell"
-	OwnerSurfaceAgentRunTask  = "agent-run-task"
+	OwnerSurfaceGuardedExec    = "guarded-exec"
+	OwnerSurfaceTaskRun        = "task-run"
+	OwnerSurfaceHTTPRun        = "http-run"
+	OwnerSurfaceAgentRunShell  = "agent-run-shell"
+	OwnerSurfaceAgentRunOnNode = "agent-run-on-node"
+	OwnerSurfaceAgentRunTask   = "agent-run-task"
 )
 
 var executionHeartbeatInterval = 15 * time.Second

@@ -302,7 +302,7 @@ func agentCmd() *cobra.Command {
 				endpoint = chat.DefaultEndpoint
 			}
 
-			cfg := agent.Config{
+			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
 				Model:                   activeTarget.Model,
 				Backend:                 backend,
@@ -310,6 +310,7 @@ func agentCmd() *cobra.Command {
 				MaxTokens:               maxTokens,
 				AutoApprove:             autoApprove,
 				Autonomy:                agent.AutonomyMode(autonomy),
+				SystemExtra:             systemMsg,
 				Verbose:                 verbose,
 				DryRun:                  dryRun,
 				AllowRawCommandEvidence: allowRawCommandEvidence,
@@ -318,9 +319,8 @@ func agentCmd() *cobra.Command {
 				Knowledge:               k,
 				ToolContext:             tc,
 				Output:                  w,
-				RunTask:                 guardedAgentTaskRunner(),
 				MCPRegistry:             mcpReg,
-			}
+			})
 
 			a = agent.New(cfg)
 
@@ -1195,29 +1195,95 @@ func agentRequestContext(parent context.Context, timeout time.Duration) (context
 	return context.WithTimeout(parent, timeout)
 }
 
+// agentSessionParams holds the live operator inputs used to construct agent.Config.
+// Extracted so tests can prove RunShell/RunOnNode/SystemExtra wiring without
+// driving the full Cobra RunE path.
+type agentSessionParams struct {
+	Endpoint                string
+	Model                   string
+	Backend                 agent.ChatBackend
+	MaxTurns                int
+	MaxTokens               int
+	AutoApprove             bool
+	Autonomy                agent.AutonomyMode
+	SystemExtra             string
+	Verbose                 bool
+	DryRun                  bool
+	AllowRawCommandEvidence bool
+	BackendSecurityClass    agent.BackendSecurityClass
+	Cluster                 *chat.ClusterSummaryForPrompt
+	Knowledge               *knowledge.ClusterKnowledge
+	ToolContext             *agent.ToolContext
+	Output                  io.Writer
+	MCPRegistry             *mcpclient.Registry
+}
+
+// buildAgentSessionConfig assembles agent.Config for axis agent sessions.
+// Always injects guarded shell runners so Layer 4 cannot be accidentally dropped.
+func buildAgentSessionConfig(p agentSessionParams) agent.Config {
+	model := p.Model
+	return agent.Config{
+		Endpoint:                p.Endpoint,
+		Model:                   p.Model,
+		Backend:                 p.Backend,
+		MaxTurns:                p.MaxTurns,
+		MaxTokens:               p.MaxTokens,
+		AutoApprove:             p.AutoApprove,
+		Autonomy:                p.Autonomy,
+		SystemExtra:             p.SystemExtra,
+		Verbose:                 p.Verbose,
+		DryRun:                  p.DryRun,
+		AllowRawCommandEvidence: p.AllowRawCommandEvidence,
+		BackendSecurityClass:    p.BackendSecurityClass,
+		Cluster:                 p.Cluster,
+		Knowledge:               p.Knowledge,
+		ToolContext:             p.ToolContext,
+		Output:                  p.Output,
+		RunShell:                guardedAgentShellRunner(model),
+		RunOnNode: func(ctx context.Context, node, command string) (string, error) {
+			return guardedAgentCommandRunner(model, node)(ctx, command)
+		},
+		RunTask:     guardedAgentTaskRunner(),
+		MCPRegistry: p.MCPRegistry,
+	}
+}
+
+// guardedAgentShellRunner runs local shell via guarded execution (local node pin).
 func guardedAgentShellRunner(model string) agent.ShellRunner {
+	return guardedAgentCommandRunner(model, "")
+}
+
+// guardedAgentCommandRunner builds a ShellRunner that executes through Layer 4.
+// When requestedNode is empty, the canonical local node is resolved from the snapshot.
+// When set, RequestedNode is pinned (agent run_on_node) with OwnerSurfaceAgentRunOnNode.
+func guardedAgentCommandRunner(model, requestedNode string) agent.ShellRunner {
 	return func(ctx context.Context, command string) (string, error) {
 		rt, err := loadAgentShellRuntime(ctx)
 		if err != nil {
 			return "", fmt.Errorf("load runtime context for guarded execution: %w", err)
 		}
 
-		var localNodeName string
-		if rt.Snapshot != nil {
-			if localNode, ok := models.FindLocalNode(rt.Snapshot.Nodes); ok {
-				localNodeName = localNode.Name
+		nodeName := strings.TrimSpace(requestedNode)
+		ownerSurface := execution.OwnerSurfaceAgentRunShell
+		if nodeName != "" {
+			ownerSurface = execution.OwnerSurfaceAgentRunOnNode
+		} else {
+			if rt.Snapshot != nil {
+				if localNode, ok := models.FindLocalNode(rt.Snapshot.Nodes); ok {
+					nodeName = localNode.Name
+				}
 			}
-		}
-		if localNodeName == "" {
-			return "", fmt.Errorf("local node resolution failed: could not identify canonical local node name from snapshot")
+			if nodeName == "" {
+				return "", fmt.Errorf("local node resolution failed: could not identify canonical local node name from snapshot")
+			}
 		}
 
 		req := execution.GuardedExecutionRequest{
 			Description:      command,
 			Mode:             execution.ModeExec,
 			Confirm:          execution.ConfirmWord,
-			RequestedNode:    localNodeName,
-			OwnerSurface:     execution.OwnerSurfaceAgentRunShell,
+			RequestedNode:    nodeName,
+			OwnerSurface:     ownerSurface,
 			OwnerLabel:       strings.TrimSpace(model),
 			Events:           events.GuardedExecutionSink{},
 			BuildContextJSON: knowledge.ExecutionContextJSON,

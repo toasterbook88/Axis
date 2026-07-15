@@ -50,6 +50,7 @@ type Agent struct {
 	tools                   *ToolRegistry
 	confirm                 ConfirmFunc
 	runShell                ShellRunner
+	runOnNode               NodeShellRunner
 	runTask                 TaskRunner
 	safety                  ShellSafetyGate
 	output                  io.Writer
@@ -115,12 +116,19 @@ type Config struct {
 	// to a direct local shell helper.
 	RunShell ShellRunner
 
+	// RunOnNode executes an approved shell command on a named cluster node.
+	// If nil, run_on_node fails with a configuration error (no raw SSH bypass).
+	RunOnNode NodeShellRunner
+
 	// RunTask executes an approved remote/cluster task.
 	RunTask TaskRunner
 
 	// MCPRegistry is a connected registry of external MCP servers (optional).
 	MCPRegistry *mcpclient.Registry
 }
+
+// NodeShellRunner runs an approved command on a named cluster node.
+type NodeShellRunner func(ctx context.Context, node, command string) (string, error)
 
 // New creates an Agent from the given configuration.
 func New(cfg Config) *Agent {
@@ -232,6 +240,7 @@ func New(cfg Config) *Agent {
 		tools:                   tools,
 		confirm:                 confirm,
 		runShell:                runShell,
+		runOnNode:               cfg.RunOnNode,
 		runTask:                 cfg.RunTask,
 		safety:                  safetyGate,
 		output:                  cfg.Output,
@@ -522,6 +531,9 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	if name == "run_shell" {
 		return a.dispatchShell(ctx, args)
 	}
+	if name == "run_on_node" {
+		return a.dispatchRunOnNode(ctx, args)
+	}
 	if name == "axis_run_task" {
 		return a.dispatchRunTask(ctx, args)
 	}
@@ -712,6 +724,77 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		fmt.Fprintf(a.output, "\n▶ Executing shell: %s\n", sa.Command)
 	}
 	return a.runShell(ctx, cmdToRun)
+}
+
+// dispatchRunOnNode handles the run_on_node tool with safety gating and confirmation,
+// then delegates to the configured guarded node runner (no raw SSH bypass).
+func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (string, error) {
+	var a0 struct {
+		Node    string `json:"node"`
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &a0); err != nil {
+		return "", fmt.Errorf("invalid arguments for run_on_node: expected {\"node\": \"...\", \"command\": \"...\"}, got: %s", string(args))
+	}
+	if strings.TrimSpace(a0.Node) == "" {
+		return "", fmt.Errorf("run_on_node requires a non-empty \"node\" argument")
+	}
+	if strings.TrimSpace(a0.Command) == "" {
+		return "", fmt.Errorf("run_on_node requires a non-empty \"command\" argument")
+	}
+	if a.runOnNode == nil {
+		return "", fmt.Errorf("run_on_node runner not configured; node commands must use guarded execution")
+	}
+
+	a.dispatchMu.Lock()
+	if a.blockAll {
+		a.dispatchMu.Unlock()
+		return "", fmt.Errorf("operator has blocked all tool execution for this session")
+	}
+	a.dispatchMu.Unlock()
+
+	allowed, reason, safetyScore := a.safety(a0.Command)
+	forceConfirm := false
+	if !allowed {
+		forceConfirm = true
+		if safetyScore < 80 {
+			safetyScore = 80
+		}
+	}
+
+	a.dispatchMu.Lock()
+	needsConfirm := !a.autoApproveAll || forceConfirm
+	a.dispatchMu.Unlock()
+	if needsConfirm {
+		promptDesc := fmt.Sprintf("[on %s] %s", a0.Node, a0.Command)
+		if forceConfirm {
+			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
+		}
+		a.dispatchMu.Lock()
+		decision := a.confirm("run_on_node", promptDesc, safetyScore)
+		switch decision {
+		case ConfirmNo:
+			a.dispatchMu.Unlock()
+			if forceConfirm {
+				return "", fmt.Errorf("operator declined to execute safety-blocked command on %s: %s (safety block: %s)", a0.Node, a0.Command, reason)
+			}
+			return "", fmt.Errorf("operator declined to execute on %s: %s", a0.Node, a0.Command)
+		case ConfirmAlways:
+			if !forceConfirm {
+				a.autoApproveAll = true
+			}
+			a.dispatchMu.Unlock()
+		case ConfirmNever:
+			a.blockAll = true
+			a.dispatchMu.Unlock()
+			return "", fmt.Errorf("operator has blocked all tool execution for this session")
+		case ConfirmYes:
+			a.dispatchMu.Unlock()
+		}
+	}
+
+	fmt.Fprintf(a.output, "\n▶ Executing on %s: %s\n", a0.Node, a0.Command)
+	return a.runOnNode(ctx, a0.Node, a0.Command)
 }
 
 // dispatchRunTask handles the axis_run_task tool with safety gating and confirmation.

@@ -106,6 +106,7 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 		tools:          childTools,
 		confirm:        confirm,
 		runShell:       a.runShell,
+		runOnNode:      a.runOnNode,
 		runTask:        a.runTask,
 		safety:         a.safety,
 		output:         a.output,
