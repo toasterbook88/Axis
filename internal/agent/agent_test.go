@@ -1026,6 +1026,75 @@ func TestDispatchShellQuotesWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestDispatchRunOnNodeRequiresRunner(t *testing.T) {
+	a := New(Config{
+		Confirm: alwaysConfirm(),
+		Output:  &bytes.Buffer{},
+	})
+	args := json.RawMessage(mustJSON(t, map[string]any{"node": "nixos", "command": "uname"}))
+	_, err := a.dispatchRunOnNode(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("expected not-configured error, got %v", err)
+	}
+}
+
+func TestDispatchRunOnNodeUsesGuardedRunner(t *testing.T) {
+	var sawNode, sawCmd string
+	a := New(Config{
+		Confirm: alwaysConfirm(),
+		Output:  &bytes.Buffer{},
+		RunOnNode: func(_ context.Context, node, command string) (string, error) {
+			sawNode, sawCmd = node, command
+			return `{"ok":true,"node":"nixos","output":"Linux"}`, nil
+		},
+	})
+	args := json.RawMessage(mustJSON(t, map[string]any{"node": "nixos", "command": "uname -a"}))
+	out, err := a.dispatchRunOnNode(context.Background(), args)
+	if err != nil {
+		t.Fatalf("dispatchRunOnNode: %v", err)
+	}
+	if sawNode != "nixos" || sawCmd != "uname -a" {
+		t.Fatalf("runner saw node=%q cmd=%q", sawNode, sawCmd)
+	}
+	if !strings.Contains(out, "Linux") {
+		t.Fatalf("out = %q", out)
+	}
+
+	// Registry direct execute must not bypass the agent gate.
+	_, err = a.tools.Execute(context.Background(), "run_on_node", args)
+	if err == nil || !strings.Contains(err.Error(), "safety gate") {
+		t.Fatalf("expected registry safety-gate error, got %v", err)
+	}
+}
+
+func TestDispatchRunOnNodeViaToolCallPath(t *testing.T) {
+	var called bool
+	a := New(Config{
+		Confirm: alwaysConfirm(),
+		Output:  &bytes.Buffer{},
+		RunOnNode: func(_ context.Context, node, command string) (string, error) {
+			called = true
+			if node != "foundry" || command != "echo hi" {
+				t.Fatalf("unexpected %s %s", node, command)
+			}
+			return `{"ok":true}`, nil
+		},
+	})
+	args := json.RawMessage(mustJSON(t, map[string]any{"node": "foundry", "command": "echo hi"}))
+	out, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: "run_on_node", Arguments: args},
+	})
+	if err != nil {
+		t.Fatalf("dispatchToolCall: %v", err)
+	}
+	if !called {
+		t.Fatal("RunOnNode not called via dispatchToolCall")
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
 func TestAgentNeverBlocksAllFutureShell(t *testing.T) {
 	// First call: operator selects "never" → second shell call should auto-block.
 	neverOnce := func() ConfirmFunc {

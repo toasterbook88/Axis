@@ -59,16 +59,14 @@ func nodeNames(nodes []config.NodeConfig) string {
 
 // --- Tool: run_on_node ---
 
-type runOnNodeArgs struct {
-	Node    string `json:"node"`
-	Command string `json:"command"`
-}
-
 func (r *ToolRegistry) registerRunOnNode(tc *ToolContext) {
+	_ = tc // reserved for future catalog-aware description enrichment
 	r.add("run_on_node",
-		"Run a shell command on a named cluster node via SSH and return stdout. "+
+		"Run a shell command on a named cluster node through AXIS guarded execution "+
+			"(safety scoring, placement pin to the requested node, reservation, observation). "+
+			"Returns a guarded execution JSON result (same contract as run_shell / axis_run_task). "+
 			"Use this to run something on a specific remote computer (e.g. tests on nixos, a build on foundry). "+
-			"Requires confirmation since it executes on a remote host. The node must be configured in nodes.yaml.",
+			"Requires confirmation. The node must appear in the live cluster snapshot.",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -77,25 +75,10 @@ func (r *ToolRegistry) registerRunOnNode(tc *ToolContext) {
 			},
 			"required":["node","command"]
 		}`),
+		// Execution is special-cased in Agent.dispatchToolCall so it always
+		// goes through safety + the CLI-injected guarded node runner.
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			var a runOnNodeArgs
-			if err := json.Unmarshal(args, &a); err != nil {
-				return "", fmt.Errorf("invalid arguments for run_on_node: %w", err)
-			}
-			if a.Node == "" {
-				return "", fmt.Errorf("run_on_node requires a non-empty \"node\" argument")
-			}
-			if a.Command == "" {
-				return "", fmt.Errorf("run_on_node requires a non-empty \"command\" argument")
-			}
-			out, err := runRemote(ctx, tc, a.Node, a.Command)
-			if err != nil {
-				return "", err
-			}
-			if out == "" {
-				return fmt.Sprintf("(no output from %s)", a.Node), nil
-			}
-			return out, nil
+			return "", fmt.Errorf("run_on_node must be dispatched through the agent safety gate")
 		},
 	)
 }

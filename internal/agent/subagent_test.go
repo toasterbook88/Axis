@@ -69,6 +69,66 @@ func TestSpawnSubagentRecursionLimit(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentChildHasBackgroundTaskStore(t *testing.T) {
+	// Regression: children must own a backgroundTasks store — the registry
+	// exposes run_background/check_task/list_* and used to nil-deref without it.
+	parent := New(Config{
+		Backend:     &subAgentBackend{answer: "done"},
+		MaxTurns:    2,
+		Output:      io.Discard,
+		Confirm:     alwaysConfirm(),
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+		RunShell: func(context.Context, string) (string, error) {
+			return "ok", nil
+		},
+	})
+	child := parent.buildChildAgent(2, "nixos", "extra")
+	if child.backgroundTasks == nil {
+		t.Fatal("buildChildAgent left backgroundTasks nil")
+	}
+	out, err := child.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"echo child-bg"}`))
+	if err != nil {
+		t.Fatalf("child run_background: %v", err)
+	}
+	if !strings.Contains(out, "bg-1") {
+		t.Fatalf("expected task id, got %s", out)
+	}
+	// list_background_tasks must not panic
+	_ = child.listBackgroundTasks()
+	// check_task must not panic
+	if _, err := child.dispatchCheckTask(context.Background(), json.RawMessage(`{"id":"bg-1"}`)); err != nil {
+		t.Fatalf("check_task: %v", err)
+	}
+}
+
+func TestBuildChildAgentInheritsDryRunAndEvidenceFlags(t *testing.T) {
+	parent := New(Config{
+		Backend:                 &subAgentBackend{answer: "done"},
+		Output:                  io.Discard,
+		Confirm:                 alwaysConfirm(),
+		ToolContext:             NewToolContext(&RuntimeView{}, nil),
+		DryRun:                  true,
+		AllowRawCommandEvidence: true,
+	})
+	child := parent.buildChildAgent(2, "nixos", "extra")
+	if !child.dryRun {
+		t.Fatal("child dryRun should inherit parent --dry-run")
+	}
+	if !child.allowRawCommandEvidence {
+		t.Fatal("child allowRawCommandEvidence should inherit parent setting")
+	}
+	// Parent defaults: child should get false when parent is false.
+	parent2 := New(Config{
+		Backend:     &subAgentBackend{},
+		Output:      io.Discard,
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+	child2 := parent2.buildChildAgent(1, "", "")
+	if child2.dryRun || child2.allowRawCommandEvidence {
+		t.Fatalf("child2 unexpectedly true: dryRun=%v evidence=%v", child2.dryRun, child2.allowRawCommandEvidence)
+	}
+}
+
 func TestFinalAssistantText(t *testing.T) {
 	conv := chat.NewConversation(4096)
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys"})
