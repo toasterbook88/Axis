@@ -1,3 +1,20 @@
+## v0.14.3 (2026-07-15)
+
+### 🚀 Features
+* **CLI:** Professionalize `axis init` onboarding — first-run vs update flows, discovery paths, validated atomic config saves with backups. (#230)
+
+### 🐛 Bug Fixes
+* **Events:** Harden event log isolation and flush; restore JSONL decoder; non-fatal init host:port duplicate handling. (#229, #230 follow-ups)
+* **Static analysis:** Resolve lint/static-analysis warnings including safe JSON-RPC request ID marshaling. (#226)
+* **UI:** Resolve repeating title bug in terminal select menu. (#222)
+
+### 🔧 Maintenance
+* **Release:** Harden release workflow dry-run, gate parity with CI, strict version parse, asset checksum verification. (#231)
+* **Docs/agents:** Restore thin Copilot entry point; fix AGENTS.md mesh/reservation wiring claims; sync dependencies with go.mod. (#227, #228)
+* **Architecture:** Invert L4→L5 dependencies in safety/execution. (#225)
+* **Daemon:** Lock-free snapshot reads and hardening scaffolding. (#223)
+* **Deps:** Bump go-modules minor/patch group. (#224)
+
 ## v0.14.2 (2026-07-12)
 
 ### 🚀 Features
