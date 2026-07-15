@@ -58,6 +58,21 @@ func TestRunBackgroundRemoteRequiresRunOnNode(t *testing.T) {
 	}
 }
 
+func TestRunBackgroundWhitespaceNodeReportsLocally(t *testing.T) {
+	// Whitespace-only node must execute locally and report "locally", not "on  ".
+	a := newAsyncTestAgent(t)
+	out, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"echo ws","node":"   "}`))
+	if err != nil {
+		t.Fatalf("dispatchRunBackground: %v", err)
+	}
+	if !strings.Contains(out, "locally") {
+		t.Fatalf("expected locally in status message, got: %s", out)
+	}
+	if strings.Contains(out, "on  ") || strings.Contains(out, "on \t") {
+		t.Fatalf("should not report remote location for whitespace node: %s", out)
+	}
+}
+
 func TestRunBackgroundRemoteUsesRunOnNode(t *testing.T) {
 	var sawNode, sawCmd string
 	a := New(Config{

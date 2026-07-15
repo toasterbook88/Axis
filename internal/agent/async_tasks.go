@@ -152,9 +152,11 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 		task.mu.Unlock()
 	}()
 
+	// Use trimmed node for display so whitespace-only "node" reports local
+	// execution (matches the actual runner choice above).
 	loc := "locally"
-	if args.Node != "" {
-		loc = "on " + args.Node
+	if node != "" {
+		loc = "on " + node
 	}
 	if a.verbose {
 		fmt.Fprintf(a.output, "%s Started background task %s (%s)\n", ui.Cyan("⤴"), task.id, loc)
