@@ -184,7 +184,8 @@ type PortForwardingRemoteExecutor interface {
 }
 
 var NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
-	return transport.NewSSHExecutor(nc.Hostname, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveTimeout())
+	spec := nc.SSHDialSpec()
+	return transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 }
 
 // RunLocalShell executes command in a login bash shell and returns its combined

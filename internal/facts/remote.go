@@ -33,6 +33,12 @@ func NewRemoteCollector(name, role, hostname string, exec transport.Executor) *R
 // Maps failures precisely:
 //   - connect/first-command fail → unreachable
 //   - subsequent command fail → partial
+//
+// Collection strategy (utility-preserving):
+//  1. Force bash for all remote probes (avoids non-POSIX login shells for scripts).
+//  2. Prefer a one-shot fact bundle (one SSH session worth of shell work).
+//  3. Fall back to the legacy multi-Run path if the bundle fails.
+//  4. Always run best-effort AI resident discovery (ollama/llama/mlx) + TurboQuant.
 func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error) {
 	facts := &models.NodeFacts{
 		Name: c.NodeName,
@@ -46,6 +52,9 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		CollectedAt: time.Now().UTC(),
 	}
 
+	// Wrap executor so every Run uses bash --noprofile --norc (bundle + legacy).
+	c.Exec = withBashForced(c.Exec)
+
 	if err := c.Exec.Connect(ctx); err != nil {
 		facts.Status = models.StatusUnreachable
 		facts.Error = err.Error()
@@ -56,74 +65,36 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if exposer, ok := c.Exec.(interface{ HandshakeLatencyMs() int64 }); ok {
 		facts.SSHHandshakeLatencyMs = exposer.HandshakeLatencyMs()
 	}
-
-	partial := false
-
-	// Detect OS
-	osOut, err := c.Exec.Run(ctx, "uname -s")
-	if err != nil {
-		partial = true
-	}
-	osName := strings.ToLower(strings.TrimSpace(osOut))
-	facts.OS = osName
-	if hostname, err := detectRemoteHostname(ctx, c.Exec); err != nil {
-		partial = true
-		facts.Hostname = c.Hostname
-	} else {
-		facts.Hostname = hostname
-	}
-	facts.Identity = detectRemoteNodeIdentity(ctx, c.Exec, osName)
-
-	// Arch
-	if archOut, err := c.Exec.Run(ctx, "uname -m"); err != nil {
-		partial = true
-	} else {
-		facts.Arch = strings.TrimSpace(archOut)
+	// Prefer the host that actually connected (may be an endpoint fallback).
+	if ch, ok := c.Exec.(interface{ ConnectedHost() string }); ok {
+		if host := strings.TrimSpace(ch.ConnectedHost()); host != "" {
+			facts.SSHTarget = host
+		}
 	}
 
-	// OS version
-	var verCmd string
-	if osName == "darwin" {
-		verCmd = "sw_vers -productVersion"
-	} else {
-		verCmd = "uname -r"
-	}
-	if verOut, err := c.Exec.Run(ctx, verCmd); err != nil {
-		partial = true
-	} else {
-		facts.OSVersion = strings.TrimSpace(verOut)
+	// Fast path: single remote bash script for core facts.
+	usedBundle := c.tryBundleCollect(ctx, facts)
+	if !usedBundle {
+		// Legacy multi-Run path — same field coverage as before.
+		c.collectLegacy(ctx, facts)
 	}
 
-	// Resources
-	res, resPartial := c.remoteResources(ctx, osName, facts.Arch)
-	facts.Resources = res
-	if resPartial {
-		partial = true
-	}
-
-	// Network addresses
-	facts.Addresses = c.remoteAddresses(ctx)
-
-	// Tools
-	facts.Tools = c.remoteTools(ctx)
-
+	// Best-effort AI discovery (same as before; runs under bash-forced executor).
+	// When the bundle path already found tools, merge rather than replace.
 	ollamaInfo, residentModels := c.discoverOllamaRobust(ctx)
 	if ollamaInfo.Installed {
 		facts.Ollama = &ollamaInfo
-		facts.ResidentModels = residentModels
-		facts.Tools = append(facts.Tools, models.ToolInfo{
+		facts.ResidentModels = append(facts.ResidentModels[:0], residentModels...)
+		facts.Tools = appendToolUnique(facts.Tools, models.ToolInfo{
 			Name:    "ollama",
 			Path:    ollamaInfo.Path,
 			Version: ollamaInfo.Version,
 			Class:   models.ToolClassAICLI,
 		})
 	}
-	// Merge llama-server resident models (runtime="llama.cpp") so empirical
-	// placement can prefer nodes with the right model already loaded.
 	if llamaResidents := c.discoverLlamaServerRobust(ctx); len(llamaResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
 	}
-	// Merge MLX resident models (runtime="mlx") from the remote mlx_lm.server API.
 	if mlxResidents := c.discoverMLXRobust(ctx); len(mlxResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
 	}
@@ -131,11 +102,83 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		return c.Exec.Run(ctx, cmd)
 	})
 
-	if partial {
+	if len(facts.PartialReasons) > 0 && facts.Status == models.StatusComplete {
 		facts.Status = models.StatusPartial
+	}
+	if facts.Status == models.StatusPartial && facts.Error == "" && len(facts.PartialReasons) > 0 {
+		facts.Error = models.FormatPartialReasons(facts.PartialReasons)
 	}
 	facts.PopulateMemoryMetrics()
 	return facts, nil
+}
+
+func appendToolUnique(tools []models.ToolInfo, add models.ToolInfo) []models.ToolInfo {
+	for _, t := range tools {
+		if t.Name == add.Name {
+			return tools
+		}
+	}
+	return append(tools, add)
+}
+
+// collectLegacy is the pre-bundle multi-Run fact path (full field coverage).
+func (c *RemoteCollector) collectLegacy(ctx context.Context, facts *models.NodeFacts) {
+	partial := false
+	note := func(probe string, err error) {
+		partial = true
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		facts.PartialReasons = append(facts.PartialReasons, models.PartialReason{Probe: probe, Message: msg})
+	}
+
+	osOut, err := c.Exec.Run(ctx, "uname -s")
+	if err != nil {
+		note("uname_s", err)
+	}
+	osName := strings.ToLower(strings.TrimSpace(osOut))
+	facts.OS = osName
+	if hostname, err := detectRemoteHostname(ctx, c.Exec); err != nil {
+		note("hostname", err)
+		facts.Hostname = c.Hostname
+	} else {
+		facts.Hostname = hostname
+	}
+	facts.Identity = detectRemoteNodeIdentity(ctx, c.Exec, osName)
+
+	if archOut, err := c.Exec.Run(ctx, "uname -m"); err != nil {
+		note("uname_m", err)
+	} else {
+		facts.Arch = strings.TrimSpace(archOut)
+	}
+
+	var verCmd string
+	if osName == "darwin" {
+		verCmd = "sw_vers -productVersion"
+	} else {
+		verCmd = "uname -r"
+	}
+	if verOut, err := c.Exec.Run(ctx, verCmd); err != nil {
+		note("os_version", err)
+	} else {
+		facts.OSVersion = strings.TrimSpace(verOut)
+	}
+
+	res, resPartial := c.remoteResources(ctx, osName, facts.Arch)
+	facts.Resources = res
+	if resPartial {
+		note("resources", fmt.Errorf("one or more resource probes failed"))
+	}
+
+	facts.Addresses = c.remoteAddresses(ctx)
+	facts.Tools = c.remoteTools(ctx)
+
+	if partial {
+		facts.Status = models.StatusPartial
+	} else {
+		facts.Status = models.StatusComplete
+	}
 }
 
 func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch string) (*models.Resources, bool) {

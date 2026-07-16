@@ -4,9 +4,11 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -14,19 +16,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// NodeEndpoint is an optional alternate dial target (e.g. LAN vs Tailscale).
+// When present, AXIS may try endpoints in order for connectivity.
+type NodeEndpoint struct {
+	Name     string `json:"name,omitempty" yaml:"name,omitempty"`
+	Hostname string `json:"hostname" yaml:"hostname"`
+}
+
 // NodeConfig describes a single node in the cluster seed file.
 // ssh_user and ssh_port are config-only — they do NOT propagate into NodeFacts.
 // stable_id is an optional operator seed used for locality/dedupe only; it
 // does not override observed node identity.
 type NodeConfig struct {
-	Name            string `json:"name" yaml:"name"`
-	Hostname        string `json:"hostname" yaml:"hostname"`
-	StableID        string `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
-	SSHUser         string `json:"ssh_user" yaml:"ssh_user"`
-	Role            string `json:"role,omitempty" yaml:"role,omitempty"`
-	SSHPort         int    `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
-	TimeoutSec      int    `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
-	SystemReserveMB int64  `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
+	Name              string         `json:"name" yaml:"name"`
+	Hostname          string         `json:"hostname" yaml:"hostname"`
+	Endpoints         []NodeEndpoint `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
+	StableID          string         `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
+	SSHUser           string         `json:"ssh_user" yaml:"ssh_user"`
+	Role              string         `json:"role,omitempty" yaml:"role,omitempty"`
+	SSHPort           int            `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
+	TimeoutSec        int            `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
+	DialTimeoutSec    int            `json:"dial_timeout_sec,omitempty" yaml:"dial_timeout_sec,omitempty"`
+	CollectTimeoutSec int            `json:"collect_timeout_sec,omitempty" yaml:"collect_timeout_sec,omitempty"`
+	SystemReserveMB   int64          `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
 }
 
 // EffectiveSSHPort returns the SSH port, defaulting to 22.
@@ -37,12 +49,117 @@ func (n *NodeConfig) EffectiveSSHPort() int {
 	return n.SSHPort
 }
 
-// EffectiveTimeout returns the timeout in seconds, defaulting to 10.
+// EffectiveTimeout returns the legacy dial-oriented timeout in seconds, defaulting to 10.
+// Prefer EffectiveDialTimeout / EffectiveCollectTimeout for new call sites.
 func (n *NodeConfig) EffectiveTimeout() int {
 	if n.TimeoutSec <= 0 {
 		return 10
 	}
 	return n.TimeoutSec
+}
+
+// EffectiveDialTimeout is the TCP/SSH handshake budget (seconds).
+func (n *NodeConfig) EffectiveDialTimeout() int {
+	if n.DialTimeoutSec > 0 {
+		return n.DialTimeoutSec
+	}
+	return n.EffectiveTimeout()
+}
+
+// EffectiveCollectTimeout is the full remote fact-collection budget (seconds).
+// When unset, defaults to max(legacy timeout, 45) so slow login shells / multi-probe
+// paths can complete without requiring every operator to edit nodes.yaml.
+func (n *NodeConfig) EffectiveCollectTimeout() int {
+	if n.CollectTimeoutSec > 0 {
+		return n.CollectTimeoutSec
+	}
+	base := n.EffectiveTimeout()
+	const defaultCollect = 45
+	if base > defaultCollect {
+		return base
+	}
+	return defaultCollect
+}
+
+// PrimaryHostname returns the preferred dial hostname: first endpoint, else hostname.
+func (n *NodeConfig) PrimaryHostname() string {
+	if n == nil {
+		return ""
+	}
+	for _, ep := range n.Endpoints {
+		if h := strings.TrimSpace(ep.Hostname); h != "" {
+			return h
+		}
+	}
+	return strings.TrimSpace(n.Hostname)
+}
+
+// DialHostnames returns ordered unique dial targets (endpoints then primary hostname).
+// Order is logical seed names as configured — callers resolve SSH Host aliases via
+// ssh -G on these logical values, not on already-resolved physical HostName values.
+func (n *NodeConfig) DialHostnames() []string {
+	if n == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	add := func(h string) {
+		h = strings.TrimSpace(h)
+		if h == "" || seen[h] {
+			return
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	for _, ep := range n.Endpoints {
+		add(ep.Hostname)
+	}
+	add(n.Hostname)
+	return out
+}
+
+// SSHDialSpec is the dial plan for a configured node (logical host + fallbacks).
+type SSHDialSpec struct {
+	Host           string
+	Port           int
+	User           string
+	DialTimeoutSec int
+	Fallbacks      []string
+}
+
+// SSHDialSpec returns the preferred dial host and ordered alternate hosts.
+func (n *NodeConfig) SSHDialSpec() SSHDialSpec {
+	if n == nil {
+		return SSHDialSpec{Port: 22, DialTimeoutSec: 10}
+	}
+	hosts := n.DialHostnames()
+	host := n.PrimaryHostname()
+	var fb []string
+	if len(hosts) > 1 {
+		fb = append(fb, hosts[1:]...)
+	}
+	return SSHDialSpec{
+		Host:           host,
+		Port:           n.EffectiveSSHPort(),
+		User:           n.SSHUser,
+		DialTimeoutSec: n.EffectiveDialTimeout(),
+		Fallbacks:      fb,
+	}
+}
+
+// MembershipFingerprint returns a stable short hash of cluster membership
+// (name + role + ssh_user per node), independent of dial addresses.
+func (c *Config) MembershipFingerprint() string {
+	if c == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(c.Nodes))
+	for _, n := range c.Nodes {
+		parts = append(parts, strings.ToLower(n.Name)+"|"+strings.ToLower(n.Role)+"|"+n.SSHUser)
+	}
+	sort.Strings(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return fmt.Sprintf("%x", sum[:8])
 }
 
 // DiscoveryConfig describes the UDP discovery properties.
@@ -296,8 +413,13 @@ func (c *Config) Validate() error {
 		}
 		nodeNames[lowerName] = true
 
-		if n.Hostname == "" {
-			return fmt.Errorf("config: node[%d] (%s) missing hostname", i, n.Name)
+		if n.PrimaryHostname() == "" {
+			return fmt.Errorf("config: node[%d] (%s) missing hostname (or endpoints[].hostname)", i, n.Name)
+		}
+		// Fill Hostname from endpoints when only endpoints are provided so
+		// older call sites reading .Hostname keep working.
+		if strings.TrimSpace(n.Hostname) == "" {
+			n.Hostname = n.PrimaryHostname()
 		}
 		if n.SSHUser == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)

@@ -84,7 +84,8 @@ func chatCmd() *cobra.Command {
 				decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
 				if decision.OK && !decision.IsLocal {
 					if targetConfig, ok := rt.Config.FindNode(decision.Node); ok {
-						executor := transport.NewSSHExecutor(targetConfig.Hostname, targetConfig.EffectiveSSHPort(), targetConfig.SSHUser, targetConfig.EffectiveTimeout())
+						spec := targetConfig.SSHDialSpec()
+						executor := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 						defer executor.Close()
 						boundPort, stopForward, err := executor.ForwardLocal(ctx, 0, 11434)
 						if err != nil {

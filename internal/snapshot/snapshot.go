@@ -87,10 +87,14 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 				Message: "node unreachable: " + n.Error,
 			})
 		case models.StatusPartial:
+			msg := models.FormatPartialReasons(n.PartialReasons)
+			if n.Error != "" && len(n.PartialReasons) == 0 {
+				msg = n.Error
+			}
 			snap.Warnings = append(snap.Warnings, models.Warning{
 				Node:    n.Name,
 				Kind:    "partial",
-				Message: "some facts failed to collect",
+				Message: msg,
 			})
 		case models.StatusError:
 			snap.Warnings = append(snap.Warnings, models.Warning{
