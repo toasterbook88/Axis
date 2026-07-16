@@ -185,6 +185,24 @@ func Serve(addr string, cache SnapshotCache) error {
 	return srv.ListenAndServe()
 }
 
+// meshPeerFromNode builds a trusted config-sourced mesh peer.
+// Uses PrimaryHostname so endpoints-only nodes still get a dialable address
+// (mesh fan-out skips peers with empty Hostname).
+func meshPeerFromNode(n config.NodeConfig, udpPort int) mesh.Peer {
+	now := time.Now().UTC()
+	return mesh.Peer{
+		Name:       n.Name,
+		Hostname:   n.PrimaryHostname(),
+		Port:       udpPort,
+		StableID:   n.StableID,
+		State:      mesh.PeerTrusted,
+		Source:     "config",
+		FirstSeen:  now,
+		LastSeen:   now,
+		Generation: 1,
+	}
+}
+
 func NewDefault(interval time.Duration) *Daemon {
 	registry := discovery.NewBeaconRegistry()
 	d := New(interval, defaultCollector(registry))
@@ -200,7 +218,7 @@ func NewDefault(interval time.Duration) *Daemon {
 			var localNode config.NodeConfig
 			var foundLocal bool
 			for _, n := range cfg.Nodes {
-				if models.IsLocalConfig(n.Name, n.Hostname, n.StableID) {
+				if n.IsLocal() {
 					localNode = n
 					foundLocal = true
 					break
@@ -213,17 +231,7 @@ func NewDefault(interval time.Duration) *Daemon {
 			}
 
 			if foundLocal {
-				selfPeer = mesh.Peer{
-					Name:       localNode.Name,
-					Hostname:   localNode.Hostname,
-					Port:       udpPort,
-					StableID:   localNode.StableID,
-					State:      mesh.PeerTrusted,
-					Source:     "config",
-					FirstSeen:  time.Now().UTC(),
-					LastSeen:   time.Now().UTC(),
-					Generation: 1,
-				}
+				selfPeer = meshPeerFromNode(localNode, udpPort)
 			}
 
 			for _, n := range cfg.Nodes {
@@ -231,17 +239,7 @@ func NewDefault(interval time.Duration) *Daemon {
 				if foundLocal && n.Name == localNode.Name {
 					continue
 				}
-				seedPeers = append(seedPeers, mesh.Peer{
-					Name:       n.Name,
-					Hostname:   n.Hostname,
-					Port:       udpPort,
-					StableID:   n.StableID,
-					State:      mesh.PeerTrusted,
-					Source:     "config",
-					FirstSeen:  time.Now().UTC(),
-					LastSeen:   time.Now().UTC(),
-					Generation: 1,
-				})
+				seedPeers = append(seedPeers, meshPeerFromNode(n, udpPort))
 			}
 		}
 

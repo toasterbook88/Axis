@@ -525,3 +525,37 @@ func stubDoctorSSHChecker(t *testing.T, fn func(context.Context, config.NodeConf
 func stripANSI(s string) string {
 	return ansiEscapePattern.ReplaceAllString(s, "")
 }
+
+func TestDoctorSkipsSSHForLocalNode(t *testing.T) {
+	restore := minimalDoctorStubs(t)
+	defer restore()
+
+	prevLocal := doctorNodeIsLocal
+	doctorNodeIsLocal = func(n config.NodeConfig) bool { return n.Name == "n" }
+	t.Cleanup(func() { doctorNodeIsLocal = prevLocal })
+
+	// If SSH were attempted for local node, this would fail the test intent.
+	prevSSH := doctorCheckNodeSSH
+	doctorCheckNodeSSH = func(context.Context, config.NodeConfig) error {
+		t.Fatal("SSH should not be attempted for local node")
+		return nil
+	}
+	t.Cleanup(func() { doctorCheckNodeSSH = prevSSH })
+
+	stdout, _, err := captureProcessOutput(t, func() error {
+		return doctorCmd().Execute()
+	})
+	if err != nil {
+		t.Fatalf("doctor Execute: %v", err)
+	}
+	out := stripANSI(stdout)
+	if !strings.Contains(out, "local node (skip remote SSH") {
+		t.Fatalf("expected local skip message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "All checks passed") && !strings.Contains(out, "Core checks passed") {
+		// daemon may warn
+		if strings.Contains(out, "fail") && strings.Contains(out, "SSH: n") && strings.Contains(out, "unreachable") {
+			t.Fatalf("local node should not fail SSH, got:\n%s", out)
+		}
+	}
+}

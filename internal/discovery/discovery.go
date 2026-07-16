@@ -26,7 +26,7 @@ const (
 var discoveryStartUDP = startUDP
 var discoveryBeaconWait = waitForBeaconWindow
 var discoveryIsLocalConfig = func(nc config.NodeConfig) bool {
-	return models.IsLocalConfig(nc.Name, nc.Hostname, nc.StableID)
+	return nc.IsLocal()
 }
 var newLocalDiscoveryCollector = func(name, role string) facts.Collector {
 	return facts.NewLocalCollector(name, role)
