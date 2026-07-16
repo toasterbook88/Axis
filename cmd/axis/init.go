@@ -96,6 +96,7 @@ func runInitWizardWithDeps(cmd *cobra.Command, deps initDependencies) error {
 	if err != nil {
 		return err
 	}
+	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("generated configuration is invalid: %w", err)
 	}
@@ -260,6 +261,7 @@ func updateConfig(ctx context.Context, prompt *initPrompter, cfg *config.Config,
 				return nil, err
 			}
 		case "review":
+			cfg.Normalize()
 			if err := cfg.Validate(); err != nil {
 				fmt.Fprintf(prompt.out, "%s %v\n", ui.Red("Invalid configuration:"), err)
 				continue

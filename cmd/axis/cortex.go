@@ -60,7 +60,7 @@ func buildCortexClient(timeout time.Duration) (*cortex.Client, error) {
 		return nil, fmt.Errorf("cortex: resolve auth token: %w", err)
 	}
 
-	return cortex.NewClientWithTimeout(node.Hostname, token, timeout), nil
+	return cortex.NewClientWithTimeout(node.PrimaryHostname(), token, timeout), nil
 }
 
 func cortexStatusCmd() *cobra.Command {

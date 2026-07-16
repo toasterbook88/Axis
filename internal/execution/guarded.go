@@ -283,8 +283,8 @@ func resolveExecutionOrigin(rt *runtimectx.Context) models.ExecutionOrigin {
 	}
 	if rt != nil && rt.Config != nil {
 		for _, nc := range rt.Config.Nodes {
-			if models.IsLocalConfig(nc.Name, nc.Hostname, nc.StableID) {
-				return models.NewExecutionOrigin(nc.Name, nc.Hostname, nc.StableID)
+			if nc.IsLocal() {
+				return models.NewExecutionOrigin(nc.Name, nc.PrimaryHostname(), nc.StableID)
 			}
 		}
 	}

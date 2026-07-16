@@ -147,6 +147,22 @@ func (n *NodeConfig) SSHDialSpec() SSHDialSpec {
 	}
 }
 
+// IsLocal reports whether this seed entry refers to the machine running AXIS.
+// It is the single endpoint-aware locality operation: StableID first, then any
+// authored hostname or endpoints[] dial target (not only the primary).
+func (n NodeConfig) IsLocal() bool {
+	// StableID match alone (hostname arg ignored when StableID matches first).
+	if n.StableID != "" && models.IsLocalConfig(n.Name, "", n.StableID) {
+		return true
+	}
+	for _, h := range n.DialHostnames() {
+		if h != "" && models.IsLocalConfig(n.Name, h, "") {
+			return true
+		}
+	}
+	return false
+}
+
 // MembershipFingerprint returns a stable short hash of cluster membership
 // (name + role + ssh_user per node), independent of dial addresses.
 func (c *Config) MembershipFingerprint() string {
@@ -295,7 +311,9 @@ func DefaultConfigPath() string {
 	return persist.AxisPath("nodes.yaml")
 }
 
-// Load reads and validates a config file.
+// Load reads, normalizes, and validates a config file.
+// Normalize runs before Validate so in-memory Hostname is filled from
+// endpoints when needed; Validate itself does not mutate the config.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -308,10 +326,26 @@ func Load(path string) (*Config, error) {
 	if err := cfg.MigrateProviders(); err != nil {
 		return nil, err
 	}
+	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// Normalize applies in-memory compatibility shims after parse.
+// It is safe to call multiple times. Hostname is authored-only and is never
+// synthesized from endpoints[] (call PrimaryHostname/SSHDialSpec/IsLocal instead).
+// Load always calls Normalize; Save only validates so endpoints-only YAML keeps
+// hostname absent on disk.
+func (c *Config) Normalize() {
+	if c == nil {
+		return
+	}
+	for i := range c.Nodes {
+		n := &c.Nodes[i]
+		n.StableID = models.NormalizeStableID(n.StableID)
+	}
 }
 
 func decodeStrict(data []byte, cfg *Config) error {
@@ -397,6 +431,8 @@ func (c *Config) MigrateProviders() error {
 }
 
 // Validate checks that all required fields are present.
+// Validate does not mutate the config. Call Normalize (or Load) first when
+// Hostname may be empty but endpoints[] provides a dial target.
 func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {
 		return fmt.Errorf("config: no nodes defined")
@@ -416,18 +452,12 @@ func (c *Config) Validate() error {
 		if n.PrimaryHostname() == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing hostname (or endpoints[].hostname)", i, n.Name)
 		}
-		// Fill Hostname from endpoints when only endpoints are provided so
-		// older call sites reading .Hostname keep working.
-		if strings.TrimSpace(n.Hostname) == "" {
-			n.Hostname = n.PrimaryHostname()
-		}
 		if n.SSHUser == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)
 		}
 		if n.SystemReserveMB < 0 {
 			return fmt.Errorf("config: node[%d] (%s) system_reserve_mb cannot be negative: %d", i, n.Name, n.SystemReserveMB)
 		}
-		n.StableID = models.NormalizeStableID(n.StableID)
 	}
 
 	for name, prov := range c.AIProviders {

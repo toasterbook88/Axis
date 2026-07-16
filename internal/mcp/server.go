@@ -474,7 +474,7 @@ func sshConnectivityTestTool(ctx context.Context, req mcpproto.CallToolRequest) 
 	out, runErr := exec.Run(runCtx, "printf axis-ok")
 	result := sshConnectivityResult{
 		Node:   nc.Name,
-		Host:   nc.Hostname,
+		Host:   nc.PrimaryHostname(),
 		OK:     runErr == nil && strings.TrimSpace(out) == "axis-ok",
 		Output: strings.TrimSpace(out),
 	}

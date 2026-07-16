@@ -420,7 +420,7 @@ func isNodeLocal(nodeName string, snap *models.ClusterSnapshot, cfg *config.Conf
 	if cfg != nil {
 		for _, n := range cfg.Nodes {
 			if n.Name == nodeName {
-				return models.IsLocalConfig(n.Name, n.Hostname, n.StableID)
+				return n.IsLocal()
 			}
 		}
 	}
