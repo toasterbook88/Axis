@@ -35,6 +35,12 @@ func (f *fakeRemoteExecutor) Run(_ context.Context, cmd string) (string, error) 
 	if res, ok := f.exact[cmd]; ok {
 		return res.out, res.err
 	}
+	// Match pre-wrap keys against bash-forced form used by RemoteCollector.
+	for k, res := range f.exact {
+		if WrapBash(k) == cmd {
+			return res.out, res.err
+		}
+	}
 	for needle, res := range f.contains {
 		if strings.Contains(cmd, needle) {
 			return res.out, res.err

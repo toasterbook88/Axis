@@ -37,9 +37,10 @@ func runRemote(ctx context.Context, tc *ToolContext, nodeName, command string) (
 		available := nodeNames(view.Config.Nodes)
 		return "", fmt.Errorf("node %q not found in cluster config (available: %s)", nodeName, available)
 	}
-	exec := transport.NewSSHExecutor(node.Hostname, node.EffectiveSSHPort(), node.SSHUser, node.EffectiveTimeout())
+	spec := node.SSHDialSpec()
+	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 	if err := exec.Connect(ctx); err != nil {
-		return "", fmt.Errorf("connect to %s (%s@%s): %w", nodeName, node.SSHUser, node.Hostname, err)
+		return "", fmt.Errorf("connect to %s (%s@%s): %w", nodeName, node.SSHUser, spec.Host, err)
 	}
 	defer exec.Close()
 	out, err := exec.Run(ctx, command)

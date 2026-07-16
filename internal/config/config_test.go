@@ -258,6 +258,70 @@ func TestEffectiveTimeout_Custom(t *testing.T) {
 	}
 }
 
+func TestEffectiveCollectTimeout_DefaultFloor(t *testing.T) {
+	n := &NodeConfig{} // legacy timeout 10
+	if got := n.EffectiveCollectTimeout(); got != 45 {
+		t.Fatalf("collect timeout = %d, want 45 floor", got)
+	}
+	n.TimeoutSec = 60
+	if got := n.EffectiveCollectTimeout(); got != 60 {
+		t.Fatalf("collect timeout = %d, want 60 when legacy higher", got)
+	}
+	n.CollectTimeoutSec = 12
+	if got := n.EffectiveCollectTimeout(); got != 12 {
+		t.Fatalf("explicit collect timeout = %d, want 12", got)
+	}
+}
+
+func TestEffectiveDialTimeout(t *testing.T) {
+	n := &NodeConfig{TimeoutSec: 8}
+	if got := n.EffectiveDialTimeout(); got != 8 {
+		t.Fatalf("dial = %d, want 8 from legacy", got)
+	}
+	n.DialTimeoutSec = 3
+	if got := n.EffectiveDialTimeout(); got != 3 {
+		t.Fatalf("dial = %d, want 3 explicit", got)
+	}
+}
+
+func TestPrimaryHostnameAndDialHostnames(t *testing.T) {
+	n := &NodeConfig{
+		Hostname: "192.168.1.1",
+		Endpoints: []NodeEndpoint{
+			{Name: "lan", Hostname: "192.168.1.1"},
+			{Name: "ts", Hostname: "100.1.2.3"},
+		},
+	}
+	if got := n.PrimaryHostname(); got != "192.168.1.1" {
+		t.Fatalf("primary = %q", got)
+	}
+	hosts := n.DialHostnames()
+	if len(hosts) != 2 || hosts[1] != "100.1.2.3" {
+		t.Fatalf("dial hosts = %v", hosts)
+	}
+}
+
+func TestMembershipFingerprint_Stable(t *testing.T) {
+	a := &Config{Nodes: []NodeConfig{
+		{Name: "b", Role: "hub", SSHUser: "axis"},
+		{Name: "a", Role: "muscle", SSHUser: "cranium"},
+	}}
+	b := &Config{Nodes: []NodeConfig{
+		{Name: "a", Hostname: "x", Role: "muscle", SSHUser: "cranium"},
+		{Name: "b", Hostname: "y", Role: "hub", SSHUser: "axis"},
+	}}
+	if a.MembershipFingerprint() != b.MembershipFingerprint() {
+		t.Fatalf("fingerprint should ignore hostnames and node order")
+	}
+	c := &Config{Nodes: []NodeConfig{
+		{Name: "a", Role: "other", SSHUser: "cranium"},
+		{Name: "b", Role: "hub", SSHUser: "axis"},
+	}}
+	if a.MembershipFingerprint() == c.MembershipFingerprint() {
+		t.Fatalf("role change should change fingerprint")
+	}
+}
+
 func TestDefaultConfigPath(t *testing.T) {
 	p := DefaultConfigPath()
 	if p == "" {

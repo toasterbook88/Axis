@@ -88,6 +88,8 @@ type SSHExecutor struct {
 	User               string
 	TimeoutSec         int
 	ResolvedDialTarget string
+	// DialFallbacks are alternate hostnames tried if the primary Host dial fails.
+	DialFallbacks      []string
 	mu                 sync.RWMutex
 	client             *ssh.Client
 	handshakeLatencyMs int64
@@ -96,6 +98,36 @@ type SSHExecutor struct {
 // NewSSHExecutor creates an SSH executor for a remote node.
 func NewSSHExecutor(host string, port int, user string, timeoutSec int) *SSHExecutor {
 	return &SSHExecutor{Host: host, Port: port, User: user, TimeoutSec: timeoutSec}
+}
+
+// SetDialFallbacks configures alternate dial hostnames (e.g. Tailscale after LAN).
+// Hosts must be logical seed values (SSH Host aliases or explicit IPs), not the
+// already-resolved HostName from a prior ssh -G of the primary alias.
+func (e *SSHExecutor) SetDialFallbacks(hosts []string) {
+	if e == nil {
+		return
+	}
+	e.DialFallbacks = append([]string(nil), hosts...)
+}
+
+// NewSSHExecutorFromDial builds an executor with primary host and optional fallbacks.
+func NewSSHExecutorFromDial(host string, port int, user string, dialTimeoutSec int, fallbacks []string) *SSHExecutor {
+	exec := NewSSHExecutor(host, port, user, dialTimeoutSec)
+	if len(fallbacks) > 0 {
+		exec.SetDialFallbacks(fallbacks)
+	}
+	return exec
+}
+
+// ConnectedHost returns the logical host currently bound to this executor.
+// After a successful Connect via a dial fallback, this is the host that worked.
+func (e *SSHExecutor) ConnectedHost() string {
+	if e == nil {
+		return ""
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.Host
 }
 
 // NewSSHExecutorWithDialTarget creates an SSH executor with a specific IP override.
@@ -128,44 +160,63 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	resolved := e.resolveSSHConfig(ctx)
 	hostKeyAddr := net.JoinHostPort(resolvedHostKeyName(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
 
+	// Dial/handshake budget is TimeoutSec (EffectiveDialTimeout), never the full
+	// parent collect context alone — otherwise a stalled handshake burns the
+	// entire fact-collection window and blocks endpoint fallback.
+	dialTimeout := time.Duration(e.TimeoutSec) * time.Second
+	if dialTimeout <= 0 {
+		dialTimeout = 10 * time.Second
+	}
+
 	config, err := e.sshConfig(resolved, hostKeyAddr)
 	if err != nil {
 		return fmt.Errorf("ssh config: %w", err)
 	}
+	config.Timeout = dialTimeout
 
-	timeout := time.Duration(e.TimeoutSec) * time.Second
-	dialer := net.Dialer{Timeout: timeout}
+	dialer := net.Dialer{Timeout: dialTimeout}
 
-	// Helper to try a specific dial address while keeping hostKeyAddr for SSH crypto
-	tryDial := func(dialAddr string) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, int64, error) {
+	// handshakeDeadline = min(now+dialTimeout, ctx.Deadline if set).
+	handshakeDeadline := func() time.Time {
+		d := time.Now().Add(dialTimeout)
+		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(d) {
+			return ctxDeadline
+		}
+		return d
+	}
+
+	// tryDial uses dialAddr for TCP and the current hostKeyAddr/config for crypto.
+	tryDial := func(dialAddr string, hkAddr string, cfg *ssh.ClientConfig, hkName string, hkPort int) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, int64, error) {
 		start := time.Now()
-		conn, err := dialer.DialContext(ctx, "tcp", dialAddr)
+		// Cap dial context by dial timeout so one bad endpoint cannot exhaust collect budget.
+		dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
+		defer dialCancel()
+		conn, err := dialer.DialContext(dialCtx, "tcp", dialAddr)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, nil, 0, ctxErr
+			}
+			if dialCtx.Err() != nil {
+				return nil, nil, nil, 0, fmt.Errorf("ssh dial %s: %w", dialAddr, context.DeadlineExceeded)
 			}
 			return nil, nil, nil, 0, fmt.Errorf("ssh dial %s: %w", dialAddr, err)
 		}
 
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			deadline = time.Now().Add(timeout)
-		}
-		if err := conn.SetDeadline(deadline); err != nil {
+		if err := conn.SetDeadline(handshakeDeadline()); err != nil {
 			conn.Close()
 			return nil, nil, nil, 0, fmt.Errorf("ssh set deadline %s: %w", dialAddr, err)
 		}
 
-		sshConn, chans, reqs, err := ssh.NewClientConn(conn, hostKeyAddr, config)
+		sshConn, chans, reqs, err := ssh.NewClientConn(conn, hkAddr, cfg)
 		if err != nil {
 			conn.Close()
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, nil, nil, 0, ctxErr
 			}
-			if handshakeDeadlineExceeded(ctx, err) {
+			if handshakeDeadlineExceeded(ctx, err) || errors.Is(err, os.ErrDeadlineExceeded) {
 				return nil, nil, nil, 0, context.DeadlineExceeded
 			}
-			if hint := handshakeRemediation(err, resolvedHostKeyName(resolved, e.Host), resolvedPort(resolved, e.Port)); hint != "" {
+			if hint := handshakeRemediation(err, hkName, hkPort); hint != "" {
 				return nil, nil, nil, 0, fmt.Errorf("ssh handshake %s: %w; remediation: %s", dialAddr, err, hint)
 			}
 			return nil, nil, nil, 0, fmt.Errorf("ssh dial %s: %w", dialAddr, err)
@@ -188,7 +239,10 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	// 1. Try the dynamic fast-path (ResolvedDialTarget) first
 	if e.ResolvedDialTarget != "" {
 		dialAddr := net.JoinHostPort(e.ResolvedDialTarget, strconv.Itoa(resolvedPort(resolved, e.Port)))
-		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(dialAddr)
+		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(
+			dialAddr, hostKeyAddr, config,
+			resolvedHostKeyName(resolved, e.Host), resolvedPort(resolved, e.Port),
+		)
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Fast-path failed (e.g. DPI firewall blocked SSH handshake on a fast TCP link).
 			// We swallow the error and fall back to the logical OS resolution.
@@ -196,12 +250,53 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		}
 	}
 
-	// 2. Fall back to the logical host resolution
+	// 2. Logical primary host, then optional dial fallbacks (LAN → Tailscale).
+	// Candidates are logical seed/alias names so ssh -G keeps HostKeyAlias,
+	// IdentityFile, User, and Port from the operator's SSH config.
 	if sshConn == nil {
-		logicalAddr := net.JoinHostPort(resolvedDialHost(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
-		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(logicalAddr)
-		if err != nil {
-			return err
+		candidates := []string{e.Host}
+		candidates = append(candidates, e.DialFallbacks...)
+		var lastErr error
+		for i, hostCand := range candidates {
+			hostCand = strings.TrimSpace(hostCand)
+			if hostCand == "" {
+				continue
+			}
+			candResolved := resolved
+			if i > 0 || hostCand != e.Host {
+				// Primary already resolved as `resolved`; only re-resolve true alternates.
+				if hostCand != e.Host {
+					candResolved = e.resolveSSHConfigForHost(ctx, hostCand)
+				}
+			}
+			dialHost := resolvedDialHost(candResolved, hostCand)
+			logicalAddr := net.JoinHostPort(dialHost, strconv.Itoa(resolvedPort(candResolved, e.Port)))
+			hkName := resolvedHostKeyName(candResolved, hostCand)
+			hkPort := resolvedPort(candResolved, e.Port)
+			hkAddr := net.JoinHostPort(hkName, strconv.Itoa(hkPort))
+			candConfig, cfgErr := e.sshConfig(candResolved, hkAddr)
+			if cfgErr != nil {
+				lastErr = cfgErr
+				continue
+			}
+			// ClientConfig.Timeout also bounds handshake I/O.
+			candConfig.Timeout = dialTimeout
+			sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(logicalAddr, hkAddr, candConfig, hkName, hkPort)
+			if err == nil {
+				e.mu.Lock()
+				e.Host = hostCand
+				e.mu.Unlock()
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			sshConn = nil
+		}
+		if sshConn == nil {
+			if lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("ssh dial: no dial targets")
 		}
 	}
 	e.mu.Lock()
@@ -551,7 +646,11 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 }
 
 func (e *SSHExecutor) resolveSSHConfig(ctx context.Context) resolvedSSHConfig {
-	output, err := runSSHConfigCommand(ctx, e.Host, e.Port, e.User)
+	return e.resolveSSHConfigForHost(ctx, e.Host)
+}
+
+func (e *SSHExecutor) resolveSSHConfigForHost(ctx context.Context, host string) resolvedSSHConfig {
+	output, err := runSSHConfigCommand(ctx, host, e.Port, e.User)
 	if err != nil {
 		return resolvedSSHConfig{}
 	}
