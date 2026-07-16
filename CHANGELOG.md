@@ -1,23 +1,28 @@
 ## Unreleased
 
+## v0.14.4 (2026-07-16)
+
 ### 🚀 Features
-* **Doctor:** Skip remote SSH and shell probes for the local node (avoids false pubkey fail on self Tailscale IP).
-* **Config:** `Normalize()` (StableID only); pure `Validate()`; authored `hostname` never synthesized from `endpoints[]`; `NodeConfig.IsLocal()` is the single endpoint-aware locality API.
-* **Facts:** One-shot remote fact bundle (single bash session) with legacy multi-probe fallback — core + thermal/storage/tools coverage, far less sensitive to slow login shells (e.g. fish+conda).
-* **Facts:** Portable bash launcher for remote probes (`command -v bash` + FHS + NixOS paths); no hard-coded `/bin/bash`.
-* **Config:** `collect_timeout_sec` / `dial_timeout_sec` (defaults: collect floor 45s, dial inherits `timeout_sec`); optional `endpoints[]` for LAN+Tailscale dial targets with fallback; `SSHDialSpec()`.
-* **Config:** `MembershipFingerprint()` for stable cluster membership identity (name/role/user).
-* **Models:** `PartialReasons` + `FormatPartialReasons` for probe-level partial diagnostics.
-* **Doctor:** Membership fingerprint in config check; mDNS `.local` seed warning; dial/collect timeout display; remote shell cost probe (slow login shell advisory).
-* **Transport:** Dial fallbacks + `ConnectedHost()`; handshake bounded by dial timeout (not full collect context).
+* **Doctor:** Skip remote SSH and shell probes for the local node (avoids false pubkey fail on self Tailscale IP). (#239)
+* **Config:** `Normalize()` (StableID only); pure `Validate()`; authored `hostname` never synthesized from `endpoints[]`; `NodeConfig.IsLocal()` is the single endpoint-aware locality API. (#239)
+* **Facts:** One-shot remote fact bundle (single bash session) with legacy multi-probe fallback — core + thermal/storage/tools coverage, far less sensitive to slow login shells (e.g. fish+conda). (#238)
+* **Facts:** Portable bash launcher for remote probes (`command -v bash` + FHS + NixOS paths); no hard-coded `/bin/bash`. (#238)
+* **Config:** `collect_timeout_sec` / `dial_timeout_sec` (defaults: collect floor 45s, dial inherits `timeout_sec`); optional `endpoints[]` for LAN+Tailscale dial targets with fallback; `SSHDialSpec()`. (#238)
+* **Config:** `MembershipFingerprint()` for stable cluster membership identity (name/role/user). (#238)
+* **Models:** `PartialReasons` + `FormatPartialReasons` for probe-level partial diagnostics. (#238)
+* **Doctor:** Membership fingerprint in config check; mDNS `.local` seed warning; dial/collect timeout display; remote shell cost probe (slow login shell advisory). (#238)
+* **Transport:** Dial fallbacks + `ConnectedHost()`; handshake bounded by dial timeout (not full collect context). (#238)
+* **Agent:** Inject nearest `AGENTS.md` into the system prompt. (#237)
+* **Agent:** Bind model selection to endpoint and protocol. (#235)
 
 ### 🐛 Bug Fixes
-* **Daemon/mesh:** Seed peers from `PrimaryHostname()` so endpoints-only nodes stay in gossip fan-out after Hostname backfill removal.
-* **Config:** Load→edit→Save preserves endpoints-only YAML (no synthetic node `hostname`); `NodeConfig.IsLocal()` used by doctor, discovery, daemon, execution, and reservations.
-* **Discovery:** Use collect timeout (not short dial timeout) as the full remote fact budget so multi-probe/slow-shell nodes complete instead of silent partials.
-* **Transport:** Endpoint fallback uses logical SSH alias names (preserves HostKeyAlias/IdentityFile); dial timeout caps handshake so stalled peers do not burn collect budget.
-* **Facts:** Bundle path fills ThermalState/ThermalZones (placement safety), tool versions, and mapper-aware storage when needed; SSHTarget tracks connected endpoint after fallback.
-* **Execution/MCP/Agent/Chat:** Propagate `endpoints[]` dial fallbacks through guarded exec, MCP, agent remote tools, and chat tunnel routing.
+* **Daemon/mesh:** Seed peers from `PrimaryHostname()` so endpoints-only nodes stay in gossip fan-out after Hostname backfill removal. (#239)
+* **Config:** Load→edit→Save preserves endpoints-only YAML (no synthetic node `hostname`); `NodeConfig.IsLocal()` used by doctor, discovery, daemon, execution, and reservations. (#239)
+* **Discovery:** Use collect timeout (not short dial timeout) as the full remote fact budget so multi-probe/slow-shell nodes complete instead of silent partials. (#238)
+* **Transport:** Endpoint fallback uses logical SSH alias names (preserves HostKeyAlias/IdentityFile); dial timeout caps handshake so stalled peers do not burn collect budget. (#238)
+* **Facts:** Bundle path fills ThermalState/ThermalZones (placement safety), tool versions, and mapper-aware storage when needed; SSHTarget tracks connected endpoint after fallback. (#238)
+* **Execution/MCP/Agent/Chat:** Propagate `endpoints[]` dial fallbacks through guarded exec, MCP, agent remote tools, and chat tunnel routing. (#238)
+* **Agent:** Wire `shell` and `run_on_node` through guarded execution. (#236)
 
 ## v0.14.3 (2026-07-15)
 
@@ -66,8 +71,6 @@
 * **Release truth:** Drop live `published_at` timestamps from generated `docs/current-state.md` facts; disable broken auto-refresh workflow that could not open PRs under branch protection. GitHub Releases remain authority. (#207)
 * **Docs:** Honest merge-policy description; tag-only GoReleaser release process; daemon restart guidance. (#207)
 * **`hack/pr-review-cycle.sh`:** Fail-closed required-check helper for the solo-operator PR loop (collection only; no auto-merge). (#208)
-
-## Unreleased
 
 ## v0.14.0 (2026-07-09)
 
