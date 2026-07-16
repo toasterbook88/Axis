@@ -343,3 +343,13 @@ func TestGPUInfo_JSONRoundTrip(t *testing.T) {
 		t.Errorf("vendor = %q, want nvidia", decoded.GPUs[0].Vendor)
 	}
 }
+
+func TestFormatPartialReasons(t *testing.T) {
+	if got := models.FormatPartialReasons(nil); got != "some facts failed to collect" {
+		t.Fatalf("nil = %q", got)
+	}
+	got := models.FormatPartialReasons([]models.PartialReason{{Probe: "df", Message: "deadline"}})
+	if got != "some facts failed (df: deadline)" {
+		t.Fatalf("got %q", got)
+	}
+}

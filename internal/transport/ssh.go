@@ -88,6 +88,8 @@ type SSHExecutor struct {
 	User               string
 	TimeoutSec         int
 	ResolvedDialTarget string
+	// DialFallbacks are alternate hostnames tried if the primary Host dial fails.
+	DialFallbacks []string
 	mu                 sync.RWMutex
 	client             *ssh.Client
 	handshakeLatencyMs int64
@@ -96,6 +98,14 @@ type SSHExecutor struct {
 // NewSSHExecutor creates an SSH executor for a remote node.
 func NewSSHExecutor(host string, port int, user string, timeoutSec int) *SSHExecutor {
 	return &SSHExecutor{Host: host, Port: port, User: user, TimeoutSec: timeoutSec}
+}
+
+// SetDialFallbacks configures alternate dial hostnames (e.g. Tailscale after LAN).
+func (e *SSHExecutor) SetDialFallbacks(hosts []string) {
+	if e == nil {
+		return
+	}
+	e.DialFallbacks = append([]string(nil), hosts...)
 }
 
 // NewSSHExecutorWithDialTarget creates an SSH executor with a specific IP override.
@@ -196,12 +206,46 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		}
 	}
 
-	// 2. Fall back to the logical host resolution
+	// 2. Fall back to the logical host resolution, then optional dial fallbacks
+	// (LAN primary → Tailscale secondary from nodes.yaml endpoints).
 	if sshConn == nil {
-		logicalAddr := net.JoinHostPort(resolvedDialHost(resolved, e.Host), strconv.Itoa(resolvedPort(resolved, e.Port)))
-		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(logicalAddr)
-		if err != nil {
-			return err
+		candidates := []string{resolvedDialHost(resolved, e.Host)}
+		candidates = append(candidates, e.DialFallbacks...)
+		var lastErr error
+		for _, hostCand := range candidates {
+			hostCand = strings.TrimSpace(hostCand)
+			if hostCand == "" {
+				continue
+			}
+			// Re-resolve ssh config for alternate hostnames when different from primary.
+			candResolved := resolved
+			if hostCand != e.Host {
+				candResolved = e.resolveSSHConfigForHost(ctx, hostCand)
+			}
+			dialHost := resolvedDialHost(candResolved, hostCand)
+			logicalAddr := net.JoinHostPort(dialHost, strconv.Itoa(resolvedPort(candResolved, e.Port)))
+			// Host key verification uses the candidate hostname.
+			hostKeyAddr = net.JoinHostPort(resolvedHostKeyName(candResolved, hostCand), strconv.Itoa(resolvedPort(candResolved, e.Port)))
+			config, err = e.sshConfig(candResolved, hostKeyAddr)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(logicalAddr)
+			if err == nil {
+				// Remember which host worked for subsequent sessions.
+				e.Host = hostCand
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			sshConn = nil
+		}
+		if sshConn == nil {
+			if lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("ssh dial: no dial targets")
 		}
 	}
 	e.mu.Lock()
@@ -551,7 +595,11 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 }
 
 func (e *SSHExecutor) resolveSSHConfig(ctx context.Context) resolvedSSHConfig {
-	output, err := runSSHConfigCommand(ctx, e.Host, e.Port, e.User)
+	return e.resolveSSHConfigForHost(ctx, e.Host)
+}
+
+func (e *SSHExecutor) resolveSSHConfigForHost(ctx context.Context, host string) resolvedSSHConfig {
+	output, err := runSSHConfigCommand(ctx, host, e.Port, e.User)
 	if err != nil {
 		return resolvedSSHConfig{}
 	}

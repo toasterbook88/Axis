@@ -24,8 +24,8 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
-				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
-				{Name: "beta", Hostname: "beta.local", SSHUser: "axis", SSHPort: 2222, TimeoutSec: 25},
+				{Name: "alpha", Hostname: "10.0.0.1", SSHUser: "axis"},
+				{Name: "beta", Hostname: "10.0.0.2", SSHUser: "axis", SSHPort: 2222, TimeoutSec: 25},
 			},
 		}, nil
 	})
@@ -35,7 +35,7 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	restoreSSH := stubDoctorSSHChecker(t, func(_ context.Context, node config.NodeConfig) error {
 		seen = append(seen, node)
 		if node.Name == "beta" {
-			return errors.New("ssh handshake beta.local:2222: ssh: handshake failed: knownhosts: key mismatch")
+			return errors.New("ssh handshake 10.0.0.2:2222: ssh: handshake failed: knownhosts: key mismatch")
 		}
 		return nil
 	})
@@ -68,10 +68,10 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 	if seen[1].EffectiveTimeout() != 25 {
 		t.Fatalf("beta timeout = %d, want 25", seen[1].EffectiveTimeout())
 	}
-	if !strings.Contains(stdout, "connected to alpha.local:22") {
+	if !strings.Contains(stdout, "connected to 10.0.0.1:22") {
 		t.Fatalf("expected alpha success in output, got %q", stdout)
 	}
-	if !strings.Contains(stdout, "unreachable (beta.local:2222)") {
+	if !strings.Contains(stdout, "unreachable (10.0.0.2:2222)") {
 		t.Fatalf("expected beta failure header in output, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "knownhosts") {
@@ -95,7 +95,7 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
-				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+				{Name: "alpha", Hostname: "10.0.0.1", SSHUser: "axis"},
 			},
 		}, nil
 	})
@@ -125,7 +125,7 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 		t.Fatalf("expected no stderr, got %q", stderr)
 	}
 	stdout = stripANSI(stdout)
-	if !strings.Contains(stdout, "connected to alpha.local:22") {
+	if !strings.Contains(stdout, "connected to 10.0.0.1:22") {
 		t.Fatalf("expected SSH success in output, got %q", stdout)
 	}
 	if !strings.Contains(stdout, "Reachable, 1 node(s) cached") {
@@ -146,7 +146,7 @@ func TestDoctorTreatsDaemonFailureAsAdvisoryByDefault(t *testing.T) {
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
-				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+				{Name: "alpha", Hostname: "10.0.0.1", SSHUser: "axis"},
 			},
 		}, nil
 	})
@@ -192,7 +192,7 @@ func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
-				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+				{Name: "alpha", Hostname: "10.0.0.1", SSHUser: "axis"},
 			},
 		}, nil
 	})
@@ -235,7 +235,7 @@ func TestDoctorWarnsWhenDaemonCacheHasZeroNodes(t *testing.T) {
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
-				{Name: "alpha", Hostname: "alpha.local", SSHUser: "axis"},
+				{Name: "alpha", Hostname: "10.0.0.1", SSHUser: "axis"},
 			},
 		}, nil
 	})
@@ -301,9 +301,13 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	t.Helper()
 	restorePath := stubDoctorConfigPath(t, func() string { return filepath.Join(t.TempDir(), "nodes.yaml") })
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
-		return &config.Config{Nodes: []config.NodeConfig{{Name: "n", Hostname: "n.local", SSHUser: "axis"}}}, nil
+		return &config.Config{Nodes: []config.NodeConfig{{Name: "n", Hostname: "127.0.0.1", SSHUser: "axis"}}}, nil
 	})
 	restoreSSH := stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error { return nil })
+	prevShell := doctorProbeRemoteShell
+	doctorProbeRemoteShell = func(context.Context, config.NodeConfig) (string, bool) {
+		return "SHELL=/bin/bash; bare session 5ms", false
+	}
 	restoreCache := stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
 		return &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "n"}}}, "cached", nil
 	})
@@ -320,6 +324,7 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 		restorePath()
 		restoreLoad()
 		restoreSSH()
+		doctorProbeRemoteShell = prevShell
 		restoreCache()
 		restoreOllama()
 		restoreLlama()

@@ -1,3 +1,17 @@
+## Unreleased
+
+### 🚀 Features
+* **Facts:** One-shot remote fact bundle (single bash session) with legacy multi-probe fallback — same NodeFacts coverage, far less sensitive to slow login shells (e.g. fish+conda).
+* **Facts:** Force `/bin/bash --noprofile --norc` for all remote fact probes (scripts remain bash-correct without requiring bash as login shell).
+* **Config:** `collect_timeout_sec` / `dial_timeout_sec` (defaults: collect floor 45s, dial inherits `timeout_sec`); optional `endpoints[]` for LAN+Tailscale dial targets with fallback.
+* **Config:** `MembershipFingerprint()` for stable cluster membership identity (name/role/user).
+* **Models:** `PartialReasons` + `FormatPartialReasons` for probe-level partial diagnostics.
+* **Doctor:** Membership fingerprint in config check; mDNS `.local` seed warning; dial/collect timeout display; remote shell cost probe (slow login shell advisory).
+* **Transport:** `SetDialFallbacks` for alternate hostnames when primary dial fails.
+
+### 🐛 Bug Fixes
+* **Discovery:** Use collect timeout (not short dial timeout) as the full remote fact budget so multi-probe/slow-shell nodes complete instead of silent partials.
+
 ## v0.14.3 (2026-07-15)
 
 ### 🚀 Features

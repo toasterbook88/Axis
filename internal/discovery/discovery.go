@@ -32,13 +32,18 @@ var newLocalDiscoveryCollector = func(name, role string) facts.Collector {
 	return facts.NewLocalCollector(name, role)
 }
 var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
-	exec := transport.NewSSHExecutor(
-		nc.Hostname,
-		nc.EffectiveSSHPort(),
-		nc.SSHUser,
-		nc.EffectiveTimeout(),
-	)
-	return facts.NewRemoteCollector(nc.Name, nc.Role, nc.Hostname, exec)
+	host := nc.PrimaryHostname()
+	if host == "" {
+		host = nc.Hostname
+	}
+	// DialHostnames()[0] is preferred (first endpoint or hostname). Additional
+	// endpoints are attempted on connect failure when the executor supports it.
+	hosts := nc.DialHostnames()
+	exec := transport.NewSSHExecutor(host, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveDialTimeout())
+	if len(hosts) > 1 {
+		exec.SetDialFallbacks(hosts[1:])
+	}
+	return facts.NewRemoteCollector(nc.Name, nc.Role, host, exec)
 }
 
 // Discover probes all configured nodes concurrently and returns their facts.
@@ -192,7 +197,9 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 			defer wg.Done()
 			defer func() { <-sem }() // release slot
 
-			nodeCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveTimeout())*time.Second)
+			// Collect budget covers full remote fact gather (bundle or multi-probe).
+			// Dial timeout is applied inside the SSH executor handshake.
+			nodeCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveCollectTimeout())*time.Second)
 			defer cancel()
 
 			var collector facts.Collector

@@ -21,12 +21,19 @@ import (
 var doctorConfigPath = config.DefaultConfigPath
 var loadDoctorConfig = config.Load
 var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
+	host := node.PrimaryHostname()
+	if host == "" {
+		host = node.Hostname
+	}
 	sshExec := transport.NewSSHExecutor(
-		node.Hostname,
+		host,
 		node.EffectiveSSHPort(),
 		node.SSHUser,
-		node.EffectiveTimeout(),
+		node.EffectiveDialTimeout(),
 	)
+	if hosts := node.DialHostnames(); len(hosts) > 1 {
+		sshExec.SetDialFallbacks(hosts[1:])
+	}
 	defer sshExec.Close()
 	return sshExec.Connect(ctx)
 }
@@ -112,6 +119,40 @@ func doctorCmd() *cobra.Command {
 	return cmd
 }
 
+// doctorProbeRemoteShell measures remote login-shell cost and default shell.
+// Returns a human message and whether it should be a warning.
+// Overridable in tests to avoid real SSH.
+var doctorProbeRemoteShell = doctorProbeRemoteShellImpl
+
+func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (string, bool) {
+	host := node.PrimaryHostname()
+	if host == "" {
+		host = node.Hostname
+	}
+	exec := transport.NewSSHExecutor(host, node.EffectiveSSHPort(), node.SSHUser, node.EffectiveDialTimeout())
+	if hosts := node.DialHostnames(); len(hosts) > 1 {
+		exec.SetDialFallbacks(hosts[1:])
+	}
+	defer exec.Close()
+	if err := exec.Connect(ctx); err != nil {
+		return "", false
+	}
+	start := time.Now()
+	// Intentionally NOT bash-wrapped: measure real login-shell cost for bare true.
+	out, err := exec.Run(ctx, "echo SHELL=$SHELL; true")
+	elapsed := time.Since(start)
+	if err != nil {
+		return fmt.Sprintf("shell probe failed: %v", err), true
+	}
+	shell := strings.TrimSpace(out)
+	warn := elapsed > 400*time.Millisecond
+	msg := fmt.Sprintf("%s; bare session %.0fms", shell, elapsed.Seconds()*1000)
+	if warn {
+		msg += " (slow login shell — multi-probe collects may exceed short timeouts)"
+	}
+	return msg, warn
+}
+
 func runDoctor(cmd *cobra.Command, strict bool) error {
 	out := cmd.OutOrStdout()
 	var checks []DoctorCheck
@@ -130,8 +171,23 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		checks = append(checks, DoctorCheck{
 			Name:    "Configuration File",
 			Status:  "pass",
-			Message: fmt.Sprintf("Loaded %d node(s) from %s", len(cfg.Nodes), cfgPath),
+			Message: fmt.Sprintf("Loaded %d node(s) from %s (membership %s)", len(cfg.Nodes), cfgPath, cfg.MembershipFingerprint()),
 		})
+
+		// 1.25 Seed hygiene: mDNS hostnames are fragile across OS resolvers.
+		for _, n := range cfg.Nodes {
+			for _, h := range n.DialHostnames() {
+				if strings.HasSuffix(strings.ToLower(h), ".local") {
+					checks = append(checks, DoctorCheck{
+						Name:    fmt.Sprintf("Seed hostname: %s", n.Name),
+						Status:  "warn",
+						Message: fmt.Sprintf("%s uses mDNS (.local); prefer stable LAN/Tailscale IPs", h),
+						Fix:     "set hostname to a fixed IP (LAN or Tailscale) in nodes.yaml",
+					})
+					break
+				}
+			}
+		}
 
 		// 1.5 MCP server config validation
 		for name, mcpCfg := range cfg.MCPServers {
@@ -190,10 +246,11 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 			}
 		}
 
-		// 2. SSH connectivity check per node
+		// 2. SSH connectivity + lightweight mesh probes per node
 		for _, n := range cfg.Nodes {
-			addr := net.JoinHostPort(n.Hostname, fmt.Sprintf("%d", n.EffectiveSSHPort()))
-			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(n.EffectiveTimeout())*time.Second)
+			host := n.PrimaryHostname()
+			addr := net.JoinHostPort(host, fmt.Sprintf("%d", n.EffectiveSSHPort()))
+			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(n.EffectiveDialTimeout())*time.Second)
 			sshErr := doctorCheckNodeSSH(sshCtx, n)
 			cancel()
 			if sshErr != nil {
@@ -201,12 +258,32 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 					Name:    fmt.Sprintf("SSH: %s", n.Name),
 					Status:  "fail",
 					Message: fmt.Sprintf("unreachable (%s): %v", addr, sshErr),
+					Fix:     "verify pubkey auth, known_hosts, and dial address (LAN vs Tailscale)",
 				})
-			} else {
+				continue
+			}
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("SSH: %s", n.Name),
+				Status:  "pass",
+				Message: fmt.Sprintf("connected to %s (dial %ds / collect %ds)", addr, n.EffectiveDialTimeout(), n.EffectiveCollectTimeout()),
+			})
+
+			// Remote shell cost: slow login shells (fish+conda) break multi-probe collects.
+			meshCtx, meshCancel := context.WithTimeout(cmd.Context(), time.Duration(n.EffectiveDialTimeout()+5)*time.Second)
+			shellMsg, shellWarn := doctorProbeRemoteShell(meshCtx, n)
+			meshCancel()
+			if shellWarn {
 				checks = append(checks, DoctorCheck{
-					Name:    fmt.Sprintf("SSH: %s", n.Name),
+					Name:    fmt.Sprintf("Remote shell: %s", n.Name),
+					Status:  "warn",
+					Message: shellMsg,
+					Fix:     "AXIS forces bash for fact scripts; prefer one-shot collect (default) or raise collect_timeout_sec",
+				})
+			} else if shellMsg != "" {
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("Remote shell: %s", n.Name),
 					Status:  "pass",
-					Message: fmt.Sprintf("connected to %s", addr),
+					Message: shellMsg,
 				})
 			}
 		}

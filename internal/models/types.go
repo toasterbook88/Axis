@@ -3,6 +3,7 @@
 package models
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -321,7 +322,36 @@ type NodeFacts struct {
 	// Result metadata
 	Status      NodeStatus `json:"status" yaml:"status"`
 	Error       string     `json:"error,omitempty" yaml:"error,omitempty"`
-	CollectedAt time.Time  `json:"collected_at" yaml:"collected_at"`
+	// PartialReasons lists probe-level failures when Status is partial.
+	// Additive: older consumers can ignore this field.
+	PartialReasons []PartialReason `json:"partial_reasons,omitempty" yaml:"partial_reasons,omitempty"`
+	CollectedAt    time.Time       `json:"collected_at" yaml:"collected_at"`
+}
+
+// PartialReason records a single fact-probe failure for operator diagnostics.
+type PartialReason struct {
+	Probe   string `json:"probe" yaml:"probe"`
+	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+}
+
+// FormatPartialReasons returns a short human-readable summary of partial failures.
+func FormatPartialReasons(reasons []PartialReason) string {
+	if len(reasons) == 0 {
+		return "some facts failed to collect"
+	}
+	parts := make([]string, 0, len(reasons))
+	for i, r := range reasons {
+		if i >= 4 {
+			parts = append(parts, fmt.Sprintf("+%d more", len(reasons)-4))
+			break
+		}
+		if r.Message == "" {
+			parts = append(parts, r.Probe)
+			continue
+		}
+		parts = append(parts, r.Probe+": "+r.Message)
+	}
+	return "some facts failed (" + strings.Join(parts, "; ") + ")"
 }
 
 // --- Epistemic State (Truth Classification) ---
