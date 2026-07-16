@@ -157,6 +157,9 @@ func TestUpdateCheckReportsStaleShadows(t *testing.T) {
 	if !strings.Contains(output, "axis update --all") {
 		t.Fatalf("expected --all hint, got: %s", output)
 	}
+	if strings.Contains(output, "use --check for details") {
+		t.Fatalf("--check output must not suggest running --check again: %s", output)
+	}
 }
 
 func TestUpdateCheckCurrentBuildNewerThanLatestPublishedRelease(t *testing.T) {

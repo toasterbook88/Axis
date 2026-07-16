@@ -145,7 +145,9 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 
 	selfPath := resolveSelfPath()
 	shadows := listKnownInstallPaths(selfPath)
-	reportShadows(out, shadows, latest, selfPath)
+	if !checkOnly {
+		reportShadows(out, shadows)
+	}
 
 	relation, err := compareReleaseVersions(current, latest)
 	if err != nil {
@@ -246,7 +248,7 @@ func reportCheck(out io.Writer, current, latest string, relation int, selfPath s
 	return nil
 }
 
-func reportShadows(out io.Writer, shadows []string, latest, selfPath string) {
+func reportShadows(out io.Writer, shadows []string) {
 	if len(shadows) == 0 {
 		return
 	}
