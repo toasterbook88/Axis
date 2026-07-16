@@ -17,12 +17,26 @@ require_command rg
 require_command git
 require_command diff
 
-curl_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
+curl_base_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
+curl_args=("${curl_base_args[@]}")
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
-latest_release_tag="$(curl "${curl_args[@]}" "https://api.github.com/repos/toasterbook88/axis/releases/latest" | jq -r '.tag_name // ""')"
+github_get() {
+  local url="$1"
+  if curl "${curl_args[@]}" "$url"; then
+    return 0
+  fi
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    printf 'authenticated GitHub API request failed; retrying without credentials\n' >&2
+    curl "${curl_base_args[@]}" "$url"
+    return
+  fi
+  return 1
+}
+
+latest_release_tag="$(github_get "https://api.github.com/repos/toasterbook88/axis/releases/latest" | jq -r '.tag_name // ""')"
 if [[ -z "$latest_release_tag" ]]; then
   printf 'failed to determine latest published release tag from GitHub\n' >&2
   exit 1
@@ -55,7 +69,7 @@ for tag in "${release_refs[@]}"; do
     # Skip querying GitHub API for the tag currently being released/built
     continue
   fi
-  if ! curl "${curl_args[@]}" "https://api.github.com/repos/toasterbook88/axis/releases/tags/${tag}" >/dev/null; then
+  if ! github_get "https://api.github.com/repos/toasterbook88/axis/releases/tags/${tag}" >/dev/null; then
     printf 'operator-facing docs reference unpublished release %s\n' "$tag" >&2
     exit 1
   fi

@@ -1,5 +1,8 @@
 ## Unreleased
 
+### 🐛 Bug Fixes
+* **CLI:** Harden `axis update`: default remains a bounded self-update of the running install; report PATH/common shadows; `--all` updates other installs only after per-target AXIS identity (`debug/buildinfo` exact module path), version (no silent downgrade; unknown version allowed only for explicit `--path`/self), package-manager path checks, and symlink-safe replace of the resolved target. `--check` reports multi-install staleness.
+
 ## v0.14.4 (2026-07-16)
 
 ### 🚀 Features
