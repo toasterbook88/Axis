@@ -50,10 +50,13 @@ github_api_get() {
   local curl_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
 
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    curl "${curl_args[@]}" --config - "$url" <<EOF
+    if curl "${curl_args[@]}" --config - "$url" <<EOF
 header = "Authorization: Bearer ${GITHUB_TOKEN}"
 EOF
-    return
+    then
+      return 0
+    fi
+    printf 'authenticated GitHub API request failed; retrying without credentials\n' >&2
   fi
 
   curl "${curl_args[@]}" "$url"
