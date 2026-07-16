@@ -14,6 +14,7 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/facts"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -26,6 +27,30 @@ var loadDoctorConfig = config.Load
 func newDoctorSSHExecutor(node config.NodeConfig) *transport.SSHExecutor {
 	spec := node.SSHDialSpec()
 	return transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
+}
+
+// doctorNodeIsLocal reports whether a seed entry refers to this machine.
+// Checks PrimaryHostname, Hostname, and all dial hostnames (LAN + Tailscale).
+var doctorNodeIsLocal = func(n config.NodeConfig) bool {
+	if models.IsLocalConfig(n.Name, n.PrimaryHostname(), n.StableID) {
+		return true
+	}
+	if n.Hostname != "" && models.IsLocalConfig(n.Name, n.Hostname, n.StableID) {
+		return true
+	}
+	for _, h := range n.DialHostnames() {
+		if models.IsLocalConfig(n.Name, h, n.StableID) {
+			return true
+		}
+	}
+	return false
+}
+
+func doctorLocalShell() string {
+	if sh := strings.TrimSpace(os.Getenv("SHELL")); sh != "" {
+		return sh
+	}
+	return "unknown"
 }
 
 var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
@@ -235,11 +260,28 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 			}
 		}
 
-		// 2. SSH connectivity + lightweight mesh probes per node
+		// 2. SSH connectivity + lightweight mesh probes per node.
+		// Skip SSH for the local node — self-dial over Tailscale/LAN often fails
+		// pubkey auth while status correctly treats the node as local/complete.
 		for _, n := range cfg.Nodes {
 			spec := n.SSHDialSpec()
 			host := spec.Host
 			addr := net.JoinHostPort(host, fmt.Sprintf("%d", spec.Port))
+
+			if doctorNodeIsLocal(n) {
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("SSH: %s", n.Name),
+					Status:  "pass",
+					Message: fmt.Sprintf("local node (skip remote SSH to %s)", addr),
+				})
+				checks = append(checks, DoctorCheck{
+					Name:    fmt.Sprintf("Remote shell: %s", n.Name),
+					Status:  "pass",
+					Message: fmt.Sprintf("local node (shell=%s)", doctorLocalShell()),
+				})
+				continue
+			}
+
 			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(spec.DialTimeoutSec)*time.Second)
 			sshErr := doctorCheckNodeSSH(sshCtx, n)
 			cancel()

@@ -295,7 +295,9 @@ func DefaultConfigPath() string {
 	return persist.AxisPath("nodes.yaml")
 }
 
-// Load reads and validates a config file.
+// Load reads, normalizes, and validates a config file.
+// Normalize runs before Validate so in-memory Hostname is filled from
+// endpoints when needed; Validate itself does not mutate the config.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -308,10 +310,31 @@ func Load(path string) (*Config, error) {
 	if err := cfg.MigrateProviders(); err != nil {
 		return nil, err
 	}
+	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// Normalize applies in-memory compatibility shims after parse.
+// It is safe to call multiple times. Unlike Validate, this may mutate the
+// config (e.g. back-fill Hostname from endpoints for older call sites).
+// Load always calls Normalize; Save does not, so endpoints-only YAML is not
+// rewritten with a synthetic hostname on disk unless the operator set one.
+func (c *Config) Normalize() {
+	if c == nil {
+		return
+	}
+	for i := range c.Nodes {
+		n := &c.Nodes[i]
+		if strings.TrimSpace(n.Hostname) == "" {
+			if primary := n.PrimaryHostname(); primary != "" {
+				n.Hostname = primary
+			}
+		}
+		n.StableID = models.NormalizeStableID(n.StableID)
+	}
 }
 
 func decodeStrict(data []byte, cfg *Config) error {
@@ -397,6 +420,8 @@ func (c *Config) MigrateProviders() error {
 }
 
 // Validate checks that all required fields are present.
+// Validate does not mutate the config. Call Normalize (or Load) first when
+// Hostname may be empty but endpoints[] provides a dial target.
 func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {
 		return fmt.Errorf("config: no nodes defined")
@@ -416,18 +441,12 @@ func (c *Config) Validate() error {
 		if n.PrimaryHostname() == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing hostname (or endpoints[].hostname)", i, n.Name)
 		}
-		// Fill Hostname from endpoints when only endpoints are provided so
-		// older call sites reading .Hostname keep working.
-		if strings.TrimSpace(n.Hostname) == "" {
-			n.Hostname = n.PrimaryHostname()
-		}
 		if n.SSHUser == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)
 		}
 		if n.SystemReserveMB < 0 {
 			return fmt.Errorf("config: node[%d] (%s) system_reserve_mb cannot be negative: %d", i, n.Name, n.SystemReserveMB)
 		}
-		n.StableID = models.NormalizeStableID(n.StableID)
 	}
 
 	for name, prov := range c.AIProviders {

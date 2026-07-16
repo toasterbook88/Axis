@@ -301,6 +301,32 @@ func TestPrimaryHostnameAndDialHostnames(t *testing.T) {
 	}
 }
 
+func TestNormalize_BackfillsHostnameFromEndpoints(t *testing.T) {
+	cfg := &Config{Nodes: []NodeConfig{{
+		Name:    "edge",
+		SSHUser: "axis",
+		Endpoints: []NodeEndpoint{
+			{Name: "ts", Hostname: "100.1.2.3"},
+		},
+	}}}
+	// Validate must not mutate.
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cfg.Nodes[0].Hostname != "" {
+		t.Fatalf("Validate must not fill Hostname, got %q", cfg.Nodes[0].Hostname)
+	}
+	cfg.Normalize()
+	if cfg.Nodes[0].Hostname != "100.1.2.3" {
+		t.Fatalf("Normalize Hostname = %q, want 100.1.2.3", cfg.Nodes[0].Hostname)
+	}
+	// Idempotent.
+	cfg.Normalize()
+	if cfg.Nodes[0].Hostname != "100.1.2.3" {
+		t.Fatalf("second Normalize changed Hostname to %q", cfg.Nodes[0].Hostname)
+	}
+}
+
 func TestMembershipFingerprint_Stable(t *testing.T) {
 	a := &Config{Nodes: []NodeConfig{
 		{Name: "b", Role: "hub", SSHUser: "axis"},
