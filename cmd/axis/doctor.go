@@ -21,19 +21,8 @@ import (
 var doctorConfigPath = config.DefaultConfigPath
 var loadDoctorConfig = config.Load
 var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
-	host := node.PrimaryHostname()
-	if host == "" {
-		host = node.Hostname
-	}
-	sshExec := transport.NewSSHExecutor(
-		host,
-		node.EffectiveSSHPort(),
-		node.SSHUser,
-		node.EffectiveDialTimeout(),
-	)
-	if hosts := node.DialHostnames(); len(hosts) > 1 {
-		sshExec.SetDialFallbacks(hosts[1:])
-	}
+	spec := node.SSHDialSpec()
+	sshExec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 	defer sshExec.Close()
 	return sshExec.Connect(ctx)
 }
@@ -125,14 +114,8 @@ func doctorCmd() *cobra.Command {
 var doctorProbeRemoteShell = doctorProbeRemoteShellImpl
 
 func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (string, bool) {
-	host := node.PrimaryHostname()
-	if host == "" {
-		host = node.Hostname
-	}
-	exec := transport.NewSSHExecutor(host, node.EffectiveSSHPort(), node.SSHUser, node.EffectiveDialTimeout())
-	if hosts := node.DialHostnames(); len(hosts) > 1 {
-		exec.SetDialFallbacks(hosts[1:])
-	}
+	spec := node.SSHDialSpec()
+	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 	defer exec.Close()
 	if err := exec.Connect(ctx); err != nil {
 		return "", false
@@ -248,9 +231,10 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 
 		// 2. SSH connectivity + lightweight mesh probes per node
 		for _, n := range cfg.Nodes {
-			host := n.PrimaryHostname()
-			addr := net.JoinHostPort(host, fmt.Sprintf("%d", n.EffectiveSSHPort()))
-			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(n.EffectiveDialTimeout())*time.Second)
+			spec := n.SSHDialSpec()
+			host := spec.Host
+			addr := net.JoinHostPort(host, fmt.Sprintf("%d", spec.Port))
+			sshCtx, cancel := context.WithTimeout(cmd.Context(), time.Duration(spec.DialTimeoutSec)*time.Second)
 			sshErr := doctorCheckNodeSSH(sshCtx, n)
 			cancel()
 			if sshErr != nil {

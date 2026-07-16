@@ -65,6 +65,12 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if exposer, ok := c.Exec.(interface{ HandshakeLatencyMs() int64 }); ok {
 		facts.SSHHandshakeLatencyMs = exposer.HandshakeLatencyMs()
 	}
+	// Prefer the host that actually connected (may be an endpoint fallback).
+	if ch, ok := c.Exec.(interface{ ConnectedHost() string }); ok {
+		if host := strings.TrimSpace(ch.ConnectedHost()); host != "" {
+			facts.SSHTarget = host
+		}
+	}
 
 	// Fast path: single remote bash script for core facts.
 	usedBundle := c.tryBundleCollect(ctx, facts)

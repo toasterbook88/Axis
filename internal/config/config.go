@@ -28,17 +28,17 @@ type NodeEndpoint struct {
 // stable_id is an optional operator seed used for locality/dedupe only; it
 // does not override observed node identity.
 type NodeConfig struct {
-	Name            string         `json:"name" yaml:"name"`
-	Hostname        string         `json:"hostname" yaml:"hostname"`
-	Endpoints       []NodeEndpoint `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
-	StableID        string         `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
-	SSHUser         string         `json:"ssh_user" yaml:"ssh_user"`
-	Role            string         `json:"role,omitempty" yaml:"role,omitempty"`
-	SSHPort         int            `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
-	TimeoutSec      int            `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
-	DialTimeoutSec  int            `json:"dial_timeout_sec,omitempty" yaml:"dial_timeout_sec,omitempty"`
-	CollectTimeoutSec int          `json:"collect_timeout_sec,omitempty" yaml:"collect_timeout_sec,omitempty"`
-	SystemReserveMB int64          `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
+	Name              string         `json:"name" yaml:"name"`
+	Hostname          string         `json:"hostname" yaml:"hostname"`
+	Endpoints         []NodeEndpoint `json:"endpoints,omitempty" yaml:"endpoints,omitempty"`
+	StableID          string         `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
+	SSHUser           string         `json:"ssh_user" yaml:"ssh_user"`
+	Role              string         `json:"role,omitempty" yaml:"role,omitempty"`
+	SSHPort           int            `json:"ssh_port,omitempty" yaml:"ssh_port,omitempty"`
+	TimeoutSec        int            `json:"timeout_sec,omitempty" yaml:"timeout_sec,omitempty"`
+	DialTimeoutSec    int            `json:"dial_timeout_sec,omitempty" yaml:"dial_timeout_sec,omitempty"`
+	CollectTimeoutSec int            `json:"collect_timeout_sec,omitempty" yaml:"collect_timeout_sec,omitempty"`
+	SystemReserveMB   int64          `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
 }
 
 // EffectiveSSHPort returns the SSH port, defaulting to 22.
@@ -95,6 +95,8 @@ func (n *NodeConfig) PrimaryHostname() string {
 }
 
 // DialHostnames returns ordered unique dial targets (endpoints then primary hostname).
+// Order is logical seed names as configured — callers resolve SSH Host aliases via
+// ssh -G on these logical values, not on already-resolved physical HostName values.
 func (n *NodeConfig) DialHostnames() []string {
 	if n == nil {
 		return nil
@@ -114,6 +116,35 @@ func (n *NodeConfig) DialHostnames() []string {
 	}
 	add(n.Hostname)
 	return out
+}
+
+// SSHDialSpec is the dial plan for a configured node (logical host + fallbacks).
+type SSHDialSpec struct {
+	Host           string
+	Port           int
+	User           string
+	DialTimeoutSec int
+	Fallbacks      []string
+}
+
+// SSHDialSpec returns the preferred dial host and ordered alternate hosts.
+func (n *NodeConfig) SSHDialSpec() SSHDialSpec {
+	if n == nil {
+		return SSHDialSpec{Port: 22, DialTimeoutSec: 10}
+	}
+	hosts := n.DialHostnames()
+	host := n.PrimaryHostname()
+	var fb []string
+	if len(hosts) > 1 {
+		fb = append(fb, hosts[1:]...)
+	}
+	return SSHDialSpec{
+		Host:           host,
+		Port:           n.EffectiveSSHPort(),
+		User:           n.SSHUser,
+		DialTimeoutSec: n.EffectiveDialTimeout(),
+		Fallbacks:      fb,
+	}
 }
 
 // MembershipFingerprint returns a stable short hash of cluster membership

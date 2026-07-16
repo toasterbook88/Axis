@@ -1,16 +1,19 @@
 ## Unreleased
 
 ### 🚀 Features
-* **Facts:** One-shot remote fact bundle (single bash session) with legacy multi-probe fallback — same NodeFacts coverage, far less sensitive to slow login shells (e.g. fish+conda).
-* **Facts:** Force `/bin/bash --noprofile --norc` for all remote fact probes (scripts remain bash-correct without requiring bash as login shell).
-* **Config:** `collect_timeout_sec` / `dial_timeout_sec` (defaults: collect floor 45s, dial inherits `timeout_sec`); optional `endpoints[]` for LAN+Tailscale dial targets with fallback.
+* **Facts:** One-shot remote fact bundle (single bash session) with legacy multi-probe fallback — core + thermal/storage/tools coverage, far less sensitive to slow login shells (e.g. fish+conda).
+* **Facts:** Portable bash launcher for remote probes (`command -v bash` + FHS + NixOS paths); no hard-coded `/bin/bash`.
+* **Config:** `collect_timeout_sec` / `dial_timeout_sec` (defaults: collect floor 45s, dial inherits `timeout_sec`); optional `endpoints[]` for LAN+Tailscale dial targets with fallback; `SSHDialSpec()`.
 * **Config:** `MembershipFingerprint()` for stable cluster membership identity (name/role/user).
 * **Models:** `PartialReasons` + `FormatPartialReasons` for probe-level partial diagnostics.
 * **Doctor:** Membership fingerprint in config check; mDNS `.local` seed warning; dial/collect timeout display; remote shell cost probe (slow login shell advisory).
-* **Transport:** `SetDialFallbacks` for alternate hostnames when primary dial fails.
+* **Transport:** Dial fallbacks + `ConnectedHost()`; handshake bounded by dial timeout (not full collect context).
 
 ### 🐛 Bug Fixes
 * **Discovery:** Use collect timeout (not short dial timeout) as the full remote fact budget so multi-probe/slow-shell nodes complete instead of silent partials.
+* **Transport:** Endpoint fallback uses logical SSH alias names (preserves HostKeyAlias/IdentityFile); dial timeout caps handshake so stalled peers do not burn collect budget.
+* **Facts:** Bundle path fills ThermalState/ThermalZones (placement safety), tool versions, and mapper-aware storage when needed; SSHTarget tracks connected endpoint after fallback.
+* **Execution/MCP/Agent/Chat:** Propagate `endpoints[]` dial fallbacks through guarded exec, MCP, agent remote tools, and chat tunnel routing.
 
 ## v0.14.3 (2026-07-15)
 

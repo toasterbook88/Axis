@@ -320,8 +320,8 @@ type NodeFacts struct {
 	Epistemic *EpistemicState `json:"epistemic,omitempty" yaml:"epistemic,omitempty"`
 
 	// Result metadata
-	Status      NodeStatus `json:"status" yaml:"status"`
-	Error       string     `json:"error,omitempty" yaml:"error,omitempty"`
+	Status NodeStatus `json:"status" yaml:"status"`
+	Error  string     `json:"error,omitempty" yaml:"error,omitempty"`
 	// PartialReasons lists probe-level failures when Status is partial.
 	// Additive: older consumers can ignore this field.
 	PartialReasons []PartialReason `json:"partial_reasons,omitempty" yaml:"partial_reasons,omitempty"`

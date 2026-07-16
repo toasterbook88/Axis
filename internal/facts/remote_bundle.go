@@ -59,11 +59,46 @@ esac
 printf 'df_b64=%s\n' "$(df -kP / 2>/dev/null | base64 | tr -d '\n')"
 printf 'addrs_b64=%s\n' "$(if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global 2>/dev/null | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi | base64 | tr -d '\n')"
 
-# Tools (path only; versions best-effort)
+# Linux storage: best-effort rotational flag for root's block device (mapper-aware via lsblk -s/-n).
+if command -v lsblk >/dev/null 2>&1; then
+  ROOT_SRC=$(findmnt -n -o SOURCE / 2>/dev/null)
+  if [ -n "$ROOT_SRC" ]; then
+    # Prefer leaf disk rotational via lsblk reverse dependencies when available.
+    ROTA=$(lsblk -ndo ROTA,TYPE,NAME "$ROOT_SRC" 2>/dev/null | awk '$2=="disk"{print $1; exit}')
+    if [ -z "$ROTA" ]; then
+      ROTA=$(lsblk -sndo ROTA,TYPE,NAME "$ROOT_SRC" 2>/dev/null | awk '$2=="disk"{print $1; exit}')
+    fi
+    if [ -z "$ROTA" ]; then
+      ROTA=$(lsblk -ndo ROTA "$ROOT_SRC" 2>/dev/null | head -1)
+    fi
+    printf 'lsblk_rota=%s\n' "$ROTA"
+  fi
+fi
+
+# Tools: path + version (same tool set as defaultToolDefs)
 for t in go python3 git jq nix docker ollama mlx_lm llama-cli llama-server node swift cargo gcc; do
   p=$(command -v "$t" 2>/dev/null)
   if [ -n "$p" ]; then
     printf 'tool_%s=%s\n' "$t" "$p"
+    case "$t" in
+      go) v=$("$p" version 2>/dev/null | head -1) ;;
+      python3) v=$("$p" --version 2>/dev/null | head -1) ;;
+      git) v=$("$p" --version 2>/dev/null | head -1) ;;
+      jq) v=$("$p" --version 2>/dev/null | head -1) ;;
+      nix) v=$("$p" --version 2>/dev/null | head -1) ;;
+      docker) v=$("$p" --version 2>/dev/null | head -1) ;;
+      ollama) v=$("$p" --version 2>/dev/null | head -1) ;;
+      mlx_lm) v=$("$p" --help 2>/dev/null | head -1) ;;
+      llama-cli|llama-server) v=$("$p" --version 2>/dev/null | head -1) ;;
+      node) v=$("$p" --version 2>/dev/null | head -1) ;;
+      swift) v=$("$p" --version 2>/dev/null | head -1) ;;
+      cargo) v=$("$p" --version 2>/dev/null | head -1) ;;
+      gcc) v=$("$p" --version 2>/dev/null | head -1) ;;
+      *) v= ;;
+    esac
+    if [ -n "$v" ]; then
+      printf 'toolver_%s=%s\n' "$t" "$(printf '%s' "$v" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    fi
   fi
 done
 
@@ -238,25 +273,35 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 		}
 	}
 
-	// Storage class (best-effort from findmnt / diskutil text)
+	// Storage class
 	if osName == "darwin" {
 		if s := b64field(kv, "storage"); s != "" {
-			res.StorageClass = parseDarwinStorageClass(s)
+			res.StorageClass = parseDiskutilStorageClass(s)
 		}
-	} else if src := strings.TrimSpace(kv["findmnt"]); src != "" {
-		res.StorageClass = storageClassFromLinuxSource(src)
+	} else {
+		src := strings.TrimSpace(kv["findmnt"])
+		rota := strings.TrimSpace(kv["lsblk_rota"])
+		res.StorageClass = storageClassFromLinuxBundle(src, rota)
+		// Mapper-backed roots need the full slave walk when rota is empty.
+		if res.StorageClass == "unknown" && src != "" &&
+			(strings.Contains(src, "mapper") || strings.Contains(src, "dm-")) {
+			if walked := c.remoteStorageClass(ctx, osName); walked != "" && walked != "unknown" {
+				res.StorageClass = walked
+			}
+		}
 	}
 
-	// Battery (linux capacity number or darwin pmset blob)
+	// Battery + thermal (must match legacy remote collectors for placement safety)
 	if osName == "darwin" {
 		if batt := b64field(kv, "battery"); batt != "" {
 			if pct, ok := parseDarwinBatteryPercent(batt); ok {
 				res.BatteryPercent = &pct
 			}
-			res.PowerSource = parseDarwinPowerSource(batt)
+			res.PowerSource = parsePmsetPowerSource(batt)
 		}
 		if th := b64field(kv, "therm"); th != "" {
-			res.ThermalState = parseDarwinThermalState(th)
+			// Established parser: CPU_Speed_Limit, not free-text "critical".
+			res.ThermalState = parsePmsetThermal(th)
 		}
 	} else {
 		if b := strings.TrimSpace(kv["battery"]); b != "" {
@@ -264,8 +309,24 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 				res.BatteryPercent = &pct
 			}
 		}
-		if p := strings.ToLower(strings.TrimSpace(kv["power"])); p != "" {
-			res.PowerSource = p
+		if p := strings.TrimSpace(kv["power"]); p != "" {
+			switch strings.ToLower(p) {
+			case "charging", "full", "not charging":
+				res.PowerSource = "ac"
+			case "discharging":
+				res.PowerSource = "battery"
+			default:
+				res.PowerSource = strings.ToLower(p)
+			}
+		}
+		// Linux thermal temps (milli-C) → ThermalState + ThermalZones (placement uses these).
+		tempsRaw := b64field(kv, "therm_b64")
+		typesRaw := b64field(kv, "therm_types_b64")
+		res.ThermalZones = parseLinuxThermalZonesBundle(tempsRaw, typesRaw)
+		if st := models.ThermalStateFromZones(res.ThermalZones); st != "" {
+			res.ThermalState = st
+		} else if tempsRaw != "" {
+			res.ThermalState = linuxThermalStateFromTempLines(tempsRaw)
 		}
 	}
 
@@ -283,13 +344,13 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 		}
 	}
 
-	// Tools from paths
+	// Tools from paths + versions
 	classByName := map[string]models.ToolClass{}
 	for _, td := range defaultToolDefs() {
 		classByName[td.name] = td.class
 	}
 	for k, v := range kv {
-		if !strings.HasPrefix(k, "tool_") {
+		if !strings.HasPrefix(k, "tool_") || strings.HasPrefix(k, "toolver_") {
 			continue
 		}
 		name := strings.TrimPrefix(k, "tool_")
@@ -300,6 +361,9 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 		ti := models.ToolInfo{Name: name, Path: path, Class: classByName[name]}
 		if ti.Class == "" {
 			ti.Class = models.ToolClassRuntime
+		}
+		if ver := strings.TrimSpace(kv["toolver_"+name]); ver != "" {
+			ti.Version = parseVersionString(ver)
 		}
 		facts.Tools = append(facts.Tools, ti)
 	}
@@ -312,26 +376,18 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 	return true
 }
 
-// storageClassFromLinuxSource is a lightweight best-effort classifier used by the bundle path.
-func storageClassFromLinuxSource(source string) string {
+// storageClassFromLinuxBundle combines findmnt source name with lsblk ROTA when present.
+func storageClassFromLinuxBundle(source, rota string) string {
 	s := strings.ToLower(source)
 	switch {
 	case strings.Contains(s, "nvme"):
 		return "nvme"
-	case strings.Contains(s, "mmc"), strings.Contains(s, "sd"):
-		return "ssd"
-	default:
-		return "unknown"
-	}
-}
-
-func parseDarwinStorageClass(diskutilInfo string) string {
-	lower := strings.ToLower(diskutilInfo)
-	switch {
-	case strings.Contains(lower, "solid state"):
-		return "ssd"
-	case strings.Contains(lower, "rotational"):
+	case rota == "1":
 		return "hdd"
+	case rota == "0":
+		return "ssd"
+	case strings.Contains(s, "mmc"):
+		return "ssd"
 	default:
 		return "unknown"
 	}
@@ -350,24 +406,55 @@ func parseDarwinBatteryPercent(pmset string) (int, bool) {
 	return 0, false
 }
 
-func parseDarwinPowerSource(pmset string) string {
-	lower := strings.ToLower(pmset)
-	switch {
-	case strings.Contains(lower, "ac power"):
-		return "ac"
-	case strings.Contains(lower, "battery"):
-		return "battery"
-	default:
-		return ""
+func parseLinuxThermalZonesBundle(tempsRaw, typesRaw string) []models.ThermalZone {
+	temps := strings.Split(strings.TrimSpace(tempsRaw), "\n")
+	types := strings.Split(strings.TrimSpace(typesRaw), "\n")
+	var zones []models.ThermalZone
+	for i, tline := range temps {
+		tline = strings.TrimSpace(tline)
+		if tline == "" {
+			continue
+		}
+		tempMilli, err := strconv.Atoi(tline)
+		if err != nil {
+			continue
+		}
+		tempC := float64(tempMilli) / 1000.0
+		zoneType := ""
+		if i < len(types) {
+			zoneType = strings.TrimSpace(types[i])
+		}
+		if zoneType == "" {
+			zoneType = fmt.Sprintf("zone_%d", len(zones))
+		}
+		zones = append(zones, models.ThermalZone{
+			Type:  zoneType,
+			TempC: tempC,
+			State: thermalStateFromTempC(tempC),
+		})
 	}
+	return zones
 }
 
-func parseDarwinThermalState(pmsetTherm string) string {
-	lower := strings.ToLower(pmsetTherm)
-	for _, state := range []string{"critical", "serious", "fair", "nominal"} {
-		if strings.Contains(lower, state) {
-			return state
+func linuxThermalStateFromTempLines(tempsRaw string) string {
+	var maxTemp int
+	for _, line := range strings.Split(strings.TrimSpace(tempsRaw), "\n") {
+		if temp, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && temp > maxTemp {
+			maxTemp = temp
 		}
 	}
-	return ""
+	if maxTemp == 0 {
+		return ""
+	}
+	tempC := maxTemp / 1000
+	switch {
+	case tempC >= 95:
+		return "critical"
+	case tempC >= 85:
+		return "serious"
+	case tempC >= 75:
+		return "fair"
+	default:
+		return "nominal"
+	}
 }

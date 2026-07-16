@@ -81,7 +81,8 @@ var fetchCachedSnapshot = daemon.FetchSnapshot
 var lookPath = exec.LookPath
 var execCommand = exec.CommandContext
 var newMCPRemoteExecutor = func(nc config.NodeConfig) mcpRemoteExecutor {
-	return transport.NewSSHExecutor(nc.Hostname, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveTimeout())
+	spec := nc.SSHDialSpec()
+	return transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 }
 
 func NewServer(useCache bool, cacheAddr string, d *daemon.Daemon) *mcpserver.MCPServer {

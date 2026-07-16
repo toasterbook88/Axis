@@ -32,17 +32,12 @@ var newLocalDiscoveryCollector = func(name, role string) facts.Collector {
 	return facts.NewLocalCollector(name, role)
 }
 var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
-	host := nc.PrimaryHostname()
+	spec := nc.SSHDialSpec()
+	host := spec.Host
 	if host == "" {
 		host = nc.Hostname
 	}
-	// DialHostnames()[0] is preferred (first endpoint or hostname). Additional
-	// endpoints are attempted on connect failure when the executor supports it.
-	hosts := nc.DialHostnames()
-	exec := transport.NewSSHExecutor(host, nc.EffectiveSSHPort(), nc.SSHUser, nc.EffectiveDialTimeout())
-	if len(hosts) > 1 {
-		exec.SetDialFallbacks(hosts[1:])
-	}
+	exec := transport.NewSSHExecutorFromDial(host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 	return facts.NewRemoteCollector(nc.Name, nc.Role, host, exec)
 }
 

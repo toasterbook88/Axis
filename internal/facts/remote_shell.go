@@ -10,23 +10,30 @@ import (
 )
 
 // WrapBash returns a remote command that runs cmd under bash without profile/rc.
+//
 // The login shell may still wrap the outer invocation (sshd: $SHELL -c …), so
 // multi-session collects remain expensive on slow login shells; prefer the
 // one-shot fact bundle for remote nodes.
 //
-// Uses /bin/bash when present on typical Linux/macOS hosts. If /bin/bash is
-// missing, sshd still surfaces a clear error and the collector falls back to
-// partial/unreachable handling — same as any other remote command failure.
+// Bash is resolved via PATH first, then common absolute locations including
+// NixOS (/run/current-system/sw/bin/bash). Hard-coding only /bin/bash breaks
+// non-FHS hosts.
 func WrapBash(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return cmd
 	}
-	// Already wrapped.
-	if strings.HasPrefix(cmd, "/bin/bash --noprofile --norc -c ") {
+	// Already wrapped with our launcher.
+	if strings.Contains(cmd, "axis_bash_launcher") && strings.Contains(cmd, "--noprofile --norc -c ") {
 		return cmd
 	}
-	return "/bin/bash --noprofile --norc -c " + shellescape.Quote(cmd)
+	quoted := shellescape.Quote(cmd)
+	// Portable launcher: PATH bash, then FHS and NixOS locations.
+	return `axis_bash_launcher=1; B=$(command -v bash 2>/dev/null || true); ` +
+		`for c in /bin/bash /usr/bin/bash /run/current-system/sw/bin/bash; do ` +
+		`[ -n "$B" ] && break; [ -x "$c" ] && B=$c; done; ` +
+		`if [ -z "$B" ]; then printf '%s\n' 'axis: bash not found on remote PATH' >&2; exit 127; fi; ` +
+		`exec "$B" --noprofile --norc -c ` + quoted
 }
 
 // bashForcedExecutor wraps an Executor so every Run is executed under bash.
@@ -62,4 +69,12 @@ func (e *bashForcedExecutor) HandshakeLatencyMs() int64 {
 		return h.HandshakeLatencyMs()
 	}
 	return 0
+}
+
+// ConnectedHost forwards the host that actually connected (may be a dial fallback).
+func (e *bashForcedExecutor) ConnectedHost() string {
+	if h, ok := e.inner.(interface{ ConnectedHost() string }); ok {
+		return h.ConnectedHost()
+	}
+	return ""
 }
