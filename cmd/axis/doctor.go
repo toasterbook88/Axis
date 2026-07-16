@@ -20,9 +20,16 @@ import (
 
 var doctorConfigPath = config.DefaultConfigPath
 var loadDoctorConfig = config.Load
-var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
+
+// newDoctorSSHExecutor builds an SSH executor from the node's dial plan
+// (primary + endpoint fallbacks). Shared by connect checks and shell probes.
+func newDoctorSSHExecutor(node config.NodeConfig) *transport.SSHExecutor {
 	spec := node.SSHDialSpec()
-	sshExec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
+	return transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
+}
+
+var doctorCheckNodeSSH = func(ctx context.Context, node config.NodeConfig) error {
+	sshExec := newDoctorSSHExecutor(node)
 	defer sshExec.Close()
 	return sshExec.Connect(ctx)
 }
@@ -114,8 +121,7 @@ func doctorCmd() *cobra.Command {
 var doctorProbeRemoteShell = doctorProbeRemoteShellImpl
 
 func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (string, bool) {
-	spec := node.SSHDialSpec()
-	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
+	exec := newDoctorSSHExecutor(node)
 	defer exec.Close()
 	if err := exec.Connect(ctx); err != nil {
 		return "", false

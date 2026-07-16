@@ -33,12 +33,9 @@ var newLocalDiscoveryCollector = func(name, role string) facts.Collector {
 }
 var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
 	spec := nc.SSHDialSpec()
-	host := spec.Host
-	if host == "" {
-		host = nc.Hostname
-	}
-	exec := transport.NewSSHExecutorFromDial(host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
-	return facts.NewRemoteCollector(nc.Name, nc.Role, host, exec)
+	// SSHDialSpec.Host is PrimaryHostname() (endpoints first, else Hostname).
+	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
+	return facts.NewRemoteCollector(nc.Name, nc.Role, spec.Host, exec)
 }
 
 // Discover probes all configured nodes concurrently and returns their facts.

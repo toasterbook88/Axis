@@ -10,22 +10,21 @@ import (
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
-func TestWrapBash_QuotesAndForcesBash(t *testing.T) {
+func TestWrapBash_FishSafePureExternal(t *testing.T) {
 	got := WrapBash("uname -s")
-	if !strings.Contains(got, "axis_bash_launcher") || !strings.Contains(got, "uname -s") {
-		t.Fatalf("wrap = %q", got)
+	// Must be pure external argv form — no POSIX assignments/loops that fish rejects.
+	if strings.Contains(got, "axis_bash_launcher=") || strings.Contains(got, "for c in") || strings.HasPrefix(got, "B=") {
+		t.Fatalf("launcher must not use POSIX shell syntax (breaks fish): %q", got)
 	}
-	// Portable: must not require only /bin/bash (NixOS has no FHS bash).
-	if !strings.Contains(got, "command -v bash") || !strings.Contains(got, "/run/current-system/sw/bin/bash") {
-		t.Fatalf("expected PATH + NixOS bash candidates, got %q", got)
+	if !strings.HasPrefix(got, "/usr/bin/env bash --noprofile --norc -c ") {
+		t.Fatalf("expected /usr/bin/env bash launcher, got %q", got)
 	}
-	again := WrapBash(got)
-	if !strings.Contains(again, "axis_bash_launcher") {
-		t.Fatalf("idempotent wrap lost launcher: %q", again)
+	if !strings.Contains(got, "uname -s") {
+		t.Fatalf("script missing: %q", got)
 	}
-	// Missing bash surfaces as remote exit 127 — launcher always includes explicit error.
-	if !strings.Contains(got, "bash not found") {
-		t.Fatalf("expected missing-bash error path, got %q", got)
+	// Idempotent.
+	if WrapBash(got) != got {
+		t.Fatalf("WrapBash should be idempotent")
 	}
 }
 
@@ -49,12 +48,8 @@ func TestBashForcedExecutor_WrapsRun(t *testing.T) {
 	if len(inner.runs) != 1 {
 		t.Fatalf("runs = %d", len(inner.runs))
 	}
-	if !strings.Contains(inner.runs[0], "uname -s") || !strings.Contains(inner.runs[0], "axis_bash_launcher") {
-		t.Fatalf("command not bash-wrapped: %q", inner.runs[0])
-	}
-	// Not hard-coded to only /bin/bash (NixOS non-FHS).
-	if strings.HasPrefix(strings.TrimSpace(inner.runs[0]), "/bin/bash --noprofile") {
-		t.Fatalf("hard-coded /bin/bash breaks NixOS: %q", inner.runs[0])
+	if !strings.HasPrefix(inner.runs[0], "/usr/bin/env bash --noprofile --norc -c ") {
+		t.Fatalf("command not env-bash-wrapped: %q", inner.runs[0])
 	}
 	ex2 := withBashForced(ex)
 	if _, ok := ex2.(*bashForcedExecutor); !ok {
@@ -64,7 +59,6 @@ func TestBashForcedExecutor_WrapsRun(t *testing.T) {
 }
 
 func TestWrapBash_MatchesViaWrapBashEquality(t *testing.T) {
-	// Fake executors match via WrapBash(key) == cmd.
 	cmd := "uname -s"
 	if WrapBash(cmd) == cmd {
 		t.Fatal("WrapBash should transform command")
@@ -97,11 +91,8 @@ __AXIS_BUNDLE_END__
 		t.Fatalf("kv = %#v", kv)
 	}
 
-	// Full apply through tryBundleCollect
-	c := &RemoteCollector{NodeName: "cachyos", Role: "agent", Hostname: "100.1.2.3", Exec: &stubExec{}}
-	// Force path: call parse + apply via try with fake exec that returns bundle
 	fe := &fixedExec{out: out}
-	c.Exec = fe
+	c := &RemoteCollector{NodeName: "cachyos", Role: "agent", Hostname: "100.1.2.3", Exec: fe}
 	nf := &models.NodeFacts{Name: "cachyos", Hostname: "100.1.2.3", Status: models.StatusComplete}
 	if !c.tryBundleCollect(context.Background(), nf) {
 		t.Fatalf("bundle collect failed reasons=%v", nf.PartialReasons)
@@ -121,14 +112,11 @@ type fixedExec struct {
 	out string
 }
 
-func (f *fixedExec) Connect(context.Context) error { return nil }
-func (f *fixedExec) Close() error                  { return nil }
-func (f *fixedExec) Run(context.Context, string) (string, error) {
-	return f.out, nil
-}
+func (f *fixedExec) Connect(context.Context) error               { return nil }
+func (f *fixedExec) Close() error                                { return nil }
+func (f *fixedExec) Run(context.Context, string) (string, error) { return f.out, nil }
 
 func TestLinuxThermalFromBundleTemps(t *testing.T) {
-	// 96000 milli-C => 96C => critical
 	st := linuxThermalStateFromTempLines("96000\n45000\n")
 	if st != "critical" {
 		t.Fatalf("state=%q want critical", st)
@@ -143,7 +131,6 @@ func TestLinuxThermalFromBundleTemps(t *testing.T) {
 }
 
 func TestParsePmsetThermalFromBundlePath(t *testing.T) {
-	// Bundle must use CPU_Speed_Limit parser, not free-text "critical".
 	out := " - CPU_Speed_Limit               = 30\n"
 	if got := parsePmsetThermal(out); got != "critical" {
 		t.Fatalf("got %q", got)

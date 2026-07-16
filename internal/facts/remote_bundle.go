@@ -57,7 +57,8 @@ case "$(printf '%s' "$OS" | tr '[:upper:]' '[:lower:]')" in
 esac
 
 printf 'df_b64=%s\n' "$(df -kP / 2>/dev/null | base64 | tr -d '\n')"
-printf 'addrs_b64=%s\n' "$(if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global 2>/dev/null | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi | base64 | tr -d '\n')"
+# Prefer ip -o (includes iface). Fallback ip addr keeps iface via $NF.
+printf 'addrs_b64=%s\n' "$(if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global 2>/dev/null | awk '/inet / {print $NF, $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi | base64 | tr -d '\n')"
 
 # Linux storage: best-effort rotational flag for root's block device (mapper-aware via lsblk -s/-n).
 if command -v lsblk >/dev/null 2>&1; then

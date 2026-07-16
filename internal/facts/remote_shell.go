@@ -11,29 +11,32 @@ import (
 
 // WrapBash returns a remote command that runs cmd under bash without profile/rc.
 //
-// The login shell may still wrap the outer invocation (sshd: $SHELL -c …), so
-// multi-session collects remain expensive on slow login shells; prefer the
-// one-shot fact bundle for remote nodes.
+// Critical: sshd executes remote commands as `$SHELL -c "<string>"`. When $SHELL
+// is fish, the string must be valid fish syntax (or a pure external command
+// line). POSIX constructs like `name=value`, `for ...; do`, and `[ ]` fail under
+// fish before bash is ever reached — which is exactly the slow-shell case this
+// wrapper targets.
 //
-// Bash is resolved via PATH first, then common absolute locations including
-// NixOS (/run/current-system/sw/bin/bash). Hard-coding only /bin/bash breaks
-// non-FHS hosts.
+// Therefore the outer form is a pure external invocation with no shell logic:
+//
+//	/usr/bin/env bash --noprofile --norc -c '<script>'
+//
+// fish, bash, zsh, and dash all treat this as "run program env with args…".
+// `env` resolves bash on PATH (works on NixOS non-FHS layouts). Absolute
+// fallbacks are tried only via env's PATH, not via shell loops.
+//
+// Multi-session collects still pay login-shell startup once per session; prefer
+// the one-shot fact bundle for remote nodes.
 func WrapBash(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return cmd
 	}
-	// Already wrapped with our launcher.
-	if strings.Contains(cmd, "axis_bash_launcher") && strings.Contains(cmd, "--noprofile --norc -c ") {
+	// Already wrapped.
+	if strings.HasPrefix(cmd, "/usr/bin/env bash --noprofile --norc -c ") {
 		return cmd
 	}
-	quoted := shellescape.Quote(cmd)
-	// Portable launcher: PATH bash, then FHS and NixOS locations.
-	return `axis_bash_launcher=1; B=$(command -v bash 2>/dev/null || true); ` +
-		`for c in /bin/bash /usr/bin/bash /run/current-system/sw/bin/bash; do ` +
-		`[ -n "$B" ] && break; [ -x "$c" ] && B=$c; done; ` +
-		`if [ -z "$B" ]; then printf '%s\n' 'axis: bash not found on remote PATH' >&2; exit 127; fi; ` +
-		`exec "$B" --noprofile --norc -c ` + quoted
+	return "/usr/bin/env bash --noprofile --norc -c " + shellescape.Quote(cmd)
 }
 
 // bashForcedExecutor wraps an Executor so every Run is executed under bash.
