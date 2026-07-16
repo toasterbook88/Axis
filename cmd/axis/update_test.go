@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -305,89 +306,65 @@ func TestPackageManagerForPath(t *testing.T) {
 
 func TestIsAxisBuildInfo(t *testing.T) {
 	if !isAxisBuildInfo(&buildinfo.BuildInfo{Path: "github.com/toasterbook88/axis/cmd/axis"}) {
-		t.Fatal("expected main path match")
+		t.Fatal("expected main package path match")
 	}
 	modMatch := &buildinfo.BuildInfo{}
 	modMatch.Main.Path = "github.com/toasterbook88/axis"
 	if !isAxisBuildInfo(modMatch) {
-		t.Fatal("expected module path match")
+		t.Fatal("expected exact module path match")
 	}
-	other := &buildinfo.BuildInfo{Path: "github.com/example/other"}
-	other.Main.Path = "github.com/example/other"
-	if isAxisBuildInfo(other) {
-		t.Fatal("expected non-axis rejection")
+	// Must not accept sibling modules or path-injection lookalikes.
+	for _, bad := range []string{
+		"github.com/toasterbook88/axis-tools",
+		"example.com/github.com/toasterbook88/axis",
+		"github.com/toasterbook88/axis/evil",
+	} {
+		bi := &buildinfo.BuildInfo{Path: bad}
+		bi.Main.Path = bad
+		if isAxisBuildInfo(bi) {
+			t.Fatalf("expected reject %q", bad)
+		}
 	}
 }
 
-func TestInstallReleaseSkipsNonAxisAndManagedAndNewer(t *testing.T) {
-	tmp := t.TempDir()
-	nonAxis := filepath.Join(tmp, "not-axis")
-	managed := filepath.Join(tmp, "managed")
-	newer := filepath.Join(tmp, "newer")
-	stale := filepath.Join(tmp, "stale")
-	for _, p := range []string{nonAxis, managed, newer, stale} {
-		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+// withReleaseServer runs fn with updateAPIBase/updateGetFunc pointed at a
+// server that serves a complete latest-release payload for this GOOS/GOARCH.
+func withReleaseServer(t *testing.T, version string, binary []byte, fn func()) {
+	t.Helper()
+	archive := buildTestArchive(t, binary)
+	archiveName := fmt.Sprintf("axis_%s_%s_%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
+	cs := checksumLine(archive, archiveName)
 
-	prevInspect := inspectBinary
-	defer func() { inspectBinary = prevInspect }()
-	inspectBinary = func(path string) (installInfo, error) {
-		abs, _ := filepath.Abs(path)
-		switch abs {
-		case mustAbs(nonAxis):
-			return installInfo{Path: abs, IsAxis: false, Reason: "not an AXIS binary"}, nil
-		case mustAbs(managed):
-			return installInfo{Path: abs, IsAxis: true, Version: "0.1.0", ManagedBy: "homebrew"}, nil
-		case mustAbs(newer):
-			return installInfo{Path: abs, IsAxis: true, Version: "99.0.0"}, nil
-		case mustAbs(stale):
-			return installInfo{Path: abs, IsAxis: true, Version: "0.1.0"}, nil
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/releases/latest"):
+			_ = json.NewEncoder(w).Encode(ghRelease{
+				TagName: "v" + version,
+				Assets: []ghAsset{
+					{Name: archiveName, BrowserDownloadURL: srv.URL + "/asset/" + archiveName},
+					{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+				},
+			})
+		case strings.Contains(r.URL.Path, "/asset/"):
+			_, _ = w.Write(archive)
+		case strings.Contains(r.URL.Path, "checksums"):
+			fmt.Fprintln(w, cs)
 		default:
-			return installInfo{Path: abs, IsAxis: false, Reason: "unknown"}, nil
+			http.NotFound(w, r)
 		}
-	}
+	}))
+	defer srv.Close()
 
-	// Only stale should be planned; download will fail without assets — that's fine
-	// if we never get there because... wait, stale IS planned so download runs.
-	// Provide a release server with archive so replace can succeed on stale only.
-	fake := []byte("new-binary")
-	archive := buildTestArchive(t, fake)
-	archiveName := fmt.Sprintf("axis_%s_%s_%s.tar.gz", "1.0.0", "linux", "amd64")
-	// Force GOOS/GOARCH via only testing plan filtering without full download:
-	// Call install with latest that matches inspect versions; mock download path
-	// by using replaceExecutable checks after a partial unit of the filter loop.
-
-	// Unit-test the filter by invoking installRelease with a stub that panics on download
-	// if plan is wrong — instead inspect outputs from a dry path:
-	// We test decision via a small helper simulation:
-
-	var skippedNonAxis, skippedManaged, skippedNewer, plannedStale bool
-	for _, target := range []string{nonAxis, managed, newer, stale} {
-		info, _ := inspectBinary(target)
-		if !info.IsAxis {
-			skippedNonAxis = true
-			continue
-		}
-		if info.ManagedBy != "" {
-			skippedManaged = true
-			continue
-		}
-		reln, _ := compareReleaseVersions(info.Version, "1.0.0")
-		if reln > 0 {
-			skippedNewer = true
-			continue
-		}
-		if reln < 0 {
-			plannedStale = true
-		}
-	}
-	if !skippedNonAxis || !skippedManaged || !skippedNewer || !plannedStale {
-		t.Fatalf("filter decisions wrong: nonAxis=%v managed=%v newer=%v stale=%v", skippedNonAxis, skippedManaged, skippedNewer, plannedStale)
-	}
-	_ = archive
-	_ = archiveName
+	prevBase := updateAPIBase
+	prevGet := updateGetFunc
+	defer func() {
+		updateAPIBase = prevBase
+		updateGetFunc = prevGet
+	}()
+	updateAPIBase = srv.URL
+	updateGetFunc = srv.Client().Get
+	fn()
 }
 
 func mustAbs(p string) string {
@@ -396,6 +373,220 @@ func mustAbs(p string) string {
 		return p
 	}
 	return a
+}
+
+func TestInstallReleaseSkipsNonAxisManagedNewerAndUpdatesStale(t *testing.T) {
+	tmp := t.TempDir()
+	nonAxis := filepath.Join(tmp, "not-axis")
+	managed := filepath.Join(tmp, "managed")
+	newer := filepath.Join(tmp, "newer")
+	stale := filepath.Join(tmp, "stale")
+	for _, p := range []string{nonAxis, managed, newer, stale} {
+		if err := os.WriteFile(p, []byte("OLD"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prevInspect := inspectBinary
+	defer func() { inspectBinary = prevInspect }()
+	inspectBinary = func(path string) (installInfo, error) {
+		abs := mustAbs(path)
+		switch abs {
+		case mustAbs(nonAxis):
+			return installInfo{Path: abs, IsAxis: false, Reason: "not an AXIS binary"}, nil
+		case mustAbs(managed):
+			return installInfo{Path: abs, Resolved: abs, IsAxis: true, Version: "0.1.0", ManagedBy: "homebrew"}, nil
+		case mustAbs(newer):
+			return installInfo{Path: abs, Resolved: abs, IsAxis: true, Version: "99.0.0"}, nil
+		case mustAbs(stale):
+			return installInfo{Path: abs, Resolved: abs, IsAxis: true, Version: "0.1.0"}, nil
+		default:
+			return installInfo{Path: abs, IsAxis: false, Reason: "unknown"}, nil
+		}
+	}
+
+	newBytes := []byte("NEW-BINARY-CONTENT")
+	withReleaseServer(t, "1.0.0", newBytes, func() {
+		cmd := updateCmd()
+		var out, errOut strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetErr(&errOut)
+		rel := &ghRelease{TagName: "v1.0.0"}
+		// Assets filled by download via updateGetFunc from server when fetchLatest isn't used —
+		// installRelease calls downloadReleaseBinary which uses updateGetFunc on asset URLs
+		// from rel.Assets. Seed assets from a probe request.
+		resp, err := updateGetFunc(updateAPIBase + "/repos/x/y/releases/latest")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(rel); err != nil {
+			t.Fatal(err)
+		}
+
+		err = installRelease(cmd, rel, "1.0.0",
+			[]string{nonAxis, managed, newer, stale},
+			"", modeAll, &errOut, &out)
+		if err != nil {
+			t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out.String(), errOut.String())
+		}
+
+		// Only stale should be rewritten.
+		for _, p := range []string{nonAxis, managed, newer} {
+			got, _ := os.ReadFile(p)
+			if string(got) != "OLD" {
+				t.Errorf("%s was mutated: %q", p, got)
+			}
+		}
+		got, err := os.ReadFile(stale)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, newBytes) {
+			t.Errorf("stale not updated: got %q want %q\nout=%s", got, newBytes, out.String())
+		}
+		if !strings.Contains(out.String(), "Skipped (managed") {
+			t.Errorf("expected managed skip message, out=%s", out.String())
+		}
+		if !strings.Contains(out.String(), "newer than release") {
+			t.Errorf("expected newer skip message, out=%s", out.String())
+		}
+	})
+}
+
+func TestInstallReleaseExplicitPathAllowsUnknownVersion(t *testing.T) {
+	// Devin P1: --path with identity-validated AXIS binary but unknown version
+	// must not print "Nothing to update."
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "axis-dev")
+	if err := os.WriteFile(target, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	prevInspect := inspectBinary
+	defer func() { inspectBinary = prevInspect }()
+	inspectBinary = func(path string) (installInfo, error) {
+		abs := mustAbs(path)
+		return installInfo{
+			Path:     abs,
+			Resolved: abs,
+			IsAxis:   true,
+			Version:  "", // unknown local build
+			Reason:   "AXIS binary but version metadata unavailable",
+		}, nil
+	}
+
+	newBytes := []byte("EXPLICIT-PATH-NEW")
+	withReleaseServer(t, "1.2.3", newBytes, func() {
+		cmd := updateCmd()
+		var out, errOut strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetErr(&errOut)
+
+		rel := &ghRelease{}
+		resp, err := updateGetFunc(updateAPIBase + "/repos/x/y/releases/latest")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(rel); err != nil {
+			t.Fatal(err)
+		}
+
+		// modeAll would refuse; modePath must accept.
+		if err := installRelease(cmd, rel, "1.2.3", []string{target}, "", modeAll, &errOut, &out); err != nil {
+			t.Fatalf("modeAll: %v", err)
+		}
+		if got, _ := os.ReadFile(target); string(got) != "OLD" {
+			t.Fatalf("modeAll must not replace unknown-version secondary, got %q", got)
+		}
+		if !strings.Contains(errOut.String(), "refusing implicit --all") {
+			t.Fatalf("expected --all refuse message, err=%s", errOut.String())
+		}
+
+		out.Reset()
+		errOut.Reset()
+		if err := installRelease(cmd, rel, "1.2.3", []string{target}, "", modePath, &errOut, &out); err != nil {
+			t.Fatalf("modePath: %v\nout=%s\nerr=%s", err, out.String(), errOut.String())
+		}
+		got, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, newBytes) {
+			t.Fatalf("modePath did not update: got %q want %q\nout=%s", got, newBytes, out.String())
+		}
+		if strings.Contains(out.String(), "Nothing to update") {
+			t.Fatalf("explicit --path must not report nothing to update: %s", out.String())
+		}
+	})
+}
+
+func TestInstallReleaseUpdatesSymlinkTargetNotLink(t *testing.T) {
+	tmp := t.TempDir()
+	realBin := filepath.Join(tmp, "real-axis")
+	linkBin := filepath.Join(tmp, "link-axis")
+	if err := os.WriteFile(realBin, []byte("OLD-TARGET"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realBin, linkBin); err != nil {
+		t.Fatal(err)
+	}
+
+	prevInspect := inspectBinary
+	defer func() { inspectBinary = prevInspect }()
+	inspectBinary = func(path string) (installInfo, error) {
+		abs := mustAbs(path)
+		return installInfo{
+			Path:      abs,
+			Resolved:  mustAbs(realBin),
+			IsSymlink: true,
+			IsAxis:    true,
+			Version:   "0.1.0",
+		}, nil
+	}
+
+	newBytes := []byte("NEW-VIA-SYMLINK")
+	withReleaseServer(t, "2.0.0", newBytes, func() {
+		cmd := updateCmd()
+		var out, errOut strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetErr(&errOut)
+
+		rel := &ghRelease{}
+		resp, err := updateGetFunc(updateAPIBase + "/repos/x/y/releases/latest")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_ = json.NewDecoder(resp.Body).Decode(rel)
+
+		if err := installRelease(cmd, rel, "2.0.0", []string{linkBin}, "", modePath, &errOut, &out); err != nil {
+			t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out.String(), errOut.String())
+		}
+
+		// Symlink must remain a symlink.
+		fi, err := os.Lstat(linkBin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("symlink was destroyed; mode=%v out=%s", fi.Mode(), out.String())
+		}
+		// Target content updated.
+		got, err := os.ReadFile(realBin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, newBytes) {
+			t.Fatalf("resolved target not updated: %q", got)
+		}
+		// Reading through link also sees new content.
+		got2, _ := os.ReadFile(linkBin)
+		if !bytes.Equal(got2, newBytes) {
+			t.Fatalf("link read mismatch: %q", got2)
+		}
+	})
 }
 
 func TestExtractBinary(t *testing.T) {
