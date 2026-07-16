@@ -2,7 +2,7 @@
 
 ### 🚀 Features
 * **Doctor:** Skip remote SSH and shell probes for the local node (avoids false pubkey fail on self Tailscale IP).
-* **Config:** `Normalize()` for Hostname/StableID shims; pure `Validate()`; `Load` runs both; `Save` does not invent hostname on disk.
+* **Config:** `Normalize()` (StableID only); pure `Validate()`; authored `hostname` never synthesized from `endpoints[]`; `NodeConfig.IsLocal()` is the single endpoint-aware locality API.
 * **Facts:** One-shot remote fact bundle (single bash session) with legacy multi-probe fallback — core + thermal/storage/tools coverage, far less sensitive to slow login shells (e.g. fish+conda).
 * **Facts:** Portable bash launcher for remote probes (`command -v bash` + FHS + NixOS paths); no hard-coded `/bin/bash`.
 * **Config:** `collect_timeout_sec` / `dial_timeout_sec` (defaults: collect floor 45s, dial inherits `timeout_sec`); optional `endpoints[]` for LAN+Tailscale dial targets with fallback; `SSHDialSpec()`.

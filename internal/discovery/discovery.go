@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,22 +26,7 @@ const (
 var discoveryStartUDP = startUDP
 var discoveryBeaconWait = waitForBeaconWindow
 var discoveryIsLocalConfig = func(nc config.NodeConfig) bool {
-	// Prefer PrimaryHostname so endpoints-only seeds still match locality
-	// without requiring Validate/Normalize to back-fill .Hostname.
-	if models.IsLocalConfig(nc.Name, nc.PrimaryHostname(), nc.StableID) {
-		return true
-	}
-	if nc.Hostname != "" && !strings.EqualFold(nc.Hostname, nc.PrimaryHostname()) {
-		if models.IsLocalConfig(nc.Name, nc.Hostname, nc.StableID) {
-			return true
-		}
-	}
-	for _, h := range nc.DialHostnames() {
-		if models.IsLocalConfig(nc.Name, h, nc.StableID) {
-			return true
-		}
-	}
-	return false
+	return nc.IsLocal()
 }
 var newLocalDiscoveryCollector = func(name, role string) facts.Collector {
 	return facts.NewLocalCollector(name, role)

@@ -147,6 +147,22 @@ func (n *NodeConfig) SSHDialSpec() SSHDialSpec {
 	}
 }
 
+// IsLocal reports whether this seed entry refers to the machine running AXIS.
+// It is the single endpoint-aware locality operation: StableID first, then any
+// authored hostname or endpoints[] dial target (not only the primary).
+func (n NodeConfig) IsLocal() bool {
+	// StableID match alone (hostname arg ignored when StableID matches first).
+	if n.StableID != "" && models.IsLocalConfig(n.Name, "", n.StableID) {
+		return true
+	}
+	for _, h := range n.DialHostnames() {
+		if h != "" && models.IsLocalConfig(n.Name, h, "") {
+			return true
+		}
+	}
+	return false
+}
+
 // MembershipFingerprint returns a stable short hash of cluster membership
 // (name + role + ssh_user per node), independent of dial addresses.
 func (c *Config) MembershipFingerprint() string {
@@ -318,21 +334,16 @@ func Load(path string) (*Config, error) {
 }
 
 // Normalize applies in-memory compatibility shims after parse.
-// It is safe to call multiple times. Unlike Validate, this may mutate the
-// config (e.g. back-fill Hostname from endpoints for older call sites).
-// Load always calls Normalize; Save does not, so endpoints-only YAML is not
-// rewritten with a synthetic hostname on disk unless the operator set one.
+// It is safe to call multiple times. Hostname is authored-only and is never
+// synthesized from endpoints[] (call PrimaryHostname/SSHDialSpec/IsLocal instead).
+// Load always calls Normalize; Save only validates so endpoints-only YAML keeps
+// hostname absent on disk.
 func (c *Config) Normalize() {
 	if c == nil {
 		return
 	}
 	for i := range c.Nodes {
 		n := &c.Nodes[i]
-		if strings.TrimSpace(n.Hostname) == "" {
-			if primary := n.PrimaryHostname(); primary != "" {
-				n.Hostname = primary
-			}
-		}
 		n.StableID = models.NormalizeStableID(n.StableID)
 	}
 }

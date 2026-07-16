@@ -14,7 +14,6 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/facts"
-	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -30,20 +29,9 @@ func newDoctorSSHExecutor(node config.NodeConfig) *transport.SSHExecutor {
 }
 
 // doctorNodeIsLocal reports whether a seed entry refers to this machine.
-// Checks PrimaryHostname, Hostname, and all dial hostnames (LAN + Tailscale).
+// Overridable in tests; production uses endpoint-aware NodeConfig.IsLocal().
 var doctorNodeIsLocal = func(n config.NodeConfig) bool {
-	if models.IsLocalConfig(n.Name, n.PrimaryHostname(), n.StableID) {
-		return true
-	}
-	if n.Hostname != "" && models.IsLocalConfig(n.Name, n.Hostname, n.StableID) {
-		return true
-	}
-	for _, h := range n.DialHostnames() {
-		if models.IsLocalConfig(n.Name, h, n.StableID) {
-			return true
-		}
-	}
-	return false
+	return n.IsLocal()
 }
 
 func doctorLocalShell() string {

@@ -301,7 +301,7 @@ func TestPrimaryHostnameAndDialHostnames(t *testing.T) {
 	}
 }
 
-func TestNormalize_BackfillsHostnameFromEndpoints(t *testing.T) {
+func TestNormalize_DoesNotSynthesizeHostname(t *testing.T) {
 	cfg := &Config{Nodes: []NodeConfig{{
 		Name:    "edge",
 		SSHUser: "axis",
@@ -309,7 +309,6 @@ func TestNormalize_BackfillsHostnameFromEndpoints(t *testing.T) {
 			{Name: "ts", Hostname: "100.1.2.3"},
 		},
 	}}}
-	// Validate must not mutate.
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -317,13 +316,114 @@ func TestNormalize_BackfillsHostnameFromEndpoints(t *testing.T) {
 		t.Fatalf("Validate must not fill Hostname, got %q", cfg.Nodes[0].Hostname)
 	}
 	cfg.Normalize()
-	if cfg.Nodes[0].Hostname != "100.1.2.3" {
-		t.Fatalf("Normalize Hostname = %q, want 100.1.2.3", cfg.Nodes[0].Hostname)
+	if cfg.Nodes[0].Hostname != "" {
+		t.Fatalf("Normalize must not synthesize Hostname, got %q", cfg.Nodes[0].Hostname)
 	}
-	// Idempotent.
-	cfg.Normalize()
-	if cfg.Nodes[0].Hostname != "100.1.2.3" {
-		t.Fatalf("second Normalize changed Hostname to %q", cfg.Nodes[0].Hostname)
+	if cfg.Nodes[0].PrimaryHostname() != "100.1.2.3" {
+		t.Fatalf("PrimaryHostname = %q", cfg.Nodes[0].PrimaryHostname())
+	}
+}
+
+func TestSaveAtomicPreservesEndpointsOnlyHostname(t *testing.T) {
+	// Sol P1 regression: Load → unrelated edit → Save must not write synthetic hostname.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	authored := `nodes:
+  - name: edge
+    ssh_user: axis
+    role: agent
+    endpoints:
+      - name: lan
+        hostname: 192.168.1.50
+      - name: ts
+        hostname: 100.1.2.3
+`
+	if err := os.WriteFile(path, []byte(authored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Nodes[0].Hostname != "" {
+		t.Fatalf("after Load Hostname must stay empty, got %q", cfg.Nodes[0].Hostname)
+	}
+	// Unrelated in-memory edit
+	cfg.Nodes[0].Role = "worker"
+	if _, err := SaveAtomic(path, cfg); err != nil {
+		t.Fatalf("SaveAtomic: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if strings.Contains(body, "hostname: 192.168.1.50") && strings.Count(body, "hostname:") > 2 {
+		// endpoints still have hostname keys; top-level node hostname must not appear
+	}
+	// Node-level hostname field serializes as "hostname:" under the node, not only under endpoints.
+	// Parse back without Normalize side effects on disk content.
+	if strings.Contains(body, "\n    hostname:") || strings.Contains(body, "\n  hostname:") {
+		// Could be endpoints nested with different indent. Check for hostname at node level only.
+		// Authored endpoints use "        hostname:" (8 spaces). Node-level would be "    hostname:" (4 spaces) after "name: edge".
+	}
+	// Strict: unmarshaled without Load normalize must still have empty Hostname.
+	var reloaded Config
+	if err := decodeStrict(raw, &reloaded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if reloaded.Nodes[0].Hostname != "" {
+		t.Fatalf("saved file synthesized hostname %q; body:\n%s", reloaded.Nodes[0].Hostname, body)
+	}
+	if reloaded.Nodes[0].Role != "worker" {
+		t.Fatalf("role not saved: %q", reloaded.Nodes[0].Role)
+	}
+	if reloaded.Nodes[0].PrimaryHostname() != "192.168.1.50" {
+		t.Fatalf("PrimaryHostname = %q", reloaded.Nodes[0].PrimaryHostname())
+	}
+}
+
+func TestNodeConfigIsLocal_UsesAllDialHostnames(t *testing.T) {
+	// Secondary endpoint is loopback while primary is non-local TEST-NET.
+	n := NodeConfig{
+		Name:    "self",
+		SSHUser: "me",
+		Endpoints: []NodeEndpoint{
+			{Name: "lan", Hostname: "198.51.100.1"},
+			{Name: "loop", Hostname: "127.0.0.1"},
+		},
+	}
+	if !n.IsLocal() {
+		t.Fatal("expected IsLocal true via secondary loopback endpoint")
+	}
+	// Primary hostname only, remote
+	remote := NodeConfig{
+		Name:     "remote",
+		Hostname: "198.51.100.9",
+		SSHUser:  "me",
+	}
+	if remote.IsLocal() {
+		t.Fatal("expected remote not local")
+	}
+	// Primary is loopback
+	primaryLocal := NodeConfig{
+		Name:     "here",
+		Hostname: "127.0.0.1",
+		SSHUser:  "me",
+	}
+	if !primaryLocal.IsLocal() {
+		t.Fatal("expected primary loopback local")
+	}
+	// Endpoints-only without local addresses
+	onlyRemoteEP := NodeConfig{
+		Name:    "edge",
+		SSHUser: "me",
+		Endpoints: []NodeEndpoint{
+			{Name: "x", Hostname: "198.51.100.8"},
+		},
+	}
+	if onlyRemoteEP.IsLocal() {
+		t.Fatal("endpoints-only remote must not be local")
 	}
 }
 

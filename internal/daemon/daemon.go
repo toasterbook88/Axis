@@ -200,7 +200,7 @@ func NewDefault(interval time.Duration) *Daemon {
 			var localNode config.NodeConfig
 			var foundLocal bool
 			for _, n := range cfg.Nodes {
-				if models.IsLocalConfig(n.Name, n.Hostname, n.StableID) {
+				if n.IsLocal() {
 					localNode = n
 					foundLocal = true
 					break
