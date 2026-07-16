@@ -12,6 +12,7 @@
 * **Transport:** Dial fallbacks + `ConnectedHost()`; handshake bounded by dial timeout (not full collect context).
 
 ### 🐛 Bug Fixes
+* **Daemon/mesh:** Seed peers from `PrimaryHostname()` so endpoints-only nodes stay in gossip fan-out after Hostname backfill removal.
 * **Config:** Load→edit→Save preserves endpoints-only YAML (no synthetic node `hostname`); `NodeConfig.IsLocal()` used by doctor, discovery, daemon, execution, and reservations.
 * **Discovery:** Use collect timeout (not short dial timeout) as the full remote fact budget so multi-probe/slow-shell nodes complete instead of silent partials.
 * **Transport:** Endpoint fallback uses logical SSH alias names (preserves HostKeyAlias/IdentityFile); dial timeout caps handshake so stalled peers do not burn collect budget.

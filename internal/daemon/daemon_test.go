@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/execution"
+	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
@@ -967,6 +969,33 @@ func TestDaemonRefreshCoalescingAndLatency(t *testing.T) {
 	// Grace period for any leaked goroutines from prior watch tests to finish
 	// file operations before t.TempDir() cleanup runs.
 	time.Sleep(100 * time.Millisecond)
+}
+
+func TestMeshPeerFromNode_UsesPrimaryHostnameForEndpointsOnly(t *testing.T) {
+	// Devin #239: after dropping Hostname backfill, mesh peers must still dial
+	// endpoints-only nodes (mesh selectFanOut skips empty Hostname).
+	n := config.NodeConfig{
+		Name:    "edge",
+		SSHUser: "axis",
+		Endpoints: []config.NodeEndpoint{
+			{Name: "lan", Hostname: "192.168.1.50"},
+			{Name: "ts", Hostname: "100.1.2.3"},
+		},
+		StableID: "abc-123",
+	}
+	if n.Hostname != "" {
+		t.Fatalf("test setup wants empty authored Hostname, got %q", n.Hostname)
+	}
+	p := meshPeerFromNode(n, 42426)
+	if p.Hostname != "192.168.1.50" {
+		t.Fatalf("Hostname = %q, want PrimaryHostname 192.168.1.50", p.Hostname)
+	}
+	if p.Name != "edge" || p.Port != 42426 || p.StableID != "abc-123" {
+		t.Fatalf("unexpected peer: %+v", p)
+	}
+	if p.Source != "config" || p.State != mesh.PeerTrusted {
+		t.Fatalf("unexpected trust/source: %+v", p)
+	}
 }
 
 func TestNewDefaultCreatesMeshWhenNoDiscoveryConfig(t *testing.T) {
