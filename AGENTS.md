@@ -173,7 +173,7 @@ HDD penalty: −15 for heavy inference.
 
 | Command | Purpose |
 | --------- | --------- |
-| `axis update [--check]` | Self-update via GitHub Releases; SHA-256 verified |
+| `axis update [--check] [--self] [--path]` | Self-update via GitHub Releases (all discovered installs by default); SHA-256 verified |
 | `axis version` | Print build version, commit, date, go, platform |
 | `axis facts [--format json\|yaml]` | Local node facts |
 | `axis status [--cached] [--format]` | Cluster snapshot |

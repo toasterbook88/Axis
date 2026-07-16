@@ -131,6 +131,8 @@ func TestUpdateCheckCurrentBuildNewerThanLatestPublishedRelease(t *testing.T) {
 }
 
 func TestUpdateRefusesDowngradeInstall(t *testing.T) {
+	// With --self, a tip-of-main build newer than the latest release must not
+	// replace itself. Without --self, other discovered installs may still update.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ghRelease{TagName: "v0.4.0"})
 	}))
@@ -146,7 +148,7 @@ func TestUpdateRefusesDowngradeInstall(t *testing.T) {
 	cmd := updateCmd()
 	var out strings.Builder
 	cmd.SetOut(&out)
-	cmd.SetArgs(nil)
+	cmd.SetArgs([]string{"--self"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,15 +193,88 @@ func TestFindAxisBinariesExplicitPath(t *testing.T) {
 	}
 }
 
+func TestFindAxisBinariesSelfOnly(t *testing.T) {
+	paths := findAxisBinaries("", true)
+	if len(paths) == 0 {
+		t.Fatal("expected at least the running binary")
+	}
+	// Self-only must not expand PATH/common discovery beyond the executable.
+	// (Other installs may coincide with the test binary path after EvalSymlinks.)
+	self := resolveSelfPath()
+	for _, p := range paths {
+		if self != "" && p != self {
+			t.Fatalf("self-only returned non-self path %q (self=%q) paths=%v", p, self, paths)
+		}
+	}
+}
+
+func TestFindAxisBinariesDefaultDiscoversPATHAndCommon(t *testing.T) {
+	// Default discovery must include PATH copies and common install locations so
+	// dual installs (e.g. ~/go/bin + /usr/local/bin) both get updated.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	goBin := filepath.Join(home, "go", "bin")
+	localBin := filepath.Join(home, ".local", "bin")
+	pathDir := filepath.Join(home, "pathbin")
+	for _, d := range []string{goBin, localBin, pathDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(dir string) string {
+		p := filepath.Join(dir, axisBinaryName())
+		if err := os.WriteFile(p, []byte("old"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	goPath := write(goBin)
+	localPath := write(localBin)
+	pathPath := write(pathDir)
+
+	// Only the PATH dir is on PATH; go/local should still be found via common candidates.
+	t.Setenv("PATH", pathDir)
+
+	paths := findAxisBinaries("", false)
+	if len(paths) == 0 {
+		t.Fatal("expected discovered installs")
+	}
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		if seen[p] {
+			t.Fatalf("duplicate path: %s", p)
+		}
+		seen[p] = true
+	}
+	mustContain := []string{goPath, localPath, pathPath}
+	for _, want := range mustContain {
+		abs, _ := filepath.Abs(want)
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if !seen[abs] {
+			// Also accept if any returned path has the same base dir+name after clean.
+			found := false
+			for got := range seen {
+				if filepath.Clean(got) == filepath.Clean(abs) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("missing %s in discovered paths: %v", abs, paths)
+			}
+		}
+	}
+}
+
 func TestFindAxisBinariesDedup(t *testing.T) {
-	// When explicit path is empty and updateAll is false, findAxisBinaries
-	// includes the current executable from os.Executable() and should return
-	// at least that path without duplicates.
+	// Default discovery includes the current executable and should never duplicate.
 	paths := findAxisBinaries("", false)
 	if len(paths) == 0 {
 		t.Fatal("expected at least 1 path for self binary")
 	}
-	// Verify no duplicates.
 	seen := make(map[string]bool)
 	for _, p := range paths {
 		if seen[p] {

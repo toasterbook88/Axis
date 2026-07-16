@@ -98,7 +98,7 @@ Top-level commands currently registered in the binary:
 | `axis mcp serve` | Start MCP server (read-only diagnostics + advisory leases) | `stdio` transport only |
 | `axis mcp client` | Unified MCP client | Subcommands: `list`, `tools`, `call`, `resources`, `read`, `prompts`, `get-prompt`, `search`, `batch`, `interactive`. Per-connection caching (60s TTL), retry with exponential backoff, placement-aware `--auto-route`, progress notifications, and REPL with 10 commands |
 | `axis serve` | Start local HTTP API | Includes execution surface |
-| `axis update` | Self-update binary | Safely replaces only the current executing binary with the latest release, verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--all` to upgrade all `$PATH` matches. `--check` reports only |
+| `axis update` | Self-update binary | Replaces **all discovered installs** with the latest release (running binary + every `axis` on `$PATH` + common locations `~/.local/bin`, `~/go/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), verifying SHA-256 via `checksums.txt`. Package-manager aware (refuses to break immutable Nix/Homebrew paths). Use `--self` for only the running binary; `--path` for one path; `--check` reports only |
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |

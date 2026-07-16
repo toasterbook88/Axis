@@ -1,5 +1,8 @@
 ## Unreleased
 
+### 🐛 Bug Fixes
+* **CLI:** `axis update` now refreshes all discovered installs by default (running binary + `$PATH` + common locations `~/.local/bin`, `~/go/bin`, `/usr/local/bin`, `/opt/homebrew/bin`) so dual installs no longer leave stale PATH shadows. Use `--self` for the old single-binary behavior.
+
 ## v0.14.4 (2026-07-16)
 
 ### 🚀 Features

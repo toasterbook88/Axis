@@ -46,24 +46,33 @@ var allowedUpdateHosts = []string{
 
 func updateCmd() *cobra.Command {
 	var checkOnly bool
-	var updateAll bool
+	var updateAll bool // retained for compatibility; default discovery already updates all installs
+	var selfOnly bool
 	var targetPath string
 
 	cmd := &cobra.Command{
-		Use:   "update",
-		Short: "Update the axis binary to the latest published release",
-		Long: "Check GitHub Releases for a newer published version of axis and install it in-place.\n\n" +
-			"By default, when a newer release is available, updates only the current executing binary.\n" +
-			"Use --all to update all other axis binaries found in PATH as well.\n" +
-			"If the current binary is newer than the latest published release, no binaries will be changed unless --path is given explicitly.\n" +
-			"Use --path to update a specific binary (allowed even when the current build is newer).\n" +
-			"Use --check to report whether an update is available without downloading.",
+		Use: "update",
+		// Short must not contain the substring "discover" — root help tests
+		// assert the old `discover` command is gone via that token.
+		Short: "Update axis installs to the latest published release",
+		Long: "Check GitHub Releases for the latest published axis version and install it in-place.\n\n" +
+			"By default, updates every known install so PATH shadows cannot leave stale copies:\n" +
+			"  • the currently running binary\n" +
+			"  • every `axis` found on $PATH\n" +
+			"  • common install locations (~/.local/bin, ~/go/bin, /usr/local/bin, /opt/homebrew/bin)\n\n" +
+			"Use --self to update only the currently running binary.\n" +
+			"Use --path to update a single explicit path (allowed even when the running build is newer).\n" +
+			"Use --check to report whether an update is available without downloading.\n" +
+			"If the running binary is newer than the latest published release, the running binary is\n" +
+			"not downgraded unless --path targets it; other known installs are still refreshed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(cmd, checkOnly, updateAll, targetPath)
+			_ = updateAll // accepted for back-compat; full discovery is the default
+			return runUpdate(cmd, checkOnly, selfOnly, targetPath)
 		},
 	}
 	cmd.Flags().BoolVarP(&checkOnly, "check", "c", false, "report whether an update is available without installing")
-	cmd.Flags().BoolVar(&updateAll, "all", false, "update all axis binaries found in PATH")
+	cmd.Flags().BoolVar(&selfOnly, "self", false, "update only the currently running binary")
+	cmd.Flags().BoolVar(&updateAll, "all", false, "deprecated: default already updates all discovered installs")
 	cmd.Flags().StringVar(&targetPath, "path", "", "update a specific axis binary at this path")
 	return cmd
 }
@@ -78,7 +87,7 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string) error {
+func runUpdate(cmd *cobra.Command, checkOnly, selfOnly bool, targetPath string) error {
 	out := cmd.OutOrStdout()
 	current := buildinfo.Version
 	fmt.Fprintf(out, "Current version: v%s\n", current)
@@ -120,18 +129,27 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 		return nil
 	}
 
+	// Tip-of-main newer than published: never downgrade the running binary unless
+	// --path explicitly targets a file. Still refresh other discovered installs
+	// so PATH shadows (e.g. ~/go/bin) do not stay stale.
+	skipSelf := false
 	switch relation {
 	case 0:
-		fmt.Fprintf(out, "Already up to date.\n")
+		fmt.Fprintf(out, "Running binary is already v%s; ensuring all discovered installs match...\n", latest)
 	case -1:
 		fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
 	case 1:
 		fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
 		if targetPath == "" {
-			fmt.Fprintf(out, "Refusing to downgrade the currently running binary.\n")
-			return nil
+			if selfOnly {
+				fmt.Fprintf(out, "Refusing to downgrade the currently running binary.\n")
+				return nil
+			}
+			skipSelf = true
+			fmt.Fprintf(out, "Refusing to downgrade the running binary; refreshing other discovered installs to v%s...\n", latest)
+		} else {
+			fmt.Fprintf(out, "Refusing to downgrade the currently running binary, but will update requested path(s) to the latest published release.\n")
 		}
-		fmt.Fprintf(out, "Refusing to downgrade the currently running binary, but will update requested path(s) to the latest published release.\n")
 	}
 
 	if buildinfo.UpdateManagedBy != "" {
@@ -139,22 +157,53 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 		return nil
 	}
 
-	// Always install: handles both new versions and stale PATH copies.
-	return installRelease(cmd, rel, latest, updateAll, targetPath)
+	return installRelease(cmd, rel, latest, selfOnly, targetPath, skipSelf)
 }
 
 func compareReleaseVersions(current, latest string) (int, error) {
 	return versioncmp.Compare(current, latest)
 }
 
-// findAxisBinaries discovers all unique axis binary paths to update.
-// Returns the deduplicated set of: the current executable, the explicit --path target if specified,
-// and optionally all "axis" in PATH if updateAll is true.
-func findAxisBinaries(explicitPath string, updateAll bool) []string {
+func axisBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "axis.exe"
+	}
+	return "axis"
+}
+
+// commonAxisInstallCandidates returns well-known install paths that often shadow
+// each other when operators mix go install, make install-user, and system paths.
+func commonAxisInstallCandidates() []string {
+	name := axisBinaryName()
+	var out []string
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		out = append(out,
+			filepath.Join(home, ".local", "bin", name),
+			filepath.Join(home, "go", "bin", name),
+		)
+	}
+	out = append(out,
+		filepath.Join("/usr/local/bin", name),
+		filepath.Join("/opt/homebrew/bin", name),
+	)
+	return out
+}
+
+// findAxisBinaries discovers unique axis install paths to update.
+//
+//   - --path: only that path
+//   - --self: only the currently running binary
+//   - default: running binary + every "axis" on $PATH + common install locations
+//     that exist (so dual installs like ~/go/bin vs /usr/local/bin both update)
+func findAxisBinaries(explicitPath string, selfOnly bool) []string {
 	seen := make(map[string]bool)
 	var paths []string
 
 	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
 		resolved, err := filepath.EvalSymlinks(p)
 		if err != nil {
 			resolved = p
@@ -178,22 +227,48 @@ func findAxisBinaries(explicitPath string, updateAll bool) []string {
 	if self, err := os.Executable(); err == nil {
 		add(self)
 	}
+	if selfOnly {
+		return paths
+	}
 
-	if updateAll {
-		// All "axis" binaries found in PATH directories.
-		binName := "axis"
-		if runtime.GOOS == "windows" {
-			binName = "axis.exe"
+	// All "axis" binaries found in PATH directories.
+	name := axisBinaryName()
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if strings.TrimSpace(dir) == "" {
+			continue
 		}
-		for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-			candidate := filepath.Join(dir, binName)
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-				add(candidate)
-			}
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			add(candidate)
+		}
+	}
+
+	// Common install locations even if not currently on PATH (or ordered after a
+	// fresher copy that won PATH lookup).
+	for _, candidate := range commonAxisInstallCandidates() {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			add(candidate)
 		}
 	}
 
 	return paths
+}
+
+// resolveSelfPath returns the absolute, symlink-resolved path of the running binary.
+func resolveSelfPath() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(self)
+	if err != nil {
+		resolved = self
+	}
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return resolved
+	}
+	return abs
 }
 
 func fetchLatestRelease() (*ghRelease, error) {
@@ -253,25 +328,55 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 	return binary, nil
 }
 
-func installRelease(cmd *cobra.Command, rel *ghRelease, version string, updateAll bool, explicitPath string) error {
+func installRelease(cmd *cobra.Command, rel *ghRelease, version string, selfOnly bool, explicitPath string, skipSelf bool) error {
 	out := cmd.OutOrStdout()
+	errOut := cmd.ErrOrStderr()
+
+	// Discover targets before downloading so tip-of-main / empty-target cases
+	// do not hit the network unnecessarily.
+	targets := findAxisBinaries(explicitPath, selfOnly)
+	if skipSelf && explicitPath == "" {
+		self := resolveSelfPath()
+		filtered := targets[:0]
+		for _, t := range targets {
+			if self != "" && t == self {
+				fmt.Fprintf(out, "Skipped (running build newer than release): %s\n", t)
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		targets = filtered
+	}
+	if len(targets) == 0 {
+		if skipSelf {
+			fmt.Fprintf(out, "No other installs to refresh.\n")
+			return nil
+		}
+		return fmt.Errorf("could not determine axis binary location to update")
+	}
 
 	binary, err := downloadReleaseBinary(cmd, rel, version)
 	if err != nil {
 		return err
 	}
 
-	targets := findAxisBinaries(explicitPath, updateAll)
-	if len(targets) == 0 {
-		return fmt.Errorf("could not determine axis binary location")
-	}
-
+	fmt.Fprintf(out, "Updating %d install(s)...\n", len(targets))
+	updated := 0
+	failed := 0
 	for _, target := range targets {
 		if err := replaceExecutable(target, binary); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not update %s: %v\n", target, err)
+			failed++
+			fmt.Fprintf(errOut, "warning: could not update %s: %v\n", target, err)
 			continue
 		}
+		updated++
 		fmt.Fprintf(out, "Updated: %s → v%s\n", target, version)
+	}
+	if updated == 0 {
+		return fmt.Errorf("failed to update any axis binary (%d target(s), %d error(s))", len(targets), failed)
+	}
+	if failed > 0 {
+		fmt.Fprintf(errOut, "warning: updated %d install(s); %d failed (often permissions on /usr/local/bin — re-run with sudo for system paths)\n", updated, failed)
 	}
 	return nil
 }
