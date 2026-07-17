@@ -1,5 +1,8 @@
 ## Unreleased
 
+### 🐛 Bug Fixes
+* **Transport:** Scope SSH-agent sockets to a single authentication handshake and close them on success or failure, preventing periodic cluster polling from exhausting the desktop keyring daemon's file-descriptor limit.
+
 ## v0.14.5 (2026-07-16)
 
 ### 🐛 Bug Fixes
