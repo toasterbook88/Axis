@@ -105,10 +105,12 @@ func TestSSHConfigUsesResolvedIdentityAndKnownHosts(t *testing.T) {
 
 	executor := NewSSHExecutor("example.com", 22, "axis", 10)
 	resolved := executor.resolveSSHConfig(context.Background())
-	cfg, err := executor.sshConfig(resolved, net.JoinHostPort("example.com", "22"))
+	lease, err := executor.sshConfig(resolved, net.JoinHostPort("example.com", "22"))
 	if err != nil {
 		t.Fatalf("sshConfig: %v", err)
 	}
+	defer lease.Close()
+	cfg := lease.config
 
 	if cfg.User != "axis" {
 		t.Fatalf("expected ssh user axis, got %q", cfg.User)

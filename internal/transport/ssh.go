@@ -61,6 +61,24 @@ type resolvedSSHConfig struct {
 	Port                 int
 }
 
+// sshConfigLease owns the short-lived resources needed to authenticate one
+// SSH handshake. Agent-backed signers retain the agent client, so its socket
+// must remain open until ssh.NewClientConn finishes authentication. It is not
+// needed for the lifetime of the established SSH connection.
+type sshConfigLease struct {
+	config    *ssh.ClientConfig
+	agentConn net.Conn
+}
+
+func (l *sshConfigLease) Close() error {
+	if l == nil || l.agentConn == nil {
+		return nil
+	}
+	err := l.agentConn.Close()
+	l.agentConn = nil
+	return err
+}
+
 type probeRemoteAddr string
 
 func (a probeRemoteAddr) Network() string { return "tcp" }
@@ -168,12 +186,6 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		dialTimeout = 10 * time.Second
 	}
 
-	config, err := e.sshConfig(resolved, hostKeyAddr)
-	if err != nil {
-		return fmt.Errorf("ssh config: %w", err)
-	}
-	config.Timeout = dialTimeout
-
 	dialer := net.Dialer{Timeout: dialTimeout}
 
 	// handshakeDeadline = min(now+dialTimeout, ctx.Deadline if set).
@@ -231,16 +243,31 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 		return sshConn, chans, reqs, time.Since(start).Milliseconds(), nil
 	}
 
+	// tryDialWithConfig scopes the SSH-agent connection to exactly one
+	// synchronous handshake attempt. NewClientConn returns only after client
+	// authentication completes, so the agent is no longer needed afterward.
+	tryDialWithConfig := func(dialAddr string, resolved resolvedSSHConfig, hkAddr string, hkName string, hkPort int) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, int64, error) {
+		lease, err := e.sshConfig(resolved, hkAddr)
+		if err != nil {
+			return nil, nil, nil, 0, fmt.Errorf("ssh config: %w", err)
+		}
+		defer lease.Close()
+
+		lease.config.Timeout = dialTimeout
+		return tryDial(dialAddr, hkAddr, lease.config, hkName, hkPort)
+	}
+
 	var sshConn ssh.Conn
 	var chans <-chan ssh.NewChannel
 	var reqs <-chan *ssh.Request
 	var handshakeLatencyMs int64
+	var err error
 
 	// 1. Try the dynamic fast-path (ResolvedDialTarget) first
 	if e.ResolvedDialTarget != "" {
 		dialAddr := net.JoinHostPort(e.ResolvedDialTarget, strconv.Itoa(resolvedPort(resolved, e.Port)))
-		sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(
-			dialAddr, hostKeyAddr, config,
+		sshConn, chans, reqs, handshakeLatencyMs, err = tryDialWithConfig(
+			dialAddr, resolved, hostKeyAddr,
 			resolvedHostKeyName(resolved, e.Host), resolvedPort(resolved, e.Port),
 		)
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
@@ -274,14 +301,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 			hkName := resolvedHostKeyName(candResolved, hostCand)
 			hkPort := resolvedPort(candResolved, e.Port)
 			hkAddr := net.JoinHostPort(hkName, strconv.Itoa(hkPort))
-			candConfig, cfgErr := e.sshConfig(candResolved, hkAddr)
-			if cfgErr != nil {
-				lastErr = cfgErr
-				continue
-			}
-			// ClientConfig.Timeout also bounds handshake I/O.
-			candConfig.Timeout = dialTimeout
-			sshConn, chans, reqs, handshakeLatencyMs, err = tryDial(logicalAddr, hkAddr, candConfig, hkName, hkPort)
+			sshConn, chans, reqs, handshakeLatencyMs, err = tryDialWithConfig(logicalAddr, candResolved, hkAddr, hkName, hkPort)
 			if err == nil {
 				e.mu.Lock()
 				e.Host = hostCand
@@ -580,7 +600,8 @@ func handshakeRemediation(err error, host string, port int) string {
 	return ""
 }
 
-func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) (*ssh.ClientConfig, error) {
+func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) (*sshConfigLease, error) {
+	lease := &sshConfigLease{}
 	var signers []ssh.Signer
 	home, _ := os.UserHomeDir()
 
@@ -592,6 +613,13 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 			if conn, err := net.Dial("unix", sock); err == nil {
 				if agentSigners, err := agent.NewClient(conn).Signers(); err == nil {
 					signers = append(signers, agentSigners...)
+					if len(agentSigners) > 0 {
+						lease.agentConn = conn
+					} else {
+						_ = conn.Close()
+					}
+				} else {
+					_ = conn.Close()
 				}
 			}
 		}
@@ -610,6 +638,7 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 	}
 
 	if len(signers) == 0 {
+		_ = lease.Close()
 		return nil, fmt.Errorf("no SSH keys or agent available")
 	}
 
@@ -622,11 +651,13 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 		resolvedPort(resolved, e.Port),
 	)
 	if err != nil {
+		_ = lease.Close()
 		return nil, err
 	}
 
 	hostKeyCallback, err := knownhosts.New(knownHostsPaths...)
 	if err != nil {
+		_ = lease.Close()
 		return nil, fmt.Errorf("failed to load known_hosts: %w", err)
 	}
 
@@ -636,13 +667,14 @@ func (e *SSHExecutor) sshConfig(resolved resolvedSSHConfig, hostKeyAddr string) 
 		user = e.User
 	}
 
-	return &ssh.ClientConfig{
+	lease.config = &ssh.ClientConfig{
 		User:              user,
 		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signers...)},
 		HostKeyCallback:   hostKeyCallback,
 		HostKeyAlgorithms: hostKeyAlgorithms,
 		Timeout:           time.Duration(e.TimeoutSec) * time.Second,
-	}, nil
+	}
+	return lease, nil
 }
 
 func (e *SSHExecutor) resolveSSHConfig(ctx context.Context) resolvedSSHConfig {
