@@ -32,7 +32,7 @@ type ToolRegistry struct {
 	defs      []chat.ToolDef
 	executors map[string]ToolExecutor
 	// todos is the session-scoped todo list, owned by the registry so the
-	// todo tool persists state across turns without external plumbing.
+	// "todo" tool persists state across turns without external plumbing.
 	todos *todoStore
 	// checkpoints snapshots file content before each mutation so undo_last
 	// and review_changes can recover prior state within a session.
