@@ -14,7 +14,10 @@ func TestSSHConfig_InsecureEnvIgnored(t *testing.T) {
 
 	executor := NewSSHExecutor("localhost", 22, "user", 10)
 	resolved := executor.resolveSSHConfig(context.Background())
-	_, err := executor.sshConfig(resolved, "localhost:22")
+	lease, err := executor.sshConfig(resolved, "localhost:22")
+	if lease != nil {
+		defer lease.Close()
+	}
 
 	if err == nil {
 		// Config succeeded using known_hosts (not insecure) — that's fine.
