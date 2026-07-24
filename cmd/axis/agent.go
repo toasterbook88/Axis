@@ -117,6 +117,10 @@ func agentCmd() *cobra.Command {
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
 			}
+			// --role and --model are mutually exclusive.
+			if strings.TrimSpace(model) != "" && strings.TrimSpace(roleFlag) != "" {
+				return fmt.Errorf("use either --model or --role, not both")
+			}
 			// --role fills model from ai.yaml when --model is empty.
 			if strings.TrimSpace(model) == "" && strings.TrimSpace(roleFlag) != "" {
 				if fromRole := modelFromAIRoleFn(roleFlag); fromRole != "" {
@@ -1462,11 +1466,18 @@ func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) err
 }
 
 // cloudOptsForTarget resolves cloud credentials when target.Protocol is cloud.
+// For openai-compatible ai.yaml backends it also resolves optional API keys.
 // target is a pointer so provider-name casing normalization is retained by callers.
 func cloudOptsForTarget(loadRT func(context.Context) (*runtimectx.Context, error), target *ModelChoice) (agent.CloudBackendOptions, error) {
 	var opts agent.CloudBackendOptions
 	if target == nil {
 		return opts, fmt.Errorf("cloud target is nil")
+	}
+	if target.Protocol == agent.ProtocolOpenAI {
+		if key := apiKeyForAIBackend(target.ProviderName, target.Endpoint); key != "" {
+			opts.APIKey = key
+		}
+		return opts, nil
 	}
 	if target.Protocol != agent.ProtocolCloud {
 		return opts, nil

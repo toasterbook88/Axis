@@ -14,12 +14,16 @@ to pick the right one.
 When `--model` is empty (provider=auto):
 
 1. Explicit interactive `/model` choice  
-2. `chat.default_model` from `nodes.yaml`  
-3. Warm-resident preferred model from the cluster snapshot  
-4. **`ai.yaml` role `default`** model (if configured)  
-5. First usable local catalog entry / cloud fallback  
+2. **`--role <name>`** from `ai.yaml` (mutually exclusive with `--model`)  
+3. `chat.default_model` from `nodes.yaml`  
+4. Warm-resident preferred model from the cluster snapshot  
+5. **`ai.yaml` role `default`** model (if configured)  
+6. First usable local catalog entry / cloud fallback  
 
 Role catalog entries appear as `ai-role:<name>` in `/models` when `ai.yaml` is present.
+They are **probed** at catalog build time: unreachable hubs are marked disabled and
+will not be selected as the auto default. Security class is **local** for loopback
+or private LAN base URLs, otherwise **remote** (stricter evidence redaction).
 
 ## Precedence for placement / task place
 
@@ -53,7 +57,8 @@ axis ai backends
 axis ai roles
 axis ai route default
 axis placement explain "run ollama inference on a 7b model"
-axis agent   # picks model per precedence above
+axis agent --role default
+axis agent --model coder:latest   # not with --role
 ```
 
 See also:
