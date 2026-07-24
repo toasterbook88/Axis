@@ -210,6 +210,7 @@ HDD penalty: −15 for heavy inference.
 | 4 | `ExitErrCommandFail` | Command execution failure |
 | 5 | `ExitErrContextWrite` | Context write failure |
 | 6 | `ExitErrIO` | I/O failure |
+| 7 | `ExitErrModelUnlisted` | `axis ai route`: model not listed on healthy backends |
 
 ## Configuration
 
