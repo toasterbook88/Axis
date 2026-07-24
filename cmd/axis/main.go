@@ -116,6 +116,8 @@ func newRootCmd() *cobra.Command {
 	cmdDaemon.GroupID = "setup"
 	cmdLlm := llmCmd()
 	cmdLlm.GroupID = "ai"
+	cmdAI := aiCmd()
+	cmdAI.GroupID = "ai"
 	cmdCortex := cortexCmd()
 	cmdCortex.GroupID = "ai"
 	cmdChat := chatCmd()
@@ -153,6 +155,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(cmdServe)
 	root.AddCommand(cmdDaemon)
 	root.AddCommand(cmdLlm)
+	root.AddCommand(cmdAI)
 	root.AddCommand(cmdCortex)
 	root.AddCommand(cmdChat)
 	root.AddCommand(cmdAgent)
