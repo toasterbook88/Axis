@@ -120,6 +120,8 @@ func planTaskExplanation(
 
 	explanation := placementpkg.ExplainPlacement(reqs, snap.Nodes, st)
 	explanation.Decision.Reasoning = runtimectx.PrependWarningReasoning(explanation.Decision.Reasoning, snap.Warnings)
+	// Advisory inference-route hints from ~/.axis/ai.yaml (does not change FitScore).
+	appendInferenceRouteHints(&explanation.Decision, desc, "")
 	return explanation, source, nil
 }
 
