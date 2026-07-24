@@ -98,6 +98,7 @@ axis doctor
 | `axis daemon restart` | Restart the local cache daemon |
 | `axis serve` | Local HTTP API + daemon cache |
 | `axis llm` | LLM routing and model management |
+| `axis ai` | Inference backends, roles, and dry-run routing |
 | `axis cortex` | Distributed vector memory / event bus |
 | `axis update` | Self-update via GitHub Releases |
 | `axis context show\|clear` | Inspect or clear placement memory |

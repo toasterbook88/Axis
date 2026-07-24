@@ -1,0 +1,47 @@
+# AXIS inference roles and backends (operator-local).
+# Copy to ~/.axis/ai.yaml and edit for your environment.
+#
+# PUBLIC REPO RULE: never commit real hostnames, private IPs, Tailscale
+# addresses, API keys, or home paths. Examples below use loopback and
+# documentation placeholders only.
+#
+# Operator pattern (outside AXIS): reverse tunnels or a local OpenAI-compatible
+# hub may expose remote backends on 127.0.0.1. AXIS only sees the configured URL.
+
+backends:
+  - name: local-ollama
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+    # Optional: bind this backend to a nodes.yaml node name for placement hints.
+    node: node-a
+    enabled: true
+
+  - name: local-hub
+    kind: openai-compatible
+    # Often a localhost reverse-proxy or router in front of several engines.
+    base_url: http://127.0.0.1:4000/v1
+    enabled: true
+    # api_key_env: AXIS_LLM_API_KEY
+
+  - name: peer-docs-example
+    kind: openai-compatible
+    # RFC 5737 TEST-NET-1 — documentation only; replace in private config.
+    base_url: http://192.0.2.10:11434/v1
+    node: node-b
+    enabled: false
+
+roles:
+  default:
+    prefer: [local-hub, local-ollama]
+    model: coder:latest
+  fast:
+    prefer: [local-hub]
+    model: fast-chat
+  long:
+    prefer: [local-hub]
+    model: long-context
+  metal:
+    prefer: [local-ollama]
+    model: small:latest
+    # Optional architecture hint for future placement filters (arm64, amd64).
+    require_arch: arm64
