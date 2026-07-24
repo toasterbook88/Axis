@@ -109,3 +109,57 @@ func TestResolveRole_ModelOverride(t *testing.T) {
 		t.Fatalf("got %+v", dec)
 	}
 }
+
+func TestResolveRole_RequireModelListed_SkipsThenSelects(t *testing.T) {
+	hubA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"other"}]}`))
+	}))
+	t.Cleanup(hubA.Close)
+	hubB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"coder:latest"}]}`))
+	}))
+	t.Cleanup(hubB.Close)
+
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{
+			{Name: "a", Kind: config.AIBackendOpenAICompatible, BaseURL: hubA.URL + "/v1"},
+			{Name: "b", Kind: config.AIBackendOpenAICompatible, BaseURL: hubB.URL + "/v1"},
+		},
+		Roles: map[string]config.AIRoleConfig{
+			"default": {Prefer: []string{"a", "b"}, Model: "coder:latest"},
+		},
+	}
+	dec, err := llmrouter.ResolveRole(context.Background(), cfg, llmrouter.ResolveRoleOptions{
+		Role:               "default",
+		RequireModelListed: true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveRole: %v", err)
+	}
+	if dec.Backend != "b" || !dec.ModelPresent {
+		t.Fatalf("got %+v", dec)
+	}
+}
+
+func TestResolveRole_RequireModelListed_ErrorsWhenMissing(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"other"}]}`))
+	}))
+	t.Cleanup(hub.Close)
+
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{
+			{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: hub.URL + "/v1"},
+		},
+		Roles: map[string]config.AIRoleConfig{
+			"default": {Prefer: []string{"hub"}, Model: "coder:latest"},
+		},
+	}
+	_, err := llmrouter.ResolveRole(context.Background(), cfg, llmrouter.ResolveRoleOptions{
+		Role:               "default",
+		RequireModelListed: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not listed") {
+		t.Fatalf("expected ErrModelUnlisted, got %v", err)
+	}
+}

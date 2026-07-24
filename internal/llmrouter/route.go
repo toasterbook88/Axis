@@ -60,9 +60,18 @@ type ResolveRoleOptions struct {
 	// SkipProbe skips network health checks (config-only preference order).
 	SkipProbe bool
 
+	// RequireModelListed rejects backends whose probe returned a non-empty model
+	// list that does not include the requested model. Empty or unparsed lists are
+	// still accepted (hubs may lazy-load). Has no effect when SkipProbe is true.
+	RequireModelListed bool
+
 	// HTTPClient is optional; used for probes.
 	HTTPClient *http.Client
 }
+
+// ErrModelUnlisted is returned when RequireModelListed is set and no healthy
+// backend advertises the requested model in a non-empty list.
+var ErrModelUnlisted = fmt.Errorf("requested model not listed on any healthy backend")
 
 // ResolveRole picks a backend for a role using prefer order and optional probes.
 // When role is empty and Model is set, every enabled backend is considered.
@@ -179,6 +188,9 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 		} else if len(p.Models) == 0 {
 			conf = 0.7
 			reasoning = append(reasoning, fmt.Sprintf("backend %q healthy; model list empty or unparsed — accepting", name))
+		} else if opts.RequireModelListed {
+			reasoning = append(reasoning, fmt.Sprintf("skip %q: model %q not listed (require_model_listed)", name, model))
+			continue
 		} else {
 			conf = 0.55
 			reasoning = append(reasoning, fmt.Sprintf("backend %q healthy; model %q not in list — still selecting (hub may lazy-load)", name, model))
@@ -206,7 +218,36 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 		}, nil
 	}
 
+	// Strict mode: every healthy candidate was skipped for missing model.
+	if opts.RequireModelListed && !opts.SkipProbe {
+		sawHealthy := false
+		for _, p := range probes {
+			if p.OK && p.Enabled {
+				sawHealthy = true
+				break
+			}
+		}
+		if sawHealthy {
+			return RoleRouteDecision{
+				Role:      roleName,
+				Model:     model,
+				Reasoning: append(reasoning, fmt.Sprintf("no healthy backend lists model %q", model)),
+				Probes:    probes,
+			}, fmt.Errorf("%w: %q", ErrModelUnlisted, model)
+		}
+	}
+
 	// Nothing healthy: return first enabled prefer as degraded advisory.
+	// Strict mode still fails — degraded advice without a listed model is not a success.
+	if opts.RequireModelListed && !opts.SkipProbe {
+		return RoleRouteDecision{
+			Role:      roleName,
+			Model:     model,
+			Reasoning: append(reasoning, "no healthy backend available under require_model_listed"),
+			Probes:    probes,
+		}, fmt.Errorf("%w: %q (no healthy backend)", ErrModelUnlisted, model)
+	}
+
 	for _, name := range prefer {
 		b, ok := cfg.FindBackend(name)
 		if !ok || !b.IsEnabled() {
