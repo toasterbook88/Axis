@@ -53,7 +53,9 @@ table_rows="$(grep -cE '^\| `axis' AGENTS.md)"
 # --- 3. MCP tool count -------------------------------------------------------
 # Registrations are s.AddTool(...) calls in internal/mcp (non-test files).
 mcp_code="$(grep -rn 's\.AddTool(' internal/mcp/*.go | grep -v _test | wc -l | tr -d ' ')"
-ro_code="$(grep -c 'WithReadOnlyHintAnnotation(true)' internal/mcp/server.go)"
+# Read-only tools may be registered from any non-test file under internal/mcp/
+# (e.g. server.go, inference_route.go), not only server.go.
+ro_code="$(grep -rn 'WithReadOnlyHintAnnotation(true)' internal/mcp/*.go | grep -v _test | wc -l | tr -d ' ')"
 lease_code="$(grep -c 's\.AddTool(' internal/mcp/triangle.go)"
 
 # AGENTS.md states "<N> tools (<R> read-only ... + <L> advisory lease ...)",
@@ -67,7 +69,7 @@ lease_doc="$(grep -oE '[0-9]+ advisory lease' AGENTS.md | grep -oE '^[0-9]+' || 
 [[ "$total_doc" == "$mcp_code" ]] \
   || fail "AGENTS.md claims $total_doc MCP tools; internal/mcp registers $mcp_code via s.AddTool"
 [[ "$ro_doc" == "$ro_code" ]] \
-  || fail "AGENTS.md claims $ro_doc read-only MCP tools; internal/mcp/server.go has $ro_code WithReadOnlyHintAnnotation(true)"
+  || fail "AGENTS.md claims $ro_doc read-only MCP tools; internal/mcp has $ro_code WithReadOnlyHintAnnotation(true)"
 [[ "$lease_doc" == "$lease_code" ]] \
   || fail "AGENTS.md claims $lease_doc advisory lease tools; internal/mcp/triangle.go registers $lease_code via s.AddTool"
 [[ $((ro_doc + lease_doc)) == "$total_doc" ]] \

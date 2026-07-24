@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -168,11 +169,12 @@ func aiRolesCmd() *cobra.Command {
 
 func aiRouteCmd() *cobra.Command {
 	var (
-		format    string
-		aiPath    string
-		model     string
-		skipProbe bool
-		timeout   time.Duration
+		format        string
+		aiPath        string
+		model         string
+		skipProbe     bool
+		allowUnlisted bool
+		timeout       time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "route [role]",
@@ -181,17 +183,25 @@ func aiRouteCmd() *cobra.Command {
 
 This is advisory only — no completion request is sent.
 
+By default (when probing), backends that advertise a non-empty model list without
+the requested model are skipped. Exit code 7 means the model was not listed on
+any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
+
   axis ai route default
   axis ai route --model fast-chat
-  axis ai route long --format json --skip-probe`,
+  axis ai route long --format json --skip-probe
+  axis ai route default --allow-unlisted`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadAIConfig(aiPath)
 			if err != nil {
-				return err
+				return ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
 			}
 			if len(cfg.Backends) == 0 {
-				return fmt.Errorf("no backends configured; copy ai.example.yaml to %s", config.DefaultAIConfigPath())
+				return ExitCodeError{
+					Code:    ExitErrConfigLoad,
+					Message: fmt.Sprintf("no backends configured; copy ai.example.yaml to %s", config.DefaultAIConfigPath()),
+				}
 			}
 
 			role := ""
@@ -205,12 +215,30 @@ This is advisory only — no completion request is sent.
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
+			// Strict by default when probing; skip-probe cannot verify listing.
+			requireListed := !skipProbe && !allowUnlisted
+
 			dec, err := llmrouter.ResolveRole(ctx, cfg, llmrouter.ResolveRoleOptions{
-				Role:      role,
-				Model:     model,
-				SkipProbe: skipProbe,
+				Role:               role,
+				Model:              model,
+				SkipProbe:          skipProbe,
+				RequireModelListed: requireListed,
 			})
 			if err != nil {
+				// Still print partial decision for operators when useful.
+				if dec.Model != "" || len(dec.Reasoning) > 0 {
+					switch strings.ToLower(format) {
+					case "json":
+						_ = writeJSON(cmd, dec)
+					case "yaml":
+						_ = writeYAML(cmd, dec)
+					default:
+						printRouteText(cmd, dec)
+					}
+				}
+				if errors.Is(err, llmrouter.ErrModelUnlisted) {
+					return ExitCodeError{Code: ExitErrModelUnlisted, Message: err.Error()}
+				}
 				return err
 			}
 
@@ -229,6 +257,7 @@ This is advisory only — no completion request is sent.
 	cmd.Flags().StringVar(&aiPath, "ai-config", "", "Path to ai.yaml (default: ~/.axis/ai.yaml)")
 	cmd.Flags().StringVar(&model, "model", "", "Override role model, or resolve model without a role")
 	cmd.Flags().BoolVar(&skipProbe, "skip-probe", false, "Config-only preference order (no health checks)")
+	cmd.Flags().BoolVar(&allowUnlisted, "allow-unlisted", false, "Accept healthy backends even when the model is absent from a non-empty list")
 	cmd.Flags().DurationVar(&timeout, "timeout", 8*time.Second, "Probe budget")
 	return cmd
 }
