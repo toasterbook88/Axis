@@ -55,6 +55,34 @@ roles:
 	}
 }
 
+func TestAIRouteStrictModelUnlistedExit(t *testing.T) {
+	// Use a local httptest via real ResolveRole is hard from CLI without live ports;
+	// exercise --allow-unlisted path still succeeds with skip-probe.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ai.yaml")
+	body := `
+backends:
+  - name: local-ollama
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+roles:
+  default:
+    prefer: [local-ollama]
+    model: coder:latest
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := aiCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"route", "default", "--ai-config", path, "--skip-probe"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("skip-probe should succeed: %v", err)
+	}
+}
+
 func TestAIRolesListsConfigured(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai.yaml")

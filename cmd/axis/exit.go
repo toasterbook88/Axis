@@ -8,13 +8,14 @@ import (
 
 // Exit codes for the AXIS CLI
 const (
-	ExitOK              = 0
-	ExitErrGeneric      = 1
-	ExitErrConfigLoad   = 2
-	ExitErrNoNodesFit   = 3
-	ExitErrCommandFail  = 4
-	ExitErrContextWrite = 5
-	ExitErrIO           = 6
+	ExitOK               = 0
+	ExitErrGeneric       = 1
+	ExitErrConfigLoad    = 2
+	ExitErrNoNodesFit    = 3
+	ExitErrCommandFail   = 4
+	ExitErrContextWrite  = 5
+	ExitErrIO            = 6
+	ExitErrModelUnlisted = 7 // axis ai route: model not listed on healthy backends
 )
 
 // ExitCodeError wraps an exit code and a user-facing message so Cobra

@@ -177,6 +177,8 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 		},
 	)
 
+	registerInferenceRouteTool(s)
+
 	s.AddTool(
 		mcpproto.NewTool(
 			"axis_health",
