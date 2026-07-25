@@ -43,16 +43,17 @@ func TestRoleFromTaskDescription_NonASCIINoPanic(t *testing.T) {
 }
 
 func TestFormatRouteReasoning(t *testing.T) {
-	lines := llmrouter.FormatRouteReasoning(llmrouter.RoleRouteDecision{
+	probed := llmrouter.FormatRouteReasoning(llmrouter.RoleRouteDecision{
 		Role:         "default",
 		Backend:      "hub",
 		Model:        "coder:latest",
 		Endpoint:     "http://127.0.0.1:4000/v1",
 		Kind:         "openai-compatible",
+		Probed:       true,
 		Healthy:      true,
 		ModelPresent: true,
 	})
-	joined := strings.Join(lines, "\n")
+	joined := strings.Join(probed, "\n")
 	for _, need := range []string{
 		"inference_role=default",
 		"inference_backend=hub",
@@ -66,6 +67,23 @@ func TestFormatRouteReasoning(t *testing.T) {
 	}
 	if strings.Contains(joined, "127.0.0.1") {
 		t.Fatal("raw endpoint must not appear in placement reasoning")
+	}
+
+	// SkipProbe path must not claim the hub is unhealthy.
+	skipped := llmrouter.FormatRouteReasoning(llmrouter.RoleRouteDecision{
+		Role:     "default",
+		Backend:  "hub",
+		Model:    "m",
+		Endpoint: "http://127.0.0.1:4000/v1",
+		Probed:   false,
+		Healthy:  false,
+	})
+	sjoin := strings.Join(skipped, "\n")
+	if !strings.Contains(sjoin, "inference_probe=skipped") {
+		t.Fatalf("expected probe=skipped, got %q", sjoin)
+	}
+	if strings.Contains(sjoin, "inference_healthy=") || strings.Contains(sjoin, "inference_model_present=") {
+		t.Fatalf("must omit healthy/model_present when unprobed: %q", sjoin)
 	}
 }
 

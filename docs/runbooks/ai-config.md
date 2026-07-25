@@ -30,18 +30,22 @@ or private LAN base URLs, otherwise **remote** (stricter evidence redaction).
 Node selection remains the placement engine (Filter → Rank → Select).
 
 When the task description maps to an inference role (keywords like `ollama`,
-`llm inference`, `role=default`, …), AXIS appends **advisory** reasoning lines:
+`llm inference`, `role=default`, …) **and** that role exists in `ai.yaml`,
+AXIS appends **advisory** reasoning lines. Resolution is **offline**
+(`SkipProbe`): no live HTTP during placement, so `inference_healthy` is not
+emitted — you will see `inference_probe=skipped` instead.
 
 ```text
 inference_role=default
 inference_backend=local-hub
 inference_model=coder:latest
-inference_endpoint=http://127.0.0.1:4000/v1
+inference_endpoint_class=loopback
+inference_probe=skipped
 …
 ```
 
 These do **not** override the selected node. They tell operators which backend
-to call after placement.
+to call after placement. Use `axis ai route` when you want a live probe.
 
 ## Operator pattern (private grids)
 

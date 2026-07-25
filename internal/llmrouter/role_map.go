@@ -83,8 +83,14 @@ func FormatRouteReasoning(dec RoleRouteDecision) []string {
 	if dec.Node != "" {
 		lines = append(lines, "inference_node_hint="+dec.Node)
 	}
-	lines = append(lines, "inference_healthy="+boolStr(dec.Healthy))
-	lines = append(lines, "inference_model_present="+boolStr(dec.ModelPresent))
+	if !dec.Probed {
+		// SkipProbe path: do not emit healthy=false / model_present=false
+		// (those read as "hub down" when no probe was attempted).
+		lines = append(lines, "inference_probe=skipped")
+	} else {
+		lines = append(lines, "inference_healthy="+boolStr(dec.Healthy))
+		lines = append(lines, "inference_model_present="+boolStr(dec.ModelPresent))
+	}
 	return lines
 }
 

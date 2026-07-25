@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -200,8 +199,10 @@ func probeAIEndpoint(kind, baseURL string) bool {
 	return inferenceProbeFn(probeURL)
 }
 
-// apiKeyForAIBackend resolves API key material for an ai.yaml backend by name
-// or by matching base_url to endpoint.
+// apiKeyForAIBackend resolves API key material for an ai.yaml backend.
+// When providerName is "ai-backend:<name>", that name is authoritative (first
+// match wins even if another backend shares the same base_url). Endpoint
+// matching is only a fallback when no name is given.
 func apiKeyForAIBackend(providerName, endpoint string) string {
 	cfg, err := inferenceAILoadFn(inferenceAIPathFn())
 	if err != nil || cfg == nil {
@@ -211,10 +212,14 @@ func apiKeyForAIBackend(providerName, endpoint string) string {
 	if strings.HasPrefix(providerName, "ai-backend:") {
 		backendName = strings.TrimPrefix(providerName, "ai-backend:")
 	}
-	for _, b := range cfg.Backends {
-		if backendName != "" && strings.EqualFold(b.Name, backendName) {
-			return resolveBackendKey(b)
+	if backendName != "" {
+		for _, b := range cfg.Backends {
+			if strings.EqualFold(b.Name, backendName) {
+				return resolveBackendKey(b)
+			}
 		}
+	}
+	for _, b := range cfg.Backends {
 		if endpoint != "" && urlsRoughlyEqual(b.BaseURL, endpoint) {
 			return resolveBackendKey(b)
 		}
@@ -233,6 +238,3 @@ func resolveBackendKey(b config.AIBackendConfig) string {
 func urlsRoughlyEqual(a, b string) bool {
 	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(a), "/"), strings.TrimRight(strings.TrimSpace(b), "/"))
 }
-
-// ensure probeEndpointFn signature available — defined in agent.go
-var _ = http.StatusOK

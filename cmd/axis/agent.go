@@ -1466,7 +1466,10 @@ func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) err
 }
 
 // cloudOptsForTarget resolves cloud credentials when target.Protocol is cloud.
-// For openai-compatible ai.yaml backends it also resolves optional API keys.
+// For any ProtocolOpenAI target it also tries ai.yaml backend keys (by
+// ai-backend: name, then by matching base_url). That intentionally covers both
+// ai-role catalog entries and nodes.yaml resident OpenAI endpoints that share
+// a hub URL with a keyed ai.yaml backend.
 // target is a pointer so provider-name casing normalization is retained by callers.
 func cloudOptsForTarget(loadRT func(context.Context) (*runtimectx.Context, error), target *ModelChoice) (agent.CloudBackendOptions, error) {
 	var opts agent.CloudBackendOptions

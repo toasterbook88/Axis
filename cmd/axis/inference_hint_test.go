@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -39,13 +40,12 @@ func TestAppendInferenceRouteHints(t *testing.T) {
 	inferenceResolveFn = func(_ context.Context, _ *config.AIConfig, opts llmrouter.ResolveRoleOptions) (llmrouter.RoleRouteDecision, error) {
 		sawSkipProbe = opts.SkipProbe
 		return llmrouter.RoleRouteDecision{
-			Role:         "default",
-			Backend:      "hub",
-			Model:        "coder:latest",
-			Endpoint:     "http://127.0.0.1:4000/v1",
-			Kind:         config.AIBackendOpenAICompatible,
-			Healthy:      true,
-			ModelPresent: true,
+			Role:     "default",
+			Backend:  "hub",
+			Model:    "coder:latest",
+			Endpoint: "http://127.0.0.1:4000/v1",
+			Kind:     config.AIBackendOpenAICompatible,
+			Probed:   false, // SkipProbe path
 		}, nil
 	}
 
@@ -57,6 +57,12 @@ func TestAppendInferenceRouteHints(t *testing.T) {
 	joined := strings.Join(dec.Reasoning, " ")
 	if !strings.Contains(joined, "inference_backend=hub") {
 		t.Fatalf("reasoning=%v", dec.Reasoning)
+	}
+	if !strings.Contains(joined, "inference_probe=skipped") {
+		t.Fatalf("expected probe=skipped, got %v", dec.Reasoning)
+	}
+	if strings.Contains(joined, "inference_healthy=") {
+		t.Fatal("must not claim healthy=false when unprobed")
 	}
 	if strings.Contains(joined, "127.0.0.1") {
 		t.Fatal("raw endpoint must not appear in placement reasoning")
@@ -195,6 +201,46 @@ func TestModelChoicesFromAIConfig_SecurityAndProbe(t *testing.T) {
 	if !remote.Disabled || remote.DisabledReason != "unreachable" {
 		t.Fatalf("remote should be disabled unreachable: %+v", remote)
 	}
+}
+
+func TestAPIKeyForAIBackend_NameAuthoritative(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() { inferenceAILoadFn = prevLoad })
+
+	// Two backends share the same base URL with different keys.
+	// Name must win over endpoint match order.
+	b1KeyFile := t.TempDir() + "/k1"
+	b2KeyFile := t.TempDir() + "/k2"
+	if err := writeKeyFile(b1KeyFile, "key-for-b1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeyFile(b2KeyFile, "key-for-b2"); err != nil {
+		t.Fatal(err)
+	}
+	sharedURL := "http://127.0.0.1:4000/v1"
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) {
+		return &config.AIConfig{
+			Backends: []config.AIBackendConfig{
+				{Name: "b1", Kind: config.AIBackendOpenAICompatible, BaseURL: sharedURL, APIKeyFile: b1KeyFile},
+				{Name: "b2", Kind: config.AIBackendOpenAICompatible, BaseURL: sharedURL, APIKeyFile: b2KeyFile},
+			},
+		}, nil
+	}
+
+	if got := apiKeyForAIBackend("ai-backend:b2", sharedURL); got != "key-for-b2" {
+		t.Fatalf("named b2: got %q want key-for-b2", got)
+	}
+	if got := apiKeyForAIBackend("ai-backend:b1", sharedURL); got != "key-for-b1" {
+		t.Fatalf("named b1: got %q want key-for-b1", got)
+	}
+	// Endpoint-only fallback still works (first matching URL).
+	if got := apiKeyForAIBackend("", sharedURL); got != "key-for-b1" {
+		t.Fatalf("endpoint fallback: got %q want key-for-b1", got)
+	}
+}
+
+func writeKeyFile(path, key string) error {
+	return os.WriteFile(path, []byte(key), 0o600)
 }
 
 func TestModelChoicesFromAIConfig_Dedupe(t *testing.T) {
