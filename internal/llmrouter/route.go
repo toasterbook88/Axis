@@ -30,10 +30,16 @@ type RoleRouteDecision struct {
 	// Node is an optional nodes.yaml binding from the backend config.
 	Node string `json:"node,omitempty" yaml:"node,omitempty"`
 
+	// Probed is true when live health probes ran. When false (SkipProbe),
+	// Healthy and ModelPresent are unset and must not be treated as failures.
+	Probed bool `json:"probed" yaml:"probed"`
+
 	// Healthy is true when the chosen backend probe succeeded.
+	// Only meaningful when Probed is true.
 	Healthy bool `json:"healthy" yaml:"healthy"`
 
 	// ModelPresent is true when the probe listed the model (when list available).
+	// Only meaningful when Probed is true.
 	ModelPresent bool `json:"model_present" yaml:"model_present"`
 
 	// Confidence is [0,1] based on health + model listing.
@@ -164,6 +170,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 				Endpoint:   b.BaseURL,
 				Kind:       b.Kind,
 				Node:       b.Node,
+				Probed:     false,
 				Healthy:    false,
 				Confidence: 0.4,
 				Reasoning:  append(reasoning, fmt.Sprintf("selected %q without probe", b.Name)),
@@ -209,6 +216,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			Endpoint:     b.BaseURL,
 			Kind:         b.Kind,
 			Node:         b.Node,
+			Probed:       true,
 			Healthy:      true,
 			ModelPresent: modelPresent,
 			Confidence:   conf,
@@ -231,6 +239,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			return RoleRouteDecision{
 				Role:      roleName,
 				Model:     model,
+				Probed:    true,
 				Reasoning: append(reasoning, fmt.Sprintf("no healthy backend lists model %q", model)),
 				Probes:    probes,
 			}, fmt.Errorf("%w: %q", ErrModelUnlisted, model)
@@ -243,6 +252,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 		return RoleRouteDecision{
 			Role:      roleName,
 			Model:     model,
+			Probed:    true,
 			Reasoning: append(reasoning, "no healthy backend available under require_model_listed"),
 			Probes:    probes,
 		}, fmt.Errorf("%w: %q (no healthy backend)", ErrModelUnlisted, model)
@@ -261,6 +271,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			Endpoint:   b.BaseURL,
 			Kind:       b.Kind,
 			Node:       b.Node,
+			Probed:     true,
 			Healthy:    false,
 			Confidence: 0.2,
 			Reasoning:  reasoning,

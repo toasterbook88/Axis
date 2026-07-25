@@ -120,6 +120,9 @@ func planTaskExplanation(
 
 	explanation := placementpkg.ExplainPlacement(reqs, snap.Nodes, st)
 	explanation.Decision.Reasoning = runtimectx.PrependWarningReasoning(explanation.Decision.Reasoning, snap.Warnings)
+	// Advisory inference-route hints from ~/.axis/ai.yaml (does not change FitScore).
+	// Offline (SkipProbe): respects ctx cancellation and --cached-only semantics.
+	appendInferenceRouteHints(ctx, &explanation.Decision, desc)
 	return explanation, source, nil
 }
 

@@ -173,8 +173,25 @@ func TestEffectiveStartupRequestedModel(t *testing.T) {
 		}
 	})
 	t.Run("empty when nothing configured", func(t *testing.T) {
-		if got := effectiveStartupRequestedModel("", &runtimectx.Context{}); got != "" {
+		prev := modelFromAIRoleFn
+		modelFromAIRoleFn = func(string) string { return "" }
+		t.Cleanup(func() { modelFromAIRoleFn = prev })
+		// Non-nil Config skips disk nodes.yaml; empty Chat + empty AI role → "".
+		if got := effectiveStartupRequestedModel("", &runtimectx.Context{Config: &config.Config{}}); got != "" {
 			t.Fatalf("got %q, want empty", got)
+		}
+	})
+	t.Run("ai role default when no chat or warm", func(t *testing.T) {
+		prev := modelFromAIRoleFn
+		modelFromAIRoleFn = func(role string) string {
+			if role == "default" {
+				return "from-ai-role"
+			}
+			return ""
+		}
+		t.Cleanup(func() { modelFromAIRoleFn = prev })
+		if got := effectiveStartupRequestedModel("", &runtimectx.Context{Config: &config.Config{}}); got != "from-ai-role" {
+			t.Fatalf("got %q", got)
 		}
 	})
 }

@@ -219,6 +219,10 @@ Optional: `role` (primary/worker), `ssh_port` (default 22), `timeout_sec`
 (default 10), `stable_id` (optional observed machine identity used for locality
 matching and discovery dedupe). Unknown YAML keys are rejected at load time.
 
+`~/.axis/ai.yaml` — optional inference **backends** and **roles** (see
+`ai.example.yaml` and `docs/runbooks/ai-config.md`). Separate from
+`ai_providers` / `chat.default_model` in `nodes.yaml`.
+
 Optional UDP discovery block: `discovery.enabled`, `discovery.udp_port`
 (default 42424), `discovery.beacon_interval_sec` (default 3),
 `discovery.secret` (HMAC-SHA256 beacon auth).
