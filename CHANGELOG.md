@@ -1,5 +1,16 @@
 ## Unreleased
 
+## v0.14.7 (2026-07-24)
+
+### 🚀 Features
+* **AI:** Operator-local `~/.axis/ai.yaml` backends and roles with health probes and prefer-order dry-run routing (`axis ai backends|roles|route`). (#251)
+* **AI:** Strict model listing on non-empty catalogs (exit code 7); MCP read-only tool `inference_route_explain`. (#252)
+* **AI:** Wire roles into placement advisory reasoning and agent catalog/startup (`--role`); document `ai.yaml` vs `ai_providers` vs `chat.default_model`. (#253)
+
+### 🔧 Maintenance
+* **CI:** Bump `actions/setup-go` from 6.5.0 to 7.0.0. (#249)
+* **Deps:** Bump `github.com/mattn/go-isatty` from 0.0.22 to 0.0.23. (#250)
+
 ## v0.14.6 (2026-07-17)
 
 ### 🐛 Bug Fixes
