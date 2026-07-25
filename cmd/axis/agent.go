@@ -49,6 +49,7 @@ var agentDaemonExecutionAddr = api.DefaultAddr
 func agentCmd() *cobra.Command {
 	var (
 		model                   string
+		roleFlag                string
 		timeout                 time.Duration
 		maxTokens               int
 		maxTurns                int
@@ -116,9 +117,21 @@ func agentCmd() *cobra.Command {
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
 			}
+			// --role and --model are mutually exclusive.
+			if strings.TrimSpace(model) != "" && strings.TrimSpace(roleFlag) != "" {
+				return fmt.Errorf("use either --model or --role, not both")
+			}
+			// --role fills model from ai.yaml when --model is empty.
+			if strings.TrimSpace(model) == "" && strings.TrimSpace(roleFlag) != "" {
+				if fromRole := modelFromAIRoleFn(roleFlag); fromRole != "" {
+					model = fromRole
+				} else {
+					return fmt.Errorf("unknown or empty ai.yaml role %q (axis ai roles)", roleFlag)
+				}
+			}
 			// Display / last-resort resolution (always non-empty when possible).
 			currentModel := resolveChatModel(model, rt)
-			// Startup request: explicit --model, else chat.default_model / warm preferred.
+			// Startup request: explicit --model, else chat.default_model / warm preferred / ai role default.
 			// Empty means "pick from catalog" (first usable local, then priority cloud).
 			startupRequestedModel := effectiveStartupRequestedModel(model, rt)
 			if verbose && strings.TrimSpace(model) == "" {
@@ -462,7 +475,8 @@ func agentCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model (default: chat.default_model or best installed)")
+	cmd.Flags().StringVarP(&model, "model", "m", "", "Model tag (default: chat.default_model, warm preferred, or ai.yaml role default)")
+	cmd.Flags().StringVar(&roleFlag, "role", "", "Inference role from ~/.axis/ai.yaml (sets model from that role when --model is empty)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Minute, "Per-request timeout")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "Maximum agent loop iterations per query")
@@ -1452,11 +1466,21 @@ func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) err
 }
 
 // cloudOptsForTarget resolves cloud credentials when target.Protocol is cloud.
+// For any ProtocolOpenAI target it also tries ai.yaml backend keys (by
+// ai-backend: name, then by matching base_url). That intentionally covers both
+// ai-role catalog entries and nodes.yaml resident OpenAI endpoints that share
+// a hub URL with a keyed ai.yaml backend.
 // target is a pointer so provider-name casing normalization is retained by callers.
 func cloudOptsForTarget(loadRT func(context.Context) (*runtimectx.Context, error), target *ModelChoice) (agent.CloudBackendOptions, error) {
 	var opts agent.CloudBackendOptions
 	if target == nil {
 		return opts, fmt.Errorf("cloud target is nil")
+	}
+	if target.Protocol == agent.ProtocolOpenAI {
+		if key := apiKeyForAIBackend(target.ProviderName, target.Endpoint); key != "" {
+			opts.APIKey = key
+		}
+		return opts, nil
 	}
 	if target.Protocol != agent.ProtocolCloud {
 		return opts, nil
@@ -1724,16 +1748,20 @@ func resolveCheapCloudTarget(rt *runtimectx.Context, primary ModelChoice, cheapM
 }
 
 // effectiveStartupRequestedModel returns the model name that should drive startup
-// selection when --model is empty: chat.default_model, then warm-resident preferred.
-// Returns "" when neither is available so the catalog can pick first usable local.
+// selection when --model is empty: chat.default_model, warm-resident preferred,
+// then ai.yaml role "default" when configured.
+// Returns "" when none are available so the catalog can pick first usable local.
 func effectiveStartupRequestedModel(flag string, rt *runtimectx.Context) string {
 	if s := strings.TrimSpace(flag); s != "" {
 		return s
 	}
 	// Prefer runtime config when available (tests inject rt.Config).
-	if rt != nil && rt.Config != nil && rt.Config.Chat != nil {
-		if s := strings.TrimSpace(rt.Config.Chat.DefaultModel); s != "" {
-			return s
+	// When Config is non-nil, do not re-read nodes.yaml from disk (test isolation).
+	if rt != nil && rt.Config != nil {
+		if rt.Config.Chat != nil {
+			if s := strings.TrimSpace(rt.Config.Chat.DefaultModel); s != "" {
+				return s
+			}
 		}
 	} else {
 		if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg.Chat != nil {
@@ -1752,6 +1780,10 @@ func effectiveStartupRequestedModel(flag string, rt *runtimectx.Context) string 
 		if best, ok := chat.ChoosePreferredModel(allInstalled); ok {
 			return best
 		}
+	}
+	// Operator inference roles (~/.axis/ai.yaml) after chat/warm defaults.
+	if s := modelFromAIRoleFn("default"); s != "" {
+		return s
 	}
 	return ""
 }
@@ -2099,6 +2131,9 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 			}
 		}
 	}
+
+	// Inference roles from ~/.axis/ai.yaml (OpenAI-compatible / ollama backends).
+	choices = append(choices, modelChoicesFromAIConfig()...)
 
 	sort.Slice(choices, func(i, j int) bool {
 		if choices[i].ProviderKind != choices[j].ProviderKind {

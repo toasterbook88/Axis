@@ -287,8 +287,12 @@ func printRouteText(cmd *cobra.Command, dec llmrouter.RoleRouteDecision) {
 	if dec.Node != "" {
 		fmt.Fprintf(out, "  node:       %s\n", dec.Node)
 	}
-	fmt.Fprintf(out, "  healthy:    %v\n", dec.Healthy)
-	fmt.Fprintf(out, "  model_seen: %v\n", dec.ModelPresent)
+	if !dec.Probed {
+		fmt.Fprintf(out, "  probe:      skipped\n")
+	} else {
+		fmt.Fprintf(out, "  healthy:    %v\n", dec.Healthy)
+		fmt.Fprintf(out, "  model_seen: %v\n", dec.ModelPresent)
+	}
 	fmt.Fprintf(out, "  confidence: %.2f\n", dec.Confidence)
 	if len(dec.Fallbacks) > 0 {
 		fmt.Fprintf(out, "  fallbacks:  %s\n", strings.Join(dec.Fallbacks, ", "))
