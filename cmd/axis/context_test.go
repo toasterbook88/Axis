@@ -350,3 +350,106 @@ func TestContextPruneBackupsDoNotCollide(t *testing.T) {
 		t.Errorf("expected 2 distinct backup directories, got %v", matches)
 	}
 }
+
+func TestContextPruneMigratesLegacyStateBeforeSaving(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Raw version-0 JSON on purpose: ClusterState.Save cannot build this
+	// fixture, because saveTo stamps the current version unconditionally --
+	// which is exactly the defect under test. A prune that reads unmigrated
+	// state via LoadUnlocked and then saves would mark the file current while
+	// leaving the surviving legacy tombstone unconverted, and every later
+	// Load would skip it, stranding the record permanently.
+	raw := `{
+  "nodes": {},
+  "tombstones": {
+    "k-ghost":  {"task_pattern": "run ollama", "node_name": "ghost",  "fail_count": 2, "last_failure": "2026-07-01T00:00:00Z", "expires_at": "2126-07-01T00:00:00Z"},
+    "k-node-a": {"task_pattern": "build repo", "node_name": "node-a", "fail_count": 3, "last_failure": "2026-07-02T00:00:00Z", "expires_at": "2126-07-02T00:00:00Z"}
+  },
+  "recent_decisions": []
+}`
+	if err := os.MkdirAll(filepath.Join(home, ".axis"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state.Path(), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runContextPrune(&buf, []string{"ghost"}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// LoadUnlocked, so the assertions see exactly what was written rather
+	// than a migration applied on the way back in.
+	got, err := state.LoadUnlocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1 is state's currentStateVersion; bump this if the schema advances.
+	if got.Version != 1 {
+		t.Errorf("pruned state was not stamped with the current version: %d", got.Version)
+	}
+	if len(got.Tombstones) != 0 {
+		t.Errorf("legacy tombstones survived the migration: %+v", got.Tombstones)
+	}
+	if len(got.Failures) != 1 {
+		t.Fatalf("surviving tombstone not migrated into Failures: %+v", got.Failures)
+	}
+	for _, f := range got.Failures {
+		if f.Scope.Node != "node-a" {
+			t.Errorf("expected only node-a to survive, got %+v", f)
+		}
+	}
+
+	// The backup must still hold the exact original bytes, migration and all.
+	matches, _ := filepath.Glob(filepath.Join(home, ".axis", "prune-backup-*"))
+	if len(matches) != 1 {
+		t.Fatalf("expected one backup directory, got %v", matches)
+	}
+	backedUp, err := os.ReadFile(filepath.Join(matches[0], "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backedUp, before) {
+		t.Errorf("backup is not the pre-prune bytes\n got: %s\nwant: %s", backedUp, before)
+	}
+}
+
+func TestContextPruneDryRunDoesNotPersistPendingMigration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	raw := `{
+  "nodes": {},
+  "tombstones": {
+    "k-ghost": {"task_pattern": "run ollama", "node_name": "ghost", "fail_count": 2, "last_failure": "2026-07-01T00:00:00Z", "expires_at": "2126-07-01T00:00:00Z"}
+  },
+  "recent_decisions": []
+}`
+	if err := os.MkdirAll(filepath.Join(home, ".axis"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state.Path(), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runContextPrune(&buf, []string{"ghost"}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(raw), after) {
+		t.Errorf("dry run persisted a pending migration\n got: %s\nwant: %s", after, raw)
+	}
+}

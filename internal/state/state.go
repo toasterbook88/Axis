@@ -190,7 +190,33 @@ func (s *ClusterState) PruneNodes(targets map[string]bool) PruneReport {
 // LoadUnlocked reads the state file without acquiring the lock and without
 // running migrations. Callers holding the lock via persist.LockFile MUST use
 // this: state.Load persists migrations through Update and would deadlock.
+//
+// Pair it with MigratePending before any Save. Save stamps the current schema
+// version unconditionally, so writing state that LoadUnlocked returned without
+// migrating it would mark the file current while leaving legacy records
+// unconverted — and every later Load would then skip them.
 func LoadUnlocked() (*ClusterState, error) { return loadStateFile(Path()) }
+
+// MigratePending runs any pending schema migrations against s in memory and
+// reports whether it changed anything. It neither locks nor saves, so it is
+// safe to call while holding the state lock via persist.LockFile — unlike
+// Load, which persists migrations through Update and would deadlock.
+//
+// It exists because LoadUnlocked deliberately skips migrations while
+// ClusterState.Save stamps currentStateVersion unconditionally. Any locked
+// transaction that reads with LoadUnlocked and may write MUST call this first,
+// or it will strand the legacy records it declined to convert.
+func MigratePending(s *ClusterState) bool {
+	if s == nil || s.Version >= currentStateVersion {
+		return false
+	}
+	// runMigrations writes into Failures; a hand-built or partially decoded
+	// state may carry a nil map, which would panic.
+	if s.Failures == nil {
+		s.Failures = failures.NewStore()
+	}
+	return runMigrations(s)
+}
 
 // Update serializes a read-modify-write transaction against the latest state
 // on disk. Use it for additive mutations that may race with other AXIS

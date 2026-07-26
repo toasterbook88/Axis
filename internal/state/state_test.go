@@ -1015,3 +1015,60 @@ func TestPruneNodesKeepsEverythingWhenAllKnown(t *testing.T) {
 		t.Error("no-op prune removed history")
 	}
 }
+
+func TestMigratePendingConvertsLegacyTombstonesWithoutSaving(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := &ClusterState{
+		Version:  0,
+		Nodes:    map[string]NodeState{},
+		Failures: failures.NewStore(),
+		Tombstones: map[string]TombstoneEntry{
+			"k1": {TaskPattern: "build repo", NodeName: "node-a", FailCount: 3},
+		},
+	}
+
+	if !MigratePending(s) {
+		t.Fatal("expected a pending migration to run")
+	}
+	if len(s.Tombstones) != 0 {
+		t.Errorf("legacy tombstones not cleared: %+v", s.Tombstones)
+	}
+	if len(s.Failures) != 1 {
+		t.Fatalf("tombstone not migrated into Failures: %+v", s.Failures)
+	}
+	for _, f := range s.Failures {
+		if f.Scope.Node != "node-a" {
+			t.Errorf("migrated record has wrong node: %+v", f)
+		}
+	}
+
+	// Idempotent once the version is current: a second call is a no-op.
+	s.Version = currentStateVersion
+	if MigratePending(s) {
+		t.Error("MigratePending must not re-run against current-version state")
+	}
+
+	// It must not persist anything on its own.
+	if _, err := os.Stat(Path()); !os.IsNotExist(err) {
+		t.Errorf("MigratePending wrote state to disk: %v", err)
+	}
+}
+
+func TestMigratePendingToleratesNilFailureStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A hand-built or partially decoded state may carry a nil Failures map.
+	// runMigrations writes into it, so a nil map would panic.
+	s := &ClusterState{
+		Version:    0,
+		Tombstones: map[string]TombstoneEntry{"k1": {NodeName: "node-a"}},
+	}
+
+	if !MigratePending(s) {
+		t.Fatal("expected a pending migration to run")
+	}
+	if len(s.Failures) != 1 {
+		t.Errorf("tombstone not migrated: %+v", s.Failures)
+	}
+}

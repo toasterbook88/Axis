@@ -216,6 +216,20 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 		return err
 	}
 
+	// LoadUnlocked skips migrations, but ClusterState.Save stamps the current
+	// schema version unconditionally. Pruning a version-0 state and saving it
+	// would therefore mark the file current while leaving surviving legacy
+	// tombstones unconverted — and because every later Load treats a current
+	// version as needing no migration, those records would be stranded for
+	// good. Migrate in memory, under the lock we already hold; state.Load
+	// would deadlock, since it persists migrations through state.Update.
+	//
+	// This runs before PruneNodes so migrated records are pruned as the
+	// failure records they have become, and it mutates memory only: the
+	// backup snapshot was taken above and still holds the exact original
+	// bytes, and a dry run returns below without writing anything.
+	state.MigratePending(st)
+
 	stRep := st.PruneNodes(targets)
 	skRep := sk.PruneNodes(targets)
 
@@ -278,6 +292,11 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 	// Each store is written ONLY if its own report is non-empty. Writing
 	// both unconditionally would create a previously absent store, or
 	// reserialize an untouched one and lose an operator's hand formatting.
+	//
+	// A pending migration alone therefore does not trigger a write: if this
+	// prune removes nothing from state.json, the file is left exactly as it
+	// was, still unmigrated, and the next ordinary state.Load migrates it
+	// properly. Prune is not a migration command and does not become one.
 	var attempted []storeSnapshot
 
 	if !stRep.Empty() {
