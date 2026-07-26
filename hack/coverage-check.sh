@@ -4,6 +4,28 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Test isolation (audit finding C5). This script runs the full suite five more
+# times; unisolated tests resolve every AXIS store to ~/.axis, so without a
+# redirect it writes real operator state. Done here rather than only in the
+# Makefile because CI invokes this script directly.
+#
+# GOCACHE, GOPATH, and GOMODCACHE derive from HOME, so they are captured from
+# the real home *before* HOME is reassigned — otherwise every run would start
+# from a cold build cache. AXIS_HOME is deliberately not exported: it outranks
+# HOME in persist.AxisDir and would collapse the ~133 tests that isolate
+# themselves with t.Setenv("HOME", ...) onto one shared AXIS root.
+export GOCACHE="${GOCACHE:-$(go env GOCACHE)}"
+export GOPATH="${GOPATH:-$(go env GOPATH)}"
+export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
+
+axis_test_home="$(mktemp -d "${TMPDIR:-/tmp}/axis-test-home.XXXXXX")"
+export HOME="$axis_test_home"
+
+# Single EXIT trap for the whole script: a second `trap ... EXIT` replaces this
+# one rather than adding to it. total_profile is created here for that reason.
+total_profile="$(mktemp)"
+trap 'rm -f "$total_profile"; rm -rf "$axis_test_home"' EXIT
+
 check_threshold() {
   local label="$1"
   local actual="$2"
@@ -38,9 +60,6 @@ package_coverage() {
   rm -f "$tmp_out"
   echo "$cov"
 }
-
-total_profile="$(mktemp)"
-trap 'rm -f "$total_profile"' EXIT
 
 if ! go test ./... -coverprofile="$total_profile" >/dev/null; then
   echo "ERROR: go test ./... -coverprofile failed. Re-running tests to show failure logs:" >&2

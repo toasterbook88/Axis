@@ -22,6 +22,7 @@ import (
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/lockutil"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/ui"
 	"github.com/toasterbook88/axis/internal/workload"
@@ -979,8 +980,7 @@ func llmConfigureCmd() *cobra.Command {
 					fmt.Fprintln(out, "  2) Reference an environment variable containing the key")
 					optionStr := promptString(in, out, "Enter option (1 or 2)", "1")
 
-					homeDir, _ := os.UserHomeDir()
-					secretsDir := filepath.Join(homeDir, ".axis", "secrets")
+					secretsDir := persist.AxisPath("secrets")
 
 					if optionStr == "2" {
 						envDefault := strings.ToUpper(providerName) + "_API_KEY"

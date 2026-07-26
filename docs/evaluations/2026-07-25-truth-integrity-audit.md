@@ -153,7 +153,7 @@ Per `docs/authority-violations.md`, `~/.axis/state.json` is the **state authorit
 
 `doctor` is not independently wrong — it faithfully renders A1. The disagreement exists because `ai backends` probes the HTTP endpoint directly while `doctor` consumes the fact plane.
 
-#### C5 — Six further stores are written by the test suite, and none can be isolated
+#### C5 — Six further stores are written by the test suite, and no seam existed to isolate them
 
 *Recorded 2026-07-26, during containment of C3. C3 named two stores; measurement of the whole suite found six more.*
 
@@ -172,10 +172,10 @@ Plus `event-sequence.lock`, `ledger.json.lock`, and `token.lock`. Measured on a 
 
 **The defect is not the tests.** 273 test functions across these four packages never isolate `HOME`; only a handful actually write. Enumerating and patching them individually is unbounded work that regresses the moment a new test is added.
 
-`internal/persist` is the *intended* choke point, and it offers no override:
+`internal/persist` is the *intended* choke point, and as found it offered no override:
 
 ```go
-// internal/persist/paths.go:18
+// internal/persist/paths.go:18, as found
 func AxisDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, axisDirName)
@@ -184,7 +184,7 @@ func AxisDir() string {
 
 There is no `AXIS_HOME`, no injected root, no test seam anywhere in `internal/persist`. That absence is why `make test` reaches production state, and why the per-test remedy does not scale.
 
-**But a seam at `AxisDir` alone is not sufficient**, and this is the part most likely to be assumed away. `AxisDir` is not the only path resolver: **eleven non-test sites call `os.UserHomeDir()` directly**, bypassing `internal/persist` entirely. One of them owns a contaminated store:
+**But a seam at `AxisDir` alone is not sufficient**, and this is the part most likely to be assumed away. `AxisDir` is not the only path resolver: **twelve non-test sites resolve the home directory themselves**, bypassing `internal/persist` entirely. One of them owns a contaminated store:
 
 | Store | Resolver | Routes through `persist`? |
 | --- | --- | --- |
@@ -194,9 +194,22 @@ There is no `AXIS_HOME`, no injected root, no test seam anywhere in `internal/pe
 | `token` | `internal/auth/auth.go:21` | yes |
 | **`chat-history.json`** | **`internal/chat/persist.go:17`** | **no — direct `os.UserHomeDir`** |
 
-The remaining bypass sites are `cmd/axis/{update.go:347, task.go:863, reservations.go:440, llm.go:982}`, `internal/secrets/secrets.go:84`, `internal/facts/local.go:68`, `internal/mcp/skills.go:19`, and `internal/transport/ssh.go:{35,606}`. They are not all AXIS-state writers — `transport/ssh.go` resolves `~/.ssh`, for instance — but each is a resolution path a seam would miss.
+The remaining bypass sites are `cmd/axis/{update.go:347, task.go:863, reservations.go:440, llm.go:982}`, `internal/secrets/secrets.go:84`, `internal/facts/local.go:{31, 68}`, `internal/mcp/skills.go:19`, and `internal/transport/ssh.go:{35,606}`. They are not all AXIS-state writers — `transport/ssh.go` resolves `~/.ssh`, for instance — but each is a resolution path a seam would miss.
+
+`internal/facts/local.go:31` is the reason the count moved from eleven to twelve. It reads `var appleFoundationModelsHomeDirFn = os.UserHomeDir` — a function *value*, not a call — so it does not match a grep for `os.UserHomeDir()`. It resolves `~/.axis/cache`, where the Apple Foundation Models helper source and compiled binary are written. Enumerating bypass sites by call syntax alone undercounts.
 
 So the fix is **two** changes, not one: add the seam to `persist.AxisDir`, *and* route the bypassing AXIS-state resolvers through it. Landing only the first would isolate five of the six stores and leave `chat-history.json` still writing to real operator state, while appearing to have solved the problem.
+
+**Isolation status — landed.** Both halves are implemented:
+
+- `persist.AxisDir` now resolves `$AXIS_HOME` first and falls back to `~/.axis` (`internal/persist/paths.go`), with regression tests covering precedence, the "names the directory, not the parent home" semantics, and the unset/blank fallback.
+- Six AXIS-state resolvers were routed through `persist`: `internal/chat/persist.go` (`chat-history.json`, `agent-history.json`), `internal/facts/local.go` (`nodes.yaml` via `config.DefaultConfigPath`, and `cache/`), `cmd/axis/task.go` (`logs/`), `cmd/axis/reservations.go` (`snapshot.json` via `daemon.DefaultSnapshotPath`), and `cmd/axis/llm.go` (`secrets/`). The five non-AXIS resolvers — `~/.ssh`, `~/.gemini/skills`, `~/.local/bin`, `~/go/bin`, and generic `~/` expansion in `internal/secrets` — were deliberately left resolving the real home.
+
+**The test harness isolates with `HOME`, not `AXIS_HOME`.** `make test`, `make test-race`, and `hack/coverage-check.sh` redirect `HOME` to a disposable directory with the Go caches pinned first. `AXIS_HOME` is deliberately *not* exported by the harness: it outranks `HOME` in `AxisDir`, so one suite-wide value would override the ~133 tests that isolate themselves with `t.Setenv("HOME", ...)` and collapse them onto a single shared AXIS root. Measured directly — exporting `AXIS_HOME` for the whole suite made `TestContextPruneApplyWritesBackupAndPrunesBothStores` and `TestContextPruneRollsBackBothStoresOnWriteFailure` fail on cross-test contamination, while ~138 others passed only because they do not assert on isolation. The `AXIS_HOME` seam remains for production use and for tests that reference `persist.AxisHomeEnv` intentionally.
+
+**Verified:** `make test` passes and leaves the real `~/.axis` byte-identical — same file set, sizes, and mtimes (`sha256` of the `path size mtime` manifest unchanged across the run).
+
+**Still open:** remediation of the contamination already on disk. That is deliberately not part of this change.
 
 **Isolation is store-agnostic; remediation is not.** Cleaning the contamination already on an operator's disk is a separate, store-specific problem, and `axis context prune` must **not** be widened to cover it — each store has different semantics and different rules for what may be deleted:
 
@@ -209,14 +222,14 @@ So the fix is **two** changes, not one: add the seam to `persist.AxisDir`, *and*
 
 **Blast radius.** Lower than C3 in placement terms — none of these six drive node selection — but broader in authority terms. Per `docs/authority-violations.md`, `snapshot.json` is the cache authority and `ledger.json` the reservation authority, and the suite writes both. C3's conclusion generalizes: this is an authority-boundary violation that every `make test` deepens.
 
-**Containment posture.** Immediate follow-up, not backlog: the repository's standard test command writes operator state today. Until a seam exists, the suite must be run under a disposable `HOME` with Go caches pinned first, because `GOCACHE`/`GOPATH`/`GOMODCACHE` derive from `$HOME`:
+**Containment posture.** The isolation half is closed: `make test` no longer writes operator state. What the Makefile does is what a bare `go test ./...` still does *not* — run the suite through the make targets, not `go test` directly:
 
 ```bash
 export GOCACHE=$(go env GOCACHE) GOPATH=$(go env GOPATH) GOMODCACHE=$(go env GOMODCACHE)
 SAFE=$(mktemp -d); HOME="$SAFE" go test ./...
 ```
 
-The export must precede the `HOME` override — bash applies assignment prefixes left to right, so a single-line `HOME=$SAFE GOCACHE=$(go env GOCACHE)` pins the cache *inside* the sandbox and re-downloads the module cache.
+The export must precede the `HOME` override — bash applies assignment prefixes left to right, so a single-line `HOME=$SAFE GOCACHE=$(go env GOCACHE)` pins the cache *inside* the sandbox and re-downloads the module cache. CI calls `make test` and `make test-race` for exactly this reason: a second, unisolated `go test` step in the workflow would drift from the operator's default command.
 
 ---
 
@@ -237,12 +250,12 @@ Any remediation that claims to "render the topology correctly from data AXIS alr
 
 Ordering is constrained by two facts: C3 and C5 worsen continuously until stopped, and A2 must not precede C1.
 
-Note for anyone reproducing these findings: **do not run `make test` on a host with real operator state.** C3 is fixed, but C5 is not — the suite still writes six stores into the real `~/.axis`. Use a disposable `HOME` with Go caches pinned first (see C5).
+Note for anyone reproducing these findings: use `make test`, not a bare `go test ./...`. The make targets redirect `HOME` to a disposable directory with the Go caches pinned first (see C5); a direct `go test ./...` still writes the real `~/.axis`.
 
 **Containment**
 
 1. **C3** — isolate `HOME` in the offending test **and remediate existing state pollution**. Isolation alone stops the bleed but leaves 70 fixture rows and a 70-sample observation skewing the empirical store. *(Done: `a47dd34`, `783fac5`, `2472624`.)*
-1b. **C5** — add an isolation seam to `persist.AxisDir` **and** route the eleven direct `os.UserHomeDir` callers through it; the seam alone misses `chat-history.json`. Then remediate the remaining stores per store. Remediation is store-specific and must not be folded into `axis context prune`.
+1b. **C5** — add an isolation seam to `persist.AxisDir` **and** route the direct home-resolving callers through it; the seam alone misses `chat-history.json`. *(Isolation done: `AXIS_HOME` seam, six AXIS-state resolvers routed, `make test` / `make test-race` / `hack/coverage-check.sh` / CI redirect `HOME` to a disposable directory.)* Remediation of the stores already contaminated on disk remains open, is store-specific, and must not be folded into `axis context prune`.
 2. **A1 / C4** — exclude the probe's own processes from `pgrep`; repair the quoting in the `running` expression.
 3. **C2** — decouple reflex determinism from confidence; stop surfacing raw upstream error strings.
 4. **C1** — replace the pairwise topology block with a vantage-labeled reachability view.

@@ -108,10 +108,8 @@ func chatCmd() *cobra.Command {
 			conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
 
 			// Resume previous conversation if requested.
-			historyPath, err := chat.PersistPath("chat")
-			if err != nil {
-				fmt.Fprintf(errW, "warning: cannot determine history path: %v\n", err)
-			} else if resume {
+			historyPath := chat.PersistPath("chat")
+			if resume {
 				if err := conv.LoadFromFile(historyPath); err != nil {
 					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
 				} else if n := conv.HistoryCount(); n > 0 {

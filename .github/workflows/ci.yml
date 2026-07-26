@@ -34,11 +34,14 @@ jobs:
       - name: Lint (gofmt + go vet + staticcheck)
         run: make lint
 
+      # Via make, not a bare `go test`: the Makefile targets set AXIS_HOME to a
+      # disposable directory (audit finding C5). A second, unisolated
+      # definition here would drift from the operator's default command.
       - name: Run tests
-        run: go test ./... -count=1
+        run: make test
 
       - name: Run race tests
-        run: go test -race ./... -count=1
+        run: make test-race
 
       - name: Build
         run: go build ./...

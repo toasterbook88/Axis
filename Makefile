@@ -30,11 +30,30 @@ install-user: build
 	@echo "verify: $(PREFIX)/bin/axis version"
 	@echo "daemon: $(PREFIX)/bin/axis daemon restart && $(PREFIX)/bin/axis daemon status"
 
+# Test isolation (audit finding C5). Unisolated tests resolve every AXIS store
+# to ~/.axis, so the suite used to write real operator state on every run. The
+# harness redirects HOME to a disposable directory.
+#
+# Two details are load-bearing:
+#
+#   - GOCACHE, GOPATH, and GOMODCACHE derive from HOME. They are captured from
+#     the real home in the assignment prefix, which the shell expands before it
+#     applies the HOME assignment, so the build cache survives.
+#   - AXIS_HOME is deliberately NOT exported here. It outranks HOME in
+#     persist.AxisDir, so a single suite-wide AXIS_HOME would override the ~133
+#     tests that isolate themselves with t.Setenv("HOME", ...) and collapse them
+#     onto one shared AXIS root.
 test:
-	go test ./... -count=1 -timeout 180s
+	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
+	trap 'rm -rf "$$d"' EXIT; \
+	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
+	HOME="$$d" go test ./... -count=1 -timeout 180s
 
 test-race:
-	go test ./... -count=1 -timeout 180s -race
+	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
+	trap 'rm -rf "$$d"' EXIT; \
+	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
+	HOME="$$d" go test ./... -count=1 -timeout 180s -race
 
 lint:
 	@unformatted=$$(gofmt -l .) || exit $$?; \

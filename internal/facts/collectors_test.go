@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 type fakeRemoteExecutor struct {
@@ -239,16 +240,14 @@ func TestRunAppleFoundationModelsProbeUsesHelperBinary(t *testing.T) {
 
 func TestBuildAppleFoundationModelsHelperBuildsAndCachesBinary(t *testing.T) {
 	tmpDir := t.TempDir()
-	prevHome := appleFoundationModelsHomeDirFn
 	prevBuild := appleFoundationModelsBuildCommandFn
 	t.Cleanup(func() {
-		appleFoundationModelsHomeDirFn = prevHome
 		appleFoundationModelsBuildCommandFn = prevBuild
 	})
 
-	appleFoundationModelsHomeDirFn = func() (string, error) {
-		return tmpDir, nil
-	}
+	// Drive the real AXIS_HOME seam rather than a package-local override, so
+	// this test also proves the helper cache honours it (C5).
+	t.Setenv(persist.AxisHomeEnv, filepath.Join(tmpDir, ".axis"))
 
 	buildCalls := 0
 	appleFoundationModelsBuildCommandFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
