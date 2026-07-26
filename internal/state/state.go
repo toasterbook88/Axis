@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/failures"
@@ -108,27 +107,107 @@ func Load() (*ClusterState, error) {
 	return s, nil
 }
 
+// PruneReport counts records removed by PruneNodes.
+type PruneReport struct {
+	Nodes        int
+	Observations int
+	TaskHistory  int
+	Failures     int
+	Tombstones   int
+}
+
+// Empty reports whether the prune removed nothing.
+func (r PruneReport) Empty() bool {
+	return r.Nodes == 0 && r.Observations == 0 && r.TaskHistory == 0 &&
+		r.Failures == 0 && r.Tombstones == 0
+}
+
+// PruneNodes removes state records belonging to the named target nodes.
+// targets holds nodes to REMOVE. An empty map removes nothing.
+// It does not save; callers persist via Update.
+//
+// Node names are matched case-insensitively because failures.HashScope
+// normalizes case, so an exact-match prune would leave failure records that
+// the failure system still considers live for the pruned node.
+func (s *ClusterState) PruneNodes(targets map[string]bool) PruneReport {
+	var rep PruneReport
+	if len(targets) == 0 {
+		return rep
+	}
+
+	norm := make(map[string]bool, len(targets))
+	for name := range targets {
+		norm[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	hit := func(name string) bool {
+		return name != "" && norm[strings.ToLower(strings.TrimSpace(name))]
+	}
+
+	for name := range s.Nodes {
+		if hit(name) {
+			delete(s.Nodes, name)
+			rep.Nodes++
+		}
+	}
+
+	for key, obs := range s.Observations {
+		if hit(obs.Scope.Node) {
+			delete(s.Observations, key)
+			rep.Observations++
+		}
+	}
+
+	kept := s.TaskHistory[:0]
+	for _, r := range s.TaskHistory {
+		if hit(r.Node) {
+			rep.TaskHistory++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	s.TaskHistory = kept
+
+	// Node-scoped failure records outlive the node they blame. Leaving them
+	// keeps a pruned node's tombstones influencing placement exclusions.
+	// Records with an empty Scope.Node are cluster-wide and are never pruned.
+	for key, f := range s.Failures {
+		if hit(f.Scope.Node) {
+			delete(s.Failures, key)
+			rep.Failures++
+		}
+	}
+
+	for key, t := range s.Tombstones {
+		if hit(t.NodeName) {
+			delete(s.Tombstones, key)
+			rep.Tombstones++
+		}
+	}
+
+	return rep
+}
+
+// LoadUnlocked reads the state file without acquiring the lock and without
+// running migrations. Callers holding the lock via persist.LockFile MUST use
+// this: state.Load persists migrations through Update and would deadlock.
+func LoadUnlocked() (*ClusterState, error) { return loadStateFile(Path()) }
+
 // Update serializes a read-modify-write transaction against the latest state
 // on disk. Use it for additive mutations that may race with other AXIS
 // processes, such as execution observations and task history.
+//
+// Never call Update while already holding a store lock; see persist.LockFile.
 func Update(mutator func(*ClusterState) error) error {
 	if mutator == nil {
 		return fmt.Errorf("state update requires a mutator")
 	}
 
 	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	release, err := persist.LockFile(path)
+	if err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening state lock: %w", err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("locking state: %w", err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer release()
 
 	latest, loadErr := loadStateFile(path)
 	if loadErr != nil {

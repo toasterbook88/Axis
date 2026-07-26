@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -935,5 +936,82 @@ func TestTombstoneMigrationRoundTrip(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"tombstones"`) {
 		t.Fatal("saved state should not contain legacy tombstones key")
+	}
+}
+
+func TestPruneNodesRemovesUnknownNodeRecords(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := &ClusterState{
+		Nodes: map[string]NodeState{
+			"node-a": {},
+			"ghost":  {},
+		},
+		Observations: map[string]models.ExecutionObservation{
+			"keep": {Scope: models.ObservationScope{Node: "node-a"}, SampleCount: 1},
+			"drop": {Scope: models.ObservationScope{Node: "ghost"}, SampleCount: 70},
+		},
+		TaskHistory: []TaskExecutionRecord{
+			{Node: "node-a"},
+			{Node: "ghost"},
+			{Node: "ghost"},
+		},
+		Failures: func() failures.Store {
+			f := failures.NewStore()
+			f.Record(models.FailureExecCrash, models.FailureScope{Node: "ghost"}, "fixture", nil)
+			f.Record(models.FailureExecCrash, models.FailureScope{Node: "node-a"}, "real", nil)
+			return f
+		}(),
+		Tombstones: map[string]TombstoneEntry{
+			"t1": {TaskPattern: "x", NodeName: "ghost"},
+			"t2": {TaskPattern: "y", NodeName: "node-a"},
+		},
+	}
+
+	// targets = nodes to REMOVE
+	rep := s.PruneNodes(map[string]bool{"ghost": true})
+
+	if rep.Nodes != 1 || rep.Observations != 1 || rep.TaskHistory != 2 {
+		t.Fatalf("unexpected prune report: %+v", rep)
+	}
+	if rep.Failures != 1 || rep.Tombstones != 1 {
+		t.Fatalf("node-scoped failure records not pruned: %+v", rep)
+	}
+	if _, ok := s.Nodes["ghost"]; ok {
+		t.Error("ghost node survived prune")
+	}
+	if _, ok := s.Observations["drop"]; ok {
+		t.Error("ghost observation survived prune")
+	}
+	if len(s.TaskHistory) != 1 || s.TaskHistory[0].Node != "node-a" {
+		t.Errorf("task history not pruned: %+v", s.TaskHistory)
+	}
+	if len(s.Failures) != 1 {
+		t.Errorf("ghost failure record survived: %+v", s.Failures)
+	}
+	if _, ok := s.Tombstones["t1"]; ok {
+		t.Error("ghost tombstone survived prune")
+	}
+}
+
+func TestPruneNodesKeepsEverythingWhenAllKnown(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := &ClusterState{
+		Nodes: map[string]NodeState{"node-a": {}},
+		Observations: map[string]models.ExecutionObservation{
+			"keep": {Scope: models.ObservationScope{Node: "node-a"}, SampleCount: 1},
+		},
+		TaskHistory: []TaskExecutionRecord{{Node: "node-a"}},
+	}
+
+	// No targets named: nothing may be removed.
+	rep := s.PruneNodes(map[string]bool{})
+
+	if rep.Nodes != 0 || rep.Observations != 0 || rep.TaskHistory != 0 {
+		t.Fatalf("expected no-op prune, got %+v", rep)
+	}
+	if len(s.TaskHistory) != 1 {
+		t.Error("no-op prune removed history")
 	}
 }
