@@ -31,7 +31,7 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Lint (gofmt + go vet)
+      - name: Lint (gofmt + go vet + staticcheck)
         run: make lint
 
       - name: Run tests

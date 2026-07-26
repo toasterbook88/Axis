@@ -94,7 +94,7 @@ func TestTaskLogsCmd(t *testing.T) {
 	}
 
 	// Test fuzzy prefix match
-	stdout, stderr, err = captureProcessOutput(t, func() error {
+	stdout, _, err = captureProcessOutput(t, func() error {
 		cmd := taskLogsCmd()
 		cmd.SetArgs([]string{"abc"})
 		return cmd.Execute()

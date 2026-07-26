@@ -3,6 +3,9 @@ COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GOVERSION := $(shell go version | awk '{print $$3}')
 PREFIX   ?= $(HOME)/.local
+# Pinned: an unpinned @latest would let an upstream release break CI without a
+# repository change. Bump deliberately.
+STATICCHECK_VERSION ?= 2025.1.1
 
 LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Commit=$(COMMIT) \
@@ -41,6 +44,7 @@ lint:
 		exit 1; \
 	fi
 	go vet ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 coverage:
 	./hack/coverage-check.sh

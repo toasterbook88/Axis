@@ -153,6 +153,57 @@ Per `docs/authority-violations.md`, `~/.axis/state.json` is the **state authorit
 
 `doctor` is not independently wrong — it faithfully renders A1. The disagreement exists because `ai backends` probes the HTTP endpoint directly while `doctor` consumes the fact plane.
 
+#### C5 — Six further stores are written by the test suite, and none can be isolated
+
+*Recorded 2026-07-26, during containment of C3. C3 named two stores; measurement of the whole suite found six more.*
+
+C3 was scoped to `state.json` and `skills.json` and was remediated by isolating one test (`a47dd34`) and pruning the residue (`axis context prune`). That fix is real but narrow. Running the full suite under a clean `HOME` writes **six additional stores**, none of which C3 covered:
+
+| Store | Written by | Path resolver |
+| --- | --- | --- |
+| `snapshot.json` | `internal/daemon`, `internal/mcp` | `internal/daemon/daemon.go:300` |
+| `events.jsonl` | `internal/mcp` | `internal/events/logger.go:28` |
+| `event-sequence` | `internal/api`, `internal/mcp` | (derived beside `events.jsonl`) |
+| `ledger.json` | `internal/api` | `internal/reservation/persist.go:17` |
+| `chat-history.json` | `cmd/axis` | (chat surface) |
+| `token` | `cmd/axis`, `internal/mcp` | `internal/auth/auth.go:21` |
+
+Plus `event-sequence.lock`, `ledger.json.lock`, and `token.lock`. Measured on a fully passing run (`go test ./...`, 41 packages, exit 0). `state.json` and `skills.json` are correctly **absent**, confirming the C3 fix holds.
+
+**The defect is not the tests.** 273 test functions across these four packages never isolate `HOME`; only a handful actually write. Enumerating and patching them individually is unbounded work that regresses the moment a new test is added.
+
+Every store resolves through a single choke point:
+
+```go
+// internal/persist/paths.go:18
+func AxisDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, axisDirName)
+}
+```
+
+`AxisDir` consults the process environment and offers **no override**. There is no `AXIS_HOME`, no injected root, no test seam anywhere in `internal/persist`. That single absence is why `make test` reaches production state, and why the per-test remedy does not scale.
+
+**Isolation is store-agnostic; remediation is not.** One seam at `AxisDir` isolates all eight stores at once. Cleaning the contamination already on an operator's disk is a separate, store-specific problem, and `axis context prune` must **not** be widened to cover it — each store has different semantics and different rules for what may be deleted:
+
+- `token` is credential material. `auth.LoadOrGenerateToken` (`internal/auth/auth.go:26`) preserves a *valid* 64-hex token unchanged, but generates and persists a new one when the file is absent or invalid — so a test run against a fresh `HOME` mints real auth state. Deleting a token is not a cleanup; it invalidates live sessions.
+- `events.jsonl` is append-only history with a monotonic `event-sequence` companion. Removing rows breaks the sequence invariant.
+- `ledger.json` holds reservations that may be live.
+- `chat-history.json` contains operator-authored content, so fixture rows must be identified by value, not truncated wholesale.
+
+**Confirmed contamination on the audited host:** `chat-history.json` carries the fixture exchange `"hi"` / `"hello world"`.
+
+**Blast radius.** Lower than C3 in placement terms — none of these six drive node selection — but broader in authority terms. Per `docs/authority-violations.md`, `snapshot.json` is the cache authority and `ledger.json` the reservation authority, and the suite writes both. C3's conclusion generalizes: this is an authority-boundary violation that every `make test` deepens.
+
+**Containment posture.** Immediate follow-up, not backlog: the repository's standard test command writes operator state today. Until a seam exists, the suite must be run under a disposable `HOME` with Go caches pinned first, because `GOCACHE`/`GOPATH`/`GOMODCACHE` derive from `$HOME`:
+
+```bash
+export GOCACHE=$(go env GOCACHE) GOPATH=$(go env GOPATH) GOMODCACHE=$(go env GOMODCACHE)
+SAFE=$(mktemp -d); HOME="$SAFE" go test ./...
+```
+
+The export must precede the `HOME` override — bash applies assignment prefixes left to right, so a single-line `HOME=$SAFE GOCACHE=$(go env GOCACHE)` pins the cache *inside* the sandbox and re-downloads the module cache.
+
 ---
 
 ## What AXIS does not currently possess
@@ -170,13 +221,14 @@ Any remediation that claims to "render the topology correctly from data AXIS alr
 
 ## Sequencing
 
-Ordering is constrained by two facts: C3 worsens continuously until stopped, and A2 must not precede C1.
+Ordering is constrained by two facts: C3 and C5 worsen continuously until stopped, and A2 must not precede C1.
 
-Note for anyone reproducing these findings: **do not run `make test` on a host with real operator state** until C3 is fixed. Doing so deepens the contamination documented in C3.
+Note for anyone reproducing these findings: **do not run `make test` on a host with real operator state.** C3 is fixed, but C5 is not — the suite still writes six stores into the real `~/.axis`. Use a disposable `HOME` with Go caches pinned first (see C5).
 
 **Containment**
 
-1. **C3** — isolate `HOME` in the offending test **and remediate existing state pollution**. Isolation alone stops the bleed but leaves 70 fixture rows and a 70-sample observation skewing the empirical store.
+1. **C3** — isolate `HOME` in the offending test **and remediate existing state pollution**. Isolation alone stops the bleed but leaves 70 fixture rows and a 70-sample observation skewing the empirical store. *(Done: `a47dd34`, `783fac5`, `2472624`.)*
+1b. **C5** — add an isolation seam to `persist.AxisDir`, then remediate the six remaining stores per store. Isolation is one change; remediation is store-specific and must not be folded into `axis context prune`.
 2. **A1 / C4** — exclude the probe's own processes from `pgrep`; repair the quoting in the `running` expression.
 3. **C2** — decouple reflex determinism from confidence; stop surfacing raw upstream error strings.
 4. **C1** — replace the pairwise topology block with a vantage-labeled reachability view.

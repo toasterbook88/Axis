@@ -470,7 +470,7 @@ func TestReservationsDoctorHealthy(t *testing.T) {
 
 	// Run doctor command in json mode
 	cmd = reservationsDoctorCmd()
-	stdout, stderr, err = captureProcessOutput(t, func() error {
+	stdout, _, err = captureProcessOutput(t, func() error {
 		cmd.SetArgs([]string{"--format", "json"})
 		return cmd.Execute()
 	})
@@ -511,10 +511,7 @@ func TestReservationsDoctorFindingsAndFix(t *testing.T) {
 	// Mock processAlive helper
 	oldProcessAlive := reservationsDoctorProcessAlive
 	reservationsDoctorProcessAlive = func(pid int) bool {
-		if pid == 999999 {
-			return false
-		}
-		return true
+		return pid != 999999
 	}
 	defer func() {
 		reservationsDoctorProcessAlive = oldProcessAlive
