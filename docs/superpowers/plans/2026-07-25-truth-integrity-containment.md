@@ -1771,7 +1771,7 @@ previous commit.
 Refs docs/evaluations/2026-07-25-truth-integrity-audit.md C3"
 ```
 
-- [ ] **Step 10: Remediate this host**
+- [x] **Step 10: Remediate this host**
 
 This step mutates real operator state. Get explicit operator go-ahead before the `--apply` run.
 
