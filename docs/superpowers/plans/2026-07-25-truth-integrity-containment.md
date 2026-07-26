@@ -325,7 +325,7 @@ Both stores are restored to the exact bytes read at the start of the transaction
 
 **Note on `PruneNodes` semantics:** the parameter is `targets` — nodes to **remove** — not `known` nodes to keep. Naming it for what it deletes makes the destructive direction explicit at every call site.
 
-- [ ] **Step 1: Write the failing test for PruneNodes**
+- [x] **Step 1: Write the failing test for PruneNodes**
 
 Add to `internal/state/state_test.go`:
 
@@ -431,8 +431,8 @@ func TestSkillsPruneNodesRemovesEvidenceNotJustReferences(t *testing.T) {
 
 	rep := s.PruneNodes(map[string]bool{"ghost": true})
 
-	if rep.SkillsDeleted != 1 {
-		t.Errorf("skill with no surviving evidence must be deleted, got %d", rep.SkillsDeleted)
+	if rep.SkillsDeleted() != 1 {
+		t.Errorf("skill with no surviving evidence must be deleted, got %d", rep.SkillsDeleted())
 	}
 	if len(s.Skills) != 1 || s.Skills[0].ID != "s1" {
 		t.Fatalf("expected only s1 to survive, got %+v", s.Skills)
@@ -494,7 +494,7 @@ func TestSkillsPruneNodesSparesUntargetedAutoDiscoveredTemplates(t *testing.T) {
 	if s.Skills[0].PreferredNode != "node-a" {
 		t.Errorf("untargeted template was modified: %q", s.Skills[0].PreferredNode)
 	}
-	if rep.SkillsDeleted != 1 || rep.AutoTemplatesDeleted != 1 {
+	if rep.SkillsDeleted() != 1 || rep.AutoTemplatesDeleted() != 1 {
 		t.Errorf("expected 1 auto template deleted, got %+v", rep)
 	}
 }
@@ -626,7 +626,7 @@ Additional imports for `internal/skills/skills_test.go`: `fmt`, `sync`.
 
 Put all skills tests in `internal/skills/skills_test.go` (package `skills`), not in the state test file.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run **both** packages — the skills tests live in `internal/skills`, and running only `internal/state` would leave every skills assertion unverified in the red stage:
 
@@ -637,7 +637,7 @@ go test ./internal/skills/ -run 'TestSkillsPrune|TestSkillsUpdate' -v
 
 Expected: both FAIL to build — `s.PruneNodes undefined`, `skills.Update undefined`.
 
-- [ ] **Step 3: Implement PruneNodes**
+- [x] **Step 3: Implement PruneNodes**
 
 Add to `internal/state/state.go`:
 
@@ -1011,7 +1011,7 @@ Add a note to the Task 2 commit message that this migration is included; it is a
 
 `TaskExecutionRecord.Node` is a `string` (`internal/state/state.go:54`) and `models.ExecutionObservation.Scope.Node` is the observation's node field — both verified against the current tree, so the code above compiles as written.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 go test ./internal/state/  -run TestPruneNodes    -v
@@ -1021,7 +1021,7 @@ go test ./internal/skills/ -race -count=1
 
 Expected: PASS throughout. The `-race` run covers `TestSkillsUpdateSerializesConcurrentWriters`.
 
-- [ ] **Step 5: Write the failing test for the CLI subcommand**
+- [x] **Step 5: Write the failing test for the CLI subcommand**
 
 Add to `cmd/axis/context_test.go`:
 
@@ -1368,7 +1368,7 @@ Imports needed: `bytes`, `errors`, `fmt`, `os`, `path/filepath`, `strings`, `syn
 
 Seven tests, all sharing the `TestContextPrune` prefix: dry-run naming, apply with backup, deleted-skill naming under duplicate IDs, rollback at **both** write positions, untouched-store preservation, concurrent-writer serialization, and backup non-collision.
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 ```bash
 go test ./cmd/axis/ -run 'TestContextPrune' -count=1 -v
@@ -1378,7 +1378,7 @@ The pattern is `TestContextPrune` — a **prefix** shared by all seven tests abo
 
 Expected: FAIL to build — `runContextPrune`, `saveStateStore`, `saveSkillsStore` undefined. Confirm the output names all seven tests once they compile; if you see `no tests to run` or `[no test files]`, the pattern or the file location is wrong, not the code.
 
-- [ ] **Step 7: Implement the subcommand**
+- [x] **Step 7: Implement the subcommand**
 
 Add to `cmd/axis/context.go`, and register `contextPruneCmd()` on the existing `context` command alongside `show` and `clear`:
 
@@ -1389,6 +1389,7 @@ Add to `cmd/axis/context.go`, and register `contextPruneCmd()` on the existing `
 type storeSnapshot struct {
 	path    string
 	data    []byte
+	mode    os.FileMode
 	missing bool
 }
 
@@ -1400,7 +1401,14 @@ func readStoreSnapshot(path string) (storeSnapshot, error) {
 	if err != nil {
 		return storeSnapshot{}, err
 	}
-	return storeSnapshot{path: path, data: data}, nil
+	// Capture the mode so rollback restores the store's own permissions
+	// rather than imposing a fixed one: state.json and skills.json are
+	// written with different perms (0o600 and 0o644).
+	mode := os.FileMode(0o600)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	return storeSnapshot{path: path, data: data, mode: mode}, nil
 }
 
 // restore puts a store back exactly as it was read.
@@ -1411,7 +1419,7 @@ func (s storeSnapshot) restore() error {
 		}
 		return nil
 	}
-	return persist.WriteFileAtomic(s.path, s.data, 0o600)
+	return persist.WriteFileAtomic(s.path, s.data, s.mode)
 }
 
 // backupSnapshots writes the already-read store contents into a fresh
@@ -1626,7 +1634,7 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 // records stayed behind — a selection that silently under-reports what it
 // missed is worse than one that offers nothing.
 func unknownNodeNames() ([]string, error) {
-	cfg, err := config.Load()
+	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
 		return nil, err
 	}
@@ -1723,12 +1731,12 @@ func contextPruneCmd() *cobra.Command {
 
 Register `contextPruneCmd()` on the existing `context` command beside `show` and `clear` (`cmd/axis/context.go:12`, which already calls `cmd.AddCommand` twice). Imports to add: `os`, `path/filepath`, `sort`, `strings`, `time`, plus `internal/persist` and `internal/skills`. Follow the surrounding file's conventions for config loading and command wiring.
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `go test ./cmd/axis/ -run TestContextPrune -v`
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 make lint
