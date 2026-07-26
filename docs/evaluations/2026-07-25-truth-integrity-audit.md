@@ -172,7 +172,7 @@ Plus `event-sequence.lock`, `ledger.json.lock`, and `token.lock`. Measured on a 
 
 **The defect is not the tests.** 273 test functions across these four packages never isolate `HOME`; only a handful actually write. Enumerating and patching them individually is unbounded work that regresses the moment a new test is added.
 
-Every store resolves through a single choke point:
+`internal/persist` is the *intended* choke point, and it offers no override:
 
 ```go
 // internal/persist/paths.go:18
@@ -182,9 +182,23 @@ func AxisDir() string {
 }
 ```
 
-`AxisDir` consults the process environment and offers **no override**. There is no `AXIS_HOME`, no injected root, no test seam anywhere in `internal/persist`. That single absence is why `make test` reaches production state, and why the per-test remedy does not scale.
+There is no `AXIS_HOME`, no injected root, no test seam anywhere in `internal/persist`. That absence is why `make test` reaches production state, and why the per-test remedy does not scale.
 
-**Isolation is store-agnostic; remediation is not.** One seam at `AxisDir` isolates all eight stores at once. Cleaning the contamination already on an operator's disk is a separate, store-specific problem, and `axis context prune` must **not** be widened to cover it — each store has different semantics and different rules for what may be deleted:
+**But a seam at `AxisDir` alone is not sufficient**, and this is the part most likely to be assumed away. `AxisDir` is not the only path resolver: **eleven non-test sites call `os.UserHomeDir()` directly**, bypassing `internal/persist` entirely. One of them owns a contaminated store:
+
+| Store | Resolver | Routes through `persist`? |
+| --- | --- | --- |
+| `snapshot.json` | `internal/daemon/daemon.go:300` | yes |
+| `events.jsonl`, `event-sequence` | `internal/events/logger.go:28` | yes |
+| `ledger.json` | `internal/reservation/persist.go:17` | yes |
+| `token` | `internal/auth/auth.go:21` | yes |
+| **`chat-history.json`** | **`internal/chat/persist.go:17`** | **no — direct `os.UserHomeDir`** |
+
+The remaining bypass sites are `cmd/axis/{update.go:347, task.go:863, reservations.go:440, llm.go:982}`, `internal/secrets/secrets.go:84`, `internal/facts/local.go:68`, `internal/mcp/skills.go:19`, and `internal/transport/ssh.go:{35,606}`. They are not all AXIS-state writers — `transport/ssh.go` resolves `~/.ssh`, for instance — but each is a resolution path a seam would miss.
+
+So the fix is **two** changes, not one: add the seam to `persist.AxisDir`, *and* route the bypassing AXIS-state resolvers through it. Landing only the first would isolate five of the six stores and leave `chat-history.json` still writing to real operator state, while appearing to have solved the problem.
+
+**Isolation is store-agnostic; remediation is not.** Cleaning the contamination already on an operator's disk is a separate, store-specific problem, and `axis context prune` must **not** be widened to cover it — each store has different semantics and different rules for what may be deleted:
 
 - `token` is credential material. `auth.LoadOrGenerateToken` (`internal/auth/auth.go:26`) preserves a *valid* 64-hex token unchanged, but generates and persists a new one when the file is absent or invalid — so a test run against a fresh `HOME` mints real auth state. Deleting a token is not a cleanup; it invalidates live sessions.
 - `events.jsonl` is append-only history with a monotonic `event-sequence` companion. Removing rows breaks the sequence invariant.
@@ -228,7 +242,7 @@ Note for anyone reproducing these findings: **do not run `make test` on a host w
 **Containment**
 
 1. **C3** — isolate `HOME` in the offending test **and remediate existing state pollution**. Isolation alone stops the bleed but leaves 70 fixture rows and a 70-sample observation skewing the empirical store. *(Done: `a47dd34`, `783fac5`, `2472624`.)*
-1b. **C5** — add an isolation seam to `persist.AxisDir`, then remediate the six remaining stores per store. Isolation is one change; remediation is store-specific and must not be folded into `axis context prune`.
+1b. **C5** — add an isolation seam to `persist.AxisDir` **and** route the eleven direct `os.UserHomeDir` callers through it; the seam alone misses `chat-history.json`. Then remediate the remaining stores per store. Remediation is store-specific and must not be folded into `axis context prune`.
 2. **A1 / C4** — exclude the probe's own processes from `pgrep`; repair the quoting in the `running` expression.
 3. **C2** — decouple reflex determinism from confidence; stop surfacing raw upstream error strings.
 4. **C1** — replace the pairwise topology block with a vantage-labeled reachability view.
