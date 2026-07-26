@@ -185,9 +185,8 @@ func probeAIEndpoint(kind, baseURL string) bool {
 	var probeURL string
 	switch kind {
 	case config.AIBackendOllama:
-		if strings.HasSuffix(base, "/v1") {
-			base = strings.TrimSuffix(base, "/v1")
-		}
+		// TrimSuffix is already a no-op when the suffix is absent.
+		base = strings.TrimSuffix(base, "/v1")
 		probeURL = base + "/api/tags"
 	default:
 		if strings.HasSuffix(base, "/v1") {
