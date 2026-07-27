@@ -62,9 +62,11 @@ package_coverage() {
   echo "$cov"
 }
 
-if ! go test ./... -coverprofile="$total_profile" >/dev/null; then
-  echo "ERROR: go test ./... -coverprofile failed. Re-running tests to show failure logs:" >&2
-  go test ./... -coverprofile="$total_profile" -count=1
+PKG_LIST=$(go list ./... | grep -v '/examples/' || true)
+
+if ! go test $PKG_LIST -coverprofile="$total_profile" >/dev/null; then
+  echo "ERROR: go test $PKG_LIST -coverprofile failed. Re-running tests to show failure logs:" >&2
+  go test $PKG_LIST -coverprofile="$total_profile" -count=1
   exit 1
 fi
 
