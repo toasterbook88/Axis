@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 // conversationHistory stores a serializable conversation record.
@@ -13,12 +15,8 @@ type conversationHistory struct {
 }
 
 // PersistPath returns the default path for conversation history files.
-func PersistPath(name string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	return filepath.Join(home, ".axis", name+"-history.json"), nil
+func PersistPath(name string) string {
+	return persist.AxisPath(name + "-history.json")
 }
 
 // SaveToFile writes the conversation (excluding system messages) to the given path.

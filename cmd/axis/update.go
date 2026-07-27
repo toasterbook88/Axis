@@ -155,7 +155,7 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 	}
 
 	if checkOnly {
-		return reportCheck(out, current, latest, relation, selfPath, shadows)
+		return reportCheck(out, current, latest, relation, shadows)
 	}
 
 	// Select mutation targets: self by default; --all expands; --path is exclusive.
@@ -176,18 +176,18 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 	if mode == modeSelf {
 		if axisbuildinfo.UpdateManagedBy != "" {
 			fmt.Fprintf(out, "Refusing in-place update. This installation is managed by '%s'. Please use your package manager to upgrade.\n", axisbuildinfo.UpdateManagedBy)
-			printShadowHint(out, shadows, latest, selfPath)
+			printShadowHint(out, shadows, latest)
 			return nil
 		}
 		switch relation {
 		case 0:
 			fmt.Fprintf(out, "Already up to date.\n")
-			printShadowHint(out, shadows, latest, selfPath)
+			printShadowHint(out, shadows, latest)
 			return nil
 		case 1:
 			fmt.Fprintf(out, "Current build is newer than the latest published release.\n")
 			fmt.Fprintf(out, "Refusing to downgrade the currently running binary.\n")
-			printShadowHint(out, shadows, latest, selfPath)
+			printShadowHint(out, shadows, latest)
 			return nil
 		case -1:
 			fmt.Fprintf(out, "Update available: v%s → v%s\n", current, latest)
@@ -197,7 +197,12 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 	return installRelease(cmd, rel, latest, targets, selfPath, mode, errOut, out)
 }
 
-func reportCheck(out io.Writer, current, latest string, relation int, selfPath string, shadows []string) error {
+// reportCheck reports the running binary's status plus every shadow install.
+// It takes no self path: callers pass the list from listKnownInstallPaths,
+// which has already excluded the running binary by absolute path and by
+// resolved file. Accepting a selfPath here would imply this function enforces
+// that exclusion, when it does not.
+func reportCheck(out io.Writer, current, latest string, relation int, shadows []string) error {
 	switch relation {
 	case 0:
 		fmt.Fprintf(out, "Running binary: already up to date (v%s).\n", current)
@@ -256,7 +261,9 @@ func reportShadows(out io.Writer, shadows []string) {
 	fmt.Fprintf(out, "Other known installs: %d (use --check for details, --all to update stale ones)\n", len(shadows))
 }
 
-func printShadowHint(out io.Writer, shadows []string, latest, selfPath string) {
+// printShadowHint notes how many shadow installs are stale. Like reportCheck,
+// it relies on the caller's list already excluding the running binary.
+func printShadowHint(out io.Writer, shadows []string, latest string) {
 	stale := 0
 	for _, p := range shadows {
 		info, err := inspectBinary(p)

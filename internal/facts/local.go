@@ -16,6 +16,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 // LocalCollector collects facts from the local machine.
@@ -28,7 +29,7 @@ var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
 var buildAppleFoundationModelsHelperFn = buildAppleFoundationModelsHelper
 var appleFoundationModelsProbeCommandFn = exec.CommandContext
 var appleFoundationModelsBuildCommandFn = exec.CommandContext
-var appleFoundationModelsHomeDirFn = os.UserHomeDir
+var appleFoundationModelsCacheDirFn = func() string { return persist.AxisPath("cache") }
 var appleFoundationModelsReadFileFn = os.ReadFile
 var appleFoundationModelsWriteFileFn = os.WriteFile
 
@@ -65,8 +66,7 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 
 	cfgPath := os.Getenv("AXIS_CONFIG")
 	if cfgPath == "" {
-		home, _ := os.UserHomeDir()
-		cfgPath = filepath.Join(home, ".axis", "nodes.yaml")
+		cfgPath = config.DefaultConfigPath()
 	}
 	if _, err := os.Stat(cfgPath); err == nil {
 		if cfg, err := config.Load(cfgPath); err == nil {
@@ -228,12 +228,7 @@ func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
 }
 
 func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
-	homeDir, err := appleFoundationModelsHomeDirFn()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory for apple foundation models helper: %w", err)
-	}
-
-	cacheDir := filepath.Join(homeDir, ".axis", "cache")
+	cacheDir := appleFoundationModelsCacheDirFn()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("create apple foundation models cache directory: %w", err)
 	}

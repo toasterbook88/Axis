@@ -129,10 +129,9 @@ func probeURL(b config.AIBackendConfig) (string, error) {
 	}
 	switch b.Kind {
 	case config.AIBackendOllama:
-		// Ollama native tags API (not under /v1).
-		if strings.HasSuffix(base, "/v1") {
-			base = strings.TrimSuffix(base, "/v1")
-		}
+		// Ollama native tags API (not under /v1). TrimSuffix is already a
+		// no-op when the suffix is absent.
+		base = strings.TrimSuffix(base, "/v1")
 		return base + "/api/tags", nil
 	case config.AIBackendOpenAICompatible, config.AIBackendLlamaCPP, config.AIBackendMLX:
 		if strings.HasSuffix(base, "/v1") {

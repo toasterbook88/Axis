@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -935,5 +936,195 @@ func TestTombstoneMigrationRoundTrip(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"tombstones"`) {
 		t.Fatal("saved state should not contain legacy tombstones key")
+	}
+}
+
+func TestPruneNodesRemovesUnknownNodeRecords(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := &ClusterState{
+		Nodes: map[string]NodeState{
+			"node-a": {},
+			"ghost":  {},
+		},
+		Observations: map[string]models.ExecutionObservation{
+			"keep": {Scope: models.ObservationScope{Node: "node-a"}, SampleCount: 1},
+			"drop": {Scope: models.ObservationScope{Node: "ghost"}, SampleCount: 70},
+		},
+		TaskHistory: []TaskExecutionRecord{
+			{Node: "node-a"},
+			{Node: "ghost"},
+			{Node: "ghost"},
+		},
+		Failures: func() failures.Store {
+			f := failures.NewStore()
+			f.Record(models.FailureExecCrash, models.FailureScope{Node: "ghost"}, "fixture", nil)
+			f.Record(models.FailureExecCrash, models.FailureScope{Node: "node-a"}, "real", nil)
+			return f
+		}(),
+		Tombstones: map[string]TombstoneEntry{
+			"t1": {TaskPattern: "x", NodeName: "ghost"},
+			"t2": {TaskPattern: "y", NodeName: "node-a"},
+		},
+		Decisions: []string{
+			"ghost: run fixture",
+			"GHOST: retry fixture",
+			"node-a: build project",
+			"legacy free-form decision",
+		},
+	}
+
+	// targets = nodes to REMOVE
+	rep := s.PruneNodes(map[string]bool{"ghost": true})
+
+	if rep.Nodes != 1 || rep.Observations != 1 || rep.TaskHistory != 2 {
+		t.Fatalf("unexpected prune report: %+v", rep)
+	}
+	if rep.Failures != 1 || rep.Tombstones != 1 || rep.Decisions != 2 {
+		t.Fatalf("node-scoped failure records not pruned: %+v", rep)
+	}
+	if _, ok := s.Nodes["ghost"]; ok {
+		t.Error("ghost node survived prune")
+	}
+	if _, ok := s.Observations["drop"]; ok {
+		t.Error("ghost observation survived prune")
+	}
+	if len(s.TaskHistory) != 1 || s.TaskHistory[0].Node != "node-a" {
+		t.Errorf("task history not pruned: %+v", s.TaskHistory)
+	}
+	if len(s.Failures) != 1 {
+		t.Errorf("ghost failure record survived: %+v", s.Failures)
+	}
+	if _, ok := s.Tombstones["t1"]; ok {
+		t.Error("ghost tombstone survived prune")
+	}
+	if len(s.Decisions) != 2 ||
+		s.Decisions[0] != "node-a: build project" ||
+		s.Decisions[1] != "legacy free-form decision" {
+		t.Errorf("decision history not pruned safely: %+v", s.Decisions)
+	}
+}
+
+func TestPruneNodesKeepsEverythingWhenAllKnown(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := &ClusterState{
+		Nodes: map[string]NodeState{"node-a": {}},
+		Observations: map[string]models.ExecutionObservation{
+			"keep": {Scope: models.ObservationScope{Node: "node-a"}, SampleCount: 1},
+		},
+		TaskHistory: []TaskExecutionRecord{{Node: "node-a"}},
+	}
+
+	// No targets named: nothing may be removed.
+	rep := s.PruneNodes(map[string]bool{})
+
+	if rep.Nodes != 0 || rep.Observations != 0 || rep.TaskHistory != 0 {
+		t.Fatalf("expected no-op prune, got %+v", rep)
+	}
+	if len(s.TaskHistory) != 1 {
+		t.Error("no-op prune removed history")
+	}
+}
+
+func TestPruneNodesRefusesExecutionState(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name string
+		node NodeState
+	}{
+		{"reserved RAM", NodeState{ReservedMB: 1024}},
+		{"active task count", NodeState{ActiveTasks: 1}},
+		{"active execution", NodeState{ActiveExecs: []string{"exec-1"}}},
+		{"reservation map", NodeState{ExecReservationsMB: map[string]int64{"exec-1": 1024}}},
+		{"heartbeat map", NodeState{ExecHeartbeatAt: map[string]time.Time{"exec-1": now}}},
+		{"owner PID map", NodeState{ExecOwnerPID: map[string]int{"exec-1": 123}}},
+		{"owner surface map", NodeState{ExecOwnerSurface: map[string]string{"exec-1": "task-run"}}},
+		{"owner label map", NodeState{ExecOwnerLabel: map[string]string{"exec-1": "build"}}},
+		{"origin map", NodeState{ExecOrigin: map[string]models.ExecutionOrigin{"exec-1": {}}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &ClusterState{
+				Nodes: map[string]NodeState{
+					"ghost": tc.node,
+					"old":   {},
+				},
+				TaskHistory: []TaskExecutionRecord{
+					{Node: "ghost"},
+					{Node: "old"},
+				},
+			}
+
+			rep := s.PruneNodes(map[string]bool{"ghost": true, "old": true})
+
+			if len(rep.Blocked) != 1 || rep.Blocked[0].Node != "ghost" {
+				t.Fatalf("expected ghost to block the prune, got %+v", rep.Blocked)
+			}
+			if !rep.Empty() {
+				t.Fatalf("blocked prune reported changes: %+v", rep)
+			}
+			if len(s.Nodes) != 2 || len(s.TaskHistory) != 2 {
+				t.Fatalf("blocked prune partially mutated state: %+v", s)
+			}
+		})
+	}
+}
+
+func TestMigratePendingConvertsLegacyTombstonesWithoutSaving(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := &ClusterState{
+		Version:  0,
+		Nodes:    map[string]NodeState{},
+		Failures: failures.NewStore(),
+		Tombstones: map[string]TombstoneEntry{
+			"k1": {TaskPattern: "build repo", NodeName: "node-a", FailCount: 3},
+		},
+	}
+
+	if !MigratePending(s) {
+		t.Fatal("expected a pending migration to run")
+	}
+	if len(s.Tombstones) != 0 {
+		t.Errorf("legacy tombstones not cleared: %+v", s.Tombstones)
+	}
+	if len(s.Failures) != 1 {
+		t.Fatalf("tombstone not migrated into Failures: %+v", s.Failures)
+	}
+	for _, f := range s.Failures {
+		if f.Scope.Node != "node-a" {
+			t.Errorf("migrated record has wrong node: %+v", f)
+		}
+	}
+
+	// Idempotent once the version is current: a second call is a no-op.
+	s.Version = currentStateVersion
+	if MigratePending(s) {
+		t.Error("MigratePending must not re-run against current-version state")
+	}
+
+	// It must not persist anything on its own.
+	if _, err := os.Stat(Path()); !os.IsNotExist(err) {
+		t.Errorf("MigratePending wrote state to disk: %v", err)
+	}
+}
+
+func TestMigratePendingToleratesNilFailureStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A hand-built or partially decoded state may carry a nil Failures map.
+	// runMigrations writes into it, so a nil map would panic.
+	s := &ClusterState{
+		Version:    0,
+		Tombstones: map[string]TombstoneEntry{"k1": {NodeName: "node-a"}},
+	}
+
+	if !MigratePending(s) {
+		t.Fatal("expected a pending migration to run")
+	}
+	if len(s.Failures) != 1 {
+		t.Errorf("tombstone not migrated: %+v", s.Failures)
 	}
 }

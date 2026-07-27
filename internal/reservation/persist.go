@@ -141,6 +141,56 @@ func (l *Ledger) Load() error {
 	return nil
 }
 
+// LoadReadOnly reads the ledger without reclaiming entries, quarantining a
+// corrupt file, or writing any reconciliation result. It exists for
+// destructive-operation preflights that must observe the exact ledger state
+// while holding LockFile, without making the preflight itself mutate a store.
+func (l *Ledger) LoadReadOnly() error {
+	l.fileMu.Lock()
+	defer l.fileMu.Unlock()
+
+	wasLocked := l.lockFile != nil
+	if !wasLocked {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.lockFileLocked(ctx); err != nil {
+			return err
+		}
+		defer l.unlockFileLocked()
+	}
+
+	data, err := os.ReadFile(Path())
+	if err != nil {
+		if os.IsNotExist(err) {
+			l.replaceEntries(nil)
+			return nil
+		}
+		return err
+	}
+
+	var df diskFormat
+	if err := json.Unmarshal(data, &df); err != nil {
+		return fmt.Errorf("decode reservation ledger without recovery: %w", err)
+	}
+	l.replaceEntries(df.Entries)
+	return nil
+}
+
+func (l *Ledger) replaceEntries(entries []*Entry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = make(map[string]*Entry, len(entries))
+	l.totalReserved = 0
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		cp := *entry
+		l.entries[cp.ID] = &cp
+		l.totalReserved += cp.RAMMB
+	}
+}
+
 // Save writes the ledger to disk. The in-memory mutex is held only long enough
 // to snapshot the entries; the marshal and atomic write run under the file lock
 // with mu released, so readers are not blocked during persistence I/O.

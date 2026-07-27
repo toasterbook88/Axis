@@ -14,11 +14,9 @@ func peakRAMFromProcessState(ps *os.ProcessState) int64 {
 	if ps == nil {
 		return 0
 	}
-	sysUsage := ps.SysUsage()
-	if sysUsage == nil {
-		return 0
-	}
-	rusage, ok := sysUsage.(*syscall.Rusage)
+	// SysUsage never returns a nil interface value; a nil *Rusage arriving
+	// inside a non-nil interface is caught by the assertion below.
+	rusage, ok := ps.SysUsage().(*syscall.Rusage)
 	if !ok || rusage == nil {
 		return 0
 	}

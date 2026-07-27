@@ -3,6 +3,9 @@ COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GOVERSION := $(shell go version | awk '{print $$3}')
 PREFIX   ?= $(HOME)/.local
+# Pinned: an unpinned @latest would let an upstream release break CI without a
+# repository change. Bump deliberately.
+STATICCHECK_VERSION ?= 2025.1.1
 
 LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Commit=$(COMMIT) \
@@ -27,11 +30,31 @@ install-user: build
 	@echo "verify: $(PREFIX)/bin/axis version"
 	@echo "daemon: $(PREFIX)/bin/axis daemon restart && $(PREFIX)/bin/axis daemon status"
 
+# Test isolation (audit finding C5). Unisolated tests resolve every AXIS store
+# to ~/.axis, so the suite used to write real operator state on every run. The
+# harness redirects HOME to a disposable directory.
+#
+# Two details are load-bearing:
+#
+#   - GOCACHE, GOPATH, and GOMODCACHE derive from HOME. They are captured from
+#     the real home in the assignment prefix, which the shell expands before it
+#     applies the HOME assignment, so the build cache survives.
+#   - AXIS_HOME is deliberately NOT exported here. It outranks HOME in
+#     persist.AxisDir, so a single suite-wide AXIS_HOME would override the ~133
+#     tests that isolate themselves with t.Setenv("HOME", ...) and collapse them
+#     onto one shared AXIS root.
 test:
-	go test ./... -count=1 -timeout 180s
+	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
+	trap 'rm -rf "$$d"' EXIT; \
+	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
+	HOME="$$d" go test ./... -count=1 -timeout 180s
+	python3 -B -m unittest discover -s docs/superpowers/tools -p '*_test.py'
 
 test-race:
-	go test ./... -count=1 -timeout 180s -race
+	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
+	trap 'rm -rf "$$d"' EXIT; \
+	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
+	HOME="$$d" go test ./... -count=1 -timeout 180s -race
 
 lint:
 	@unformatted=$$(gofmt -l .) || exit $$?; \
@@ -41,6 +64,7 @@ lint:
 		exit 1; \
 	fi
 	go vet ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 coverage:
 	./hack/coverage-check.sh

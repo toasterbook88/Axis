@@ -648,8 +648,7 @@ func TestWatchDiscoveryRefreshesOnBeaconChange(t *testing.T) {
 
 	var calls atomic.Int32
 	registry := discovery.NewBeaconRegistry()
-	var d *Daemon
-	d = New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		calls.Add(1)
 		nodes := registry.Snapshot()
 		return &models.ClusterSnapshot{
