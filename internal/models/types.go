@@ -420,6 +420,26 @@ type ClusterSnapshot struct {
 	Summary   ClusterSummary      `json:"summary" yaml:"summary"`
 	Warnings  []Warning           `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 	Freshness *DiscoveryFreshness `json:"freshness,omitempty" yaml:"freshness,omitempty"`
+	Topology  *PairwiseLinkMatrix `json:"topology,omitempty" yaml:"topology,omitempty"`
+}
+
+// PairwiseLinkMatrix is the directional network topology between cluster
+// nodes. Each LinkMetric describes one source→target edge. Throughput is
+// optional (0 = unmeasured); RTTLatencyP95 is the primary signal. The matrix
+// is built best-effort from a single vantage (the local node probing each
+// remote target); cross-remote edges are recorded with the overlay inferred
+// from the dial target when no direct probe is possible.
+type PairwiseLinkMatrix struct {
+	Links []LinkMetric `json:"links" yaml:"links"`
+}
+
+// LinkMetric describes a directional source→target network edge.
+type LinkMetric struct {
+	SourceNode      string        `json:"source_node" yaml:"source_node"`
+	TargetNode      string        `json:"target_node" yaml:"target_node"`
+	OverlayType     string        `json:"overlay_type" yaml:"overlay_type"` // e.g. "lan", "tailscale", "wireguard", "thunderbolt"
+	RTTLatencyP95   time.Duration `json:"rtt_latency_p95" yaml:"rtt_latency_p95"`
+	ThroughputMBps  float64       `json:"throughput_mbps,omitempty" yaml:"throughput_mbps,omitempty"`
 }
 
 // --- Phase 2: Task Placement ---
