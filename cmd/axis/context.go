@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -46,15 +48,32 @@ func contextCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "clear",
 		Short: "Clear the cluster placement memory",
-		Run: func(cmd *cobra.Command, args []string) {
-			os.Remove(state.Path())
-			fmt.Println("Cleared cluster state.")
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runContextClear(cmd.OutOrStdout())
 		},
 	})
 
 	cmd.AddCommand(contextPruneCmd())
 
 	return cmd
+}
+
+func runContextClear(w io.Writer) error {
+	release, err := persist.LockFile(state.Path())
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if err := os.Remove(state.Path()); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(w, "Cluster state is already clear.")
+			return nil
+		}
+		return fmt.Errorf("clear cluster state: %w", err)
+	}
+	fmt.Fprintln(w, "Cleared cluster state.")
+	return nil
 }
 
 // storeSnapshot is the exact on-disk content of one store at the moment the
@@ -119,6 +138,11 @@ func backupSnapshots(snaps ...storeSnapshot) (string, error) {
 			continue
 		}
 		if err := os.WriteFile(filepath.Join(dir, filepath.Base(s.path)), s.data, 0o600); err != nil {
+			if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+				return "", fmt.Errorf(
+					"write backup snapshot: %w; remove partial backup %s: %v",
+					err, dir, cleanupErr)
+			}
 			return "", err
 		}
 	}
@@ -158,6 +182,66 @@ func rollbackPrune(cause error, backupDir string, attempted ...storeSnapshot) er
 	return fmt.Errorf("prune failed, all stores rolled back: %w", cause)
 }
 
+type ledgerPruneBlock struct {
+	node       string
+	entries    int
+	reservedMB int64
+}
+
+func ledgerPruneBlockers(entries []reservation.Entry, targets map[string]bool) []ledgerPruneBlock {
+	norm := make(map[string]bool, len(targets))
+	for name := range targets {
+		norm[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	byNode := map[string]ledgerPruneBlock{}
+	for _, entry := range entries {
+		node := strings.TrimSpace(entry.Node)
+		key := strings.ToLower(node)
+		if node == "" || !norm[key] {
+			continue
+		}
+		block := byNode[key]
+		if block.node == "" {
+			block.node = node
+		}
+		block.entries++
+		block.reservedMB += entry.RAMMB
+		byNode[key] = block
+	}
+	blocked := make([]ledgerPruneBlock, 0, len(byNode))
+	for _, block := range byNode {
+		blocked = append(blocked, block)
+	}
+	sort.Slice(blocked, func(i, j int) bool {
+		return strings.ToLower(blocked[i].node) < strings.ToLower(blocked[j].node)
+	})
+	return blocked
+}
+
+func printPruneBlockers(w io.Writer, stateBlocks []state.PruneBlock, ledgerBlocks []ledgerPruneBlock) {
+	fmt.Fprintln(w, "\nPrune blocked by execution or reservation state:")
+	for _, block := range stateBlocks {
+		fmt.Fprintf(
+			w,
+			"  - %s: state reserved_mb=%d active_tasks=%d active_execs=%d tracking_records=%d\n",
+			block.Node,
+			block.ReservedMB,
+			block.ActiveTasks,
+			block.ActiveExecs,
+			block.TrackingRecords,
+		)
+	}
+	for _, block := range ledgerBlocks {
+		fmt.Fprintf(
+			w,
+			"  - %s: ledger entries=%d reserved_mb=%d\n",
+			block.node,
+			block.entries,
+			block.reservedMB,
+		)
+	}
+}
+
 func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 	if len(targetNames) == 0 {
 		return fmt.Errorf("no nodes selected; pass --node NAME or --unknown-nodes")
@@ -176,13 +260,24 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 
 	// ---- Begin the transaction ----------------------------------------
 	//
-	// Both locks are held across read, backup, and both writes, so nothing
-	// can slip between the version we back up and the version we prune.
-	// Order is persist.LockFile's documented order (state, then skills);
-	// release is deferred, so it happens in reverse.
+	// All three locks are held across the liveness preflight, read, backup,
+	// and both writes. The ledger is first so no new reservation can land
+	// between the preflight and the prune; the persisted-store order remains
+	// state, then skills. Release is deferred and therefore happens in reverse.
 	//
 	// LoadUnlocked, not Load: state.Load persists pending migrations through
 	// state.Update, which would deadlock against the lock we now hold.
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledgerCtx, cancelLedgerLock := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelLedgerLock()
+	if err := ledger.LockFile(ledgerCtx); err != nil {
+		return fmt.Errorf("lock reservation ledger for prune preflight: %w", err)
+	}
+	defer ledger.UnlockFile()
+	if err := ledger.LoadReadOnly(); err != nil {
+		return fmt.Errorf("load reservation ledger for prune preflight: %w", err)
+	}
+
 	releaseState, err := persist.LockFile(state.Path())
 	if err != nil {
 		return err
@@ -216,6 +311,21 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 		return err
 	}
 
+	stateBlocks := st.PruneBlockers(targets)
+	ledgerBlocks := ledgerPruneBlockers(ledger.Entries(), targets)
+	if len(stateBlocks) > 0 || len(ledgerBlocks) > 0 {
+		printPruneBlockers(w, stateBlocks, ledgerBlocks)
+		if apply {
+			return fmt.Errorf(
+				"refusing to prune nodes with execution or reservation state; release active work and repair stale reservations first")
+		}
+		fmt.Fprintln(
+			w,
+			"\ndry run — nothing was pruned; --apply would be refused until the execution and reservation state is cleared.",
+		)
+		return nil
+	}
+
 	// LoadUnlocked skips migrations, but ClusterState.Save stamps the current
 	// schema version unconditionally. Pruning a version-0 state and saving it
 	// would therefore mark the file current while leaving surviving legacy
@@ -231,6 +341,9 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 	state.MigratePending(st)
 
 	stRep := st.PruneNodes(targets)
+	if len(stRep.Blocked) > 0 {
+		return fmt.Errorf("refusing to prune nodes with execution state")
+	}
 	skRep := sk.PruneNodes(targets)
 
 	// Every field of both reports is printed. An operator cannot judge blast
@@ -243,6 +356,7 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 	fmt.Fprintf(w, "    task history rows   %d\n", stRep.TaskHistory)
 	fmt.Fprintf(w, "    failure records     %d\n", stRep.Failures)
 	fmt.Fprintf(w, "    legacy tombstones   %d\n", stRep.Tombstones)
+	fmt.Fprintf(w, "    recent decisions    %d\n", stRep.Decisions)
 	fmt.Fprintf(w, "  skills.json\n")
 	fmt.Fprintf(w, "    node counts         %d\n", skRep.NodeCounts)
 	fmt.Fprintf(w, "    preferred-node refs %d\n", skRep.PreferredNodes)
@@ -321,10 +435,10 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 // absent from nodes.yaml.
 //
 // It must scan every record type PruneNodes can affect. A node referenced only
-// by an observation, a failure record, a legacy tombstone, or a learned
-// skill's NodeCount would otherwise be reported as nothing to prune while its
-// records stayed behind — a selection that silently under-reports what it
-// missed is worse than one that offers nothing.
+// by an observation, a failure record, a legacy tombstone, a recent decision,
+// or a learned skill's NodeCount would otherwise be reported as nothing to
+// prune while its records stayed behind — a selection that silently
+// under-reports what it missed is worse than one that offers nothing.
 func unknownNodeNames() ([]string, error) {
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
@@ -344,9 +458,15 @@ func unknownNodeNames() ([]string, error) {
 		seen[trimmed] = true
 	}
 
-	st, err := state.Load()
+	// Selection is read-only with respect to healthy stores. In particular,
+	// LoadUnlocked does not persist pending state migrations, so the default
+	// dry run cannot rewrite state.json before runContextPrune starts.
+	st, err := state.LoadUnlocked()
 	if err != nil {
-		return nil, err
+		if st == nil {
+			return nil, err
+		}
+		printWarning(err)
 	}
 	for name := range st.Nodes {
 		note(name)
@@ -363,10 +483,18 @@ func unknownNodeNames() ([]string, error) {
 	for _, tomb := range st.Tombstones {
 		note(tomb.NodeName)
 	}
+	for _, decision := range st.Decisions {
+		if node, ok := state.DecisionNodeName(decision); ok {
+			note(node)
+		}
+	}
 
-	sk, err := skills.Load()
+	sk, err := skills.LoadUnlocked()
 	if err != nil {
-		return nil, err
+		if sk == nil {
+			return nil, err
+		}
+		printWarning(err)
 	}
 	for _, s := range sk.Skills {
 		note(s.PreferredNode)
@@ -394,11 +522,14 @@ func contextPruneCmd() *cobra.Command {
 		Long: "Prune is destructive and defaults to a dry run.\n\n" +
 			"Absence from nodes.yaml does not prove a record is stale — retired or " +
 			"temporarily removed nodes may hold legitimate history. Nodes are always " +
-			"listed before any write, and both stores are backed up before --apply.\n\n" +
-			"A dry run prunes nothing, but it is not guaranteed to leave the files " +
-			"byte-identical: reading state.json applies any pending schema migration, " +
-			"and a store that fails to parse is renamed aside for recovery. Those are " +
-			"the normal load-path behaviours of every AXIS command, not effects of prune.",
+			"listed before any write, and both stores are backed up before --apply. " +
+			"Prune refuses any node that still carries execution state or reservation " +
+			"ledger entries.\n\n" +
+			"A dry run never rewrites a healthy state.json, skills.json, or ledger.json, " +
+			"and it does not persist schema migrations. Acquiring the transaction locks " +
+			"may create sibling .lock files. A state or skills store that fails to parse " +
+			"may still be renamed aside for recovery, which is the normal AXIS corrupt-file " +
+			"load behaviour rather than a prune.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targets := append([]string(nil), nodeNames...)
 

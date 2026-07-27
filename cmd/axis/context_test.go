@@ -9,7 +9,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -37,6 +40,9 @@ func TestContextPruneDefaultsToDryRunAndNamesNodes(t *testing.T) {
 	}
 	if !strings.Contains(out, "dry run") {
 		t.Errorf("expected dry-run notice, got: %s", out)
+	}
+	if !strings.Contains(out, "recent decisions") {
+		t.Errorf("prune report omitted decision history: %s", out)
 	}
 
 	reloaded, err := state.Load()
@@ -451,5 +457,258 @@ func TestContextPruneDryRunDoesNotPersistPendingMigration(t *testing.T) {
 	}
 	if !bytes.Equal([]byte(raw), after) {
 		t.Errorf("dry run persisted a pending migration\n got: %s\nwant: %s", after, raw)
+	}
+}
+
+func TestContextPruneUnknownNodesDryRunDoesNotPersistPendingMigration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".axis"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `nodes:
+  - name: node-a
+    hostname: localhost
+    ssh_user: axis
+`
+	if err := os.WriteFile(filepath.Join(home, ".axis", "nodes.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{
+  "nodes": {},
+  "tombstones": {
+    "k-ghost": {"task_pattern": "run ollama", "node_name": "ghost", "fail_count": 2, "last_failure": "2026-07-01T00:00:00Z", "expires_at": "2126-07-01T00:00:00Z"}
+  },
+  "recent_decisions": ["decision-only: old task", "node-a: keep"]
+}`
+	if err := os.WriteFile(state.Path(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := unknownNodeNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(targets, ","); got != "decision-only,ghost" {
+		t.Fatalf("unknown targets = %q, want decision-only,ghost", got)
+	}
+	afterSelection, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(raw), afterSelection) {
+		t.Fatalf("unknown-node selection persisted migration\n got: %s\nwant: %s", afterSelection, raw)
+	}
+
+	var buf bytes.Buffer
+	if err := runContextPrune(&buf, targets, false); err != nil {
+		t.Fatal(err)
+	}
+	afterDryRun, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(raw), afterDryRun) {
+		t.Errorf("unknown-node dry run modified state\n got: %s\nwant: %s", afterDryRun, raw)
+	}
+}
+
+func TestContextPruneRefusesStateExecutionMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := (&state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"ghost": {
+				ReservedMB:       2048,
+				ActiveTasks:      1,
+				ActiveExecs:      []string{"exec-1"},
+				ExecHeartbeatAt:  map[string]time.Time{"exec-1": time.Now().UTC()},
+				ExecOwnerPID:     map[string]int{"exec-1": os.Getpid()},
+				ExecOwnerSurface: map[string]string{"exec-1": "task-run"},
+			},
+		},
+		TaskHistory: []state.TaskExecutionRecord{{Node: "ghost"}},
+	}).Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&skills.Store{Skills: []skills.LearnedSkill{{
+		ID: "s1", Description: "ghost", SuccessCount: 1,
+		PreferredNode: "ghost", NodeCount: map[string]int{"ghost": 1},
+	}}}).Save(); err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, skillsBefore := seedStoreBytes(t)
+
+	var dryRun bytes.Buffer
+	if err := runContextPrune(&dryRun, []string{"ghost"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dryRun.String(), "Prune blocked") ||
+		!strings.Contains(dryRun.String(), "active_execs=1") ||
+		!strings.Contains(dryRun.String(), "--apply would be refused") {
+		t.Fatalf("dry run did not report the live-state block:\n%s", dryRun.String())
+	}
+
+	var applyOut bytes.Buffer
+	err := runContextPrune(&applyOut, []string{"ghost"}, true)
+	if err == nil || !strings.Contains(err.Error(), "refusing to prune") {
+		t.Fatalf("apply error = %v, want live-state refusal", err)
+	}
+	assertStoreBytes(t, stateBefore, skillsBefore)
+	matches, _ := filepath.Glob(filepath.Join(home, ".axis", "prune-backup-*"))
+	if len(matches) != 0 {
+		t.Fatalf("blocked prune wrote a backup despite making no changes: %v", matches)
+	}
+}
+
+func TestContextPruneRefusesLedgerReservation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := (&state.ClusterState{
+		Nodes:       map[string]state.NodeState{"ghost": {}},
+		TaskHistory: []state.TaskExecutionRecord{{Node: "ghost"}},
+	}).Save(); err != nil {
+		t.Fatal(err)
+	}
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledger.SetNodeCapacity("ghost", 8192)
+	if _, err := ledger.Reserve(reservation.Entry{
+		ID: "exec-1", Node: "ghost", OwnerExecID: "exec-1", RAMMB: 1024,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledgerBefore, err := os.ReadFile(reservation.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	err = runContextPrune(&buf, []string{"ghost"}, true)
+	if err == nil || !strings.Contains(err.Error(), "refusing to prune") {
+		t.Fatalf("apply error = %v, want ledger refusal", err)
+	}
+	if !strings.Contains(buf.String(), "ledger entries=1 reserved_mb=1024") {
+		t.Fatalf("ledger blocker missing from output:\n%s", buf.String())
+	}
+	stateAfter, _ := os.ReadFile(state.Path())
+	ledgerAfter, _ := os.ReadFile(reservation.Path())
+	if !bytes.Equal(stateBefore, stateAfter) {
+		t.Error("blocked ledger prune modified state.json")
+	}
+	if !bytes.Equal(ledgerBefore, ledgerAfter) {
+		t.Error("read-only ledger preflight modified ledger.json")
+	}
+}
+
+func seedStoreBytes(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	stateBytes, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillsBytes, err := os.ReadFile(skills.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stateBytes, skillsBytes
+}
+
+func assertStoreBytes(t *testing.T, wantState, wantSkills []byte) {
+	t.Helper()
+	gotState, err := os.ReadFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSkills, err := os.ReadFile(skills.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wantState, gotState) {
+		t.Errorf("state.json changed during blocked prune\n got: %s\nwant: %s", gotState, wantState)
+	}
+	if !bytes.Equal(wantSkills, gotSkills) {
+		t.Errorf("skills.json changed during blocked prune\n got: %s\nwant: %s", gotSkills, wantSkills)
+	}
+}
+
+func TestContextClearUsesStateLock(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := (&state.ClusterState{Nodes: map[string]state.NodeState{"node-a": {}}}).Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := persist.LockFile(state.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- runContextClear(&bytes.Buffer{})
+	}()
+	<-started
+
+	select {
+	case err := <-done:
+		t.Fatalf("clear bypassed the state lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("clear did not proceed after the state lock was released")
+	}
+	if _, err := os.Stat(state.Path()); !os.IsNotExist(err) {
+		t.Fatalf("state file survived clear: %v", err)
+	}
+}
+
+func TestContextClearPropagatesRemoveFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(state.Path(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state.Path(), "child"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	err := runContextClear(&buf)
+	if err == nil || !strings.Contains(err.Error(), "clear cluster state") {
+		t.Fatalf("clear error = %v, want propagated remove failure", err)
+	}
+	if strings.Contains(buf.String(), "Cleared cluster state") {
+		t.Fatalf("clear reported success after failure: %q", buf.String())
+	}
+}
+
+func TestBackupSnapshotsRemovesPartialDirectoryOnFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	_, err := backupSnapshots(storeSnapshot{path: ".", data: []byte("fixture")})
+	if err == nil {
+		t.Fatal("expected backup write failure")
+	}
+	matches, globErr := filepath.Glob(filepath.Join(home, ".axis", "prune-backup-*"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("partial backup directory survived failure: %v", matches)
 	}
 }

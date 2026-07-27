@@ -966,6 +966,12 @@ func TestPruneNodesRemovesUnknownNodeRecords(t *testing.T) {
 			"t1": {TaskPattern: "x", NodeName: "ghost"},
 			"t2": {TaskPattern: "y", NodeName: "node-a"},
 		},
+		Decisions: []string{
+			"ghost: run fixture",
+			"GHOST: retry fixture",
+			"node-a: build project",
+			"legacy free-form decision",
+		},
 	}
 
 	// targets = nodes to REMOVE
@@ -974,7 +980,7 @@ func TestPruneNodesRemovesUnknownNodeRecords(t *testing.T) {
 	if rep.Nodes != 1 || rep.Observations != 1 || rep.TaskHistory != 2 {
 		t.Fatalf("unexpected prune report: %+v", rep)
 	}
-	if rep.Failures != 1 || rep.Tombstones != 1 {
+	if rep.Failures != 1 || rep.Tombstones != 1 || rep.Decisions != 2 {
 		t.Fatalf("node-scoped failure records not pruned: %+v", rep)
 	}
 	if _, ok := s.Nodes["ghost"]; ok {
@@ -991,6 +997,11 @@ func TestPruneNodesRemovesUnknownNodeRecords(t *testing.T) {
 	}
 	if _, ok := s.Tombstones["t1"]; ok {
 		t.Error("ghost tombstone survived prune")
+	}
+	if len(s.Decisions) != 2 ||
+		s.Decisions[0] != "node-a: build project" ||
+		s.Decisions[1] != "legacy free-form decision" {
+		t.Errorf("decision history not pruned safely: %+v", s.Decisions)
 	}
 }
 
@@ -1013,6 +1024,51 @@ func TestPruneNodesKeepsEverythingWhenAllKnown(t *testing.T) {
 	}
 	if len(s.TaskHistory) != 1 {
 		t.Error("no-op prune removed history")
+	}
+}
+
+func TestPruneNodesRefusesExecutionState(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name string
+		node NodeState
+	}{
+		{"reserved RAM", NodeState{ReservedMB: 1024}},
+		{"active task count", NodeState{ActiveTasks: 1}},
+		{"active execution", NodeState{ActiveExecs: []string{"exec-1"}}},
+		{"reservation map", NodeState{ExecReservationsMB: map[string]int64{"exec-1": 1024}}},
+		{"heartbeat map", NodeState{ExecHeartbeatAt: map[string]time.Time{"exec-1": now}}},
+		{"owner PID map", NodeState{ExecOwnerPID: map[string]int{"exec-1": 123}}},
+		{"owner surface map", NodeState{ExecOwnerSurface: map[string]string{"exec-1": "task-run"}}},
+		{"owner label map", NodeState{ExecOwnerLabel: map[string]string{"exec-1": "build"}}},
+		{"origin map", NodeState{ExecOrigin: map[string]models.ExecutionOrigin{"exec-1": {}}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &ClusterState{
+				Nodes: map[string]NodeState{
+					"ghost": tc.node,
+					"old":   {},
+				},
+				TaskHistory: []TaskExecutionRecord{
+					{Node: "ghost"},
+					{Node: "old"},
+				},
+			}
+
+			rep := s.PruneNodes(map[string]bool{"ghost": true, "old": true})
+
+			if len(rep.Blocked) != 1 || rep.Blocked[0].Node != "ghost" {
+				t.Fatalf("expected ghost to block the prune, got %+v", rep.Blocked)
+			}
+			if !rep.Empty() {
+				t.Fatalf("blocked prune reported changes: %+v", rep)
+			}
+			if len(s.Nodes) != 2 || len(s.TaskHistory) != 2 {
+				t.Fatalf("blocked prune partially mutated state: %+v", s)
+			}
+		})
 	}
 }
 

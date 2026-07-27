@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -114,12 +115,94 @@ type PruneReport struct {
 	TaskHistory  int
 	Failures     int
 	Tombstones   int
+	Decisions    int
+	Blocked      []PruneBlock
 }
 
-// Empty reports whether the prune removed nothing.
+// PruneBlock describes live execution state that prevents a node prune.
+// TrackingRecords counts the per-execution maps in NodeState in addition to
+// ActiveExecs, so partially inconsistent state is still treated conservatively.
+type PruneBlock struct {
+	Node            string
+	ReservedMB      int64
+	ActiveTasks     int
+	ActiveExecs     int
+	TrackingRecords int
+}
+
+// Empty reports whether the prune removed nothing. Blocked nodes do not count
+// as changes: PruneNodes returns without mutating anything when Blocked is set.
 func (r PruneReport) Empty() bool {
 	return r.Nodes == 0 && r.Observations == 0 && r.TaskHistory == 0 &&
-		r.Failures == 0 && r.Tombstones == 0
+		r.Failures == 0 && r.Tombstones == 0 && r.Decisions == 0
+}
+
+// DecisionNodeName extracts the node prefix written by RecordPlacement.
+// Free-form legacy entries without the "node: task" shape are left untouched.
+func DecisionNodeName(decision string) (string, bool) {
+	node, _, ok := strings.Cut(decision, ":")
+	node = strings.TrimSpace(node)
+	return node, ok && node != ""
+}
+
+func normalizedNodeTargets(targets map[string]bool) map[string]bool {
+	norm := make(map[string]bool, len(targets))
+	for name := range targets {
+		norm[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	return norm
+}
+
+func matchesNodeTarget(norm map[string]bool, name string) bool {
+	return name != "" && norm[strings.ToLower(strings.TrimSpace(name))]
+}
+
+func nodeStateHasExecutionState(ns NodeState) bool {
+	return ns.ReservedMB != 0 ||
+		ns.ActiveTasks != 0 ||
+		len(ns.ActiveExecs) > 0 ||
+		len(ns.ExecReservationsMB) > 0 ||
+		len(ns.ExecHeartbeatAt) > 0 ||
+		len(ns.ExecOwnerPID) > 0 ||
+		len(ns.ExecOwnerSurface) > 0 ||
+		len(ns.ExecOwnerLabel) > 0 ||
+		len(ns.ExecOrigin) > 0
+}
+
+// PruneBlockers returns targeted nodes that still carry execution or
+// reservation state. A caller must clear or release that state before pruning;
+// absence from nodes.yaml is not evidence that an execution has stopped.
+func (s *ClusterState) PruneBlockers(targets map[string]bool) []PruneBlock {
+	if s == nil || len(targets) == 0 {
+		return nil
+	}
+	norm := normalizedNodeTargets(targets)
+	var blocked []PruneBlock
+	for name, ns := range s.Nodes {
+		if !matchesNodeTarget(norm, name) || !nodeStateHasExecutionState(ns) {
+			continue
+		}
+		blocked = append(blocked, PruneBlock{
+			Node:        name,
+			ReservedMB:  ns.ReservedMB,
+			ActiveTasks: ns.ActiveTasks,
+			ActiveExecs: len(ns.ActiveExecs),
+			TrackingRecords: len(ns.ExecReservationsMB) +
+				len(ns.ExecHeartbeatAt) +
+				len(ns.ExecOwnerPID) +
+				len(ns.ExecOwnerSurface) +
+				len(ns.ExecOwnerLabel) +
+				len(ns.ExecOrigin),
+		})
+	}
+	sort.Slice(blocked, func(i, j int) bool {
+		left, right := strings.ToLower(blocked[i].Node), strings.ToLower(blocked[j].Node)
+		if left == right {
+			return blocked[i].Node < blocked[j].Node
+		}
+		return left < right
+	})
+	return blocked
 }
 
 // PruneNodes removes state records belonging to the named target nodes.
@@ -134,13 +217,14 @@ func (s *ClusterState) PruneNodes(targets map[string]bool) PruneReport {
 	if len(targets) == 0 {
 		return rep
 	}
-
-	norm := make(map[string]bool, len(targets))
-	for name := range targets {
-		norm[strings.ToLower(strings.TrimSpace(name))] = true
+	rep.Blocked = s.PruneBlockers(targets)
+	if len(rep.Blocked) > 0 {
+		return rep
 	}
+
+	norm := normalizedNodeTargets(targets)
 	hit := func(name string) bool {
-		return name != "" && norm[strings.ToLower(strings.TrimSpace(name))]
+		return matchesNodeTarget(norm, name)
 	}
 
 	for name := range s.Nodes {
@@ -183,6 +267,17 @@ func (s *ClusterState) PruneNodes(targets map[string]bool) PruneReport {
 			rep.Tombstones++
 		}
 	}
+
+	keptDecisions := s.Decisions[:0]
+	for _, decision := range s.Decisions {
+		node, ok := DecisionNodeName(decision)
+		if ok && hit(node) {
+			rep.Decisions++
+			continue
+		}
+		keptDecisions = append(keptDecisions, decision)
+	}
+	s.Decisions = keptDecisions
 
 	return rep
 }
