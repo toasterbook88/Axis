@@ -18,8 +18,8 @@ import (
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
-	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
@@ -177,7 +177,6 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 			return placementDecisionTool(ctx, req, cache)
 		},
 	)
-
 
 	s.AddTool(
 		mcpproto.NewTool(
@@ -497,12 +496,12 @@ func simulateWorkloadPlanTool(ctx context.Context, req mcpproto.CallToolRequest,
 	}
 
 	out := map[string]any{
-		"best_node":          best.Node,
-		"fit_score":          best.FitScore,
-		"ok":                 best.OK,
-		"reasoning":          best.Reasoning,
-		"ranked_candidates":  explained,
-		"warnings":           snapCopy.Warnings,
+		"best_node":         best.Node,
+		"fit_score":         best.FitScore,
+		"ok":                best.OK,
+		"reasoning":         best.Reasoning,
+		"ranked_candidates": explained,
+		"warnings":          snapCopy.Warnings,
 	}
 	return mcpproto.NewToolResultJSON(out)
 }
