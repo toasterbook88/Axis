@@ -463,3 +463,104 @@ func TestNewServerWiresDaemonCacheInvalidation(t *testing.T) {
 		t.Fatalf("expected cache invalidation to trigger fresh fetch, got %d", fetchCount)
 	}
 }
+
+func TestVerifyExecutionSafetyToolVetoesDestructive(t *testing.T) {
+	result, err := verifyExecutionSafetyTool(context.Background(), toolRequest(map[string]any{
+		"command": "rm -rf /tmp/important-dir",
+	}))
+	if err != nil {
+		t.Fatalf("verifyExecutionSafetyTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success result, got error: %s", toolResultText(t, result))
+	}
+	out, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %#v", result.StructuredContent)
+	}
+	if out["verdict"] != "VETO" {
+		t.Fatalf("expected VETO for rm -rf, got %v", out["verdict"])
+	}
+	if out["program"] != "rm" {
+		t.Fatalf("expected program rm, got %v", out["program"])
+	}
+}
+
+func TestVerifyExecutionSafetyToolAllowsReadOnly(t *testing.T) {
+	result, err := verifyExecutionSafetyTool(context.Background(), toolRequest(map[string]any{
+		"command": "ls -la /tmp",
+	}))
+	if err != nil {
+		t.Fatalf("verifyExecutionSafetyTool: %v", err)
+	}
+	out, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %#v", result.StructuredContent)
+	}
+	if out["verdict"] != "SAFE" {
+		t.Fatalf("expected SAFE for ls, got %v", out["verdict"])
+	}
+}
+
+func TestVerifyExecutionSafetyToolDefaultsSurfaceToShell(t *testing.T) {
+	result, err := verifyExecutionSafetyTool(context.Background(), toolRequest(map[string]any{
+		"command": "git push --force origin main",
+	}))
+	if err != nil {
+		t.Fatalf("verifyExecutionSafetyTool: %v", err)
+	}
+	out, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %#v", result.StructuredContent)
+	}
+	if out["verdict"] != "PROMPT" {
+		t.Fatalf("expected PROMPT for git push --force, got %v", out["verdict"])
+	}
+	if out["surface"] != "shell" {
+		t.Fatalf("expected default surface shell, got %v", out["surface"])
+	}
+}
+
+func TestSimulateWorkloadPlanReturnsRankedCandidates(t *testing.T) {
+	restore := stubMCPRuntime(t, &runtimectx.Context{
+		Snapshot: &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				mcpNode("alpha", "alpha.internal", 8192, 8192, "low", "git"),
+				mcpNode("beta", "beta.internal", 16384, 16384, "low", "git"),
+			},
+		},
+		State: &state.ClusterState{},
+	}, nil)
+	defer restore()
+
+	result, err := simulateWorkloadPlanTool(context.Background(), toolRequest(map[string]any{
+		"task_description": "analyze a git repo",
+	}), NewSessionCache(30*time.Second, false, ""))
+	if err != nil {
+		t.Fatalf("simulateWorkloadPlanTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success result, got error: %s", toolResultText(t, result))
+	}
+	out, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %#v", result.StructuredContent)
+	}
+	if out["best_node"] == nil || out["best_node"] == "" {
+		t.Fatalf("expected non-empty best_node, got %v", out["best_node"])
+	}
+	ranked, ok := out["ranked_candidates"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected ranked_candidates slice, got %T", out["ranked_candidates"])
+	}
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 ranked candidates, got %d", len(ranked))
+	}
+	// Every ranked candidate must carry a fit_score.
+	for _, c := range ranked {
+		if _, hasFit := c["fit_score"]; !hasFit {
+			t.Fatalf("ranked candidate missing fit_score: %#v", c)
+		}
+	}
+}
