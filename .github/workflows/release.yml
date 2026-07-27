@@ -52,7 +52,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0  # GoReleaser needs full history for changelog
 
@@ -111,7 +111,7 @@ jobs:
       version: ${{ steps.extract.outputs.version }}
       is_prerelease: ${{ steps.extract.outputs.is_prerelease }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
 
       - name: Extract version from tag and source
         id: extract
@@ -178,7 +178,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
 
       - name: Set up Go
         uses: actions/setup-go@v7.0.0
@@ -201,7 +201,7 @@ jobs:
     permissions:
       contents: write  # GoReleaser needs write to create releases
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -275,7 +275,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
 
       - name: Set up Go
         uses: actions/setup-go@v7.0.0
