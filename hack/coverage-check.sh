@@ -20,6 +20,7 @@ export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
 
 axis_test_home="$(mktemp -d "${TMPDIR:-/tmp}/axis-test-home.XXXXXX")"
 export HOME="$axis_test_home"
+unset AXIS_HOME
 
 # Single EXIT trap for the whole script: a second `trap ... EXIT` replaces this
 # one rather than adding to it. total_profile is created here for that reason.
@@ -61,9 +62,11 @@ package_coverage() {
   echo "$cov"
 }
 
-if ! go test ./... -coverprofile="$total_profile" >/dev/null; then
-  echo "ERROR: go test ./... -coverprofile failed. Re-running tests to show failure logs:" >&2
-  go test ./... -coverprofile="$total_profile" -count=1
+PKG_LIST=$(go list ./... | grep -v '/examples/' || true)
+
+if ! go test $PKG_LIST -coverprofile="$total_profile" >/dev/null; then
+  echo "ERROR: go test $PKG_LIST -coverprofile failed. Re-running tests to show failure logs:" >&2
+  go test $PKG_LIST -coverprofile="$total_profile" -count=1
   exit 1
 fi
 

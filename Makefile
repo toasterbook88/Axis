@@ -47,14 +47,14 @@ test:
 	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
 	trap 'rm -rf "$$d"' EXIT; \
 	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
-	HOME="$$d" go test ./... -count=1 -timeout 180s
+	HOME="$$d" AXIS_HOME= go test ./... -count=1 -timeout 180s
 	python3 -B -m unittest discover -s docs/superpowers/tools -p '*_test.py'
 
 test-race:
 	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
 	trap 'rm -rf "$$d"' EXIT; \
 	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
-	HOME="$$d" go test ./... -count=1 -timeout 180s -race
+	HOME="$$d" AXIS_HOME= go test -race ./... -count=1 -timeout 180s
 
 lint:
 	@unformatted=$$(gofmt -l .) || exit $$?; \
