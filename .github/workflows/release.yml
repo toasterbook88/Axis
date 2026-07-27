@@ -67,7 +67,7 @@ jobs:
       - name: Verify go.sum
         run: go mod verify
 
-      - name: Lint (gofmt + go vet)
+      - name: Lint (gofmt + go vet + staticcheck)
         run: make lint
 
       - name: Run tests

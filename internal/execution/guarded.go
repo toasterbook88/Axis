@@ -1195,16 +1195,27 @@ func recordSuccess(skillStore *skills.Store, description, command, node string) 
 	if skillStore == nil {
 		return
 	}
+	// Mutate the in-memory store so callers holding it see the update, and
+	// apply the same mutation to the locked on-disk copy. skills.Update
+	// reloads from disk inside the lock, so a stale or empty in-memory store
+	// can no longer truncate the operator's file.
 	skillStore.RecordSuccess(description, command, node)
-	_ = skillStore.Save()
+	_ = skills.Update(func(s *skills.Store) error {
+		s.RecordSuccess(description, command, node)
+		return nil
+	})
 }
 
 func recordFailure(skillStore *skills.Store, description string, exitCode int) {
 	if skillStore == nil {
 		return
 	}
-	skillStore.RecordFailure(description, fmt.Sprintf("failed with code %d", exitCode))
-	_ = skillStore.Save()
+	reason := fmt.Sprintf("failed with code %d", exitCode)
+	skillStore.RecordFailure(description, reason)
+	_ = skills.Update(func(s *skills.Store) error {
+		s.RecordFailure(description, reason)
+		return nil
+	})
 }
 
 func notifyStateChange(ctx context.Context, req GuardedExecutionRequest, trigger string, resp GuardedExecutionResult) {

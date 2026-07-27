@@ -71,6 +71,9 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	if !handled {
 		t.Error("expected /context to be handled")
 	}
+	if shouldExit {
+		t.Error("/context must not exit the REPL")
+	}
 	if !strings.Contains(errW.String(), "Tokens used:") {
 		t.Errorf("expected context output, got %q", errW.String())
 	}
@@ -88,6 +91,9 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	if !handled {
 		t.Error("expected /clear to be handled")
 	}
+	if shouldExit {
+		t.Error("/clear must not exit the REPL")
+	}
 	for _, msg := range a.Conversation().Messages() {
 		if msg.Role != chat.RoleSystem {
 			t.Errorf("expected conversation to be cleared of non-system messages, found role %q", msg.Role)
@@ -96,7 +102,9 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 
 	// Test /model <name> unknown is rejected (no silent synthetic local)
 	errW.Reset()
-	handled, shouldExit, err = handleREPLSlashCommand(session, "/model my-model-abc")
+	// shouldExit is not asserted here: the command errors, and the exit
+	// signal is not part of the contract on the error path.
+	handled, _, err = handleREPLSlashCommand(session, "/model my-model-abc")
 	if err == nil {
 		t.Fatal("expected error for unknown model name")
 	}

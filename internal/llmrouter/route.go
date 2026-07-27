@@ -203,11 +203,8 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			reasoning = append(reasoning, fmt.Sprintf("backend %q healthy; model %q not in list — still selecting (hub may lazy-load)", name, model))
 		}
 
-		rest := remaining(prefer, i+1)
 		// Only list remaining that were preferred after this one.
-		for _, f := range rest {
-			fallbacks = append(fallbacks, f)
-		}
+		fallbacks = append(fallbacks, remaining(prefer, i+1)...)
 
 		return RoleRouteDecision{
 			Role:         roleName,

@@ -685,6 +685,7 @@ func TestRemoteTrapIsShellSafeWithAdversarialPaths(t *testing.T) {
 }
 
 func TestRunRemoteUsesVariableBasedTrap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	var capturedCmds []string
 	prev := NewRemoteExecutor
 	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {

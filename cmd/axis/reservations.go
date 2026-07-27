@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -437,9 +436,7 @@ func getBestSnapshot(ctx context.Context, cacheAddr string) (*models.ClusterSnap
 		return snap, nil
 	}
 
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".axis", "snapshot.json")
-	if data, err := os.ReadFile(path); err == nil {
+	if data, err := os.ReadFile(daemon.DefaultSnapshotPath()); err == nil {
 		var snap models.ClusterSnapshot
 		if err := json.Unmarshal(data, &snap); err == nil {
 			return &snap, nil

@@ -731,7 +731,6 @@ func runMCPClientInteractive(ctx context.Context, in io.Reader, out io.Writer) e
 			server := ""
 			if len(args) >= 2 && args[0] == "--server" {
 				server = args[1]
-				args = args[2:]
 			}
 			tools := reg.ListAllTools()
 			for _, te := range tools {
@@ -744,7 +743,6 @@ func runMCPClientInteractive(ctx context.Context, in io.Reader, out io.Writer) e
 			server := ""
 			if len(args) >= 2 && args[0] == "--server" {
 				server = args[1]
-				args = args[2:]
 			}
 			resources := reg.ListAllResources()
 			for _, re := range resources {
@@ -757,7 +755,6 @@ func runMCPClientInteractive(ctx context.Context, in io.Reader, out io.Writer) e
 			server := ""
 			if len(args) >= 2 && args[0] == "--server" {
 				server = args[1]
-				args = args[2:]
 			}
 			prompts := reg.ListAllPrompts()
 			for _, pe := range prompts {

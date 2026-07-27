@@ -9,15 +9,25 @@ import (
 )
 
 // AutoDiscoverSkills turns every discovered CLI on a node into a reusable skill template.
+//
+// The append happens inside Update, so discovery serializes against the other
+// skills writers instead of racing them with an unlocked Save.
 func AutoDiscoverSkills(ctx context.Context, nodes []models.NodeFacts) *Store {
-	s, err := Load()
-	if s == nil {
-		s = newStore()
+	result := newStore()
+	if err := Update(func(s *Store) error {
+		discoverInto(s, nodes)
+		result = s
+		return nil
+	}); err != nil {
+		// Persisting failed. Still return what discovery would have produced,
+		// so callers get a usable in-memory store as they did before.
+		result = newStore()
+		discoverInto(result, nodes)
 	}
-	if err != nil && s == nil {
-		return newStore()
-	}
+	return result
+}
 
+func discoverInto(s *Store, nodes []models.NodeFacts) {
 	for _, n := range nodes {
 		if n.Tools == nil {
 			continue
@@ -49,9 +59,6 @@ func AutoDiscoverSkills(ctx context.Context, nodes []models.NodeFacts) *Store {
 			s.Skills = append(s.Skills, skill)
 		}
 	}
-
-	_ = s.Save()
-	return s
 }
 
 func alreadyKnown(s *Store, name string) bool {

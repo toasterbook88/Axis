@@ -20,6 +20,7 @@ import (
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/scripts"
@@ -860,8 +861,7 @@ func taskLogsCmd() *cobra.Command {
 			if strings.ContainsAny(execID, "/\\") || strings.Contains(execID, "..") {
 				return fmt.Errorf("invalid execution ID: %q", execID)
 			}
-			home, _ := os.UserHomeDir()
-			logDir := filepath.Join(home, ".axis", "logs")
+			logDir := persist.AxisPath("logs")
 
 			logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
 			if _, err := os.Stat(logPath); os.IsNotExist(err) {

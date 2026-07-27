@@ -338,10 +338,8 @@ func agentCmd() *cobra.Command {
 			a = agent.New(cfg)
 
 			// Resume previous conversation if requested.
-			historyPath, err := chat.PersistPath("agent")
-			if err != nil {
-				fmt.Fprintf(errW, "warning: cannot determine history path: %v\n", err)
-			} else if resume {
+			historyPath := chat.PersistPath("agent")
+			if resume {
 				if err := a.Conversation().LoadFromFile(historyPath); err != nil {
 					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
 				} else if n := a.Conversation().HistoryCount(); n > 0 {
