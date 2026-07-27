@@ -66,7 +66,10 @@ The live repo currently contains:
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 - Shell-quoting-safe remote cleanup traps: variable assignment pattern (`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`) eliminates nested quoting interaction; adversarial test suite covers spaces, quotes, dollar signs, backticks, semicolons
 - `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated
-- Internal library packages with scaffolding not wired into the CLI operator path: `internal/mesh/` (gossip peer discovery, HMAC-SHA256 auth), `internal/reservation/` (double-entry ledger, wired into task placement as library, no standalone CLI command), `internal/safety/structured.go` (parsed command analysis, learned approvals disabled), `internal/api/v2.go` (active read routes + explicit 501 stubs for unimplemented endpoints)
+- `internal/mesh/` is live: `axis serve` starts daemon mesh watching when discovery is enabled (the default), with diagnostics through `axis mesh`, daemon `/mesh`, and API `/v2/mesh`
+- `internal/reservation/` is live: its ledger backs guarded execution reserve/release, snapshot reservation overlays, `axis reservations`, agent reservation inspection, and API `/v2/reservations`
+- `internal/safety/structured.go` is included in default builds and used by both `safety.Check` and guarded execution; learned approvals remain disabled
+- `internal/api/v2.go` serves active read, reservation, and mesh routes alongside explicit 501 stubs for endpoints that remain unimplemented
 - `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
 - Unified MCP client (`axis mcp client`) with per-server connection caching, retry, batch execution, interactive REPL, placement-aware auto-routing, and progress notifications
 
@@ -247,9 +250,12 @@ V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
-3. Push resident-model VRAM peak probes where truth-backed process metrics are available; the multi-runtime resident-model view (Ollama + llama-server + MLX) is now live.
-4. Refine reservation accounting into a clearer cluster RAM balancing model.
-5. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
+3. Finish the open truth-integrity containment in order: correct Ollama running-state detection (A1/C4), stop reporting confidence for unknown classifications (C2), then remove the unsupported pairwise topology rendering (C1).
+4. Implement the accepted topology truth contract with snapshot vantage metadata and a vantage-labeled reachability view; only then fix Darwin CIDR collection (A2).
+5. Implement the placement feasibility/objective contract (B2/B3/B4) before expanding workload taxonomy.
+6. Push resident-model VRAM peak probes where truth-backed process metrics are available; the multi-runtime resident-model view (Ollama + llama-server + MLX) is now live.
+7. Refine reservation accounting into a clearer cluster RAM balancing model.
+8. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.
 
 ## Decommissioned
 

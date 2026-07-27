@@ -276,6 +276,37 @@ Should precede taxonomy expansion. Classifier accuracy is independently measurab
 
 ---
 
+## Containment status — 2026-07-27
+
+PR #256 (`bac1561`) landed the first containment tranche, not the complete
+implementation plan.
+
+- **C3 / C5 isolation — fixed in repository workflows.** The Makefile test,
+  race, and coverage paths run under a disposable `HOME` with Go caches pinned
+  outside it. The suite no longer writes AXIS stores under the operator's real
+  home when run through the documented Makefile targets.
+- **C3 cleanup tooling — landed.** `axis context prune` can remove explicitly
+  selected fixture-node records from `state.json` and `skills.json`, defaults
+  to a dry run, backs up and rolls back both stores, serializes writers, and
+  refuses nodes carrying execution state or reservation-ledger entries.
+  Whether an operator's previously contaminated stores have actually been
+  cleaned is host-local state and is not asserted here.
+- **A1 / C4 — open.** `OllamaDiscoveryScript` still uses the self-matching
+  `pgrep -f "$OLLAMA_BIN"` path and the malformed inline `running` expression.
+- **C2 — open.** `reflexFallback` still emits confidence `1.0` for an unknown
+  classification and still incorporates raw upstream error text.
+- **C1 — open.** `axis summary` still draws pairwise `CLUSTER TOPOLOGY` links
+  from matching subnet strings. The removal-only containment task must land
+  before the vantage-labeled reachability implementation.
+- **C5 historical remediation — open and store-specific.** Stores polluted
+  before isolation require explicit inspection and cleanup; this cannot be
+  inferred from repository state or folded into `axis context prune`.
+
+A2, A3, A4, B1–B4, and the reachability half of C1 also remain open. Their
+accepted contracts are design material until backed by code and tests.
+
+---
+
 ## What this document is not
 
 - Not a specification. No interface or schema is defined here.
