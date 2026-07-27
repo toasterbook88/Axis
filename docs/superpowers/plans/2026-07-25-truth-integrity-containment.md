@@ -8,6 +8,23 @@
 
 **Tech Stack:** Go 1.26.1+, standard library, `gopkg.in/yaml.v3`. Tests use the stdlib `testing` package. Shell probes are POSIX `bash` executed locally and over SSH.
 
+## Implementation Status
+
+Status as of 2026-07-27, after PR #256 (`bac1561`) merged:
+
+| Task | Status | Repository evidence |
+| --- | --- | --- |
+| 1 — isolate tests from operator state | Landed | Makefile test, race, and coverage paths run with a disposable `HOME`; persistent-path tests are isolated |
+| 2 — add scoped state/skills remediation | Landed | `axis context prune` is dry-run by default, lock-backed, backup/rollback protected, and refuses live state or ledger reservations |
+| 3 — fix Ollama running-state probe | Open | `OllamaDiscoveryScript` still uses `pgrep -f "$OLLAMA_BIN"` and the quoted inline `running` expression |
+| 4 — stop certainty on non-classifications | Open | `reflexFallback` still returns `Confidence: 1.0` for `ClassUnknown` and includes the upstream error text |
+| 5 — remove inferred topology edges | Open | `axis summary` still renders `CLUSTER TOPOLOGY` from matching subnet strings |
+| 6 — full-plan verification and closure | Open | Cannot complete until Tasks 3–5 land |
+
+The checkboxes below remain the execution recipe, not a claim that every step
+has run. Operator-local cleanup of stores contaminated before Task 1 is also
+not repository truth and must be verified on each affected host.
+
 ## Global Constraints
 
 - Go 1.26.1+ required; `go.mod` is authoritative for the minimum.
