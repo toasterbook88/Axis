@@ -121,7 +121,7 @@ internal/transport/   SSH execution layer (host-key verification must stay on)
 ```text
 internal/daemon/      Background snapshot refresh, in-memory cache
 internal/api/         Optional local HTTP API (axis serve)
-internal/mcp/         MCP server (axis mcp serve): 18 tools (15 read-only
+internal/mcp/         MCP server (axis mcp serve): 20 tools (17 read-only
                       diagnostics + 3 advisory lease primitives); see
                       docs/runbooks/mcp-network-tools.md for the full list
 internal/chat/        Structured Ollama /api/chat client (subordinate to facts)
