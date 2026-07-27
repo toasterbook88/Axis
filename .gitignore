@@ -73,3 +73,7 @@ axis-current
 .obsidian/
 *.base
 *.canvas
+
+# Aider chat history (local agent scratch, not source)
+.aider*
+.aider.tags.cache.v4/
