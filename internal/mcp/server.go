@@ -18,6 +18,7 @@ import (
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
@@ -174,6 +175,47 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 		),
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
 			return placementDecisionTool(ctx, req, cache)
+		},
+	)
+
+
+	s.AddTool(
+		mcpproto.NewTool(
+			"verify_execution_safety",
+			mcpproto.WithDescription("Evaluate a proposed command against destructive-command rules without running it. Returns SAFE / PROMPT / VETO plus matched rule and reasons."),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+			mcpproto.WithString(
+				"command",
+				mcpproto.Required(),
+				mcpproto.Description("Raw command string to evaluate"),
+			),
+			mcpproto.WithString(
+				"surface",
+				mcpproto.Description("Execution surface: shell, task, http (defaults to shell)"),
+			),
+		),
+		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			return verifyExecutionSafetyTool(ctx, req)
+		},
+	)
+
+	s.AddTool(
+		mcpproto.NewTool(
+			"simulate_workload_plan",
+			mcpproto.WithDescription("Dry-run placement ranker: returns best node, fit score, and ranked candidates for a task description without reserving or executing."),
+			mcpproto.WithReadOnlyHintAnnotation(true),
+			mcpproto.WithString(
+				"task_description",
+				mcpproto.Required(),
+				mcpproto.Description("Task description to rank nodes against"),
+			),
+			mcpproto.WithBoolean(
+				"cached",
+				mcpproto.Description("Use the local daemon snapshot cache when available (default true)"),
+			),
+		),
+		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+			return simulateWorkloadPlanTool(ctx, req, cache)
 		},
 	)
 
@@ -380,6 +422,89 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, ca
 	decision := placement.SelectBestNode(placement.InferRequirements(desc), snapCopy.Nodes, st)
 	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snapCopy.Warnings)
 	return mcpproto.NewToolResultJSON(decision)
+}
+
+// verifyExecutionSafetyTool evaluates a raw command against the structured
+// safety rule set without executing it. It maps the internal safety.Verdict
+// (allow/deny/prompt) to the operator-facing SAFE/PROMPT/VETO vocabulary.
+func verifyExecutionSafetyTool(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
+	cmd, err := req.RequireString("command")
+	if err != nil {
+		return mcpproto.NewToolResultError(err.Error()), nil
+	}
+	surface, _ := req.RequireString("surface")
+	if strings.TrimSpace(surface) == "" {
+		surface = "shell"
+	}
+
+	eval := safety.NewEvaluator(safety.DefaultRuleSet())
+	dec := eval.Evaluate(cmd, surface)
+
+	verdict := "SAFE"
+	switch dec.Verdict {
+	case safety.VerdictDeny:
+		verdict = "VETO"
+	case safety.VerdictPrompt:
+		verdict = "PROMPT"
+	}
+
+	out := map[string]any{
+		"verdict":      verdict,
+		"category":     string(dec.Category),
+		"program":      dec.Program,
+		"matched_rule": dec.MatchedRule,
+		"reasons":      dec.Reasons,
+		"raw_cmd":      dec.RawCmd,
+		"surface":      surface,
+	}
+	return mcpproto.NewToolResultJSON(out)
+}
+
+// simulateWorkloadPlanTool runs the placement ranker in dry-run mode: it
+// returns the best node, fit score, and the full ranked candidate list with
+// per-node reasoning, without reserving or executing anything.
+func simulateWorkloadPlanTool(ctx context.Context, req mcpproto.CallToolRequest, cache *SessionCache) (*mcpproto.CallToolResult, error) {
+	desc, err := req.RequireString("task_description")
+	if err != nil {
+		return mcpproto.NewToolResultError(err.Error()), nil
+	}
+
+	snap, st, err := cache.GetPlacementInputs(ctx, GetSessionID(ctx))
+	if err != nil {
+		return mcpproto.NewToolResultError(err.Error()), nil
+	}
+
+	snapCopy := daemon.CloneSnapshot(snap)
+	snapshotview.ApplyReservationView(snapCopy, st, nil)
+
+	reqs := placement.InferRequirements(desc)
+	best := placement.SelectBestNode(reqs, snapCopy.Nodes, st)
+
+	// Build the ranked candidate list with fit scores, mirroring what the
+	// selector internally considered. FilterCandidates prunes unsuitable
+	// nodes; RankCandidates orders the survivors.
+	candidates := placement.FilterCandidates(reqs, snapCopy.Nodes, st)
+	ranked := placement.RankCandidates(candidates, reqs, st)
+	explained := make([]map[string]any, 0, len(ranked))
+	for _, n := range ranked {
+		explained = append(explained, map[string]any{
+			"node":        n.Name,
+			"fit_score":   placement.ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs),
+			"is_local":    models.IsLocalNode(n),
+			"alloc_mb":    n.RAMAllocatableMB,
+			"reserved_mb": n.RAMReservedMB,
+		})
+	}
+
+	out := map[string]any{
+		"best_node":          best.Node,
+		"fit_score":          best.FitScore,
+		"ok":                 best.OK,
+		"reasoning":          best.Reasoning,
+		"ranked_candidates":  explained,
+		"warnings":           snapCopy.Warnings,
+	}
+	return mcpproto.NewToolResultJSON(out)
 }
 
 func axisHealthTool(ctx context.Context, req mcpproto.CallToolRequest, cache *SessionCache) (*mcpproto.CallToolResult, error) {
