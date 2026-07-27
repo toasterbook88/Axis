@@ -20,6 +20,7 @@ export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
 
 axis_test_home="$(mktemp -d "${TMPDIR:-/tmp}/axis-test-home.XXXXXX")"
 export HOME="$axis_test_home"
+unset AXIS_HOME
 
 # Single EXIT trap for the whole script: a second `trap ... EXIT` replaces this
 # one rather than adding to it. total_profile is created here for that reason.
