@@ -435,11 +435,11 @@ type PairwiseLinkMatrix struct {
 
 // LinkMetric describes a directional source→target network edge.
 type LinkMetric struct {
-	SourceNode      string        `json:"source_node" yaml:"source_node"`
-	TargetNode      string        `json:"target_node" yaml:"target_node"`
-	OverlayType     string        `json:"overlay_type" yaml:"overlay_type"` // e.g. "lan", "tailscale", "wireguard", "thunderbolt"
-	RTTLatencyP95   time.Duration `json:"rtt_latency_p95" yaml:"rtt_latency_p95"`
-	ThroughputMBps  float64       `json:"throughput_mbps,omitempty" yaml:"throughput_mbps,omitempty"`
+	SourceNode     string        `json:"source_node" yaml:"source_node"`
+	TargetNode     string        `json:"target_node" yaml:"target_node"`
+	OverlayType    string        `json:"overlay_type" yaml:"overlay_type"` // e.g. "lan", "tailscale", "wireguard", "thunderbolt"
+	RTTLatencyP95  time.Duration `json:"rtt_latency_p95" yaml:"rtt_latency_p95"`
+	ThroughputMBps float64       `json:"throughput_mbps,omitempty" yaml:"throughput_mbps,omitempty"`
 }
 
 // --- Phase 2: Task Placement ---

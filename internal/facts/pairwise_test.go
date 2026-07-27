@@ -84,7 +84,7 @@ func TestBuildPairwiseLinkMatrixSkipsLocalAndEmptyTargets(t *testing.T) {
 	// skipped and empty-target nodes are skipped (no panic, no crash).
 	nodes := []models.NodeFacts{
 		{Name: "local", SSHTarget: "127.0.0.1"},
-		{Name: "local-self", SSHTarget: ""}, // empty target, skipped
+		{Name: "local-self", SSHTarget: ""},           // empty target, skipped
 		{Name: "unreachable", SSHTarget: "192.0.2.1"}, // TEST-NET, will fail ping
 	}
 	m := BuildPairwiseLinkMatrix(context.Background(), "local", nodes)

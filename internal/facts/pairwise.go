@@ -81,7 +81,8 @@ func probeRTT(ctx context.Context, host string) (time.Duration, bool) {
 
 // parseRTTP95 extracts the worst-case (max over 4 samples ≈ P95) RTT from a
 // ping summary line of the form:
-//   rtt min/avg/max/mdev = 0.123/0.456/0.789/0.012 ms
+//
+//	rtt min/avg/max/mdev = 0.123/0.456/0.789/0.012 ms
 func parseRTTP95(out string) (time.Duration, bool) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
