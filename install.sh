@@ -128,6 +128,20 @@ is_package_managed() {
 # upgrade of that manager would overwrite or orphan the binary. Both the literal
 # and the resolved path are checked — a symlink such as
 # /usr/local/bin -> /opt/homebrew/bin would otherwise slip past a literal match.
+# Reject parent traversal outright. An unresolved ".." suffix is reattached
+# literally by the builtin fallback, so "/tmp/new/../../opt/homebrew/bin" is not
+# recognised as package-managed even though mkdir -p then lands there.
+# Normalising ".." correctly around symlinks is subtle and an install
+# destination never needs it, so refuse rather than try to interpret it.
+case "/$AXIS_INSTALL_DIR/" in
+    */../*)
+        echo "Error: AXIS_INSTALL_DIR must not contain '..' components."
+        echo "Given: $AXIS_INSTALL_DIR"
+        echo "Use the direct path to the destination directory."
+        exit 1
+        ;;
+esac
+
 if AXIS_INSTALL_DIR_REAL=$(canonicalize_path "$AXIS_INSTALL_DIR"); then
     if is_package_managed "$AXIS_INSTALL_DIR" || is_package_managed "$AXIS_INSTALL_DIR_REAL"; then
         echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
@@ -219,10 +233,25 @@ if [ "$AXIS_VERSION" = "latest" ]; then
     pinned_command_hint "$TAG"
 fi
 
-# Scope decides cleanup direction; resolved here so --dry-run can report it.
+# Every privileged operation from here on uses the resolved physical path.
+#
+# Validating AXIS_INSTALL_DIR_REAL and then writing through AXIS_INSTALL_DIR
+# leaves a window in which a symlink component can be repointed between the
+# check and `sudo mkdir` / `mktemp` / the promotion rename. Switching now means
+# the package-manager decision and the install destination refer to the same
+# object. The original value is kept for display only.
+AXIS_INSTALL_DIR_DISPLAY="$AXIS_INSTALL_DIR"
+AXIS_INSTALL_DIR="$AXIS_INSTALL_DIR_REAL"
+if [ "$AXIS_INSTALL_DIR_DISPLAY" != "$AXIS_INSTALL_DIR" ]; then
+    echo "Resolved install directory: $AXIS_INSTALL_DIR_DISPLAY -> $AXIS_INSTALL_DIR"
+fi
+
+# Scope decides cleanup direction. Compare physical against physical: a symlinked
+# home would otherwise misclassify a user-local install as system-wide.
+HOME_REAL=$(canonicalize_path "$HOME" 2>/dev/null) || HOME_REAL="$HOME"
 case "$AXIS_INSTALL_DIR/" in
-    "$HOME"/*) INSTALL_SCOPE="user" ;;
-    *)         INSTALL_SCOPE="system" ;;
+    "$HOME_REAL"/*|"$HOME"/*) INSTALL_SCOPE="user" ;;
+    *)                        INSTALL_SCOPE="system" ;;
 esac
 
 if [ "$AXIS_DRY_RUN" = "1" ]; then
@@ -234,7 +263,8 @@ if [ "$AXIS_DRY_RUN" = "1" ]; then
     echo "  platform      : $OS-$ARCH"
     echo "  release       : $TAG"
     echo "  archive       : $ARCHIVE_NAME"
-    echo "  install dir   : $AXIS_INSTALL_DIR   (source: ${AXIS_INSTALL_DIR_SOURCE:-default})"
+    echo "  requested     : $AXIS_INSTALL_DIR_DISPLAY   (source: ${AXIS_INSTALL_DIR_SOURCE:-default})"
+    echo "  install dir   : $AXIS_INSTALL_DIR   (physical)"
     echo "  target        : $AXIS_INSTALL_DIR/axis"
     echo "  scope         : $INSTALL_SCOPE"
     if [ "$INSTALL_SCOPE" = "system" ]; then

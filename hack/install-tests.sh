@@ -22,8 +22,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 PASS=0
 FAIL=0
+SKIP=0
 ok()   { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+skip() { SKIP=$((SKIP+1)); printf '  SKIP %s\n' "$1"; }
 
 if command -v shasum >/dev/null 2>&1; then SHA="shasum -a 256"; else SHA="sha256sum"; fi
 
@@ -259,7 +261,7 @@ fi
 # does not imply "does not exist": a mode-000 directory is unreadable to this
 # process while a later sudo install could traverse it.
 if [ "$(id -u)" -eq 0 ]; then
-    ok "permission-denied ancestor fails closed (skipped: running as root)"
+    skip "permission-denied ancestor fails closed (running as root: mode 000 does not restrict traversal)"
 else
     mkdir -p "$WORK/t12d/locked"
     chmod 000 "$WORK/t12d/locked"
@@ -283,6 +285,17 @@ if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12e/afile/bin" AXIS_DRY_RUN
     bad "regular-file ancestor fails closed" "a file was accepted as a parent directory"
 else
     ok "regular-file ancestor fails closed"
+fi
+
+# ".." in the target is refused. The builtin fallback reattaches an unresolved
+# ".." suffix literally, so "/tmp/new/../../opt/homebrew/bin" would not match the
+# package-manager patterns even though mkdir -p lands there.
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="/tmp/axis-new-parent/../../opt/homebrew/bin" \
+       AXIS_DRY_RUN=1 AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    bad "'..' traversal into a package tree is refused" "dot-dot bypassed the guard"
+else
+    ok "'..' traversal into a package tree is refused"
 fi
 
 # A target whose parents simply do not exist yet must still be allowed: mkdir -p
@@ -328,5 +341,5 @@ else
 fi
 
 echo
-printf 'install.sh: %d assertions passed, %d failed\n' "$PASS" "$FAIL"
+printf 'install.sh: %d assertions passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]
