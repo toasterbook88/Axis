@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -155,9 +156,71 @@ func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (st
 	return msg, warn
 }
 
+// canonicalInstallDir is the system-wide location install.sh writes to by
+// default. One absolute path shared by every node is what keeps a cluster from
+// running mixed versions: per-user paths differ per account
+// (/home/alice/.local/bin vs /Users/bob/.local/bin) and drift independently.
+const canonicalInstallDir = "/usr/local/bin"
+
+// doctorInstallCheck reports duplicate axis binaries on this host.
+//
+// A second install earlier in PATH shadows the canonical one, so `axis update`
+// refreshes the copy the operator invokes while a systemd unit with an absolute
+// ExecStart keeps running the stale one. Each `axis version` looks correct in
+// isolation; the divergence is only visible by enumerating installs.
+// doctorProbeInstall inspects the real filesystem, so it is overridable the
+// same way the AI backend and remote-shell probes are: unit tests must not
+// depend on how many axis binaries happen to exist on the build host.
+var doctorProbeInstall = doctorInstallCheck
+
+func doctorInstallCheck() DoctorCheck {
+	self := resolveSelfPath()
+	return installCheckFor(self, listKnownInstallPaths(self))
+}
+
+// installCheckFor holds the decision logic so it can be exercised without
+// depending on the test binary's own location or the ambient PATH.
+func installCheckFor(self string, shadows []string) DoctorCheck {
+	if self == "" {
+		return DoctorCheck{
+			Name:    "AXIS Install",
+			Status:  "warn",
+			Message: "could not resolve the running binary path",
+		}
+	}
+
+	if len(shadows) > 0 {
+		return DoctorCheck{
+			Name:   "AXIS Install",
+			Status: "warn",
+			Message: fmt.Sprintf("%d axis binaries on this host; running %s, also present: %s",
+				len(shadows)+1, self, strings.Join(shadows, ", ")),
+			Fix: "axis update --all, then remove the copies you do not want (one install should remain)",
+		}
+	}
+
+	if filepath.Dir(self) != canonicalInstallDir {
+		return DoctorCheck{
+			Name:    "AXIS Install",
+			Status:  "pass",
+			Message: fmt.Sprintf("single install at %s (user-local)", self),
+			Fix:     fmt.Sprintf("a system-wide install keeps every node on one path: AXIS_INSTALL_DIR=%s ./install.sh", canonicalInstallDir),
+		}
+	}
+
+	return DoctorCheck{
+		Name:    "AXIS Install",
+		Status:  "pass",
+		Message: fmt.Sprintf("single system-wide install at %s", self),
+	}
+}
+
 func runDoctor(cmd *cobra.Command, strict bool) error {
 	out := cmd.OutOrStdout()
 	var checks []DoctorCheck
+
+	// 0. Install hygiene: duplicate binaries silently diverge across releases.
+	checks = append(checks, doctorProbeInstall())
 
 	// 1. Config check
 	cfgPath := doctorConfigPath()

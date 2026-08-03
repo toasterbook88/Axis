@@ -654,6 +654,9 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 		version string
 	}
 	var plan []planned
+	// blocked holds targets that are valid AXIS installs but not writable by the
+	// current user; they drive the elevation hint instead of a silent skip.
+	var blocked []string
 	seenReplace := map[string]bool{}
 
 	for _, target := range targets {
@@ -728,11 +731,24 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 			fmt.Fprintf(out, "Already planned (alias): %s\n", label)
 			continue
 		}
+
+		// Writability preflight: fail here, before spending a download, rather
+		// than at the final rename.
+		if err := ensureWritableTarget(replacePath); err != nil {
+			blocked = append(blocked, replacePath)
+			fmt.Fprintf(errOut, "warning: skipping %s: not writable by the current user\n", label)
+			continue
+		}
+
 		seenReplace[replacePath] = true
 		plan = append(plan, planned{replacePath: replacePath, label: label, version: info.Version})
 	}
 
 	if len(plan) == 0 {
+		if len(blocked) > 0 {
+			return fmt.Errorf("no writable axis install to update; %s is owned by another user.\nRe-run with elevated rights:\n    %s",
+				blocked[0], elevationHint(blocked[0]))
+		}
 		fmt.Fprintf(out, "Nothing to update.\n")
 		return nil
 	}
@@ -763,6 +779,13 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 	}
 	if failed > 0 {
 		fmt.Fprintf(errOut, "warning: updated %d install(s); %d failed (often permissions on /usr/local/bin — re-run with elevated rights for system paths)\n", updated, failed)
+	}
+	if len(blocked) > 0 {
+		fmt.Fprintf(errOut, "warning: %d install(s) skipped as not writable:\n", len(blocked))
+		for _, b := range blocked {
+			fmt.Fprintf(errOut, "    %s\n", b)
+		}
+		fmt.Fprintf(errOut, "Re-run with elevated rights to update them:\n    %s\n", elevationHint(blocked[0]))
 	}
 	return nil
 }
@@ -845,6 +868,38 @@ func extractBinary(archiveData []byte, name string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("binary %q not found in archive", name)
+}
+
+// ensureWritableTarget reports whether replaceExecutable could write to target.
+//
+// It performs the same operation replaceExecutable does (create a temp file in
+// the destination directory) rather than inspecting mode bits, because mode
+// bits lie: read-only mounts, NFS root-squash, and ACLs all permit a passing
+// permission check followed by a failing write. The probe file is removed
+// immediately.
+//
+// This runs before the release is downloaded so that a privileged destination
+// fails in under a second with an actionable message, instead of after a
+// multi-megabyte download.
+func ensureWritableTarget(target string) error {
+	dir := filepath.Dir(target)
+	probe, err := os.CreateTemp(dir, ".axis-perm-*")
+	if err != nil {
+		return err
+	}
+	name := probe.Name()
+	probe.Close()
+	os.Remove(name)
+	return nil
+}
+
+// elevationHint returns the command that would grant write access to target.
+func elevationHint(target string) string {
+	self, err := os.Executable()
+	if err != nil || self == "" {
+		self = "axis"
+	}
+	return fmt.Sprintf("sudo %s update --path %s", self, target)
 }
 
 func replaceExecutable(target string, data []byte) error {

@@ -3,8 +3,18 @@
 set -euo pipefail
 
 # Default variables
+#
+# AXIS installs system-wide by default so that every node in a cluster resolves
+# the same absolute path, regardless of which user is logged in. Per-user
+# installs produce a different path per account (/home/alice/.local/bin vs
+# /Users/bob/.local/bin), which is how one host silently runs a stale binary
+# while another runs the current one.
+#
+# Override with AXIS_INSTALL_DIR=... for a user-local install.
 AXIS_VERSION="${AXIS_VERSION:-latest}"
-AXIS_INSTALL_DIR="${AXIS_INSTALL_DIR:-$HOME/.local/bin}"
+AXIS_INSTALL_DIR="${AXIS_INSTALL_DIR:-/usr/local/bin}"
+# Set AXIS_KEEP_LEGACY=1 to leave pre-existing user-local installs in place.
+AXIS_KEEP_LEGACY="${AXIS_KEEP_LEGACY:-0}"
 REPO="toasterbook88/axis"
 CURL_ARGS=(-fsSL)
 
@@ -107,24 +117,103 @@ echo "Checksum verified!"
 echo "Extracting binary..."
 tar -xzf "$ARCHIVE_NAME" axis
 
-mkdir -p "$AXIS_INSTALL_DIR"
-install -m 0755 axis "$AXIS_INSTALL_DIR/axis"
+# Elevate only when the destination is not writable by the current user.
+dir_needs_sudo() {
+    local dir="$1"
+    if [ -d "$dir" ]; then
+        [ -w "$dir" ] && return 1 || return 0
+    fi
+    local parent
+    parent=$(dirname "$dir")
+    while [ ! -d "$parent" ] && [ "$parent" != "/" ]; do
+        parent=$(dirname "$parent")
+    done
+    [ -w "$parent" ] && return 1 || return 0
+}
+
+SUDO=""
+if dir_needs_sudo "$AXIS_INSTALL_DIR"; then
+    if [ "$(id -u)" -eq 0 ]; then
+        SUDO=""
+    elif command -v sudo >/dev/null 2>&1; then
+        SUDO="sudo"
+        echo "Note: $AXIS_INSTALL_DIR requires elevated privileges; using sudo."
+    else
+        echo "Error: $AXIS_INSTALL_DIR is not writable and 'sudo' is unavailable."
+        echo "Re-run as root, or install to a user-local path:"
+        echo ""
+        echo "    AXIS_INSTALL_DIR=\"\$HOME/.local/bin\" $0"
+        exit 1
+    fi
+fi
+
+$SUDO mkdir -p "$AXIS_INSTALL_DIR"
+$SUDO install -m 0755 axis "$AXIS_INSTALL_DIR/axis"
+
+CANONICAL="$AXIS_INSTALL_DIR/axis"
 
 echo ""
 echo "=================================================="
 echo " AXIS installed successfully at:"
-echo " $AXIS_INSTALL_DIR/axis"
+echo " $CANONICAL"
 echo "=================================================="
 echo ""
+
+# Converge on a single install: a second axis binary earlier in PATH silently
+# shadows the one we just wrote, which is how nodes drift between releases.
+# Package-manager-owned paths are never touched.
+LEGACY_PATHS=()
+for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/opt/homebrew/bin/axis"; do
+    [ -f "$cand" ] || continue
+    [ "$cand" -ef "$CANONICAL" ] && continue
+    case "$cand" in
+        /opt/homebrew/*|*/Cellar/*|/nix/store/*|/run/current-system/*) continue ;;
+    esac
+    # Only ever remove something that identifies itself as AXIS.
+    if "$cand" version 2>/dev/null | grep -qi '^axis '; then
+        LEGACY_PATHS+=("$cand")
+    else
+        echo "NOTE: $cand exists but does not identify as AXIS; leaving it alone."
+    fi
+done
+
+if [ ${#LEGACY_PATHS[@]} -gt 0 ]; then
+    if [ "$AXIS_KEEP_LEGACY" = "1" ]; then
+        echo "WARNING: other AXIS installs remain (AXIS_KEEP_LEGACY=1):"
+        for p in "${LEGACY_PATHS[@]}"; do echo "    $p"; done
+        echo "These may shadow $CANONICAL depending on PATH order."
+    else
+        echo "Removing superseded AXIS installs:"
+        for p in "${LEGACY_PATHS[@]}"; do
+            rm_sudo=""
+            dir_needs_sudo "$(dirname "$p")" && [ "$(id -u)" -ne 0 ] && rm_sudo="sudo"
+            if $rm_sudo rm -f "$p" 2>/dev/null; then
+                echo "    removed $p"
+            else
+                echo "    WARNING: could not remove $p (permission denied)"
+            fi
+        done
+    fi
+    echo ""
+fi
 
 # Provide PATH guidance if missing
 if [[ ":$PATH:" != *":$AXIS_INSTALL_DIR:"* ]]; then
     echo "WARNING: $AXIS_INSTALL_DIR is not in your current PATH."
-    echo "To use 'axis', add the following to your profile (e.g. ~/.bashrc or ~/.zshrc):"
-    echo ""
-    echo "    export PATH=\"\$PATH:$AXIS_INSTALL_DIR\""
-    echo ""
-    echo "Then restart your shell or run: source ~/.zshrc (or .bashrc)"
+    if [ -e /etc/NIXOS ] || [ -d /run/current-system ]; then
+        echo "This is NixOS, which omits $AXIS_INSTALL_DIR from PATH by default."
+        echo "Add it declaratively in your configuration.nix:"
+        echo ""
+        echo "    environment.sessionVariables.PATH = [ \"$AXIS_INSTALL_DIR\" ];"
+        echo ""
+        echo "then run: sudo nixos-rebuild switch"
+    else
+        echo "Add the following to your profile (e.g. ~/.bashrc or ~/.zshrc):"
+        echo ""
+        echo "    export PATH=\"\$PATH:$AXIS_INSTALL_DIR\""
+        echo ""
+        echo "Then restart your shell or run: source ~/.zshrc (or .bashrc)"
+    fi
 else
     echo "You can now run 'axis version' to verify the installation."
 fi
