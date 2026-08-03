@@ -4,7 +4,9 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,50 +20,60 @@ type ProbeResult struct {
 	Err     error
 }
 
-// Probe evaluates all provided addresses concurrently to find the fastest
-// reachable path that speaks SSH. It applies latency penalties to known
-// overlay networks (CGNAT) to prefer true LAN links.
-func Probe(ctx context.Context, port int, addresses []models.NetworkAddress) string {
-	if len(addresses) == 0 {
+const (
+	maxConcurrentProbes = 3
+	successCacheTTL     = 2 * time.Minute
+)
+
+type cachedPath struct {
+	address   string
+	expiresAt time.Time
+}
+
+var successfulPaths = struct {
+	sync.Mutex
+	entries map[string]cachedPath
+}{entries: make(map[string]cachedPath)}
+
+// Probe evaluates filtered addresses with bounded concurrency to find the
+// fastest reachable path that speaks SSH. preferred contains already-known
+// logical or connected targets and is used to choose/order equivalent routes.
+// A recent successful result is revalidated alone before another fan-out.
+func Probe(ctx context.Context, port int, addresses []models.NetworkAddress, preferred ...string) string {
+	candidates := probeCandidates(addresses, preferred)
+	if len(candidates) == 0 {
 		return ""
 	}
 
-	results := make(chan ProbeResult, len(addresses))
+	cacheKey := pathCacheKey(port, candidates)
+	if cached := loadSuccessfulPath(cacheKey, candidates); cached != "" {
+		result := measureProbe(ctx, port, models.NetworkAddress{Address: cached})
+		if result.Err == nil {
+			storeSuccessfulPath(cacheKey, cached)
+			return cached
+		}
+		deleteSuccessfulPath(cacheKey)
+	}
+
+	results := make(chan ProbeResult, len(candidates))
+	jobs := make(chan models.NetworkAddress)
 	var wg sync.WaitGroup
-
-	for _, addr := range addresses {
-		if addr.Address == "" {
-			continue
-		}
-		// Skip Docker bridge addresses - they're local to the remote host
-		// and don't route to the actual SSH daemon
-		if isDockerBridgeAddr(addr.Address) {
-			continue
-		}
+	workers := min(maxConcurrentProbes, len(candidates))
+	for range workers {
 		wg.Add(1)
-		go func(a models.NetworkAddress) {
+		go func() {
 			defer wg.Done()
-			latency, err := probeSSH(ctx, a.Address, port)
-
-			// Apply penalties to overlay networks to ensure direct LAN wins
-			if err == nil {
-				penalty := time.Duration(0)
-				if a.SpeedClass == "tailscale" || a.SpeedClass == "zerotier" || a.SpeedClass == "vpn" || a.SpeedClass == "wireguard" || a.SpeedClass == "netbird" {
-					penalty = 50 * time.Millisecond
-				} else if ip, parseErr := netip.ParseAddr(a.Address); parseErr == nil {
-					// Apply penalty to Tailscale CGNAT range if not explicitly tagged
-					if isTailscaleAddr(ip) {
-						penalty = 50 * time.Millisecond
-					}
-				}
-				latency += penalty
+			for candidate := range jobs {
+				results <- measureProbe(ctx, port, candidate)
 			}
-
-			results <- ProbeResult{Address: a.Address, Latency: latency, Err: err}
-		}(addr)
+		}()
 	}
 
 	go func() {
+		for _, candidate := range candidates {
+			jobs <- candidate
+		}
+		close(jobs)
 		wg.Wait()
 		close(results)
 	}()
@@ -78,8 +90,138 @@ func Probe(ctx context.Context, port int, addresses []models.NetworkAddress) str
 			best = res.Address
 		}
 	}
+	if best != "" {
+		storeSuccessfulPath(cacheKey, best)
+	}
 
 	return best
+}
+
+func measureProbe(ctx context.Context, port int, candidate models.NetworkAddress) ProbeResult {
+	latency, err := probeSSH(ctx, candidate.Address, port)
+	if err == nil {
+		latency += overlayPenalty(candidate)
+	}
+	return ProbeResult{Address: candidate.Address, Latency: latency, Err: err}
+}
+
+// probeCandidates removes unusable/exact duplicates and collapses multiple IPv6
+// addresses advertising the same interface route. Linux privacy addresses share
+// that route with their stable peer, so probing each one only creates redundant
+// unauthenticated SSH connections. A configured/connected target wins its route.
+func probeCandidates(addresses []models.NetworkAddress, preferred []string) []models.NetworkAddress {
+	preferredSet := make(map[string]bool, len(preferred))
+	for _, raw := range preferred {
+		if ip, err := netip.ParseAddr(strings.TrimSpace(raw)); err == nil {
+			preferredSet[ip.Unmap().String()] = true
+		}
+	}
+
+	var candidates []models.NetworkAddress
+	exact := make(map[string]int)
+	ipv6Routes := make(map[string]int)
+	for _, candidate := range addresses {
+		ip, err := netip.ParseAddr(strings.TrimSpace(candidate.Address))
+		if err != nil {
+			continue
+		}
+		ip = ip.Unmap()
+		candidate.Address = ip.String()
+		if isDockerBridgeAddr(candidate.Address) {
+			continue
+		}
+
+		if idx, ok := exact[candidate.Address]; ok {
+			if candidatePreferred(candidate, preferredSet) || overlayPenalty(candidate) < overlayPenalty(candidates[idx]) {
+				candidates[idx] = candidate
+			}
+			continue
+		}
+
+		if route := ipv6RouteKey(candidate, ip); route != "" {
+			if idx, ok := ipv6Routes[route]; ok {
+				if candidatePreferred(candidate, preferredSet) && !candidatePreferred(candidates[idx], preferredSet) {
+					delete(exact, candidates[idx].Address)
+					candidates[idx] = candidate
+					exact[candidate.Address] = idx
+				}
+				continue
+			}
+			ipv6Routes[route] = len(candidates)
+		}
+
+		exact[candidate.Address] = len(candidates)
+		candidates = append(candidates, candidate)
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidatePreferred(candidates[i], preferredSet) && !candidatePreferred(candidates[j], preferredSet)
+	})
+	return candidates
+}
+
+func ipv6RouteKey(candidate models.NetworkAddress, ip netip.Addr) string {
+	if !ip.Is6() || candidate.Interface == "" || candidate.Subnet == "" {
+		return ""
+	}
+	prefix, err := netip.ParsePrefix(candidate.Subnet)
+	if err != nil || !prefix.Addr().Is6() || prefix.Bits() == 128 {
+		return ""
+	}
+	return candidate.Interface + "|" + prefix.Masked().String()
+}
+
+func candidatePreferred(candidate models.NetworkAddress, preferred map[string]bool) bool {
+	return preferred[candidate.Address]
+}
+
+func overlayPenalty(candidate models.NetworkAddress) time.Duration {
+	switch candidate.SpeedClass {
+	case "tailscale", "zerotier", "vpn", "wireguard", "netbird":
+		return 50 * time.Millisecond
+	}
+	if ip, err := netip.ParseAddr(candidate.Address); err == nil && isTailscaleAddr(ip) {
+		return 50 * time.Millisecond
+	}
+	return 0
+}
+
+func pathCacheKey(port int, candidates []models.NetworkAddress) string {
+	addresses := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		addresses = append(addresses, candidate.Address)
+	}
+	sort.Strings(addresses)
+	return strconv.Itoa(port) + "|" + strings.Join(addresses, ",")
+}
+
+func loadSuccessfulPath(key string, candidates []models.NetworkAddress) string {
+	successfulPaths.Lock()
+	defer successfulPaths.Unlock()
+	entry, ok := successfulPaths.entries[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		delete(successfulPaths.entries, key)
+		return ""
+	}
+	for _, candidate := range candidates {
+		if candidate.Address == entry.address {
+			return entry.address
+		}
+	}
+	delete(successfulPaths.entries, key)
+	return ""
+}
+
+func storeSuccessfulPath(key, address string) {
+	successfulPaths.Lock()
+	defer successfulPaths.Unlock()
+	successfulPaths.entries[key] = cachedPath{address: address, expiresAt: time.Now().Add(successCacheTTL)}
+}
+
+func deleteSuccessfulPath(key string) {
+	successfulPaths.Lock()
+	defer successfulPaths.Unlock()
+	delete(successfulPaths.entries, key)
 }
 
 func probeSSH(ctx context.Context, ip string, port int) (time.Duration, error) {

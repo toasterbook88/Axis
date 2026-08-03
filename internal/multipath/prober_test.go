@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,6 +71,71 @@ func TestProbeSSHReadsBanner(t *testing.T) {
 	}
 	if latency <= 0 {
 		t.Fatalf("probeSSH() latency = %v, want positive duration", latency)
+	}
+}
+
+func TestProbeBoundsConcurrentConnections(t *testing.T) {
+	listener, port, peak, _ := startTrackingBannerServer(t, 50*time.Millisecond)
+	defer listener.Close()
+
+	addresses := make([]models.NetworkAddress, 0, 8)
+	for i := 1; i <= 8; i++ {
+		addresses = append(addresses, models.NetworkAddress{Address: "127.0.0." + strconv.Itoa(i)})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if got := Probe(ctx, port, addresses); got == "" {
+		t.Fatal("Probe() returned no reachable address")
+	}
+	if got := peak.Load(); got > maxConcurrentProbes {
+		t.Fatalf("peak concurrent probes = %d, want <= %d", got, maxConcurrentProbes)
+	}
+}
+
+func TestProbeCandidatesCollapseIPv6Routes(t *testing.T) {
+	addresses := []models.NetworkAddress{
+		{Address: "192.0.2.10", Interface: "eth0", Subnet: "192.0.2.0/24"},
+		{Address: "2001:db8::1", Interface: "eth0", Subnet: "2001:db8::/64"},
+		{Address: "2001:db8::2", Interface: "eth0", Subnet: "2001:db8::/64"},
+		{Address: "2001:db8:1::1", Interface: "eth1", Subnet: "2001:db8:1::/64"},
+		{Address: "172.18.0.1", Interface: "docker0", Subnet: "172.18.0.0/16"},
+	}
+
+	got := probeCandidates(addresses, []string{"2001:db8::2"})
+	if len(got) != 3 {
+		t.Fatalf("candidate count = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].Address != "2001:db8::2" {
+		t.Fatalf("preferred route candidate = %q, want 2001:db8::2", got[0].Address)
+	}
+}
+
+func TestProbeRevalidatesCachedSuccessfulPathAlone(t *testing.T) {
+	listener, port, _, accepts := startTrackingBannerServer(t, 0)
+	defer listener.Close()
+	addresses := []models.NetworkAddress{
+		{Address: "127.0.0.10"},
+		{Address: "127.0.0.11"},
+		{Address: "127.0.0.12"},
+		{Address: "127.0.0.13"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	first := Probe(ctx, port, addresses)
+	if first == "" {
+		t.Fatal("first Probe() returned no reachable address")
+	}
+	firstAccepts := accepts.Load()
+	if firstAccepts != int64(len(addresses)) {
+		t.Fatalf("first probe accepts = %d, want %d", firstAccepts, len(addresses))
+	}
+	if second := Probe(ctx, port, addresses); second != first {
+		t.Fatalf("cached Probe() = %q, want %q", second, first)
+	}
+	if delta := accepts.Load() - firstAccepts; delta != 1 {
+		t.Fatalf("cached probe opened %d connections, want 1", delta)
 	}
 }
 
@@ -144,4 +211,41 @@ func startBannerServer(t *testing.T) (net.Listener, int) {
 	}()
 
 	return listener, port
+}
+
+func startTrackingBannerServer(t *testing.T, delay time.Duration) (net.Listener, int, *atomic.Int64, *atomic.Int64) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	var active atomic.Int64
+	var peak atomic.Int64
+	var accepts atomic.Int64
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			current := active.Add(1)
+			for {
+				observed := peak.Load()
+				if current <= observed || peak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			go func() {
+				defer active.Add(-1)
+				defer conn.Close()
+				time.Sleep(delay)
+				_, _ = conn.Write([]byte("SSH-2.0-axis-test\r\n"))
+			}()
+		}
+	}()
+
+	return listener, port, &peak, &accepts
 }
