@@ -214,9 +214,9 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 			}
 
 			if nf != nil && nf.Status != models.StatusUnreachable && len(nf.Addresses) > 0 && !models.IsLocalNode(*nf) {
-				bestIP := multipath.Probe(nodeCtx, nc.EffectiveSSHPort(), nf.Addresses)
-				if bestIP != "" {
-					nf.ResolvedDialTarget = bestIP
+				decision := multipath.Probe(nodeCtx, nc.EffectiveSSHPort(), nf.Addresses, nf.SSHTarget, nf.ResolvedDialTarget)
+				if decision.SelectedTarget != "" {
+					nf.ResolvedDialTarget = decision.SelectedTarget
 				}
 			}
 
