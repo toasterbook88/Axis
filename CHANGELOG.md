@@ -1,5 +1,22 @@
 ## Unreleased
 
+## v0.14.8 (2026-08-03)
+
+### 🚀 Features
+* **MCP:** Add read-only `verify_execution_safety` and `simulate_workload_plan` tools for structured safety inspection and ranked placement simulation. (#264)
+* **Execution:** Sample best-effort peak NVIDIA VRAM during local guarded execution and record it in execution observations. (#265)
+* **Facts:** Add an unwired, single-vantage `PairwiseLinkMatrix` substrate for directional probe observations; snapshot topology remains absent unless a caller explicitly builds it. (#266)
+
+### 🐛 Bug Fixes
+* **Multipath:** Bound concurrent SSH path probes, collapse redundant candidates, revalidate a short-lived successful path cache, reject unusable routes and non-SSH listeners, and preserve logical SSH identity and fallback behavior. (#267)
+* **Tests/state:** Isolate the full test suite from operator `~/.axis` state and harden state, skills, reservation, and persistence update paths. (#260)
+
+### 🔧 Maintenance
+* **Truth contracts:** Reconcile current-state claims and add evidence/provenance contracts for placement, capability probes, and topology observations. (#257)
+* **CI:** Bump `actions/checkout` from 7.0.0 to 7.0.1. (#258)
+* **Deps:** Bump `github.com/mark3labs/mcp-go` to 0.57.0 and `github.com/mattn/go-isatty` to 0.0.24. (#259)
+* **Docs:** Refresh post-v0.14.7 current-state facts; remove the short-lived OpenWiki workflow while retaining local agent-history ignores. (#255, #256, #261, #263)
+
 ## v0.14.7 (2026-07-24)
 
 ### 🚀 Features
