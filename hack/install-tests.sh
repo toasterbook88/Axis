@@ -255,6 +255,36 @@ else
     ok "path beneath an unresolved symlink fails closed"
 fi
 
+# An ancestor that exists but cannot be entered must fail closed. "cd -P failed"
+# does not imply "does not exist": a mode-000 directory is unreadable to this
+# process while a later sudo install could traverse it.
+if [ "$(id -u)" -eq 0 ]; then
+    ok "permission-denied ancestor fails closed (skipped: running as root)"
+else
+    mkdir -p "$WORK/t12d/locked"
+    chmod 000 "$WORK/t12d/locked"
+    if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12d/locked/unknown/bin" AXIS_DRY_RUN=1 \
+           AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+           bash "$INSTALL_SH" >/dev/null 2>&1; then
+        bad "permission-denied ancestor fails closed" "unreadable ancestor was walked past"
+    else
+        ok "permission-denied ancestor fails closed"
+    fi
+    chmod 700 "$WORK/t12d/locked" 2>/dev/null || true
+fi
+
+# A regular file used as an intermediate path component is not a directory that
+# mkdir -p can create, and must not be treated as "does not exist yet".
+mkdir -p "$WORK/t12e"
+printf 'not a directory\n' > "$WORK/t12e/afile"
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12e/afile/bin" AXIS_DRY_RUN=1 \
+       AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    bad "regular-file ancestor fails closed" "a file was accepted as a parent directory"
+else
+    ok "regular-file ancestor fails closed"
+fi
+
 # A target whose parents simply do not exist yet must still be allowed: mkdir -p
 # creates them, and refusing would break legitimate installs.
 if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12c/newdir/bin" AXIS_DRY_RUN=1 \

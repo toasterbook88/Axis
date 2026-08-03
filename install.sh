@@ -95,9 +95,20 @@ canonicalize_path() {
             if [ -n "$rest" ]; then printf '%s/%s\n' "$out" "$rest"; else printf '%s\n' "$out"; fi
             return 0
         fi
-        # Could not enter it. If this component is a symlink, it is one we cannot
-        # resolve — report failure rather than guess at its target.
-        [ -L "$cur" ] && return 1
+        # Could not enter it. "Cannot enter" has several causes and only one of
+        # them is safe to walk past:
+        #
+        #   - it exists but is unreadable (mode 000): we cannot see through it,
+        #     and the install may later run under sudo, which *can* traverse it
+        #   - it is a symlink we could not resolve
+        #   - it is a regular file being used as an intermediate component
+        #   - it genuinely does not exist yet, and mkdir -p will create it
+        #
+        # Only the last is safe. `-e` follows symlinks and so is false for a
+        # dangling one, hence the explicit `-L` as well.
+        if [ -e "$cur" ] || [ -L "$cur" ]; then
+            return 1
+        fi
         parent=$(dirname -- "$cur")
         [ "$parent" = "$cur" ] && return 1
         rest="$(basename -- "$cur")${rest:+/$rest}"
