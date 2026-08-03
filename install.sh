@@ -152,23 +152,77 @@ $SUDO install -m 0755 axis "$AXIS_INSTALL_DIR/axis"
 
 CANONICAL="$AXIS_INSTALL_DIR/axis"
 
+# Prove the installed artifact runs and is the version we asked for BEFORE any
+# other copy is removed. The checksum validates the archive, not that the
+# extracted binary executes on this host (wrong architecture, truncated write,
+# or an incompatible libc all pass a checksum). Without this gate a valid-but-
+# unusable download would replace a working installation.
+# `|| true` is required: under `set -euo pipefail` a non-zero exit inside the
+# command substitution would abort the script here, before the checks below can
+# explain what went wrong.
+INSTALLED_VERSION=$("$CANONICAL" version 2>/dev/null | grep -oiE '^axis [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}' | head -1) || true
+if [ -z "${INSTALLED_VERSION:-}" ]; then
+    echo "Error: $CANONICAL did not run or did not report a version."
+    echo "The previous installation was left untouched. Investigate before retrying."
+    exit 1
+fi
+if [ "$INSTALLED_VERSION" != "$VERSION_NUM" ]; then
+    echo "Error: expected v$VERSION_NUM at $CANONICAL but it reports v$INSTALLED_VERSION."
+    echo "The previous installation was left untouched."
+    exit 1
+fi
+
 echo ""
 echo "=================================================="
 echo " AXIS installed successfully at:"
 echo " $CANONICAL"
+echo " Verified: v$INSTALLED_VERSION"
 echo "=================================================="
 echo ""
 
 # Converge on a single install: a second axis binary earlier in PATH silently
 # shadows the one we just wrote, which is how nodes drift between releases.
-# Package-manager-owned paths are never touched.
+#
+# Cleanup is directional. A system-wide install may retire user-local shadows,
+# because it is the copy every account and service resolves. A user-local
+# install must never delete the system copy: that would be one account removing
+# a binary other users and systemd units depend on.
+case "$AXIS_INSTALL_DIR/" in
+    "$HOME"/*) INSTALL_SCOPE="user" ;;
+    *)         INSTALL_SCOPE="system" ;;
+esac
+
 LEGACY_PATHS=()
+FOREIGN_PATHS=()
 for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/opt/homebrew/bin/axis"; do
     [ -f "$cand" ] || continue
     [ "$cand" -ef "$CANONICAL" ] && continue
-    case "$cand" in
-        /opt/homebrew/*|*/Cellar/*|/nix/store/*|/run/current-system/*) continue ;;
+
+    # Resolve before testing ownership: on Intel macOS /usr/local/bin/axis may
+    # be a Homebrew symlink into /usr/local/Cellar, which an unresolved match
+    # would miss.
+    resolved="$cand"
+    if command -v readlink >/dev/null 2>&1; then
+        resolved=$(readlink -f "$cand" 2>/dev/null || echo "$cand")
+    fi
+    case "$cand:$resolved" in
+        */opt/homebrew/*|*/Cellar/*|*/linuxbrew/*|*/nix/store/*|*/run/current-system/*)
+            echo "NOTE: $cand is package-manager owned; leaving it alone."
+            continue
+            ;;
     esac
+
+    # A user-local install reports other copies but does not remove them.
+    case "$cand" in
+        "$HOME"/*) ;;
+        *)
+            if [ "$INSTALL_SCOPE" = "user" ]; then
+                FOREIGN_PATHS+=("$cand")
+                continue
+            fi
+            ;;
+    esac
+
     # Only ever remove something that identifies itself as AXIS.
     if "$cand" version 2>/dev/null | grep -qi '^axis '; then
         LEGACY_PATHS+=("$cand")
@@ -176,6 +230,14 @@ for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/
         echo "NOTE: $cand exists but does not identify as AXIS; leaving it alone."
     fi
 done
+
+if [ ${#FOREIGN_PATHS[@]} -gt 0 ]; then
+    echo "NOTE: this is a user-local install; the following system installs were left in place:"
+    for p in "${FOREIGN_PATHS[@]}"; do echo "    $p"; done
+    echo "They may take precedence for services and other accounts. To converge on one"
+    echo "system-wide binary instead, re-run without AXIS_INSTALL_DIR."
+    echo ""
+fi
 
 if [ ${#LEGACY_PATHS[@]} -gt 0 ]; then
     if [ "$AXIS_KEEP_LEGACY" = "1" ]; then
@@ -207,6 +269,10 @@ if [[ ":$PATH:" != *":$AXIS_INSTALL_DIR:"* ]]; then
         echo "    environment.sessionVariables.PATH = [ \"$AXIS_INSTALL_DIR\" ];"
         echo ""
         echo "then run: sudo nixos-rebuild switch"
+        echo ""
+        echo "This is set through PAM and so reaches non-interactive SSH."
+        echo "It does NOT configure systemd: units carry a hermetic PATH, so any"
+        echo "unit invoking axis needs an absolute ExecStart."
     else
         echo "Add the following to your profile (e.g. ~/.bashrc or ~/.zshrc):"
         echo ""

@@ -63,8 +63,15 @@ absolute path. A second binary earlier in `$PATH` shadows the canonical one:
 `axis update` then refreshes the copy the operator invokes while a systemd unit
 with an absolute `ExecStart` keeps running the stale one, and each host's
 `axis version` still looks correct in isolation. `axis doctor` reports duplicate
-installs; NixOS omits `/usr/local/bin` from `PATH` by default and needs
-`environment.sessionVariables.PATH = [ "/usr/local/bin" ];` in `configuration.nix`.
+installs.
+
+NixOS omits `/usr/local/bin` from `PATH` by default. Add it with
+`environment.sessionVariables.PATH = [ "/usr/local/bin" ];` in `configuration.nix`
+— that is set through PAM, so it reaches non-interactive SSH, which the remote
+fact collectors rely on. Do not substitute `environment.extraInit`: it runs
+during shell initialization only and misses non-interactive SSH. Neither option
+configures systemd; NixOS units carry a hermetic `PATH` built from their own
+inputs, so any unit invoking axis needs an absolute `ExecStart`.
 `axis version` must print `commit:` — that line distinguishes tip-of-main from a GitHub release with the same semver.
 Never `gh release create` before the tag workflow; GoReleaser owns GitHub Releases.
 
