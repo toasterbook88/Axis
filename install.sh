@@ -36,19 +36,50 @@ if [ "$AXIS_REQUIRE_PINNED" = "1" ] && [ "$AXIS_VERSION" = "latest" ]; then
     echo "Error: AXIS_REQUIRE_PINNED=1 but AXIS_VERSION is 'latest'."
     echo "Pin an explicit release so every node installs the same artifact:"
     echo ""
-    echo "    AXIS_VERSION=v0.14.8 AXIS_REQUIRE_PINNED=1 $0"
+    echo "    AXIS_VERSION=vX.Y.Z AXIS_REQUIRE_PINNED=1 $0"
+    echo ""
+    echo "Current releases: https://github.com/$REPO/releases"
     exit 1
 fi
 
+# Resolve a path to its physical location, following symlinks.
+#
+# `readlink -f` is GNU-first: it is missing or behaves differently on older
+# macOS/BSD userlands, and this script is a public `curl | bash` target. Try the
+# portable options in order and fall back to the literal path rather than
+# failing — callers treat an unresolvable path as "not package-managed", which
+# is the same answer they would have had without resolution.
+canonicalize_path() {
+    local p="$1" out=""
+    if out=$(readlink -f "$p" 2>/dev/null) && [ -n "$out" ]; then printf '%s\n' "$out"; return; fi
+    if out=$(realpath "$p" 2>/dev/null) && [ -n "$out" ]; then printf '%s\n' "$out"; return; fi
+    if command -v python3 >/dev/null 2>&1; then
+        if out=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$p" 2>/dev/null) && [ -n "$out" ]; then
+            printf '%s\n' "$out"; return
+        fi
+    fi
+    printf '%s\n' "$p"
+}
+
+# True when a path lies inside a package-manager-owned tree.
+is_package_managed() {
+    case "$1/" in
+        /nix/store/*|/run/current-system/*|/opt/homebrew/*|*/Cellar/*|*/linuxbrew/*|/var/lib/flatpak/*|/snap/*) return 0 ;;
+    esac
+    return 1
+}
+
 # Refuse to install into a directory owned by a package manager: the next
-# upgrade of that manager would overwrite or orphan the binary.
-case "$AXIS_INSTALL_DIR/" in
-    /nix/store/*|/run/current-system/*|/opt/homebrew/*|*/Cellar/*|*/linuxbrew/*|/var/lib/flatpak/*|/snap/*)
-        echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
-        echo "Install it through that package manager, or choose /usr/local/bin."
-        exit 1
-        ;;
-esac
+# upgrade of that manager would overwrite or orphan the binary. Both the literal
+# and the resolved path are checked — a symlink such as
+# /usr/local/bin -> /opt/homebrew/bin would otherwise slip past a literal match.
+AXIS_INSTALL_DIR_REAL=$(canonicalize_path "$AXIS_INSTALL_DIR")
+if is_package_managed "$AXIS_INSTALL_DIR" || is_package_managed "$AXIS_INSTALL_DIR_REAL"; then
+    echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
+    [ "$AXIS_INSTALL_DIR_REAL" != "$AXIS_INSTALL_DIR" ] && echo "       (resolves to $AXIS_INSTALL_DIR_REAL)"
+    echo "Install it through that package manager, or choose /usr/local/bin."
+    exit 1
+fi
 
 echo "Installing AXIS to $AXIS_INSTALL_DIR..."
 
@@ -109,8 +140,12 @@ fi
 # Strip the leading v for the archive name matching goreleaser defaults
 VERSION_NUM="${TAG#v}"
 ARCHIVE_NAME="axis_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE_NAME"
-CHECKSUM_URL="https://github.com/$REPO/releases/download/$TAG/checksums.txt"
+# Release location. Overridable so hack/install-tests.sh can serve a local tree
+# over file:// and exercise download, checksum, extraction, staging, validation
+# and cleanup without network access or a real system path.
+AXIS_RELEASE_BASE_URL="${AXIS_RELEASE_BASE_URL:-https://github.com/$REPO/releases/download}"
+DOWNLOAD_URL="$AXIS_RELEASE_BASE_URL/$TAG/$ARCHIVE_NAME"
+CHECKSUM_URL="$AXIS_RELEASE_BASE_URL/$TAG/checksums.txt"
 
 if [ "$AXIS_VERSION" = "latest" ]; then
     echo "Resolved latest -> $TAG"
@@ -127,7 +162,10 @@ esac
 
 if [ "$AXIS_DRY_RUN" = "1" ]; then
     echo ""
-    echo "===================== DRY RUN — nothing written ====================="
+    echo "============ DRY RUN — path resolution only, nothing written ========"
+    echo "  Checks target/scope/cleanup direction. Does NOT exercise download,"
+    echo "  checksum, extraction, permissions, staging, binary validation, or"
+    echo "  which specific copies cleanup would remove."
     echo "  platform      : $OS-$ARCH"
     echo "  release       : $TAG"
     echo "  archive       : $ARCHIVE_NAME"
@@ -212,9 +250,22 @@ if dir_needs_sudo "$AXIS_INSTALL_DIR"; then
 fi
 
 $SUDO mkdir -p "$AXIS_INSTALL_DIR"
-$SUDO install -m 0755 axis "$AXIS_INSTALL_DIR/axis"
 
 CANONICAL="$AXIS_INSTALL_DIR/axis"
+
+# Stage into the destination directory, validate the STAGED file, then rename
+# over the canonical path only after it proves good.
+#
+# Staging in the destination directory (not /tmp) keeps the final step a
+# same-filesystem rename(2), which is atomic: readers see either the old binary
+# or the new one, never a partial write. Installing directly over the canonical
+# path and validating afterwards would destroy a working binary before
+# discovering the replacement is unusable.
+STAGED="$AXIS_INSTALL_DIR/.axis-install-$$"
+cleanup_staged() { [ -n "${STAGED:-}" ] && $SUDO rm -f "$STAGED" 2>/dev/null || true; }
+trap 'rm -rf "$WORKDIR"; cleanup_staged' EXIT
+
+$SUDO install -m 0755 axis "$STAGED"
 
 # Prove the installed artifact runs and is the version we asked for BEFORE any
 # other copy is removed. The checksum validates the archive, not that the
@@ -224,17 +275,21 @@ CANONICAL="$AXIS_INSTALL_DIR/axis"
 # `|| true` is required: under `set -euo pipefail` a non-zero exit inside the
 # command substitution would abort the script here, before the checks below can
 # explain what went wrong.
-INSTALLED_VERSION=$("$CANONICAL" version 2>/dev/null | grep -oiE '^axis [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}' | head -1) || true
+INSTALLED_VERSION=$("$STAGED" version 2>/dev/null | grep -oiE '^axis [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}' | head -1) || true
 if [ -z "${INSTALLED_VERSION:-}" ]; then
-    echo "Error: $CANONICAL did not run or did not report a version."
-    echo "The previous installation was left untouched. Investigate before retrying."
+    echo "Error: the downloaded binary did not run or did not report a version."
+    echo "Staged copy discarded; $CANONICAL is unchanged. Investigate before retrying."
     exit 1
 fi
 if [ "$INSTALLED_VERSION" != "$VERSION_NUM" ]; then
-    echo "Error: expected v$VERSION_NUM at $CANONICAL but it reports v$INSTALLED_VERSION."
-    echo "The previous installation was left untouched."
+    echo "Error: expected v$VERSION_NUM but the downloaded binary reports v$INSTALLED_VERSION."
+    echo "Staged copy discarded; $CANONICAL is unchanged."
     exit 1
 fi
+
+# Validation passed — promote atomically. Same directory, so this is rename(2).
+$SUDO mv -f "$STAGED" "$CANONICAL"
+STAGED=""
 
 echo ""
 echo "=================================================="
@@ -260,16 +315,11 @@ for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/
     # Resolve before testing ownership: on Intel macOS /usr/local/bin/axis may
     # be a Homebrew symlink into /usr/local/Cellar, which an unresolved match
     # would miss.
-    resolved="$cand"
-    if command -v readlink >/dev/null 2>&1; then
-        resolved=$(readlink -f "$cand" 2>/dev/null || echo "$cand")
+    resolved=$(canonicalize_path "$cand")
+    if is_package_managed "$cand" || is_package_managed "$resolved"; then
+        echo "NOTE: $cand is package-manager owned; leaving it alone."
+        continue
     fi
-    case "$cand:$resolved" in
-        */opt/homebrew/*|*/Cellar/*|*/linuxbrew/*|*/nix/store/*|*/run/current-system/*)
-            echo "NOTE: $cand is package-manager owned; leaving it alone."
-            continue
-            ;;
-    esac
 
     # A user-local install reports other copies but does not remove them.
     case "$cand" in
@@ -356,17 +406,27 @@ echo "-------------------------------------------------------------------"
 echo " Installed FILE is v$INSTALLED_VERSION. Running PROCESSES are not updated."
 RUNNING_AXIS_UNITS=""
 if command -v systemctl >/dev/null 2>&1; then
-    RUNNING_AXIS_UNITS=$(systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null \
-        | awk '{print $1}' | grep -iE '^axis' || true)
+    # System scope and user scope are separate registries; a service can be
+    # running in either. Checking only the system bus under-reports.
+    RUNNING_AXIS_UNITS=$(
+        { systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print "system: "$1}'
+          systemctl --user list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print "user:   "$1}'
+        } | grep -iE 'axis|cortex|supermemory|qmd' || true
+    )
 fi
+if command -v launchctl >/dev/null 2>&1; then
+    RUNNING_AXIS_UNITS="$RUNNING_AXIS_UNITS$(printf '\n'; launchctl list 2>/dev/null \
+        | awk 'NR>1 && $1 != "-" {print "launchd: "$3}' | grep -iE 'axis|cortex' || true)"
+fi
+RUNNING_AXIS_UNITS=$(printf '%s\n' "$RUNNING_AXIS_UNITS" | sed '/^$/d')
 if [ -n "$RUNNING_AXIS_UNITS" ]; then
-    echo " Running axis-related services on this host:"
+    echo " Possibly affected services on this host:"
     echo "$RUNNING_AXIS_UNITS" | sed 's/^/     /'
     echo " Restart whichever of these execute the axis binary, then re-check the"
     echo " running version. Units with an absolute ExecStart may point at a"
     echo " different path than the one just installed."
 else
-    echo " No running axis-* systemd services detected on this host."
+    echo " No running axis-related services detected (systemd system+user, launchd)."
 fi
 echo " Duplicate-install check:  axis doctor"
 echo "-------------------------------------------------------------------"

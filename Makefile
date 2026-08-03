@@ -13,7 +13,7 @@ LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.UpdateManagedBy=
 
-.PHONY: build test test-race lint coverage clean install install-user install-system
+.PHONY: build test test-race lint coverage clean install install-user install-system test-install
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o axis ./cmd/axis/
@@ -21,6 +21,11 @@ build:
 # Install to GOPATH/bin (legacy; often not on operator PATH).
 install: build
 	cp axis $(shell go env GOPATH)/bin/axis
+
+# Regression tests for install.sh. Hermetic: serves a local release tree over
+# file:// so no network and no real system paths are touched.
+test-install:
+	./hack/install-tests.sh
 
 # Install to /usr/local/bin — the same absolute path on every node, and what
 # install.sh writes by default. Preferred for any host in a cluster: per-user
