@@ -44,7 +44,9 @@ pinned_command_hint() {
     local base
     base="$(basename -- "$0" 2>/dev/null || echo "$0")"
     if [ -r "$0" ] && [ "$base" != "bash" ] && [ "$base" != "sh" ] && [ "$base" != "dash" ]; then
-        printf '    AXIS_VERSION=%s AXIS_REQUIRE_PINNED=1 %s\n' "$ver" "$0"
+        # Quote the path: an installer under a directory containing spaces would
+        # otherwise produce a command that splits into separate words.
+        printf '    AXIS_VERSION=%s AXIS_REQUIRE_PINNED=1 "%s"\n' "$ver" "$0"
     else
         printf '    curl -fsSL %s \\\n' "$INSTALL_URL"
         printf '      | AXIS_VERSION=%s AXIS_REQUIRE_PINNED=1 bash\n' "$ver"
@@ -81,18 +83,26 @@ canonicalize_path() {
     fi
     # Dependency-free fallback: `cd -P` resolves symlinks physically using only
     # shell builtins, so it works where none of the helpers above exist.
-    if [ -d "$p" ]; then
-        if out=$( cd -P "$p" 2>/dev/null && pwd -P ) && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
-    else
-        dir=$(dirname -- "$p"); base=$(basename -- "$p")
-        if out=$( cd -P "$dir" 2>/dev/null && pwd -P ) && [ -n "$out" ]; then
-            # The parent is now physical. If the leaf itself is a symlink we
-            # still cannot see through it, so report failure rather than guess.
-            if [ -L "$p" ]; then return 1; fi
-            printf '%s/%s\n' "$out" "$base"; return 0
+    #
+    # Walk up to the deepest ancestor we can physically enter, then re-attach the
+    # remaining components. This handles a target whose parents do not exist yet
+    # (mkdir -p creates them later) while still refusing a path that passes
+    # through a symlink we cannot see through — checking only the leaf would
+    # accept "<dangling-link>/bin", since the leaf itself is not a symlink.
+    local cur="$p" rest="" parent=""
+    while :; do
+        if out=$( cd -P "$cur" 2>/dev/null && pwd -P ) && [ -n "$out" ]; then
+            if [ -n "$rest" ]; then printf '%s/%s\n' "$out" "$rest"; else printf '%s\n' "$out"; fi
+            return 0
         fi
-    fi
-    return 1
+        # Could not enter it. If this component is a symlink, it is one we cannot
+        # resolve — report failure rather than guess at its target.
+        [ -L "$cur" ] && return 1
+        parent=$(dirname -- "$cur")
+        [ "$parent" = "$cur" ] && return 1
+        rest="$(basename -- "$cur")${rest:+/$rest}"
+        cur="$parent"
+    done
 }
 
 # True when a path lies inside a package-manager-owned tree.
@@ -114,19 +124,15 @@ if AXIS_INSTALL_DIR_REAL=$(canonicalize_path "$AXIS_INSTALL_DIR"); then
         echo "Install it through that package manager, or choose /usr/local/bin."
         exit 1
     fi
-elif [ -L "$AXIS_INSTALL_DIR" ]; then
-    # Fail closed: an unresolvable symlink could point into a package-managed
-    # tree, and a safety guard must not treat "unknown" as "safe".
-    echo "Error: $AXIS_INSTALL_DIR is a symlink and this system has no way to resolve it."
+else
+    # Fail closed, without inspecting only the leaf: an unresolvable component
+    # anywhere in the path could lead into a package-managed tree, and a safety
+    # guard must not treat "unknown" as "safe".
+    echo "Error: cannot resolve $AXIS_INSTALL_DIR to a physical path on this system."
+    echo "It passes through a symlink that could not be followed, so it cannot be"
+    echo "checked against package-manager-owned locations."
     echo "Install to the physical directory it points at, or choose /usr/local/bin."
     exit 1
-else
-    AXIS_INSTALL_DIR_REAL="$AXIS_INSTALL_DIR"
-    if is_package_managed "$AXIS_INSTALL_DIR"; then
-        echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
-        echo "Install it through that package manager, or choose /usr/local/bin."
-        exit 1
-    fi
 fi
 
 echo "Installing AXIS to $AXIS_INSTALL_DIR..."

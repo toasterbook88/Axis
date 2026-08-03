@@ -192,7 +192,7 @@ fi
 # 11. The pinned hint must be runnable. Under `curl | bash`, $0 is "bash", so a
 #     hint of "AXIS_VERSION=… $0" would tell the operator to start a shell.
 out=$(printf '%s' "$(cat "$INSTALL_SH")" | env AXIS_REQUIRE_PINNED=1 AXIS_VERSION=latest bash 2>&1 || true)
-if printf '%s' "$out" | grep -qE '^\s+curl -fsSL .*install\.sh'; then
+if printf '%s' "$out" | grep -qE '^[[:space:]]+curl -fsSL .*install\.sh'; then
     ok "piped invocation prints a curl-based pinned hint"
 else
     bad "piped invocation prints a curl-based pinned hint" "$(printf '%s' "$out" | tail -4)"
@@ -241,6 +241,28 @@ if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12/danglink" AXIS_DRY_RUN=1
     bad "unresolvable symlink fails closed" "accepted an unresolvable target"
 else
     ok "unresolvable symlink fails closed"
+fi
+
+# A path *beneath* an unresolved symlink must also fail closed. Checking only
+# the leaf accepts "<dangling-link>/bin", since the leaf itself is not a symlink.
+mkdir -p "$WORK/t12b"
+ln -sfn "$WORK/t12b/missing-target" "$WORK/t12b/parent-link"
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12b/parent-link/bin" AXIS_DRY_RUN=1 \
+       AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    bad "path beneath an unresolved symlink fails closed" "nested symlink bypassed the guard"
+else
+    ok "path beneath an unresolved symlink fails closed"
+fi
+
+# A target whose parents simply do not exist yet must still be allowed: mkdir -p
+# creates them, and refusing would break legitimate installs.
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12c/newdir/bin" AXIS_DRY_RUN=1 \
+       AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    ok "not-yet-existing target directory is allowed"
+else
+    bad "not-yet-existing target directory is allowed" "over-refused a creatable path"
 fi
 
 # The same fallback must not produce false positives on an ordinary symlink.
