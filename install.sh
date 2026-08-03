@@ -29,6 +29,10 @@ AXIS_REQUIRE_PINNED="${AXIS_REQUIRE_PINNED:-0}"
 # Set AXIS_DRY_RUN=1 to resolve and print the full plan (version, target,
 # scope, cleanup set) and exit before writing anything.
 AXIS_DRY_RUN="${AXIS_DRY_RUN:-0}"
+# Set AXIS_FORCE_REPLACE=1 to overwrite an existing file at the destination that
+# does not identify as AXIS. Never bypasses the package-manager or non-regular
+# entry refusals — those are not the operator's to override here.
+AXIS_FORCE_REPLACE="${AXIS_FORCE_REPLACE:-0}"
 REPO="toasterbook88/axis"
 CURL_ARGS=(-fsSL)
 
@@ -66,10 +70,9 @@ fi
 # Resolve a path to its physical location, following symlinks.
 #
 # `readlink -f` is GNU-first: it is missing or behaves differently on older
-# macOS/BSD userlands, and this script is a public `curl | bash` target. Try the
-# portable options in order and fall back to the literal path rather than
-# failing — callers treat an unresolvable path as "not package-managed", which
-# is the same answer they would have had without resolution.
+# macOS/BSD userlands, and this script is a public `curl | bash` target, so the
+# portable options are tried in order.
+#
 # Returns 0 and prints the resolved path, or returns 1 if it could not resolve.
 # Callers must treat a non-zero return as "unknown", never as "safe".
 canonicalize_path() {
@@ -246,6 +249,75 @@ if [ "$AXIS_INSTALL_DIR_DISPLAY" != "$AXIS_INSTALL_DIR" ]; then
     echo "Resolved install directory: $AXIS_INSTALL_DIR_DISPLAY -> $AXIS_INSTALL_DIR"
 fi
 
+CANONICAL="$AXIS_INSTALL_DIR/axis"
+
+# Classify the entry we would replace, before anything is downloaded or staged.
+#
+# The directory guard says nothing about the file inside it. /usr/local/bin is a
+# legitimate shared directory on Intel macOS while /usr/local/bin/axis may be a
+# Homebrew symlink into Cellar — the promotion would silently replace a
+# package-managed entry. The legacy-cleanup loop already refuses to touch
+# package-managed paths and non-AXIS files, but it runs *after* promotion, by
+# which point the original entry is gone. Apply the same ownership rules here.
+CANONICAL_STATE=""
+classify_canonical() {
+    if [ ! -e "$CANONICAL" ] && [ ! -L "$CANONICAL" ]; then
+        CANONICAL_STATE="absent"
+        return 0
+    fi
+    if [ -L "$CANONICAL" ]; then
+        local tgt=""
+        if tgt=$(canonicalize_path "$CANONICAL"); then
+            if is_package_managed "$CANONICAL" || is_package_managed "$tgt"; then
+                CANONICAL_STATE="package-manager-owned symlink -> $tgt"
+                return 1
+            fi
+        else
+            CANONICAL_STATE="symlink that cannot be resolved"
+            return 1
+        fi
+    fi
+    if [ -d "$CANONICAL" ]; then
+        CANONICAL_STATE="a directory"
+        return 1
+    fi
+    if [ ! -f "$CANONICAL" ]; then
+        CANONICAL_STATE="not a regular file"
+        return 1
+    fi
+    if is_package_managed "$CANONICAL"; then
+        CANONICAL_STATE="package-manager-owned file"
+        return 1
+    fi
+    if "$CANONICAL" version 2>/dev/null | grep -qi '^axis '; then
+        CANONICAL_STATE="existing AXIS install (upgrade)"
+        return 0
+    fi
+    CANONICAL_STATE="an existing file that does not identify as AXIS"
+    if [ "$AXIS_FORCE_REPLACE" = "1" ]; then
+        CANONICAL_STATE="$CANONICAL_STATE (replacing: AXIS_FORCE_REPLACE=1)"
+        return 0
+    fi
+    return 1
+}
+
+if ! classify_canonical; then
+    echo "Error: refusing to replace $CANONICAL"
+    echo "       it is $CANONICAL_STATE."
+    case "$CANONICAL_STATE" in
+        *"does not identify as AXIS"*)
+            echo "Set AXIS_FORCE_REPLACE=1 to overwrite it deliberately."
+            ;;
+        *package-manager*)
+            echo "Upgrade it through that package manager, or choose another AXIS_INSTALL_DIR."
+            ;;
+        *)
+            echo "Remove or relocate it, or choose another AXIS_INSTALL_DIR."
+            ;;
+    esac
+    exit 1
+fi
+
 # Scope decides cleanup direction. Compare physical against physical: a symlinked
 # home would otherwise misclassify a user-local install as system-wide.
 HOME_REAL=$(canonicalize_path "$HOME" 2>/dev/null) || HOME_REAL="$HOME"
@@ -265,7 +337,8 @@ if [ "$AXIS_DRY_RUN" = "1" ]; then
     echo "  archive       : $ARCHIVE_NAME"
     echo "  requested     : $AXIS_INSTALL_DIR_DISPLAY   (source: ${AXIS_INSTALL_DIR_SOURCE:-default})"
     echo "  install dir   : $AXIS_INSTALL_DIR   (physical)"
-    echo "  target        : $AXIS_INSTALL_DIR/axis"
+    echo "  target        : $CANONICAL"
+    echo "  existing entry: $CANONICAL_STATE"
     echo "  scope         : $INSTALL_SCOPE"
     if [ "$INSTALL_SCOPE" = "system" ]; then
         echo "  cleanup       : may remove verified user-local AXIS copies"
@@ -345,8 +418,6 @@ if dir_needs_sudo "$AXIS_INSTALL_DIR"; then
 fi
 
 $SUDO mkdir -p "$AXIS_INSTALL_DIR"
-
-CANONICAL="$AXIS_INSTALL_DIR/axis"
 
 # Stage into the destination directory, validate the STAGED file, then rename
 # over the canonical path only after it proves good.

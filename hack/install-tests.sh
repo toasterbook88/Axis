@@ -340,6 +340,59 @@ else
     ok "no staged file left after checksum failure"
 fi
 
+# 14. The canonical entry itself must be classified before it is replaced. The
+#     directory can be legitimate while the file inside it is package-managed,
+#     unrelated, or not a regular file at all.
+make_release 9.9.9 "$GOOD_BODY"
+
+# 14a. A Homebrew-style symlink at the canonical path is preserved.
+H="$WORK/t14a/home"; D="$WORK/t14a/bin"; C="$WORK/t14a/Cellar/axis/bin"
+mkdir -p "$H" "$D" "$C"
+printf '#!/bin/sh\necho "axis 0.0.1"\n' > "$C/axis"; chmod +x "$C/axis"
+ln -sfn "$C/axis" "$D/axis"
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9); rc=$?
+if [ "$rc" -ne 0 ] && [ -L "$D/axis" ]; then
+    ok "package-managed canonical symlink is preserved"
+else
+    bad "package-managed canonical symlink is preserved" "rc=$rc, still a symlink: $([ -L "$D/axis" ] && echo yes || echo no)"
+fi
+
+# 14b. An unrelated executable named axis is not silently overwritten.
+H="$WORK/t14b/home"; D="$WORK/t14b/bin"; mkdir -p "$H" "$D"
+printf '#!/bin/sh\necho "some other tool"\n' > "$D/axis"; chmod +x "$D/axis"
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9); rc=$?
+if [ "$rc" -ne 0 ] && "$D/axis" 2>/dev/null | grep -q 'some other tool'; then
+    ok "unrelated canonical executable is preserved"
+else
+    bad "unrelated canonical executable is preserved" "rc=$rc"
+fi
+# ...and AXIS_FORCE_REPLACE=1 is the documented way through.
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9 AXIS_FORCE_REPLACE=1)
+if "$D/axis" version 2>/dev/null | grep -q '9.9.9'; then
+    ok "AXIS_FORCE_REPLACE=1 overwrites an unrelated file"
+else
+    bad "AXIS_FORCE_REPLACE=1 overwrites an unrelated file" "$out"
+fi
+
+# 14c. A directory at the canonical path is refused.
+H="$WORK/t14c/home"; D="$WORK/t14c/bin"; mkdir -p "$H" "$D/axis"
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9); rc=$?
+if [ "$rc" -ne 0 ] && [ -d "$D/axis" ]; then
+    ok "directory at the canonical path is refused"
+else
+    bad "directory at the canonical path is refused" "rc=$rc"
+fi
+
+# 14d. An existing genuine AXIS binary upgrades normally.
+H="$WORK/t14d/home"; D="$WORK/t14d/bin"; mkdir -p "$H" "$D"
+printf '#!/bin/sh\necho "axis 1.2.3"\n' > "$D/axis"; chmod +x "$D/axis"
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9)
+if "$D/axis" version 2>/dev/null | grep -q '9.9.9'; then
+    ok "existing AXIS binary upgrades in place"
+else
+    bad "existing AXIS binary upgrades in place" "$out"
+fi
+
 echo
 printf 'install.sh: %d assertions passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]
