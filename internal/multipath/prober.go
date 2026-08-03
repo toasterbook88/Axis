@@ -1,7 +1,10 @@
 package multipath
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sort"
@@ -13,16 +16,36 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
-// ProbeResult holds the result of probing a single address.
+// ProbeResult holds the ephemeral result of probing a single address. It is not
+// persisted because failures and durations are relative to the process that
+// performed the probe.
 type ProbeResult struct {
-	Address string
-	Latency time.Duration
-	Err     error
+	Address                   string
+	SSHIdentificationDuration time.Duration
+	SelectionScore            time.Duration
+	Err                       error
+}
+
+// ProbeDecision describes the selected concrete SSH endpoint. Durations are
+// SSH identification probe durations, not network latency or a full SSH
+// handshake. The decision remains internal until snapshots can attribute route
+// observations to an explicit vantage point.
+type ProbeDecision struct {
+	SelectedTarget              string
+	SSHIdentificationDuration   time.Duration
+	AdjustedSelectionScore      time.Duration
+	CandidateCount              int
+	FailedProbeCount            int
+	ObservedAt                  time.Time
+	RevalidatedCachedTargetOnly bool
 }
 
 const (
 	maxConcurrentProbes = 3
 	successCacheTTL     = 2 * time.Minute
+	maxSuccessCacheSize = 256
+	maxIdentification   = 255
+	maxPreBannerLines   = 20
 )
 
 type cachedPath struct {
@@ -36,22 +59,38 @@ var successfulPaths = struct {
 }{entries: make(map[string]cachedPath)}
 
 // Probe evaluates filtered addresses with bounded concurrency to find the
-// fastest reachable path that speaks SSH. preferred contains already-known
-// logical or connected targets and is used to choose/order equivalent routes.
-// A recent successful result is revalidated alone before another fan-out.
-func Probe(ctx context.Context, port int, addresses []models.NetworkAddress, preferred ...string) string {
+// fastest reachable path that identifies itself as SSH. preferred contains
+// already-known logical or connected targets and is used to choose/order
+// equivalent routes. A recent successful result is revalidated alone before
+// another fan-out.
+func Probe(ctx context.Context, port int, addresses []models.NetworkAddress, preferred ...string) ProbeDecision {
+	return probe(ctx, port, addresses, measureProbe, preferred...)
+}
+
+type measureFunc func(context.Context, int, models.NetworkAddress) ProbeResult
+
+func probe(ctx context.Context, port int, addresses []models.NetworkAddress, measure measureFunc, preferred ...string) ProbeDecision {
 	candidates := probeCandidates(addresses, preferred)
-	if len(candidates) == 0 {
-		return ""
+	decision := ProbeDecision{
+		CandidateCount: len(candidates),
 	}
+	if len(candidates) == 0 {
+		return decision
+	}
+	decision.ObservedAt = time.Now().UTC()
 
 	cacheKey := pathCacheKey(port, candidates)
 	if cached := loadSuccessfulPath(cacheKey, candidates); cached != "" {
-		result := measureProbe(ctx, port, models.NetworkAddress{Address: cached})
+		result := measure(ctx, port, candidateByAddress(candidates, cached))
 		if result.Err == nil {
 			storeSuccessfulPath(cacheKey, cached)
-			return cached
+			decision.SelectedTarget = cached
+			decision.SSHIdentificationDuration = result.SSHIdentificationDuration
+			decision.AdjustedSelectionScore = result.SelectionScore
+			decision.RevalidatedCachedTargetOnly = true
+			return decision
 		}
+		decision.FailedProbeCount++
 		deleteSuccessfulPath(cacheKey)
 	}
 
@@ -64,7 +103,7 @@ func Probe(ctx context.Context, port int, addresses []models.NetworkAddress, pre
 		go func() {
 			defer wg.Done()
 			for candidate := range jobs {
-				results <- measureProbe(ctx, port, candidate)
+				results <- measure(ctx, port, candidate)
 			}
 		}()
 	}
@@ -78,31 +117,42 @@ func Probe(ctx context.Context, port int, addresses []models.NetworkAddress, pre
 		close(results)
 	}()
 
-	var best string
-	var minLatency time.Duration = -1
+	var best ProbeResult
+	found := false
 
 	for res := range results {
 		if res.Err != nil {
+			decision.FailedProbeCount++
 			continue
 		}
-		if minLatency == -1 || res.Latency < minLatency {
-			minLatency = res.Latency
-			best = res.Address
+		if !found || res.SelectionScore < best.SelectionScore ||
+			(res.SelectionScore == best.SelectionScore && res.Address < best.Address) {
+			best = res
+			found = true
 		}
 	}
-	if best != "" {
-		storeSuccessfulPath(cacheKey, best)
+	if found {
+		storeSuccessfulPath(cacheKey, best.Address)
+		decision.SelectedTarget = best.Address
+		decision.SSHIdentificationDuration = best.SSHIdentificationDuration
+		decision.AdjustedSelectionScore = best.SelectionScore
 	}
 
-	return best
+	return decision
 }
 
 func measureProbe(ctx context.Context, port int, candidate models.NetworkAddress) ProbeResult {
-	latency, err := probeSSH(ctx, candidate.Address, port)
+	duration, err := probeSSH(ctx, candidate.Address, port)
+	score := duration
 	if err == nil {
-		latency += overlayPenalty(candidate)
+		score += overlayPenalty(candidate)
 	}
-	return ProbeResult{Address: candidate.Address, Latency: latency, Err: err}
+	return ProbeResult{
+		Address:                   candidate.Address,
+		SSHIdentificationDuration: duration,
+		SelectionScore:            score,
+		Err:                       err,
+	}
 }
 
 // probeCandidates removes unusable/exact duplicates and collapses multiple IPv6
@@ -126,8 +176,11 @@ func probeCandidates(addresses []models.NetworkAddress, preferred []string) []mo
 			continue
 		}
 		ip = ip.Unmap()
+		if !eligibleAddress(ip) {
+			continue
+		}
 		candidate.Address = ip.String()
-		if isDockerBridgeAddr(candidate.Address) {
+		if isContainerBridgeCandidate(candidate) {
 			continue
 		}
 
@@ -160,6 +213,36 @@ func probeCandidates(addresses []models.NetworkAddress, preferred []string) []mo
 	return candidates
 }
 
+func eligibleAddress(ip netip.Addr) bool {
+	if !ip.IsValid() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLoopback() {
+		return false
+	}
+	// NetworkAddress.Interface names the remote interface. It cannot provide
+	// the observer-side zone required to dial an IPv6 link-local address.
+	if ip.Is6() && ip.IsLinkLocalUnicast() {
+		return false
+	}
+	return true
+}
+
+func isContainerBridgeCandidate(candidate models.NetworkAddress) bool {
+	iface := strings.ToLower(strings.TrimSpace(candidate.Interface))
+	return strings.HasPrefix(iface, "docker") ||
+		strings.HasPrefix(iface, "br-") ||
+		strings.HasPrefix(iface, "veth") ||
+		strings.HasPrefix(iface, "cni") ||
+		strings.HasPrefix(iface, "podman")
+}
+
+func candidateByAddress(candidates []models.NetworkAddress, address string) models.NetworkAddress {
+	for _, candidate := range candidates {
+		if candidate.Address == address {
+			return candidate
+		}
+	}
+	return models.NetworkAddress{Address: address}
+}
+
 func ipv6RouteKey(candidate models.NetworkAddress, ip netip.Addr) string {
 	if !ip.Is6() || candidate.Interface == "" || candidate.Subnet == "" {
 		return ""
@@ -187,12 +270,18 @@ func overlayPenalty(candidate models.NetworkAddress) time.Duration {
 }
 
 func pathCacheKey(port int, candidates []models.NetworkAddress) string {
-	addresses := make([]string, 0, len(candidates))
+	identities := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		addresses = append(addresses, candidate.Address)
+		identities = append(identities, strings.Join([]string{
+			candidate.Address,
+			candidate.Interface,
+			candidate.Subnet,
+			candidate.SpeedClass,
+			candidate.Scope,
+		}, "\x1f"))
 	}
-	sort.Strings(addresses)
-	return strconv.Itoa(port) + "|" + strings.Join(addresses, ",")
+	sort.Strings(identities)
+	return strconv.Itoa(port) + "|" + strings.Join(identities, "\x1e")
 }
 
 func loadSuccessfulPath(key string, candidates []models.NetworkAddress) string {
@@ -215,6 +304,23 @@ func loadSuccessfulPath(key string, candidates []models.NetworkAddress) string {
 func storeSuccessfulPath(key, address string) {
 	successfulPaths.Lock()
 	defer successfulPaths.Unlock()
+	now := time.Now()
+	for existingKey, entry := range successfulPaths.entries {
+		if now.After(entry.expiresAt) {
+			delete(successfulPaths.entries, existingKey)
+		}
+	}
+	if _, exists := successfulPaths.entries[key]; !exists && len(successfulPaths.entries) >= maxSuccessCacheSize {
+		oldestKey := ""
+		var oldestExpiry time.Time
+		for existingKey, entry := range successfulPaths.entries {
+			if oldestKey == "" || entry.expiresAt.Before(oldestExpiry) {
+				oldestKey = existingKey
+				oldestExpiry = entry.expiresAt
+			}
+		}
+		delete(successfulPaths.entries, oldestKey)
+	}
 	successfulPaths.entries[key] = cachedPath{address: address, expiresAt: time.Now().Add(successCacheTTL)}
 }
 
@@ -235,28 +341,43 @@ func probeSSH(ctx context.Context, ip string, port int) (time.Duration, error) {
 	}
 	defer conn.Close()
 
-	// Read the SSH banner to avoid fail2ban/IDS triggering on empty TCP connects.
-	// Many security tools ban IPs that connect and immediately close.
-	_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-	_, _ = conn.Read(make([]byte, 255))
+	readDeadline := time.Now().Add(time.Second)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(readDeadline) {
+		readDeadline = deadline
+	}
+	if err := conn.SetReadDeadline(readDeadline); err != nil {
+		return 0, fmt.Errorf("set SSH identification deadline: %w", err)
+	}
+	if err := readSSHIdentification(conn); err != nil {
+		return 0, fmt.Errorf("read SSH identification from %s: %w", ip, err)
+	}
 
 	return time.Since(start), nil
 }
 
-func isDockerBridgeAddr(ip string) bool {
-	parsed, err := netip.ParseAddr(ip)
-	if err != nil {
-		return false
-	}
-	parsed = parsed.Unmap()
-	if parsed.Is4() {
-		b := parsed.As4()
-		// Docker default and user-defined bridges: 172.16.0.0/12
-		if b[0] == 172 && b[1] >= 16 && b[1] <= 31 {
-			return true
+func readSSHIdentification(conn net.Conn) error {
+	reader := bufio.NewReaderSize(conn, maxIdentification+1)
+	for range maxPreBannerLines + 1 {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			if errors.Is(err, bufio.ErrBufferFull) || len(line) > maxIdentification {
+				return fmt.Errorf("identification line exceeds %d bytes", maxIdentification)
+			}
+			return err
 		}
+		if len(line) > maxIdentification {
+			return fmt.Errorf("identification line exceeds %d bytes", maxIdentification)
+		}
+		identification := strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r")
+		if !strings.HasPrefix(identification, "SSH-") {
+			continue
+		}
+		if strings.HasPrefix(identification, "SSH-2.0-") || strings.HasPrefix(identification, "SSH-1.99-") {
+			return nil
+		}
+		return fmt.Errorf("unsupported SSH identification %q", identification)
 	}
-	return false
+	return fmt.Errorf("SSH identification not found within %d pre-banner lines", maxPreBannerLines)
 }
 
 func isTailscaleAddr(ip netip.Addr) bool {
