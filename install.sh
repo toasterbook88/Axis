@@ -32,11 +32,30 @@ AXIS_DRY_RUN="${AXIS_DRY_RUN:-0}"
 REPO="toasterbook88/axis"
 CURL_ARGS=(-fsSL)
 
+INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
+
+# Emit a re-runnable pinned command for however this script was invoked.
+#
+# Under the documented `curl … | bash` flow, $0 is "bash" — printing
+# "AXIS_VERSION=… $0" would tell the operator to launch a shell, not to
+# reinstall. Detect the piped case and print the piped form instead.
+pinned_command_hint() {
+    local ver="${1:-vX.Y.Z}"
+    local base
+    base="$(basename -- "$0" 2>/dev/null || echo "$0")"
+    if [ -r "$0" ] && [ "$base" != "bash" ] && [ "$base" != "sh" ] && [ "$base" != "dash" ]; then
+        printf '    AXIS_VERSION=%s AXIS_REQUIRE_PINNED=1 %s\n' "$ver" "$0"
+    else
+        printf '    curl -fsSL %s \\\n' "$INSTALL_URL"
+        printf '      | AXIS_VERSION=%s AXIS_REQUIRE_PINNED=1 bash\n' "$ver"
+    fi
+}
+
 if [ "$AXIS_REQUIRE_PINNED" = "1" ] && [ "$AXIS_VERSION" = "latest" ]; then
     echo "Error: AXIS_REQUIRE_PINNED=1 but AXIS_VERSION is 'latest'."
     echo "Pin an explicit release so every node installs the same artifact:"
     echo ""
-    echo "    AXIS_VERSION=vX.Y.Z AXIS_REQUIRE_PINNED=1 $0"
+    pinned_command_hint "vX.Y.Z"
     echo ""
     echo "Current releases: https://github.com/$REPO/releases"
     exit 1
@@ -49,16 +68,31 @@ fi
 # portable options in order and fall back to the literal path rather than
 # failing — callers treat an unresolvable path as "not package-managed", which
 # is the same answer they would have had without resolution.
+# Returns 0 and prints the resolved path, or returns 1 if it could not resolve.
+# Callers must treat a non-zero return as "unknown", never as "safe".
 canonicalize_path() {
-    local p="$1" out=""
-    if out=$(readlink -f "$p" 2>/dev/null) && [ -n "$out" ]; then printf '%s\n' "$out"; return; fi
-    if out=$(realpath "$p" 2>/dev/null) && [ -n "$out" ]; then printf '%s\n' "$out"; return; fi
+    local p="$1" out="" dir="" base=""
+    if out=$(readlink -f "$p" 2>/dev/null) && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    if out=$(realpath "$p" 2>/dev/null) && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
     if command -v python3 >/dev/null 2>&1; then
         if out=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$p" 2>/dev/null) && [ -n "$out" ]; then
-            printf '%s\n' "$out"; return
+            printf '%s\n' "$out"; return 0
         fi
     fi
-    printf '%s\n' "$p"
+    # Dependency-free fallback: `cd -P` resolves symlinks physically using only
+    # shell builtins, so it works where none of the helpers above exist.
+    if [ -d "$p" ]; then
+        if out=$( cd -P "$p" 2>/dev/null && pwd -P ) && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    else
+        dir=$(dirname -- "$p"); base=$(basename -- "$p")
+        if out=$( cd -P "$dir" 2>/dev/null && pwd -P ) && [ -n "$out" ]; then
+            # The parent is now physical. If the leaf itself is a symlink we
+            # still cannot see through it, so report failure rather than guess.
+            if [ -L "$p" ]; then return 1; fi
+            printf '%s/%s\n' "$out" "$base"; return 0
+        fi
+    fi
+    return 1
 }
 
 # True when a path lies inside a package-manager-owned tree.
@@ -73,12 +107,26 @@ is_package_managed() {
 # upgrade of that manager would overwrite or orphan the binary. Both the literal
 # and the resolved path are checked — a symlink such as
 # /usr/local/bin -> /opt/homebrew/bin would otherwise slip past a literal match.
-AXIS_INSTALL_DIR_REAL=$(canonicalize_path "$AXIS_INSTALL_DIR")
-if is_package_managed "$AXIS_INSTALL_DIR" || is_package_managed "$AXIS_INSTALL_DIR_REAL"; then
-    echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
-    [ "$AXIS_INSTALL_DIR_REAL" != "$AXIS_INSTALL_DIR" ] && echo "       (resolves to $AXIS_INSTALL_DIR_REAL)"
-    echo "Install it through that package manager, or choose /usr/local/bin."
+if AXIS_INSTALL_DIR_REAL=$(canonicalize_path "$AXIS_INSTALL_DIR"); then
+    if is_package_managed "$AXIS_INSTALL_DIR" || is_package_managed "$AXIS_INSTALL_DIR_REAL"; then
+        echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
+        [ "$AXIS_INSTALL_DIR_REAL" != "$AXIS_INSTALL_DIR" ] && echo "       (resolves to $AXIS_INSTALL_DIR_REAL)"
+        echo "Install it through that package manager, or choose /usr/local/bin."
+        exit 1
+    fi
+elif [ -L "$AXIS_INSTALL_DIR" ]; then
+    # Fail closed: an unresolvable symlink could point into a package-managed
+    # tree, and a safety guard must not treat "unknown" as "safe".
+    echo "Error: $AXIS_INSTALL_DIR is a symlink and this system has no way to resolve it."
+    echo "Install to the physical directory it points at, or choose /usr/local/bin."
     exit 1
+else
+    AXIS_INSTALL_DIR_REAL="$AXIS_INSTALL_DIR"
+    if is_package_managed "$AXIS_INSTALL_DIR"; then
+        echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
+        echo "Install it through that package manager, or choose /usr/local/bin."
+        exit 1
+    fi
 fi
 
 echo "Installing AXIS to $AXIS_INSTALL_DIR..."
@@ -151,7 +199,7 @@ if [ "$AXIS_VERSION" = "latest" ]; then
     echo "Resolved latest -> $TAG"
     echo "NOTE: for a fleet rollout, pin this explicitly so every node gets the same"
     echo "      artifact even if a release lands mid-rollout:"
-    echo "          AXIS_VERSION=$TAG AXIS_REQUIRE_PINNED=1 $0"
+    pinned_command_hint "$TAG"
 fi
 
 # Scope decides cleanup direction; resolved here so --dry-run can report it.
@@ -261,7 +309,10 @@ CANONICAL="$AXIS_INSTALL_DIR/axis"
 # or the new one, never a partial write. Installing directly over the canonical
 # path and validating afterwards would destroy a working binary before
 # discovering the replacement is unusable.
-STAGED="$AXIS_INSTALL_DIR/.axis-install-$$"
+# mktemp, not $$: a PID-derived name is predictable, which matters when the
+# destination is an operator-chosen directory writable by others. mktemp creates
+# the file exclusively, so it cannot be pre-created or aimed at via symlink.
+STAGED=$($SUDO mktemp "$AXIS_INSTALL_DIR/.axis-install-XXXXXX")
 cleanup_staged() { [ -n "${STAGED:-}" ] && $SUDO rm -f "$STAGED" 2>/dev/null || true; }
 trap 'rm -rf "$WORKDIR"; cleanup_staged' EXIT
 
@@ -315,9 +366,15 @@ for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/
     # Resolve before testing ownership: on Intel macOS /usr/local/bin/axis may
     # be a Homebrew symlink into /usr/local/Cellar, which an unresolved match
     # would miss.
-    resolved=$(canonicalize_path "$cand")
-    if is_package_managed "$cand" || is_package_managed "$resolved"; then
-        echo "NOTE: $cand is package-manager owned; leaving it alone."
+    if resolved=$(canonicalize_path "$cand"); then
+        if is_package_managed "$cand" || is_package_managed "$resolved"; then
+            echo "NOTE: $cand is package-manager owned; leaving it alone."
+            continue
+        fi
+    else
+        # Unresolvable — cannot rule out a package-managed target, so do not
+        # delete it. Fail closed on removal too, not just on install.
+        echo "NOTE: $cand could not be resolved; leaving it alone."
         continue
     fi
 

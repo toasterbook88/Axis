@@ -189,6 +189,92 @@ else
     bad "default target is system-scoped /usr/local/bin" "$out"
 fi
 
+# 11. The pinned hint must be runnable. Under `curl | bash`, $0 is "bash", so a
+#     hint of "AXIS_VERSION=… $0" would tell the operator to start a shell.
+out=$(printf '%s' "$(cat "$INSTALL_SH")" | env AXIS_REQUIRE_PINNED=1 AXIS_VERSION=latest bash 2>&1 || true)
+if printf '%s' "$out" | grep -qE '^\s+curl -fsSL .*install\.sh'; then
+    ok "piped invocation prints a curl-based pinned hint"
+else
+    bad "piped invocation prints a curl-based pinned hint" "$(printf '%s' "$out" | tail -4)"
+fi
+if printf '%s' "$out" | grep -qE 'AXIS_REQUIRE_PINNED=1 (bash|/)'; then
+    ok "piped hint does not end at a bare shell name"
+else
+    bad "piped hint does not end at a bare shell name" "$(printf '%s' "$out" | tail -4)"
+fi
+out=$(env AXIS_REQUIRE_PINNED=1 AXIS_VERSION=latest bash "$INSTALL_SH" 2>&1 || true)
+if printf '%s' "$out" | grep -q "$INSTALL_SH"; then
+    ok "file invocation prints a path-based pinned hint"
+else
+    bad "file invocation prints a path-based pinned hint" "$(printf '%s' "$out" | tail -4)"
+fi
+
+# 12. The package-manager guard must still hold when every external
+#     canonicalization helper is missing — the case that previously failed open.
+#     Stub readlink/realpath/python3 to failure and point the target at a symlink
+#     into a Cellar tree. The builtin `cd -P` fallback must still resolve it and
+#     the install must be refused.
+mkdir -p "$WORK/t12/Cellar/axis/bin" "$WORK/t12/stub" "$WORK/t12/plain"
+ln -sfn "$WORK/t12/Cellar/axis/bin" "$WORK/t12/pkglink"
+ln -sfn "$WORK/t12/plain" "$WORK/t12/safelink"
+for s in readlink realpath python3; do
+    printf '#!/bin/sh\nexit 1\n' > "$WORK/t12/stub/$s"; chmod +x "$WORK/t12/stub/$s"
+done
+STUBBED_PATH="$WORK/t12/stub:$PATH"
+
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12/pkglink" AXIS_DRY_RUN=1 \
+       AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    bad "symlink into a package tree is refused with no helpers available" \
+        "guard failed open — this is the regression"
+else
+    ok "symlink into a package tree is refused with no helpers available"
+fi
+
+# When even `cd -P` cannot resolve (dangling symlink), the guard must refuse
+# rather than assume safety. This is the fail-closed branch specifically; the
+# assertion above is satisfied by successful fallback resolution instead.
+ln -sfn "$WORK/t12/does-not-exist" "$WORK/t12/danglink"
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12/danglink" AXIS_DRY_RUN=1 \
+       AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    bad "unresolvable symlink fails closed" "accepted an unresolvable target"
+else
+    ok "unresolvable symlink fails closed"
+fi
+
+# The same fallback must not produce false positives on an ordinary symlink.
+if env PATH="$STUBBED_PATH" AXIS_INSTALL_DIR="$WORK/t12/safelink" AXIS_DRY_RUN=1 \
+       AXIS_VERSION=v9.9.9 AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+       bash "$INSTALL_SH" >/dev/null 2>&1; then
+    ok "ordinary symlink target still allowed with no helpers available"
+else
+    bad "ordinary symlink target still allowed with no helpers available" \
+        "guard is over-refusing"
+fi
+
+# 13. A corrupted archive must fail the checksum and never reach the canonical path.
+make_release 9.9.9 "$GOOD_BODY"
+H="$WORK/t13/home"; D="$WORK/t13/bin"; mkdir -p "$H" "$D"
+printf '#!/bin/sh\necho "axis 1.2.3"\n' > "$D/axis"; chmod +x "$D/axis"
+printf 'corrupted' >> "$WORK/releases/v9.9.9"/axis_9.9.9_*.tar.gz
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'checksum'; then
+    ok "corrupted archive fails checksum verification"
+else
+    bad "corrupted archive fails checksum verification" "rc=$rc"
+fi
+if "$D/axis" version 2>/dev/null | grep -q '1.2.3'; then
+    ok "canonical binary preserved on checksum failure"
+else
+    bad "canonical binary preserved on checksum failure"
+fi
+if ls "$D"/.axis-install-* >/dev/null 2>&1; then
+    bad "no staged file left after checksum failure"
+else
+    ok "no staged file left after checksum failure"
+fi
+
 echo
-printf 'install.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
+printf 'install.sh: %d assertions passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
