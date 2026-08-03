@@ -12,11 +12,43 @@ set -euo pipefail
 #
 # Override with AXIS_INSTALL_DIR=... for a user-local install.
 AXIS_VERSION="${AXIS_VERSION:-latest}"
+# Record whether the target came from the environment or the built-in default,
+# so the default path is observable (and testable) without being overridden.
+if [ -n "${AXIS_INSTALL_DIR:-}" ]; then
+    AXIS_INSTALL_DIR_SOURCE="AXIS_INSTALL_DIR override"
+else
+    AXIS_INSTALL_DIR_SOURCE="built-in default"
+fi
 AXIS_INSTALL_DIR="${AXIS_INSTALL_DIR:-/usr/local/bin}"
 # Set AXIS_KEEP_LEGACY=1 to leave pre-existing user-local installs in place.
 AXIS_KEEP_LEGACY="${AXIS_KEEP_LEGACY:-0}"
+# Set AXIS_REQUIRE_PINNED=1 to refuse "latest". A fleet rollout that resolves
+# "latest" per node can straddle a release published mid-rollout, leaving nodes
+# on different versions — the exact drift this installer exists to prevent.
+AXIS_REQUIRE_PINNED="${AXIS_REQUIRE_PINNED:-0}"
+# Set AXIS_DRY_RUN=1 to resolve and print the full plan (version, target,
+# scope, cleanup set) and exit before writing anything.
+AXIS_DRY_RUN="${AXIS_DRY_RUN:-0}"
 REPO="toasterbook88/axis"
 CURL_ARGS=(-fsSL)
+
+if [ "$AXIS_REQUIRE_PINNED" = "1" ] && [ "$AXIS_VERSION" = "latest" ]; then
+    echo "Error: AXIS_REQUIRE_PINNED=1 but AXIS_VERSION is 'latest'."
+    echo "Pin an explicit release so every node installs the same artifact:"
+    echo ""
+    echo "    AXIS_VERSION=v0.14.8 AXIS_REQUIRE_PINNED=1 $0"
+    exit 1
+fi
+
+# Refuse to install into a directory owned by a package manager: the next
+# upgrade of that manager would overwrite or orphan the binary.
+case "$AXIS_INSTALL_DIR/" in
+    /nix/store/*|/run/current-system/*|/opt/homebrew/*|*/Cellar/*|*/linuxbrew/*|/var/lib/flatpak/*|/snap/*)
+        echo "Error: refusing to install into $AXIS_INSTALL_DIR — that path is package-manager owned."
+        echo "Install it through that package manager, or choose /usr/local/bin."
+        exit 1
+        ;;
+esac
 
 echo "Installing AXIS to $AXIS_INSTALL_DIR..."
 
@@ -79,6 +111,38 @@ VERSION_NUM="${TAG#v}"
 ARCHIVE_NAME="axis_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE_NAME"
 CHECKSUM_URL="https://github.com/$REPO/releases/download/$TAG/checksums.txt"
+
+if [ "$AXIS_VERSION" = "latest" ]; then
+    echo "Resolved latest -> $TAG"
+    echo "NOTE: for a fleet rollout, pin this explicitly so every node gets the same"
+    echo "      artifact even if a release lands mid-rollout:"
+    echo "          AXIS_VERSION=$TAG AXIS_REQUIRE_PINNED=1 $0"
+fi
+
+# Scope decides cleanup direction; resolved here so --dry-run can report it.
+case "$AXIS_INSTALL_DIR/" in
+    "$HOME"/*) INSTALL_SCOPE="user" ;;
+    *)         INSTALL_SCOPE="system" ;;
+esac
+
+if [ "$AXIS_DRY_RUN" = "1" ]; then
+    echo ""
+    echo "===================== DRY RUN — nothing written ====================="
+    echo "  platform      : $OS-$ARCH"
+    echo "  release       : $TAG"
+    echo "  archive       : $ARCHIVE_NAME"
+    echo "  install dir   : $AXIS_INSTALL_DIR   (source: ${AXIS_INSTALL_DIR_SOURCE:-default})"
+    echo "  target        : $AXIS_INSTALL_DIR/axis"
+    echo "  scope         : $INSTALL_SCOPE"
+    if [ "$INSTALL_SCOPE" = "system" ]; then
+        echo "  cleanup       : may remove verified user-local AXIS copies"
+    else
+        echo "  cleanup       : user-local install — system copies reported, never removed"
+    fi
+    echo "  keep legacy   : $AXIS_KEEP_LEGACY"
+    echo "====================================================================="
+    exit 0
+fi
 
 WORKDIR=$(mktemp -d "/tmp/axis-install-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -187,11 +251,6 @@ echo ""
 # because it is the copy every account and service resolves. A user-local
 # install must never delete the system copy: that would be one account removing
 # a binary other users and systemd units depend on.
-case "$AXIS_INSTALL_DIR/" in
-    "$HOME"/*) INSTALL_SCOPE="user" ;;
-    *)         INSTALL_SCOPE="system" ;;
-esac
-
 LEGACY_PATHS=()
 FOREIGN_PATHS=()
 for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/opt/homebrew/bin/axis"; do
@@ -283,3 +342,31 @@ if [[ ":$PATH:" != *":$AXIS_INSTALL_DIR:"* ]]; then
 else
     echo "You can now run 'axis version' to verify the installation."
 fi
+
+# Installing a file does not update a running process. A systemd unit or launchd
+# job that already mapped the old executable keeps running it until restarted,
+# so "the file is v$INSTALLED_VERSION" and "the service is v$INSTALLED_VERSION"
+# are separate claims requiring separate verification.
+#
+# This script deliberately does not restart anything: service management has its
+# own blast radius (in-flight work, dependency ordering, restart storms) and does
+# not belong to a binary installer.
+echo ""
+echo "-------------------------------------------------------------------"
+echo " Installed FILE is v$INSTALLED_VERSION. Running PROCESSES are not updated."
+RUNNING_AXIS_UNITS=""
+if command -v systemctl >/dev/null 2>&1; then
+    RUNNING_AXIS_UNITS=$(systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null \
+        | awk '{print $1}' | grep -iE '^axis' || true)
+fi
+if [ -n "$RUNNING_AXIS_UNITS" ]; then
+    echo " Running axis-related services on this host:"
+    echo "$RUNNING_AXIS_UNITS" | sed 's/^/     /'
+    echo " Restart whichever of these execute the axis binary, then re-check the"
+    echo " running version. Units with an absolute ExecStart may point at a"
+    echo " different path than the one just installed."
+else
+    echo " No running axis-* systemd services detected on this host."
+fi
+echo " Duplicate-install check:  axis doctor"
+echo "-------------------------------------------------------------------"
