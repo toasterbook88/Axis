@@ -20,9 +20,16 @@ func TestMain(m *testing.M) {
 	doctorProbeRemoteShell = func(context.Context, config.NodeConfig) (string, bool) {
 		return "", false
 	}
+	// Install hygiene enumerates axis binaries on the build host; stub globally
+	// so doctor output does not depend on the developer's own installs.
+	prevInstall := doctorProbeInstall
+	doctorProbeInstall = func() DoctorCheck {
+		return DoctorCheck{Name: "AXIS Install", Status: "pass", Message: "single system-wide install (stubbed)"}
+	}
 
 	code := m.Run()
 
+	doctorProbeInstall = prevInstall
 	doctorProbeRemoteShell = prevShell
 	getGitRepoState = prevGit
 	os.Exit(code)

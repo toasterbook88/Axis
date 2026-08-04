@@ -46,7 +46,8 @@ Source of truth: [`Makefile`](Makefile).
 
 ```bash
 make build          # CGO_ENABLED=0 go build -trimpath with LDFLAGS
-make install-user   # Build + install to ~/.local/bin (preferred)
+make install-system # Build + install to /usr/local/bin (preferred on cluster nodes)
+make install-user   # Build + install to ~/.local/bin (workstation development)
 make install        # Build + copy to $GOPATH/bin (legacy)
 make test           # go test ./... -count=1 -timeout 180s
 make test-race      # go test ./... -count=1 -timeout 180s -race
@@ -55,7 +56,22 @@ make coverage       # ./hack/coverage-check.sh
 make clean          # rm -f axis
 ```
 
-After `make install-user` on a daemon host: `axis daemon restart && axis daemon status`.
+After installing on a daemon host: `axis daemon restart && axis daemon status`.
+
+AXIS installs to `/usr/local/bin` by default so every node resolves the same
+absolute path. A second binary earlier in `$PATH` shadows the canonical one:
+`axis update` then refreshes the copy the operator invokes while a systemd unit
+with an absolute `ExecStart` keeps running the stale one, and each host's
+`axis version` still looks correct in isolation. `axis doctor` reports duplicate
+installs.
+
+NixOS omits `/usr/local/bin` from `PATH` by default. Add it with
+`environment.sessionVariables.PATH = [ "/usr/local/bin" ];` in `configuration.nix`
+— that is set through PAM, so it reaches non-interactive SSH, which the remote
+fact collectors rely on. Do not substitute `environment.extraInit`: it runs
+during shell initialization only and misses non-interactive SSH. Neither option
+configures systemd; NixOS units carry a hermetic `PATH` built from their own
+inputs, so any unit invoking axis needs an absolute `ExecStart`.
 `axis version` must print `commit:` — that line distinguishes tip-of-main from a GitHub release with the same semver.
 Never `gh release create` before the tag workflow; GoReleaser owns GitHub Releases.
 
