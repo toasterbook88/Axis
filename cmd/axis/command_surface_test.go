@@ -768,6 +768,17 @@ func TestResolveChatModelUsesRequestedValue(t *testing.T) {
 }
 
 func TestResolveChatModelFallsBackToResolver(t *testing.T) {
+	// Self-isolate, as many other tests in this package already do. Without it
+	// the operator's real ~/.axis/ai.yaml supplies a model and the fallback
+	// under test is never reached, so the test passes under `make test` (which
+	// redirects HOME) and fails under a bare `go test ./...`.
+	//
+	// Both variables are required: persist.AxisDir() gives a non-empty AXIS_HOME
+	// precedence over HOME, so isolating HOME alone still reads the operator's
+	// store whenever AXIS_HOME is exported.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AXIS_HOME", t.TempDir())
+
 	restore := stubDefaultChatModelResolver(t, func(context.Context) string {
 		return "default-model"
 	})
