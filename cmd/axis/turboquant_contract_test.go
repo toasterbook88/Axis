@@ -13,6 +13,18 @@ import (
 )
 
 func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
+	// Self-isolate, as many other tests in this package already do. The cluster
+	// snapshot below is fully injected, but planTaskExplanation still reads the
+	// operator's ~/.axis/ai.yaml, which adds inference-role reasoning and so
+	// changes the golden output. Bisected to that file: removing it makes this
+	// pass.
+	//
+	// Both variables are required: persist.AxisDir() gives a non-empty AXIS_HOME
+	// precedence over HOME, so isolating HOME alone still reads the operator's
+	// store whenever AXIS_HOME is exported.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AXIS_HOME", t.TempDir())
+
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
