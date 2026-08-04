@@ -13,7 +13,7 @@ LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.UpdateManagedBy=
 
-.PHONY: build test test-race lint coverage clean install install-user install-system test-install
+.PHONY: build test test-race lint coverage clean install install-user install-system test-install test-fleet
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o axis ./cmd/axis/
@@ -73,6 +73,16 @@ test-race:
 	trap 'rm -rf "$$d"' EXIT; \
 	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
 	HOME="$$d" AXIS_HOME= go test -race ./... -count=1 -timeout 180s
+
+# Fleet test: two-node read-only facts smoke. Gated behind //go:build fleet so
+# it never runs in normal CI or make test. Set AXIS_FLEET_TARGET to the remote
+# node ([user@]host[:port]) and ensure SSH key access to it; the test skips when
+# that variable is unset.
+test-fleet:
+	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
+	trap 'rm -rf "$$d"' EXIT; \
+	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
+	HOME="$$d" AXIS_HOME= go test -tags=fleet -count=1 -timeout 120s -v ./internal/fleettest/
 
 lint:
 	@unformatted=$$(gofmt -l .) || exit $$?; \
