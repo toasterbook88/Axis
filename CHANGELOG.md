@@ -1,5 +1,28 @@
 ## Unreleased
 
+## v0.14.10 (2026-08-04)
+
+### 🚀 Features
+* **Install:** `install.sh` installs to `/usr/local/bin` by default so every node resolves the same absolute path, and retires superseded user-local copies. The downloaded binary is staged inside the destination, executed and version-checked, then renamed over the canonical path, so a checksum-valid but unusable artifact can no longer destroy a working install. The existing entry is classified first: package-manager symlinks, unresolvable symlinks and non-regular entries are refused, and a non-AXIS file requires `AXIS_FORCE_REPLACE=1`. Path resolution fails closed on `..`, inaccessible ancestors and unresolvable symlinks. Adds `AXIS_REQUIRE_PINNED`, `AXIS_DRY_RUN`, `AXIS_RELEASE_BASE_URL`, and a committed regression suite (`make test-install`). (#271)
+* **Doctor:** Report duplicate `axis` binaries on a host, reusing the shadow enumeration already present in `axis update`. (#271)
+
+### 🐛 Bug Fixes
+* **Update:** Preflight target writability before downloading, so a privileged destination fails immediately with the elevation command rather than at the final rename after a multi-megabyte download. (#271)
+* **Tests:** Two `cmd/axis` tests relied on the caller to isolate `HOME`; they now set `HOME` and `AXIS_HOME` themselves, so a bare `go test ./...` no longer reads the operator's store. (#270)
+
+### 🔧 Maintenance
+* **Fleet tests:** Add `internal/fleettest`, a write-containment guard for tests that execute against real nodes, plus a build-tagged two-node facts smoke (`make test-fleet`). Not imported by `cmd/`, so it never enters the shipped binary. (#272)
+
+**Upgrade note:** `install.sh` now defaults to `/usr/local/bin` rather than `$HOME/.local/bin` and removes the superseded user-local copy. Set `AXIS_INSTALL_DIR` to override, or `AXIS_KEEP_LEGACY=1` to leave existing copies in place.
+
+
+## v0.14.9 (2026-08-04)
+
+Tagged but never published. The release workflow failed its documentation gate
+before GoReleaser ran, so no artifacts exist for this tag. Superseded by
+v0.14.10, which carries the same changes. The entry is retained because
+`hack/verify-doc-facts.sh` requires one for every git tag.
+
 ## v0.14.8 (2026-08-03)
 
 ### 🚀 Features
