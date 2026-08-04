@@ -13,7 +13,7 @@ LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.UpdateManagedBy=
 
-.PHONY: build test test-race lint coverage clean install install-user
+.PHONY: build test test-race lint coverage clean install install-user install-system test-install
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o axis ./cmd/axis/
@@ -22,7 +22,25 @@ build:
 install: build
 	cp axis $(shell go env GOPATH)/bin/axis
 
-# Install to ~/.local/bin — matches axis update / install.sh on Cranium.
+# Regression tests for install.sh. Hermetic: serves a local release tree over
+# file:// so no network and no real system paths are touched.
+test-install:
+	./hack/install-tests.sh
+
+# Install to /usr/local/bin — the same absolute path on every node, and what
+# install.sh writes by default. Preferred for any host in a cluster: per-user
+# paths differ per account, so two nodes can sit on different releases while
+# each one's `axis version` looks correct.
+SYSTEM_PREFIX ?= /usr/local
+install-system: build
+	sudo mkdir -p $(SYSTEM_PREFIX)/bin
+	sudo install -m 0755 axis $(SYSTEM_PREFIX)/bin/axis
+	@echo "installed $(SYSTEM_PREFIX)/bin/axis (version $(VERSION) commit $(COMMIT))"
+	@echo "verify: $(SYSTEM_PREFIX)/bin/axis version"
+	@echo "check for duplicate installs: $(SYSTEM_PREFIX)/bin/axis doctor"
+
+# Install to ~/.local/bin. Useful for development on a workstation; prefer
+# install-system on cluster nodes so every host resolves one path.
 install-user: build
 	mkdir -p $(PREFIX)/bin
 	install -m 0755 axis $(PREFIX)/bin/axis
