@@ -95,7 +95,10 @@ func TestValidateRejectsAdversarialAxisHomes(t *testing.T) {
 		{"whitespace only", "   "},
 		{"relative path", "axis-home"},
 		{"the real operator store", realStore},
-		{"a hardcoded live store path", "/home/cranium/.axis"},
+		// Any AXIS root that happens to exist elsewhere on the filesystem.
+		// Constructed rather than hardcoded: the assertion is about being
+		// outside the run root, not about one particular machine's layout.
+		{"an operator store outside the run root", filepath.Join(t.TempDir(), ".axis")},
 		// Raw strings, not filepath.Join: Join normalises ".." away before
 		// Validate ever sees it, so a Join-built case would not exercise the
 		// rule at all.
@@ -237,5 +240,30 @@ func TestContainmentErrorNamesBothPaths(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error message %q should mention %q", msg, want)
 		}
+	}
+}
+
+// TestRemoteRootDerivationIsUniquePerGuard asserts that the remote run root
+// derivation produces distinct paths for different local guards. This is the
+// remote counterpart of TestNewGuardRunRootsAreUnique: the local side already
+// guarantees unique roots; the remote side must derive from that uniqueness
+// so concurrent runs don't collide on the same remote directory.
+//
+// The derivation is a pure function of g.Root and the target name, so this
+// test is hermetic and does not require cluster access.
+func TestRemoteRootDerivationIsUniquePerGuard(t *testing.T) {
+	base := t.TempDir()
+	seen := map[string]bool{}
+
+	for i := 0; i < 5; i++ {
+		g, err := NewGuard(base)
+		if err != nil {
+			t.Fatalf("NewGuard: %v", err)
+		}
+		remoteRoot := g.RemoteRoot("node-a")
+		if seen[remoteRoot] {
+			t.Errorf("remote root %q reused for different local guard (iteration %d)", remoteRoot, i)
+		}
+		seen[remoteRoot] = true
 	}
 }

@@ -192,6 +192,13 @@ func (g *Guard) Env() []string {
 	}
 }
 
+// RemoteRoot returns the remote run root path for a target node, derived from
+// the local guard's unique root so concurrent runs don't collide on the same
+// remote directory. The target name disambiguates multiple nodes in one run.
+func (g *Guard) RemoteRoot(targetName string) string {
+	return filepath.Join("/tmp", filepath.Base(g.Root)+"-"+targetName)
+}
+
 // RemoteEnv returns the assignments for a remote run root on another node.
 // Remote paths differ from local ones, so the caller supplies the root that
 // was created on that node.
