@@ -4,6 +4,18 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * *"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "cmd/axis/**"
+      - "internal/facts/**"
+      - "internal/placement/**"
+      - "internal/transport/**"
+      - "internal/buildinfo/**"
+      - "internal/models/**"
+      - "hack/**"
+      - "README.md"
+      - "docs/current-state.md"
   push:
     branches: [main]
     paths:
@@ -56,7 +68,7 @@ jobs:
       - name: Run tests
         env:
           GOTOOLCHAIN: auto
-        run: go test ./... -count=1
+        run: make test
 
       - name: Build
         env:
@@ -122,4 +134,3 @@ jobs:
         run: |
           git reset --hard HEAD
           git clean -ffdx
-

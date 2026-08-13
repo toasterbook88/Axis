@@ -7,6 +7,11 @@ PREFIX   ?= $(HOME)/.local
 # repository change. Bump deliberately.
 STATICCHECK_VERSION ?= 2025.1.1
 
+# Go's implicit VCS probe can fail in valid linked worktrees. Axis release
+# metadata is injected explicitly below, so Makefile gates and builds do not
+# depend on that probe.
+export GOFLAGS := $(strip $(GOFLAGS) -buildvcs=false)
+
 LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Commit=$(COMMIT) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Date=$(DATE) \
