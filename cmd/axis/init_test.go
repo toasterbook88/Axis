@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 func TestInitCmdFirstTime(t *testing.T) {
@@ -26,7 +27,7 @@ func TestInitCmdFirstTime(t *testing.T) {
 		t.Fatalf("nodes = %d, want 1", len(cfg.Nodes))
 	}
 	local := cfg.Nodes[0]
-	if local.Name != "my-local-node" || local.Hostname != "localhost" || local.SSHUser != "my-ssh-user" || local.Role != "primary" {
+	if local.Name != "my-local-node" || local.Hostname != "localhost" || local.SSHUser != "my-ssh-user" || local.Role != "primary" || local.StableID != "test-stable-id" {
 		t.Fatalf("unexpected local node: %+v", local)
 	}
 	if cfg.Discovery == nil || cfg.Discovery.Enabled {
@@ -41,6 +42,11 @@ func TestInitCmdFirstTime(t *testing.T) {
 	}
 	if !strings.Contains(out, "First-time setup") || !strings.Contains(out, "Configuration saved") {
 		t.Fatalf("missing onboarding output:\n%s", out)
+	}
+	for _, next := range []string{"axis doctor --strict", "axis daemon service install", "axis daemon status"} {
+		if !strings.Contains(out, next) {
+			t.Errorf("onboarding output missing %q:\n%s", next, out)
+		}
 	}
 }
 
@@ -391,11 +397,12 @@ func executeInit(t *testing.T, path, input string, deps initDependencies) string
 
 func testInitDeps() initDependencies {
 	return initDependencies{
-		hostname:    func() (string, error) { return "test-host.local", nil },
-		defaultUser: func() string { return "operator" },
-		loadConfig:  config.Load,
-		saveConfig:  config.SaveAtomic,
-		verifySSH:   func(context.Context, string, int, string, int, io.Writer) bool { return true },
+		hostname:      func() (string, error) { return "test-host.local", nil },
+		defaultUser:   func() string { return "operator" },
+		localIdentity: func(context.Context) *models.NodeIdentity { return models.NewNodeIdentity("test-stable-id", "test") },
+		loadConfig:    config.Load,
+		saveConfig:    config.SaveAtomic,
+		verifySSH:     func(context.Context, string, int, string, int, io.Writer) bool { return true },
 		discoverTailscale: func(context.Context) ([]config.NodeConfig, error) {
 			return nil, nil
 		},

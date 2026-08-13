@@ -20,6 +20,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
+	"github.com/toasterbook88/axis/internal/facts"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -44,6 +46,7 @@ func initCmd() *cobra.Command {
 type initDependencies struct {
 	hostname          func() (string, error)
 	defaultUser       func() string
+	localIdentity     func(context.Context) *models.NodeIdentity
 	loadConfig        func(string) (*config.Config, error)
 	saveConfig        func(string, *config.Config) (config.SaveResult, error)
 	verifySSH         func(context.Context, string, int, string, int, io.Writer) bool
@@ -55,6 +58,7 @@ func defaultInitDependencies() initDependencies {
 	return initDependencies{
 		hostname:          os.Hostname,
 		defaultUser:       currentSSHUser,
+		localIdentity:     facts.LocalNodeIdentity,
 		loadConfig:        config.Load,
 		saveConfig:        config.SaveAtomic,
 		verifySSH:         verifySSHConnectionFn,
@@ -128,8 +132,9 @@ func runInitWizardWithDeps(cmd *cobra.Command, deps initDependencies) error {
 	if result.BackupPath != "" {
 		fmt.Fprintf(out, "  Previous configuration: %s\n", result.BackupPath)
 	}
-	fmt.Fprintf(out, "  Next: %s\n", ui.Bold("axis doctor"))
-	fmt.Fprintf(out, "  Then: %s\n\n", ui.Bold("axis summary"))
+	fmt.Fprintf(out, "  Next: %s\n", ui.Bold("axis doctor --strict"))
+	fmt.Fprintf(out, "  Then: %s\n", ui.Bold("axis daemon service install"))
+	fmt.Fprintf(out, "  Verify: %s\n\n", ui.Bold("axis daemon status"))
 	return nil
 }
 
@@ -208,13 +213,20 @@ func firstTimeConfig(ctx context.Context, prompt *initPrompter, deps initDepende
 		return nil, err
 	}
 
-	cfg := &config.Config{Nodes: []config.NodeConfig{{
+	local := config.NodeConfig{
 		Name:       name,
 		Hostname:   "localhost",
 		SSHUser:    user,
 		Role:       "primary",
 		TimeoutSec: 10,
-	}}}
+	}
+	if deps.localIdentity != nil {
+		if identity := deps.localIdentity(ctx); identity != nil {
+			local.StableID = identity.StableID
+			fmt.Fprintf(prompt.out, "%s Stable identity detected (%s).\n", ui.Green("✓"), identity.Source)
+		}
+	}
+	cfg := &config.Config{Nodes: []config.NodeConfig{local}}
 	fmt.Fprintf(prompt.out, "%s Local node configured.\n\n", ui.Green("✓"))
 
 	fmt.Fprintln(prompt.out, ui.Cyan("2/3  Remote nodes"))
