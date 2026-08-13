@@ -102,12 +102,29 @@ type triggerableSnapshotCache interface {
 	RefreshWithTrigger(context.Context, string) error
 }
 
-const runtimeRefreshTimeout = 30 * time.Second
+const (
+	runtimeRefreshTimeout   = 30 * time.Second
+	serverReadHeaderTimeout = 5 * time.Second
+	serverReadTimeout       = 15 * time.Second
+	serverIdleTimeout       = 60 * time.Second
+)
 
 var runLiveGuarded = execution.RunGuarded
 
 func Serve(addr string, cache snapshotCache, token string, pprof bool) error {
 	return ServeWithContext(context.Background(), addr, cache, token, pprof)
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout:       serverReadTimeout,
+		IdleTimeout:       serverIdleTimeout,
+		// /run streams progress for commands that may legitimately outlive a
+		// fixed response deadline. Caller contexts bound that execution path.
+		WriteTimeout: 0,
+	}
 }
 
 // ServeWithContext starts the HTTP/Unix API server and blocks until ctx is
@@ -120,10 +137,7 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 		registerPprofRoutes(mux, token)
 	}
 
-	srv := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := newHTTPServer(mux)
 
 	srvErr := make(chan error, 1)
 
@@ -163,7 +177,7 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	case <-ctx.Done():
 	}
 
-	drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
 	defer cancel()
 	_ = srv.Shutdown(drainCtx) //nolint:contextcheck
 

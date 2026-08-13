@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -171,18 +170,6 @@ func (d *Daemon) RefreshWithTrigger(ctx context.Context, trigger string) error {
 		return err
 	}
 	return d.refreshWithTrigger(ctx, normalized)
-}
-
-func Serve(addr string, cache SnapshotCache) error {
-	mux := http.NewServeMux()
-	RegisterRoutes(mux, cache)
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	return srv.ListenAndServe()
 }
 
 // meshPeerFromNode builds a trusted config-sourced mesh peer.
