@@ -104,7 +104,7 @@ func Update(mutator func(*Store) error) error {
 
 func (s *Store) Save() error {
 	data, _ := json.MarshalIndent(s, "", "  ")
-	return persist.WriteFileAtomic(path(), data, 0o644)
+	return persist.WritePrivateFileAtomic(path(), data)
 }
 
 // RecordSuccess learns from real usage

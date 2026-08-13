@@ -55,6 +55,43 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func TestOpenTaskLogTightensPrivateModes(t *testing.T) {
+	axisHome := filepath.Join(t.TempDir(), "axis")
+	t.Setenv("AXIS_HOME", axisHome)
+	logDir := filepath.Join(axisHome, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	logPath := filepath.Join(logDir, "task-existing.log")
+	if err := os.WriteFile(logPath, []byte("old"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(logPath, 0o644); err != nil {
+		t.Fatalf("Chmod file: %v", err)
+	}
+	if err := os.Chmod(logDir, 0o755); err != nil {
+		t.Fatalf("Chmod dir: %v", err)
+	}
+
+	f := openTaskLog("existing")
+	if f == nil {
+		t.Fatal("openTaskLog returned nil")
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	for path, want := range map[string]os.FileMode{logDir: 0o700, logPath: 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%s): %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("mode(%s) = %o, want %o", path, got, want)
+		}
+	}
+}
+
 func TestPrepareRequirementsExecKeepsOllamaRequirement(t *testing.T) {
 	reqs := prepareRequirements("ollama run llama3", ModeExec, Intent{})
 	if len(reqs.RequiredTools) == 0 {

@@ -35,10 +35,10 @@ func (l *Ledger) lockFileLocked(ctx context.Context) error {
 		return nil
 	}
 	path := Path() + ".lock"
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := persist.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("creating config directory for lock: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	f, err := persist.OpenPrivateFile(path, os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return fmt.Errorf("opening lock file: %w", err)
 	}
@@ -232,7 +232,7 @@ func (l *Ledger) snapshotEntriesLocked() []*Entry {
 // write never block in-memory readers.
 func (l *Ledger) writeSnapshot(entries []*Entry) error {
 	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := persist.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 
@@ -241,5 +241,5 @@ func (l *Ledger) writeSnapshot(entries []*Entry) error {
 	if err != nil {
 		return err
 	}
-	return persist.WriteFileAtomic(path, data, 0o644)
+	return persist.WritePrivateFileAtomic(path, data)
 }

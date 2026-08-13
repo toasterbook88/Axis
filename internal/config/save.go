@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/persist"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,21 +33,20 @@ func SaveAtomic(path string, cfg *Config) (SaveResult, error) {
 		return SaveResult{}, err
 	}
 
+	dir := filepath.Dir(path)
+	if err := persist.EnsurePrivateDir(dir); err != nil {
+		return SaveResult{}, fmt.Errorf("securing config directory: %w", err)
+	}
 	if existing, err := Load(path); err == nil && reflect.DeepEqual(existing, cfg) {
+		if err := os.Chmod(path, persist.PrivateFileMode); err != nil {
+			return SaveResult{}, fmt.Errorf("securing config file: %w", err)
+		}
 		return SaveResult{}, nil
 	}
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return SaveResult{}, fmt.Errorf("marshalling config: %w", err)
-	}
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return SaveResult{}, fmt.Errorf("creating config directory: %w", err)
-	}
-	if err := os.Chmod(dir, 0700); err != nil && !errors.Is(err, os.ErrPermission) {
-		return SaveResult{}, fmt.Errorf("securing config directory: %w", err)
 	}
 
 	result := SaveResult{Changed: true}

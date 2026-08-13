@@ -44,10 +44,10 @@ func ResetTestLog(path string) error {
 		logPathVal.Store("")
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := persist.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("ResetTestLog mkdir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := persist.OpenPrivateFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	if err != nil {
 		return fmt.Errorf("ResetTestLog create: %w", err)
 	}
@@ -62,12 +62,12 @@ func ResetTestLog(path string) error {
 func allocateSequence() (uint64, error) {
 	path := defaultLogPath()
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := persist.EnsurePrivateDir(dir); err != nil {
 		return 0, err
 	}
 
 	lockPath := filepath.Join(dir, "event-sequence.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	lockFile, err := persist.OpenPrivateFile(lockPath, os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return 0, err
 	}
@@ -82,7 +82,7 @@ func allocateSequence() (uint64, error) {
 	}()
 
 	seqPath := filepath.Join(dir, "event-sequence")
-	seqFile, err := os.OpenFile(seqPath, os.O_CREATE|os.O_RDWR, 0644)
+	seqFile, err := persist.OpenPrivateFile(seqPath, os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return 0, err
 	}
@@ -120,12 +120,12 @@ func appendEventToFile(evt Event) error {
 
 	path := defaultLogPath()
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := persist.EnsurePrivateDir(dir); err != nil {
 		return err
 	}
 
 	// 1. Perform atomic append write
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := persist.OpenPrivateFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func appendEventToFile(evt Event) error {
 func rotateLogsUnderLock(path string) error {
 	dir := filepath.Dir(path)
 	lockPath := filepath.Join(dir, "events.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	lockFile, err := persist.OpenPrivateFile(lockPath, os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return err
 	}

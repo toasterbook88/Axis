@@ -82,7 +82,6 @@ func runContextClear(w io.Writer) error {
 type storeSnapshot struct {
 	path    string
 	data    []byte
-	mode    os.FileMode
 	missing bool
 }
 
@@ -94,13 +93,7 @@ func readStoreSnapshot(path string) (storeSnapshot, error) {
 	if err != nil {
 		return storeSnapshot{}, err
 	}
-	// Capture the mode so rollback restores the store's own permissions
-	// rather than imposing a fixed one.
-	mode := os.FileMode(0o600)
-	if info, statErr := os.Stat(path); statErr == nil {
-		mode = info.Mode().Perm()
-	}
-	return storeSnapshot{path: path, data: data, mode: mode}, nil
+	return storeSnapshot{path: path, data: data}, nil
 }
 
 // restore puts a store back exactly as it was read.
@@ -111,7 +104,7 @@ func (s storeSnapshot) restore() error {
 		}
 		return nil
 	}
-	return persist.WriteFileAtomic(s.path, s.data, s.mode)
+	return persist.WritePrivateFileAtomic(s.path, s.data)
 }
 
 // backupSnapshots writes the already-read store contents into a fresh

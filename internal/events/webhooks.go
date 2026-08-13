@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/netutil"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 var (
@@ -148,7 +149,7 @@ func writeDeadLetter(targetURL string, errMsg string, evt Event) error {
 		return err
 	}
 
-	f, err := os.OpenFile(dlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := persist.OpenPrivateFile(dlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return err
 	}
