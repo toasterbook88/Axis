@@ -199,7 +199,7 @@ HDD penalty: −15 for heavy inference.
 | `axis profile match` | Workload class inference |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
-| `axis daemon` | Subcommands: `status`, `refresh`, `invalidate`, `restart` |
+| `axis daemon` | Subcommands: `status`, `refresh`, `invalidate`, `restart`; `status` emits `axis.output/v1` JSON |
 | `axis chat [--stream]` | Experimental Ollama chat (advisory only) |
 | `axis agent [--auto-approve]` | Agentic tool-calling assistant |
 | `axis llm` | LLM routing and model management |

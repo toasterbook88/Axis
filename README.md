@@ -92,7 +92,7 @@ axis doctor
 | `axis reservations` | Reservation inspection |
 | `axis doctor` | Comprehensive health diagnostics |
 | `axis daemon start` | Background snapshot refresh daemon |
-| `axis daemon status` | Daemon health and cache metadata |
+| `axis daemon status` | Daemon health in one versioned JSON envelope |
 | `axis daemon refresh` | Trigger immediate cache refresh |
 | `axis daemon invalidate` | Invalidate cached snapshot |
 | `axis daemon restart` | Restart the local cache daemon |

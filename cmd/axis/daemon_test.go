@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
 )
 
@@ -199,16 +201,73 @@ func TestDaemonStatusWarnsWhenVersionMissing(t *testing.T) {
 	defer server.Close()
 
 	cmd := daemonCmd()
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	cmd.SetErr(&errOut)
 	cmd.SetArgs([]string{"--cache-addr", server.URL, "status"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("daemon status: %v", err)
 	}
-	if !strings.Contains(out.String(), "missing version information") {
-		t.Fatalf("expected missing-version warning, got %q", out.String())
+	if errOut.String() != "" {
+		t.Fatalf("unexpected stderr: %q", errOut.String())
+	}
+	var envelope struct {
+		SchemaVersion string          `json:"schema_version"`
+		Command       string          `json:"command"`
+		OK            bool            `json:"ok"`
+		Status        string          `json:"status"`
+		Data          daemon.Metadata `json:"data"`
+		Warnings      []struct {
+			Kind    string `json:"kind"`
+			Message string `json:"message"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("daemon status is not one JSON envelope: %v\n%s", err, out.String())
+	}
+	if envelope.SchemaVersion != "axis.output/v1" || envelope.Command != "daemon status" {
+		t.Fatalf("unexpected envelope identity: %+v", envelope)
+	}
+	if envelope.OK || envelope.Status != "incompatible" {
+		t.Fatalf("unexpected missing-version state: %+v", envelope)
+	}
+	if !envelope.Data.Ready || len(envelope.Warnings) != 1 || envelope.Warnings[0].Kind != "daemon_version" || !strings.Contains(envelope.Warnings[0].Message, "missing version information") {
+		t.Fatalf("expected structured missing-version warning, got %+v", envelope)
+	}
+}
+
+func TestDaemonStatusEmitsFreshMachineEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"source":"daemon-cache","ready":true,"version":"0.14.10","refresh_interval_sec":60}`))
+	}))
+	defer server.Close()
+
+	cmd := daemonCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"--cache-addr", server.URL, "status"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("daemon status: %v", err)
+	}
+	if errOut.String() != "" {
+		t.Fatalf("unexpected stderr: %q", errOut.String())
+	}
+	var envelope struct {
+		SchemaVersion string          `json:"schema_version"`
+		OK            bool            `json:"ok"`
+		Status        string          `json:"status"`
+		Data          daemon.Metadata `json:"data"`
+		Warnings      []any           `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("daemon status is not one JSON envelope: %v\n%s", err, out.String())
+	}
+	if envelope.SchemaVersion != "axis.output/v1" || !envelope.OK || envelope.Status != "fresh" || envelope.Data.Version != "0.14.10" || len(envelope.Warnings) != 0 {
+		t.Fatalf("unexpected fresh envelope: %+v", envelope)
 	}
 }
 
