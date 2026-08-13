@@ -68,7 +68,7 @@ jobs:
       - name: Run tests
         env:
           GOTOOLCHAIN: auto
-        run: make test
+        run: ./hack/hermetic-go-test.sh ./... -count=1 -timeout 180s
 
       - name: Build
         env:

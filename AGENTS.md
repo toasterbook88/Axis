@@ -302,6 +302,8 @@ reason, or add heavy dependencies without strong justification.
 | Script | Purpose |
 | -------- | --------- |
 | `hack/coverage-check.sh` | Per-package and total coverage gates |
+| `hack/hermetic-go-test.sh` | Run Go tests without touching operator AXIS state |
+| `hack/hermetic-go-test-tests.sh` | Regression tests for the hermetic Go test runner |
 | `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
 | `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, CHANGELOG) |
 | `hack/refresh-current-state.sh` | Rebuild repository-derived facts and verification in `docs/current-state.md` |
