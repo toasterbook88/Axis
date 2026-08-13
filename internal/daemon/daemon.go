@@ -22,6 +22,7 @@ import (
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/multipath"
 	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
@@ -73,6 +74,7 @@ type Metadata struct {
 	MaxRefreshLatencyMs int64                      `json:"max_refresh_latency_ms,omitempty"`
 	StaleNodes          []string                   `json:"stale_nodes,omitempty"`
 	Freshness           *models.DiscoveryFreshness `json:"freshness,omitempty"`
+	RouteProbeStats     multipath.Stats            `json:"route_probe_stats"`
 }
 
 type daemonMetadata struct {
@@ -159,6 +161,7 @@ var watchConfigPollInterval = 500 * time.Millisecond
 var reportWatchFingerprintError = func(path, trigger string, err error) {
 	slog.Error("daemon: watch fingerprint failed", "path", path, "trigger", trigger, "error", err)
 }
+var routeProbeStats = multipath.SnapshotStats
 
 func (d *Daemon) RefreshNow(ctx context.Context) error {
 	return d.RefreshWithTrigger(ctx, RefreshTriggerManual)
@@ -929,6 +932,7 @@ func (d *Daemon) Meta() Metadata {
 		CacheAgeSec:        int(age.Seconds()),
 		Stale:              stale,
 		StaleThresholdSec:  int(metaState.staleThreshold / time.Second),
+		RouteProbeStats:    routeProbeStats(),
 	}
 	mesh := d.mesh
 	if mesh != nil {
