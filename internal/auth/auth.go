@@ -90,7 +90,7 @@ func SaveToken(token string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	return persist.WriteFileAtomic(path, []byte(token), 0600)
+	return persist.WritePrivateFileAtomic(path, []byte(token))
 }
 
 // IsUnixAddr returns true if the address is a Unix socket path.

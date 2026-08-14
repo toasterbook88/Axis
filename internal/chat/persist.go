@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/toasterbook88/axis/internal/persist"
 )
@@ -33,10 +32,7 @@ func (c *Conversation) SaveToFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal conversation: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create history directory: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := persist.WritePrivateFileAtomic(path, data); err != nil {
 		return fmt.Errorf("write history file: %w", err)
 	}
 	return nil

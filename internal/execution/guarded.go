@@ -90,6 +90,15 @@ func generateExecID(node string) string {
 	return fmt.Sprintf("%s-%s", hex.EncodeToString(b), node)
 }
 
+func openTaskLog(execID string) *os.File {
+	logPath := filepath.Join(persist.AxisPath("logs"), fmt.Sprintf("task-%s.log", execID))
+	f, err := persist.OpenPrivateFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
 type GuardedExecutionRequest struct {
 	Description      string                                                `json:"description"`
 	Mode             string                                                `json:"mode,omitempty"`
@@ -820,14 +829,9 @@ func runLocal(
 		resp.ExecID = execID
 	}
 
-	var logFile *os.File
-	logDir := persist.AxisPath("logs")
-	if err := os.MkdirAll(logDir, 0755); err == nil {
-		logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
-		if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-			logFile = lf
-			defer logFile.Close()
-		}
+	logFile := openTaskLog(execID)
+	if logFile != nil {
+		defer logFile.Close()
 	}
 
 	stdoutWriter := req.Stdout
@@ -951,14 +955,9 @@ func runRemote(
 		resp.ExecID = execID
 	}
 
-	var logFile *os.File
-	logDir := persist.AxisPath("logs")
-	if err := os.MkdirAll(logDir, 0755); err == nil {
-		logPath := filepath.Join(logDir, fmt.Sprintf("task-%s.log", execID))
-		if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-			logFile = lf
-			defer logFile.Close()
-		}
+	logFile := openTaskLog(execID)
+	if logFile != nil {
+		defer logFile.Close()
 	}
 
 	stdoutWriter := req.Stdout

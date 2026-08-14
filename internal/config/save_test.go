@@ -41,6 +41,9 @@ func TestSaveAtomicSkipsSemanticNoop(t *testing.T) {
 	if _, err := SaveAtomic(path, cfg); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := SaveAtomic(path, testSaveConfig("node-a"))
 	if err != nil {
@@ -55,6 +58,11 @@ func TestSaveAtomicSkipsSemanticNoop(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("unexpected backups: %v", matches)
+	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %o, want 600 after semantic no-op", got)
 	}
 }
 

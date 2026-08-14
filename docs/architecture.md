@@ -164,10 +164,17 @@ All state lives under `~/.axis/`:
 | `nodes.yaml` | Cluster node configuration | Content-hash watch |
 | `state.json` | Execution history, reservations | Semantic watch |
 | `skills.json` | Learned execution skills | File watch |
+| `snapshot.json` | Daemon snapshot cache | Daemon refresh |
+| `ledger.json` | Reservation authority | Reservation mutations |
+| `events*.jsonl`, `event-sequence*` | Lifecycle events and ordering | Event writes |
+| `logs/task-*.log` | Combined task stdout/stderr | Guarded execution |
+| `{chat,agent}-history.json` | Structured advisory conversations | Chat/agent sessions |
 | `axis.sock` | Unix domain socket (API) | — |
 
-**Corruption recovery:** Both `state.json` and `skills.json` use atomic
-write with rename and automatic recovery from corrupt files.
+Runtime directories and files created by AXIS use owner-only modes (`0700` and
+`0600`). Atomic stores tighten permissions on replacement; append and lock
+stores tighten existing files when opened. `state.json` and `skills.json` also
+provide automatic recovery from corrupt files.
 
 ## Network Ports
 

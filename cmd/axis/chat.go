@@ -164,9 +164,8 @@ func chatCmd() *cobra.Command {
 				InterruptPrompt: "^C",
 				EOFPrompt:       "exit",
 			}
-			if historyPath != "" {
-				cfg.HistoryFile = historyPath + ".line"
-			}
+			// Conversation.SaveToFile is the sole persisted history. readline's
+			// file writer creates group-readable files on permissive umasks.
 			rl, err := readline.NewEx(cfg)
 			if err != nil {
 				// Fallback to plain scanner if readline fails (e.g., non-TTY).
