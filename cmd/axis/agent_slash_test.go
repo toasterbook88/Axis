@@ -125,6 +125,112 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	}
 }
 
+func TestHandleREPLSlashCommandFactsAndClusterUseSessionSnapshot(t *testing.T) {
+	hn, err := os.Hostname()
+	if err != nil || hn == "" {
+		t.Skip("hostname unavailable")
+	}
+	a := agent.New(agent.Config{
+		Endpoint:  "http://localhost:8081",
+		Model:     "nemotron-3.5-lightning",
+		MaxTokens: 4096,
+	})
+	var w, errW bytes.Buffer
+	session := &agentREPLSession{
+		Agent: a,
+		Runtime: func(context.Context) (*runtimectx.Context, error) {
+			return &runtimectx.Context{
+				Snapshot: &models.ClusterSnapshot{
+					Nodes: []models.NodeFacts{
+						{
+							Name:     "cranium",
+							Hostname: hn,
+							OS:       "linux",
+							Arch:     "amd64",
+							Status:   models.StatusComplete,
+							ResidentModels: []models.ResidentModel{
+								{Name: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-IQ4_XS", Runtime: "llama.cpp", Port: 8081},
+							},
+						},
+						{Name: "foundry", Hostname: "foundry", Status: models.StatusComplete, OS: "linux", Arch: "amd64"},
+					},
+				},
+				Config: &config.Config{},
+			}, nil
+		},
+		Out:    &w,
+		ErrOut: &errW,
+	}
+
+	handled, shouldExit, err := handleREPLSlashCommand(session, "/facts")
+	if err != nil {
+		t.Fatalf("/facts: %v", err)
+	}
+	if !handled || shouldExit {
+		t.Fatalf("/facts handled=%v exit=%v", handled, shouldExit)
+	}
+	factsOut := w.String() + errW.String()
+	if !strings.Contains(factsOut, "8081") {
+		t.Fatalf("/facts must print probed resident port 8081, got %q", factsOut)
+	}
+	if !strings.Contains(factsOut, "NVIDIA-Nemotron") {
+		t.Fatalf("/facts must print resident name, got %q", factsOut)
+	}
+
+	w.Reset()
+	errW.Reset()
+	handled, shouldExit, err = handleREPLSlashCommand(session, "/cluster")
+	if err != nil {
+		t.Fatalf("/cluster must use session snapshot, not fail: %v", err)
+	}
+	if !handled || shouldExit {
+		t.Fatalf("/cluster handled=%v exit=%v", handled, shouldExit)
+	}
+	clusterOut := w.String() + errW.String()
+	if !strings.Contains(clusterOut, "cranium") || !strings.Contains(clusterOut, "foundry") {
+		t.Fatalf("/cluster must list snapshot nodes, got %q", clusterOut)
+	}
+}
+
+func TestHandleREPLSlashCommandExecDeferred(t *testing.T) {
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "x", MaxTokens: 4096})
+	var w, errW bytes.Buffer
+	session := &agentREPLSession{
+		Agent: a,
+		Runtime: func(context.Context) (*runtimectx.Context, error) {
+			return nil, nil
+		},
+		Out:    &w,
+		ErrOut: &errW,
+	}
+	handled, shouldExit, err := handleREPLSlashCommand(session, "/exec echo hi")
+	if err != nil {
+		t.Fatalf("/exec must not error in v1, got %v", err)
+	}
+	if handled || shouldExit {
+		t.Fatalf("/exec is deferred; handled=%v exit=%v", handled, shouldExit)
+	}
+}
+
+func TestPrintAgentSessionDetailsIncludesStatusStrip(t *testing.T) {
+	var buf bytes.Buffer
+	printAgentSessionDetails(&buf, ModelChoice{
+		Model:    "nemotron-3.5-lightning",
+		Endpoint: "http://localhost:8081",
+		Protocol: agent.ProtocolOpenAI,
+	}, false, "", 0, 10)
+	got := buf.String()
+	if !strings.Contains(got, "[model:") || !strings.Contains(got, "nemotron-3.5-lightning") {
+		t.Fatalf("missing model strip: %q", got)
+	}
+	if !strings.Contains(got, "[endpoint:") || !strings.Contains(got, "localhost:8081") {
+		t.Fatalf("missing endpoint strip: %q", got)
+	}
+	if !strings.Contains(got, "[status:") {
+		t.Fatalf("missing status strip: %q", got)
+	}
+}
+
 func TestHandleREPLSlashCommandModelsInteractive(t *testing.T) {
 	a := agent.New(agent.Config{
 		Endpoint:  "http://localhost:11434",
