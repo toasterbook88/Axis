@@ -335,6 +335,13 @@ func TestMLXResidentModelCarriesSizeVRAMMB(t *testing.T) {
 	}
 }
 
+// withSandboxedPATH puts stub binaries first and keeps the runner PATH so
+// NixOS /nix/store coreutils (awk, sed, head, stat) still resolve. A
+// hardcoded /usr/bin:/bin suffix is empty of those tools on nixos-runner.
+func withSandboxedPATH(bin string) []string {
+	return append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // TestLlamaServerDiscoveryScriptReportsPortFromCmdline is the regression for
 // the hardcoded-8080 bug: a live llama-server started with --port 8081 must
 // be published on 8081, not the llama-server default. The script is the
@@ -363,7 +370,7 @@ func TestLlamaServerDiscoveryScriptReportsPortFromCmdline(t *testing.T) {
 	writeStub("netstat", `exit 1`)
 
 	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
-	cmd.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	cmd.Env = withSandboxedPATH(bin)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("script: %v\n%s", err, out)
@@ -404,7 +411,7 @@ func TestLlamaServerDiscoveryScriptReportsPortFromShortFlag(t *testing.T) {
 	writeStub("netstat", `exit 1`)
 
 	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
-	cmd.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	cmd.Env = withSandboxedPATH(bin)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("script: %v\n%s", err, out)
