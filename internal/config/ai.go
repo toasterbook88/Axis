@@ -32,6 +32,11 @@ type AIBackendConfig struct {
 	// Examples: http://127.0.0.1:11434  or  http://127.0.0.1:4000/v1
 	BaseURL string `json:"base_url" yaml:"base_url"`
 
+	// AdvertiseURL is an optional cluster-facing URL (e.g. a Traefik
+	// Host on *.lan.axismcp.org). Used only when this process is not
+	// the backend's node. Same-box callers keep BaseURL.
+	AdvertiseURL string `json:"advertise_url,omitempty" yaml:"advertise_url,omitempty"`
+
 	// Node optionally ties this backend to a nodes.yaml node name (placement hints).
 	Node string `json:"node,omitempty" yaml:"node,omitempty"`
 
@@ -138,6 +143,7 @@ func (c *AIConfig) Normalize() {
 		b.Name = strings.TrimSpace(b.Name)
 		b.Kind = strings.ToLower(strings.TrimSpace(b.Kind))
 		b.BaseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
+		b.AdvertiseURL = strings.TrimRight(strings.TrimSpace(b.AdvertiseURL), "/")
 		b.Node = strings.TrimSpace(b.Node)
 		b.APIKeyEnv = strings.TrimSpace(b.APIKeyEnv)
 		b.APIKeyFile = strings.TrimSpace(b.APIKeyFile)

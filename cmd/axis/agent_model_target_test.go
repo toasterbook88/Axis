@@ -9,6 +9,7 @@ import (
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
@@ -583,4 +584,161 @@ func TestCollectModelChoicesKeepsReachableLocalLlamaCppEnabled(t *testing.T) {
 		}
 	}
 	t.Fatalf("missing choice: %+v", choices)
+}
+func TestModelChoicesAdvertiseURLUnreachableIsDisabled(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	prevResolve := inferenceResolveFn
+	prevProbe := inferenceProbeFn
+	t.Cleanup(func() {
+		inferenceAILoadFn = prevLoad
+		inferenceResolveFn = prevResolve
+		inferenceProbeFn = prevProbe
+	})
+
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{
+			{
+				Name:         "remote-nemotron",
+				Kind:         config.AIBackendOpenAICompatible,
+				BaseURL:      "http://127.0.0.1:8081/v1",
+				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+				Node:         "not-this-host",
+			},
+		},
+		Roles: map[string]config.AIRoleConfig{
+			"nemotron": {Prefer: []string{"remote-nemotron"}, Model: "nemotron-3.5-lightning"},
+		},
+	}
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return cfg, nil }
+	inferenceResolveFn = func(_ context.Context, _ *config.AIConfig, _ llmrouter.ResolveRoleOptions) (llmrouter.RoleRouteDecision, error) {
+		return llmrouter.RoleRouteDecision{
+			Role:     "nemotron",
+			Backend:  "remote-nemotron",
+			Model:    "nemotron-3.5-lightning",
+			Endpoint: "http://127.0.0.1:8081/v1",
+			Kind:     config.AIBackendOpenAICompatible,
+			Node:     "not-this-host",
+		}, nil
+	}
+	probed := map[string]bool{}
+	inferenceProbeFn = func(url string) bool {
+		probed[url] = true
+		return false
+	}
+
+	choices := modelChoicesFromAIConfig()
+	if len(choices) != 1 {
+		t.Fatalf("choices=%+v", choices)
+	}
+	c := choices[0]
+	if c.Endpoint != "http://nemotron.lan.axismcp.org/v1" {
+		t.Fatalf("endpoint = %q, want advertise_url", c.Endpoint)
+	}
+	if !c.Disabled || c.DisabledReason != "unreachable" {
+		t.Fatalf("want disabled/unreachable, got %+v", c)
+	}
+	if !probed["http://nemotron.lan.axismcp.org/v1/models"] {
+		t.Fatalf("did not probe advertise_url; probed %v", probed)
+	}
+}
+
+func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	prevResolve := inferenceResolveFn
+	prevProbe := inferenceProbeFn
+	t.Cleanup(func() {
+		inferenceAILoadFn = prevLoad
+		inferenceResolveFn = prevResolve
+		inferenceProbeFn = prevProbe
+	})
+
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{
+			{
+				Name:         "remote-nemotron",
+				Kind:         config.AIBackendOpenAICompatible,
+				BaseURL:      "http://127.0.0.1:8081/v1",
+				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+				Node:         "not-this-host",
+			},
+		},
+		Roles: map[string]config.AIRoleConfig{
+			"nemotron": {Prefer: []string{"remote-nemotron"}, Model: "nemotron-3.5-lightning"},
+		},
+	}
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return cfg, nil }
+	inferenceResolveFn = func(_ context.Context, _ *config.AIConfig, _ llmrouter.ResolveRoleOptions) (llmrouter.RoleRouteDecision, error) {
+		return llmrouter.RoleRouteDecision{
+			Role:     "nemotron",
+			Backend:  "remote-nemotron",
+			Model:    "nemotron-3.5-lightning",
+			Endpoint: "http://127.0.0.1:8081/v1",
+			Kind:     config.AIBackendOpenAICompatible,
+			Node:     "not-this-host",
+		}, nil
+	}
+	inferenceProbeFn = func(url string) bool {
+		return strings.Contains(url, "nemotron.lan.axismcp.org")
+	}
+
+	choices := modelChoicesFromAIConfig()
+	if len(choices) != 1 {
+		t.Fatalf("choices=%+v", choices)
+	}
+	c := choices[0]
+	if c.Disabled {
+		t.Fatalf("reachable advertise_url must stay enabled, got %+v", c)
+	}
+	if c.Endpoint != "http://nemotron.lan.axismcp.org/v1" {
+		t.Fatalf("endpoint = %q", c.Endpoint)
+	}
+}
+
+func TestModelChoicesLocalBackendKeepsBaseURL(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	prevResolve := inferenceResolveFn
+	prevProbe := inferenceProbeFn
+	t.Cleanup(func() {
+		inferenceAILoadFn = prevLoad
+		inferenceResolveFn = prevResolve
+		inferenceProbeFn = prevProbe
+	})
+
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{
+			{
+				Name:         "local-nemotron",
+				Kind:         config.AIBackendOpenAICompatible,
+				BaseURL:      "http://127.0.0.1:8081/v1",
+				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+			},
+		},
+		Roles: map[string]config.AIRoleConfig{
+			"nemotron": {Prefer: []string{"local-nemotron"}, Model: "nemotron-3.5-lightning"},
+		},
+	}
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return cfg, nil }
+	inferenceResolveFn = func(_ context.Context, _ *config.AIConfig, _ llmrouter.ResolveRoleOptions) (llmrouter.RoleRouteDecision, error) {
+		return llmrouter.RoleRouteDecision{
+			Role:     "nemotron",
+			Backend:  "local-nemotron",
+			Model:    "nemotron-3.5-lightning",
+			Endpoint: "http://127.0.0.1:8081/v1",
+			Kind:     config.AIBackendOpenAICompatible,
+		}, nil
+	}
+	inferenceProbeFn = func(url string) bool {
+		return strings.Contains(url, "127.0.0.1:8081")
+	}
+
+	choices := modelChoicesFromAIConfig()
+	if len(choices) != 1 {
+		t.Fatalf("choices=%+v", choices)
+	}
+	if choices[0].Endpoint != "http://127.0.0.1:8081/v1" {
+		t.Fatalf("on-box must keep base_url, got %q", choices[0].Endpoint)
+	}
+	if choices[0].Disabled {
+		t.Fatalf("reachable base_url must stay enabled, got %+v", choices[0])
+	}
 }
