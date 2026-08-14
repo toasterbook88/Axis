@@ -65,19 +65,10 @@ jobs:
           GOTOOLCHAIN: auto
         run: go mod download
 
-      - name: Run tests
-        env:
-          GOTOOLCHAIN: auto
-        run: ./hack/hermetic-go-test.sh ./... -count=1 -timeout 180s
-
-      - name: Build
-        env:
-          GOTOOLCHAIN: auto
-        run: go build ./...
-
       - name: Install runner dependencies
         run: |
-          # Add NixOS system paths to search for existing tools and persist across steps
+          # Must run before tests: NixOS keeps awk/sed/stat in this profile,
+          # not /usr/bin. Discovery-script tests need those tools on PATH.
           echo "/run/current-system/sw/bin" >> $GITHUB_PATH
           export PATH="$PATH:/run/current-system/sw/bin"
           for cmd in awk rg jq; do
@@ -103,6 +94,16 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Run tests
+        env:
+          GOTOOLCHAIN: auto
+        run: ./hack/hermetic-go-test.sh ./... -count=1 -timeout 180s
+
+      - name: Build
+        env:
+          GOTOOLCHAIN: auto
+        run: go build ./...
 
       - name: Coverage gates
         env:
