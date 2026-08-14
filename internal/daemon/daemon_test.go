@@ -23,6 +23,7 @@ import (
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/multipath"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
@@ -968,6 +969,28 @@ func TestDaemonRefreshCoalescingAndLatency(t *testing.T) {
 	// Grace period for any leaked goroutines from prior watch tests to finish
 	// file operations before t.TempDir() cleanup runs.
 	time.Sleep(100 * time.Millisecond)
+}
+
+func TestDaemonMetaExposesRouteProbeStats(t *testing.T) {
+	previous := routeProbeStats
+	t.Cleanup(func() { routeProbeStats = previous })
+	routeProbeStats = func() multipath.Stats {
+		return multipath.Stats{
+			Decisions:          7,
+			CandidateAttempts:  11,
+			CacheRevalidations: 4,
+			FanoutDecisions:    3,
+			FailedAttempts:     2,
+		}
+	}
+
+	d := New(time.Minute, func(context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{}, nil
+	})
+	meta := d.Meta()
+	if meta.RouteProbeStats.Decisions != 7 || meta.RouteProbeStats.CacheRevalidations != 4 {
+		t.Fatalf("route probe stats = %+v", meta.RouteProbeStats)
+	}
 }
 
 func TestMeshPeerFromNode_UsesPrimaryHostnameForEndpointsOnly(t *testing.T) {

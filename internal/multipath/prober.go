@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -38,6 +39,37 @@ type ProbeDecision struct {
 	FailedProbeCount            int
 	ObservedAt                  time.Time
 	RevalidatedCachedTargetOnly bool
+}
+
+// Stats is process-lifetime observability for route selection. It deliberately
+// reports counts rather than persisting probe latencies without a durable
+// observer identity.
+type Stats struct {
+	Decisions          int64 `json:"decisions"`
+	CandidateAttempts  int64 `json:"candidate_attempts"`
+	CacheRevalidations int64 `json:"cache_revalidations"`
+	FanoutDecisions    int64 `json:"fanout_decisions"`
+	FailedAttempts     int64 `json:"failed_attempts"`
+}
+
+var probeStats struct {
+	decisions          atomic.Int64
+	candidateAttempts  atomic.Int64
+	cacheRevalidations atomic.Int64
+	fanoutDecisions    atomic.Int64
+	failedAttempts     atomic.Int64
+}
+
+// SnapshotStats returns a consistent-enough lock-free snapshot of monotonic
+// route-probe counters. Individual fields may advance during the read.
+func SnapshotStats() Stats {
+	return Stats{
+		Decisions:          probeStats.decisions.Load(),
+		CandidateAttempts:  probeStats.candidateAttempts.Load(),
+		CacheRevalidations: probeStats.cacheRevalidations.Load(),
+		FanoutDecisions:    probeStats.fanoutDecisions.Load(),
+		FailedAttempts:     probeStats.failedAttempts.Load(),
+	}
 }
 
 const (
@@ -77,13 +109,16 @@ func probe(ctx context.Context, port int, addresses []models.NetworkAddress, mea
 	if len(candidates) == 0 {
 		return decision
 	}
+	probeStats.decisions.Add(1)
 	decision.ObservedAt = time.Now().UTC()
 
 	cacheKey := pathCacheKey(port, candidates)
 	if cached := loadSuccessfulPath(cacheKey, candidates); cached != "" {
+		probeStats.candidateAttempts.Add(1)
 		result := measure(ctx, port, candidateByAddress(candidates, cached))
 		if result.Err == nil {
 			storeSuccessfulPath(cacheKey, cached)
+			probeStats.cacheRevalidations.Add(1)
 			decision.SelectedTarget = cached
 			decision.SSHIdentificationDuration = result.SSHIdentificationDuration
 			decision.AdjustedSelectionScore = result.SelectionScore
@@ -91,9 +126,11 @@ func probe(ctx context.Context, port int, addresses []models.NetworkAddress, mea
 			return decision
 		}
 		decision.FailedProbeCount++
+		probeStats.failedAttempts.Add(1)
 		deleteSuccessfulPath(cacheKey)
 	}
 
+	probeStats.fanoutDecisions.Add(1)
 	results := make(chan ProbeResult, len(candidates))
 	jobs := make(chan models.NetworkAddress)
 	var wg sync.WaitGroup
@@ -103,6 +140,7 @@ func probe(ctx context.Context, port int, addresses []models.NetworkAddress, mea
 		go func() {
 			defer wg.Done()
 			for candidate := range jobs {
+				probeStats.candidateAttempts.Add(1)
 				results <- measure(ctx, port, candidate)
 			}
 		}()
@@ -123,6 +161,7 @@ func probe(ctx context.Context, port int, addresses []models.NetworkAddress, mea
 	for res := range results {
 		if res.Err != nil {
 			decision.FailedProbeCount++
+			probeStats.failedAttempts.Add(1)
 			continue
 		}
 		if !found || res.SelectionScore < best.SelectionScore ||

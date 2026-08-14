@@ -225,6 +225,38 @@ func TestProbeRevalidatesCachedSuccessfulPathAlone(t *testing.T) {
 	}
 }
 
+func TestProbeStatsExposeFanoutAndCachedRevalidation(t *testing.T) {
+	resetSuccessfulPaths(t)
+	addresses := []models.NetworkAddress{
+		{Address: "192.0.2.10"},
+		{Address: "192.0.2.11"},
+		{Address: "192.0.2.12"},
+	}
+	measure := func(_ context.Context, _ int, candidate models.NetworkAddress) ProbeResult {
+		return successfulProbeResult(candidate, time.Millisecond)
+	}
+
+	probe(context.Background(), 22, addresses, measure)
+	probe(context.Background(), 22, addresses, measure)
+
+	stats := SnapshotStats()
+	if stats.Decisions != 2 {
+		t.Fatalf("decisions = %d, want 2", stats.Decisions)
+	}
+	if stats.CandidateAttempts != 4 {
+		t.Fatalf("candidate attempts = %d, want 4 (three fan-out + one revalidation)", stats.CandidateAttempts)
+	}
+	if stats.FanoutDecisions != 1 {
+		t.Fatalf("fan-out decisions = %d, want 1", stats.FanoutDecisions)
+	}
+	if stats.CacheRevalidations != 1 {
+		t.Fatalf("cache revalidations = %d, want 1", stats.CacheRevalidations)
+	}
+	if stats.FailedAttempts != 0 {
+		t.Fatalf("failed attempts = %d, want 0", stats.FailedAttempts)
+	}
+}
+
 func TestProbeReportsFailures(t *testing.T) {
 	resetSuccessfulPaths(t)
 	addresses := []models.NetworkAddress{{Address: "192.0.2.10"}, {Address: "192.0.2.11"}}
@@ -296,6 +328,12 @@ func successfulProbeResult(candidate models.NetworkAddress, duration time.Durati
 
 func resetSuccessfulPaths(t *testing.T) {
 	t.Helper()
+	previousStats := SnapshotStats()
+	probeStats.decisions.Store(0)
+	probeStats.candidateAttempts.Store(0)
+	probeStats.cacheRevalidations.Store(0)
+	probeStats.fanoutDecisions.Store(0)
+	probeStats.failedAttempts.Store(0)
 	successfulPaths.Lock()
 	previous := successfulPaths.entries
 	successfulPaths.entries = make(map[string]cachedPath)
@@ -304,6 +342,11 @@ func resetSuccessfulPaths(t *testing.T) {
 		successfulPaths.Lock()
 		successfulPaths.entries = previous
 		successfulPaths.Unlock()
+		probeStats.decisions.Store(previousStats.Decisions)
+		probeStats.candidateAttempts.Store(previousStats.CandidateAttempts)
+		probeStats.cacheRevalidations.Store(previousStats.CacheRevalidations)
+		probeStats.fanoutDecisions.Store(previousStats.FanoutDecisions)
+		probeStats.failedAttempts.Store(previousStats.FailedAttempts)
 	})
 }
 
