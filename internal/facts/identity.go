@@ -5,12 +5,20 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/transport"
 )
+
+// LocalNodeIdentity returns the stable identity observable on this machine.
+// It is intentionally a narrow probe so onboarding does not need to collect a
+// full hardware snapshot merely to seed locality and deduplication.
+func LocalNodeIdentity(ctx context.Context) *models.NodeIdentity {
+	return detectLocalNodeIdentity(ctx, runtime.GOOS)
+}
 
 var readLocalIdentityFile = os.ReadFile
 var runLocalIdentityCommand = func(ctx context.Context, name string, args ...string) (string, error) {

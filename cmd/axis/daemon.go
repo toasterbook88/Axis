@@ -33,6 +33,7 @@ func daemonCmd() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.AddCommand(daemonStartCmd())
+	cmd.AddCommand(daemonServiceCmd())
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show local AXIS daemon health and staleness",

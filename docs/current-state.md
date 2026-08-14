@@ -25,6 +25,8 @@ The live repo currently contains:
 - A local chat surface backed by Ollama
 - A local HTTP API with task execution
 - A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
+- Native per-user daemon service install/status/uninstall for launchd and
+  systemd, with managed-file ownership checks
 - Explicit cached status reads via `axis status --cached`
 - Explicit cached placement reads via `axis task place --cached`
 - Explicit cached context reads via `axis task context --cached`
@@ -44,6 +46,7 @@ The live repo currently contains:
 - Stateful placement ranking with reservation subtraction, GPU capability scoring (VRAM/vendor/backend match), and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
 - Observed stable node identity when the host exposes it (`machine-id` on Linux, platform UUID on macOS), with locality preferring explicit identity before hostname/address fallback
+- `axis init` automatically seeds that observed local stable identity into new configurations
 - Optional `nodes.yaml` `stable_id` seeds and identity-aware UDP beacon dedupe so configured nodes survive hostname/IP drift without overriding observed truth
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
@@ -92,7 +95,8 @@ Top-level commands currently registered in the binary:
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
 | `axis daemon status` | Inspect daemon freshness | Emits one `axis.output/v1` JSON envelope with structured state and warnings |
-| `axis daemon restart` | Restart daemon | Restart the local cache seam |
+| `axis daemon restart` | Restart daemon | Replace the local listener as an unmanaged recovery/development process |
+| `axis daemon service install\|status\|uninstall` | Manage daemon persistence | Supervise the user daemon through launchd or systemd without overwriting foreign service files |
 | `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
 | `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; injects nearest `AGENTS.md` into the system prompt when present; `--auto-approve` for safe commands; `--system` appends to system prompt |
 | `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |

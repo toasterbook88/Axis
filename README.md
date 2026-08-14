@@ -96,6 +96,9 @@ axis doctor
 | `axis daemon refresh` | Trigger immediate cache refresh |
 | `axis daemon invalidate` | Invalidate cached snapshot |
 | `axis daemon restart` | Restart the local cache daemon |
+| `axis daemon service install` | Install/start a native launchd or systemd user service |
+| `axis daemon service status` | Inspect native service-manager state |
+| `axis daemon service uninstall` | Stop/remove only an AXIS-managed user service |
 | `axis serve` | Local HTTP API + daemon cache |
 | `axis llm` | LLM routing and model management |
 | `axis ai` | Inference backends, roles, and dry-run routing |
