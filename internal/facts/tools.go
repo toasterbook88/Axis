@@ -122,8 +122,9 @@ PYEOF
 // report it as a resident model. Works locally and over SSH.
 //
 // pgrep is trimmed to a single PID with | head -1 to handle multiple instances
-// deterministically. The --model/-m flag is parsed with awk to handle both
-// --model=path and --model path forms and avoid fragile column assumptions.
+// deterministically. The --model/-m and --port/-p flags are parsed with awk
+// to handle both --flag=value and --flag value forms. Port defaults to 8080
+// (llama-server's own default) when the process does not set one.
 const LlamaServerDiscoveryScript = `set -o pipefail;
 		LSBIN=$(command -v llama-server || echo "")
 		if [ -z "$LSBIN" ]; then echo '{"installed":false}'; exit 0; fi
@@ -131,17 +132,23 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || pgrep -f llama-server 2>/dev/null | head -1 || echo "")
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
+		PORT=8080
+		CMDLINE=""
+		if [ -n "$PGREP" ]; then
+			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
+			PORT_ARG=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--port"||$i=="-p"){print $(i+1);exit}if($i~/^(--port=|-p=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then PORT="$PORT_ARG"; fi
+		fi
 		LISTENING=false
-		if command -v lsof >/dev/null 2>&1 && lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+		if command -v lsof >/dev/null 2>&1 && lsof -i :"$PORT" 2>/dev/null | grep -q LISTEN; then
 			LISTENING=true
-		elif command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':8080 '; then
+		elif command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ":$PORT "; then
 			LISTENING=true
-		elif command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q ':8080 '; then
+		elif command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q ":$PORT "; then
 			LISTENING=true
 		fi
 		RESIDENT="[]"
 		if [ -n "$PGREP" ]; then
-			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
 			MODEL=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 			if [ -n "$MODEL" ]; then
 				MNAME=$(basename "$MODEL" | sed 's/\.[^.]*$//')
@@ -154,7 +161,7 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"size_vram_mb\":$SIZE_MB,\"source\":\"llama-server-ps\"}]"
 			fi
 		fi
-		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":8080,\"resident_models\":$RESIDENT}"
+		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":$PORT,\"resident_models\":$RESIDENT}"
 	`
 
 type llamaServerDiscoveryPayload struct {

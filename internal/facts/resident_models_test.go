@@ -1,7 +1,12 @@
 package facts
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -327,5 +332,97 @@ func TestMLXResidentModelCarriesSizeVRAMMB(t *testing.T) {
 	got := facts.ResidentModels[0]
 	if got.SizeVRAMMB != 4096 {
 		t.Errorf("SizeVRAMMB = %d, want 4096 (process RSS ≈ 4.0 GB)", got.SizeVRAMMB)
+	}
+}
+
+// withSandboxedPATH puts stub binaries first. It keeps the runner PATH and
+// appends NixOS's system profile so awk/sed/head/stat resolve even if the
+// job PATH is still Ubuntu-shaped (/usr/bin) with no /nix/store links.
+func withSandboxedPATH(bin string) []string {
+	sep := string(os.PathListSeparator)
+	path := bin + sep + os.Getenv("PATH") + sep + "/run/current-system/sw/bin" + sep + "/usr/bin" + sep + "/bin"
+	return append(os.Environ(), "PATH="+path)
+}
+
+// TestLlamaServerDiscoveryScriptReportsPortFromCmdline is the regression for
+// the hardcoded-8080 bug: a live llama-server started with --port 8081 must
+// be published on 8081, not the llama-server default. The script is the
+// production parser (local + SSH), so this runs it under a PATH sandbox.
+func TestLlamaServerDiscoveryScriptReportsPortFromCmdline(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	model := filepath.Join(t.TempDir(), "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-IQ4_XS.gguf")
+	if err := os.WriteFile(model, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `echo "llama-server -m `+model+` --port 8081 --host 127.0.0.1"`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withSandboxedPATH(bin)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload llamaServerDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if payload.Port != 8081 {
+		t.Fatalf("port = %d, want 8081 (parsed from --port on llama-server argv)", payload.Port)
+	}
+	if len(payload.ResidentModels) != 1 || payload.ResidentModels[0].Name == "" {
+		t.Fatalf("resident_models = %#v", payload.ResidentModels)
+	}
+}
+
+func TestLlamaServerDiscoveryScriptReportsPortFromShortFlag(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	model := filepath.Join(t.TempDir(), "qwen.gguf")
+	if err := os.WriteFile(model, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `echo "llama-server -m `+model+` -p 9090"`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withSandboxedPATH(bin)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload llamaServerDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if payload.Port != 9090 {
+		t.Fatalf("port = %d, want 9090 (parsed from -p on llama-server argv)", payload.Port)
 	}
 }
