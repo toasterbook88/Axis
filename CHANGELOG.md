@@ -1,5 +1,21 @@
 ## Unreleased
 
+## v0.14.11 (2026-08-14)
+
+### 🚀 Features
+* **Daemon:** Add native per-user service management — `axis daemon service install|status|uninstall` provisions a managed launchd (macOS) or systemd (Linux) user service with foreign-file refusal and direct argv execution, seeds first-time configuration from the observed stable local identity, and documents persistence ownership, paths, privacy, and unmanaged-listener recovery. (#281)
+* **Multipath:** Expose monotonic process-lifetime route reuse counters (route decisions, candidate attempts, cached-path revalidations, full fan-outs, failures) through daemon metadata/status JSON, without persisting latency observations that lack a durable vantage-point identity. (#278)
+
+### 🐛 Bug Fixes
+* **CLI:** `axis daemon status` now emits exactly one versioned `axis.output/v1` JSON envelope on stdout, classifying fresh, stale, degraded, unavailable, and incompatible outcomes with typed warnings and keeping diagnostics off stdout. (#280)
+* **Persistence:** Keep runtime state owner-only — centralized 0700 directories and 0600 files across legacy append, lock, config, event, ledger, and task-log paths; removed readline's duplicate permissive prompt-history files while retaining structured private chat/agent history. (#279)
+* **API:** Bound daemon request lifetimes — 15-second request-body reads and 60-second idle keep-alives alongside the existing 5-second header limit, response writes left unbounded for streamed `/run` output, and the unused legacy daemon HTTP server removed. (#277)
+
+### 🔧 Maintenance
+* **CI:** Harden the Claude workflow entry points — reject prompts from untrusted author associations before the write-capable action starts, remove issue-assignment replay, bound concurrency/runtime, prevent checkout credential persistence, pin checkout and Claude Code Action to immutable commits, and add fail-closed regression coverage to required CI. (#276)
+* **CI:** Separate repository and release truth so publishing a release cannot stale `main` — keep committed current-state facts repository-derived, centralize source/tag equality validation with executable regressions, run canonical hermetic Makefile gates in CI/release, and share the hermetic Go runner with the NixOS hardware job. (#275)
+* **CI:** Remove the Dependabot self-approve step, incompatible with read-only Actions defaults and unnecessary since `main` requires zero approving reviews; auto-merge via `gh pr merge --auto --squash` is preserved. (#282)
+
 ## v0.14.10 (2026-08-04)
 
 ### 🚀 Features
