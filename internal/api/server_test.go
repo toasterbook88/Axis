@@ -1349,6 +1349,23 @@ func TestServeWithContextGracefulShutdown(t *testing.T) {
 	}
 }
 
+func TestHTTPServerTimeoutPolicy(t *testing.T) {
+	srv := newHTTPServer(http.NewServeMux())
+
+	if srv.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %v, want 5s", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadTimeout != 15*time.Second {
+		t.Fatalf("ReadTimeout = %v, want 15s", srv.ReadTimeout)
+	}
+	if srv.IdleTimeout != 60*time.Second {
+		t.Fatalf("IdleTimeout = %v, want 60s", srv.IdleTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %v, want 0 for streamed /run responses", srv.WriteTimeout)
+	}
+}
+
 func TestDefaultAddr(t *testing.T) {
 	addr := DefaultAddr()
 	if !strings.HasSuffix(addr, filepath.Join(".axis", "axis.sock")) {

@@ -105,6 +105,7 @@ Backward compatibility: when `discovery` is **absent** from `nodes.yaml`, `IsMes
 | `daemon.defaultStaleThreshold` | 5 min | Cached snapshot older than this is flagged `stale` in metadata. |
 | `daemon.defaultRefreshInterval` | 1 min | How often the daemon re-probes the cluster. |
 | `daemon.ShutdownDrainTimeout` | 10 sec | Max wait for in-flight refresh on daemon stop. |
+| API read-header / request / idle timeouts | 5 sec / 15 sec / 60 sec | Bounds slow request and keep-alive resource use; streamed `/run` writes remain caller-context bounded. |
 | `watchConfigPollInterval` | 500 ms | How quickly the daemon notices a config edit. |
 
 ## Summary Table
