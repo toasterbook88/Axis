@@ -1,5 +1,14 @@
 ## Unreleased
 
+## v0.14.12 (2026-08-14)
+
+### 🚀 Features
+* **Agent:** In-session `/facts` and `/cluster` on `axis agent` print the local resident table (with probed ports) and the cluster node table from the **session snapshot** without a live collect. `/nodes` still does the live/daemon path. Session header adds `[model:] [endpoint:] [status: probed|stale]`. `/exec` is not shipped. (#286)
+* **AI:** Optional `advertise_url` on `~/.axis/ai.yaml` backends for Traefik-routed `*.lan.axismcp.org` names. Non-local catalog choices use it and probe before enabling; same-box callers keep `base_url`. `resolveNodeEndpoint` (direct IP/SSH) is unchanged. (#285)
+
+### 🐛 Bug Fixes
+* **Facts/Agent:** Parse llama-server `--port`/`-p` from argv (default 8080 only when unset) and probe **local** llama.cpp/MLX `/v1/models` the same as remotes so a dead default port is not selectable. Hardware Validation installs awk/rg/jq **before** tests so NixOS discovery scripts can parse ports. (#284)
+
 ## v0.14.11 (2026-08-14)
 
 ### 🚀 Features
