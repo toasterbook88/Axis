@@ -127,3 +127,30 @@ roles: {}
 		t.Fatal("enabledOnly map should be empty")
 	}
 }
+
+func TestLoadAI_AdvertiseURL(t *testing.T) {
+	path := writeAI(t, `
+backends:
+  - name: local-nemotron
+    kind: openai-compatible
+    base_url: http://127.0.0.1:8081/v1
+    advertise_url: http://nemotron.lan.axismcp.org/v1
+    node: cranium
+roles:
+  nemotron:
+    prefer: [local-nemotron]
+    model: nemotron-3.5-lightning
+`)
+	cfg, err := config.LoadAI(path)
+	if err != nil {
+		t.Fatalf("LoadAI: %v", err)
+	}
+	if len(cfg.Backends) != 1 {
+		t.Fatalf("backends=%d", len(cfg.Backends))
+	}
+	got := cfg.Backends[0].AdvertiseURL
+	want := "http://nemotron.lan.axismcp.org/v1"
+	if got != want {
+		t.Fatalf("AdvertiseURL = %q, want %q", got, want)
+	}
+}
