@@ -48,7 +48,7 @@ func TestCommandSurfacesWireExpectedSubcommands(t *testing.T) {
 		want []string
 	}{
 		{taskCmd(), []string{"place", "context", "run"}},
-		{daemonCmd(), []string{"start", "status", "invalidate", "refresh", "restart"}},
+		{daemonCmd(), []string{"start", "status", "invalidate", "refresh", "restart", "service"}},
 		{profileCmd(), []string{"match"}},
 		{placementCmd(), []string{"explain"}},
 		{mcpCmd(), []string{"serve"}},

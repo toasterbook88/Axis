@@ -199,7 +199,7 @@ HDD penalty: −15 for heavy inference.
 | `axis profile match` | Workload class inference |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
-| `axis daemon` | Subcommands: `status`, `refresh`, `invalidate`, `restart`; `status` emits `axis.output/v1` JSON |
+| `axis daemon` | Lifecycle/cache commands plus native `service install\|status\|uninstall`; `status` emits `axis.output/v1` JSON |
 | `axis chat [--stream]` | Experimental Ollama chat (advisory only) |
 | `axis agent [--auto-approve]` | Agentic tool-calling assistant |
 | `axis llm` | LLM routing and model management |
@@ -235,6 +235,11 @@ HDD penalty: −15 for heavy inference.
 Optional: `role` (primary/worker), `ssh_port` (default 22), `timeout_sec`
 (default 10), `stable_id` (optional observed machine identity used for locality
 matching and discovery dedupe). Unknown YAML keys are rejected at load time.
+
+`axis init` automatically records the local stable identity when the platform
+exposes one. After validation, use `axis daemon service install` for a
+supervised per-user daemon. `axis daemon restart` remains an unmanaged
+development/recovery path, not a persistence mechanism.
 
 `~/.axis/ai.yaml` — optional inference **backends** and **roles** (see
 `ai.example.yaml` and `docs/runbooks/ai-config.md`). Separate from

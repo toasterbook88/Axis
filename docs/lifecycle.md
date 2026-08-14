@@ -117,6 +117,7 @@ Classification is based on `cmd/axis/` source files and the command surface docu
 | `axis daemon invalidate` | stable | Explicit cache invalidation |
 | `axis daemon refresh` | stable | Explicit cache refresh |
 | `axis daemon restart` | stable | Daemon lifecycle restart |
+| `axis daemon service install\|status\|uninstall` | stable | Native user-service lifecycle |
 | `axis serve` | experimental | Optional local HTTP API; execution surface |
 | `axis mcp serve` | experimental | Optional read-only MCP diagnostic server |
 | `axis chat` | experimental | Advisory Ollama chat; explicitly experimental per Truth Rule |
