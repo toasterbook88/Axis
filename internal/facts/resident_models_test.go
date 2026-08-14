@@ -335,11 +335,13 @@ func TestMLXResidentModelCarriesSizeVRAMMB(t *testing.T) {
 	}
 }
 
-// withSandboxedPATH puts stub binaries first and keeps the runner PATH so
-// NixOS /nix/store coreutils (awk, sed, head, stat) still resolve. A
-// hardcoded /usr/bin:/bin suffix is empty of those tools on nixos-runner.
+// withSandboxedPATH puts stub binaries first. It keeps the runner PATH and
+// appends NixOS's system profile so awk/sed/head/stat resolve even if the
+// job PATH is still Ubuntu-shaped (/usr/bin) with no /nix/store links.
 func withSandboxedPATH(bin string) []string {
-	return append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	sep := string(os.PathListSeparator)
+	path := bin + sep + os.Getenv("PATH") + sep + "/run/current-system/sw/bin" + sep + "/usr/bin" + sep + "/bin"
+	return append(os.Environ(), "PATH="+path)
 }
 
 // TestLlamaServerDiscoveryScriptReportsPortFromCmdline is the regression for
