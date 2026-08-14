@@ -31,62 +31,18 @@ require_command() {
   fi
 }
 
-require_command git
-require_command go
 require_command awk
 require_command sed
-require_command curl
-require_command jq
+if (( facts_only == 0 )); then
+  require_command go
+  require_command make
+fi
 
 axis_version="$(sed -n 's/^const Version = "\(.*\)"/\1/p' internal/buildinfo/version.go)"
 if [[ -z "$axis_version" ]]; then
   printf 'failed to parse axis version from internal/buildinfo/version.go; check that the Version const format matches the sed pattern in hack/refresh-current-state.sh\n' >&2
   exit 1
 fi
-refreshed_at="$(TZ=America/New_York date '+%Y-%m-%d %Z')"
-
-github_api_get() {
-  local url="$1"
-  local curl_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
-
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    if curl "${curl_args[@]}" --config - "$url" <<EOF
-header = "Authorization: Bearer ${GITHUB_TOKEN}"
-EOF
-    then
-      return 0
-    fi
-    printf 'authenticated GitHub API request failed; retrying without credentials\n' >&2
-  fi
-
-  curl "${curl_args[@]}" "$url"
-}
-
-release_json="$(github_api_get "https://api.github.com/repos/toasterbook88/axis/releases/latest" || true)"
-latest_release_tag="$(printf '%s' "$release_json" | jq -r '.tag_name // ""')"
-latest_release_published="$(printf '%s' "$release_json" | jq -r '.published_at // ""')"
-
-if [[ -z "$latest_release_tag" ]]; then
-  latest_release_tag="unavailable"
-  latest_release_published="unavailable"
-fi
-
-release_truth="repo version matches the latest published release"
-if [[ "$latest_release_tag" == "unavailable" ]]; then
-  release_truth="latest published release is unavailable from the GitHub API"
-else
-  compare_status="$(go run ./hack/compare-release-versions.go "$axis_version" "$latest_release_tag")"
-  case "$compare_status" in
-    equal) release_truth="repo version matches the latest published release" ;;
-    behind) release_truth="repo version is behind the latest published release" ;;
-    ahead) release_truth="repo version is ahead of the latest published release" ;;
-    *)
-      printf 'unexpected comparison result: %s\n' "$compare_status" >&2
-      exit 1
-      ;;
-  esac
-fi
-
 run_and_report() {
   local cmd="$1"
   local tmp
@@ -99,7 +55,7 @@ run_and_report() {
     rm -f "$tmp"
     return 1
   fi
-  if [[ "$cmd" == "./hack/coverage-check.sh" ]]; then
+  if [[ "$cmd" == "make coverage" ]]; then
     printf '  - Coverage gates:\n'
     while IFS= read -r line; do
       printf '    - `%s`\n' "$line"
@@ -118,20 +74,20 @@ trap 'rm -f "$facts_tmp" "${verify_tmp:-}" "$doc_tmp"' EXIT
 
 cat >"$facts_tmp" <<EOF
 $facts_start
-- Refreshed: $refreshed_at
 - Repo version: \`$axis_version\`
-- Latest published GitHub release: \`$latest_release_tag\`
-- Release truth: $release_truth
 $facts_end
 EOF
 
 if (( facts_only == 0 )); then
   {
     printf '%s\n' "$verify_start"
-    run_and_report "go test ./... -count=1"
-    run_and_report "go test -race ./... -count=1"
-    run_and_report "go build ./..."
-    run_and_report "./hack/coverage-check.sh"
+    run_and_report "make test"
+    run_and_report "make test-race"
+    # Linked worktrees can make Go's implicit VCS probe fail even when the
+    # source tree is otherwise healthy. Release binaries carry explicit
+    # version metadata; this verification build only needs to compile.
+    run_and_report "go build -buildvcs=false ./..."
+    run_and_report "make coverage"
     printf '%s\n' "$verify_end"
   } >"$verify_tmp"
 fi

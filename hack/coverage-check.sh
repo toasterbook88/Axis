@@ -4,6 +4,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Coverage never ships a binary, so implicit VCS stamping adds no value and
+# makes this gate fail in otherwise valid linked worktrees.
+export GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false"
+
 # Test isolation (audit finding C5). This script runs the full suite five more
 # times; unisolated tests resolve every AXIS store to ~/.axis, so without a
 # redirect it writes real operator state. Done here rather than only in the
@@ -62,7 +66,7 @@ package_coverage() {
   echo "$cov"
 }
 
-PKG_LIST=$(go list ./... | grep -v '/examples/' || true)
+PKG_LIST=$(go list ./... | grep -v '/examples/')
 
 if ! go test $PKG_LIST -coverprofile="$total_profile" >/dev/null; then
   echo "ERROR: go test $PKG_LIST -coverprofile failed. Re-running tests to show failure logs:" >&2

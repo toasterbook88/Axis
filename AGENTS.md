@@ -26,14 +26,15 @@ Lifecycle events (see `internal/events/events.go`) are provided for observation 
 
 The repo version constant lives in `internal/buildinfo/version.go`.  The latest
 **published** GitHub release may differ from the repo version — check the
-[Releases page](https://github.com/toasterbook88/axis/releases) or run
-`./hack/refresh-current-state.sh` for the live comparison.  CI enforces this
-for `README.md` and `docs/current-state.md` via `./hack/verify-repo-truth.sh`:
-those files may not reference unpublished release tags or claim a "current
-release" that differs from the latest published GitHub release.
+[Releases page](https://github.com/toasterbook88/axis/releases). Committed
+current-state facts are derived only from repository contents, so publishing a
+release cannot make `main` stale. CI still checks explicit release links and
+"current release" claims in `README.md` and `docs/current-state.md` via
+`./hack/verify-repo-truth.sh`.
 
-Do not fabricate or assume a release version. If you need the current state,
-read `docs/current-state.md` (its facts section is CI-validated).
+Do not fabricate or assume a release version. Use `docs/current-state.md` for
+repository state and GitHub Releases for publication state; each has one
+authority.
 
 For planned work, read `docs/future-roadmap.md` and older phase/spec docs as
 design material, not live product truth. Do not describe roadmap phases or
@@ -86,9 +87,9 @@ Source of truth: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Runs on `ubuntu-latest` for every push and PR across all branches.
 Verification steps:
 
-- `go test ./... -count=1`
-- `go test -race ./... -count=1`
-- `go build ./...`
+- `make test`
+- `make test-race`
+- `go build -buildvcs=false ./...` (portable across linked worktrees; release builds inject explicit metadata)
 - `./hack/coverage-check.sh` — enforces per-package and total coverage gates
 - `./hack/verify-repo-truth.sh` — enforces release-tag and doc-fact accuracy
 - `./hack/verify-doc-facts.sh` — enforces code/doc agreement: exit codes, command count, MCP tool count, and CHANGELOG completeness (no network)
@@ -301,10 +302,13 @@ reason, or add heavy dependencies without strong justification.
 | Script | Purpose |
 | -------- | --------- |
 | `hack/coverage-check.sh` | Per-package and total coverage gates |
+| `hack/hermetic-go-test.sh` | Run Go tests without touching operator AXIS state |
+| `hack/hermetic-go-test-tests.sh` | Regression tests for the hermetic Go test runner |
 | `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
 | `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, CHANGELOG) |
-| `hack/refresh-current-state.sh` | Rebuild `docs/current-state.md` |
-| `hack/compare-release-versions.go` | Compare repo vs published release tag |
+| `hack/refresh-current-state.sh` | Rebuild repository-derived facts and verification in `docs/current-state.md` |
+| `hack/repo-truth-tests.sh` | Regression tests for repository/release truth boundaries |
+| `hack/validate-release-version.sh` | Enforce source version and release-tag equality |
 | `hack/apple-foundation-models.swift` | Probe Apple Foundation Models support |
 | `hack/verify-plan-progress.sh` | Verify execution-plan progress matrix test references and completed tests |
 
