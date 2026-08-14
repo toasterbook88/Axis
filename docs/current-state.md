@@ -125,7 +125,7 @@ Top-level commands currently registered in the binary:
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, now recovers from corrupt JSON, but semantic validation is still light |
 | `internal/safety` | Execution blocker + structured command analysis | Heuristic substring blocker is well unit-tested; structured command analysis scaffolding exists but learned approvals are deliberately disabled and NOT wired into the operator path |
-| `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; integration coverage still needs to grow, but baseline unit coverage is now solid |
+| `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; successful multipath routes are revalidated from a bounded process cache, with aggregate reuse/fan-out/failure counters exposed in daemon metadata |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
 | `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
 | `internal/mcpclient` | Unified MCP client library | Connection pooling, per-server caching (60s TTL), retry with exponential backoff, progress notifications, placement-aware routing, batch execution, and metrics collection; powers `axis mcp client` |
