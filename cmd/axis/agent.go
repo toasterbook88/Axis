@@ -377,6 +377,8 @@ func agentCmd() *cobra.Command {
 			var completerItems []readline.PrefixCompleterInterface
 			completerItems = append(completerItems,
 				readline.PcItem("/help"),
+				readline.PcItem("/facts"),
+				readline.PcItem("/cluster"),
 				readline.PcItem("/clear"),
 				readline.PcItem("/context"),
 				readline.PcItem("/history"),
@@ -679,6 +681,8 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 	case "/help":
 		fmt.Fprintln(errW, "Available commands:")
 		fmt.Fprintln(errW, "  /help          Show this help message")
+		fmt.Fprintln(errW, "  /facts         Show local node facts and resident models")
+		fmt.Fprintln(errW, "  /cluster       Show cluster snapshot (no live collect)")
 		fmt.Fprintln(errW, "  /clear         Clear conversation history (keep system prompt)")
 		fmt.Fprintln(errW, "  /context       Show conversation token usage and limit")
 		fmt.Fprintln(errW, "  /history       Show conversation turn summary")
@@ -690,6 +694,14 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		fmt.Fprintln(errW, "  /reservations  Show active ledger reservations")
 		fmt.Fprintln(errW, "  /skills        Show learned skills from history")
 		fmt.Fprintln(errW, "  /exit, /quit   Quit the session")
+		return true, false, nil
+
+	case "/facts":
+		printAgentFacts(w, errW, rt)
+		return true, false, nil
+
+	case "/cluster":
+		printAgentCluster(w, errW, rt)
 		return true, false, nil
 
 	case "/nodes":
@@ -2149,6 +2161,87 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 var tokenRegex = regexp.MustCompile(`(?i)(bearer|token|key|auth|password|secret|credential)[=:\s]+[A-Za-z0-9\-_./\+=]+`)
 var urlSecretRegex = regexp.MustCompile(`(?i)(token|key|password|pass|secret|auth)=[^&\s]+`)
 
+func printAgentFacts(w, errW io.Writer, rt *runtimectx.Context) {
+	if rt == nil || rt.Snapshot == nil {
+		fmt.Fprintln(errW, ui.Yellow("No cluster snapshot available"))
+		return
+	}
+	n, ok := models.FindLocalNode(rt.Snapshot.Nodes)
+	if !ok {
+		fmt.Fprintln(errW, ui.Yellow("Local node not found in snapshot"))
+		return
+	}
+	fmt.Fprintf(w, "Node: %s (%s/%s)\n", n.Name, n.OS, n.Arch)
+	if n.Resources != nil {
+		fmt.Fprintf(w, "CPU: %d cores\n", n.Resources.CPUCores)
+		fmt.Fprintf(w, "RAM: %d MB total, %d MB free\n", n.Resources.RAMTotalMB, n.Resources.RAMFreeMB)
+	}
+	if len(n.ResidentModels) == 0 {
+		fmt.Fprintln(w, "Residents: none")
+		return
+	}
+	fmt.Fprintln(w, "Residents:")
+	for _, rm := range n.ResidentModels {
+		fmt.Fprintf(w, "  %s  runtime=%s  port=%d\n", rm.Name, rm.Runtime, rm.Port)
+	}
+}
+
+func printAgentCluster(w, errW io.Writer, rt *runtimectx.Context) {
+	if rt == nil || rt.Snapshot == nil || len(rt.Snapshot.Nodes) == 0 {
+		fmt.Fprintln(errW, ui.Yellow("No nodes found in session snapshot."))
+		return
+	}
+	var listItems []NodeListItem
+	for _, n := range rt.Snapshot.Nodes {
+		var ramTotal, ramFree int
+		var pressure string
+		var gpus []string
+		if n.Resources != nil {
+			ramTotal = int(n.Resources.RAMTotalMB)
+			ramFree = int(n.Resources.RAMFreeMB)
+			pressure = string(n.Resources.Pressure)
+			for _, g := range n.Resources.GPUs {
+				gpus = append(gpus, g.Model)
+			}
+		}
+		listItems = append(listItems, NodeListItem{
+			Name:     n.Name,
+			Status:   string(n.Status),
+			OS:       n.OS,
+			Arch:     n.Arch,
+			RAMTotal: ramTotal,
+			RAMFree:  ramFree,
+			Pressure: pressure,
+			GPUs:     gpus,
+			IsLocal:  models.IsLocalNode(n),
+			Reserved: n.RAMReservedMB,
+		})
+	}
+	fmt.Fprintln(w, "Snapshot Source: session")
+	fmt.Fprint(w, RenderNodeTable(listItems))
+}
+
+func agentStatusStrip(target ModelChoice) string {
+	model := strings.TrimSpace(target.Model)
+	if model == "" {
+		model = "(none)"
+	}
+	ep := strings.TrimSpace(target.Endpoint)
+	ep = strings.TrimPrefix(ep, "http://")
+	ep = strings.TrimPrefix(ep, "https://")
+	if i := strings.Index(ep, "/"); i >= 0 {
+		ep = ep[:i]
+	}
+	if ep == "" {
+		ep = "(default)"
+	}
+	status := "probed"
+	if target.Disabled {
+		status = "stale"
+	}
+	return fmt.Sprintf("[model: %s] [endpoint: %s] [status: %s]", model, ep, status)
+}
+
 func redactSecrets(s string) string {
 	s = tokenRegex.ReplaceAllString(s, "$1=[REDACTED]")
 	s = urlSecretRegex.ReplaceAllString(s, "$1=[REDACTED]")
@@ -2197,7 +2290,6 @@ func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool,
 	if target.Protocol != "" {
 		provider = fmt.Sprintf("%s [%s]", provider, target.Protocol)
 	}
-
 	ui.WhiteColor.Fprintln(w, "  ┌────────────────────────────────────────────────────────┐")
 	ui.WhiteColor.Fprintln(w, "  │                     SESSION ACTIVE                     │")
 	ui.WhiteColor.Fprintln(w, "  ├────────────────────────────────────────────────────────┤")
@@ -2211,5 +2303,6 @@ func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool,
 	printRow("MCP Servers ", mcpStr, false)
 	printRow("Max Turns   ", fmt.Sprintf("%d", maxTurns), false)
 	ui.WhiteColor.Fprintln(w, "  └────────────────────────────────────────────────────────┘")
+	fmt.Fprintln(w, agentStatusStrip(target))
 	fmt.Fprintln(w)
 }
