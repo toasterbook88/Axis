@@ -42,23 +42,44 @@ func daemonCmd() *cobra.Command {
 
 			meta, err := daemon.FetchMeta(ctx, cacheAddr)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "daemon not responding on %s: %v\n", cacheAddr, err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "daemon not responding on %s: %v\n", cacheAddr, err)
 				return err
 			}
 
-			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(meta); err != nil {
-				return err
-			}
-
+			status := "fresh"
+			ok := true
+			var warnings []machineWarning
 			switch {
 			case meta.Version == "":
-				fmt.Fprintln(cmd.OutOrStdout(), "warning: daemon metadata is missing version information; restart axis serve from current main")
+				status = "incompatible"
+				ok = false
+				warnings = append(warnings, machineWarning{
+					Kind:    "daemon_version",
+					Message: "daemon metadata is missing version information; restart axis serve from current main",
+				})
+			case !meta.Ready:
+				status = "unavailable"
+				ok = false
+				warnings = append(warnings, machineWarning{
+					Kind:    "daemon_cache",
+					Message: "daemon cache is not ready; run axis daemon refresh",
+				})
 			case meta.Stale:
-				fmt.Fprintln(cmd.OutOrStdout(), "warning: daemon cache is stale; restart axis serve or run axis daemon refresh")
-			default:
-				fmt.Fprintln(cmd.OutOrStdout(), "daemon cache is fresh")
+				status = "stale"
+				ok = false
+				warnings = append(warnings, machineWarning{
+					Kind:    "daemon_cache",
+					Message: "daemon cache is stale; restart axis serve or run axis daemon refresh",
+				})
+			case meta.LastError != "":
+				status = "degraded"
+				ok = false
+				warnings = append(warnings, machineWarning{
+					Kind:    "daemon_refresh",
+					Message: meta.LastError,
+				})
 			}
-			return nil
+			return writeMachineOutput(cmd.OutOrStdout(), "daemon status", status, ok, meta, warnings)
 		},
 	})
 

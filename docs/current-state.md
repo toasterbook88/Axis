@@ -91,7 +91,7 @@ Top-level commands currently registered in the binary:
 | `axis daemon start` | Start daemon HTTP API | Alias for `axis serve`; `--addr` and `--refresh` flags |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
-| `axis daemon status` | Inspect daemon freshness | Reports cache readiness, age, version metadata |
+| `axis daemon status` | Inspect daemon freshness | Emits one `axis.output/v1` JSON envelope with structured state and warnings |
 | `axis daemon restart` | Restart daemon | Restart the local cache seam |
 | `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
 | `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; injects nearest `AGENTS.md` into the system prompt when present; `--auto-approve` for safe commands; `--system` appends to system prompt |
