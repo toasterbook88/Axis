@@ -132,6 +132,11 @@ func modelChoicesFromAIConfig() []ModelChoice {
 		if err != nil || dec.Model == "" || dec.Endpoint == "" {
 			continue
 		}
+		if b, ok := cfg.FindBackend(dec.Backend); ok {
+			if ep := chooseAICatalogEndpoint(b); ep != "" {
+				dec.Endpoint = ep
+			}
+		}
 		key := strings.ToLower(dec.Endpoint) + "\x00" + strings.ToLower(dec.Model)
 		if seen[key] {
 			continue
@@ -175,6 +180,23 @@ func modelChoicesFromAIConfig() []ModelChoice {
 		})
 	}
 	return out
+}
+
+// chooseAICatalogEndpoint keeps BaseURL on-box and uses AdvertiseURL only
+// when this process is not the backend's node. resolveNodeEndpoint is not
+// involved — snapshot/IP reachability stays unchanged.
+func chooseAICatalogEndpoint(b config.AIBackendConfig) string {
+	if strings.TrimSpace(b.AdvertiseURL) == "" || aiBackendIsLocal(b) {
+		return b.BaseURL
+	}
+	return b.AdvertiseURL
+}
+
+func aiBackendIsLocal(b config.AIBackendConfig) bool {
+	if strings.TrimSpace(b.Node) == "" {
+		return llmrouter.EndpointIsClusterLocal(b.BaseURL)
+	}
+	return models.IsLocalConfig(b.Node, b.Node, "")
 }
 
 func probeAIEndpoint(kind, baseURL string) bool {
