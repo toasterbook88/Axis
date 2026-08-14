@@ -1979,12 +1979,12 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 					endpointToNodes[endpoint+"/api/tags"] = append(endpointToNodes[endpoint+"/api/tags"], n)
 				}
 			}
-			// Probe MLX/llama.cpp resident models
+			// Probe MLX/llama.cpp resident models on every node, including
+			// local. A hardcoded or stale port must not stay selectable.
 			for _, rm := range n.ResidentModels {
-				if (rm.Runtime == "mlx" || rm.Runtime == "llama.cpp") && !models.IsLocalNode(n) && rm.Port > 0 {
+				if (rm.Runtime == "mlx" || rm.Runtime == "llama.cpp") && rm.Port > 0 {
 					endpoint, err := resolveNodeEndpoint(n, rm.Port)
 					if err == nil && endpoint != "" {
-						// OpenAI-compatible /v1/models probe
 						endpointToNodes[endpoint+"/v1/models"] = append(endpointToNodes[endpoint+"/v1/models"], n)
 					}
 				}
@@ -2072,7 +2072,7 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 					disabled = true
 					reason = "no valid endpoint"
 					endpoint = ""
-				} else if !models.IsLocalNode(n) && !probeMap[endpoint+"/v1/models"] {
+				} else if !probeMap[endpoint+"/v1/models"] {
 					disabled = true
 					reason = "unreachable"
 				}

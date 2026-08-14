@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -473,4 +474,113 @@ func TestFindModelInProvider(t *testing.T) {
 	if _, ok := findModelInProvider(pCfg, "missing"); ok {
 		t.Fatal("expected miss")
 	}
+}
+
+// TestCollectModelChoicesProbesLocalLlamaCppResidents is the /model
+// localhost:8080 regression: a local llama.cpp resident whose /v1/models
+// probe fails must be Disabled, same as a remote one. Previously only
+// !IsLocalNode residents were probed.
+func TestCollectModelChoicesProbesLocalLlamaCppResidents(t *testing.T) {
+	hn, err := os.Hostname()
+	if err != nil || hn == "" {
+		t.Skip("hostname unavailable")
+	}
+	prevProbe := probeEndpointFn
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() {
+		probeEndpointFn = prevProbe
+		inferenceAILoadFn = prevLoad
+	})
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
+
+	probed := map[string]bool{}
+	probeEndpointFn = func(url string) bool {
+		probed[url] = true
+		return false
+	}
+
+	rt := &runtimectx.Context{
+		Snapshot: &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				{
+					Name:     "cranium",
+					Hostname: hn,
+					Status:   models.StatusComplete,
+					ResidentModels: []models.ResidentModel{
+						{Name: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-IQ4_XS", Runtime: "llama.cpp", Port: 8080},
+					},
+				},
+			},
+		},
+		Config: &config.Config{},
+	}
+	choices := collectModelChoices(rt)
+	var got ModelChoice
+	var found bool
+	for _, c := range choices {
+		if c.Protocol == agent.ProtocolOpenAI && strings.Contains(c.Model, "Nemotron") {
+			got = c
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected local llama.cpp choice, got %+v", choices)
+	}
+	wantURL := "http://localhost:8080/v1/models"
+	if !probed[wantURL] {
+		t.Fatalf("did not probe local resident %s; probed %v", wantURL, probed)
+	}
+	if !got.Disabled {
+		t.Fatalf("local unreachable llama.cpp choice must be disabled, got %+v", got)
+	}
+	if got.DisabledReason != "unreachable" {
+		t.Fatalf("DisabledReason = %q, want unreachable", got.DisabledReason)
+	}
+}
+
+func TestCollectModelChoicesKeepsReachableLocalLlamaCppEnabled(t *testing.T) {
+	hn, err := os.Hostname()
+	if err != nil || hn == "" {
+		t.Skip("hostname unavailable")
+	}
+	prevProbe := probeEndpointFn
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() {
+		probeEndpointFn = prevProbe
+		inferenceAILoadFn = prevLoad
+	})
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
+	probeEndpointFn = func(url string) bool {
+		return strings.HasSuffix(url, "/v1/models")
+	}
+
+	rt := &runtimectx.Context{
+		Snapshot: &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{
+				{
+					Name:     "cranium",
+					Hostname: hn,
+					Status:   models.StatusComplete,
+					ResidentModels: []models.ResidentModel{
+						{Name: "nemotron-live", Runtime: "llama.cpp", Port: 8081},
+					},
+				},
+			},
+		},
+		Config: &config.Config{},
+	}
+	choices := collectModelChoices(rt)
+	for _, c := range choices {
+		if c.Model == "nemotron-live" {
+			if c.Disabled {
+				t.Fatalf("reachable local llama.cpp must stay enabled, got %+v", c)
+			}
+			if c.Endpoint != "http://localhost:8081" {
+				t.Fatalf("endpoint = %q", c.Endpoint)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing choice: %+v", choices)
 }
