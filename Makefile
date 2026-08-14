@@ -7,6 +7,11 @@ PREFIX   ?= $(HOME)/.local
 # repository change. Bump deliberately.
 STATICCHECK_VERSION ?= 2025.1.1
 
+# Go's implicit VCS probe can fail in valid linked worktrees. Axis release
+# metadata is injected explicitly below, so Makefile gates and builds do not
+# depend on that probe.
+export GOFLAGS := $(strip $(GOFLAGS) -buildvcs=false)
+
 LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Commit=$(COMMIT) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.Date=$(DATE) \
@@ -48,41 +53,22 @@ install-user: build
 	@echo "verify: $(PREFIX)/bin/axis version"
 	@echo "daemon: $(PREFIX)/bin/axis daemon restart && $(PREFIX)/bin/axis daemon status"
 
-# Test isolation (audit finding C5). Unisolated tests resolve every AXIS store
-# to ~/.axis, so the suite used to write real operator state on every run. The
-# harness redirects HOME to a disposable directory.
-#
-# Two details are load-bearing:
-#
-#   - GOCACHE, GOPATH, and GOMODCACHE derive from HOME. They are captured from
-#     the real home in the assignment prefix, which the shell expands before it
-#     applies the HOME assignment, so the build cache survives.
-#   - AXIS_HOME is deliberately NOT exported here. It outranks HOME in
-#     persist.AxisDir, so a single suite-wide AXIS_HOME would override the ~133
-#     tests that isolate themselves with t.Setenv("HOME", ...) and collapse them
-#     onto one shared AXIS root.
+# Test isolation lives in one executable abstraction so workflows that do not
+# provide make can preserve the same operator-state boundary.
 test:
-	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
-	trap 'rm -rf "$$d"' EXIT; \
-	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
-	HOME="$$d" AXIS_HOME= go test ./... -count=1 -timeout 180s
+	@./hack/hermetic-go-test.sh ./... -count=1 -timeout 180s
+	./hack/hermetic-go-test-tests.sh
 	python3 -B -m unittest discover -s docs/superpowers/tools -p '*_test.py'
 
 test-race:
-	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
-	trap 'rm -rf "$$d"' EXIT; \
-	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
-	HOME="$$d" AXIS_HOME= go test -race ./... -count=1 -timeout 180s
+	@./hack/hermetic-go-test.sh -race ./... -count=1 -timeout 180s
 
 # Fleet test: two-node read-only facts smoke. Gated behind //go:build fleet so
 # it never runs in normal CI or make test. Set AXIS_FLEET_TARGET to the remote
 # node ([user@]host[:port]) and ensure SSH key access to it; the test skips when
 # that variable is unset.
 test-fleet:
-	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/axis-test-home.XXXXXX"); \
-	trap 'rm -rf "$$d"' EXIT; \
-	GOCACHE=$$(go env GOCACHE) GOPATH=$$(go env GOPATH) GOMODCACHE=$$(go env GOMODCACHE) \
-	HOME="$$d" AXIS_HOME= go test -tags=fleet -count=1 -timeout 120s -v ./internal/fleettest/
+	@./hack/hermetic-go-test.sh -tags=fleet -count=1 -timeout 120s -v ./internal/fleettest/
 
 lint:
 	@unformatted=$$(gofmt -l .) || exit $$?; \

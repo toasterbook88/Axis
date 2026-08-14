@@ -17,6 +17,8 @@ require_command rg
 require_command git
 require_command diff
 
+./hack/repo-truth-tests.sh
+
 curl_base_args=(-fsSL --retry 3 --connect-timeout 15 --max-time 30)
 curl_args=("${curl_base_args[@]}")
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -46,9 +48,7 @@ tmp_doc="$(mktemp)"
 trap 'rm -f "$tmp_doc"' EXIT
 cp docs/current-state.md "$tmp_doc"
 AXIS_CURRENT_STATE_DOC_PATH="$tmp_doc" ./hack/refresh-current-state.sh --facts-only >/dev/null
-if ! diff -u \
-    <(grep -v '^- Refreshed:' docs/current-state.md) \
-    <(grep -v '^- Refreshed:' "$tmp_doc") >/dev/null; then
+if ! diff -u docs/current-state.md "$tmp_doc" >/dev/null; then
   printf 'docs/current-state.md generated facts are stale; run ./hack/refresh-current-state.sh\n' >&2
   diff -u docs/current-state.md "$tmp_doc" >&2 || true
   exit 1

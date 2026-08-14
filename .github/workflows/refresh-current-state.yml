@@ -4,10 +4,10 @@
 # (GITHUB_TOKEN cannot satisfy main branch protection). Committing live GitHub
 # release timestamps also forced thrash PRs and fought verify-repo-truth.
 #
-# GitHub Releases are the release authority. docs/current-state.md generated
-# facts track repo version + latest tag name + ahead/matches only (no
-# published_at). Re-enable only with a working automation identity AND a
-# design that does not dual-write mutable release metadata into main.
+# GitHub Releases are the publication authority. docs/current-state.md now
+# contains repository-derived facts only, so no scheduled commit is needed.
+# Re-enable only if a new repository-derived fact genuinely requires automated
+# refresh and the automation identity can satisfy branch protection.
 name: Refresh Current State
 
 on:
