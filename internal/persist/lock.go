@@ -22,10 +22,10 @@ import (
 // state.Update or skills.Update while holding a lock — including indirectly
 // via state.Load, which persists pending migrations through Update.
 func LockFile(path string) (release func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := OpenPrivateFile(path+".lock", os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return nil, fmt.Errorf("opening lock for %s: %w", filepath.Base(path), err)
 	}

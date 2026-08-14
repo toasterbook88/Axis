@@ -63,7 +63,8 @@ Skills are written **only after execution** and are read during snapshot assembl
 
 - `Daemon.Snapshot()` returns a **deep clone** via `snapshotview.Clone()` (`internal/daemon/daemon.go:597`). This prevents callers from mutating the internal cache.
 - However, the daemon's internal `snapshot` pointer is **overwritten** on every `doRefresh`. There is no versioning or copy-on-write; the old snapshot is simply replaced.
-- `snapshot.json` on disk is overwritten via `os.WriteFile` after each refresh. There is no atomic rename or double-buffering.
+- `snapshot.json` is atomically replaced after each refresh. There is no
+  cross-store transaction or double-buffering with state and ledger files.
 
 ### 3.2 Runtime Cache
 
@@ -87,7 +88,7 @@ Searches for `SnapshotEpoch`, `snapshot_epoch`, `epoch`, `generation`, or `gen` 
 
 ## 5. Double-Buffering and Atomic Publication
 
-**Neither double-buffering nor atomic publication is used.**
+**Individual persistence files are atomically replaced; cross-store publication is not atomic.**
 
 ### 5.1 Daemon Cache Publication
 
@@ -105,7 +106,7 @@ The sequence is:
 1. Lock `d.mu`
 2. Assign `d.snapshot = clone(snap)`
 3. Unlock `d.mu`
-4. Write `snapshot.json` to disk (non-atomic)
+4. Atomically replace `snapshot.json`
 
 There is a window between step 3 and step 4 where the in-memory cache is newer than the disk file. Conversely, if the daemon crashes between step 2 and step 4, the in-memory state is lost.
 
@@ -180,7 +181,7 @@ This is mitigated only by:
 | No `SnapshotEpoch` | Consumers cannot detect out-of-order or mixed-layer reads. |
 | No atomic snapshot+state+ledger read | Each layer is read independently, creating windows of inconsistency. |
 | No monotonic clock in `Timestamp` | `ClusterSnapshot.Timestamp` is wall-clock UTC and can go backwards after NTP jumps. |
-| `snapshot.json` is not written atomically | Crash between memory update and disk write leaves stale disk state. |
+| Snapshot memory and disk are not published as one transaction | A crash after the in-memory swap but before the atomic replacement leaves the prior complete disk snapshot. |
 
 ## Summary Table
 
@@ -192,7 +193,7 @@ This is mitigated only by:
 | Invalidation | `Invalidate()`, file watchers, execution events | N/A (rebuilt each time) | `context clear`, load maintenance | Manual file delete |
 | Mutable after publish | Overwritten on refresh | Fresh build each time | Mutated during load | Append-only |
 | Generation ID | **None** | **None** | `Version` field (schema) | **None** |
-| Atomic publication | **No** | N/A | Yes (`WriteFileAtomic`) | Yes (`WriteFileAtomic`) |
+| Atomic file replacement | Yes | N/A | Yes | Yes |
 | Double-buffering | **No** | N/A | No | No |
 | Event-driven invalidation | Yes | N/A | No | No |
 | Time-driven invalidation | Yes (1m ticker, 5m stale) | N/A | Yes (load-time reclaim) | N/A |

@@ -1029,7 +1029,7 @@ func persistSnapshot(path string, snap *models.ClusterSnapshot) error {
 	if err != nil {
 		return err
 	}
-	return persist.WriteFileAtomic(path, data, 0o644)
+	return persist.WritePrivateFileAtomic(path, data)
 }
 
 func cloneSnapshot(snap *models.ClusterSnapshot) *models.ClusterSnapshot {

@@ -104,6 +104,13 @@ func TestWebhookDeadLetter(t *testing.T) {
 
 	tempDir := t.TempDir()
 	_ = isolateEventBus(t, tempDir)
+	dlPath := filepath.Join(tempDir, "webhook-deadletter.jsonl")
+	if err := os.WriteFile(dlPath, nil, 0o644); err != nil {
+		t.Fatalf("precreate dead-letter: %v", err)
+	}
+	if err := os.Chmod(dlPath, 0o644); err != nil {
+		t.Fatalf("chmod dead-letter: %v", err)
+	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -121,9 +128,13 @@ func TestWebhookDeadLetter(t *testing.T) {
 	}
 
 	// Verify that the dead-letter log is written
-	dlPath := filepath.Join(tempDir, "webhook-deadletter.jsonl")
 	if _, err := os.Stat(dlPath); err != nil {
 		t.Fatalf("expected dead-letter file %s to exist, got error: %v", dlPath, err)
+	}
+	if info, err := os.Stat(dlPath); err != nil {
+		t.Fatalf("stat dead-letter file: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("dead-letter mode = %o, want 600", got)
 	}
 
 	// Read and verify dead-letter content

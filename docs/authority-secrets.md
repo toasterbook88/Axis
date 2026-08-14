@@ -50,27 +50,33 @@ When `IdentitiesOnly` is **not** set, the following are tried in order:
 - **Behavior:** Empty secret means HMAC verification is bypassed (`verifyMessageHMAC` returns `true`).
 - **Rotation:** Not supported without code change; mesh config is fixed at daemon construction time.
 
-## 3. Are Secrets Ever Written to State Files?
+## 3. Can Operator-Supplied Secret Material Reach Runtime State?
 
-**No.** The following state files contain **zero secret material**:
+AXIS does not intentionally copy credential fields into state, ledger, skills,
+snapshot, event, conversation, or task-log stores. It cannot promise those
+files contain zero secret material: task descriptions, commands, model prompts,
+stdout/stderr, webhook errors, and learned execution context are
+operator-controlled and may contain sensitive values.
 
-| File | Contents | Secrets? |
-|------|----------|----------|
-| `~/.axis/state.json` | Reservations, failures, observations, decisions | No |
-| `~/.axis/ledger.json` | Double-entry reservation ledger | No |
-| `~/.axis/skills.json` | Learned skills/failures | No |
-| `~/.axis/snapshot.json` | Daemon-cached cluster snapshot | No |
+AXIS therefore treats all runtime persistence as private even when its schema
+has no credential field. AXIS-created directories use `0700`; AXIS-created
+runtime files use `0600`. Atomic stores are replaced with private modes, while
+append and lock stores tighten an existing file when it is opened. Operator
+managed inputs such as `nodes.yaml`, `ai.yaml`, `cortex.token`, and referenced
+API-key files should also be `0600`.
 
 ### API Tokens
 
 - `~/.axis/token` holds the local API token for `axis serve`.
-- Written atomically (`os.CreateTemp` + `rename`) with `0600` permissions.
+- Written atomically with `0600` permissions.
 - `AXIS_API_TOKEN` env var overrides the file.
 
 ### Cloud Provider API Keys
 
 - `internal/secrets/secrets.go` resolves keys via `api_key_env` or `api_key_file` (from `nodes.yaml` `ai_providers` block).
-- Keys are **never persisted** by AXIS; they live only in environment variables or operator-managed files.
+- Keys entered through the provider configuration flow may be written to an
+  operator-selected key file with `0600`; otherwise they remain in environment
+  variables or operator-managed files.
 
 ## 4. Are Secrets Logged or Exposed in Error Messages?
 

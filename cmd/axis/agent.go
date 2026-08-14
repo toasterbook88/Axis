@@ -407,9 +407,9 @@ func agentCmd() *cobra.Command {
 				EOFPrompt:       "exit",
 				AutoComplete:    completer,
 			}
-			if historyPath != "" {
-				rlCfg.HistoryFile = historyPath + ".line"
-			}
+			// Agent history is already persisted by Conversation.SaveToFile.
+			// Keep readline history in memory so its permissive file mode cannot
+			// expose prompts to other local users.
 			rl, err := readline.NewEx(rlCfg)
 			if err != nil {
 				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, mcpReg, activeTarget)

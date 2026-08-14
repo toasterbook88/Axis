@@ -962,7 +962,7 @@ func (s *ClusterState) saveTo(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return persist.WriteFileAtomic(path, data, 0o644)
+	return persist.WritePrivateFileAtomic(path, data)
 }
 
 func (s *ClusterState) RecordPlacement(node string, estRAMMB int64, taskDesc string) {

@@ -250,6 +250,15 @@ Persisted local state:
   decisions, per-exec heartbeats, and local caller/origin provenance
 - `~/.axis/skills.json` — learned skills and failures
 - `~/.axis/snapshot.json` — daemon-cached snapshot
+- `~/.axis/ledger.json` — reservation authority
+- `~/.axis/events*.jsonl` and `event-sequence*` — event history and ordering
+- `~/.axis/logs/task-*.log` — combined task stdout/stderr
+- `~/.axis/{chat,agent}-history.json` — advisory conversation history
+
+AXIS-created runtime directories are owner-only (`0700`) and runtime files are
+owner-only (`0600`). Opening an append/lock store or replacing an atomic store
+tightens files created by older releases. Readline does not persist a second
+prompt-history file; the private structured conversation store is authoritative.
 
 Corrupt state/skills files are quarantined to `.corrupt-*` backups and surfaced
 as warnings instead of crashing read paths.

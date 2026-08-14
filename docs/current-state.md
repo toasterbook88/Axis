@@ -36,6 +36,8 @@ The live repo currently contains:
 - A read-only diagnostics + advisory lease MCP server for cluster state, with a per-session cache (`SessionCache`) with a 30s TTL to prevent redundant live discoveries
 - In-process snapshot-change hooks on the daemon supporting subscriber callbacks with lock-free dispatch and panic recovery
 - Persistent local state in `~/.axis/state.json` and `~/.axis/skills.json`
+- Owner-only runtime persistence (`0700` directories, `0600` files), including
+  permission tightening for legacy append/lock files when reused
 - Recoverable persistence for corrupt local state/skills files via quarantine + warning
 - UDP beacon-based node discovery inside the live snapshot pipeline
 - Per-run execution context files instead of shared temp-path injection

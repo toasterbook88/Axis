@@ -62,6 +62,57 @@ func TestJSONLLogger(t *testing.T) {
 	}
 }
 
+func TestEventPersistenceUsesPrivateModes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "axis")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod file: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("Chmod dir: %v", err)
+	}
+	if err := ResetTestLog(path); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
+
+	if _, err := allocateSequence(); err != nil {
+		t.Fatalf("allocateSequence: %v", err)
+	}
+	if err := appendEventToFile(NewEvent("privacy.test", nil)); err != nil {
+		t.Fatalf("appendEventToFile: %v", err)
+	}
+	if err := rotateLogsUnderLock(path); err != nil {
+		t.Fatalf("rotateLogsUnderLock: %v", err)
+	}
+
+	for _, privatePath := range []string{
+		dir,
+		path,
+		filepath.Join(dir, "event-sequence"),
+		filepath.Join(dir, "event-sequence.lock"),
+		filepath.Join(dir, "events.lock"),
+	} {
+		info, err := os.Stat(privatePath)
+		if err != nil {
+			t.Fatalf("Stat(%s): %v", privatePath, err)
+		}
+		want := os.FileMode(0o600)
+		if info.IsDir() {
+			want = 0o700
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("mode(%s) = %o, want %o", privatePath, got, want)
+		}
+	}
+}
+
 func TestFlockSequenceAllocation(t *testing.T) {
 	tempDir := t.TempDir()
 	tempLog := filepath.Join(tempDir, "events.jsonl")
