@@ -1,5 +1,10 @@
 ## Unreleased
 
+### 🚀 Features
+
+* **CLI:** `axis cluster` runs the same `status`/`summary`/`facts`/`doctor` as the root. Root help is a path (look → act). Experimental verbs (`chat`, `llm`, `cortex`, `mcp`, `context`, `profile`, `scripts`, `skills`, `observations`) stay installed but are hidden from default help.
+
+
 ## v0.14.13 (2026-08-15)
 
 ### 🚀 Features
