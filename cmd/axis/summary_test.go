@@ -15,6 +15,25 @@ import (
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
+func TestSummaryHelpNamesDashboardAndCacheDefault(t *testing.T) {
+	stdout, _, err := captureProcessOutput(t, func() error {
+		cmd := summaryCmd()
+		cmd.SetArgs([]string{"--help"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("summary --help: %v", err)
+	}
+	for _, want := range []string{"dashboard", "--cached=false", "live"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("summary help missing %q\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "summary <command> --help") {
+		t.Fatalf("leaf summary help invented subcommands:\n%s", stdout)
+	}
+}
+
 func TestSummaryRenderEmptyState(t *testing.T) {
 	color.NoColor = true
 	defer func() { color.NoColor = false }()
