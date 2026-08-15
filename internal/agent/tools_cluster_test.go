@@ -10,11 +10,11 @@ import (
 
 func TestFindNode(t *testing.T) {
 	nodes := []config.NodeConfig{
-		{Name: "nixos", Hostname: "192.168.1.219", SSHUser: "axis"},
-		{Name: "foundry", Hostname: "192.168.1.249", SSHUser: "axis"},
+		{Name: "alpha", Hostname: "192.0.2.10", SSHUser: "axis"},
+		{Name: "beta", Hostname: "192.0.2.20", SSHUser: "axis"},
 	}
-	if n := findNode(nodes, "nixos"); n == nil || n.Hostname != "192.168.1.219" {
-		t.Fatalf("findNode nixos: got %+v", n)
+	if n := findNode(nodes, "alpha"); n == nil || n.Hostname != "192.0.2.10" {
+		t.Fatalf("findNode alpha: got %+v", n)
 	}
 	if n := findNode(nodes, "missing"); n != nil {
 		t.Fatalf("findNode missing should be nil, got %+v", n)

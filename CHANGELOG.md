@@ -3,6 +3,13 @@
 ### 🚀 Features
 
 * **Facts:** Inventory every mounted volume (root plus other local mounts), not just root + `_Ext` totals. Virtual filesystems (tmpfs, overlay, docker, snap/loop, Darwin synthetic, 0 GB images) are omitted. Local sizes come from `df -kPl` (never stats a remote server). CIFS/NFS/SMB rows come from `mount`/`/proc/mounts` with sizes left 0. Bus/class inferred from the device path only; role is `root` or `other`. `disk_total_gb` is still the root filesystem.
+* **Facts:** Join network volumes to the owning cluster node from `Device` (CIFS `//user@host/share`, NFS `ip:/export`, mDNS `._smb._tcp.local`). Sets `owner` + `owner_mount`; does not copy sizes (share stays 0/0). Ambiguous hosts stay unresolved.
+
+### Maintenance
+* **Docs/Tests:** Replace operator-cluster hostnames and LAN/Tailscale addresses in fixtures and worklog with RFC 5737 / symbolic names. `hack/verify-public-boundary.sh` (wired into `verify-doc-facts`) rejects non-documentation IPv4 literals in Go sources and CHANGELOG.
+
+
+
 
 
 
