@@ -186,12 +186,17 @@ type DiscoveryConfig struct {
 	Secret         string `json:"secret,omitempty" yaml:"secret,omitempty"`
 }
 
-// ChatConfig holds optional operator preferences for the chat and agent surfaces.
+// AgentConfig holds optional operator preferences for axis agent.
 // All fields are optional; omitting the section entirely is valid.
-type ChatConfig struct {
-	// DefaultModel is the Ollama model tag to use when no --model flag is given.
-	// When unset, AXIS auto-selects the best available installed model.
+type AgentConfig struct {
+	// DefaultModel is the Ollama model tag when --model is omitted.
 	// Example: default_model: "llama3.2:latest"
+	DefaultModel string `json:"default_model,omitempty" yaml:"default_model,omitempty"`
+}
+
+// ChatConfig is the deprecated alias of AgentConfig (nodes.yaml key `chat`).
+// Load still accepts it for one release; prefer `agent.default_model`.
+type ChatConfig struct {
 	DefaultModel string `json:"default_model,omitempty" yaml:"default_model,omitempty"`
 }
 
@@ -290,9 +295,11 @@ type MCPServerConfig struct {
 
 // Config is the top-level AXIS configuration.
 type Config struct {
-	Nodes       []NodeConfig                `json:"nodes" yaml:"nodes"`
-	Discovery   *DiscoveryConfig            `json:"discovery,omitempty" yaml:"discovery,omitempty"`
-	Chat        *ChatConfig                 `json:"chat,omitempty" yaml:"chat,omitempty"`
+	Nodes     []NodeConfig     `json:"nodes" yaml:"nodes"`
+	Discovery *DiscoveryConfig `json:"discovery,omitempty" yaml:"discovery,omitempty"`
+	Agent     *AgentConfig     `json:"agent,omitempty" yaml:"agent,omitempty"`
+	Chat      *ChatConfig      `json:"chat,omitempty" yaml:"chat,omitempty"`
+
 	AIProviders map[string]AIProviderConfig `json:"ai_providers,omitempty" yaml:"ai_providers,omitempty"`
 	Inference   *InferenceConfig            `json:"inference,omitempty" yaml:"inference,omitempty"`
 	MCPServers  map[string]MCPServerConfig  `json:"mcp_servers,omitempty" yaml:"mcp_servers,omitempty"`
@@ -428,6 +435,23 @@ func (c *Config) MigrateProviders() error {
 		}
 	}
 	return nil
+}
+
+// AgentDefaultModel returns agent.default_model, then the deprecated
+// chat.default_model. Empty if neither is set.
+func (c *Config) AgentDefaultModel() string {
+	if c == nil {
+		return ""
+	}
+	if c.Agent != nil {
+		if s := strings.TrimSpace(c.Agent.DefaultModel); s != "" {
+			return s
+		}
+	}
+	if c.Chat != nil {
+		return strings.TrimSpace(c.Chat.DefaultModel)
+	}
+	return ""
 }
 
 // Validate checks that all required fields are present.

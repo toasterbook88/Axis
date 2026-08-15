@@ -365,7 +365,8 @@ func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	}
 
 	optional := &config.Config{
-		Chat:                 &config.ChatConfig{DefaultModel: "m"},
+		Agent:                &config.AgentConfig{DefaultModel: "m"},
+		Chat:                 &config.ChatConfig{DefaultModel: "legacy"},
 		AIProviders:          map[string]config.AIProviderConfig{"p": {Type: "local"}},
 		Inference:            &config.InferenceConfig{DefaultMode: "local"},
 		MCPServers:           map[string]config.MCPServerConfig{"mcp": {Transport: "stdio"}},
@@ -374,7 +375,7 @@ func TestInitValidationAndUtilityHelpers(t *testing.T) {
 	}
 	target := &config.Config{}
 	preserveOptionalConfig(target, optional)
-	if target.Chat == nil || target.AIProviders == nil || target.Inference == nil || target.MCPServers == nil || len(target.Webhooks) != 1 || len(target.AllowedInternalHosts) != 1 {
+	if target.Agent == nil || target.Chat == nil || target.AIProviders == nil || target.Inference == nil || target.MCPServers == nil || len(target.Webhooks) != 1 || len(target.AllowedInternalHosts) != 1 {
 		t.Fatalf("optional config not preserved: %+v", target)
 	}
 }

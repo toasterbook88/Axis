@@ -676,6 +676,71 @@ chat:
 	}
 }
 
+func TestLoad_AgentDefaultModel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+agent:
+  default_model: "qwen3:8b"
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load with agent config: %v", err)
+	}
+	if got := cfg.AgentDefaultModel(); got != "qwen3:8b" {
+		t.Fatalf("AgentDefaultModel() = %q, want qwen3:8b", got)
+	}
+}
+
+func TestLoad_AgentDefaultModelWinsOverChat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+agent:
+  default_model: "from-agent"
+chat:
+  default_model: "from-chat"
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load both keys: %v", err)
+	}
+	if got := cfg.AgentDefaultModel(); got != "from-agent" {
+		t.Fatalf("AgentDefaultModel() = %q, want from-agent", got)
+	}
+}
+
+func TestLoad_ChatDefaultModelStillAccepted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(path, []byte(`nodes:
+  - name: node-a
+    hostname: node-a.local
+    ssh_user: user
+chat:
+  default_model: "legacy-chat"
+`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load legacy chat key: %v", err)
+	}
+	if got := cfg.AgentDefaultModel(); got != "legacy-chat" {
+		t.Fatalf("AgentDefaultModel() = %q, want legacy-chat", got)
+	}
+}
+
 func TestLoad_Webhooks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nodes.yaml")

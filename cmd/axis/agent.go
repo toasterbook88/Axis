@@ -210,7 +210,7 @@ func agentCmd() *cobra.Command {
 			var backend agent.ChatBackend
 
 			hasDefaultModel := false
-			if rt != nil && rt.Config != nil && rt.Config.Chat != nil && strings.TrimSpace(rt.Config.Chat.DefaultModel) != "" {
+			if rt != nil && rt.Config != nil && rt.Config.AgentDefaultModel() != "" {
 				hasDefaultModel = true
 			}
 
@@ -474,7 +474,8 @@ func agentCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&model, "model", "m", "", "Model tag (default: chat.default_model, warm preferred, or ai.yaml role default)")
+	cmd.Flags().StringVarP(&model, "model", "m", "", "Model tag (default: agent.default_model, warm preferred, or ai.yaml role default)")
+
 	cmd.Flags().StringVar(&roleFlag, "role", "", "Inference role from ~/.axis/ai.yaml (sets model from that role when --model is empty)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Minute, "Per-request timeout")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
@@ -1709,24 +1710,21 @@ func resolveCheapCloudTarget(rt *runtimectx.Context, primary ModelChoice, cheapM
 }
 
 // effectiveStartupRequestedModel returns the model name that should drive startup
-// selection when --model is empty: chat.default_model, warm-resident preferred,
-// then ai.yaml role "default" when configured.
+// selection when --model is empty: agent.default_model (or deprecated chat.default_model),
+// warm-resident preferred, then ai.yaml role "default" when configured.
+
 // Returns "" when none are available so the catalog can pick first usable local.
 func effectiveStartupRequestedModel(flag string, rt *runtimectx.Context) string {
 	if s := strings.TrimSpace(flag); s != "" {
 		return s
 	}
-	// Prefer runtime config when available (tests inject rt.Config).
-	// When Config is non-nil, do not re-read nodes.yaml from disk (test isolation).
 	if rt != nil && rt.Config != nil {
-		if rt.Config.Chat != nil {
-			if s := strings.TrimSpace(rt.Config.Chat.DefaultModel); s != "" {
-				return s
-			}
+		if s := rt.Config.AgentDefaultModel(); s != "" {
+			return s
 		}
 	} else {
-		if cfg, err := config.Load(config.DefaultConfigPath()); err == nil && cfg.Chat != nil {
-			if s := strings.TrimSpace(cfg.Chat.DefaultModel); s != "" {
+		if cfg, err := config.Load(config.DefaultConfigPath()); err == nil {
+			if s := cfg.AgentDefaultModel(); s != "" {
 				return s
 			}
 		}
