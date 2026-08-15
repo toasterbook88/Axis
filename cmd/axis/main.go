@@ -41,15 +41,15 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		Long: `Look first, then act.
 
-  axis cluster status     every node
-  axis cluster facts      this machine
+  axis cluster status     every node (live; --cached to opt in)
+  axis node facts         this machine
   axis agent              ask questions (advisory)
   axis model start        llama-server on a named node (--node --weights --port)
   axis daemon status      local cache
 
 axis status, axis facts, axis summary, and axis doctor still work.
-Experimental commands (chat, llm, cortex, …) stay installed; they are hidden from this list.`,
-		Example: "  axis cluster status\n  axis cluster facts\n  axis agent\n  axis model start --node storage --weights /mnt/models/a.gguf --port 8081",
+axis chat and axis llm were removed; use axis agent and axis ai route.`,
+		Example: "  axis cluster status\n  axis node facts\n  axis agent\n  axis model start --node storage --weights /mnt/models/a.gguf --port 8081",
 
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			ui.Init(noColor)
@@ -163,9 +163,12 @@ Experimental commands (chat, llm, cortex, …) stay installed; they are hidden f
 	cmdMcp.Hidden = true
 	cmdCluster := clusterCmd()
 	cmdCluster.GroupID = "cluster"
+	cmdNode := nodeCmd()
+	cmdNode.GroupID = "cluster"
 
 	root.AddCommand(cmdUpdate)
 	root.AddCommand(cmdCluster)
+	root.AddCommand(cmdNode)
 
 	root.AddCommand(cmdVersion)
 	root.AddCommand(cmdInit)

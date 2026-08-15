@@ -5,7 +5,8 @@ import (
 )
 
 // ApplyHelpTemplate sets a custom help template on the root command.
-// Headers are bold, examples are dimmed.
+// Headers are bold, examples are dimmed. Leaf commands omit the
+// "<command> --help" footer.
 func ApplyHelpTemplate(root *cobra.Command) {
 	root.SetUsageTemplate(usageTpl)
 }
@@ -30,8 +31,8 @@ const usageTpl = `{{bold "USAGE"}}
 {{end}}{{if .Example}}
 {{bold "EXAMPLES"}}
 {{dim .Example}}
-{{end}}Use "{{.CommandPath}} <command> --help" for more information about a command.
-`
+{{end}}{{if .HasAvailableSubCommands}}Use "{{.CommandPath}} <command> --help" for more information about a command.
+{{end}}`
 
 func init() {
 	cobra.AddTemplateFunc("bold", Bold)

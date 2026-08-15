@@ -120,9 +120,12 @@ Classification is based on `cmd/axis/` source files and the command surface docu
 | `axis daemon service install\|status\|uninstall` | stable | Native user-service lifecycle |
 | `axis serve` | experimental | Optional local HTTP API; execution surface |
 | `axis mcp serve` | experimental | Optional read-only MCP diagnostic server |
-| `axis chat` | experimental | Advisory Ollama chat; explicitly experimental per Truth Rule |
+| `axis chat` | removed | Prints `use: axis agent` |
 | `axis agent` | experimental | Agentic tool-calling assistant; safety-gated but evolving |
-| `axis llm` | experimental | Hybrid LLM routing; local + cloud fallback |
+| `axis llm` | removed | Prints `use: axis ai route` |
+| `axis cluster` | stable | Fleet snapshot: `status`, `summary` |
+| `axis node` | stable | This machine: `facts` |
+
 | `axis cortex` | experimental | Distributed vector memory / event bus; requires optional Foundry node |
 | `axis summary` | stable | Cluster summary view |
 | `axis reservations` | stable | Reservation inspection (read-only) |

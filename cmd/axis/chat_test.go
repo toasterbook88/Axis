@@ -1,41 +1,39 @@
 package main
 
 import (
-	"context"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// TestResolveChatModelUsesConfigDefault verifies that when no --model flag is
-// set, resolveChatModel reads the chat.default_model field from nodes.yaml and
-// returns it without calling the Ollama auto-detect path.
-func TestResolveChatModelUsesConfigDefault(t *testing.T) {
-	// Write a minimal nodes.yaml with chat.default_model set.
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "nodes.yaml")
-	if err := os.WriteFile(cfgPath, []byte(`nodes:
-  - name: node-a
-    hostname: node-a.local
-    ssh_user: user
-chat:
-  default_model: "llama3.2:latest"
-`), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
+func TestChatCmdSurface(t *testing.T) {
+	cmd := chatCmd()
+	if got := cmd.Name(); got != "chat" {
+		t.Fatalf("chatCmd name = %q, want chat", got)
 	}
+}
 
-	// Stub the Ollama auto-detect so if it is called the test fails.
-	prev := resolveDefaultChatModel
-	resolveDefaultChatModel = func(_ context.Context) string {
-		t.Error("resolveDefaultChatModel should not be called when config provides a default model")
-		return ""
+func TestChatCmdRegisteredOnRoot(t *testing.T) {
+	root := newRootCmd()
+	found := false
+	for _, c := range root.Commands() {
+		if c.Name() == "chat" {
+			found = true
+			break
+		}
 	}
-	defer func() { resolveDefaultChatModel = prev }()
+	if !found {
+		t.Fatal("chat command not registered on root")
+	}
+}
 
-	// Resolve the model using the temporary config path directly so the test
-	// stays independent of the default config location.
-	got := resolveChatModelFromPath("", cfgPath, nil)
-	if got != "llama3.2:latest" {
-		t.Fatalf("resolveChatModel() = %q, want %q", got, "llama3.2:latest")
+func TestChatCmdPrintsRemoval(t *testing.T) {
+	cmd := chatCmd()
+	cmd.SetArgs([]string{"hi"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected removal error")
+	}
+	if !strings.Contains(err.Error(), "was removed") || !strings.Contains(err.Error(), "axis agent") {
+		t.Fatalf("removal message = %v", err)
 	}
 }
