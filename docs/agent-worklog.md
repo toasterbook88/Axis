@@ -91,4 +91,5 @@ This file is the canonical coordination surface for active AXIS work.
 | AX-025 | Claude (Antigravity) | `ed41449` | Staleness threshold configurable (default 5 min), SetStaleThreshold method, stale_threshold_sec in metadata, freshness policy documented. Full suite green. |
 | AX-027 | Claude (Antigravity) | `39e9a2f` | Phase C: Git Intelligence implementation. Query local git repository workspace details (branch, commit hash, commit subject, dirty status, ahead/behind counts) safely. Expose `git_status` tool in MCP, print Git state in `axis task context`. Address review feedback on DirtyCount and regex porcelain parsing. |
 | AX-028 | Claude (Antigravity) | `6d7a789` | Print Cobra execution errors to stderr in `main()`, fixing silent exits under `SilenceErrors: true` for ExitCodeError occurrences. |
-| AX-029 | Claude (Antigravity) | config | Cluster stabilization: Resolved Foundry connection failure by replacing `foundry.local` with its direct IP `192.168.1.249` (bypassing avahi name conflicts) and configuring `~/.axis/cortex.token`. Verified cortex status and cluster status. |
+| AX-029 | Claude (Antigravity) | config | Cluster stabilization: resolved a hub node connection failure caused by mDNS name conflict by preferring the configured dial address. Verified cortex and cluster status. |
+

@@ -79,7 +79,8 @@ nodes:
       storage_type: ssd
 
   - name: node-edge
-    hostname: 192.168.1.105
+    hostname: 192.0.2.40
+
     ssh_user: pi-user
     roles: ["scout"]
     labels:

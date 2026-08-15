@@ -100,4 +100,6 @@ else
   fi
 fi
 
+./hack/verify-public-boundary.sh
+
 printf 'doc facts guardrails passed\n'

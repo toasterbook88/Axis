@@ -439,7 +439,8 @@ func TestIsPrivateLAN(t *testing.T) {
 		ip   string
 		want bool
 	}{
-		{"192.168 lan", "192.168.1.219", true},
+		{"192.168 lan", "192.168.0.10", true},
+
 		{"172.16 lan", "172.16.0.1", true},
 		{"172.31 lan", "172.31.255.1", true},
 		{"172.32 not private", "172.32.0.1", false},
@@ -452,7 +453,8 @@ func TestIsPrivateLAN(t *testing.T) {
 		{"public not private", "8.8.8.8", false},
 		{"loopback", "127.0.0.1", true},
 		// IPv4-mapped IPv6 must be recognized as the underlying private IPv4.
-		{"ipv4-mapped ipv6 lan", "::ffff:192.168.1.219", true},
+		{"ipv4-mapped ipv6 lan", "::ffff:192.168.0.10", true},
+
 		{"ipv4-mapped ipv6 public", "::ffff:8.8.8.8", false},
 		// IPv6 Unique Local Address (fc00::/7) is the IPv6 RFC1918 equivalent.
 		{"ipv6 ula fd00", "fd00::1", true},

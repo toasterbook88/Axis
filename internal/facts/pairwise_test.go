@@ -50,11 +50,11 @@ func TestInferOverlay(t *testing.T) {
 		host string
 		want string
 	}{
-		{"100.81.205.4", "tailscale"},
+		{"100.64.1.10", "tailscale"},
 		{"169.254.1.2", "thunderbolt"},
-		{"192.168.1.103", "lan"},
+		{"192.168.0.10", "lan"},
 		{"10.0.0.5", "lan"},
-		{"cranium.local", "lan"},
+		{"node.local", "lan"},
 	}
 	for _, c := range cases {
 		if got := inferOverlay(c.host); got != c.want {

@@ -72,11 +72,13 @@ func TestParseRemoteFactBundle_LinuxCore(t *testing.T) {
 	mem := base64.StdEncoding.EncodeToString([]byte("MemTotal:       16384000 kB\nMemAvailable:   8192000 kB\nMemFree:        4096000 kB\n"))
 	df := base64.StdEncoding.EncodeToString([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 104857600 52428800 52428800 50% /\n"))
 	dfAll := base64.StdEncoding.EncodeToString([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 104857600 52428800 52428800 50% /\n/dev/sda1 2097152 1048576 1048576 50% /mnt/models\n"))
-	mounts := base64.StdEncoding.EncodeToString([]byte("192.168.1.249:/home/axis /mnt/foundry nfs4 rw,relatime 0 0\n"))
+	mounts := base64.StdEncoding.EncodeToString([]byte("192.0.2.20:/export /mnt/share nfs4 rw,relatime 0 0\n"))
+
 	out := `__AXIS_BUNDLE_V1__
 os=Linux
 arch=x86_64
-hostname=cachyos
+hostname=worker
+
 os_version=6.1.0
 cpu_cores=8
 cpu_model=Test CPU
@@ -91,13 +93,14 @@ __AXIS_BUNDLE_END__
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kv["os"] != "Linux" || kv["hostname"] != "cachyos" {
+	if kv["os"] != "Linux" || kv["hostname"] != "worker" {
 		t.Fatalf("kv = %#v", kv)
 	}
 
 	fe := &fixedExec{out: out}
-	c := &RemoteCollector{NodeName: "cachyos", Role: "agent", Hostname: "100.1.2.3", Exec: fe}
-	nf := &models.NodeFacts{Name: "cachyos", Hostname: "100.1.2.3", Status: models.StatusComplete}
+	c := &RemoteCollector{NodeName: "worker", Role: "agent", Hostname: "203.0.113.5", Exec: fe}
+	nf := &models.NodeFacts{Name: "worker", Hostname: "203.0.113.5", Status: models.StatusComplete}
+
 	if !c.tryBundleCollect(context.Background(), nf) {
 		t.Fatalf("bundle collect failed reasons=%v", nf.PartialReasons)
 	}
@@ -115,7 +118,8 @@ __AXIS_BUNDLE_END__
 	}
 	var sawNFS bool
 	for _, v := range nf.Resources.Volumes {
-		if v.Mount == "/mnt/foundry" {
+		if v.Mount == "/mnt/share" {
+
 			sawNFS = true
 			if v.Kind != "network" || v.TotalGB != 0 || v.Bus != "nfs" {
 				t.Fatalf("nfs volume=%+v", v)

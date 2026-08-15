@@ -124,6 +124,8 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 		TotalFreeRAMMB: freeRAM,
 	}
 
+	JoinNetworkVolumeOwners(snap.Nodes)
+
 	return snap
 }
 
