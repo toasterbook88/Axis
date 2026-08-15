@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
-	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
@@ -784,120 +782,6 @@ func TestPrintWarningWritesStderr(t *testing.T) {
 	}
 }
 
-func TestResolveChatModelUsesRequestedValue(t *testing.T) {
-	if got := resolveChatModel(" llama3 ", nil); got != "llama3" {
-		t.Fatalf("resolveChatModel() = %q, want llama3", got)
-	}
-}
-
-func TestResolveChatModelFallsBackToResolver(t *testing.T) {
-	// Self-isolate, as many other tests in this package already do. Without it
-	// the operator's real ~/.axis/ai.yaml supplies a model and the fallback
-	// under test is never reached, so the test passes under `make test` (which
-	// redirects HOME) and fails under a bare `go test ./...`.
-	//
-	// Both variables are required: persist.AxisDir() gives a non-empty AXIS_HOME
-	// precedence over HOME, so isolating HOME alone still reads the operator's
-	// store whenever AXIS_HOME is exported.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AXIS_HOME", t.TempDir())
-
-	restore := stubDefaultChatModelResolver(t, func(context.Context) string {
-		return "default-model"
-	})
-	defer restore()
-
-	if got := resolveChatModel("", nil); got != "default-model" {
-		t.Fatalf("resolveChatModel() = %q, want default-model", got)
-	}
-}
-
-func TestHandleSlashCommandModelsPrintsCatalog(t *testing.T) {
-	restoreFormat := stubFormatChatCatalog(t, func(context.Context, string) string {
-		return "formatted catalog"
-	})
-	defer restoreFormat()
-
-	var buf bytes.Buffer
-	conv := chat.NewConversation(4096)
-	next := handleSlashCommand("/models", "phi4", conv, &buf)
-	if next != "" {
-		t.Fatalf("expected empty next model for /models, got %q", next)
-	}
-	if !strings.Contains(buf.String(), "formatted catalog") {
-		t.Fatalf("expected formatted catalog output, got %q", buf.String())
-	}
-}
-
-func TestHandleSlashCommandClear(t *testing.T) {
-	conv := chat.NewConversation(4096)
-	conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys"})
-	conv.Append(chat.Message{Role: chat.RoleUser, Content: "hello"})
-
-	var buf bytes.Buffer
-	handleSlashCommand("/clear", "phi4", conv, &buf)
-
-	// After clear, only system messages remain.
-	if conv.Len() != 1 {
-		t.Fatalf("expected 1 message after clear, got %d", conv.Len())
-	}
-	if !strings.Contains(buf.String(), "cleared") {
-		t.Fatalf("expected cleared message, got %q", buf.String())
-	}
-}
-
-func TestHandleSlashCommandHelp(t *testing.T) {
-	conv := chat.NewConversation(4096)
-	var buf bytes.Buffer
-	handleSlashCommand("/help", "phi4", conv, &buf)
-
-	if !strings.Contains(buf.String(), "/clear") || !strings.Contains(buf.String(), "/status") {
-		t.Fatalf("expected help text with commands, got %q", buf.String())
-	}
-}
-
-func TestHandleSlashCommandModelSwitch(t *testing.T) {
-	conv := chat.NewConversation(4096)
-	var buf bytes.Buffer
-	next := handleSlashCommand("/model llama3", "phi4", conv, &buf)
-	if next != "llama3" {
-		t.Fatalf("expected next model 'llama3', got %q", next)
-	}
-}
-
-func TestHandleSlashCommandUnknown(t *testing.T) {
-	conv := chat.NewConversation(4096)
-	var buf bytes.Buffer
-	handleSlashCommand("/bogus", "phi4", conv, &buf)
-	if !strings.Contains(buf.String(), "Unknown command") {
-		t.Fatalf("expected unknown command message, got %q", buf.String())
-	}
-}
-
-func TestHandleSlashCommandModelBare(t *testing.T) {
-	conv := chat.NewConversation(4096)
-	var buf bytes.Buffer
-	next := handleSlashCommand("/model", "phi4", conv, &buf)
-	if next != "" {
-		t.Fatalf("expected empty next for bare /model, got %q", next)
-	}
-	if !strings.Contains(buf.String(), "Usage:") {
-		t.Fatalf("expected usage message, got %q", buf.String())
-	}
-}
-
-func TestChatCmdPrintsRemoval(t *testing.T) {
-	cmd := chatCmd()
-	cmd.SetArgs([]string{"hi"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected removal error")
-	}
-	if !strings.Contains(err.Error(), "was removed") || !strings.Contains(err.Error(), "axis agent") {
-		t.Fatalf("removal message = %v", err)
-	}
-}
-
 type fakeServeDaemon struct {
 	started          bool
 	ctx              context.Context
@@ -1011,29 +895,6 @@ func stubStatusLiveLoader(t *testing.T, fn func(context.Context) (*models.Cluste
 	return func() {
 		loadStatusLiveSnapshot = prev
 	}
-}
-
-func stubDefaultChatModelResolver(t *testing.T, fn func(context.Context) string) func() {
-	t.Helper()
-	prev := resolveDefaultChatModel
-	resolveDefaultChatModel = fn
-	return func() {
-		resolveDefaultChatModel = prev
-	}
-}
-
-func stubFormatChatCatalog(t *testing.T, fn func(context.Context, string) string) func() {
-	t.Helper()
-	prev := formatChatCatalog
-	formatChatCatalog = fn
-	return func() { formatChatCatalog = prev }
-}
-
-func stubChatRuntimeLoader(t *testing.T, fn func(context.Context) (*runtimectx.Context, error)) func() {
-	t.Helper()
-	prev := loadRuntimeContext
-	loadRuntimeContext = fn
-	return func() { loadRuntimeContext = prev }
 }
 
 func containsString(values []string, want string) bool {

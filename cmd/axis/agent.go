@@ -130,7 +130,7 @@ func agentCmd() *cobra.Command {
 				}
 			}
 			// Display / last-resort resolution (always non-empty when possible).
-			currentModel := resolveChatModel(model, rt)
+			currentModel := resolveAgentModel(model, rt)
 			// Startup request: explicit --model, else chat.default_model / warm preferred / ai role default.
 			// Empty means "pick from catalog" (first usable local, then priority cloud).
 			startupRequestedModel := effectiveStartupRequestedModel(model, rt)
@@ -1751,6 +1751,15 @@ func effectiveStartupRequestedModel(flag string, rt *runtimectx.Context) string 
 	return ""
 }
 
+func resolveAgentModel(flag string, rt *runtimectx.Context) string {
+	if m := effectiveStartupRequestedModel(flag, rt); m != "" {
+		return m
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return chat.ResolveDefaultModel(ctx)
+}
+
 func syntheticLocalOllamaTarget(name string) ModelChoice {
 	return ModelChoice{
 		ID:            "local:ollama:" + name,
@@ -1878,7 +1887,7 @@ func resolveStartupModelTarget(
 			return t, agent.CloudBackendOptions{}, nil
 		}
 		// Fallback local default name
-		name := resolveChatModel("", rt)
+		name := resolveAgentModel("", rt)
 		return syntheticLocalOllamaTarget(name), agent.CloudBackendOptions{}, nil
 
 	default: // auto
@@ -1903,7 +1912,7 @@ func resolveStartupModelTarget(
 			return t, opts, nil
 		}
 		// Last resort: local ollama with resolved default name
-		name := resolveChatModel("", rt)
+		name := resolveAgentModel("", rt)
 		return syntheticLocalOllamaTarget(name), agent.CloudBackendOptions{}, nil
 	}
 }
