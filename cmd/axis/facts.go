@@ -99,6 +99,12 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
 			for _, v := range r.Volumes {
 				line := fmt.Sprintf("    %s %s  %d GB free / %d GB  %s %s %s",
 					ui.Green("✓"), v.Mount, v.FreeGB, v.TotalGB, v.Kind, v.Bus, v.Role)
+				if v.Removable {
+					line += " removable"
+				}
+				if v.LinkMbit > 0 {
+					line += fmt.Sprintf(" %d Mbit", v.LinkMbit)
+				}
 				if v.Owner != "" {
 					line += "  owner " + v.Owner
 					if v.OwnerMount != "" {
