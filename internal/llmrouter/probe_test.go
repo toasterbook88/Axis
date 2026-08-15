@@ -39,7 +39,6 @@ func TestViewLocality(t *testing.T) {
 	}
 }
 
-
 func TestProbeBackend_OllamaTags(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tags" {
