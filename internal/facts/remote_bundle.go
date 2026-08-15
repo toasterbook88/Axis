@@ -59,6 +59,9 @@ esac
 printf 'df_b64=%s\n' "$(df -kP / 2>/dev/null | base64 | tr -d '\n')"
 printf 'df_all_b64=%s\n' "$(df -kPl 2>/dev/null | base64 | tr -d '\n')"
 printf 'mounts_b64=%s\n' "$(if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi 2>/dev/null | base64 | tr -d '\n')"
+printf 'sysfs_block_b64=%s\n' "$(if [ -d /sys/class/block ]; then for d in /sys/class/block/*; do [ -d "$d/queue" ] || continue; name=$(basename "$d"); rota=$(cat "$d/queue/rotational" 2>/dev/null || echo -); rem=$(cat "$d/removable" 2>/dev/null || echo -); speed=$(cat "$d/device/speed" 2>/dev/null || echo -); printf '%s %s %s %s\n' "$name" "$rota" "$rem" "$speed"; done; fi 2>/dev/null | base64 | tr -d '\n')"
+
+
 
 
 
@@ -271,6 +274,9 @@ func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.No
 	}
 	if mounts := b64field(kv, "mounts_b64"); mounts != "" {
 		res.Volumes = mergeVolumes(res.Volumes, ParseMountNetworkVolumes(mounts))
+	}
+	if blk := b64field(kv, "sysfs_block_b64"); blk != "" {
+		ApplySysfsBlockTable(res.Volumes, blk)
 	}
 
 	gpuOut := strings.TrimSpace(b64field(kv, "gpu_b64"))
