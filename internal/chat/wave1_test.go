@@ -492,8 +492,9 @@ func TestClientChatStreamModelMissingListsAvailable(t *testing.T) {
 	if !strings.Contains(err.Error(), "--model") {
 		t.Errorf("error should suggest --model flag, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "chat.default_model") {
-		t.Errorf("error should mention chat.default_model, got %v", err)
+	if !strings.Contains(err.Error(), "agent.default_model") {
+		t.Errorf("error should mention agent.default_model, got %v", err)
+
 	}
 	if !strings.Contains(err.Error(), "ollama pull nomodel") {
 		t.Errorf("error should still suggest pull for the missing model, got %v", err)

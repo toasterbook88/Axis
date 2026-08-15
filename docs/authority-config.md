@@ -45,7 +45,8 @@ Changing these fields alters cluster identity and can orphan reservations or dec
 | `discovery.udp_port` | Requires daemon restart because the UDP socket is bound at startup. Config change alone does not rebind. |
 | `discovery.beacon_interval_sec` | Picked up when the beacon broadcaster goroutine restarts (next config-driven `applyWatcher` cycle). |
 | `discovery.secret` | Picked up when the beacon listener restarts. Mesh gossip does **not** consume this secret; mesh uses its own empty default. |
-| `chat.default_model` | Used on the next `axis chat` invocation. |
+| `agent.default_model` | Used on the next `axis agent` invocation. `chat.default_model` is still read if the new key is unset. |
+
 | `ai_providers[].*` | Used on the next inference routing decision. |
 | `inference.*` | Used on the next inference routing decision. |
 | `nodes[].timeout_sec` | Used for the next SSH probe only. |

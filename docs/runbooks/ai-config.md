@@ -6,8 +6,8 @@ to pick the right one.
 | Surface | File | Purpose | Used by |
 | -------- | ---- | ------- | ------- |
 | **Inference roles / backends** | `~/.axis/ai.yaml` (example: `ai.example.yaml`) | Name local/OpenAI-compatible backends and logical **roles** (`default`, `fast`, `long`, …). Health probes and prefer-order routing. | `axis ai *`, MCP `inference_route_explain`, placement/agent **hints** |
-| **Cloud / hybrid providers** | `~/.axis/nodes.yaml` → `ai_providers` | Credentialed cloud providers (OpenRouter, Groq, Anthropic) and optional local entries for `axis llm` registry. | `axis llm`, agent **cloud** backends |
-| **Chat default model** | `~/.axis/nodes.yaml` → `chat.default_model` | Single default Ollama model tag when `--model` is omitted. | `axis chat`, `axis agent` startup (before roles) |
+| **Cloud / hybrid providers** | `~/.axis/nodes.yaml` → `ai_providers` | Credentialed cloud providers (OpenRouter, Groq, Anthropic) and optional local entries. | `axis agent` cloud backends, `axis ai` |
+| **Agent default model** | `~/.axis/nodes.yaml` → `agent.default_model` | Single default Ollama model tag when `--model` is omitted. `chat.default_model` is still read for one release. | `axis agent` startup (before roles) |
 
 ## Precedence for `axis agent` model selection
 
@@ -15,7 +15,7 @@ When `--model` is empty (provider=auto):
 
 1. Explicit interactive `/model` choice  
 2. **`--role <name>`** from `ai.yaml` (mutually exclusive with `--model`)  
-3. `chat.default_model` from `nodes.yaml`  
+3. `agent.default_model` from `nodes.yaml` (`chat.default_model` if the new key is unset)  
 4. Warm-resident preferred model from the cluster snapshot  
 5. **`ai.yaml` role `default`** model (if configured)  
 6. First usable local catalog entry / cloud fallback  

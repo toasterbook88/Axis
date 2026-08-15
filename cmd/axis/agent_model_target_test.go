@@ -160,6 +160,16 @@ func TestEffectiveStartupRequestedModel(t *testing.T) {
 			t.Fatalf("got %q", got)
 		}
 	})
+	t.Run("agent key wins over chat key", func(t *testing.T) {
+		rt := &runtimectx.Context{Config: &config.Config{
+			Agent: &config.AgentConfig{DefaultModel: "from-agent"},
+			Chat:  &config.ChatConfig{DefaultModel: "from-chat"},
+		}}
+		if got := effectiveStartupRequestedModel("", rt); got != "from-agent" {
+			t.Fatalf("got %q", got)
+		}
+	})
+
 	t.Run("warm preferred when no config default", func(t *testing.T) {
 		rt := &runtimectx.Context{
 			Snapshot: &models.ClusterSnapshot{

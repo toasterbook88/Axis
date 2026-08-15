@@ -40,10 +40,11 @@ discovery:
   # Rotate this value regularly; do not commit it to version control.
   secret: example-shared-cluster-secret
 
-# Optional chat / agent preferences.
-chat:
+# Optional agent preferences.
+agent:
   # Default Ollama model tag when no --model flag is given.
   default_model: "llama3.2:latest"
+
 
 # Optional AI inference provider configuration.
 # This section is only needed if you route inference through cloud or
