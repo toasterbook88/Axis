@@ -55,6 +55,8 @@ func TestCommandSurfacesWireExpectedSubcommands(t *testing.T) {
 		{scriptsCmd(), []string{"list"}},
 		{contextCmd(), []string{"show", "clear"}},
 		{aiCmd(), []string{"backends", "roles", "route"}},
+		{clusterCmd(), []string{"status", "summary", "facts", "doctor"}},
+
 		{modelCmd(), []string{"start", "stop"}},
 	}
 
@@ -84,6 +86,27 @@ func TestRootCommandShowsHelpInsteadOfRoutingToChat(t *testing.T) {
 	}
 	if strings.Contains(stdout, "discover") {
 		t.Fatalf("expected discover to be removed from root help, got %q", stdout)
+	}
+}
+
+func TestRootHelpTeachesAPathAndHidesExperimental(t *testing.T) {
+	stdout, _, err := captureProcessOutput(t, func() error {
+		cmd := newRootCmd()
+		cmd.SetArgs([]string{"--help"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	for _, want := range []string{"axis cluster status", "axis cluster facts", "axis agent", "axis model start"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("root help missing path %q\n%s", want, stdout)
+		}
+	}
+	for _, hide := range []string{"\n  chat ", "\n  llm ", "\n  cortex ", "\n  skills "} {
+		if strings.Contains(stdout, hide) {
+			t.Fatalf("experimental %q still in default help\n%s", strings.TrimSpace(hide), stdout)
+		}
 	}
 }
 

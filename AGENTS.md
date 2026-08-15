@@ -122,7 +122,8 @@ Layer 1  Fact Plane   internal/facts  internal/discovery  internal/mesh
 ### Stable operator path
 
 ```text
-cmd/axis/             Cobra CLI — one file per subcommand (26 commands)
+cmd/axis/             Cobra CLI — one file per subcommand (27 commands)
+
 
 internal/config/      Load ~/.axis/nodes.yaml; strict YAML parsing
 internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
@@ -187,7 +188,8 @@ HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
-26 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
+27 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
+
 
 
 | Command | Purpose |
@@ -207,6 +209,8 @@ HDD penalty: −15 for heavy inference.
 | `axis llm` | LLM routing and model management |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
 | `axis model` | Start/stop llama-server on a named node (`start --node --weights --port`, `stop --node --port`) |
+| `axis cluster` | Umbrella for status/summary/facts/doctor (root aliases unchanged) |
+
 
 | `axis cortex` | Distributed vector memory / event bus |
 | `axis context show\|clear` | Inspect or clear placement memory |
