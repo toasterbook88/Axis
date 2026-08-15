@@ -5,6 +5,7 @@
 * **CLI:** Noun registry with two tiers (operate: cluster/node/model/task/daemon/agent; inspect: doctor/mesh/ai/init/serve/update/version). `axis node facts` is this machine; `axis cluster` is `status`/`summary` only. `axis chat` and `axis llm` print a removal message. `/nodes` retires with a use-this message. `/cluster` prints `session-snapshot` and age. Leaf `--help` no longer invents subcommands.
 * **CLI:** `axis summary` stays the dashboard verb (also `axis cluster summary`). Help states cache-default and `--cached=false` for a live collect. Not a flag on `status`.
 * **Agent:** `nodes.yaml` key is `agent.default_model`. `chat.default_model` is still read if the new key is unset. `axis chat` is gone; this is the agent startup default.
+* **AI:** `axis ai backends` probes `advertise_url` when the backend belongs to another node (same selection as the agent catalog) and prints the URL it actually probed. Off-box backends no longer report `down` while the Host is green.
 
 
 

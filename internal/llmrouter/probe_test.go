@@ -61,6 +61,34 @@ func TestProbeBackend_OpenAICompatibleModels(t *testing.T) {
 	}
 }
 
+func TestProbeBackend_OffBoxUsesAdvertiseURL(t *testing.T) {
+	// The backend belongs to another node: base_url is loopback on that
+	// node, advertise_url is the reachable Host. The probe must hit the
+	// advertise_url, not the loopback base_url.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"nemotron"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	b := config.AIBackendConfig{
+		Name:         "local-nemotron",
+		Kind:         config.AIBackendOpenAICompatible,
+		BaseURL:      "http://127.0.0.1:8081/v1",
+		AdvertiseURL: srv.URL + "/v1",
+		Node:         "some-other-node",
+	}
+	p := llmrouter.ProbeBackend(context.Background(), b, srv.Client())
+	if !p.OK {
+		t.Fatalf("probe via advertise_url: %+v", p)
+	}
+	if !llmrouter.ModelListed(p.Models, "nemotron") {
+		t.Fatalf("missing nemotron in %v", p.Models)
+	}
+}
+
 func TestProbeBackend_Disabled(t *testing.T) {
 	off := false
 	b := config.AIBackendConfig{

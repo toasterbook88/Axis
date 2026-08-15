@@ -97,8 +97,12 @@ func aiBackendsCmd() *cobra.Command {
 					} else if skipProbe {
 						status = "unprobed"
 					}
+					displayURL := p.BaseURL
+					if p.ProbedURL != "" && p.ProbedURL != p.BaseURL {
+						displayURL = p.ProbedURL
+					}
 					fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-18s %-8s %s",
-						p.Backend, p.Kind, status, p.BaseURL)
+						p.Backend, p.Kind, status, displayURL)
 					if p.Node != "" {
 						fmt.Fprintf(cmd.OutOrStdout(), " node=%s", p.Node)
 					}
