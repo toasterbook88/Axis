@@ -6,19 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
-	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
-	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -31,211 +26,14 @@ var chatEndpoint = chat.DefaultEndpoint
 var loadRuntimeContext = runtimectx.Load
 
 func chatCmd() *cobra.Command {
-	var (
-		model      string
-		timeout    time.Duration
-		maxTokens  int
-		useContext bool
-		systemMsg  string
-		format     string
-		resume     bool
-		verbose    bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "chat [message...]",
-		Short: "Cluster-aware chat assistant",
-		Long: "Chat with a local LLM that understands your cluster.\n\n" +
-			"Uses the Ollama /api/chat endpoint with structured messages.\n" +
-			"Chat responses are advisory only and must not be treated as cluster truth\n" +
-			"unless backed by `axis status`, `axis facts`, or a live probe.\n\n" +
-			"Slash commands:\n" +
-			"  /clear     — clear conversation history\n" +
-			"  /status    — show cluster status summary\n" +
-			"  /facts     — show local hardware facts\n" +
-			"  /models    — list available models\n" +
-			"  /model TAG — switch to a different model\n" +
-			"  /help      — show this help\n",
-		Args: cobra.ArbitraryArgs,
+	return &cobra.Command{
+		Use:   "chat",
+		Short: "Removed; use axis agent",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
-			defer stop()
-
-			// Load runtime context for auto-routing and context injection.
-			rt, _ := loadRuntimeContext(ctx)
-
-			currentModel := resolveChatModel(model, rt)
-			if verbose && model == "" {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Resolved model: %s\n", currentModel)
-			}
-			w := cmd.OutOrStdout()
-			errW := cmd.ErrOrStderr()
-
-			// Build optional cluster context.
-			var cluster *chat.ClusterSummaryForPrompt
-			if useContext && rt != nil && rt.Snapshot != nil {
-				cluster = chat.BuildClusterSummary(rt.Snapshot)
-			}
-
-			// --- Intelligent Auto-Routing (Phase E) ---
-			endpoint := chatEndpoint
-			if rt != nil && rt.Snapshot != nil && rt.State != nil {
-				reqs := placement.InferRequirements(fmt.Sprintf("ollama run %s", currentModel))
-				decision := placement.SelectBestNode(reqs, rt.Snapshot.Nodes, rt.State)
-				if decision.OK && !decision.IsLocal {
-					if targetConfig, ok := rt.Config.FindNode(decision.Node); ok {
-						spec := targetConfig.SSHDialSpec()
-						executor := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
-						defer executor.Close()
-						boundPort, stopForward, err := executor.ForwardLocal(ctx, 0, 11434)
-						if err != nil {
-							fmt.Fprintf(errW, "%s Failed to tunnel to %s: %v (falling back to local)\n", ui.Yellow("!"), decision.Node, err)
-						} else {
-							defer stopForward()
-							endpoint = fmt.Sprintf("http://127.0.0.1:%d", boundPort)
-							fmt.Fprintf(errW, "%s Auto-routed %s to %s (zero-latency inference tunnel active)\n", ui.Green("✓"), ui.Bold(currentModel), ui.Bold(decision.Node))
-						}
-					}
-				} else if decision.OK && decision.IsLocal && verbose {
-					fmt.Fprintf(errW, "Routed to local node (%s)\n", decision.Node)
-				}
-			}
-
-			// Build client and conversation.
-			client := chat.NewClient(endpoint, currentModel)
-			conv := chat.NewConversation(maxTokens)
-			sysPrompt := chat.BuildSystemPrompt(cluster, systemMsg)
-			conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
-
-			// Resume previous conversation if requested.
-			historyPath := chat.PersistPath("chat")
-			if resume {
-				if err := conv.LoadFromFile(historyPath); err != nil {
-					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
-				} else if n := conv.HistoryCount(); n > 0 {
-					fmt.Fprintf(errW, "Resumed %d messages from previous session.\n", n)
-				}
-			}
-
-			fmt.Fprintln(errW, ui.Dim("advisory: chat output is not cluster truth — validate with axis status or axis facts"))
-
-			// Single-shot mode.
-			if len(args) > 0 {
-				query := strings.Join(args, " ")
-				conv.Append(chat.Message{Role: chat.RoleUser, Content: query})
-
-				sp := ui.NewSpinner()
-				sp.Start("Thinking...")
-
-				ctx2, cancel := chatRequestContext(ctx, timeout)
-				defer cancel()
-
-				// When --format json, suppress streaming to stdout and
-				// only print the structured response afterward.
-				streamW := w
-				if format == "json" {
-					streamW = io.Discard
-				}
-				resp, err := client.ChatStream(ctx2, conv.Messages(), nil, streamW)
-				sp.Stop("")
-
-				if err != nil {
-					fmt.Fprintf(errW, "error: Chat failed: %v\n", err)
-					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("chat failed: %v", err)}
-				}
-				if format == "json" {
-					conv.Append(resp)
-					printOutput(cmd.OutOrStdout(), resp, format)
-				} else {
-					fmt.Fprintln(w)
-				}
-				// Save conversation after single-shot.
-				if historyPath != "" {
-					_ = conv.SaveToFile(historyPath)
-				}
-				return nil
-			}
-
-			// Interactive REPL with readline.
-			fmt.Fprintf(errW, "AXIS Chat [%s] — type /help for commands, exit to quit\n\n", ui.Bold(currentModel))
-
-			cfg := &readline.Config{
-				Prompt:          ui.Cyan(">>> "),
-				InterruptPrompt: "^C",
-				EOFPrompt:       "exit",
-			}
-			// Conversation.SaveToFile is the sole persisted history. readline's
-			// file writer creates group-readable files on permissive umasks.
-			rl, err := readline.NewEx(cfg)
-			if err != nil {
-				// Fallback to plain scanner if readline fails (e.g., non-TTY).
-				return runPlainREPL(ctx, client, conv, currentModel, w, errW, timeout, historyPath)
-			}
-			defer rl.Close()
-
-			for {
-				line, err := rl.Readline()
-				if err != nil { // io.EOF or readline.ErrInterrupt
-					break
-				}
-				query := strings.TrimSpace(line)
-				if query == "" {
-					continue
-				}
-				lower := strings.ToLower(query)
-				if lower == "exit" || lower == "quit" {
-					break
-				}
-
-				// Slash commands.
-				if strings.HasPrefix(query, "/") {
-					nextModel := handleSlashCommand(query, currentModel, conv, errW)
-					if nextModel != "" {
-						currentModel = nextModel
-						client = chat.NewClient(chat.DefaultEndpoint, currentModel)
-					}
-					continue
-				}
-
-				conv.Append(chat.Message{Role: chat.RoleUser, Content: query})
-
-				sp := ui.NewSpinner()
-				sp.Start("Thinking...")
-
-				ctx2, cancel := chatRequestContext(ctx, timeout)
-				resp, err := client.ChatStream(ctx2, conv.Messages(), nil, w)
-				sp.Stop("")
-				cancel()
-
-				if err != nil {
-					fmt.Fprintf(errW, "\n%s\n", ui.Red("Error: ", err))
-					continue
-				}
-				conv.Append(resp)
-				fmt.Fprintln(w)
-			}
-
-			// Save conversation on exit.
-			if historyPath != "" && conv.HistoryCount() > 0 {
-				if err := conv.SaveToFile(historyPath); err != nil {
-					fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
-				} else {
-					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", conv.HistoryCount())
-				}
-			}
-			return nil
+			return fmt.Errorf("axis chat was removed in v0.15. Use: axis agent")
 		},
 	}
-
-	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model (default: chat.default_model or best installed)")
-	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 2*time.Minute, "Per-request timeout")
-	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
-	cmd.Flags().BoolVar(&useContext, "context", false, "Inject live cluster snapshot into system prompt")
-	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
-	cmd.Flags().StringVar(&format, "format", "text", "Output format for single-shot mode (text, json)")
-	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
-	cmd.Flags().BoolVar(&verbose, "verbose", false, "Print model resolution and other debug info")
-	return cmd
 }
 
 // runPlainREPL is the fallback scanner-based REPL when readline is unavailable.

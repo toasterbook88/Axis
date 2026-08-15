@@ -93,95 +93,14 @@ type llmRequirements struct {
 }
 
 func llmCmd() *cobra.Command {
-	var (
-		model    string
-		endpoint string
-		timeout  time.Duration
-		format   string
-		dryRun   bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "llm <prompt>",
-		Short: "Classify a prompt and show hybrid AI router requirements",
-		Long: "Classifies a task prompt using a local LLM (via Ollama) into a WorkloadClass\n" +
-			"and derives hardware requirements for placement.\n\n" +
-			"The classifier uses a lightweight local model (default: granite3.1-moe:1b)\n" +
-			"with a hard latency budget. If the local model is unavailable or too slow,\n" +
-			"AXIS can confirm a cloud fallback from configured providers before using\n" +
-			"the legacy string-matcher result.\n\n" +
-			"Output is advisory only — use `axis task place` for full placement decisions.\n\n" +
-			"Classification sources:\n" +
-			"  semantic  — a local or confirmed cloud LLM classified the prompt\n" +
-			"  reflex    — legacy string-matcher used (LLM unavailable or declined)",
-		Args: cobra.ExactArgs(1),
+	return &cobra.Command{
+		Use:   "llm",
+		Short: "Removed; use axis ai route",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			prompt := args[0]
-			w := cmd.OutOrStdout()
-			errW := cmd.ErrOrStderr()
-
-			// Build engine with CLI-provided overrides.
-			engineOpts := []llmrouter.Option{
-				llmrouter.WithTimeout(timeout),
-			}
-			if endpoint != "" {
-				engineOpts = append(engineOpts, llmrouter.WithEndpoint(endpoint))
-			}
-			if model != "" {
-				engineOpts = append(engineOpts, llmrouter.WithModel(model))
-			}
-			engine := llmrouter.NewEngine(engineOpts...)
-
-			sp := ui.NewSpinner()
-			sp.Start("Classifying locally...")
-			inference := llmInferRequirementsFn(prompt, engine)
-			sp.Stop("")
-			localModelName := model
-			if localModelName == "" {
-				localModelName = "granite3.1-moe:1b"
-			}
-			inference = maybeLLMCloudFallback(cmd.Context(), prompt, inference, cmd.InOrStdin(), errW, localModelName)
-
-			result := llmResult{
-				Prompt:     prompt,
-				Class:      string(inference.reqs.Workload.Class),
-				Confidence: inference.sig.Confidence,
-				Source:     string(inference.sig.Source),
-				Signals:    inference.sig.Signals,
-				Notes:      inference.sig.Notes,
-				Requirements: llmRequirements{
-					MinFreeRAMMB:      inference.reqs.MinFreeRAMMB,
-					RequiredTools:     inference.reqs.RequiredTools,
-					PreferredBackends: inference.reqs.PreferredBackends,
-					PrefersTurboQuant: inference.reqs.PrefersTurboQuant,
-					ContextWindow:     inference.reqs.ContextWindowTokens,
-				},
-			}
-
-			if format == "json" || format == "yaml" {
-				return printOutput(cmd.OutOrStdout(), result, format)
-			}
-
-			// Human-readable output.
-			if dryRun {
-				fmt.Fprintln(errW, ui.Dim("dry-run: classification only, no execution"))
-			}
-			printLLMResult(w, result)
-			fmt.Fprintln(errW, ui.Dim("advisory: use axis task place for full placement decisions"))
-			return nil
+			return fmt.Errorf("axis llm was removed in v0.15. Use: axis ai route")
 		},
 	}
-
-	cmd.Flags().StringVarP(&model, "model", "m", "", "Local classifier model (default: granite3.1-moe:1b)")
-	cmd.Flags().StringVar(&endpoint, "endpoint", "", "Ollama endpoint (default: http://localhost:11434)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 150*time.Millisecond, "Classifier latency budget")
-	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, yaml")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show routing decision without executing (classification preview only)")
-
-	cmd.AddCommand(llmSelectCmd())
-	cmd.AddCommand(llmConfigureCmd())
-
-	return cmd
 }
 
 func maybeLLMCloudFallback(ctx context.Context, prompt string, current llmInferenceResult, in io.Reader, errW io.Writer, localModel string) llmInferenceResult {

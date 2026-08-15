@@ -2,7 +2,8 @@
 
 ### 🚀 Features
 
-* **CLI:** `axis cluster` runs the same `status`/`summary`/`facts`/`doctor` as the root. Root help is a path (look → act). Experimental verbs (`chat`, `llm`, `cortex`, `mcp`, `context`, `profile`, `scripts`, `skills`, `observations`) stay installed but are hidden from default help.
+* **CLI:** Noun registry with two tiers (operate: cluster/node/model/task/daemon/agent; inspect: doctor/mesh/ai/init/serve/update/version). `axis node facts` is this machine; `axis cluster` is `status`/`summary` only. `axis chat` and `axis llm` print a removal message. `/nodes` retires with a use-this message. `/cluster` prints `session-snapshot` and age. Leaf `--help` no longer invents subcommands.
+
 
 
 ## v0.14.13 (2026-08-15)
