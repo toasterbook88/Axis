@@ -40,8 +40,11 @@ var packageStates = map[string]string{
 	"internal/llmrouter":    Experimental,
 	"internal/mcp":          Experimental,
 	"internal/mesh":         Scaffolded,
+	"internal/modellife":    Experimental,
 	"internal/multipath":    Scaffolded,
 	"internal/models":       InternalOnly,
+
+
 	"internal/netutil":      InternalOnly,
 	"internal/persist":      InternalOnly,
 	"internal/placement":    Stable,

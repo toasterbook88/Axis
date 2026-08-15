@@ -55,6 +55,8 @@ func TestCommandSurfacesWireExpectedSubcommands(t *testing.T) {
 		{scriptsCmd(), []string{"list"}},
 		{contextCmd(), []string{"show", "clear"}},
 		{aiCmd(), []string{"backends", "roles", "route"}},
+		{modelCmd(), []string{"start", "stop"}},
+
 	}
 
 	for _, tt := range tests {
