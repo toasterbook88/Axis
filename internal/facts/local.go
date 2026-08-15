@@ -799,7 +799,13 @@ func localVolumes(ctx context.Context) []models.Volume {
 	if err != nil {
 		local = nil
 	}
-	return mergeVolumes(local, ParseMountNetworkVolumes(localMountTable(ctx)))
+	vols := mergeVolumes(local, ParseMountNetworkVolumes(localMountTable(ctx)))
+	if runtime.GOOS == "linux" {
+		for i := range vols {
+			applyLinuxBlockObservation(&vols[i], linuxSysfsRoot)
+		}
+	}
+	return vols
 }
 
 func localMountTable(ctx context.Context) string {
