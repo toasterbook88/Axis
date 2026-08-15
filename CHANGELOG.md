@@ -7,6 +7,8 @@
 * **Facts:** Observe Linux block bus/class from sysfs (`rotational`, `removable`, USB `device/speed` in Mbit). Path inference remains the fallback. Network volumes are not probed.
 * **Facts:** After owner join, copy the owning node's observed bus/class/removable/link_mbit onto the network row. Sizes stay 0.
 * **CLI:** `axis model start --node --weights --port` and `axis model stop --node --port`. Weights must sit on a named local volume. llama-server only; listen on 127.0.0.1; port is required (no 8080 default). No Traefik, no harness writes.
+* **Facts:** Observe Darwin volume bus/class from `diskutil info` (Protocol, Solid State, Removable Media, Device/Link Speed). Network volumes are not probed.
+
 
 
 

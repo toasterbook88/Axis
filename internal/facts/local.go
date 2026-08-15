@@ -43,6 +43,14 @@ var runMLXDiscoveryFn = func(ctx context.Context) ([]byte, error) {
 	return exec.CommandContext(ctx, "bash", "-c", MLXDiscoveryScript).Output()
 }
 
+var runDiskutilInfo = func(ctx context.Context, device string) (string, error) {
+	out, err := exec.CommandContext(ctx, "diskutil", "info", device).Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // NewLocalCollector creates a collector for the local node.
 func NewLocalCollector(name, role string) *LocalCollector {
 	return &LocalCollector{Name: name, Role: role}
@@ -800,9 +808,21 @@ func localVolumes(ctx context.Context) []models.Volume {
 		local = nil
 	}
 	vols := mergeVolumes(local, ParseMountNetworkVolumes(localMountTable(ctx)))
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		for i := range vols {
 			applyLinuxBlockObservation(&vols[i], linuxSysfsRoot)
+		}
+	case "darwin":
+		for i := range vols {
+			if vols[i].Kind == "network" || vols[i].Device == "" {
+				continue
+			}
+			out, err := runDiskutilInfo(ctx, vols[i].Device)
+			if err != nil {
+				continue
+			}
+			applyDiskutilObservation(&vols[i], out)
 		}
 	}
 	return vols

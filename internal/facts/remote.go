@@ -292,6 +292,20 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 	if out, err := c.Exec.Run(ctx, `if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`); err == nil {
 		r.Volumes = mergeVolumes(r.Volumes, ParseMountNetworkVolumes(out))
 	}
+	if strings.EqualFold(osName, "darwin") {
+		for i := range r.Volumes {
+			v := &r.Volumes[i]
+			if v.Kind == "network" || v.Device == "" {
+				continue
+			}
+			out, err := c.Exec.Run(ctx, "diskutil info "+posixSingleQuote(v.Device))
+
+			if err != nil {
+				continue
+			}
+			applyDiskutilObservation(v, out)
+		}
+	}
 
 	// GPU (best-effort)
 	var gpuCmd string
