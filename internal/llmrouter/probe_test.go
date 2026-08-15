@@ -11,6 +11,35 @@ import (
 	"github.com/toasterbook88/axis/internal/llmrouter"
 )
 
+func TestViewLocality(t *testing.T) {
+	here := llmrouter.ViewLocality(config.AIBackendConfig{
+		Name:    "nemotron",
+		Kind:    config.AIBackendOpenAICompatible,
+		BaseURL: "http://127.0.0.1:8081/v1",
+	})
+	if here != "here" {
+		t.Fatalf("loopback untitled node = %q, want here", here)
+	}
+	peer := llmrouter.ViewLocality(config.AIBackendConfig{
+		Name:    "nemotron",
+		Kind:    config.AIBackendOpenAICompatible,
+		BaseURL: "http://127.0.0.1:8081/v1",
+		Node:    "some-other-node",
+	})
+	if peer != "peer" {
+		t.Fatalf("named other node = %q, want peer", peer)
+	}
+	cloud := llmrouter.ViewLocality(config.AIBackendConfig{
+		Name:    "openrouter",
+		Kind:    config.AIBackendOpenAICompatible,
+		BaseURL: "https://openrouter.ai/api/v1",
+	})
+	if cloud != "cloud" {
+		t.Fatalf("public URL no node = %q, want cloud", cloud)
+	}
+}
+
+
 func TestProbeBackend_OllamaTags(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tags" {

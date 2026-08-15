@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Features
+
+* **AI:** `axis ai backends` prints a viewer-relative locality column: `here` (this process), `peer` (another enrolled node), `cloud` (public URL, no node). Backend names are unchanged.
+
+
+
 ## v0.14.14 (2026-08-15)
 
 ### 🚀 Features

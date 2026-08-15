@@ -140,6 +140,21 @@ func effectiveProbeEndpoint(b config.AIBackendConfig) string {
 	return b.AdvertiseURL
 }
 
+// ViewLocality is viewer-relative: here (this process), peer (another
+// enrolled node), cloud (public URL, no node). The backend name is not used.
+func ViewLocality(b config.AIBackendConfig) string {
+	if strings.TrimSpace(b.Node) != "" {
+		if models.IsLocalConfig(b.Node, b.Node, "") {
+			return "here"
+		}
+		return "peer"
+	}
+	if EndpointIsClusterLocal(b.BaseURL) {
+		return "here"
+	}
+	return "cloud"
+}
+
 func probeURL(b config.AIBackendConfig) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(effectiveProbeEndpoint(b)), "/")
 	if base == "" {
