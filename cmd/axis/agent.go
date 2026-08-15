@@ -130,7 +130,7 @@ func agentCmd() *cobra.Command {
 				}
 			}
 			// Display / last-resort resolution (always non-empty when possible).
-			currentModel := resolveChatModel(model, rt)
+			currentModel := resolveAgentModel(model, rt)
 			// Startup request: explicit --model, else chat.default_model / warm preferred / ai role default.
 			// Empty means "pick from catalog" (first usable local, then priority cloud).
 			startupRequestedModel := effectiveStartupRequestedModel(model, rt)
@@ -385,7 +385,6 @@ func agentCmd() *cobra.Command {
 				readline.PcItem("/tools"),
 				readline.PcItem("/models"),
 				readline.PcItem("/mcp"),
-				readline.PcItem("/nodes"),
 				readline.PcItem("/reservations"),
 				readline.PcItem("/skills"),
 				readline.PcItem("/exit"),
@@ -690,7 +689,6 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		fmt.Fprintln(errW, "  /model <name>  Switch LLM model mid-session")
 		fmt.Fprintln(errW, "  /models        List available models and switch interactively")
 		fmt.Fprintln(errW, "  /mcp           Manage and view connected MCP servers")
-		fmt.Fprintln(errW, "  /nodes         Show cluster nodes status")
 		fmt.Fprintln(errW, "  /reservations  Show active ledger reservations")
 		fmt.Fprintln(errW, "  /skills        Show learned skills from history")
 		fmt.Fprintln(errW, "  /exit, /quit   Quit the session")
@@ -705,56 +703,9 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		return true, false, nil
 
 	case "/nodes":
-		ctx2, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		cacheAddr := api.DefaultAddr()
-		snap, source, err := collectStatusSnapshot(
-			ctx2,
-			true,  // cached
-			false, // cachedOnly
-			func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-				return fetchStatusSnapshot(ctx, cacheAddr)
-			},
-			loadStatusLiveSnapshot,
-		)
-		cancel()
-		if err != nil {
-			return true, false, fmt.Errorf("failed to load cluster status: %w", err)
-		}
-		if snap == nil || len(snap.Nodes) == 0 {
-			fmt.Fprintln(errW, ui.Yellow("No nodes found in cluster snapshot."))
-			return true, false, nil
-		}
-		var listItems []NodeListItem
-		for _, n := range snap.Nodes {
-			var ramTotal, ramFree int
-			var pressure string
-			var gpus []string
-			if n.Resources != nil {
-				ramTotal = int(n.Resources.RAMTotalMB)
-				ramFree = int(n.Resources.RAMFreeMB)
-				pressure = string(n.Resources.Pressure)
-				for _, g := range n.Resources.GPUs {
-					gpus = append(gpus, g.Model)
-				}
-			}
-			listItems = append(listItems, NodeListItem{
-				Name:     n.Name,
-				Status:   string(n.Status),
-				OS:       n.OS,
-				Arch:     n.Arch,
-				RAMTotal: ramTotal,
-				RAMFree:  ramFree,
-				Pressure: pressure,
-				GPUs:     gpus,
-				IsLocal:  models.IsLocalNode(n),
-				Reserved: n.RAMReservedMB,
-			})
-		}
-		fmt.Fprintf(w, "Snapshot Source: %s\n", source)
-		if !snap.Timestamp.IsZero() {
-			fmt.Fprintf(w, "Snapshot Age: %v\n", time.Since(snap.Timestamp).Round(time.Second))
-		}
-		fmt.Fprint(w, RenderNodeTable(listItems))
+		fmt.Fprintln(errW, "/nodes was cached-first with a live fallback.")
+		fmt.Fprintln(errW, "/cluster shows the session snapshot (source and age are printed).")
+		fmt.Fprintln(errW, "For a live collect: axis cluster status")
 		return true, false, nil
 
 	case "/reservations":
@@ -1798,6 +1749,15 @@ func effectiveStartupRequestedModel(flag string, rt *runtimectx.Context) string 
 	return ""
 }
 
+func resolveAgentModel(flag string, rt *runtimectx.Context) string {
+	if m := effectiveStartupRequestedModel(flag, rt); m != "" {
+		return m
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	return chat.ResolveDefaultModel(ctx)
+}
+
 func syntheticLocalOllamaTarget(name string) ModelChoice {
 	return ModelChoice{
 		ID:            "local:ollama:" + name,
@@ -1925,7 +1885,7 @@ func resolveStartupModelTarget(
 			return t, agent.CloudBackendOptions{}, nil
 		}
 		// Fallback local default name
-		name := resolveChatModel("", rt)
+		name := resolveAgentModel("", rt)
 		return syntheticLocalOllamaTarget(name), agent.CloudBackendOptions{}, nil
 
 	default: // auto
@@ -1950,7 +1910,7 @@ func resolveStartupModelTarget(
 			return t, opts, nil
 		}
 		// Last resort: local ollama with resolved default name
-		name := resolveChatModel("", rt)
+		name := resolveAgentModel("", rt)
 		return syntheticLocalOllamaTarget(name), agent.CloudBackendOptions{}, nil
 	}
 }
@@ -2217,7 +2177,12 @@ func printAgentCluster(w, errW io.Writer, rt *runtimectx.Context) {
 			Reserved: n.RAMReservedMB,
 		})
 	}
-	fmt.Fprintln(w, "Snapshot Source: session")
+	if rt.Snapshot.Timestamp.IsZero() {
+		fmt.Fprintln(w, "Snapshot Source: session-snapshot (age unknown)")
+	} else {
+		fmt.Fprintf(w, "Snapshot Source: session-snapshot (age %s)\n", time.Since(rt.Snapshot.Timestamp).Round(time.Minute))
+	}
+
 	fmt.Fprint(w, RenderNodeTable(listItems))
 }
 

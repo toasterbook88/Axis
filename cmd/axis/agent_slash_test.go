@@ -61,6 +61,9 @@ func TestHandleREPLSlashCommand(t *testing.T) {
 	if !strings.Contains(errW.String(), "Available commands:") {
 		t.Errorf("expected help output, got %q", errW.String())
 	}
+	if n := strings.Count(errW.String(), "/exit, /quit"); n != 1 {
+		t.Fatalf("/help must list /exit once, got %d\n%s", n, errW.String())
+	}
 
 	// Test /context
 	errW.Reset()

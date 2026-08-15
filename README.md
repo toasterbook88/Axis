@@ -39,8 +39,9 @@ advisory surfaces never override observed state.
 │  Content-aware config watches · Staleness detection             │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 1: FACT PLANE                                            │
-│  SSH hardware probes · UDP beacons · Mesh gossip scaffolding    │
-│  (mesh is library-only; not wired into the CLI operator path)   │
+│  SSH hardware probes · UDP beacons · Mesh gossip                │
+│  (axis mesh status/peers; also started from axis serve)         │
+
 │  Local + remote collectors · HMAC-authenticated beacons         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -58,10 +59,11 @@ go install github.com/toasterbook88/axis/cmd/axis@latest
 axis init
 
 # Inspect the local machine
-axis facts
+axis node facts
 
 # Inspect the full cluster
-axis status
+axis cluster status
+
 
 # Ask where to run a task
 axis task place "run ollama inference on a 7b model"
@@ -81,9 +83,10 @@ axis doctor
 |---------|---------|
 | `axis version` | Print build version, commit, and Go version |
 | `axis init` | Interactive cluster configuration wizard |
-| `axis facts` | Local hardware/tool snapshot (`--format json\|yaml`) |
-| `axis status` | Live cluster snapshot (`--cached`, `--cached-only`) |
-| `axis summary` | Cluster summary view |
+| `axis node facts` | Local hardware/tool snapshot (`--format json\|yaml`); `axis facts` still works |
+| `axis cluster status` | Live cluster snapshot (`--cached`, `--cached-only`); `axis status` still works |
+| `axis cluster summary` | Cluster summary view |
+
 | `axis task place` | Advisory placement with reasoning (`--cached`) |
 | `axis placement explain` | Detailed per-node placement breakdown |
 | `axis profile match` | Workload class inference (no snapshot needed) |
@@ -100,8 +103,8 @@ axis doctor
 | `axis daemon service status` | Inspect native service-manager state |
 | `axis daemon service uninstall` | Stop/remove only an AXIS-managed user service |
 | `axis serve` | Local HTTP API + daemon cache |
-| `axis llm` | LLM routing and model management |
 | `axis ai` | Inference backends, roles, and dry-run routing |
+
 | `axis cortex` | Distributed vector memory / event bus |
 | `axis update` | Self-update via GitHub Releases |
 | `axis context show\|clear` | Inspect or clear placement memory |
@@ -117,8 +120,9 @@ observed cluster state.
 | Command | Purpose |
 |---------|---------|
 | `axis mcp serve` | Read-only MCP server over stdio |
-| `axis chat` | Ollama-backed advisory chat |
+| `axis chat` | Removed; use `axis agent` |
 | `axis agent` | Tool-calling agent loop |
+
 
 ## Placement Algorithm
 
@@ -236,8 +240,9 @@ axis/
 │   ├── execution/     Guarded task execution
 │   ├── daemon/        Background cache + 7 refresh triggers
 │   ├── api/           HTTP API (v1 + v2 read routes)
-│   ├── mesh/          Gossip peer discovery scaffolding (library-only)
-│   ├── reservation/   Resource accounting ledger (library-only)
+│   ├── mesh/          Gossip peer discovery (`axis mesh`, daemon WatchMesh) |
+│   ├── reservation/   Resource accounting ledger (`axis reservations`) |
+
 │   ├── safety/        Structured command safety groundwork (scaffolding)
 │   ├── discovery/     SSH + UDP node discovery
 │   ├── mcp/           MCP server (stdio)

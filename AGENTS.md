@@ -16,8 +16,9 @@ a real snapshot or live probe.
 
 - `axis facts`, `axis status`, `axis task place`, and `axis task context` are
   the primary operator truth surfaces.
-- `axis chat` and `axis agent` are experimental helpers subordinate to observed
-  state.
+- `axis agent` is an experimental helper subordinate to observed state.
+- `axis chat` was removed; use `axis agent`.
+
 - Optional HTTP, MCP, and execution surfaces must not weaken the fact plane.
 
 Lifecycle events (see `internal/events/events.go`) are provided for observation and advisory integration by external agents. They are strictly observational and advisory. Agents may subscribe to events via MCP but must not assume control or execution authority.
@@ -122,7 +123,8 @@ Layer 1  Fact Plane   internal/facts  internal/discovery  internal/mesh
 ### Stable operator path
 
 ```text
-cmd/axis/             Cobra CLI — one file per subcommand (27 commands)
+cmd/axis/             Cobra CLI — one file per subcommand (28 commands)
+
 
 
 internal/config/      Load ~/.axis/nodes.yaml; strict YAML parsing
@@ -188,30 +190,27 @@ HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
-27 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
-
-
+28 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
 
 | Command | Purpose |
 | --------- | --------- |
 | `axis update [--check] [--all] [--path]` | Self-update via GitHub Releases (running install by default; `--all` for validated shadows); SHA-256 verified |
 | `axis version` | Print build version, commit, date, go, platform |
-| `axis facts [--format json\|yaml]` | Local node facts |
-| `axis status [--cached] [--format]` | Cluster snapshot |
+| `axis facts [--format json\|yaml]` | Local node facts (alias of `axis node facts`) |
+| `axis status [--cached] [--format]` | Cluster snapshot (alias of `axis cluster status`) |
 | `axis task` | Task subcommands: `place`, `context`, `run` |
 | `axis placement explain` | Detailed per-node placement breakdown |
 | `axis profile match` | Workload class inference |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
 | `axis daemon` | Lifecycle/cache commands plus native `service install\|status\|uninstall`; `status` emits `axis.output/v1` JSON |
-| `axis chat [--stream]` | Experimental Ollama chat (advisory only) |
+| `axis chat` | Removed; prints `use axis agent` |
 | `axis agent [--auto-approve]` | Agentic tool-calling assistant |
-| `axis llm` | LLM routing and model management |
+| `axis llm` | Removed; prints `use axis ai route` |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
 | `axis model` | Start/stop llama-server on a named node (`start --node --weights --port`, `stop --node --port`) |
-| `axis cluster` | Umbrella for status/summary/facts/doctor (root aliases unchanged) |
-
-
+| `axis cluster` | Fleet snapshot: `status`, `summary` |
+| `axis node` | This machine: `facts` |
 | `axis cortex` | Distributed vector memory / event bus |
 | `axis context show\|clear` | Inspect or clear placement memory |
 | `axis scripts list` | List built-in helper scripts |
@@ -221,8 +220,9 @@ HDD penalty: −15 for heavy inference.
 | `axis summary` | Cluster summary view |
 | `axis reservations` | Reservation inspection |
 | `axis init` | Interactive cluster configuration wizard |
-| `axis mesh` | Gossip mesh peer diagnostics (subcommands: `properties`, `neighbors`) |
+| `axis mesh` | Gossip mesh peer diagnostics (subcommands: `status`, `peers`) |
 | `axis observations` | Show execution observations tracked by the cluster |
+
 
 ### Exit codes (`cmd/axis/exit.go`)
 

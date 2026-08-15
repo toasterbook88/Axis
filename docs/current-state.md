@@ -97,9 +97,12 @@ Top-level commands currently registered in the binary:
 | `axis daemon status` | Inspect daemon freshness | Emits one `axis.output/v1` JSON envelope with structured state and warnings |
 | `axis daemon restart` | Restart daemon | Replace the local listener as an unmanaged recovery/development process |
 | `axis daemon service install\|status\|uninstall` | Manage daemon persistence | Supervise the user daemon through launchd or systemd without overwriting foreign service files |
-| `axis chat` | Cluster-aware chat via Ollama | Uses `/api/chat` with structured messages and rolling context; advisory only |
+| `axis chat` | Removed | Prints `use: axis agent` |
 | `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; injects nearest `AGENTS.md` into the system prompt when present; `--auto-approve` for safe commands; `--system` appends to system prompt |
-| `axis llm` | Route prompt to local/cloud LLM | `--dry-run`, `--endpoint`, `--format`, `--model`, `--timeout` |
+| `axis llm` | Removed | Prints `use: axis ai route` |
+| `axis cluster` | Fleet snapshot | `status` (live; `--cached` opt-in), `summary` |
+| `axis node` | This machine | `facts` (localhost). Root `axis facts` still works |
+
 | `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
 | `axis mcp serve` | Start MCP server (read-only diagnostics + advisory leases) | `stdio` transport only |
 | `axis mcp client` | Unified MCP client | Subcommands: `list`, `tools`, `call`, `resources`, `read`, `prompts`, `get-prompt`, `search`, `batch`, `interactive`. Per-connection caching (60s TTL), retry with exponential backoff, placement-aware `--auto-route`, progress notifications, and REPL with 10 commands |

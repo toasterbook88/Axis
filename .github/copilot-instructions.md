@@ -14,8 +14,8 @@ a real snapshot or live probe.
 
 - `axis facts`, `axis status`, `axis task place`, and `axis task context` are
   the primary operator truth surfaces.
-- `axis chat` and `axis agent` are experimental helpers subordinate to observed
-  state.
+- `axis agent` is an experimental helper subordinate to observed state. `axis chat` was removed.
+
 - Optional HTTP, MCP, and execution surfaces must not weaken the fact plane.
 
 ## Copilot-Specific Behavior
