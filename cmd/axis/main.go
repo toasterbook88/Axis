@@ -142,6 +142,8 @@ func newRootCmd() *cobra.Command {
 	cmdReservations.GroupID = "task"
 	cmdObservations := observationsCmd()
 	cmdObservations.GroupID = "task"
+	cmdModel := modelCmd()
+	cmdModel.GroupID = "ai"
 
 	root.AddCommand(cmdUpdate)
 	root.AddCommand(cmdVersion)
@@ -168,6 +170,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(cmdSummary)
 	root.AddCommand(cmdReservations)
 	root.AddCommand(cmdObservations)
+	root.AddCommand(cmdModel)
 
 	ui.ApplyHelpTemplate(root)
 
