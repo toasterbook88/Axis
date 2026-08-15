@@ -39,10 +39,18 @@ func newRootCmd() *cobra.Command {
 		Short:         "AXIS — snapshot-first cluster facts and deterministic placement",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Long: "AXIS is a snapshot-first operator CLI for cluster fact collection, " +
-			"deterministic placement, and explicit local control surfaces.\n\n" +
-			"Chat helpers are experimental and must not be treated as authoritative " +
-			"cluster truth unless backed by a live snapshot or probe.",
+		Long: `Look first, then act.
+
+  axis cluster status     every node
+  axis cluster facts      this machine
+  axis agent              ask questions (advisory)
+  axis model start        llama-server on a named node (--node --weights --port)
+  axis daemon status      local cache
+
+axis status, axis facts, axis summary, and axis doctor still work.
+Experimental commands (chat, llm, cortex, …) stay installed; they are hidden from this list.`,
+		Example: "  axis cluster status\n  axis cluster facts\n  axis agent\n  axis model start --node storage --weights /mnt/models/a.gguf --port 8081",
+
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			ui.Init(noColor)
 			// Initialize and register Cortex client globally (optional cluster integration)
@@ -116,22 +124,29 @@ func newRootCmd() *cobra.Command {
 	cmdDaemon.GroupID = "setup"
 	cmdLlm := llmCmd()
 	cmdLlm.GroupID = "ai"
+	cmdLlm.Hidden = true
 	cmdAI := aiCmd()
 	cmdAI.GroupID = "ai"
 	cmdCortex := cortexCmd()
 	cmdCortex.GroupID = "ai"
+	cmdCortex.Hidden = true
 	cmdChat := chatCmd()
 	cmdChat.GroupID = "ai"
+	cmdChat.Hidden = true
 	cmdAgent := agentCmd()
 	cmdAgent.GroupID = "ai"
 	cmdContext := contextCmd()
 	cmdContext.GroupID = "meta"
+	cmdContext.Hidden = true
 	cmdProfile := profileCmd()
 	cmdProfile.GroupID = "task"
+	cmdProfile.Hidden = true
 	cmdScripts := scriptsCmd()
 	cmdScripts.GroupID = "meta"
+	cmdScripts.Hidden = true
 	cmdSkills := skillsCmd()
 	cmdSkills.GroupID = "meta"
+	cmdSkills.Hidden = true
 	cmdCompletion := completionCmd()
 	cmdCompletion.GroupID = "meta"
 	cmdDoctor := doctorCmd()
@@ -142,10 +157,16 @@ func newRootCmd() *cobra.Command {
 	cmdReservations.GroupID = "task"
 	cmdObservations := observationsCmd()
 	cmdObservations.GroupID = "task"
+	cmdObservations.Hidden = true
 	cmdModel := modelCmd()
 	cmdModel.GroupID = "ai"
+	cmdMcp.Hidden = true
+	cmdCluster := clusterCmd()
+	cmdCluster.GroupID = "cluster"
 
 	root.AddCommand(cmdUpdate)
+	root.AddCommand(cmdCluster)
+
 	root.AddCommand(cmdVersion)
 	root.AddCommand(cmdInit)
 	root.AddCommand(cmdMesh)
