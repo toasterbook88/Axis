@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Repo version: `0.14.12`
+- Repo version: `0.14.13`
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary

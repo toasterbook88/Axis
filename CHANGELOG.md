@@ -1,30 +1,22 @@
 ## Unreleased
 
+## v0.14.13 (2026-08-15)
+
 ### 🚀 Features
 
-* **Facts:** Inventory every mounted volume (root plus other local mounts), not just root + `_Ext` totals. Virtual filesystems (tmpfs, overlay, docker, snap/loop, Darwin synthetic, 0 GB images) are omitted. Local sizes come from `df -kPl` (never stats a remote server). CIFS/NFS/SMB rows come from `mount`/`/proc/mounts` with sizes left 0. Bus/class inferred from the device path only; role is `root` or `other`. `disk_total_gb` is still the root filesystem.
-* **Facts:** Join network volumes to the owning cluster node from `Device` (CIFS `//user@host/share`, NFS `ip:/export`, mDNS `._smb._tcp.local`). Sets `owner` + `owner_mount`; does not copy sizes (share stays 0/0). Ambiguous hosts stay unresolved.
-* **Facts:** Observe Linux block bus/class from sysfs (`rotational`, `removable`, USB `device/speed` in Mbit). Path inference remains the fallback. Network volumes are not probed.
-* **Facts:** After owner join, copy the owning node's observed bus/class/removable/link_mbit onto the network row. Sizes stay 0.
-* **CLI:** `axis model start --node --weights --port` and `axis model stop --node --port`. Weights must sit on a named local volume. llama-server only; listen on 127.0.0.1; port is required (no 8080 default). No Traefik, no harness writes.
-* **Facts:** Observe Darwin volume bus/class from `diskutil info` (Protocol, Solid State, Removable Media, Device/Link Speed). Network volumes are not probed.
-* **Facts:** Remote Linux collect (bundle `sysfs_block_b64` and the multi-probe fallback) dumps `/sys/class/block` rotational/removable/speed once and applies it to named local volumes. Does not stat network mounts.
-
-
-
-
-
+* **Facts:** Inventory every mounted volume (root plus other local mounts), not just root + `_Ext` totals. Virtual filesystems (tmpfs, overlay, docker, snap/loop, Darwin synthetic, 0 GB images) are omitted. Local sizes come from `df -kPl` (never stats a remote server). CIFS/NFS/SMB rows come from `mount`/`/proc/mounts` with sizes left 0. Bus/class inferred from the device path only; role is `root` or `other`. `disk_total_gb` is still the root filesystem. (#288)
+* **Facts:** Join network volumes to the owning cluster node from `Device` (CIFS `//user@host/share`, NFS `ip:/export`, mDNS `._smb._tcp.local`). Sets `owner` + `owner_mount`; does not copy sizes (share stays 0/0). Ambiguous hosts stay unresolved. (#289)
+* **Facts:** Observe Linux block bus/class from sysfs (`rotational`, `removable`, USB `device/speed` in Mbit). Path inference remains the fallback. Network volumes are not probed. (#290)
+* **Facts:** After owner join, copy the owning node's observed bus/class/removable/link_mbit onto the network row. Sizes stay 0. (#291)
+* **CLI:** `axis model start --node --weights --port` and `axis model stop --node --port`. Weights must sit on a named local volume. llama-server only; listen on 127.0.0.1; port is required (no 8080 default). No Traefik, no harness writes. (#292)
+* **Facts:** Observe Darwin volume bus/class from `diskutil info` (Protocol, Solid State, Removable Media, Device/Link Speed). Network volumes are not probed. (#293)
+* **Facts:** Remote Linux collect (bundle `sysfs_block_b64` and the multi-probe fallback) dumps `/sys/class/block` rotational/removable/speed once and applies it to named local volumes. Does not stat network mounts. (#294)
 
 ### Maintenance
-* **Docs/Tests:** Replace operator-cluster hostnames and LAN/Tailscale addresses in fixtures and worklog with RFC 5737 / symbolic names. `hack/verify-public-boundary.sh` (wired into `verify-doc-facts`) rejects non-documentation IPv4 literals in Go sources and CHANGELOG.
-
-
-
-
-
-
+* **Docs/Tests:** Replace operator-cluster hostnames and LAN/Tailscale addresses in fixtures and worklog with RFC 5737 / symbolic names. `hack/verify-public-boundary.sh` (wired into `verify-doc-facts`) rejects non-documentation IPv4 literals in Go sources and CHANGELOG. (#289)
 
 ## v0.14.12 (2026-08-14)
+
 
 ### 🚀 Features
 * **Agent:** In-session `/facts` and `/cluster` on `axis agent` print the local resident table (with probed ports) and the cluster node table from the **session snapshot** without a live collect. `/nodes` still does the live/daemon path. Session header adds `[model:] [endpoint:] [status: probed|stale]`. `/exec` is not shipped. (#286)
