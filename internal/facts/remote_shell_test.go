@@ -73,12 +73,11 @@ func TestParseRemoteFactBundle_LinuxCore(t *testing.T) {
 	df := base64.StdEncoding.EncodeToString([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 104857600 52428800 52428800 50% /\n"))
 	dfAll := base64.StdEncoding.EncodeToString([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 104857600 52428800 52428800 50% /\n/dev/sda1 2097152 1048576 1048576 50% /mnt/models\n"))
 	mounts := base64.StdEncoding.EncodeToString([]byte("192.0.2.20:/export /mnt/share nfs4 rw,relatime 0 0\n"))
-
+	sysfs := base64.StdEncoding.EncodeToString([]byte("sda 0 1 5000\nroot 0 0 -\n"))
 	out := `__AXIS_BUNDLE_V1__
 os=Linux
 arch=x86_64
 hostname=worker
-
 os_version=6.1.0
 cpu_cores=8
 cpu_model=Test CPU
@@ -87,6 +86,7 @@ loadavg=0.10 0.20 0.30 1/100 1
 df_b64=` + df + `
 df_all_b64=` + dfAll + `
 mounts_b64=` + mounts + `
+sysfs_block_b64=` + sysfs + `
 __AXIS_BUNDLE_END__
 `
 	kv, err := parseRemoteFactBundle(out)
@@ -116,18 +116,23 @@ __AXIS_BUNDLE_END__
 	if len(nf.Resources.Volumes) != 3 {
 		t.Fatalf("volumes=%#v", nf.Resources.Volumes)
 	}
-	var sawNFS bool
+	var sawNFS, sawUSB bool
 	for _, v := range nf.Resources.Volumes {
 		if v.Mount == "/mnt/share" {
-
 			sawNFS = true
 			if v.Kind != "network" || v.TotalGB != 0 || v.Bus != "nfs" {
 				t.Fatalf("nfs volume=%+v", v)
 			}
 		}
+		if v.Mount == "/mnt/models" {
+			sawUSB = true
+			if v.Bus != "usb" || v.LinkMbit != 5000 {
+				t.Fatalf("usb volume=%+v", v)
+			}
+		}
 	}
-	if !sawNFS {
-		t.Fatalf("missing nfs volume: %#v", nf.Resources.Volumes)
+	if !sawNFS || !sawUSB {
+		t.Fatalf("missing volumes: %#v", nf.Resources.Volumes)
 	}
 
 }

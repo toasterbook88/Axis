@@ -292,6 +292,12 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 	if out, err := c.Exec.Run(ctx, `if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`); err == nil {
 		r.Volumes = mergeVolumes(r.Volumes, ParseMountNetworkVolumes(out))
 	}
+	if !strings.EqualFold(osName, "darwin") {
+		if out, err := c.Exec.Run(ctx, sysfsBlockTableCmd); err == nil {
+			ApplySysfsBlockTable(r.Volumes, out)
+		}
+	}
+
 	if strings.EqualFold(osName, "darwin") {
 		for i := range r.Volumes {
 			v := &r.Volumes[i]
