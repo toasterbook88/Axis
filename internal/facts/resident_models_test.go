@@ -27,7 +27,17 @@ func minimalRemoteExec() map[string]fakeRunResult {
 		"grep MemAvailable /proc/meminfo | awk '{print $2}'":                                {out: "8388608\n"},
 		"cut -d' ' -f1-3 /proc/loadavg":                                                     {out: "0.10 0.20 0.30\n"},
 		"df -kP / | tail -1":                                                                {out: "/dev/nvme0n1 1048576 524288 524288 50% /\n"},
-		"cat /proc/pressure/memory 2>/dev/null":                                             {out: "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"},
+		"df -kP /": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/nvme0n1 1048576 524288 524288 50% /
+`},
+		"df -kPl": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/nvme0n1 1048576 524288 524288 50% /
+tmpfs 8388608 0 8388608 0% /tmp
+/dev/sda1 2097152 1048576 1048576 50% /mnt/models
+`},
+		`if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`: {out: ""},
+
+		"cat /proc/pressure/memory 2>/dev/null": {out: "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"},
 		`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {out: "2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"},
 		// Inference backends not installed on this baseline node.
 		OllamaDiscoveryScript:      {out: `{"installed":false}`},
