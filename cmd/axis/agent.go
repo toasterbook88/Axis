@@ -692,8 +692,6 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		fmt.Fprintln(errW, "  /reservations  Show active ledger reservations")
 		fmt.Fprintln(errW, "  /skills        Show learned skills from history")
 		fmt.Fprintln(errW, "  /exit, /quit   Quit the session")
-
-		fmt.Fprintln(errW, "  /exit, /quit   Quit the session")
 		return true, false, nil
 
 	case "/facts":
