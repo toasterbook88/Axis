@@ -27,7 +27,12 @@ func summaryCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "summary",
-		Short: "Display a visual dashboard of cluster health and resources",
+		Short: "Visual dashboard of cluster health and resources",
+		Long: `One-screen dashboard of the fleet. Not the node table (that is axis cluster status).
+
+Uses the daemon snapshot cache by default. For a live collect: axis summary --cached=false.
+axis cluster summary is the same command.`,
+
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if watch {
 				ticker := time.NewTicker(watchInterval)
