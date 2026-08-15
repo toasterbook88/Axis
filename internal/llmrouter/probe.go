@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/secrets"
 )
 
@@ -20,15 +21,16 @@ const (
 
 // BackendProbe is the result of probing a configured AI backend.
 type BackendProbe struct {
-	Backend string        `json:"backend" yaml:"backend"`
-	Kind    string        `json:"kind" yaml:"kind"`
-	BaseURL string        `json:"base_url" yaml:"base_url"`
-	OK      bool          `json:"ok" yaml:"ok"`
-	Latency time.Duration `json:"latency" yaml:"latency"`
-	Message string        `json:"message,omitempty" yaml:"message,omitempty"`
-	Models  []string      `json:"models,omitempty" yaml:"models,omitempty"`
-	Node    string        `json:"node,omitempty" yaml:"node,omitempty"`
-	Enabled bool          `json:"enabled" yaml:"enabled"`
+	Backend   string        `json:"backend" yaml:"backend"`
+	Kind      string        `json:"kind" yaml:"kind"`
+	BaseURL   string        `json:"base_url" yaml:"base_url"`
+	ProbedURL string        `json:"probed_url,omitempty" yaml:"probed_url,omitempty"`
+	OK        bool          `json:"ok" yaml:"ok"`
+	Latency   time.Duration `json:"latency" yaml:"latency"`
+	Message   string        `json:"message,omitempty" yaml:"message,omitempty"`
+	Models    []string      `json:"models,omitempty" yaml:"models,omitempty"`
+	Node      string        `json:"node,omitempty" yaml:"node,omitempty"`
+	Enabled   bool          `json:"enabled" yaml:"enabled"`
 }
 
 // ProbeBackend checks reachability and lists models when possible.
@@ -61,7 +63,7 @@ func ProbeBackend(ctx context.Context, b config.AIBackendConfig, client *http.Cl
 		out.Latency = time.Since(start)
 		return out
 	}
-
+	out.ProbedURL = url
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		out.Message = err.Error()
@@ -122,8 +124,24 @@ func resolveBackendAPIKey(b config.AIBackendConfig) string {
 	return key
 }
 
+// effectiveProbeEndpoint keeps BaseURL on-box and uses AdvertiseURL only
+// when this process is not the backend's node — same selection the agent
+// catalog uses (chooseAICatalogEndpoint in cmd/axis).
+func effectiveProbeEndpoint(b config.AIBackendConfig) string {
+	if strings.TrimSpace(b.AdvertiseURL) == "" {
+		return b.BaseURL
+	}
+	if strings.TrimSpace(b.Node) == "" {
+		return b.BaseURL
+	}
+	if models.IsLocalConfig(b.Node, b.Node, "") {
+		return b.BaseURL
+	}
+	return b.AdvertiseURL
+}
+
 func probeURL(b config.AIBackendConfig) (string, error) {
-	base := strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
+	base := strings.TrimRight(strings.TrimSpace(effectiveProbeEndpoint(b)), "/")
 	if base == "" {
 		return "", fmt.Errorf("empty base_url")
 	}
