@@ -1,5 +1,12 @@
 ## Unreleased
 
+### 🚀 Features
+
+* **Facts:** Inventory every mounted volume (root plus other local mounts), not just root + `_Ext` totals. Virtual filesystems (tmpfs, overlay, docker, snap/loop, Darwin synthetic, 0 GB images) are omitted. Local sizes come from `df -kPl` (never stats a remote server). CIFS/NFS/SMB rows come from `mount`/`/proc/mounts` with sizes left 0. Bus/class inferred from the device path only; role is `root` or `other`. `disk_total_gb` is still the root filesystem.
+
+
+
+
 ## v0.14.12 (2026-08-14)
 
 ### 🚀 Features

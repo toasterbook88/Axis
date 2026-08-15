@@ -75,6 +75,20 @@ func (g GPUInfo) HasCapability(cap string) bool {
 	return false
 }
 
+// Volume is one mounted filesystem Axis can name. Sizes are observed from df.
+// Bus/class are inferred from the device path only (nvme/mmc/cifs/nfs/unknown).
+// Kind is "local" or "network". Role is "root" or "other" — mount-path is not hardware.
+type Volume struct {
+	Device  string `json:"device" yaml:"device"`
+	Mount   string `json:"mount" yaml:"mount"`
+	TotalGB int64  `json:"total_gb" yaml:"total_gb"`
+	FreeGB  int64  `json:"free_gb" yaml:"free_gb"`
+	Kind    string `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Bus     string `json:"bus,omitempty" yaml:"bus,omitempty"`     // nvme, mmc, cifs, nfs, unknown
+	Class   string `json:"class,omitempty" yaml:"class,omitempty"` // nvme, network, unknown
+	Role    string `json:"role,omitempty" yaml:"role,omitempty"`   // root, other
+}
+
 // Resources holds observed hardware resource metrics.
 type Resources struct {
 	CPUCores              int            `json:"cpu_cores" yaml:"cpu_cores"`
@@ -97,7 +111,8 @@ type Resources struct {
 	DiskFreeGB_Ext        int64          `json:"disk_free_gb_ext,omitempty" yaml:"disk_free_gb_ext,omitempty"`
 	GPUs                  []GPUInfo      `json:"gpus,omitempty" yaml:"gpus,omitempty"`
 	GPUUtilPercent        *float64       `json:"gpu_util_percent,omitempty" yaml:"gpu_util_percent,omitempty"`
-	StorageClass          string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown
+	StorageClass          string         `json:"storage_class,omitempty" yaml:"storage_class,omitempty"` // nvme, ssd, hdd, unknown — root only, retained
+	Volumes               []Volume       `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 	BatteryPercent        *int           `json:"battery_percent,omitempty" yaml:"battery_percent,omitempty"`
 	PowerSource           string         `json:"power_source,omitempty" yaml:"power_source,omitempty"`   // ac, battery, unknown
 	ThermalState          string         `json:"thermal_state,omitempty" yaml:"thermal_state,omitempty"` // nominal, fair, serious, critical

@@ -380,6 +380,10 @@ func localResources(ctx context.Context) (*models.Resources, bool) {
 		r.DiskFreeGB_Ext = freeExt
 	}
 
+	if vols := localVolumes(ctx); len(vols) > 0 {
+		r.Volumes = vols
+	}
+
 	// GPU (best-effort, never causes partial)
 	r.GPUs = localGPUs(ctx)
 	if util, ok := localGPUUtilPercent(ctx); ok {
@@ -782,6 +786,31 @@ func parseDFOutputExt(out string) (int64, int64, error) {
 		}
 	}
 	return totalExt / (1024 * 1024), freeExt / (1024 * 1024), nil
+}
+
+func localVolumes(ctx context.Context) []models.Volume {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "df", "-kPl").Output()
+	if err != nil {
+		return nil
+	}
+	local, err := ParseDFVolumes(string(out))
+	if err != nil {
+		local = nil
+	}
+	return mergeVolumes(local, ParseMountNetworkVolumes(localMountTable(ctx)))
+}
+
+func localMountTable(ctx context.Context) string {
+	if data, err := os.ReadFile("/proc/mounts"); err == nil {
+		return string(data)
+	}
+	out, err := exec.CommandContext(ctx, "mount").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 func localGPUs(ctx context.Context) []models.GPUInfo {

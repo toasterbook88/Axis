@@ -356,6 +356,12 @@ Pages inactive:                          100000.
 			"df -kP /": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/disk3s1 3145728 1048576 2097152 34% /
 `},
+			"df -kPl": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/disk3s1 3145728 1048576 2097152 34% /
+/dev/disk4s1 10485760 1048576 9437184 10% /Volumes/Models
+`},
+			`if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`: {out: ""},
+
 			"system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'": {out: "Chipset Model: Apple M3 Max GPU\nVRAM (Total): 32 GB\nMetal: Supported, feature set macOS GPUFamily2 v1\n"},
 			`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {out: "2: en0    inet 192.168.1.10/24 brd 192.168.1.255 scope global en0\n3: en0    inet6 2001:db8::10/64 scope global en0\n"},
 			"command -v git 2>/dev/null":          {out: "/usr/bin/git\n"},
@@ -402,6 +408,16 @@ Pages inactive:                          100000.
 	if facts.Resources.Pressure != "medium" {
 		t.Fatalf("expected medium pressure, got %q", facts.Resources.Pressure)
 	}
+	if len(facts.Resources.Volumes) != 2 {
+		t.Fatalf("volumes=%+v", facts.Resources.Volumes)
+	}
+	if facts.Resources.Volumes[0].Mount != "/" || facts.Resources.Volumes[0].Role != "root" {
+		t.Fatalf("root volume=%+v", facts.Resources.Volumes[0])
+	}
+	if facts.Resources.Volumes[1].Mount != "/Volumes/Models" || facts.Resources.Volumes[1].Role != "other" {
+		t.Fatalf("other volume=%+v", facts.Resources.Volumes[1])
+	}
+
 	if facts.Ollama == nil || !facts.Ollama.Installed {
 		t.Fatalf("expected ollama info, got %+v", facts.Ollama)
 	}
@@ -455,6 +471,11 @@ MemAvailable:   12456780 kB
 			"df -kP /": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/root 3145728 1048576 2097152 34% /
 `},
+			"df -kPl": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root 3145728 1048576 2097152 34% /
+`},
+			`if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`: {out: ""},
+
 			`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {err: fmt.Errorf("no network tool")},
 			OllamaDiscoveryScript: {err: fmt.Errorf("no ollama")},
 		},
