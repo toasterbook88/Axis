@@ -817,8 +817,10 @@ func cloneConfig(source *config.Config) *config.Config {
 }
 
 func preserveOptionalConfig(target, source *config.Config) {
+	target.Agent = source.Agent
 	target.Chat = source.Chat
 	target.AIProviders = source.AIProviders
+
 	target.Inference = source.Inference
 	target.MCPServers = source.MCPServers
 	target.Webhooks = append([]string(nil), source.Webhooks...)

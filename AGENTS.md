@@ -251,7 +251,8 @@ development/recovery path, not a persistence mechanism.
 
 `~/.axis/ai.yaml` — optional inference **backends** and **roles** (see
 `ai.example.yaml` and `docs/runbooks/ai-config.md`). Separate from
-`ai_providers` / `chat.default_model` in `nodes.yaml`.
+`ai_providers` / `agent.default_model` in `nodes.yaml` (`chat.default_model` still accepted).
+
 
 Optional UDP discovery block: `discovery.enabled`, `discovery.udp_port`
 (default 42424), `discovery.beacon_interval_sec` (default 3),

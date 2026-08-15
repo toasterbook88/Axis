@@ -167,7 +167,8 @@ func formatMissingModelError(model string, installed []string) error {
 		available = strings.Join(installed[:4], ", ") + fmt.Sprintf(" (+%d more)", len(installed)-4)
 	}
 
-	return fmt.Errorf("model %q is not available locally\navailable: %s\nre-run with --model %s or set chat.default_model in ~/.axis/nodes.yaml\nor pull it with: ollama pull %s",
+	return fmt.Errorf("model %q is not available locally\navailable: %s\nre-run with --model %s or set agent.default_model in ~/.axis/nodes.yaml\nor pull it with: ollama pull %s",
+
 		model, available, suggest, model)
 }
 
