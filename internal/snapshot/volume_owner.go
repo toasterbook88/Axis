@@ -9,8 +9,13 @@ import (
 
 // JoinNetworkVolumeOwners annotates network volumes with the owning cluster
 // node when Device names a unique hostname or address. Sizes stay 0.
+// Bus, class, removable, and link_mbit are copied from the owner's local row.
 func JoinNetworkVolumeOwners(nodes []models.NodeFacts) {
 	index := buildOwnerIndex(nodes)
+	byName := make(map[string]*models.NodeFacts, len(nodes))
+	for i := range nodes {
+		byName[nodes[i].Name] = &nodes[i]
+	}
 	for i := range nodes {
 		res := nodes[i].Resources
 		if res == nil {
@@ -31,7 +36,32 @@ func JoinNetworkVolumeOwners(nodes []models.NodeFacts) {
 			}
 			v.Owner = matches[0].name
 			v.OwnerMount = matches[0].root
+			copyOwnerObservation(v, byName[v.Owner])
 		}
+	}
+}
+
+func copyOwnerObservation(dst *models.Volume, owner *models.NodeFacts) {
+	if dst == nil || owner == nil || owner.Resources == nil {
+		return
+	}
+	want := dst.OwnerMount
+	if want == "" {
+		want = "/"
+	}
+	for _, src := range owner.Resources.Volumes {
+		if src.Kind == "network" || src.Mount != want {
+			continue
+		}
+		if src.Bus != "" {
+			dst.Bus = src.Bus
+		}
+		if src.Class != "" {
+			dst.Class = src.Class
+		}
+		dst.Removable = src.Removable
+		dst.LinkMbit = src.LinkMbit
+		return
 	}
 }
 
