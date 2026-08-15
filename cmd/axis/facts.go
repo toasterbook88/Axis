@@ -93,6 +93,15 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
 		if r.StorageClass != "" {
 			kv("storage:", r.StorageClass)
 		}
+		if len(r.Volumes) > 0 {
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "  %s\n", ui.Bold("Volumes"))
+			for _, v := range r.Volumes {
+				fmt.Fprintf(out, "    %s %s  %d GB free / %d GB  %s %s %s\n",
+					ui.Green("✓"), v.Mount, v.FreeGB, v.TotalGB, v.Kind, v.Bus, v.Role)
+			}
+		}
+
 		kv("pressure:", formatPressure(r.Pressure))
 		if len(r.GPUs) > 0 {
 			fmt.Fprintln(out)

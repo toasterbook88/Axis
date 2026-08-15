@@ -284,6 +284,15 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 		}
 	}
 
+	if out, err := c.Exec.Run(ctx, "df -kPl"); err == nil {
+		if vols, err := ParseDFVolumes(out); err == nil {
+			r.Volumes = vols
+		}
+	}
+	if out, err := c.Exec.Run(ctx, `if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`); err == nil {
+		r.Volumes = mergeVolumes(r.Volumes, ParseMountNetworkVolumes(out))
+	}
+
 	// GPU (best-effort)
 	var gpuCmd string
 	if osName == "darwin" {

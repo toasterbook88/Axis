@@ -71,6 +71,8 @@ func TestWrapBash_MatchesViaWrapBashEquality(t *testing.T) {
 func TestParseRemoteFactBundle_LinuxCore(t *testing.T) {
 	mem := base64.StdEncoding.EncodeToString([]byte("MemTotal:       16384000 kB\nMemAvailable:   8192000 kB\nMemFree:        4096000 kB\n"))
 	df := base64.StdEncoding.EncodeToString([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 104857600 52428800 52428800 50% /\n"))
+	dfAll := base64.StdEncoding.EncodeToString([]byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 104857600 52428800 52428800 50% /\n/dev/sda1 2097152 1048576 1048576 50% /mnt/models\n"))
+	mounts := base64.StdEncoding.EncodeToString([]byte("192.168.1.249:/home/axis /mnt/foundry nfs4 rw,relatime 0 0\n"))
 	out := `__AXIS_BUNDLE_V1__
 os=Linux
 arch=x86_64
@@ -81,6 +83,8 @@ cpu_model=Test CPU
 meminfo_b64=` + mem + `
 loadavg=0.10 0.20 0.30 1/100 1
 df_b64=` + df + `
+df_all_b64=` + dfAll + `
+mounts_b64=` + mounts + `
 __AXIS_BUNDLE_END__
 `
 	kv, err := parseRemoteFactBundle(out)
@@ -106,6 +110,22 @@ __AXIS_BUNDLE_END__
 	if nf.Resources.DiskTotalGB <= 0 {
 		t.Fatalf("disk=%+v", nf.Resources)
 	}
+	if len(nf.Resources.Volumes) != 3 {
+		t.Fatalf("volumes=%#v", nf.Resources.Volumes)
+	}
+	var sawNFS bool
+	for _, v := range nf.Resources.Volumes {
+		if v.Mount == "/mnt/foundry" {
+			sawNFS = true
+			if v.Kind != "network" || v.TotalGB != 0 || v.Bus != "nfs" {
+				t.Fatalf("nfs volume=%+v", v)
+			}
+		}
+	}
+	if !sawNFS {
+		t.Fatalf("missing nfs volume: %#v", nf.Resources.Volumes)
+	}
+
 }
 
 type fixedExec struct {
