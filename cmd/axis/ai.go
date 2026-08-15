@@ -101,11 +101,13 @@ func aiBackendsCmd() *cobra.Command {
 					if p.ProbedURL != "" && p.ProbedURL != p.BaseURL {
 						displayURL = p.ProbedURL
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-18s %-8s %s",
-						p.Backend, p.Kind, status, displayURL)
+					loc := llmrouter.ViewLocality(config.AIBackendConfig{Node: p.Node, BaseURL: p.BaseURL})
+					fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-6s %-18s %-8s %s",
+						p.Backend, loc, p.Kind, status, displayURL)
 					if p.Node != "" {
 						fmt.Fprintf(cmd.OutOrStdout(), " node=%s", p.Node)
 					}
+
 					if p.Message != "" && status != "ok" {
 						fmt.Fprintf(cmd.OutOrStdout(), " (%s)", p.Message)
 					}

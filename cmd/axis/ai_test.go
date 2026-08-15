@@ -55,6 +55,39 @@ roles:
 	}
 }
 
+func TestAIBackendsPrintsViewLocality(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ai.yaml")
+	body := `
+backends:
+  - name: nemotron
+    kind: openai-compatible
+    base_url: http://127.0.0.1:8081/v1
+    node: some-other-node
+  - name: loop
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := aiCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"backends", "--ai-config", path, "--skip-probe"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("backends: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "nemotron") || !strings.Contains(out, "peer") {
+		t.Fatalf("expected peer locality for named other node:\n%s", out)
+	}
+	if !strings.Contains(out, "loop") || !strings.Contains(out, "here") {
+		t.Fatalf("expected here locality for loopback:\n%s", out)
+	}
+}
+
 func TestAIRouteStrictModelUnlistedExit(t *testing.T) {
 	// Use a local httptest via real ResolveRole is hard from CLI without live ports;
 	// exercise --allow-unlisted path still succeeds with skip-probe.
