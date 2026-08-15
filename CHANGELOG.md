@@ -5,6 +5,8 @@
 * **Facts:** Inventory every mounted volume (root plus other local mounts), not just root + `_Ext` totals. Virtual filesystems (tmpfs, overlay, docker, snap/loop, Darwin synthetic, 0 GB images) are omitted. Local sizes come from `df -kPl` (never stats a remote server). CIFS/NFS/SMB rows come from `mount`/`/proc/mounts` with sizes left 0. Bus/class inferred from the device path only; role is `root` or `other`. `disk_total_gb` is still the root filesystem.
 * **Facts:** Join network volumes to the owning cluster node from `Device` (CIFS `//user@host/share`, NFS `ip:/export`, mDNS `._smb._tcp.local`). Sets `owner` + `owner_mount`; does not copy sizes (share stays 0/0). Ambiguous hosts stay unresolved.
 * **Facts:** Observe Linux block bus/class from sysfs (`rotational`, `removable`, USB `device/speed` in Mbit). Path inference remains the fallback. Network volumes are not probed.
+* **Facts:** After owner join, copy the owning node's observed bus/class/removable/link_mbit onto the network row. Sizes stay 0.
+
 
 
 ### Maintenance

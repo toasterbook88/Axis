@@ -79,3 +79,38 @@ func TestJoinNetworkVolumeOwnersSkipsAmbiguousHost(t *testing.T) {
 		t.Fatalf("ambiguous host must stay unresolved, got %q", viewer.Resources.Volumes[0].Owner)
 	}
 }
+
+func TestJoinNetworkVolumeOwnersCopiesOwnerObservation(t *testing.T) {
+	storage := models.NodeFacts{
+		Name:      "storage",
+		Hostname:  "storage",
+		Addresses: []models.NetworkAddress{{Kind: "ipv4", Address: "192.0.2.10"}},
+		Resources: &models.Resources{
+			Volumes: []models.Volume{{
+				Device: "/dev/sda2", Mount: "/", TotalGB: 1000, FreeGB: 800,
+				Kind: "local", Role: "root", Bus: "usb", Class: "ssd",
+				Removable: true, LinkMbit: 5000,
+			}},
+		},
+	}
+	viewer := models.NodeFacts{
+		Name: "viewer",
+		Resources: &models.Resources{
+			Volumes: []models.Volume{{
+				Device: "//nas@STORAGE._smb._tcp.local/share",
+				Mount:  "/Volumes/share", Kind: "network", Bus: "cifs", Class: "network",
+			}},
+		},
+	}
+	JoinNetworkVolumeOwners([]models.NodeFacts{storage, viewer})
+	got := viewer.Resources.Volumes[0]
+	if got.Owner != "storage" || got.Bus != "usb" || got.Class != "ssd" || !got.Removable || got.LinkMbit != 5000 {
+		t.Fatalf("observation copy: %+v", got)
+	}
+	if got.TotalGB != 0 || got.FreeGB != 0 {
+		t.Fatalf("must not copy sizes: %+v", got)
+	}
+	if got.Kind != "network" {
+		t.Fatalf("kind must stay network: %+v", got)
+	}
+}
