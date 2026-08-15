@@ -97,9 +97,17 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
 			fmt.Fprintln(out)
 			fmt.Fprintf(out, "  %s\n", ui.Bold("Volumes"))
 			for _, v := range r.Volumes {
-				fmt.Fprintf(out, "    %s %s  %d GB free / %d GB  %s %s %s\n",
+				line := fmt.Sprintf("    %s %s  %d GB free / %d GB  %s %s %s",
 					ui.Green("✓"), v.Mount, v.FreeGB, v.TotalGB, v.Kind, v.Bus, v.Role)
+				if v.Owner != "" {
+					line += "  owner " + v.Owner
+					if v.OwnerMount != "" {
+						line += ":" + v.OwnerMount
+					}
+				}
+				fmt.Fprintln(out, line)
 			}
+
 		}
 
 		kv("pressure:", formatPressure(r.Pressure))

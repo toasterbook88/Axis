@@ -77,16 +77,19 @@ func (g GPUInfo) HasCapability(cap string) bool {
 
 // Volume is one mounted filesystem Axis can name. Sizes are observed from df.
 // Bus/class are inferred from the device path only (nvme/mmc/cifs/nfs/unknown).
-// Kind is "local" or "network". Role is "root" or "other" — mount-path is not hardware.
+// Kind is "local" or "network". Role is "root" or "other" — mount path is not hardware.
+// Owner/OwnerMount are filled after collect by joining a network Device to a cluster node.
 type Volume struct {
-	Device  string `json:"device" yaml:"device"`
-	Mount   string `json:"mount" yaml:"mount"`
-	TotalGB int64  `json:"total_gb" yaml:"total_gb"`
-	FreeGB  int64  `json:"free_gb" yaml:"free_gb"`
-	Kind    string `json:"kind,omitempty" yaml:"kind,omitempty"`
-	Bus     string `json:"bus,omitempty" yaml:"bus,omitempty"`     // nvme, mmc, cifs, nfs, unknown
-	Class   string `json:"class,omitempty" yaml:"class,omitempty"` // nvme, network, unknown
-	Role    string `json:"role,omitempty" yaml:"role,omitempty"`   // root, other
+	Device     string `json:"device" yaml:"device"`
+	Mount      string `json:"mount" yaml:"mount"`
+	TotalGB    int64  `json:"total_gb" yaml:"total_gb"`
+	FreeGB     int64  `json:"free_gb" yaml:"free_gb"`
+	Kind       string `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Bus        string `json:"bus,omitempty" yaml:"bus,omitempty"`     // nvme, mmc, cifs, nfs, unknown
+	Class      string `json:"class,omitempty" yaml:"class,omitempty"` // nvme, network, unknown
+	Role       string `json:"role,omitempty" yaml:"role,omitempty"`   // root, other
+	Owner      string `json:"owner,omitempty" yaml:"owner,omitempty"`
+	OwnerMount string `json:"owner_mount,omitempty" yaml:"owner_mount,omitempty"`
 }
 
 // Resources holds observed hardware resource metrics.
