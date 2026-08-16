@@ -113,18 +113,6 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 	})
 	defer restoreCache()
 
-	// Stub the local AI backend probes so the test does not depend on which
-	// inference binaries happen to be installed on the host running it.
-	notInstalled := func(context.Context) doctorBackendStatus {
-		return doctorBackendStatus{Installed: false}
-	}
-	restoreOllama := stubDoctorOllama(t, notInstalled)
-	defer restoreOllama()
-	restoreLlama := stubDoctorLlamaServer(t, notInstalled)
-	defer restoreLlama()
-	restoreMLX := stubDoctorMLX(t, notInstalled)
-	defer restoreMLX()
-
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := doctorCmd()
 		cmd.SetArgs(nil)
