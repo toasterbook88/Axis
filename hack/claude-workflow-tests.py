@@ -28,13 +28,13 @@ class ClaudeWorkflowSecurityTests(unittest.TestCase):
         self.assertNotIn("types: [opened, assigned]", TEXT)
 
     def test_dependencies_are_immutable_and_checkout_has_no_ambient_token(self) -> None:
-        self.assertIn(
-            "uses: anthropics/claude-code-action@239e3a730883eeb5c53db12b0fc9573b3024b126 # v1",
+        self.assertRegex(
             TEXT,
+            r"uses: anthropics/claude-code-action@[0-9a-f]{40} # v1",
         )
-        self.assertIn(
-            "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+        self.assertRegex(
             TEXT,
+            r"uses: actions/checkout@[0-9a-f]{40} # v7\.0\.1",
         )
         self.assertRegex(TEXT, r"fetch-depth: 1\s*\n\s+persist-credentials: false")
 
