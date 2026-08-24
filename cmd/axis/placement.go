@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -64,7 +63,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
 				return err
 			}
 

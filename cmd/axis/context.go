@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -34,14 +33,14 @@ func contextCmd() *cobra.Command {
 				if st == nil {
 					return err
 				}
-				printWarning(err)
+				if writeErr := printWarning(cmd.ErrOrStderr(), err); writeErr != nil {
+					return writeErr
+				}
 			}
 			if st != nil {
 				state.Maintain(st)
 			}
-			out, _ := json.MarshalIndent(st, "", "  ")
-			fmt.Println(string(out))
-			return nil
+			return printOutput(cmd.OutOrStdout(), st, "json")
 		},
 	})
 
@@ -432,7 +431,7 @@ func runContextPrune(w io.Writer, targetNames []string, apply bool) error {
 // or a learned skill's NodeCount would otherwise be reported as nothing to
 // prune while its records stayed behind — a selection that silently
 // under-reports what it missed is worse than one that offers nothing.
-func unknownNodeNames() ([]string, error) {
+func unknownNodeNames(errOut io.Writer) ([]string, error) {
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
 		return nil, err
@@ -459,7 +458,9 @@ func unknownNodeNames() ([]string, error) {
 		if st == nil {
 			return nil, err
 		}
-		printWarning(err)
+		if writeErr := printWarning(errOut, err); writeErr != nil {
+			return nil, writeErr
+		}
 	}
 	for name := range st.Nodes {
 		note(name)
@@ -487,7 +488,9 @@ func unknownNodeNames() ([]string, error) {
 		if sk == nil {
 			return nil, err
 		}
-		printWarning(err)
+		if writeErr := printWarning(errOut, err); writeErr != nil {
+			return nil, writeErr
+		}
 	}
 	for _, s := range sk.Skills {
 		note(s.PreferredNode)
@@ -527,7 +530,7 @@ func contextPruneCmd() *cobra.Command {
 			targets := append([]string(nil), nodeNames...)
 
 			if unknownNodes {
-				found, err := unknownNodeNames()
+				found, err := unknownNodeNames(cmd.ErrOrStderr())
 				if err != nil {
 					return err
 				}

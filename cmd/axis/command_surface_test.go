@@ -767,18 +767,12 @@ func TestRemoteExecPrefixIncludesQuotedEnv(t *testing.T) {
 }
 
 func TestPrintWarningWritesStderr(t *testing.T) {
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		printWarning(errors.New("careful"))
-		return nil
-	})
-	if err != nil {
+	var stderr strings.Builder
+	if err := printWarning(&stderr, errors.New("careful")); err != nil {
 		t.Fatalf("printWarning: %v", err)
 	}
-	if stdout != "" {
-		t.Fatalf("expected no stdout, got %q", stdout)
-	}
-	if !strings.Contains(stderr, "warning: careful") {
-		t.Fatalf("expected warning on stderr, got %q", stderr)
+	if !strings.Contains(stderr.String(), "warning: careful") {
+		t.Fatalf("expected warning on stderr, got %q", stderr.String())
 	}
 }
 

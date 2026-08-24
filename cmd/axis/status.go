@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -108,7 +107,7 @@ func statusCmd() *cobra.Command {
 				loadStatusLiveSnapshot,
 			)
 			if err != nil {
-				ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
+				ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 				return err
 			}
 

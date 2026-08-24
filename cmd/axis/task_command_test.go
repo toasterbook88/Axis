@@ -278,18 +278,12 @@ func TestPrintContextBlockWritesOutput(t *testing.T) {
 		Summary: models.ClusterSummary{TotalNodes: 1, TotalFreeRAMMB: 4096},
 	}
 
-	stdout, stderr, err := captureProcessOutput(t, func() error {
-		printContextBlock(snap, models.TaskRequirements{}, "analyze a git repo", "live", nil, nil)
-		return nil
-	})
-	if err != nil {
+	var stdout strings.Builder
+	if err := printContextBlock(&stdout, snap, models.TaskRequirements{}, "analyze a git repo", "live", nil, nil); err != nil {
 		t.Fatalf("printContextBlock: %v", err)
 	}
-	if stderr != "" {
-		t.Fatalf("expected no stderr, got %q", stderr)
-	}
-	if !strings.Contains(stdout, "AXIS CLUSTER CONTEXT") {
-		t.Fatalf("expected context header, got %q", stdout)
+	if !strings.Contains(stdout.String(), "AXIS CLUSTER CONTEXT") {
+		t.Fatalf("expected context header, got %q", stdout.String())
 	}
 }
 
