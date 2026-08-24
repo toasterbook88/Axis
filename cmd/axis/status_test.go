@@ -105,6 +105,52 @@ func TestCollectStatusSnapshotCachedOnlyFailsWhenCacheFails(t *testing.T) {
 	}
 }
 
+func TestStatusWatchRejectsUnsupportedOutputBeforeCollection(t *testing.T) {
+	previous := loadStatusLiveSnapshot
+	t.Cleanup(func() { loadStatusLiveSnapshot = previous })
+	loadStatusLiveSnapshot = func(context.Context) (*models.ClusterSnapshot, string, error) {
+		t.Fatal("status collection must not run after invalid watch options")
+		return nil, "", nil
+	}
+
+	for _, format := range []string{"json", "yaml"} {
+		t.Run(format, func(t *testing.T) {
+			cmd := statusCmd()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--watch", "--format", format})
+
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "--watch only supports --format text") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestStatusWatchRejectsNonPositiveIntervalBeforeCollection(t *testing.T) {
+	previous := loadStatusLiveSnapshot
+	t.Cleanup(func() { loadStatusLiveSnapshot = previous })
+	loadStatusLiveSnapshot = func(context.Context) (*models.ClusterSnapshot, string, error) {
+		t.Fatal("status collection must not run after invalid watch options")
+		return nil, "", nil
+	}
+
+	for _, interval := range []string{"0s", "-1s"} {
+		t.Run(interval, func(t *testing.T) {
+			cmd := statusCmd()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--watch", "--watch-interval", interval})
+
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "--watch-interval must be greater than zero") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 // --- Resident model display tests ---
 
 func TestPrintResidentModelsSectionEmpty(t *testing.T) {

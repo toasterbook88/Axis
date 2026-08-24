@@ -29,6 +29,38 @@ func TestAICommandSurfaceWiresSubcommands(t *testing.T) {
 	}
 }
 
+func TestAIEmptyInventoriesHonorStructuredFormat(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing-ai.yaml")
+	tests := []struct {
+		name       string
+		command    string
+		format     string
+		wantOutput string
+	}{
+		{name: "backends json", command: "backends", format: "json", wantOutput: "[]\n"},
+		{name: "backends yaml", command: "backends", format: "yaml", wantOutput: "[]\n"},
+		{name: "roles json", command: "roles", format: "json", wantOutput: "{}\n"},
+		{name: "roles yaml", command: "roles", format: "yaml", wantOutput: "{}\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := aiCmd()
+			var stdout bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{tt.command, "--ai-config", missingPath, "--format", tt.format})
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if got := stdout.String(); got != tt.wantOutput {
+				t.Fatalf("output = %q, want %q", got, tt.wantOutput)
+			}
+		})
+	}
+}
+
 func TestAIRouteSkipProbeText(t *testing.T) {
 	stubAINodeConfig(t, nil)
 	dir := t.TempDir()
