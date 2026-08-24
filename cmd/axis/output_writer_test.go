@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/cortex"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
@@ -205,6 +206,41 @@ func TestContextAndSkillsCommandsPropagateWriterFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.run(rejectingOutputWriter{err: wantErr})
 			if !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
+	}
+}
+
+func TestCortexRenderersPropagateWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	tests := []struct {
+		name string
+		run  func(rejectingOutputWriter) error
+	}{
+		{
+			name: "status",
+			run: func(w rejectingOutputWriter) error {
+				return printCortexStatus(w, &cortex.HealthResponse{Status: "healthy"})
+			},
+		},
+		{
+			name: "events",
+			run: func(w rejectingOutputWriter) error {
+				return printCortexEvents(w, []cortex.Event{{Type: "deploy", Payload: []byte(`"ok"`)}})
+			},
+		},
+		{
+			name: "recall",
+			run: func(w rejectingOutputWriter) error {
+				return printCortexRecall(w, "query", []cortex.MemoryHit{{Content: "result", Score: 0.9}})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(rejectingOutputWriter{err: wantErr}); !errors.Is(err, wantErr) {
 				t.Fatalf("error = %v, want writer failure", err)
 			}
 		})
