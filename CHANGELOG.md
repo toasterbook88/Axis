@@ -7,6 +7,7 @@
 ### Bug Fixes
 
 * **Model:** Fail closed when an observed remote node has no matching `nodes.yaml` entry instead of running the model lifecycle command on the local machine. Snapshot-confirmed local nodes remain executable without an SSH seed.
+* **Model:** `axis model stop` uses `fuser` when available and falls back to `lsof` on platforms such as macOS. It remains idempotent when no process owns the port but now reports an error instead of claiming success when neither port tool exists.
 * **AI:** Resolve each backend's `node` as the documented `nodes.yaml` name before classifying locality or choosing between `base_url` and `advertise_url`. Logical node names no longer make an on-box backend appear to be a peer or probe its off-box URL.
 
 
