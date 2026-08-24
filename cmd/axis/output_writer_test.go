@@ -36,6 +36,20 @@ func TestPrintOutputPropagatesWriterFailures(t *testing.T) {
 	}
 }
 
+func TestFactsTextPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	t.Cleanup(stubCollectLocalFacts(t, func(context.Context, string) (*models.NodeFacts, error) {
+		return &models.NodeFacts{Name: "test-host", Status: models.StatusComplete}, nil
+	}))
+
+	cmd := factsCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&strings.Builder{})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
 func TestContextAndSkillsCommandsPropagateWriterFailures(t *testing.T) {
 	t.Setenv("AXIS_HOME", t.TempDir())
 	wantErr := errors.New("writer unavailable")

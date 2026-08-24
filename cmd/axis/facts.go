@@ -48,8 +48,7 @@ func factsCmd() *cobra.Command {
 			case "json", "yaml":
 				return printOutput(cmd.OutOrStdout(), nf, format)
 			default:
-				printFactsText(cmd, nf, verbose)
-				return nil
+				return printFactsText(cmd, nf, verbose)
 			}
 		},
 	}
@@ -59,8 +58,9 @@ func factsCmd() *cobra.Command {
 	return cmd
 }
 
-func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
-	out := cmd.OutOrStdout()
+func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) error {
+	var rendered strings.Builder
+	out := &rendered
 
 	fmt.Fprintf(out, "%s %s\n\n", ui.Bold("NODE FACTS"), ui.Cyan(nf.Name))
 
@@ -196,6 +196,8 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) {
 	}
 
 	fmt.Fprintf(out, "\n  %s %s\n", ui.Dim("collected:"), nf.CollectedAt.Format(time.RFC3339))
+	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+	return err
 }
 
 func formatThermal(state string) string {
