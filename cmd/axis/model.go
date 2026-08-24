@@ -30,7 +30,7 @@ var loadModelConfig = func() (*config.Config, error) {
 }
 
 type modelProcessRunner interface {
-	Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, argv []string) error
+	Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error
 	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
 	Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
 }
@@ -96,7 +96,7 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if err != nil {
 		return err
 	}
-	if err := runner.Start(ctx, nf, cfgNode, plan.Argv); err != nil {
+	if err := runner.Start(ctx, nf, cfgNode, plan); err != nil {
 		return err
 	}
 	if err := runner.Probe(ctx, nf, cfgNode, plan.Port); err != nil {
@@ -157,11 +157,11 @@ func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *conf
 
 type liveModelRunner struct{}
 
-func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, argv []string) error {
-	if len(argv) == 0 {
+func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error {
+	if len(plan.Argv) == 0 {
 		return fmt.Errorf("empty argv")
 	}
-	script := shellStart(argv)
+	script := shellStart(plan.Argv, plan.Port)
 	return runOnNode(ctx, node, cfgNode, script)
 }
 
@@ -171,7 +171,7 @@ func (liveModelRunner) Stop(ctx context.Context, node models.NodeFacts, cfgNode 
 }
 
 func (liveModelRunner) Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error {
-	script := fmt.Sprintf("curl -fsS --max-time 5 http://127.0.0.1:%d/v1/models >/dev/null", port)
+	script := shellProbe(port)
 	var last error
 	for i := 0; i < 10; i++ {
 		if err := runOnNode(ctx, node, cfgNode, script); err == nil {
@@ -191,32 +191,59 @@ func (liveModelRunner) Probe(ctx context.Context, node models.NodeFacts, cfgNode
 	return last
 }
 
-func shellStart(argv []string) string {
+func shellStart(argv []string, port int) string {
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
 		quoted[i] = shellQuote(a)
 	}
-	return fmt.Sprintf("nohup %s >/dev/null 2>&1 &", strings.Join(quoted, " "))
+	return shellListenerLookup(port) + fmt.Sprintf(
+		"if test -n \"$_axis_pids\"; then "+
+			"echo \"refusing to start llama-server: port %d already has listener pid(s) $_axis_pids\" >&2; exit 1; fi; "+
+			"nohup %s >/dev/null 2>&1 &",
+		port, strings.Join(quoted, " "),
+	)
 }
 
 func shellStop(port int) string {
+	return shellListenerLookup(port) +
+		"if test -z \"$_axis_pids\"; then exit 0; fi; " +
+		shellLlamaServerOwnerGuard(port) +
+		"for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done"
+}
+
+func shellProbe(port int) string {
+	return shellListenerLookup(port) + fmt.Sprintf(
+		"if test -z \"$_axis_pids\"; then echo \"no listener on port %d\" >&2; exit 1; fi; ",
+		port,
+	) + shellLlamaServerOwnerGuard(port) + fmt.Sprintf(
+		"curl -fsS --max-time 5 http://127.0.0.1:%d/v1/models >/dev/null",
+		port,
+	)
+}
+
+func shellLlamaServerOwnerGuard(port int) string {
+	return fmt.Sprintf(
+		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; exit 127; fi; "+
+			"for _axis_pid in $_axis_pids; do "+
+			"case \"$_axis_pid\" in ''|*[!0-9]*) echo \"refusing invalid listener pid $_axis_pid\" >&2; exit 1;; esac; "+
+			"_axis_cmd=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_cmd=${_axis_cmd##*/}; "+
+			"if test \"$_axis_cmd\" != llama-server; then "+
+			"echo \"refusing port %d: pid $_axis_pid is $_axis_cmd, not llama-server\" >&2; exit 1; fi; "+
+			"done; ",
+		port,
+	)
+}
+
+func shellListenerLookup(port int) string {
 	return fmt.Sprintf(
 		"if command -v fuser >/dev/null 2>&1; then "+
 			"_axis_pids=$(fuser %d/tcp 2>/dev/null); _axis_rc=$?; "+
 			"elif command -v lsof >/dev/null 2>&1; then "+
 			"_axis_pids=$(lsof -nP -tiTCP:%d -sTCP:LISTEN); _axis_rc=$?; "+
-			"else echo 'axis model stop requires fuser or lsof' >&2; exit 127; fi; "+
+			"else echo 'axis model requires fuser or lsof to inspect port ownership' >&2; exit 127; fi; "+
 			"if test \"$_axis_rc\" -gt 1; then exit \"$_axis_rc\"; fi; "+
-			"if test -z \"$_axis_pids\"; then exit 0; fi; "+
-			"if ! command -v ps >/dev/null 2>&1; then echo 'axis model stop requires ps to verify process ownership' >&2; exit 127; fi; "+
-			"for _axis_pid in $_axis_pids; do "+
-			"case \"$_axis_pid\" in ''|*[!0-9]*) echo \"refusing to stop invalid listener pid $_axis_pid\" >&2; exit 1;; esac; "+
-			"_axis_cmd=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_cmd=${_axis_cmd##*/}; "+
-			"if test \"$_axis_cmd\" != llama-server; then "+
-			"echo \"refusing to stop port %d: pid $_axis_pid is $_axis_cmd, not llama-server\" >&2; exit 1; fi; "+
-			"done; "+
-			"for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done",
-		port, port, port,
+			"true; ",
+		port, port,
 	)
 }
 
