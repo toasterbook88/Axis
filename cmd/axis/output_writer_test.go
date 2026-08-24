@@ -70,6 +70,21 @@ func TestScriptsListPropagatesWriterFailures(t *testing.T) {
 	}
 }
 
+func TestSummaryCommandPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	t.Cleanup(stubStatusRuntimeLoader(t, func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{Snapshot: &models.ClusterSnapshot{}}, nil
+	}))
+
+	cmd := summaryCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&strings.Builder{})
+	cmd.SetArgs([]string{"--cached=false"})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
 func TestContextAndSkillsCommandsPropagateWriterFailures(t *testing.T) {
 	t.Setenv("AXIS_HOME", t.TempDir())
 	wantErr := errors.New("writer unavailable")
