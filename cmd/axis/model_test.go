@@ -109,3 +109,45 @@ func TestRunModelStopRequiresPort(t *testing.T) {
 		t.Fatal("expected port error")
 	}
 }
+
+func TestResolveModelNodeRefusesUnconfiguredRemoteNode(t *testing.T) {
+	stubModelSnapshot(t, testSnap())
+	stubModelConfig(t, &config.Config{})
+
+	_, _, err := resolveModelNode(context.Background(), "storage")
+	if err == nil || !strings.Contains(err.Error(), "no configuration entry") {
+		t.Fatalf("expected unconfigured remote-node error, got %v", err)
+	}
+}
+
+func TestResolveModelNodeAllowsUnconfiguredLocalNode(t *testing.T) {
+	snap := testSnap()
+	snap.Nodes[0].Hostname = "127.0.0.1"
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{})
+
+	node, cfgNode, err := resolveModelNode(context.Background(), "storage")
+	if err != nil {
+		t.Fatalf("resolve local node: %v", err)
+	}
+	if node.Name != "storage" || cfgNode != nil {
+		t.Fatalf("node=%+v cfgNode=%+v", node, cfgNode)
+	}
+}
+
+func TestRunOnNodeRefusesUnconfiguredRemoteNode(t *testing.T) {
+	node := models.NodeFacts{Name: "remote-node", Hostname: "remote-node.invalid"}
+
+	err := runOnNode(context.Background(), node, nil, "true")
+	if err == nil || !strings.Contains(err.Error(), "no configuration entry") {
+		t.Fatalf("expected unconfigured remote-node error, got %v", err)
+	}
+}
+
+func TestRunOnNodeAllowsUnconfiguredLocalNode(t *testing.T) {
+	node := models.NodeFacts{Name: "local-node", Hostname: "127.0.0.1"}
+
+	if err := runOnNode(context.Background(), node, nil, "true"); err != nil {
+		t.Fatalf("run local node: %v", err)
+	}
+}

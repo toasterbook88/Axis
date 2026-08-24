@@ -149,7 +149,10 @@ func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *conf
 			return *nf, &cfg.Nodes[i], nil
 		}
 	}
-	return *nf, nil, nil
+	if models.IsLocalNode(*nf) {
+		return *nf, nil, nil
+	}
+	return *nf, nil, fmt.Errorf("node %s has no configuration entry", name)
 }
 
 type liveModelRunner struct{}
@@ -201,10 +204,13 @@ func shellQuote(s string) string {
 }
 
 func runOnNode(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, script string) error {
-	if models.IsLocalNode(node) || cfgNode == nil {
+	if models.IsLocalNode(node) {
 		ex := transport.NewLocalExecutor()
 		_, err := ex.Run(ctx, script)
 		return err
+	}
+	if cfgNode == nil {
+		return fmt.Errorf("node %s has no configuration entry", node.Name)
 	}
 	spec := cfgNode.SSHDialSpec()
 	ex := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
