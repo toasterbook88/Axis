@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -165,6 +166,35 @@ func TestRefreshDaemonCachePostsToEndpoint(t *testing.T) {
 	}
 	if !sawPost {
 		t.Fatal("expected refresh endpoint to be called")
+	}
+}
+
+func TestDaemonCacheMutationsPropagateWriterFailureAfterPosting(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	for _, action := range []string{"invalidate", "refresh"} {
+		t.Run(action, func(t *testing.T) {
+			t.Setenv("AXIS_HOME", t.TempDir())
+			var sawPost bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/"+action {
+					t.Fatalf("request = %s %s, want POST /%s", r.Method, r.URL.Path, action)
+				}
+				sawPost = true
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+
+			cmd := daemonCmd()
+			cmd.SetOut(rejectingOutputWriter{err: wantErr})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--cache-addr", server.URL, action})
+			if err := cmd.Execute(); !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+			if !sawPost {
+				t.Fatal("cache mutation did not complete before reporting failure")
+			}
+		})
 	}
 }
 

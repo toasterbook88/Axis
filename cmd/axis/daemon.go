@@ -111,8 +111,8 @@ func daemonCmd() *cobra.Command {
 			if err := invalidateDaemonCache(ctx, cacheAddr); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "AXIS daemon cache invalidated")
-			return nil
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), "AXIS daemon cache invalidated")
+			return err
 		},
 	})
 
@@ -126,8 +126,8 @@ func daemonCmd() *cobra.Command {
 			if err := refreshDaemonCache(ctx, cacheAddr); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "AXIS daemon cache refreshed")
-			return nil
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), "AXIS daemon cache refreshed")
+			return err
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
