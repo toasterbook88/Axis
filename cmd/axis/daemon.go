@@ -149,8 +149,9 @@ func daemonStartCmd() *cobra.Command {
 	var pprof bool
 
 	cmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start the local AXIS daemon HTTP API with background snapshot refresh",
+		Use:     "start",
+		Short:   "Start the local AXIS daemon HTTP API with background snapshot refresh",
+		PreRunE: validatePositiveDuration("refresh", &refreshInterval),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval, pprof)
 		},

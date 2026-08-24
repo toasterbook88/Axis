@@ -33,6 +33,7 @@ func statusCmd() *cobra.Command {
 	var watch bool
 	var watchInterval time.Duration
 	validateFormat := validateOutputFormat(&format, "text", "json", "yaml")
+	validateWatchInterval := validatePositiveDuration("watch-interval", &watchInterval)
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -41,14 +42,11 @@ func statusCmd() *cobra.Command {
 			if err := validateFormat(cmd, args); err != nil {
 				return err
 			}
-			if !watch {
-				return nil
+			if err := validateWatchInterval(cmd, args); err != nil {
+				return err
 			}
-			if format != "text" {
+			if watch && format != "text" {
 				return fmt.Errorf("--watch only supports --format text")
-			}
-			if watchInterval <= 0 {
-				return fmt.Errorf("--watch-interval must be greater than zero")
 			}
 			return nil
 		},

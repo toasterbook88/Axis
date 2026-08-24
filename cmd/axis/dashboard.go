@@ -25,8 +25,9 @@ func summaryCmd() *cobra.Command {
 	var watchInterval time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "summary",
-		Short: "Visual dashboard of cluster health and resources",
+		Use:     "summary",
+		Short:   "Visual dashboard of cluster health and resources",
+		PreRunE: validatePositiveDuration("watch-interval", &watchInterval),
 		Long: `One-screen dashboard of the fleet. Not the node table (that is axis cluster status).
 
 Uses the daemon snapshot cache by default. For a live collect: axis summary --cached=false.

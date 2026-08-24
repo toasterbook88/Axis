@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -52,5 +53,14 @@ func validateOutputFormat(format *string, allowed ...string) func(*cobra.Command
 			}
 		}
 		return fmt.Errorf("invalid --format %q (expected one of: %s)", *format, strings.Join(allowed, ", "))
+	}
+}
+
+func validatePositiveDuration(flagName string, value *time.Duration) func(*cobra.Command, []string) error {
+	return func(_ *cobra.Command, _ []string) error {
+		if *value <= 0 {
+			return fmt.Errorf("--%s must be greater than zero", flagName)
+		}
+		return nil
 	}
 }

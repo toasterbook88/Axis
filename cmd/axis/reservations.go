@@ -459,11 +459,18 @@ func reservationsDoctorCmd() *cobra.Command {
 	var format string
 	var staleWindow time.Duration
 	var cacheAddr string
+	validateFormat := validateOutputFormat(&format, "text", "json")
+	validateStaleWindow := validatePositiveDuration("stale-window", &staleWindow)
 
 	cmd := &cobra.Command{
-		Use:     "doctor",
-		Short:   "Diagnose reservation inconsistencies, stale leases, and memory leaks",
-		PreRunE: validateOutputFormat(&format, "text", "json"),
+		Use:   "doctor",
+		Short: "Diagnose reservation inconsistencies, stale leases, and memory leaks",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(cmd, args); err != nil {
+				return err
+			}
+			return validateStaleWindow(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReservationsDoctor(cmd, fix, format, staleWindow, cacheAddr)
 		},
@@ -478,6 +485,9 @@ func reservationsDoctorCmd() *cobra.Command {
 }
 
 func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWindow time.Duration, cacheAddr string) error {
+	if staleWindow <= 0 {
+		return fmt.Errorf("--stale-window must be greater than zero")
+	}
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -574,9 +584,11 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 		}
 		defer ledger.UnlockFile()
 
-		// Load ledger (this automatically reclaims stale/expired entries!)
-		if err := ledger.Load(); err != nil {
-			return fmt.Errorf("loading reservation ledger: %w", err)
+		// Load the exact ledger state without default-threshold reconciliation.
+		// Findings above use the operator's --stale-window, so remediation must
+		// release precisely those entries rather than applying ledger defaults.
+		if err := ledger.LoadReadOnly(); err != nil {
+			return fmt.Errorf("loading reservation ledger for repair: %w", err)
 		}
 
 		// Re-fetch remaining entries to see what is left to release manually
@@ -588,16 +600,15 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 		// Go through our findings and perform release
 		for _, f := range findings {
 			switch f.Type {
-			case "expired", "stale":
-				// These were automatically reclaimed by ledger.Load()
-				fixed = append(fixed, f)
-			case "orphaned":
-				// Check if still in ledger
-				if remainingMap[f.EntryID] {
-					if err := ledger.Release(f.EntryID); err == nil {
-						fixed = append(fixed, f)
-					}
+			case "expired", "stale", "orphaned":
+				if !remainingMap[f.EntryID] {
+					continue
 				}
+				if err := ledger.Release(f.EntryID); err != nil {
+					return fmt.Errorf("releasing %s reservation %q: %w", f.Type, f.EntryID, err)
+				}
+				delete(remainingMap, f.EntryID)
+				fixed = append(fixed, f)
 			}
 		}
 	}
