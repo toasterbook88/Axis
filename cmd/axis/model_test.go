@@ -96,6 +96,23 @@ func TestRunModelStartUsesPlanAndRunner(t *testing.T) {
 	}
 }
 
+func TestRunModelStartPropagatesWriterFailureAfterStarting(t *testing.T) {
+	stubModelSnapshot(t, testSnap())
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	runner := &fakeModelRunner{}
+	wantErr := errors.New("writer unavailable")
+	cmd := modelStartCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+
+	err := runModelStart(context.Background(), cmd, "storage", "/mnt/models/a.gguf", 8081, runner)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	if len(runner.started) != 1 || len(runner.probed) != 1 {
+		t.Fatalf("model lifecycle did not complete before reporting failure: %+v", runner)
+	}
+}
+
 func TestRunModelStartRefusesNetworkPath(t *testing.T) {
 	snap := testSnap()
 	snap.Nodes[0].Resources.Volumes = []models.Volume{{Mount: "/mnt/nas", Kind: "network"}}
@@ -119,6 +136,23 @@ func TestRunModelStopRequiresValidPort(t *testing.T) {
 		if len(runner.stopped) != 0 {
 			t.Fatalf("port %d reached runner: %#v", port, runner.stopped)
 		}
+	}
+}
+
+func TestRunModelStopPropagatesWriterFailureAfterStopping(t *testing.T) {
+	stubModelSnapshot(t, testSnap())
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	runner := &fakeModelRunner{}
+	wantErr := errors.New("writer unavailable")
+	cmd := modelStopCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+
+	err := runModelStop(context.Background(), cmd, "storage", 8081, runner)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	if len(runner.stopped) != 1 || runner.stopped[0] != 8081 {
+		t.Fatalf("model stop did not complete before reporting failure: %+v", runner)
 	}
 }
 
