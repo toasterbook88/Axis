@@ -187,9 +187,14 @@ func observationsInspectCmd() *cobra.Command {
 				// Allow lookup by prefix for convenience.
 				for k, obs := range st.Observations {
 					if strings.HasPrefix(k, key) {
+						if found != nil {
+							return ExitCodeError{
+								Code:    ExitErrGeneric,
+								Message: fmt.Sprintf("observation prefix %q is ambiguous", key),
+							}
+						}
 						obsCopy := obs
 						found = &obsCopy
-						break
 					}
 				}
 			}

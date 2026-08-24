@@ -267,6 +267,27 @@ func TestObservationsInspectCmdPrefixMatch(t *testing.T) {
 	}
 }
 
+func TestObservationsInspectCmdRejectsAmbiguousPrefix(t *testing.T) {
+	st := &state.ClusterState{
+		Observations: map[string]models.ExecutionObservation{
+			"abc123-first":  {Scope: models.ObservationScope{Node: "alpha"}},
+			"abc123-second": {Scope: models.ObservationScope{Node: "beta"}},
+		},
+	}
+	restore := stubObservationsState(t, st, nil)
+	defer restore()
+
+	cmd := observationsInspectCmd()
+	cmd.SetArgs([]string{"abc123"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("error = %v, want ambiguous prefix error", err)
+	}
+	if code := ExitCode(err); code != ExitErrGeneric {
+		t.Fatalf("exit code = %d, want %d", code, ExitErrGeneric)
+	}
+}
+
 func TestRenderObservationTable(t *testing.T) {
 	entries := []models.ExecutionObservation{
 		{
