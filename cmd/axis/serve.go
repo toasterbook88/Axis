@@ -96,8 +96,9 @@ func serveCmd() *cobra.Command {
 	var pprof bool
 
 	cmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Start the local AXIS HTTP API with background snapshot refresh",
+		Use:     "serve",
+		Short:   "Start the local AXIS HTTP API with background snapshot refresh",
+		PreRunE: validatePositiveDuration("refresh", &refreshInterval),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runServeCommand(cmd.OutOrStdout(), addr, refreshInterval, pprof)
 		},

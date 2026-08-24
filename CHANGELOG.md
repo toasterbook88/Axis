@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Reservations/CLI:** Make `reservations doctor --fix` remediate exactly the entries classified by the requested `--stale-window`, persist each release before reporting it fixed, and reject non-positive stale/watch/refresh durations before destructive work or ticker construction.
 * **CLI:** Route non-streaming command output and diagnostics through Cobra's configured writers, including context, skills, placement, status, and summary; structured/text helpers now propagate write failures instead of reporting success after dropped output.
 * **CLI:** Preserve structured output on empty AI backend/role and MCP server inventories (`[]` or `{}` instead of prose), reject structured formats for the text-only `status --watch` stream, and reject non-positive watch intervals before `time.NewTicker` can panic.
 * **CLI:** Reject unknown `--format` values across every structured-output command instead of silently falling back to text, preventing successful automation runs with an unintended output contract.
