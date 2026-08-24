@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -34,15 +35,15 @@ func runObservationsLocal(cmd *cobra.Command) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 	if st == nil || len(st.Observations) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No observations tracked")
-		return nil
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No observations tracked")
+		return err
 	}
 	entries := make([]models.ExecutionObservation, 0, len(st.Observations))
 	for _, obs := range st.Observations {
 		entries = append(entries, obs)
 	}
-	fmt.Fprint(cmd.OutOrStdout(), renderObservationTable(entries))
-	return nil
+	_, err = io.WriteString(cmd.OutOrStdout(), renderObservationTable(entries))
+	return err
 }
 
 func renderObservationTable(entries []models.ExecutionObservation) string {
@@ -128,8 +129,8 @@ func observationsListCmd() *cobra.Command {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
 			default:
 				if len(entries) == 0 {
-					fmt.Fprintln(cmd.OutOrStdout(), "No observations tracked")
-					return nil
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "No observations tracked")
+					return err
 				}
 				tbl := ui.NewTable("KEY", "NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "PEAK RAM", "PEAK VRAM", "SAMPLES", "OBSERVED")
 				for _, obs := range entries {
@@ -151,8 +152,10 @@ func observationsListCmd() *cobra.Command {
 						obs.ObservedAt.Format(time.RFC3339),
 					)
 				}
-				tbl.Render(cmd.OutOrStdout())
-				return nil
+				var b strings.Builder
+				tbl.Render(&b)
+				_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+				return err
 			}
 		},
 	}
@@ -207,29 +210,30 @@ func observationsInspectCmd() *cobra.Command {
 			case "json":
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(found)
 			default:
-				out := cmd.OutOrStdout()
-				fmt.Fprintf(out, "Key:         %s\n", state.ObservationKey(found.Scope))
-				fmt.Fprintf(out, "Node:        %s\n", found.Scope.Node)
-				fmt.Fprintf(out, "Workload:    %s\n", found.Scope.Workload)
-				fmt.Fprintf(out, "Backend:     %s\n", found.Scope.Backend)
-				fmt.Fprintf(out, "Tool:        %s\n", found.Scope.Tool)
+				var b strings.Builder
+				fmt.Fprintf(&b, "Key:         %s\n", state.ObservationKey(found.Scope))
+				fmt.Fprintf(&b, "Node:        %s\n", found.Scope.Node)
+				fmt.Fprintf(&b, "Workload:    %s\n", found.Scope.Workload)
+				fmt.Fprintf(&b, "Backend:     %s\n", found.Scope.Backend)
+				fmt.Fprintf(&b, "Tool:        %s\n", found.Scope.Tool)
 				if found.Scope.ModelName != "" {
-					fmt.Fprintf(out, "Model:       %s\n", found.Scope.ModelName)
+					fmt.Fprintf(&b, "Model:       %s\n", found.Scope.ModelName)
 				}
-				fmt.Fprintf(out, "Wall Time:   %d ms\n", found.WallTimeMS)
-				fmt.Fprintf(out, "Peak RAM:    %d MB\n", found.PeakRAMMB)
+				fmt.Fprintf(&b, "Wall Time:   %d ms\n", found.WallTimeMS)
+				fmt.Fprintf(&b, "Peak RAM:    %d MB\n", found.PeakRAMMB)
 				if found.PeakVRAMMB > 0 {
-					fmt.Fprintf(out, "Peak VRAM:   %d MB\n", found.PeakVRAMMB)
+					fmt.Fprintf(&b, "Peak VRAM:   %d MB\n", found.PeakVRAMMB)
 				}
-				fmt.Fprintf(out, "Samples:     %d\n", found.SampleCount)
-				fmt.Fprintf(out, "Last Success:%v\n", found.LastSuccess)
-				fmt.Fprintf(out, "Observed At: %s\n", found.ObservedAt.Format(time.RFC3339))
+				fmt.Fprintf(&b, "Samples:     %d\n", found.SampleCount)
+				fmt.Fprintf(&b, "Last Success:%v\n", found.LastSuccess)
+				fmt.Fprintf(&b, "Observed At: %s\n", found.ObservedAt.Format(time.RFC3339))
 				isStale := ""
 				if !state.ObservationIsFresh(*found, time.Now().UTC()) {
 					isStale = " (stale)"
 				}
-				fmt.Fprintf(out, "Fresh:       %v%s\n", state.ObservationIsFresh(*found, time.Now().UTC()), isStale)
-				return nil
+				fmt.Fprintf(&b, "Fresh:       %v%s\n", state.ObservationIsFresh(*found, time.Now().UTC()), isStale)
+				_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+				return err
 			}
 		},
 	}
