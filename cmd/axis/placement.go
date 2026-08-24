@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -81,7 +82,9 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 				return printOutput(cmd.OutOrStdout(), payload, "json")
 			}
 
-			printPlacementExplanationText(cmd.OutOrStdout(), explanation, source, cacheRequested)
+			if err := printPlacementExplanationText(cmd.OutOrStdout(), explanation, source, cacheRequested); err != nil {
+				return err
+			}
 			if !explanation.Decision.OK {
 				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
@@ -129,7 +132,10 @@ func planTaskExplanation(
 	return explanation, source, nil
 }
 
-func printPlacementExplanationText(out io.Writer, explanation models.PlacementExplanation, source string, showSource bool) {
+func printPlacementExplanationText(destination io.Writer, explanation models.PlacementExplanation, source string, showSource bool) error {
+	var rendered strings.Builder
+	out := &rendered
+
 	if showSource {
 		fmt.Fprintf(out, "%s %s\n", ui.Dim("Source:"), source)
 	}
@@ -176,4 +182,6 @@ func printPlacementExplanationText(out io.Writer, explanation models.PlacementEx
 			}
 		}
 	}
+	_, err := fmt.Fprint(destination, rendered.String())
+	return err
 }
