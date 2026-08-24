@@ -820,10 +820,12 @@ func taskHistoryCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to load state: %w", err)
 			}
-			out := cmd.OutOrStdout()
+			var rendered strings.Builder
+			out := &rendered
 			if len(st.TaskHistory) == 0 {
 				fmt.Fprintln(out, "No task execution history found.")
-				return nil
+				_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+				return err
 			}
 
 			fmt.Fprintln(out, ui.Bold("AXIS Task Execution History"))
@@ -868,7 +870,8 @@ func taskHistoryCmd() *cobra.Command {
 			}
 			tbl.Render(out)
 			fmt.Fprintln(out)
-			return nil
+			_, err = fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+			return err
 		},
 	}
 	return cmd

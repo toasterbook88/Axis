@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,6 +59,39 @@ func TestTaskHistoryCmd(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "exec-098") || !strings.Contains(stdout, "beta") || !strings.Contains(stdout, "350ms") {
 		t.Errorf("missing record 2 info, got %q", stdout)
+	}
+}
+
+func TestTaskHistoryCmdPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	tests := []struct {
+		name  string
+		state *state.ClusterState
+	}{
+		{name: "empty", state: &state.ClusterState{}},
+		{
+			name: "records",
+			state: &state.ClusterState{TaskHistory: []state.TaskExecutionRecord{{
+				ExecID:      "exec-123",
+				Description: "test task",
+				Node:        "alpha",
+				Timestamp:   time.Now(),
+			}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := stubPlacementState(t, tt.state, nil)
+			defer restore()
+
+			cmd := taskHistoryCmd()
+			cmd.SetOut(rejectingOutputWriter{err: wantErr})
+			cmd.SetErr(&strings.Builder{})
+			if err := cmd.Execute(); !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
 	}
 }
 
