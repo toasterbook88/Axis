@@ -35,7 +35,7 @@ Examples:
 func runTUI(cmd *cobra.Command, args []string) error {
 	// Check if we're running in a TTY
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
-		return fmt.Errorf("axis tui requires an interactive terminal\n\nTTY detection failed: stdin is not a terminal.\nThe TUI cannot run when piped or redirected.\n\nUse 'axis cluster status' for text output instead.")
+		return fmt.Errorf("axis tui requires an interactive terminal\n\nTTY detection failed: stdin is not a terminal.\nThe TUI cannot run when piped or redirected.\n\nUse 'axis cluster status' for text output instead")
 	}
 
 	// Initialize and run the Bubble Tea program
