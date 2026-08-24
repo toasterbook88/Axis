@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -486,7 +487,7 @@ func TestContextPruneUnknownNodesDryRunDoesNotPersistPendingMigration(t *testing
 		t.Fatal(err)
 	}
 
-	targets, err := unknownNodeNames()
+	targets, err := unknownNodeNames(io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

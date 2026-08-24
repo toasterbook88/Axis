@@ -67,7 +67,7 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 					netutil.AllowInternalHost(host)
 				}
 				if err := events.SetWebhooks(cfg.Webhooks); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
 				}
 			}
 			return nil
@@ -234,20 +234,22 @@ func printOutput(out io.Writer, data interface{}, format string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprint(out, string(b))
+		_, err = fmt.Fprint(out, string(b))
+		return err
 	default:
 		b, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(out, string(b))
+		_, err = fmt.Fprintln(out, string(b))
+		return err
 	}
-	return nil
 }
 
-func printWarning(err error) {
+func printWarning(out io.Writer, err error) error {
 	if err == nil {
-		return
+		return nil
 	}
-	fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	_, writeErr := fmt.Fprintf(out, "warning: %v\n", err)
+	return writeErr
 }

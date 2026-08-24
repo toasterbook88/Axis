@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -93,7 +92,7 @@ axis cluster summary is the same command.`,
 				discoverLiveSnapshot,
 			)
 			if err != nil {
-				ui.FprintError(os.Stderr, fmt.Sprintf("%v", err), "")
+				ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 				return err
 			}
 
