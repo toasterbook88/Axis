@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/scripts"
@@ -22,8 +23,9 @@ func scriptsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all available fallback scripts",
-		Run: func(cmd *cobra.Command, args []string) {
-			out := cmd.OutOrStdout()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var rendered strings.Builder
+			out := &rendered
 			fmt.Fprintln(out, ui.Bold("AVAILABLE SCRIPTS"))
 
 			var categories []string
@@ -41,6 +43,8 @@ func scriptsListCmd() *cobra.Command {
 				tbl.Render(out)
 			}
 			fmt.Fprintf(out, "\n%s\n", ui.Dim("Run a script with: axis task run --script \"<script-name-or-keywords>\""))
+			_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+			return err
 		},
 	}
 }
