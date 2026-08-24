@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **CLI:** Route non-streaming command output and diagnostics through Cobra's configured writers, including context, skills, placement, status, and summary; structured/text helpers now propagate write failures instead of reporting success after dropped output.
 * **CLI:** Preserve structured output on empty AI backend/role and MCP server inventories (`[]` or `{}` instead of prose), reject structured formats for the text-only `status --watch` stream, and reject non-positive watch intervals before `time.NewTicker` can panic.
 * **CLI:** Reject unknown `--format` values across every structured-output command instead of silently falling back to text, preventing successful automation runs with an unintended output contract.
 * **Agent:** Surface conversation-history persistence failures in single-shot and plain-input modes instead of silently reporting an otherwise successful session while losing its history.

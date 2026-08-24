@@ -520,8 +520,7 @@ func taskContextCmd() *cobra.Command {
 				out := buildContextJSON(snap, reqs, desc, source, st, skillStore)
 				return printOutput(cmd.OutOrStdout(), out, "json")
 			}
-			printContextBlock(snap, reqs, desc, source, st, skillStore)
-			return nil
+			return printContextBlock(cmd.OutOrStdout(), snap, reqs, desc, source, st, skillStore)
 		},
 	}
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
@@ -531,8 +530,9 @@ func taskContextCmd() *cobra.Command {
 	return cmd
 }
 
-func printContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) {
-	fmt.Println(buildContextBlock(snap, reqs, task, source, st, skillStore))
+func printContextBlock(w io.Writer, snap *models.ClusterSnapshot, reqs models.TaskRequirements, task, source string, st *state.ClusterState, skillStore *skills.Store) error {
+	_, err := fmt.Fprintln(w, buildContextBlock(snap, reqs, task, source, st, skillStore))
+	return err
 }
 
 // ContextOutput is the structured JSON form of the context block — suitable

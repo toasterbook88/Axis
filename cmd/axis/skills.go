@@ -15,10 +15,11 @@ func skillsCmd() *cobra.Command {
 				if s == nil {
 					return err
 				}
-				printWarning(err)
+				if writeErr := printWarning(cmd.ErrOrStderr(), err); writeErr != nil {
+					return writeErr
+				}
 			}
-			printOutput(cmd.OutOrStdout(), s, "json")
-			return nil
+			return printOutput(cmd.OutOrStdout(), s, "json")
 		},
 	}
 }
