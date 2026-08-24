@@ -202,12 +202,20 @@ func shellStart(argv []string) string {
 func shellStop(port int) string {
 	return fmt.Sprintf(
 		"if command -v fuser >/dev/null 2>&1; then "+
-			"if fuser %d/tcp >/dev/null 2>&1; then fuser -k %d/tcp >/dev/null 2>&1; fi; "+
+			"_axis_pids=$(fuser %d/tcp 2>/dev/null); _axis_rc=$?; "+
 			"elif command -v lsof >/dev/null 2>&1; then "+
 			"_axis_pids=$(lsof -nP -tiTCP:%d -sTCP:LISTEN); _axis_rc=$?; "+
+			"else echo 'axis model stop requires fuser or lsof' >&2; exit 127; fi; "+
 			"if test \"$_axis_rc\" -gt 1; then exit \"$_axis_rc\"; fi; "+
-			"test -z \"$_axis_pids\" || kill -KILL $_axis_pids; "+
-			"else echo 'axis model stop requires fuser or lsof' >&2; exit 127; fi",
+			"if test -z \"$_axis_pids\"; then exit 0; fi; "+
+			"if ! command -v ps >/dev/null 2>&1; then echo 'axis model stop requires ps to verify process ownership' >&2; exit 127; fi; "+
+			"for _axis_pid in $_axis_pids; do "+
+			"case \"$_axis_pid\" in ''|*[!0-9]*) echo \"refusing to stop invalid listener pid $_axis_pid\" >&2; exit 1;; esac; "+
+			"_axis_cmd=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_cmd=${_axis_cmd##*/}; "+
+			"if test \"$_axis_cmd\" != llama-server; then "+
+			"echo \"refusing to stop port %d: pid $_axis_pid is $_axis_cmd, not llama-server\" >&2; exit 1; fi; "+
+			"done; "+
+			"for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done",
 		port, port, port,
 	)
 }
