@@ -63,13 +63,17 @@ axis cluster summary is the same command.`,
 					fetchCancel()
 
 					// Clear terminal screen and move cursor to home
-					fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
+					if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J"); writeErr != nil {
+						return writeErr
+					}
 
 					if err != nil {
 						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 					} else {
 						view := populateSummaryView(snap, meta)
-						fmt.Fprint(cmd.OutOrStdout(), view.Render())
+						if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), view.Render()); writeErr != nil {
+							return writeErr
+						}
 					}
 
 					select {
@@ -107,8 +111,8 @@ axis cluster summary is the same command.`,
 			}
 
 			view := populateSummaryView(snap, meta)
-			fmt.Fprint(cmd.OutOrStdout(), view.Render())
-			return nil
+			_, err = fmt.Fprint(cmd.OutOrStdout(), view.Render())
+			return err
 		},
 	}
 	cmd.Flags().BoolVar(&cached, "cached", true, "Use the local daemon snapshot cache by default")
