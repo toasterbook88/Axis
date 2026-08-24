@@ -642,6 +642,64 @@ func TestReservationsDoctorHealthy(t *testing.T) {
 	}
 }
 
+func TestReservationsDoctorPropagatesTextWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	tests := []struct {
+		name     string
+		populate bool
+	}{
+		{name: "healthy"},
+		{name: "findings", populate: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AXIS_HOME", t.TempDir())
+			if tt.populate {
+				now := time.Now().UTC()
+				writeDoctorLedgerFixture(t, &reservation.Entry{
+					ID:            "stale-entry",
+					Node:          "node-a",
+					RAMMB:         512,
+					CreatedAt:     now.Add(-time.Minute),
+					LastHeartbeat: now.Add(-30 * time.Second),
+				})
+			}
+
+			cmd := reservationsDoctorCmd()
+			cmd.SetOut(rejectingOutputWriter{err: wantErr})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--format", "text", "--stale-window", "10s"})
+			if err := cmd.Execute(); !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
+	}
+}
+
+func TestReservationsDoctorFixPropagatesTextWriterFailureAfterPersisting(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t, &reservation.Entry{
+		ID:            "stale-entry",
+		Node:          "node-a",
+		RAMMB:         512,
+		CreatedAt:     now.Add(-time.Minute),
+		LastHeartbeat: now.Add(-30 * time.Second),
+	})
+	wantErr := errors.New("writer unavailable")
+
+	cmd := reservationsDoctorCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--fix", "--format", "text", "--stale-window", "10s"})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	if entries := loadDoctorLedgerFixture(t); len(entries) != 0 {
+		t.Fatalf("doctor fix was not persisted: %#v", entries)
+	}
+}
+
 func TestReservationsDoctorFindingsAndFix(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
