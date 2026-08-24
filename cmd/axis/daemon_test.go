@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -195,6 +196,41 @@ func TestDaemonCacheMutationsPropagateWriterFailureAfterPosting(t *testing.T) {
 				t.Fatal("cache mutation did not complete before reporting failure")
 			}
 		})
+	}
+}
+
+func TestDaemonCommandsHonorCanceledContextBeforeRequestOrRestart(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.URL.Path {
+		case "/snapshot/meta":
+			_, _ = fmt.Fprintf(w, `{"ready":true,"version":%q}`, daemon.Version)
+		case "/mesh":
+			_, _ = w.Write([]byte(`{"peers":[],"count":0}`))
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer server.Close()
+
+	for _, action := range []string{"status", "mesh", "invalidate", "refresh", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			cmd := daemonCmd()
+			cmd.SetContext(ctx)
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--cache-addr", server.URL, action})
+			if err := cmd.Execute(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want context cancellation", err)
+			}
+		})
+	}
+	if requests != 0 {
+		t.Fatalf("canceled daemon commands made %d request(s)", requests)
 	}
 }
 
