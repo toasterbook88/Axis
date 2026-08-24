@@ -813,6 +813,49 @@ func TestReservationsDoctorFixPreservesEntriesActiveForLongerWindow(t *testing.T
 	}
 }
 
+func TestReservationsDoctorFixSkipsEntryRevivedAfterDiagnosis(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	entry := &reservation.Entry{
+		ID:            "revived",
+		Node:          "node-a",
+		RAMMB:         1024,
+		CreatedAt:     now.Add(-time.Minute),
+		LastHeartbeat: now.Add(-30 * time.Second),
+	}
+	writeDoctorLedgerFixture(t, entry)
+	previousHook := reservationsDoctorBeforeFix
+	reservationsDoctorBeforeFix = func() {
+		revived := *entry
+		revived.LastHeartbeat = time.Now().UTC()
+		writeDoctorLedgerFixture(t, &revived)
+	}
+	t.Cleanup(func() { reservationsDoctorBeforeFix = previousHook })
+
+	cmd := reservationsDoctorCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--fix", "--format", "json", "--stale-window", "10s"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("doctor fix: %v", err)
+	}
+
+	var result struct {
+		Fixed []DoctorFinding `json:"fixed"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v\noutput: %s", err, stdout.String())
+	}
+	if len(result.Fixed) != 0 {
+		t.Fatalf("fixed = %#v, want revived entry skipped", result.Fixed)
+	}
+	entries := loadDoctorLedgerFixture(t)
+	if len(entries) != 1 || entries[0].ID != "revived" {
+		t.Fatalf("ledger entries = %#v, want revived entry preserved", entries)
+	}
+}
+
 func writeDoctorLedgerFixture(t *testing.T, entries ...*reservation.Entry) {
 	t.Helper()
 	data, err := json.Marshal(struct {
