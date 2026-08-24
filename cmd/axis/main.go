@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -205,8 +206,9 @@ func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print AXIS version and build info",
-		Run: func(cmd *cobra.Command, args []string) {
-			out := cmd.OutOrStdout()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var rendered strings.Builder
+			out := &rendered
 			ui.PrintLogo(out, Version)
 			fmt.Fprintln(out)
 			fmt.Fprintf(out, "axis %s\n", Version)
@@ -222,6 +224,8 @@ func versionCmd() *cobra.Command {
 			}
 			fmt.Fprintf(out, "  go:       %s\n", goVer)
 			fmt.Fprintf(out, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+			_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+			return err
 		},
 	}
 }
