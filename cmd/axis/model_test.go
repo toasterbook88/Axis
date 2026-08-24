@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -21,8 +22,8 @@ type fakeModelRunner struct {
 	probed  []int
 }
 
-func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, argv []string) error {
-	f.started = append(f.started, append([]string(nil), argv...))
+func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, plan modellife.StartPlan) error {
+	f.started = append(f.started, append([]string(nil), plan.Argv...))
 	return nil
 }
 func (f *fakeModelRunner) Stop(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, port int) error {
@@ -112,6 +113,96 @@ func TestRunModelStopRequiresPort(t *testing.T) {
 	err := runModelStop(context.Background(), modelStopCmd(), "storage", 0, &fakeModelRunner{})
 	if err == nil {
 		t.Fatal("expected port error")
+	}
+}
+
+func TestShellStartRefusesOccupiedPort(t *testing.T) {
+	dir := t.TempDir()
+	writeModelTestExecutable(t, filepath.Join(dir, "fuser"), `#!/bin/sh
+printf '%s\n' 4242
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellStart([]string{"/bin/true"}, 8081))
+	cmd.Env = []string{"PATH=" + dir}
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("error = %v, output = %q", err, out)
+	}
+	if !strings.Contains(string(out), "port 8081 already has listener pid(s) 4242") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+func TestShellStartAllowsFreePort(t *testing.T) {
+	dir := t.TempDir()
+	writeModelTestExecutable(t, filepath.Join(dir, "fuser"), `#!/bin/sh
+exit 1
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellStart([]string{"/bin/true"}, 8082))
+	cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shellStart: %v: %s", err, out)
+	}
+}
+
+func TestShellStartFailsWithoutPortInspectionTool(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("/bin/sh", "-c", shellStart([]string{"/bin/true"}, 8083))
+	cmd.Env = []string{"PATH=" + dir}
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 127 {
+		t.Fatalf("error = %v, output = %q", err, out)
+	}
+	if !strings.Contains(string(out), "requires fuser or lsof") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+func TestShellProbeRequiresLlamaServerOwnerAndHealth(t *testing.T) {
+	dir := t.TempDir()
+	curlLog := filepath.Join(dir, "curl.log")
+	writeModelTestExecutable(t, filepath.Join(dir, "lsof"), `#!/bin/sh
+printf '%s\n' 4242
+`)
+	writeModelTestExecutable(t, filepath.Join(dir, "ps"), `#!/bin/sh
+printf '%s\n' llama-server
+`)
+	writeModelTestExecutable(t, filepath.Join(dir, "curl"), `#!/bin/sh
+printf '%s\n' "$*" > "$AXIS_TEST_LOG"
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellProbe(8084))
+	cmd.Env = []string{"PATH=" + dir, "AXIS_TEST_LOG=" + curlLog}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shellProbe: %v: %s", err, out)
+	}
+	data, err := os.ReadFile(curlLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); !strings.Contains(got, "http://127.0.0.1:8084/v1/models") {
+		t.Fatalf("curl call = %q", got)
+	}
+}
+
+func TestShellProbeRefusesMissingListener(t *testing.T) {
+	dir := t.TempDir()
+	writeModelTestExecutable(t, filepath.Join(dir, "lsof"), `#!/bin/sh
+exit 1
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellProbe(8085))
+	cmd.Env = []string{"PATH=" + dir}
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("error = %v, output = %q", err, out)
+	}
+	if !strings.Contains(string(out), "no listener on port 8085") {
+		t.Fatalf("output = %q", out)
 	}
 }
 
