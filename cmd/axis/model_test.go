@@ -107,12 +107,18 @@ func TestRunModelStartRefusesNetworkPath(t *testing.T) {
 	}
 }
 
-func TestRunModelStopRequiresPort(t *testing.T) {
+func TestRunModelStopRequiresValidPort(t *testing.T) {
 	stubModelSnapshot(t, testSnap())
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
-	err := runModelStop(context.Background(), modelStopCmd(), "storage", 0, &fakeModelRunner{})
-	if err == nil {
-		t.Fatal("expected port error")
+	for _, port := range []int{-1, 0, 65536} {
+		runner := &fakeModelRunner{}
+		err := runModelStop(context.Background(), modelStopCmd(), "storage", port, runner)
+		if err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
+			t.Fatalf("port %d error = %v, want valid range error", port, err)
+		}
+		if len(runner.stopped) != 0 {
+			t.Fatalf("port %d reached runner: %#v", port, runner.stopped)
+		}
 	}
 }
 

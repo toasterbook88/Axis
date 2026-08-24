@@ -107,8 +107,8 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 }
 
 func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port int, runner modelProcessRunner) error {
-	if port <= 0 {
-		return fmt.Errorf("port is required")
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
 	}
 	nf, cfgNode, err := resolveModelNode(ctx, nodeName)
 	if err != nil {

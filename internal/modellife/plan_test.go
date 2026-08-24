@@ -23,10 +23,12 @@ func storageNode() models.NodeFacts {
 	}
 }
 
-func TestPlanStartRequiresPortAndWeights(t *testing.T) {
+func TestPlanStartRequiresValidPortAndWeights(t *testing.T) {
 	n := storageNode()
-	if _, err := PlanStart(n, "/mnt/models/a.gguf", 0); err == nil {
-		t.Fatal("expected error for missing port")
+	for _, port := range []int{-1, 0, 65536} {
+		if _, err := PlanStart(n, "/mnt/models/a.gguf", port); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
+			t.Fatalf("port %d error = %v, want valid range error", port, err)
+		}
 	}
 	if _, err := PlanStart(n, "", 8081); err == nil {
 		t.Fatal("expected error for missing weights")
