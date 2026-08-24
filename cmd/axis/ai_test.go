@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,5 +203,46 @@ roles:
 	}
 	if !strings.Contains(stdout.String(), "fast") || !strings.Contains(stdout.String(), "fast-chat") {
 		t.Fatalf("output:\n%s", stdout.String())
+	}
+}
+
+func TestAIInventoryTextCommandsPropagateWriterFailures(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ai.yaml")
+	body := `
+backends:
+  - name: hub
+    kind: openai-compatible
+    base_url: http://127.0.0.1:4000/v1
+roles:
+  fast:
+    prefer: [hub]
+    model: fast-chat
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("writer unavailable")
+	missingPath := filepath.Join(dir, "missing.yaml")
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "backends", args: []string{"backends", "--ai-config", path, "--skip-probe"}},
+		{name: "roles", args: []string{"roles", "--ai-config", path}},
+		{name: "empty backends", args: []string{"backends", "--ai-config", missingPath, "--skip-probe"}},
+		{name: "empty roles", args: []string{"roles", "--ai-config", missingPath}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := aiCmd()
+			cmd.SetOut(rejectingOutputWriter{err: wantErr})
+			cmd.SetErr(&strings.Builder{})
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
 	}
 }

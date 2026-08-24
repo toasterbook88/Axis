@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -78,8 +79,7 @@ func aiBackendsCmd() *cobra.Command {
 				case "yaml":
 					return writeYAML(cmd, empty)
 				default:
-					fmt.Fprintln(cmd.OutOrStdout(), "No backends configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
-					return nil
+					return printAIBackendsText(cmd.OutOrStdout(), nil, nil, skipProbe)
 				}
 			}
 			nodeCfg, _ := aiNodeConfigLoadFn()
@@ -108,35 +108,7 @@ func aiBackendsCmd() *cobra.Command {
 			case "yaml":
 				return writeYAML(cmd, probes)
 			default:
-				for _, p := range probes {
-					status := "down"
-					if !p.Enabled {
-						status = "disabled"
-					} else if p.OK {
-						status = "ok"
-					} else if skipProbe {
-						status = "unprobed"
-					}
-					displayURL := p.BaseURL
-					if p.ProbedURL != "" && p.ProbedURL != p.BaseURL {
-						displayURL = p.ProbedURL
-					}
-					loc := llmrouter.ViewLocalityForNodes(config.AIBackendConfig{Node: p.Node, BaseURL: p.BaseURL}, nodeCfg)
-					fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-6s %-18s %-8s %s",
-						p.Backend, loc, p.Kind, status, displayURL)
-					if p.Node != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), " node=%s", p.Node)
-					}
-
-					if p.Message != "" && status != "ok" {
-						fmt.Fprintf(cmd.OutOrStdout(), " (%s)", p.Message)
-					}
-					if p.OK && len(p.Models) > 0 {
-						fmt.Fprintf(cmd.OutOrStdout(), " models=%d", len(p.Models))
-					}
-					fmt.Fprintln(cmd.OutOrStdout())
-				}
-				return nil
+				return printAIBackendsText(cmd.OutOrStdout(), probes, nodeCfg, skipProbe)
 			}
 		},
 	}
@@ -169,8 +141,7 @@ func aiRolesCmd() *cobra.Command {
 				case "yaml":
 					return writeYAML(cmd, empty)
 				default:
-					fmt.Fprintln(cmd.OutOrStdout(), "No roles configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
-					return nil
+					return printAIRolesText(cmd.OutOrStdout(), nil)
 				}
 			}
 			switch strings.ToLower(format) {
@@ -179,27 +150,73 @@ func aiRolesCmd() *cobra.Command {
 			case "yaml":
 				return writeYAML(cmd, cfg.Roles)
 			default:
-				names := make([]string, 0, len(cfg.Roles))
-				for name := range cfg.Roles {
-					names = append(names, name)
-				}
-				sort.Strings(names)
-				for _, name := range names {
-					role := cfg.Roles[name]
-					fmt.Fprintf(cmd.OutOrStdout(), "%-12s model=%-20s prefer=%v",
-						name, role.Model, role.Prefer)
-					if role.RequireArch != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), " arch=%s", role.RequireArch)
-					}
-					fmt.Fprintln(cmd.OutOrStdout())
-				}
-				return nil
+				return printAIRolesText(cmd.OutOrStdout(), cfg.Roles)
 			}
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	cmd.Flags().StringVar(&aiPath, "ai-config", "", "Path to ai.yaml (default: ~/.axis/ai.yaml)")
 	return cmd
+}
+
+func printAIBackendsText(w io.Writer, probes []llmrouter.BackendProbe, nodeCfg *config.Config, skipProbe bool) error {
+	var out strings.Builder
+	if len(probes) == 0 {
+		fmt.Fprintln(&out, "No backends configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
+	} else {
+		for _, p := range probes {
+			status := "down"
+			if !p.Enabled {
+				status = "disabled"
+			} else if p.OK {
+				status = "ok"
+			} else if skipProbe {
+				status = "unprobed"
+			}
+			displayURL := p.BaseURL
+			if p.ProbedURL != "" && p.ProbedURL != p.BaseURL {
+				displayURL = p.ProbedURL
+			}
+			loc := llmrouter.ViewLocalityForNodes(config.AIBackendConfig{Node: p.Node, BaseURL: p.BaseURL}, nodeCfg)
+			fmt.Fprintf(&out, "%-16s %-6s %-18s %-8s %s",
+				p.Backend, loc, p.Kind, status, displayURL)
+			if p.Node != "" {
+				fmt.Fprintf(&out, " node=%s", p.Node)
+			}
+			if p.Message != "" && status != "ok" {
+				fmt.Fprintf(&out, " (%s)", p.Message)
+			}
+			if p.OK && len(p.Models) > 0 {
+				fmt.Fprintf(&out, " models=%d", len(p.Models))
+			}
+			fmt.Fprintln(&out)
+		}
+	}
+	_, err := fmt.Fprint(w, out.String())
+	return err
+}
+
+func printAIRolesText(w io.Writer, roles map[string]config.AIRoleConfig) error {
+	var out strings.Builder
+	if len(roles) == 0 {
+		fmt.Fprintln(&out, "No roles configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
+	} else {
+		names := make([]string, 0, len(roles))
+		for name := range roles {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			role := roles[name]
+			fmt.Fprintf(&out, "%-12s model=%-20s prefer=%v", name, role.Model, role.Prefer)
+			if role.RequireArch != "" {
+				fmt.Fprintf(&out, " arch=%s", role.RequireArch)
+			}
+			fmt.Fprintln(&out)
+		}
+	}
+	_, err := fmt.Fprint(w, out.String())
+	return err
 }
 
 func aiRouteCmd() *cobra.Command {
