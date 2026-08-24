@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,13 +64,7 @@ func daemonServiceInstallCmd() *cobra.Command {
 		Short: "Install and start a launchd or systemd user service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := installDaemonService(cmd.Context(), addr, refresh, defaultDaemonServiceDependencies())
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "AXIS daemon user service installed: %s\n", path)
-			fmt.Fprintln(cmd.OutOrStdout(), "Verify: axis daemon status")
-			return nil
+			return runDaemonServiceInstall(cmd.Context(), cmd.OutOrStdout(), addr, refresh, defaultDaemonServiceDependencies())
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", api.DefaultAddr(), "Daemon listen address (Unix socket or TCP host:port)")
@@ -82,22 +78,7 @@ func daemonServiceStatusCmd() *cobra.Command {
 		Short: "Show native user-service manager status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			deps := defaultDaemonServiceDependencies()
-			var name string
-			var managerArgs []string
-			switch deps.goos {
-			case "darwin":
-				name = "launchctl"
-				managerArgs = []string{"print", fmt.Sprintf("gui/%d/%s", deps.uid(), daemonLaunchdLabel)}
-			case "linux":
-				name = "systemctl"
-				managerArgs = []string{"--user", "status", "--no-pager", daemonSystemdUnit}
-			default:
-				return unsupportedDaemonServicePlatform(deps.goos)
-			}
-			out, err := deps.run(cmd.Context(), name, managerArgs...)
-			_, _ = cmd.OutOrStdout().Write(out)
-			return err
+			return runDaemonServiceStatus(cmd.Context(), cmd.OutOrStdout(), defaultDaemonServiceDependencies())
 		},
 	}
 }
@@ -108,14 +89,48 @@ func daemonServiceUninstallCmd() *cobra.Command {
 		Short: "Stop and remove the native user service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := uninstallDaemonService(cmd.Context(), defaultDaemonServiceDependencies())
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "AXIS daemon user service removed: %s\n", path)
-			return nil
+			return runDaemonServiceUninstall(cmd.Context(), cmd.OutOrStdout(), defaultDaemonServiceDependencies())
 		},
 	}
+}
+
+func runDaemonServiceInstall(ctx context.Context, out io.Writer, addr, refresh string, deps daemonServiceDependencies) error {
+	path, err := installDaemonService(ctx, addr, refresh, deps)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "AXIS daemon user service installed: %s\nVerify: axis daemon status\n", path)
+	return err
+}
+
+func runDaemonServiceStatus(ctx context.Context, out io.Writer, deps daemonServiceDependencies) error {
+	var name string
+	var managerArgs []string
+	switch deps.goos {
+	case "darwin":
+		name = "launchctl"
+		managerArgs = []string{"print", fmt.Sprintf("gui/%d/%s", deps.uid(), daemonLaunchdLabel)}
+	case "linux":
+		name = "systemctl"
+		managerArgs = []string{"--user", "status", "--no-pager", daemonSystemdUnit}
+	default:
+		return unsupportedDaemonServicePlatform(deps.goos)
+	}
+	managerOut, managerErr := deps.run(ctx, name, managerArgs...)
+	var writeErr error
+	if len(managerOut) > 0 {
+		_, writeErr = out.Write(managerOut)
+	}
+	return errors.Join(managerErr, writeErr)
+}
+
+func runDaemonServiceUninstall(ctx context.Context, out io.Writer, deps daemonServiceDependencies) error {
+	path, err := uninstallDaemonService(ctx, deps)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "AXIS daemon user service removed: %s\n", path)
+	return err
 }
 
 func daemonServicePath(goos, home string) (string, error) {
