@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -74,6 +75,49 @@ func TestMeshCommandsPropagateWriterFailures(t *testing.T) {
 			cmd.SetErr(&strings.Builder{})
 			if err := cmd.Execute(); !errors.Is(err, wantErr) {
 				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
+	}
+}
+
+func TestMeshCommandsHonorCanceledContext(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	cfgPath := filepath.Join(tempHome, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	content := `nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: axis
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	for _, command := range []struct {
+		name string
+		new  func() *cobra.Command
+	}{
+		{name: "status", new: meshStatusCmd},
+		{name: "peers", new: meshPeersCmd},
+	} {
+		t.Run(command.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var out strings.Builder
+			cmd := command.new()
+			cmd.SilenceUsage = true
+			cmd.SetContext(ctx)
+			cmd.SetOut(&out)
+			cmd.SetErr(&strings.Builder{})
+			if err := cmd.Execute(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want context cancellation", err)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("canceled command wrote output: %q", out.String())
 			}
 		})
 	}
