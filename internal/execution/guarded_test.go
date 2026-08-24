@@ -477,30 +477,28 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	defer func() { executionHeartbeatInterval = prevInterval }()
 
 	prevHeartbeat := heartbeatTask
-	heartbeatCalls := 0
-	heartbeatTask = func(ledger *reservation.Ledger, ledgerExecID string) error {
-		fmt.Printf("DEBUG: heartbeatTask called id=%s\n", ledgerExecID)
-		heartbeatCalls++
+	heartbeatCh := make(chan struct{}, 1)
+	heartbeatTask = func(*reservation.Ledger, string) error {
+		select {
+		case heartbeatCh <- struct{}{}:
+		default:
+		}
 		return nil
 	}
 	defer func() { heartbeatTask = prevHeartbeat }()
 
 	prevShell := RunLocalShell
-	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
-		time.Sleep(150 * time.Millisecond)
-		return []byte("ok\n"), 0, nil
+	RunLocalShell = func(ctx context.Context, _ string, _ []string) ([]byte, int64, error) {
+		select {
+		case <-heartbeatCh:
+			return []byte("ok\n"), 0, nil
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		case <-time.After(time.Second):
+			return nil, 0, fmt.Errorf("timed out waiting for execution heartbeat")
+		}
 	}
 	defer func() { RunLocalShell = prevShell }()
-
-	prevStream := StreamLocalShell
-	StreamLocalShell = func(ctx context.Context, command string, env []string, stdout, stderr io.Writer) (int64, error) {
-		time.Sleep(150 * time.Millisecond)
-		if stdout != nil {
-			_, _ = stdout.Write([]byte("ok\n"))
-		}
-		return 0, nil
-	}
-	defer func() { StreamLocalShell = prevStream }()
 
 	resp, err := RunGuarded(context.Background(), rt, GuardedExecutionRequest{
 		Description: "echo ok",
@@ -512,9 +510,6 @@ func TestRunGuardedHeartbeatsActiveReservationWhileCommandRuns(t *testing.T) {
 	}
 	if !resp.OK {
 		t.Fatalf("expected OK response, got %#v", resp)
-	}
-	if heartbeatCalls == 0 {
-		t.Fatal("expected at least one execution heartbeat during run")
 	}
 }
 
