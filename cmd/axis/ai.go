@@ -271,20 +271,22 @@ any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
 			})
 			if err != nil {
 				// Still print partial decision for operators when useful.
+				var outputErr error
 				if dec.Model != "" || len(dec.Reasoning) > 0 {
 					switch strings.ToLower(format) {
 					case "json":
-						_ = writeJSON(cmd, dec)
+						outputErr = writeJSON(cmd, dec)
 					case "yaml":
-						_ = writeYAML(cmd, dec)
+						outputErr = writeYAML(cmd, dec)
 					default:
-						printRouteText(cmd, dec)
+						outputErr = printRouteText(cmd, dec)
 					}
 				}
+				var routeErr error = err
 				if errors.Is(err, llmrouter.ErrModelUnlisted) {
-					return ExitCodeError{Code: ExitErrModelUnlisted, Message: err.Error()}
+					routeErr = ExitCodeError{Code: ExitErrModelUnlisted, Message: err.Error()}
 				}
-				return err
+				return errors.Join(routeErr, outputErr)
 			}
 
 			switch strings.ToLower(format) {
@@ -293,8 +295,7 @@ any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
 			case "yaml":
 				return writeYAML(cmd, dec)
 			default:
-				printRouteText(cmd, dec)
-				return nil
+				return printRouteText(cmd, dec)
 			}
 		},
 	}
@@ -319,8 +320,9 @@ func loadAIConfig(aiPath string) (*config.AIConfig, error) {
 	return cfg, nil
 }
 
-func printRouteText(cmd *cobra.Command, dec llmrouter.RoleRouteDecision) {
-	out := cmd.OutOrStdout()
+func printRouteText(cmd *cobra.Command, dec llmrouter.RoleRouteDecision) error {
+	var rendered strings.Builder
+	out := &rendered
 	fmt.Fprintln(out, "AXIS inference route (advisory / dry-run)")
 	if dec.Role != "" {
 		fmt.Fprintf(out, "  role:       %s\n", dec.Role)
@@ -348,6 +350,8 @@ func printRouteText(cmd *cobra.Command, dec llmrouter.RoleRouteDecision) {
 			fmt.Fprintf(out, "    - %s\n", line)
 		}
 	}
+	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+	return err
 }
 
 func writeJSON(cmd *cobra.Command, v any) error {

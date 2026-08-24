@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
@@ -125,6 +126,15 @@ func TestTaskPlaceCommandPropagatesWriterFailures(t *testing.T) {
 	cmd.SetErr(&strings.Builder{})
 	cmd.SetArgs([]string{"intent"})
 	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
+func TestAIRouteTextPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	cmd := &cobra.Command{}
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	if err := printRouteText(cmd, llmrouter.RoleRouteDecision{Model: "coder"}); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want writer failure", err)
 	}
 }
