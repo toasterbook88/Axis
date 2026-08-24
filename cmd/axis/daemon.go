@@ -96,8 +96,7 @@ func daemonCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "mesh query failed: %v\n", err)
 				return err
 			}
-			printMeshPeers(cmd, peers)
-			return nil
+			return printMeshPeers(cmd, peers)
 		},
 	})
 
@@ -218,11 +217,13 @@ func fetchDaemonMesh(ctx context.Context, addr string) ([]mesh.Peer, error) {
 
 const maxMeshPeersDisplayed = 50
 
-func printMeshPeers(cmd *cobra.Command, peers []mesh.Peer) {
-	out := cmd.OutOrStdout()
+func printMeshPeers(cmd *cobra.Command, peers []mesh.Peer) error {
+	var rendered strings.Builder
+	out := &rendered
 	if len(peers) == 0 {
 		fmt.Fprintln(out, "No active mesh peers.")
-		return
+		_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+		return err
 	}
 
 	tbl := ui.NewTable("NAME", "HOSTNAME", "STATE", "SOURCE", "LAST SEEN")
@@ -240,6 +241,8 @@ func printMeshPeers(cmd *cobra.Command, peers []mesh.Peer) {
 	if remaining > 0 {
 		fmt.Fprintf(out, "\n... and %d more peers not shown\n", remaining)
 	}
+	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+	return err
 }
 
 func humanizeTime(t time.Time) string {
