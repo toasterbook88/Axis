@@ -326,8 +326,7 @@ func taskRunCmd() *cobra.Command {
 				return ctxErr
 			}
 			if prepared.Result.Blocked {
-				printBlockedResult(cmd.OutOrStdout(), prepared.Result)
-				return nil
+				return printBlockedResult(cmd.OutOrStdout(), prepared.Result)
 			}
 			if err != nil && prepared.Result.Error == "no suitable node found" {
 				for _, reason := range prepared.Result.Reasoning {
@@ -469,11 +468,14 @@ func localityLabel(isLocal bool) string {
 	return "remote"
 }
 
-func printBlockedResult(w io.Writer, resp execution.GuardedExecutionResult) {
-	fmt.Fprintf(w, "\n=== SAFETY BLOCKED ===\n")
-	fmt.Fprintf(w, "Reason: %s\n", resp.BlockReason)
-	fmt.Fprintf(w, "Safety score: %d/100\n", resp.DumbScore)
-	fmt.Fprintln(w, "Nothing was executed. Fix your request.")
+func printBlockedResult(w io.Writer, resp execution.GuardedExecutionResult) error {
+	var out strings.Builder
+	fmt.Fprintln(&out, "\n=== SAFETY BLOCKED ===")
+	fmt.Fprintf(&out, "Reason: %s\n", resp.BlockReason)
+	fmt.Fprintf(&out, "Safety score: %d/100\n", resp.DumbScore)
+	fmt.Fprintln(&out, "Nothing was executed. Fix your request.")
+	_, err := fmt.Fprint(w, out.String())
+	return err
 }
 
 func formatObservationSummary(resp execution.GuardedExecutionResult) string {

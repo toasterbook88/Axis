@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -125,6 +126,38 @@ func TestTaskPlaceCommandPropagatesWriterFailures(t *testing.T) {
 	cmd.SetOut(rejectingOutputWriter{err: wantErr})
 	cmd.SetErr(&strings.Builder{})
 	cmd.SetArgs([]string{"intent"})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
+func TestTaskRunBlockedResultPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	previousLoad := loadTaskRunRuntime
+	previousPrepare := prepareTaskGuarded
+	t.Cleanup(func() {
+		loadTaskRunRuntime = previousLoad
+		prepareTaskGuarded = previousPrepare
+	})
+
+	loadTaskRunRuntime = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
+	}
+	prepareTaskGuarded = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.PreparedExecution, error) {
+		return execution.PreparedExecution{
+			Request: req,
+			Result: execution.GuardedExecutionResult{
+				Blocked:     true,
+				BlockReason: "unsafe command",
+				DumbScore:   100,
+			},
+		}, nil
+	}
+
+	cmd := taskRunCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&strings.Builder{})
+	cmd.SetArgs([]string{"--exec", "echo hello"})
 	if err := cmd.Execute(); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want writer failure", err)
 	}
