@@ -4,7 +4,6 @@ go 1.26.6
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0
-	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/chzyer/readline v1.5.1

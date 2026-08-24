@@ -171,7 +171,7 @@ User opens TUI
       ↓
 Init() → loadSnapshotCmd()
       ↓
-Goroutine reads ~/.local/share/axis/snapshot.json
+Goroutine reads the daemon snapshot cache (persist.AxisPath("snapshot.json"), i.e. ~/.axis/snapshot.json)
       ↓
 Returns snapshotLoadedMsg
       ↓
@@ -186,7 +186,7 @@ View() renders with data
 
 | Tier | Source | Latency | TUI Usage |
 |------|--------|---------|-----------|
-| Tier 0 | `~/.local/share/axis/snapshot.json` | <5ms | Primary data source |
+| Tier 0 | Daemon snapshot cache (`persist.AxisPath("snapshot.json")`) | <5ms | Primary data source |
 | Tier 1 | Mesh gossip (UDP) | Async | Future: real-time peer updates |
 | Tier 2 | SSH fan-out | 10s/node | Manual refresh only (`r` key) |
 

@@ -290,11 +290,13 @@ file outputs for degraded-state recovery.
 
 ## Dependencies
 
-12 direct dependencies (`go.mod`; versions authoritative in go.mod):
+14 direct dependencies (`go.mod`; versions authoritative in go.mod):
 
 | Module | Purpose |
 | -------- | --------- |
 | `al.essio.dev/pkg/shellescape` | Shell argument escaping |
+| `github.com/charmbracelet/bubbletea` | Elm-architecture TUI runtime (`axis tui`) |
+| `github.com/charmbracelet/lipgloss` | TUI layout/styling (`axis tui`) |
 | `github.com/chzyer/readline` | Interactive line editing (agent/chat flows) |
 | `github.com/fatih/color` | Terminal color output |
 | `github.com/google/uuid` | Event/reservation/provenance identifiers |

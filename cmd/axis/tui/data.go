@@ -19,9 +19,19 @@ func loadSnapshotCmd() tea.Cmd {
 		}
 		return snapshotLoadedMsg{
 			Snapshot:  snapshot,
-			Timestamp: freshness.Format(time.Kitchen),
+			Timestamp: formatFreshness(freshness),
 		}
 	}
+}
+
+// formatFreshness renders a snapshot timestamp for the header. A zero
+// time (timestamp absent and mtime unavailable) renders as "unknown"
+// instead of a fabricated clock reading.
+func formatFreshness(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.Format(time.Kitchen)
 }
 
 // loadDaemonSnapshot reads the cached snapshot from disk using AXIS_HOME-aware paths.
@@ -41,15 +51,14 @@ func loadDaemonSnapshot() (*models.ClusterSnapshot, time.Time, error) {
 		return nil, time.Time{}, err
 	}
 
-	// Use the snapshot's actual collection timestamp, not file mtime
+	// Use the snapshot's actual collection timestamp, not file mtime.
+	// Degraded fallback: file mtime when the timestamp is absent. If even
+	// the stat fails, leave freshness zero so the header renders an
+	// explicit "unknown" rather than a fabricated time.
 	freshness := snapshot.Timestamp
 	if freshness.IsZero() {
-		// Fallback to file mtime only if timestamp missing (degraded state)
-		info, err := os.Stat(cachePath)
-		if err == nil {
+		if info, err := os.Stat(cachePath); err == nil {
 			freshness = info.ModTime()
-		} else {
-			freshness = time.Now()
 		}
 	}
 
