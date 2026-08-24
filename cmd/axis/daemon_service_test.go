@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -144,5 +145,64 @@ func TestInstallDaemonServiceRejectsInvalidRefreshBeforeWriting(t *testing.T) {
 	path, _ := daemonServicePath("linux", home)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("invalid install wrote service, stat err=%v", err)
+	}
+}
+
+func TestDaemonServiceInstallPropagatesWriterFailureAfterInstalling(t *testing.T) {
+	home := t.TempDir()
+	deps := daemonServiceDependencies{
+		goos:       "linux",
+		homeDir:    func() (string, error) { return home, nil },
+		executable: func() (string, error) { return "/opt/axis/bin/axis", nil },
+		run:        func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	}
+	wantErr := errors.New("writer unavailable")
+
+	err := runDaemonServiceInstall(context.Background(), rejectingOutputWriter{err: wantErr}, "/tmp/axis.sock", "1m", deps)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	path, _ := daemonServicePath("linux", home)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("service was not installed before reporting failure: %v", err)
+	}
+}
+
+func TestDaemonServiceStatusPreservesManagerAndWriterFailures(t *testing.T) {
+	managerErr := errors.New("manager unavailable")
+	writerErr := errors.New("writer unavailable")
+	deps := daemonServiceDependencies{
+		goos: "linux",
+		run: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("service failed\n"), managerErr
+		},
+	}
+
+	err := runDaemonServiceStatus(context.Background(), rejectingOutputWriter{err: writerErr}, deps)
+	if !errors.Is(err, managerErr) || !errors.Is(err, writerErr) {
+		t.Fatalf("error = %v, want manager and writer failures", err)
+	}
+}
+
+func TestDaemonServiceUninstallPropagatesWriterFailureAfterRemoving(t *testing.T) {
+	home := t.TempDir()
+	deps := daemonServiceDependencies{
+		goos:       "linux",
+		homeDir:    func() (string, error) { return home, nil },
+		executable: func() (string, error) { return "/opt/axis/bin/axis", nil },
+		run:        func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	}
+	if _, err := installDaemonService(context.Background(), "/tmp/axis.sock", "1m", deps); err != nil {
+		t.Fatalf("fixture install: %v", err)
+	}
+	wantErr := errors.New("writer unavailable")
+
+	err := runDaemonServiceUninstall(context.Background(), rejectingOutputWriter{err: wantErr}, deps)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	path, _ := daemonServicePath("linux", home)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("service was not removed before reporting failure: %v", err)
 	}
 }
