@@ -125,8 +125,6 @@ Layer 1  Fact Plane   internal/facts  internal/discovery  internal/mesh
 ```text
 cmd/axis/             Cobra CLI — one file per subcommand (28 commands)
 
-
-
 internal/config/      Load ~/.axis/nodes.yaml; strict YAML parsing
 internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
                       pressure, thermal, battery, network, TurboQuant, AFM
@@ -223,7 +221,6 @@ HDD penalty: −15 for heavy inference.
 | `axis mesh` | Gossip mesh peer diagnostics (subcommands: `status`, `peers`) |
 | `axis observations` | Show execution observations tracked by the cluster |
 
-
 ### Exit codes (`cmd/axis/exit.go`)
 
 | Code | Constant | Meaning |
@@ -252,7 +249,6 @@ development/recovery path, not a persistence mechanism.
 `~/.axis/ai.yaml` — optional inference **backends** and **roles** (see
 `ai.example.yaml` and `docs/runbooks/ai-config.md`). Separate from
 `ai_providers` / `agent.default_model` in `nodes.yaml` (`chat.default_model` still accepted).
-
 
 Optional UDP discovery block: `discovery.enabled`, `discovery.udp_port`
 (default 42424), `discovery.beacon_interval_sec` (default 3),
