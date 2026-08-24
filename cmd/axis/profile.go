@@ -47,8 +47,7 @@ func profileMatchCmd() *cobra.Command {
 			case "json", "yaml":
 				return printOutput(cmd.OutOrStdout(), output, format)
 			default:
-				printProfileMatchText(cmd, output)
-				return nil
+				return printProfileMatchText(cmd, output)
 			}
 		},
 	}
@@ -57,35 +56,37 @@ func profileMatchCmd() *cobra.Command {
 	return cmd
 }
 
-func printProfileMatchText(cmd *cobra.Command, output profileMatchOutput) {
-	out := cmd.OutOrStdout()
+func printProfileMatchText(cmd *cobra.Command, output profileMatchOutput) error {
+	var out strings.Builder
 	reqs := output.Requirements
 
-	fmt.Fprintf(out, "%s %s\n\n", ui.Bold("MATCHED CLASS:"), ui.Cyan(string(output.Match.Class)))
+	fmt.Fprintf(&out, "%s %s\n\n", ui.Bold("MATCHED CLASS:"), ui.Cyan(string(output.Match.Class)))
 	if len(output.Match.Notes) > 0 {
-		fmt.Fprintf(out, "%s\n", ui.Bold("Notes"))
+		fmt.Fprintf(&out, "%s\n", ui.Bold("Notes"))
 		for _, note := range output.Match.Notes {
-			fmt.Fprintf(out, "  %s %s\n", ui.Dim("-"), note)
+			fmt.Fprintf(&out, "  %s %s\n", ui.Dim("-"), note)
 		}
-		fmt.Fprintln(out)
+		fmt.Fprintln(&out)
 	}
 
-	fmt.Fprintf(out, "%s\n", ui.Bold("Inferred Requirements"))
-	fmt.Fprintf(out, "  %s %d MB\n", ui.Dim("Min RAM:"), reqs.MinFreeRAMMB)
+	fmt.Fprintf(&out, "%s\n", ui.Bold("Inferred Requirements"))
+	fmt.Fprintf(&out, "  %s %d MB\n", ui.Dim("Min RAM:"), reqs.MinFreeRAMMB)
 	if len(reqs.RequiredTools) > 0 {
-		fmt.Fprintf(out, "  %s %s\n", ui.Dim("Required tools:"), strings.Join(reqs.RequiredTools, ", "))
+		fmt.Fprintf(&out, "  %s %s\n", ui.Dim("Required tools:"), strings.Join(reqs.RequiredTools, ", "))
 	} else {
-		fmt.Fprintf(out, "  %s none\n", ui.Dim("Required tools:"))
+		fmt.Fprintf(&out, "  %s none\n", ui.Dim("Required tools:"))
 	}
 	if len(reqs.PreferredBackends) > 0 {
-		fmt.Fprintf(out, "  %s %s\n", ui.Dim("Preferred backends:"), strings.Join(reqs.PreferredBackends, ", "))
+		fmt.Fprintf(&out, "  %s %s\n", ui.Dim("Preferred backends:"), strings.Join(reqs.PreferredBackends, ", "))
 	} else {
-		fmt.Fprintf(out, "  %s none\n", ui.Dim("Preferred backends:"))
+		fmt.Fprintf(&out, "  %s none\n", ui.Dim("Preferred backends:"))
 	}
 	if reqs.ContextWindowTokens > 0 {
-		fmt.Fprintf(out, "  %s %d\n", ui.Dim("Context window tokens:"), reqs.ContextWindowTokens)
+		fmt.Fprintf(&out, "  %s %d\n", ui.Dim("Context window tokens:"), reqs.ContextWindowTokens)
 	} else {
-		fmt.Fprintf(out, "  %s none\n", ui.Dim("Context window tokens:"))
+		fmt.Fprintf(&out, "  %s none\n", ui.Dim("Context window tokens:"))
 	}
-	fmt.Fprintf(out, "  %s %t\n", ui.Dim("Prefers turboquant:"), reqs.PrefersTurboQuant)
+	fmt.Fprintf(&out, "  %s %t\n", ui.Dim("Prefers turboquant:"), reqs.PrefersTurboQuant)
+	_, err := fmt.Fprint(cmd.OutOrStdout(), out.String())
+	return err
 }
