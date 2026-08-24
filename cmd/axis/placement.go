@@ -48,7 +48,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 			cacheRequested := cached || cachedOnly
 
@@ -63,6 +63,9 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
 				return err
 			}

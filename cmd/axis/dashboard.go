@@ -80,7 +80,7 @@ axis cluster summary is the same command.`,
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 
 			snap, source, err := collectStatusSnapshot(
@@ -93,6 +93,9 @@ axis cluster summary is the same command.`,
 				discoverLiveSnapshot,
 			)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 				return err
 			}

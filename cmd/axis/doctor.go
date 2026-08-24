@@ -216,6 +216,9 @@ func installCheckFor(self string, shadows []string) DoctorCheck {
 }
 
 func runDoctor(cmd *cobra.Command, strict bool) error {
+	if err := cmd.Context().Err(); err != nil {
+		return err
+	}
 	out := cmd.OutOrStdout()
 	var checks []DoctorCheck
 
@@ -374,7 +377,7 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 
 	// 3. Daemon health check
 	daemonAddr := api.DefaultAddr()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 	snap, _, daemonErr := fetchStatusSnapshot(ctx, daemonAddr)
 	cancel()
 	if daemonErr != nil || snap == nil {
