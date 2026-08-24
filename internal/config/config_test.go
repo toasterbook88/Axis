@@ -594,6 +594,36 @@ func TestLoad_AIProviders_Absent_BackwardCompat(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidAIProviderNumericValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{name: "negative priority", body: "ai_providers:\n  local:\n    type: local\n    priority: -1\n", wantErr: "priority must be between 0 and 100"},
+		{name: "oversized priority", body: "ai_providers:\n  local:\n    type: local\n    priority: 101\n", wantErr: "priority must be between 0 and 100"},
+		{name: "negative model cost", body: "ai_providers:\n  local:\n    type: local\n    models:\n      - name: model-a\n        cost_per_1k: -0.01\n", wantErr: "cost_per_1k must be a finite non-negative value"},
+		{name: "NaN model cost", body: "ai_providers:\n  local:\n    type: local\n    models:\n      - name: model-a\n        cost_per_1k: .nan\n", wantErr: "cost_per_1k must be a finite non-negative value"},
+		{name: "negative request cap", body: "inference:\n  max_cost_per_request: -0.01\n", wantErr: "max_cost_per_request must be a finite non-negative value"},
+		{name: "infinite alert threshold", body: "inference:\n  budget_alert_threshold: .inf\n", wantErr: "budget_alert_threshold must be a finite non-negative value"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "nodes.yaml")
+			body := "nodes:\n  - name: node-a\n    hostname: node-a.local\n    ssh_user: user\n" + tt.body
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoad_InferenceConfig_Parses(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nodes.yaml")
