@@ -102,8 +102,8 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if err := runner.Probe(ctx, nf, cfgNode, plan.Port); err != nil {
 		return fmt.Errorf("started but probe failed: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s\n", plan.Argv[0], plan.Node, plan.Port, plan.Volume)
-	return nil
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s\n", plan.Argv[0], plan.Node, plan.Port, plan.Volume)
+	return err
 }
 
 func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port int, runner modelProcessRunner) error {
@@ -117,8 +117,8 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	if err := runner.Stop(ctx, nf, cfgNode, port); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "stopped %s:%d\n", nf.Name, port)
-	return nil
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "stopped %s:%d\n", nf.Name, port)
+	return err
 }
 
 func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *config.NodeConfig, error) {
