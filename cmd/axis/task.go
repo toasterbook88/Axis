@@ -69,9 +69,10 @@ func taskPlaceCmd() *cobra.Command {
 	var cacheAddr string
 
 	cmd := &cobra.Command{
-		Use:   "place [description]",
-		Short: "Select the best node to run a task (advisory only)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "place [description]",
+		Short:   "Select the best node to run a task (advisory only)",
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -140,7 +141,7 @@ func taskPlaceCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&format, "format", "", "Output format: json")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
 	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
@@ -483,9 +484,10 @@ func taskContextCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "context [description]",
-		Short: "Emit 200-token context block for Gemini/Codex/Copilot/OpenCode",
-		Args:  cobra.ExactArgs(1),
+		Use:     "context [description]",
+		Short:   "Emit 200-token context block for Gemini/Codex/Copilot/OpenCode",
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

@@ -42,8 +42,9 @@ func mcpClientCmd() *cobra.Command {
 func mcpClientListCmd() *cobra.Command {
 	var format string
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List configured MCP servers and connection status",
+		Use:     "list",
+		Short:   "List configured MCP servers and connection status",
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMCPClientList(cmd.Context(), cmd.OutOrStdout(), format)
 		},
@@ -135,8 +136,9 @@ func mcpClientToolsCmd() *cobra.Command {
 	var server string
 	var format string
 	cmd := &cobra.Command{
-		Use:   "tools",
-		Short: "List tools from connected MCP servers",
+		Use:     "tools",
+		Short:   "List tools from connected MCP servers",
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMCPClientTools(cmd.Context(), cmd.OutOrStdout(), server, format)
 		},
@@ -313,8 +315,9 @@ func mcpClientResourcesCmd() *cobra.Command {
 	var server string
 	var format string
 	cmd := &cobra.Command{
-		Use:   "resources",
-		Short: "List resources from connected MCP servers",
+		Use:     "resources",
+		Short:   "List resources from connected MCP servers",
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMCPClientResources(cmd.Context(), cmd.OutOrStdout(), server, format)
 		},
@@ -421,8 +424,9 @@ func mcpClientPromptsCmd() *cobra.Command {
 	var server string
 	var format string
 	cmd := &cobra.Command{
-		Use:   "prompts",
-		Short: "List prompts from connected MCP servers",
+		Use:     "prompts",
+		Short:   "List prompts from connected MCP servers",
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMCPClientPrompts(cmd.Context(), cmd.OutOrStdout(), server, format)
 		},

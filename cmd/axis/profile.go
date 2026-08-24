@@ -29,9 +29,10 @@ func profileMatchCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "match [intent]",
-		Short: "See which workload class and requirements match an intent string",
-		Args:  cobra.ExactArgs(1),
+		Use:     "match [intent]",
+		Short:   "See which workload class and requirements match an intent string",
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			intent := args[0]
 			match := workload.Match(intent)
