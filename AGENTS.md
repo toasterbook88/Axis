@@ -123,7 +123,7 @@ Layer 1  Fact Plane   internal/facts  internal/discovery  internal/mesh
 ### Stable operator path
 
 ```text
-cmd/axis/             Cobra CLI — one file per subcommand (28 commands)
+cmd/axis/             Cobra CLI — one file per subcommand (29 commands)
 
 internal/config/      Load ~/.axis/nodes.yaml; strict YAML parsing
 internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
@@ -188,7 +188,7 @@ HDD penalty: −15 for heavy inference.
 
 ## CLI Subcommands
 
-28 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
+29 top-level commands registered via `AddCommand` in `cmd/axis/main.go`:
 
 | Command | Purpose |
 | --------- | --------- |
@@ -220,6 +220,7 @@ HDD penalty: −15 for heavy inference.
 | `axis init` | Interactive cluster configuration wizard |
 | `axis mesh` | Gossip mesh peer diagnostics (subcommands: `status`, `peers`) |
 | `axis observations` | Show execution observations tracked by the cluster |
+| `axis tui` | Interactive full-screen Bubble Tea cluster dashboard |
 
 ### Exit codes (`cmd/axis/exit.go`)
 
@@ -289,11 +290,13 @@ file outputs for degraded-state recovery.
 
 ## Dependencies
 
-12 direct dependencies (`go.mod`; versions authoritative in go.mod):
+14 direct dependencies (`go.mod`; versions authoritative in go.mod):
 
 | Module | Purpose |
 | -------- | --------- |
 | `al.essio.dev/pkg/shellescape` | Shell argument escaping |
+| `github.com/charmbracelet/bubbletea` | Elm-architecture TUI runtime (`axis tui`) |
+| `github.com/charmbracelet/lipgloss` | TUI layout/styling (`axis tui`) |
 | `github.com/chzyer/readline` | Interactive line editing (agent/chat flows) |
 | `github.com/fatih/color` | Terminal color output |
 | `github.com/google/uuid` | Event/reservation/provenance identifiers |
