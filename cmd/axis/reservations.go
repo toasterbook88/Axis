@@ -717,13 +717,14 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
 	default:
-		out := cmd.OutOrStdout()
+		var b strings.Builder
 		if healthy {
-			fmt.Fprintln(out, "No issues found. Cluster reservations are healthy.")
-			return nil
+			fmt.Fprintln(&b, "No issues found. Cluster reservations are healthy.")
+			_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+			return err
 		}
 
-		fmt.Fprintf(out, "Reservations Doctor report:\n\n")
+		fmt.Fprintf(&b, "Reservations Doctor report:\n\n")
 		tbl := ui.NewTable("SEVERITY", "CATEGORY", "NODE", "RESERVATION ID", "DETAILS")
 		for _, f := range findings {
 			sevStr := f.Severity
@@ -747,15 +748,16 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 				f.Message,
 			)
 		}
-		tbl.Render(out)
+		tbl.Render(&b)
 
 		if fix && len(fixed) > 0 {
-			fmt.Fprintf(out, "\nSuccessfully fixed %d issue(s):\n", len(fixed))
+			fmt.Fprintf(&b, "\nSuccessfully fixed %d issue(s):\n", len(fixed))
 			for _, f := range fixed {
-				fmt.Fprintf(out, "  - Released %s reservation %s on node %s\n", f.Type, f.EntryID, f.Node)
+				fmt.Fprintf(&b, "  - Released %s reservation %s on node %s\n", f.Type, f.EntryID, f.Node)
 			}
 		}
 
-		return nil
+		_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+		return err
 	}
 }
