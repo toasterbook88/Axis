@@ -360,7 +360,7 @@ func agentCmd() *cobra.Command {
 				}
 				fmt.Fprintln(w)
 				if historyPath != "" {
-					_ = a.Conversation().SaveToFile(historyPath)
+					_ = saveAgentConversation(a.Conversation(), historyPath, errW)
 				}
 				return nil
 			}
@@ -464,9 +464,7 @@ func agentCmd() *cobra.Command {
 			}
 
 			if historyPath != "" && a.Conversation().HistoryCount() > 0 {
-				if err := a.Conversation().SaveToFile(historyPath); err != nil {
-					fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
-				} else {
+				if err := saveAgentConversation(a.Conversation(), historyPath, errW); err == nil {
 					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", a.Conversation().HistoryCount())
 				}
 			}
@@ -657,9 +655,17 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 	}
 
 	if historyPath != "" && a.Conversation().HistoryCount() > 0 {
-		_ = a.Conversation().SaveToFile(historyPath)
+		_ = saveAgentConversation(a.Conversation(), historyPath, errW)
 	}
 
+	return nil
+}
+
+func saveAgentConversation(conversation *chat.Conversation, historyPath string, errW io.Writer) error {
+	if err := conversation.SaveToFile(historyPath); err != nil {
+		fmt.Fprintf(errW, "warning: could not save conversation: %v\n", err)
+		return err
+	}
 	return nil
 }
 
