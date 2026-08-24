@@ -7,6 +7,7 @@
 ### Bug Fixes
 
 * **Model:** Fail closed when an observed remote node has no matching `nodes.yaml` entry instead of running the model lifecycle command on the local machine. Snapshot-confirmed local nodes remain executable without an SSH seed.
+* **AI:** Resolve each backend's `node` as the documented `nodes.yaml` name before classifying locality or choosing between `base_url` and `advertise_url`. Logical node names no longer make an on-box backend appear to be a peer or probe its off-box URL.
 
 
 
