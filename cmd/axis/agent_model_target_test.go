@@ -636,7 +636,7 @@ func TestModelChoicesAdvertiseURLUnreachableIsDisabled(t *testing.T) {
 		return false
 	}
 
-	choices := modelChoicesFromAIConfig()
+	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 {
 		t.Fatalf("choices=%+v", choices)
 	}
@@ -691,7 +691,7 @@ func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
 		return strings.Contains(url, "nemotron.lan.axismcp.org")
 	}
 
-	choices := modelChoicesFromAIConfig()
+	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 {
 		t.Fatalf("choices=%+v", choices)
 	}
@@ -704,7 +704,7 @@ func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
 	}
 }
 
-func TestModelChoicesLocalBackendKeepsBaseURL(t *testing.T) {
+func TestModelChoicesLocalNodeBindingKeepsBaseURL(t *testing.T) {
 	prevLoad := inferenceAILoadFn
 	prevResolve := inferenceResolveFn
 	prevProbe := inferenceProbeFn
@@ -721,6 +721,7 @@ func TestModelChoicesLocalBackendKeepsBaseURL(t *testing.T) {
 				Kind:         config.AIBackendOpenAICompatible,
 				BaseURL:      "http://127.0.0.1:8081/v1",
 				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+				Node:         "node-a",
 			},
 		},
 		Roles: map[string]config.AIRoleConfig{
@@ -741,7 +742,10 @@ func TestModelChoicesLocalBackendKeepsBaseURL(t *testing.T) {
 		return strings.Contains(url, "127.0.0.1:8081")
 	}
 
-	choices := modelChoicesFromAIConfig()
+	choices := modelChoicesFromAIConfig(&config.Config{Nodes: []config.NodeConfig{{
+		Name:     "node-a",
+		Hostname: "127.0.0.1",
+	}}})
 	if len(choices) != 1 {
 		t.Fatalf("choices=%+v", choices)
 	}

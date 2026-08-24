@@ -17,8 +17,11 @@ import (
 
 // Test seams for AI config path resolution.
 var (
-	aiConfigPathFn = config.DefaultAIConfigPath
-	aiLoadFn       = config.LoadAIOrEmpty
+	aiConfigPathFn     = config.DefaultAIConfigPath
+	aiLoadFn           = config.LoadAIOrEmpty
+	aiNodeConfigLoadFn = func() (*config.Config, error) {
+		return config.Load(config.DefaultConfigPath())
+	}
 )
 
 func aiCmd() *cobra.Command {
@@ -63,12 +66,13 @@ func aiBackendsCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "No backends configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
 				return nil
 			}
+			nodeCfg, _ := aiNodeConfigLoadFn()
 
 			var probes []llmrouter.BackendProbe
 			if !skipProbe {
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
-				probes = llmrouter.ProbeAllBackends(ctx, cfg, nil)
+				probes = llmrouter.ProbeAllBackendsForNodes(ctx, cfg, nil, nodeCfg)
 			} else {
 				for _, b := range cfg.Backends {
 					probes = append(probes, llmrouter.BackendProbe{
@@ -101,7 +105,7 @@ func aiBackendsCmd() *cobra.Command {
 					if p.ProbedURL != "" && p.ProbedURL != p.BaseURL {
 						displayURL = p.ProbedURL
 					}
-					loc := llmrouter.ViewLocality(config.AIBackendConfig{Node: p.Node, BaseURL: p.BaseURL})
+					loc := llmrouter.ViewLocalityForNodes(config.AIBackendConfig{Node: p.Node, BaseURL: p.BaseURL}, nodeCfg)
 					fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-6s %-18s %-8s %s",
 						p.Backend, loc, p.Kind, status, displayURL)
 					if p.Node != "" {
@@ -223,12 +227,14 @@ any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
 
 			// Strict by default when probing; skip-probe cannot verify listing.
 			requireListed := !skipProbe && !allowUnlisted
+			nodeCfg, _ := aiNodeConfigLoadFn()
 
 			dec, err := llmrouter.ResolveRole(ctx, cfg, llmrouter.ResolveRoleOptions{
 				Role:               role,
 				Model:              model,
 				SkipProbe:          skipProbe,
 				RequireModelListed: requireListed,
+				NodeConfig:         nodeCfg,
 			})
 			if err != nil {
 				// Still print partial decision for operators when useful.
