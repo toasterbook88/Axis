@@ -117,6 +117,17 @@ func TestPlacementCommandPropagatesWriterFailures(t *testing.T) {
 	}
 }
 
+func TestProfileMatchTextPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	cmd := profileMatchCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&strings.Builder{})
+	cmd.SetArgs([]string{"build a Go project"})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
 func TestTaskPlaceCommandPropagatesWriterFailures(t *testing.T) {
 	wantErr := errors.New("writer unavailable")
 	t.Cleanup(stubTaskLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
