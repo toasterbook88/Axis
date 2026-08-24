@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -682,4 +683,95 @@ func TestReservationsDoctorFindingsAndFix(t *testing.T) {
 	if entries[0].ID != "valid-1" {
 		t.Errorf("expected remaining entry to be valid-1, got %s", entries[0].ID)
 	}
+}
+
+func TestReservationsDoctorFixHonorsShorterStaleWindow(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t, &reservation.Entry{
+		ID:            "custom-stale",
+		Node:          "node-a",
+		RAMMB:         1024,
+		CreatedAt:     now.Add(-time.Minute),
+		LastHeartbeat: now.Add(-30 * time.Second),
+	})
+
+	cmd := reservationsDoctorCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--fix", "--format", "json", "--stale-window", "10s"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("doctor fix: %v", err)
+	}
+
+	var result struct {
+		Fixed []DoctorFinding `json:"fixed"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v\noutput: %s", err, stdout.String())
+	}
+	if len(result.Fixed) != 1 || result.Fixed[0].EntryID != "custom-stale" {
+		t.Fatalf("fixed = %#v, want custom-stale", result.Fixed)
+	}
+	if entries := loadDoctorLedgerFixture(t); len(entries) != 0 {
+		t.Fatalf("ledger still contains custom-window stale entry: %#v", entries)
+	}
+}
+
+func TestReservationsDoctorFixPreservesEntriesActiveForLongerWindow(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t, &reservation.Entry{
+		ID:            "custom-active",
+		Node:          "node-a",
+		RAMMB:         1024,
+		CreatedAt:     now.Add(-5 * time.Minute),
+		LastHeartbeat: now.Add(-3 * time.Minute),
+	})
+
+	cmd := reservationsDoctorCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--fix", "--format", "json", "--stale-window", "10m"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("doctor fix: %v", err)
+	}
+
+	var result struct {
+		Fixed []DoctorFinding `json:"fixed"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v\noutput: %s", err, stdout.String())
+	}
+	if len(result.Fixed) != 0 {
+		t.Fatalf("fixed = %#v, want no liveness remediation", result.Fixed)
+	}
+	entries := loadDoctorLedgerFixture(t)
+	if len(entries) != 1 || entries[0].ID != "custom-active" {
+		t.Fatalf("ledger entries = %#v, want custom-active preserved", entries)
+	}
+}
+
+func writeDoctorLedgerFixture(t *testing.T, entries ...*reservation.Entry) {
+	t.Helper()
+	data, err := json.Marshal(struct {
+		Entries []*reservation.Entry `json:"entries"`
+	}{Entries: entries})
+	if err != nil {
+		t.Fatalf("marshal ledger fixture: %v", err)
+	}
+	if err := os.WriteFile(reservation.Path(), data, 0600); err != nil {
+		t.Fatalf("write ledger fixture: %v", err)
+	}
+}
+
+func loadDoctorLedgerFixture(t *testing.T) []reservation.Entry {
+	t.Helper()
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	if err := ledger.LoadReadOnly(); err != nil {
+		t.Fatalf("load ledger fixture: %v", err)
+	}
+	return ledger.Entries()
 }
