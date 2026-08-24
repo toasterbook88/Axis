@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,48 @@ discovery:
 	}
 	if cfg.Discovery.UDPPort != 42424 {
 		t.Fatalf("expected discovery udp_port 42424, got %d", cfg.Discovery.UDPPort)
+	}
+}
+
+func TestLoadRejectsInvalidNetworkAndDurationValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		nodeField string
+		discovery string
+		wantErr   string
+	}{
+		{name: "negative SSH port", nodeField: "ssh_port: -1", wantErr: "ssh_port must be between 1 and 65535"},
+		{name: "oversized SSH port", nodeField: "ssh_port: 65536", wantErr: "ssh_port must be between 1 and 65535"},
+		{name: "negative legacy timeout", nodeField: "timeout_sec: -1", wantErr: "timeout_sec cannot be negative"},
+		{name: "negative dial timeout", nodeField: "dial_timeout_sec: -1", wantErr: "dial_timeout_sec cannot be negative"},
+		{name: "negative collect timeout", nodeField: "collect_timeout_sec: -1", wantErr: "collect_timeout_sec cannot be negative"},
+		{name: "overflowing timeout", nodeField: "timeout_sec: 9223372037", wantErr: "timeout_sec exceeds the maximum supported duration"},
+		{name: "negative discovery port", discovery: "udp_port: -1", wantErr: "discovery.udp_port must be between 1 and 65535"},
+		{name: "oversized discovery port", discovery: "udp_port: 65536", wantErr: "discovery.udp_port must be between 1 and 65535"},
+		{name: "negative beacon interval", discovery: "beacon_interval_sec: -1", wantErr: "discovery.beacon_interval_sec cannot be negative"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeField := ""
+			if tt.nodeField != "" {
+				nodeField = "    " + tt.nodeField + "\n"
+			}
+			discovery := ""
+			if tt.discovery != "" {
+				discovery = "discovery:\n  enabled: true\n  " + tt.discovery + "\n"
+			}
+			path := filepath.Join(t.TempDir(), "nodes.yaml")
+			body := fmt.Sprintf("nodes:\n  - name: node-a\n    hostname: node-a.local\n    ssh_user: user\n%s%s", nodeField, discovery)
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

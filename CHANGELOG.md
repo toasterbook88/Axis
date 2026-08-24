@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Config:** Reject negative or overflowing node/discovery durations and out-of-range SSH/UDP ports during `nodes.yaml` load instead of silently defaulting malformed values or failing later in socket/timer paths.
 * **AI:** Reject non-positive backend and route probe budgets instead of constructing an already-expired context and reporting every configured backend as unavailable.
 * **Reservations/CLI:** Make `reservations doctor --fix` remediate exactly the entries classified by the requested `--stale-window`, persist each release before reporting it fixed, and reject non-positive stale/watch/refresh durations before destructive work or ticker construction.
 * **CLI:** Route non-streaming command output and diagnostics through Cobra's configured writers, including context, skills, placement, status, and summary; structured/text helpers now propagate write failures instead of reporting success after dropped output.
