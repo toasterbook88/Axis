@@ -77,8 +77,10 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab++
 			}
 
-		case "?":
-			m.statusMsg = "j/k: navigate | 1-4: tabs | r: refresh | h/l: switch tab | q: quit"
+		case "p":
+			// Open placement wizard modal
+			m.modal = NewPlacementModal()
+			m.modalActive = true
 			return m, nil
 
 		case "enter":
