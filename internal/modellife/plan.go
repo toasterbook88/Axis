@@ -18,11 +18,11 @@ type StartPlan struct {
 }
 
 // PlanStart validates weights sit on a named local volume and that
-// llama-server is an observed tool. Port must be explicit.
+// llama-server is an observed tool. Port must be explicit and valid.
 func PlanStart(node models.NodeFacts, weights string, port int) (StartPlan, error) {
 	weights = path.Clean(strings.TrimSpace(weights))
-	if port <= 0 {
-		return StartPlan{}, fmt.Errorf("port is required")
+	if port < 1 || port > 65535 {
+		return StartPlan{}, fmt.Errorf("port must be between 1 and 65535")
 	}
 	if weights == "" || weights == "." {
 		return StartPlan{}, fmt.Errorf("weights path is required")
