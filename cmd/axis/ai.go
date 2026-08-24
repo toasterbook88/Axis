@@ -54,10 +54,17 @@ func aiBackendsCmd() *cobra.Command {
 		skipProbe bool
 		timeout   time.Duration
 	)
+	validateFormat := validateOutputFormat(&format, "text", "json", "yaml")
+	validateTimeout := validatePositiveDuration("timeout", &timeout)
 	cmd := &cobra.Command{
-		Use:     "backends",
-		Short:   "List configured inference backends (optional live probe)",
-		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
+		Use:   "backends",
+		Short: "List configured inference backends (optional live probe)",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(cmd, args); err != nil {
+				return err
+			}
+			return validateTimeout(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadAIConfig(aiPath)
 			if err != nil {
@@ -204,6 +211,8 @@ func aiRouteCmd() *cobra.Command {
 		allowUnlisted bool
 		timeout       time.Duration
 	)
+	validateFormat := validateOutputFormat(&format, "text", "json", "yaml")
+	validateTimeout := validatePositiveDuration("timeout", &timeout)
 	cmd := &cobra.Command{
 		Use:   "route [role]",
 		Short: "Dry-run: resolve a role (or model) to a backend",
@@ -219,8 +228,13 @@ any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
   axis ai route --model fast-chat
   axis ai route long --format json --skip-probe
   axis ai route default --allow-unlisted`,
-		Args:    cobra.MaximumNArgs(1),
-		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
+		Args: cobra.MaximumNArgs(1),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(cmd, args); err != nil {
+				return err
+			}
+			return validateTimeout(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadAIConfig(aiPath)
 			if err != nil {

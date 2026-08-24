@@ -20,6 +20,8 @@ func TestCommandsRejectNonPositiveDurationFlags(t *testing.T) {
 		{name: "serve refresh", cmd: serveCmd, args: []string{"--refresh", "0s"}, wantErr: "--refresh must be greater than zero"},
 		{name: "daemon refresh", cmd: daemonStartCmd, args: []string{"--refresh", "-1s"}, wantErr: "--refresh must be greater than zero"},
 		{name: "reservations stale window", cmd: reservationsDoctorCmd, args: []string{"--stale-window", "0s"}, wantErr: "--stale-window must be greater than zero"},
+		{name: "AI backend probe timeout", cmd: aiBackendsCmd, args: []string{"--timeout", "0s"}, wantErr: "--timeout must be greater than zero"},
+		{name: "AI route probe timeout", cmd: aiRouteCmd, args: []string{"default", "--timeout", "-1s"}, wantErr: "--timeout must be greater than zero"},
 	}
 
 	for _, tt := range tests {
