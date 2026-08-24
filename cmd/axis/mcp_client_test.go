@@ -34,6 +34,22 @@ func TestMCPClientListEmptyConfig(t *testing.T) {
 	}
 }
 
+func TestMCPClientListEmptyConfigJSON(t *testing.T) {
+	previous := loadMCPClientConfig
+	t.Cleanup(func() { loadMCPClientConfig = previous })
+	loadMCPClientConfig = func(string) (*config.Config, error) {
+		return &config.Config{MCPServers: map[string]config.MCPServerConfig{}}, nil
+	}
+
+	var buf bytes.Buffer
+	if err := runMCPClientList(context.Background(), &buf, "json"); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if got := buf.String(); got != "[]\n" {
+		t.Fatalf("output = %q, want empty JSON array", got)
+	}
+}
+
 func TestMCPClientListJSON(t *testing.T) {
 	restore := func() {
 		loadMCPClientConfig = config.Load
