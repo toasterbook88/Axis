@@ -106,8 +106,9 @@ func observationsListCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List execution observations from the local state ledger",
+		Use:     "list",
+		Short:   "List execution observations from the local state ledger",
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := loadObservationsState()
 			if err != nil {
@@ -163,9 +164,10 @@ func observationsInspectCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "inspect <key>",
-		Short: "Show full details of an execution observation",
-		Args:  cobra.ExactArgs(1),
+		Use:     "inspect <key>",
+		Short:   "Show full details of an execution observation",
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 			st, err := loadObservationsState()

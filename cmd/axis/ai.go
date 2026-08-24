@@ -55,8 +55,9 @@ func aiBackendsCmd() *cobra.Command {
 		timeout   time.Duration
 	)
 	cmd := &cobra.Command{
-		Use:   "backends",
-		Short: "List configured inference backends (optional live probe)",
+		Use:     "backends",
+		Short:   "List configured inference backends (optional live probe)",
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadAIConfig(aiPath)
 			if err != nil {
@@ -137,8 +138,9 @@ func aiRolesCmd() *cobra.Command {
 		aiPath string
 	)
 	cmd := &cobra.Command{
-		Use:   "roles",
-		Short: "List configured inference roles",
+		Use:     "roles",
+		Short:   "List configured inference roles",
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadAIConfig(aiPath)
 			if err != nil {
@@ -201,7 +203,8 @@ any healthy backend. Use --allow-unlisted to restore lazy-load acceptance.
   axis ai route --model fast-chat
   axis ai route long --format json --skip-probe
   axis ai route default --allow-unlisted`,
-		Args: cobra.MaximumNArgs(1),
+		Args:    cobra.MaximumNArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadAIConfig(aiPath)
 			if err != nil {

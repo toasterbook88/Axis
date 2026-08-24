@@ -23,8 +23,9 @@ func factsCmd() *cobra.Command {
 	var verbose bool
 
 	cmd := &cobra.Command{
-		Use:   "facts",
-		Short: "Collect and display local node facts",
+		Use:     "facts",
+		Short:   "Collect and display local node facts",
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()

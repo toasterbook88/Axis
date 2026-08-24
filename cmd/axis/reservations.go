@@ -189,8 +189,9 @@ func reservationsListCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List active reservations from the local ledger",
+		Use:     "list",
+		Short:   "List active reservations from the local ledger",
+		PreRunE: validateOutputFormat(&format, "text", "json", "ndjson"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 			if err := ledger.Load(); err != nil {
@@ -241,9 +242,10 @@ func reservationsInspectCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "inspect <id>",
-		Short: "Show full details of a reservation",
-		Args:  cobra.ExactArgs(1),
+		Use:     "inspect <id>",
+		Short:   "Show full details of a reservation",
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
@@ -301,9 +303,10 @@ func reservationsReleaseCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "release <id>",
-		Short: "Release a reservation from the local ledger",
-		Args:  cobra.ExactArgs(1),
+		Use:     "release <id>",
+		Short:   "Release a reservation from the local ledger",
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
@@ -458,8 +461,9 @@ func reservationsDoctorCmd() *cobra.Command {
 	var cacheAddr string
 
 	cmd := &cobra.Command{
-		Use:   "doctor",
-		Short: "Diagnose reservation inconsistencies, stale leases, and memory leaks",
+		Use:     "doctor",
+		Short:   "Diagnose reservation inconsistencies, stale leases, and memory leaks",
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReservationsDoctor(cmd, fix, format, staleWindow, cacheAddr)
 		},

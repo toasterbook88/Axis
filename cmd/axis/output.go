@@ -2,7 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 const machineOutputSchemaV1 = "axis.output/v1"
@@ -36,4 +40,17 @@ func writeMachineOutput(out io.Writer, command, status string, ok bool, data any
 		Data:          data,
 		Warnings:      warnings,
 	})
+}
+
+func validateOutputFormat(format *string, allowed ...string) func(*cobra.Command, []string) error {
+	return func(_ *cobra.Command, _ []string) error {
+		normalized := strings.ToLower(strings.TrimSpace(*format))
+		for _, candidate := range allowed {
+			if normalized == candidate {
+				*format = normalized
+				return nil
+			}
+		}
+		return fmt.Errorf("invalid --format %q (expected one of: %s)", *format, strings.Join(allowed, ", "))
+	}
 }
