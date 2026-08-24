@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -119,23 +120,47 @@ func TestShellStopUsesFuserWhenAvailable(t *testing.T) {
 	logPath := filepath.Join(dir, "fuser.log")
 	writeModelTestExecutable(t, filepath.Join(dir, "fuser"), `#!/bin/sh
 printf '%s\n' "$*" >> "$AXIS_TEST_LOG"
+printf '%s\n' "$AXIS_TEST_PID"
 exit 0
 `)
 	writeModelTestExecutable(t, filepath.Join(dir, "lsof"), `#!/bin/sh
 exit 99
 `)
+	writeModelTestExecutable(t, filepath.Join(dir, "ps"), `#!/bin/sh
+printf '%s\n' llama-server
+`)
+
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			_ = sleeper.Process.Kill()
+			_ = sleeper.Wait()
+		}
+	})
 
 	cmd := exec.Command("/bin/sh", "-c", shellStop(8081))
-	cmd.Env = []string{"PATH=" + dir, "AXIS_TEST_LOG=" + logPath}
+	cmd.Env = []string{
+		"PATH=" + dir,
+		"AXIS_TEST_LOG=" + logPath,
+		"AXIS_TEST_PID=" + strconv.Itoa(sleeper.Process.Pid),
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("shellStop: %v: %s", err, out)
 	}
+	if err := sleeper.Wait(); err == nil {
+		t.Fatal("expected listener process to be killed")
+	}
+	waited = true
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(data)
-	if !strings.Contains(got, "8081/tcp") || !strings.Contains(got, "-k 8081/tcp") {
+	if !strings.Contains(got, "8081/tcp") {
 		t.Fatalf("fuser calls = %q", got)
 	}
 }
@@ -172,6 +197,27 @@ func TestShellStopFailsWhenNoPortToolExists(t *testing.T) {
 		t.Fatalf("error = %v, output = %q", err, out)
 	}
 	if !strings.Contains(string(out), "requires fuser or lsof") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+func TestShellStopRefusesNonLlamaServerListener(t *testing.T) {
+	dir := t.TempDir()
+	writeModelTestExecutable(t, filepath.Join(dir, "lsof"), `#!/bin/sh
+printf '%s\n' 4242
+`)
+	writeModelTestExecutable(t, filepath.Join(dir, "ps"), `#!/bin/sh
+printf '%s\n' postgres
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellStop(5432))
+	cmd.Env = []string{"PATH=" + dir}
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("error = %v, output = %q", err, out)
+	}
+	if !strings.Contains(string(out), "not llama-server") || !strings.Contains(string(out), "postgres") {
 		t.Fatalf("output = %q", out)
 	}
 }
