@@ -23,7 +23,7 @@ When you run a task via the CLI, the execution path (`internal/execution/guarded
 4. A `defer` ensures `ledger.Release(execID)` is called when the process exits.
 
 ### HTTP API
-`POST /v2/reservations` is scaffolded but **not yet implemented**. The handler currently returns `501 Not Implemented`. When wired, it will allow operators to create reservations manually via the ledger API.
+`POST /v2/reservations` creates a manual ledger entry after validating its node and positive RAM request. The authenticated API also supports listing reservations, fetching or deleting an entry by ID, and posting heartbeats to `/v2/reservations/{id}/heartbeat`.
 
 ## 3. How reservations expire
 
@@ -76,10 +76,15 @@ Returns:
 - `cluster`: per-node and cluster-wide summaries
 - `reservations`: full list of `Entry` objects with IDs, nodes, RAM, heartbeats, and owners
 
-### CLI (indirect)
-There is **no dedicated CLI subcommand** yet. Reservations are visible indirectly:
-- `axis status --cached` shows `RAMReservedMB` and `RAMAllocatableMB` per node.
-- `axis task place` reports allocatable headroom after subtracting reservations.
+### CLI
+`axis reservations` shows the active reservation table, using the daemon API when available and falling back to the local ledger. Dedicated subcommands provide local ledger workflows:
+
+- `axis reservations list [--format text|json|ndjson]`
+- `axis reservations inspect <id> [--format text|json]`
+- `axis reservations release <id> [--force] [--format text|json]`
+- `axis reservations doctor [--fix] [--stale-window 2m] [--format text|json]`
+
+Reservation-aware capacity is also visible through `axis status` and `axis task place`.
 
 ## 8. How stale reservations are reclaimed
 

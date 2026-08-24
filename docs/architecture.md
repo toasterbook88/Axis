@@ -35,7 +35,7 @@ The fact plane collects hardware and software facts from cluster nodes.
 | `RemoteCollector` | SSH into remote nodes via `transport.SSHExecutor` |
 | `Discovery` | Fan-out probes (maxParallel=10) with semaphore |
 | `UDP Beacons` | HMAC-SHA256 authenticated node announcements |
-| `Mesh Gossip` | Peer discovery scaffolding; HMAC only, no replay protection; not wired into CLI operator path |
+| `Mesh Gossip` | Live optional peer discovery started by `axis serve`; HMAC-authenticated, exposed through CLI/HTTP diagnostics, with replay protection still pending |
 
 **Facts collected per node:**
 - OS, architecture, hostname, kernel version
@@ -150,7 +150,7 @@ actions but never present generated output as cluster truth.
 |---------|----------|------|
 | `axis chat` | Ollama /api/chat | Interactive advisory with rolling context |
 | `axis agent` | Tool-calling loop | Read-only tools + safety-gated shell |
-| `axis mcp serve` | MCP over stdio | Read-only cluster diagnostics for LLM clients |
+| `axis mcp serve` | MCP over stdio | 17 read-only diagnostics plus 3 advisory lease primitives for LLM clients |
 | `axis serve` | HTTP (Unix socket) | Programmatic API for integrations |
 | `cortex` | Internal | Distributed vector memory + event bus |
 | `llmrouter` | Internal | Model routing and selection |
