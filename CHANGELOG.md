@@ -4,6 +4,10 @@
 
 * **AI:** `axis ai backends` prints a viewer-relative locality column: `here` (this process), `peer` (another enrolled node), `cloud` (public URL, no node). Backend names are unchanged.
 
+### Bug Fixes
+
+* **Model:** Fail closed when an observed remote node has no matching `nodes.yaml` entry instead of running the model lifecycle command on the local machine. Snapshot-confirmed local nodes remain executable without an SSH seed.
+
 
 
 ## v0.14.14 (2026-08-15)
