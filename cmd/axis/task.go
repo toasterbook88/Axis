@@ -109,7 +109,8 @@ func taskPlaceCmd() *cobra.Command {
 			}
 
 			// Human-readable output
-			w := cmd.OutOrStdout()
+			var rendered strings.Builder
+			w := &rendered
 			if !decision.OK {
 				if cacheRequested {
 					fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), source)
@@ -117,6 +118,9 @@ func taskPlaceCmd() *cobra.Command {
 				fmt.Fprintf(w, "%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
 					fmt.Fprintf(w, "  %s %s\n", ui.Dim("-"), r)
+				}
+				if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), rendered.String()); writeErr != nil {
+					return writeErr
 				}
 				return ExitCodeError{Code: ExitErrNoNodesFit, Message: "no suitable node found"}
 			}
@@ -140,7 +144,8 @@ func taskPlaceCmd() *cobra.Command {
 			for _, r := range decision.Reasoning {
 				fmt.Fprintf(w, "    %s %s\n", ui.Dim("-"), r)
 			}
-			return nil
+			_, err = fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+			return err
 		},
 	}
 
