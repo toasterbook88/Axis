@@ -310,7 +310,15 @@ func reservationsReleaseCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
-			if err := ledger.Load(); err != nil {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if err := ledger.LockFile(ctx); err != nil {
+				return fmt.Errorf("locking ledger for release: %w", err)
+			}
+			defer ledger.UnlockFile()
+			if err := ledger.LoadReadOnly(); err != nil {
 				return fmt.Errorf("loading ledger: %w", err)
 			}
 
@@ -328,10 +336,8 @@ func reservationsReleaseCmd() *cobra.Command {
 					"success": false,
 					"error":   fmt.Sprintf("reservation %q not found", id),
 				}
-				if format == "json" {
-					_ = json.NewEncoder(cmd.OutOrStdout()).Encode(result)
-				}
-				return ExitCodeError{Code: ExitErrGeneric, Message: fmt.Sprintf("reservation %q not found", id)}
+				primary := ExitCodeError{Code: ExitErrGeneric, Message: fmt.Sprintf("reservation %q not found", id)}
+				return writeReservationReleaseFailure(cmd, format, result, primary)
 			}
 
 			if !force && found.OwnerPID > 0 && found.OwnerPID != os.Getpid() {
@@ -339,10 +345,8 @@ func reservationsReleaseCmd() *cobra.Command {
 					"success": false,
 					"error":   fmt.Sprintf("reservation %q is owned by PID %d (current PID %d); use --force to override", id, found.OwnerPID, os.Getpid()),
 				}
-				if format == "json" {
-					_ = json.NewEncoder(cmd.OutOrStdout()).Encode(result)
-				}
-				return ExitCodeError{Code: ExitErrGeneric, Message: fmt.Sprintf("reservation %q is owned by PID %d (current PID %d); use --force to override", id, found.OwnerPID, os.Getpid())}
+				primary := ExitCodeError{Code: ExitErrGeneric, Message: fmt.Sprintf("reservation %q is owned by PID %d (current PID %d); use --force to override", id, found.OwnerPID, os.Getpid())}
+				return writeReservationReleaseFailure(cmd, format, result, primary)
 			}
 
 			if err := ledger.Release(id); err != nil {
@@ -350,21 +354,8 @@ func reservationsReleaseCmd() *cobra.Command {
 					"success": false,
 					"error":   err.Error(),
 				}
-				if format == "json" {
-					_ = json.NewEncoder(cmd.OutOrStdout()).Encode(result)
-				}
-				return ExitCodeError{Code: ExitErrGeneric, Message: err.Error()}
-			}
-
-			if err := ledger.Save(); err != nil {
-				result := map[string]interface{}{
-					"success": false,
-					"error":   fmt.Sprintf("failed to save ledger: %v", err),
-				}
-				if format == "json" {
-					_ = json.NewEncoder(cmd.OutOrStdout()).Encode(result)
-				}
-				return ExitCodeError{Code: ExitErrGeneric, Message: fmt.Sprintf("failed to save ledger: %v", err)}
+				primary := ExitCodeError{Code: ExitErrGeneric, Message: err.Error()}
+				return writeReservationReleaseFailure(cmd, format, result, primary)
 			}
 
 			result := map[string]interface{}{
@@ -374,13 +365,23 @@ func reservationsReleaseCmd() *cobra.Command {
 			if format == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Released reservation %s\n", id)
-			return nil
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Released reservation %s\n", id)
+			return err
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "Release even if not owned by the current process")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
+}
+
+func writeReservationReleaseFailure(cmd *cobra.Command, format string, result map[string]interface{}, primary error) error {
+	if format != "json" {
+		return primary
+	}
+	if err := json.NewEncoder(cmd.OutOrStdout()).Encode(result); err != nil {
+		return errors.Join(primary, fmt.Errorf("writing reservation release result: %w", err))
+	}
+	return primary
 }
 
 type DoctorFinding struct {

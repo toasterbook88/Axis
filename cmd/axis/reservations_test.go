@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -317,6 +318,64 @@ func TestReservationsReleaseForce(t *testing.T) {
 		t.Fatalf("expected release confirmation, got:\n%s", stdout)
 	}
 	_ = stderr
+}
+
+func TestReservationsReleasePreservesUnrelatedStaleEntry(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t,
+		&reservation.Entry{ID: "target", Node: "node-a", RAMMB: 512, CreatedAt: now, LastHeartbeat: now},
+		&reservation.Entry{ID: "unrelated-stale", Node: "node-b", RAMMB: 1024, CreatedAt: now.Add(-5 * time.Minute), LastHeartbeat: now.Add(-3 * time.Minute)},
+	)
+
+	cmd := reservationsReleaseCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"target"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("release target: %v", err)
+	}
+
+	entries := loadDoctorLedgerFixture(t)
+	if len(entries) != 1 || entries[0].ID != "unrelated-stale" {
+		t.Fatalf("ledger entries = %#v, want unrelated stale entry preserved", entries)
+	}
+}
+
+func TestReservationsReleasePropagatesWriterFailureAfterPersisting(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t, &reservation.Entry{ID: "target", Node: "node-a", RAMMB: 512, CreatedAt: now, LastHeartbeat: now})
+	wantErr := errors.New("writer unavailable")
+
+	cmd := reservationsReleaseCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"target"})
+	err := cmd.Execute()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	if entries := loadDoctorLedgerFixture(t); len(entries) != 0 {
+		t.Fatalf("release was not persisted: %#v", entries)
+	}
+}
+
+func TestReservationsReleaseJSONFailurePreservesWriterAndExitErrors(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	wantErr := errors.New("writer unavailable")
+
+	cmd := reservationsReleaseCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--format", "json", "missing"})
+	err := cmd.Execute()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+	if code := ExitCode(err); code != ExitErrGeneric {
+		t.Fatalf("exit code = %d, want %d", code, ExitErrGeneric)
+	}
 }
 
 func TestReservationsListText(t *testing.T) {
