@@ -16,9 +16,9 @@ type Model struct {
 	lastRefresh string
 
 	// Navigation
-	cursor        int   // Selected row index
-	contentOffset int   // Viewport scroll offset
-	activeTab     int   // Inspector tab (0=Details, 1=Backends, 2=Storage, 3=Reservations)
+	cursor        int // Selected row index
+	contentOffset int // Viewport scroll offset
+	activeTab     int // Inspector tab (0=Details, 1=Backends, 2=Storage, 3=Reservations)
 
 	// Viewport for scrollable content
 	viewport viewport.Model

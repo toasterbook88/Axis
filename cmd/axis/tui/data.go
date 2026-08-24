@@ -28,7 +28,7 @@ func loadSnapshotCmd() tea.Cmd {
 func loadDaemonSnapshot() (*models.ClusterSnapshot, error) {
 	// Try daemon cache first
 	cachePath := filepath.Join(os.Getenv("HOME"), ".local", "share", "axis", "snapshot.json")
-	
+
 	// Fallback to legacy path
 	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
 		cachePath = filepath.Join(os.Getenv("HOME"), ".axis", "snapshot.json")
