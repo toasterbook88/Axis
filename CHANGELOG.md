@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Reservations:** Revalidate every `reservations doctor --fix` finding against the locked, current ledger state so a heartbeat or ownership change between diagnosis and repair cannot release a revived reservation.
 * **Reservations:** Make `reservations release` hold the ledger lock across its read/check/write transaction, preserve unrelated stale entries, avoid a redundant second save, and surface text or JSON writer failures instead of reporting success after dropped output.
 * **Config/AI:** Reject provider priorities outside `0..100` and negative, NaN, or infinite model-cost and inference-budget values before they can distort provider ordering or bypass cost controls.
 * **Config:** Reject negative or overflowing node/discovery durations and out-of-range SSH/UDP ports during `nodes.yaml` load instead of silently defaulting malformed values or failing later in socket/timer paths.
