@@ -33,11 +33,26 @@ func statusCmd() *cobra.Command {
 	var cacheAddr string
 	var watch bool
 	var watchInterval time.Duration
+	validateFormat := validateOutputFormat(&format, "text", "json", "yaml")
 
 	cmd := &cobra.Command{
-		Use:     "status",
-		Short:   "Collect cluster snapshot from all configured nodes",
-		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
+		Use:   "status",
+		Short: "Collect cluster snapshot from all configured nodes",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(cmd, args); err != nil {
+				return err
+			}
+			if !watch {
+				return nil
+			}
+			if format != "text" {
+				return fmt.Errorf("--watch only supports --format text")
+			}
+			if watchInterval <= 0 {
+				return fmt.Errorf("--watch-interval must be greater than zero")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cacheRequested := cached || cachedOnly
 

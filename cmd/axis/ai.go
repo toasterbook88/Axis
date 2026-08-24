@@ -64,8 +64,16 @@ func aiBackendsCmd() *cobra.Command {
 				return err
 			}
 			if len(cfg.Backends) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No backends configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
-				return nil
+				empty := []llmrouter.BackendProbe{}
+				switch format {
+				case "json":
+					return writeJSON(cmd, empty)
+				case "yaml":
+					return writeYAML(cmd, empty)
+				default:
+					fmt.Fprintln(cmd.OutOrStdout(), "No backends configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
+					return nil
+				}
 			}
 			nodeCfg, _ := aiNodeConfigLoadFn()
 
@@ -147,8 +155,16 @@ func aiRolesCmd() *cobra.Command {
 				return err
 			}
 			if len(cfg.Roles) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No roles configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
-				return nil
+				empty := map[string]config.AIRoleConfig{}
+				switch format {
+				case "json":
+					return writeJSON(cmd, empty)
+				case "yaml":
+					return writeYAML(cmd, empty)
+				default:
+					fmt.Fprintln(cmd.OutOrStdout(), "No roles configured. Copy ai.example.yaml to ~/.axis/ai.yaml")
+					return nil
+				}
 			}
 			switch strings.ToLower(format) {
 			case "json":

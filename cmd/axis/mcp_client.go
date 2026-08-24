@@ -59,16 +59,19 @@ func runMCPClientList(ctx context.Context, out io.Writer, format string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	reg := mcpclient.NewRegistry()
+	defer reg.Close()
+
 	if len(cfg.MCPServers) == 0 {
+		if format == "json" {
+			return printMCPClientListJSON(out, reg)
+		}
 		fmt.Fprintln(out, "No MCP servers configured.")
 		fmt.Fprintf(out, "Add them to %s under mcp_servers:\n", config.DefaultConfigPath())
 		return nil
 	}
 
-	reg := mcpclient.NewRegistry()
-
 	reg.ConnectAll(ctx, cfg)
-	defer reg.Close()
 
 	if format == "json" {
 		return printMCPClientListJSON(out, reg)
@@ -104,8 +107,9 @@ func printMCPClientListJSON(out io.Writer, reg *mcpclient.Registry) error {
 		AvgLatencyMs int64  `json:"avg_latency_ms,omitempty"`
 		UptimeSec    int64  `json:"uptime_sec,omitempty"`
 	}
-	var rows []serverRow
-	for _, name := range reg.Names() {
+	names := reg.Names()
+	rows := make([]serverRow, 0, len(names))
+	for _, name := range names {
 		sc := reg.Get(name)
 		r := serverRow{
 			Name:      name,
