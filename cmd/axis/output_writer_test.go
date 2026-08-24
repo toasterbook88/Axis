@@ -50,6 +50,16 @@ func TestFactsTextPropagatesWriterFailures(t *testing.T) {
 	}
 }
 
+func TestVersionCommandPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	cmd := versionCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&strings.Builder{})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
 func TestContextAndSkillsCommandsPropagateWriterFailures(t *testing.T) {
 	t.Setenv("AXIS_HOME", t.TempDir())
 	wantErr := errors.New("writer unavailable")
