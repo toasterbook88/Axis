@@ -249,7 +249,7 @@ func reservationsInspectCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
-			if err := ledger.Load(); err != nil {
+			if err := ledger.LoadReadOnly(); err != nil {
 				return fmt.Errorf("loading ledger: %w", err)
 			}
 
@@ -270,27 +270,28 @@ func reservationsInspectCmd() *cobra.Command {
 			case "json":
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(found)
 			default:
-				out := cmd.OutOrStdout()
-				fmt.Fprintf(out, "ID:            %s\n", found.ID)
-				fmt.Fprintf(out, "Node:          %s\n", found.Node)
-				fmt.Fprintf(out, "RAM MB:        %d\n", found.RAMMB)
+				var b strings.Builder
+				fmt.Fprintf(&b, "ID:            %s\n", found.ID)
+				fmt.Fprintf(&b, "Node:          %s\n", found.Node)
+				fmt.Fprintf(&b, "RAM MB:        %d\n", found.RAMMB)
 				if found.VRAMMB > 0 {
-					fmt.Fprintf(out, "VRAM MB:       %d\n", found.VRAMMB)
+					fmt.Fprintf(&b, "VRAM MB:       %d\n", found.VRAMMB)
 				}
-				fmt.Fprintf(out, "Owner Exec ID: %s\n", found.OwnerExecID)
-				fmt.Fprintf(out, "Owner Surface: %s\n", found.OwnerSurface)
+				fmt.Fprintf(&b, "Owner Exec ID: %s\n", found.OwnerExecID)
+				fmt.Fprintf(&b, "Owner Surface: %s\n", found.OwnerSurface)
 				if found.OwnerPID > 0 {
-					fmt.Fprintf(out, "Owner PID:     %d\n", found.OwnerPID)
+					fmt.Fprintf(&b, "Owner PID:     %d\n", found.OwnerPID)
 				}
-				fmt.Fprintf(out, "Created At:    %s\n", found.CreatedAt.Format(time.RFC3339))
-				fmt.Fprintf(out, "Last Heartbeat:%s\n", found.LastHeartbeat.Format(time.RFC3339))
+				fmt.Fprintf(&b, "Created At:    %s\n", found.CreatedAt.Format(time.RFC3339))
+				fmt.Fprintf(&b, "Last Heartbeat:%s\n", found.LastHeartbeat.Format(time.RFC3339))
 				if !found.ExpiresAt.IsZero() {
-					fmt.Fprintf(out, "Expires At:    %s\n", found.ExpiresAt.Format(time.RFC3339))
+					fmt.Fprintf(&b, "Expires At:    %s\n", found.ExpiresAt.Format(time.RFC3339))
 				}
 				if found.Description != "" {
-					fmt.Fprintf(out, "Description:   %s\n", found.Description)
+					fmt.Fprintf(&b, "Description:   %s\n", found.Description)
 				}
-				return nil
+				_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+				return err
 			}
 		},
 	}
