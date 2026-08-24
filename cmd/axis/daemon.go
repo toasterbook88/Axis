@@ -38,7 +38,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show local AXIS daemon health and staleness",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 			defer cancel()
 
 			meta, err := daemon.FetchMeta(ctx, cacheAddr)
@@ -88,7 +88,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "mesh",
 		Short: "Show gossip mesh peers from the local daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 			defer cancel()
 
 			peers, err := fetchDaemonMesh(ctx, cacheAddr)
@@ -105,7 +105,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "invalidate",
 		Short: "Invalidate the local AXIS daemon snapshot cache",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 			defer cancel()
 
 			if err := invalidateDaemonCache(ctx, cacheAddr); err != nil {
@@ -120,7 +120,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "refresh",
 		Short: "Refresh the local AXIS daemon snapshot cache now",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 65*time.Second)
 			defer cancel()
 
 			if err := refreshDaemonCache(ctx, cacheAddr); err != nil {
@@ -134,7 +134,7 @@ func daemonCmd() *cobra.Command {
 		Use:   "restart",
 		Short: "Restart the AXIS daemon on the target address from the current binary",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
 			return restartDaemon(ctx, cacheAddr, cmd.OutOrStdout())
 		},
@@ -313,6 +313,9 @@ func doDaemonActionWithClient(client *http.Client, req *http.Request, prefix str
 func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 	listenAddr, err := daemonListenAddr(addr)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
