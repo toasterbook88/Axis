@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -285,6 +288,46 @@ func TestObservationsInspectCmdRejectsAmbiguousPrefix(t *testing.T) {
 	}
 	if code := ExitCode(err); code != ExitErrGeneric {
 		t.Fatalf("exit code = %d, want %d", code, ExitErrGeneric)
+	}
+}
+
+func TestObservationsCommandsPropagateTextWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	observation := models.ExecutionObservation{
+		Scope:      models.ObservationScope{Node: "alpha", Workload: "inference"},
+		ObservedAt: time.Now().UTC(),
+	}
+	tests := []struct {
+		name     string
+		cmd      func() *cobra.Command
+		args     []string
+		populate bool
+	}{
+		{name: "root empty", cmd: observationsCmd},
+		{name: "root table", cmd: observationsCmd, populate: true},
+		{name: "list empty", cmd: observationsListCmd},
+		{name: "list table", cmd: observationsListCmd, populate: true},
+		{name: "inspect", cmd: observationsInspectCmd, args: []string{"observation-key"}, populate: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			observations := map[string]models.ExecutionObservation{}
+			if tt.populate {
+				observations["observation-key"] = observation
+			}
+			restore := stubObservationsState(t, &state.ClusterState{
+				Observations: observations,
+			}, nil)
+			defer restore()
+
+			cmd := tt.cmd()
+			cmd.SetOut(rejectingOutputWriter{err: wantErr})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
 	}
 }
 
