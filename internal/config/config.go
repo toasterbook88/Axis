@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -399,6 +400,14 @@ func (c *Config) IsMeshEnabled() bool {
 // MigrateProviders infers missing Kind for cloud providers and canonicalizes it.
 func (c *Config) MigrateProviders() error {
 	for name, prov := range c.AIProviders {
+		if prov.Priority < 0 || prov.Priority > 100 {
+			return fmt.Errorf("provider %q: priority must be between 0 and 100: %d", name, prov.Priority)
+		}
+		for i, model := range prov.Models {
+			if err := validateOptionalNonNegativeAmount(fmt.Sprintf("provider %q models[%d].cost_per_1k", name, i), model.CostPer1K); err != nil {
+				return err
+			}
+		}
 		if strings.EqualFold(prov.Type, "cloud") {
 			kind := strings.ToLower(strings.TrimSpace(prov.Kind))
 			if kind == "" {
@@ -433,6 +442,14 @@ func (c *Config) MigrateProviders() error {
 				prov.Kind = kind
 			}
 			c.AIProviders[name] = prov
+		}
+	}
+	if c.Inference != nil {
+		if err := validateOptionalNonNegativeAmount("config: inference.max_cost_per_request", c.Inference.MaxCostPerRequest); err != nil {
+			return err
+		}
+		if err := validateOptionalNonNegativeAmount("config: inference.budget_alert_threshold", c.Inference.BudgetAlertThreshold); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -535,6 +552,13 @@ func validateOptionalDurationSeconds(field string, value int) error {
 	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
 	if int64(value) > maxDurationSeconds {
 		return fmt.Errorf("%s exceeds the maximum supported duration: %d", field, value)
+	}
+	return nil
+}
+
+func validateOptionalNonNegativeAmount(field string, value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return fmt.Errorf("%s must be a finite non-negative value: %v", field, value)
 	}
 	return nil
 }
