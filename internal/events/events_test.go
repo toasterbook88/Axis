@@ -193,13 +193,14 @@ func TestEventFiltering(t *testing.T) {
 	var taskEvents []Event
 	var allEvents []Event
 	var wg sync.WaitGroup
-	wg.Add(2) // 1 for task.started, 1 for reservation.released (received by allEvents)
+	wg.Add(3) // task listener once; wildcard listener for both emitted events
 
 	// Register listener with filter
 	cancelTask := RegisterListener(func(e Event) {
 		mu.Lock()
 		taskEvents = append(taskEvents, e)
 		mu.Unlock()
+		wg.Done()
 	}, "task.*")
 	defer cancelTask()
 
