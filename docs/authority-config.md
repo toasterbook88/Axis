@@ -79,6 +79,8 @@ Validation is **three-layer**:
    - At least one node must be defined.
    - Each node must have `name`, `hostname`, and `ssh_user`.
    - `stable_id` is normalized (lowercase, trimmed) but uniqueness is **not enforced**.
+   - Explicit SSH/discovery ports must be in `1..65535`; zero remains the documented default sentinel.
+   - Node timeout and discovery beacon interval values cannot be negative or overflow Go's duration range; zero remains the documented default sentinel.
 
 3. **Daemon defensive reload**
    - If `config.Load()` fails during a refresh, the daemon keeps the previous snapshot and records the error in `Metadata.LastError`.

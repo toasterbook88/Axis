@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/persist"
@@ -479,8 +480,32 @@ func (c *Config) Validate() error {
 		if n.SSHUser == "" {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)
 		}
+		prefix := fmt.Sprintf("config: node[%d] (%s)", i, n.Name)
+		if err := validateOptionalPort(prefix+" ssh_port", n.SSHPort); err != nil {
+			return err
+		}
+		for _, timeout := range []struct {
+			field string
+			value int
+		}{
+			{field: "timeout_sec", value: n.TimeoutSec},
+			{field: "dial_timeout_sec", value: n.DialTimeoutSec},
+			{field: "collect_timeout_sec", value: n.CollectTimeoutSec},
+		} {
+			if err := validateOptionalDurationSeconds(prefix+" "+timeout.field, timeout.value); err != nil {
+				return err
+			}
+		}
 		if n.SystemReserveMB < 0 {
 			return fmt.Errorf("config: node[%d] (%s) system_reserve_mb cannot be negative: %d", i, n.Name, n.SystemReserveMB)
+		}
+	}
+	if c.Discovery != nil {
+		if err := validateOptionalPort("config: discovery.udp_port", c.Discovery.UDPPort); err != nil {
+			return err
+		}
+		if err := validateOptionalDurationSeconds("config: discovery.beacon_interval_sec", c.Discovery.BeaconInterval); err != nil {
+			return err
 		}
 	}
 
@@ -493,5 +518,23 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func validateOptionalPort(field string, value int) error {
+	if value < 0 || value > 65535 {
+		return fmt.Errorf("%s must be between 1 and 65535 when set: %d", field, value)
+	}
+	return nil
+}
+
+func validateOptionalDurationSeconds(field string, value int) error {
+	if value < 0 {
+		return fmt.Errorf("%s cannot be negative: %d", field, value)
+	}
+	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+	if int64(value) > maxDurationSeconds {
+		return fmt.Errorf("%s exceeds the maximum supported duration: %d", field, value)
+	}
 	return nil
 }
