@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Agent:** Surface conversation-history persistence failures in single-shot and plain-input modes instead of silently reporting an otherwise successful session while losing its history.
 * **Model:** Fail closed when an observed remote node has no matching `nodes.yaml` entry instead of running the model lifecycle command on the local machine. Snapshot-confirmed local nodes remain executable without an SSH seed.
 * **Model:** `axis model stop` uses `fuser` when available and falls back to `lsof` on platforms such as macOS. It remains idempotent when no process owns the port but now reports an error instead of claiming success when neither port tool exists.
 * **Model:** Before killing a listener, `axis model stop` verifies every owning PID is exactly `llama-server`; a mistyped port now refuses to terminate unrelated services.
