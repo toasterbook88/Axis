@@ -68,13 +68,13 @@ Classification is based on live code inspection (`internal/`), test coverage, op
 | `internal/git` | stable | Local git repository workspace querying; core to repo-aware context |
 | `internal/knowledge` | stable | Execution context builder; heavily covered; stable contract |
 | `internal/llmrouter` | experimental | Hybrid local/cloud routing; new surface |
-| `internal/mcp` | experimental | Read-only MCP server; optional diagnostic layer |
-| `internal/mesh` | scaffolded | Gossip peer discovery; HMAC auth; NOT wired into CLI operator path |
+| `internal/mcp` | experimental | Optional MCP server with 17 read-only diagnostics and 3 advisory lease primitives |
+| `internal/mesh` | experimental | Live optional gossip discovery started by `axis serve`, with CLI and HTTP diagnostics; replay protection is still pending |
 | `internal/models` | internal-only | Core shared types; no public API surface |
 | `internal/persist` | internal-only | Corrupt-file quarantine helpers; pure infrastructure |
 | `internal/placement` | stable | Filter → rank → select; deterministic and well-tested |
 | `internal/repairs` | scaffolded | Type definitions only; no live wiring |
-| `internal/reservation` | scaffolded | Double-entry ledger wired as library; `/v2/reservations` returns 501; no standalone CLI |
+| `internal/reservation` | stable | Double-entry ledger backs guarded execution, snapshot overlays, the `axis reservations` CLI, and `/v2/reservations` CRUD/heartbeat routes |
 | `internal/runtimectx` | stable | Unified live runtime loader; shared by stable read paths |
 | `internal/safety` | experimental | Execution blocker is live; structured analysis scaffolding exists but learned approvals are deliberately disabled |
 | `internal/scripts` | stable | Built-in script registry; deterministic matching |
@@ -119,16 +119,17 @@ Classification is based on `cmd/axis/` source files and the command surface docu
 | `axis daemon restart` | stable | Daemon lifecycle restart |
 | `axis daemon service install\|status\|uninstall` | stable | Native user-service lifecycle |
 | `axis serve` | experimental | Optional local HTTP API; execution surface |
-| `axis mcp serve` | experimental | Optional read-only MCP diagnostic server |
+| `axis mcp serve` | experimental | Optional MCP diagnostics plus advisory lease primitives |
 | `axis chat` | removed | Prints `use: axis agent` |
 | `axis agent` | experimental | Agentic tool-calling assistant; safety-gated but evolving |
 | `axis llm` | removed | Prints `use: axis ai route` |
 | `axis cluster` | stable | Fleet snapshot: `status`, `summary` |
 | `axis node` | stable | This machine: `facts` |
+| `axis mesh` | experimental | Live gossip/beacon diagnostics; daemon and HTTP mesh state remain optional |
 
 | `axis cortex` | experimental | Distributed vector memory / event bus; requires optional Foundry node |
 | `axis summary` | stable | Cluster summary view |
-| `axis reservations` | stable | Reservation inspection (read-only) |
+| `axis reservations` | stable | Reservation table plus local list/inspect/release/doctor workflows |
 
 ---
 

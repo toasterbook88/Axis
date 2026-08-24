@@ -136,16 +136,16 @@ Top-level commands currently registered in the binary:
 | `internal/safety` | Execution blocker + structured command analysis | Heuristic substring blocker is well unit-tested; structured command analysis scaffolding exists but learned approvals are deliberately disabled and NOT wired into the operator path |
 | `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; successful multipath routes are revalidated from a bounded process cache, with aggregate reuse/fan-out/failure counters exposed in daemon metadata |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
-| `internal/mcp` | Read-only MCP surfaces | Diagnostic layer now shares the live runtime path and meets the v1 coverage gate |
+| `internal/mcp` | MCP diagnostics and advisory leases | 17 read-only diagnostics share the live runtime path; 3 advisory lease primitives remain subordinate to observed state |
 | `internal/mcpclient` | Unified MCP client library | Connection pooling, per-server caching (60s TTL), retry with exponential backoff, progress notifications, placement-aware routing, batch execution, and metrics collection; powers `axis mcp client` |
 | `internal/persist` | Corrupt-file recovery helpers | Small helper package used for quarantine + warning recovery |
 | `internal/runtimectx` | Unified live runtime loader | Centralizes config + discovery + overlay + warning assembly for live reads |
 | `internal/chat` | Structured /api/chat client | Rolling context window, system prompt builder, model catalog |
 | `internal/agent` | Tool-calling agent loop | Read-only tools (status, facts, place) + safety-gated shell with adversarial tests |
-| `internal/mesh` | Gossip peer discovery | Scaffolding only; HMAC-SHA256 auth, 5-state lifecycle; NOT wired into CLI operator path |
-| `internal/reservation` | Double-entry reservation ledger | Used as library by task placement; `/v2/reservations` exists but returns 501 pending ledger integration; no standalone CLI command |
+| `internal/mesh` | Gossip peer discovery | Live optional daemon path started by `axis serve`; HMAC-SHA256 auth, 5-state lifecycle, `axis mesh` / `axis daemon mesh` diagnostics, and HTTP `/mesh` / `/v2/mesh` exposure |
+| `internal/reservation` | Double-entry reservation ledger | Live authority for guarded execution reserve/release, snapshot overlays, `axis reservations` list/inspect/release/doctor, and the `/v2/reservations` CRUD/heartbeat API |
 | `internal/workload` | Workload profile matching | Powers `axis profile match`; deterministic class inference for 8 workload classes |
-| `internal/llmrouter` | Hybrid AI model routing | Powers `axis llm`; local/cloud provider registry with semantic reflex classification |
+| `internal/llmrouter` | Hybrid AI model routing | Powers `axis ai backends|roles|route`; local/cloud provider registry with semantic reflex classification |
 | `internal/cortex` | MCP client for cluster brain | Powers `axis cortex`; FastMCP 3.x Streamable HTTP protocol |
 
 ## Verification Snapshot

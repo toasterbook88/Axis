@@ -13,7 +13,8 @@
 #   3. AGENTS.md MCP tool count (total / read-only / advisory-lease) == the
 #      s.AddTool registrations in internal/mcp, with the read-only subset
 #      matching WithReadOnlyHintAnnotation(true) in server.go.
-#   4. Every released git tag >= v0.7.0 has a CHANGELOG.md entry.
+#   4. Canonical docs do not contradict live mesh and reservation wiring.
+#   5. Every released git tag >= v0.7.0 has a CHANGELOG.md entry.
 #
 # When these disagree, fix the doc to match the code (the code is the source
 # of truth) or, for CHANGELOG, add the missing entry from the GitHub release
@@ -75,7 +76,51 @@ lease_doc="$(grep -oE '[0-9]+ advisory lease' AGENTS.md | grep -oE '^[0-9]+' || 
 [[ $((ro_doc + lease_doc)) == "$total_doc" ]] \
   || fail "AGENTS.md MCP counts don't add up: $ro_doc read-only + $lease_doc lease != $total_doc total"
 
-# --- 4. CHANGELOG completeness ----------------------------------------------
+for doc in docs/architecture.md docs/current-state.md docs/lifecycle.md; do
+  grep -qF "$ro_code read-only" "$doc" \
+    || fail "$doc missing current MCP read-only tool count ($ro_code)"
+  grep -qF "$lease_code advisory" "$doc" \
+    || fail "$doc missing current MCP advisory lease count ($lease_code)"
+done
+
+# --- 4. Live wiring claims ---------------------------------------------------
+# These surfaces previously remained documented as scaffolded long after their
+# startup, config, API, and CLI paths shipped. Anchor the prohibition to the
+# corresponding code so future removal can update code and docs together.
+reject_stale_claim() {
+  local pattern="$1"
+  shift
+  if grep -Ein "$pattern" "$@" >/dev/null; then
+    fail "canonical docs contain a stale live-wiring claim matching /$pattern/"
+  fi
+}
+
+if grep -qF 'd.WatchMesh(ctx, selfPeer)' cmd/axis/serve.go; then
+  reject_stale_claim 'mesh.*(scaffold|not wired)|scaffold.*mesh|not wired.*mesh' \
+    README.md docs/architecture.md docs/current-state.md docs/lifecycle.md
+fi
+
+if grep -qF 'meshCfg.SharedSecret = cfg.Discovery.Secret' internal/daemon/daemon.go; then
+  reject_stale_claim 'mesh.*(does not consume|not propagated|not wired to config|empty default)' \
+    docs/authority-config.md docs/authority-secrets.md
+fi
+
+reservation_handler="$(sed -n '/^func (h \*v2Handlers) handleReservations/,/^}/p' internal/api/v2.go)"
+if grep -qF 'case http.MethodPost:' <<<"$reservation_handler"; then
+  reject_stale_claim '(reservations|/v2/reservations).*(returns|return).*501|POST /v2/reservations.*not.*implemented' \
+    docs/current-state.md docs/lifecycle.md docs/reservations.md
+fi
+
+if grep -qF 'cmd.AddCommand(reservationsDoctorCmd())' cmd/axis/reservations.go; then
+  reject_stale_claim 'no (standalone|dedicated) CLI' \
+    docs/current-state.md docs/lifecycle.md docs/reservations.md
+fi
+
+if grep -qF 'cmdAI := aiCmd()' cmd/axis/main.go; then
+  reject_stale_claim 'Powers `axis llm`' docs/current-state.md
+fi
+
+# --- 5. CHANGELOG completeness ----------------------------------------------
 # Every released tag >= v0.7.0 (CHANGELOG's coverage floor) must have a
 # "## vX.Y.Z" header. Skipped silently when no tags are available (e.g. a
 # shallow checkout without fetch-tags) so local runs still work.

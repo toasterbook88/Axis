@@ -44,7 +44,7 @@ Changing these fields alters cluster identity and can orphan reservations or dec
 | `discovery.enabled` | Starts or stops the UDP beacon listener and broadcaster. The mesh gossip layer (`WatchMesh`) is **not** restarted on config change; it is created once at daemon startup. |
 | `discovery.udp_port` | Requires daemon restart because the UDP socket is bound at startup. Config change alone does not rebind. |
 | `discovery.beacon_interval_sec` | Picked up when the beacon broadcaster goroutine restarts (next config-driven `applyWatcher` cycle). |
-| `discovery.secret` | Picked up when the beacon listener restarts. Mesh gossip does **not** consume this secret; mesh uses its own empty default. |
+| `discovery.secret` | Picked up when the beacon listener restarts. The same value seeds mesh-gossip HMAC at daemon construction, so changing the mesh secret requires a daemon restart. |
 | `agent.default_model` | Used on the next `axis agent` invocation. `chat.default_model` is still read if the new key is unset. |
 
 | `ai_providers[].*` | Used on the next inference routing decision. |

@@ -45,10 +45,10 @@ When `IdentitiesOnly` is **not** set, the following are tried in order:
 
 ### 2.2 Mesh Gossip Secret
 
-- **Location:** `mesh.Config.SharedSecret` (`internal/mesh/mesh.go`)
-- **Current wiring:** The mesh is initialized in `daemon.NewDefault()` with `mesh.DefaultConfig()`, which has an **empty** `SharedSecret`. The `nodes.yaml` `discovery.secret` is **not** propagated to the mesh layer today.
+- **Location:** `nodes.yaml` → `discovery.secret`, copied into `mesh.Config.SharedSecret` by `daemon.NewDefault()`
+- **Current wiring:** The daemon uses the same operator-supplied secret for UDP beacons and mesh-gossip HMAC. If the field is omitted, `mesh.DefaultConfig()` leaves `SharedSecret` empty.
 - **Behavior:** Empty secret means HMAC verification is bypassed (`verifyMessageHMAC` returns `true`).
-- **Rotation:** Not supported without code change; mesh config is fixed at daemon construction time.
+- **Rotation:** Edit `nodes.yaml` and restart the daemon. UDP beacon discovery hot-reloads the value, but the mesh config is fixed at daemon construction time.
 
 ## 3. Can Operator-Supplied Secret Material Reach Runtime State?
 
@@ -109,7 +109,7 @@ API-key files should also be `0600`.
 | SSH private keys | Replace files in `~/.ssh/` or rotate agent keys. AXIS reconnects on next probe. | Yes (per-connection) |
 | SSH known_hosts | Update file manually or via `ssh-keyscan`. AXIS reads it on next connection. | Yes (per-connection) |
 | UDP beacon secret | Edit `nodes.yaml` `discovery.secret`. Daemon restarts listener on next poll. | Yes |
-| Mesh gossip secret | **Not supported today** (empty default, not wired to config). | No |
+| Mesh gossip secret | Edit `nodes.yaml` `discovery.secret`, then restart the daemon. | No |
 | API token (`~/.axis/token`) | Delete file and/or change `AXIS_API_TOKEN`. AXIS regenerates on next `auth.LoadOrGenerateToken()`. | Yes |
 | Cloud provider API keys | Rotate env var or file contents outside AXIS. | Yes (per-request) |
 
@@ -120,6 +120,6 @@ API-key files should also be `0600`.
 | SSH private keys | `~/.ssh/`, SSH agent | Per-connection | No | Yes |
 | SSH host keys | `~/.ssh/known_hosts` | Per-connection | No | Yes |
 | UDP beacon secret | `nodes.yaml` | Daemon lifetime (listener restart on change) | No | Yes |
-| Mesh gossip secret | `mesh.Config` (empty default) | Daemon lifetime | No | No (not wired) |
+| Mesh gossip secret | `nodes.yaml` → `mesh.Config` | Daemon lifetime | No | Yes (restart required) |
 | API token | `~/.axis/token` or `AXIS_API_TOKEN` | Daemon lifetime | No | Yes |
 | Cloud API keys | Env var / file (external) | Per-request | No | Yes |
