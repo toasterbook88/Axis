@@ -106,6 +106,23 @@ func TestDaemonMeshCommandHandlesEmptyPeers(t *testing.T) {
 	}
 }
 
+func TestDaemonMeshCommandPropagatesWriterFailure(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"peers":[],"count":0}`))
+	}))
+	defer server.Close()
+
+	cmd := daemonCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--cache-addr", server.URL, "mesh"})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
 func TestHumanizeTimeFormatsRecent(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
