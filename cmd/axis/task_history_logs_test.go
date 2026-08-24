@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,5 +166,58 @@ func TestTaskLogsCmd(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid execution ID") {
 		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestTaskLogsFollowHonorsCancellation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := filepath.Join(os.Getenv("HOME"), ".axis", "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "task-canceled.log"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd := taskLogsCmd()
+	cmd.SetContext(ctx)
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetErr(&strings.Builder{})
+	cmd.SetArgs([]string{"--follow", "canceled"})
+	if err := cmd.Execute(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+}
+
+func TestFollowTaskLogPropagatesAppendedLineWriterFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.log")
+	if err := os.WriteFile(path, []byte("existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := io.Copy(io.Discard, file); err != nil {
+		t.Fatal(err)
+	}
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFile.WriteString("appended\n"); err != nil {
+		appendFile.Close()
+		t.Fatal(err)
+	}
+	if err := appendFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("writer unavailable")
+	if err := followTaskLog(context.Background(), rejectingOutputWriter{err: wantErr}, file, time.Millisecond); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
 	}
 }

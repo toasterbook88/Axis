@@ -919,28 +919,41 @@ func taskLogsCmd() *cobra.Command {
 				return err
 			}
 
-			reader := bufio.NewReader(file)
-			for {
-				select {
-				case <-cmd.Context().Done():
-					return nil
-				default:
-				}
-
-				line, err := reader.ReadString('\n')
-				if len(line) > 0 {
-					fmt.Fprint(out, line)
-				}
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						time.Sleep(250 * time.Millisecond)
-						continue
-					}
-					return err
-				}
-			}
+			return followTaskLog(cmd.Context(), out, file, 250*time.Millisecond)
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream new logs as they are written")
 	return cmd
+}
+
+func followTaskLog(ctx context.Context, out io.Writer, file *os.File, pollInterval time.Duration) error {
+	reader := bufio.NewReader(file)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if _, writeErr := fmt.Fprint(out, line); writeErr != nil {
+				return writeErr
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, io.EOF) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
