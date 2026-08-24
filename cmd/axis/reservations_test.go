@@ -180,6 +180,45 @@ func TestReservationsInspectNotFound(t *testing.T) {
 	}
 }
 
+func TestReservationsInspectPreservesStaleEntry(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t, &reservation.Entry{
+		ID:            "stale-entry",
+		Node:          "node-a",
+		RAMMB:         1024,
+		CreatedAt:     now.Add(-5 * time.Minute),
+		LastHeartbeat: now.Add(-3 * time.Minute),
+	})
+
+	cmd := reservationsInspectCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--format", "json", "stale-entry"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("inspect stale entry: %v", err)
+	}
+	if entries := loadDoctorLedgerFixture(t); len(entries) != 1 || entries[0].ID != "stale-entry" {
+		t.Fatalf("inspect mutated ledger: %#v", entries)
+	}
+}
+
+func TestReservationsInspectPropagatesTextWriterFailure(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	now := time.Now().UTC()
+	writeDoctorLedgerFixture(t, &reservation.Entry{ID: "entry", Node: "node-a", RAMMB: 512, CreatedAt: now, LastHeartbeat: now})
+	wantErr := errors.New("writer unavailable")
+
+	cmd := reservationsInspectCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"entry"})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
 func TestReservationsReleaseSuccess(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

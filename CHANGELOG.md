@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Reservations:** Make `reservations inspect` use the non-reconciling ledger load so inspecting a stale entry cannot delete it, and propagate text writer failures after rendering the complete detail block.
 * **Reservations:** Revalidate every `reservations doctor --fix` finding against the locked, current ledger state so a heartbeat or ownership change between diagnosis and repair cannot release a revived reservation.
 * **Reservations:** Make `reservations release` hold the ledger lock across its read/check/write transaction, preserve unrelated stale entries, avoid a redundant second save, and surface text or JSON writer failures instead of reporting success after dropped output.
 * **Config/AI:** Reject provider priorities outside `0..100` and negative, NaN, or infinite model-cost and inference-budget values before they can distort provider ordering or bypass cost controls.
