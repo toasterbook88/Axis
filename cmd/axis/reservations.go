@@ -44,7 +44,11 @@ func reservationsCmd() *cobra.Command {
 }
 
 func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	client, baseURLAddr := daemon.HttpClientForAddr(cacheAddr)
@@ -63,6 +67,9 @@ func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
 	var isFallback bool
 
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		isFallback = true
 		ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 		if loadErr := ledger.Load(); loadErr == nil {

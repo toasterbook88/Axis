@@ -75,7 +75,7 @@ func taskPlaceCmd() *cobra.Command {
 		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 			cacheRequested := cached || cachedOnly
 
@@ -90,6 +90,9 @@ func taskPlaceCmd() *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
 				return err
 			}
@@ -255,11 +258,14 @@ func taskRunCmd() *cobra.Command {
 					return fmt.Errorf("invalid --expose-port flag: %w", err)
 				}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Minute)
 			defer cancel()
 
 			rt, err := loadTaskRunRuntime(ctx)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: failed to load runtime context: %v\n", err)
 				return ExitCodeError{Code: ExitErrConfigLoad, Message: fmt.Sprintf("failed to load runtime context: %v", err)}
 			}
@@ -311,6 +317,9 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			prepared, err := prepareTaskGuarded(ctx, rt, req)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if prepared.Result.Blocked {
 				printBlockedResult(cmd.OutOrStdout(), prepared.Result)
 				return nil
@@ -342,6 +351,9 @@ func taskRunCmd() *cobra.Command {
 			}
 
 			resp, err := runTaskRunRequest(ctx, prepared)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil && resp.Error == "no suitable node found" {
 				for _, reason := range resp.Reasoning {
 					fmt.Fprintf(w, "  - %s\n", reason)
@@ -490,7 +502,7 @@ func taskContextCmd() *cobra.Command {
 		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 			cacheRequested := cached || cachedOnly
 
@@ -504,6 +516,9 @@ func taskContextCmd() *cobra.Command {
 				loadTaskLiveSnapshot,
 			)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: failed to load snapshot: %v\n", err)
 				return ExitCodeError{Code: ExitErrConfigLoad, Message: fmt.Sprintf("failed to load snapshot: %v", err)}
 			}
