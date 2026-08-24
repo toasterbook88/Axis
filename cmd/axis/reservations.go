@@ -412,6 +412,8 @@ var reservationsDoctorProcessAlive = func(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+var reservationsDoctorBeforeFix = func() {}
+
 func isNodeLocal(nodeName string, snap *models.ClusterSnapshot, cfg *config.Config) bool {
 	if snap != nil {
 		for _, n := range snap.Nodes {
@@ -432,6 +434,21 @@ func isNodeLocal(nodeName string, snap *models.ClusterSnapshot, cfg *config.Conf
 		return models.IsLocalTarget(nodeName, h)
 	}
 	return false
+}
+
+func doctorFindingStillApplies(f DoctorFinding, entry reservation.Entry, now time.Time, limits reservation.Limits, snap *models.ClusterSnapshot, cfg *config.Config) bool {
+	switch f.Type {
+	case "expired":
+		return entry.ClassifyLiveness(now, limits) == reservation.LivenessExpired
+	case "stale":
+		return entry.ClassifyLiveness(now, limits) == reservation.LivenessStale
+	case "orphaned":
+		return entry.ClassifyLiveness(now, limits) == reservation.LivenessActive &&
+			isNodeLocal(entry.Node, snap, cfg) && entry.OwnerPID > 0 &&
+			!reservationsDoctorProcessAlive(entry.OwnerPID)
+	default:
+		return false
+	}
 }
 
 func getBestSnapshot(ctx context.Context, cacheAddr string) (*models.ClusterSnapshot, error) {
@@ -580,6 +597,7 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 
 	// If fix is requested, perform remediation
 	if fix && len(findings) > 0 {
+		reservationsDoctorBeforeFix()
 		if err := ledger.LockFile(ctx); err != nil {
 			return fmt.Errorf("acquiring write lock on ledger: %w", err)
 		}
@@ -593,16 +611,17 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 		}
 
 		// Re-fetch remaining entries to see what is left to release manually
-		remainingMap := make(map[string]bool)
+		remainingMap := make(map[string]reservation.Entry)
 		for _, re := range ledger.Entries() {
-			remainingMap[re.ID] = true
+			remainingMap[re.ID] = re
 		}
 
 		// Go through our findings and perform release
 		for _, f := range findings {
 			switch f.Type {
 			case "expired", "stale", "orphaned":
-				if !remainingMap[f.EntryID] {
+				entry, ok := remainingMap[f.EntryID]
+				if !ok || !doctorFindingStillApplies(f, entry, time.Now(), limits, snap, cfg) {
 					continue
 				}
 				if err := ledger.Release(f.EntryID); err != nil {
