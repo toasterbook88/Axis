@@ -27,12 +27,15 @@ func factsCmd() *cobra.Command {
 		Short:   "Collect and display local node facts",
 		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
 			hostname, _ := currentHostname()
 			nf, err := collectLocalFacts(ctx, hostname)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				nf = &models.NodeFacts{
 					Name:        hostname,
 					Status:      models.StatusError,
