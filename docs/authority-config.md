@@ -81,6 +81,7 @@ Validation is **three-layer**:
    - `stable_id` is normalized (lowercase, trimmed) but uniqueness is **not enforced**.
    - Explicit SSH/discovery ports must be in `1..65535`; zero remains the documented default sentinel.
    - Node timeout and discovery beacon interval values cannot be negative or overflow Go's duration range; zero remains the documented default sentinel.
+   - AI provider priorities stay in `0..100`; model costs and inference budget values must be finite and non-negative.
 
 3. **Daemon defensive reload**
    - If `config.Load()` fails during a refresh, the daemon keeps the previous snapshot and records the error in `Metadata.LastError`.

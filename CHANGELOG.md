@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Config/AI:** Reject provider priorities outside `0..100` and negative, NaN, or infinite model-cost and inference-budget values before they can distort provider ordering or bypass cost controls.
 * **Config:** Reject negative or overflowing node/discovery durations and out-of-range SSH/UDP ports during `nodes.yaml` load instead of silently defaulting malformed values or failing later in socket/timer paths.
 * **AI:** Reject non-positive backend and route probe budgets instead of constructing an already-expired context and reporting every configured backend as unavailable.
 * **Reservations/CLI:** Make `reservations doctor --fix` remediate exactly the entries classified by the requested `--stale-window`, persist each release before reporting it fixed, and reject non-positive stale/watch/refresh durations before destructive work or ticker construction.
