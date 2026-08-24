@@ -136,6 +136,8 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 	cmdChat.Hidden = true
 	cmdAgent := agentCmd()
 	cmdAgent.GroupID = "ai"
+	cmdTUI := tuiCmd()
+	cmdTUI.GroupID = "setup"
 	cmdContext := contextCmd()
 	cmdContext.GroupID = "meta"
 	cmdContext.Hidden = true
@@ -186,6 +188,7 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 	root.AddCommand(cmdCortex)
 	root.AddCommand(cmdChat)
 	root.AddCommand(cmdAgent)
+	root.AddCommand(cmdTUI)
 	root.AddCommand(cmdContext)
 	root.AddCommand(cmdProfile)
 	root.AddCommand(cmdScripts)
