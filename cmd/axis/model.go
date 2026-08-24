@@ -166,7 +166,7 @@ func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode
 }
 
 func (liveModelRunner) Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error {
-	script := fmt.Sprintf("fuser -k %d/tcp >/dev/null 2>&1 || true", port)
+	script := shellStop(port)
 	return runOnNode(ctx, node, cfgNode, script)
 }
 
@@ -197,6 +197,19 @@ func shellStart(argv []string) string {
 		quoted[i] = shellQuote(a)
 	}
 	return fmt.Sprintf("nohup %s >/dev/null 2>&1 &", strings.Join(quoted, " "))
+}
+
+func shellStop(port int) string {
+	return fmt.Sprintf(
+		"if command -v fuser >/dev/null 2>&1; then "+
+			"if fuser %d/tcp >/dev/null 2>&1; then fuser -k %d/tcp >/dev/null 2>&1; fi; "+
+			"elif command -v lsof >/dev/null 2>&1; then "+
+			"_axis_pids=$(lsof -nP -tiTCP:%d -sTCP:LISTEN); _axis_rc=$?; "+
+			"if test \"$_axis_rc\" -gt 1; then exit \"$_axis_rc\"; fi; "+
+			"test -z \"$_axis_pids\" || kill -KILL $_axis_pids; "+
+			"else echo 'axis model stop requires fuser or lsof' >&2; exit 127; fi",
+		port, port, port,
+	)
 }
 
 func shellQuote(s string) string {

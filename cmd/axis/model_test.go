@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -107,6 +111,75 @@ func TestRunModelStopRequiresPort(t *testing.T) {
 	err := runModelStop(context.Background(), modelStopCmd(), "storage", 0, &fakeModelRunner{})
 	if err == nil {
 		t.Fatal("expected port error")
+	}
+}
+
+func TestShellStopUsesFuserWhenAvailable(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "fuser.log")
+	writeModelTestExecutable(t, filepath.Join(dir, "fuser"), `#!/bin/sh
+printf '%s\n' "$*" >> "$AXIS_TEST_LOG"
+exit 0
+`)
+	writeModelTestExecutable(t, filepath.Join(dir, "lsof"), `#!/bin/sh
+exit 99
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellStop(8081))
+	cmd.Env = []string{"PATH=" + dir, "AXIS_TEST_LOG=" + logPath}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shellStop: %v: %s", err, out)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "8081/tcp") || !strings.Contains(got, "-k 8081/tcp") {
+		t.Fatalf("fuser calls = %q", got)
+	}
+}
+
+func TestShellStopFallsBackToLsof(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "lsof.log")
+	writeModelTestExecutable(t, filepath.Join(dir, "lsof"), `#!/bin/sh
+printf '%s\n' "$*" > "$AXIS_TEST_LOG"
+exit 1
+`)
+
+	cmd := exec.Command("/bin/sh", "-c", shellStop(8082))
+	cmd.Env = []string{"PATH=" + dir, "AXIS_TEST_LOG=" + logPath}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shellStop: %v: %s", err, out)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); !strings.Contains(got, "-tiTCP:8082 -sTCP:LISTEN") {
+		t.Fatalf("lsof call = %q", got)
+	}
+}
+
+func TestShellStopFailsWhenNoPortToolExists(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("/bin/sh", "-c", shellStop(8083))
+	cmd.Env = []string{"PATH=" + dir}
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 127 {
+		t.Fatalf("error = %v, output = %q", err, out)
+	}
+	if !strings.Contains(string(out), "requires fuser or lsof") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+func writeModelTestExecutable(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
 	}
 }
 
