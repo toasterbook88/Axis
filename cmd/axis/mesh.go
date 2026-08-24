@@ -27,6 +27,9 @@ func meshStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show local Gossip mesh network properties",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := cmd.Context().Err(); err != nil {
+				return err
+			}
 			cfgPath := config.DefaultConfigPath()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
@@ -77,6 +80,9 @@ func meshPeersCmd() *cobra.Command {
 		Use:   "peers",
 		Short: "List discovered Gossip mesh neighbors",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := cmd.Context().Err(); err != nil {
+				return err
+			}
 			cfgPath := config.DefaultConfigPath()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
@@ -98,6 +104,9 @@ func meshPeersCmd() *cobra.Command {
 			discovery.WatchBeaconChanges(scanCtx, cfg, registry, nil)
 			<-scanCtx.Done()
 			scanCancel()
+			if err := cmd.Context().Err(); err != nil {
+				return err
+			}
 
 			peers := registry.Snapshot()
 			if len(peers) == 0 {
