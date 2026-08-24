@@ -33,13 +33,18 @@ func meshStatusCmd() *cobra.Command {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
 
-			out := cmd.OutOrStdout()
+			var rendered strings.Builder
+			out := &rendered
+			flush := func() error {
+				_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+				return err
+			}
 			fmt.Fprintln(out, ui.Bold("AXIS Gossip Mesh Status"))
 			fmt.Fprintln(out, strings.Repeat("─", 40))
 
 			if cfg.Discovery == nil || !cfg.Discovery.Enabled {
 				fmt.Fprintln(out, "Gossip Mesh Discovery: "+ui.Red("DISABLED"))
-				return nil
+				return flush()
 			}
 
 			fmt.Fprintln(out, "Gossip Mesh Discovery: "+ui.Green("ENABLED"))
@@ -62,7 +67,7 @@ func meshStatusCmd() *cobra.Command {
 			fmt.Fprintf(out, "Beacon Signatures:     %s\n", secretStatus)
 			fmt.Fprintln(out)
 
-			return nil
+			return flush()
 		},
 	}
 }
@@ -80,11 +85,13 @@ func meshPeersCmd() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			if cfg.Discovery == nil || !cfg.Discovery.Enabled {
-				fmt.Fprintln(out, "Gossip Mesh Discovery is disabled.")
-				return nil
+				_, err := fmt.Fprintln(out, "Gossip Mesh Discovery is disabled.")
+				return err
 			}
 
-			fmt.Fprintln(out, "Listening for Gossip mesh beacons (5 seconds)...")
+			if _, err := fmt.Fprintln(out, "Listening for Gossip mesh beacons (5 seconds)..."); err != nil {
+				return err
+			}
 
 			registry := discovery.NewBeaconRegistry()
 			scanCtx, scanCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
@@ -94,11 +101,12 @@ func meshPeersCmd() *cobra.Command {
 
 			peers := registry.Snapshot()
 			if len(peers) == 0 {
-				fmt.Fprintln(out, "No active Gossip neighbors discovered.")
-				return nil
+				_, err := fmt.Fprintln(out, "No active Gossip neighbors discovered.")
+				return err
 			}
 
-			fmt.Fprintln(out, "\nDiscovered Gossip Neighbors:")
+			var rendered strings.Builder
+			fmt.Fprintln(&rendered, "\nDiscovered Gossip Neighbors:")
 			tbl := ui.NewTable("NAME", "HOSTNAME/IP", "ROLE", "PORT", "STABLE ID")
 			for _, p := range peers {
 				tbl.AddRow(
@@ -109,9 +117,10 @@ func meshPeersCmd() *cobra.Command {
 					p.StableID,
 				)
 			}
-			tbl.Render(out)
-			fmt.Fprintln(out)
-			return nil
+			tbl.Render(&rendered)
+			fmt.Fprintln(&rendered)
+			_, err = fmt.Fprint(out, rendered.String())
+			return err
 		},
 	}
 }
