@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -81,13 +82,7 @@ func cortexStatusCmd() *cobra.Command {
 				return fmt.Errorf("cortex unreachable: %w", err)
 			}
 
-			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "\n  %s\n\n", ui.Bold("CORTEX BRAIN STATUS"))
-			fmt.Fprintf(w, "  %-16s %s\n", "Status:", ui.Green(status.Status))
-			fmt.Fprintf(w, "  %-16s %d\n", "MCP Tools:", status.MCPTools)
-			fmt.Fprintf(w, "  %-16s %d (Qdrant points)\n", "Memories:", status.Memories)
-			fmt.Fprintln(w)
-			return nil
+			return printCortexStatus(cmd.OutOrStdout(), status)
 		},
 	}
 }
@@ -112,27 +107,7 @@ func cortexEventsCmd() *cobra.Command {
 				return err
 			}
 
-			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "\n  %s (last %d)\n\n", ui.Bold("CORTEX EVENT BUS"), len(events))
-
-			if len(events) == 0 {
-				fmt.Fprintf(w, "  %s\n\n", ui.Dim("no events"))
-				return nil
-			}
-
-			for _, ev := range events {
-				color := ui.Cyan
-				evType := strings.ToUpper(ev.Type)
-				if strings.Contains(ev.Type, "failure") || strings.Contains(ev.Type, "error") {
-					color = ui.Red
-					evType = ui.Red(evType)
-				} else {
-					evType = color(evType)
-				}
-				fmt.Fprintf(w, "  [%s] %s  %s\n", ev.CreatedAt, evType, formatPayload(ev.Payload))
-			}
-			fmt.Fprintln(w)
-			return nil
+			return printCortexEvents(cmd.OutOrStdout(), events)
 		},
 	}
 
@@ -162,21 +137,60 @@ func cortexRecallCmd() *cobra.Command {
 				return err
 			}
 
-			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "\n  %s %q\n\n", ui.Bold("RECALL:"), args[0])
-
-			if len(hits) == 0 {
-				fmt.Fprintf(w, "  %s\n\n", ui.Dim("no results"))
-				return nil
-			}
-
-			for i, hit := range hits {
-				fmt.Fprintf(w, "  [%d] score=%.3f\n      %s\n\n",
-					i+1, hit.Score, hit.Content)
-			}
-			return nil
+			return printCortexRecall(cmd.OutOrStdout(), args[0], hits)
 		},
 	}
+}
+
+func printCortexStatus(w io.Writer, status *cortex.HealthResponse) error {
+	var out strings.Builder
+	fmt.Fprintf(&out, "\n  %s\n\n", ui.Bold("CORTEX BRAIN STATUS"))
+	fmt.Fprintf(&out, "  %-16s %s\n", "Status:", ui.Green(status.Status))
+	fmt.Fprintf(&out, "  %-16s %d\n", "MCP Tools:", status.MCPTools)
+	fmt.Fprintf(&out, "  %-16s %d (Qdrant points)\n", "Memories:", status.Memories)
+	fmt.Fprintln(&out)
+	_, err := fmt.Fprint(w, out.String())
+	return err
+}
+
+func printCortexEvents(w io.Writer, events []cortex.Event) error {
+	var out strings.Builder
+	fmt.Fprintf(&out, "\n  %s (last %d)\n\n", ui.Bold("CORTEX EVENT BUS"), len(events))
+
+	if len(events) == 0 {
+		fmt.Fprintf(&out, "  %s\n\n", ui.Dim("no events"))
+	} else {
+		for _, ev := range events {
+			evType := strings.ToUpper(ev.Type)
+			if strings.Contains(ev.Type, "failure") || strings.Contains(ev.Type, "error") {
+				evType = ui.Red(evType)
+			} else {
+				evType = ui.Cyan(evType)
+			}
+			fmt.Fprintf(&out, "  [%s] %s  %s\n", ev.CreatedAt, evType, formatPayload(ev.Payload))
+		}
+		fmt.Fprintln(&out)
+	}
+
+	_, err := fmt.Fprint(w, out.String())
+	return err
+}
+
+func printCortexRecall(w io.Writer, query string, hits []cortex.MemoryHit) error {
+	var out strings.Builder
+	fmt.Fprintf(&out, "\n  %s %q\n\n", ui.Bold("RECALL:"), query)
+
+	if len(hits) == 0 {
+		fmt.Fprintf(&out, "  %s\n\n", ui.Dim("no results"))
+	} else {
+		for i, hit := range hits {
+			fmt.Fprintf(&out, "  [%d] score=%.3f\n      %s\n\n",
+				i+1, hit.Score, hit.Content)
+		}
+	}
+
+	_, err := fmt.Fprint(w, out.String())
+	return err
 }
 
 // formatPayload renders an Event.Payload for terminal display.
