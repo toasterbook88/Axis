@@ -43,9 +43,10 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 	var cacheAddr string
 
 	cmd := &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.ExactArgs(1),
+		Use:     use,
+		Short:   short,
+		Args:    cobra.ExactArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

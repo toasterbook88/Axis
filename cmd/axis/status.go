@@ -35,8 +35,9 @@ func statusCmd() *cobra.Command {
 	var watchInterval time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Collect cluster snapshot from all configured nodes",
+		Use:     "status",
+		Short:   "Collect cluster snapshot from all configured nodes",
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cacheRequested := cached || cachedOnly
 
