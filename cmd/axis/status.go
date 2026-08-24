@@ -76,12 +76,16 @@ func statusCmd() *cobra.Command {
 					fetchCancel()
 
 					// Clear terminal screen and move cursor to home
-					fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
+					if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J"); writeErr != nil {
+						return writeErr
+					}
 
 					if err != nil {
 						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
 					} else {
-						printStatusText(cmd, snap, source)
+						if writeErr := printStatusText(cmd, snap, source); writeErr != nil {
+							return writeErr
+						}
 					}
 
 					select {
@@ -120,8 +124,7 @@ func statusCmd() *cobra.Command {
 				}
 				return printOutput(cmd.OutOrStdout(), payload, format)
 			default:
-				printStatusText(cmd, snap, source)
-				return nil
+				return printStatusText(cmd, snap, source)
 			}
 		},
 	}
@@ -135,8 +138,9 @@ func statusCmd() *cobra.Command {
 	return cmd
 }
 
-func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source string) {
-	out := cmd.OutOrStdout()
+func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source string) error {
+	var rendered strings.Builder
+	out := &rendered
 
 	healthy := 0
 	for _, n := range snap.Nodes {
@@ -199,6 +203,8 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	fmt.Fprintf(out, "%s %s | %s\n",
 		ui.Dim("Snapshot:"), sourceLabel,
 		ui.Dim(snap.Timestamp.Format(time.RFC3339)))
+	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
+	return err
 }
 
 // canonicalRuntimeOrder defines the display order for known resident model
