@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/state"
@@ -101,6 +102,55 @@ func TestReservationsListNDJSON(t *testing.T) {
 		}
 	}
 	_ = stderr
+}
+
+func TestReservationsListPropagatesWriterFailures(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	tests := []struct {
+		name     string
+		format   string
+		populate bool
+	}{
+		{name: "text empty", format: "text"},
+		{name: "text table", format: "text", populate: true},
+		{name: "json", format: "json", populate: true},
+		{name: "ndjson", format: "ndjson", populate: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AXIS_HOME", t.TempDir())
+			if tt.populate {
+				now := time.Now().UTC()
+				writeDoctorLedgerFixture(t, &reservation.Entry{
+					ID:            "entry",
+					Node:          "node-a",
+					RAMMB:         512,
+					CreatedAt:     now,
+					LastHeartbeat: now,
+				})
+			}
+
+			cmd := reservationsListCmd()
+			cmd.SetOut(rejectingOutputWriter{err: wantErr})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"--format", tt.format})
+			if err := cmd.Execute(); !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want writer failure", err)
+			}
+		})
+	}
+}
+
+func TestReservationsTablePropagatesWriterFailureOnFallback(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	wantErr := errors.New("writer unavailable")
+	cmd := &cobra.Command{}
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	cmd.SetErr(&bytes.Buffer{})
+
+	if err := runReservationsTable(cmd, "127.0.0.1:1"); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
 }
 
 func TestReservationsInspectFound(t *testing.T) {
