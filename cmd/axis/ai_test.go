@@ -6,7 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/toasterbook88/axis/internal/config"
 )
+
+func stubAINodeConfig(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	prev := aiNodeConfigLoadFn
+	aiNodeConfigLoadFn = func() (*config.Config, error) { return cfg, nil }
+	t.Cleanup(func() { aiNodeConfigLoadFn = prev })
+}
 
 func TestAICommandSurfaceWiresSubcommands(t *testing.T) {
 	cmd := aiCmd()
@@ -21,6 +30,7 @@ func TestAICommandSurfaceWiresSubcommands(t *testing.T) {
 }
 
 func TestAIRouteSkipProbeText(t *testing.T) {
+	stubAINodeConfig(t, nil)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai.yaml")
 	body := `
@@ -56,6 +66,10 @@ roles:
 }
 
 func TestAIBackendsPrintsViewLocality(t *testing.T) {
+	stubAINodeConfig(t, &config.Config{Nodes: []config.NodeConfig{
+		{Name: "some-other-node", Hostname: "192.0.2.10"},
+		{Name: "node-a", Hostname: "127.0.0.1"},
+	}})
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai.yaml")
 	body := `
@@ -67,6 +81,10 @@ backends:
   - name: loop
     kind: ollama
     base_url: http://127.0.0.1:11434
+  - name: bound
+    kind: openai-compatible
+    base_url: http://127.0.0.1:8082/v1
+    node: node-a
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -80,15 +98,26 @@ backends:
 		t.Fatalf("backends: %v", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "nemotron") || !strings.Contains(out, "peer") {
-		t.Fatalf("expected peer locality for named other node:\n%s", out)
+	localities := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			localities[fields[0]] = fields[1]
+		}
 	}
-	if !strings.Contains(out, "loop") || !strings.Contains(out, "here") {
-		t.Fatalf("expected here locality for loopback:\n%s", out)
+	if localities["nemotron"] != "peer" {
+		t.Fatalf("nemotron locality = %q, want peer:\n%s", localities["nemotron"], out)
+	}
+	if localities["loop"] != "here" {
+		t.Fatalf("loop locality = %q, want here:\n%s", localities["loop"], out)
+	}
+	if localities["bound"] != "here" {
+		t.Fatalf("bound locality = %q, want here:\n%s", localities["bound"], out)
 	}
 }
 
 func TestAIRouteStrictModelUnlistedExit(t *testing.T) {
+	stubAINodeConfig(t, nil)
 	// Use a local httptest via real ResolveRole is hard from CLI without live ports;
 	// exercise --allow-unlisted path still succeeds with skip-probe.
 	dir := t.TempDir()

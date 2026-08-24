@@ -73,6 +73,10 @@ type ResolveRoleOptions struct {
 
 	// HTTPClient is optional; used for probes.
 	HTTPClient *http.Client
+
+	// NodeConfig resolves backend node bindings relative to this AXIS process.
+	// Nil preserves conservative hostname-only fallback behavior.
+	NodeConfig *config.Config
 }
 
 // ErrModelUnlisted is returned when RequireModelListed is set and no healthy
@@ -142,7 +146,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 				reasoning = append(reasoning, fmt.Sprintf("skip %q: not in config", name))
 				continue
 			}
-			p := ProbeBackend(ctx, b, opts.HTTPClient)
+			p := ProbeBackendForNodes(ctx, b, opts.HTTPClient, opts.NodeConfig)
 			probes = append(probes, p)
 			probeByName[strings.ToLower(name)] = p
 		}

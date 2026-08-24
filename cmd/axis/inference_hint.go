@@ -107,7 +107,7 @@ func modelFromAIRole(role string) string {
 // modelChoicesFromAIConfig builds agent catalog entries from ai.yaml roles.
 // Resolves prefer order offline, then probes endpoints and marks unreachable
 // entries Disabled. Dedupes by (endpoint, model). Resolves API keys for hubs.
-func modelChoicesFromAIConfig() []ModelChoice {
+func modelChoicesFromAIConfig(nodeCfg *config.Config) []ModelChoice {
 	cfg, err := inferenceAILoadFn(inferenceAIPathFn())
 	if err != nil || cfg == nil || len(cfg.Roles) == 0 || len(cfg.Backends) == 0 {
 		return nil
@@ -133,7 +133,7 @@ func modelChoicesFromAIConfig() []ModelChoice {
 			continue
 		}
 		if b, ok := cfg.FindBackend(dec.Backend); ok {
-			if ep := chooseAICatalogEndpoint(b); ep != "" {
+			if ep := chooseAICatalogEndpoint(b, nodeCfg); ep != "" {
 				dec.Endpoint = ep
 			}
 		}
@@ -185,18 +185,15 @@ func modelChoicesFromAIConfig() []ModelChoice {
 // chooseAICatalogEndpoint keeps BaseURL on-box and uses AdvertiseURL only
 // when this process is not the backend's node. resolveNodeEndpoint is not
 // involved — snapshot/IP reachability stays unchanged.
-func chooseAICatalogEndpoint(b config.AIBackendConfig) string {
-	if strings.TrimSpace(b.AdvertiseURL) == "" || aiBackendIsLocal(b) {
+func chooseAICatalogEndpoint(b config.AIBackendConfig, nodeCfg *config.Config) string {
+	if strings.TrimSpace(b.AdvertiseURL) == "" || aiBackendIsLocal(b, nodeCfg) {
 		return b.BaseURL
 	}
 	return b.AdvertiseURL
 }
 
-func aiBackendIsLocal(b config.AIBackendConfig) bool {
-	if strings.TrimSpace(b.Node) == "" {
-		return llmrouter.EndpointIsClusterLocal(b.BaseURL)
-	}
-	return models.IsLocalConfig(b.Node, b.Node, "")
+func aiBackendIsLocal(b config.AIBackendConfig, nodeCfg *config.Config) bool {
+	return llmrouter.BackendIsLocal(b, nodeCfg)
 }
 
 func probeAIEndpoint(kind, baseURL string) bool {

@@ -36,6 +36,13 @@ type BackendProbe struct {
 // ProbeBackend checks reachability and lists models when possible.
 // It never panics; failures set OK=false with Message.
 func ProbeBackend(ctx context.Context, b config.AIBackendConfig, client *http.Client) BackendProbe {
+	return ProbeBackendForNodes(ctx, b, client, nil)
+}
+
+// ProbeBackendForNodes checks a backend using viewer-relative node locality
+// from nodes.yaml when available. This keeps a backend's on-box BaseURL for
+// its owning node and uses AdvertiseURL for peers.
+func ProbeBackendForNodes(ctx context.Context, b config.AIBackendConfig, client *http.Client, nodes *config.Config) BackendProbe {
 	out := BackendProbe{
 		Backend: b.Name,
 		Kind:    b.Kind,
@@ -57,7 +64,7 @@ func ProbeBackend(ctx context.Context, b config.AIBackendConfig, client *http.Cl
 	}
 
 	start := time.Now()
-	url, err := probeURL(b)
+	url, err := probeURL(b, nodes)
 	if err != nil {
 		out.Message = err.Error()
 		out.Latency = time.Since(start)
@@ -106,12 +113,18 @@ func ProbeBackend(ctx context.Context, b config.AIBackendConfig, client *http.Cl
 
 // ProbeAllBackends probes each backend sequentially (stable order as configured).
 func ProbeAllBackends(ctx context.Context, cfg *config.AIConfig, client *http.Client) []BackendProbe {
+	return ProbeAllBackendsForNodes(ctx, cfg, client, nil)
+}
+
+// ProbeAllBackendsForNodes probes each backend sequentially, resolving
+// backend node bindings against nodes.yaml when available.
+func ProbeAllBackendsForNodes(ctx context.Context, cfg *config.AIConfig, client *http.Client, nodes *config.Config) []BackendProbe {
 	if cfg == nil {
 		return nil
 	}
 	out := make([]BackendProbe, 0, len(cfg.Backends))
 	for _, b := range cfg.Backends {
-		out = append(out, ProbeBackend(ctx, b, client))
+		out = append(out, ProbeBackendForNodes(ctx, b, client, nodes))
 	}
 	return out
 }
@@ -127,24 +140,46 @@ func resolveBackendAPIKey(b config.AIBackendConfig) string {
 // effectiveProbeEndpoint keeps BaseURL on-box and uses AdvertiseURL only
 // when this process is not the backend's node — same selection the agent
 // catalog uses (chooseAICatalogEndpoint in cmd/axis).
-func effectiveProbeEndpoint(b config.AIBackendConfig) string {
+func effectiveProbeEndpoint(b config.AIBackendConfig, nodes *config.Config) string {
 	if strings.TrimSpace(b.AdvertiseURL) == "" {
 		return b.BaseURL
 	}
 	if strings.TrimSpace(b.Node) == "" {
 		return b.BaseURL
 	}
-	if models.IsLocalConfig(b.Node, b.Node, "") {
+	if BackendIsLocal(b, nodes) {
 		return b.BaseURL
 	}
 	return b.AdvertiseURL
 }
 
+// BackendIsLocal reports whether a backend belongs to the machine running
+// AXIS. A backend node is a nodes.yaml name, so resolve that seed before
+// falling back to direct hostname matching for compatibility.
+func BackendIsLocal(b config.AIBackendConfig, nodes *config.Config) bool {
+	nodeName := strings.TrimSpace(b.Node)
+	if nodeName == "" {
+		return EndpointIsClusterLocal(b.BaseURL)
+	}
+	if nodes != nil {
+		if node, ok := nodes.FindNode(nodeName); ok {
+			return node.IsLocal()
+		}
+	}
+	return models.IsLocalConfig(nodeName, nodeName, "")
+}
+
 // ViewLocality is viewer-relative: here (this process), peer (another
 // enrolled node), cloud (public URL, no node). The backend name is not used.
 func ViewLocality(b config.AIBackendConfig) string {
+	return ViewLocalityForNodes(b, nil)
+}
+
+// ViewLocalityForNodes classifies a backend after resolving its optional node
+// binding through nodes.yaml.
+func ViewLocalityForNodes(b config.AIBackendConfig, nodes *config.Config) string {
 	if strings.TrimSpace(b.Node) != "" {
-		if models.IsLocalConfig(b.Node, b.Node, "") {
+		if BackendIsLocal(b, nodes) {
 			return "here"
 		}
 		return "peer"
@@ -155,8 +190,8 @@ func ViewLocality(b config.AIBackendConfig) string {
 	return "cloud"
 }
 
-func probeURL(b config.AIBackendConfig) (string, error) {
-	base := strings.TrimRight(strings.TrimSpace(effectiveProbeEndpoint(b)), "/")
+func probeURL(b config.AIBackendConfig, nodes *config.Config) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(effectiveProbeEndpoint(b, nodes)), "/")
 	if base == "" {
 		return "", fmt.Errorf("empty base_url")
 	}

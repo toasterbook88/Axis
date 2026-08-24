@@ -2101,7 +2101,7 @@ func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
 	}
 
 	// Inference roles from ~/.axis/ai.yaml (OpenAI-compatible / ollama backends).
-	choices = append(choices, modelChoicesFromAIConfig()...)
+	choices = append(choices, modelChoicesFromAIConfig(rt.Config)...)
 
 	sort.Slice(choices, func(i, j int) bool {
 		if choices[i].ProviderKind != choices[j].ProviderKind {

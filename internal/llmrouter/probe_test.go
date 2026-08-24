@@ -37,6 +37,18 @@ func TestViewLocality(t *testing.T) {
 	if cloud != "cloud" {
 		t.Fatalf("public URL no node = %q, want cloud", cloud)
 	}
+	logicalLocal := llmrouter.ViewLocalityForNodes(config.AIBackendConfig{
+		Name:    "nemotron",
+		Kind:    config.AIBackendOpenAICompatible,
+		BaseURL: "http://127.0.0.1:8081/v1",
+		Node:    "node-a",
+	}, &config.Config{Nodes: []config.NodeConfig{{
+		Name:     "node-a",
+		Hostname: "127.0.0.1",
+	}}})
+	if logicalLocal != "here" {
+		t.Fatalf("logical local node = %q, want here", logicalLocal)
+	}
 }
 
 func TestProbeBackend_OllamaTags(t *testing.T) {
@@ -114,6 +126,35 @@ func TestProbeBackend_OffBoxUsesAdvertiseURL(t *testing.T) {
 	}
 	if !llmrouter.ModelListed(p.Models, "nemotron") {
 		t.Fatalf("missing nemotron in %v", p.Models)
+	}
+}
+
+func TestProbeBackend_LocalNodeBindingKeepsBaseURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"nemotron"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	b := config.AIBackendConfig{
+		Name:         "local-nemotron",
+		Kind:         config.AIBackendOpenAICompatible,
+		BaseURL:      srv.URL + "/v1",
+		AdvertiseURL: "http://127.0.0.1:1/v1",
+		Node:         "node-a",
+	}
+	nodes := &config.Config{Nodes: []config.NodeConfig{{
+		Name:     "node-a",
+		Hostname: "127.0.0.1",
+	}}}
+	p := llmrouter.ProbeBackendForNodes(context.Background(), b, srv.Client(), nodes)
+	if !p.OK {
+		t.Fatalf("probe via base_url: %+v", p)
+	}
+	if p.ProbedURL != srv.URL+"/v1/models" {
+		t.Fatalf("probed URL = %q, want local base_url", p.ProbedURL)
 	}
 }
 

@@ -179,7 +179,7 @@ func TestModelChoicesFromAIConfig_SecurityAndProbe(t *testing.T) {
 		return strings.Contains(url, "127.0.0.1")
 	}
 
-	choices := modelChoicesFromAIConfig()
+	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 2 {
 		t.Fatalf("got %d choices: %#v", len(choices), choices)
 	}
@@ -271,7 +271,7 @@ func TestModelChoicesFromAIConfig_Dedupe(t *testing.T) {
 	}
 	inferenceProbeFn = func(string) bool { return true }
 
-	choices := modelChoicesFromAIConfig()
+	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 {
 		t.Fatalf("expected dedupe to 1, got %d", len(choices))
 	}
