@@ -103,8 +103,8 @@ func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
 		ui.FprintWarning(cmd.ErrOrStderr(), "using local ledger (daemon cache unavailable)")
 	}
 
-	fmt.Fprint(cmd.OutOrStdout(), RenderReservationTable(items))
-	return nil
+	_, err = io.WriteString(cmd.OutOrStdout(), RenderReservationTable(items))
+	return err
 }
 
 type ReservationListItem struct {
@@ -210,13 +210,15 @@ func reservationsListCmd() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					fmt.Fprintln(out, string(b))
+					if _, err := fmt.Fprintln(out, string(b)); err != nil {
+						return err
+					}
 				}
 				return nil
 			default:
 				if len(entries) == 0 {
-					fmt.Fprintln(cmd.OutOrStdout(), "No active reservations")
-					return nil
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "No active reservations")
+					return err
 				}
 				tbl := ui.NewTable("ID", "NODE", "RAM MB", "OWNER", "CREATED AT", "LAST HEARTBEAT")
 				for _, e := range entries {
@@ -229,8 +231,10 @@ func reservationsListCmd() *cobra.Command {
 						e.LastHeartbeat.Format(time.RFC3339),
 					)
 				}
-				tbl.Render(cmd.OutOrStdout())
-				return nil
+				var b strings.Builder
+				tbl.Render(&b)
+				_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+				return err
 			}
 		},
 	}
