@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -19,9 +18,6 @@ type Model struct {
 	cursor    int // Selected row index
 	activeTab int // Inspector tab (0=Details, 1=Backends, 2=Storage, 3=Reservations)
 
-	// Viewport for scrollable content
-	viewport viewport.Model
-
 	// Dimensions
 	width  int
 	height int
@@ -34,7 +30,6 @@ type Model struct {
 // NewModel creates an initialized TUI model.
 func NewModel() Model {
 	return Model{
-		viewport:    viewport.New(80, 24),
 		cursor:      0,
 		activeTab:   0,
 		loading:     true,

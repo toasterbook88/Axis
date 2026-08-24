@@ -30,8 +30,7 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 12
+		// Viewport disabled - using direct rendering instead
 		return m, nil
 
 	case tea.KeyMsg:
@@ -116,10 +115,8 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd(refreshInterval)
 	}
 
-	// Update viewport
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	return m, cmd
+	// Update (no-op for direct rendering)
+	return m, nil
 }
 
 // ViewWithLogo renders the TUI with the ASCII logo.

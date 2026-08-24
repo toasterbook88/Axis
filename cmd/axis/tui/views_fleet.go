@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/toasterbook88/axis/internal/models"
@@ -53,7 +54,7 @@ func renderFleetTable(m Model) string {
 
 	// Table header
 	headers := []string{"NODE", "ROLE", "STATUS", "CPU", "RAM", "GPU", "TRANSPORT"}
-	headerRow := renderRow(headers, headerStyle, m.width)
+	headerRow := renderRow(headers, headerStyle)
 
 	// Node rows
 	var rows []string
@@ -76,13 +77,13 @@ func renderFleetTable(m Model) string {
 			transport = transportTail
 		}
 
-		// RAM gauge
+		// RAM gauge (constrain to 10 chars)
 		ramPct := 0.0
 		if node.Resources != nil && node.Resources.RAMTotalMB > 0 {
 			ramUsed := node.Resources.RAMTotalMB - node.Resources.RAMAllocatableMB
 			ramPct = float64(ramUsed) / float64(node.Resources.RAMTotalMB)
 		}
-		ramBar := renderProgressBar(ramPct, 10)
+		ramBar := renderProgressBar(ramPct, 8) // Reduced width to fit column
 
 		// GPU info
 		gpuInfo := "--"
@@ -91,15 +92,15 @@ func renderFleetTable(m Model) string {
 			gpuInfo = fmt.Sprintf("%s %dMB", gpu.Model, gpu.VRAMMB)
 		}
 
-		// CPU load
+		// CPU load (constrain to 8 chars)
 		cpuPct := 0.0
-		if node.Resources != nil {
+		if node.Resources != nil && node.Resources.CPUCores > 0 {
 			cpuPct = node.Resources.Load1M / float64(node.Resources.CPUCores)
 			if cpuPct > 1.0 {
 				cpuPct = 1.0
 			}
 		}
-		cpuBar := renderProgressBar(cpuPct, 8)
+		cpuBar := renderProgressBar(cpuPct, 6) // Reduced width
 
 		rowData := []string{
 			node.Name,
@@ -116,7 +117,7 @@ func renderFleetTable(m Model) string {
 			rowStyle = selectedRowStyle
 		}
 
-		rows = append(rows, renderRow(rowData, rowStyle, m.width))
+		rows = append(rows, renderRow(rowData, rowStyle))
 	}
 
 	table := lipgloss.JoinVertical(lipgloss.Left,
@@ -127,40 +128,90 @@ func renderFleetTable(m Model) string {
 	return table
 }
 
-// renderRow formats a single table row.
-func renderRow(cells []string, style lipgloss.Style, _ int) string {
-	// Simple fixed-width column layout
-	colWidths := []int{15, 12, 8, 12, 15, 25, 10}
+// renderRow formats a single table row with ANSI-aware padding.
+func renderRow(cells []string, style lipgloss.Style) string {
+	// Column widths (visual, excluding ANSI codes)
+	colWidths := []int{15, 12, 8, 10, 12, 20, 10}
 	var parts []string
 
 	for i, cell := range cells {
-		width := colWidths[i]
-		if i < len(colWidths) {
-			cell = fmt.Sprintf("%-*s", width, truncate(cell, width))
+		if i >= len(colWidths) {
+			parts = append(parts, style.Render(cell))
+			continue
 		}
+		width := colWidths[i]
+		cell = padVisualWidth(cell, width)
 		parts = append(parts, style.Render(cell))
 	}
 
 	return strings.Join(parts, " ")
 }
 
-// renderProgressBar creates a text-based progress bar.
-func renderProgressBar(pct float64, width int) string {
-	filled := int(pct * float64(width))
-	if filled > width {
-		filled = width
+// padVisualWidth pads a string to the specified visual width,
+// accounting for ANSI escape codes and Unicode graphemes.
+func padVisualWidth(s string, width int) string {
+	visualLen := visualWidth(s)
+	if visualLen >= width {
+		return truncateVisual(s, width)
 	}
-
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	return fmt.Sprintf("[%s] %3.0f%%", bar, pct*100)
+	return s + strings.Repeat(" ", width-visualLen)
 }
 
-// truncate shortens a string to maxLen.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+// visualWidth returns the display width of a string,
+// excluding ANSI escape codes and counting Unicode graphemes.
+func visualWidth(s string) int {
+	// Strip ANSI codes for width calculation
+	stripped := stripANSI(s)
+	return utf8.RuneCountInString(stripped)
+}
+
+// truncateVisual truncates a string to the specified visual width.
+func truncateVisual(s string, maxLen int) string {
+	if visualWidth(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	// Simple truncation (could be enhanced for grapheme clusters)
+	stripped := stripANSI(s)
+	runes := []rune(stripped)
+	if len(runes) > maxLen-1 {
+		runes = runes[:maxLen-1]
+	}
+	// Re-apply ANSI prefix if present (simplified)
+	return string(runes) + "…"
+}
+
+// stripANSI removes ANSI escape codes from a string.
+func stripANSI(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') || s[i] == '@' {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteByte(s[i])
+	}
+	return result.String()
+}
+
+// renderProgressBar creates a text-based progress bar of specified width.
+func renderProgressBar(pct float64, barWidth int) string {
+	if barWidth <= 0 {
+		barWidth = 8
+	}
+	filled := int(pct * float64(barWidth))
+	if filled > barWidth {
+		filled = barWidth
+	}
+
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	return fmt.Sprintf("[%s]", bar)
 }
 
 // renderInspector returns the tabbed inspector panel.
