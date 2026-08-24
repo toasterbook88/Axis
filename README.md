@@ -256,7 +256,7 @@ axis/
 ## Security
 
 - **Air-gapped option:** On-device inference via Ollama, no cloud dependency
-- **HMAC-SHA256:** Beacon auth is shipped; mesh gossip scaffolding authenticates payloads but does not yet enforce replay protection
+- **HMAC-SHA256:** Beacon and mesh-gossip authentication are shipped; mesh messages do not yet enforce replay protection
 - **Zero-trust execution:** Existing safety gates are shipped; parsed command analysis scaffolding is not wired into the operator path
 - **Constant-time auth:** Bearer token comparison via `crypto/subtle`
 - **No data exfiltration:** All state persisted locally in `~/.axis/`
