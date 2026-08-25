@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -24,6 +25,7 @@ type subAgentArgs struct {
 	Prompt     string `json:"prompt"`
 	TargetNode string `json:"target_node,omitempty"`
 	MaxTurns   int    `json:"max_turns,omitempty"`
+	Async      bool   `json:"async,omitempty"`
 }
 
 // registerSubAgent registers the spawn_subagent tool definition. Execution is
@@ -34,6 +36,7 @@ func (r *ToolRegistry) registerSubAgent() {
 		"Delegate a focused sub-task to a child agent that runs its own tool-calling loop, "+
 			"scoped to a target cluster node. The sub-agent can investigate and run commands on that node "+
 			"(via run_on_node, remote_read_file, remote_grep, remote_list) and returns a final summary. "+
+			"Set async=true to run in the background and receive a task id immediately for check_task. "+
 			"Use this to parallelize work across nodes — e.g. one sub-agent runs tests on nixos while another "+
 			"validates a build on foundry. The sub-agent inherits the active model and auto-approve setting. "+
 			"Nesting is capped (sub-agents cannot spawn their own sub-agents beyond depth 2).",
@@ -42,7 +45,8 @@ func (r *ToolRegistry) registerSubAgent() {
 			"properties":{
 				"prompt":{"type":"string","description":"The delegated sub-task instruction for the child agent"},
 				"target_node":{"type":"string","description":"Cluster node the sub-agent should focus on (optional; if omitted the sub-agent chooses via placement)"},
-				"max_turns":{"type":"integer","description":"Max tool-calling turns for the sub-agent (default 6)","default":6}
+				"max_turns":{"type":"integer","description":"Max tool-calling turns for the sub-agent (default 6)","default":6},
+				"async":{"type":"boolean","description":"Run subagent in background and return task id immediately (default false)","default":false}
 			},
 			"required":["prompt"]
 		}`),
@@ -81,6 +85,44 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 		a.subAgentDepth+1, firstNonEmpty(sa.TargetNode, "chosen by placement"))
 
 	child := a.buildChildAgent(maxTurns, sa.TargetNode, sysExtra)
+
+	if sa.Async {
+		if a.backgroundTasks == nil {
+			return "", fmt.Errorf("background task store not configured")
+		}
+		taskCtx, cancel := context.WithCancel(context.Background())
+		task := &backgroundTask{
+			command:   fmt.Sprintf("[subagent on %s] %s", firstNonEmpty(sa.TargetNode, "auto"), truncateForLog(sa.Prompt, 100)),
+			node:      sa.TargetNode,
+			startedAt: time.Now(),
+			cancel:    cancel,
+		}
+		task.id = a.backgroundTasks.nextID()
+		a.backgroundTasks.add(task)
+
+		go func() {
+			defer cancel()
+			err := child.Run(taskCtx, sa.Prompt)
+			answer := finalAssistantText(child.conv)
+			if answer != "" {
+				task.appendOutput([]byte(answer))
+			}
+			if err != nil {
+				task.appendOutput([]byte(fmt.Sprintf("\n[subagent error: %s]\n", err.Error())))
+			}
+			task.mu.Lock()
+			task.done = true
+			task.failed = err != nil
+			task.mu.Unlock()
+		}()
+
+		if a.verbose {
+			fmt.Fprintf(a.output, "\n%s Spawned background sub-agent %s (depth %d, target=%s, max_turns=%d)\n",
+				ui.Cyan("⤷"), task.id, child.subAgentDepth, firstNonEmpty(sa.TargetNode, "auto"), maxTurns)
+		}
+		return fmt.Sprintf("Sub-agent task %s started in background on %s (prompt: %s). Use `check_task` with id %q to monitor output.",
+			task.id, firstNonEmpty(sa.TargetNode, "auto"), truncateForLog(sa.Prompt, 80), task.id), nil
+	}
 
 	if a.verbose {
 		fmt.Fprintf(a.output, "\n%s Spawning sub-agent (depth %d, target=%s, max_turns=%d)\n",
