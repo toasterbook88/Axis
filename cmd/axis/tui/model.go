@@ -23,8 +23,8 @@ type Model struct {
 	height int
 
 	// Status
-	statusMsg   string
-	quitting    bool
+	statusMsg string
+	quitting  bool
 
 	// Modal overlays
 	modal       PlacementModal
