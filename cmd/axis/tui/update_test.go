@@ -190,6 +190,31 @@ func TestUpdateWindowSize(t *testing.T) {
 	}
 }
 
+func TestUpdateOpensPlacementModal(t *testing.T) {
+	m := modelWithNodes(1)
+	next, cmd := UpdateWithRefresh(m, keyMsg("p"))
+	if cmd == nil {
+		t.Fatal("placement key returned nil command, want text-input blink command")
+	}
+	if !next.(Model).modalActive {
+		t.Fatal("placement key did not activate modal")
+	}
+}
+
+func TestUpdateRoutesKeysToPlacementModal(t *testing.T) {
+	m := modelWithNodes(1)
+	m.modalActive = true
+	m.modal = NewPlacementModal()
+
+	next, cmd := UpdateWithRefresh(m, tea.KeyMsg{Type: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatalf("modal escape returned command %v, want nil", cmd)
+	}
+	if next.(Model).modalActive {
+		t.Fatal("modal remained active after Escape")
+	}
+}
+
 type boomError struct{}
 
 func (boomError) Error() string { return "boom" }

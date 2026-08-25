@@ -25,6 +25,10 @@ type Model struct {
 	// Status
 	statusMsg string
 	quitting  bool
+
+	// Modal overlays
+	modal       PlacementModal
+	modalActive bool
 }
 
 // NewModel creates an initialized TUI model.

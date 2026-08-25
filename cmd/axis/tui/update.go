@@ -26,6 +26,18 @@ const refreshInterval = 30 * time.Second
 
 // UpdateWithRefresh extends the base Update to handle auto-refresh ticks.
 func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.modalActive {
+		updated, cmd := m.modal.Update(msg)
+		m.modal = updated.(PlacementModal)
+		if m.modal.cancelled || m.modal.confirmed {
+			m.modalActive = false
+			if m.modal.confirmed {
+				m.statusMsg = "Placement selected; task place remains advisory"
+			}
+		}
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -77,6 +89,11 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab++
 			}
 
+		case "p":
+			m.modal = NewPlacementModal()
+			m.modalActive = true
+			return m, m.modal.Init()
+
 		case "?":
 			m.statusMsg = "j/k: navigate | 1-4: tabs | r: refresh | h/l: switch tab | q: quit"
 			return m, nil
@@ -123,6 +140,9 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 func ViewWithLogo(m Model) string {
 	if m.quitting {
 		return ""
+	}
+	if m.modalActive {
+		return m.modal.View()
 	}
 
 	var b strings.Builder
