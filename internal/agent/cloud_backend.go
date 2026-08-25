@@ -228,6 +228,12 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 	}
 
 	result.ToolCalls = accumulatedTools
+	if len(result.ToolCalls) == 0 && len(tools) > 0 {
+		if fallbackCalls, clean := chat.ExtractFallbackToolCalls(result.Content, tools); len(fallbackCalls) > 0 {
+			result.ToolCalls = fallbackCalls
+			result.Content = clean
+		}
+	}
 
 	// If token usage wasn't reported in the stream, estimate it.
 	if !usageReported {
@@ -458,6 +464,12 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		}
 	}
 	result.ToolCalls = accumulatedTools
+	if len(result.ToolCalls) == 0 && len(tools) > 0 {
+		if fallbackCalls, clean := chat.ExtractFallbackToolCalls(result.Content, tools); len(fallbackCalls) > 0 {
+			result.ToolCalls = fallbackCalls
+			result.Content = clean
+		}
+	}
 
 	// If token usage wasn't reported in the stream, estimate it.
 	if !usageReported {

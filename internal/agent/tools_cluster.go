@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -218,4 +219,141 @@ func (r *ToolRegistry) registerRemoteList(tc *ToolContext) {
 // '\” idiom.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// --- Tool: fleet_exec ---
+
+type fleetExecArgs struct {
+	Nodes      []string `json:"nodes"`
+	Command    string   `json:"command"`
+	TimeoutSec int      `json:"timeout_sec,omitempty"`
+}
+
+func (r *ToolRegistry) registerFleetExec(tc *ToolContext) {
+	_ = tc
+	r.add("fleet_exec",
+		"Execute a shell command across multiple cluster nodes in parallel (or all reachable nodes) and return an aggregated tabular status report. "+
+			"Use this to check health, probe processes, find files, or run fleet-wide diagnostics. "+
+			"Specify node names in `nodes` array (or `[\"all\"]` for all nodes in the cluster snapshot).",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"nodes":{"type":"array","items":{"type":"string"},"description":"List of target node names, or [\"all\"] for every node in snapshot"},
+				"command":{"type":"string","description":"Shell command to execute on each target node"},
+				"timeout_sec":{"type":"integer","description":"Per-node timeout in seconds (default 15)","default":15}
+			},
+			"required":["nodes","command"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "", fmt.Errorf("fleet_exec must be dispatched through the agent safety gate")
+		},
+	)
+}
+
+// --- Tool: remote_write_file ---
+
+type remoteWriteArgs struct {
+	Node    string `json:"node"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+func (r *ToolRegistry) registerRemoteWriteFile(tc *ToolContext) {
+	r.add("remote_write_file",
+		"Create or overwrite a file on a remote cluster node via SSH. Requires operator confirmation (mutating action). "+
+			"Use this to deploy or update configurations, scripts, or patches on another node in the cluster.",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"node":{"type":"string","description":"Cluster node name"},
+				"path":{"type":"string","description":"Absolute path on the remote node"},
+				"content":{"type":"string","description":"The text content to write to the remote file"}
+			},
+			"required":["node","path","content"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a remoteWriteArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for remote_write_file: %w", err)
+			}
+			if a.Node == "" || a.Path == "" {
+				return "", fmt.Errorf("remote_write_file requires \"node\" and \"path\"")
+			}
+			cmd := buildRemoteWriteCmd(a.Path, a.Content)
+			out, err := runRemote(ctx, tc, a.Node, cmd)
+			if err != nil {
+				return "", fmt.Errorf("remote write to %s:%s failed: %w", a.Node, a.Path, err)
+			}
+			if out != "" {
+				return fmt.Sprintf("Wrote %d bytes to %s on %s: %s", len(a.Content), a.Path, a.Node, out), nil
+			}
+			return fmt.Sprintf("Successfully wrote %d bytes to %s on %s", len(a.Content), a.Path, a.Node), nil
+		},
+	)
+}
+
+// buildRemoteWriteCmd returns the shell command that writes content to path
+// on a remote node. Content is base64-encoded: a raw heredoc would let any
+// content line equal to the delimiter terminate the heredoc early and
+// execute the remainder as shell on the node.
+func buildRemoteWriteCmd(path, content string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	return fmt.Sprintf("mkdir -p $(dirname %s) && printf '%%s' %s | base64 -d > %s",
+		shellQuote(path), shellQuote(encoded), shellQuote(path))
+}
+
+// --- Tool: remote_tail_logs ---
+
+type remoteTailLogsArgs struct {
+	Node  string `json:"node"`
+	Unit  string `json:"unit,omitempty"`
+	Path  string `json:"path,omitempty"`
+	Lines int    `json:"lines,omitempty"`
+}
+
+func (r *ToolRegistry) registerRemoteTailLogs(tc *ToolContext) {
+	r.add("remote_tail_logs",
+		"Tail recent logs from a remote cluster node via SSH. You can specify a systemd service unit (e.g. `cortex`, `ollama`, `traefik`) or a log file path. Read-only, no confirmation.",
+		json.RawMessage(`{
+			"type":"object",
+			"properties":{
+				"node":{"type":"string","description":"Cluster node name"},
+				"unit":{"type":"string","description":"Optional systemd unit name to query via journalctl"},
+				"path":{"type":"string","description":"Optional file path to tail"},
+				"lines":{"type":"integer","description":"Number of lines to tail (default 50)","default":50}
+			},
+			"required":["node"]
+		}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a remoteTailLogsArgs
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", fmt.Errorf("invalid arguments for remote_tail_logs: %w", err)
+			}
+			if a.Node == "" {
+				return "", fmt.Errorf("remote_tail_logs requires \"node\"")
+			}
+			lines := a.Lines
+			if lines <= 0 {
+				lines = 50
+			}
+			var cmd string
+			if a.Unit != "" {
+				cmd = fmt.Sprintf("journalctl -u %s -n %d --no-pager 2>/dev/null || journalctl --user -u %s -n %d --no-pager 2>/dev/null",
+					shellQuote(a.Unit), lines, shellQuote(a.Unit), lines)
+			} else if a.Path != "" {
+				cmd = fmt.Sprintf("tail -n %d %s 2>/dev/null", lines, shellQuote(a.Path))
+			} else {
+				cmd = fmt.Sprintf("journalctl -n %d --no-pager 2>/dev/null || dmesg | tail -n %d", lines, lines)
+			}
+
+			out, err := runRemote(ctx, tc, a.Node, cmd)
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(out) == "" {
+				return fmt.Sprintf("(no logs found on %s)", a.Node), nil
+			}
+			return out, nil
+		},
+	)
 }

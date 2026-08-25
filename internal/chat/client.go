@@ -142,6 +142,13 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, tools []ToolDef
 		return result, err
 	}
 
+	if len(result.ToolCalls) == 0 && len(tools) > 0 {
+		if fallbackCalls, clean := ExtractFallbackToolCalls(result.Content, tools); len(fallbackCalls) > 0 {
+			result.ToolCalls = fallbackCalls
+			result.Content = clean
+		}
+	}
+
 	return result, nil
 }
 

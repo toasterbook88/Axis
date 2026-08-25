@@ -104,7 +104,7 @@ func isReadOnlyTool(name string) bool {
 	case "axis_status", "axis_facts", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "list_directory", "grep_search",
 		"todo", "symbol_search", "web_fetch", "web_search", "review_changes",
-		"remote_read_file", "remote_grep", "remote_list",
+		"remote_read_file", "remote_grep", "remote_list", "remote_tail_logs",
 		"check_task", "list_background_tasks",
 		"branch_session", "rollback_session":
 		return true
