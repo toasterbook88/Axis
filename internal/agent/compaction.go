@@ -107,6 +107,40 @@ func buildSummarizationPrompt(msgs []chat.Message) string {
 	return sb.String()
 }
 
+// CompactManually triggers compaction on demand, returning before/after token counts and the number of messages compacted.
+func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens int, compactedCount int, err error) {
+	beforeTokens = a.conv.EstimateTokens()
+	candidates := a.conv.SummarizableMessages(protectLastTurns)
+	if len(candidates) < 2 {
+		return beforeTokens, beforeTokens, 0, fmt.Errorf("not enough older messages to compact (need at least 2 candidate messages)")
+	}
+
+	prompt := buildSummarizationPrompt(candidates)
+	summary, err := a.summarizeViaBackend(ctx, prompt)
+	if err != nil {
+		return beforeTokens, beforeTokens, 0, fmt.Errorf("compaction summarization failed: %w", err)
+	}
+	if strings.TrimSpace(summary) == "" {
+		return beforeTokens, beforeTokens, 0, fmt.Errorf("compaction summarizer returned empty summary")
+	}
+
+	start := a.conv.FirstNonSystemIndex()
+	if start < 0 {
+		return beforeTokens, beforeTokens, 0, fmt.Errorf("no non-system messages to compact")
+	}
+	end := a.conv.Len() - protectLastTurns
+	if end <= start {
+		return beforeTokens, beforeTokens, 0, fmt.Errorf("active working turn range overlaps candidate range")
+	}
+
+	a.conv.ReplaceRange(start, end, []chat.Message{
+		{Role: chat.RoleSystem, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
+	})
+
+	afterTokens = a.conv.EstimateTokens()
+	return beforeTokens, afterTokens, len(candidates), nil
+}
+
 // summarizeViaBackend runs a single no-tools, non-streamed exchange against the
 // active backend to produce a summary. Output is discarded from the user's
 // stream so compaction is invisible.

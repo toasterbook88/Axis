@@ -52,6 +52,29 @@ func TestSpawnSubagentReturnsChildAnswer(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentAsync(t *testing.T) {
+	backend := &subAgentBackend{answer: "async task completed on foundry"}
+	parent := New(Config{
+		Backend:     backend,
+		MaxTurns:    3,
+		MaxTokens:   4096,
+		Output:      io.Discard,
+		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+		"prompt":      "build project on foundry",
+		"target_node": "foundry",
+		"async":       true,
+	})))
+	if err != nil {
+		t.Fatalf("dispatchSubagent async: %v", err)
+	}
+	if !strings.Contains(out, "started in background") || !strings.Contains(out, "bg-1") {
+		t.Fatalf("expected async task response, got: %q", out)
+	}
+}
+
 func TestSpawnSubagentEmptyPromptErrors(t *testing.T) {
 	parent := New(Config{Backend: &subAgentBackend{}, Output: io.Discard, ToolContext: NewToolContext(&RuntimeView{}, nil)})
 	_, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{"prompt": "   "})))

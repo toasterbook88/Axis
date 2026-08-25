@@ -39,3 +39,45 @@ func TestAxisRunTaskToolValidation(t *testing.T) {
 		t.Errorf("expected safety gate error, got: %v", err)
 	}
 }
+
+func TestFleetExecToolValidation(t *testing.T) {
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if !r.HasTool("fleet_exec") {
+		t.Fatal("expected registry to have fleet_exec tool")
+	}
+
+	_, err := r.Execute(context.Background(), "fleet_exec", json.RawMessage(`{"command":"uptime","nodes":["all"]}`))
+	if err == nil || !strings.Contains(err.Error(), "must be dispatched through the agent safety gate") {
+		t.Errorf("expected safety gate dispatch error, got: %v", err)
+	}
+}
+
+func TestRemoteWriteFileValidation(t *testing.T) {
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if !r.HasTool("remote_write_file") {
+		t.Fatal("expected registry to have remote_write_file tool")
+	}
+
+	_, err := r.Execute(context.Background(), "remote_write_file", json.RawMessage(`{"node":""}`))
+	if err == nil || !strings.Contains(err.Error(), "requires \"node\" and \"path\"") {
+		t.Errorf("expected validation error, got: %v", err)
+	}
+}
+
+func TestRemoteTailLogsValidation(t *testing.T) {
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if !r.HasTool("remote_tail_logs") {
+		t.Fatal("expected registry to have remote_tail_logs tool")
+	}
+
+	_, err := r.Execute(context.Background(), "remote_tail_logs", json.RawMessage(`{"node":""}`))
+	if err == nil || !strings.Contains(err.Error(), "requires \"node\"") {
+		t.Errorf("expected validation error, got: %v", err)
+	}
+}

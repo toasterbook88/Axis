@@ -45,15 +45,21 @@ type TaskRunner func(ctx context.Context, prepared execution.PreparedExecution) 
 // Agent drives a multi-turn tool-calling loop on top of the chat client.
 // It is strictly a consumer of the fact plane — its output is never cluster truth.
 type Agent struct {
-	client                  ChatBackend
-	conv                    *chat.Conversation
-	tools                   *ToolRegistry
-	confirm                 ConfirmFunc
+	client  ChatBackend
+	conv    *chat.Conversation
+	tools   *ToolRegistry
+	confirm ConfirmFunc
+	// baseConfirm is the surface-installed confirm without autonomy
+	// wrapping. SetAutonomy re-wraps this instead of StdinConfirm so a
+	// raw-mode surface's confirm survives mode changes.
+	baseConfirm             ConfirmFunc
 	runShell                ShellRunner
 	runOnNode               NodeShellRunner
 	runTask                 TaskRunner
 	safety                  ShellSafetyGate
 	output                  io.Writer
+	observer                Observer
+	runMu                   sync.Mutex
 	maxTurns                int
 	maxTokens               int
 	verbose                 bool
@@ -82,6 +88,8 @@ type Agent struct {
 	// branchStack holds session branch snapshots for branch_session /
 	// rollback_session, letting the model try risky approaches and rewind.
 	branchStack []branchSnapshot
+	// autonomy tracks the active autonomy policy for the session.
+	autonomy AutonomyMode
 }
 
 // Config configures an Agent.
@@ -112,6 +120,12 @@ type Config struct {
 	// Output is where the agent writes assistant text and traces.
 	Output io.Writer
 
+	// Observer, when non-nil, receives structured loop events (tool calls,
+	// results, turns, shell execs) instead of having them formatted to
+	// Output. Surfaces that render their own transcript set this; the plain
+	// CLI leaves it nil. See observer.go.
+	Observer Observer
+
 	// Confirm is the confirmation function. If nil, StdinConfirm() is used.
 	Confirm ConfirmFunc
 
@@ -139,10 +153,10 @@ func New(cfg Config) *Agent {
 		cfg.Endpoint = chat.DefaultEndpoint
 	}
 	if cfg.MaxTurns <= 0 {
-		cfg.MaxTurns = 10
+		cfg.MaxTurns = 25
 	}
 	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 4096
+		cfg.MaxTokens = 32768
 	}
 	if cfg.Output == nil {
 		cfg.Output = io.Discard
@@ -188,7 +202,10 @@ func New(cfg Config) *Agent {
 		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control (Layer-4 guarded).\n" +
 		"- `run_on_node` to run a shell command on a specific named cluster node through Layer-4 guarded execution with a requested-node pin (returns a guarded JSON result).\n" +
 		"- `remote_read_file` / `remote_grep` / `remote_list` to read files, grep, and list directories on remote cluster nodes (read-only, no confirmation).\n" +
-		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node — use this to parallelize work across nodes (e.g. tests on nixos while a build runs on foundry).\n" +
+		"- `remote_write_file` to create or update a file on a remote cluster node via SSH (requires confirmation).\n" +
+		"- `remote_tail_logs` to tail systemd unit logs or file logs on a remote cluster node (read-only).\n" +
+		"- `fleet_exec` to execute a shell command across multiple cluster nodes in parallel (or all nodes) and aggregate results.\n" +
+		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node (sync or async) — use this to parallelize work across nodes (e.g. tests on nixos while a build runs on foundry).\n" +
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +
@@ -229,6 +246,7 @@ func New(cfg Config) *Agent {
 	// Autonomy mode takes precedence over the legacy AutoApprove flag,
 	// wrapping the (possibly already-auto-approving) confirm with the
 	// mode-specific policy.
+	baseConfirm := confirm
 	if cfg.Autonomy != "" && cfg.Autonomy != AutonomyDefault {
 		confirm = autonomyConfirm(cfg.Autonomy, confirm)
 	}
@@ -248,6 +266,7 @@ func New(cfg Config) *Agent {
 		conv:                    conv,
 		tools:                   tools,
 		confirm:                 confirm,
+		baseConfirm:             baseConfirm,
 		runShell:                runShell,
 		runOnNode:               cfg.RunOnNode,
 		runTask:                 cfg.RunTask,
@@ -263,23 +282,100 @@ func New(cfg Config) *Agent {
 		securityClass:           cfg.BackendSecurityClass,
 		mcpRegistry:             cfg.MCPRegistry,
 		backgroundTasks:         newBackgroundTaskStore(),
+		autonomy:                cfg.Autonomy,
+		observer:                cfg.Observer,
 	}
 }
 
 // Run executes one full agent turn: the user prompt goes in, the agent loops
 // through tool calls until the model produces a text response or hits the
 // turn limit.
+// SetConfirm replaces the confirmation function. A surface that owns the
+// terminal installs its own here: the default reads os.Stdin directly, which
+// would corrupt a raw-mode input loop.
+//
+// It takes both the run lock (so it cannot land midway through a turn) and
+// dispatchMu, which guards confirm/baseConfirm against SetAutonomy and
+// dispatchToolCall.
+func (a *Agent) SetConfirm(fn ConfirmFunc) {
+	if fn == nil {
+		return
+	}
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+	a.baseConfirm = fn
+	a.confirm = a.wrapConfirm(fn)
+}
+
+// wrapConfirm applies the active autonomy policy to a base confirm.
+// Callers must hold a lock covering confirm/autonomy.
+func (a *Agent) wrapConfirm(fn ConfirmFunc) ConfirmFunc {
+	if a.autonomy != "" && a.autonomy != AutonomyDefault {
+		return autonomyConfirm(a.autonomy, fn)
+	}
+	return fn
+}
+
+// Run executes one full agent turn. Calls are serialized: the conversation is
+// not safe for concurrent mutation, so a caller that abandons a turn (a
+// cancellation the backend never acknowledged) blocks here until that turn
+// actually exits rather than racing it.
 func (a *Agent) Run(ctx context.Context, userPrompt string) error {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	return a.runLocked(ctx, userPrompt)
+}
+
+// SetAutonomy updates the autonomy mode and its confirmation policy,
+// re-wrapping the surface-installed base confirm rather than StdinConfirm.
+func (a *Agent) SetAutonomy(mode AutonomyMode) {
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+	a.autonomy = mode
+	base := a.baseConfirm
+	if base == nil {
+		base = StdinConfirm()
+	}
+	a.confirm = autonomyConfirm(mode, base)
+}
+
+// RunWithSinks executes one turn against turn-scoped sinks, restoring the
+// previous ones when it returns. A surface that stamps events with the turn
+// that produced them constructs a fresh observer and writer per turn and
+// passes them here; because the swap happens under the same lock as the run,
+// an abandoned turn keeps writing to its own sinks and can never be
+// misattributed to the turn that replaced it.
+//
+// Either sink may be nil to leave that one unchanged.
+func (a *Agent) RunWithSinks(ctx context.Context, userPrompt string, obs Observer, out io.Writer) error {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+
+	prevObs, prevOut := a.observer, a.output
+	if obs != nil {
+		a.observer = obs
+	}
+	if out != nil {
+		a.output = out
+	}
+	defer func() { a.observer, a.output = prevObs, prevOut }()
+
+	return a.runLocked(ctx, userPrompt)
+}
+
+func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
 
 	for turn := 0; turn < a.maxTurns; turn++ {
 		if a.verbose {
-			fmt.Fprintf(a.output, "\n%s\n", ui.Dim(fmt.Sprintf("─── Turn %d/%d ──────────────────────────────────────────────────", turn+1, a.maxTurns)))
+			a.emitTurnStarted(turn+1, a.maxTurns)
 		}
 		// Proactively compress older conversation turns before sending context
 		// to the model, so long sessions stay within the token budget.
 		if err := a.compactContext(ctx); err != nil && a.verbose {
-			fmt.Fprintf(a.output, "  %s compaction skipped: %v\n", ui.Dim("♻"), err)
+			a.emitCompactionSkipped(err)
 		}
 		msgs := a.conv.Messages()
 		toolDefs := a.tools.Defs()
@@ -350,12 +446,9 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 		// in the original tool-call order so tool_call_id alignment is preserved.
 		var liveCalls []chat.ToolCall
 		for _, tc := range resp.ToolCalls {
-			fmt.Fprintf(a.output, "\n%s Calling %s...\n", ui.Cyan("▶"), ui.Bold(tc.Function.Name))
-			if a.verbose && len(tc.Function.Arguments) > 0 {
-				fmt.Fprintf(a.output, "  %s Parameters: %s\n", ui.Dim("→"), tc.Function.Arguments)
-			}
+			a.emitToolCalled(tc.ID, tc.Function.Name, string(tc.Function.Arguments))
 			if a.dryRun {
-				fmt.Fprintf(a.output, "  %s Skipped execution of %s\n", ui.Yellow("[dry-run]"), tc.Function.Name)
+				a.emitToolSkipped(tc.ID, tc.Function.Name, "dry-run")
 				a.conv.Append(chat.Message{
 					Role:       chat.RoleTool,
 					ToolCallID: tc.ID,
@@ -388,14 +481,9 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 					result, err := a.dispatchToolCall(ctx, tc)
 					outMu.Lock()
 					if err != nil {
-						errMsg := fmt.Sprintf("Error executing tool %q: %s", tc.Function.Name, err.Error())
-						fmt.Fprintf(a.output, "  %s %s\n", ui.Red("⚠"), errMsg)
+						a.emitToolFailed(tc.ID, tc.Function.Name, err)
 					} else {
-						summary := formatToolResultSummary(tc.Function.Name, result)
-						fmt.Fprintf(a.output, "%s %s\n", ui.Green("✓"), summary)
-						if a.verbose {
-							fmt.Fprintf(a.output, "  %s Result: %d chars\n", ui.Dim("←"), len(result))
-						}
+						a.emitToolSucceeded(tc.ID, tc.Function.Name, formatToolResultSummary(tc.Function.Name, result), len(result))
 					}
 					outMu.Unlock()
 					results[i] = toolResult{result: result, err: err}
@@ -423,7 +511,7 @@ func (a *Agent) Run(ctx context.Context, userPrompt string) error {
 		}
 	}
 
-	fmt.Fprintf(a.output, "\n⚠ Agent reached maximum turns (%d). Stopping.\n", a.maxTurns)
+	a.emitMaxTurnsReached(a.maxTurns)
 	return nil
 }
 
@@ -496,6 +584,12 @@ func formatToolResultSummary(toolName, result string) string {
 	case "git_log":
 		lines := strings.Count(result, "\n")
 		return fmt.Sprintf("%s: retrieved %d commits", toolName, lines)
+	case "fleet_exec":
+		return fmt.Sprintf("%s: executed across fleet", toolName)
+	case "remote_write_file":
+		return fmt.Sprintf("%s: wrote remote file", toolName)
+	case "remote_tail_logs":
+		return fmt.Sprintf("%s: retrieved remote logs", toolName)
 	}
 	if strings.HasPrefix(toolName, "mcp_") {
 		return fmt.Sprintf("%s: executed successfully (%d chars)", toolName, len(result))
@@ -542,6 +636,9 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	}
 	if name == "run_on_node" {
 		return a.dispatchRunOnNode(ctx, args)
+	}
+	if name == "fleet_exec" {
+		return a.dispatchFleetExec(ctx, args)
 	}
 	if name == "axis_run_task" {
 		return a.dispatchRunTask(ctx, args)
@@ -728,9 +825,9 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	}
 
 	if sa.Cwd != "" {
-		fmt.Fprintf(a.output, "\n▶ Executing shell (in %s): %s\n", sa.Cwd, sa.Command)
+		a.emitShellExecuting("", "", sa.Cwd, sa.Command)
 	} else {
-		fmt.Fprintf(a.output, "\n▶ Executing shell: %s\n", sa.Command)
+		a.emitShellExecuting("", "", "", sa.Command)
 	}
 	runLocal := a.shellRunner()
 	if runLocal == nil {
@@ -807,8 +904,162 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 		}
 	}
 
-	fmt.Fprintf(a.output, "\n▶ Executing on %s: %s\n", a0.Node, a0.Command)
+	a.emitShellExecuting("", a0.Node, "", a0.Command)
 	return runNode(ctx, a0.Node, a0.Command)
+}
+
+// dispatchFleetExec executes a command across multiple cluster nodes in parallel with safety gating.
+func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (string, error) {
+	var a0 fleetExecArgs
+	if err := json.Unmarshal(args, &a0); err != nil {
+		return "", fmt.Errorf("invalid arguments for fleet_exec: %w", err)
+	}
+	if strings.TrimSpace(a0.Command) == "" {
+		return "", fmt.Errorf("fleet_exec requires a non-empty \"command\" argument")
+	}
+
+	a.dispatchMu.Lock()
+	if a.blockAll {
+		a.dispatchMu.Unlock()
+		return "", fmt.Errorf("operator has blocked all tool execution for this session")
+	}
+	a.dispatchMu.Unlock()
+
+	// Safety check on command
+	allowed, reason, safetyScore := a.safety(a0.Command)
+	forceConfirm := false
+	if !allowed {
+		forceConfirm = true
+		if safetyScore < 80 {
+			safetyScore = 80
+		}
+	}
+
+	// Resolve target nodes
+	var targetNodes []string
+	var allNodes []string
+	if a.toolContext != nil {
+		view := a.toolContext.GetView()
+		if view != nil && view.Snapshot != nil {
+			for _, n := range view.Snapshot.Nodes {
+				allNodes = append(allNodes, n.Name)
+			}
+		} else if view != nil && view.Config != nil {
+			for _, n := range view.Config.Nodes {
+				allNodes = append(allNodes, n.Name)
+			}
+		}
+	}
+
+	isAll := len(a0.Nodes) == 0
+	for _, n := range a0.Nodes {
+		if strings.EqualFold(strings.TrimSpace(n), "all") {
+			isAll = true
+			break
+		}
+	}
+
+	if isAll {
+		targetNodes = allNodes
+	} else {
+		for _, n := range a0.Nodes {
+			n = strings.TrimSpace(n)
+			if n != "" {
+				targetNodes = append(targetNodes, n)
+			}
+		}
+	}
+
+	if len(targetNodes) == 0 {
+		return "", fmt.Errorf("fleet_exec: no target nodes found in snapshot or config")
+	}
+
+	a.dispatchMu.Lock()
+	needsConfirm := !a.autoApproveAll || forceConfirm
+	a.dispatchMu.Unlock()
+	if needsConfirm {
+		promptDesc := fmt.Sprintf("[on %d nodes: %s] %s", len(targetNodes), strings.Join(targetNodes, ", "), a0.Command)
+		if forceConfirm {
+			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
+		}
+		a.dispatchMu.Lock()
+		decision := a.confirm("fleet_exec", promptDesc, safetyScore)
+		switch decision {
+		case ConfirmNo:
+			a.dispatchMu.Unlock()
+			if forceConfirm {
+				return "", fmt.Errorf("operator declined safety-blocked fleet command: %s (%s)", a0.Command, reason)
+			}
+			return "", fmt.Errorf("operator declined fleet execution: %s", a0.Command)
+		case ConfirmAlways:
+			if !forceConfirm {
+				a.autoApproveAll = true
+			}
+			a.dispatchMu.Unlock()
+		case ConfirmNever:
+			a.blockAll = true
+			a.dispatchMu.Unlock()
+			return "", fmt.Errorf("operator has blocked all tool execution for this session")
+		case ConfirmYes:
+			a.dispatchMu.Unlock()
+		}
+	}
+
+	timeout := 15 * time.Second
+	if a0.TimeoutSec > 0 {
+		timeout = time.Duration(a0.TimeoutSec) * time.Second
+	}
+
+	type nodeResult struct {
+		node   string
+		output string
+		err    error
+	}
+
+	results := make([]nodeResult, len(targetNodes))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+
+	for i, nodeName := range targetNodes {
+		wg.Add(1)
+		go func(idx int, name string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			nodeCtx, nodeCancel := context.WithTimeout(ctx, timeout)
+			defer nodeCancel()
+
+			var out string
+			var err error
+			if runNode := a.nodeRunner(); runNode != nil {
+				out, err = runNode(nodeCtx, name, a0.Command)
+			} else {
+				out, err = runRemote(nodeCtx, a.toolContext, name, a0.Command)
+			}
+			results[idx] = nodeResult{node: name, output: strings.TrimSpace(out), err: err}
+		}(i, nodeName)
+	}
+	wg.Wait()
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Fleet Execution Report (Command: `%s`, %d node(s)):\n\n", a0.Command, len(targetNodes)))
+	for _, res := range results {
+		status := "✓ OK"
+		if res.err != nil {
+			status = fmt.Sprintf("✗ FAIL (%s)", res.err.Error())
+		}
+		sb.WriteString(fmt.Sprintf("### Node: %s [%s]\n", res.node, status))
+		if res.output != "" {
+			sb.WriteString("```\n")
+			sb.WriteString(res.output)
+			sb.WriteString("\n```\n\n")
+		} else {
+			sb.WriteString("(no output)\n\n")
+		}
+	}
+
+	return strings.TrimSpace(sb.String()), nil
 }
 
 // dispatchRunTask handles the axis_run_task tool with safety gating and confirmation.
@@ -964,6 +1215,24 @@ func (a *Agent) Backend() ChatBackend {
 // Model returns the current active model name.
 func (a *Agent) Model() string {
 	return a.model
+}
+
+// Autonomy returns the current autonomy mode.
+func (a *Agent) Autonomy() AutonomyMode {
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+	if a.autonomy == "" {
+		return AutonomyDefault
+	}
+	return a.autonomy
+}
+
+// ExecuteToolDirect allows direct tool execution (e.g. from slash commands or harness scripts).
+func (a *Agent) ExecuteToolDirect(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if a.tools == nil {
+		return "", fmt.Errorf("tool registry unavailable")
+	}
+	return a.tools.Execute(ctx, name, args)
 }
 
 // SetModel updates the current active model name.
