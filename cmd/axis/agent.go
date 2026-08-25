@@ -66,6 +66,7 @@ func agentCmd() *cobra.Command {
 		cheapModel              string
 		allowRawCommandEvidence bool
 		selectModel             bool
+		useConsole              bool
 	)
 
 	cmd := &cobra.Command{
@@ -367,6 +368,16 @@ func agentCmd() *cobra.Command {
 				return nil
 			}
 
+			// Experimental transcript console. Opt-in only: it cannot execute
+			// tools yet, so it must never displace the readline REPL by
+			// default. Non-TTY and single-shot paths never reach here.
+			if useConsole {
+				if !consoleTTY() {
+					return fmt.Errorf("--console requires an interactive terminal")
+				}
+				return runAgentConsole(ctx, a, errW, timeout, historyPath, mcpReg, activeTarget)
+			}
+
 			// Interactive REPL with readline.
 			ui.PrintLogo(errW, buildinfo.Version)
 
@@ -499,6 +510,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cheapModel, "cheap-model", "", "Cheap/fast model for simple turns (enables multi-model routing; uses the same cloud provider as --cloud-model)")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
+	cmd.Flags().BoolVar(&useConsole, "console", false, "Experimental transcript console (interactive TTY only; tool approvals are denied)")
 	return cmd
 }
 
