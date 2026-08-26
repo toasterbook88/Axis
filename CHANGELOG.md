@@ -2,10 +2,17 @@
 
 ### Features
 
+* **Agent:** Add `fleet_exec` (parallel multi-node shell execution behind the safety gate), `remote_write_file` (base64 transport so file content cannot escape into a remote shell), `remote_tail_logs`, and async `spawn_subagent` runs that return a background task id.
+* **Agent:** Add REPL slash commands `/plan`, `/todo`, `/diff`, `/undo`, `/compact`, `/autonomy`, `/export` (session worklog Markdown export), and `/fleet`, with readline completion.
+* **Agent:** Raise conversation defaults to `--max-tokens 32768` and `--max-turns 25`.
+* **Agent (experimental):** Add `axis agent --console`, an opt-in interactive transcript console that renders structured loop events; tool approvals are denied until an asynchronous approval overlay exists.
 * **AI:** `axis ai backends` prints a viewer-relative locality column: `here` (this process), `peer` (another enrolled node), `cloud` (public URL, no node). Backend names are unchanged.
 
 ### Bug Fixes
 
+* **Agent:** Restore the OpenAI streaming scanner error check so a truncated stream fails instead of feeding partial content to fallback tool-call extraction, and stop promoting naked JSON objects in prose to executable tool calls.
+* **Agent:** Encode `remote_write_file` content as base64 so a content line equal to the heredoc delimiter can no longer execute shell on the target node.
+* **Agent:** Keep surface-installed confirmation functions intact across autonomy-mode changes and serialize turn execution so an abandoned turn cannot race its replacement.
 * **Reservations:** Make `reservations inspect` use the non-reconciling ledger load so inspecting a stale entry cannot delete it, and propagate text writer failures after rendering the complete detail block.
 * **Reservations:** Revalidate every `reservations doctor --fix` finding against the locked, current ledger state so a heartbeat or ownership change between diagnosis and repair cannot release a revived reservation.
 * **Reservations:** Make `reservations release` hold the ledger lock across its read/check/write transaction, preserve unrelated stale entries, avoid a redundant second save, and surface text or JSON writer failures instead of reporting success after dropped output.

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -64,6 +66,7 @@ func agentCmd() *cobra.Command {
 		cheapModel              string
 		allowRawCommandEvidence bool
 		selectModel             bool
+		useConsole              bool
 	)
 
 	cmd := &cobra.Command{
@@ -365,6 +368,16 @@ func agentCmd() *cobra.Command {
 				return nil
 			}
 
+			// Experimental transcript console. Opt-in only: it cannot execute
+			// tools yet, so it must never displace the readline REPL by
+			// default. Non-TTY and single-shot paths never reach here.
+			if useConsole {
+				if !consoleTTY() {
+					return fmt.Errorf("--console requires an interactive terminal")
+				}
+				return runAgentConsole(ctx, a, errW, timeout, historyPath, mcpReg, activeTarget)
+			}
+
 			// Interactive REPL with readline.
 			ui.PrintLogo(errW, buildinfo.Version)
 
@@ -377,6 +390,14 @@ func agentCmd() *cobra.Command {
 			var completerItems []readline.PrefixCompleterInterface
 			completerItems = append(completerItems,
 				readline.PcItem("/help"),
+				readline.PcItem("/plan"),
+				readline.PcItem("/todo"),
+				readline.PcItem("/diff"),
+				readline.PcItem("/undo"),
+				readline.PcItem("/compact"),
+				readline.PcItem("/autonomy", readline.PcItem("default"), readline.PcItem("edit"), readline.PcItem("full")),
+				readline.PcItem("/export"),
+				readline.PcItem("/fleet"),
 				readline.PcItem("/facts"),
 				readline.PcItem("/cluster"),
 				readline.PcItem("/clear"),
@@ -476,8 +497,8 @@ func agentCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&roleFlag, "role", "", "Inference role from ~/.axis/ai.yaml (sets model from that role when --model is empty)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 5*time.Minute, "Per-request timeout")
-	cmd.Flags().IntVar(&maxTokens, "max-tokens", 4096, "Conversation token budget")
-	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "Maximum agent loop iterations per query")
+	cmd.Flags().IntVar(&maxTokens, "max-tokens", 32768, "Conversation token budget")
+	cmd.Flags().IntVar(&maxTurns, "max-turns", 25, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
 	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but safety-blocked)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
@@ -489,6 +510,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cheapModel, "cheap-model", "", "Cheap/fast model for simple turns (enables multi-model routing; uses the same cloud provider as --cloud-model)")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
+	cmd.Flags().BoolVar(&useConsole, "console", false, "Experimental transcript console (interactive TTY only; tool approvals are denied)")
 	return cmd
 }
 
@@ -687,6 +709,13 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 	case "/help":
 		fmt.Fprintln(errW, "Available commands:")
 		fmt.Fprintln(errW, "  /help          Show this help message")
+		fmt.Fprintln(errW, "  /plan, /todo   Show active plan and tasks")
+		fmt.Fprintln(errW, "  /diff          Show git working tree changes")
+		fmt.Fprintln(errW, "  /undo          Undo the most recent file edit")
+		fmt.Fprintln(errW, "  /compact       Compress older conversation history")
+		fmt.Fprintln(errW, "  /autonomy [m]  View or set autonomy mode (default, edit, full)")
+		fmt.Fprintln(errW, "  /export [path] Export session worklog to Markdown")
+		fmt.Fprintln(errW, "  /fleet         Show cluster fleet status table")
 		fmt.Fprintln(errW, "  /facts         Show local node facts and resident models")
 		fmt.Fprintln(errW, "  /cluster       Show cluster snapshot (no live collect)")
 		fmt.Fprintln(errW, "  /clear         Clear conversation history (keep system prompt)")
@@ -699,6 +728,82 @@ func handleREPLSlashCommand(session *agentREPLSession, line string) (bool, bool,
 		fmt.Fprintln(errW, "  /reservations  Show active ledger reservations")
 		fmt.Fprintln(errW, "  /skills        Show learned skills from history")
 		fmt.Fprintln(errW, "  /exit, /quit   Quit the session")
+		return true, false, nil
+
+	case "/plan", "/todo":
+		res, err := a.ExecuteToolDirect(context.Background(), "todo", json.RawMessage(`{"op":"view"}`))
+		if err != nil {
+			fmt.Fprintf(errW, "%s failed to view todo: %v\n", ui.Red("Error:"), err)
+		} else {
+			fmt.Fprintln(w, res)
+		}
+		return true, false, nil
+
+	case "/diff":
+		cmdDiff := exec.Command("git", "diff", "HEAD")
+		out, err := cmdDiff.CombinedOutput()
+		if err != nil {
+			fmt.Fprintf(errW, "%s git diff: %v\n", ui.Red("Error:"), err)
+			return true, false, nil
+		}
+		if len(strings.TrimSpace(string(out))) == 0 {
+			fmt.Fprintln(w, "Working tree is clean — no uncommitted changes.")
+		} else {
+			fmt.Fprintln(w, string(out))
+		}
+		return true, false, nil
+
+	case "/undo":
+		res, err := a.ExecuteToolDirect(context.Background(), "undo_last", json.RawMessage(`{}`))
+		if err != nil {
+			fmt.Fprintf(errW, "%s %v\n", ui.Red("Error:"), err)
+		} else {
+			fmt.Fprintf(w, "%s %s\n", ui.Green("✓"), res)
+		}
+		return true, false, nil
+
+	case "/compact":
+		ctx2, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		before, after, count, err := a.CompactManually(ctx2)
+		if err != nil {
+			fmt.Fprintf(errW, "%s %v\n", ui.Yellow("Compaction note:"), err)
+		} else {
+			fmt.Fprintf(w, "%s Compacted %d older messages into summary (%d → %d tokens)\n",
+				ui.Green("✓"), count, before, after)
+		}
+		return true, false, nil
+
+	case "/autonomy":
+		if len(parts) >= 2 {
+			modeStr := parts[1]
+			mode, err := agent.ParseAutonomyMode(modeStr)
+			if err != nil {
+				fmt.Fprintf(errW, "%s %v\n", ui.Red("Error:"), err)
+				return true, false, nil
+			}
+			a.SetAutonomy(mode)
+			fmt.Fprintf(w, "Switched autonomy mode to %s\n", ui.Bold(string(mode)))
+		} else {
+			fmt.Fprintf(w, "Current autonomy mode: %s (available: default, edit, full)\n", ui.Bold(string(a.Autonomy())))
+		}
+		return true, false, nil
+
+	case "/fleet":
+		printAgentCluster(w, errW, rt)
+		return true, false, nil
+
+	case "/export":
+		exportPath := ""
+		if len(parts) >= 2 {
+			exportPath = strings.Join(parts[1:], " ")
+		}
+		saved, err := exportAgentWorklog(a, exportPath)
+		if err != nil {
+			fmt.Fprintf(errW, "%s %v\n", ui.Red("Error exporting worklog:"), err)
+		} else {
+			fmt.Fprintf(w, "%s Session worklog exported to: %s\n", ui.Green("✓"), ui.Bold(saved))
+		}
 		return true, false, nil
 
 	case "/facts":
@@ -2274,4 +2379,76 @@ func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool,
 	ui.WhiteColor.Fprintln(w, "  └────────────────────────────────────────────────────────┘")
 	fmt.Fprintln(w, agentStatusStrip(target))
 	fmt.Fprintln(w)
+}
+
+func exportAgentWorklog(a *agent.Agent, customPath string) (string, error) {
+	if a == nil || a.Conversation() == nil {
+		return "", fmt.Errorf("no active conversation to export")
+	}
+
+	exportPath := strings.TrimSpace(customPath)
+	if exportPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir := filepath.Join(home, ".axis", "worklogs")
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return "", err
+		}
+		exportPath = filepath.Join(dir, fmt.Sprintf("session-%s.md", time.Now().Format("2006-01-02T150405")))
+	} else {
+		if strings.HasPrefix(exportPath, "~/") {
+			home, _ := os.UserHomeDir()
+			exportPath = filepath.Join(home, exportPath[2:])
+		}
+		dir := filepath.Dir(exportPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", err
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# AXIS Agent Session Worklog\n\n")
+	sb.WriteString(fmt.Sprintf("- **Generated**: %s\n", time.Now().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("- **Model**: %s\n", a.Model()))
+	sb.WriteString(fmt.Sprintf("- **Autonomy Mode**: %s\n", a.Autonomy()))
+	sb.WriteString(fmt.Sprintf("- **Tokens**: %d / %d\n\n", a.ContextTokens(), a.MaxTokens()))
+	sb.WriteString("---\n\n")
+
+	msgs := a.Conversation().Messages()
+	for i, m := range msgs {
+		switch m.Role {
+		case chat.RoleSystem:
+			if i == 0 {
+				sb.WriteString("### System Prompt\n\n```text\n")
+				sb.WriteString(m.Content)
+				sb.WriteString("\n```\n\n")
+			} else {
+				sb.WriteString(fmt.Sprintf("### System Context\n\n%s\n\n", m.Content))
+			}
+		case chat.RoleUser:
+			sb.WriteString(fmt.Sprintf("## Operator\n\n%s\n\n", m.Content))
+		case chat.RoleAssistant:
+			sb.WriteString("## AXIS Agent\n\n")
+			if m.Content != "" {
+				sb.WriteString(m.Content)
+				sb.WriteString("\n\n")
+			}
+			if len(m.ToolCalls) > 0 {
+				sb.WriteString("**Tool Invocations:**\n")
+				for _, tc := range m.ToolCalls {
+					sb.WriteString(fmt.Sprintf("- `%s(%s)`\n", tc.Function.Name, string(tc.Function.Arguments)))
+				}
+				sb.WriteString("\n")
+			}
+		case chat.RoleTool:
+			sb.WriteString(fmt.Sprintf("### Tool Result (`%s`)\n\n```\n%s\n```\n\n", m.ToolCallID, m.Content))
+		}
+	}
+
+	if err := os.WriteFile(exportPath, []byte(sb.String()), 0600); err != nil {
+		return "", err
+	}
+	return exportPath, nil
 }
