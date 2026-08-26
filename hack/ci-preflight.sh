@@ -19,6 +19,13 @@ if ((require_clean == 1)) && [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
+# actionlint silently skips its shell analysis when shellcheck is unavailable,
+# which would make the local preflight weaker than GitHub CI.
+if ! command -v shellcheck >/dev/null 2>&1; then
+  printf 'CI preflight requires shellcheck for workflow run-block validation\n' >&2
+  exit 1
+fi
+
 run() {
   printf '\n==> %s\n' "$*"
   "$@"
