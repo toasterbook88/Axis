@@ -1,17 +1,20 @@
 # Release pipeline for AXIS
-# Triggers on semver tags (v*.*.*). Runs full test suite, then GoReleaser.
-# CI (ci.yml) handles push/PR testing. This workflow handles release artifacts.
 #
 # Supported publish path (canonical):
-#   1. Bump internal/buildinfo/version.go to match the intended tag (no leading v)
-#   2. git tag vX.Y.Z && git push origin vX.Y.Z
-#   GoReleaser owns GitHub Releases — do not gh release create by hand.
+#   1. Prepare the version, CHANGELOG, goldens, and current-state facts in a PR.
+#   2. Merge to main and run a successful dry run against that exact main SHA:
+#        gh workflow run Release --repo toasterbook88/Axis --ref main -f dry_run=true
+#   3. Create an annotated tag on the verified merge SHA and push only that tag:
+#        git tag -a vX.Y.Z <merge-sha> -m "vX.Y.Z"
+#        git push origin vX.Y.Z
+#
+# The workflow rejects malformed SemVer, source/tag mismatches, and commits that
+# are not reachable from main. GoReleaser owns GitHub Releases; never create a
+# release by hand.
 #
 # Manual dispatch:
-#   dry_run=true  (default) → snapshot build + upload artifacts, no GitHub Release
-#   dry_run=false → real publish only when the workflow runs on a refs/tags/v* ref
-#
-# Or use the manual dispatch for dry-run testing.
+#   dry_run=true  (default) -> cross-platform snapshot + uploaded workflow artifact
+#   dry_run=false           -> real publish, permitted only when dispatched on a tag
 
 name: Release
 
@@ -32,32 +35,33 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GORELEASER_VERSION: v2.18.0
+  SYFT_VERSION: v1.51.0
 
-# Never cancel an in-flight publish for the same ref.
+# Real publishes are globally serialized. Dry runs for separate refs do not
+# block one another and can never cancel an in-flight publish.
 concurrency:
-  group: release-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true' && format('axis-release-dry-run-{0}', github.ref) || 'axis-release-publish' }}
   cancel-in-progress: false
 
-# Default to read; release job elevates to write for GoReleaser.
 permissions:
   contents: read
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Gate: full test suite must pass before release
-  # ──────────────────────────────────────────────
   test:
     name: Test Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0  # GoReleaser needs full history for changelog
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -76,8 +80,11 @@ jobs:
       - name: Run race tests
         run: make test-race
 
+      - name: Run install regression tests
+        run: make test-install
+
       - name: Build check
-        run: go build ./...
+        run: go build -buildvcs=false ./...
 
       - name: Coverage gates
         run: ./hack/coverage-check.sh
@@ -95,60 +102,61 @@ jobs:
       - name: Doc facts guardrails
         run: ./hack/verify-doc-facts.sh
 
+      - name: Workflow Action pin guardrails
+        run: python3 hack/workflow-action-pins.py
+
+      - name: Validate GitHub Actions syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
       - name: Lifecycle lint
         run: go run hack/lifecycle-check.go
 
-  # ──────────────────────────────────────────────
-  # Validate: tag matches version.go
-  # ──────────────────────────────────────────────
   validate-version:
-    name: Validate Version
+    name: Validate Version and Main Ancestry
     runs-on: ubuntu-latest
-    needs: test
+    timeout-minutes: 5
     permissions:
       contents: read
-    outputs:
-      version: ${{ steps.extract.outputs.version }}
-      is_prerelease: ${{ steps.extract.outputs.is_prerelease }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Extract version from tag and source
-        id: extract
+      - name: Validate source version and tag
         env:
           EVENT_NAME: ${{ github.event_name }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
-            VERSION="$(./hack/validate-release-version.sh --source)"
-            echo "Manual dispatch - version from source: ${VERSION}"
+            ./hack/validate-release-version.sh --source
           else
-            VERSION="$(./hack/validate-release-version.sh "${TAG_NAME}")"
+            ./hack/validate-release-version.sh "${TAG_NAME}"
           fi
 
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          if [[ "${VERSION}" == *-* ]]; then
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+      - name: Require the release commit on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::release commit $(git rev-parse HEAD) is not reachable from origin/main"
+            exit 1
           fi
 
-  # ──────────────────────────────────────────────
-  # Security: govulncheck
-  # ──────────────────────────────────────────────
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: test
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -158,31 +166,22 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
-  # ──────────────────────────────────────────────
-  # Release: GoReleaser builds + publishes
-  # ──────────────────────────────────────────────
-  release:
-    name: Release
+  dry-run:
+    name: Cross-platform Release Dry Run
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test, validate-version, security]
     permissions:
-      contents: write  # GoReleaser needs write to create releases
+      contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Require tag ref for real publish via dispatch
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false'
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.ref }}" != refs/tags/v* ]]; then
-            echo "::error::dry_run=false requires running on a refs/tags/v* ref (or push a tag instead)"
-            exit 1
-          fi
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -190,115 +189,188 @@ jobs:
         id: go-env
         run: echo "goversion=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
 
-      - name: Install syft (SBOM generator)
-        run: |
-          set -euo pipefail
-          SYFT_VERSION="v1.20.0"
-          SYFT_VERSION_NO_V="${SYFT_VERSION#v}"
-          case "$(uname -m)" in
-            x86_64) SYFT_ARCH="amd64" ;;
-            aarch64|arm64) SYFT_ARCH="arm64" ;;
-            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          SYFT_TARBALL="syft_${SYFT_VERSION_NO_V}_linux_${SYFT_ARCH}.tar.gz"
-          SYFT_BASE_URL="https://github.com/anchore/syft/releases/download/${SYFT_VERSION}"
-          TMPDIR="$(mktemp -d)" || exit 1
-          trap 'rm -rf "${TMPDIR}"' EXIT
-          curl -sSfLo "${TMPDIR}/${SYFT_TARBALL}" "${SYFT_BASE_URL}/${SYFT_TARBALL}"
-          curl -sSfLo "${TMPDIR}/checksums.txt" "${SYFT_BASE_URL}/syft_${SYFT_VERSION_NO_V}_checksums.txt"
-          (cd "${TMPDIR}" && grep " ${SYFT_TARBALL}$" checksums.txt | sha256sum -c -)
-          tar -xzf "${TMPDIR}/${SYFT_TARBALL}" -C "${TMPDIR}" syft
-          install -m 0755 "${TMPDIR}/syft" /usr/local/bin/syft
-          syft version
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - name: Run GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
-          args: >-
-            release
-            ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true') && '--snapshot --clean' || '' }}
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --snapshot --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOVERSION: ${{ steps.go-env.outputs.goversion }}
 
-      - name: Upload artifacts (dry-run only)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
-        uses: actions/upload-artifact@v7
+      - name: Upload complete snapshot manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: axis-snapshot-binaries
-          path: dist/axis_*
+          name: axis-release-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.sbom.json
+            dist/checksums.txt
+          if-no-files-found: error
           retention-days: 7
 
-  # ──────────────────────────────────────────────
-  # Post-release: verify published assets + checksums
-  # ──────────────────────────────────────────────
-  verify-install:
-    name: Verify Release Assets
+  release:
+    name: Publish Release
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false')
     runs-on: ubuntu-latest
-    needs: release
-    if: github.event_name == 'push'  # only on real tag releases
+    timeout-minutes: 30
+    needs: [test, validate-version, security]
+    environment:
+      name: release
     permissions:
-      contents: read
+      contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v7.0.1
+      - name: Harden release runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a tag ref for manual publication
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_REF}" != refs/tags/v* ]]; then
+            echo "::error::dry_run=false requires dispatching the workflow on a refs/tags/v* ref"
+            exit 1
+          fi
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
-      - name: Download release assets and verify checksums
+      - name: Capture Go toolchain version
+        id: go-env
+        run: echo "goversion=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
+
+      - name: Install Cosign for GoReleaser verification
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOVERSION: ${{ steps.go-env.outputs.goversion }}
+
+      - name: Attest the published artifact manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+  verify-install:
+    name: Verify Release Assets
+    if: >-
+      always() &&
+      needs.release.result == 'success' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Verify complete release manifest, checksums, SBOMs, and provenance
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           TAG_CLEAN="${TAG#v}"
           ARCHIVE="axis_${TAG_CLEAN}_linux_amd64.tar.gz"
           WORK="$(mktemp -d)"
+          trap 'rm -rf "${WORK}"' EXIT
           cd "${WORK}"
 
-          # Assets can lag briefly after GoReleaser finishes.
+          expected=(
+            "axis_${TAG_CLEAN}_darwin_amd64.tar.gz"
+            "axis_${TAG_CLEAN}_darwin_amd64.tar.gz.sbom.json"
+            "axis_${TAG_CLEAN}_darwin_arm64.tar.gz"
+            "axis_${TAG_CLEAN}_darwin_arm64.tar.gz.sbom.json"
+            "axis_${TAG_CLEAN}_linux_amd64.tar.gz"
+            "axis_${TAG_CLEAN}_linux_amd64.tar.gz.sbom.json"
+            "axis_${TAG_CLEAN}_linux_arm64.tar.gz"
+            "axis_${TAG_CLEAN}_linux_arm64.tar.gz.sbom.json"
+            "axis_${TAG_CLEAN}_source.tar.gz"
+            "checksums.txt"
+          )
+          printf '%s\n' "${expected[@]}" | sort >expected.assets
+
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if gh release download "${TAG}" --repo "${{ github.repository }}" \
-              --pattern 'checksums.txt' \
-              --pattern "${ARCHIVE}" \
-              --clobber; then
+            if gh release view "${TAG}" --repo "${REPOSITORY}" \
+              --json assets --jq '.assets[].name' | sort >actual.assets && \
+              diff -u expected.assets actual.assets && \
+              gh release download "${TAG}" --repo "${REPOSITORY}" \
+                --pattern 'axis_*' --pattern 'checksums.txt' --clobber; then
               break
             fi
             if [[ "${attempt}" -eq 10 ]]; then
-              echo "::error::failed to download release assets for ${TAG} after retries"
+              echo "::error::release manifest for ${TAG} did not converge after retries"
               exit 1
             fi
-            echo "download attempt ${attempt} failed; sleeping 15s..."
+            echo "manifest/download attempt ${attempt} failed; sleeping 15s..."
             sleep 15
           done
 
-          # checksums.txt lists every artifact; restrict to the archive we downloaded.
-          grep " ${ARCHIVE}\$" checksums.txt | sha256sum -c -
+          sha256sum -c checksums.txt
+          for sbom in ./*.sbom.json; do
+            jq -e '.spdxVersion == "SPDX-2.3" and (.packages | type == "array")' "${sbom}" >/dev/null
+          done
+
+          gh attestation verify "${ARCHIVE}" --repo "${REPOSITORY}"
 
           tar -xzf "${ARCHIVE}" axis
           test -x ./axis
           ./axis version | tee version.out
           if ! grep -q "${TAG_CLEAN}" version.out && ! grep -q "${TAG}" version.out; then
             echo "::error::axis version output missing expected version ${TAG_CLEAN}"
-            cat version.out
             exit 1
           fi
 
-          echo "Verified ${ARCHIVE} for ${TAG}"
+          echo "Verified the complete ten-asset manifest for ${TAG}"
 
       - name: Soft-check go install (module proxy)
         continue-on-error: true
         run: |
           set -euo pipefail
-          # Best-effort: proxy.golang.org may lag the GitHub Release by minutes.
           for attempt in 1 2 3 4 5; do
             if go install "github.com/toasterbook88/axis/cmd/axis@${{ github.ref_name }}"; then
               bindir="$(go env GOBIN)"
-              if [ -z "${bindir}" ]; then
+              if [[ -z "${bindir}" ]]; then
                 bindir="$(go env GOPATH)/bin"
               fi
               "${bindir}/axis" version
@@ -307,5 +379,5 @@ jobs:
             echo "go install attempt ${attempt} failed; sleeping 30s..."
             sleep 30
           done
-          echo "::warning::go install @${{ github.ref_name }} did not succeed after retries (proxy lag is OK if asset verify passed)"
+          echo "::warning::go install @${{ github.ref_name }} did not succeed after retries (proxy lag is acceptable after asset verification)"
           exit 1

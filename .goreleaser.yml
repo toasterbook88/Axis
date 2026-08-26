@@ -40,9 +40,6 @@ archives:
     ids:
       - axis
     name_template: "axis_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        format: zip
     files:
       - LICENSE
       - README.md
@@ -93,7 +90,7 @@ release:
     ---
     **Full changelog:** https://github.com/toasterbook88/axis/compare/{{ .PreviousTag }}...{{ .Tag }}
 
-    Built with Go {{ .Env.GOVERSION }} | [axismcp.app](https://axismcp.app) | Smith Software Solutions LLC
+    Built with {{ .Env.GOVERSION }} | [axismcp.app](https://axismcp.app) | Smith Software Solutions LLC
 
 changelog:
   sort: asc

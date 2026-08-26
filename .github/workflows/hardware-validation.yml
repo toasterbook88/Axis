@@ -50,13 +50,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           clean: true
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -69,18 +69,18 @@ jobs:
         run: |
           # Must run before tests: NixOS keeps awk/sed/stat in this profile,
           # not /usr/bin. Discovery-script tests need those tools on PATH.
-          echo "/run/current-system/sw/bin" >> $GITHUB_PATH
+          echo "/run/current-system/sw/bin" >> "$GITHUB_PATH"
           export PATH="$PATH:/run/current-system/sw/bin"
           for cmd in awk rg jq; do
-            if ! command -v $cmd >/dev/null 2>&1; then
+            if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "$cmd is missing, attempting to install..."
               pkg="$cmd"
               [ "$cmd" = "awk" ] && pkg="gawk"
               [ "$cmd" = "rg" ] && pkg="ripgrep"
               if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update && sudo apt-get install -y $pkg
+                sudo apt-get update && sudo apt-get install -y "$pkg"
               elif command -v nix >/dev/null 2>&1; then
-                nix profile install nixpkgs#$pkg
+                nix profile install "nixpkgs#$pkg"
               else
                 echo "$cmd is required, but neither apt-get nor nix is available" >&2
                 exit 1
@@ -89,7 +89,7 @@ jobs:
           done
 
           for cmd in awk rg jq; do
-            if ! command -v $cmd >/dev/null 2>&1; then
+            if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "Failed to install $cmd on PATH" >&2
               exit 1
             fi

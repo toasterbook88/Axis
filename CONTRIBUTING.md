@@ -50,23 +50,30 @@ the tag workflow — that breaks repo-truth gates and leaves releases without as
 3. Run local validation:
 
 ```bash
-make lint
-make test
-make test-race
-make coverage
+make release-preflight
 ```
 
 4. Merge the release-prep PR to `main`.
-5. Create and push a tag matching `version.go` (lightweight tags are fine today):
+5. Run the release workflow's snapshot dry run against the merged `main` commit
+   and wait for it to succeed:
 
 ```bash
-git tag vX.Y.Z
+gh workflow run Release --repo toasterbook88/Axis --ref main -f dry_run=true
+```
+
+6. Create an annotated tag on that exact merge SHA and push it:
+
+```bash
+git tag -a vX.Y.Z <merge-sha> -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The release workflow verifies the tag matches `internal/buildinfo/version.go`,
-then GoReleaser publishes multi-arch assets. Operators install with
-`axis update` or `install.sh`.
+The release workflow verifies strict SemVer, source/tag equality, and main
+ancestry before GoReleaser publishes multi-arch assets, SPDX SBOMs, checksums,
+and GitHub provenance attestations. Operators install with `axis update` or
+`install.sh`. Do not move a pushed release tag without explicit operator
+authorization; a failed tag may already have been consumed through the Go
+module ecosystem even when no GitHub Release exists.
 
 Format the code before submitting (`make lint` must pass).
 
