@@ -1,5 +1,7 @@
 ## Unreleased
 
+## v0.15.0 (2026-08-25)
+
 ### Features
 
 * **Agent:** Add `fleet_exec` (parallel multi-node shell execution behind the safety gate), `remote_write_file` (base64 transport so file content cannot escape into a remote shell), `remote_tail_logs`, and async `spawn_subagent` runs that return a background task id.
