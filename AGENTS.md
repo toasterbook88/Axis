@@ -21,7 +21,12 @@ a real snapshot or live probe.
 
 - Optional HTTP, MCP, and execution surfaces must not weaken the fact plane.
 
-Lifecycle events (see `internal/events/events.go`) are provided for observation and advisory integration by external agents. They are strictly observational and advisory. Agents may subscribe to events via MCP but must not assume control or execution authority.
+### Event Surface (observational only)
+
+Lifecycle events (see `internal/events/events.go`) are provided for observation
+and advisory integration by external agents. They are strictly observational
+and advisory. Agents may subscribe to events via MCP but must not assume control
+or execution authority.
 
 ## Release State
 
@@ -107,10 +112,11 @@ publishes via GoReleaser (`darwin`/`linux` × `amd64`/`arm64`).
 
 ## Architecture
 
-AXIS is a 5-layer stack where each layer depends only on layers below it. Advisory surfaces (chat, agent, MCP, HTTP) never override the fact plane.
+AXIS is organized into five architectural trust/role tiers. Higher tiers consume lower-tier authority; advisory surfaces (chat, agent, console, MCP, HTTP) may compose with peer advisory packages but never override the fact plane.
 
 ```text
-Layer 5  Advisory     internal/chat  internal/agent  internal/mcp  internal/api
+Layer 5  Advisory     internal/chat  internal/agent  internal/console
+                        internal/mcp  internal/api
 Layer 4  Execution    internal/execution  internal/safety  internal/reservation
                         internal/scripts  internal/skills
 Layer 3  Placement    internal/placement  internal/workload
@@ -203,7 +209,7 @@ HDD penalty: −15 for heavy inference.
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
 | `axis daemon` | Lifecycle/cache commands plus native `service install\|status\|uninstall`; `status` emits `axis.output/v1` JSON |
 | `axis chat` | Removed; prints `use axis agent` |
-| `axis agent [--auto-approve]` | Agentic tool-calling assistant |
+| `axis agent [--auto-approve] [--autonomy MODE] [--console]` | Agentic tool-calling assistant; REPL slash commands `/plan /todo /diff /undo /compact /autonomy /export /fleet`; `--console` opens the experimental transcript console (interactive TTY only; tool approvals are denied) |
 | `axis llm` | Removed; prints `use axis ai route` |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
 | `axis model` | Start/stop llama-server on a named node (`start --node --weights --port`, `stop --node --port`) |
@@ -290,12 +296,13 @@ file outputs for degraded-state recovery.
 
 ## Dependencies
 
-14 direct dependencies (`go.mod`; versions authoritative in go.mod):
+15 direct dependencies (`go.mod`; versions authoritative in go.mod):
 
 | Module | Purpose |
 | -------- | --------- |
 | `al.essio.dev/pkg/shellescape` | Shell argument escaping |
 | `github.com/charmbracelet/bubbletea` | Elm-architecture TUI runtime (`axis tui`) |
+| `github.com/charmbracelet/bubbles` | Bubble Tea component library (`axis tui`) |
 | `github.com/charmbracelet/lipgloss` | TUI layout/styling (`axis tui`) |
 | `github.com/chzyer/readline` | Interactive line editing (agent/chat flows) |
 | `github.com/fatih/color` | Terminal color output |
