@@ -54,6 +54,7 @@ func sessionOnlySlashes() []string {
 	return []string{
 		"/help", "/clear", "/context", "/history", "/tools",
 		"/model", "/models", "/mcp", "/reservations", "/skills",
+		"/plan", "/todo", "/diff", "/undo", "/compact", "/autonomy", "/export", "/fleet",
 		"/exit", "/quit",
 	}
 }
