@@ -18,7 +18,7 @@ LDFLAGS  := -s -w \
 	-X github.com/toasterbook88/axis/internal/buildinfo.GoVersion=$(GOVERSION) \
 	-X github.com/toasterbook88/axis/internal/buildinfo.UpdateManagedBy=
 
-.PHONY: build test test-race lint coverage clean install install-user install-system test-install test-fleet
+.PHONY: build test test-race lint coverage clean install install-user install-system test-install test-fleet ci-preflight release-preflight
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o axis ./cmd/axis/
@@ -31,6 +31,15 @@ install: build
 # file:// so no network and no real system paths are touched.
 test-install:
 	./hack/install-tests.sh
+
+# Full local mirror of required PR gates.
+ci-preflight:
+	./hack/ci-preflight.sh
+
+# CI preflight plus the release vulnerability scan. Use --require-clean
+# directly on the script for the exact post-merge commit that will be tagged.
+release-preflight:
+	./hack/release-preflight.sh
 
 # Install to /usr/local/bin — the same absolute path on every node, and what
 # install.sh writes by default. Preferred for any host in a cluster: per-user

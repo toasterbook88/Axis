@@ -106,9 +106,13 @@ Coverage gates are authoritative in `hack/coverage-check.sh`.
 
 Source of truth: [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
-Triggered by `v*` tag push. Validates that the tag matches
-`internal/buildinfo/version.go`, runs the full test+coverage+build suite, then
-publishes via GoReleaser (`darwin`/`linux` × `amd64`/`arm64`).
+Triggered by a `vX.Y.Z` tag push, with a manual snapshot dry run available and
+required by the release playbook before tagging. The workflow validates strict
+SemVer, source/tag equality, and reachability from `main`; runs the full
+test+race+install+coverage+build suite; then publishes via GoReleaser
+(`darwin`/`linux` × `amd64`/`arm64`). Published archives, SBOMs, source, and the
+checksum manifest are verified after publication and receive GitHub provenance
+attestations.
 
 ## Architecture
 
@@ -338,6 +342,9 @@ reason, or add heavy dependencies without strong justification.
 | `hack/refresh-current-state.sh` | Rebuild repository-derived facts and verification in `docs/current-state.md` |
 | `hack/repo-truth-tests.sh` | Regression tests for repository/release truth boundaries |
 | `hack/validate-release-version.sh` | Enforce source version and release-tag equality |
+| `hack/ci-preflight.sh` | Run the complete local PR gate set (`--require-clean` for an exact commit) |
+| `hack/release-preflight.sh` | Run the complete local release-candidate gate set (`--require-clean` for the tag commit) |
+| `hack/workflow-action-pins.py` | Enforce full-commit-SHA pins for every non-local GitHub Action |
 | `hack/apple-foundation-models.swift` | Probe Apple Foundation Models support |
 | `hack/verify-plan-progress.sh` | Verify execution-plan progress matrix test references and completed tests |
 

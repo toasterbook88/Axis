@@ -286,7 +286,9 @@ AXIS follows a rapid release cadence with:
 - **Minor releases** (v0.15.0, v0.16.0) — New features, backward-compatible changes
 - **Major releases** (v1.0.0) — Breaking changes (none planned yet)
 
-**Release notes are published** for every tagged release. CHANGELOG entries are written continuously during development.
+**Release notes are published** for every successful release. Every pushed tag,
+including a failed publication such as v0.14.9, retains a CHANGELOG entry so the
+repository's tag history remains explicit.
 
 ---
 

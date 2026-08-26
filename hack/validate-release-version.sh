@@ -16,9 +16,28 @@ if [[ -z "$source_versions" || "$(printf '%s\n' "$source_versions" | wc -l)" -ne
 fi
 
 source_version="$source_versions"
+normalized_tag="v${source_version}"
+
+# SemVer 2.0.0, including prerelease and build metadata. Numeric identifiers
+# may not contain leading zeroes; alphanumeric prerelease identifiers may.
+numeric='0|[1-9][0-9]*'
+prerelease_id="(${numeric}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+build_id='[0-9A-Za-z-]+'
+semver_re="^v(${numeric})\.(${numeric})\.(${numeric})(-${prerelease_id}(\.${prerelease_id})*)?(\+${build_id}(\.${build_id})*)?$"
+
+if [[ ! "$normalized_tag" =~ $semver_re ]]; then
+  printf 'source version %s is not valid SemVer\n' "$source_version" >&2
+  exit 1
+fi
+
 if [[ "$tag" == "--source" ]]; then
-  printf 'v%s\n' "$source_version"
+  printf '%s\n' "$normalized_tag"
   exit 0
+fi
+
+if [[ ! "$tag" =~ $semver_re ]]; then
+  printf 'tag %s is not valid SemVer (expected vX.Y.Z with optional prerelease/build metadata)\n' "$tag" >&2
+  exit 1
 fi
 
 tag_version="${tag#v}"

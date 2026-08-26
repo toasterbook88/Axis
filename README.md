@@ -213,20 +213,28 @@ make coverage       # Coverage gates via hack/coverage-check.sh
 Releases are automated via GitHub Actions:
 
 ```bash
-# 1. Update version in internal/buildinfo/version.go
-# 2. Commit and tag
-git tag v0.X.Y
+# 1. Prepare version.go, CHANGELOG, goldens, and current-state facts in a PR.
+# 2. After merge, cross-build the exact main commit without publishing.
+gh workflow run Release --repo toasterbook88/Axis --ref main -f dry_run=true
+
+# 3. After the dry run succeeds, tag the verified merge commit explicitly.
+git tag -a v0.X.Y <merge-sha> -m "v0.X.Y"
 git push origin v0.X.Y
 
-# 3. release.yml runs automatically:
-#    Test Gate → Version Validation → Security Scan → GoReleaser → Verify Install
+# 4. release.yml validates the tag and main ancestry, then publishes.
 ```
 
 Binaries are built for **darwin/linux × amd64/arm64** with:
 - Reproducible builds (`-trimpath`, `CGO_ENABLED=0`)
 - Embedded version, commit hash, build date
 - SHA-256 checksums
+- Per-archive SPDX SBOMs
+- GitHub build-provenance attestations
 - Conventional Commits changelog
+
+GoReleaser owns the GitHub Release. Do not run `gh release create` manually,
+and do not move a pushed release tag; cut the next patch version after a failed
+publication unless the operator explicitly authorizes rewriting the tag.
 
 ## Project Layout
 

@@ -1,0 +1,9 @@
+self-hosted-runner:
+  labels:
+    - axis
+    - trusted
+
+paths:
+  .github/workflows/refresh-current-state.yml:
+    ignore:
+      - 'constant expression "false" in condition'

@@ -69,4 +69,25 @@ fi
 grep -qF 'tag v1.2.4 does not match source version 1.2.3' "$test_root/mismatch.err" \
   || fail "source/tag mismatch must explain both versions"
 
+printf 'package buildinfo\n\nconst Version = "1.2.3-rc.1+build.7"\n' >"$version_file"
+prerelease_tag="$(AXIS_VERSION_FILE="$version_file" ./hack/validate-release-version.sh --source)"
+[[ "$prerelease_tag" == "v1.2.3-rc.1+build.7" ]] \
+  || fail "valid prerelease/build metadata must be preserved"
+
+for invalid_tag in \
+  v1.2 \
+  v1.2.3.4 \
+  v01.2.3 \
+  v1.02.3 \
+  v1.2.03 \
+  v1.2.3-01 \
+  v1.2.3-rc..1 \
+  vbanana; do
+  printf 'package buildinfo\n\nconst Version = "%s"\n' "${invalid_tag#v}" >"$version_file"
+  if AXIS_VERSION_FILE="$version_file" ./hack/validate-release-version.sh "$invalid_tag" \
+    >"$test_root/invalid.out" 2>"$test_root/invalid.err"; then
+    fail "invalid SemVer tag $invalid_tag must be rejected"
+  fi
+done
+
 printf 'repo truth regression tests passed\n'
