@@ -30,6 +30,9 @@
 * **Model:** `axis model start` now refuses an already-occupied port before launching, then verifies the post-start listener is owned by `llama-server` before probing `/v1/models`. An existing OpenAI-compatible service or bind race can no longer make a failed launch look successful.
 * **AI:** Resolve each backend's `node` as the documented `nodes.yaml` name before classifying locality or choosing between `base_url` and `advertise_url`. Logical node names no longer make an on-box backend appear to be a peer or probe its off-box URL.
 
+### Maintenance
+
+* **Release/CI:** Require a successful pre-tag cross-platform dry run, strict SemVer and `main` ancestry, install regressions, full-SHA Action pins, Cosign-verified GoReleaser installation, complete release-manifest/SBOM validation, and GitHub provenance attestations. Add repository-owned CI/release preflight commands and align release documentation with the guarded workflow.
 
 
 ## v0.14.14 (2026-08-15)

@@ -19,12 +19,13 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-tags: true
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -43,8 +44,11 @@ jobs:
       - name: Run race tests
         run: make test-race
 
+      - name: Run install regression tests
+        run: make test-install
+
       - name: Build
-        run: go build ./...
+        run: go build -buildvcs=false ./...
 
       - name: Coverage gates
         run: ./hack/coverage-check.sh
@@ -64,6 +68,12 @@ jobs:
 
       - name: Claude workflow security guardrails
         run: python3 hack/claude-workflow-tests.py
+
+      - name: Workflow Action pin guardrails
+        run: python3 hack/workflow-action-pins.py
+
+      - name: Validate GitHub Actions syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
       - name: Lifecycle lint
         run: go run hack/lifecycle-check.go
