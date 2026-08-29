@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2025,5 +2026,88 @@ func TestV2BatchPlace(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestToolsEndpointMatchesCanonicalDaemonDefinitions pins the production HTTP
+// surface (registerRoutes, as used by ServeWithContext) to the single canonical
+// definition function, daemon.ToolDefinitions. If either side grows its own copy
+// of the tool schemas again, this fails.
+func TestToolsEndpointMatchesCanonicalDaemonDefinitions(t *testing.T) {
+	canonical := make(map[string]daemon.ToolDef)
+	for _, def := range daemon.ToolDefinitions() {
+		canonical[def.Name] = def
+	}
+
+	for _, path := range []string{"/tools", "/mcp/tools"} {
+		mux := http.NewServeMux()
+		registerRoutes(mux, nil, "test-token")
+
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", path, rec.Code)
+		}
+
+		var payload ToolsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("%s: unmarshal response: %v", path, err)
+		}
+		if len(payload.Tools) != len(canonical) {
+			t.Fatalf("%s: expected %d tools, got %d", path, len(canonical), len(payload.Tools))
+		}
+
+		served := make(map[string]ToolDef)
+		for _, tool := range payload.Tools {
+			served[tool.Name] = tool
+		}
+
+		for _, name := range []string{"axis_execute", "axis_knowledge"} {
+			want, ok := canonical[name]
+			if !ok {
+				t.Fatalf("daemon.ToolDefinitions missing %s", name)
+			}
+			got, ok := served[name]
+			if !ok {
+				t.Fatalf("%s: missing tool %s", path, name)
+			}
+			if got.Description != want.Description {
+				t.Fatalf("%s: %s description diverged:\n served: %q\ncanonical: %q", path, name, got.Description, want.Description)
+			}
+			if !reflect.DeepEqual(requiredFields(t, got.InputSchema), requiredFields(t, want.InputSchema)) {
+				t.Fatalf("%s: %s required fields diverged: served %v, canonical %v",
+					path, name, requiredFields(t, got.InputSchema), requiredFields(t, want.InputSchema))
+			}
+		}
+	}
+}
+
+// requiredFields normalizes a tool schema's "required" list, which survives a
+// JSON round trip as []any but is authored as []string.
+func requiredFields(t *testing.T, schema map[string]any) []string {
+	t.Helper()
+	raw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				t.Fatalf("required entry %#v is not a string", item)
+			}
+			out = append(out, s)
+		}
+		return out
+	default:
+		t.Fatalf("unexpected required type %T", raw)
+		return nil
 	}
 }
