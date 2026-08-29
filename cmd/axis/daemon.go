@@ -185,7 +185,10 @@ func newDaemonRequest(ctx context.Context, addr, method, path string, query url.
 }
 
 func fetchDaemonMesh(ctx context.Context, addr string) ([]mesh.Peer, error) {
-	req, client, err := newDaemonRequest(ctx, addr, http.MethodGet, "/mesh", nil)
+	// /v2/mesh, not /mesh: the production mux serves the v2 path and has done
+	// since before v0.15.0, so this works against already-running daemons
+	// without a restart. /mesh is now registered as an alias too.
+	req, client, err := newDaemonRequest(ctx, addr, http.MethodGet, "/v2/mesh", nil)
 	if err != nil {
 		return nil, err
 	}

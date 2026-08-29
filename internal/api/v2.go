@@ -25,6 +25,11 @@ func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
 	mux.HandleFunc("/v2/reservations", withAuth(h.handleReservations, token))
 	mux.HandleFunc("/v2/reservations/", withAuth(h.handleReservations, token))
 	mux.HandleFunc("/v2/mesh", withAuth(h.handleMesh, token))
+	// Legacy alias. Clients shipped before v0.15.1 request /mesh, which only
+	// the unused internal/daemon route twin ever registered -- against the
+	// production mux they got 404. Delegate to the same handler here instead
+	// of keeping a second registration path alive.
+	mux.HandleFunc("/mesh", withAuth(h.handleMesh, token))
 	mux.HandleFunc("/v2/placement/dry-run", withAuth(h.handleDryRun, token))
 	mux.HandleFunc("/v2/metrics", h.handleMetrics)
 	mux.HandleFunc("/v2/history", withAuth(h.handleHistory, token))
