@@ -3,6 +3,7 @@
 package lockutil
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -38,4 +39,18 @@ func OpenLock(path string) (*File, error) {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
 	return &File{File: f}, nil
+}
+
+// TryLockEx attempts to acquire an exclusive advisory lock without blocking.
+// It reports whether the lock was acquired. A false return with a nil error
+// means another process holds the lock.
+func (f *File) TryLockEx() (bool, error) {
+	err := Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, unix.EWOULDBLOCK) {
+		return false, nil
+	}
+	return false, err
 }

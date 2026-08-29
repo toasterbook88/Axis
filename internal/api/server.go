@@ -4,13 +4,10 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -142,28 +139,15 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	srvErr := make(chan error, 1)
 
 	if auth.IsUnixAddr(addr) {
-		if err := os.MkdirAll(filepath.Dir(addr), 0700); err != nil {
-			return fmt.Errorf("creating unix socket directory: %w", err)
-		}
-		if fi, err := os.Lstat(addr); err == nil {
-			if fi.Mode()&os.ModeSocket == 0 {
-				return fmt.Errorf("refusing to remove non-socket file at %s", addr)
-			}
-			if err := os.Remove(addr); err != nil {
-				return fmt.Errorf("removing existing socket: %w", err)
-			}
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat socket path: %w", err)
-		}
-		ln, err := net.Listen("unix", addr)
+		ln, release, err := acquireUnixSocket(addr)
 		if err != nil {
-			return fmt.Errorf("listen unix %s: %w", addr, err)
+			return err
 		}
-		if err := os.Chmod(addr, 0600); err != nil {
-			return fmt.Errorf("chmod unix socket: %w", err)
-		}
+		defer release()
 		go func() { srvErr <- srv.Serve(ln) }()
 	} else {
+		// TCP addresses are already exclusive: a second listener on the same
+		// host:port fails with EADDRINUSE rather than displacing the first.
 		srv.Addr = addr
 		go func() { srvErr <- srv.ListenAndServe() }()
 	}
