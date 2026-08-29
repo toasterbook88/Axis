@@ -203,7 +203,7 @@ func scanHFHub(ctx context.Context, home string, vols []models.Volume, minSize i
 		}
 		dir := filepath.Join(hub, e.Name())
 		name := hfHubName(e.Name())
-		bytes := sumWeightFiles(filepath.Join(dir, "snapshots"), 3)
+		bytes := sumWeightFiles(filepath.Join(dir, "snapshots"), 3, minSize)
 		if bytes < minSize {
 			continue
 		}
@@ -302,7 +302,7 @@ func scanSystemdUnits(home string, vols []models.Volume, minSize int64, add func
 				format := "gguf"
 				path := p
 				if st.IsDir() {
-					bytes = sumWeightFiles(p, 3)
+					bytes = sumWeightFiles(p, 3, minSize)
 					format = "safetensors"
 					if hasExtUnder(p, ".gguf", 3) {
 						format = "gguf"
@@ -376,6 +376,9 @@ func walkWeightFiles(ctx context.Context, root string, vols []models.Volume, sou
 		if ext == ".gguf" && !fileHasGGUFMagic(path) {
 			return nil
 		}
+		if ext == ".safetensors" && fileIsLFSPointer(path) {
+			return nil
+		}
 		hits = append(hits, fileHit{
 			Path: path, Bytes: info.Size(), Source: source,
 			Volume: volumeMountFor(path, vols),
@@ -447,6 +450,20 @@ func groupDiskWeights(hits []fileHit) []models.DiskWeight {
 	return singles
 }
 
+func fileIsLFSPointer(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 64)
+	n, err := f.Read(buf)
+	if n == 0 && err != nil {
+		return false
+	}
+	return bytes.HasPrefix(buf[:n], []byte("version https://git-lfs"))
+}
+
 func fileHasGGUFMagic(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -461,7 +478,10 @@ func fileHasGGUFMagic(path string) bool {
 	return n == 4 && bytes.Equal(buf, ggufMagic)
 }
 
-func sumWeightFiles(root string, maxDepth int) int64 {
+func sumWeightFiles(root string, maxDepth int, minSize int64) int64 {
+	if minSize <= 0 {
+		minSize = diskWeightMinSize
+	}
 	var total int64
 	root = filepath.Clean(root)
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -489,7 +509,13 @@ func sumWeightFiles(root string, maxDepth int) int64 {
 			return nil
 		}
 		info, err := d.Info()
-		if err != nil {
+		if err != nil || info.Size() < minSize {
+			return nil
+		}
+		if ext == ".safetensors" && fileIsLFSPointer(path) {
+			return nil
+		}
+		if ext == ".gguf" && !fileHasGGUFMagic(path) {
 			return nil
 		}
 		total += info.Size()

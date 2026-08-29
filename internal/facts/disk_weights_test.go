@@ -156,6 +156,43 @@ func TestScanDiskWeightsMarksProjector(t *testing.T) {
 	}
 }
 
+func TestScanDiskWeightsSkipsSafetensorsLFSPointers(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	dir := filepath.Join(home, "models", "lfs-tree")
+	ptr := []byte("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 99\n")
+	writeFile(t, filepath.Join(dir, "model-00001-of-00001.safetensors"), ptr)
+	res := ScanDiskWeights(context.Background(), DiskWeightScanConfig{
+		Home:    home,
+		Volumes: []models.Volume{{Mount: root, Kind: "local"}},
+		MinSize: 4,
+	})
+	for _, w := range res.Weights {
+		if w.Format == "safetensors" {
+			t.Fatalf("LFS pointer tree must not count as safetensors: %#v", w)
+		}
+	}
+}
+
+func TestDiskWeightsDiscoveryScriptKeepsLocalVolumeContract(t *testing.T) {
+	s := DiskWeightsDiscoveryScript
+	for _, needle := range []string{
+		"axis-disk-weights-v1",
+		"is_network_source",
+		"hit_count",
+		"DEADLINE",
+		"is_lfs_pointer",
+		"skip_device_mount",
+	} {
+		if !strings.Contains(s, needle) {
+			t.Errorf("remote script missing %q", needle)
+		}
+	}
+	if strings.Contains(s, "n = 0") {
+		t.Error("remote walk_root must not reset per-mount file cap")
+	}
+}
+
 func TestScanDiskWeightsRejectsFakeGGUFExtension(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

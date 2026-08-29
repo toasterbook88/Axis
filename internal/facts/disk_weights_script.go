@@ -5,7 +5,7 @@ package facts
 // Python is best-effort: missing interpreter yields an empty scan, not a collect failure.
 const DiskWeightsDiscoveryScript = `python3 - <<'PY'
 # axis-disk-weights-v1
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 
 MIN = 20 * 1024 * 1024
@@ -39,6 +39,13 @@ def gguf_magic(path):
     except OSError:
         return False
 
+def is_lfs_pointer(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(64).startswith(b"version https://git-lfs")
+    except OSError:
+        return False
+
 home = str(Path.home())
 hub = Path(home) / ".cache" / "huggingface" / "hub"
 try:
@@ -67,7 +74,13 @@ if hub.is_dir():
                         sz = os.path.getsize(fp)
                     except OSError:
                         continue
+                    if sz < MIN:
+                        continue
+                    if low.endswith(".safetensors") and is_lfs_pointer(fp):
+                        continue
                     if low.endswith(".gguf"):
+                        if not gguf_magic(fp):
+                            continue
                         fmt = "gguf"
                         total += sz
                     elif low.endswith(".safetensors"):
@@ -100,18 +113,47 @@ if man.is_dir():
                  "source": "ollama-manifest", "kind": "model"})
 
 hits = []
+hit_count = 0
+DEADLINE = time.time() + 8
+
+def is_network_source(device):
+    # Keep in sync with facts.DFSourceIsNetwork.
+    if not device:
+        return False
+    d = device.lower()
+    if device.startswith("//") or ":/" in device:
+        return True
+    return any(tok in d for tok in ("nfs", "cifs", "smb", "sshfs", "rclone", "9p", "afs", "ceph", "gluster"))
+
+def skip_device_mount(device, mnt):
+    d = device.lower()
+    if d in ("tmpfs", "devtmpfs", "devfs", "overlay", "squashfs", "proc", "sysfs",
+             "cgroup", "cgroup2", "none", "udev", "dev", "efivarfs", "map"):
+        return True
+    if d.startswith("/dev/loop") or d.startswith("/dev/zram") or d.startswith("zram"):
+        return True
+    if mnt in ("/boot",) or mnt.startswith("/boot/") or mnt.startswith("/snap/"):
+        return True
+    if mnt.startswith("/var/lib/docker/") or mnt.startswith("/run/") or mnt.startswith("/sys/"):
+        return True
+    if is_network_source(device):
+        return True
+    return False
+
 def walk_root(root, source):
-    global truncated
+    global truncated, hit_count
     if truncated or not os.path.isdir(root):
         return
-    n = 0
     for dirpath, dirs, files in os.walk(root, topdown=True):
+        if truncated or time.time() >= DEADLINE:
+            truncated = True
+            return
         if is_sys(dirpath):
             dirs[:] = []
             continue
         dirs[:] = [d for d in dirs if d not in SKIP]
         for fn in files:
-            if n >= MAX_FILES:
+            if hit_count >= MAX_FILES or time.time() >= DEADLINE:
                 truncated = True
                 return
             low = fn.lower()
@@ -126,13 +168,14 @@ def walk_root(root, source):
                 continue
             if low.endswith(".gguf") and not gguf_magic(fp):
                 continue
+            if low.endswith(".safetensors") and is_lfs_pointer(fp):
+                continue
             hits.append((sz, fp, source))
-            n += 1
+            hit_count += 1
 
 for p in (os.path.join(home, "models"), os.path.join(home, "Storage"), "/opt/models", "/models"):
     walk_root(p, "well-known")
 
-# remaining local mounts (best-effort df)
 try:
     import subprocess
     df = subprocess.check_output(["df", "-kPl"], text=True, timeout=3)
@@ -141,9 +184,12 @@ try:
         parts = line.split()
         if len(parts) < 6:
             continue
+        device = parts[0]
         mnt = " ".join(parts[5:])
-        if mnt in ("/boot",) or mnt.startswith("/boot/") or mnt.startswith("/snap/"):
+        if skip_device_mount(device, mnt):
             continue
+        if mnt == "/" and home:
+            mnt = home
         mounts.append(mnt)
     for mnt in mounts:
         walk_root(mnt, "find")
