@@ -43,6 +43,7 @@ tmpfs 8388608 0 8388608 0% /tmp
 		OllamaDiscoveryScript:      {out: `{"installed":false}`},
 		LlamaServerDiscoveryScript: {out: `{"installed":false}`},
 		MLXDiscoveryScript:         {out: `{"installed":false}`},
+		DiskWeightsDiscoveryScript: {out: `{"weights":[],"truncated":false}`},
 	}
 }
 

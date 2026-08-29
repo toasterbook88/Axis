@@ -98,6 +98,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if mlxResidents := c.discoverMLXRobust(ctx); len(mlxResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
 	}
+	c.discoverDiskWeights(ctx, facts)
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)
 	})
@@ -484,6 +485,19 @@ func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
 }
 
 // discoverOllamaRobust does ONE SSH command that gathers everything robustly.
+func (c *RemoteCollector) discoverDiskWeights(ctx context.Context, facts *models.NodeFacts) {
+	if facts == nil || c.Exec == nil {
+		return
+	}
+	out, err := c.Exec.Run(ctx, DiskWeightsDiscoveryScript)
+	if err != nil {
+		return
+	}
+	res := parseDiskWeightsJSON(out)
+	facts.DiskWeights = res.Weights
+	facts.DiskWeightsTruncated = res.Truncated
+}
+
 func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
 	info := models.OllamaInfo{Installed: false}
 

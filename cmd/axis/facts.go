@@ -120,6 +120,19 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 
 		}
 
+		if len(nf.DiskWeights) > 0 || nf.DiskWeightsTruncated {
+			fmt.Fprintln(out)
+			title := "Disk weights"
+			if nf.DiskWeightsTruncated {
+				title += " (truncated)"
+			}
+			fmt.Fprintf(out, "  %s\n", ui.Bold(title))
+			for _, w := range nf.DiskWeights {
+				fmt.Fprintf(out, "    %s %s  %s  %s  %s\n",
+					ui.Green("✓"), w.Name, formatDiskWeightBytes(w.Bytes), w.Format, w.Path)
+			}
+		}
+
 		kv("pressure:", formatPressure(r.Pressure))
 		if len(r.GPUs) > 0 {
 			fmt.Fprintln(out)
@@ -198,6 +211,21 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 	fmt.Fprintf(out, "\n  %s %s\n", ui.Dim("collected:"), nf.CollectedAt.Format(time.RFC3339))
 	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
 	return err
+}
+
+func formatDiskWeightBytes(n int64) string {
+	const (
+		mib = 1024 * 1024
+		gib = 1024 * mib
+	)
+	switch {
+	case n >= gib:
+		return fmt.Sprintf("%.1f GiB", float64(n)/float64(gib))
+	case n >= mib:
+		return fmt.Sprintf("%.0f MiB", float64(n)/float64(mib))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 func formatThermal(state string) string {

@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Features
+
+* **Facts:** Inventory on-disk weight artifacts (`DiskWeights`) during local and remote fact collection. Catalog-first (HuggingFace hub `models--*`, ollama manifests, systemd `--model-path`/`-m`), then a bounded per-volume find of GGUF/safetensors above 20 MiB. Shards group to one tree; empty name-only directories are not weights; GGUF files must have magic `GGUF`. Scan is time-capped and may set `disk_weights_truncated`. `axis facts` prints the list. Distinct from resident (loaded) models.
+
 ## v0.15.0 (2026-08-25)
 
 ### Features
