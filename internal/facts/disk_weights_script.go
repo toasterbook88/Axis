@@ -99,7 +99,8 @@ if man.is_dir():
     for root, dirs, files in os.walk(man):
         for fn in files:
             p = Path(root) / fn
-            rel = str(p.relative_to(man)).replace("\\", "/")
+            # as_posix() avoids a backslash string that fish-unquoted heredocs break.
+            rel = p.relative_to(man).as_posix()
             parts = rel.split("/")
             if len(parts) < 2:
                 continue
