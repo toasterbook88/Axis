@@ -4,6 +4,10 @@
 
 * **Facts:** Inventory on-disk weight artifacts (`DiskWeights`) during local and remote fact collection. Catalog-first (HuggingFace hub `models--*`, ollama manifests, systemd `--model-path`/`-m`), then a bounded per-volume find of GGUF/safetensors above 20 MiB. Shards group to one tree; empty name-only directories are not weights; GGUF files must have magic `GGUF`. Scan is time-capped and may set `disk_weights_truncated`. `axis facts` prints the list. Distinct from resident (loaded) models. Remote scan skips NFS/CIFS/SSHFS and other network df sources, enforces a global 400-file cap (not per-mount), and applies an 8s wall-clock deadline. Safetensors below the size floor and Git LFS pointer files are not counted as trees.
 
+### Bug Fixes
+
+* **Doctor:** Report daemon ownership instead of reachability alone. `axis doctor` now fails on more than one axis daemon serving the same API address and on a daemon whose executable inode has been deleted or replaced, and reports socket ownership at the daemon address (live listener, stale socket file, non-socket squatter, missing path, and whether the `<addr>.lock` guard exists) plus mesh UDP port contention as warnings. All probes are observational: doctor never kills a process, unlinks a socket, or takes the ownership lock.
+
 ## v0.15.0 (2026-08-25)
 
 ### Features
