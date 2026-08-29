@@ -47,6 +47,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 			nodeCopy.Ollama = &ollama
 		}
 		nodeCopy.ResidentModels = append([]models.ResidentModel(nil), node.ResidentModels...)
+		nodeCopy.DiskWeights = append([]models.DiskWeight(nil), node.DiskWeights...)
 		if node.TurboQuant != nil {
 			turbo := *node.TurboQuant
 			turbo.Backends = append([]string(nil), node.TurboQuant.Backends...)

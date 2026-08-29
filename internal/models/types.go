@@ -247,6 +247,20 @@ type OllamaInfo struct {
 	Error            string `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
+// DiskWeight is one on-disk weight artifact observed during fact collection.
+// It is inventory, not occupancy: the file exists; it may not be loaded.
+// Sharded safetensors collapse to one row (Path is the directory).
+// Empty directories that look like model names are not weights.
+type DiskWeight struct {
+	Name   string `json:"name" yaml:"name"`
+	Path   string `json:"path" yaml:"path"`
+	Bytes  int64  `json:"bytes" yaml:"bytes"`
+	Format string `json:"format,omitempty" yaml:"format,omitempty"` // gguf, safetensors, ollama
+	Volume string `json:"volume,omitempty" yaml:"volume,omitempty"` // Axis volume mount
+	Source string `json:"source,omitempty" yaml:"source,omitempty"` // hf-hub, ollama-manifest, systemd, find
+	Kind   string `json:"kind,omitempty" yaml:"kind,omitempty"`     // model (default) or projector
+}
+
 // ResidentModel is additive truth-plane metadata describing a model that is
 // currently resident in a node runtime according to a live probe.
 //
@@ -316,21 +330,25 @@ type NodeFacts struct {
 	// reach this node (e.g. via concurrent TCP pinging of its Addresses).
 	// This allows "SDN-lite" routing over the fastest link (like a GbE switch)
 	// while maintaining the logical SSHTarget for SSH identity/auth checks.
-	ResolvedDialTarget string                     `json:"resolved_dial_target,omitempty" yaml:"resolved_dial_target,omitempty"`
-	Identity           *NodeIdentity              `json:"identity,omitempty" yaml:"identity,omitempty"`
-	OS                 string                     `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
-	OSVersion          string                     `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
-	Arch               string                     `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Resources          *Resources                 `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Addresses          []NetworkAddress           `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	Tools              []ToolInfo                 `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Ollama             *OllamaInfo                `json:"ollama,omitempty" yaml:"ollama,omitempty"`
-	ResidentModels     []ResidentModel            `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
-	TurboQuant         *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
-	AppleFM            *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
-	RAMReservedMB      int64                      `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
-	RAMAllocatableMB   int64                      `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
-	SystemReserveMB    int64                      `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
+	ResolvedDialTarget string           `json:"resolved_dial_target,omitempty" yaml:"resolved_dial_target,omitempty"`
+	Identity           *NodeIdentity    `json:"identity,omitempty" yaml:"identity,omitempty"`
+	OS                 string           `json:"os,omitempty" yaml:"os,omitempty"`                 // darwin, linux
+	OSVersion          string           `json:"os_version,omitempty" yaml:"os_version,omitempty"` // e.g. 26.4, 6.1.0
+	Arch               string           `json:"arch,omitempty" yaml:"arch,omitempty"`
+	Resources          *Resources       `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Addresses          []NetworkAddress `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Tools              []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Ollama             *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
+	ResidentModels     []ResidentModel  `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
+	// DiskWeights lists weight files/trees on local volumes. Distinct from
+	// ResidentModels (loaded). Truncated is true when the scan hit its budget.
+	DiskWeights          []DiskWeight               `json:"disk_weights,omitempty" yaml:"disk_weights,omitempty"`
+	DiskWeightsTruncated bool                       `json:"disk_weights_truncated,omitempty" yaml:"disk_weights_truncated,omitempty"`
+	TurboQuant           *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`
+	AppleFM              *AppleFoundationModelsInfo `json:"apple_foundation_models,omitempty" yaml:"apple_foundation_models,omitempty"`
+	RAMReservedMB        int64                      `json:"ram_reserved_mb,omitempty" yaml:"ram_reserved_mb,omitempty"`
+	RAMAllocatableMB     int64                      `json:"ram_allocatable_mb,omitempty" yaml:"ram_allocatable_mb,omitempty"`
+	SystemReserveMB      int64                      `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
 
 	// Network telemetry (Phase D)
 	SSHHandshakeLatencyMs int64        `json:"ssh_handshake_latency_ms,omitempty" yaml:"ssh_handshake_latency_ms,omitempty"`
