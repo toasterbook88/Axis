@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,6 +191,27 @@ func TestDiskWeightsDiscoveryScriptKeepsLocalVolumeContract(t *testing.T) {
 	}
 	if strings.Contains(s, "n = 0") {
 		t.Error("remote walk_root must not reset per-mount file cap")
+	}
+}
+
+func TestDiskWeightsDiscoveryScriptPythonParsesAfterUnquotedHeredoc(t *testing.T) {
+	s := DiskWeightsDiscoveryScript
+	_, rest, ok := strings.Cut(s, "<<'PY'\n")
+	if !ok {
+		t.Fatal("expected python3 heredoc")
+	}
+	body, _, ok := strings.Cut(rest, "\nPY")
+	if !ok {
+		t.Fatal("expected heredoc terminator")
+	}
+	// WrapBash quotes <<'PY' with POSIX '"'"'. fish -c strips that, leaving
+	// an unquoted <<PY so bash expands \\ to \ before python sees the source.
+	expanded := strings.ReplaceAll(body, `\\`, `\`)
+	cmd := exec.Command("python3", "-c", "import ast,sys; ast.parse(sys.stdin.read())")
+	cmd.Stdin = strings.NewReader(expanded)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("remote python must parse after fish-unquoted heredoc expansion: %v\n%s", err, out)
 	}
 }
 
