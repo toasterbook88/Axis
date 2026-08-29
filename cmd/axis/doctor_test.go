@@ -522,7 +522,7 @@ func stubDoctorOwnershipHealthy(t *testing.T) func() {
 	doctorProbeSocket = func(a string) doctorSocketState {
 		return doctorSocketState{
 			Path: a, Unix: true, Exists: true, IsSocket: true, Live: true,
-			LockPath: a + ".lock", LockExists: true,
+			LockPath: a + ".lock", LockExists: true, LockHeld: true,
 		}
 	}
 	prevMesh := doctorProbeMeshPort

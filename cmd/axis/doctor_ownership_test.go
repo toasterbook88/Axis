@@ -10,6 +10,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/lockutil"
 )
 
 const testSock = "/tmp/axis-test/axis.sock"
@@ -23,6 +24,7 @@ func ownedSocket() doctorSocketState {
 		Live:       true,
 		LockPath:   testSock + ".lock",
 		LockExists: true,
+		LockHeld:   true,
 	}
 }
 
@@ -174,6 +176,19 @@ func TestDaemonOwnershipLiveSocketWithoutLockWarns(t *testing.T) {
 		t.Fatalf("status = %q, want warn", check.Status)
 	}
 	if !strings.Contains(check.Message, "advisory locking") {
+		t.Errorf("unexpected message %q", check.Message)
+	}
+}
+
+func TestDaemonOwnershipLiveSocketWithUnlockedFileWarns(t *testing.T) {
+	sock := ownedSocket()
+	sock.LockHeld = false
+	procs := []doctorDaemonProc{{PID: 2265, Exe: "/usr/local/bin/axis", Addr: testSock}}
+	check := findCheck(t, daemonOwnershipChecks(procs, nil, sock, freeMesh()), "Daemon socket")
+	if check.Status != "warn" {
+		t.Fatalf("status = %q, want warn", check.Status)
+	}
+	if !strings.Contains(check.Message, "no process holds") {
 		t.Errorf("unexpected message %q", check.Message)
 	}
 }
@@ -346,6 +361,38 @@ func TestProbeDaemonSocketAgainstRealPaths(t *testing.T) {
 	}
 	if st := doctorProbeSocket(regular); !st.Exists || st.IsSocket || st.Live {
 		t.Errorf("regular file: %+v", st)
+	}
+}
+
+func TestProbeAdvisoryLockHeldDoesNotConfuseFileWithLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "axis.sock.lock")
+	lock, err := lockutil.OpenLock(path)
+	if err != nil {
+		t.Fatalf("open lock: %v", err)
+	}
+	defer lock.Close()
+
+	held, err := probeAdvisoryLockHeld(path)
+	if errors.Is(err, errOwnershipProbeUnsupported) {
+		t.Skip("advisory lock observation unsupported on this platform")
+	}
+	if err != nil {
+		t.Fatalf("probe unlocked file: %v", err)
+	}
+	if held {
+		t.Fatal("an existing but unlocked file was reported as held")
+	}
+
+	if err := lock.LockEx(); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer lock.Unlock()
+	held, err = probeAdvisoryLockHeld(path)
+	if err != nil {
+		t.Fatalf("probe held lock: %v", err)
+	}
+	if !held {
+		t.Fatal("held advisory lock was not observed")
 	}
 }
 

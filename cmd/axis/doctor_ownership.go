@@ -54,6 +54,8 @@ type doctorSocketState struct {
 	Live       bool
 	LockPath   string
 	LockExists bool
+	LockHeld   bool
+	LockErr    error
 	// Unix is false for TCP daemon addresses, where none of the file-level
 	// fields apply.
 	Unix bool
@@ -201,6 +203,9 @@ func probeDaemonSocket(addr string) doctorSocketState {
 	st.LockPath = api.LockPathFor(addr)
 	if _, err := os.Stat(st.LockPath); err == nil {
 		st.LockExists = true
+		st.LockHeld, st.LockErr = probeAdvisoryLockHeld(st.LockPath)
+	} else if !os.IsNotExist(err) {
+		st.LockErr = fmt.Errorf("stat lock file: %w", err)
 	}
 	fi, err := os.Lstat(addr)
 	if err != nil {
@@ -395,6 +400,21 @@ func daemonSocketCheck(sock doctorSocketState, owners []doctorDaemonProc, procsK
 			Name:    "Daemon socket",
 			Status:  "warn",
 			Message: fmt.Sprintf("%s is live but %s is missing; the owner predates advisory locking and cannot exclude a second daemon", sock.Path, sock.LockPath),
+			Fix:     "restart the daemon from a current binary: axis daemon restart",
+		}
+	}
+	if sock.LockErr != nil {
+		return DoctorCheck{
+			Name:    "Daemon socket",
+			Status:  "warn",
+			Message: fmt.Sprintf("%s is live and %s exists, but doctor could not verify that the advisory lock is held: %v", sock.Path, sock.LockPath, sock.LockErr),
+		}
+	}
+	if !sock.LockHeld {
+		return DoctorCheck{
+			Name:    "Daemon socket",
+			Status:  "warn",
+			Message: fmt.Sprintf("%s is live and %s exists, but no process holds the advisory lock; the owner cannot exclude a second daemon", sock.Path, sock.LockPath),
 			Fix:     "restart the daemon from a current binary: axis daemon restart",
 		}
 	}
