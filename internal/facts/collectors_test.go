@@ -75,11 +75,16 @@ func TestLocalCollectorCollectsFacts(t *testing.T) {
 	runMLXDiscoveryFn = func(context.Context) ([]byte, error) {
 		return []byte(`{"installed":false}`), nil
 	}
+	prevScan := scanDiskWeightsFn
+	scanDiskWeightsFn = func(context.Context, DiskWeightScanConfig) DiskWeightScanResult {
+		return DiskWeightScanResult{}
+	}
 	t.Cleanup(func() {
 		runAppleFoundationModelsProbeFn = prevAFM
 		runOllamaDiscoveryFn = prevOllama
 		runLlamaServerDiscoveryFn = prevLlama
 		runMLXDiscoveryFn = prevMLX
+		scanDiskWeightsFn = prevScan
 	})
 
 	collector := NewLocalCollector("local-node", "worker")
@@ -369,6 +374,7 @@ Pages inactive:                          100000.
 			"command -v llama-server 2>/dev/null": {out: "/opt/homebrew/bin/llama-server\n"},
 			"llama-server --version 2>/dev/null":  {out: "llama.cpp server version 0.0.1\n"},
 			OllamaDiscoveryScript:                 {out: `{"installed":true,"path":"/usr/local/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"gpu_offload":"gpu:metal"}`},
+			DiskWeightsDiscoveryScript:            {out: `{"weights":[],"truncated":false}`},
 		},
 		contains: map[string]fakeRunResult{
 			"llama-server --help": {out: "llama.cpp server --ctx-size --n-gpu-layers --flash-attn\n"},
@@ -477,7 +483,8 @@ MemAvailable:   12456780 kB
 			`if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`: {out: ""},
 
 			`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {err: fmt.Errorf("no network tool")},
-			OllamaDiscoveryScript: {err: fmt.Errorf("no ollama")},
+			OllamaDiscoveryScript:      {err: fmt.Errorf("no ollama")},
+			DiskWeightsDiscoveryScript: {out: `{"weights":[],"truncated":false}`},
 		},
 	}
 

@@ -130,6 +130,7 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	if mlxResidents := discoverMLXLocal(ctx); len(mlxResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
 	}
+	applyLocalDiskWeights(ctx, facts)
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
 	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {
 		facts.AppleFM = fm

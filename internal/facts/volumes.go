@@ -76,12 +76,30 @@ func skipDFFilesystem(device, mount string) bool {
 	return false
 }
 
+// DFSourceIsNetwork reports whether a df device field names a network filesystem.
+// Keep the remote disk-weight Python scanner in sync with this list.
+func DFSourceIsNetwork(device string) bool {
+	if device == "" {
+		return false
+	}
+	if strings.HasPrefix(device, "//") || strings.Contains(device, ":/") {
+		return true
+	}
+	d := strings.ToLower(device)
+	for _, tok := range []string{"nfs", "cifs", "smb", "sshfs", "rclone", "9p", "afs", "ceph", "gluster"} {
+		if strings.Contains(d, tok) {
+			return true
+		}
+	}
+	return false
+}
+
 func classifyVolume(v *models.Volume) {
 	dev := strings.ToLower(v.Device)
-	if strings.HasPrefix(v.Device, "//") || strings.Contains(v.Device, ":/") {
+	if DFSourceIsNetwork(v.Device) {
 		v.Kind = "network"
 		v.Class = "network"
-		if strings.HasPrefix(v.Device, "//") {
+		if strings.HasPrefix(v.Device, "//") || strings.Contains(dev, "cifs") || strings.Contains(dev, "smb") {
 			v.Bus = "cifs"
 		} else {
 			v.Bus = "nfs"

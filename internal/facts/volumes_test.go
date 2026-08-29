@@ -22,6 +22,29 @@ overlay           46080000  20000000  24000000      46% /var/lib/docker/overlay2
 
 `
 
+func TestDFSourceIsNetwork(t *testing.T) {
+	cases := []struct {
+		device string
+		want   bool
+	}{
+		{"/dev/nvme0n1p2", false},
+		{"/dev/sda1", false},
+		{"//nas/share", true},
+		{"192.0.2.10:/export", true},
+		{"foundry:/mnt/data", true},
+		{"10.0.0.1:/nfs", true},
+		{"fuse.sshfs", true},
+		{"sshfs#user@host", true},
+		{"nfs4", true},
+		{"overlay", false},
+	}
+	for _, tc := range cases {
+		if got := DFSourceIsNetwork(tc.device); got != tc.want {
+			t.Errorf("DFSourceIsNetwork(%q) = %v, want %v", tc.device, got, tc.want)
+		}
+	}
+}
+
 func TestParseDFVolumesKeepsRealMountsDropsVirtual(t *testing.T) {
 	vols, err := ParseDFVolumes(sampleDFKP)
 	if err != nil {

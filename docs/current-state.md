@@ -20,7 +20,7 @@ AXIS is no longer just a read-only Phase 1 fact collector.
 
 The live repo currently contains:
 
-- Cluster fact collection for local and remote nodes
+- Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models
 - Cluster snapshot assembly and advisory placement
 - A local chat surface backed by Ollama
 - A local HTTP API with task execution
