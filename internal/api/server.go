@@ -30,15 +30,11 @@ func DefaultAddr() string {
 	return persist.AxisPath("axis.sock")
 }
 
-type ToolDef struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
-}
+// ToolDef and ToolsResponse alias the daemon types so the JSON shape and the
+// tool definitions themselves have exactly one source: daemon.ToolDefinitions.
+type ToolDef = daemon.ToolDef
 
-type ToolsResponse struct {
-	Tools []ToolDef `json:"tools"`
-}
+type ToolsResponse = daemon.ToolsResponse
 
 type KnowledgeResponse struct {
 	Knowledge *knowledge.ClusterKnowledge `json:"knowledge"`
@@ -288,30 +284,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		tools := []ToolDef{
-			{
-				Name:        "axis_execute",
-				Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Explicit mode and explicit operator confirmation are required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands, and set confirm=YES to authorize execution.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"description": map[string]any{"type": "string", "description": "Natural language task description or raw command"},
-						"mode":        map[string]any{"type": "string", "description": "Execution mode: script or exec"},
-						"confirm":     map[string]any{"type": "string", "description": "Must be YES to authorize execution"},
-					},
-					"required": []string{"description", "mode", "confirm"},
-				},
-			},
-			{
-				Name:        "axis_knowledge",
-				Description: "Return live cluster state, Ollama status, learned skills, and recent placement state.",
-				InputSchema: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
-				},
-			},
-		}
-		writeJSON(w, http.StatusOK, ToolsResponse{Tools: tools})
+		writeJSON(w, http.StatusOK, ToolsResponse{Tools: daemon.ToolDefinitions()})
 	}
 	mux.HandleFunc("/tools", withAuth(toolsHandler, token))
 	mux.HandleFunc("/mcp/tools", withAuth(toolsHandler, token))

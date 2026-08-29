@@ -116,11 +116,15 @@ func HealthPayload(meta *Metadata) map[string]any {
 	return payload
 }
 
+// ToolDefinitions is the single canonical source for the AXIS tool schemas
+// advertised over every surface: the daemon mux, the HTTP API's /tools and
+// /mcp/tools handlers (internal/api), and the MCP server's tool listing
+// (internal/mcp). Do not copy these definitions into another package.
 func ToolDefinitions() []ToolDef {
 	return []ToolDef{
 		{
 			Name:        "axis_execute",
-			Description: "Execute a task on the live AXIS cluster using deterministic placement, reservation headroom, runtime pressure shielding, TurboQuant-aware injection, and the safety blocker. Explicit mode and explicit operator confirmation are required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands, and set confirm=YES to authorize execution.",
+			Description: "Execute a task on the live AXIS cluster using placement, learned skills/scripts, live RAM pressure, and the safety blocker. Explicit mode and explicit operator confirmation are required: use mode=script for matched scripts/skills only or mode=exec for explicit raw commands, and set confirm=YES to authorize execution.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -133,7 +137,7 @@ func ToolDefinitions() []ToolDef {
 		},
 		{
 			Name:        "axis_knowledge",
-			Description: "Return live cluster state, learned skills, and recent placement context.",
+			Description: "Return live cluster state, Ollama status, learned skills, and recent placement state.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},

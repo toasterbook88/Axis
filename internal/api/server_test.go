@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2025,5 +2026,74 @@ func TestV2BatchPlace(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestToolsEndpointsMatchCanonicalDaemonDefinitions pins both production HTTP
+// surfaces to the single canonical definition function, daemon.ToolDefinitions.
+// If either surface grows its own copy of the tool schemas again, this fails.
+func TestToolsEndpointsMatchCanonicalDaemonDefinitions(t *testing.T) {
+	canonicalJSON, err := json.Marshal(ToolsResponse{Tools: daemon.ToolDefinitions()})
+	if err != nil {
+		t.Fatalf("marshal canonical tool definitions: %v", err)
+	}
+	var canonical ToolsResponse
+	if err := json.Unmarshal(canonicalJSON, &canonical); err != nil {
+		t.Fatalf("normalize canonical tool definitions: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		path     string
+		register func(*http.ServeMux)
+		auth     bool
+	}{
+		{
+			name: "api /tools",
+			path: "/tools",
+			register: func(mux *http.ServeMux) {
+				registerRoutes(mux, nil, "test-token")
+			},
+			auth: true,
+		},
+		{
+			name: "api /mcp/tools",
+			path: "/mcp/tools",
+			register: func(mux *http.ServeMux) {
+				registerRoutes(mux, nil, "test-token")
+			},
+			auth: true,
+		},
+		{
+			name:     "daemon /tools",
+			path:     "/tools",
+			register: func(mux *http.ServeMux) { daemon.RegisterRoutes(mux, nil) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			tt.register(mux)
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.auth {
+				req.Header.Set("Authorization", "Bearer test-token")
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rec.Code)
+			}
+
+			var payload ToolsResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if !reflect.DeepEqual(payload.Tools, canonical.Tools) {
+				t.Fatalf("tool definitions diverged:\n served: %#v\ncanonical: %#v", payload.Tools, canonical.Tools)
+			}
+		})
 	}
 }
