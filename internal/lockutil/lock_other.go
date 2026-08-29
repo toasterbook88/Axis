@@ -36,3 +36,10 @@ func OpenLock(path string) (*File, error) {
 	}
 	return &File{File: f}, nil
 }
+
+// TryLockEx always reports success on platforms without advisory locking.
+// Callers must not rely on it alone for mutual exclusion there; pair it with a
+// liveness probe of the resource being guarded.
+func (f *File) TryLockEx() (bool, error) {
+	return true, nil
+}
