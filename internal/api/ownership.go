@@ -101,3 +101,21 @@ func acquireUnixSocket(addr string) (net.Listener, func(), error) {
 	}
 	return ln, release, nil
 }
+
+// LockPathFor returns the advisory lock path guarding a daemon address.
+//
+// Exported for observational callers (axis doctor) that report who owns the
+// address. Reading the path is safe; taking the lock is not, and no read
+// surface should do it.
+func LockPathFor(addr string) string {
+	return lockPathFor(addr)
+}
+
+// SocketIsLive reports whether some process is accepting connections on the
+// unix socket at addr, without disturbing the owner.
+//
+// Exported so diagnostics distinguish a stale socket file from an owned one
+// using the same probe the acquire path trusts.
+func SocketIsLive(addr string) bool {
+	return socketIsLive(addr)
+}

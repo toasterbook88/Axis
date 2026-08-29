@@ -62,6 +62,7 @@ The live repo currently contains:
 - Hard empirical filter in placement: nodes whose freshly-observed `PeakRAMMB` exceeds current allocatable RAM are excluded from `FilterCandidates` before ranking begins
 - `axis status` renders a RESIDENT MODELS table showing which models are live on each node, grouped by runtime (ollama, llama.cpp, mlx, apple-foundation-models), with stable canonical ordering and `+N more` truncation for wide lists
 - `axis doctor` probes local AI backends (llama-server and MLX) and reports installed/running/port/model-count state as advisory checks; probe errors surface stderr for actionability without blocking core SSH/config checks
+- `axis doctor` reports daemon ownership observationally: duplicate daemons serving one address (`fail`), a daemon running a deleted executable inode (`fail`), socket state at `api.DefaultAddr()` — live, stale file, non-socket squatter, missing, and whether the `<addr>.lock` guard is held — and mesh UDP port contention (`warn`). Doctor never kills a process, unlinks a socket, or takes the ownership lock
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
 - Protected `main` with required CI status checks (`Test & Build`, `govulncheck`), squash-only merges, and required conversation resolution. Approving reviews are **not** required by branch rules today (solo-operator workflow: explicit operator merge after green checks and thread resolution). Linear history via squash.
@@ -111,7 +112,7 @@ Top-level commands currently registered in the binary:
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
-| `axis doctor` | Validate config, SSH, daemon health, and local AI backends | Checks config, TCP probes per node, daemon status; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
+| `axis doctor` | Validate config, SSH, daemon health/ownership, and local AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, socket ownership, and mesh UDP contention; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
 | `axis completion` | Generate shell completions | bash/zsh/fish/powershell |
 
 ## Package Map

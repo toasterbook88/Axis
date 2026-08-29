@@ -408,6 +408,16 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		}
 	}
 
+	// 3.5 Daemon ownership: who holds the address, and is that one process
+	// running the binary on disk. Reachability alone hides a duplicate pair.
+	ownProcs, ownErr := doctorProbeDaemonProcs()
+	checks = append(checks, daemonOwnershipChecks(
+		ownProcs,
+		ownErr,
+		doctorProbeSocket(daemonAddr),
+		doctorProbeMeshPort(cfg),
+	)...)
+
 	// 4. Local AI backend health
 	for _, b := range []struct {
 		name  string

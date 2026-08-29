@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -20,6 +21,8 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 		return tmpFile
 	})
 	defer restorePath()
+
+	defer stubDoctorOwnershipHealthy(t)()
 
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
@@ -92,6 +95,8 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 	})
 	defer restorePath()
 
+	defer stubDoctorOwnershipHealthy(t)()
+
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
@@ -143,6 +148,8 @@ func TestDoctorTreatsDaemonFailureAsAdvisoryByDefault(t *testing.T) {
 	})
 	defer restorePath()
 
+	defer stubDoctorOwnershipHealthy(t)()
+
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
@@ -189,6 +196,8 @@ func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
 	})
 	defer restorePath()
 
+	defer stubDoctorOwnershipHealthy(t)()
+
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
@@ -231,6 +240,8 @@ func TestDoctorWarnsWhenDaemonCacheHasZeroNodes(t *testing.T) {
 		return tmpFile
 	})
 	defer restorePath()
+
+	defer stubDoctorOwnershipHealthy(t)()
 
 	restoreLoad := stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
 		return &config.Config{
@@ -320,7 +331,9 @@ func minimalDoctorStubs(t *testing.T) (restoreAll func()) {
 	restoreMLX := stubDoctorMLX(t, func(context.Context) doctorBackendStatus {
 		return doctorBackendStatus{Installed: false}
 	})
+	restoreOwnership := stubDoctorOwnershipHealthy(t)
 	return func() {
+		restoreOwnership()
 		restorePath()
 		restoreLoad()
 		restoreSSH()
@@ -492,6 +505,43 @@ func TestFormatResidentModelCount(t *testing.T) {
 		if got := formatResidentModelCount(tc.n); got != tc.want {
 			t.Errorf("formatResidentModelCount(%d) = %q, want %q", tc.n, got, tc.want)
 		}
+	}
+}
+
+// stubDoctorOwnershipHealthy pins the daemon-ownership probes to a single
+// well-owned daemon. The real probes read /proc and bind a UDP port, so every
+// doctor test that does not exercise ownership must stub them: otherwise the
+// result depends on what happens to be running on the build host.
+func stubDoctorOwnershipHealthy(t *testing.T) func() {
+	t.Helper()
+	addr := api.DefaultAddr()
+	restoreProcs := stubDoctorDaemonProcs(t, func() ([]doctorDaemonProc, error) {
+		return []doctorDaemonProc{{PID: 4242, Exe: "/usr/local/bin/axis", Addr: addr}}, nil
+	})
+	prevSocket := doctorProbeSocket
+	doctorProbeSocket = func(a string) doctorSocketState {
+		return doctorSocketState{
+			Path: a, Unix: true, Exists: true, IsSocket: true, Live: true,
+			LockPath: a + ".lock", LockExists: true, LockHeld: true,
+		}
+	}
+	prevMesh := doctorProbeMeshPort
+	doctorProbeMeshPort = func(*config.Config) doctorMeshPortState {
+		return doctorMeshPortState{Port: 42426, Enabled: true, Bound: true}
+	}
+	return func() {
+		restoreProcs()
+		doctorProbeSocket = prevSocket
+		doctorProbeMeshPort = prevMesh
+	}
+}
+
+func stubDoctorDaemonProcs(t *testing.T, fn func() ([]doctorDaemonProc, error)) func() {
+	t.Helper()
+	prev := doctorProbeDaemonProcs
+	doctorProbeDaemonProcs = fn
+	return func() {
+		doctorProbeDaemonProcs = prev
 	}
 }
 
