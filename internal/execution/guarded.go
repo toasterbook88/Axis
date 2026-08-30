@@ -942,7 +942,7 @@ func runRemote(
 	defer executor.Close()
 
 	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
-	writeJSONCmd := fmt.Sprintf("cat > %s << 'AXIS_EOF'\n%s\nAXIS_EOF\n", shellescape.Quote(remoteContextPath), string(contextJSON))
+	writeJSONCmd := transport.BuildRemoteWriteCommand(remoteContextPath, contextJSON)
 	if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
 		resp.Error = err.Error()
 		resp.ExitCode = 1
