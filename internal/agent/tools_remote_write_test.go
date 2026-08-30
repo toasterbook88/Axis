@@ -6,16 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/toasterbook88/axis/internal/transport"
 )
 
 // Regression: content containing the old heredoc delimiter (or any shell
 // metacharacters) must round-trip byte-exact through the generated command
 // instead of escaping and executing on the remote node.
-func TestBuildRemoteWriteCmdRoundTripsHostileContent(t *testing.T) {
-	content := "line one\nAXIS_EOF\nrm -rf /tmp/pwned; $(whoami) `id` | tee /tmp/pwned\nlast line\n"
+func TestBuildRemoteWriteCommandRoundTripsHostileContent(t *testing.T) {
+	content := "{\n  \"message\": \"quoted value\"\n}\nAXIS_EOF\nrm -rf /tmp/pwned; $(whoami) `id` | tee /tmp/pwned\nlast line\n"
 	path := filepath.Join(t.TempDir(), "sub", "probe.txt")
 
-	cmd := buildRemoteWriteCmd(path, content)
+	cmd := transport.BuildRemoteWriteCommand(path, []byte(content))
 	out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("sh -c %q: %v\n%s", cmd, err, out)
@@ -33,5 +35,8 @@ func TestBuildRemoteWriteCmdRoundTripsHostileContent(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "base64") {
 		t.Fatal("expected base64 transport in generated command")
+	}
+	if strings.Contains(cmd, "<<") || strings.Contains(cmd, "AXIS_EOF") {
+		t.Fatalf("remote write command must not embed a heredoc or payload: %s", cmd)
 	}
 }

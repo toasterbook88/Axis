@@ -111,8 +111,11 @@ func TestRunGuardedRemoteUsesLoadedConfigAndStreamsOutput(t *testing.T) {
 	if len(executor.calls) != 2 {
 		t.Fatalf("expected two remote calls, got %d (%#v)", len(executor.calls), executor.calls)
 	}
-	if executor.calls[0].method != "run" || !strings.HasPrefix(executor.calls[0].command, "cat > /tmp/axis-knows-") {
+	if executor.calls[0].method != "run" || !strings.Contains(executor.calls[0].command, "base64 -d > /tmp/axis-knows-") {
 		t.Fatalf("expected first call to upload context, got %#v", executor.calls[0])
+	}
+	if strings.Contains(executor.calls[0].command, "<<") || strings.Contains(executor.calls[0].command, "AXIS_EOF") {
+		t.Fatalf("context upload must not use a heredoc, got %#v", executor.calls[0])
 	}
 	if executor.calls[1].method != "stream" {
 		t.Fatalf("expected second call to stream execution, got %#v", executor.calls[1])
