@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -279,7 +278,7 @@ func (r *ToolRegistry) registerRemoteWriteFile(tc *ToolContext) {
 			if a.Node == "" || a.Path == "" {
 				return "", fmt.Errorf("remote_write_file requires \"node\" and \"path\"")
 			}
-			cmd := buildRemoteWriteCmd(a.Path, a.Content)
+			cmd := transport.BuildRemoteWriteCommand(a.Path, []byte(a.Content))
 			out, err := runRemote(ctx, tc, a.Node, cmd)
 			if err != nil {
 				return "", fmt.Errorf("remote write to %s:%s failed: %w", a.Node, a.Path, err)
@@ -290,16 +289,6 @@ func (r *ToolRegistry) registerRemoteWriteFile(tc *ToolContext) {
 			return fmt.Sprintf("Successfully wrote %d bytes to %s on %s", len(a.Content), a.Path, a.Node), nil
 		},
 	)
-}
-
-// buildRemoteWriteCmd returns the shell command that writes content to path
-// on a remote node. Content is base64-encoded: a raw heredoc would let any
-// content line equal to the delimiter terminate the heredoc early and
-// execute the remainder as shell on the node.
-func buildRemoteWriteCmd(path, content string) string {
-	encoded := base64.StdEncoding.EncodeToString([]byte(content))
-	return fmt.Sprintf("mkdir -p $(dirname %s) && printf '%%s' %s | base64 -d > %s",
-		shellQuote(path), shellQuote(encoded), shellQuote(path))
 }
 
 // --- Tool: remote_tail_logs ---

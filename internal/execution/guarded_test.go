@@ -765,10 +765,13 @@ func TestRunRemoteUsesVariableBasedTrap(t *testing.T) {
 		t.Fatalf("runRemote failed: %v", err)
 	}
 
-	// The first command is the heredoc write (context JSON upload).
-	heredocCmd := capturedCmds[0]
-	if !strings.Contains(heredocCmd, "AXIS_EOF") {
-		t.Fatalf("heredoc must use AXIS_EOF delimiter, got: %s", heredocCmd)
+	// The first command is the base64 context JSON upload.
+	uploadCmd := capturedCmds[0]
+	if !strings.Contains(uploadCmd, "base64 -d") {
+		t.Fatalf("context upload must use base64, got: %s", uploadCmd)
+	}
+	if strings.Contains(uploadCmd, "<<") || strings.Contains(uploadCmd, "AXIS_EOF") {
+		t.Fatalf("context upload must not use a heredoc, got: %s", uploadCmd)
 	}
 
 	// The second command is the run command with the trap.
@@ -1097,7 +1100,7 @@ func TestRunGuardedRemoteContextUploadFailure(t *testing.T) {
 	prev := NewRemoteExecutor
 	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
 		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
-			if strings.Contains(cmd, "AXIS_EOF") {
+			if strings.Contains(cmd, "base64 -d") {
 				return "", fmt.Errorf("upload failed")
 			}
 			return "", nil
@@ -1142,7 +1145,7 @@ func TestRunGuardedRemoteExecutionFailure(t *testing.T) {
 	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
 		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
 			callCount++
-			if callCount == 1 && strings.Contains(cmd, "AXIS_EOF") {
+			if callCount == 1 && strings.Contains(cmd, "base64 -d") {
 				return "", nil // context upload succeeds
 			}
 			return "", fmt.Errorf("remote execution failed")
@@ -1190,7 +1193,7 @@ func TestRunGuardedRemoteLedgerReserveFailure(t *testing.T) {
 	prev := NewRemoteExecutor
 	NewRemoteExecutor = func(nc config.NodeConfig) RemoteExecutor {
 		return &stubRemoteExecutor{runFunc: func(_ context.Context, cmd string) (string, error) {
-			if strings.Contains(cmd, "AXIS_EOF") {
+			if strings.Contains(cmd, "base64 -d") {
 				return "", nil
 			}
 			return "", nil
