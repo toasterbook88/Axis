@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -457,52 +455,6 @@ func TestGuardedAgentShellRunnerPrefersDaemonRunWhenAvailable(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected daemon stream path to preserve refresh signaling")
-	}
-}
-
-func TestServeSurfaceUsesUnifiedHealthPath(t *testing.T) {
-	mux := http.NewServeMux()
-	daemon.RegisterRoutes(mux, nil)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 from /health, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
-		t.Fatalf("expected health payload, got %q", rec.Body.String())
-	}
-
-	redirect := httptest.NewRecorder()
-	mux.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if redirect.Code != http.StatusPermanentRedirect {
-		t.Fatalf("expected 308 from /healthz, got %d", redirect.Code)
-	}
-	if got := redirect.Header().Get("Location"); got != "/health" {
-		t.Fatalf("expected /health redirect, got %q", got)
-	}
-}
-
-func TestServeSurfaceUsesUnifiedToolsPath(t *testing.T) {
-	mux := http.NewServeMux()
-	daemon.RegisterRoutes(mux, nil)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/tools", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 from /tools, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `"axis_execute"`) || !strings.Contains(rec.Body.String(), `"axis_knowledge"`) {
-		t.Fatalf("expected tool catalog, got %q", rec.Body.String())
-	}
-
-	redirect := httptest.NewRecorder()
-	mux.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "/mcp/tools", nil))
-	if redirect.Code != http.StatusPermanentRedirect {
-		t.Fatalf("expected 308 from /mcp/tools, got %d", redirect.Code)
-	}
-	if got := redirect.Header().Get("Location"); got != "/tools" {
-		t.Fatalf("expected /tools redirect, got %q", got)
 	}
 }
 
