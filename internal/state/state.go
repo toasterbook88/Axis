@@ -15,6 +15,7 @@ import (
 	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/repairs"
 )
 
 type NodeState struct {
@@ -410,30 +411,66 @@ func runMigrations(s *ClusterState) bool {
 	return mutated
 }
 
+// MaintenanceReport describes cleanup changes made in memory. Receipts become
+// operator-visible only after the caller successfully persists the state.
+type MaintenanceReport struct {
+	Receipts []repairs.RepairEvent
+}
+
+// Changed reports whether maintenance changed any state record.
+func (r MaintenanceReport) Changed() bool { return len(r.Receipts) > 0 }
+
 // Maintain performs ongoing cleanup of stale reservations and expired failure
 // records on the provided state. It returns true if the state was modified.
-// Callers that need accurate reservation and failure views should invoke
-// Maintain after Load and before reading state fields. The daemon should also
-// Save() after Maintain when it returns true.
+// Callers that need receipts should use MaintainWithReport and emit them only
+// after the cleaned state has been persisted successfully.
 func Maintain(s *ClusterState) bool {
-	mutated := false
+	return MaintainWithReport(s).Changed()
+}
+
+// MaintainWithReport performs the same cleanup as Maintain and returns one
+// advisory receipt per persisted record group changed by maintenance.
+func MaintainWithReport(s *ClusterState) MaintenanceReport {
+	var report MaintenanceReport
+	now := time.Now().UTC()
+	appendNodeReceipt := func(name, newValue string, severity repairs.Severity, reasons []string) {
+		report.Receipts = append(report.Receipts, repairs.RepairEvent{
+			Timestamp:       now,
+			Severity:        severity,
+			SourceAuthority: "state",
+			ObjectType:      "node_state",
+			ObjectID:        name,
+			OldValue:        "present",
+			NewValue:        newValue,
+			Description:     strings.Join(reasons, "; "),
+		})
+	}
 
 	pruned := s.Failures.Prune()
 	if pruned > 0 {
-		mutated = true
+		report.Receipts = append(report.Receipts, repairs.RepairEvent{
+			Timestamp:       now,
+			Severity:        repairs.SeverityInfo,
+			SourceAuthority: "state",
+			ObjectType:      "failure_records",
+			OldValue:        strconv.Itoa(pruned) + " expired",
+			NewValue:        "removed",
+			Description:     "state maintenance removed expired failure records",
+		})
 	}
 
-	now := time.Now().UTC()
 	for name, ns := range s.Nodes {
+		var reasons []string
 		legacyHeartbeatMode := len(ns.ActiveExecs) > 0 && len(ns.ExecHeartbeatAt) == 0
 		ns, normalized := normalizeNodeStateExecTracking(ns, now)
 		if normalized {
-			mutated = true
+			reasons = append(reasons, "normalized execution tracking")
 		}
 
 		if shouldDropAncientNodeState(now, ns, legacyHeartbeatMode) {
 			delete(s.Nodes, name)
-			mutated = true
+			reasons = append(reasons, "removed ancient node state")
+			appendNodeReceipt(name, "removed", repairs.SeverityWarning, reasons)
 			continue
 		}
 
@@ -441,26 +478,35 @@ func Maintain(s *ClusterState) bool {
 		// so any retained reservation is untrustworthy and should be discarded.
 		if len(ns.ActiveExecs) == 0 && (ns.ActiveTasks > 0 || ns.ReservedMB > 0) {
 			delete(s.Nodes, name)
-			mutated = true
+			reasons = append(reasons, "removed untracked legacy reservation state")
+			appendNodeReceipt(name, "removed", repairs.SeverityWarning, reasons)
 			continue
 		}
 
 		reclaimed, reclaimedAny := reclaimStaleReservation(now, ns, legacyHeartbeatMode)
 		if reclaimedAny {
 			ns = reclaimed
-			mutated = true
+			reasons = append(reasons, "reclaimed inactive execution reservations")
 		}
 
 		if ns.ActiveTasks == 0 && ns.ReservedMB == 0 {
 			delete(s.Nodes, name)
-			mutated = true
+			reasons = append(reasons, "removed empty node state")
+			appendNodeReceipt(name, "removed", repairs.SeverityWarning, reasons)
 			continue
 		}
 
 		s.Nodes[name] = ns
+		if len(reasons) > 0 {
+			severity := repairs.SeverityInfo
+			if reclaimedAny {
+				severity = repairs.SeverityWarning
+			}
+			appendNodeReceipt(name, "reconciled", severity, reasons)
+		}
 	}
 
-	return mutated
+	return report
 }
 
 func emptyClusterState() *ClusterState {

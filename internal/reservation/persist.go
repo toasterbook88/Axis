@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/repairs"
 )
 
 // Path returns the path to the ledger persistence file.
@@ -123,7 +124,7 @@ func (l *Ledger) Load() error {
 		l.totalReserved += e.RAMMB
 	}
 	// Startup reconciliation pass (in-memory only; persist after unlocking mu).
-	reclaimed := l.reclaimInMemoryLocked()
+	reclaimed, receipts := l.reclaimInMemoryLocked()
 	var snap []*Entry
 	if reclaimed > 0 {
 		snap = l.snapshotEntriesLocked()
@@ -134,6 +135,8 @@ func (l *Ledger) Load() error {
 		l.logger.Info("startup reconciliation complete", "reclaimed", reclaimed)
 		if err := l.writeSnapshot(snap); err != nil {
 			l.logger.Error("failed to persist ledger during startup reconciliation", "error", err)
+		} else {
+			repairs.EmitAll(l.logger, receipts)
 		}
 	}
 

@@ -1,9 +1,11 @@
-// Package repairs is SCAFFOLDED — typed repair-event structures.
-// Not wired into the stable operator path.
+// Package repairs is INTERNAL-ONLY — advisory receipts for automatic authority maintenance.
+// Receipts are observable telemetry only; they never drive reconciliation.
 package repairs
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -65,4 +67,35 @@ func (e RepairEvent) String() string {
 // operator action.
 func (e RepairEvent) IsSilent() bool {
 	return e.Severity == SeverityInfo
+}
+
+// Emit writes a structured maintenance receipt synchronously. Callers must emit
+// only after the repaired authority has been persisted successfully.
+func Emit(logger *slog.Logger, event RepairEvent) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	level := slog.LevelInfo
+	if event.Severity == SeverityWarning {
+		level = slog.LevelWarn
+	} else if event.Severity == SeverityCritical {
+		level = slog.LevelError
+	}
+	logger.LogAttrs(context.Background(), level, "maintenance receipt",
+		slog.Time("repair_timestamp", event.Timestamp),
+		slog.String("severity", string(event.Severity)),
+		slog.String("source_authority", event.SourceAuthority),
+		slog.String("object_type", event.ObjectType),
+		slog.String("object_id", event.ObjectID),
+		slog.String("old_value", event.OldValue),
+		slog.String("new_value", event.NewValue),
+		slog.String("description", event.Description),
+	)
+}
+
+// EmitAll writes receipts in maintenance order.
+func EmitAll(logger *slog.Logger, events []RepairEvent) {
+	for _, event := range events {
+		Emit(logger, event)
+	}
 }
