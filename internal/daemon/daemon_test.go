@@ -30,6 +30,7 @@ import (
 )
 
 func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	d := New(30*time.Second, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{
 			Timestamp: time.Unix(1700000000, 0).UTC(),
@@ -87,6 +88,9 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	if meta.Source != "daemon-cache" {
 		t.Fatalf("expected source daemon-cache, got %q", meta.Source)
 	}
+	if meta.PublicationID != snap.Publication.ID {
+		t.Fatalf("metadata publication %q does not bind snapshot %q", meta.PublicationID, snap.Publication.ID)
+	}
 	if meta.Version != Version {
 		t.Fatalf("expected version %q, got %q", Version, meta.Version)
 	}
@@ -111,7 +115,6 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	if meta.Stale {
 		t.Fatal("expected fresh metadata immediately after refresh")
 	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read snapshot file: %v", err)
@@ -165,6 +168,9 @@ func TestRefreshFailurePreservesPreviousSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(meta.LastError, "deadline exceeded") {
 		t.Fatalf("expected deadline exceeded in last_error, got %q", meta.LastError)
+	}
+	if snap.Publication == nil || meta.PublicationID != snap.Publication.ID {
+		t.Fatalf("failed refresh detached metadata from preserved publication: meta=%q snapshot=%+v", meta.PublicationID, snap.Publication)
 	}
 }
 

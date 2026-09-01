@@ -56,6 +56,7 @@ type SnapshotCache interface {
 type Metadata struct {
 	Source             string    `json:"source"`
 	Ready              bool      `json:"ready"`
+	PublicationID      string    `json:"publication_id,omitempty"`
 	RefreshIntervalSec int       `json:"refresh_interval_sec"`
 	LastRefreshTrigger string    `json:"last_refresh_trigger,omitempty"`
 	LastConfigEventAt  time.Time `json:"last_config_event_at,omitempty"`
@@ -79,6 +80,9 @@ type Metadata struct {
 }
 
 type daemonMetadata struct {
+	ready               bool
+	publicationID       string
+	freshness           *models.DiscoveryFreshness
 	interval            time.Duration
 	staleThreshold      time.Duration
 	snapshotPath        string
@@ -941,7 +945,6 @@ func (d *Daemon) Invalidate() {
 }
 
 func (d *Daemon) Meta() Metadata {
-	snapshot := d.snapshotPublished.Load()
 	metaState := d.metaPublished.Load()
 	if metaState == nil {
 		metaState = &daemonMetadata{}
@@ -955,7 +958,8 @@ func (d *Daemon) Meta() Metadata {
 
 	meta := Metadata{
 		Source:             "daemon-cache",
-		Ready:              snapshot != nil,
+		Ready:              metaState.ready,
+		PublicationID:      metaState.publicationID,
 		RefreshIntervalSec: int(metaState.interval / time.Second),
 		LastRefreshTrigger: metaState.lastTrigger,
 		LastConfigEventAt:  metaState.lastConfigAt,
@@ -979,8 +983,8 @@ func (d *Daemon) Meta() Metadata {
 	meta.MaxRefreshLatencyMs = d.maxRefreshLatency.Milliseconds()
 	d.pendingMu.Unlock()
 	meta.StaleNodes = append([]string(nil), metaState.staleNodes...)
-	if snapshot != nil && snapshot.Freshness != nil {
-		freshness := *snapshot.Freshness
+	if metaState.freshness != nil {
+		freshness := *metaState.freshness
 		meta.Freshness = &freshness
 	}
 
@@ -991,10 +995,8 @@ func (d *Daemon) Meta() Metadata {
 		for _, ns := range st.Nodes {
 			meta.ReservedMB += ns.ReservedMB
 		}
-		if err != nil {
-			if meta.LastError == "" {
-				meta.LastError = err.Error()
-			}
+		if err != nil && meta.LastError == "" {
+			meta.LastError = err.Error()
 		}
 	}
 
@@ -1002,7 +1004,25 @@ func (d *Daemon) Meta() Metadata {
 }
 
 func (d *Daemon) publishMetadataLocked() {
+	var (
+		ready         bool
+		publicationID string
+		freshness     *models.DiscoveryFreshness
+	)
+	if snapshot := d.snapshotPublished.Load(); snapshot != nil {
+		ready = true
+		if snapshot.Publication != nil {
+			publicationID = snapshot.Publication.ID
+		}
+		if snapshot.Freshness != nil {
+			copy := *snapshot.Freshness
+			freshness = &copy
+		}
+	}
 	d.metaPublished.Store(&daemonMetadata{
+		ready:               ready,
+		publicationID:       publicationID,
+		freshness:           freshness,
 		interval:            d.interval,
 		staleThreshold:      d.staleThreshold,
 		snapshotPath:        d.snapshotPath,

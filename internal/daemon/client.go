@@ -68,6 +68,9 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 	if err := json.NewDecoder(snapResp.Body).Decode(&snap); err != nil {
 		return nil, "", err
 	}
+	if err := validatePublicationBinding(meta, &snap); err != nil {
+		return nil, "", err
+	}
 
 	if meta.Stale {
 		models.AppendWarningIfMissing(&snap, staleCacheWarning(meta))
@@ -89,6 +92,19 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 	}
 
 	return &snap, source, nil
+}
+
+func validatePublicationBinding(meta Metadata, snap *models.ClusterSnapshot) error {
+	if meta.PublicationID == "" {
+		return fmt.Errorf("snapshot metadata missing publication_id; daemon upgrade required")
+	}
+	if snap == nil || snap.Publication == nil || snap.Publication.ID == "" {
+		return fmt.Errorf("snapshot payload missing publication.id")
+	}
+	if snap.Publication.ID != meta.PublicationID {
+		return fmt.Errorf("snapshot publication changed during read: metadata=%q snapshot=%q; retry", meta.PublicationID, snap.Publication.ID)
+	}
+	return nil
 }
 
 func staleCacheWarning(meta Metadata) models.Warning {

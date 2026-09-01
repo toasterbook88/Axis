@@ -1,6 +1,7 @@
 # Snapshot Publication Envelope
 
-Status: implemented for live runtime and daemon snapshot assembly.
+Status: implemented for live runtime and daemon snapshot assembly, including
+daemon metadata binding.
 
 ## Decision
 
@@ -38,10 +39,17 @@ observation time, and read-time cache age. It retains component digests as
 semantic content, so a changed authority input can still notify snapshot
 subscribers.
 
-## Deferred binding
+## Metadata binding
 
-`/snapshot` and `/snapshot/meta` remain separate reads in this slice. Metadata
-does not yet carry the snapshot publication ID, and the client still backfills
-missing discovery freshness from a separate metadata request. Binding those
-responses to one publication and then removing cross-request freshness
-backfill are the next authority-coherence steps.
+`/snapshot` and `/snapshot/meta` remain separate reads. Daemon metadata captures
+the current snapshot publication ID and its discovery freshness in one atomic
+metadata state. The cached client requires both responses to carry the same
+non-empty publication ID before it applies staleness warnings or freshness.
+
+If a refresh lands between the metadata and snapshot requests, the IDs differ
+and the read fails with an explicit retry error. A missing ID is treated as an
+incompatible daemon/payload rather than silently accepting an unbound view.
+
+The client still backfills missing discovery freshness from metadata after the
+publication IDs match. Removing that compatibility behavior is the next
+authority-coherence step.
