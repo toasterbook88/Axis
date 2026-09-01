@@ -138,7 +138,16 @@ jobs:
       - name: Require the release commit on main
         run: |
           set -euo pipefail
-          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          # The checkout above uses fetch-depth: 0, which already fetched
+          # +refs/heads/*:refs/remotes/origin/*, so origin/main is present.
+          # Do not re-fetch here: persist-credentials is false, so a fresh
+          # fetch carries no credentials and exits 128 on a private
+          # repository ("could not read Username for 'https://github.com'"),
+          # failing the gate before it can evaluate ancestry at all.
+          if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+            echo "::error::origin/main is not present; this job requires checkout with fetch-depth: 0"
+            exit 1
+          fi
           if ! git merge-base --is-ancestor HEAD origin/main; then
             echo "::error::release commit $(git rev-parse HEAD) is not reachable from origin/main"
             exit 1
