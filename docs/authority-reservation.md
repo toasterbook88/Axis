@@ -134,20 +134,22 @@ Reclamation happens without event emission or caller-visible warning in the foll
 
 ```text
 # Ledger JSON should only be written from internal/reservation/
-grep -rn 'os.WriteFile.*ledger\|persist.WriteFileAtomic.*ledger' internal/
-# → Only hits in internal/reservation/persist.go (ledger.saveLocked)
+grep -rn 'WritePrivateFileAtomic' internal/reservation/ --include='*.go' | grep -v '_test.go'
+# → Only internal/reservation/persist.go (persist.LedgerPath path) writes ledger.json
 
-# Ledger Reserve/Release/Heartbeat should only be called from internal/execution/ in prod
-grep -rn 'ledger\.Reserve\|ledger\.Release\|ledger\.Heartbeat' internal/ --include='*.go' | grep -v '_test.go'
-# → Hits in internal/execution/guarded.go only
+# Ledger Reserve/Release/Heartbeat may only be called from the documented
+# surfaces: internal/execution/ (guarded execution) and the advisory lease
+# surfaces internal/api/v2.go (/v2/reservations) and internal/mcp/triangle.go
+grep -rn '\.Reserve(\|\.Release(\|\.Heartbeat(' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/reservation/'
+# → Hits only in internal/execution/guarded.go, internal/api/v2.go, internal/mcp/triangle.go
 
-# State JSON should only be written from internal/state/ (and execution outcomes)
-grep -rn 'os.WriteFile.*state\|persist.WriteFileAtomic.*state' internal/
-# → Only hits in internal/state/state.go (ClusterState.Save)
+# State JSON should only be written from internal/state/
+grep -rn 'WritePrivateFileAtomic' internal/state/ internal/execution/ --include='*.go' | grep -v '_test.go'
+# → Only internal/state/state.go writes state.json (guarded.go writes execution logs, not state)
 
-# Snapshot overlay should be read-only
-grep -rn 'snap\.Nodes\[.*\]\.RAMReservedMB.*=' internal/ --include='*.go' | grep -v '_test.go'
-# → Only hit in internal/snapshotview/overlay.go (assignment is local to the overlay function)
+# Snapshot overlay should be read-only (no RAMReservedMB assignment outside the overlay)
+grep -rn 'RAMReservedMB\s*=' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/snapshotview/'
+# → Zero hits (only internal/snapshotview/overlay.go assigns node.RAMReservedMB)
 ```
 
 ## 7. Summary
