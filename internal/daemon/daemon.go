@@ -24,6 +24,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/multipath"
 	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/publication"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
@@ -708,7 +709,20 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	d.staleNodes = staleNodes
 
 	d.snapshot = snapshotview.Clone(snap)
-	ApplyReservationView(d.snapshot, st, d.ledger)
+	var ledgerEntries []reservation.Entry
+	ledgerAvailable := d.ledger != nil
+	if ledgerAvailable {
+		ledgerEntries = d.ledger.Entries()
+	}
+	publicationEnvelope, publicationErr := publication.Build(publication.SourceDaemonCache, now, d.snapshot, ledgerEntries, ledgerAvailable, st, stateWarning)
+	if publicationErr != nil {
+		d.lastError = publicationErr.Error()
+		d.publishMetadataLocked()
+		d.mu.Unlock()
+		return publicationErr
+	}
+	d.snapshot.Publication = publicationEnvelope
+	snapshotview.ApplyReservationEntries(d.snapshot, st, ledgerEntries, ledgerAvailable)
 
 	// Advisory snapshot collected event
 	events.EmitToBuffer(events.NoopEmitter{}, events.EventSnapshotCollected, map[string]any{
@@ -848,9 +862,18 @@ func hashSnapshot(snap *models.ClusterSnapshot) [sha256.Size]byte {
 	if snap == nil {
 		return [sha256.Size]byte{}
 	}
-	// Shallow copy the snapshot to zero out the Timestamp so it doesn't defeat the debounce.
+	// Shallow copy the snapshot to zero out observation/publication identity so
+	// time and a fresh publication ID do not defeat content debounce.
 	snapCopy := *snap
 	snapCopy.Timestamp = time.Time{}
+	if snap.Publication != nil {
+		publicationCopy := *snap.Publication
+		publicationCopy.ID = ""
+		publicationCopy.AssembledAt = time.Time{}
+		publicationCopy.CacheAgeSec = 0
+		publicationCopy.Facts.ObservedAt = time.Time{}
+		snapCopy.Publication = &publicationCopy
+	}
 
 	// Use the canonical JSON for stability. A malformed snapshot will hash
 	// to the empty struct, which still produces a deterministic value.
@@ -891,7 +914,15 @@ func (d *Daemon) Snapshot() (*models.ClusterSnapshot, bool) {
 	if snapshot == nil {
 		return nil, false
 	}
-	return snapshotview.Clone(snapshot), true
+	clone := snapshotview.Clone(snapshot)
+	if clone.Publication != nil {
+		age := time.Since(clone.Publication.AssembledAt)
+		if age < 0 {
+			age = 0
+		}
+		clone.Publication.CacheAgeSec = int64(age / time.Second)
+	}
+	return clone, true
 }
 
 func (d *Daemon) Invalidate() {

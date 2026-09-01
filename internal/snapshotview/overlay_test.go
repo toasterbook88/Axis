@@ -58,7 +58,8 @@ func TestCloneIsDeepCopy(t *testing.T) {
 				},
 			},
 		},
-		Warnings: []models.Warning{{Message: "low disk"}},
+		Warnings:    []models.Warning{{Message: "low disk"}},
+		Publication: &models.PublicationEnvelope{ID: "pub-original"},
 	}
 
 	clone := snapshotview.Clone(orig)
@@ -71,6 +72,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	clone.Nodes[0].TurboQuant.Backends[0] = "MUTATED"
 	clone.Nodes[0].TurboQuant.Capabilities[0] = "MUTATED"
 	clone.Warnings[0].Message = "MUTATED"
+	clone.Publication.ID = "MUTATED"
 
 	if orig.Nodes[0].Resources.GPUs[0].Model != "RTX 4090" {
 		t.Error("Clone mutated original GPU slice")
@@ -92,6 +94,9 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	}
 	if orig.Warnings[0].Message != "low disk" {
 		t.Error("Clone mutated original Warnings slice")
+	}
+	if orig.Publication.ID != "pub-original" {
+		t.Error("Clone mutated original Publication envelope")
 	}
 }
 
@@ -418,5 +423,26 @@ func TestApplyReservationViewParentInheritance(t *testing.T) {
 	}
 	if snap.Nodes[0].RAMAllocatableMB != 7168 {
 		t.Errorf("expected 7168MB allocatable after parent subtraction, got %d", snap.Nodes[0].RAMAllocatableMB)
+	}
+}
+
+func TestApplyReservationEntriesUsesFrozenLedgerRead(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	limits := reservation.DefaultLimits()
+	limits.SystemReserveMB = 0
+	ledger := reservation.NewLedger(limits, nil)
+	ledger.SetNodeCapacity("node-a", 4096)
+	if _, err := ledger.Reserve(reservation.Entry{ID: "exec-1", Node: "node-a", RAMMB: 512}); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	frozen := ledger.Entries()
+	if err := ledger.Release("exec-1"); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{baseNode("node-a", 4096)}}
+	snapshotview.ApplyReservationEntries(snap, nil, frozen, true)
+	if got := snap.Nodes[0].RAMReservedMB; got != 512 {
+		t.Fatalf("frozen reservation view changed after live ledger mutation: got %d, want 512", got)
 	}
 }

@@ -449,16 +449,57 @@ type DiscoveryFreshness struct {
 	Warning          string `json:"warning,omitempty" yaml:"warning,omitempty"`
 }
 
+// PublicationEnvelope records the independently timed authorities used to
+// assemble a snapshot. It makes mixed input epochs observable without claiming
+// that the component reads were transactional.
+type PublicationEnvelope struct {
+	ID          string                    `json:"id" yaml:"id"`
+	Source      string                    `json:"source" yaml:"source"`
+	AssembledAt time.Time                 `json:"assembled_at" yaml:"assembled_at"`
+	CacheAgeSec int64                     `json:"cache_age_sec" yaml:"cache_age_sec"`
+	Facts       PublicationFactsEvidence  `json:"facts" yaml:"facts"`
+	Ledger      PublicationLedgerEvidence `json:"ledger" yaml:"ledger"`
+	State       PublicationStateEvidence  `json:"state" yaml:"state"`
+}
+
+// PublicationFactsEvidence identifies the observed fact set before overlays.
+type PublicationFactsEvidence struct {
+	Available       bool      `json:"available" yaml:"available"`
+	ObservedAt      time.Time `json:"observed_at,omitempty" yaml:"observed_at,omitempty"`
+	DiscoveryDigest string    `json:"discovery_digest,omitempty" yaml:"discovery_digest,omitempty"`
+	Warning         string    `json:"warning,omitempty" yaml:"warning,omitempty"`
+}
+
+// PublicationLedgerEvidence identifies the reservation authority used by the
+// publication. Digest is a SHA-256 hash of the canonical active-entry set.
+type PublicationLedgerEvidence struct {
+	Available  bool   `json:"available" yaml:"available"`
+	Digest     string `json:"digest,omitempty" yaml:"digest,omitempty"`
+	EntryCount int    `json:"entry_count" yaml:"entry_count"`
+	Warning    string `json:"warning,omitempty" yaml:"warning,omitempty"`
+}
+
+// PublicationStateEvidence identifies the legacy state input used for
+// non-reservation overlays and warnings.
+type PublicationStateEvidence struct {
+	Available     bool      `json:"available" yaml:"available"`
+	Digest        string    `json:"digest,omitempty" yaml:"digest,omitempty"`
+	SchemaVersion int       `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
+	Warning       string    `json:"warning,omitempty" yaml:"warning,omitempty"`
+}
+
 // ClusterSnapshot is the principal output of AXIS: a compact structured
 // summary of cluster state for consumption by frontier models and operators.
 type ClusterSnapshot struct {
-	Timestamp time.Time           `json:"timestamp" yaml:"timestamp"`
-	Status    SnapshotStatus      `json:"status" yaml:"status"`
-	Nodes     []NodeFacts         `json:"nodes" yaml:"nodes"`
-	Summary   ClusterSummary      `json:"summary" yaml:"summary"`
-	Warnings  []Warning           `json:"warnings,omitempty" yaml:"warnings,omitempty"`
-	Freshness *DiscoveryFreshness `json:"freshness,omitempty" yaml:"freshness,omitempty"`
-	Topology  *PairwiseLinkMatrix `json:"topology,omitempty" yaml:"topology,omitempty"`
+	Timestamp   time.Time            `json:"timestamp" yaml:"timestamp"`
+	Status      SnapshotStatus       `json:"status" yaml:"status"`
+	Nodes       []NodeFacts          `json:"nodes" yaml:"nodes"`
+	Summary     ClusterSummary       `json:"summary" yaml:"summary"`
+	Warnings    []Warning            `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	Freshness   *DiscoveryFreshness  `json:"freshness,omitempty" yaml:"freshness,omitempty"`
+	Publication *PublicationEnvelope `json:"publication,omitempty" yaml:"publication,omitempty"`
+	Topology    *PairwiseLinkMatrix  `json:"topology,omitempty" yaml:"topology,omitempty"`
 }
 
 // PairwiseLinkMatrix is the directional network topology between cluster

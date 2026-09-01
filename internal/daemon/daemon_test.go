@@ -70,6 +70,15 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	if snap.Summary.TotalAllocatableMB != 4096 {
 		t.Fatalf("expected allocatable ram 4096, got %d", snap.Summary.TotalAllocatableMB)
 	}
+	if snap.Publication == nil || snap.Publication.Source != "daemon-cache" {
+		t.Fatalf("expected daemon publication envelope, got %+v", snap.Publication)
+	}
+	if !snap.Publication.Facts.Available || !snap.Publication.Ledger.Available || !snap.Publication.State.Available {
+		t.Fatalf("expected component evidence to be available, got %+v", snap.Publication)
+	}
+	if snap.Publication.CacheAgeSec < 0 {
+		t.Fatalf("expected non-negative publication cache age, got %d", snap.Publication.CacheAgeSec)
+	}
 
 	meta := d.Meta()
 	if !meta.Ready {
@@ -113,6 +122,9 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	}
 	if persisted.Summary.TotalNodes != 1 {
 		t.Fatalf("expected persisted total nodes 1, got %d", persisted.Summary.TotalNodes)
+	}
+	if persisted.Publication == nil || persisted.Publication.ID != snap.Publication.ID {
+		t.Fatalf("persisted publication identity mismatch: memory=%+v disk=%+v", snap.Publication, persisted.Publication)
 	}
 }
 
@@ -1291,6 +1303,16 @@ func TestHashSnapshotFieldsTripwire(t *testing.T) {
 			{Name: "node-1"},
 		},
 		Warnings: []models.Warning{{Node: "node-1", Kind: "test", Message: "warning-1"}},
+		Publication: &models.PublicationEnvelope{
+			ID:          "pub-one",
+			Source:      "daemon-cache",
+			AssembledAt: time.Now(),
+			Facts: models.PublicationFactsEvidence{
+				Available:       true,
+				ObservedAt:      time.Now(),
+				DiscoveryDigest: "sha256:facts-one",
+			},
+		},
 	}
 
 	baseHash := hashSnapshot(snap)
@@ -1300,6 +1322,27 @@ func TestHashSnapshotFieldsTripwire(t *testing.T) {
 	snapTime.Timestamp = snap.Timestamp.Add(time.Hour)
 	if hashSnapshot(&snapTime) != baseHash {
 		t.Error("expected changing Timestamp to not change snapshot hash")
+	}
+
+	// Publication identity and age are per-assembly/read metadata, not content.
+	snapPublicationIdentity := *snap
+	publicationIdentity := *snap.Publication
+	publicationIdentity.ID = "pub-two"
+	publicationIdentity.AssembledAt = publicationIdentity.AssembledAt.Add(time.Hour)
+	publicationIdentity.CacheAgeSec = 99
+	publicationIdentity.Facts.ObservedAt = publicationIdentity.Facts.ObservedAt.Add(time.Hour)
+	snapPublicationIdentity.Publication = &publicationIdentity
+	if hashSnapshot(&snapPublicationIdentity) != baseHash {
+		t.Error("expected publication identity and observation times not to change snapshot content hash")
+	}
+
+	// Component evidence is semantic content and must trip the debounce hash.
+	snapPublicationEvidence := *snap
+	publicationEvidence := *snap.Publication
+	publicationEvidence.Facts.DiscoveryDigest = "sha256:facts-two"
+	snapPublicationEvidence.Publication = &publicationEvidence
+	if hashSnapshot(&snapPublicationEvidence) == baseHash {
+		t.Error("expected publication component evidence to change snapshot content hash")
 	}
 
 	// Changing Status should change hash

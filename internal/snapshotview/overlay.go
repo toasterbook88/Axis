@@ -31,6 +31,10 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		freshness := *snap.Freshness
 		clone.Freshness = &freshness
 	}
+	if snap.Publication != nil {
+		publication := *snap.Publication
+		clone.Publication = &publication
+	}
 	clone.Nodes = make([]models.NodeFacts, len(snap.Nodes))
 	for i, node := range snap.Nodes {
 		nodeCopy := node
@@ -65,8 +69,33 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 // semantics. When a ledger is supplied, it is authoritative including when it
 // reports zero; state is used only by legacy callers without a ledger.
 func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, ledger *reservation.Ledger) {
+	if ledger == nil {
+		ApplyReservationEntries(snap, st, nil, false)
+		return
+	}
+	ApplyReservationEntries(snap, st, ledger.Entries(), true)
+}
+
+// ApplyReservationEntries applies one frozen reservation-authority view. The
+// same entry slice can be fingerprinted for a publication envelope, ensuring
+// the evidence and rendered capacity derive from exactly the same ledger read.
+func ApplyReservationEntries(snap *models.ClusterSnapshot, st *state.ClusterState, entries []reservation.Entry, ledgerAvailable bool) {
 	if snap == nil {
 		return
+	}
+
+	reservedByNode := make(map[string]int64)
+	for _, entry := range entries {
+		reservedByNode[entry.Node] += entry.RAMMB
+	}
+	if parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID"); ledgerAvailable && parentID != "" {
+		adjusted := make(map[string]bool)
+		for _, entry := range entries {
+			if !adjusted[entry.Node] && (entry.ID == parentID || entry.OwnerExecID == parentID) {
+				reservedByNode[entry.Node] -= entry.RAMMB
+				adjusted[entry.Node] = true
+			}
+		}
 	}
 
 	var totalReservable, totalReserved, totalAllocatable int64
@@ -77,18 +106,10 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, 
 		}
 
 		reserved := int64(0)
-		if ledger != nil {
-			reserved = ledger.NodeSummaryFor(node.Name).ReservedRAMMB
-			if parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID"); parentID != "" {
-				for _, entry := range ledger.Entries() {
-					if entry.Node == node.Name && (entry.ID == parentID || entry.OwnerExecID == parentID) {
-						reserved -= entry.RAMMB
-						break
-					}
-				}
-			}
+		if ledgerAvailable {
+			reserved = reservedByNode[node.Name]
 		}
-		if ledger == nil && st != nil && st.Nodes != nil {
+		if !ledgerAvailable && st != nil && st.Nodes != nil {
 			if ns, ok := st.Nodes[node.Name]; ok {
 				reserved = ns.ReservedMB
 			}
