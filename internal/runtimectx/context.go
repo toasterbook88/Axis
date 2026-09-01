@@ -3,10 +3,12 @@ package runtimectx
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/publication"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
@@ -31,7 +33,7 @@ var loadLedger = func() (*reservation.Ledger, error) {
 	err := l.Load()
 	return l, err
 }
-var applyReservationView = snapshotview.ApplyReservationView
+var applyReservationEntries = snapshotview.ApplyReservationEntries
 var loadSkills = skills.Load
 
 func Load(ctx context.Context) (*Context, error) {
@@ -67,7 +69,17 @@ func Load(ctx context.Context) (*Context, error) {
 		}
 	}
 
-	applyReservationView(snap, st, ledger)
+	var ledgerEntries []reservation.Entry
+	ledgerAvailable := ledger != nil
+	if ledgerAvailable {
+		ledgerEntries = ledger.Entries()
+	}
+	publicationEnvelope, publicationErr := publication.Build(publication.SourceLiveRuntime, time.Now().UTC(), snap, ledgerEntries, ledgerAvailable, st, err)
+	if publicationErr != nil {
+		return nil, publicationErr
+	}
+	snap.Publication = publicationEnvelope
+	applyReservationEntries(snap, st, ledgerEntries, ledgerAvailable)
 	if err != nil {
 		snap.Warnings = append(snap.Warnings, models.Warning{
 			Kind:    "state",

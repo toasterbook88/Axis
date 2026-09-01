@@ -171,6 +171,7 @@ internal/models/      Core types: NodeFacts, ClusterSnapshot, PlacementDecision
 internal/buildinfo/   Version, commit, date, go version (ldflags injection)
 internal/ui/          Terminal colors, tables, spinners, help templates
 internal/persist/     Corrupt-file quarantine + warning recovery
+internal/publication/ Build per-snapshot component evidence envelopes
 internal/snapshotview/ Deep clone + reservation overlay on snapshots
 internal/turboexec/   TurboQuant flag injection for execution
 ```

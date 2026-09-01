@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
@@ -30,7 +31,8 @@ func TestLoadBuildsRuntimeAndSurfacesRecoverableWarnings(t *testing.T) {
 			},
 		},
 	}
-	stateValue := &state.ClusterState{Nodes: map[string]state.NodeState{"node-a": {ReservedMB: 512}}}
+	stateUpdatedAt := time.Unix(1_700_000_000, 0).UTC()
+	stateValue := &state.ClusterState{Version: 1, Nodes: map[string]state.NodeState{"node-a": {ReservedMB: 512}}, UpdatedAt: stateUpdatedAt}
 	skillStore := &skills.Store{Skills: []skills.LearnedSkill{{ID: "skill-1"}}}
 
 	restore := stubRuntimeDeps(t,
@@ -63,6 +65,16 @@ func TestLoadBuildsRuntimeAndSurfacesRecoverableWarnings(t *testing.T) {
 	}
 	if rt.Skills != skillStore {
 		t.Fatal("expected recovered skills to propagate")
+	}
+	publication := rt.Snapshot.Publication
+	if publication == nil || publication.Source != "live-runtime" {
+		t.Fatalf("expected live publication envelope, got %+v", publication)
+	}
+	if !publication.Facts.Available || !publication.Ledger.Available || !publication.State.Available {
+		t.Fatalf("expected all publication authorities available, got %+v", publication)
+	}
+	if publication.State.SchemaVersion != 1 || !publication.State.UpdatedAt.Equal(stateUpdatedAt) || publication.State.Warning != "recovered local AXIS state" {
+		t.Fatalf("unexpected state publication evidence: %+v", publication.State)
 	}
 	if len(rt.Snapshot.Warnings) != 2 {
 		t.Fatalf("expected 2 warnings, got %d", len(rt.Snapshot.Warnings))
@@ -252,14 +264,16 @@ func stubRuntimeDeps(
 	prevDiscoverNodes := discoverNodes
 	prevBuildSnapshot := buildSnapshot
 	prevLoadState := loadState
-	prevApplyReservationView := applyReservationView
+	prevApplyReservationEntries := applyReservationEntries
 	prevLoadSkills := loadSkills
 
 	loadConfig = cfgFn
 	discoverNodes = discoverFn
 	buildSnapshot = buildFn
 	loadState = stateFn
-	applyReservationView = applyFn
+	applyReservationEntries = func(snap *models.ClusterSnapshot, st *state.ClusterState, _ []reservation.Entry, _ bool) {
+		applyFn(snap, st, nil)
+	}
 	loadSkills = skillsFn
 
 	return func() {
@@ -267,7 +281,7 @@ func stubRuntimeDeps(
 		discoverNodes = prevDiscoverNodes
 		buildSnapshot = prevBuildSnapshot
 		loadState = prevLoadState
-		applyReservationView = prevApplyReservationView
+		applyReservationEntries = prevApplyReservationEntries
 		loadSkills = prevLoadSkills
 	}
 }
