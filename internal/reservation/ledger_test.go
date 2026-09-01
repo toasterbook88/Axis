@@ -1,8 +1,13 @@
 package reservation
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -170,7 +175,9 @@ func TestReclaim_StaleEntries(t *testing.T) {
 }
 
 func TestReclaim_ExpiredEntries(t *testing.T) {
-	l := setupTestLedger(t, DefaultLimits())
+	t.Setenv("HOME", t.TempDir())
+	var logs bytes.Buffer
+	l := NewLedger(DefaultLimits(), slog.New(slog.NewJSONHandler(&logs, nil)))
 	l.SetNodeCapacity("node-a", 16384)
 
 	l.mu.Lock()
@@ -188,6 +195,110 @@ func TestReclaim_ExpiredEntries(t *testing.T) {
 	if reclaimed != 1 {
 		t.Errorf("expected 1 expired entry reclaimed, got %d", reclaimed)
 	}
+	assertMaintenanceReceipt(t, &logs, "ledger", "reservation", "exec-1", "expired", "reclaimed")
+
+	data, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatalf("read persisted ledger: %v", err)
+	}
+	var persisted diskFormat
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("decode persisted ledger: %v", err)
+	}
+	if len(persisted.Entries) != 0 {
+		t.Fatalf("persisted entries = %+v, want empty after receipt", persisted.Entries)
+	}
+}
+
+func TestLoadEmitsReceiptAfterStartupReconciliation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+	data, err := json.Marshal(diskFormat{Entries: []*Entry{{
+		ID:            "exec-stale",
+		Node:          "node-a",
+		RAMMB:         512,
+		CreatedAt:     now.Add(-10 * time.Minute),
+		LastHeartbeat: now.Add(-10 * time.Minute),
+	}}})
+	if err != nil {
+		t.Fatalf("marshal ledger fixture: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		t.Fatalf("create ledger directory: %v", err)
+	}
+	if err := os.WriteFile(Path(), data, 0o600); err != nil {
+		t.Fatalf("write ledger fixture: %v", err)
+	}
+
+	var logs bytes.Buffer
+	l := NewLedger(DefaultLimits(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	l.now = func() time.Time { return now }
+	if err := l.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(l.Entries()) != 0 {
+		t.Fatalf("startup reconciliation retained stale entries: %+v", l.Entries())
+	}
+	assertMaintenanceReceipt(t, &logs, "ledger", "reservation", "exec-stale", "stale", "reclaimed")
+}
+
+func TestReclaimDoesNotEmitSuccessReceiptWhenPersistenceFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(Path(), 0o700); err != nil {
+		t.Fatalf("create directory at ledger path: %v", err)
+	}
+
+	var logs bytes.Buffer
+	l := NewLedger(DefaultLimits(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	l.mu.Lock()
+	l.entries["exec-expired"] = &Entry{
+		ID:            "exec-expired",
+		Node:          "node-a",
+		RAMMB:         512,
+		CreatedAt:     time.Now().Add(-time.Hour),
+		LastHeartbeat: time.Now(),
+		ExpiresAt:     time.Now().Add(-time.Minute),
+	}
+	l.mu.Unlock()
+
+	if reclaimed := l.Reclaim(); reclaimed != 1 {
+		t.Fatalf("Reclaim() = %d, want 1 in-memory candidate", reclaimed)
+	}
+	if got := logs.String(); strings.Contains(got, `"msg":"maintenance receipt"`) {
+		t.Fatalf("success receipt emitted despite persistence failure:\n%s", got)
+	} else if !strings.Contains(got, "failed to persist ledger during reclaim") {
+		t.Fatalf("persistence failure log missing:\n%s", got)
+	}
+}
+
+func assertMaintenanceReceipt(t *testing.T, logs *bytes.Buffer, authority, objectType, objectID, oldValue, newValue string) {
+	t.Helper()
+	scanner := bufio.NewScanner(bytes.NewReader(logs.Bytes()))
+	for scanner.Scan() {
+		var record map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatalf("decode log record: %v", err)
+		}
+		if record["msg"] != "maintenance receipt" {
+			continue
+		}
+		for key, want := range map[string]string{
+			"source_authority": authority,
+			"object_type":      objectType,
+			"object_id":        objectID,
+			"old_value":        oldValue,
+			"new_value":        newValue,
+		} {
+			if record[key] != want {
+				t.Fatalf("%s = %#v, want %q (record=%v)", key, record[key], want, record)
+			}
+		}
+		return
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan logs: %v", err)
+	}
+	t.Fatalf("maintenance receipt not found in logs:\n%s", logs.String())
 }
 
 func TestAllocatableRAM(t *testing.T) {

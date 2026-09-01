@@ -74,7 +74,7 @@ Classification is based on live code inspection (`internal/`), test coverage, op
 | `internal/persist` | internal-only | Corrupt-file quarantine helpers; pure infrastructure |
 | `internal/publication` | internal-only | Snapshot component evidence assembly; no independent operator surface |
 | `internal/placement` | stable | Filter → rank → select; deterministic and well-tested |
-| `internal/repairs` | scaffolded | Type definitions only; no live wiring |
+| `internal/repairs` | internal-only | Structured advisory receipts emitted after persisted authority maintenance; no independent operator or control surface |
 | `internal/reservation` | stable | Double-entry ledger backs guarded execution, snapshot overlays, the `axis reservations` CLI, and `/v2/reservations` CRUD/heartbeat routes |
 | `internal/runtimectx` | stable | Unified live runtime loader; shared by stable read paths |
 | `internal/safety` | experimental | Execution blocker is live; structured analysis scaffolding exists but learned approvals are deliberately disabled |

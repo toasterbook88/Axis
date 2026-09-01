@@ -48,7 +48,7 @@ var packageStates = map[string]string{
 	"internal/persist":      InternalOnly,
 	"internal/placement":    Stable,
 	"internal/publication":  InternalOnly,
-	"internal/repairs":      Scaffolded,
+	"internal/repairs":      InternalOnly,
 	"internal/reservation":  Scaffolded,
 	"internal/runtimectx":   Stable,
 	"internal/safety":       Experimental,

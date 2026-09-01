@@ -128,6 +128,7 @@ Top-level commands currently registered in the binary:
 | `internal/discovery` | Fan-out discovery and UDP beacons | Node ordering is stabilized, live discovery now emits typed freshness metadata for the bounded beacon window, and the daemon cache has a long-lived beacon watcher for event-driven refreshes |
 | `internal/snapshot` | Build `ClusterSnapshot` | Best-tested package in the repo |
 | `internal/publication` | Build snapshot publication evidence | Internal-only helper that fingerprints the pre-overlay facts, frozen ledger entry set, and state input without claiming cross-store transactional coherence |
+| `internal/repairs` | Emit authority maintenance receipts | Internal-only structured slog helper; receipts are emitted only after state or ledger cleanup persists and never drive reconciliation |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, trigger-aware refresh metadata, and cached discovery-freshness exposure for config/state/skills, execution events, and long-lived discovery beacons |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences (keyed per model name), hard `PeakRAMMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
@@ -253,6 +254,7 @@ In practical terms:
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads and can surface typed discovery freshness plus publication component evidence in machine-readable output. Daemon metadata and snapshot payloads carry the same publication ID; cached clients reject missing or mismatched IDs and preserve snapshot-native freshness instead of backfilling it from a separate metadata response.
 - Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
 - Daemon freshness policy: 7 refresh triggers (startup, interval, manual, config-change, state-change, skills-change, beacon-change) plus execution events; staleness threshold is configurable (default 5 min, exposed via `stale_threshold_sec` in metadata); `--cached` is explicit and operator-facing, never a hidden fallback
+- State maintenance and ledger startup/explicit reconciliation emit typed structured receipts only after the cleaned authority has been persisted successfully; these logs are advisory and are never replayed into state
 
 ## Recommended Next Sequence
 

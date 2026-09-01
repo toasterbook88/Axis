@@ -1,12 +1,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -128,6 +130,48 @@ func TestRefreshStoresSnapshotAndMeta(t *testing.T) {
 	}
 	if persisted.Publication == nil || persisted.Publication.ID != snap.Publication.ID {
 		t.Fatalf("persisted publication identity mismatch: memory=%+v disk=%+v", snap.Publication, persisted.Publication)
+	}
+}
+
+func TestRefreshEmitsReceiptAfterPersistingStateMaintenance(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Now().UTC()
+	st := &state.ClusterState{Nodes: map[string]state.NodeState{
+		"alpha": {
+			ReservedMB:         1024,
+			LastPlacedAt:       now.Add(-10 * time.Minute),
+			ActiveTasks:        1,
+			ActiveExecs:        []string{"exec-stale"},
+			ExecReservationsMB: map[string]int64{"exec-stale": 1024},
+			ExecHeartbeatAt:    map[string]time.Time{"exec-stale": now.Add(-10 * time.Minute)},
+		},
+	}}
+	if err := st.Save(); err != nil {
+		t.Fatalf("save stale state: %v", err)
+	}
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	d := New(time.Minute, func(context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{Status: models.SnapshotHealthy}, nil
+	})
+	d.SetSnapshotPath("")
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	persisted, err := state.Load()
+	if err != nil {
+		t.Fatalf("load maintained state: %v", err)
+	}
+	if _, ok := persisted.Nodes["alpha"]; ok {
+		t.Fatal("state maintenance was not persisted before receipt")
+	}
+	if got := logs.String(); !strings.Contains(got, `"msg":"maintenance receipt"`) || !strings.Contains(got, `"source_authority":"state"`) {
+		t.Fatalf("state maintenance receipt missing from logs:\n%s", got)
 	}
 }
 

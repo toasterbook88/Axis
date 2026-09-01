@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/repairs"
 )
 
 // EventEmitter receives advisory reservation lifecycle events. It is optional;
@@ -419,7 +420,7 @@ func (l *Ledger) Reclaim() int {
 	}
 
 	l.mu.Lock()
-	reclaimed := l.reclaimInMemoryLocked()
+	reclaimed, receipts := l.reclaimInMemoryLocked()
 	var snap []*Entry
 	if reclaimed > 0 {
 		snap = l.snapshotEntriesLocked()
@@ -429,6 +430,8 @@ func (l *Ledger) Reclaim() int {
 	if reclaimed > 0 {
 		if err := l.writeSnapshot(snap); err != nil {
 			l.logger.Error("failed to persist ledger during reclaim", "error", err)
+		} else {
+			repairs.EmitAll(l.logger, receipts)
 		}
 	}
 	return reclaimed
@@ -448,9 +451,10 @@ func (l *Ledger) Prune() int {
 // reclaimInMemoryLocked removes stale/expired entries from the in-memory map
 // and returns the count reclaimed. The caller must hold l.mu and is responsible
 // for persisting a snapshot afterwards (outside l.mu).
-func (l *Ledger) reclaimInMemoryLocked() int {
-	now := l.now()
+func (l *Ledger) reclaimInMemoryLocked() (int, []repairs.RepairEvent) {
+	now := l.now().UTC()
 	reclaimed := 0
+	var receipts []repairs.RepairEvent
 	for id, e := range l.entries {
 		liveness := e.ClassifyLiveness(now, l.limits)
 		if liveness == LivenessExpired || liveness == LivenessStale {
@@ -463,9 +467,19 @@ func (l *Ledger) reclaimInMemoryLocked() int {
 				"ram_mb", e.RAMMB,
 				"reason", string(liveness),
 			)
+			receipts = append(receipts, repairs.RepairEvent{
+				Timestamp:       now,
+				Severity:        repairs.SeverityWarning,
+				SourceAuthority: "ledger",
+				ObjectType:      "reservation",
+				ObjectID:        id,
+				OldValue:        string(liveness),
+				NewValue:        "reclaimed",
+				Description:     "automatic ledger reconciliation removed an inactive reservation",
+			})
 		}
 	}
-	return reclaimed
+	return reclaimed, receipts
 }
 
 // AllocatableRAM returns the allocatable RAM on a node after subtracting
