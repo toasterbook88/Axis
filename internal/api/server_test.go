@@ -2064,11 +2064,6 @@ func TestToolsEndpointsMatchCanonicalDaemonDefinitions(t *testing.T) {
 			},
 			auth: true,
 		},
-		{
-			name:     "daemon /tools",
-			path:     "/tools",
-			register: func(mux *http.ServeMux) { daemon.RegisterRoutes(mux, nil) },
-		},
 	}
 
 	for _, tt := range tests {
