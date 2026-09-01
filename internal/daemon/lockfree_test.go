@@ -54,6 +54,10 @@ func TestDaemonReadsLockFreeDuringRefresh(t *testing.T) {
 				}
 
 				meta := d.Meta()
+				if meta.Ready && meta.PublicationID == "" {
+					errs <- "ready metadata missing publication identity"
+					return
+				}
 				if meta.RefreshCount < lastRefreshCount {
 					errs <- "Meta RefreshCount regressed"
 					return

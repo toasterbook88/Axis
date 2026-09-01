@@ -24,11 +24,13 @@ func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Metadata{
 				Source:             "daemon-cache",
 				Ready:              true,
+				PublicationID:      "pub-1",
 				RefreshIntervalSec: 60,
 			})
 		case "/snapshot":
 			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
-				Status: models.SnapshotHealthy,
+				Status:      models.SnapshotHealthy,
+				Publication: &models.PublicationEnvelope{ID: "pub-1"},
 				Summary: models.ClusterSummary{
 					TotalNodes: 3,
 				},
@@ -51,6 +53,44 @@ func TestFetchSnapshotReadsDaemonEndpoints(t *testing.T) {
 	}
 }
 
+func TestFetchSnapshotRejectsUnboundOrMixedPublications(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+	tests := []struct {
+		name       string
+		metaID     string
+		snapshotID string
+		want       string
+	}{
+		{name: "metadata missing id", snapshotID: "pub-1", want: "metadata missing publication_id"},
+		{name: "snapshot missing id", metaID: "pub-1", want: "snapshot payload missing publication.id"},
+		{name: "refresh raced reads", metaID: "pub-1", snapshotID: "pub-2", want: "snapshot publication changed during read"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/snapshot/meta":
+					_ = json.NewEncoder(w).Encode(Metadata{Source: "daemon-cache", Ready: true, PublicationID: tt.metaID})
+				case "/snapshot":
+					var publication *models.PublicationEnvelope
+					if tt.snapshotID != "" {
+						publication = &models.PublicationEnvelope{ID: tt.snapshotID}
+					}
+					_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{Status: models.SnapshotHealthy, Publication: publication})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			if _, _, err := FetchSnapshot(context.Background(), server.URL); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("FetchSnapshot error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
 	t.Setenv(auth.TokenEnvVar, "tok")
 
@@ -60,6 +100,7 @@ func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Metadata{
 				Source:             "daemon-cache",
 				Ready:              true,
+				PublicationID:      "pub-1",
 				RefreshIntervalSec: 60,
 				CacheAgeSec:        187,
 				Stale:              true,
@@ -67,7 +108,8 @@ func TestFetchSnapshotSurfacesStaleCacheWarning(t *testing.T) {
 			})
 		case "/snapshot":
 			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
-				Status: models.SnapshotHealthy,
+				Status:      models.SnapshotHealthy,
+				Publication: &models.PublicationEnvelope{ID: "pub-1"},
 				Summary: models.ClusterSummary{
 					TotalNodes: 2,
 				},
@@ -113,6 +155,7 @@ func TestFetchSnapshotTruncatesLongStaleNodeLists(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Metadata{
 				Source:             "daemon-cache",
 				Ready:              true,
+				PublicationID:      "pub-1",
 				RefreshIntervalSec: 60,
 				CacheAgeSec:        60,
 				Stale:              true,
@@ -120,7 +163,8 @@ func TestFetchSnapshotTruncatesLongStaleNodeLists(t *testing.T) {
 			})
 		case "/snapshot":
 			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
-				Status: models.SnapshotHealthy,
+				Status:      models.SnapshotHealthy,
+				Publication: &models.PublicationEnvelope{ID: "pub-1"},
 				Summary: models.ClusterSummary{
 					TotalNodes: 12,
 				},

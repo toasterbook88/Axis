@@ -113,8 +113,9 @@ func TestSummaryCommandDaemonCache(t *testing.T) {
 	color.NoColor = true
 	defer func() { color.NoColor = false }()
 
-	meta := daemon.Metadata{Version: "v1.0.0", CacheAgeSec: 12, Ready: true}
+	meta := daemon.Metadata{Version: "v1.0.0", CacheAgeSec: 12, Ready: true, PublicationID: "pub-1"}
 	snap := models.ClusterSnapshot{
+		Publication: &models.PublicationEnvelope{ID: "pub-1"},
 		Summary: models.ClusterSummary{
 			TotalRAMMB:         16 * 1024,
 			TotalFreeRAMMB:     8 * 1024,

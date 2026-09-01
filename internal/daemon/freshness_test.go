@@ -18,8 +18,9 @@ func TestFetchSnapshotBackfillsFreshnessFromMetadata(t *testing.T) {
 		switch r.URL.Path {
 		case "/snapshot/meta":
 			_ = json.NewEncoder(w).Encode(Metadata{
-				Source: "daemon-cache",
-				Ready:  true,
+				Source:        "daemon-cache",
+				Ready:         true,
+				PublicationID: "pub-1",
 				Freshness: &models.DiscoveryFreshness{
 					Source:           "beacon-registry",
 					ExpectedWindowMS: 2250,
@@ -30,7 +31,8 @@ func TestFetchSnapshotBackfillsFreshnessFromMetadata(t *testing.T) {
 			})
 		case "/snapshot":
 			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
-				Status: models.SnapshotHealthy,
+				Status:      models.SnapshotHealthy,
+				Publication: &models.PublicationEnvelope{ID: "pub-1"},
 			})
 		default:
 			http.NotFound(w, r)
@@ -52,7 +54,8 @@ func TestFetchSnapshotBackfillsFreshnessFromMetadata(t *testing.T) {
 
 func TestHealthPayloadIncludesDiscoveryFreshness(t *testing.T) {
 	payload := HealthPayload(&Metadata{
-		Ready: true,
+		Ready:         true,
+		PublicationID: "pub-1",
 		Freshness: &models.DiscoveryFreshness{
 			Source:           "beacon-registry",
 			ExpectedWindowMS: 2250,
@@ -68,5 +71,8 @@ func TestHealthPayloadIncludesDiscoveryFreshness(t *testing.T) {
 	freshness, ok := raw.(*models.DiscoveryFreshness)
 	if !ok || freshness.Source != "beacon-registry" {
 		t.Fatalf("unexpected discovery_freshness payload: %#v", raw)
+	}
+	if got := payload["publication_id"]; got != "pub-1" {
+		t.Fatalf("publication_id = %#v, want pub-1", got)
 	}
 }

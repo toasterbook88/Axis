@@ -1008,7 +1008,8 @@ func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, &fakeCache{
 		snap: &models.ClusterSnapshot{
-			Status: models.SnapshotHealthy,
+			Status:      models.SnapshotHealthy,
+			Publication: &models.PublicationEnvelope{ID: "pub-1"},
 			Summary: models.ClusterSummary{
 				TotalNodes: 1,
 			},
@@ -1016,6 +1017,7 @@ func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 		meta: daemon.Metadata{
 			Source:             "daemon-cache",
 			Ready:              true,
+			PublicationID:      "pub-1",
 			RefreshIntervalSec: 60,
 		},
 	}, "test-token")
@@ -1036,6 +1038,9 @@ func TestSnapshotEndpointReturnsCachedSnapshot(t *testing.T) {
 	if payload.Summary.TotalNodes != 1 {
 		t.Fatalf("expected total nodes 1, got %d", payload.Summary.TotalNodes)
 	}
+	if payload.Publication == nil || payload.Publication.ID != "pub-1" {
+		t.Fatalf("expected snapshot publication pub-1, got %+v", payload.Publication)
+	}
 }
 
 func TestSnapshotMetaEndpointReturnsCacheMetadata(t *testing.T) {
@@ -1044,6 +1049,7 @@ func TestSnapshotMetaEndpointReturnsCacheMetadata(t *testing.T) {
 		meta: daemon.Metadata{
 			Source:             "daemon-cache",
 			Ready:              true,
+			PublicationID:      "pub-1",
 			RefreshIntervalSec: 60,
 		},
 	}, "test-token")
@@ -1069,6 +1075,9 @@ func TestSnapshotMetaEndpointReturnsCacheMetadata(t *testing.T) {
 	}
 	if payload.RefreshIntervalSec != 60 {
 		t.Fatalf("expected refresh interval sec 60, got %d", payload.RefreshIntervalSec)
+	}
+	if payload.PublicationID != "pub-1" {
+		t.Fatalf("expected publication_id pub-1, got %q", payload.PublicationID)
 	}
 }
 

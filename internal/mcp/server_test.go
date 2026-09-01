@@ -29,10 +29,12 @@ func TestCurrentSnapshotUsesCacheWhenRequested(t *testing.T) {
 				Source:             "daemon-cache",
 				Ready:              true,
 				RefreshIntervalSec: 60,
+				PublicationID:      "pub-1",
 			})
 		case "/snapshot":
 			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
-				Status: models.SnapshotHealthy,
+				Publication: &models.PublicationEnvelope{ID: "pub-1"},
+				Status:      models.SnapshotHealthy,
 				Summary: models.ClusterSummary{
 					TotalNodes: 2,
 				},
