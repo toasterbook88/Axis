@@ -163,7 +163,7 @@ The repair types exist as a foundation for future authority-aware diagnostics bu
 | Corrupt skills file recovery | `internal/skills/skills.go` | Same pattern via `persist.QuarantineCorruptFile` |
 | Ledger stale entry reclaim | `internal/reservation/ledger.go` | Logs via `slog.Info`, no structured `RepairEvent` |
 | State heartbeat/PID reclaim | `internal/state/state.go` | Silent normalization, no logs or events |
-| Snapshot freshness backfill | `internal/daemon/client.go` | Warns via `models.Warning`, no repair event |
+| Snapshot discovery warning | `internal/daemon/client.go` | Surfaces only the warning already carried by snapshot-native freshness; no repair event |
 
 When repair events are wired, they will be emitted synchronously at the repair site and surfaced to operators via doctor, metrics, and `--json`/`--ndjson` output.
 
