@@ -120,6 +120,63 @@ if grep -qF 'cmdAI := aiCmd()' cmd/axis/main.go; then
   reject_stale_claim 'Powers `axis llm`' docs/current-state.md
 fi
 
+# --- 4b. Authority-doc code quotes -------------------------------------------
+# docs/authority-reservation.md, docs/authority-transition.md, and
+# docs/reservations.md quote the reservation overlay's legacy-state branch
+# from internal/snapshotview/overlay.go. When the overlay condition changes,
+# those quoted snippets must be updated in the same change. Anchor both
+# directions: the docs must not quote a condition the code no longer contains,
+# and the code's legacy-state fallback must stay recognizable to the docs.
+
+overlay_legacy="$(grep -nF 'ledger == nil && st != nil' internal/snapshotview/overlay.go || true)"
+if [[ -n "$overlay_legacy" ]]; then
+  # Code still uses the explicit legacy-state fallback: docs must quote the
+  # current form (else-branch) and must not resurrect the pre-#372 form.
+  for doc in docs/authority-reservation.md docs/authority-transition.md docs/reservations.md; do
+    grep -qF '} else if st != nil && st.Nodes != nil {' "$doc" \
+      || fail "$doc no longer quotes the current overlay legacy-state branch from internal/snapshotview/overlay.go"
+    if grep -qF 'if reserved <= 0 && st != nil' "$doc"; then
+      fail "$doc still quotes the pre-authoritative-zero overlay condition (reserved <= 0); update the quoted snippet to match internal/snapshotview/overlay.go"
+    fi
+  done
+  if ! grep -qF 'including zero' docs/authority-reservation.md \
+     || ! grep -qF 'including zero' docs/authority-transition.md; then
+    fail "overlay treats a supplied ledger as authoritative including zero, but the authority docs no longer state that contract"
+  fi
+else
+  # Legacy fallback removed (transition phase 4+): docs must stop quoting it.
+  if grep -lF 'else if st != nil && st.Nodes != nil' \
+      docs/authority-reservation.md docs/authority-transition.md docs/reservations.md >/dev/null 2>&1; then
+    fail "overlay.go no longer has the legacy-state fallback but authority docs still quote it"
+  fi
+fi
+
+# Authority-reservation grep invariants (docs/authority-reservation.md §6):
+# the ledger mutation API must only be called from execution and the advisory
+# lease surfaces (API /v2/reservations, MCP triangle); a new caller outside
+# those packages requires updating the doc invariant with the operator.
+while IFS= read -r hit; do
+  caller="$(printf '%s' "$hit" | cut -d: -f1)"
+  case "$caller" in
+    internal/execution/*|internal/api/v2.go|internal/mcp/triangle.go) ;;
+    *) fail "new ledger.Reserve/Release/Heartbeat caller outside documented surfaces: $hit (docs/authority-reservation.md §6)" ;;
+  esac
+done < <(grep -rn '\.Reserve(\|\.Release(\|\.Heartbeat(' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/reservation/')
+
+# The snapshot reservation view is derived/read-only: no package other than
+# the overlay may assign RAMReservedMB.
+ram_writers="$(grep -rn 'RAMReservedMB\s*=' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/snapshotview/' || true)"
+[[ -z "$ram_writers" ]] \
+  || fail "RAMReservedMB assigned outside internal/snapshotview (derived view must stay read-only): $ram_writers"
+
+# The daemon documents that it watches state.json and skills.json but not
+# ledger.json (docs/authority-reservation.md §5). Keep that claim mechanical.
+if grep -qF 'func (d *Daemon) WatchLedger(' internal/daemon/daemon.go; then
+  if grep -qF 'does not watch `ledger.json`' docs/authority-reservation.md; then
+    fail "daemon now has WatchLedger but docs/authority-reservation.md still claims ledger.json is not watched"
+  fi
+fi
+
 # --- 5. CHANGELOG completeness ----------------------------------------------
 # Every released tag >= v0.7.0 (CHANGELOG's coverage floor) must have a
 # "## vX.Y.Z" header. Skipped silently when no tags are available (e.g. a

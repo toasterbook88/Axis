@@ -2,6 +2,8 @@
 
 ### Features
 
+* **Docs:** Mechanical authority-doc regression guards in `hack/verify-doc-facts.sh`. The reservation-overlay code quoted in `docs/authority-reservation.md`, `docs/authority-transition.md`, and `docs/reservations.md` must match the live `internal/snapshotview/overlay.go` legacy-state branch (both directions: stale quotes fail, and removal of the fallback forces doc updates). New checks also pin the `docs/authority-reservation.md` §6 grep invariants mechanically: ledger `Reserve`/`Release`/`Heartbeat` callers are restricted to the documented surfaces (execution, `/v2/reservations`, MCP triangle), `RAMReservedMB` stays assignment-read-only inside `internal/snapshotview`, and a future `WatchLedger` daemon watcher cannot coexist with the doc claim that `ledger.json` is not watched.
+
 * **Facts:** Inventory on-disk weight artifacts (`DiskWeights`) during local and remote fact collection. Catalog-first (HuggingFace hub `models--*`, ollama manifests, systemd `--model-path`/`-m`), then a bounded per-volume find of GGUF/safetensors above 20 MiB. Shards group to one tree; empty name-only directories are not weights; GGUF files must have magic `GGUF`. Scan is time-capped and may set `disk_weights_truncated`. `axis facts` prints the list. Distinct from resident (loaded) models. Remote scan skips NFS/CIFS/SSHFS and other network df sources, enforces a global 400-file cap (not per-mount), and applies an 8s wall-clock deadline. Safetensors below the size floor and Git LFS pointer files are not counted as trees.
 
 ### Bug Fixes
