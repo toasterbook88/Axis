@@ -27,6 +27,10 @@ The v1 envelope is:
 - `warnings` is always an array of `{kind,message}` objects, including when it
   is empty.
 
+The daemon metadata inside `data` includes `publication_id` whenever the cache
+is ready. It identifies the exact snapshot publication described by the
+snapshot-bound metadata fields and matches `publication.id` from `/snapshot`.
+
 Other commands with `--format json` retain their command-specific payloads.
 They must still keep stdout parseable and send diagnostic prose to stderr; they
 do not claim the `axis.output/v1` envelope until explicitly migrated.

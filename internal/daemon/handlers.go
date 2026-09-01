@@ -21,6 +21,9 @@ func HealthPayload(meta *Metadata) map[string]any {
 	}
 
 	payload["cache_ready"] = meta.Ready
+	if meta.PublicationID != "" {
+		payload["publication_id"] = meta.PublicationID
+	}
 	payload["cache_stale"] = meta.Stale
 	payload["cache_age_sec"] = meta.CacheAgeSec
 	payload["refresh_count"] = meta.RefreshCount
