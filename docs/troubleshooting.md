@@ -324,13 +324,16 @@ axis reservations release --force <reservation-id>
 
 **Problem:** `~/.axis/ledger.json` corrupt
 
+AXIS leaves the canonical file in place and fails runtime reads and daemon
+refreshes closed. It does not reinterpret a decode failure as an empty ledger.
+
 **Solution:**
 ```bash
 # Backup
 cp ~/.axis/ledger.json ~/.axis/ledger.json.corrupt
 
-# AXIS will auto-recover on next write
-# Or clear manually (loses all reservations)
+# Restore a known-good copy, or clear manually only if accepting the loss of
+# every recorded reservation.
 rm ~/.axis/ledger.json
 ```
 

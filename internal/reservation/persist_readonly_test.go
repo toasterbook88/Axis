@@ -81,3 +81,33 @@ func TestLoadReadOnlyDoesNotQuarantineCorruptLedger(t *testing.T) {
 		t.Fatalf("read-only load created quarantine files: %v", matches)
 	}
 }
+
+func TestLoadDoesNotQuarantineCorruptLedger(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("{not-json")
+	if err := os.WriteFile(Path(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ledger := NewLedger(DefaultLimits(), nil)
+	if err := ledger.Load(); err == nil {
+		t.Fatal("expected corrupt-ledger error")
+	}
+	after, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatalf("load moved the authoritative ledger aside: %v", err)
+	}
+	if !bytes.Equal(raw, after) {
+		t.Errorf("corrupt ledger changed\n got: %s\nwant: %s", after, raw)
+	}
+	matches, err := filepath.Glob(Path() + ".corrupt-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("load created quarantine files: %v", matches)
+	}
+}

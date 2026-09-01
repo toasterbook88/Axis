@@ -62,7 +62,8 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 
 // ApplyReservationView overlays locally persisted reservations onto a snapshot
 // so read paths can reason about allocatable RAM without requiring daemon-only
-// semantics.
+// semantics. When a ledger is supplied, it is authoritative including when it
+// reports zero; state is used only by legacy callers without a ledger.
 func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, ledger *reservation.Ledger) {
 	if snap == nil {
 		return
@@ -87,7 +88,7 @@ func ApplyReservationView(snap *models.ClusterSnapshot, st *state.ClusterState, 
 				}
 			}
 		}
-		if reserved <= 0 && st != nil && st.Nodes != nil {
+		if ledger == nil && st != nil && st.Nodes != nil {
 			if ns, ok := st.Nodes[node.Name]; ok {
 				reserved = ns.ReservedMB
 			}

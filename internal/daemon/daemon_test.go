@@ -156,6 +156,45 @@ func TestRefreshFailurePreservesPreviousSnapshot(t *testing.T) {
 	}
 }
 
+func TestRefreshLedgerLoadFailurePreservesPreviousSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	freeRAM := int64(4096)
+	d := New(time.Minute, func(context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{{
+				Name:      "alpha",
+				Status:    models.StatusComplete,
+				Resources: &models.Resources{RAMTotalMB: 8192, RAMFreeMB: freeRAM},
+			}},
+			Summary: models.ClusterSummary{TotalFreeRAMMB: freeRAM},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if err := os.WriteFile(reservation.Path(), []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	freeRAM = 2048
+	if err := d.Refresh(context.Background()); err == nil {
+		t.Fatal("expected refresh to fail when ledger cannot load")
+	}
+
+	snap, ok := d.Snapshot()
+	if !ok {
+		t.Fatal("expected previous snapshot to remain available")
+	}
+	if got := snap.Summary.TotalFreeRAMMB; got != 4096 {
+		t.Fatalf("previous snapshot replaced after ledger failure: got free RAM %d, want 4096", got)
+	}
+	if got := d.Meta().LastError; !strings.Contains(got, "load reservation ledger") {
+		t.Fatalf("expected ledger failure in metadata, got %q", got)
+	}
+}
+
 func TestInvalidateClearsSnapshotAndRemovesPersistedFile(t *testing.T) {
 	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{

@@ -125,15 +125,21 @@ The derived snapshot view (`internal/snapshotview/overlay.go`) resolves this at 
 reserved := int64(0)
 if ledger != nil {
     reserved = ledger.NodeSummaryFor(node.Name).ReservedRAMMB
-}
-if reserved <= 0 && st != nil && st.Nodes != nil {
+} else if st != nil && st.Nodes != nil {
     if ns, ok := st.Nodes[node.Name]; ok {
         reserved = ns.ReservedMB
     }
 }
 ```
 
-**Ledger wins; state is a fallback for zero.** This means state under-reporting is invisible to the operator, while ledger under-reporting would be visible because the fallback would not fire.
+**A supplied ledger is authoritative, including zero.** Legacy state is consulted
+only when the caller has no ledger. This prevents stale state from resurrecting a
+reservation that the ledger does not contain.
+
+A ledger is supplied to production overlays only after a successful load. If
+the canonical ledger cannot be read or decoded, live runtime loading and daemon
+refresh fail closed; the daemon retains its last valid snapshot, and the ledger
+file remains in place for operator repair.
 
 Neither reclamation path emits events or warnings. A daemon restart can silently drop missed-heartbeat reservations, and every CLI invocation that calls `state.Load()` can rewrite `state.json` without notice.
 

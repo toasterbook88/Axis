@@ -2,6 +2,7 @@ package runtimectx
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
@@ -55,8 +56,8 @@ func Load(ctx context.Context) (*Context, error) {
 	}
 
 	ledger, ledgerErr := loadLedger()
-	if ledgerErr != nil && ledger == nil {
-		return nil, ledgerErr
+	if ledgerErr != nil {
+		return nil, fmt.Errorf("load reservation ledger: %w", ledgerErr)
 	}
 	if ledger != nil {
 		for _, n := range snap.Nodes {

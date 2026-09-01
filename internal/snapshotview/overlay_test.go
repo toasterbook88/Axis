@@ -319,6 +319,50 @@ func TestApplyReservationViewEmptyNodes(t *testing.T) {
 	}
 }
 
+func TestApplyReservationViewLedgerIsAuthoritativeIncludingZero(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			baseNode("ledger-zero", 4096),
+			baseNode("ledger-reserved", 4096),
+		},
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"ledger-zero":     {ReservedMB: 1024},
+			"ledger-reserved": {ReservedMB: 2048},
+		},
+	}
+
+	limits := reservation.DefaultLimits()
+	limits.SystemReserveMB = 0
+	t.Setenv("HOME", t.TempDir())
+	ledger := reservation.NewLedger(limits, nil)
+	ledger.SetNodeCapacity("ledger-zero", 4096)
+	ledger.SetNodeCapacity("ledger-reserved", 4096)
+	if _, err := ledger.Reserve(reservation.Entry{
+		ID:    "ledger-reservation",
+		Node:  "ledger-reserved",
+		RAMMB: 512,
+	}); err != nil {
+		t.Fatalf("reserve from ledger: %v", err)
+	}
+
+	snapshotview.ApplyReservationView(snap, st, ledger)
+
+	if got := snap.Nodes[0].RAMReservedMB; got != 0 {
+		t.Fatalf("authoritative ledger zero replaced by stale state reservation: got %d, want 0", got)
+	}
+	if got := snap.Nodes[0].RAMAllocatableMB; got != 4096 {
+		t.Fatalf("ledger-zero allocatable: got %d, want 4096", got)
+	}
+	if got := snap.Nodes[1].RAMReservedMB; got != 512 {
+		t.Fatalf("ledger reservation: got %d, want 512", got)
+	}
+	if got := snap.Summary.TotalReservedMB; got != 512 {
+		t.Fatalf("summary reserved: got %d, want 512", got)
+	}
+}
+
 func TestApplyReservationViewParentInheritance(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
@@ -363,7 +407,12 @@ func TestApplyReservationViewParentInheritance(t *testing.T) {
 
 	// With AXIS_EXECUTION_PARENT_ID set to parent-id, reservation should be inherited (subtracted)
 	t.Setenv("AXIS_EXECUTION_PARENT_ID", "parent-id")
-	snapshotview.ApplyReservationView(snap, nil, ledger)
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"node-a": {ReservedMB: 2048},
+		},
+	}
+	snapshotview.ApplyReservationView(snap, st, ledger)
 	if snap.Nodes[0].RAMReservedMB != 0 {
 		t.Errorf("expected 0MB reserved after parent subtraction, got %d", snap.Nodes[0].RAMReservedMB)
 	}

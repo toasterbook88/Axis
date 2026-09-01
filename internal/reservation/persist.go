@@ -112,8 +112,7 @@ func (l *Ledger) Load() error {
 
 	var df diskFormat
 	if err := json.Unmarshal(data, &df); err != nil {
-		warnErr := persist.QuarantineCorruptFile(path, err)
-		return warnErr
+		return fmt.Errorf("decode reservation ledger %s: %w", path, err)
 	}
 
 	l.mu.Lock()

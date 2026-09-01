@@ -3,6 +3,7 @@ package runtimectx
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
@@ -113,6 +114,43 @@ func TestLoadFailsOnHardStateError(t *testing.T) {
 
 	if _, err := Load(context.Background()); err == nil || err.Error() != "state hard fail" {
 		t.Fatalf("expected hard state error, got %v", err)
+	}
+}
+
+func TestLoadFailsWhenLedgerInstanceCouldNotLoad(t *testing.T) {
+	restore := stubRuntimeDeps(t,
+		func(string) (*config.Config, error) {
+			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.internal", SSHUser: "me"}}}, nil
+		},
+		func(context.Context, *config.Config) discovery.Result {
+			return discovery.Result{Nodes: []models.NodeFacts{{
+				Name:      "node-a",
+				Resources: &models.Resources{RAMTotalMB: 8192, RAMFreeMB: 4096},
+			}}}
+		},
+		func(nodes []models.NodeFacts) *models.ClusterSnapshot {
+			return &models.ClusterSnapshot{Nodes: nodes}
+		},
+		func() (*state.ClusterState, error) {
+			return &state.ClusterState{Nodes: map[string]state.NodeState{
+				"node-a": {ReservedMB: 1024},
+			}}, nil
+		},
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {
+			t.Fatal("reservation view must not be published when ledger authority is unavailable")
+		},
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	defer restore()
+
+	prevLoadLedger := loadLedger
+	loadLedger = func() (*reservation.Ledger, error) {
+		return reservation.NewLedger(reservation.DefaultLimits(), nil), errors.New("ledger unavailable")
+	}
+	defer func() { loadLedger = prevLoadLedger }()
+
+	if _, err := Load(context.Background()); err == nil || !strings.Contains(err.Error(), "load reservation ledger: ledger unavailable") {
+		t.Fatalf("expected ledger load error, got %v", err)
 	}
 }
 
