@@ -140,6 +140,7 @@ internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
                       pressure, thermal, battery, network, TurboQuant, AFM
 internal/discovery/   Fan-out configured nodes + opt-in UDP beacons
 internal/snapshot/    Assemble ClusterSnapshot from []NodeFacts
+internal/publication/ Build per-snapshot component evidence envelopes
 internal/placement/   Deterministic filter → rank → select (FitScore 0–100)
 internal/runtimectx/  Unified live runtime loader for read surfaces
 internal/transport/   SSH execution layer (host-key verification must stay on)
