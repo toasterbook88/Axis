@@ -47,6 +47,7 @@ var packageStates = map[string]string{
 	"internal/netutil":      InternalOnly,
 	"internal/persist":      InternalOnly,
 	"internal/placement":    Stable,
+	"internal/publication":  InternalOnly,
 	"internal/repairs":      Scaffolded,
 	"internal/reservation":  Scaffolded,
 	"internal/runtimectx":   Stable,

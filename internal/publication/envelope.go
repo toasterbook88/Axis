@@ -1,4 +1,4 @@
-// Package publication builds evidence envelopes for assembled snapshots.
+// Package publication is INTERNAL-ONLY — evidence envelopes for assembled snapshots.
 package publication
 
 import (

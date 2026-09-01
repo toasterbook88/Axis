@@ -871,6 +871,7 @@ func hashSnapshot(snap *models.ClusterSnapshot) [sha256.Size]byte {
 		publicationCopy.ID = ""
 		publicationCopy.AssembledAt = time.Time{}
 		publicationCopy.CacheAgeSec = 0
+		publicationCopy.Facts.ObservedAt = time.Time{}
 		snapCopy.Publication = &publicationCopy
 	}
 

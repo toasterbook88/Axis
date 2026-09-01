@@ -1309,6 +1309,7 @@ func TestHashSnapshotFieldsTripwire(t *testing.T) {
 			AssembledAt: time.Now(),
 			Facts: models.PublicationFactsEvidence{
 				Available:       true,
+				ObservedAt:      time.Now(),
 				DiscoveryDigest: "sha256:facts-one",
 			},
 		},
@@ -1329,9 +1330,10 @@ func TestHashSnapshotFieldsTripwire(t *testing.T) {
 	publicationIdentity.ID = "pub-two"
 	publicationIdentity.AssembledAt = publicationIdentity.AssembledAt.Add(time.Hour)
 	publicationIdentity.CacheAgeSec = 99
+	publicationIdentity.Facts.ObservedAt = publicationIdentity.Facts.ObservedAt.Add(time.Hour)
 	snapPublicationIdentity.Publication = &publicationIdentity
 	if hashSnapshot(&snapPublicationIdentity) != baseHash {
-		t.Error("expected publication identity and age not to change snapshot content hash")
+		t.Error("expected publication identity and observation times not to change snapshot content hash")
 	}
 
 	// Component evidence is semantic content and must trip the debounce hash.

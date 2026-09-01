@@ -140,7 +140,6 @@ internal/facts/       Local + SSH remote fact collection, tool probes, GPU,
                       pressure, thermal, battery, network, TurboQuant, AFM
 internal/discovery/   Fan-out configured nodes + opt-in UDP beacons
 internal/snapshot/    Assemble ClusterSnapshot from []NodeFacts
-internal/publication/ Build per-snapshot component evidence envelopes
 internal/placement/   Deterministic filter → rank → select (FitScore 0–100)
 internal/runtimectx/  Unified live runtime loader for read surfaces
 internal/transport/   SSH execution layer (host-key verification must stay on)
@@ -172,6 +171,7 @@ internal/models/      Core types: NodeFacts, ClusterSnapshot, PlacementDecision
 internal/buildinfo/   Version, commit, date, go version (ldflags injection)
 internal/ui/          Terminal colors, tables, spinners, help templates
 internal/persist/     Corrupt-file quarantine + warning recovery
+internal/publication/ Build per-snapshot component evidence envelopes
 internal/snapshotview/ Deep clone + reservation overlay on snapshots
 internal/turboexec/   TurboQuant flag injection for execution
 ```

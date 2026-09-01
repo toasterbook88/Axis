@@ -33,9 +33,10 @@ digest and rendered allocatable capacity cannot describe different ledger
 reads. State and facts are also local immutable inputs after they are captured
 for the assembly.
 
-Daemon content-change debounce ignores the publication ID, assembly time, and
-read-time cache age. It retains component digests as semantic content, so a
-changed authority input can still notify snapshot subscribers.
+Daemon content-change debounce ignores the publication ID, assembly time, facts
+observation time, and read-time cache age. It retains component digests as
+semantic content, so a changed authority input can still notify snapshot
+subscribers.
 
 ## Deferred binding
 
