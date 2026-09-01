@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+* **Reservations:** Treat an available reservation ledger as authoritative even when it reports zero, so stale legacy `state.json` values cannot reintroduce reservations into snapshot views.
 * **Doctor:** Report daemon ownership instead of reachability alone. `axis doctor` now fails on more than one axis daemon serving the same API address and on a daemon whose executable inode has been deleted or replaced, and reports socket ownership at the daemon address (live listener, stale socket file, non-socket squatter, missing path, and whether the `<addr>.lock` guard is held) plus mesh UDP port contention as warnings. All probes are observational: doctor never kills a process, unlinks a socket, or takes the ownership lock.
 
 ## v0.15.0 (2026-08-25)

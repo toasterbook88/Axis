@@ -20,7 +20,7 @@ All authority moves must follow the six-phase sequence below. Skipping a phase i
 |-------|------|------|-----------------|
 | 1 | **Dual-write** | New authority receives every write that goes to the old authority. | None — old authority is still read. |
 | 2 | **Shadow-read** | New authority is read in parallel with the old authority; results are compared but the old authority still wins. | Observability only — divergence is logged/warned. |
-| 3 | **Read-cutover** | New authority becomes the primary read source; old authority is read only as a fallback (zero-value fallback). | Reads now reflect new authority. |
+| 3 | **Read-cutover** | New authority becomes the primary read source; old authority is consulted only when the new authority is unavailable under an explicit compatibility mode. | Reads now reflect new authority. |
 | 4 | **Snapshot-demotion** | Old authority stops being included in `ClusterSnapshot` and API responses. | CLI/API no longer expose old fields. |
 | 5 | **Mutation-prohibition** | Writes to the old authority are rejected or redirected to the new authority. | Old paths are hard-deprecated. |
 | 6 | **Legacy-removal** | Old code and files are deleted after a deprecation window. | Zero footprint. |
@@ -47,31 +47,35 @@ The new authority is queried alongside the old authority. If the answers differ,
 
 **Concrete AXIS example:**
 
-`internal/snapshotview/overlay.go` already performs a shadow-read for reservations:
+`internal/snapshotview/overlay.go` now makes the authority branch explicit:
 
 ```go
 reserved := int64(0)
 if ledger != nil {
     reserved = ledger.NodeSummaryFor(node.Name).ReservedRAMMB
-}
-if reserved <= 0 && st != nil && st.Nodes != nil {
+} else if st != nil && st.Nodes != nil {
     if ns, ok := st.Nodes[node.Name]; ok {
         reserved = ns.ReservedMB
     }
 }
 ```
 
-This is a **read-cutover** (phase 3), not a shadow-read, because there is no divergence warning. A proper shadow-read would log when `ledger.ReservedRAMMB != state.ReservedMB`.
+Ledger presence is authoritative, including zero. This is not a shadow-read
+because no comparison is performed; callers without a ledger retain an explicit
+legacy-state compatibility path.
 
 ### 2.3 Phase 3 — Read-cutover
 
-The new authority becomes the primary source. The old authority is consulted only when the new authority returns a zero value.
+The new authority becomes the primary source. The old authority is consulted
+only when the new authority is unavailable and a compatibility path is
+explicitly selected. A valid zero from the new authority must remain zero.
 
 **Current AXIS state:**
 
 - `Ledger.AllocatableRAM()` is authoritative for placement.
-- `state.json` `ReservedMB` is a fallback when the ledger value is zero.
-- This means the state fallback can mask ledger under-reporting.
+- A supplied ledger is authoritative for snapshot reservation overlays,
+  including when it reports zero.
+- `state.json` `ReservedMB` is used only by callers that supply no ledger.
 
 **Cutover checklist:**
 
@@ -85,7 +89,10 @@ Old-authority fields are removed from `ClusterSnapshot` and API responses. Consu
 
 **In AXIS today:**
 
-`ClusterSnapshot` does not embed `ReservedMB` directly; it is applied via `snapshotview.ApplyReservationView()`. Demotion here means removing the state-file fallback inside `overlay.go` so only the ledger contributes to `RAMReservedMB`.
+`ClusterSnapshot` does not embed `ReservedMB` directly; it is applied via
+`snapshotview.ApplyReservationView()`. When a ledger is supplied, only the
+ledger contributes to `RAMReservedMB`; the state path remains solely for legacy
+callers without a ledger.
 
 ### 2.5 Phase 5 — Mutation-prohibition
 
