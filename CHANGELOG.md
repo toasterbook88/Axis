@@ -1,4 +1,4 @@
-## Unreleased
+## v0.16.0 (2026-09-01)
 
 ### Features
 
@@ -13,6 +13,9 @@
 
 * **Reservations:** Treat a successfully loaded reservation ledger as authoritative even when it reports zero, so stale legacy `state.json` values cannot reintroduce reservations into snapshot views. Ledger load failures now fail runtime reads and daemon refreshes closed, preserving the last valid snapshot and the corrupt ledger for operator repair instead of silently publishing an empty authority.
 * **Doctor:** Report daemon ownership instead of reachability alone. `axis doctor` now fails on more than one axis daemon serving the same API address and on a daemon whose executable inode has been deleted or replaced, and reports socket ownership at the daemon address (live listener, stale socket file, non-socket squatter, missing path, and whether the `<addr>.lock` guard is held) plus mesh UDP port contention as warnings. All probes are observational: doctor never kills a process, unlinks a socket, or takes the ownership lock.
+* **Daemon:** Take exclusive ownership of the API socket. A second daemon on the same address now fails to start with a clear error instead of unlinking the live socket and silently orphaning the incumbent, which kept serving a divergent snapshot cache on an unlinked inode. Ownership combines a non-blocking advisory lock on `<addr>.lock` with a connect probe, so a socket file left by a crashed daemon is still reclaimed. TCP addresses were already exclusive.
+* **Daemon:** Serve the mesh route the CLI actually requests. `axis daemon mesh` returned 404 against every deployed daemon because the CLI called `/mesh`, which only an unused internal route registration ever defined; the production mux served `/v2/mesh`. The CLI now requests `/v2/mesh`, which works against already-running daemons without a restart, and `/mesh` is registered on the production mux as an alias for older clients.
+* **Execution:** Upload remote execution context with base64 rather than a POSIX heredoc, so context content equal to the heredoc delimiter can no longer terminate the document early and execute shell on the target node.
 
 ## v0.15.0 (2026-08-25)
 
