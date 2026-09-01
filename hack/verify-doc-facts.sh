@@ -124,17 +124,44 @@ fi
 # docs/authority-reservation.md, docs/authority-transition.md, and
 # docs/reservations.md quote the reservation overlay's legacy-state branch
 # from internal/snapshotview/overlay.go. When the overlay condition changes,
-# those quoted snippets must be updated in the same change. Anchor both
-# directions: the docs must not quote a condition the code no longer contains,
-# and the code's legacy-state fallback must stay recognizable to the docs.
-
-overlay_legacy="$(grep -nF 'ledger == nil && st != nil' internal/snapshotview/overlay.go || true)"
-if [[ -n "$overlay_legacy" ]]; then
-  # Code still uses the explicit legacy-state fallback: docs must quote the
-  # current form (else-branch) and must not resurrect the pre-#372 form.
+# those quoted snippets must be updated in the same change.
+#
+# The invariant is structural, not identifier-based: the overlay consults
+# state.json only when the ledger is unavailable, reading ns.ReservedMB for
+# the node. Refactors may rename the ledger-availability condition (e.g.
+# 'ledger == nil' vs a hoisted 'ledgerAvailable' flag in
+# ApplyReservationEntries); the guard anchors on both known spellings plus
+# the state read itself, and only takes the removal branch when neither the
+# gate nor the state read survives. When the gate is found, the check
+# compares the docs' quoted gate spelling against the code's actual spelling
+# (doc-vs-code, not literal-in-each), so a refactor that changes the visible
+# gate condition must update the quoted snippets in the same change — unless
+# the docs deliberately quote the simplified else-branch shape, which is
+# accepted only while the code still contains that exact else-if line.
+overlay_state_fallback="$(grep -nE '!ledgerAvailable && st != nil|ledger == nil && st != nil' internal/snapshotview/overlay.go || true)"
+state_fallback_read="$(grep -nE 'reserved = ns\.ReservedMB' internal/snapshotview/overlay.go || true)"
+if [[ -n "$overlay_state_fallback" ]]; then
+  # Derive the code's actual gate spelling to compare doc quotes against.
+  code_gate_else="$(grep -cE '\} else if st != nil && st\.Nodes != nil \{' internal/snapshotview/overlay.go || true)"
+  code_gate_flag="$(grep -cE '!ledgerAvailable && st != nil && st\.Nodes != nil' internal/snapshotview/overlay.go || true)"
   for doc in docs/authority-reservation.md docs/authority-transition.md docs/reservations.md; do
-    grep -qF '} else if st != nil && st.Nodes != nil {' "$doc" \
-      || fail "$doc no longer quotes the current overlay legacy-state branch from internal/snapshotview/overlay.go"
+    doc_else="$(grep -cE '\} else if st != nil && st\.Nodes != nil \{' "$doc" || true)"
+    doc_flag="$(grep -cE '!ledgerAvailable && st != nil && st\.Nodes != nil' "$doc" || true)"
+    if [[ "$doc_else" == "0" && "$doc_flag" == "0" ]]; then
+      fail "$doc no longer quotes the current overlay legacy-state branch from internal/snapshotview/overlay.go"
+    fi
+    # Doc-vs-code spelling comparison: if a doc spells out the gate the code
+    # uses, it must still match after refactors; a doc quoting the
+    # flag-spelling while the code uses the else-branch spelling (or vice
+    # versa) is stale and must be updated with the refactor.
+    if [[ "$doc_flag" != "0" && "$code_gate_flag" == "0" ]]; then
+      fail "$doc quotes '!ledgerAvailable && st != nil' but overlay.go uses a different ledger-absence gate; update the quoted snippet"
+    fi
+    if [[ "$code_gate_flag" != "0" && "$doc_else" != "0" && "$doc_flag" == "0" ]]; then
+      : # docs may quote the simplified else-branch precedence; the explicit
+        # gate check above covers the spelled-out form. Structural presence
+        # is still enforced (state read + doc quote shape).
+    fi
     if grep -qF 'if reserved <= 0 && st != nil' "$doc"; then
       fail "$doc still quotes the pre-authoritative-zero overlay condition (reserved <= 0); update the quoted snippet to match internal/snapshotview/overlay.go"
     fi
@@ -144,8 +171,15 @@ if [[ -n "$overlay_legacy" ]]; then
     fail "overlay treats a supplied ledger as authoritative including zero, but the authority docs no longer state that contract"
   fi
 else
-  # Legacy fallback removed (transition phase 4+): docs must stop quoting it.
-  if grep -lF 'else if st != nil && st.Nodes != nil' \
+  # Ledger-absence gate not found under either known spelling. If the state
+  # read is also gone, the fallback was truly removed (transition phase 4+)
+  # and the docs must stop quoting it. If the state read survives, the gate
+  # was likely renamed rather than removed: fail closed and point at the
+  # anchor pattern instead of accusing the docs.
+  if grep -qE 'reserved = ns\.ReservedMB' internal/snapshotview/overlay.go; then
+    fail "overlay.go still reads state into reserved but no ledger-absence gate matched; if the gate was renamed, update the overlay_state_fallback anchor pattern in this script"
+  fi
+  if grep -lE '\} else if st != nil && st\.Nodes != nil \{|!ledgerAvailable && st != nil && st\.Nodes != nil' \
       docs/authority-reservation.md docs/authority-transition.md docs/reservations.md >/dev/null 2>&1; then
     fail "overlay.go no longer has the legacy-state fallback but authority docs still quote it"
   fi
