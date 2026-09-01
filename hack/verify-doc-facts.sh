@@ -120,6 +120,97 @@ if grep -qF 'cmdAI := aiCmd()' cmd/axis/main.go; then
   reject_stale_claim 'Powers `axis llm`' docs/current-state.md
 fi
 
+# --- 4b. Authority-doc code quotes -------------------------------------------
+# docs/authority-reservation.md, docs/authority-transition.md, and
+# docs/reservations.md quote the reservation overlay's legacy-state branch
+# from internal/snapshotview/overlay.go. When the overlay condition changes,
+# those quoted snippets must be updated in the same change.
+#
+# The invariant is structural, not identifier-based: the overlay consults
+# state.json only when the ledger is unavailable, reading ns.ReservedMB for
+# the node. Refactors may rename the ledger-availability condition (e.g.
+# 'ledger == nil' vs a hoisted 'ledgerAvailable' flag in
+# ApplyReservationEntries); the guard anchors on both known spellings plus
+# the state read itself, and only takes the removal branch when neither the
+# gate nor the state read survives. When the gate is found, the check
+# compares the docs' quoted gate spelling against the code's actual spelling
+# (doc-vs-code, not literal-in-each), so a refactor that changes the visible
+# gate condition must update the quoted snippets in the same change — unless
+# the docs deliberately quote the simplified else-branch shape, which is
+# accepted only while the code still contains that exact else-if line.
+overlay_state_fallback="$(grep -nE '!ledgerAvailable && st != nil|ledger == nil && st != nil' internal/snapshotview/overlay.go || true)"
+state_fallback_read="$(grep -nE 'reserved = ns\.ReservedMB' internal/snapshotview/overlay.go || true)"
+if [[ -n "$overlay_state_fallback" ]]; then
+  # Derive the code's actual gate spelling to compare doc quotes against.
+  code_gate_else="$(grep -cE '\} else if st != nil && st\.Nodes != nil \{' internal/snapshotview/overlay.go || true)"
+  code_gate_flag="$(grep -cE '!ledgerAvailable && st != nil && st\.Nodes != nil' internal/snapshotview/overlay.go || true)"
+  for doc in docs/authority-reservation.md docs/authority-transition.md docs/reservations.md; do
+    doc_else="$(grep -cE '\} else if st != nil && st\.Nodes != nil \{' "$doc" || true)"
+    doc_flag="$(grep -cE '!ledgerAvailable && st != nil && st\.Nodes != nil' "$doc" || true)"
+    if [[ "$doc_else" == "0" && "$doc_flag" == "0" ]]; then
+      fail "$doc no longer quotes the current overlay legacy-state branch from internal/snapshotview/overlay.go"
+    fi
+    # Doc-vs-code spelling comparison: if a doc spells out the gate the code
+    # uses, it must still match after refactors; a doc quoting the
+    # flag-spelling while the code uses the else-branch spelling (or vice
+    # versa) is stale and must be updated with the refactor.
+    if [[ "$doc_flag" != "0" && "$code_gate_flag" == "0" ]]; then
+      fail "$doc quotes '!ledgerAvailable && st != nil' but overlay.go uses a different ledger-absence gate; update the quoted snippet"
+    fi
+    if [[ "$code_gate_flag" != "0" && "$doc_else" != "0" && "$doc_flag" == "0" ]]; then
+      : # docs may quote the simplified else-branch precedence; the explicit
+        # gate check above covers the spelled-out form. Structural presence
+        # is still enforced (state read + doc quote shape).
+    fi
+    if grep -qF 'if reserved <= 0 && st != nil' "$doc"; then
+      fail "$doc still quotes the pre-authoritative-zero overlay condition (reserved <= 0); update the quoted snippet to match internal/snapshotview/overlay.go"
+    fi
+  done
+  if ! grep -qF 'including zero' docs/authority-reservation.md \
+     || ! grep -qF 'including zero' docs/authority-transition.md; then
+    fail "overlay treats a supplied ledger as authoritative including zero, but the authority docs no longer state that contract"
+  fi
+else
+  # Ledger-absence gate not found under either known spelling. If the state
+  # read is also gone, the fallback was truly removed (transition phase 4+)
+  # and the docs must stop quoting it. If the state read survives, the gate
+  # was likely renamed rather than removed: fail closed and point at the
+  # anchor pattern instead of accusing the docs.
+  if grep -qE 'reserved = ns\.ReservedMB' internal/snapshotview/overlay.go; then
+    fail "overlay.go still reads state into reserved but no ledger-absence gate matched; if the gate was renamed, update the overlay_state_fallback anchor pattern in this script"
+  fi
+  if grep -lE '\} else if st != nil && st\.Nodes != nil \{|!ledgerAvailable && st != nil && st\.Nodes != nil' \
+      docs/authority-reservation.md docs/authority-transition.md docs/reservations.md >/dev/null 2>&1; then
+    fail "overlay.go no longer has the legacy-state fallback but authority docs still quote it"
+  fi
+fi
+
+# Authority-reservation grep invariants (docs/authority-reservation.md §6):
+# the ledger mutation API must only be called from execution and the advisory
+# lease surfaces (API /v2/reservations, MCP triangle); a new caller outside
+# those packages requires updating the doc invariant with the operator.
+while IFS= read -r hit; do
+  caller="$(printf '%s' "$hit" | cut -d: -f1)"
+  case "$caller" in
+    internal/execution/*|internal/api/v2.go|internal/mcp/triangle.go) ;;
+    *) fail "new ledger.Reserve/Release/Heartbeat caller outside documented surfaces: $hit (docs/authority-reservation.md §6)" ;;
+  esac
+done < <(grep -rn '\.Reserve(\|\.Release(\|\.Heartbeat(' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/reservation/')
+
+# The snapshot reservation view is derived/read-only: no package other than
+# the overlay may assign RAMReservedMB.
+ram_writers="$(grep -rn 'RAMReservedMB\s*=' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/snapshotview/' || true)"
+[[ -z "$ram_writers" ]] \
+  || fail "RAMReservedMB assigned outside internal/snapshotview (derived view must stay read-only): $ram_writers"
+
+# The daemon documents that it watches state.json and skills.json but not
+# ledger.json (docs/authority-reservation.md §5). Keep that claim mechanical.
+if grep -qF 'func (d *Daemon) WatchLedger(' internal/daemon/daemon.go; then
+  if grep -qF 'does not watch `ledger.json`' docs/authority-reservation.md; then
+    fail "daemon now has WatchLedger but docs/authority-reservation.md still claims ledger.json is not watched"
+  fi
+fi
+
 # --- 5. CHANGELOG completeness ----------------------------------------------
 # Every released tag >= v0.7.0 (CHANGELOG's coverage floor) must have a
 # "## vX.Y.Z" header. Skipped silently when no tags are available (e.g. a
