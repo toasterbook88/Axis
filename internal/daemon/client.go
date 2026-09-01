@@ -75,10 +75,6 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 	if meta.Stale {
 		models.AppendWarningIfMissing(&snap, staleCacheWarning(meta))
 	}
-	if snap.Freshness == nil && meta.Freshness != nil {
-		freshness := *meta.Freshness
-		snap.Freshness = &freshness
-	}
 	if snap.Freshness != nil && snap.Freshness.Warning != "" {
 		models.AppendWarningIfMissing(&snap, models.Warning{
 			Kind:    "discovery",

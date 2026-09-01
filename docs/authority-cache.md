@@ -147,12 +147,11 @@ There is a window between step 3 and step 4 where the in-memory cache is newer t
 
 ### 7.1 What Can Go Wrong
 
-Because there is **no epoch or generation ID**, consumers can assemble a logically inconsistent view from multiple cache layers:
+Publication IDs now detect mixed `/snapshot/meta` and `/snapshot` reads, but independently timed authority inputs can still produce inconsistent views inside other cache layers:
 
 | Scenario | Layers Involved | Risk |
 |----------|-----------------|------|
 | Snapshot N + overlay N+1 | Daemon snapshot (older) + state file (newer) | `runtimectx.Load()` and `Daemon.doRefresh()` both load `state.json` **after** building the snapshot. If the state changed since the snapshot was taken, the reservation overlay reflects a newer world than the node facts. |
-| Freshness N-1 + snapshot N | `FetchSnapshot` backfills `Freshness` from `Meta()` into an older snapshot | `internal/daemon/client.go:75-78` copies `meta.Freshness` into the snapshot if the snapshot lacks one. The freshness metadata may be newer than the snapshot body. |
 | Ledger in-memory + snapshot disk | Daemon crashes between `d.snapshot = clone(snap)` and `persistSnapshot()` | On restart, the daemon loads an older `snapshot.json` but may load a current `ledger.json`, creating a reservation view that overestimates reserved RAM relative to the snapshot. |
 | Skills file + snapshot | Skills file changes between snapshot build and skill read | `Daemon.doRefresh()` loads skills **after** cloning the snapshot. A concurrent skill write could mean the warning attached to the snapshot references skill state newer than the node facts. |
 
@@ -178,7 +177,7 @@ This is mitigated only by:
 
 | Gap | Impact |
 |-----|--------|
-| No `SnapshotEpoch` | Consumers cannot detect out-of-order or mixed-layer reads. |
+| Publication ID covers only daemon metadata + snapshot pairing | Other independently read inputs still lack a cross-store transaction. |
 | No atomic snapshot+state+ledger read | Each layer is read independently, creating windows of inconsistency. |
 | No monotonic clock in `Timestamp` | `ClusterSnapshot.Timestamp` is wall-clock UTC and can go backwards after NTP jumps. |
 | Snapshot memory and disk are not published as one transaction | A crash after the in-memory swap but before the atomic replacement leaves the prior complete disk snapshot. |
