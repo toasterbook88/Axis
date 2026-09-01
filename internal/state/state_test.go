@@ -73,6 +73,42 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	}
 }
 
+func TestMaintainWithReportDescribesChangedRecords(t *testing.T) {
+	now := time.Now().UTC()
+	st := &ClusterState{
+		Nodes: map[string]NodeState{
+			"alpha": {
+				ReservedMB:         1024,
+				LastPlacedAt:       now.Add(-10 * time.Minute),
+				ActiveTasks:        1,
+				ActiveExecs:        []string{"exec-stale"},
+				ExecReservationsMB: map[string]int64{"exec-stale": 1024},
+				ExecHeartbeatAt:    map[string]time.Time{"exec-stale": now.Add(-10 * time.Minute)},
+			},
+		},
+		Failures:     failures.NewStore(),
+		Observations: make(map[string]models.ExecutionObservation),
+	}
+
+	report := MaintainWithReport(st)
+	if !report.Changed() {
+		t.Fatal("expected maintenance report to describe a changed record")
+	}
+	if _, ok := st.Nodes["alpha"]; ok {
+		t.Fatal("expected stale node state to be removed")
+	}
+	if len(report.Receipts) != 1 {
+		t.Fatalf("receipts = %+v, want one aggregate node receipt", report.Receipts)
+	}
+	receipt := report.Receipts[0]
+	if receipt.SourceAuthority != "state" || receipt.ObjectType != "node_state" || receipt.ObjectID != "alpha" {
+		t.Fatalf("unexpected receipt identity: %+v", receipt)
+	}
+	if receipt.NewValue != "removed" || !strings.Contains(receipt.Description, "reclaimed inactive execution reservations") {
+		t.Fatalf("unexpected receipt outcome: %+v", receipt)
+	}
+}
+
 func TestUpdatePreservesConcurrentTaskHistory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

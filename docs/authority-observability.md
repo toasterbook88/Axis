@@ -10,7 +10,7 @@
 | **CLI status output** | CLI `axis status` | Operators | `cmd/axis/status.go` |
 | **Daemon metadata** | HTTP API (`/snapshot/meta`, `/health`) | CLI, MCP, operators | `internal/daemon/daemon.go:Meta()` |
 | **Snapshot warnings** | Snapshot assembly | All snapshot consumers | `models.Warning` attached to `ClusterSnapshot` |
-| **Repair events** | Subsystems that auto-repair state | Structured slog records, future surfaces | `internal/repairs/types.go` |
+| **Repair receipts** | State maintenance and reservation reconciliation | Structured slog records | `internal/repairs/types.go` |
 
 ### 1.1 Structured Logs (slog)
 
@@ -19,7 +19,7 @@ AXIS uses Go's `log/slog` with structured key-value pairs. Log sites include:
 - **Daemon:** refresh errors, mesh peer events, config watch failures (`internal/daemon/daemon.go`)
 - **API server:** async refresh failures (`internal/api/server.go`, `internal/daemon/handlers.go`)
 - **Reservation ledger:** reserve/release/reclaim events with `id`, `node`, `ram_mb`, `owner` (`internal/reservation/ledger.go`)
-- **State maintenance:** no direct logs; failures surface as returned errors or snapshot warnings
+- **State maintenance:** typed receipts after persisted node/failure cleanup; save failures remain error logs without success receipts
 
 There is **no log level configuration** exposed to operators; the default slog level is used.
 
@@ -95,7 +95,7 @@ State reconciliation happens through:
 - **Daemon refresh:** `doRefresh()` re-probes nodes via SSH and rebuilds the snapshot.
 - **Heartbeat checks:** `ledger.Reclaim()` and `state.runMaintenance()` evaluate timestamps and PID liveness, not log entries.
 
-The `internal/repairs/types.go` package defines `RepairEvent` structures for future structured repair emission, but today no repair event is read back for reconciliation.
+The `internal/repairs/types.go` package emits structured receipts, but no repair event is read back for reconciliation.
 
 ## 4. Metrics Do Not Influence Placement or Reservation Decisions
 
@@ -149,11 +149,12 @@ Repair events are intended to be emitted as **structured slog records** at the p
 
 ### 6.2 Current State
 
-As of the current codebase, `internal/repairs/types.go` defines the types but **no code emits `RepairEvent` instances yet**. The package comment states:
-
-> "Scope discipline: v0.11 intentionally avoids event buses, async routing, or subscriber models. Events are emitted synchronously at the point of repair."
-
-The repair types exist as a foundation for future authority-aware diagnostics but are not yet wired into state maintenance, ledger reclaim, or snapshot repair paths.
+State maintenance and ledger startup/explicit reconciliation create typed
+`RepairEvent` values and synchronously emit them as `maintenance receipt` slog
+records after the cleaned file has been written successfully. A failed write
+emits an error but no success receipt. The events remain process-local advisory
+telemetry: there is no event bus, subscriber model, persistent event log, or
+log-to-state replay.
 
 ### 6.3 Where Repairs Today Are Silent
 
@@ -161,11 +162,11 @@ The repair types exist as a foundation for future authority-aware diagnostics bu
 |--------|----------|----------------|
 | Corrupt state file recovery | `internal/persist/persist.go` | Quarantines to `.corrupt-*`, logs warning, returns `RecoveryWarning` |
 | Corrupt skills file recovery | `internal/skills/skills.go` | Same pattern via `persist.QuarantineCorruptFile` |
-| Ledger stale entry reclaim | `internal/reservation/ledger.go` | Logs via `slog.Info`, no structured `RepairEvent` |
-| State heartbeat/PID reclaim | `internal/state/state.go` | Silent normalization, no logs or events |
+| Ledger stale entry reclaim | `internal/reservation/ledger.go` | Warning-level structured receipt after successful ledger persistence |
+| State heartbeat/PID reclaim | `internal/state/state.go`, `internal/daemon/daemon.go` | Aggregate per-node receipt after successful state persistence |
 | Snapshot discovery warning | `internal/daemon/client.go` | Surfaces only the warning already carried by snapshot-native freshness; no repair event |
 
-When repair events are wired, they will be emitted synchronously at the repair site and surfaced to operators via doctor, metrics, and `--json`/`--ndjson` output.
+Receipts currently surface through structured process logs. Doctor, metrics, and command JSON do not yet mirror them.
 
 ## Summary Table
 
@@ -176,7 +177,7 @@ When repair events are wired, they will be emitted synchronously at the repair s
 | Doctor warnings | No | No | No | No (CLI-only) |
 | CLI status text | No | No | No | No (human-formatted) |
 | Snapshot warnings | No (advisory) | No | No | Yes (in `ClusterSnapshot`) |
-| Repair events (future) | No | No | No | No (structured slog only) |
+| Repair receipts | No | No | No | No (structured slog only) |
 | State file (`state.json`) | **Yes** | Yes | Yes | Yes |
 | Ledger (`ledger.json`) | **Yes** | Yes | Yes | Yes |
 | Snapshot facts | **Yes** | Yes | Yes | Yes (when cached) |

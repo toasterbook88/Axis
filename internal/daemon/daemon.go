@@ -25,6 +25,7 @@ import (
 	"github.com/toasterbook88/axis/internal/multipath"
 	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/publication"
+	"github.com/toasterbook88/axis/internal/repairs"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/snapshot"
@@ -651,12 +652,15 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		st, stateWarning = state.Load()
 		if st != nil {
 			if state.Maintain(st) {
+				var maintenance state.MaintenanceReport
 				if err := state.Update(func(latest *state.ClusterState) error {
-					state.Maintain(latest)
+					maintenance = state.MaintainWithReport(latest)
 					st = latest
 					return nil
 				}); err != nil {
 					slog.Error("failed to save maintained state", "path", state.Path(), "error", err)
+				} else {
+					repairs.EmitAll(slog.Default().With("component", "state-maintenance"), maintenance.Receipts)
 				}
 			}
 		}
