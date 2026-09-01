@@ -94,15 +94,20 @@ Two independent packages reclaim stale reservations, on different triggers, with
 reserved := int64(0)
 if ledger != nil {
     reserved = ledger.NodeSummaryFor(node.Name).ReservedRAMMB
-}
-if reserved <= 0 && st != nil && st.Nodes != nil {
+} else if st != nil && st.Nodes != nil {
     if ns, ok := st.Nodes[node.Name]; ok {
         reserved = ns.ReservedMB
     }
 }
 ```
 
-Ledger wins; state is a fallback for zero. This means state can under-report without the operator noticing.
+A supplied ledger is authoritative, including zero. State remains an explicit
+compatibility source only for callers that do not supply a ledger.
+
+Load success is part of authority availability. A read or decode failure is not
+converted into an empty ledger or a state-derived reservation: runtime loading
+and daemon refresh fail closed, preserving the canonical file and any previously
+published daemon snapshot for operator recovery.
 
 ## 5. Silent Reconciliation
 

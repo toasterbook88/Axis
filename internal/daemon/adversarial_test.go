@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 	"github.com/toasterbook88/axis/internal/snapshot"
 )
 
-func TestLedgerCorruptionRecovery(t *testing.T) {
+func TestLedgerCorruptionFailsClosed(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -33,25 +34,23 @@ func TestLedgerCorruptionRecovery(t *testing.T) {
 		}, nil
 	})
 
-	// The ledger loading should quarantine the corrupt file and start empty, not crash
+	// Construction remains non-panicking, but the unavailable authority must
+	// prevent snapshot publication instead of becoming an empty ledger.
 	ledger := d.Ledger()
 	if ledger == nil {
 		t.Fatal("ledger is nil")
 	}
-
-	// Ensure the quarantine file exists
-	entries, err := os.ReadDir(filepath.Dir(path))
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("authoritative ledger was moved aside: %v", err)
 	}
-	foundQuarantine := false
-	for _, e := range entries {
-		if e.Name() != "ledger.json" && e.Name() != "snapshot.json" {
-			foundQuarantine = true
-		}
+	if err := d.Refresh(context.Background()); err == nil {
+		t.Fatal("expected refresh to fail while ledger authority is unavailable")
 	}
-	if !foundQuarantine {
-		t.Error("expected quarantined ledger file")
+	if _, ok := d.Snapshot(); ok {
+		t.Fatal("daemon published a snapshot from an unavailable ledger")
+	}
+	if got := d.Meta().LastError; !strings.Contains(got, "reservation ledger") {
+		t.Fatalf("expected ledger error in daemon metadata, got %q", got)
 	}
 }
 
