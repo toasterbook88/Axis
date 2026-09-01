@@ -50,8 +50,10 @@ The **ledger** (`internal/reservation/ledger.go`) is the single source of truth 
 
 Key properties:
 - Mutex-protected in-memory map of `Entry` values.
-- Atomic disk writes via `persist.WriteFileAtomic`.
-- Startup reconciliation pass (`Load()` calls `reclaimLocked()` silently).
+- Atomic disk writes via `persist.WritePrivateFileAtomic`.
+- Startup reconciliation pass (`Load()` calls `reclaimInMemoryLocked()`).
+- One structured `maintenance receipt` log per reclaimed entry, emitted only
+  after the cleaned ledger persists successfully.
 - Tracks totals: `totalReserved`, `totalReleased`, `totalReclaimed`, `reserveFailures`.
 
 ## 6. Ledger vs. `state.json` (`NodeState.ReservedMB`)
@@ -89,20 +91,23 @@ Reservation-aware capacity is also visible through `axis status` and `axis task 
 ## 8. How stale reservations are reclaimed
 
 ### Ledger reclamation
-- **Trigger**: `ledger.Load()` on daemon startup, or explicit `ledger.Reclaim()`.
+- **Trigger**: every `ledger.Load()` (including daemon startup and refresh), or
+  explicit `ledger.Reclaim()`.
 - **Rule**: `entry.IsStale(now, 2m)` or `entry.IsExpired(now)`.
 - **Scope**: Per-entry.
 - **Persist?** Yes — writes cleaned set back to `ledger.json`.
 
 ### State reclamation
-- **Trigger**: `state.Load()` on **every** load (daemon refresh, CLI reads, API handlers).
+- **Trigger**: explicit `state.Maintain()`. Daemon refresh persists maintenance
+  through `state.Update`; CLI context reads may apply it only to their in-memory view.
 - **Rules**:
   1. `reclaimDeadOwnerExecutions()` — drops execs whose owner PID is no longer alive.
   2. `reclaimHeartbeatStaleExecutions()` — drops execs whose last heartbeat is older than **2 minutes**.
   3. Legacy fallback — caps `ReservedMB` after **45 minutes** if the node uses the pre-heartbeat tracking mode.
   4. `shouldDropAncientNodeState()` — drops the entire `NodeState` after **45 minutes** (no execs) or **24 hours** (legacy).
 - **Scope**: Per-node `NodeState`.
-- **Persist?** Yes — writes cleaned set back to `state.json`.
+- **Persist?** Only the daemon refresh path writes the cleaned state. Successful
+  persisted changes emit aggregate structured maintenance receipts.
 
 ## 9. The dual-reclamation problem
 
@@ -110,7 +115,7 @@ Both `ledger.json` and `state.json` independently prune stale reservations, but 
 
 | Aspect | Ledger | State |
 |--------|--------|-------|
-| Trigger | Startup `Load()`, explicit `Reclaim()` | Every `Load()` (frequent) |
+| Trigger | Every `Load()`, explicit `Reclaim()` | Explicit `Maintain()`; persisted by daemon refresh |
 | Stale window | 2 minutes | 2 minutes (heartbeat mode), 45 minutes (legacy) |
 | Extra checks | Hard expiry only | PID death, ancient node drop |
 | Cross-checks | None — does not read `state.json` | None — does not read `ledger.json` |
@@ -141,16 +146,19 @@ the canonical ledger cannot be read or decoded, live runtime loading and daemon
 refresh fail closed; the daemon retains its last valid snapshot, and the ledger
 file remains in place for operator repair.
 
-Neither reclamation path emits events or warnings. A daemon restart can silently drop missed-heartbeat reservations, and every CLI invocation that calls `state.Load()` can rewrite `state.json` without notice.
+Both persisted reclamation paths emit advisory structured `maintenance receipt`
+logs after a successful write. Failed writes emit an error and no success
+receipt. `state.Load()` itself performs no ongoing cleanup; it only applies
+one-time schema migrations when required.
 
-## 10. Future: reservation CLI commands
+## 10. Reservation CLI surface
 
-No dedicated reservation CLI commands exist today. The following are planned but not scheduled:
+The current dedicated commands are:
 
-- `axis reservation list` — show active ledger entries
-- `axis reservation show <id>` — detail a single reservation
-- `axis reservation create --node <name> --ram <mb>` — manual reservation
-- `axis reservation release <id>` — manual release
-- `axis reservation reclaim` — trigger orphan sweep
+- `axis reservations list`
+- `axis reservations inspect <id>`
+- `axis reservations release <id> [--force]`
+- `axis reservations doctor [--fix] [--stale-window <duration>]`
 
-Until then, use the HTTP `/v2/reservations` endpoint or inspect reservations indirectly via `axis status` and `axis task place`.
+The authenticated HTTP `/v2/reservations` surface remains available for
+create/list/inspect/release/heartbeat workflows.

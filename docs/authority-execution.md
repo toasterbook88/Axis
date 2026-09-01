@@ -20,7 +20,9 @@ Execution state is tracked by **two independent systems** with overlapping conce
 
 These fields are mutated by:
 - **Guarded execution** (`internal/execution/guarded.go`) — creates entries during `runLocal`/`runRemote` by reserving through the ledger, but the `state.json` fields are populated indirectly via the legacy reservation path or loaded from disk.
-- **State load/maintenance** (`internal/state/state.go`) — `Load()` → `runMaintenance()` normalizes and reclaims stale entries on every read.
+- **Explicit state maintenance** (`internal/state/state.go`) — `Maintain()` /
+  `MaintainWithReport()` normalize and reclaim legacy tracking. Daemon refresh
+  persists changes; CLI context reads may maintain only their in-memory view.
 
 ### 1.2 `internal/reservation/ledger.go` — Primary Reservation Authority
 
@@ -54,7 +56,7 @@ The `Ledger` (persisted to `~/.axis/ledger.json`) is the **double-entry reservat
 
 The `state.json` heartbeat tracking (`ExecHeartbeatAt`) is **advisory** and exists for:
 - Daemon state display and legacy compatibility.
-- Cross-checking during `state.Load()` maintenance.
+- Cross-checking during explicit state maintenance.
 - It does **not** gate placement decisions directly; the ledger does.
 
 ## 3. Relationship Between Execution Heartbeats and Ledger Heartbeats
@@ -104,7 +106,8 @@ There are **two independent reclamation paths** that can release reservations wi
 - **Persistence:** Re-saves `ledger.json` after reclaim.
 
 ### 5.2 State.json Reclaim (`internal/state/state.go:157-203`)
-- **Trigger:** `state.Load()` on every load (CLI reads, daemon refresh, API handlers).
+- **Trigger:** explicit state maintenance. Daemon refresh persists it through
+  `state.Update`; selected CLI reads apply it in memory without rewriting the file.
 - **Rules:**
   - `reclaimDeadOwnerExecutions()` — checks if owner PID is alive via `processAlive()` (OS signal 0 on Unix, always-true stub on other platforms).
   - `reclaimHeartbeatStaleExecutions()` — `now.Sub(hb) > execHeartbeatStaleAfter` (2 minutes).
@@ -120,7 +123,7 @@ These two reclaimers operate on **different files**, with **different triggers**
 | Reclaimer | File | Trigger | PID Check | Heartbeat Window |
 |-----------|------|---------|-----------|------------------|
 | Ledger | `ledger.json` | Explicit `Reclaim()` / `Reconcile()` | None | 2 min |
-| State maintenance | `state.json` | Every `Load()` | `processAlive()` signal 0 | 2 min |
+| State maintenance | `state.json` | Explicit `Maintain()`; daemon refresh persists | `processAlive()` signal 0 | 2 min |
 
 **Risk:** A process that crashes without calling `ledger.Release` will have its ledger entry reclaimed after 2 minutes of missing heartbeats. The corresponding `state.json` entry may also be reclaimed via PID check or heartbeat stale detection during the next `Load()`. However, because they operate independently, there are windows where the two views diverge:
 - Ledger may reclaim while `state.json` still shows the exec as active.
