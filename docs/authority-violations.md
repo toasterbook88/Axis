@@ -44,9 +44,9 @@ This writes reclaimed state back to `state.json`, bypassing the ledger which is 
 
 Guessing or overriding freshness metadata instead of using the daemon's canonical evaluator.
 
-**Concrete AXIS example:**
+**Resolved AXIS example:**
 
-`internal/daemon/client.go:75-78` backfills `snap.Freshness` from `meta.Freshness` when the snapshot body lacks one:
+The former cached client backfilled `snap.Freshness` from `meta.Freshness` when the snapshot body lacked one:
 
 ```go
 if snap.Freshness == nil && meta.Freshness != nil {
@@ -55,7 +55,7 @@ if snap.Freshness == nil && meta.Freshness != nil {
 }
 ```
 
-The snapshot body and the metadata endpoint are separate reads. Injecting metadata freshness into an older snapshot body creates a mixed-epoch view where the freshness claim is newer than the node facts it describes.
+The snapshot body and the metadata endpoint are separate reads. Injecting metadata freshness into an older snapshot body creates a mixed-epoch view where the freshness claim is newer than the node facts it describes. The client now rejects mismatched publication IDs and returns snapshot-native freshness without this backfill.
 
 ### 2.3 Repair-on-Read Mutation
 
@@ -227,7 +227,7 @@ grep -rn 'state\.Load().*ReservedMB\|ReservedMB.*state\.Load' internal/ --includ
 |----------|-----------|----------|--------|---------------|
 | **P0** | Repair-on-read mutation | `internal/state/state.go:72-119` | Every CLI invocation mutates `state.json` silently | Remove `runMaintenance()` from `Load()`. Move maintenance to an explicit `Maintain()` called only by the daemon or CLI `axis doctor` |
 | **P0** | Dual reclamation | `internal/state/state.go:388-606` | State and ledger prune independently with different rules | Delete state-file reclamation entirely. Rely on ledger `Reclaim()` as the single source of truth |
-| **P1** | Heuristic freshness override | `internal/daemon/client.go:75-78` | Mixed-epoch freshness backfill | Remove backfill. Return snapshot as-is; let callers request `/snapshot/meta` separately if they need freshness |
+| **Resolved** | Heuristic freshness override | `internal/daemon/client.go` | Mixed-epoch freshness backfill | Removed; the client returns snapshot-native freshness and metadata remains separately queryable |
 | **P1** | Ledger fallback in metadata | `internal/daemon/daemon.go:653-664` | Metrics derive from state mirror when ledger is nil | Remove `state.Load()` fallback from `Meta()`. If ledger is nil, report `ReservedMB: -1` or omit the field |
 | **P2** | Test-only ReservedMB writes | `internal/daemon/daemon_test.go:502`, etc. | Tests build invalid state | Ensure test helpers use ledger APIs or document that they intentionally simulate legacy state |
 | **P2** | Normalization during Load | `internal/state/state.go:227-386` | `normalizeNodeStateExecTracking` rewrites exec maps on read | Move normalization to explicit maintenance or deprecation path |
@@ -239,6 +239,6 @@ grep -rn 'state\.Load().*ReservedMB\|ReservedMB.*state\.Load' internal/ --includ
 - **Canonical reservation authority** is `internal/reservation/ledger.go`.
 - **State file** (`~/.axis/state.json`) acts as a legacy mirror that still reclaims and normalizes reservations independently.
 - **Repair-on-read** in `state.Load()` means every CLI invocation can silently rewrite persisted state.
-- **Freshness backfill** in `daemon/client.go` mixes metadata epoch into snapshot body.
+- **Freshness backfill** has been removed from `daemon/client.go`; snapshot freshness remains native to its publication.
 - **Ledger fallback** in `daemon.Meta()` causes metrics to reflect mirror state when canonical is unavailable.
 - **Remediation** should prioritize removing mutation from read paths and unifying reclamation under the ledger.

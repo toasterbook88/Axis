@@ -11,7 +11,7 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
-func TestFetchSnapshotBackfillsFreshnessFromMetadata(t *testing.T) {
+func TestFetchSnapshotDoesNotBackfillFreshnessFromMetadata(t *testing.T) {
 	t.Setenv(auth.TokenEnvVar, "tok")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,11 +44,53 @@ func TestFetchSnapshotBackfillsFreshnessFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchSnapshot() error = %v", err)
 	}
-	if snap.Freshness == nil || snap.Freshness.Source != "beacon-registry" {
-		t.Fatalf("expected freshness from metadata, got %+v", snap.Freshness)
+	if snap.Freshness != nil {
+		t.Fatalf("expected snapshot freshness to remain absent, got %+v", snap.Freshness)
 	}
-	if len(snap.Warnings) != 1 || snap.Warnings[0].Kind != "discovery" {
-		t.Fatalf("expected discovery warning from freshness, got %#v", snap.Warnings)
+	if len(snap.Warnings) != 0 {
+		t.Fatalf("metadata freshness must not add snapshot warnings, got %#v", snap.Warnings)
+	}
+}
+
+func TestFetchSnapshotUsesSnapshotNativeFreshness(t *testing.T) {
+	t.Setenv(auth.TokenEnvVar, "tok")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/snapshot/meta":
+			_ = json.NewEncoder(w).Encode(Metadata{
+				Source:        "daemon-cache",
+				Ready:         true,
+				PublicationID: "pub-1",
+				Freshness: &models.DiscoveryFreshness{
+					Source:  "metadata-must-not-win",
+					Warning: "metadata warning must not leak",
+				},
+			})
+		case "/snapshot":
+			_ = json.NewEncoder(w).Encode(models.ClusterSnapshot{
+				Status:      models.SnapshotHealthy,
+				Publication: &models.PublicationEnvelope{ID: "pub-1"},
+				Freshness: &models.DiscoveryFreshness{
+					Source:  "snapshot-native",
+					Warning: "snapshot warning",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snap, _, err := FetchSnapshot(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchSnapshot() error = %v", err)
+	}
+	if snap.Freshness == nil || snap.Freshness.Source != "snapshot-native" {
+		t.Fatalf("expected snapshot-native freshness, got %+v", snap.Freshness)
+	}
+	if len(snap.Warnings) != 1 || snap.Warnings[0].Kind != "discovery" || snap.Warnings[0].Message != "snapshot warning" {
+		t.Fatalf("expected only the snapshot-native discovery warning, got %#v", snap.Warnings)
 	}
 }
 

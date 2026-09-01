@@ -44,12 +44,13 @@ subscribers.
 `/snapshot` and `/snapshot/meta` remain separate reads. Daemon metadata captures
 the current snapshot publication ID and its discovery freshness in one atomic
 metadata state. The cached client requires both responses to carry the same
-non-empty publication ID before it applies staleness warnings or freshness.
+non-empty publication ID before it applies staleness warnings.
 
 If a refresh lands between the metadata and snapshot requests, the IDs differ
 and the read fails with an explicit retry error. A missing ID is treated as an
 incompatible daemon/payload rather than silently accepting an unbound view.
 
-The client still backfills missing discovery freshness from metadata after the
-publication IDs match. Removing that compatibility behavior is the next
-authority-coherence step.
+Discovery freshness in the snapshot body is authoritative for snapshot
+consumers. A missing snapshot freshness field remains missing; the client does
+not fill it from metadata, even when the publication IDs match. Metadata keeps
+its copy for callers that explicitly request daemon health or metadata.

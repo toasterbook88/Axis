@@ -7,7 +7,7 @@ This document defines the safe-transition lifecycle for moving canonical authori
 Concrete AXIS examples covered:
 
 - `internal/state/state.go` (`~/.axis/state.json`) → `internal/reservation/ledger.go` (`~/.axis/ledger.json`) for reservation authority.
-- `internal/daemon/client.go` freshness backfill → `ClusterSnapshot.Timestamp` as the single freshness source.
+- `internal/daemon/client.go` freshness backfill → publication-bound `ClusterSnapshot.Freshness` as the single snapshot freshness source (cutover complete).
 - Future transitions (e.g., `state.json` `NodeState` exec tracking → ledger-only execution records).
 
 ---
