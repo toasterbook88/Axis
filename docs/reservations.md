@@ -136,6 +136,11 @@ if ledger != nil {
 only when the caller has no ledger. This prevents stale state from resurrecting a
 reservation that the ledger does not contain.
 
+A ledger is supplied to production overlays only after a successful load. If
+the canonical ledger cannot be read or decoded, live runtime loading and daemon
+refresh fail closed; the daemon retains its last valid snapshot, and the ledger
+file remains in place for operator repair.
+
 Neither reclamation path emits events or warnings. A daemon restart can silently drop missed-heartbeat reservations, and every CLI invocation that calls `state.Load()` can rewrite `state.json` without notice.
 
 ## 10. Future: reservation CLI commands

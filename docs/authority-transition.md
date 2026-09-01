@@ -76,6 +76,8 @@ explicitly selected. A valid zero from the new authority must remain zero.
 - A supplied ledger is authoritative for snapshot reservation overlays,
   including when it reports zero.
 - `state.json` `ReservedMB` is used only by callers that supply no ledger.
+- A ledger load failure is unavailable authority, not zero: runtime loading and
+  daemon refresh fail closed without publishing a replacement snapshot.
 
 **Cutover checklist:**
 

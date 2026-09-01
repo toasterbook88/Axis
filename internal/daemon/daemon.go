@@ -272,6 +272,8 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		snapshotHooks:   make(map[string]*snapshotHook),
 	}
 	if err := d.ledger.Load(); err != nil {
+		err = fmt.Errorf("load reservation ledger: %w", err)
+		d.lastError = err.Error()
 		slog.Error("failed to load reservation ledger", "error", err)
 	}
 	d.publishMetadataLocked()
@@ -628,9 +630,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	if err == nil {
 		if d.ledger != nil {
 			if loadErr := d.ledger.Load(); loadErr != nil {
-				slog.Error("failed to reload reservation ledger during refresh", "error", loadErr)
-			}
-			if snap != nil {
+				err = fmt.Errorf("load reservation ledger: %w", loadErr)
+				slog.Error("failed to reload reservation ledger during refresh", "error", err)
+			} else if snap != nil {
 				for _, n := range snap.Nodes {
 					if n.Resources != nil {
 						d.ledger.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
@@ -639,6 +641,8 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 				}
 			}
 		}
+	}
+	if err == nil {
 		st, stateWarning = state.Load()
 		if st != nil {
 			if state.Maintain(st) {

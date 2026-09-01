@@ -104,6 +104,11 @@ if ledger != nil {
 A supplied ledger is authoritative, including zero. State remains an explicit
 compatibility source only for callers that do not supply a ledger.
 
+Load success is part of authority availability. A read or decode failure is not
+converted into an empty ledger or a state-derived reservation: runtime loading
+and daemon refresh fail closed, preserving the canonical file and any previously
+published daemon snapshot for operator recovery.
+
 ## 5. Silent Reconciliation
 
 Reclamation happens without event emission or caller-visible warning in the following paths:
