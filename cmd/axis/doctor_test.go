@@ -51,11 +51,17 @@ func TestDoctorUsesAuthenticatedSSHCheck(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := doctorCmd()
+		// The root command silences these in production; a detached command
+		// would otherwise print Cobra's error and usage block to stderr.
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
 		cmd.SetArgs(nil)
 		return cmd.Execute()
 	})
-	if err != nil {
-		t.Fatalf("doctor Execute: %v", err)
+	// This scenario contains a failed check, so the command must report
+	// failure to the caller as well as in the rendered report.
+	if got := ExitCode(err); got != ExitErrCommandFail {
+		t.Fatalf("doctor Execute: exit %d, want %d", got, ExitErrCommandFail)
 	}
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)
@@ -120,6 +126,10 @@ func TestDoctorReportsHealthySSHAndDaemon(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := doctorCmd()
+		// The root command silences these in production; a detached command
+		// would otherwise print Cobra's error and usage block to stderr.
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
 		cmd.SetArgs(nil)
 		return cmd.Execute()
 	})
@@ -171,6 +181,10 @@ func TestDoctorTreatsDaemonFailureAsAdvisoryByDefault(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := doctorCmd()
+		// The root command silences these in production; a detached command
+		// would otherwise print Cobra's error and usage block to stderr.
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
 		cmd.SetArgs(nil)
 		return cmd.Execute()
 	})
@@ -219,11 +233,15 @@ func TestDoctorStrictTreatsDaemonFailureAsFailure(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := doctorCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
 		cmd.SetArgs([]string{"--strict"})
 		return cmd.Execute()
 	})
-	if err != nil {
-		t.Fatalf("doctor Execute: %v", err)
+	// This scenario contains a failed check, so the command must report
+	// failure to the caller as well as in the rendered report.
+	if got := ExitCode(err); got != ExitErrCommandFail {
+		t.Fatalf("doctor Execute: exit %d, want %d", got, ExitErrCommandFail)
 	}
 	if stderr != "" {
 		t.Fatalf("expected no stderr, got %q", stderr)
@@ -264,6 +282,10 @@ func TestDoctorWarnsWhenDaemonCacheHasZeroNodes(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := doctorCmd()
+		// The root command silences these in production; a detached command
+		// would otherwise print Cobra's error and usage block to stderr.
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
 		cmd.SetArgs(nil)
 		return cmd.Execute()
 	})
