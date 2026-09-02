@@ -59,10 +59,11 @@ Skills are written **only after execution** and are read during snapshot assembl
 
 ### 3.1 Daemon Snapshot Cache
 
-**Published snapshots are immutable in theory but mutable in practice.**
+**Published snapshots are immutable values behind an atomic pointer.**
 
 - `Daemon.Snapshot()` returns a **deep clone** via `snapshotview.Clone()` (`internal/daemon/daemon.go:597`). This prevents callers from mutating the internal cache.
-- However, the daemon's internal `snapshot` pointer is **overwritten** on every `doRefresh`. There is no versioning or copy-on-write; the old snapshot is simply replaced.
+- `doRefresh` assembles a new clone, attaches a publication envelope, and swaps
+  `snapshotPublished` atomically. Each publication has a unique ID and component evidence.
 - `snapshot.json` is atomically replaced after each refresh. There is no
   cross-store transaction or double-buffering with state and ledger files.
 
@@ -72,19 +73,26 @@ The `ClusterSnapshot` returned by `runtimectx.Load()` is a fresh build. It is **
 
 ### 3.3 State and Skills Files
 
-Both are **mutable** after load. `state.Load()` runs maintenance (reclaim, prune, normalize) and may **mutate and re-save** the file before returning it to the caller. This means the returned `ClusterState` may already differ from what was on disk seconds earlier.
+Returned state and skills objects are mutable by callers, but `state.Load()` no
+longer performs ongoing maintenance. It reads the file and persists only a
+pending one-time schema migration. Ongoing state cleanup is an explicit
+`Maintain()` operation; daemon refresh persists it through `state.Update()`.
 
 ## 4. Generation IDs and Epoch Semantics
 
-**There are no generation IDs or epoch semantics in any AXIS cache.**
+**Snapshot publications have identity, but AXIS has no cross-store transaction.**
 
-Searches for `SnapshotEpoch`, `snapshot_epoch`, `epoch`, `generation`, or `gen` in the cache-relevant packages (`internal/daemon`, `internal/snapshotview`, `internal/state`, `internal/skills`, `internal/runtimectx`) return no matches.
+Every newly assembled `ClusterSnapshot` carries a unique publication ID.
+Daemon metadata carries the same ID, and cached clients reject missing or
+mismatched metadata/snapshot IDs. The publication also records component
+digests and observation times so independently timed inputs are explicit.
 
 ### What Is Missing
 
-- `ClusterSnapshot` has a `Timestamp` (wall-clock UTC) but no monotonic generation counter.
-- `Daemon.Meta()` exposes `RefreshCount` (a monotonic integer), but this is **not embedded into the snapshot payload** returned by `Snapshot()`.
-- There is no way for a consumer to ask "is this snapshot newer than the one I already have?" except by comparing `Timestamp` (vulnerable to clock jumps) or `RefreshCount` (only available via the separate `/snapshot/meta` endpoint).
+- Publication IDs are unique, not monotonic; ordering still relies on wall-clock
+  `AssembledAt`/`Timestamp` or daemon `RefreshCount`.
+- A publication proves which component evidence was assembled, not that facts,
+  ledger, and state were captured in one transaction.
 
 ## 5. Double-Buffering and Atomic Publication
 
@@ -93,18 +101,16 @@ Searches for `SnapshotEpoch`, `snapshot_epoch`, `epoch`, `generation`, or `gen` 
 ### 5.1 Daemon Cache Publication
 
 ```go
-// internal/daemon/daemon.go:535
-d.snapshot = snapshotview.Clone(snap)
-// ...
-if err := persistSnapshot(d.snapshotPath, d.snapshot); err != nil {
-    d.lastError = err.Error()
-    return err
-}
+snapCopy := d.snapshot
+d.snapshotPublished.Store(snapCopy)
+d.publishMetadataLocked()
+// unlock, then atomically replace snapshot.json
+persistSnapshot(snapshotPath, snapCopy)
 ```
 
 The sequence is:
 1. Lock `d.mu`
-2. Assign `d.snapshot = clone(snap)`
+2. Atomically publish the new snapshot pointer and its bound metadata
 3. Unlock `d.mu`
 4. Atomically replace `snapshot.json`
 
@@ -112,7 +118,10 @@ There is a window between step 3 and step 4 where the in-memory cache is newer t
 
 ### 5.2 State File Persistence
 
-`state.Save()` uses `persist.WriteFileAtomic()`, which **does** perform an atomic write (write to temp, rename). However, the read-modify-write cycle in `state.Load()` is not atomic relative to other writers.
+`state.Save()` uses `persist.WritePrivateFileAtomic()`. Concurrent read-modify-write
+transactions use `state.Update()`, which holds the state-file lock around loading
+the latest value, mutation, and atomic replacement. `state.Load()` itself is a
+read path apart from pending one-time migrations.
 
 ### 5.3 Skills File Persistence
 
@@ -127,7 +136,7 @@ There is a window between step 3 and step 4 where the in-memory cache is newer t
 | Daemon snapshot | Background ticker | `defaultRefreshInterval = 1 minute` (`internal/daemon/daemon.go:35`) |
 | Daemon staleness | Wall-clock age vs threshold | `defaultStaleThreshold = 5 minutes` (`internal/daemon/daemon.go:37`) |
 | Ledger reclaim | Heartbeat stale window | `HeartbeatStaleWindow = 2 minutes` (`internal/reservation/ledger.go:93`) |
-| State maintenance | Load-time reclaim | `staleReservationReclaimAfter = 45 minutes`, `execHeartbeatStaleAfter = 2 minutes` (`internal/state/state.go:62-64`) |
+| State maintenance | Explicit daemon-refresh maintenance | `staleReservationReclaimAfter = 45 minutes`, `execHeartbeatStaleAfter = 2 minutes` |
 
 ### 6.2 Event-Driven Triggers
 
@@ -187,12 +196,12 @@ This is mitigated only by:
 | Property | Daemon Cache | Runtime Cache | State File | Skills File |
 |----------|--------------|---------------|------------|-------------|
 | Persistence | `~/.axis/snapshot.json` | None | `~/.axis/state.json` | `~/.axis/skills.json` |
-| Writer | Daemon (single goroutine) | `runtimectx.Load()` | Execution + load maintenance | Post-execution recording |
+| Writer | Daemon refresh | `runtimectx.Load()` | Execution + daemon-persisted maintenance | Post-execution recording |
 | Reader | HTTP API, CLI, MCP | CLI commands | Daemon, placement, CLI | Daemon, placement, CLI |
-| Invalidation | `Invalidate()`, file watchers, execution events | N/A (rebuilt each time) | `context clear`, load maintenance | Manual file delete |
-| Mutable after publish | Overwritten on refresh | Fresh build each time | Mutated during load | Append-only |
-| Generation ID | **None** | **None** | `Version` field (schema) | **None** |
+| Invalidation | `Invalidate()`, file watchers, execution events | N/A (rebuilt each time) | `context clear`, explicit maintenance | Manual file delete |
+| Mutable after publish | Atomic replacement; readers receive clones | Fresh build each time | Mutable only through explicit callers | Append-only |
+| Publication ID | Unique ID + component evidence | Unique ID + component evidence | `Version` is schema only | **None** |
 | Atomic file replacement | Yes | N/A | Yes | Yes |
 | Double-buffering | **No** | N/A | No | No |
 | Event-driven invalidation | Yes | N/A | No | No |
-| Time-driven invalidation | Yes (1m ticker, 5m stale) | N/A | Yes (load-time reclaim) | N/A |
+| Time-driven invalidation | Yes (1m ticker, 5m stale) | N/A | Via daemon refresh maintenance | N/A |

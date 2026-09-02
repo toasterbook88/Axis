@@ -112,12 +112,67 @@ if grep -qF 'case http.MethodPost:' <<<"$reservation_handler"; then
 fi
 
 if grep -qF 'cmd.AddCommand(reservationsDoctorCmd())' cmd/axis/reservations.go; then
-  reject_stale_claim 'no (standalone|dedicated) CLI' \
+  reject_stale_claim 'no (standalone|dedicated).*(reservation )?CLI|planned but not scheduled' \
     docs/current-state.md docs/lifecycle.md docs/reservations.md
 fi
 
 if grep -qF 'cmdAI := aiCmd()' cmd/axis/main.go; then
   reject_stale_claim 'Powers `axis llm`' docs/current-state.md
+fi
+
+# state.Load is a read plus one-time schema migration. Ongoing cleanup is an
+# explicit Maintain call; only the daemon persists it through state.Update.
+state_load_body="$(sed -n '/^func Load() (\*ClusterState, error) {/,/^}/p' internal/state/state.go)"
+if ! grep -qE 'Maintain\(|reclaimStaleReservation\(|normalizeNodeStateExecTracking\(' <<<"$state_load_body"; then
+  reject_stale_claim 'state\.Load\(\).*(runs|calls|→).*(maint|reclaim|prun|normaliz)|load-time reclaim|load maintenance|per-load state maintenance|state\.Load\(\).*on every|every (load|read).*(reclaim|maintenance)|calls `runMaintenance\(\)`' \
+    docs/authority-cache.md docs/authority-execution.md docs/authority-reservation.md \
+    docs/authority-transition.md docs/authority-violations.md docs/reservations.md
+fi
+
+# The old helpers were renamed when maintenance became explicit. Canonical
+# docs must not keep quoting identifiers that no longer exist.
+if ! grep -qE '^func runMaintenance\(' internal/state/state.go; then
+  reject_stale_claim '`runMaintenance\(\)`' \
+    docs/authority-cache.md docs/authority-execution.md docs/authority-reservation.md \
+    docs/authority-transition.md docs/authority-violations.md docs/reservations.md
+fi
+if ! grep -qE '^func \(l \*Ledger\) reclaimLocked\(' internal/reservation/*.go; then
+  reject_stale_claim '`reclaimLocked\(\)`' docs/authority-reservation.md docs/reservations.md
+fi
+
+# Persisted cleanup is observable through typed structured receipts. If that
+# wiring exists, docs may describe the logs as advisory but not as silent.
+if grep -qF 'repairs.EmitAll' internal/daemon/daemon.go \
+   && grep -qF 'repairs.EmitAll' internal/reservation/ledger.go \
+   && grep -qF 'repairs.EmitAll' internal/reservation/persist.go; then
+  reject_stale_claim 'reclamation happens without event emission|neither reclamation path emits|reclaim itself is silent|triggers silent reclaim|silent ops.*(ledger|maintenance)|silently (drop|reclaim)' \
+    docs/authority-execution.md docs/authority-reservation.md docs/authority-violations.md docs/reservations.md
+  for doc in docs/authority-reservation.md docs/reservations.md; do
+    grep -qiF 'maintenance receipt' "$doc" \
+      || fail "$doc does not describe the structured maintenance receipts emitted by current cleanup paths"
+  done
+fi
+
+# Publication identity now binds daemon metadata and snapshot payloads. The
+# cache audit must not claim that every cache lacks an epoch/generation signal.
+if grep -qE 'Publication[[:space:]]+\*PublicationEnvelope' internal/models/types.go \
+   && grep -qF 'PublicationID' internal/daemon/daemon.go; then
+  reject_stale_claim 'there are no generation IDs or epoch semantics|generation ID.*\*\*none\*\*' docs/authority-cache.md
+  grep -qiF 'publication ID' docs/authority-cache.md \
+    || fail 'docs/authority-cache.md does not describe the publication ID now carried by snapshots and metadata'
+fi
+
+# Daemon metadata reads reservation totals only from the ledger. A former
+# state.json fallback must stay documented as resolved, never current.
+meta_body="$(sed -n '/^func (d \*Daemon) Meta() Metadata {/,/^}/p' internal/daemon/daemon.go)"
+if ! grep -qF 'state.Load(' <<<"$meta_body"; then
+  reject_stale_claim 'Meta\(\).*(falls back|fallback).*state|missing ledger.*metrics.*state mirror|ledger fallback in metadata.*(P1|current)' \
+    docs/authority-observability.md docs/authority-reservation.md docs/authority-violations.md
+else
+  reject_stale_claim 'Meta\(\).*reads.*only from the ledger|ledger fallback.*resolved|metrics use ledger totals only' \
+    docs/authority-observability.md docs/authority-reservation.md docs/authority-violations.md
+  grep -qiE 'falls back to (summing )?`?state\.json|ledger fallback.*remains' docs/authority-violations.md \
+    || fail 'docs/authority-violations.md does not describe the current Daemon.Meta state fallback'
 fi
 
 # --- 4b. Authority-doc code quotes -------------------------------------------

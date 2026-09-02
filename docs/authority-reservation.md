@@ -14,12 +14,12 @@
 
 | Function | File | What it mutates | Persist? |
 |----------|------|-----------------|----------|
-| `Reserve()` | `internal/reservation/ledger.go` | Creates `Entry` in `l.entries`, increments `totalReserved` | Yes (`saveLocked`) |
-| `Release()` | `internal/reservation/ledger.go` | Deletes `Entry`, increments `totalReleased` | Yes (`saveLocked`) |
-| `Heartbeat()` | `internal/reservation/ledger.go` | Updates `LastHeartbeat` on `Entry` | Yes (`saveLocked`) |
-| `Reclaim()` | `internal/reservation/ledger.go` | Deletes stale/expired entries, increments `totalReclaimed` | Yes (`saveLocked`) |
-| `reclaimLocked()` | `internal/reservation/ledger.go` | Internal impl called by `Reclaim()` and `Load()` | Yes (`saveLocked`) |
-| `Load()` | `internal/reservation/persist.go` | Replaces `l.entries`, **then calls `reclaimLocked()`** | Yes (if reclaim > 0) |
+| `Reserve()` | `internal/reservation/ledger.go` | Creates `Entry` in `l.entries`, increments `totalReserved` | Yes (`writeSnapshot`) |
+| `Release()` | `internal/reservation/ledger.go` | Deletes `Entry`, increments `totalReleased` | Yes (`writeSnapshot`) |
+| `Heartbeat()` | `internal/reservation/ledger.go` | Updates `LastHeartbeat` on `Entry` | Yes (`writeSnapshot`) |
+| `Reclaim()` | `internal/reservation/ledger.go` | Deletes stale/expired entries, increments `totalReclaimed` | Yes (`writeSnapshot`) |
+| `reclaimInMemoryLocked()` | `internal/reservation/ledger.go` | Internal impl called by `Reclaim()` and `Load()` | Caller persists afterward |
+| `Load()` | `internal/reservation/persist.go` | Replaces `l.entries`, then calls `reclaimInMemoryLocked()` | Yes (if reclaim > 0) |
 | `SetNodeCapacity()` | `internal/reservation/ledger.go` | Updates `l.nodeRAM[node]` | No |
 
 ### 2.2 Callers of ledger mutation in production
@@ -29,9 +29,11 @@
   - Call `ledger.Release(execID)` via `defer` after execution
   - Call `heartbeatTask` → `ledger.Heartbeat()` every `executionHeartbeatInterval` during execution
 - `internal/daemon/daemon.go` – `New()`:
-  - Calls `ledger.Load()` on startup (triggers silent reclaim)
+  - Calls `ledger.Load()` on startup (reclaims stale entries and emits receipts after persistence)
+- `internal/daemon/daemon.go` – `doRefresh()`:
+  - Reloads the ledger on every refresh using the same reconciliation contract
 - `internal/runtimectx/context.go` – `Load()`:
-  - Creates a fresh ledger, calls `ledger.Load()` (triggers silent reclaim), then `SetNodeCapacity` for each node
+  - Creates a fresh ledger, calls `ledger.Load()` (same persisted reconciliation contract), then `SetNodeCapacity` for each node
 - `cmd/axis/task.go` and `cmd/axis/context.go`:
   - Call `state.Load()` (not ledger directly), but the daemon cache applies the ledger overlay
 
@@ -39,10 +41,11 @@
 
 | Function | File | What it mutates | Persist? |
 |----------|------|-----------------|----------|
-| `Load()` | `internal/state/state.go` | Loads from disk, then calls `runMaintenance()` | Yes (if maintenance mutates) |
-| `runMaintenance()` | `internal/state/state.go` | Calls `reclaimStaleReservation()`, `normalizeNodeStateExecTracking()`, deletes ancient nodes | Yes (via `Load`'s save) |
-| `reclaimStaleReservation()` | `internal/state/state.go` | Delegates to `reclaimDeadOwnerExecutions()` and `reclaimHeartbeatStaleExecutions()` | Yes (via above) |
-| `normalizeNodeStateExecTracking()` | `internal/state/state.go` | Reconciles `ActiveTasks`, `ReservedMB`, `ExecReservationsMB`, `ExecHeartbeatAt`, etc. | Yes (via above) |
+| `Load()` | `internal/state/state.go` | Reads state and applies only pending one-time schema migration | Only if migration is pending |
+| `Maintain()` / `MaintainWithReport()` | `internal/state/state.go` | Reclaims stale legacy execution state, normalizes tracking, prunes failures/nodes | No; caller chooses persistence |
+| Daemon refresh | `internal/daemon/daemon.go` | Runs maintenance, persists through `state.Update`, then emits receipts | Yes, when changed |
+| `reclaimStaleReservation()` | `internal/state/state.go` | Delegates to dead-owner and stale-heartbeat cleanup | Via daemon maintenance transaction |
+| `normalizeNodeStateExecTracking()` | `internal/state/state.go` | Reconciles `ActiveTasks`, `ReservedMB`, execution maps | Via daemon maintenance transaction |
 | `RecordPlacement()` | `internal/state/state.go` | Appends to `Decisions` slice (capped at 20), calls `Save()` | Yes |
 | `RecordObservation()` | `internal/state/observations.go` | Upserts into `Observations` map | No (caller must `Save`) |
 | `applyFailureOutcome()` | `internal/execution/guarded.go` | Records failure in `st.Failures` | Yes (via `Save`) |
@@ -55,7 +58,8 @@ Two independent packages reclaim stale reservations, on different triggers, with
 
 ### 3.1 Ledger reclamation (`internal/reservation/`)
 
-- **Trigger**: `ledger.Load()` (startup only) and `ledger.Reclaim()` (explicit call; no periodic background ticker in daemon).
+- **Trigger**: every `ledger.Load()` (daemon startup, daemon refresh, and direct
+  runtime loads) and `ledger.Reclaim()` (explicit call; no separate reclaim ticker).
 - **Rules**:
   - `entry.IsStale(now, HeartbeatStaleWindow)` → default **2 minutes**
   - `entry.IsExpired(now)` → hard expiry if `ExpiresAt` set
@@ -64,7 +68,8 @@ Two independent packages reclaim stale reservations, on different triggers, with
 
 ### 3.2 State reclamation (`internal/state/`)
 
-- **Trigger**: `state.Load()` on **every** load (called by daemon refresh, CLI reads, API handlers, etc.).
+- **Trigger**: explicit `state.Maintain()`. Daemon refresh persists the result;
+  CLI context reads may use an in-memory maintained view without writing.
 - **Rules**:
   - `reclaimDeadOwnerExecutions()` → checks if owner PID is alive via `processAlive()`
   - `reclaimHeartbeatStaleExecutions()` → `now.Sub(hb) > execHeartbeatStaleAfter` → **2 minutes**
@@ -78,7 +83,9 @@ Two independent packages reclaim stale reservations, on different triggers, with
 1. **Different files, same concept**: Both prune "stale reservations" but on separate JSON files (`ledger.json` vs `state.json`). A reservation can be alive in the ledger but already purged from state, or vice versa.
 2. **Different windows**: Ledger uses 2 min stale window universally. State uses 2 min for heartbeat-aware execs, 45 min for legacy mode, plus PID-based death detection.
 3. **No cross-file reconciliation**: Neither loader reads the other file. `ledger.Load()` does not consult `state.json`, and `state.Load()` does not consult `ledger.json`.
-4. **Derived view ambiguity**: `snapshotview.ApplyReservationView()` prefers ledger, falls back to state. If the two disagree, the snapshot silently reflects whichever has a non-zero value, masking drift.
+4. **Derived view boundary**: a supplied ledger is authoritative including
+   zero. State is used only by explicit legacy callers that supply no ledger,
+   so disagreement cannot override an available ledger.
 
 ## 4. Path Classification
 
@@ -109,26 +116,31 @@ converted into an empty ledger or a state-derived reservation: runtime loading
 and daemon refresh fail closed, preserving the canonical file and any previously
 published daemon snapshot for operator recovery.
 
-## 5. Silent Reconciliation
+## 5. Observable Reconciliation
 
-Reclamation happens without event emission or caller-visible warning in the following paths:
+Persisted reclamation emits structured advisory receipts in these paths:
 
 1. **`ledger.Load()` startup reclaim**
-   - `internal/reservation/persist.go:50` calls `l.reclaimLocked()` after loading entries.
-   - Reclaimed entries are logged (`l.logger.Info`) but no error is returned, no warning is appended to any snapshot, and no `StateChange*` event fires.
-   - **Impact**: A daemon restart can silently drop reservations that missed their heartbeat window while the daemon was down.
+   - `internal/reservation/persist.go` calls `l.reclaimInMemoryLocked()` after loading entries.
+   - After the cleaned ledger is persisted, one warning-level structured
+     `maintenance receipt` is logged per reclaimed entry.
+   - A persistence failure logs an error and emits no success receipt.
 
-2. **`state.Load()` maintenance reclaim**
-   - `internal/state/state.go:108` calls `runMaintenance()` on every load.
-   - `reclaimStaleReservation()` can delete `ActiveExecs`, zero `ReservedMB`, drop entire `NodeState` entries.
-   - Maintenance saves back to disk inside `Load()`, then returns a clean `*ClusterState`.
-   - No event is emitted. The daemon's `WatchState` may later detect the write and trigger a refresh, but the reclaim itself is silent.
-   - **Impact**: Every CLI invocation that calls `state.Load()` (e.g., `axis task context`) can mutate and rewrite `state.json` without the operator knowing.
+2. **Daemon state maintenance**
+   - `state.Load()` is read-only apart from one-time schema migrations.
+   - Daemon refresh calls `MaintainWithReport()` inside `state.Update()` when a
+     preview finds cleanup work.
+   - After persistence succeeds, it logs one aggregate maintenance receipt per
+     changed node record plus one for expired failure-record cleanup.
+   - In-memory CLI maintenance previews do not emit a persisted-change receipt.
 
 3. **No ledger file watcher**
    - The daemon watches `state.json` (`WatchState`) and `skills.json` (`WatchSkills`), but **does not watch `ledger.json`**.
-   - If an external process modifies `ledger.json`, the in-memory daemon ledger stays stale until restart.
-   - Conversely, ledger mutations via `Reserve/Release/Heartbeat` are in-memory only (auto-persisted to disk), but no file watcher signals other processes.
+   - An external write does not trigger an immediate refresh. The daemon reloads
+     the ledger on its next scheduled or event-driven refresh.
+   - Ledger mutations via the daemon's own `Reserve`/`Release`/`Heartbeat` calls
+     update its in-memory ledger and persist to disk. Other processes receive no
+     file event and observe the change when they next load the ledger.
 
 ## 6. Grep Invariants (expected single-mutation packages)
 
@@ -156,6 +168,6 @@ grep -rn 'RAMReservedMB\s*=' internal/ --include='*.go' | grep -v '_test.go' | g
 
 - **Canonical authority**: `internal/reservation/ledger.go` / `~/.axis/ledger.json`
 - **Legacy mirror**: `internal/state/state.go` / `~/.axis/state.json` (still actively mutated and loaded)
-- **Dual-reclamation**: Both `ledger.Load()` and `state.Load()` independently prune stale reservations with different rules and windows.
-- **Silent ops**: Startup ledger reclaim and per-load state maintenance both mutate persisted state without emitting events or returning warnings.
-- **Risk**: The state mirror can drift from the ledger canonical source. The derived snapshot overlay prefers ledger, so drift in state is masked; drift in ledger would be visible but only if the ledger value is non-zero.
+- **Dual cleanup**: Ledger reconciliation and explicit state maintenance retain different rules because state is a legacy mirror; `state.Load()` itself does not reclaim.
+- **Receipts**: Successful persisted cleanup emits structured maintenance receipts; failed persistence cannot emit a success receipt.
+- **Risk**: The state mirror can drift from the ledger canonical source. A supplied ledger is authoritative in the derived snapshot, including zero; state is consulted only when no ledger is supplied.

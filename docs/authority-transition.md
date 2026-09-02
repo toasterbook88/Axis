@@ -100,15 +100,19 @@ callers without a ledger.
 
 Writes to the old authority are rejected or redirected.
 
-**Concrete target:**
+**Current status:**
 
-`internal/state/state.go:Load()` must stop calling `runMaintenance()`, which mutates `state.json` on every read. Maintenance should be moved to an explicit `Maintain()` or deleted entirely if the ledger already performs the same reclamation.
+Repair-on-read is resolved: `state.Load()` performs no ongoing maintenance.
+Cleanup is explicit through `Maintain()` / `MaintainWithReport()`, and daemon
+refresh persists it through `state.Update()` before emitting maintenance
+receipts. Mutation-prohibition is not otherwise complete because legacy
+`NodeState` execution fields and compatibility writes still exist.
 
 ### 2.6 Phase 6 — Legacy-removal
 
 After a deprecation window (minimum one minor release), the old code and files are removed.
 
-**Deprecation schedule:**
+**Historical proposal (not the current release schedule):**
 
 | Milestone | Action |
 |-----------|--------|
@@ -117,6 +121,9 @@ After a deprecation window (minimum one minor release), the old code and files a
 | v0.13.0 | Snapshot-demotion: state fallback removed from overlay. |
 | v0.14.0 | Mutation-prohibition: `state.json` maintenance deleted; state writes rejected. |
 | v0.15.0 | Legacy-removal: `NodeState.ReservedMB`, `ActiveExecs`, and related fields deleted. |
+
+Those dates were not achieved: v0.16.0 still retains the legacy fields and the
+no-ledger compatibility overlay. Future removal requires a new explicit plan.
 
 ---
 
@@ -162,7 +169,7 @@ If a cutover causes production issues, rollback must be possible within one daem
 | Scenario | Old Authority | New Authority | Risk |
 |----------|---------------|---------------|------|
 | Ledger reservation missing | `state.json` shows `ReservedMB = 512` | `ledger.json` shows no entry | Placement over-allocates because ledger says RAM is free. |
-| State maintenance reclaimed early | `state.json` shows `ReservedMB = 0` | `ledger.json` shows active entry | Placement under-allocates because overlay falls back to zero. |
+| State maintenance reclaimed early | `state.json` shows `ReservedMB = 0` | `ledger.json` shows active entry | Production placement still follows the ledger; only a legacy no-ledger caller can observe the stale mirror. |
 | Heartbeat desync | `state.json` `ExecHeartbeatAt` is fresh | `ledger.json` `LastHeartbeat` is stale | State hides a stale ledger entry that placement should ignore. |
 
 ### 5.2 Detection Invariants
@@ -178,8 +185,9 @@ grep -n 'ReservedMB\|reserved' internal/snapshotview/overlay.go
 # 3. Detect state-only writes that bypass the ledger
 grep -rn '\.ReservedMB\s*=' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/reservation/'
 
-# 4. Detect Load() mutations that should be ledger-only
-grep -n 'runMaintenance\|Save()' internal/state/state.go
+# 4. Verify Load() does not regain ongoing maintenance
+sed -n '/^func Load() (\*ClusterState, error) {/,/^}/p' internal/state/state.go
+# → no Maintain/reclaim/normalize calls (one-time migration is allowed)
 ```
 
 ### 5.3 Automated Checks

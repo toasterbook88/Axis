@@ -21,24 +21,12 @@ Inversion happens when a mirror, cache, test, CLI heuristic, or observability su
 
 Writing reservation or state data to `~/.axis/state.json` when the canonical write path is `~/.axis/ledger.json`.
 
-**Concrete AXIS example:**
+**Resolved AXIS example:**
 
-`internal/state/state.go:108-118` calls `runMaintenance()` inside `Load()`, which reclaims stale reservations and then calls `Save()`:
-
-```go
-// Maintenance: prune and reclaim stale state on every load.
-if maintained := runMaintenance(&s); maintained {
-    mutated = true
-}
-
-if mutated {
-    if err := s.Save(); err != nil {
-        return nil, err
-    }
-}
-```
-
-This writes reclaimed state back to `state.json`, bypassing the ledger which is the canonical reservation authority.
+The former `state.Load()` path performed ongoing cleanup and rewrote
+`state.json`. Current `Load()` reads state and persists only a pending one-time
+schema migration. Ongoing cleanup is explicit through `Maintain()`; daemon
+refresh persists it through `state.Update()`.
 
 ### 2.2 Heuristic Freshness Overrides
 
@@ -61,81 +49,50 @@ The snapshot body and the metadata endpoint are separate reads. Injecting metada
 
 Mutating persisted state during a `Load()` call before returning it to the caller.
 
-**Concrete AXIS example:**
+**Resolved AXIS example:**
 
-`internal/state/state.go:72-119` — `Load()` not only reads `state.json` but also runs migrations, reclaims dead/stale executions, normalizes `ActiveTasks`/`ReservedMB`, deletes ancient nodes, and writes the result back to disk before returning:
-
-```go
-func Load() (*ClusterState, error) {
-    // ... read file ...
-    // One-time migrations
-    if s.Version < currentStateVersion {
-        if migrated := runMigrations(&s); migrated {
-            mutated = true
-        }
-    }
-    // Maintenance: prune and reclaim stale state on every load.
-    if maintained := runMaintenance(&s); maintained {
-        mutated = true
-    }
-    if mutated {
-        if err := s.Save(); err != nil {
-            return nil, err
-        }
-    }
-    return &s, nil
-}
-```
-
-Every CLI invocation that touches state (`axis task context`, `axis task place`, daemon refresh) can trigger a repair-on-read rewrite of `state.json`.
+Ongoing cleanup was removed from `state.Load()`. Selected CLI context reads may
+maintain their returned object in memory, but they do not persist it. Daemon
+refresh is the explicit persisted maintenance owner.
 
 ### 2.4 Mirror-to-Canonical Reconciliation Without Event Emission
 
 Reconciling a mirror back into canonical form without emitting events or warnings that operators can observe.
 
-**Concrete AXIS examples:**
+**Resolved AXIS examples:**
 
-1. `internal/state/state.go:187-191` — `reclaimStaleReservation()` is called inside `runMaintenance()`, silently zeroing `ReservedMB` and deleting `ActiveExecs`. No event is emitted; the daemon's `WatchState` may eventually notice the disk write and refresh, but the reclaim itself is invisible.
-
-```go
-reclaimed, reclaimedAny := reclaimStaleReservation(now, ns, legacyHeartbeatMode)
-if reclaimedAny {
-    ns = reclaimed
-    mutated = true
-}
-```
-
-2. `internal/reservation/persist.go:50-52` — `ledger.Load()` silently reclaims stale entries on startup:
+1. State cleanup produces an aggregate typed receipt for each changed node
+record and for expired failure-record cleanup. Daemon refresh emits those
+receipts only after `state.Update()` succeeds.
 
 ```go
-reclaimed := l.reclaimLocked()
-if reclaimed > 0 {
-    l.logger.Info("startup reconciliation complete", "reclaimed", reclaimed)
-}
+maintenance = state.MaintainWithReport(latest)
+// after state.Update succeeds:
+repairs.EmitAll(logger, maintenance.Receipts)
 ```
 
-A daemon restart can silently drop reservations that missed their heartbeat window while the daemon was down. No warning is appended to the snapshot, no error is returned, and no `StateChange*` event fires.
+2. Ledger startup and explicit reconciliation emit one typed receipt per
+reclaimed reservation after the cleaned ledger persists.
+
+```go
+reclaimed, receipts := l.reclaimInMemoryLocked()
+// after writeSnapshot succeeds:
+repairs.EmitAll(l.logger, receipts)
+```
+
+These receipts are advisory structured logs, not authority and not snapshot
+warnings. Failed persistence emits an error and no success receipt.
 
 ### 2.5 Observability-Derived State Mutation
 
 Using metrics, metadata, or derived summaries to trigger or influence reservation changes.
 
-**Concrete AXIS example:**
+**Current AXIS example:**
 
-`internal/daemon/daemon.go:653-664` — `Meta()` falls back to `state.Load()` for `ReservedMB` when the ledger is unavailable:
-
-```go
-if d.ledger != nil {
-    meta.ReservedMB = d.ledger.Summary().TotalReservedMB
-} else if st, err := state.Load(); st != nil {
-    for _, ns := range st.Nodes {
-        meta.ReservedMB += ns.ReservedMB
-    }
-    ...
-}
-```
-
-The metrics endpoint (`/v2/metrics`) and the doctor endpoint (`/v2/doctor`) consume `Meta()`, so a missing ledger causes metrics to derive `ReservedMB` from the state mirror. If an operator or external system uses those metrics to make placement or scaling decisions, the decision is based on inverted authority.
+`Daemon.Meta()` reads `ReservedMB` from the ledger when one is configured, but
+falls back to summing `state.json` when `d.ledger == nil`. Metrics and doctor
+consumers can therefore receive a mirror-derived reservation total when the
+canonical authority is unavailable.
 
 ---
 
@@ -151,15 +108,11 @@ internal/state/state.go:512-606   reclaimDeadOwnerExecutions()
 
 These functions independently prune reservations using rules (45 min legacy, 2 min heartbeat, PID death detection) that differ from the ledger's 2-minute heartbeat window. The state file should not reclaim reservations; the ledger owns all reclamation.
 
-### 3.2 `state.go` mutating during `Load()` (repair-on-read)
+### 3.2 Repair-on-read (resolved)
 
-```go
-internal/state/state.go:72-119    Load() → runMaintenance() → Save()
-internal/state/state.go:155-203   runMaintenance()
-internal/state/state.go:227-386   normalizeNodeStateExecTracking()
-```
-
-`Load()` is a read surface. It should return what is on disk. Instead it mutates `ActiveTasks`, `ReservedMB`, `ExecReservationsMB`, deletes nodes, and writes back to disk before returning.
+`state.Load()` performs no ongoing maintenance. Normalization and stale-entry
+cleanup live behind explicit `Maintain()` calls; daemon refresh owns persisted
+maintenance and emits receipts after a successful transaction.
 
 ### 3.3 Direct `ReservedMB` writes outside `internal/reservation/`
 
@@ -200,8 +153,8 @@ The overlay assignment in `snapshotview/overlay.go:88` is expected behavior for 
 # 1. Detect state-file reclamation (should not happen; ledger should own it)
 grep -rn 'reclaimStaleReservation\|reclaimDeadOwnerExecutions\|reclaimHeartbeatStaleExecutions' internal/ --include='*.go' | grep -v '_test.go'
 
-# 2. Detect repair-on-read inside Load()
-grep -n 'func Load()' internal/state/state.go && grep -n 'runMaintenance\|Save()' internal/state/state.go
+# 2. Inspect Load() for ongoing maintenance (none expected)
+sed -n '/^func Load() (\*ClusterState, error) {/,/^}/p' internal/state/state.go
 
 # 3. Detect direct ReservedMB writes outside internal/reservation/ (production)
 grep -rn '\.ReservedMB\s*=' internal/ --include='*.go' | grep -v '_test.go' | grep -v 'internal/reservation/'
@@ -225,12 +178,12 @@ grep -rn 'state\.Load().*ReservedMB\|ReservedMB.*state\.Load' internal/ --includ
 
 | Priority | Violation | Location | Impact | Suggested Fix |
 |----------|-----------|----------|--------|---------------|
-| **P0** | Repair-on-read mutation | `internal/state/state.go:72-119` | Every CLI invocation mutates `state.json` silently | Remove `runMaintenance()` from `Load()`. Move maintenance to an explicit `Maintain()` called only by the daemon or CLI `axis doctor` |
+| **Resolved** | Repair-on-read mutation | `internal/state/state.go` | Reads previously rewrote state | Ongoing cleanup moved to explicit maintenance; daemon owns persistence |
 | **P0** | Dual reclamation | `internal/state/state.go:388-606` | State and ledger prune independently with different rules | Delete state-file reclamation entirely. Rely on ledger `Reclaim()` as the single source of truth |
 | **Resolved** | Heuristic freshness override | `internal/daemon/client.go` | Mixed-epoch freshness backfill | Removed; the client returns snapshot-native freshness and metadata remains separately queryable |
-| **P1** | Ledger fallback in metadata | `internal/daemon/daemon.go:653-664` | Metrics derive from state mirror when ledger is nil | Remove `state.Load()` fallback from `Meta()`. If ledger is nil, report `ReservedMB: -1` or omit the field |
+| **P1** | Ledger fallback in metadata | `internal/daemon/daemon.go` | Metrics derive from the state mirror when the ledger is absent | Remove the `state.Load()` fallback or make unavailability explicit |
 | **P2** | Test-only ReservedMB writes | `internal/daemon/daemon_test.go:502`, etc. | Tests build invalid state | Ensure test helpers use ledger APIs or document that they intentionally simulate legacy state |
-| **P2** | Normalization during Load | `internal/state/state.go:227-386` | `normalizeNodeStateExecTracking` rewrites exec maps on read | Move normalization to explicit maintenance or deprecation path |
+| **Resolved** | Normalization during Load | `internal/state/state.go` | Exec maps were rewritten on read | Normalization now runs only through explicit maintenance |
 
 ---
 
@@ -238,7 +191,8 @@ grep -rn 'state\.Load().*ReservedMB\|ReservedMB.*state\.Load' internal/ --includ
 
 - **Canonical reservation authority** is `internal/reservation/ledger.go`.
 - **State file** (`~/.axis/state.json`) acts as a legacy mirror that still reclaims and normalizes reservations independently.
-- **Repair-on-read** in `state.Load()` means every CLI invocation can silently rewrite persisted state.
+- **Repair-on-read** is resolved; `state.Load()` does not perform ongoing cleanup.
 - **Freshness backfill** has been removed from `daemon/client.go`; snapshot freshness remains native to its publication.
-- **Ledger fallback** in `daemon.Meta()` causes metrics to reflect mirror state when canonical is unavailable.
-- **Remediation** should prioritize removing mutation from read paths and unifying reclamation under the ledger.
+- **Ledger fallback** remains in `daemon.Meta()` when no ledger is configured.
+- **Remaining remediation** is the deliberate removal plan for legacy state
+  reservation fields and the no-ledger compatibility path.
