@@ -291,10 +291,14 @@ func TestDaemonStatusWarnsWhenVersionMissing(t *testing.T) {
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
 	cmd.SetArgs([]string{"--cache-addr", server.URL, "status"})
 
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("daemon status: %v", err)
+	// Missing version metadata is the "incompatible" unhealthy state: the
+	// envelope is still emitted, and the command reports failure.
+	if got := ExitCode(cmd.Execute()); got != ExitErrCommandFail {
+		t.Fatalf("daemon status: exit %d, want %d", got, ExitErrCommandFail)
 	}
 	if errOut.String() != "" {
 		t.Fatalf("unexpected stderr: %q", errOut.String())

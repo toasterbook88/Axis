@@ -1,3 +1,16 @@
+## Unreleased
+
+### Breaking
+
+* **CLI exit contracts:** `axis doctor`, `axis daemon status`, and `axis model stop` now exit **4** when they report an unhealthy or no-op result, after writing their complete diagnostic output. They previously exited 0, so shell automation could not distinguish a healthy cluster from a broken one. There is no deprecation path for an exit code: **shell consumers that treat these commands as pass/fail must branch on exit 4.**
+  * `axis doctor` exits 4 when any check is `fail`, in both bare and `--strict` mode. `--strict` is unchanged in meaning: it only promotes daemon-cache unavailability from `warn` to `fail`. Warning-only runs still exit 0, and the interactive setup-wizard path is unchanged — an accepted wizard's success and its error are both passed through.
+  * `axis daemon status` exits 4 for `unavailable`, `stale`, `degraded`, and `incompatible` metadata. The machine-readable envelope is still written first and is unchanged; only the exit code is new. A failure to write that envelope still outranks the health disposition.
+  * `axis model stop` now reports a typed disposition — `stopped`, `not_running`, `wrong_owner`, or `inspection_unavailable` — and exits 4 for everything except `stopped`. A port with no listener previously printed `stopped` and exited 0. Missing `fuser`/`lsof`/`ps` is reported as `inspection_unavailable`, never as `not_running`, because the port was never observed.
+
+### Bug Fixes
+
+* **Daemon:** Make `axis daemon restart` readiness honest. Both the short-circuit and the post-restart poll now use one predicate requiring the exact current version, `Ready=true`, `Stale=false`, and an empty `LastError`; previously both checked only version and staleness, so a daemon that was not ready — or that was reporting a refresh error — was announced as "already fresh". A current-version daemon that is merely still starting gets one bounded 3-second grace period before at most one terminate/start cycle, so repeated restarts cannot churn a daemon that was about to come up. Wrong-version and stale daemons get no grace: exact version equality is an intentional split-binary guard for installations where the CLI and the supervised daemon run from different filesystem paths.
+
 ## v0.16.0 (2026-09-01)
 
 ### Features

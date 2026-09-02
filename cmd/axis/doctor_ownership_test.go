@@ -462,8 +462,10 @@ func TestDoctorReportsDuplicateDaemons(t *testing.T) {
 		cmd.SetArgs(nil)
 		return cmd.Execute()
 	})
-	if err != nil {
-		t.Fatalf("doctor Execute: %v", err)
+	// This scenario contains a failed check, so the command must report
+	// failure to the caller as well as in the rendered report.
+	if got := ExitCode(err); got != ExitErrCommandFail {
+		t.Fatalf("doctor Execute: exit %d, want %d", got, ExitErrCommandFail)
 	}
 	stdout = stripANSI(stdout)
 	for _, want := range []string{"Daemon processes", "2 axis daemons", "Daemon executable", "deleted executable"} {
