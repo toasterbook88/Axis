@@ -463,16 +463,27 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		}
 	}
 
-	// Print visual report using RenderDoctorReport
-	fmt.Fprint(out, RenderDoctorReport(checks))
+	// Print visual report using RenderDoctorReport. The report is the diagnostic
+	// payload: if it cannot be emitted, that write error outranks the health
+	// disposition below, because the caller has no report to act on.
+	if _, writeErr := fmt.Fprint(out, RenderDoctorReport(checks)); writeErr != nil {
+		return writeErr
+	}
 
 	// Print binary path info
 	self, _ := os.Executable()
-	ui.DimColor.Fprintf(out, "  Binary Path: %s\n", self)
-	ui.DimColor.Fprintf(out, "  Version:     %s\n\n", Version)
+	if _, writeErr := ui.DimColor.Fprintf(out, "  Binary Path: %s\n", self); writeErr != nil {
+		return writeErr
+	}
+	if _, writeErr := ui.DimColor.Fprintf(out, "  Version:     %s\n\n", Version); writeErr != nil {
+		return writeErr
+	}
 
-	// Active Remediation for missing config
-	if err != nil && ui.StdinIsTerminal() && ui.StdoutIsTerminal() {
+	// Active Remediation for missing config. An accepted wizard owns the result
+	// of the command: its success and its error are both passed through
+	// unchanged, and neither is overwritten by the failed-config disposition
+	// that prompted it.
+	if err != nil && doctorStdinIsTerminal() && doctorStdoutIsTerminal() {
 		fmt.Fprint(out, "No configuration found. Would you like to run the setup wizard (axis init) now? [y/N]: ")
 		var answer string
 		_, _ = fmt.Fscanln(cmd.InOrStdin(), &answer)
@@ -480,9 +491,42 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		if answer == "y" || answer == "yes" {
 			// Trigger setup wizard (we will run the init command logic)
 			fmt.Fprintln(out, "\nStarting setup wizard...")
-			return runInitWizard(cmd)
+			return doctorRunInitWizard(cmd)
 		}
 	}
 
-	return nil
+	return doctorDisposition(checks)
 }
+
+// doctorDisposition converts the rendered report into a process exit
+// disposition. Any check classified "fail" makes the command fail, in both bare
+// and --strict modes; --strict differs only in what it classifies as a failure
+// (it promotes daemon-cache unavailability from warn to fail), never in how a
+// failure is reported. Warnings stay advisory and exit 0.
+func doctorDisposition(checks []DoctorCheck) error {
+	var failed []string
+	for _, check := range checks {
+		if check.Status == "fail" {
+			failed = append(failed, check.Name)
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	noun := "checks"
+	if len(failed) == 1 {
+		noun = "check"
+	}
+	return ExitCodeError{
+		Code:    ExitErrCommandFail,
+		Message: fmt.Sprintf("%d doctor %s failed: %s", len(failed), noun, strings.Join(failed, ", ")),
+	}
+}
+
+// Seams for the interactive remediation branch, so its four outcomes
+// (non-TTY, decline, wizard success, wizard error) are testable.
+var (
+	doctorStdinIsTerminal  = ui.StdinIsTerminal
+	doctorStdoutIsTerminal = ui.StdoutIsTerminal
+	doctorRunInitWizard    = runInitWizard
+)

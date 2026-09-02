@@ -17,18 +17,23 @@ import (
 )
 
 type fakeModelRunner struct {
-	started [][]string
-	stopped []int
-	probed  []int
+	started         [][]string
+	stopped         []int
+	probed          []int
+	stopDisposition modelStopDisposition
+	stopErr         error
 }
 
 func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, plan modellife.StartPlan) error {
 	f.started = append(f.started, append([]string(nil), plan.Argv...))
 	return nil
 }
-func (f *fakeModelRunner) Stop(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, port int) error {
+func (f *fakeModelRunner) Stop(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, port int) (modelStopDisposition, error) {
 	f.stopped = append(f.stopped, port)
-	return nil
+	if f.stopDisposition != "" {
+		return f.stopDisposition, f.stopErr
+	}
+	return modelStopStopped, f.stopErr
 }
 func (f *fakeModelRunner) Probe(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, port int) error {
 	f.probed = append(f.probed, port)

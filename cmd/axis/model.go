@@ -31,7 +31,7 @@ var loadModelConfig = func() (*config.Config, error) {
 
 type modelProcessRunner interface {
 	Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error
-	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
+	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) (modelStopDisposition, error)
 	Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
 }
 
@@ -114,11 +114,36 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	if err != nil {
 		return err
 	}
-	if err := runner.Stop(ctx, nf, cfgNode, port); err != nil {
+	disposition, err := runner.Stop(ctx, nf, cfgNode, port)
+	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "stopped %s:%d\n", nf.Name, port)
-	return err
+	// Report what was actually observed. Only "stopped" is a successful
+	// lifecycle transition; the rest mean nothing was stopped, so they must
+	// not print success, and must fail for shell automation.
+	if _, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d\n", disposition, nf.Name, port); writeErr != nil {
+		return writeErr
+	}
+	if disposition == modelStopStopped {
+		return nil
+	}
+	return ExitCodeError{
+		Code:    ExitErrCommandFail,
+		Message: fmt.Sprintf("model stop on %s:%d: %s", nf.Name, port, modelStopExplanation(disposition)),
+	}
+}
+
+func modelStopExplanation(d modelStopDisposition) string {
+	switch d {
+	case modelStopNotRunning:
+		return "no listener was running on that port"
+	case modelStopWrongOwner:
+		return "the listener is not an axis-managed llama-server; refusing to kill it"
+	case modelStopInspectionUnavailable:
+		return "port ownership could not be inspected (fuser, lsof, or ps unavailable)"
+	default:
+		return string(d)
+	}
 }
 
 func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *config.NodeConfig, error) {
@@ -165,9 +190,10 @@ func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode
 	return runOnNode(ctx, node, cfgNode, script)
 }
 
-func (liveModelRunner) Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error {
+func (liveModelRunner) Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) (modelStopDisposition, error) {
 	script := shellStop(port)
-	return runOnNode(ctx, node, cfgNode, script)
+	out, err := runOnNodeCapturing(ctx, node, cfgNode, script)
+	return classifyModelStop(out, err)
 }
 
 func (liveModelRunner) Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error {
@@ -206,9 +232,10 @@ func shellStart(argv []string, port int) string {
 
 func shellStop(port int) string {
 	return shellListenerLookup(port) +
-		"if test -z \"$_axis_pids\"; then exit 0; fi; " +
+		"if test -z \"$_axis_pids\"; then echo '" + modelStopMarker + "not_running'; exit 0; fi; " +
 		shellLlamaServerOwnerGuard(port) +
-		"for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done"
+		"for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done; " +
+		"echo '" + modelStopMarker + "stopped'"
 }
 
 func shellProbe(port int) string {
@@ -223,12 +250,12 @@ func shellProbe(port int) string {
 
 func shellLlamaServerOwnerGuard(port int) string {
 	return fmt.Sprintf(
-		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; exit 127; fi; "+
+		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; echo '"+modelStopMarker+"inspection_unavailable' >&2; exit 127; fi; "+
 			"for _axis_pid in $_axis_pids; do "+
 			"case \"$_axis_pid\" in ''|*[!0-9]*) echo \"refusing invalid listener pid $_axis_pid\" >&2; exit 1;; esac; "+
 			"_axis_cmd=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_cmd=${_axis_cmd##*/}; "+
 			"if test \"$_axis_cmd\" != llama-server; then "+
-			"echo \"refusing port %d: pid $_axis_pid is $_axis_cmd, not llama-server\" >&2; exit 1; fi; "+
+			"echo \"refusing port %d: pid $_axis_pid is $_axis_cmd, not llama-server\" >&2; echo '"+modelStopMarker+"wrong_owner' >&2; exit 1; fi; "+
 			"done; ",
 		port,
 	)
@@ -240,7 +267,7 @@ func shellListenerLookup(port int) string {
 			"_axis_pids=$(fuser %d/tcp 2>/dev/null); _axis_rc=$?; "+
 			"elif command -v lsof >/dev/null 2>&1; then "+
 			"_axis_pids=$(lsof -nP -tiTCP:%d -sTCP:LISTEN); _axis_rc=$?; "+
-			"else echo 'axis model requires fuser or lsof to inspect port ownership' >&2; exit 127; fi; "+
+			"else echo 'axis model requires fuser or lsof to inspect port ownership' >&2; echo '"+modelStopMarker+"inspection_unavailable' >&2; exit 127; fi; "+
 			"if test \"$_axis_rc\" -gt 1; then exit \"$_axis_rc\"; fi; "+
 			"true; ",
 		port, port,
@@ -252,20 +279,63 @@ func shellQuote(s string) string {
 }
 
 func runOnNode(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, script string) error {
+	_, err := runOnNodeCapturing(ctx, node, cfgNode, script)
+	return err
+}
+
+// runOnNodeCapturing is runOnNode that also returns the command output, so
+// callers can read a result marker the script emitted. Both transports return
+// combined output, including on failure.
+func runOnNodeCapturing(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, script string) (string, error) {
 	if models.IsLocalNode(node) {
 		ex := transport.NewLocalExecutor()
-		_, err := ex.Run(ctx, script)
-		return err
+		return ex.Run(ctx, script)
 	}
 	if cfgNode == nil {
-		return fmt.Errorf("node %s has no configuration entry", node.Name)
+		return "", fmt.Errorf("node %s has no configuration entry", node.Name)
 	}
 	spec := cfgNode.SSHDialSpec()
 	ex := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
 	defer ex.Close()
 	if err := ex.Connect(ctx); err != nil {
-		return err
+		return "", err
 	}
-	_, err := ex.Run(ctx, script)
-	return err
+	return ex.Run(ctx, script)
+}
+
+// modelStopDisposition is the observed outcome of a stop request. Only
+// modelStopStopped is a successful lifecycle transition; the others describe
+// states where nothing was stopped, and must not be reported as success.
+type modelStopDisposition string
+
+const (
+	modelStopStopped               modelStopDisposition = "stopped"
+	modelStopNotRunning            modelStopDisposition = "not_running"
+	modelStopWrongOwner            modelStopDisposition = "wrong_owner"
+	modelStopInspectionUnavailable modelStopDisposition = "inspection_unavailable"
+)
+
+// modelStopMarker is emitted by the stop script so the outcome survives both
+// the local and SSH transports, neither of which exposes a portable exit
+// status to the caller.
+const modelStopMarker = "axis-stop-result:"
+
+// classifyModelStop maps script output and error into a typed disposition.
+// A missing marker with no error is treated as stopped only when the script
+// said so; an unrecognized success is an error, never an assumed success.
+func classifyModelStop(out string, err error) (modelStopDisposition, error) {
+	switch {
+	case strings.Contains(out, modelStopMarker+string(modelStopInspectionUnavailable)):
+		return modelStopInspectionUnavailable, nil
+	case strings.Contains(out, modelStopMarker+string(modelStopWrongOwner)):
+		return modelStopWrongOwner, nil
+	case strings.Contains(out, modelStopMarker+string(modelStopNotRunning)):
+		return modelStopNotRunning, nil
+	case strings.Contains(out, modelStopMarker+string(modelStopStopped)):
+		return modelStopStopped, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("model stop produced no recognizable result marker")
 }

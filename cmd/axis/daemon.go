@@ -80,7 +80,19 @@ func daemonCmd() *cobra.Command {
 					Message: meta.LastError,
 				})
 			}
-			return writeMachineOutput(cmd.OutOrStdout(), "daemon status", status, ok, meta, warnings)
+			// The envelope is the diagnostic. Emit it first; a write failure
+			// outranks the health disposition because the caller has no
+			// payload to act on (GUD-002).
+			if writeErr := writeMachineOutput(cmd.OutOrStdout(), "daemon status", status, ok, meta, warnings); writeErr != nil {
+				return writeErr
+			}
+			if !ok {
+				return ExitCodeError{
+					Code:    ExitErrCommandFail,
+					Message: fmt.Sprintf("daemon cache is %s on %s", status, cacheAddr),
+				}
+			}
+			return nil
 		},
 	})
 
@@ -326,14 +338,31 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 	}
 
 	metaCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	meta, metaErr := daemon.FetchMeta(metaCtx, listenAddr)
+	meta, metaErr := restartFetchMeta(metaCtx, listenAddr)
 	cancel()
-	if metaErr == nil && meta.Version == daemon.Version && !meta.Stale {
-		fmt.Fprintf(out, "AXIS daemon already fresh on %s\n", listenAddr)
-		return nil
+	if metaErr == nil {
+		if daemonIsServingCurrent(meta) {
+			fmt.Fprintf(out, "AXIS daemon already fresh on %s\n", listenAddr)
+			return nil
+		}
+		// A current-version, not-stale, error-free daemon that is simply not
+		// ready yet is still starting. Give it one bounded grace window before
+		// any terminate/start cycle, so repeated restarts cannot churn a
+		// daemon that was about to come up on its own. Wrong-version or stale
+		// daemons get no grace (GUD-004): they must be replaced, not waited on.
+		if daemonIsStartingUp(meta) {
+			ready, waitErr := awaitDaemonServing(ctx, listenAddr, restartGraceWindow)
+			if waitErr != nil {
+				return waitErr
+			}
+			if ready {
+				fmt.Fprintf(out, "AXIS daemon became ready on %s\n", listenAddr)
+				return nil
+			}
+		}
 	}
 
-	pid, err := findDaemonPID(listenAddr)
+	pid, err := restartFindPID(listenAddr)
 	if err != nil {
 		return err
 	}
@@ -341,7 +370,7 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 	switch {
 	case metaErr == nil && pid > 0:
 		fmt.Fprintf(out, "Sending SIGTERM to AXIS daemon PID %d on %s\n", pid, listenAddr)
-		if err := terminatePID(pid, out); err != nil {
+		if err := restartTerminate(pid, out); err != nil {
 			return err
 		}
 	case metaErr == nil && pid == 0:
@@ -352,36 +381,22 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 		fmt.Fprintf(out, "No daemon responding on %s; starting fresh\n", listenAddr)
 	}
 
-	exe, err := os.Executable()
+	spawnedPID, err := restartSpawnDaemon(listenAddr)
 	if err != nil {
-		return fmt.Errorf("cannot resolve current binary: %w", err)
+		return err
 	}
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", os.DevNull, err)
-	}
-	defer devNull.Close()
+	fmt.Fprintf(out, "Fresh daemon started (PID %d) on %s\n", spawnedPID, listenAddr)
 
-	serveCmd := exec.Command(exe, "serve", "--addr", listenAddr)
-	serveCmd.Stdin = devNull
-	serveCmd.Stdout = devNull
-	serveCmd.Stderr = devNull
-	serveCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := serveCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start fresh daemon: %w", err)
-	}
-	fmt.Fprintf(out, "Fresh daemon started (PID %d) on %s\n", serveCmd.Process.Pid, listenAddr)
-
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(restartReadyDeadline)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(restartPollInterval):
 			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			meta, err := daemon.FetchMeta(pollCtx, listenAddr)
+			meta, err := restartFetchMeta(pollCtx, listenAddr)
 			cancel()
-			if err == nil && meta.Version == daemon.Version && !meta.Stale {
+			if err == nil && daemonIsServingCurrent(meta) {
 				fmt.Fprintln(out, "AXIS daemon is fresh and serving current snapshot")
 				return nil
 			}
@@ -498,4 +513,82 @@ func terminatePID(pid int, out io.Writer) error {
 func pidAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// Seams for daemon restart, so readiness and restart-cycle behavior can be
+// tested without spawning real daemons or signalling real processes.
+var (
+	restartFetchMeta     = daemon.FetchMeta
+	restartFindPID       = findDaemonPID
+	restartTerminate     = terminatePID
+	restartSpawnDaemon   = spawnFreshDaemon
+	restartGraceWindow   = 3 * time.Second
+	restartPollInterval  = 300 * time.Millisecond
+	restartReadyDeadline = 10 * time.Second
+)
+
+// spawnFreshDaemon starts a detached `axis serve` on addr and returns its PID.
+func spawnFreshDaemon(listenAddr string) (int, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, fmt.Errorf("cannot resolve current binary: %w", err)
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return 0, fmt.Errorf("open %s: %w", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	serveCmd := exec.Command(exe, "serve", "--addr", listenAddr)
+	serveCmd.Stdin = devNull
+	serveCmd.Stdout = devNull
+	serveCmd.Stderr = devNull
+	serveCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := serveCmd.Start(); err != nil {
+		return 0, fmt.Errorf("failed to start fresh daemon: %w", err)
+	}
+	return serveCmd.Process.Pid, nil
+}
+
+// daemonIsServingCurrent reports whether metadata describes a daemon that is
+// safe to leave running: the exact current binary version, ready, not stale,
+// and with no last refresh error. This is the single readiness predicate used
+// by both the restart short-circuit and the post-restart readiness poll, so
+// the two can never disagree about what "fresh" means.
+//
+// Version equality is exact by design (GUD-004). On installations where the CLI
+// and the supervised daemon execute different filesystem paths, a merely
+// "ready" daemon may be running an older binary; accepting it would let the two
+// silently desynchronize.
+func daemonIsServingCurrent(meta daemon.Metadata) bool {
+	return meta.Version == daemon.Version && meta.Ready && !meta.Stale && meta.LastError == ""
+}
+
+// daemonIsStartingUp reports whether metadata describes the current binary in a
+// transient not-yet-ready state, as opposed to a daemon that is wrong-version,
+// stale, or reporting an error. Only this state earns a grace period.
+func daemonIsStartingUp(meta daemon.Metadata) bool {
+	return meta.Version == daemon.Version && !meta.Ready && !meta.Stale && meta.LastError == ""
+}
+
+// awaitDaemonServing polls until the daemon reports it is serving current, the
+// window expires, or ctx is cancelled. It reports whether the daemon became
+// ready; a cancelled context is returned as an error so the caller aborts
+// instead of restarting.
+func awaitDaemonServing(ctx context.Context, listenAddr string, window time.Duration) (bool, error) {
+	deadline := time.Now().Add(window)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(restartPollInterval):
+			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			meta, err := restartFetchMeta(pollCtx, listenAddr)
+			cancel()
+			if err == nil && daemonIsServingCurrent(meta) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
