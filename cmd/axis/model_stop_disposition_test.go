@@ -92,23 +92,49 @@ func TestRunModelStopStoppedExitsZero(t *testing.T) {
 	}
 }
 
-// End-to-end at the shell layer: the real generated script, run against a port
-// with no listener, must classify as not_running rather than success.
-func TestShellStopClassifiesFreePortAsNotRunning(t *testing.T) {
+// End-to-end at the shell layer, using the real generated script against a port
+// with no listener. The expected disposition depends on whether this machine can
+// inspect port ownership at all, and both outcomes are part of the contract:
+// with fuser or lsof the port is provably empty (not_running); without either
+// the port was never observed, which must report inspection_unavailable and must
+// never be downgraded to not_running.
+func TestShellStopClassifiesFreePortByInspectionCapability(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash unavailable")
 	}
+	canInspect := false
+	for _, tool := range []string{"fuser", "lsof"} {
+		if _, err := exec.LookPath(tool); err == nil {
+			canInspect = true
+			break
+		}
+	}
+	if canInspect {
+		if _, err := exec.LookPath("ps"); err != nil {
+			canInspect = false
+		}
+	}
+
 	// A port in the ephemeral-but-unused range; the script only inspects it.
 	const freePort = 39733
-	script := shellStop(freePort)
-	out, err := exec.Command("bash", "-c", script).CombinedOutput()
+	out, err := exec.Command("bash", "-c", shellStop(freePort)).CombinedOutput()
 
 	disposition, cerr := classifyModelStop(string(out), err)
 	if cerr != nil {
 		t.Fatalf("classify: %v (output %q)", cerr, string(out))
 	}
-	if disposition != modelStopNotRunning {
-		t.Fatalf("free port classified as %q, want %q (output %q)", disposition, modelStopNotRunning, string(out))
+
+	want := modelStopInspectionUnavailable
+	if canInspect {
+		want = modelStopNotRunning
+	}
+	if disposition != want {
+		t.Fatalf("free port classified as %q, want %q (canInspect=%v, output %q)",
+			disposition, want, canInspect, string(out))
+	}
+	// Whichever branch ran, the free port must never be reported as stopped.
+	if disposition == modelStopStopped {
+		t.Fatal("a port with no listener must never classify as stopped")
 	}
 }
 
