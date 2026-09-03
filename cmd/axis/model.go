@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -52,11 +53,14 @@ func modelCmd() *cobra.Command {
 }
 
 func modelStartCmd() *cobra.Command {
-	var node, weights string
+	var node, weights, cacheAddr, format string
 	var port int
+	var live bool
 	cmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start llama-server on a named node (explicit port and weights)",
+		Use:          "start",
+		Short:        "Start llama-server on a named node (explicit port and weights)",
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
 			defer cancel()
@@ -66,6 +70,9 @@ func modelStartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&node, "node", "", "Cluster node name (required)")
 	cmd.Flags().StringVar(&weights, "weights", "", "GGUF path on a named local volume (required)")
 	cmd.Flags().IntVar(&port, "port", 0, "Listen port (required; no default)")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().StringVar(&format, "format", "text", "Start operation receipt format: text, json, or yaml")
 	_ = cmd.MarkFlagRequired("node")
 	_ = cmd.MarkFlagRequired("weights")
 	_ = cmd.MarkFlagRequired("port")
@@ -76,10 +83,11 @@ func modelStopCmd() *cobra.Command {
 	var node, cacheAddr, format string
 	var port int
 	cmd := &cobra.Command{
-		Use:     "stop [generation-id]",
-		Short:   "Stop an observed llama-server generation or use legacy node/port flags",
-		Args:    cobra.MaximumNArgs(1),
-		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
+		Use:          "stop [generation-id]",
+		Short:        "Stop an observed llama-server generation or use legacy node/port flags",
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
@@ -100,21 +108,129 @@ func modelStopCmd() *cobra.Command {
 }
 
 func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights string, port int, runner modelProcessRunner) error {
-	nf, cfgNode, err := resolveModelNode(ctx, nodeName)
+	startedAt := time.Now().UTC()
+	live, _ := cmd.Flags().GetBool("live")
+	cacheAddr, _ := cmd.Flags().GetString("cache-addr")
+	if cacheAddr == "" {
+		cacheAddr = api.DefaultAddr()
+	}
+	format, _ := cmd.Flags().GetString("format")
+	if format == "" {
+		format = "text"
+	}
+	var (
+		snap   *models.ClusterSnapshot
+		source string
+		err    error
+	)
+	if live {
+		snap, err = loadModelSnapshot(ctx)
+		source = "live"
+	} else {
+		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
+	}
+	if err != nil {
+		if live {
+			return fmt.Errorf("collect live cluster snapshot for model start: %w", err)
+		}
+		return fmt.Errorf("load cluster snapshot from daemon cache for model start: %w (use --live for an explicit live collection)", err)
+	}
+
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
 	if err != nil {
 		return err
 	}
+
+	for _, res := range nf.ResidentModels {
+		if res.Port == port {
+			receipt := models.ModelOperationReceipt{
+				Schema:         "axis.model-operation/v1",
+				ID:             models.GenerateID("mo"),
+				Action:         models.ModelOperationStart,
+				Status:         models.ModelOperationRejected,
+				Disposition:    "port_occupied",
+				Node:           nf.Name,
+				Engine:         "llama.cpp",
+				Port:           port,
+				SnapshotSource: source,
+				SnapshotAt:     snap.Timestamp,
+				StartedAt:      startedAt,
+				CompletedAt:    time.Now().UTC(),
+				Error:          fmt.Sprintf("port %d already occupied by resident model %q (%s)", port, res.Name, res.Runtime),
+			}
+			if snap.Publication != nil {
+				receipt.PublicationID = snap.Publication.ID
+			}
+			_ = writeModelStartReceipt(cmd, receipt, format)
+			return ExitCodeError{
+				Code:    ExitErrCommandFail,
+				Message: fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, port, receipt.Error),
+			}
+		}
+	}
+
 	plan, err := modellife.PlanStart(nf, weights, port)
 	if err != nil {
 		return err
 	}
-	if err := runner.Start(ctx, nf, cfgNode, plan); err != nil {
+
+	startErr := runner.Start(ctx, nf, cfgNode, plan)
+	if startErr == nil {
+		startErr = runner.Probe(ctx, nf, cfgNode, plan.Port)
+	}
+
+	executable := "llama-server"
+	if len(plan.Argv) > 0 {
+		executable = plan.Argv[0]
+	}
+
+	receipt := models.ModelOperationReceipt{
+		Schema:         "axis.model-operation/v1",
+		ID:             models.GenerateID("mo"),
+		Action:         models.ModelOperationStart,
+		Status:         models.ModelOperationCompleted,
+		Disposition:    "started",
+		Node:           plan.Node,
+		Engine:         "llama.cpp",
+		Port:           plan.Port,
+		Model:          path.Base(plan.Weights),
+		Weights:        plan.Weights,
+		Volume:         plan.Volume,
+		Executable:     executable,
+		SnapshotSource: source,
+		SnapshotAt:     snap.Timestamp,
+		StartedAt:      startedAt,
+		CompletedAt:    time.Now().UTC(),
+	}
+	if snap.Publication != nil {
+		receipt.PublicationID = snap.Publication.ID
+	}
+	if startErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = startErr.Error()
+	}
+
+	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	if startErr != nil {
+		return fmt.Errorf("started but probe failed: %w", startErr)
+	}
+	return nil
+}
+
+func writeModelStartReceipt(cmd *cobra.Command, receipt models.ModelOperationReceipt, format string) error {
+	if format == "json" || format == "yaml" {
+		return printOutput(cmd.OutOrStdout(), receipt, format)
+	}
+	if receipt.Status == models.ModelOperationCompleted {
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
+			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID)
 		return err
 	}
-	if err := runner.Probe(ctx, nf, cfgNode, plan.Port); err != nil {
-		return fmt.Errorf("started but probe failed: %w", err)
-	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s\n", plan.Argv[0], plan.Node, plan.Port, plan.Volume)
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d: %s operation %s\n",
+		receipt.Disposition, receipt.Node, receipt.Port, receipt.Error, receipt.ID)
 	return err
 }
 
@@ -122,7 +238,18 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
-	nf, cfgNode, err := resolveModelNode(ctx, nodeName)
+	cacheAddr, _ := cmd.Flags().GetString("cache-addr")
+	if cacheAddr == "" {
+		cacheAddr = api.DefaultAddr()
+	}
+	snap, _, err := fetchModelInventorySnapshot(ctx, cacheAddr)
+	if err != nil {
+		snap, err = loadModelSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
 	if err != nil {
 		return err
 	}
