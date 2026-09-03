@@ -2,16 +2,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/modelinventory"
 	"github.com/toasterbook88/axis/internal/modellife"
+	"github.com/toasterbook88/axis/internal/modelplan"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/transport"
@@ -47,8 +53,32 @@ func modelCmd() *cobra.Command {
 	}
 	cmd.AddCommand(modelListCmd())
 	cmd.AddCommand(modelInspectCmd())
+	cmd.AddCommand(modelPlanCmd())
 	cmd.AddCommand(modelStartCmd())
 	cmd.AddCommand(modelStopCmd())
+	return cmd
+}
+
+func modelPlanCmd() *cobra.Command {
+	var cacheAddr, format string
+	var port int
+	var live bool
+	cmd := &cobra.Command{
+		Use:          "plan <spec|weights>",
+		Short:        "Dry-run evaluation of cluster nodes for model placement",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
+			defer cancel()
+			return runModelPlan(ctx, cmd, args[0], port, live, cacheAddr, format)
+		},
+	}
+	cmd.Flags().IntVar(&port, "port", 8080, "Target listen port to verify availability")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	return cmd
 }
 
@@ -105,6 +135,137 @@ func modelStopCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
 	return cmd
+}
+
+func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string, port int, live bool, cacheAddr, format string) error {
+	var (
+		snap   *models.ClusterSnapshot
+		source string
+		err    error
+	)
+	if live {
+		snap, err = loadModelSnapshot(ctx)
+		source = "live"
+	} else {
+		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
+	}
+	if err != nil {
+		if live {
+			return fmt.Errorf("collect live cluster snapshot for model plan: %w", err)
+		}
+		return fmt.Errorf("load cluster snapshot from daemon cache for model plan: %w (use --live for an explicit live collection)", err)
+	}
+
+	spec, err := resolveModelSpec(specOrWeights, snap)
+	if err != nil {
+		return err
+	}
+
+	plan, err := modelplan.PlanSingleNode(snap, spec, port)
+	if err != nil {
+		return err
+	}
+	plan.SnapshotSource = source
+
+	if format == "json" || format == "yaml" {
+		if writeErr := printOutput(cmd.OutOrStdout(), plan, format); writeErr != nil {
+			return writeErr
+		}
+	} else {
+		if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), modelplan.FormatModelPlacementPlanText(plan)); writeErr != nil {
+			return writeErr
+		}
+	}
+
+	if len(plan.Candidates) == 0 {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: "model plan: no eligible placement candidates found",
+		}
+	}
+	return nil
+}
+
+func resolveModelSpec(input string, snap *models.ClusterSnapshot) (models.ModelSpec, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return models.ModelSpec{}, fmt.Errorf("model spec or weights path is required")
+	}
+
+	// 1. Check if input is a local file
+	if fi, err := os.Stat(input); err == nil && !fi.IsDir() {
+		content, readErr := os.ReadFile(input)
+		if readErr == nil {
+			var spec models.ModelSpec
+			if jsonErr := json.Unmarshal(content, &spec); jsonErr == nil && spec.ID != "" && spec.Name != "" {
+				if err := spec.Validate(); err == nil {
+					return spec, nil
+				}
+			}
+			var yamlSpec models.ModelSpec
+			if yamlErr := yaml.Unmarshal(content, &yamlSpec); yamlErr == nil && yamlSpec.ID != "" && yamlSpec.Name != "" {
+				if err := yamlSpec.Validate(); err == nil {
+					return yamlSpec, nil
+				}
+			}
+		}
+		spec := models.ModelSpecFromPath(input, fi.Size())
+		return spec, nil
+	}
+
+	// 2. Check cluster snapshot DiskWeights
+	if snap != nil {
+		for _, n := range snap.Nodes {
+			for _, dw := range n.DiskWeights {
+				if strings.EqualFold(dw.Name, input) || strings.EqualFold(dw.Path, input) || strings.EqualFold(filepath.Base(dw.Path), filepath.Base(input)) {
+					spec := models.ModelSpecFromDiskWeight(dw)
+					return spec, nil
+				}
+			}
+		}
+		// Check resident models
+		for _, n := range snap.Nodes {
+			for _, res := range n.ResidentModels {
+				if strings.EqualFold(res.Name, input) {
+					weightMB := res.WeightSizeMB
+					if weightMB <= 0 {
+						weightMB = 2048
+					}
+					spec := models.ModelSpec{
+						Schema:           "axis.model-spec/v1",
+						ID:               models.ModelSpecID(res.Name, models.ModelFormatGGUF, weightMB),
+						Name:             res.Name,
+						Format:           models.ModelFormatGGUF,
+						Source:           "resident-model",
+						ObservedAt:       time.Now().UTC(),
+						Accelerators:     []models.AcceleratorType{models.AcceleratorCUDA, models.AcceleratorMetal, models.AcceleratorROCm, models.AcceleratorCPU},
+						SupportedEngines: []string{"llama.cpp"},
+						ParallelismModes: []string{"single-node"},
+						Memory: models.ModelMemoryRequirements{
+							WeightSizeMB:      weightMB,
+							ContextOverheadMB: 512,
+							RuntimeOverheadMB: 256,
+							MinVRAMMB:         0,
+							RecommendedVRAMMB: weightMB + 512,
+						},
+					}
+					return spec, nil
+				}
+			}
+		}
+	}
+
+	// 3. If input ends with .gguf or has path separators, construct an unobserved spec with default estimate
+	base := filepath.Base(input)
+	ext := strings.ToLower(filepath.Ext(base))
+	if ext == ".gguf" || ext == ".safetensors" || strings.Contains(input, "/") {
+		name := strings.TrimSuffix(base, ext)
+		spec := models.ModelSpecFromPath(input, 2048*1024*1024)
+		spec.Name = name
+		return spec, nil
+	}
+
+	return models.ModelSpec{}, fmt.Errorf("unable to resolve model spec or weights for %q (not found in local filesystem or cluster disk weights)", input)
 }
 
 func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights string, port int, runner modelProcessRunner) error {
