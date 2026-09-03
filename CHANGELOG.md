@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Features
+
+* **Model inventory:** Add a canonical read-only model-instance schema plus `axis model list` and `axis model inspect <instance-id>`. Inventory reads are daemon-cache-first for fast operator feedback; `--live` is an explicit fresh collection with no hidden fallback. Every instance preserves the observed node status and timestamp, while the inventory carries its snapshot source, publication ID, and warnings. Instance IDs are deterministic keys for the observed node/engine/model/port slot, not fabricated process IDs.
+
 ### Breaking
 
 * **CLI exit contracts:** `axis doctor`, `axis daemon status`, and `axis model stop` now exit **4** when they report an unhealthy or no-op result, after writing their complete diagnostic output. They previously exited 0, so shell automation could not distinguish a healthy cluster from a broken one. There is no deprecation path for an exit code: **shell consumers that treat these commands as pass/fail must branch on exit 4.**

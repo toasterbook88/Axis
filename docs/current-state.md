@@ -55,6 +55,7 @@ The live repo currently contains:
 - Probe-verified local Apple Foundation Models capability on eligible Apple Silicon hosts running macOS 26 or later, surfaced in node facts/snapshots and as an `apple-foundation-models` tool, with actual model execution available only through the explicit guarded execution path
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Resident-model truth in node facts via `resident_models`, populated from `ollama ps`, `llama-server` `/v1/models`, and `mlx_lm.server` `/v1/models`
+- Canonical read-only model-instance inventory through `axis model list` and `axis model inspect <instance-id>`. These commands read the bound daemon publication by default and require `--live` for a fresh cluster collection; output preserves source, publication ID, snapshot/node observation times, node status, and warnings rather than inventing process ownership or endpoint data
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
 - Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference
@@ -102,6 +103,8 @@ Top-level commands currently registered in the binary:
 | `axis chat` | Removed | Prints `use: axis agent` |
 | `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; injects nearest `AGENTS.md` into the system prompt when present; `--auto-approve` for safe commands; `--system` appends to system prompt |
 | `axis llm` | Removed | Prints `use: axis ai route` |
+| `axis model list\|inspect` | Inspect resident model instances | Daemon cache by default; `--live` explicitly performs a fresh cluster collection; text, JSON, and YAML output |
+| `axis model start\|stop` | Manage llama-server | Requires an explicit node and port; start also requires a weight path on an observed local volume |
 | `axis cluster` | Fleet snapshot | `status` (live; `--cached` opt-in), `summary` |
 | `axis node` | This machine | `facts` (localhost). Root `axis facts` still works |
 
@@ -131,6 +134,7 @@ Top-level commands currently registered in the binary:
 | `internal/repairs` | Emit authority maintenance receipts | Internal-only structured slog helper; receipts are emitted only after state or ledger cleanup persists and never drive reconciliation |
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, trigger-aware refresh metadata, and cached discovery-freshness exposure for config/state/skills, execution events, and long-lived discovery beacons |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
+| `internal/modelinventory` | Canonical resident-model inventory projection | Internal-only deterministic projection of snapshot resident facts; preserves authority metadata and makes no process-ownership or endpoint claims |
 | `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences (keyed per model name), hard `PeakRAMMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and explicit local-only Apple Foundation Models qualification are now live |
 | `internal/state` | Persist placement memory | Explicit acquire/release is live and tested; state now also stores exact-scope execution observations separately from failure memory |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |

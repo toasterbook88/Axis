@@ -40,8 +40,10 @@ var defaultModelRunner modelProcessRunner = liveModelRunner{}
 func modelCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "model",
-		Short: "Start or stop a llama-server on a named node",
+		Short: "Inspect resident models or manage llama-server on a named node",
 	}
+	cmd.AddCommand(modelListCmd())
+	cmd.AddCommand(modelInspectCmd())
 	cmd.AddCommand(modelStartCmd())
 	cmd.AddCommand(modelStopCmd())
 	return cmd

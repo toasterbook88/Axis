@@ -218,7 +218,7 @@ HDD penalty: −15 for heavy inference.
 | `axis agent [--auto-approve] [--autonomy MODE] [--console]` | Agentic tool-calling assistant; REPL slash commands `/plan /todo /diff /undo /compact /autonomy /export /fleet`; `--console` opens the experimental transcript console (interactive TTY only; tool approvals are denied) |
 | `axis llm` | Removed; prints `use axis ai route` |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
-| `axis model` | Start/stop llama-server on a named node (`start --node --weights --port`, `stop --node --port`) |
+| `axis model` | List/inspect observed resident instances (daemon cache by default; `--live` explicit), or start/stop llama-server on a named node |
 | `axis cluster` | Fleet snapshot: `status`, `summary` |
 | `axis node` | This machine: `facts` |
 | `axis cortex` | Distributed vector memory / event bus |

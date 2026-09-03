@@ -70,6 +70,7 @@ Classification is based on live code inspection (`internal/`), test coverage, op
 | `internal/llmrouter` | experimental | Hybrid local/cloud routing; new surface |
 | `internal/mcp` | experimental | Optional MCP server with 17 read-only diagnostics and 3 advisory lease primitives |
 | `internal/mesh` | experimental | Live optional gossip discovery started by `axis serve`, with CLI and HTTP diagnostics; replay protection is still pending |
+| `internal/modelinventory` | internal-only | Deterministic projection from snapshot resident facts to the canonical model-instance read schema |
 | `internal/models` | internal-only | Core shared types; no public API surface |
 | `internal/persist` | internal-only | Corrupt-file quarantine helpers; pure infrastructure |
 | `internal/publication` | internal-only | Snapshot component evidence assembly; no independent operator surface |
@@ -124,6 +125,8 @@ Classification is based on `cmd/axis/` source files and the command surface docu
 | `axis chat` | removed | Prints `use: axis agent` |
 | `axis agent` | experimental | Agentic tool-calling assistant; safety-gated but evolving |
 | `axis llm` | removed | Prints `use: axis ai route` |
+| `axis model list\|inspect` | stable | Read-only resident-model inventory bound to daemon or explicit live snapshot authority |
+| `axis model start\|stop` | stable | Explicit node/port lifecycle with weight-path and process-owner guards |
 | `axis cluster` | stable | Fleet snapshot: `status`, `summary` |
 | `axis node` | stable | This machine: `facts` |
 | `axis mesh` | experimental | Live gossip/beacon diagnostics; daemon and HTTP mesh state remain optional |
