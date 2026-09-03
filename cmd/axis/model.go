@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/modelinventory"
 	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -31,7 +33,7 @@ var loadModelConfig = func() (*config.Config, error) {
 
 type modelProcessRunner interface {
 	Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error
-	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) (modelStopDisposition, error)
+	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, target modellife.StopTarget) (modelStopDisposition, error)
 	Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
 }
 
@@ -71,21 +73,29 @@ func modelStartCmd() *cobra.Command {
 }
 
 func modelStopCmd() *cobra.Command {
-	var node string
+	var node, cacheAddr, format string
 	var port int
 	cmd := &cobra.Command{
-		Use:   "stop",
-		Short: "Stop the llama-server listening on --port on a named node",
+		Use:     "stop [generation-id]",
+		Short:   "Stop an observed llama-server generation or use legacy node/port flags",
+		Args:    cobra.MaximumNArgs(1),
+		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
+			if len(args) == 1 {
+				if strings.TrimSpace(node) != "" || port != 0 {
+					return fmt.Errorf("generation ID cannot be combined with --node or --port")
+				}
+				return runModelStopGeneration(ctx, cmd, args[0], cacheAddr, format, defaultModelRunner)
+			}
 			return runModelStop(ctx, cmd, node, port, defaultModelRunner)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "Cluster node name (required)")
-	cmd.Flags().IntVar(&port, "port", 0, "Listen port (required)")
-	_ = cmd.MarkFlagRequired("node")
-	_ = cmd.MarkFlagRequired("port")
+	cmd.Flags().StringVar(&node, "node", "", "Legacy cluster node name")
+	cmd.Flags().IntVar(&port, "port", 0, "Legacy llama-server listen port")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
 	return cmd
 }
 
@@ -116,7 +126,7 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	if err != nil {
 		return err
 	}
-	disposition, err := runner.Stop(ctx, nf, cfgNode, port)
+	disposition, err := runner.Stop(ctx, nf, cfgNode, modellife.StopTarget{Port: port})
 	if err != nil {
 		return err
 	}
@@ -135,6 +145,115 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	}
 }
 
+func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationID, cacheAddr, format string, runner modelProcessRunner) error {
+	generationID = strings.TrimSpace(generationID)
+	if strings.HasPrefix(generationID, "mi-") {
+		return fmt.Errorf("%s is a stable slot ID and cannot authorize a stop; use the instance generation_id", generationID)
+	}
+	if !strings.HasPrefix(generationID, "mg-") {
+		return fmt.Errorf("model generation ID must start with mg-")
+	}
+	startedAt := time.Now().UTC()
+	snap, source, err := fetchModelInventorySnapshot(ctx, cacheAddr)
+	if err != nil {
+		return fmt.Errorf("load model generation from daemon cache: %w", err)
+	}
+	inventory := modelinventory.FromSnapshot(snap, source)
+	if inventory.PublicationID == "" {
+		return fmt.Errorf("daemon cache has no bound publication ID; refusing lifecycle mutation")
+	}
+	var instance *models.ModelInstance
+	for i := range inventory.Instances {
+		if inventory.Instances[i].GenerationID == generationID {
+			instance = &inventory.Instances[i]
+			break
+		}
+	}
+	if instance == nil {
+		return fmt.Errorf("model generation %q not found in %s inventory", generationID, sourceOrLive(inventory.Source))
+	}
+	if instance.NodeStatus != models.StatusComplete {
+		return fmt.Errorf("model generation %s is on node %s with status %s; refusing lifecycle mutation", generationID, instance.Node, instance.NodeStatus)
+	}
+	if instance.Engine != "llama.cpp" {
+		return fmt.Errorf("model generation %s uses unsupported stop engine %q", generationID, instance.Engine)
+	}
+	target := modellife.StopTarget{
+		Port:              instance.Port,
+		PID:               instance.PID,
+		Executable:        instance.Executable,
+		ProcessOwner:      instance.ProcessOwner,
+		ProcessStartToken: instance.ProcessStartToken,
+		GenerationID:      instance.GenerationID,
+	}
+	if err := target.Validate(); err != nil {
+		return fmt.Errorf("model generation %s has incomplete stop evidence: %w", generationID, err)
+	}
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, instance.Node)
+	if err != nil {
+		return err
+	}
+	disposition, stopErr := runner.Stop(ctx, nf, cfgNode, target)
+	receipt := models.ModelOperationReceipt{
+		Schema:         "axis.model-operation/v1",
+		ID:             models.GenerateID("mo"),
+		Action:         models.ModelOperationStop,
+		Status:         modelStopOperationStatus(disposition, stopErr),
+		Disposition:    string(disposition),
+		InstanceID:     instance.ID,
+		GenerationID:   instance.GenerationID,
+		Node:           instance.Node,
+		Engine:         instance.Engine,
+		Port:           instance.Port,
+		PID:            instance.PID,
+		SnapshotSource: inventory.Source,
+		PublicationID:  inventory.PublicationID,
+		SnapshotAt:     inventory.ObservedAt,
+		StartedAt:      startedAt,
+		CompletedAt:    time.Now().UTC(),
+	}
+	if stopErr != nil {
+		receipt.Disposition = "execution_failed"
+		receipt.Error = stopErr.Error()
+	}
+	if writeErr := writeModelOperationReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	if stopErr != nil {
+		return stopErr
+	}
+	if disposition == modelStopStopped {
+		return nil
+	}
+	return ExitCodeError{
+		Code:    ExitErrCommandFail,
+		Message: fmt.Sprintf("model generation stop on %s:%d: %s", instance.Node, instance.Port, modelStopExplanation(disposition)),
+	}
+}
+
+func modelStopOperationStatus(disposition modelStopDisposition, err error) models.ModelOperationStatus {
+	if err != nil {
+		return models.ModelOperationFailed
+	}
+	switch disposition {
+	case modelStopStopped:
+		return models.ModelOperationCompleted
+	case modelStopNotRunning:
+		return models.ModelOperationNoOp
+	default:
+		return models.ModelOperationRejected
+	}
+}
+
+func writeModelOperationReceipt(cmd *cobra.Command, receipt models.ModelOperationReceipt, format string) error {
+	if format == "json" || format == "yaml" {
+		return printOutput(cmd.OutOrStdout(), receipt, format)
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d generation %s operation %s\n",
+		receipt.Disposition, receipt.Node, receipt.Port, receipt.GenerationID, receipt.ID)
+	return err
+}
+
 func modelStopExplanation(d modelStopDisposition) string {
 	switch d {
 	case modelStopNotRunning:
@@ -143,6 +262,8 @@ func modelStopExplanation(d modelStopDisposition) string {
 		return "the listener is not an axis-managed llama-server; refusing to kill it"
 	case modelStopInspectionUnavailable:
 		return "port ownership could not be inspected (fuser, lsof, or ps unavailable)"
+	case modelStopGenerationMismatch:
+		return "the process generation changed or was replaced; refusing to kill it"
 	default:
 		return string(d)
 	}
@@ -156,6 +277,13 @@ func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *conf
 	snap, err := loadModelSnapshot(ctx)
 	if err != nil {
 		return models.NodeFacts{}, nil, err
+	}
+	return resolveModelNodeFromSnapshot(snap, name)
+}
+
+func resolveModelNodeFromSnapshot(snap *models.ClusterSnapshot, name string) (models.NodeFacts, *config.NodeConfig, error) {
+	if snap == nil {
+		return models.NodeFacts{}, nil, fmt.Errorf("no cluster snapshot")
 	}
 	var nf *models.NodeFacts
 	for i := range snap.Nodes {
@@ -192,8 +320,8 @@ func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode
 	return runOnNode(ctx, node, cfgNode, script)
 }
 
-func (liveModelRunner) Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) (modelStopDisposition, error) {
-	script := shellStop(port)
+func (liveModelRunner) Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, target modellife.StopTarget) (modelStopDisposition, error) {
+	script := shellStopTarget(target)
 	out, err := runOnNodeCapturing(ctx, node, cfgNode, script)
 	return classifyModelStop(out, err)
 }
@@ -233,11 +361,41 @@ func shellStart(argv []string, port int) string {
 }
 
 func shellStop(port int) string {
+	return shellStopTarget(modellife.StopTarget{Port: port})
+}
+
+func shellStopTarget(target modellife.StopTarget) string {
+	port := target.Port
+	killCmd := "for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done; "
+	if target.IsGenerationBound() {
+		killCmd = fmt.Sprintf("kill -KILL \"%d\" || exit $?; ", target.PID)
+	}
 	return shellListenerLookup(port) +
 		"if test -z \"$_axis_pids\"; then echo '" + modelStopMarker + "not_running'; exit 0; fi; " +
 		shellLlamaServerOwnerGuard(port) +
-		"for _axis_pid in $_axis_pids; do kill -KILL \"$_axis_pid\" || exit $?; done; " +
+		shellGenerationGuard(target) +
+		killCmd +
 		"echo '" + modelStopMarker + "stopped'"
+}
+
+func shellGenerationGuard(target modellife.StopTarget) string {
+	if !target.IsGenerationBound() {
+		return ""
+	}
+	return fmt.Sprintf(
+		"_axis_matched=false; "+
+			"for _axis_pid in $_axis_pids; do "+
+			"if test \"$_axis_pid\" = \"%d\"; then "+
+			"_axis_start=$(ps -p \"$_axis_pid\" -o lstart= 2>/dev/null | awk '{$1=$1; print}' || echo \"\"); "+
+			"if test \"$_axis_start\" = %s; then _axis_matched=true; break; fi; "+
+			"fi; "+
+			"done; "+
+			"if test \"$_axis_matched\" != true; then "+
+			"echo 'axis model generation mismatch: target pid or start time changed' >&2; "+
+			"echo '"+modelStopMarker+"generation_mismatch' >&2; exit 1; fi; ",
+		target.PID,
+		shellQuote(target.ProcessStartToken),
+	)
 }
 
 func shellProbe(port int) string {
@@ -315,6 +473,7 @@ const (
 	modelStopNotRunning            modelStopDisposition = "not_running"
 	modelStopWrongOwner            modelStopDisposition = "wrong_owner"
 	modelStopInspectionUnavailable modelStopDisposition = "inspection_unavailable"
+	modelStopGenerationMismatch    modelStopDisposition = "generation_mismatch"
 )
 
 // modelStopMarker is emitted by the stop script so the outcome survives both
@@ -331,6 +490,8 @@ func classifyModelStop(out string, err error) (modelStopDisposition, error) {
 		return modelStopInspectionUnavailable, nil
 	case strings.Contains(out, modelStopMarker+string(modelStopWrongOwner)):
 		return modelStopWrongOwner, nil
+	case strings.Contains(out, modelStopMarker+string(modelStopGenerationMismatch)):
+		return modelStopGenerationMismatch, nil
 	case strings.Contains(out, modelStopMarker+string(modelStopNotRunning)):
 		return modelStopNotRunning, nil
 	case strings.Contains(out, modelStopMarker+string(modelStopStopped)):
