@@ -37,21 +37,26 @@ func FromSnapshot(snap *models.ClusterSnapshot, source string) models.ModelInven
 		}
 		for _, resident := range node.ResidentModels {
 			instance := models.ModelInstance{
-				ID:           instanceID(nodeIdentity, resident.Runtime, resident.Name, resident.Port),
-				Model:        resident.Name,
-				Engine:       resident.Runtime,
-				Node:         node.Name,
-				NodeStatus:   node.Status,
-				State:        models.ModelInstanceResident,
-				Port:         resident.Port,
-				Processor:    resident.Processor,
-				Source:       resident.Source,
-				WeightSizeMB: resident.WeightSizeMB,
-				SizeRAMMB:    resident.SizeRAMMB,
-				SizeVRAMMB:   resident.SizeVRAMMB,
-				ExpiresAt:    resident.ExpiresAt,
-				WarmthScore:  resident.WarmthScore,
-				ObservedAt:   node.CollectedAt,
+				ID:                instanceID(nodeIdentity, resident.Runtime, resident.Name, resident.Port),
+				GenerationID:      generationID(nodeIdentity, resident),
+				Model:             resident.Name,
+				Engine:            resident.Runtime,
+				Node:              node.Name,
+				NodeStatus:        node.Status,
+				State:             models.ModelInstanceResident,
+				Port:              resident.Port,
+				Processor:         resident.Processor,
+				Source:            resident.Source,
+				WeightSizeMB:      resident.WeightSizeMB,
+				SizeRAMMB:         resident.SizeRAMMB,
+				SizeVRAMMB:        resident.SizeVRAMMB,
+				PID:               resident.PID,
+				Executable:        resident.Executable,
+				ProcessOwner:      resident.ProcessOwner,
+				ProcessStartToken: resident.ProcessStartToken,
+				ExpiresAt:         resident.ExpiresAt,
+				WarmthScore:       resident.WarmthScore,
+				ObservedAt:        node.CollectedAt,
 			}
 			byID[instance.ID] = instance
 		}
@@ -89,4 +94,23 @@ func instanceID(nodeIdentity, engine, model string, port int) string {
 	}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "mi-" + hex.EncodeToString(digest[:12])
+}
+
+func generationID(nodeIdentity string, resident models.ResidentModel) string {
+	nodeIdentity = strings.TrimSpace(nodeIdentity)
+	executable := strings.TrimSpace(resident.Executable)
+	startToken := strings.TrimSpace(resident.ProcessStartToken)
+	if nodeIdentity == "" || resident.PID <= 0 || executable == "" || startToken == "" {
+		return ""
+	}
+	parts := []string{
+		"axis-model-generation-v1",
+		nodeIdentity,
+		strings.ToLower(strings.TrimSpace(resident.Runtime)),
+		strconv.Itoa(resident.PID),
+		executable,
+		startToken,
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "mg-" + hex.EncodeToString(digest[:12])
 }

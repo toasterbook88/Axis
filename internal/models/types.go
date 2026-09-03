@@ -280,6 +280,13 @@ type ResidentModel struct {
 	WeightSizeMB int64  `json:"weight_size_mb,omitempty" yaml:"weight_size_mb,omitempty"` // On-disk model weights; not a memory measurement
 	SizeRAMMB    int64  `json:"size_ram_mb,omitempty" yaml:"size_ram_mb,omitempty"`       // Resident process RAM reported by the runtime or OS
 	SizeVRAMMB   int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"`     // Resident accelerator memory reported by the runtime
+	PID          int    `json:"pid,omitempty" yaml:"pid,omitempty"`                       // Observed process ID; not sufficient alone to identify a generation
+	Executable   string `json:"executable,omitempty" yaml:"executable,omitempty"`         // Observed executable path
+	ProcessOwner string `json:"process_owner,omitempty" yaml:"process_owner,omitempty"`   // Observed operating-system account
+	// ProcessStartToken is the platform's normalized process-start observation.
+	// It is intentionally opaque; paired with PID and executable it prevents PID
+	// reuse from masquerading as the same process generation.
+	ProcessStartToken string `json:"process_start_token,omitempty" yaml:"process_start_token,omitempty"`
 
 	// ExpiresAt is the wall-clock time at which the model is expected to
 	// be unloaded by the runtime. Zero when unknown.

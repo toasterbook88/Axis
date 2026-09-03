@@ -128,6 +128,7 @@ PYEOF
 const LlamaServerDiscoveryScript = `set -o pipefail;
 		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || true)
 		if [ -z "$PGREP" ]; then PGREP=$(pgrep -f '[l]lama-server' 2>/dev/null | head -1 || true); fi
+		case "$PGREP" in ''|*[!0-9]*) PGREP="";; esac
 		LSBIN=$(command -v llama-server || echo "")
 		if [ -z "$LSBIN" ] && [ -n "$PGREP" ]; then
 			LSBIN=$(readlink /proc/"$PGREP"/exe 2>/dev/null || echo "")
@@ -142,8 +143,12 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 		[ -n "$PGREP" ] && RUNNING=true
 		PORT=8080
 		CMDLINE=""
+		PROCESS_OWNER=""
+		PROCESS_START_TOKEN=""
 		if [ -n "$PGREP" ]; then
 			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
+			PROCESS_OWNER=$(ps -p "$PGREP" -o user= 2>/dev/null | awk '{$1=$1; print}' || echo "")
+			PROCESS_START_TOKEN=$(ps -p "$PGREP" -o lstart= 2>/dev/null | awk '{$1=$1; print}' || echo "")
 			PORT_ARG=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--port"||$i=="-p"){print $(i+1);exit}if($i~/^(--port=|-p=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then PORT="$PORT_ARG"; fi
 		fi
@@ -166,7 +171,10 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				SIZE_BYTES=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
 				SIZE_MB=$((SIZE_BYTES / 1048576))
 				MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
-				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"source\":\"llama-server-ps\"}]"
+				LSBIN_ESC=$(echo "$LSBIN" | sed 's/\\/\\\\/g; s/"/\\"/g')
+				PROCESS_OWNER_ESC=$(echo "$PROCESS_OWNER" | sed 's/\\/\\\\/g; s/"/\\"/g')
+				PROCESS_START_TOKEN_ESC=$(echo "$PROCESS_START_TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')
+				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"source\":\"llama-server-ps\"}]"
 			fi
 		fi
 		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":$PORT,\"resident_models\":$RESIDENT}"

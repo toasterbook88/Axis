@@ -20,6 +20,7 @@ import (
 type fakeModelRunner struct {
 	started         [][]string
 	stopped         []int
+	stopTargets     []modellife.StopTarget
 	probed          []int
 	stopDisposition modelStopDisposition
 	stopErr         error
@@ -29,8 +30,9 @@ func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config
 	f.started = append(f.started, append([]string(nil), plan.Argv...))
 	return nil
 }
-func (f *fakeModelRunner) Stop(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, port int) (modelStopDisposition, error) {
-	f.stopped = append(f.stopped, port)
+func (f *fakeModelRunner) Stop(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, target modellife.StopTarget) (modelStopDisposition, error) {
+	f.stopped = append(f.stopped, target.Port)
+	f.stopTargets = append(f.stopTargets, target)
 	if f.stopDisposition != "" {
 		return f.stopDisposition, f.stopErr
 	}
