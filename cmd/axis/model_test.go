@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -70,12 +71,151 @@ func testSnap() *models.ClusterSnapshot {
 	}
 }
 
-func TestModelCommandWiresStartStop(t *testing.T) {
+func TestModelCommandWiresInventoryAndLifecycleCommands(t *testing.T) {
 	cmd := modelCmd()
-	for _, name := range []string{"start", "stop"} {
+	for _, name := range []string{"list", "inspect", "start", "stop"} {
 		if _, _, err := cmd.Find([]string{name}); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
+	}
+}
+
+func TestModelListDefaultsToDaemonCacheAndWritesCanonicalInventory(t *testing.T) {
+	previous := loadModelInventory
+	t.Cleanup(func() { loadModelInventory = previous })
+	var gotLive bool
+	loadModelInventory = func(_ context.Context, live bool, _ string) (models.ModelInventory, error) {
+		gotLive = live
+		return models.ModelInventory{
+			Source: "daemon-cache", PublicationID: "pub-test-1",
+			Instances: []models.ModelInstance{{
+				ID: "mi-abc", Model: "model-a", Engine: "llama.cpp", Node: "node-a",
+				State: models.ModelInstanceResident, Port: 8080,
+			}},
+		}, nil
+	}
+
+	cmd := modelListCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotLive {
+		t.Fatal("model list silently performed live discovery by default")
+	}
+	var got models.ModelInventory
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, out.String())
+	}
+	if got.Source != "daemon-cache" || got.PublicationID != "pub-test-1" || len(got.Instances) != 1 || got.Instances[0].ID != "mi-abc" {
+		t.Fatalf("output = %#v", got)
+	}
+}
+
+func TestModelListLiveIsExplicit(t *testing.T) {
+	previous := loadModelInventory
+	t.Cleanup(func() { loadModelInventory = previous })
+	var gotLive bool
+	loadModelInventory = func(_ context.Context, live bool, _ string) (models.ModelInventory, error) {
+		gotLive = live
+		return models.ModelInventory{Instances: []models.ModelInstance{}}, nil
+	}
+
+	cmd := modelListCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--live"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !gotLive {
+		t.Fatal("--live did not select live discovery")
+	}
+}
+
+func TestReadModelInventoryCacheFailureDoesNotHideLiveFallback(t *testing.T) {
+	previousFetch := fetchModelInventorySnapshot
+	previousLive := loadModelSnapshot
+	t.Cleanup(func() {
+		fetchModelInventorySnapshot = previousFetch
+		loadModelSnapshot = previousLive
+	})
+	cacheErr := errors.New("cache unavailable")
+	fetchModelInventorySnapshot = func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", cacheErr
+	}
+	liveCalled := false
+	loadModelSnapshot = func(context.Context) (*models.ClusterSnapshot, error) {
+		liveCalled = true
+		return &models.ClusterSnapshot{}, nil
+	}
+
+	_, err := readModelInventory(context.Background(), false, "test.sock")
+	if !errors.Is(err, cacheErr) || !strings.Contains(err.Error(), "use --live") {
+		t.Fatalf("error = %v, want cache error with explicit live guidance", err)
+	}
+	if liveCalled {
+		t.Fatal("cache failure silently fell back to expensive live discovery")
+	}
+}
+
+func TestModelListTextPropagatesWriterFailure(t *testing.T) {
+	previous := loadModelInventory
+	t.Cleanup(func() { loadModelInventory = previous })
+	loadModelInventory = func(context.Context, bool, string) (models.ModelInventory, error) {
+		return models.ModelInventory{Source: "daemon-cache", Instances: []models.ModelInstance{}}, nil
+	}
+	wantErr := errors.New("writer unavailable")
+	cmd := modelListCmd()
+	cmd.SetOut(rejectingOutputWriter{err: wantErr})
+	if err := cmd.Execute(); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want writer failure", err)
+	}
+}
+
+func TestModelInspectReturnsExactObservedInstance(t *testing.T) {
+	previous := loadModelInventory
+	t.Cleanup(func() { loadModelInventory = previous })
+	loadModelInventory = func(context.Context, bool, string) (models.ModelInventory, error) {
+		return models.ModelInventory{
+			Source: "daemon-cache",
+			Instances: []models.ModelInstance{
+				{ID: "mi-first", Model: "first", State: models.ModelInstanceResident},
+				{ID: "mi-target", Model: "target", Engine: "ollama", Node: "node-b", State: models.ModelInstanceResident, Port: 11434},
+			},
+		}, nil
+	}
+
+	cmd := modelInspectCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"mi-target", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got models.ModelInspection
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, out.String())
+	}
+	if got.Source != "daemon-cache" || got.Instance.ID != "mi-target" || got.Instance.Model != "target" {
+		t.Fatalf("inspection = %#v", got)
+	}
+}
+
+func TestModelInspectRejectsUnknownInstance(t *testing.T) {
+	previous := loadModelInventory
+	t.Cleanup(func() { loadModelInventory = previous })
+	loadModelInventory = func(context.Context, bool, string) (models.ModelInventory, error) {
+		return models.ModelInventory{Instances: []models.ModelInstance{}}, nil
+	}
+
+	cmd := modelInspectCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mi-missing"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), `model instance "mi-missing" not found`) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
