@@ -73,7 +73,7 @@ func TestRemoteCollectorCollectsResidentModelsFromOllamaProbe(t *testing.T) {
 
 func TestRemoteCollectorCollectsResidentModelsFromLlamaServerProbe(t *testing.T) {
 	m := minimalRemoteExec()
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","weight_size_mb":4384,"source":"llama-server-ps"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
@@ -94,14 +94,14 @@ func TestRemoteCollectorCollectsResidentModelsFromLlamaServerProbe(t *testing.T)
 	if got.Source != "llama-server-ps" {
 		t.Errorf("Source = %q, want llama-server-ps", got.Source)
 	}
-	if got.SizeVRAMMB != 4384 {
-		t.Errorf("SizeVRAMMB = %d, want 4384 (model file stat ≈ 4.3 GB)", got.SizeVRAMMB)
+	if got.WeightSizeMB != 4384 || got.SizeVRAMMB != 0 {
+		t.Errorf("memory facts = %+v, want weight size 4384 and unknown VRAM", got)
 	}
 }
 
 func TestRemoteCollectorCollectsResidentModelsFromMLXProbe(t *testing.T) {
 	m := minimalRemoteExec()
-	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_vram_mb":4096,"source":"mlx-lm-api"}]}`}
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_ram_mb":4096,"source":"mlx-lm-api"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
@@ -125,8 +125,8 @@ func TestRemoteCollectorCollectsResidentModelsFromMLXProbe(t *testing.T) {
 	if got.Source != "mlx-lm-api" {
 		t.Errorf("Source = %q, want mlx-lm-api", got.Source)
 	}
-	if got.SizeVRAMMB != 4096 {
-		t.Errorf("SizeVRAMMB = %d, want 4096 (process RSS ≈ 4.0 GB)", got.SizeVRAMMB)
+	if got.SizeRAMMB != 4096 || got.SizeVRAMMB != 0 {
+		t.Errorf("memory facts = %+v, want resident RAM 4096 and unknown VRAM", got)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestRemoteCollectorMLXNotInstalledReturnsNoResidentModels(t *testing.T) {
 func TestRemoteCollectorMergesOllamaAndLlamaServerResidentModels(t *testing.T) {
 	m := minimalRemoteExec()
 	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","size_vram_mb":4915,"source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","weight_size_mb":4384,"source":"llama-server-ps"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
@@ -176,8 +176,8 @@ func TestRemoteCollectorMergesOllamaAndLlamaServerResidentModels(t *testing.T) {
 func TestRemoteCollectorMergesAllThreeResidentModelBackends(t *testing.T) {
 	m := minimalRemoteExec()
 	m[OllamaDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"resident_models":[{"name":"llama3:8b","runtime":"ollama","processor":"100% GPU","size_vram_mb":4915,"source":"ollama-ps"}],"gpu_offload":"gpu:cuda"}`}
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
-	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_vram_mb":4096,"source":"mlx-lm-api"}]}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","weight_size_mb":4384,"source":"llama-server-ps"}]}`}
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_ram_mb":4096,"source":"mlx-lm-api"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
@@ -302,12 +302,11 @@ func TestMLXResidentModelZeroVRAMWhenSizeUnavailable(t *testing.T) {
 	}
 }
 
-// TestLlamaServerResidentModelCarriesSizeVRAMMB verifies that the llama-server
-// probe JSON (as emitted by the updated script that stats the model file) is
-// parsed into the SizeVRAMMB field on the ResidentModel struct.
-func TestLlamaServerResidentModelCarriesSizeVRAMMB(t *testing.T) {
+// TestLlamaServerResidentModelCarriesWeightSize verifies that model-file bytes
+// remain distinct from runtime-reported accelerator memory.
+func TestLlamaServerResidentModelCarriesWeightSize(t *testing.T) {
 	m := minimalRemoteExec()
-	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","size_vram_mb":4384,"source":"llama-server-ps"}]}`}
+	m[LlamaServerDiscoveryScript] = fakeRunResult{out: `{"installed":true,"path":"/usr/local/bin/llama-server","version":"b3447","running":true,"listening":true,"port":8080,"resident_models":[{"name":"qwen2.5-coder-7b-q4","runtime":"llama.cpp","processor":"gpu","weight_size_mb":4384,"source":"llama-server-ps"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("worker-1", "worker", "worker-1.internal", exec)
@@ -319,17 +318,16 @@ func TestLlamaServerResidentModelCarriesSizeVRAMMB(t *testing.T) {
 		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
 	}
 	got := facts.ResidentModels[0]
-	if got.SizeVRAMMB != 4384 {
-		t.Errorf("SizeVRAMMB = %d, want 4384 (model file stat ≈ 4.3 GB)", got.SizeVRAMMB)
+	if got.WeightSizeMB != 4384 || got.SizeVRAMMB != 0 {
+		t.Errorf("memory facts = %+v, want weight size 4384 and unknown VRAM", got)
 	}
 }
 
-// TestMLXResidentModelCarriesSizeVRAMMB verifies that the MLX probe JSON (as
-// emitted by the updated script that queries process RSS) is parsed into the
-// SizeVRAMMB field on the ResidentModel struct.
-func TestMLXResidentModelCarriesSizeVRAMMB(t *testing.T) {
+// TestMLXResidentModelCarriesRAMSize verifies that process RSS remains
+// distinct from runtime-reported accelerator memory.
+func TestMLXResidentModelCarriesRAMSize(t *testing.T) {
 	m := minimalRemoteExec()
-	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_vram_mb":4096,"source":"mlx-lm-api"}]}`}
+	m[MLXDiscoveryScript] = fakeRunResult{out: `{"installed":true,"running":true,"port":8080,"resident_models":[{"name":"Qwen2.5-Coder-7B-Instruct-4bit","runtime":"mlx","processor":"gpu","size_ram_mb":4096,"source":"mlx-lm-api"}]}`}
 	exec := &fakeRemoteExecutor{exact: m}
 
 	collector := NewRemoteCollector("cortex", "primary", "cortex.local", exec)
@@ -341,8 +339,8 @@ func TestMLXResidentModelCarriesSizeVRAMMB(t *testing.T) {
 		t.Fatalf("resident models = %#v, want 1", facts.ResidentModels)
 	}
 	got := facts.ResidentModels[0]
-	if got.SizeVRAMMB != 4096 {
-		t.Errorf("SizeVRAMMB = %d, want 4096 (process RSS ≈ 4.0 GB)", got.SizeVRAMMB)
+	if got.SizeRAMMB != 4096 || got.SizeVRAMMB != 0 {
+		t.Errorf("memory facts = %+v, want resident RAM 4096 and unknown VRAM", got)
 	}
 }
 
@@ -353,6 +351,27 @@ func withSandboxedPATH(bin string) []string {
 	sep := string(os.PathListSeparator)
 	path := bin + sep + os.Getenv("PATH") + sep + "/run/current-system/sw/bin" + sep + "/usr/bin" + sep + "/bin"
 	return append(os.Environ(), "PATH="+path)
+}
+
+// withExactToolPATH makes a hermetic PATH from the test stubs plus symlinks to
+// only the named host tools. It lets a test prove an executable is absent from
+// PATH without assuming FHS paths, which NixOS intentionally does not provide.
+func withExactToolPATH(t *testing.T, bin string, tools ...string) []string {
+	t.Helper()
+	for _, name := range tools {
+		target := filepath.Join(bin, name)
+		if _, err := os.Lstat(target); err == nil {
+			continue
+		}
+		source, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("required test tool %s not available: %v", name, err)
+		}
+		if err := os.Symlink(source, target); err != nil {
+			t.Fatalf("link test tool %s: %v", name, err)
+		}
+	}
+	return append(os.Environ(), "PATH="+bin)
 }
 
 // TestLlamaServerDiscoveryScriptReportsPortFromCmdline is the regression for
@@ -435,5 +454,148 @@ func TestLlamaServerDiscoveryScriptReportsPortFromShortFlag(t *testing.T) {
 	}
 	if payload.Port != 9090 {
 		t.Fatalf("port = %d, want 9090 (parsed from -p on llama-server argv)", payload.Port)
+	}
+}
+
+// TestLlamaServerDiscoveryScriptFindsRunningBinaryOutsidePATH is the
+// regression for supervised runtimes whose executable is referenced by an
+// absolute service path but is not available in the collector's login PATH.
+// A running process is direct evidence that llama-server is installed.
+func TestLlamaServerDiscoveryScriptFindsRunningBinaryOutsidePATH(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	model := filepath.Join(t.TempDir(), "qwen-outside-path.gguf")
+	if err := os.WriteFile(model, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `echo "/opt/llama.cpp/bin/llama-server --model `+model+` --port 8181"`)
+	writeStub("readlink", `echo /opt/llama.cpp/bin/llama-server`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload llamaServerDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if !payload.Installed || !payload.Running {
+		t.Fatalf("payload = %+v, want installed and running", payload)
+	}
+	if payload.Path != "/opt/llama.cpp/bin/llama-server" {
+		t.Fatalf("path = %q, want supervised executable path", payload.Path)
+	}
+	if payload.Port != 8181 || len(payload.ResidentModels) != 1 {
+		t.Fatalf("payload = %+v, want port 8181 and one resident model", payload)
+	}
+}
+
+func TestLlamaServerDiscoveryScriptReportsWeightSizeNotVRAM(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	model := filepath.Join(t.TempDir(), "two-mib.gguf")
+	if err := os.WriteFile(model, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(model, 2*1024*1024); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `echo "llama-server --model `+model+` --port 8182"`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withSandboxedPATH(bin)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload struct {
+		ResidentModels []map[string]any `json:"resident_models"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if len(payload.ResidentModels) != 1 {
+		t.Fatalf("resident_models = %#v, want one", payload.ResidentModels)
+	}
+	resident := payload.ResidentModels[0]
+	if got := resident["weight_size_mb"]; got != float64(2) {
+		t.Fatalf("weight_size_mb = %#v, want 2", got)
+	}
+	if _, exists := resident["size_vram_mb"]; exists {
+		t.Fatalf("resident model falsely reports model-file bytes as VRAM: %#v", resident)
+	}
+}
+
+func TestMLXDiscoveryScriptReportsResidentRAMNotVRAM(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("mlx_lm", `exit 0`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `
+case "$*" in
+  "-p 4242 -o args=") echo "python -m mlx_lm.server --port 8183" ;;
+  "-o rss= -p 4242") echo 3145728 ;;
+esac`)
+	writeStub("curl", `echo '{"data":[{"id":"org/mlx-model"}]}'`)
+
+	cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload struct {
+		ResidentModels []map[string]any `json:"resident_models"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if len(payload.ResidentModels) != 1 {
+		t.Fatalf("resident_models = %#v, want one", payload.ResidentModels)
+	}
+	resident := payload.ResidentModels[0]
+	if got := resident["size_ram_mb"]; got != float64(3072) {
+		t.Fatalf("size_ram_mb = %#v, want 3072", got)
+	}
+	if _, exists := resident["size_vram_mb"]; exists {
+		t.Fatalf("resident model falsely reports process RSS as VRAM: %#v", resident)
 	}
 }

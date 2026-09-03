@@ -135,12 +135,13 @@ func printModelInventoryText(out io.Writer, inventory models.ModelInventory) err
 		fmt.Fprintln(&rendered, "No resident model instances observed.")
 	} else {
 		table := tabwriter.NewWriter(&rendered, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(table, "INSTANCE\tMODEL\tENGINE\tNODE\tNODE STATUS\tSTATE\tPORT\tPROCESSOR\tVRAM")
+		fmt.Fprintln(table, "INSTANCE\tMODEL\tENGINE\tNODE\tNODE STATUS\tSTATE\tPORT\tPROCESSOR\tWEIGHTS\tRAM\tVRAM")
 		for _, instance := range inventory.Instances {
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				instance.ID, displayModelValue(instance.Model), displayModelValue(instance.Engine),
 				displayModelValue(instance.Node), displayModelValue(string(instance.NodeStatus)), instance.State, displayModelPort(instance.Port),
-				displayModelValue(instance.Processor), displayModelVRAM(instance.SizeVRAMMB))
+				displayModelValue(instance.Processor), displayModelMemory(instance.WeightSizeMB), displayModelMemory(instance.SizeRAMMB),
+				displayModelMemory(instance.SizeVRAMMB))
 		}
 		_ = table.Flush()
 	}
@@ -153,10 +154,11 @@ func printModelInspectionText(out io.Writer, inspection models.ModelInspection) 
 	var rendered bytes.Buffer
 	instance := inspection.Instance
 	fmt.Fprintln(&rendered, "MODEL INSTANCE")
-	fmt.Fprintf(&rendered, "ID: %s\nModel: %s\nEngine: %s\nNode: %s\nNode status: %s\nState: %s\nPort: %s\nProcessor: %s\nVRAM: %s\n",
+	fmt.Fprintf(&rendered, "ID: %s\nModel: %s\nEngine: %s\nNode: %s\nNode status: %s\nState: %s\nPort: %s\nProcessor: %s\nWeights: %s\nRAM: %s\nVRAM: %s\n",
 		instance.ID, displayModelValue(instance.Model), displayModelValue(instance.Engine),
 		displayModelValue(instance.Node), displayModelValue(string(instance.NodeStatus)), instance.State, displayModelPort(instance.Port),
-		displayModelValue(instance.Processor), displayModelVRAM(instance.SizeVRAMMB))
+		displayModelValue(instance.Processor), displayModelMemory(instance.WeightSizeMB), displayModelMemory(instance.SizeRAMMB),
+		displayModelMemory(instance.SizeVRAMMB))
 	if instance.Source != "" {
 		fmt.Fprintf(&rendered, "Resident source: %s\n", instance.Source)
 	}
@@ -202,7 +204,7 @@ func displayModelPort(port int) string {
 	return fmt.Sprintf("%d", port)
 }
 
-func displayModelVRAM(sizeMB int64) string {
+func displayModelMemory(sizeMB int64) string {
 	if sizeMB == 0 {
 		return "—"
 	}
