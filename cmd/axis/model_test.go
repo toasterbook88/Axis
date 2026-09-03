@@ -45,9 +45,16 @@ func (f *fakeModelRunner) Probe(_ context.Context, _ models.NodeFacts, _ *config
 
 func stubModelSnapshot(t *testing.T, snap *models.ClusterSnapshot) {
 	t.Helper()
-	prev := loadModelSnapshot
+	prevLive := loadModelSnapshot
 	loadModelSnapshot = func(context.Context) (*models.ClusterSnapshot, error) { return snap, nil }
-	t.Cleanup(func() { loadModelSnapshot = prev })
+	prevFetch := fetchModelInventorySnapshot
+	fetchModelInventorySnapshot = func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return snap, "daemon-cache", nil
+	}
+	t.Cleanup(func() {
+		loadModelSnapshot = prevLive
+		fetchModelInventorySnapshot = prevFetch
+	})
 }
 
 func stubModelConfig(t *testing.T, cfg *config.Config) {
