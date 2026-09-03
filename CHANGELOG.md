@@ -2,6 +2,7 @@
 
 ### Features
 
+* **Model stop:** Add generation-bound `axis model stop <generation-id>`. Resolves the model instance and host from the local daemon cache, revalidates process ownership, PID, executable, and process start token on the host before terminating, refuses to kill if the process generation changed, and writes a typed `axis.model-operation/v1` operation receipt with snapshot publication binding.
 * **Model inventory:** Add a canonical read-only model-instance schema plus `axis model list` and `axis model inspect <instance-id>`. Inventory reads are daemon-cache-first for fast operator feedback; `--live` is an explicit fresh collection with no hidden fallback. Every instance preserves the observed node status and timestamp, while the inventory carries its snapshot source, publication ID, and warnings. Instance IDs are deterministic keys for the observed node/engine/model/port slot, not fabricated process IDs.
 
 ### Breaking
@@ -9,7 +10,7 @@
 * **CLI exit contracts:** `axis doctor`, `axis daemon status`, and `axis model stop` now exit **4** when they report an unhealthy or no-op result, after writing their complete diagnostic output. They previously exited 0, so shell automation could not distinguish a healthy cluster from a broken one. There is no deprecation path for an exit code: **shell consumers that treat these commands as pass/fail must branch on exit 4.**
   * `axis doctor` exits 4 when any check is `fail`, in both bare and `--strict` mode. `--strict` is unchanged in meaning: it only promotes daemon-cache unavailability from `warn` to `fail`. Warning-only runs still exit 0, and the interactive setup-wizard path is unchanged — an accepted wizard's success and its error are both passed through.
   * `axis daemon status` exits 4 for `unavailable`, `stale`, `degraded`, and `incompatible` metadata. The machine-readable envelope is still written first and is unchanged; only the exit code is new. A failure to write that envelope still outranks the health disposition.
-  * `axis model stop` now reports a typed disposition — `stopped`, `not_running`, `wrong_owner`, or `inspection_unavailable` — and exits 4 for everything except `stopped`. A port with no listener previously printed `stopped` and exited 0. Missing `fuser`/`lsof`/`ps` is reported as `inspection_unavailable`, never as `not_running`, because the port was never observed.
+  * `axis model stop` now reports a typed disposition — `stopped`, `not_running`, `wrong_owner`, `inspection_unavailable`, or `generation_mismatch` — and exits 4 for everything except `stopped`. A port with no listener previously printed `stopped` and exited 0. Missing `fuser`/`lsof`/`ps` is reported as `inspection_unavailable`, never as `not_running`, because the port was never observed.
 
 ### Bug Fixes
 
