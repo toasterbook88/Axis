@@ -6,7 +6,8 @@ import "time"
 type ModelOperationAction string
 
 const (
-	ModelOperationStop ModelOperationAction = "stop"
+	ModelOperationStart ModelOperationAction = "start"
+	ModelOperationStop  ModelOperationAction = "stop"
 )
 
 // ModelOperationStatus is the terminal status of a synchronous lifecycle
@@ -34,6 +35,10 @@ type ModelOperationReceipt struct {
 	Engine         string               `json:"engine,omitempty" yaml:"engine,omitempty"`
 	Port           int                  `json:"port,omitempty" yaml:"port,omitempty"`
 	PID            int                  `json:"pid,omitempty" yaml:"pid,omitempty"`
+	Model          string               `json:"model,omitempty" yaml:"model,omitempty"`
+	Weights        string               `json:"weights,omitempty" yaml:"weights,omitempty"`
+	Volume         string               `json:"volume,omitempty" yaml:"volume,omitempty"`
+	Executable     string               `json:"executable,omitempty" yaml:"executable,omitempty"`
 	SnapshotSource string               `json:"snapshot_source,omitempty" yaml:"snapshot_source,omitempty"`
 	PublicationID  string               `json:"publication_id,omitempty" yaml:"publication_id,omitempty"`
 	SnapshotAt     time.Time            `json:"snapshot_at,omitempty" yaml:"snapshot_at,omitempty"`

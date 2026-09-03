@@ -2,6 +2,7 @@
 
 ### Features
 
+* **Model start:** Make `axis model start` cache-first by default, eliminating the 54-second full-cluster discovery sweep while supporting `--live` for explicit discovery. Add preflight port conflict verification against resident models. Emit typed `axis.model-operation/v1` lifecycle receipts with publication binding, supporting `--format text|json|yaml` and `--cache-addr` for local daemon authority.
 * **Model stop:** Add generation-bound `axis model stop <generation-id>`. Resolves the model instance and host from the local daemon cache, revalidates process ownership, PID, executable, and process start token on the host before terminating, refuses to kill if the process generation changed, and writes a typed `axis.model-operation/v1` operation receipt with snapshot publication binding.
 * **Model inventory:** Add a canonical read-only model-instance schema plus `axis model list` and `axis model inspect <instance-id>`. Inventory reads are daemon-cache-first for fast operator feedback; `--live` is an explicit fresh collection with no hidden fallback. Every instance preserves the observed node status and timestamp, while the inventory carries its snapshot source, publication ID, and warnings. Instance IDs are deterministic keys for the observed node/engine/model/port slot, not fabricated process IDs.
 
