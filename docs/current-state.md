@@ -56,6 +56,7 @@ The live repo currently contains:
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
 - Resident-model truth in node facts via `resident_models`, populated from `ollama ps`, `llama-server` `/v1/models`, and `mlx_lm.server` `/v1/models`
 - Canonical read-only model-instance inventory through `axis model list` and `axis model inspect <instance-id>`. These commands read the bound daemon publication by default and require `--live` for a fresh cluster collection; output preserves source, publication ID, snapshot/node observation times, node status, and warnings rather than inventing process ownership or endpoint data
+- Resident memory facts preserve their measurement domains: llama.cpp model-file stat is `weight_size_mb`, MLX process RSS is `size_ram_mb`, and `size_vram_mb` is populated only from runtime-reported accelerator memory. A supervised `llama-server` remains discoverable from its running process even when its absolute executable path is outside the collector's login `PATH`
 - Pressure-aware heavy-task filtering that avoids nodes under critical Linux PSI / Darwin VM pressure signals
 - Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
 - Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference

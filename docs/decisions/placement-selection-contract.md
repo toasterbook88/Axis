@@ -66,7 +66,7 @@ Extends the existing `evaluateCandidates` / `ExclusionReasons` mechanism in `int
 
 `TaskRequirements` gains `OS string` and `Arch string`. Both are populated by workload classification where inferable and may be set explicitly.
 
-**Model fit is conditional and must degrade honestly.** Model size is known when it comes from resident-model facts (`ResidentModel.SizeVRAMMB`), from the local model inventory, or from an explicit requirement. When size is unknown, **the filter does not apply** and the decision records `model_fit: unknown`. AXIS must not guess a model's memory footprint from its name.
+**Model fit is conditional and must degrade honestly.** Model weight size is known when it comes from resident-model facts (`ResidentModel.WeightSizeMB`), from the local model inventory, or from an explicit requirement. `ResidentModel.SizeRAMMB` and `ResidentModel.SizeVRAMMB` are observations of current residency, not substitutes for model weight size. When weight size is unknown, **the filter does not apply** and the decision records `model_fit: unknown`. AXIS must not guess a model's memory footprint from its name.
 
 Usable accelerator memory is `GPUInfo.VRAMMB` for discrete GPUs, and allocatable system RAM for unified-memory nodes (where `VRAMMB` is reported as 0). This corrects a current asymmetry in which unified-memory nodes score zero VRAM despite their real ceiling being system RAM.
 

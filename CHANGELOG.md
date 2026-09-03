@@ -13,6 +13,7 @@
 
 ### Bug Fixes
 
+* **Model truth:** Detect a running `llama-server` from process evidence even when its supervised absolute executable path is outside the collector's login `PATH`. Keep on-disk weight bytes, resident process RAM, and runtime-reported accelerator memory as separate facts (`weight_size_mb`, `size_ram_mb`, and `size_vram_mb`); llama.cpp model-file size and MLX RSS are no longer mislabeled as VRAM.
 * **Daemon:** Make `axis daemon restart` readiness honest. Both the short-circuit and the post-restart poll now use one predicate requiring the exact current version, `Ready=true`, `Stale=false`, and an empty `LastError`; previously both checked only version and staleness, so a daemon that was not ready — or that was reporting a refresh error — was announced as "already fresh". A current-version daemon that is merely still starting gets one bounded 3-second grace period before at most one terminate/start cycle, so repeated restarts cannot churn a daemon that was about to come up. Wrong-version and stale daemons get no grace: exact version equality is an intentional split-binary guard for installations where the CLI and the supervised daemon run from different filesystem paths.
 
 ## v0.16.0 (2026-09-01)

@@ -37,19 +37,21 @@ func FromSnapshot(snap *models.ClusterSnapshot, source string) models.ModelInven
 		}
 		for _, resident := range node.ResidentModels {
 			instance := models.ModelInstance{
-				ID:          instanceID(nodeIdentity, resident.Runtime, resident.Name, resident.Port),
-				Model:       resident.Name,
-				Engine:      resident.Runtime,
-				Node:        node.Name,
-				NodeStatus:  node.Status,
-				State:       models.ModelInstanceResident,
-				Port:        resident.Port,
-				Processor:   resident.Processor,
-				Source:      resident.Source,
-				SizeVRAMMB:  resident.SizeVRAMMB,
-				ExpiresAt:   resident.ExpiresAt,
-				WarmthScore: resident.WarmthScore,
-				ObservedAt:  node.CollectedAt,
+				ID:           instanceID(nodeIdentity, resident.Runtime, resident.Name, resident.Port),
+				Model:        resident.Name,
+				Engine:       resident.Runtime,
+				Node:         node.Name,
+				NodeStatus:   node.Status,
+				State:        models.ModelInstanceResident,
+				Port:         resident.Port,
+				Processor:    resident.Processor,
+				Source:       resident.Source,
+				WeightSizeMB: resident.WeightSizeMB,
+				SizeRAMMB:    resident.SizeRAMMB,
+				SizeVRAMMB:   resident.SizeVRAMMB,
+				ExpiresAt:    resident.ExpiresAt,
+				WarmthScore:  resident.WarmthScore,
+				ObservedAt:   node.CollectedAt,
 			}
 			byID[instance.ID] = instance
 		}

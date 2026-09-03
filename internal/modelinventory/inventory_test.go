@@ -22,7 +22,7 @@ func TestFromSnapshotBuildsDeterministicResidentInstanceInventory(t *testing.T) 
 				CollectedAt: observed.Add(-time.Second),
 				ResidentModels: []models.ResidentModel{
 					{Name: "zeta", Runtime: "ollama", Processor: "gpu", Port: 11434, SizeVRAMMB: 4096},
-					{Name: "alpha", Runtime: "llama.cpp", Processor: "cpu+gpu", Source: "process", Port: 8080},
+					{Name: "alpha", Runtime: "llama.cpp", Processor: "cpu+gpu", Source: "process", Port: 8080, WeightSizeMB: 5120},
 				},
 			},
 			{
@@ -30,8 +30,8 @@ func TestFromSnapshotBuildsDeterministicResidentInstanceInventory(t *testing.T) 
 				Status:      models.StatusComplete,
 				CollectedAt: observed.Add(-2 * time.Second),
 				ResidentModels: []models.ResidentModel{
-					{Name: "beta", Runtime: "mlx", Port: 8090},
-					{Name: "beta", Runtime: "mlx", Port: 8090},
+					{Name: "beta", Runtime: "mlx", Port: 8090, SizeRAMMB: 3072},
+					{Name: "beta", Runtime: "mlx", Port: 8090, SizeRAMMB: 3072},
 				},
 			},
 		},
@@ -61,6 +61,12 @@ func TestFromSnapshotBuildsDeterministicResidentInstanceInventory(t *testing.T) 
 	}
 	if got.Instances[1].Source != "process" || got.Instances[2].SizeVRAMMB != 4096 {
 		t.Fatalf("resident facts not preserved: %#v", got.Instances)
+	}
+	if got.Instances[0].SizeRAMMB != 3072 || got.Instances[0].SizeVRAMMB != 0 {
+		t.Fatalf("MLX memory facts not preserved honestly: %#v", got.Instances[0])
+	}
+	if got.Instances[1].WeightSizeMB != 5120 || got.Instances[1].SizeVRAMMB != 0 {
+		t.Fatalf("llama.cpp memory facts not preserved honestly: %#v", got.Instances[1])
 	}
 	if !got.Instances[0].ObservedAt.Equal(observed.Add(-2 * time.Second)) {
 		t.Fatalf("node observation time not preserved: %#v", got.Instances[0])

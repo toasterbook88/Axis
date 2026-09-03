@@ -272,12 +272,14 @@ type DiskWeight struct {
 // placement uses them as a bounded tiebreaker, never as a primary signal
 // (see internal/placement/ranker.go modelWarmthRank).
 type ResidentModel struct {
-	Name       string `json:"name" yaml:"name"`
-	Runtime    string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
-	Processor  string `json:"processor,omitempty" yaml:"processor,omitempty"`
-	Source     string `json:"source,omitempty" yaml:"source,omitempty"`
-	Port       int    `json:"port,omitempty" yaml:"port,omitempty"`                 // Port the runtime is listening on (if applicable)
-	SizeVRAMMB int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"` // 0 = unknown/not reported by the runtime
+	Name         string `json:"name" yaml:"name"`
+	Runtime      string `json:"runtime,omitempty" yaml:"runtime,omitempty"`
+	Processor    string `json:"processor,omitempty" yaml:"processor,omitempty"`
+	Source       string `json:"source,omitempty" yaml:"source,omitempty"`
+	Port         int    `json:"port,omitempty" yaml:"port,omitempty"`                     // Port the runtime is listening on (if applicable)
+	WeightSizeMB int64  `json:"weight_size_mb,omitempty" yaml:"weight_size_mb,omitempty"` // On-disk model weights; not a memory measurement
+	SizeRAMMB    int64  `json:"size_ram_mb,omitempty" yaml:"size_ram_mb,omitempty"`       // Resident process RAM reported by the runtime or OS
+	SizeVRAMMB   int64  `json:"size_vram_mb,omitempty" yaml:"size_vram_mb,omitempty"`     // Resident accelerator memory reported by the runtime
 
 	// ExpiresAt is the wall-clock time at which the model is expected to
 	// be unloaded by the runtime. Zero when unknown.

@@ -126,10 +126,18 @@ PYEOF
 // to handle both --flag=value and --flag value forms. Port defaults to 8080
 // (llama-server's own default) when the process does not set one.
 const LlamaServerDiscoveryScript = `set -o pipefail;
+		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || true)
+		if [ -z "$PGREP" ]; then PGREP=$(pgrep -f '[l]lama-server' 2>/dev/null | head -1 || true); fi
 		LSBIN=$(command -v llama-server || echo "")
+		if [ -z "$LSBIN" ] && [ -n "$PGREP" ]; then
+			LSBIN=$(readlink /proc/"$PGREP"/exe 2>/dev/null || echo "")
+		fi
+		if [ -z "$LSBIN" ] && [ -n "$PGREP" ]; then
+			LSBIN=$(ps -p "$PGREP" -o args= 2>/dev/null | awk '{print $1; exit}' || echo "")
+		fi
 		if [ -z "$LSBIN" ]; then echo '{"installed":false}'; exit 0; fi
-		VERSION=$($LSBIN --version 2>/dev/null | head -1)
-		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || pgrep -f llama-server 2>/dev/null | head -1 || echo "")
+		VERSION=unknown
+		if [ -x "$LSBIN" ]; then VERSION=$("$LSBIN" --version 2>/dev/null | head -1); fi
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
 		PORT=8080
@@ -158,7 +166,7 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				SIZE_BYTES=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
 				SIZE_MB=$((SIZE_BYTES / 1048576))
 				MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
-				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"size_vram_mb\":$SIZE_MB,\"source\":\"llama-server-ps\"}]"
+				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"source\":\"llama-server-ps\"}]"
 			fi
 		fi
 		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":$PORT,\"resident_models\":$RESIDENT}"
@@ -220,7 +228,7 @@ try:
         if not mid:
             continue
         name = mid.split('/')[-1]
-        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'size_vram_mb': $SIZE_MB, 'source': 'mlx-lm-api'})
+        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'size_ram_mb': $SIZE_MB, 'source': 'mlx-lm-api'})
     print(json.dumps(items))
 except Exception:
     print('[]')
