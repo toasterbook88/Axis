@@ -59,13 +59,12 @@ By making orchestration a first-class (but still advisory) concern inside Axis, 
 - Keep Axis as the substrate rather than forcing it to become a heavyweight runtime
 - Align with the explicit future thinking already present in `docs/sovereign-grid-architecture.md` ("Constellations", "Execution Leases", "Universal MCP Context Provider")
 
-### Hardware Reality on This Sovereign Grid (Live Evidence)
+### Hardware Reality in Heterogeneous Grids
 
-Live `axis status --cached` (2026-05-28 daemon cache) on the actual cluster shows the constraints Triangle must respect:
-- 8 nodes, 7 healthy, 1 unreachable (patriot).
-- Extreme asymmetry: cranium (~12 GB RAM + NVIDIA RTX 5060 8 GB), nixos (~8.8 GB + MX250 4 GB), m3/m1 (Apple Silicon ~1.9/1.8 GB unified), foundry/latitude lower-end Intel.
-- Mixed tools, storage (nvme/ssd/unknown), GPU capabilities, reachability (Tailscale/SSH).
-- GEMINI.md (gitignored cluster notes surface) + `internal/facts/` (thermal, pressure, resident models, AFM, TurboQuant) capture the physics.
+Heterogeneous edge clusters exhibit extreme asymmetry that Triangle orchestration must respect:
+- Nodes range from high-memory workstations with discrete GPUs to low-power edge nodes and low-RAM unified memory systems.
+- Mixed tools, storage (NVMe/SSD/HDD), variable GPU capabilities, and diverse reachability (LAN/VPN/SSH).
+- Node fact collection (`internal/facts/`: thermal, pressure, resident models, AFM, TurboQuant) captures runtime physics.
 
 Any Triangle delegation or lease logic **must** route through Placement + live Snapshot + Ledger headroom and must degrade gracefully on unreachable/fragile/low-RAM nodes. This is not hypothetical — it is the observed environment.
 
@@ -118,7 +117,7 @@ All components below were confirmed present and functional via live `axis` binar
 | MCP Server                | `internal/mcp/server.go`           | Primary interface for external orchestrators | **Exactly 10 read-only tools** (see below); explicit "Do not assume any write or execution authority" instructions |
 | MCP Client                | `internal/mcpclient/`              | How Axis itself can call other services as part of a crew | Recently unified (caching/retry/batch) |
 | Skills + Empirical        | `internal/skills/`, `internal/state/observations.go` | Data-driven crew member selection | `axis skills` + `axis observations` surfaces; feeds placement |
-| Cortex                    | `internal/cortex/client.go`        | Shared blackboard / coordination bus for the crew | **EXPERIMENTAL** package; Qdrant vector memory + event bus + distributed locking on "foundry" node |
+| Cortex                    | `internal/cortex/client.go`        | Shared blackboard / coordination bus for the crew | **EXPERIMENTAL** package; Qdrant vector memory + event bus + distributed locking |
 | State / Reservations      | `internal/state/`, `internal/reservation/ledger.go` | Resource awareness for safe delegation | Ledger is **scaffolded** ("Not wired into the stable operator path" per header); double-entry RAM/VRAM with heartbeats/owner/expiry — direct foundation for Execution Leases |
 | Hybrid Router             | `internal/llmrouter/`              | Choosing the right model for different crew roles | Active |
 
@@ -299,16 +298,16 @@ Triangle does **not** conflict with any of the above precisely because it is del
 This proposal underwent exhaustive re-verification (2026-05-28) against the live environment per the task "research every detail, double check all claims with the code and documentation, iron out any errors and optimize".
 
 **Local Filesystem Enumeration**:
-- 1224 files, 350 dirs under /home/cranium/axis.
-- All critical paths confirmed: `cmd/axis/` (22 command .go files incl. main.go registering 21+ subcommands), `internal/` (agent, placement, execution, mcp, cortex, reservation, skills, state, facts, snapshot, llmrouter, mcpclient, safety, etc.), `docs/future/` (triangle-orchestration.md + consistency-model.md + reservation-doctor.md), `hack/` (verify-repo-truth.sh, coverage-check.sh, etc.), `.github/workflows/` (ci.yml + hardware-validation.yml + claude*.yml + release.yml), `.github/copilot/`.
+- Example tree: ~1200 files, ~350 dirs under repository root.
+- All critical paths confirmed: `cmd/axis/` (command .go files incl. main.go registering subcommands), `internal/` (agent, placement, execution, mcp, cortex, reservation, skills, state, facts, snapshot, llmrouter, mcpclient, safety, etc.), `docs/future/` (triangle-orchestration.md + consistency-model.md + reservation-doctor.md), `hack/` (verify-repo-truth.sh, coverage-check.sh, etc.), `.github/workflows/` (ci.yml + hardware-validation.yml + claude*.yml + release.yml), `.github/copilot/`.
 
 **Live Binary (./axis v0.10.7, commit d8900ec, built 2026-05-27)**:
 - `--help` and subcommand help output exactly match AGENTS.md and proposal tables.
 - `axis mcp` explicitly "Read-only MCP surfaces...".
 - `axis agent`: "guarded AXIS execution with operator confirmation", "--auto-approve (safety score < 70)", advisory-only disclaimer.
-- `axis cortex`: events/recall/status against Foundry.
+- `axis cortex`: events/recall/status against configured Cortex node.
 - `axis skills` + `axis observations`: empirical surfaces confirmed.
-- `axis status --cached`: real 8-node heterogeneous cluster (asymmetric RAM, mixed Apple Silicon + NVIDIA + Intel, 1 unreachable node, daemon cache working).
+- `axis status --cached`: heterogeneous cluster support (asymmetric RAM, mixed Apple Silicon + NVIDIA + Intel architectures, daemon cache working).
 
 **Source Code Audits (key files read end-to-end or strategically)**:
 - `internal/mcp/server.go`: Exactly 10 tools, all `WithReadOnlyHintAnnotation(true)`, server instructions forbid write/execution authority.

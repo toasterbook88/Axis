@@ -3,7 +3,7 @@
 **Status**: Evaluation snapshot (one-time analysis)  
 **Date**: 2026-05-28  
 **Evaluator**: Grok (xAI)  
-**Scope**: All 39 Markdown files under `/home/cranium/axis/docs/` (including `future/`, `decisions/`, and `runbooks/` subdirectories)  
+**Scope**: All 39 Markdown files under `docs/` (including `future/`, `decisions/`, and `runbooks/` subdirectories)  
 **Version of AXIS under review**: 0.10.7 (commit d8900ec, binary built 2026-05-27)
 
 ---
@@ -25,7 +25,7 @@ This document was created at the explicit request of the operator after a comple
 
 ## Executive Summary
 
-The `/home/cranium/axis/docs/` corpus (39 files, ~396 KB, ~6,670 lines) is **above average for a project of this complexity** and shows genuine commitment to the project's own "Live Reality Beats Narrative" principle.
+The `docs/` corpus (39 files, ~396 KB, ~6,670 lines) is **above average for a project of this complexity** and shows genuine commitment to the project's own "Live Reality Beats Narrative" principle.
 
 **Core strengths**:
 - `doctrine.md`, `architecture.md`, `lifecycle.md`, and `current-state.md` form an exceptionally strong, mutually reinforcing guardrail system.
@@ -45,7 +45,7 @@ The `/home/cranium/axis/docs/` corpus (39 files, ~396 KB, ~6,670 lines) is **abo
 
 ## Methodology
 
-- Full filesystem enumeration of `/home/cranium/axis/docs/` (39 files, subdirectories, sizes, mtimes).
+- Full filesystem enumeration of `docs/` (39 files, subdirectories, sizes, mtimes).
 - Multiple passes of `grep` across the entire tree for high-signal terms (Triangle, Constellations, Execution Lease, orchestrator, heavyweight, "fact plane", Truth Rule, Cortex, MCP + read-only, scaffolded, experimental, advisory, reservations/ledger, empirical).
 - Deep reads (full or large strategic chunks) of: `docs/README.md`, `doctrine.md`, `architecture.md`, `lifecycle.md`, `current-state.md`, `future-roadmap.md`, `sovereign-grid-architecture.md`, `distributed-cognitive-architecture.md`, `consistency-model.md`, `reservation-doctor.md`, `authority-reservation.md`, and representative others.
 - Cross-checks against:
@@ -196,45 +196,45 @@ It correctly:
 ## Appendix: Complete File Inventory with Metadata (2026-05-28)
 
 ```
-2026-05-28 01:13       20756 bytes  /home/cranium/axis/docs/future/triangle-orchestration.md
-2026-05-25 14:49       26226 bytes  /home/cranium/axis/docs/current-state.md
-2026-05-18 10:00        8927 bytes  /home/cranium/axis/docs/roadmap-status.md
-2026-05-18 02:19        2693 bytes  /home/cranium/axis/docs/future/consistency-model.md
-2026-05-18 02:19        2409 bytes  /home/cranium/axis/docs/future/reservation-doctor.md
-2026-05-18 00:21        4981 bytes  /home/cranium/axis/docs/decisions/v2-reservations-endpoint.md
-2026-05-18 00:21        4067 bytes  /home/cranium/axis/docs/decisions/dashboard-command.md
-2026-05-18 00:19        7536 bytes  /home/cranium/axis/docs/reservations.md
-2026-05-18 00:15        5044 bytes  /home/cranium/axis/docs/profiling.md
-2026-05-18 00:15       10625 bytes  /home/cranium/axis/docs/authority-transition.md
-2026-05-17 23:35       11065 bytes  /home/cranium/axis/docs/authority-violations.md
-2026-05-17 23:32       10726 bytes  /home/cranium/axis/docs/authority-observability.md
-2026-05-17 23:31       12469 bytes  /home/cranium/axis/docs/authority-cache.md
-2026-05-17 23:28        6661 bytes  /home/cranium/axis/docs/authority-config.md
-2026-05-17 23:28        5795 bytes  /home/cranium/axis/docs/authority-secrets.md
-2026-05-17 23:26       11979 bytes  /home/cranium/axis/docs/lifecycle.md
-2026-05-17 23:24        8284 bytes  /home/cranium/axis/docs/authority-execution.md
-2026-05-17 23:24        5504 bytes  /home/cranium/axis/docs/authority-observations.md
-2026-05-17 23:22        6070 bytes  /home/cranium/axis/docs/distributed-cognitive-architecture.md
-2026-05-17 23:22       20230 bytes  /home/cranium/axis/docs/hybrid-ai-router-plan.md
-2026-05-17 23:22        1344 bytes  /home/cranium/axis/docs/README.md
-2026-05-17 23:21        7000 bytes  /home/cranium/axis/docs/architecture.md
-2026-05-17 23:21        1173 bytes  /home/cranium/axis/docs/phase-tracking.md
-2026-05-17 23:14        6690 bytes  /home/cranium/axis/docs/authority-freshness.md
-2026-05-17 23:14        6458 bytes  /home/cranium/axis/docs/authority-identity.md
-2026-05-17 23:12        9956 bytes  /home/cranium/axis/docs/authority-reservation.md
-2026-05-13 16:57        8275 bytes  /home/cranium/axis/docs/sovereign-grid-architecture.md
-2026-05-13 16:57        8134 bytes  /home/cranium/axis/docs/ram-balancing-research.md
-2026-05-13 16:57         771 bytes  /home/cranium/axis/docs/runbooks/mcp-network-tools.md
-2026-05-13 16:57         764 bytes  /home/cranium/axis/docs/development-process.md
-2026-05-13 16:57         731 bytes  /home/cranium/axis/docs/invariants.md
-2026-05-13 16:57        7289 bytes  /home/cranium/axis/docs/doctrine.md
-2026-05-13 16:57         705 bytes  /home/cranium/axis/docs/runbooks/local-assist.md
-2026-05-13 16:57        6945 bytes  /home/cranium/axis/docs/phase1_spec.md
-2026-05-13 16:57        6723 bytes  /home/cranium/axis/docs/white_paper_v1.md
-2026-05-13 16:57        4724 bytes  /home/cranium/axis/docs/session-handoff.md
-2026-05-13 16:57       15897 bytes  /home/cranium/axis/docs/future-roadmap.md
-2026-05-13 16:57       10628 bytes  /home/cranium/axis/docs/agent-worklog.md
-2026-05-13 16:57       10612 bytes  /home/cranium/axis/docs/substrate-roadmap.md
+2026-05-28 01:13       20756 bytes  docs/future/triangle-orchestration.md
+2026-05-25 14:49       26226 bytes  docs/current-state.md
+2026-05-18 10:00        8927 bytes  docs/roadmap-status.md
+2026-05-18 02:19        2693 bytes  docs/future/consistency-model.md
+2026-05-18 02:19        2409 bytes  docs/future/reservation-doctor.md
+2026-05-18 00:21        4981 bytes  docs/decisions/v2-reservations-endpoint.md
+2026-05-18 00:21        4067 bytes  docs/decisions/dashboard-command.md
+2026-05-18 00:19        7536 bytes  docs/reservations.md
+2026-05-18 00:15        5044 bytes  docs/profiling.md
+2026-05-18 00:15       10625 bytes  docs/authority-transition.md
+2026-05-17 23:35       11065 bytes  docs/authority-violations.md
+2026-05-17 23:32       10726 bytes  docs/authority-observability.md
+2026-05-17 23:31       12469 bytes  docs/authority-cache.md
+2026-05-17 23:28        6661 bytes  docs/authority-config.md
+2026-05-17 23:28        5795 bytes  docs/authority-secrets.md
+2026-05-17 23:26       11979 bytes  docs/lifecycle.md
+2026-05-17 23:24        8284 bytes  docs/authority-execution.md
+2026-05-17 23:24        5504 bytes  docs/authority-observations.md
+2026-05-17 23:22        6070 bytes  docs/distributed-cognitive-architecture.md
+2026-05-17 23:22       20230 bytes  docs/hybrid-ai-router-plan.md
+2026-05-17 23:22        1344 bytes  docs/README.md
+2026-05-17 23:21        7000 bytes  docs/architecture.md
+2026-05-17 23:21        1173 bytes  docs/phase-tracking.md
+2026-05-17 23:14        6690 bytes  docs/authority-freshness.md
+2026-05-17 23:14        6458 bytes  docs/authority-identity.md
+2026-05-17 23:12        9956 bytes  docs/authority-reservation.md
+2026-05-13 16:57        8275 bytes  docs/sovereign-grid-architecture.md
+2026-05-13 16:57        8134 bytes  docs/ram-balancing-research.md
+2026-05-13 16:57         771 bytes  docs/runbooks/mcp-network-tools.md
+2026-05-13 16:57         764 bytes  docs/development-process.md
+2026-05-13 16:57         731 bytes  docs/invariants.md
+2026-05-13 16:57        7289 bytes  docs/doctrine.md
+2026-05-13 16:57         705 bytes  docs/runbooks/local-assist.md
+2026-05-13 16:57        6945 bytes  docs/phase1_spec.md
+2026-05-13 16:57        6723 bytes  docs/white_paper_v1.md
+2026-05-13 16:57        4724 bytes  docs/session-handoff.md
+2026-05-13 16:57       15897 bytes  docs/future-roadmap.md
+2026-05-13 16:57       10628 bytes  docs/agent-worklog.md
+2026-05-13 16:57       10612 bytes  docs/substrate-roadmap.md
 ```
 
 **Total**: 39 files.

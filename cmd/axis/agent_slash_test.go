@@ -146,7 +146,7 @@ func TestHandleREPLSlashCommandFactsAndClusterUseSessionSnapshot(t *testing.T) {
 				Snapshot: &models.ClusterSnapshot{
 					Nodes: []models.NodeFacts{
 						{
-							Name:     "cranium",
+							Name:     "node-a",
 							Hostname: hn,
 							OS:       "linux",
 							Arch:     "amd64",
@@ -155,7 +155,7 @@ func TestHandleREPLSlashCommandFactsAndClusterUseSessionSnapshot(t *testing.T) {
 								{Name: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-IQ4_XS", Runtime: "llama.cpp", Port: 8081},
 							},
 						},
-						{Name: "foundry", Hostname: "foundry", Status: models.StatusComplete, OS: "linux", Arch: "amd64"},
+						{Name: "node-b", Hostname: "node-b", Status: models.StatusComplete, OS: "linux", Arch: "amd64"},
 					},
 				},
 				Config: &config.Config{},
@@ -190,7 +190,7 @@ func TestHandleREPLSlashCommandFactsAndClusterUseSessionSnapshot(t *testing.T) {
 		t.Fatalf("/cluster handled=%v exit=%v", handled, shouldExit)
 	}
 	clusterOut := w.String() + errW.String()
-	if !strings.Contains(clusterOut, "cranium") || !strings.Contains(clusterOut, "foundry") {
+	if !strings.Contains(clusterOut, "node-a") || !strings.Contains(clusterOut, "node-b") {
 		t.Fatalf("/cluster must list snapshot nodes, got %q", clusterOut)
 	}
 }

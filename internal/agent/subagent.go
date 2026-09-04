@@ -37,8 +37,8 @@ func (r *ToolRegistry) registerSubAgent() {
 			"scoped to a target cluster node. The sub-agent can investigate and run commands on that node "+
 			"(via run_on_node, remote_read_file, remote_grep, remote_list) and returns a final summary. "+
 			"Set async=true to run in the background and receive a task id immediately for check_task. "+
-			"Use this to parallelize work across nodes — e.g. one sub-agent runs tests on nixos while another "+
-			"validates a build on foundry. The sub-agent inherits the active model and auto-approve setting. "+
+			"Use this to parallelize work across nodes — e.g. one sub-agent runs tests on worker-1 while another "+
+			"validates a build on builder. The sub-agent inherits the active model and auto-approve setting. "+
 			"Nesting is capped (sub-agents cannot spawn their own sub-agents beyond depth 2).",
 		json.RawMessage(`{
 			"type":"object",

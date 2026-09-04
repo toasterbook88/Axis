@@ -66,7 +66,7 @@ func (r *ToolRegistry) registerRunOnNode(tc *ToolContext) {
 		"Run a shell command on a named cluster node through AXIS guarded execution "+
 			"(safety scoring, placement pin to the requested node, reservation, observation). "+
 			"Returns a guarded execution JSON result (same contract as run_shell / axis_run_task). "+
-			"Use this to run something on a specific remote computer (e.g. tests on nixos, a build on foundry). "+
+			"Use this to run something on a specific remote computer (e.g. tests on worker-1, a build on builder). "+
 			"Requires confirmation. The node must appear in the live cluster snapshot.",
 		json.RawMessage(`{
 			"type":"object",
@@ -94,7 +94,7 @@ type remoteReadArgs struct {
 func (r *ToolRegistry) registerRemoteReadFile(tc *ToolContext) {
 	r.add("remote_read_file",
 		"Read a file's contents on a remote cluster node via SSH (cat). Read-only, no confirmation. "+
-			"Use this to inspect files that live on another computer (e.g. logs on foundry, configs on nixos).",
+			"Use this to inspect files that live on another computer (e.g. logs on builder, configs on worker-1).",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{

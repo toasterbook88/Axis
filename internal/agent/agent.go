@@ -205,7 +205,7 @@ func New(cfg Config) *Agent {
 		"- `remote_write_file` to create or update a file on a remote cluster node via SSH (requires confirmation).\n" +
 		"- `remote_tail_logs` to tail systemd unit logs or file logs on a remote cluster node (read-only).\n" +
 		"- `fleet_exec` to execute a shell command across multiple cluster nodes in parallel (or all nodes) and aggregate results.\n" +
-		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node (sync or async) — use this to parallelize work across nodes (e.g. tests on nixos while a build runs on foundry).\n" +
+		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node (sync or async) — use this to parallelize work across nodes (e.g. tests on worker-1 while a build runs on builder).\n" +
 		"- `git_status` to view repository status.\n" +
 		"- `git_diff` to view git differences.\n" +
 		"- `git_log` to view git commit history.\n" +

@@ -9,7 +9,7 @@ test, and contribute effectively.
 git clone https://github.com/toasterbook88/axis.git
 cd axis
 make build                 # ./axis with commit/date ldflags
-make install-user          # ~/.local/bin/axis (preferred on Cranium)
+make install-user          # ~/.local/bin/axis
 # make install              # $GOPATH/bin/axis (legacy; often not on PATH)
 ```
 

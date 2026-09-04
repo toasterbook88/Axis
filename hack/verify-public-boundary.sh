@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Enforce docs/decisions/placement-selection-contract.md §12 for IPv4
-# literals in Go sources and CHANGELOG.
+# literals and private cluster domain names across all tracked files.
 #
 # Documentation / example addresses are allowlisted. A 192.168.1.x or
 # CGNAT address that is not on that list is treated as a live grid host.
@@ -22,7 +22,6 @@ allowed_ip() {
     # CGNAT classification fixtures + dummy 100.1.2.3 (not CGNAT, not a grid host)
     100.1.2.3|100.64.0.*|100.64.1.*|100.100.*|100.63.*|100.127.*|100.128.*) return 0 ;;
 
-
     169.254.0.0|169.254.1.1|169.254.1.2|169.254.1.5|169.254.169.254) return 0 ;;
     127.*|0.0.0.0|255.255.255.255|8.8.8.8|1.2.3.4|224.0.0.1) return 0 ;;
     # Semver mistaken for IPv4 (x.y.z.w version strings)
@@ -31,18 +30,36 @@ allowed_ip() {
   esac
 }
 
-hits=()
+# 1. Check for private cluster domain / hostname patterns across all tracked files
+domain_hits=()
+forbidden_domain_regex='(\.lan\.axismcp\.org|\.axismcp\.org|\.ts\.net|cranium\.lan|tail9ecf52)'
+
+while IFS= read -r -d '' f; do
+  [[ -f "$f" ]] || continue
+  [[ "$f" == "hack/verify-public-boundary.sh" ]] && continue
+  while IFS= read -r line; do
+    domain_hits+=("$f: $line")
+  done < <(rg -n -e "$forbidden_domain_regex" "$f" || true)
+done < <(git ls-files -z)
+
+if (( ${#domain_hits[@]} > 0 )); then
+  printf '%s\n' "${domain_hits[@]}" >&2
+  fail "${#domain_hits[@]} private cluster domain/hostname occurrence(s); use RFC 2606 example.com domains"
+fi
+
+# 2. Check for unauthorized IPv4 literals across all tracked files
+ip_hits=()
 while IFS= read -r -d '' f; do
   [[ -f "$f" ]] || continue
   while IFS= read -r ip; do
     allowed_ip "$ip" && continue
-    hits+=("$f: address $ip")
+    ip_hits+=("$f: address $ip")
   done < <(rg -oN --no-filename '[0-9]{1,3}(\.[0-9]{1,3}){3}' "$f" | sort -u)
-done < <(git ls-files -z -- 'cmd/**/*.go' 'internal/**/*.go' 'CHANGELOG.md')
+done < <(git ls-files -z)
 
-if (( ${#hits[@]} > 0 )); then
-  printf '%s\n' "${hits[@]}" >&2
-  fail "${#hits[@]} non-documentation IPv4 literal(s); use RFC 5737 / example addresses (placement-selection-contract.md §12)"
+if (( ${#ip_hits[@]} > 0 )); then
+  printf '%s\n' "${ip_hits[@]}" >&2
+  fail "${#ip_hits[@]} non-documentation IPv4 literal(s); use RFC 5737 / example addresses (placement-selection-contract.md §12)"
 fi
 
 printf 'public boundary guardrails passed\n'

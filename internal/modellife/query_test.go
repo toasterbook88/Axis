@@ -174,7 +174,7 @@ func TestNormalizeChatCompletionsEndpoint(t *testing.T) {
 		{"127.0.0.1:8080", "http://127.0.0.1:8080/v1/chat/completions"},
 		{"http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1/chat/completions"},
 		{"http://127.0.0.1:8080/v1/chat/completions", "http://127.0.0.1:8080/v1/chat/completions"},
-		{"https://qwen.lan.axismcp.org/v1", "https://qwen.lan.axismcp.org/v1/chat/completions"},
+		{"https://qwen.example.com/v1", "https://qwen.example.com/v1/chat/completions"},
 	}
 
 	for _, tc := range tests {
