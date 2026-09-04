@@ -58,6 +58,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep
 
+      - name: Public boundary guardrails
+        run: ./hack/verify-public-boundary.sh
+
       - name: Repo truth guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
