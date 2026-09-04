@@ -4,18 +4,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * *"
-  pull_request:
-    paths:
-      - ".github/workflows/**"
-      - "cmd/axis/**"
-      - "internal/facts/**"
-      - "internal/placement/**"
-      - "internal/transport/**"
-      - "internal/buildinfo/**"
-      - "internal/models/**"
-      - "hack/**"
-      - "README.md"
-      - "docs/current-state.md"
+  # No pull_request trigger: this workflow runs on a self-hosted runner inside
+  # the operator LAN. Fork pull requests must never execute on it. PR coverage
+  # is provided by ci.yml (ubuntu-latest); push to main still runs hardware
+  # validation on trusted code that has already merged.
   push:
     branches: [main]
     paths:
