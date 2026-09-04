@@ -82,7 +82,7 @@ inputs, so any unit invoking axis needs an absolute `ExecStart`.
 `axis version` must print `commit:` — that line distinguishes tip-of-main from a GitHub release with the same semver.
 Never `gh release create` before the tag workflow; GoReleaser owns GitHub Releases.
 
-Requires Go 1.26.1+ (`go.mod` is authoritative for the minimum; use the latest
+Requires Go 1.26.6+ (`go.mod` is authoritative for the minimum; use the latest
 1.26 patch release). Remote node tests require SSH
 key-based auth.
 
@@ -97,6 +97,7 @@ Verification steps:
 - `make test-race`
 - `go build -buildvcs=false ./...` (portable across linked worktrees; release builds inject explicit metadata)
 - `./hack/coverage-check.sh` — enforces per-package and total coverage gates
+- `./hack/verify-public-boundary.sh` — enforces RFC 2606 domain and IPv4 documentation boundaries across all tracked files
 - `./hack/verify-repo-truth.sh` — enforces release-tag and doc-fact accuracy
 - `./hack/verify-doc-facts.sh` — enforces code/doc agreement: exit codes, command count, MCP tool count, and CHANGELOG completeness (no network)
 
@@ -120,14 +121,17 @@ AXIS is organized into five architectural trust/role tiers. Higher tiers consume
 
 ```text
 Layer 5  Advisory     internal/chat  internal/agent  internal/console
-                        internal/mcp  internal/api
+                        internal/mcp  internal/api  internal/cortex
+                        internal/mcpclient
 Layer 4  Execution    internal/execution  internal/safety  internal/reservation
-                        internal/scripts  internal/skills
-Layer 3  Placement    internal/placement  internal/workload
+                        internal/scripts  internal/skills  internal/modellife
+                        internal/modelinventory
+Layer 3  Placement    internal/placement  internal/workload  internal/modelplan
+                        internal/llmrouter
 Layer 2  Snapshot     internal/snapshot  internal/daemon  internal/snapshotview
-                        internal/runtimectx
+                        internal/runtimectx  internal/publication
 Layer 1  Fact Plane   internal/facts  internal/discovery  internal/mesh
-                        internal/transport (SSH)
+                        internal/transport (SSH)  internal/multipath
 ```
 
 ### Stable operator path
@@ -148,20 +152,29 @@ internal/transport/   SSH execution layer (host-key verification must stay on)
 ### Secondary / optional surfaces
 
 ```text
-internal/daemon/      Background snapshot refresh, in-memory cache
-internal/api/         Optional local HTTP API (axis serve)
-internal/mcp/         MCP server (axis mcp serve): 20 tools (17 read-only
-                      diagnostics + 3 advisory lease primitives); see
-                      docs/runbooks/mcp-network-tools.md for the full list
-internal/chat/        Structured Ollama /api/chat client (subordinate to facts)
-internal/agent/       Tool-calling agent loop with safety-gated shell
-internal/execution/   Guarded execution: safety → reserve → run → release
-internal/safety/      Execution blocker (0–100 score; ≥80 = hard block)
-internal/state/       Reservation tracking, per-exec liveness/provenance, and
-                      failure immune system
-internal/skills/      Learned skills/failures, corrupt-file recovery
-internal/scripts/     Built-in helper scripts with keyword matching
-internal/knowledge/   Cluster knowledge context for execution
+internal/daemon/         Background snapshot refresh, in-memory cache
+internal/api/            Optional local HTTP API (axis serve)
+internal/mcp/            MCP server (axis mcp serve): 20 tools (17 read-only
+                         diagnostics + 3 advisory lease primitives); see
+                         docs/runbooks/mcp-network-tools.md for the full list
+internal/chat/           Structured Ollama /api/chat client (subordinate to facts)
+internal/agent/          Tool-calling agent loop with safety-gated shell
+internal/console/        Experimental transcript console for agent sessions
+internal/cortex/         Distributed vector memory & event bus MCP client (dynamic node resolution)
+internal/mcpclient/      External MCP server client integration
+internal/execution/      Guarded execution: safety → reserve → run → release
+internal/safety/         Execution blocker (0–100 score; ≥80 = hard block)
+internal/reservation/    Daemon reservation ledger, advisory leases, and reclamation
+internal/state/          Reservation tracking, per-exec liveness/provenance, and
+                         failure immune system
+internal/skills/         Learned skills/failures, corrupt-file recovery
+internal/scripts/        Built-in helper scripts with keyword matching
+internal/knowledge/      Cluster knowledge context for execution
+internal/modellife/      Native llama-server start/stop lifecycle planning and readiness probing
+internal/modelinventory/ Canonical resident-model discovery and instance derivation
+internal/modelplan/      Deterministic hardware-fit distributed model placement planning
+internal/llmrouter/      Model route resolution across backends, roles, and fallbacks
+internal/multipath/      Multi-interface network reachability and transport probing
 ```
 
 ### Supporting packages
@@ -175,6 +188,14 @@ internal/publication/ Build per-snapshot component evidence envelopes
 internal/repairs/     Structured advisory maintenance receipts
 internal/snapshotview/ Deep clone + reservation overlay on snapshots
 internal/turboexec/   TurboQuant flag injection for execution
+internal/auth/        Forwarded-origin authentication helpers
+internal/failures/    Failure-scope hashing, quarantine, and expiry
+internal/fleettest/   Safety guardrails for cross-node fleet integration tests
+internal/git/         Workspace git status and repository metadata inspection
+internal/lockutil/    Interprocess and file lock primitives (flock / lockfile)
+internal/netutil/     Network address classification, IP parsing, subnet validation
+internal/secrets/     Secret store resolution and sanitization
+internal/versioncmp/  Semantic and platform version comparison helpers
 ```
 
 ### Core types (`internal/models/types.go`)
@@ -221,7 +242,7 @@ HDD penalty: −15 for heavy inference.
 | `axis model` | List/inspect resident instances, dry-run placement planning, start/stop llama-server, await readiness, or query models |
 | `axis cluster` | Fleet snapshot: `status`, `summary` |
 | `axis node` | This machine: `facts` |
-| `axis cortex` | Distributed vector memory / event bus |
+| `axis cortex` | Distributed vector memory / event bus (resolves node via AXIS_CORTEX_NODE, role: cortex, or name cortex/foundry) |
 | `axis context show\|clear` | Inspect or clear placement memory |
 | `axis scripts list` | List built-in helper scripts |
 | `axis skills` | Show learned skills/failures |
@@ -339,6 +360,7 @@ reason, or add heavy dependencies without strong justification.
 | `hack/coverage-check.sh` | Per-package and total coverage gates |
 | `hack/hermetic-go-test.sh` | Run Go tests without touching operator AXIS state |
 | `hack/hermetic-go-test-tests.sh` | Regression tests for the hermetic Go test runner |
+| `hack/verify-public-boundary.sh` | Enforce RFC 2606 domain and IPv4 documentation boundaries across all tracked files |
 | `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
 | `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, CHANGELOG) |
 | `hack/refresh-current-state.sh` | Rebuild repository-derived facts and verification in `docs/current-state.md` |
