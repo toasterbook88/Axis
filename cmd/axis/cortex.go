@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -21,11 +22,12 @@ const cortexRecallTimeout = 45 * time.Second
 func cortexCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cortex",
-		Short: "Interact with the Cortex cluster brain on Foundry",
-		Long: "Cortex is an optional coordination layer running on Foundry.\n" +
+		Short: "Interact with the Cortex cluster brain",
+		Long: "Cortex is an optional coordination layer.\n" +
 			"It provides distributed vector memory (Qdrant), a CI/CD event bus,\n" +
 			"and cross-agent locking.\n\n" +
-			"Requires a node named \"foundry\" in nodes.yaml.\n" +
+			"Target node is resolved from AXIS_CORTEX_NODE, role: cortex in nodes.yaml,\n" +
+			"or a node named cortex (or foundry for backward compatibility).\n" +
 			"Auth token: AXIS_CORTEX_SECRET env var or ~/.axis/cortex.token file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
@@ -39,20 +41,50 @@ func cortexCmd() *cobra.Command {
 	return cmd
 }
 
-// buildCortexClient resolves Foundry from nodes.yaml and the auth token from
+// resolveCortexNode finds the target node for Cortex from configuration or environment.
+// Precedence:
+// 1. AXIS_CORTEX_NODE environment variable (explicit node name)
+// 2. Node with role: cortex in nodes.yaml
+// 3. Node named "cortex" in nodes.yaml
+// 4. Node named "foundry" in nodes.yaml (backward compatibility)
+func resolveCortexNode(cfg *config.Config) (config.NodeConfig, bool) {
+	if cfg == nil {
+		return config.NodeConfig{}, false
+	}
+	if envNode := strings.TrimSpace(os.Getenv("AXIS_CORTEX_NODE")); envNode != "" {
+		if node, ok := cfg.FindNode(envNode); ok {
+			return node, true
+		}
+	}
+	for _, n := range cfg.Nodes {
+		if strings.EqualFold(n.Role, "cortex") {
+			return n, true
+		}
+	}
+	if node, ok := cfg.FindNode("cortex"); ok {
+		return node, true
+	}
+	if node, ok := cfg.FindNode("foundry"); ok {
+		return node, true
+	}
+	return config.NodeConfig{}, false
+}
+
+// buildCortexClient resolves the Cortex target node from nodes.yaml and the auth token from
 // secrets, then returns a ready-to-use cortex.Client with the given HTTP timeout.
-// It returns an actionable error if foundry is not configured.
+// It returns an actionable error if no Cortex node is configured.
 func buildCortexClient(timeout time.Duration) (*cortex.Client, error) {
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("cortex: load config: %w", err)
 	}
 
-	node, ok := cfg.FindNode("foundry")
+	node, ok := resolveCortexNode(cfg)
 	if !ok {
 		return nil, fmt.Errorf(
-			"cortex: no node named \"foundry\" found in nodes.yaml\n" +
-				"  add a node with name: foundry, hostname: <ip>, ssh_user: <user>",
+			"cortex: no Cortex node configured in %s\n"+
+				"  set AXIS_CORTEX_NODE=<name>, or configure a node with role: cortex (or name: cortex)",
+			config.DefaultConfigPath(),
 		)
 	}
 
