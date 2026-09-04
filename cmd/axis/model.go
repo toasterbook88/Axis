@@ -337,11 +337,16 @@ func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, node
 		return err
 	}
 
+	var tempPtr *float64
+	if cmd.Flags().Changed("temperature") || temperature != 0 {
+		tempPtr = &temperature
+	}
+
 	req := modellife.QueryRequest{
 		Model:       instance.Model,
 		Prompt:      prompt,
 		MaxTokens:   maxTokens,
-		Temperature: temperature,
+		Temperature: tempPtr,
 	}
 
 	result, queryErr := runner.Query(ctx, nf, cfgNode, *instance, req)
@@ -905,7 +910,8 @@ func (liveModelRunner) Probe(ctx context.Context, node models.NodeFacts, cfgNode
 
 func (r liveModelRunner) Await(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error) {
 	opts.ProbeFn = func(probeCtx context.Context) error {
-		return r.Probe(probeCtx, node, cfgNode, instance.Port)
+		script := shellProbe(instance.Port)
+		return runOnNode(probeCtx, node, cfgNode, script)
 	}
 	return modellife.AwaitInstance(ctx, instance, opts)
 }
@@ -924,7 +930,12 @@ func (r liveModelRunner) Query(ctx context.Context, node models.NodeFacts, cfgNo
 	if err != nil {
 		return modellife.QueryResult{}, fmt.Errorf("remote query on %s:%d failed: %w (output: %s)", node.Name, instance.Port, err, strings.TrimSpace(out))
 	}
-	return modellife.ParseQueryResponse([]byte(out), time.Since(start), fmt.Sprintf("%s:%d", node.Name, instance.Port))
+	const maxResponseBytes = 10 * 1024 * 1024
+	raw := []byte(out)
+	if len(raw) > maxResponseBytes {
+		raw = raw[:maxResponseBytes]
+	}
+	return modellife.ParseQueryResponse(raw, time.Since(start), fmt.Sprintf("%s:%d", node.Name, instance.Port))
 }
 
 func shellQuery(port int, req modellife.QueryRequest) (string, error) {
@@ -947,8 +958,8 @@ func shellQuery(port int, req modellife.QueryRequest) (string, error) {
 	if req.MaxTokens > 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
-	if req.Temperature > 0 {
-		payload["temperature"] = req.Temperature
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

@@ -13,11 +13,11 @@ import (
 
 // QueryRequest encapsulates a prompt request to a resident model instance.
 type QueryRequest struct {
-	Model        string  `json:"model"`
-	Prompt       string  `json:"prompt"`
-	SystemPrompt string  `json:"system_prompt,omitempty"`
-	MaxTokens    int     `json:"max_tokens,omitempty"`
-	Temperature  float64 `json:"temperature,omitempty"`
+	Model        string   `json:"model"`
+	Prompt       string   `json:"prompt"`
+	SystemPrompt string   `json:"system_prompt,omitempty"`
+	MaxTokens    int      `json:"max_tokens,omitempty"`
+	Temperature  *float64 `json:"temperature,omitempty"`
 }
 
 // QueryResult contains the completion response text and execution telemetry.
@@ -92,9 +92,8 @@ func QueryHTTP(ctx context.Context, endpoint string, req QueryRequest, httpClien
 	if req.MaxTokens > 0 {
 		bodyPayload.MaxTokens = req.MaxTokens
 	}
-	if req.Temperature > 0 {
-		temp := req.Temperature
-		bodyPayload.Temperature = &temp
+	if req.Temperature != nil {
+		bodyPayload.Temperature = req.Temperature
 	}
 
 	payloadBytes, err := json.Marshal(bodyPayload)
