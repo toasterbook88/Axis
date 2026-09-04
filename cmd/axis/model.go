@@ -42,6 +42,8 @@ type modelProcessRunner interface {
 	Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error
 	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, target modellife.StopTarget) (modelStopDisposition, error)
 	Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
+	Await(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error)
+	Query(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, req modellife.QueryRequest) (modellife.QueryResult, error)
 }
 
 var defaultModelRunner modelProcessRunner = liveModelRunner{}
@@ -56,6 +58,8 @@ func modelCmd() *cobra.Command {
 	cmd.AddCommand(modelPlanCmd())
 	cmd.AddCommand(modelStartCmd())
 	cmd.AddCommand(modelStopCmd())
+	cmd.AddCommand(modelAwaitCmd())
+	cmd.AddCommand(modelQueryCmd())
 	return cmd
 }
 
@@ -135,6 +139,275 @@ func modelStopCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
 	return cmd
+}
+
+func modelAwaitCmd() *cobra.Command {
+	var cacheAddr, format string
+	var timeout, interval time.Duration
+	var live bool
+	cmd := &cobra.Command{
+		Use:          "await <instance-id>",
+		Short:        "Wait for a resident model instance to become ready to serve",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout+5*time.Second)
+			defer cancel()
+			return runModelAwait(ctx, cmd, args[0], timeout, interval, live, cacheAddr, format, defaultModelRunner)
+		},
+	}
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "Maximum time to wait for instance readiness")
+	cmd.Flags().DurationVar(&interval, "interval", 500*time.Millisecond, "Polling interval between readiness probes")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
+	return cmd
+}
+
+func modelQueryCmd() *cobra.Command {
+	var cacheAddr, format, node string
+	var timeout time.Duration
+	var maxTokens int
+	var temperature float64
+	var live bool
+	cmd := &cobra.Command{
+		Use:          "query <instance-id|model> <prompt>",
+		Short:        "Query a resident model instance with a prompt",
+		Args:         cobra.ExactArgs(2),
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			return runModelQuery(ctx, cmd, args[0], args[1], node, maxTokens, temperature, live, cacheAddr, format, defaultModelRunner)
+		},
+	}
+	cmd.Flags().StringVar(&node, "node", "", "Filter candidate instances by node name")
+	cmd.Flags().IntVar(&maxTokens, "max-tokens", 512, "Maximum tokens to generate")
+	cmd.Flags().Float64Var(&temperature, "temperature", 0.7, "Sampling temperature")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "Request timeout")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
+	return cmd
+}
+
+func runModelAwait(ctx context.Context, cmd *cobra.Command, targetID string, timeout, interval time.Duration, live bool, cacheAddr, format string, runner modelProcessRunner) error {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return fmt.Errorf("instance ID is required")
+	}
+
+	var (
+		snap   *models.ClusterSnapshot
+		source string
+		err    error
+	)
+	if live {
+		snap, err = loadModelSnapshot(ctx)
+		source = "live"
+	} else {
+		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
+	}
+	if err != nil {
+		if live {
+			return fmt.Errorf("collect live cluster snapshot for model await: %w", err)
+		}
+		return fmt.Errorf("load cluster snapshot from daemon cache for model await: %w (use --live for an explicit live collection)", err)
+	}
+
+	inventory := modelinventory.FromSnapshot(snap, source)
+	var instance *models.ModelInstance
+	for i := range inventory.Instances {
+		inst := &inventory.Instances[i]
+		if inst.ID == targetID || inst.GenerationID == targetID || strings.EqualFold(inst.Model, targetID) {
+			instance = inst
+			break
+		}
+	}
+	if instance == nil {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: fmt.Sprintf("model instance %q not found in %s inventory", targetID, sourceOrLive(source)),
+		}
+	}
+
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, instance.Node)
+	if err != nil {
+		return err
+	}
+
+	opts := modellife.AwaitOptions{
+		Timeout:        timeout,
+		Interval:       interval,
+		SnapshotSource: source,
+		SnapshotAt:     snap.Timestamp,
+	}
+	if snap.Publication != nil {
+		opts.PublicationID = snap.Publication.ID
+	}
+
+	receipt, awaitErr := runner.Await(ctx, nf, cfgNode, *instance, opts)
+	if format == "json" || format == "yaml" {
+		if writeErr := printOutput(cmd.OutOrStdout(), receipt, format); writeErr != nil {
+			return writeErr
+		}
+	} else {
+		if receipt.Status == models.ModelOperationCompleted {
+			if _, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "ready %s:%d instance %s in %dms operation %s\n",
+				receipt.Node, receipt.Port, receipt.InstanceID, receipt.DurationMS, receipt.ID); writeErr != nil {
+				return writeErr
+			}
+		} else {
+			if _, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d instance %s: %s operation %s\n",
+				receipt.Disposition, receipt.Node, receipt.Port, receipt.InstanceID, receipt.Error, receipt.ID); writeErr != nil {
+				return writeErr
+			}
+		}
+	}
+
+	if awaitErr != nil || receipt.Status != models.ModelOperationCompleted {
+		errMsg := receipt.Error
+		if errMsg == "" && awaitErr != nil {
+			errMsg = awaitErr.Error()
+		}
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: fmt.Sprintf("model await on %s:%d: %s", instance.Node, instance.Port, errMsg),
+		}
+	}
+	return nil
+}
+
+func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, nodeFilter string, maxTokens int, temperature float64, live bool, cacheAddr, format string, runner modelProcessRunner) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("target instance ID or model name is required")
+	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("prompt cannot be empty")
+	}
+
+	startedAt := time.Now().UTC()
+	var (
+		snap   *models.ClusterSnapshot
+		source string
+		err    error
+	)
+	if live {
+		snap, err = loadModelSnapshot(ctx)
+		source = "live"
+	} else {
+		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
+	}
+	if err != nil {
+		if live {
+			return fmt.Errorf("collect live cluster snapshot for model query: %w", err)
+		}
+		return fmt.Errorf("load cluster snapshot from daemon cache for model query: %w (use --live for an explicit live collection)", err)
+	}
+
+	inventory := modelinventory.FromSnapshot(snap, source)
+	var instance *models.ModelInstance
+	for i := range inventory.Instances {
+		inst := &inventory.Instances[i]
+		if nodeFilter != "" && !strings.EqualFold(inst.Node, nodeFilter) {
+			continue
+		}
+		if inst.ID == target || inst.GenerationID == target || strings.EqualFold(inst.Model, target) {
+			instance = inst
+			break
+		}
+	}
+	if instance == nil {
+		msg := fmt.Sprintf("model instance or name %q not found in %s inventory", target, sourceOrLive(source))
+		if nodeFilter != "" {
+			msg = fmt.Sprintf("model instance or name %q on node %q not found in %s inventory", target, nodeFilter, sourceOrLive(source))
+		}
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: msg,
+		}
+	}
+
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, instance.Node)
+	if err != nil {
+		return err
+	}
+
+	var tempPtr *float64
+	if cmd.Flags().Changed("temperature") || temperature != 0 {
+		tempPtr = &temperature
+	}
+
+	req := modellife.QueryRequest{
+		Model:       instance.Model,
+		Prompt:      prompt,
+		MaxTokens:   maxTokens,
+		Temperature: tempPtr,
+	}
+
+	result, queryErr := runner.Query(ctx, nf, cfgNode, *instance, req)
+
+	receipt := models.ModelOperationReceipt{
+		Schema:           "axis.model-operation/v1",
+		ID:               models.GenerateID("mo"),
+		Action:           models.ModelOperationQuery,
+		Status:           models.ModelOperationCompleted,
+		Disposition:      "answered",
+		InstanceID:       instance.ID,
+		GenerationID:     instance.GenerationID,
+		Node:             instance.Node,
+		Engine:           instance.Engine,
+		Port:             instance.Port,
+		PID:              instance.PID,
+		Model:            instance.Model,
+		SnapshotSource:   source,
+		SnapshotAt:       snap.Timestamp,
+		StartedAt:        startedAt,
+		CompletedAt:      time.Now().UTC(),
+		DurationMS:       result.DurationMS,
+		PromptTokens:     result.PromptTokens,
+		CompletionTokens: result.CompletionTokens,
+		TotalTokens:      result.TotalTokens,
+		EndpointURL:      result.Endpoint,
+		ResponseText:     result.Content,
+	}
+	if snap.Publication != nil {
+		receipt.PublicationID = snap.Publication.ID
+	}
+	if queryErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = queryErr.Error()
+	}
+
+	if format == "json" || format == "yaml" {
+		if writeErr := printOutput(cmd.OutOrStdout(), receipt, format); writeErr != nil {
+			return writeErr
+		}
+	} else {
+		if queryErr == nil {
+			if _, writeErr := fmt.Fprintln(cmd.OutOrStdout(), result.Content); writeErr != nil {
+				return writeErr
+			}
+		} else {
+			if _, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "query failed on %s:%d: %s operation %s\n",
+				instance.Node, instance.Port, receipt.Error, receipt.ID); writeErr != nil {
+				return writeErr
+			}
+		}
+	}
+
+	if queryErr != nil {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: fmt.Sprintf("model query on %s:%d failed: %v", instance.Node, instance.Port, queryErr),
+		}
+	}
+	return nil
 }
 
 func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string, port int, live bool, cacheAddr, format string) error {
@@ -633,6 +906,69 @@ func (liveModelRunner) Probe(ctx context.Context, node models.NodeFacts, cfgNode
 		last = fmt.Errorf("probe failed")
 	}
 	return last
+}
+
+func (r liveModelRunner) Await(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error) {
+	opts.ProbeFn = func(probeCtx context.Context) error {
+		script := shellProbe(instance.Port)
+		return runOnNode(probeCtx, node, cfgNode, script)
+	}
+	return modellife.AwaitInstance(ctx, instance, opts)
+}
+
+func (r liveModelRunner) Query(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, req modellife.QueryRequest) (modellife.QueryResult, error) {
+	start := time.Now()
+	if models.IsLocalNode(node) {
+		endpoint := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", instance.Port)
+		return modellife.QueryHTTP(ctx, endpoint, req, nil)
+	}
+	script, err := shellQuery(instance.Port, req)
+	if err != nil {
+		return modellife.QueryResult{}, err
+	}
+	out, err := runOnNodeCapturing(ctx, node, cfgNode, script)
+	if err != nil {
+		return modellife.QueryResult{}, fmt.Errorf("remote query on %s:%d failed: %w (output: %s)", node.Name, instance.Port, err, strings.TrimSpace(out))
+	}
+	const maxResponseBytes = 10 * 1024 * 1024
+	raw := []byte(out)
+	if len(raw) > maxResponseBytes {
+		raw = raw[:maxResponseBytes]
+	}
+	return modellife.ParseQueryResponse(raw, time.Since(start), fmt.Sprintf("%s:%d", node.Name, instance.Port))
+}
+
+func shellQuery(port int, req modellife.QueryRequest) (string, error) {
+	var messages []map[string]string
+	if strings.TrimSpace(req.SystemPrompt) != "" {
+		messages = append(messages, map[string]string{
+			"role":    "system",
+			"content": req.SystemPrompt,
+		})
+	}
+	messages = append(messages, map[string]string{
+		"role":    "user",
+		"content": req.Prompt,
+	})
+	payload := map[string]interface{}{
+		"model":    req.Model,
+		"messages": messages,
+		"stream":   false,
+	}
+	if req.MaxTokens > 0 {
+		payload["max_tokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"curl -fsS -X POST http://127.0.0.1:%d/v1/chat/completions -H 'Content-Type: application/json' -d %s",
+		port, shellQuote(string(body)),
+	), nil
 }
 
 func shellStart(argv []string, port int) string {
