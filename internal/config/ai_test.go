@@ -134,8 +134,8 @@ backends:
   - name: local-nemotron
     kind: openai-compatible
     base_url: http://127.0.0.1:8081/v1
-    advertise_url: http://nemotron.lan.axismcp.org/v1
-    node: cranium
+    advertise_url: http://nemotron.example.com/v1
+    node: node-a
 roles:
   nemotron:
     prefer: [local-nemotron]
@@ -149,7 +149,7 @@ roles:
 		t.Fatalf("backends=%d", len(cfg.Backends))
 	}
 	got := cfg.Backends[0].AdvertiseURL
-	want := "http://nemotron.lan.axismcp.org/v1"
+	want := "http://nemotron.example.com/v1"
 	if got != want {
 		t.Fatalf("AdvertiseURL = %q, want %q", got, want)
 	}

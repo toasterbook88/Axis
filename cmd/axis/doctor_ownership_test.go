@@ -268,8 +268,8 @@ func TestDaemonServeAddr(t *testing.T) {
 	}{
 		{
 			"daemon start with explicit addr",
-			[]string{"/home/cranium/axis/axis", "daemon", "start", "--addr", "/home/cranium/.axis/axis.sock", "--refresh", "1m0s"},
-			"/home/cranium/.axis/axis.sock", true,
+			[]string{"/home/user/axis/axis", "daemon", "start", "--addr", "/home/user/.axis/axis.sock", "--refresh", "1m0s"},
+			"/home/user/.axis/axis.sock", true,
 		},
 		{
 			"serve with --addr=",
@@ -278,7 +278,7 @@ func TestDaemonServeAddr(t *testing.T) {
 		},
 		{"serve default addr", []string{"axis", "serve"}, api.DefaultAddr(), true},
 		{"serve behind a global flag", []string{"axis", "--no-color", "serve"}, api.DefaultAddr(), true},
-		{"mcp serve binds nothing", []string{"/home/cranium/.local/bin/axis", "mcp", "serve", "--cached"}, "", false},
+		{"mcp serve binds nothing", []string{"/home/user/.local/bin/axis", "mcp", "serve", "--cached"}, "", false},
 		{"daemon status is not a daemon", []string{"axis", "daemon", "status"}, "", false},
 		{"unrelated binary", []string{"/usr/bin/axisd", "serve"}, "", false},
 		{"bare axis", []string{"axis"}, "", false},

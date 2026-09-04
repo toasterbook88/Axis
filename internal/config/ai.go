@@ -32,8 +32,8 @@ type AIBackendConfig struct {
 	// Examples: http://127.0.0.1:11434  or  http://127.0.0.1:4000/v1
 	BaseURL string `json:"base_url" yaml:"base_url"`
 
-	// AdvertiseURL is an optional cluster-facing URL (e.g. a Traefik
-	// Host on *.lan.axismcp.org). Used only when this process is not
+	// AdvertiseURL is an optional cluster-facing URL (e.g. a reverse-proxy
+	// Host or gateway URL). Used only when this process is not
 	// the backend's node. Same-box callers keep BaseURL.
 	AdvertiseURL string `json:"advertise_url,omitempty" yaml:"advertise_url,omitempty"`
 

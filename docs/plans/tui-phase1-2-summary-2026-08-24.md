@@ -198,7 +198,7 @@ View() renders with data
 
 ```bash
 # Build and test
-cd /home/cranium/axis
+cd /path/to/axis
 go build -o axis ./cmd/axis/
 ./axis tui
 

@@ -514,7 +514,7 @@ func TestCollectModelChoicesProbesLocalLlamaCppResidents(t *testing.T) {
 		Snapshot: &models.ClusterSnapshot{
 			Nodes: []models.NodeFacts{
 				{
-					Name:     "cranium",
+					Name:     "local-node",
 					Hostname: hn,
 					Status:   models.StatusComplete,
 					ResidentModels: []models.ResidentModel{
@@ -570,7 +570,7 @@ func TestCollectModelChoicesKeepsReachableLocalLlamaCppEnabled(t *testing.T) {
 		Snapshot: &models.ClusterSnapshot{
 			Nodes: []models.NodeFacts{
 				{
-					Name:     "cranium",
+					Name:     "local-node",
 					Hostname: hn,
 					Status:   models.StatusComplete,
 					ResidentModels: []models.ResidentModel{
@@ -611,7 +611,7 @@ func TestModelChoicesAdvertiseURLUnreachableIsDisabled(t *testing.T) {
 				Name:         "remote-nemotron",
 				Kind:         config.AIBackendOpenAICompatible,
 				BaseURL:      "http://127.0.0.1:8081/v1",
-				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+				AdvertiseURL: "http://nemotron.example.com/v1",
 				Node:         "not-this-host",
 			},
 		},
@@ -641,13 +641,13 @@ func TestModelChoicesAdvertiseURLUnreachableIsDisabled(t *testing.T) {
 		t.Fatalf("choices=%+v", choices)
 	}
 	c := choices[0]
-	if c.Endpoint != "http://nemotron.lan.axismcp.org/v1" {
+	if c.Endpoint != "http://nemotron.example.com/v1" {
 		t.Fatalf("endpoint = %q, want advertise_url", c.Endpoint)
 	}
 	if !c.Disabled || c.DisabledReason != "unreachable" {
 		t.Fatalf("want disabled/unreachable, got %+v", c)
 	}
-	if !probed["http://nemotron.lan.axismcp.org/v1/models"] {
+	if !probed["http://nemotron.example.com/v1/models"] {
 		t.Fatalf("did not probe advertise_url; probed %v", probed)
 	}
 }
@@ -668,7 +668,7 @@ func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
 				Name:         "remote-nemotron",
 				Kind:         config.AIBackendOpenAICompatible,
 				BaseURL:      "http://127.0.0.1:8081/v1",
-				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+				AdvertiseURL: "http://nemotron.example.com/v1",
 				Node:         "not-this-host",
 			},
 		},
@@ -688,7 +688,7 @@ func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
 		}, nil
 	}
 	inferenceProbeFn = func(url string) bool {
-		return strings.Contains(url, "nemotron.lan.axismcp.org")
+		return strings.Contains(url, "nemotron.example.com")
 	}
 
 	choices := modelChoicesFromAIConfig(nil)
@@ -699,7 +699,7 @@ func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
 	if c.Disabled {
 		t.Fatalf("reachable advertise_url must stay enabled, got %+v", c)
 	}
-	if c.Endpoint != "http://nemotron.lan.axismcp.org/v1" {
+	if c.Endpoint != "http://nemotron.example.com/v1" {
 		t.Fatalf("endpoint = %q", c.Endpoint)
 	}
 }
@@ -720,7 +720,7 @@ func TestModelChoicesLocalNodeBindingKeepsBaseURL(t *testing.T) {
 				Name:         "local-nemotron",
 				Kind:         config.AIBackendOpenAICompatible,
 				BaseURL:      "http://127.0.0.1:8081/v1",
-				AdvertiseURL: "http://nemotron.lan.axismcp.org/v1",
+				AdvertiseURL: "http://nemotron.example.com/v1",
 				Node:         "node-a",
 			},
 		},

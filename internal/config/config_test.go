@@ -473,17 +473,17 @@ func TestNodeConfigIsLocal_UsesAllDialHostnames(t *testing.T) {
 func TestMembershipFingerprint_Stable(t *testing.T) {
 	a := &Config{Nodes: []NodeConfig{
 		{Name: "b", Role: "hub", SSHUser: "axis"},
-		{Name: "a", Role: "muscle", SSHUser: "cranium"},
+		{Name: "a", Role: "muscle", SSHUser: "user"},
 	}}
 	b := &Config{Nodes: []NodeConfig{
-		{Name: "a", Hostname: "x", Role: "muscle", SSHUser: "cranium"},
+		{Name: "a", Hostname: "x", Role: "muscle", SSHUser: "user"},
 		{Name: "b", Hostname: "y", Role: "hub", SSHUser: "axis"},
 	}}
 	if a.MembershipFingerprint() != b.MembershipFingerprint() {
 		t.Fatalf("fingerprint should ignore hostnames and node order")
 	}
 	c := &Config{Nodes: []NodeConfig{
-		{Name: "a", Role: "other", SSHUser: "cranium"},
+		{Name: "a", Role: "other", SSHUser: "user"},
 		{Name: "b", Role: "hub", SSHUser: "axis"},
 	}}
 	if a.MembershipFingerprint() == c.MembershipFingerprint() {

@@ -39,23 +39,23 @@ type Client struct {
 // NewClient creates a Cortex client targeting the given Foundry hostname.
 // token may be empty for unauthenticated access (if the server permits it).
 // Prefer NewClientWithTimeout or NewClientWithOptions when you need to override timeouts.
-func NewClient(foundryHost, token string) *Client {
-	return NewClientWithOptions(foundryHost, token, defaultMCPPort, defaultQdrantPort, defaultTimeout)
+func NewClient(cortexHost, token string) *Client {
+	return NewClientWithOptions(cortexHost, token, defaultMCPPort, defaultQdrantPort, defaultTimeout)
 }
 
 // NewClientWithTimeout creates a Cortex client with a custom HTTP timeout.
 // Use this when a specific operation (e.g. recall with cold embedding model)
 // needs a longer deadline than the package default.
-func NewClientWithTimeout(foundryHost, token string, timeout time.Duration) *Client {
-	return NewClientWithOptions(foundryHost, token, defaultMCPPort, defaultQdrantPort, timeout)
+func NewClientWithTimeout(cortexHost, token string, timeout time.Duration) *Client {
+	return NewClientWithOptions(cortexHost, token, defaultMCPPort, defaultQdrantPort, timeout)
 }
 
 // NewClientWithOptions creates a Cortex client with explicit port and timeout
 // overrides. Use this in tests to point at httptest servers.
-func NewClientWithOptions(foundryHost, token string, mcpPort, qdrantPort int, timeout time.Duration) *Client {
+func NewClientWithOptions(cortexHost, token string, mcpPort, qdrantPort int, timeout time.Duration) *Client {
 	return &Client{
-		mcpURL:    fmt.Sprintf("http://%s:%d%s", foundryHost, mcpPort, mcpPath),
-		qdrantURL: fmt.Sprintf("http://%s:%d", foundryHost, qdrantPort),
+		mcpURL:    fmt.Sprintf("http://%s:%d%s", cortexHost, mcpPort, mcpPath),
+		qdrantURL: fmt.Sprintf("http://%s:%d", cortexHost, qdrantPort),
 		token:     token,
 		http:      &http.Client{Timeout: timeout},
 	}

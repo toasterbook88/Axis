@@ -1,6 +1,6 @@
 # AXIS RAM Balancing: Implementation Plan
 
-**Reference Document:** [ram-balancing-research.md](file:///home/cranium/axis/docs/ram-balancing-research.md)  
+**Reference Document:** [ram-balancing-research.md](ram-balancing-research.md)  
 **Target Version:** v0.11.0 (Phase A Core Integration)  
 **Status:** Design Proposal / Ready for Implementation  
 
@@ -24,7 +24,7 @@ graph TD
 
 We will extend the core data structures to represent system reserves and soft-claims:
 
-### A. Node Model Extensions ( [internal/models/types.go](file:///home/cranium/axis/internal/models/types.go) )
+### A. Node Model Extensions ( `internal/models/types.go` )
 Add fields to `Resources` to distinguish between raw limits and allocatable space:
 ```go
 type Resources struct {
@@ -58,16 +58,16 @@ type TaskRequirements struct {
 ### Phase 1: Fact Collection & OS Probing
 We must populate the new model fields during fact gathering.
 
-1. **Linux System Probes ( [internal/facts/local.go](file:///home/cranium/axis/internal/facts/local.go) )**:
+1. **Linux System Probes ( `internal/facts/local.go` )**:
    * **PSI Probing**: Read `/proc/pressure/memory`. Parse `some avg10` and `full avg10` percentages.
    * **Eviction Reserves**: Define a default safety floor of 512MB (or 5% of total RAM).
    * **System Reserves**: Read custom settings from `~/.axis/nodes.yaml` (defaulting to 1024MB if omitted).
    * **Compute Allocatable**: Calculate `Allocatable = Total - SystemReserved - EvictionReserved`.
-2. **macOS System Probes ( [internal/facts/local_darwin.go](file:///home/cranium/axis/internal/facts/local_darwin.go) )**:
+2. **macOS System Probes ( `internal/facts/local_darwin.go` )**:
    * Probe memory pressure via `sysctl vm.page_free_target` or VM statistics. Map macOS memory pressure states to nominal PSI levels.
 
 ### Phase 2: Lease-based Ledger Integration
-AXIS currently features a scaffolded `Ledger` in [ledger.go](file:///home/cranium/axis/internal/reservation/ledger.go). We must integrate it fully:
+AXIS currently features a scaffolded `Ledger` in [`internal/reservation/ledger.go`](../internal/reservation/ledger.go). We must integrate it fully:
 
 1. **Active Leases**: Every `axis task run` will register a memory reservation entry inside the ledger with a default Time-To-Live (`LeaseTTL`, e.g., 5 minutes) and execution owner information.
 2. **Lease Eviction Loop**: The local API daemon (`axis serve`) will run a periodic background loop (every 10 seconds) calling `Ledger.Prune()` to automatically evict expired reservations and stale heartbeats.
@@ -75,7 +75,7 @@ AXIS currently features a scaffolded `Ledger` in [ledger.go](file:///home/craniu
    * For each node: `EffectiveHeadroom = Allocatable - Max(RequestedMem, LeasedMem)`.
 
 ### Phase 3: Placement Filter & Score Updates
-Modify the placement ranker in [ranker.go](file:///home/cranium/axis/internal/placement/ranker.go) to utilize the new metrics:
+Modify the placement ranker in [`internal/placement/ranker.go`](../internal/placement/ranker.go) to utilize the new metrics:
 
 1. **Stage 1 (Filter)**:
    * Disqualify any node where `EffectiveHeadroom < Task.MemoryRequestMB`.

@@ -154,8 +154,8 @@ func (r ReservationList) View() string {
 **Display Format:**
 ```
 ID      NODE        RAM      VRAM     EXPIRES        COUNTDOWN
-abc123  cranium     16 GB    8 GB     2h 15m         [████████░░] 78%
-def456  cachyos     32 GB    --       45m            [███░░░░░░░] 33%
+abc123  node-a      16 GB    8 GB     2h 15m         [████████░░] 78%
+def456  node-b      32 GB    --       45m            [███░░░░░░░] 33%
 ```
 
 **Keybindings:**
@@ -172,7 +172,7 @@ def456  cachyos     32 GB    --       45m            [███░░░░░�
 ```
 1. User selects node in fleet table
 2. Presses Enter
-3. Confirmation prompt: "SSH to cranium (192.168.1.100)?"
+3. Confirmation prompt: "SSH to node-a (192.168.1.100)?"
 4. On confirm: suspends TUI, launches SSH session
 5. On SSH exit: resumes TUI, refreshes snapshot
 ```
@@ -273,10 +273,10 @@ func (e EventDrawer) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 **Display Format:**
 ```
-[14:32:05] cranium: status changed (complete → partial) - thermal throttling detected
-[14:31:48] reservation abc123 created on cachyos (16 GB RAM, 8 GB VRAM)
-[14:30:12] model qwen38-27b started on cranium:8082
-[14:28:55] mesh peer joined: foundry (latency 2.3ms)
+[14:32:05] node-a: status changed (complete → partial) - thermal throttling detected
+[14:31:48] reservation abc123 created on node-b (16 GB RAM, 8 GB VRAM)
+[14:30:12] model qwen-demo started on node-a:8082
+[14:28:55] mesh peer joined: node-c (latency 2.3ms)
 ```
 
 **Keybindings:**
