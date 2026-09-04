@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/modellife"
@@ -24,6 +26,12 @@ type fakeModelRunner struct {
 	probed          []int
 	stopDisposition modelStopDisposition
 	stopErr         error
+	awaitErr        error
+	awaitReceipt    *models.ModelOperationReceipt
+	queryResult     *modellife.QueryResult
+	queryErr        error
+	queriedTargets  []string
+	awaitedTargets  []string
 }
 
 func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, plan modellife.StartPlan) error {
@@ -41,6 +49,52 @@ func (f *fakeModelRunner) Stop(_ context.Context, _ models.NodeFacts, _ *config.
 func (f *fakeModelRunner) Probe(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, port int) error {
 	f.probed = append(f.probed, port)
 	return nil
+}
+func (f *fakeModelRunner) Await(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error) {
+	f.awaitedTargets = append(f.awaitedTargets, instance.ID)
+	if f.awaitReceipt != nil {
+		return *f.awaitReceipt, f.awaitErr
+	}
+	startedAt := time.Now().UTC()
+	receipt := models.ModelOperationReceipt{
+		Schema:       "axis.model-operation/v1",
+		ID:           models.GenerateID("mo"),
+		Action:       models.ModelOperationAwait,
+		Status:       models.ModelOperationCompleted,
+		Disposition:  "ready",
+		InstanceID:   instance.ID,
+		GenerationID: instance.GenerationID,
+		Node:         instance.Node,
+		Engine:       instance.Engine,
+		Port:         instance.Port,
+		Model:        instance.Model,
+		StartedAt:    startedAt,
+		CompletedAt:  time.Now().UTC(),
+	}
+	if f.awaitErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "timeout"
+		receipt.Error = f.awaitErr.Error()
+	}
+	return receipt, f.awaitErr
+}
+func (f *fakeModelRunner) Query(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, instance models.ModelInstance, req modellife.QueryRequest) (modellife.QueryResult, error) {
+	f.queriedTargets = append(f.queriedTargets, instance.ID)
+	if f.queryResult != nil {
+		return *f.queryResult, f.queryErr
+	}
+	if f.queryErr != nil {
+		return modellife.QueryResult{}, f.queryErr
+	}
+	return modellife.QueryResult{
+		Model:            instance.Model,
+		Content:          "mock response to: " + req.Prompt,
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		DurationMS:       42,
+		Endpoint:         fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", instance.Port),
+	}, nil
 }
 
 func stubModelSnapshot(t *testing.T, snap *models.ClusterSnapshot) {
@@ -82,7 +136,7 @@ func testSnap() *models.ClusterSnapshot {
 
 func TestModelCommandWiresInventoryAndLifecycleCommands(t *testing.T) {
 	cmd := modelCmd()
-	for _, name := range []string{"list", "inspect", "start", "stop"} {
+	for _, name := range []string{"list", "inspect", "plan", "start", "stop", "await", "query"} {
 		if _, _, err := cmd.Find([]string{name}); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
