@@ -1,11 +1,15 @@
 ## Unreleased
 
+## v0.17.0 (2026-09-04)
+
 ### Features
 
+* **Model await & query:** Add `axis model await <instance-id>` for polling readiness with `--timeout` and `--interval`, and `axis model query <instance-id|model> "<prompt>"` for prompt inference against local or remote model instances via HTTP and SSH curl execution. Supports `--temperature` (with `0.0` greedy decoding support), `--max-tokens`, and a bounded 10MB remote response stream limit.
 * **Model placement planning:** Add `axis model plan <spec|weights>` to perform dry-run evaluation of cluster nodes for model placement without mutating services. Introduces canonical `ModelSpec` schema (`axis.model-spec/v1`) keeping format, weight size, context overhead, runtime overhead, and accelerator compatibility separate. Evaluates candidate nodes against available RAM, VRAM, and port availability; checks resident models for port collisions; scores eligible nodes deterministically with fit labels; provides reasoning; and supports `--format text|json|yaml`, `--port`, `--cache-addr`, and `--live`.
 * **Model start:** Make `axis model start` cache-first by default, eliminating the 54-second full-cluster discovery sweep while supporting `--live` for explicit discovery. Add preflight port conflict verification against resident models. Emit typed `axis.model-operation/v1` lifecycle receipts with publication binding, supporting `--format text|json|yaml` and `--cache-addr` for local daemon authority.
 * **Model stop:** Add generation-bound `axis model stop <generation-id>`. Resolves the model instance and host from the local daemon cache, revalidates process ownership, PID, executable, and process start token on the host before terminating, refuses to kill if the process generation changed, and writes a typed `axis.model-operation/v1` operation receipt with snapshot publication binding.
 * **Model inventory:** Add a canonical read-only model-instance schema plus `axis model list` and `axis model inspect <instance-id>`. Inventory reads are daemon-cache-first for fast operator feedback; `--live` is an explicit fresh collection with no hidden fallback. Every instance preserves the observed node status and timestamp, while the inventory carries its snapshot source, publication ID, and warnings. Instance IDs are deterministic keys for the observed node/engine/model/port slot, not fabricated process IDs.
+* **Documentation & Architecture:** Refresh `AGENTS.md` and `README.md` to document the completed native model lifecycle loop (`plan` → `start` → `await` → `query` → `stop`), catalog all 46 internal packages across the 5-layer trust hierarchy, and align minimum Go version with `go.mod` (`Go 1.26.6+`).
 
 ### Breaking
 
@@ -14,10 +18,21 @@
   * `axis daemon status` exits 4 for `unavailable`, `stale`, `degraded`, and `incompatible` metadata. The machine-readable envelope is still written first and is unchanged; only the exit code is new. A failure to write that envelope still outranks the health disposition.
   * `axis model stop` now reports a typed disposition — `stopped`, `not_running`, `wrong_owner`, `inspection_unavailable`, or `generation_mismatch` — and exits 4 for everything except `stopped`. A port with no listener previously printed `stopped` and exited 0. Missing `fuser`/`lsof`/`ps` is reported as `inspection_unavailable`, never as `not_running`, because the port was never observed.
 
+### Security & Boundaries
+
+* **Dependencies:** Update `golang.org/x/crypto` from `v0.55.0` to `v0.56.0` to clear reachable SSH denial-of-service vulnerabilities GO-2026-6354 and GO-2026-6355 across all remote fact-collection and execution paths.
+* **CI & Runner Isolation:** Remove `pull_request` trigger from `.github/workflows/hardware-validation.yml` to isolate self-hosted LAN runners from untrusted PR execution before making the repository public.
+* **Boundary Enforcement:** Add `hack/verify-public-boundary.sh` and wire `Public boundary guardrails` into `.github/workflows/ci.yml` to mechanically enforce RFC 2606 example domains and prevent private cluster domain patterns or non-allowlisted IPv4 literals from entering the repository.
+* **Cortex Node Decoupling:** Decouple `axis cortex` and `internal/cortex/client.go` from hardcoded target hosts; target nodes now dynamically resolve via `AXIS_CORTEX_NODE` → `role: cortex` → name `cortex` → backward-compatible fallback `foundry`.
+
 ### Bug Fixes
 
 * **Model truth:** Detect a running `llama-server` from process evidence even when its supervised absolute executable path is outside the collector's login `PATH`. Keep on-disk weight bytes, resident process RAM, and runtime-reported accelerator memory as separate facts (`weight_size_mb`, `size_ram_mb`, and `size_vram_mb`); llama.cpp model-file size and MLX RSS are no longer mislabeled as VRAM.
 * **Daemon:** Make `axis daemon restart` readiness honest. Both the short-circuit and the post-restart poll now use one predicate requiring the exact current version, `Ready=true`, `Stale=false`, and an empty `LastError`; previously both checked only version and staleness, so a daemon that was not ready — or that was reporting a refresh error — was announced as "already fresh". A current-version daemon that is merely still starting gets one bounded 3-second grace period before at most one terminate/start cycle, so repeated restarts cannot churn a daemon that was about to come up. Wrong-version and stale daemons get no grace: exact version equality is an intentional split-binary guard for installations where the CLI and the supervised daemon run from different filesystem paths.
+
+### Operational Notes
+
+* Installed daemons on cluster nodes may need `axis daemon restart && axis daemon status` after operators self-update via `axis update` to ensure running services transition cleanly to the new release binary.
 
 ## v0.16.0 (2026-09-01)
 
