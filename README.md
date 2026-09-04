@@ -8,7 +8,7 @@
 
 **A local-first cluster substrate that discovers hardware across your machines via SSH,
 builds deterministic snapshots, and makes reservation-aware placement decisions —
-with optional gossip mesh discovery, AI agent surfaces, and guarded execution.**
+with native distributed model lifecycle, optional gossip mesh discovery, AI agent surfaces, and guarded execution.**
 
 > **Truth Boundary:** No generated output may present itself as cluster truth
 > unless it is backed by a real snapshot or live probe.
@@ -26,12 +26,12 @@ advisory surfaces never override observed state.
 │  Chat · Agent · MCP Server                                      │
 │  Experimental helpers — never authoritative                     │
 ├─────────────────────────────────────────────────────────────────┤
-│  Layer 4: EXECUTION                                             │
-│  Guarded Exec · Safety Gates · Heartbeat Reservations           │
+│  Layer 4: EXECUTION & LIFECYCLE                                 │
+│  Guarded Exec · Model Lifecycle · Safety Gates · Reservations   │
 │  Structured NDJSON streaming · Resource accounting              │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 3: PLACEMENT                                             │
-│  Filter → Rank → Select · FitScore 0-100                        │
+│  Filter → Rank → Select · Model Evaluation · FitScore 0-100     │
 │  GPU/VRAM matching · Locality · Empirical observations          │
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 2: SNAPSHOT                                              │
@@ -41,7 +41,6 @@ advisory surfaces never override observed state.
 │  Layer 1: FACT PLANE                                            │
 │  SSH hardware probes · UDP beacons · Mesh gossip                │
 │  (axis mesh status/peers; also started from axis serve)         │
-
 │  Local + remote collectors · HMAC-authenticated beacons         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -71,6 +70,11 @@ axis task place "run ollama inference on a 7b model"
 # Explain a placement decision
 axis placement explain "run ollama inference on a 7b model"
 
+# Resident model lifecycle (plan, start, await, query, stop, list)
+axis model plan qwen3.8-27b
+axis model list
+axis model query qwen3.8-27b "Why is the sky blue?"
+
 # Health diagnostics
 axis doctor
 ```
@@ -86,7 +90,7 @@ axis doctor
 | `axis node facts` | Local hardware/tool snapshot (`--format json\|yaml`); `axis facts` still works |
 | `axis cluster status` | Live cluster snapshot (`--cached`, `--cached-only`); `axis status` still works |
 | `axis cluster summary` | Cluster summary view |
-
+| `axis model` | Resident model lifecycle: `plan`, `start`, `await`, `query`, `stop`, `list` |
 | `axis task place` | Advisory placement with reasoning (`--cached`) |
 | `axis placement explain` | Detailed per-node placement breakdown |
 | `axis profile match` | Workload class inference (no snapshot needed) |
@@ -104,13 +108,15 @@ axis doctor
 | `axis daemon service uninstall` | Stop/remove only an AXIS-managed user service |
 | `axis serve` | Local HTTP API + daemon cache |
 | `axis ai` | Inference backends, roles, and dry-run routing |
-
 | `axis cortex` | Distributed vector memory / event bus |
 | `axis update` | Self-update via GitHub Releases |
 | `axis context show\|clear` | Inspect or clear placement memory |
 | `axis scripts list` | Built-in script catalog |
 | `axis skills` | Learned execution skills |
 | `axis completion` | Shell completions (bash/zsh/fish/powershell) |
+| `axis mesh` | Gossip mesh peer diagnostics (`axis mesh status\|peers`) |
+| `axis observations` | Execution observations tracked by the cluster |
+| `axis tui` | Interactive full-screen Bubble Tea cluster dashboard |
 
 ### Experimental / Secondary Surfaces
 
@@ -156,6 +162,23 @@ The placement engine uses a deterministic **Filter → Rank → Select** pipelin
 - Local node: **+10 pts**
 - Unified memory bonus for matching workloads
 - Reservation ratio factor
+
+## Model Lifecycle
+
+AXIS manages resident inference models across cluster nodes through a deterministic 5-phase lifecycle pipeline with structured, typed receipts (`axis.model-operation/v1`):
+
+```
+┌────────┐      ┌────────┐      ┌────────┐      ┌────────┐      ┌────────┐
+│  PLAN  │ ───> │ START  │ ───> │ AWAIT  │ ───> │ QUERY  │ ───> │  STOP  │
+└────────┘      └────────┘      └────────┘      └────────┘      └────────┘
+```
+
+- **`axis model plan <spec|weights>`**: Dry-run evaluation of cluster nodes against available RAM, VRAM, and port availability. Outputs scored placement candidates (`axis.model-spec/v1`) without mutating services.
+- **`axis model start <spec|weights>`**: Starts a model instance (e.g., `llama-server`) on a target or auto-placed node with port negotiation, process invocation, and typed lifecycle receipts.
+- **`axis model await <instance-id>`**: Readiness poller that probes `/health` (handling transient 503 loading states) and `/v1/models` against local or remote nodes until serving.
+- **`axis model query <instance-id|model> "<prompt>"`**: Standardized OpenAI-compatible inference (`POST /v1/chat/completions`) with latency, token counts (`prompt_tokens`, `completion_tokens`, `total_tokens`), and provenance telemetry.
+- **`axis model stop <instance-id>`**: Clean process termination, port release, and lifecycle receipt recording.
+- **`axis model list`**: Inspects resident model instances across all cluster nodes using the daemon cache with `--live` fallback.
 
 ## HTTP API
 
@@ -241,21 +264,23 @@ publication unless the operator explicitly authorizes rewriting the tag.
 ```
 axis/
 ├── cmd/axis/          Cobra CLI entry point
-├── internal/          Private packages (34 packages)
+├── internal/          Private packages (46 packages)
 │   ├── facts/         SSH hardware/tool collection
 │   ├── snapshot/      ClusterSnapshot assembly
 │   ├── placement/     Deterministic Filter→Rank→Select
+│   ├── modellife/     Model start, await, query, and stop lifecycle
+│   ├── modelplan/     Dry-run model placement evaluation
+│   ├── modelinventory/ Resident model instance discovery
 │   ├── execution/     Guarded task execution
 │   ├── daemon/        Background cache + 7 refresh triggers
 │   ├── api/           HTTP API (v1 + v2 read routes)
-│   ├── mesh/          Gossip peer discovery (`axis mesh`, daemon WatchMesh) |
-│   ├── reservation/   Resource accounting ledger (`axis reservations`) |
-
-│   ├── safety/        Structured command safety groundwork (scaffolding)
+│   ├── mesh/          Gossip peer discovery (`axis mesh`, daemon WatchMesh)
+│   ├── reservation/   Resource accounting ledger (`axis reservations`)
+│   ├── safety/        Structured command safety evaluation and gates
 │   ├── discovery/     SSH + UDP node discovery
 │   ├── mcp/           MCP server (stdio)
 │   ├── agent/         Tool-calling agent loop
-│   └── ...            20+ additional packages
+│   └── ...            30+ additional packages
 ├── docs/              Design docs + CI-validated state
 ├── hack/              Developer scripts
 └── .github/           CI + release workflows
@@ -263,7 +288,7 @@ axis/
 
 ## Security
 
-- **Air-gapped option:** On-device inference via Ollama, no cloud dependency
+- **Air-gapped option:** On-device inference via llama-server and Ollama, no cloud dependency
 - **HMAC-SHA256:** Beacon and mesh-gossip authentication are shipped; mesh messages do not yet enforce replay protection
 - **Zero-trust execution:** Existing safety gates are shipped; parsed command analysis scaffolding is not wired into the operator path
 - **Constant-time auth:** Bearer token comparison via `crypto/subtle`
