@@ -371,6 +371,10 @@ func agentCmd() *cobra.Command {
 				Timeout:      timeout,
 				HistoryPath:  historyPath,
 				UseConsole:   useConsole,
+				AutoApprove:  autoApprove,
+				Autonomy:     autonomy,
+				MaxTurns:     maxTurns,
+				ModelChoices: choices,
 				Ctx:          ctx,
 				Out:          w,
 				ErrOut:       errW,
@@ -531,34 +535,10 @@ func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, t
 			}
 			break
 		}
-		instruction := strings.TrimSpace(line)
-		if instruction == "" {
-			continue
-		}
-		lower := strings.ToLower(instruction)
-		if lower == "exit" || lower == "quit" {
+		_, shouldBreak := replTurn(session, ctx, timeout, line)
+		if shouldBreak {
 			break
 		}
-
-		if strings.HasPrefix(instruction, "/") {
-			handled, shouldExit, slashErr := handleREPLSlashCommand(session, instruction)
-			if slashErr != nil {
-				fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), slashErr)
-			}
-			if handled {
-				if shouldExit {
-					break
-				}
-				continue
-			}
-		}
-
-		ctx2, cancel := agentRequestContext(ctx, timeout)
-		if err := session.Agent.Run(ctx2, instruction); err != nil {
-			fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), err)
-		}
-		cancel()
-		fmt.Fprintln(session.Out)
 	}
 
 	if historyPath != "" && a.Conversation().HistoryCount() > 0 {

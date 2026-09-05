@@ -25,6 +25,10 @@ type agentREPLConfig struct {
 	Timeout      time.Duration
 	HistoryPath  string
 	UseConsole   bool
+	AutoApprove  bool
+	Autonomy     string
+	MaxTurns     int
+	ModelChoices []ModelChoice
 	Ctx          context.Context
 	Out, ErrOut  io.Writer
 }
@@ -42,25 +46,65 @@ func runAgentInteractive(cfg agentREPLConfig) error {
 	return runAgentREPLSession(cfg)
 }
 
-// runAgentREPLSession runs the readline REPL (extracted verbatim from the
-// agentCmd RunE body; completer setup intentionally dropped with readline's
-// default config because a nil AutoComplete is behavior-identical in plain
-// pipes and the interactive tree is rebuilt by readline itself).
-func runAgentREPLSession(cfg agentREPLConfig) error {
-	out, errW := cfg.Out, cfg.ErrOut
-
-	// Interactive REPL with readline.
-	ui.PrintLogo(errW, buildinfo.Version)
+// writeAgentREPLIntro prints the logo and session banner. Extracted so tests
+// can lock Safety Gate and Max Turns without a live TTY/readline loop.
+func writeAgentREPLIntro(cfg agentREPLConfig) {
+	ui.PrintLogo(cfg.ErrOut, buildinfo.Version)
 	mcpCount := 0
 	if cfg.MCPRegistry != nil {
 		mcpCount = len(cfg.MCPRegistry.Names())
 	}
-	printAgentSessionDetails(errW, cfg.ActiveTarget, false, "", mcpCount, 0)
+	printAgentSessionDetails(cfg.ErrOut, cfg.ActiveTarget, cfg.AutoApprove, cfg.Autonomy, mcpCount, cfg.MaxTurns)
+}
+
+// agentREPLCompleter is the slash-verb and /model tab-complete tree restored
+// from the pre-extraction readline config. Nil AutoComplete is not equivalent:
+// readline does not rebuild this tree.
+func agentREPLCompleter(choices []ModelChoice) *readline.PrefixCompleter {
+	completerItems := []readline.PrefixCompleterInterface{
+		readline.PcItem("/help"),
+		readline.PcItem("/plan"),
+		readline.PcItem("/todo"),
+		readline.PcItem("/diff"),
+		readline.PcItem("/undo"),
+		readline.PcItem("/compact"),
+		readline.PcItem("/autonomy", readline.PcItem("default"), readline.PcItem("edit"), readline.PcItem("full")),
+		readline.PcItem("/export"),
+		readline.PcItem("/fleet"),
+		readline.PcItem("/facts"),
+		readline.PcItem("/cluster"),
+		readline.PcItem("/clear"),
+		readline.PcItem("/context"),
+		readline.PcItem("/history"),
+		readline.PcItem("/tools"),
+		readline.PcItem("/models"),
+		readline.PcItem("/mcp"),
+		readline.PcItem("/reservations"),
+		readline.PcItem("/skills"),
+		readline.PcItem("/exit"),
+		readline.PcItem("/quit"),
+	}
+	var modelCompleterItems []readline.PrefixCompleterInterface
+	for _, choice := range choices {
+		if !choice.Disabled {
+			modelCompleterItems = append(modelCompleterItems, readline.PcItem(choice.Model))
+		}
+	}
+	completerItems = append(completerItems, readline.PcItem("/model", modelCompleterItems...))
+	return readline.NewPrefixCompleter(completerItems...)
+}
+
+// runAgentREPLSession runs the readline REPL extracted from the agentCmd RunE body.
+func runAgentREPLSession(cfg agentREPLConfig) error {
+	out, errW := cfg.Out, cfg.ErrOut
+
+	writeAgentREPLIntro(cfg)
 
 	rlCfg := &readline.Config{
 		Prompt:          ui.Cyan("✨ axis ❯ "),
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
+		AutoComplete:    agentREPLCompleter(cfg.ModelChoices),
 	}
 	// Agent history is already persisted by Conversation.SaveToFile.
 	// Keep readline history in memory so its permissive file mode cannot

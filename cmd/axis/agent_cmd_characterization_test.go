@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/toasterbook88/axis/internal/agent"
-	"github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // Characterization rows for agentCmd construction and the extracted REPL
@@ -152,28 +151,62 @@ func TestCharReplTurnAgentRunError(t *testing.T) {
 	}
 }
 
-func TestCharAgentSessionDefaults(t *testing.T) {
-	// agentREPLSession wiring sanity: registry nil-safe names check matches
-	// what runAgentREPLSession does before printing session details.
-	var reg *mcpclient.Registry
-	count := 0
-	if reg != nil {
-		count = len(reg.Names())
+func TestCharREPLSessionBannerReflectsFlags(t *testing.T) {
+	var errW bytes.Buffer
+	writeAgentREPLIntro(agentREPLConfig{
+		ActiveTarget: ModelChoice{Model: "test-model", Endpoint: "http://127.0.0.1:11434"},
+		AutoApprove:  true,
+		Autonomy:     "full",
+		MaxTurns:     50,
+		ErrOut:       &errW,
+	})
+	got := ui.StripANSIAndControls(errW.String())
+	if !strings.Contains(got, "Autonomy: full") {
+		t.Errorf("banner must reflect --autonomy full, got %q", got)
 	}
-	if count != 0 {
-		t.Errorf("nil registry count = %d, want 0", count)
+	if strings.Contains(got, "Strict Operator Approval") {
+		t.Errorf("banner must not hard-code Strict Operator Approval when autonomy is full, got %q", got)
 	}
+	if !strings.Contains(got, "50") {
+		t.Errorf("banner must reflect --max-turns 50, got %q", got)
+	}
+	if strings.Contains(got, "Max Turns") && strings.Contains(got, " 0") && !strings.Contains(got, "50") {
+		t.Errorf("banner must not hard-code Max Turns 0, got %q", got)
+	}
+}
 
-	// A real registry with one server counts 1
-	reg = mcpclient.NewRegistry()
-	if len(reg.Names()) != 0 {
-		t.Errorf("empty registry count = %d, want 0", len(reg.Names()))
+func TestCharREPLSessionBannerAutoApprove(t *testing.T) {
+	var errW bytes.Buffer
+	writeAgentREPLIntro(agentREPLConfig{
+		ActiveTarget: ModelChoice{Model: "test-model"},
+		AutoApprove:  true,
+		MaxTurns:     25,
+		ErrOut:       &errW,
+	})
+	got := ui.StripANSIAndControls(errW.String())
+	if !strings.Contains(got, "Auto-Approve safe") {
+		t.Errorf("banner must reflect --auto-approve, got %q", got)
 	}
+	if !strings.Contains(got, "25") {
+		t.Errorf("banner must reflect max-turns 25, got %q", got)
+	}
+}
 
-	// Agent construction with defaults keeps model name
-	a := agent.New(agent.Config{Model: "test-model"})
-	if a.Model() != "test-model" && a.Model() != "test" {
-		// Lock only that Model() reflects what was configured
-		t.Logf("model = %q (informational)", a.Model())
+func TestCharREPLCompleterIncludesVerbsAndModels(t *testing.T) {
+	completer := agentREPLCompleter([]ModelChoice{
+		{Model: "qwen3:1.7b", Disabled: false},
+		{Model: "disabled-model", Disabled: true},
+	})
+	if completer == nil {
+		t.Fatal("agentREPLCompleter must not be nil")
+	}
+	tree := completer.Tree("")
+	for _, want := range []string{"/help", "/plan", "/todo", "/autonomy", "default", "edit", "full", "/model", "/models", "/exit", "/quit", "qwen3:1.7b"} {
+		if !strings.Contains(tree, want) {
+			t.Errorf("completer tree missing %q\n%s", want, tree)
+		}
+	}
+	if strings.Contains(tree, "disabled-model") {
+		t.Errorf("disabled models must not be completer items\n%s", tree)
 	}
 }

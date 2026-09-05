@@ -177,7 +177,7 @@ func slashExport(session *agentREPLSession, parts []string) (bool, bool, error) 
 	}
 	saved, err := exportAgentWorklog(session.Agent, exportPath)
 	if err != nil {
-		fmt.Fprintf(session.ErrOut, "%s Error exporting worklog: %v\n", ui.Red(""), err)
+		fmt.Fprintf(session.ErrOut, "%s %v\n", ui.Red("Error exporting worklog:"), err)
 	} else {
 		fmt.Fprintf(session.Out, "%s Session worklog exported to: %s\n", ui.Green("✓"), ui.Bold(saved))
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // Characterization tests for handleREPLSlashCommand.
@@ -173,7 +174,7 @@ func TestCharUndoAndPlanUseToolDirect(t *testing.T) {
 	if !handled || shouldExit {
 		t.Fatalf("/plan: handled=%v exit=%v", handled, shouldExit)
 	}
-	if !strings.Contains(w.String(), errW.String()) && w.String() == "" && errW.String() == "" {
+	if w.String() == "" && errW.String() == "" {
 		t.Error("/plan: expected output on Out or ErrOut, got neither")
 	}
 
@@ -224,18 +225,33 @@ func TestCharAutonomyViewAndSet(t *testing.T) {
 }
 
 func TestCharFactsAndClusterNoCluster(t *testing.T) {
-	// Runtime returns nil,nil (no cluster); /facts and /cluster must still
-	// handle cleanly and print *something* — today they render empty tables.
-	for _, verb := range []string{"/facts", "/cluster", "/fleet"} {
-		session, w, _ := newCharSession()
-		handled, shouldExit, err := handleREPLSlashCommand(session, verb)
-		if err != nil {
-			t.Fatalf("%s: %v", verb, err)
-		}
-		if !handled || shouldExit {
-			t.Fatalf("%s: handled=%v exit=%v", verb, handled, shouldExit)
-		}
-		_ = w
+	// Runtime returns nil,nil (no cluster). /facts writes the snapshot warning
+	// to ErrOut; /cluster and /fleet write the empty-snapshot warning to ErrOut.
+	session, _, errW := newCharSession()
+	handled, shouldExit, err := handleREPLSlashCommand(session, "/facts")
+	if err != nil || !handled || shouldExit {
+		t.Fatalf("/facts: handled=%v exit=%v err=%v", handled, shouldExit, err)
+	}
+	if !strings.Contains(errW.String(), "No cluster snapshot available") {
+		t.Errorf("/facts ErrOut, got %q", errW.String())
+	}
+
+	session, _, errW = newCharSession()
+	handled, shouldExit, err = handleREPLSlashCommand(session, "/cluster")
+	if err != nil || !handled || shouldExit {
+		t.Fatalf("/cluster: handled=%v exit=%v err=%v", handled, shouldExit, err)
+	}
+	if !strings.Contains(errW.String(), "No nodes found in session snapshot") {
+		t.Errorf("/cluster ErrOut, got %q", errW.String())
+	}
+
+	session, _, errW = newCharSession()
+	handled, shouldExit, err = handleREPLSlashCommand(session, "/fleet")
+	if err != nil || !handled || shouldExit {
+		t.Fatalf("/fleet: handled=%v exit=%v err=%v", handled, shouldExit, err)
+	}
+	if !strings.Contains(errW.String(), "No nodes found in session snapshot") {
+		t.Errorf("/fleet ErrOut, got %q", errW.String())
 	}
 }
 
@@ -338,6 +354,11 @@ func TestCharExportErrorsWithoutWorkspace(t *testing.T) {
 	if !handled || shouldExit {
 		t.Fatalf("/export: handled=%v exit=%v", handled, shouldExit)
 	}
-	// Either success (unlikely) or captured error — both write something.
-	_ = errW
+	got := ui.StripANSIAndControls(errW.String())
+	if !strings.Contains(got, "Error exporting worklog:") {
+		t.Errorf("/export must capture the error on ErrOut, got %q", got)
+	}
+	if strings.Contains(got, " Error exporting worklog:") {
+		t.Errorf("/export label must be ui.Red(\"Error exporting worklog:\"), not an empty red prefix, got %q", got)
+	}
 }
