@@ -66,6 +66,17 @@ func TestCharAllVerbsAreHandled(t *testing.T) {
 			case "/model", "/models":
 				// /model without args opens interactive select; Selector is nil
 				// so it may error — that's today's behavior, lock it.
+			case "/reservations":
+				// /reservations attempts the daemon then the runtime fallback.
+				// In the hermetic CI HOME there is no daemon AND no nodes.yaml,
+				// so the fallback load errors. On a dev box with a running
+				// daemon it succeeds. Both outcomes are today's behavior; the
+				// dedicated row below pins the error string when one surfaces.
+			case "/skills":
+				// /skills always loads the runtime context first; without a
+				// nodes.yaml it errors the same way /reservations does. Same
+				// environment-dependent contract: error or success are both
+				// today's behavior depending on whether a daemon/config exists.
 			default:
 				t.Fatalf("%s: unexpected error: %v", verb, err)
 			}
