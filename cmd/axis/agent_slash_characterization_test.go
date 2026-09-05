@@ -8,6 +8,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
@@ -296,6 +297,13 @@ func TestCharContextAndHistoryAndToolsAndClear(t *testing.T) {
 }
 
 func TestCharModelUnknownErrors(t *testing.T) {
+	// Stub the ai.yaml loaders so the catalog is deterministic regardless of
+	// the operator's real ~/.axis/ai.yaml (previously a live-machine flake).
+	prevLoad, prevPath := inferenceAILoadFn, inferenceAIPathFn
+	t.Cleanup(func() { inferenceAILoadFn, inferenceAIPathFn = prevLoad, prevPath })
+	inferenceAIPathFn = func() string { return "test" }
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
+
 	session, _, _ := newCharSession()
 	handled, _, err := handleREPLSlashCommand(session, "/model definitely-not-a-model")
 	if !handled {
