@@ -13,6 +13,7 @@ func TestCharToolSummaryClusterReads(t *testing.T) {
 		{"status single line falls to fallback", "axis_status", "only-line", "axis_status returned 9 chars"},
 		{"summary full", "axis_summary", "  trimmed  ", "axis_summary: trimmed"},
 		{"facts first line", "axis_facts", "first\nsecond", "axis_facts: first"},
+		{"facts single line falls to fallback", "axis_facts", "only-line", "axis_facts returned 9 chars"},
 		{"place full", "axis_place", "  chosen node-x  ", "axis_place: chosen node-x"},
 	}
 	for _, tc := range cases {

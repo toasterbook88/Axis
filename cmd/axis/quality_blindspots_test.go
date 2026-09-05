@@ -103,8 +103,12 @@ func TestCharMCPInteractiveListEmptyRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !strings.Contains(out.String(), "mcp> ") {
-		t.Errorf("prompt missing, got %q", out.String())
+	got := out.String()
+	if !strings.Contains(got, "mcp> ") {
+		t.Errorf("prompt missing, got %q", got)
+	}
+	if strings.Contains(got, " — ") {
+		t.Errorf("empty registry list must not print server status lines, got %q", got)
 	}
 }
 
@@ -130,8 +134,12 @@ func TestCharMCPInteractiveBadJSONArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call bad json: %v", err)
 	}
-	if !strings.Contains(out.String(), "Error:") {
-		t.Errorf("ParseArgs error output missing, got %q", out.String())
+	got := out.String()
+	if !strings.Contains(got, "invalid JSON args") {
+		t.Errorf("ParseArgs error output missing, got %q", got)
+	}
+	if strings.Contains(got, "not configured") {
+		t.Errorf("malformed JSON must fail in ParseArgs before CallTool, got %q", got)
 	}
 }
 
@@ -148,6 +156,7 @@ func TestCharMCPInteractiveCallUsage(t *testing.T) {
 		"Usage: call <server> <tool> [json-args]",
 		"Usage: read <server> <uri>",
 		"Usage: get-prompt <server> <prompt> [json-args]",
+		"Usage: search <keyword>",
 	} {
 		if !strings.Contains(outStr, want) {
 			t.Errorf("usage output missing %q", want)
@@ -229,7 +238,8 @@ func TestCharPrintFactsTextAddresses(t *testing.T) {
 	nf.Addresses = []models.NetworkAddress{
 		{Address: "192.0.2.10", Kind: "ipv4", Interface: "eth0"},
 		{Address: "fe80::1", Kind: "ipv6", Scope: "link-local"},
-		{Address: "100.64.0.5", Kind: "ipv4", SpeedClass: "tailscale"},
+		// ipv6 + link-local would hide; SpeedClass tailscale must still show.
+		{Address: "2001:db8::64", Kind: "ipv6", Scope: "link-local", SpeedClass: "tailscale"},
 		{Address: "2001:db8::5", Kind: "ipv6", Scope: "global"},
 	}
 	var out bytes.Buffer
@@ -240,17 +250,19 @@ func TestCharPrintFactsTextAddresses(t *testing.T) {
 	if !strings.Contains(nonVerbose, "192.0.2.10") {
 		t.Error("ipv4 always shown")
 	}
-	if !strings.Contains(nonVerbose, "100.64.0.5") {
-		t.Error("tailscale class always shown")
+	if !strings.Contains(nonVerbose, "2001:db8::64") {
+		t.Error("tailscale class always shown, even on link-local ipv6")
 	}
-	if !strings.Contains(nonVerbose, "more addresses") {
-		t.Errorf("hidden-count hint missing in non-verbose, got %q", nonVerbose)
+	if !strings.Contains(nonVerbose, "2001:db8::5") {
+		t.Error("global ipv6 always shown in non-verbose")
+	}
+	if !strings.Contains(nonVerbose, "1 more addresses") {
+		t.Errorf("hidden-count hint must be exactly one (fe80::1), got %q", nonVerbose)
 	}
 	if strings.Contains(nonVerbose, "fe80::1") {
-		t.Error("link-local must be hidden in non-verbose")
+		t.Error("link-local without a special speed class must be hidden in non-verbose")
 	}
 
-	// verbose shows link-local too
 	out.Reset()
 	if err := printFactsText(newFactsTestCmdShim(&out), nf, true); err != nil {
 		t.Fatalf("addresses verbose: %v", err)
@@ -259,8 +271,8 @@ func TestCharPrintFactsTextAddresses(t *testing.T) {
 	if !strings.Contains(verbose, "fe80::1") {
 		t.Errorf("verbose must show link-local, got %q", verbose)
 	}
-	if !strings.Contains(verbose, "2001:db8::5") {
-		t.Errorf("verbose must show global ipv6, got %q", verbose)
+	if strings.Contains(verbose, "more addresses") {
+		t.Errorf("verbose must not hide addresses, got %q", verbose)
 	}
 }
 
