@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -248,5 +249,118 @@ func TestCharSetupAgentStartupBackendExplicitModel(t *testing.T) {
 	}
 	if res.Backend == nil {
 		t.Error("Backend must not be nil")
+	}
+}
+
+func TestCharSetupAgentStartupBackendNonTTYSelectAborts(t *testing.T) {
+	rt := &runtimectx.Context{
+		Config: &config.Config{
+			AIProviders: map[string]config.AIProviderConfig{
+				"mock-prov": {
+					Enabled: true, Type: "cloud", Kind: "anthropic", Priority: 50,
+					APIKeyEnv: "AXIS_TEST_MOCK_KEY",
+					Models:    []config.AIModelConfig{{Name: "mock-choice", CostPer1K: 0.01}},
+				},
+			},
+		},
+	}
+	t.Setenv("AXIS_TEST_MOCK_KEY", "secret-key")
+
+	var out bytes.Buffer
+	_, err := setupAgentStartupBackend(agentStartupBackendParams{
+		SelectModel: true,
+		RT:          rt,
+		Out:         &out,
+	})
+	if err == nil {
+		t.Fatal("expected selection to abort in non-TTY test environment")
+	}
+	if !strings.Contains(err.Error(), "model selection aborted") {
+		t.Errorf("error = %q, want 'model selection aborted'", err.Error())
+	}
+	if !strings.Contains(out.String(), "Select model to use for the AXIS Agent session:") {
+		t.Errorf("expected menu header in out, got: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "mock-choice") {
+		t.Errorf("expected choice in out, got: %s", out.String())
+	}
+}
+
+func TestCharSetupAgentStartupBackendCloudAndCheapRouting(t *testing.T) {
+	t.Setenv("AXIS_TEST_CLOUD_ROUTING", "test-key")
+	rt := &runtimectx.Context{
+		Config: &config.Config{
+			AIProviders: map[string]config.AIProviderConfig{
+				"anthropic": {
+					Enabled: true, Type: "cloud", Kind: "anthropic", Priority: 50,
+					APIKeyEnv: "AXIS_TEST_CLOUD_ROUTING",
+					Models: []config.AIModelConfig{
+						{Name: "claude-3-opus", CostPer1K: 0.015},
+						{Name: "claude-3-haiku", CostPer1K: 0.00025},
+					},
+				},
+			},
+		},
+	}
+
+	var errW bytes.Buffer
+	res, err := setupAgentStartupBackend(agentStartupBackendParams{
+		Provider:   "cloud",
+		CloudModel: "claude-3-opus",
+		CheapModel: "claude-3-haiku",
+		Verbose:    true,
+		RT:         rt,
+		ErrOut:     &errW,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ActiveTarget.Model != "claude-3-opus" {
+		t.Errorf("ActiveTarget.Model = %q, want 'claude-3-opus'", res.ActiveTarget.Model)
+	}
+	if res.ActiveTarget.Protocol != agent.ProtocolCloud {
+		t.Errorf("ActiveTarget.Protocol = %v, want ProtocolCloud", res.ActiveTarget.Protocol)
+	}
+	if res.Backend == nil {
+		t.Error("Backend must not be nil")
+	}
+	if !strings.Contains(errW.String(), `Multi-model routing: primary="claude-3-opus" cheap="claude-3-haiku"`) {
+		t.Errorf("expected multi-model routing log in ErrOut, got: %s", errW.String())
+	}
+}
+
+func TestCharSetupAgentStartupBackendCheapModelWarning(t *testing.T) {
+	t.Setenv("AXIS_TEST_CLOUD_ROUTING", "test-key")
+	rt := &runtimectx.Context{
+		Config: &config.Config{
+			AIProviders: map[string]config.AIProviderConfig{
+				"anthropic": {
+					Enabled: true, Type: "cloud", Kind: "anthropic", Priority: 50,
+					APIKeyEnv: "AXIS_TEST_CLOUD_ROUTING",
+					Models: []config.AIModelConfig{
+						{Name: "claude-3-opus", CostPer1K: 0.015},
+					},
+				},
+			},
+		},
+	}
+
+	var errW bytes.Buffer
+	res, err := setupAgentStartupBackend(agentStartupBackendParams{
+		Provider:   "cloud",
+		CloudModel: "claude-3-opus",
+		CheapModel: "bogus-cheap-model",
+		Verbose:    true,
+		RT:         rt,
+		ErrOut:     &errW,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ActiveTarget.Model != "claude-3-opus" {
+		t.Errorf("ActiveTarget.Model = %q, want 'claude-3-opus'", res.ActiveTarget.Model)
+	}
+	if !strings.Contains(errW.String(), `Warning: cheap-model "bogus-cheap-model" not available`) {
+		t.Errorf("expected warning in ErrOut, got: %s", errW.String())
 	}
 }
