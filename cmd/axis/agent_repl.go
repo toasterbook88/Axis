@@ -87,12 +87,12 @@ func runAgentREPLSession(cfg agentREPLConfig) error {
 		if err != nil {
 			break
 		}
-		shouldContinue, shouldBreak := replTurn(session, cfg.Ctx, cfg.Timeout, line)
+		// replTurn returns (continueLoop, breakLoop). breakLoop exits the REPL;
+		// otherwise the loop continues regardless of continueLoop (both blank
+		// lines and handled verbs fall through to the next Readline).
+		_, shouldBreak := replTurn(session, cfg.Ctx, cfg.Timeout, line)
 		if shouldBreak {
 			break
-		}
-		if shouldContinue {
-			continue
 		}
 	}
 
