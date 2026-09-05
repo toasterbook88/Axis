@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -208,5 +210,43 @@ func TestCharREPLCompleterIncludesVerbsAndModels(t *testing.T) {
 	}
 	if strings.Contains(tree, "disabled-model") {
 		t.Errorf("disabled models must not be completer items\n%s", tree)
+	}
+}
+
+func TestCharSetupAgentStartupBackendNoModelsError(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
+	t.Cleanup(func() { inferenceAILoadFn = prevLoad })
+
+	var out bytes.Buffer
+	_, err := setupAgentStartupBackend(agentStartupBackendParams{
+		SelectModel: true,
+		RT:          &runtimectx.Context{Config: &config.Config{}},
+		Out:         &out,
+	})
+	if err == nil {
+		t.Fatal("expected error when no models are available and selectModel is true")
+	}
+	exitErr, ok := err.(ExitCodeError)
+	if !ok || exitErr.Code != ExitErrConfigLoad {
+		t.Errorf("expected ExitErrConfigLoad, got %v", err)
+	}
+}
+
+func TestCharSetupAgentStartupBackendExplicitModel(t *testing.T) {
+	res, err := setupAgentStartupBackend(agentStartupBackendParams{
+		Model:                 "mock-model",
+		StartupRequestedModel: "mock-model",
+		Provider:              "local",
+		RT:                    &runtimectx.Context{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ActiveTarget.Model != "mock-model" {
+		t.Errorf("ActiveTarget.Model = %q, want %q", res.ActiveTarget.Model, "mock-model")
+	}
+	if res.Backend == nil {
+		t.Error("Backend must not be nil")
 	}
 }
