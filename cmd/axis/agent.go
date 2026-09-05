@@ -17,11 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/api"
-	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
@@ -365,128 +363,18 @@ func agentCmd() *cobra.Command {
 				return nil
 			}
 
-			// Experimental transcript console. Opt-in only: it cannot execute
-			// tools yet, so it must never displace the readline REPL by
-			// default. Non-TTY and single-shot paths never reach here.
-			if useConsole {
-				if !consoleTTY() {
-					return fmt.Errorf("--console requires an interactive terminal")
-				}
-				return runAgentConsole(ctx, a, errW, timeout, historyPath, mcpReg, activeTarget)
-			}
-
-			// Interactive REPL with readline.
-			ui.PrintLogo(errW, buildinfo.Version)
-
-			mcpCount := 0
-			if mcpReg != nil {
-				mcpCount = len(mcpReg.Names())
-			}
-			printAgentSessionDetails(errW, activeTarget, autoApprove, autonomy, mcpCount, maxTurns)
-
-			var completerItems []readline.PrefixCompleterInterface
-			completerItems = append(completerItems,
-				readline.PcItem("/help"),
-				readline.PcItem("/plan"),
-				readline.PcItem("/todo"),
-				readline.PcItem("/diff"),
-				readline.PcItem("/undo"),
-				readline.PcItem("/compact"),
-				readline.PcItem("/autonomy", readline.PcItem("default"), readline.PcItem("edit"), readline.PcItem("full")),
-				readline.PcItem("/export"),
-				readline.PcItem("/fleet"),
-				readline.PcItem("/facts"),
-				readline.PcItem("/cluster"),
-				readline.PcItem("/clear"),
-				readline.PcItem("/context"),
-				readline.PcItem("/history"),
-				readline.PcItem("/tools"),
-				readline.PcItem("/models"),
-				readline.PcItem("/mcp"),
-				readline.PcItem("/reservations"),
-				readline.PcItem("/skills"),
-				readline.PcItem("/exit"),
-				readline.PcItem("/quit"),
-			)
-
-			// Collect available models dynamically for /model <name> autocomplete
-			var modelCompleterItems []readline.PrefixCompleterInterface
-			for _, choice := range collectModelChoices(rt) {
-				if !choice.Disabled {
-					modelCompleterItems = append(modelCompleterItems, readline.PcItem(choice.Model))
-				}
-			}
-			completerItems = append(completerItems, readline.PcItem("/model", modelCompleterItems...))
-
-			completer := readline.NewPrefixCompleter(completerItems...)
-
-			rlCfg := &readline.Config{
-				Prompt:          ui.Cyan("✨ axis ❯ "),
-				InterruptPrompt: "^C",
-				EOFPrompt:       "exit",
-				AutoComplete:    completer,
-			}
-			// Agent history is already persisted by Conversation.SaveToFile.
-			// Keep readline history in memory so its permissive file mode cannot
-			// expose prompts to other local users.
-			rl, err := readline.NewEx(rlCfg)
-			if err != nil {
-				return runPlainAgentREPL(ctx, a, w, errW, timeout, historyPath, mcpReg, activeTarget)
-			}
-			defer rl.Close()
-
-			session := &agentREPLSession{
+			// REPL runtime extracted to agent_repl.go (runAgentInteractive).
+			return runAgentInteractive(agentREPLConfig{
 				Agent:        a,
 				MCPRegistry:  mcpReg,
-				Runtime:      loadAgentShellRuntime,
-				Selector:     &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: rl, out: w},
-				In:           rl,
+				ActiveTarget: activeTarget,
+				Timeout:      timeout,
+				HistoryPath:  historyPath,
+				UseConsole:   useConsole,
+				Ctx:          ctx,
 				Out:          w,
 				ErrOut:       errW,
-				ActiveTarget: activeTarget,
-			}
-
-			for {
-				line, err := session.In.Readline()
-				if err != nil {
-					break
-				}
-				instruction := strings.TrimSpace(line)
-				if instruction == "" {
-					continue
-				}
-				lower := strings.ToLower(instruction)
-				if lower == "exit" || lower == "quit" {
-					break
-				}
-
-				if strings.HasPrefix(instruction, "/") {
-					handled, shouldExit, slashErr := handleREPLSlashCommand(session, instruction)
-					if slashErr != nil {
-						fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), slashErr)
-					}
-					if handled {
-						if shouldExit {
-							break
-						}
-						continue
-					}
-				}
-
-				ctx2, cancel := agentRequestContext(ctx, timeout)
-				if err := session.Agent.Run(ctx2, instruction); err != nil {
-					fmt.Fprintf(session.ErrOut, "\n%s %v\n", ui.Red("Error:"), err)
-				}
-				cancel()
-				fmt.Fprintln(session.Out)
-			}
-
-			if historyPath != "" && a.Conversation().HistoryCount() > 0 {
-				if err := saveAgentConversation(a.Conversation(), historyPath, errW); err == nil {
-					fmt.Fprintf(errW, "Saved %d messages to conversation history.\n", a.Conversation().HistoryCount())
-				}
-			}
-			return nil
+			})
 		},
 	}
 
