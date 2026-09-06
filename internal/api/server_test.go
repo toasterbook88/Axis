@@ -838,9 +838,7 @@ func TestV2MethodValidationAndCacheState(t *testing.T) {
 			registerRoutes(mux, tt.cache, "test-token")
 
 			req := httptest.NewRequest(tt.method, tt.path, nil)
-			if tt.path != "/v2/metrics" || tt.cache != nil {
-				req.Header.Set("Authorization", "Bearer test-token")
-			}
+			req.Header.Set("Authorization", "Bearer test-token")
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
@@ -859,6 +857,21 @@ func TestV2MethodValidationAndCacheState(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tt.errorContains, got)
 			}
 		})
+	}
+}
+
+func TestV2MetricsRequiresAuth(t *testing.T) {
+	mux := http.NewServeMux()
+	registerRoutes(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+		meta: daemon.Metadata{Ready: true},
+	}, "test-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/metrics", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /v2/metrics: expected 401, got %d", rec.Code)
 	}
 }
 
@@ -882,6 +895,7 @@ func TestV2MetricsEndpointExportsCacheAndNodeCounts(t *testing.T) {
 	}, "test-token")
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

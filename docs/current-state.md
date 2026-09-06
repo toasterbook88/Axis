@@ -22,7 +22,7 @@ The live repo currently contains:
 
 - Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models
 - Cluster snapshot assembly and advisory placement
-- A local chat surface backed by Ollama
+- An agentic tool-calling assistant (`axis agent`) that consumes the fact plane (`axis chat` was removed)
 - A local HTTP API with task execution
 - A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
 - Native per-user daemon service install/status/uninstall for launchd and
@@ -71,7 +71,7 @@ The live repo currently contains:
 - Protected `main` with required CI status checks (`Test & Build`, `govulncheck`), squash-only merges, and required conversation resolution. Approving reviews are **not** required by branch rules today (solo-operator workflow: explicit operator merge after green checks and thread resolution). Linear history via squash.
 - Lightweight security automation via Dependabot, `govulncheck`, `SECURITY.md`, and enabled GitHub private vulnerability reporting / automated security fixes
 - Shell-quoting-safe remote cleanup traps: variable assignment pattern (`_axis_ctx=QUOTED; trap 'rm -f "$_axis_ctx"' EXIT`) eliminates nested quoting interaction; adversarial test suite covers spaces, quotes, dollar signs, backticks, semicolons
-- `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing; `Fatal()` deprecated
+- `ExitCodeError` type for Cobra `RunE` handlers: exit codes propagate through Cobra without calling `os.Exit` directly; `SilenceErrors`/`SilenceUsage` on root command prevents double-printing
 - `internal/mesh/` is live: `axis serve` starts daemon mesh watching when discovery is enabled (the default), with diagnostics through `axis mesh`, daemon `/mesh`, and API `/v2/mesh`
 - `internal/reservation/` is live: its ledger backs guarded execution reserve/release, snapshot reservation overlays, `axis reservations`, agent reservation inspection, and API `/v2/reservations`
 - `internal/safety/structured.go` is included in default builds and used by both `safety.Check` and guarded execution; learned approvals remain disabled
@@ -142,7 +142,7 @@ Top-level commands currently registered in the binary:
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, now recovers from corrupt JSON, but semantic validation is still light |
-| `internal/safety` | Execution blocker + structured command analysis | Heuristic substring blocker is well unit-tested; structured command analysis scaffolding exists but learned approvals are deliberately disabled and NOT wired into the operator path |
+| `internal/safety` | Execution blocker + structured command analysis | Heuristic blocker and structured evaluator are both live on the guarded-execution path (`safety.Check` → `NewEvaluator`/`Evaluate`); learned approvals remain disabled |
 | `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; successful multipath routes are revalidated from a bounded process cache, with aggregate reuse/fan-out/failure counters exposed in daemon metadata |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
 | `internal/mcp` | MCP diagnostics and advisory leases | 17 read-only diagnostics share the live runtime path; 3 advisory lease primitives remain subordinate to observed state |
@@ -169,10 +169,10 @@ Refresh this section with `./hack/refresh-current-state.sh`.
   - Coverage gates:
     - `./hack/coverage-check.sh`
     - `coverage gate passed: internal/knowledge 100.0% >= 90.0%`
-    - `coverage gate passed: internal/api 78.3% >= 50.0%`
-    - `coverage gate passed: internal/mcp 86.5% >= 35.0%`
+    - `coverage gate passed: internal/api 78.3% >= 65.0%`
+    - `coverage gate passed: internal/mcp 86.5% >= 70.0%`
     - `coverage gate passed: internal/ui 90.1% >= 80.0%`
-    - `coverage gate passed: total 72.1% >= 45.0%`
+    - `coverage gate passed: total 73.8% >= 65.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -40,23 +39,4 @@ func RenderLogo() string {
 // RenderLogoSmall returns a compact one-line logo for the header.
 func RenderLogoSmall() string {
 	return logoSmallStyle.Render("██████╗ ██████╗ ███████╗")
-}
-
-// RenderLogoWithVersion returns the logo with version string.
-func RenderLogoWithVersion(version string) string {
-	logo := RenderLogo()
-	versionLine := fmt.Sprintf("  Version: %s", version)
-	versionStyled := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("248")).
-		Render(versionLine)
-	return logo + "\n" + versionStyled
-}
-
-// RenderHeaderLine returns a single-line header with logo and status.
-func RenderHeaderLine(status string) string {
-	left := logoSmallStyle.Render("AXIS")
-	right := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("248")).
-		Render(status)
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, "  |  ", right)
 }

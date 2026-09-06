@@ -31,7 +31,7 @@ func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
 	// of keeping a second registration path alive.
 	mux.HandleFunc("/mesh", withAuth(h.handleMesh, token))
 	mux.HandleFunc("/v2/placement/dry-run", withAuth(h.handleDryRun, token))
-	mux.HandleFunc("/v2/metrics", h.handleMetrics)
+	mux.HandleFunc("/v2/metrics", withAuth(h.handleMetrics, token))
 	mux.HandleFunc("/v2/history", withAuth(h.handleHistory, token))
 	mux.HandleFunc("/v2/batch/place", withAuth(h.handleBatchPlace, token))
 	mux.HandleFunc("/v2/doctor", withAuth(h.handleDoctor, token))

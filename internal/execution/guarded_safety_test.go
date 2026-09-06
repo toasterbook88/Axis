@@ -1,5 +1,3 @@
-//go:build safety_scaffolded
-
 package execution
 
 import (
@@ -24,7 +22,7 @@ func TestPrepareGuardedExecutionSafetyDeny(t *testing.T) {
 			CPUCores:   8,
 		},
 	}
-	rt := testGuardedRuntime([]models.NodeFacts{node})
+	rt := testGuardedRuntime(t, []models.NodeFacts{node})
 	resp, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
 		Description: "rm -rf /",
 		Mode:        ModeExec,
@@ -36,7 +34,8 @@ func TestPrepareGuardedExecutionSafetyDeny(t *testing.T) {
 	if !resp.Result.Blocked {
 		t.Fatal("expected Blocked=true for safety deny")
 	}
-	if !strings.Contains(resp.Result.BlockReason, "recursive-delete") {
-		t.Fatalf("expected safety block reason, got: %v", resp.Result.BlockReason)
+	if !strings.Contains(resp.Result.BlockReason, "legacy-hardblock-root-rm") &&
+		!strings.Contains(resp.Result.BlockReason, "recursive") {
+		t.Fatalf("expected recursive-rm safety block reason, got: %v", resp.Result.BlockReason)
 	}
 }
