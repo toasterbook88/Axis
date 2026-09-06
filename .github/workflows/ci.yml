@@ -61,6 +61,9 @@ jobs:
       - name: Public boundary guardrails
         run: ./hack/verify-public-boundary.sh
 
+      - name: Deadcode gate
+        run: ./hack/verify-deadcode.sh
+
       - name: Repo truth guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
