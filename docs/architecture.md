@@ -18,7 +18,7 @@
    The daemon is optional and provides caching, not truth.
 
 4. **Layers are subordinate.** Each layer in the stack depends only on
-   layers below it. Advisory surfaces (chat, agent, MCP) never override
+   layers below it. Advisory surfaces (agent, MCP, HTTP) never override
    the fact plane.
 
 ## 5-Layer Stack
@@ -119,12 +119,14 @@ Guarded task execution with pre-flight safety checks and resource reservation.
 Description → Intent Parse → Safety Gate → Placement → Reserve → Execute → Release
 ```
 
-**Structured safety evaluation (scaffolding, not wired into operator path):**
+**Structured safety evaluation (live, default-wired):**
+- `safety.Check` and guarded execution both use `safety.NewEvaluator` /
+  `Evaluate` in default builds (not a `safety_scaffolded` build-tag gate)
 - Parsed command analysis (program + args, not substring matching)
 - 7 risk categories: safe, read-only, modify, destructive, network-mutating,
   privilege-escalate, system-critical
 - 3 verdicts: allow, deny, prompt (ask operator)
-- Program-name-only learned overrides are deliberately disabled pending narrower scoping
+- Program-name-only learned overrides remain disabled pending narrower scoping
 
 **Reservation lifecycle:**
 1. `Reserve()` — claim RAM on target node
@@ -148,7 +150,7 @@ actions but never present generated output as cluster truth.
 
 | Surface | Protocol | Role |
 |---------|----------|------|
-| `axis chat` | Ollama /api/chat | Interactive advisory with rolling context |
+| `axis chat` | Removed | Prints `use: axis agent` |
 | `axis agent` | Tool-calling loop | Read-only tools + safety-gated shell |
 | `axis mcp serve` | MCP over stdio | 17 read-only diagnostics plus 3 advisory lease primitives for LLM clients |
 | `axis serve` | HTTP (Unix socket) | Programmatic API for integrations |

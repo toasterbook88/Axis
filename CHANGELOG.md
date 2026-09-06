@@ -1,5 +1,16 @@
 ## Unreleased
 
+### Fixes
+
+* **Docs:** Align `SECURITY.md` supported line with `v0.17.x`. Document structured safety as live on the guarded path and `axis chat` as removed in `docs/architecture.md` and `docs/current-state.md`.
+* **Tests:** Run `TestPrepareGuardedExecutionSafetyDeny` in the default test set (drop `safety_scaffolded` tag). Isolate `hack/hermetic-go-test-tests.sh` from inherited `GOCACHE`/`GOPATH`/`GOMODCACHE`.
+* **API:** Require bearer auth on `/v2/metrics` (same `withAuth` as other `/v2` reads). Default listen remains the Unix socket.
+
+### Cleanup
+
+* Remove unused `cmd/axis/noun_registry.go`, deprecated `Fatal()`, and unused TUI logo helpers.
+* Raise CI coverage floors to match live package coverage: total 65%, `internal/mcp` 70%, `internal/api` 65%.
+
 ## v0.17.0 (2026-09-04)
 
 ### Features
