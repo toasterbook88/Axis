@@ -38,6 +38,7 @@ PATH="$test_root/bin:$PATH" \
   AXIS_TEST_ROOT="$test_root" \
   AXIS_HOME="$test_root/operator-axis-home" \
   HOME="$test_root/operator-home" \
+  env -u GOCACHE -u GOPATH -u GOMODCACHE \
   ./hack/hermetic-go-test.sh -race ./...
 after_listing="$(LC_ALL=C ls -A "$test_root/operator-home/.axis")"
 after_cksum="$(cksum <"$test_root/operator-home/.axis/sentinel")"

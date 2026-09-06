@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 )
 
 // Exit codes for the AXIS CLI
@@ -45,13 +44,4 @@ func ExitCode(err error) int {
 		return codeErr.Code
 	}
 	return ExitErrGeneric
-}
-
-// Fatal exits the program with the given code and prints an optional error message to stderr.
-// Deprecated: use ExitCodeError in RunE handlers instead.
-func Fatal(code int, format string, args ...interface{}) {
-	if format != "" {
-		fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
-	}
-	os.Exit(code)
 }
