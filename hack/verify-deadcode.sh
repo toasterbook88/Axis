@@ -27,6 +27,10 @@ require_command awk
 require_command sort
 require_command comm
 
+# Pinned tool version — same reproducibility policy as actionlint in CI.
+# Bump deliberately after checking `deadcode` output stability.
+DEADCODE_VERSION=v0.49.0
+
 allowfile="hack/deadcode-allowlist.txt"
 [[ -f "$allowfile" ]] || fail_missing_allowfile() { :; } # created below if absent
 
@@ -34,14 +38,21 @@ if [[ ! -f "$allowfile" ]]; then
   printf '# Deadcode allowlist: one pkg/file.go:line: func-name entry per line.\n# See docs/quality/deadcode-triage.md for the triage rationale.\n' > "$allowfile"
 fi
 
-# Run deadcode and normalize entries (drop the func column tail differences by
-# matching on file path + line + function name substring).
-dead_raw="$(go run golang.org/x/tools/cmd/deadcode@latest ./... 2>/dev/null || true)"
+# Run deadcode pinned to DEADCODE_VERSION. The gate is fail-closed: with
+# `set -e`, a failing command substitution would abort the script silently,
+# so the failure is captured explicitly and converted into a gate failure.
+if ! dead_raw="$(go run golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION} ./... 2>&1)"; then
+  printf 'deadcode gate FAILED: pinned tool did not run (version %s):\n%s\n' "$DEADCODE_VERSION" "$dead_raw" >&2
+  exit 1
+fi
+if [[ "$dead_raw" == "go: "* ]]; then
+  printf 'deadcode gate FAILED: pinned tool errored (version %s):\n%s\n' "$DEADCODE_VERSION" "$dead_raw" >&2
+  exit 1
+fi
 if [[ -z "$dead_raw" ]]; then
   echo "deadcode gate passed: no unreachable functions"
   exit 0
 fi
-
 # Every deadcode line looks like: path/file.go:123:45 funcName  (or with :col)
 # Allowlist lines look like:  path/file.go  funcName     (path + func name, no line)
 norm() {
