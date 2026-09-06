@@ -41,13 +41,23 @@ fi
 # Run deadcode pinned to DEADCODE_VERSION. The gate is fail-closed: with
 # `set -e`, a failing command substitution would abort the script silently,
 # so the failure is captured explicitly and converted into a gate failure.
-if ! dead_raw="$(go run golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION} ./... 2>&1)"; then
-  printf 'deadcode gate FAILED: pinned tool did not run (version %s):\n%s\n' "$DEADCODE_VERSION" "$dead_raw" >&2
+#
+# First-run nuance: `go run` prints "go: downloading ..." progress lines to
+# stderr on cold module caches (CI), and those lines land in dead_raw via
+# 2>&1. They are progress, not errors — strip them before interpreting, and
+# only treat remaining `go: ...` output as a tool failure.
+if ! raw_out="$(go run golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION} ./... 2>&1)"; then
+  printf 'deadcode gate FAILED: pinned tool did not run (version %s):\n%s\n' "$DEADCODE_VERSION" "$raw_out" >&2
   exit 1
 fi
-if [[ "$dead_raw" == "go: "* ]]; then
-  printf 'deadcode gate FAILED: pinned tool errored (version %s):\n%s\n' "$DEADCODE_VERSION" "$dead_raw" >&2
-  exit 1
+# Strip download-progress lines (only at line starts, keep real findings).
+dead_raw="$(printf '%s\n' "$raw_out" | grep -v '^go: downloading ' || true)"
+if [[ -z "$(printf '%s\n' "$dead_raw" | grep -v '^go: ' || true)" ]]; then
+  # nothing but download lines and/or go: errors → tool did not produce findings
+  if printf '%s\n' "$dead_raw" | grep -q '^go: ' ; then
+    printf 'deadcode gate FAILED: pinned tool errored (version %s):\n%s\n' "$DEADCODE_VERSION" "$dead_raw" >&2
+    exit 1
+  fi
 fi
 if [[ -z "$dead_raw" ]]; then
   echo "deadcode gate passed: no unreachable functions"
