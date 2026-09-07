@@ -1,5 +1,23 @@
 ## Unreleased
 
+## v0.17.1 (2026-09-07)
+
+Nine commits on `main` since `v0.17.0`. No new operator command surface. Cluster nodes pick this up with `axis update`, then `axis daemon restart && axis daemon status` where a daemon is installed.
+
+### Dependencies
+
+* Bump `github.com/mark3labs/mcp-go` from `0.58.0` to `1.0.0`. Live `axis mcp serve` `tools/list` remains 20 tools / 17 read-only.
+* Bump `al.essio.dev/pkg/shellescape` from `1.6.0` to `1.6.1`.
+* Bump the GitHub Actions minor/patch group (2 updates).
+
+### CI & Truth Gates
+
+* Add a fail-closed deadcode allowlist gate (`hack/verify-deadcode.sh`, pinned `golang.org/x/tools/cmd/deadcode`). Unreachable symbols not in `hack/deadcode-allowlist.txt` fail CI.
+* Add `hack/verify-deadcode-tests.sh` for the gate's failure paths (tool did not run, `go:` error after stripping download progress, unallowlisted symbol) and wire both scripts into `.github/workflows/ci.yml` and `hack/ci-preflight.sh`.
+* Extend `hack/verify-doc-facts.sh` with an `internal/` package inventory check against `AGENTS.md` and a 30KB `AGENTS.md` budget (margin before the 32KB agent injection cap).
+* Document those gates in `AGENTS.md`.
+* Raise CI coverage floors to match live package coverage: total 65%, `internal/mcp` 70%, `internal/api` 65%.
+
 ### Fixes
 
 * **Docs:** Align `SECURITY.md` supported line with `v0.17.x`. Document structured safety as live on the guarded path and `axis chat` as removed in `docs/architecture.md` and `docs/current-state.md`.
@@ -9,7 +27,7 @@
 ### Cleanup
 
 * Remove unused `cmd/axis/noun_registry.go`, deprecated `Fatal()`, and unused TUI logo helpers.
-* Raise CI coverage floors to match live package coverage: total 65%, `internal/mcp` 70%, `internal/api` 65%.
+* Split `axis agent` slash-verb dispatch and REPL runtime out of `agent.go`, extract startup model-resolution, and add characterization tests for the previous coverage blindspots.
 
 ## v0.17.0 (2026-09-04)
 
