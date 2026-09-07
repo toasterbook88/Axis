@@ -258,6 +258,24 @@ ram_writers="$(grep -rn 'RAMReservedMB\s*=' internal/ --include='*.go' | grep -v
 [[ -z "$ram_writers" ]] \
   || fail "RAMReservedMB assigned outside internal/snapshotview (derived view must stay read-only): $ram_writers"
 
+# --- 4b. internal/ package inventory -----------------------------------------
+# AGENTS.md documents the package tier layout; verify no package exists that
+# AGENTS.md does not name, and none named has disappeared.
+pkg_code="$(find internal -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+for pkg in $(find internal -mindepth 1 -maxdepth 1 -type d | xargs -n1 basename); do
+  grep -qE "internal/$pkg([ /)]|$)" AGENTS.md \
+    || fail "AGENTS.md does not mention internal/$pkg (add it to the tier layout or delete the package)"
+done
+
+# --- 4c. AGENTS.md context budget --------------------------------------------
+# axis agent injects the nearest AGENTS.md into the system prompt with a 32KB
+# cap (internal/agent/repo_instructions.go maxRepoInstructionsBytes). The tail
+# (Scope Discipline, agent guidelines) truncates first, so keep growth visible:
+# fail at 30KB to leave a decision margin before the silent 32KB cliff.
+agents_bytes="$(wc -c < AGENTS.md | tr -d ' ')"
+[[ "$agents_bytes" -le 30720 ]] \
+  || fail "AGENTS.md is $agents_bytes bytes; the axis agent system-prompt injection caps at 32768 and silently truncates the tail. Trim AGENTS.md or raise the budget consciously."
+
 # The daemon documents that it watches state.json and skills.json but not
 # ledger.json (docs/authority-reservation.md §5). Keep that claim mechanical.
 if grep -qF 'func (d *Daemon) WatchLedger(' internal/daemon/daemon.go; then

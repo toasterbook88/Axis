@@ -1,0 +1,248 @@
+# Deadcode allowlist — symbols reported by `deadcode ./...` that are
+# intentionally retained. One entry per line: <package/file path fragment> <function-name>
+# Lines starting with # are comments. Matching is path-substring + exact func
+# name, line-agnostic (entries survive upstream edits).
+#
+# Full triage rationale lives in docs/quality/deadcode-triage.md. Update that
+# doc when adding an entry here.
+#
+# --- KEEP-ALLOW: interface satisfaction (deadcode cannot see compile-time
+# --- assertions like `var _ workload.Classifier = (*Engine)(nil)`)
+internal/llmrouter ClassifyWorkload
+internal/llmrouter/cloud.go NewOpenRouterProvider
+internal/llmrouter/cloud.go NewGroqProvider
+internal/llmrouter/cloud.go NewAnthropicProvider
+internal/llmrouter/cloud.go newCloudProvider
+internal/llmrouter/cloud.go Name
+internal/llmrouter/cloud.go Type
+internal/llmrouter/cloud.go Health
+internal/llmrouter/cloud.go SupportsModel
+internal/llmrouter/cloud.go EstimateCost
+internal/llmrouter/cloud.go Send
+internal/llmrouter/cloud.go Endpoint
+internal/llmrouter/cloud.go DefaultModel
+internal/llmrouter/cloud.go defaultModel
+internal/llmrouter/cloud.go lookupModel
+internal/llmrouter/cloud.go applyAuth
+internal/llmrouter/cloud.go sendOpenAICompatible
+internal/llmrouter/cloud.go sendAnthropic
+internal/llmrouter/cloud.go NewRegistryFromConfig
+internal/llmrouter/cloud.go newConfiguredCloudProvider
+internal/llmrouter/cloud.go detectCloudProviderKind
+internal/llmrouter/cloud.go SelectCloudFallback
+internal/llmrouter/cloud.go compareCloudCandidatesByLatency
+internal/llmrouter/cloud.go compareCloudCandidatesByCost
+internal/llmrouter/cloud.go costKnown
+internal/llmrouter/cloud.go defaultProviderModel
+internal/llmrouter/cloud.go providerPriority
+internal/llmrouter/cloud.go providerEndpoint
+internal/llmrouter/cloud.go ClassifyWithProvider
+# --- KEEP-ALLOW: build-tagged consumers (//go:build fleet, make test-fleet)
+# (guard.go symbols: containment guard, physical-resolution, remote helpers)
+internal/fleettest NewGuard
+internal/fleettest Validate
+internal/fleettest resolvePhysical
+internal/fleettest hasDotDot
+internal/fleettest Env
+internal/fleettest RemoteRoot
+internal/fleettest RemoteEnv
+internal/fleettest RemoteCommand
+# --- KEEP-ALLOW: Tier-3 distributed planner surface (#175), PlanSingleNode live
+# (planner.go symbols: Planner struct, NewPlanner, validateSnapshot,
+#  normalizeManifest, planConfidence, indexLinks, etc.)
+# --- KEEP-ALLOW: engine internals (semantic classification path, docs/future
+# --- hybrid-orchestration-spec.md §4.1)
+internal/llmrouter/engine.go Classify
+internal/llmrouter/engine.go classifyViaSemantic
+internal/llmrouter/engine.go NewEngine
+internal/llmrouter/registry.go NewRegistry
+internal/llmrouter/registry.go Register
+internal/llmrouter/registry.go MustRegister
+internal/llmrouter/registry.go Lookup
+internal/llmrouter/registry.go List
+# --- KEEP-ALLOW: llmrouter remaining surface (provider options + Tier-3 cost/
+# --- latency comparators, same rationale as the cloud.go block above)
+internal/llmrouter/cloud.go Priority
+internal/llmrouter/cloud.go estimateTokens
+internal/llmrouter/engine.go WithTimeout
+internal/llmrouter/engine.go WithHTTPClient
+internal/llmrouter/engine.go buildClassifyPrompt
+internal/llmrouter/engine.go parseWorkloadClass
+internal/llmrouter/engine.go reflexFallback
+internal/llmrouter/engine.go clamp
+internal/llmrouter/engine.go WithEndpoint
+internal/llmrouter/engine.go WithModel
+# --- KEEP-ALLOW: remaining llmrouter probe/registry (same rationale)
+internal/llmrouter/probe.go ProbeAllBackends
+internal/llmrouter/probe.go ViewLocality
+internal/llmrouter/probe.go ProbeBackend
+internal/llmrouter/registry.go Len
+internal/llmrouter/registry.go CheckHealth
+internal/llmrouter/registry.go Healthy
+internal/llmrouter/registry.go ListByType
+internal/llmrouter/registry.go snapshotProviders
+internal/fleettest shellQuote
+internal/fleettest Error
+# --- KEEP-ALLOW: modelplan planner internals (Planner struct from #175)
+internal/modelplan/planner.go NewPlanner
+internal/modelplan/planner.go Plan
+internal/modelplan/planner.go currentTime
+internal/modelplan/planner.go validateSnapshot
+internal/modelplan/planner.go validateOptions
+internal/modelplan/planner.go normalizeManifest
+internal/modelplan/planner.go normalizeStrings
+internal/modelplan/planner.go planConfidence
+internal/modelplan/planner.go indexLinks
+# (planner.go remaining internals — distributed-planner math and candidate
+#  graph; same #175 rationale)
+internal/modelplan/planner.go convertExclusions
+internal/modelplan/planner.go sortExclusions
+internal/modelplan/planner.go eligibleCandidates
+internal/modelplan/planner.go effectiveAllocatable
+internal/modelplan/planner.go containsCandidate
+internal/modelplan/planner.go betterLink
+internal/modelplan/planner.go choosePlan
+internal/modelplan/planner.go forEachCombination
+internal/modelplan/planner.go topologyOrders
+internal/modelplan/planner.go sameLinkQuality
+internal/modelplan/planner.go betterCandidate
+internal/modelplan/planner.go nodeSequence
+internal/modelplan/planner.go partitionLayers
+internal/modelplan/planner.go betterPartition
+internal/modelplan/planner.go buildCandidatePlan
+internal/modelplan/planner.go betterPlan
+internal/modelplan/planner.go sumInt64
+internal/modelplan/planner.go ceilDiv
+internal/modelplan/planner.go checkedAdd
+internal/modelplan/planner.go checkedMul
+internal/modelplan/planner.go maxInt64
+
+# --- DELETE candidates per triage (not yet deleted; tracked for phase 2)
+cmd/axis/agent_console.go draining
+cmd/axis/model.go resolveModelNode
+cmd/axis/model.go shellStop
+cmd/axis/task.go reservationMBForRequirements
+cmd/axis/task.go ensureReservationCapacity
+cmd/axis/task.go remoteExecPrefix
+
+# --- KEEP: accessor API (MCPRegistry/Backend accessors, ExecuteShell variant)
+internal/agent/agent.go MCPRegistry
+internal/agent/agent.go Backend
+internal/agent/tools.go ExecuteShell
+
+# --- DECIDE: Serve vs Run (one of the two entry points is dead)
+internal/api/server.go Serve
+
+# --- KEEP-ALLOW: chat engine/ollama client library surface
+internal/chat/engine.go NewEngine
+internal/chat/engine.go GenerateStream
+internal/chat/fallback_tools.go ExtractReasoning
+internal/chat/models.go BuildModelCatalog
+internal/chat/models.go FormatModelCatalog
+internal/chat/ollama.go ensureRunning
+internal/chat/ollama.go NewOllamaClient
+internal/chat/ollama.go GenerateStream
+
+# --- KEEP-ALLOW: console render variants (Thinking/Stream/Diff entries)
+internal/console/entries.go PlainAll
+internal/console/entries.go NewThinkingEntry
+internal/console/entries.go Render
+internal/console/entries.go NewStreamEntry
+internal/console/entries.go Append
+internal/console/entries.go Close
+internal/console/entries.go Render
+internal/console/entries.go NewDiffEntry
+internal/console/entries.go Render
+
+# --- DECIDE: cortex lock primitives have no CLI path yet
+internal/cortex/client.go AcquireLock
+internal/cortex/client.go ReleaseLock
+internal/cortex/client.go NewClient
+
+# --- DECIDE: RunGuarded wrapper vs RunGuardedStream; CanReserve/ApplyReservationView
+internal/daemon/client.go RunGuarded
+internal/daemon/daemon.go CanReserve
+internal/daemon/daemon.go ApplyReservationView
+
+# --- KEEP-ALLOW: discovery variants
+internal/discovery/discovery.go Discover
+internal/discovery/discovery.go DiscoverWithWarnings
+internal/discovery/discovery.go DiscoverSeeded
+
+# --- KEEP-ALLOW: MCP subscriber extension API (observational event surface)
+internal/events/events.go RegisterInterest
+internal/events/events.go GetInterests
+internal/events/events.go SetEventBufferSize
+internal/events/logger.go SetLogPath
+internal/events/logger.go ResetTestLog
+internal/events/webhooks.go ShutdownWebhooks
+
+# --- DECIDE: pairwise topology enrichment (#266) not wired to MCP
+internal/facts/disk_weights.go ParseDiskWeightFindTSV
+internal/facts/pairwise.go inferOverlay
+internal/facts/pairwise.go TopologySummary
+internal/facts/pairwise.go BuildPairwiseLinkMatrix
+internal/facts/pairwise.go findNode
+internal/facts/pairwise.go probeRTT
+internal/facts/pairwise.go parseRTTP95
+
+# --- KEEP-ALLOW: lock API completeness
+internal/lockutil/lock_unix.go LockEx
+
+# --- KEEP-ALLOW: client SDK surface for agent MCP integration
+internal/mcpclient/call.go CallToolWithProgress
+internal/mcpclient/connection.go SetProgressHandler
+internal/mcpclient/registry.go ConnectedNames
+internal/mcpclient/registry.go FindTool
+internal/mcpclient/registry.go Add
+
+# --- DECIDE: verifyHMAC — check whether HMAC verification is wired
+internal/mesh/mesh.go verifyHMAC
+
+# --- KEEP-ALLOW: model type helpers/error impls
+internal/models/memory.go AllocatableRAMMB
+internal/models/types.go Error
+
+# --- KEEP-ALLOW: allowlist reset API
+internal/netutil/url.go ResetInternalAllowlist
+
+# --- DECIDE: Headroom/clusterPressurePenalty helpers
+internal/placement/ranker.go Headroom
+internal/placement/ranker.go clusterPressurePenalty
+
+# --- KEEP: LearnAllow/LearnDeny intentionally disabled (approvals unscoped), documented in source
+internal/safety/structured.go LearnAllow
+internal/safety/structured.go LearnDeny
+
+# --- KEEP-ALLOW: IsConfigured API
+internal/secrets/secrets.go IsConfigured
+
+# --- DECIDE: AutoDiscoverSkills — wire into axis skills or delete
+internal/skills/autodiscover.go AutoDiscoverSkills
+internal/skills/autodiscover.go discoverInto
+internal/skills/autodiscover.go alreadyKnown
+
+# --- KEEP-ALLOW: LocalExecutor symmetry + SSH dial-target constructor
+internal/transport/local.go Connect
+internal/transport/local.go Stream
+internal/transport/local.go ForwardLocal
+internal/transport/local.go Close
+internal/transport/ssh.go NewSSHExecutorWithDialTarget
+
+# --- KEEP-ALLOW: presentational API (spinner/errors/color/select/table)
+internal/ui/color.go Boldf
+internal/ui/color.go StatusIcon
+internal/ui/color.go FprintBold
+internal/ui/errors.go PrintError
+internal/ui/errors.go PrintWarning
+internal/ui/errors.go PrintSuccess
+internal/ui/errors.go FprintSuccess
+internal/ui/select.go NewDefaultSelector
+internal/ui/select.go Select
+internal/ui/spinner.go spinnerCapable
+internal/ui/spinner.go NewSpinner
+internal/ui/spinner.go Start
+internal/ui/spinner.go Update
+internal/ui/spinner.go Stop
+internal/ui/spinner.go animate
+internal/ui/table.go RowCount
