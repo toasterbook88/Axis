@@ -38,6 +38,8 @@ run make test-install
 run go build -buildvcs=false ./...
 run make coverage
 run ./hack/verify-public-boundary.sh
+run ./hack/verify-deadcode-tests.sh
+run ./hack/verify-deadcode.sh
 run ./hack/verify-repo-truth.sh
 run ./hack/verify-doc-facts.sh
 run python3 hack/claude-workflow-tests.py

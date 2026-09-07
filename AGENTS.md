@@ -98,8 +98,10 @@ Verification steps:
 - `go build -buildvcs=false ./...` (portable across linked worktrees; release builds inject explicit metadata)
 - `./hack/coverage-check.sh` — enforces per-package and total coverage gates
 - `./hack/verify-public-boundary.sh` — enforces RFC 2606 domain and IPv4 documentation boundaries across all tracked files
+- `./hack/verify-deadcode-tests.sh` — regression tests for the deadcode gate's failure paths
+- `./hack/verify-deadcode.sh` — fail-closed allowlist gate: unreachable symbols not in `hack/deadcode-allowlist.txt` fail CI (pinned `deadcode` version)
 - `./hack/verify-repo-truth.sh` — enforces release-tag and doc-fact accuracy
-- `./hack/verify-doc-facts.sh` — enforces code/doc agreement: exit codes, command count, MCP tool count, and CHANGELOG completeness (no network)
+- `./hack/verify-doc-facts.sh` — enforces code/doc agreement: exit codes, command count, MCP tool count, package inventory, AGENTS.md 30KB budget, and CHANGELOG completeness (no network)
 
 Coverage gates are authoritative in `hack/coverage-check.sh`.
 
@@ -358,11 +360,14 @@ reason, or add heavy dependencies without strong justification.
 | Script | Purpose |
 | -------- | --------- |
 | `hack/coverage-check.sh` | Per-package and total coverage gates |
+| `hack/deadcode-allowlist.txt` | Allowlist for `hack/verify-deadcode.sh` (rationale in `docs/quality/deadcode-triage.md`) |
 | `hack/hermetic-go-test.sh` | Run Go tests without touching operator AXIS state |
 | `hack/hermetic-go-test-tests.sh` | Regression tests for the hermetic Go test runner |
+| `hack/verify-deadcode.sh` | Fail on unreachable symbols not in the deadcode allowlist |
+| `hack/verify-deadcode-tests.sh` | Regression tests for the deadcode gate's failure paths |
 | `hack/verify-public-boundary.sh` | Enforce RFC 2606 domain and IPv4 documentation boundaries across all tracked files |
 | `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
-| `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, CHANGELOG) |
+| `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, package inventory, AGENTS.md 30KB budget, CHANGELOG) |
 | `hack/refresh-current-state.sh` | Rebuild repository-derived facts and verification in `docs/current-state.md` |
 | `hack/repo-truth-tests.sh` | Regression tests for repository/release truth boundaries |
 | `hack/validate-release-version.sh` | Enforce source version and release-tag equality |
