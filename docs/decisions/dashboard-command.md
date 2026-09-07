@@ -13,6 +13,7 @@ The `axis summary` command renders a visual terminal dashboard of cluster health
 - Aggregate node health counts (healthy, degraded, unreachable)
 - A visual RAM usage bar with reserved-RAM annotation
 - GPU availability count
+- Vantage-labeled reachability (`vantage → node` routes: network class and SSH handshake duration). Cached snapshots without vantage render `vantage unknown`. The command does not draw node-to-node edges.
 - Mesh peer count (when applicable)
 - Cluster warnings
 

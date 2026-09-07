@@ -61,6 +61,7 @@ The live repo currently contains:
 - Storage class detection (nvme/ssd/hdd) with HDD penalty for heavy inference tasks
 - Battery and thermal probing: nodes below 20% battery or under serious/critical thermal throttle are disqualified for heavy inference
 - Network topology enrichment: interface name, CIDR subnet, and heuristic speed class (wireguard, tailscale, netbird, thunderbolt, wifi, gigabit, etc.)
+- Snapshot vantage metadata naming the collecting host, cloned through reservation overlays. `axis summary` renders vantage-labeled reachability (`vantage → node` network class and SSH handshake duration) and does not draw node-to-node edges from subnet equality
 - Exact-scope execution observations in persisted local state, separate from failure memory, with mandatory wall time and best-effort RAM/VRAM peaks when directly observed; when a non-empty model name is known, observation scopes are keyed per model so different models on the same node accumulate independent empirical histories, and when no model name is known they intentionally fall back to the legacy non-model key for backward compatibility
 - Hard empirical filter in placement: nodes whose freshly-observed `PeakRAMMB` exceeds current allocatable RAM are excluded from `FilterCandidates` before ranking begins
 - `axis status` renders a RESIDENT MODELS table showing which models are live on each node, grouped by runtime (ollama, llama.cpp, mlx, apple-foundation-models), with stable canonical ordering and `+N more` truncation for wide lists
@@ -267,8 +268,8 @@ V1 hardening is now mostly about durability, not feature growth:
 
 1. Keep this file, `README.md`, `SECURITY.md`, and the CI/release/security workflows current as the orientation layer.
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
-3. Finish the open truth-integrity containment in order: correct Ollama running-state detection (A1/C4), stop reporting confidence for unknown classifications (C2), then remove the unsupported pairwise topology rendering (C1).
-4. Implement the accepted topology truth contract with snapshot vantage metadata and a vantage-labeled reachability view; only then fix Darwin CIDR collection (A2).
+3. Finish the remaining truth-integrity containment: correct Ollama running-state detection (A1/C4), then stop reporting confidence for unknown classifications (C2). Pairwise topology rendering (C1) is replaced by vantage-labeled reachability.
+4. Darwin CIDR collection (A2) is unblocked now that subnet equality is not rendered as an edge; it remains an independent fact-plane correctness fix.
 5. Implement the placement feasibility/objective contract (B2/B3/B4) before expanding workload taxonomy.
 6. Push resident-model VRAM peak probes where truth-backed process metrics are available; the multi-runtime resident-model view (Ollama + llama-server + MLX) is now live.
 7. Refine reservation accounting into a clearer cluster RAM balancing model.

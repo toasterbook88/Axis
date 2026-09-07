@@ -126,6 +126,17 @@ func Build(nodes []models.NodeFacts) *models.ClusterSnapshot {
 
 	JoinNetworkVolumeOwners(snap.Nodes)
 
+	if local, ok := models.FindLocalNode(snap.Nodes); ok {
+		vantage := models.VantageInfo{
+			NodeName:   local.Name,
+			ObservedAt: snap.Timestamp,
+		}
+		if local.Identity != nil {
+			vantage.StableID = local.Identity.StableID
+		}
+		snap.Vantage = &vantage
+	}
+
 	return snap
 }
 

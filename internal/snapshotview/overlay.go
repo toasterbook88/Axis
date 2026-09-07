@@ -35,6 +35,10 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		publication := *snap.Publication
 		clone.Publication = &publication
 	}
+	if snap.Vantage != nil {
+		vantage := *snap.Vantage
+		clone.Vantage = &vantage
+	}
 	clone.Nodes = make([]models.NodeFacts, len(snap.Nodes))
 	for i, node := range snap.Nodes {
 		nodeCopy := node

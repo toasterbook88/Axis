@@ -2,26 +2,23 @@
   ║           AXIS CLUSTER SUMMARY               ║
   ╚══════════════════════════════════════════════╝
 
-  Version: v1.2.3    Cache Age: 15s
+  Version: 0.17.1    Cache Age: 1m30s
 
   NODES
   ─────────────────────────────────
-  ● Healthy:     1
-  ◐ Degraded:    1
+  ● Healthy:     4
   ○ Unreachable: 1
-    Total:       3
+    Total:       5
 
   RESOURCES
   ─────────────────────────────────
-  RAM:  [█████████████████░░░░░░░░░░░░░] 58% 28GB / 48GB (4GB reserved) (16GB allocatable)
-  GPUs: 1 available
+  RAM:  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 0% 0GB / 0GB
+  GPUs: none detected
 
-  REACHABILITY (vantage unknown, 15s ago)
+  REACHABILITY (observed from node-a, 1m30s ago)
   ─────────────────────────────────
-  alpha       unknown           no route observed
-  beta        unknown           no route observed
-  gamma       unknown           no route observed
-
-  WARNINGS
-  ─────────────────────────────────
-  ⚠ beta: high CPU load
+  cli-host    relayed           handshake 200ms
+  node-a      local             —
+  node-b      relayed           handshake 212ms
+  node-c      direct-lan        handshake 38ms   thunderbolt iface present
+  node-d      unknown           no route observed
