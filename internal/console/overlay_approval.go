@@ -45,7 +45,7 @@ func (o *ApprovalOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 	}
 
 	switch key.String() {
-	case "y", "Y", "enter":
+	case "y", "Y":
 		o.resolve(agent.ConfirmYes)
 		return nil, nil
 

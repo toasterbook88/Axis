@@ -319,7 +319,7 @@ func TestConsoleApprovalFailsClosedWithoutReadingStdin(t *testing.T) {
 	// the input loop, so the console uses an overlay and times out / fails closed
 	// if no operator response is received.
 	rec := &capture{}
-	confirm := consoleConfirmWithTimeout(rec.Send, consoleClock, 10*time.Millisecond)
+	confirm := consoleConfirmWithTimeout(context.Background(), rec.Send, consoleClock, 10*time.Millisecond)
 
 	for _, score := range []int{0, 35, 74, 95} {
 		if got := confirm("bash", "rm -rf /tmp/x", score); got != agent.ConfirmNo {
@@ -350,7 +350,7 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 	rec := &capture{}
 
 	// Approving 'y' delivers ConfirmYes
-	confirmApprove := consoleConfirmWithTimeout(func(m tea.Msg) {
+	confirmApprove := consoleConfirmWithTimeout(context.Background(), func(m tea.Msg) {
 		rec.Send(m)
 		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
 			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
@@ -362,7 +362,7 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 	}
 
 	// Denying 'n' delivers ConfirmNo
-	confirmDeny := consoleConfirmWithTimeout(func(m tea.Msg) {
+	confirmDeny := consoleConfirmWithTimeout(context.Background(), func(m tea.Msg) {
 		rec.Send(m)
 		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
 			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
@@ -374,7 +374,7 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 	}
 
 	// Approving 'a' delivers ConfirmAlways
-	confirmAlways := consoleConfirmWithTimeout(func(m tea.Msg) {
+	confirmAlways := consoleConfirmWithTimeout(context.Background(), func(m tea.Msg) {
 		rec.Send(m)
 		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
 			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
@@ -386,8 +386,42 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 	}
 }
 
+func TestConsoleApprovalContextCancelReturnsDeny(t *testing.T) {
+	rec := &capture{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-canceled
+
+	confirm := consoleConfirmWithTimeout(ctx, rec.Send, consoleClock, time.Minute)
+	got := confirm("bash", "rm -rf /tmp/x", 75)
+	if got != agent.ConfirmNo {
+		t.Fatalf("expected ConfirmNo on canceled context, got %v", got)
+	}
+
+	msgs := rec.all()
+	var dismissed bool
+	var entry *console.EntryMsg
+	for _, m := range msgs {
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay == nil {
+			dismissed = true
+		}
+		if em, ok := m.(console.EntryMsg); ok {
+			entry = &em
+		}
+	}
+	if !dismissed {
+		t.Error("expected overlay to be dismissed on context cancel")
+	}
+	if entry == nil {
+		t.Fatal("expected entry to be logged on context cancel")
+	}
+	rendered := strings.Join(console.PlainAll(entry.Entry.Render(100)), " ")
+	if !strings.Contains(rendered, "denied") && !strings.Contains(rendered, "canceled") {
+		t.Errorf("entry did not mention denial or cancellation: %q", rendered)
+	}
+}
+
 func TestConsoleApprovalNeverAutoApproves(t *testing.T) {
-	confirm := consoleConfirm(nil, consoleClock)
+	confirm := consoleConfirm(context.Background(), nil, consoleClock)
 	for _, r := range []agent.ConfirmResult{agent.ConfirmYes, agent.ConfirmAlways} {
 		if confirm("bash", "anything", 0) == r {
 			t.Fatalf("console confirm returned %v; it must always deny", r)

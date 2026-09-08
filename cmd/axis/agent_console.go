@@ -151,13 +151,16 @@ const defaultApprovalTimeout = 2 * time.Minute
 // It never reads stdin: Bubble Tea holds the terminal in raw mode, so a synchronous prompt
 // would corrupt the input loop and the display. Instead, it dispatches an ApprovalOverlay
 // to the program's event loop and waits on a Go channel for the operator's decision.
-func consoleConfirm(send func(tea.Msg), now func() time.Time) agent.ConfirmFunc {
-	return consoleConfirmWithTimeout(send, now, defaultApprovalTimeout)
+func consoleConfirm(ctx context.Context, send func(tea.Msg), now func() time.Time) agent.ConfirmFunc {
+	return consoleConfirmWithTimeout(ctx, send, now, defaultApprovalTimeout)
 }
 
-func consoleConfirmWithTimeout(send func(tea.Msg), now func() time.Time, timeout time.Duration) agent.ConfirmFunc {
+func consoleConfirmWithTimeout(ctx context.Context, send func(tea.Msg), now func() time.Time, timeout time.Duration) agent.ConfirmFunc {
 	if now == nil {
 		now = time.Now
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	return func(toolName, description string, safetyScore int) agent.ConfirmResult {
 		if send == nil {
@@ -201,6 +204,12 @@ func consoleConfirmWithTimeout(send func(tea.Msg), now func() time.Time, timeout
 			result = agent.ConfirmNo
 			decision = console.DecisionDenied
 			reason = "approval timed out (denied)"
+		case <-ctx.Done():
+			// Dismiss overlay if context canceled
+			send(console.SetOverlayMsg{Overlay: nil})
+			result = agent.ConfirmNo
+			decision = console.DecisionDenied
+			reason = "approval canceled (denied)"
 		}
 
 		send(console.EntryMsg{Entry: console.NewApprovalEntry(
@@ -303,7 +312,7 @@ func runAgentConsole(
 
 	// Approvals fail closed. Installing this before the first turn guarantees
 	// no code path can reach the agent's stdin prompt while tea owns the tty.
-	a.SetConfirm(consoleConfirm(prog.Send, time.Now))
+	a.SetConfirm(consoleConfirm(ctx, prog.Send, time.Now))
 
 	// Restore the terminal whatever happens, including a panic in a view.
 	defer prog.Kill()

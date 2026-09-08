@@ -1,14 +1,21 @@
 package runtimectx
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
 )
@@ -27,6 +34,7 @@ func stubCacheDeps(
 	prevDisk := readDiskSnapshot
 	prevStat := loadState
 	prevSkills := loadSkills
+	prevLedger := loadLedger
 
 	if cfgFn != nil {
 		loadConfig = cfgFn
@@ -43,6 +51,9 @@ func stubCacheDeps(
 	if skillsFn != nil {
 		loadSkills = skillsFn
 	}
+	loadLedger = func() (*reservation.Ledger, error) {
+		return reservation.NewLedger(reservation.DefaultLimits(), nil), nil
+	}
 
 	return func() {
 		loadConfig = prevCfg
@@ -50,6 +61,7 @@ func stubCacheDeps(
 		readDiskSnapshot = prevDisk
 		loadState = prevStat
 		loadSkills = prevSkills
+		loadLedger = prevLedger
 	}
 }
 
@@ -230,12 +242,220 @@ func TestLoadCachedFallbackToBootstrapSkeleton(t *testing.T) {
 	if rt.Snapshot.Publication == nil {
 		t.Fatal("expected fallback publication envelope")
 	}
+	if rt.Snapshot.Publication.Source == "live-runtime" {
+		t.Fatal("bootstrap skeleton publication must not be labeled live-runtime")
+	}
+	if rt.Snapshot.Publication.Source != "bootstrap" {
+		t.Fatalf("expected publication source 'bootstrap', got %q", rt.Snapshot.Publication.Source)
+	}
 }
 
-func TestLoadCachedStaleWarning(t *testing.T) {
+func TestDefaultCacheFetchAddressIsSocketNotPort8080(t *testing.T) {
+	addr := DefaultDaemonAddr()
+	want := persist.AxisPath("axis.sock")
+	if addr != want {
+		t.Fatalf("DefaultDaemonAddr() = %q, want %q", addr, want)
+	}
+	if addr == "127.0.0.1:8080" || strings.Contains(addr, "8080") {
+		t.Fatalf("DefaultDaemonAddr() should be unix socket, got port 8080 addr: %q", addr)
+	}
+
+	var fetchedAddr string
+	restore := stubCacheDeps(t,
+		func(string) (*config.Config, error) { return &config.Config{}, nil },
+		func(_ context.Context, a string) (*models.ClusterSnapshot, string, error) {
+			fetchedAddr = a
+			return &models.ClusterSnapshot{Timestamp: time.Now().UTC(), Status: models.SnapshotHealthy}, "daemon-cache", nil
+		},
+		func() (*models.ClusterSnapshot, error) { return nil, os.ErrNotExist },
+		func() (*state.ClusterState, error) { return &state.ClusterState{}, nil },
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	defer restore()
+
+	_, err := LoadCachedWithAddr(context.Background(), "")
+	if err != nil {
+		t.Fatalf("LoadCachedWithAddr: %v", err)
+	}
+	if fetchedAddr != want {
+		t.Fatalf("LoadCachedWithAddr with empty addr called fetchDaemonSnapshot with %q, want %q", fetchedAddr, want)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestLoadCachedCallsStubbedSocketClientAndDoesNotOpenPort8080(t *testing.T) {
+	var clientCalledAddr string
+	var reqURL string
+
+	prevClient := httpClientForAddr
+	httpClientForAddr = func(addr string, timeout time.Duration) (*http.Client, string) {
+		clientCalledAddr = addr
+		return &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				reqURL = r.URL.String()
+				snap := &models.ClusterSnapshot{
+					Timestamp: time.Now().UTC(),
+					Status:    models.SnapshotHealthy,
+				}
+				data, _ := json.Marshal(snap)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		}, "http://localhost"
+	}
+	defer func() { httpClientForAddr = prevClient }()
+
+	snap, source, err := fetchDaemonHTTP(context.Background(), "")
+	if err != nil {
+		t.Fatalf("fetchDaemonHTTP: %v", err)
+	}
+	if snap == nil || source != "daemon-cache" {
+		t.Fatalf("unexpected result: snap=%+v source=%q", snap, source)
+	}
+
+	wantSocket := persist.AxisPath("axis.sock")
+	if clientCalledAddr != wantSocket {
+		t.Fatalf("client called with %q, want socket %q", clientCalledAddr, wantSocket)
+	}
+	if strings.Contains(clientCalledAddr, "8080") || strings.Contains(reqURL, "8080") {
+		t.Fatalf("socket client called with port 8080: addr=%q url=%q", clientCalledAddr, reqURL)
+	}
+}
+
+func TestCachedSnapshotVantagePreservedAndSurfaced(t *testing.T) {
 	cfg := &config.Config{
 		Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.example.com"}},
 	}
+	now := time.Now().UTC()
+
+	// Case A: cached snapshot WITH vantage keeps it and surfaces it in badge
+	snapWithVantage := &models.ClusterSnapshot{
+		Timestamp: now,
+		Status:    models.SnapshotHealthy,
+		Vantage: &models.VantageInfo{
+			NodeName:   "foundry",
+			ObservedAt: now,
+		},
+	}
+
+	restoreA := stubCacheDeps(t,
+		func(string) (*config.Config, error) { return cfg, nil },
+		func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+			return snapWithVantage, "daemon-cache", nil
+		},
+		func() (*models.ClusterSnapshot, error) { return nil, os.ErrNotExist },
+		func() (*state.ClusterState, error) { return &state.ClusterState{}, nil },
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+
+	rtA, err := LoadCached(context.Background())
+	restoreA()
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	if rtA.Snapshot.Vantage == nil || rtA.Snapshot.Vantage.NodeName != "foundry" {
+		t.Fatalf("expected vantage foundry kept, got: %+v", rtA.Snapshot.Vantage)
+	}
+	var foundBadgeA bool
+	for _, w := range rtA.Snapshot.Warnings {
+		if w.Kind == "cache" && strings.Contains(w.Message, "vantage: foundry") {
+			foundBadgeA = true
+			break
+		}
+	}
+	if !foundBadgeA {
+		t.Fatalf("expected cache badge surfacing vantage foundry, got: %+v", rtA.Snapshot.Warnings)
+	}
+
+	// Case B: cached snapshot WITHOUT vantage keeps it nil and surfaces "unknown", not a guessed host
+	snapWithoutVantage := &models.ClusterSnapshot{
+		Timestamp: now,
+		Status:    models.SnapshotHealthy,
+		Vantage:   nil,
+	}
+
+	restoreB := stubCacheDeps(t,
+		func(string) (*config.Config, error) { return cfg, nil },
+		func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+			return snapWithoutVantage, "daemon-cache", nil
+		},
+		func() (*models.ClusterSnapshot, error) { return nil, os.ErrNotExist },
+		func() (*state.ClusterState, error) { return &state.ClusterState{}, nil },
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+
+	rtB, err := LoadCached(context.Background())
+	restoreB()
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	if rtB.Snapshot.Vantage != nil {
+		t.Fatalf("expected nil vantage to remain nil (not guessed), got: %+v", rtB.Snapshot.Vantage)
+	}
+	var foundBadgeB bool
+	for _, w := range rtB.Snapshot.Warnings {
+		if w.Kind == "cache" && strings.Contains(w.Message, "vantage: unknown") {
+			foundBadgeB = true
+			break
+		}
+	}
+	if !foundBadgeB {
+		t.Fatalf("expected cache badge surfacing vantage: unknown, got: %+v", rtB.Snapshot.Warnings)
+	}
+}
+
+func TestLoadCachedStaleWarningAndVantageBadge(t *testing.T) {
+	cfg := &config.Config{
+		Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.example.com"}},
+	}
+
+	// Case A: Fresh snapshot (1 minute ago) has vantage badge with stale: false, and NO separate stale warning
+	freshTime := time.Now().UTC().Add(-1 * time.Minute)
+	freshSnap := &models.ClusterSnapshot{
+		Timestamp: freshTime,
+		Status:    models.SnapshotHealthy,
+		Vantage:   &models.VantageInfo{NodeName: "node-a", ObservedAt: freshTime},
+	}
+	restoreFresh := stubCacheDeps(t,
+		func(string) (*config.Config, error) { return cfg, nil },
+		func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+			return freshSnap, "daemon-cache", nil
+		},
+		func() (*models.ClusterSnapshot, error) { return nil, os.ErrNotExist },
+		func() (*state.ClusterState, error) { return &state.ClusterState{}, nil },
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	rtFresh, err := LoadCached(context.Background())
+	restoreFresh()
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	var foundFreshBadge bool
+	var foundFreshStaleWarning bool
+	for _, w := range rtFresh.Snapshot.Warnings {
+		if w.Kind == "cache" && strings.Contains(w.Message, "stale: false") && strings.Contains(w.Message, "vantage: node-a") {
+			foundFreshBadge = true
+		}
+		if w.Kind == "cache" && strings.Contains(w.Message, "is stale") {
+			foundFreshStaleWarning = true
+		}
+	}
+	if !foundFreshBadge {
+		t.Fatalf("expected fresh vantage badge, got warnings: %+v", rtFresh.Snapshot.Warnings)
+	}
+	if foundFreshStaleWarning {
+		t.Fatalf("fresh snapshot should not have stale warning, got: %+v", rtFresh.Snapshot.Warnings)
+	}
+
+	// Case B: Stale snapshot (15 minutes ago) has BOTH the vantage badge (stale: true) AND the stale warning
 	staleTime := time.Now().UTC().Add(-15 * time.Minute)
 	diskSnap := &models.ClusterSnapshot{
 		Timestamp: staleTime,
@@ -243,9 +463,10 @@ func TestLoadCachedStaleWarning(t *testing.T) {
 		Nodes: []models.NodeFacts{
 			{Name: "node-a", Status: models.StatusComplete},
 		},
+		Vantage: &models.VantageInfo{NodeName: "node-a", ObservedAt: staleTime},
 	}
 
-	restore := stubCacheDeps(t,
+	restoreStale := stubCacheDeps(t,
 		func(string) (*config.Config, error) { return cfg, nil },
 		func(context.Context, string) (*models.ClusterSnapshot, string, error) {
 			return nil, "", errors.New("connection refused")
@@ -260,20 +481,27 @@ func TestLoadCachedStaleWarning(t *testing.T) {
 			return &skills.Store{}, nil
 		},
 	)
-	defer restore()
+	defer restoreStale()
 
 	rt, err := LoadCached(context.Background())
 	if err != nil {
 		t.Fatalf("LoadCached: %v", err)
 	}
 
-	foundStale := false
+	foundVantageBadge := false
+	foundStaleWarning := false
 	for _, w := range rt.Snapshot.Warnings {
-		if w.Kind == "cache" && len(w.Message) > 0 {
-			foundStale = true
+		if w.Kind == "cache" && strings.Contains(w.Message, "vantage: node-a") && strings.Contains(w.Message, "stale: true") {
+			foundVantageBadge = true
+		}
+		if w.Kind == "cache" && strings.Contains(w.Message, "is stale") {
+			foundStaleWarning = true
 		}
 	}
-	if !foundStale {
-		t.Fatal("expected stale cache warning")
+	if !foundVantageBadge {
+		t.Fatalf("expected vantage badge with stale: true, got warnings: %+v", rt.Snapshot.Warnings)
+	}
+	if !foundStaleWarning {
+		t.Fatalf("expected stale warning alongside vantage badge, got warnings: %+v", rt.Snapshot.Warnings)
 	}
 }

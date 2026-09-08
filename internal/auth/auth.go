@@ -1,13 +1,17 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/persist"
 )
@@ -100,4 +104,23 @@ func IsUnixAddr(addr string) bool {
 	return strings.HasPrefix(addr, "/") ||
 		strings.HasPrefix(addr, "./") ||
 		strings.HasPrefix(addr, "../")
+}
+
+// HttpClientForAddrWithTimeout returns an http.Client and base URL for the given address.
+// If addr is a Unix domain socket (checked via IsUnixAddr), it configures a Unix dialer
+// and returns "http://localhost" as the base URL.
+func HttpClientForAddrWithTimeout(addr string, timeout time.Duration) (*http.Client, string) {
+	client := &http.Client{
+		Timeout: timeout,
+	}
+	if IsUnixAddr(addr) {
+		client.Transport = &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", addr)
+			},
+		}
+		return client, "http://localhost"
+	}
+	return client, addr
 }

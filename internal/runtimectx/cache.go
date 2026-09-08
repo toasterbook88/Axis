@@ -17,13 +17,17 @@ import (
 	"github.com/toasterbook88/axis/internal/reservation"
 )
 
-// DefaultDaemonAddr is the standard loopback address for the axis daemon.
-const DefaultDaemonAddr = "127.0.0.1:8080"
+// DefaultDaemonAddr returns the default address for the local daemon (the unix socket).
+func DefaultDaemonAddr() string {
+	return persist.AxisPath("axis.sock")
+}
 
 // StaleCacheThreshold defines the age at which a cached snapshot is considered stale.
 const StaleCacheThreshold = 5 * time.Minute
 
 var (
+	defaultDaemonAddr   = DefaultDaemonAddr
+	httpClientForAddr   = auth.HttpClientForAddrWithTimeout
 	fetchDaemonSnapshot = fetchDaemonHTTP
 	readDiskSnapshot    = loadDiskSnapshot
 )
@@ -38,6 +42,10 @@ func LoadCached(ctx context.Context) (*Context, error) {
 // LoadCachedWithAddr loads cluster context using a specific daemon address, or
 // the default address if empty.
 func LoadCachedWithAddr(ctx context.Context, daemonAddr string) (*Context, error) {
+	if daemonAddr == "" {
+		daemonAddr = defaultDaemonAddr()
+	}
+
 	cfg, err := loadConfig(config.DefaultConfigPath())
 	if err != nil {
 		return nil, err
@@ -74,9 +82,12 @@ func LoadCachedWithAddr(ctx context.Context, daemonAddr string) (*Context, error
 
 	// If the snapshot has no publication envelope (e.g. older disk snapshot or bootstrap),
 	// build a fallback envelope so consumers expecting Publication won't panic.
+	// A bootstrap skeleton is NOT live runtime.
 	if snap.Publication == nil {
-		pubSource := publication.SourceLiveRuntime
-		if source == "disk-cache" || source == "daemon-cache" {
+		pubSource := source
+		if pubSource == "" {
+			pubSource = "bootstrap"
+		} else if pubSource == "disk-cache" || pubSource == "daemon-cache" {
 			pubSource = publication.SourceDaemonCache
 		}
 		publicationEnvelope, publicationErr := publication.Build(
@@ -133,12 +144,7 @@ func resolveCachedSnapshot(ctx context.Context, daemonAddr string, cfg *config.C
 	// Priority 1: Daemon HTTP API
 	snap, source, err := fetchDaemonSnapshot(ctx, daemonAddr)
 	if err == nil && snap != nil {
-		if !snap.Timestamp.IsZero() && time.Since(snap.Timestamp) > StaleCacheThreshold {
-			models.AppendWarningIfMissing(snap, models.Warning{
-				Kind:    "cache",
-				Message: fmt.Sprintf("daemon snapshot cache is stale (age: %s, collected: %s)", time.Since(snap.Timestamp).Round(time.Second), snap.Timestamp.Format(time.RFC3339)),
-			})
-		}
+		badgeCacheRead(snap, source)
 		return snap, source, nil
 	}
 
@@ -151,12 +157,7 @@ func resolveCachedSnapshot(ctx context.Context, daemonAddr string, cfg *config.C
 				diskSnap.Timestamp = info.ModTime().UTC()
 			}
 		}
-		if !diskSnap.Timestamp.IsZero() && time.Since(diskSnap.Timestamp) > StaleCacheThreshold {
-			models.AppendWarningIfMissing(diskSnap, models.Warning{
-				Kind:    "cache",
-				Message: fmt.Sprintf("disk snapshot cache is stale (age: %s, collected: %s)", time.Since(diskSnap.Timestamp).Round(time.Second), diskSnap.Timestamp.Format(time.RFC3339)),
-			})
-		}
+		badgeCacheRead(diskSnap, "disk-cache")
 		models.AppendWarningIfMissing(diskSnap, models.Warning{
 			Kind:    "cache",
 			Message: "daemon unreachable; snapshot loaded from disk cache",
@@ -168,18 +169,52 @@ func resolveCachedSnapshot(ctx context.Context, daemonAddr string, cfg *config.C
 	return bootstrapSkeletonSnapshot(cfg), "bootstrap", fmt.Errorf("no snapshot cache available: daemon unreachable (%v) and no disk snapshot (%v)", err, diskErr)
 }
 
+func badgeCacheRead(snap *models.ClusterSnapshot, source string) {
+	if snap == nil {
+		return
+	}
+	var age time.Duration
+	if !snap.Timestamp.IsZero() {
+		age = time.Since(snap.Timestamp).Round(time.Second)
+		if age < 0 {
+			age = 0
+		}
+	}
+	isStale := snap.Timestamp.IsZero() || time.Since(snap.Timestamp) > StaleCacheThreshold
+
+	vantageName := "unknown"
+	if snap.Vantage != nil && strings.TrimSpace(snap.Vantage.NodeName) != "" {
+		vantageName = snap.Vantage.NodeName
+	}
+
+	badgeMsg := fmt.Sprintf("cache read (%s): age %s, stale: %t, vantage: %s", source, age, isStale, vantageName)
+	models.AppendWarningIfMissing(snap, models.Warning{
+		Kind:    "cache",
+		Message: badgeMsg,
+	})
+
+	if isStale && !snap.Timestamp.IsZero() {
+		models.AppendWarningIfMissing(snap, models.Warning{
+			Kind:    "cache",
+			Message: fmt.Sprintf("%s snapshot cache is stale (age: %s, collected: %s)", source, age, snap.Timestamp.Format(time.RFC3339)),
+		})
+	}
+}
+
 func fetchDaemonHTTP(ctx context.Context, addr string) (*models.ClusterSnapshot, string, error) {
 	if addr == "" {
-		addr = DefaultDaemonAddr
+		addr = defaultDaemonAddr()
 	}
-	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
-		addr = "http://" + addr
-	}
-	addr = strings.TrimRight(addr, "/")
 
 	token, _ := auth.LoadOrGenerateToken()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr+"/snapshot", nil)
+	client, baseURLAddr := httpClientForAddr(addr, 3*time.Second)
+	baseURL := strings.TrimRight(baseURLAddr, "/")
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/snapshot", nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -187,7 +222,6 @@ func fetchDaemonHTTP(ctx context.Context, addr string) (*models.ClusterSnapshot,
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err

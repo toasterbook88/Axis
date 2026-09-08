@@ -146,3 +146,40 @@ func TestApprovalOverlayRenderRiskBadges(t *testing.T) {
 		t.Errorf("expected [LOW RISK] in:\n%s", textLow)
 	}
 }
+
+func TestApprovalOverlayEnterDoesNotApprove(t *testing.T) {
+	reply := make(chan agent.ConfirmResult, 1)
+	overlay := NewApprovalOverlay("shell", "dangerous command", 90, reply)
+
+	// Enter must not mean yes. Enter must not resolve ConfirmYes.
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated == nil || cmd != nil {
+		t.Fatalf("expected overlay to stay active on Enter, got updated=%v, cmd=%v", updated, cmd)
+	}
+	if overlay.Done() {
+		t.Fatal("expected overlay NOT to be done after Enter")
+	}
+	select {
+	case res := <-reply:
+		t.Fatalf("Enter must not send a reply, got %v", res)
+	default:
+		// expected: nothing sent on Enter
+	}
+
+	// Yes is an explicit 'y' only.
+	updated, cmd = overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if updated != nil || cmd != nil {
+		t.Fatalf("expected overlay to dismiss on 'y', got updated=%v, cmd=%v", updated, cmd)
+	}
+	if !overlay.Done() {
+		t.Fatal("expected overlay to be done after 'y'")
+	}
+	select {
+	case res := <-reply:
+		if res != agent.ConfirmYes {
+			t.Fatalf("expected ConfirmYes on 'y', got %v", res)
+		}
+	default:
+		t.Fatal("expected reply on channel after 'y'")
+	}
+}
