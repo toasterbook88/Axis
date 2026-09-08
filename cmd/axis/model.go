@@ -676,14 +676,7 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	if cacheAddr == "" {
 		cacheAddr = api.DefaultAddr()
 	}
-	snap, _, err := fetchModelInventorySnapshot(ctx, cacheAddr)
-	if err != nil {
-		snap, err = loadModelSnapshot(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
+	nf, cfgNode, err := resolveModelStopTargetNode(ctx, nodeName, cacheAddr)
 	if err != nil {
 		return err
 	}
@@ -828,6 +821,95 @@ func modelStopExplanation(d modelStopDisposition) string {
 	default:
 		return string(d)
 	}
+}
+
+func resolveFromDaemonCache(ctx context.Context, cacheAddr, nodeName string, targetCfg *config.NodeConfig) (models.NodeFacts, *config.NodeConfig, bool) {
+	if cacheAddr == "" {
+		cacheAddr = api.DefaultAddr()
+	}
+	snap, _, err := fetchModelInventorySnapshot(ctx, cacheAddr)
+	if err != nil || snap == nil {
+		return models.NodeFacts{}, nil, false
+	}
+	if nodeName == "" {
+		localNF, ok := models.FindLocalNode(snap.Nodes)
+		if !ok {
+			return models.NodeFacts{}, nil, false
+		}
+		return localNF, targetCfg, true
+	}
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
+	if err != nil {
+		return models.NodeFacts{}, nil, false
+	}
+	return nf, cfgNode, true
+}
+
+func makeLocalNodeFacts(nodeName, role string) models.NodeFacts {
+	localHostname, _ := os.Hostname()
+	if nodeName == "" {
+		if localHostname != "" {
+			nodeName = localHostname
+		} else {
+			nodeName = "local"
+		}
+	}
+	return models.NodeFacts{
+		Name:     nodeName,
+		Role:     role,
+		Hostname: localHostname,
+		Identity: &models.NodeIdentity{
+			StableID: models.CurrentLocalStableID(),
+		},
+		Addresses: []models.NetworkAddress{
+			{Address: "127.0.0.1", Scope: "loopback"},
+		},
+	}
+}
+
+func resolveModelStopTargetNode(ctx context.Context, nodeName, cacheAddr string) (models.NodeFacts, *config.NodeConfig, error) {
+	nodeName = strings.TrimSpace(nodeName)
+	cfg, _ := loadModelConfig()
+
+	var targetCfg *config.NodeConfig
+	if cfg != nil {
+		for i := range cfg.Nodes {
+			if (nodeName == "" && cfg.Nodes[i].IsLocal()) || (nodeName != "" && cfg.Nodes[i].Name == nodeName) {
+				targetCfg = &cfg.Nodes[i]
+				break
+			}
+		}
+	}
+	if nodeName == "" && targetCfg != nil {
+		nodeName = targetCfg.Name
+	}
+
+	if nf, cfgNode, ok := resolveFromDaemonCache(ctx, cacheAddr, nodeName, targetCfg); ok {
+		return nf, cfgNode, nil
+	}
+
+	isLocal := (targetCfg != nil && targetCfg.IsLocal()) ||
+		nodeName == "" ||
+		models.IsLocalTarget(nodeName, "") ||
+		nodeName == "localhost" ||
+		nodeName == "127.0.0.1"
+
+	if isLocal {
+		role := ""
+		if targetCfg != nil {
+			role = targetCfg.Role
+		}
+		return makeLocalNodeFacts(nodeName, role), targetCfg, nil
+	}
+
+	if nodeName == "" {
+		return models.NodeFacts{}, nil, fmt.Errorf("node is required")
+	}
+	snap, err := loadModelSnapshot(ctx)
+	if err != nil {
+		return models.NodeFacts{}, nil, err
+	}
+	return resolveModelNodeFromSnapshot(snap, nodeName)
 }
 
 func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *config.NodeConfig, error) {
