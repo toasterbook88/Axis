@@ -316,10 +316,10 @@ func TestConsoleStampsEachTurnWithItsOwnID(t *testing.T) {
 
 func TestConsoleApprovalFailsClosedWithoutReadingStdin(t *testing.T) {
 	// Bubble Tea holds stdin in raw mode. A synchronous prompt would corrupt
-	// the input loop, so the console denies rather than prompting — and never
-	// auto-approves.
+	// the input loop, so the console uses an overlay and times out / fails closed
+	// if no operator response is received.
 	rec := &capture{}
-	confirm := consoleConfirm(rec.Send, consoleClock)
+	confirm := consoleConfirmWithTimeout(rec.Send, consoleClock, 10*time.Millisecond)
 
 	for _, score := range []int{0, 35, 74, 95} {
 		if got := confirm("bash", "rm -rf /tmp/x", score); got != agent.ConfirmNo {
@@ -328,18 +328,61 @@ func TestConsoleApprovalFailsClosedWithoutReadingStdin(t *testing.T) {
 	}
 
 	msgs := rec.all()
-	if len(msgs) != 4 {
-		t.Fatalf("got %d approval notices, want 4", len(msgs))
-	}
+	// Each approval produces a SetOverlayMsg, an unregister SetOverlayMsg on timeout, and an EntryMsg
+	var entries []console.EntryMsg
 	for _, m := range msgs {
-		e, ok := m.(console.EntryMsg)
-		if !ok {
-			t.Fatalf("approval produced %T, want EntryMsg", m)
+		if e, ok := m.(console.EntryMsg); ok {
+			entries = append(entries, e)
 		}
+	}
+	if len(entries) != 4 {
+		t.Fatalf("got %d approval notices, want 4", len(entries))
+	}
+	for _, e := range entries {
 		rendered := strings.Join(console.PlainAll(e.Entry.Render(100)), " ")
 		if !strings.Contains(rendered, "denied") {
 			t.Errorf("denial was silent: %q", rendered)
 		}
+	}
+}
+
+func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
+	rec := &capture{}
+
+	// Approving 'y' delivers ConfirmYes
+	confirmApprove := consoleConfirmWithTimeout(func(m tea.Msg) {
+		rec.Send(m)
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		}
+	}, consoleClock, time.Second)
+
+	if got := confirmApprove("shell", "ls", 10); got != agent.ConfirmYes {
+		t.Fatalf("expected ConfirmYes, got %v", got)
+	}
+
+	// Denying 'n' delivers ConfirmNo
+	confirmDeny := consoleConfirmWithTimeout(func(m tea.Msg) {
+		rec.Send(m)
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		}
+	}, consoleClock, time.Second)
+
+	if got := confirmDeny("shell", "rm -rf /", 90); got != agent.ConfirmNo {
+		t.Fatalf("expected ConfirmNo, got %v", got)
+	}
+
+	// Approving 'a' delivers ConfirmAlways
+	confirmAlways := consoleConfirmWithTimeout(func(m tea.Msg) {
+		rec.Send(m)
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+		}
+	}, consoleClock, time.Second)
+
+	if got := confirmAlways("shell", "status", 15); got != agent.ConfirmAlways {
+		t.Fatalf("expected ConfirmAlways, got %v", got)
 	}
 }
 
@@ -379,8 +422,7 @@ func TestConsoleRejectsSlashWhenUnwired(t *testing.T) {
 }
 
 func TestConsoleFlagIsOptInAndDefaultsOff(t *testing.T) {
-	// The console cannot execute tools yet, so it must never displace the
-	// readline REPL by default.
+	// The console is opt-in and must not displace the standard REPL by default.
 	cmd := agentCmd()
 	f := cmd.Flags().Lookup("console")
 	if f == nil {
@@ -389,8 +431,8 @@ func TestConsoleFlagIsOptInAndDefaultsOff(t *testing.T) {
 	if f.DefValue != "false" {
 		t.Errorf("--console default = %q, want false", f.DefValue)
 	}
-	if !strings.Contains(f.Usage, "approvals are denied") {
-		t.Errorf("--console usage does not state the approval limitation: %q", f.Usage)
+	if !strings.Contains(f.Usage, "interactive TTY") {
+		t.Errorf("--console usage does not state interactive TTY requirement: %q", f.Usage)
 	}
 }
 

@@ -27,7 +27,7 @@ import (
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
-var loadAgentShellRuntime = runtimectx.Load
+var loadAgentShellRuntime = runtimectx.LoadCached
 var runGuardedAgentShell = execution.RunGuarded
 var runDaemonGuardedAgentShell = daemon.RunGuardedStream
 var fetchAgentDaemonMeta = daemon.FetchMeta
@@ -55,6 +55,7 @@ func agentCmd() *cobra.Command {
 		allowRawCommandEvidence bool
 		selectModel             bool
 		useConsole              bool
+		live                    bool
 	)
 
 	cmd := &cobra.Command{
@@ -104,7 +105,12 @@ func agentCmd() *cobra.Command {
 				}
 			}()
 
-			rt, err := runtimectx.Load(ctx)
+			loader := loadAgentShellRuntime
+			if live {
+				loader = runtimectx.LoadLive
+			}
+
+			rt, err := loader(ctx)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "%s Could not load cluster context: %v\n", ui.Yellow("⚠"), err)
 			}
@@ -162,7 +168,7 @@ func agentCmd() *cobra.Command {
 			}
 
 			tc := agent.NewToolContext(initialView, func(ctx context.Context) (*agent.RuntimeView, error) {
-				newRt, err := runtimectx.Load(ctx)
+				newRt, err := loader(ctx)
 				if err != nil {
 					return nil, err
 				}
@@ -310,7 +316,8 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cheapModel, "cheap-model", "", "Cheap/fast model for simple turns (enables multi-model routing; uses the same cloud provider as --cloud-model)")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
-	cmd.Flags().BoolVar(&useConsole, "console", false, "Experimental transcript console (interactive TTY only; tool approvals are denied)")
+	cmd.Flags().BoolVar(&useConsole, "console", false, "Transcript console (interactive TTY)")
+	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd
 }
 

@@ -145,23 +145,71 @@ func (l *consoleLauncher) draining() int {
 	return l.inFlight
 }
 
-// consoleConfirm fails closed. It never reads stdin: Bubble Tea holds the
-// terminal in raw mode, so a synchronous prompt would corrupt the input loop
-// and the display. Every attempt is reported to the operator so a denial is
-// never silent, and nothing is ever auto-approved.
+const defaultApprovalTimeout = 2 * time.Minute
+
+// consoleConfirm bridges agent tool confirmation into Bubble Tea's overlay system.
+// It never reads stdin: Bubble Tea holds the terminal in raw mode, so a synchronous prompt
+// would corrupt the input loop and the display. Instead, it dispatches an ApprovalOverlay
+// to the program's event loop and waits on a Go channel for the operator's decision.
 func consoleConfirm(send func(tea.Msg), now func() time.Time) agent.ConfirmFunc {
+	return consoleConfirmWithTimeout(send, now, defaultApprovalTimeout)
+}
+
+func consoleConfirmWithTimeout(send func(tea.Msg), now func() time.Time, timeout time.Duration) agent.ConfirmFunc {
 	if now == nil {
 		now = time.Now
 	}
 	return func(toolName, description string, safetyScore int) agent.ConfirmResult {
-		if send != nil {
-			send(console.EntryMsg{Entry: console.NewApprovalEntry(
-				now(), toolName, "", safetyScore,
-				"denied: interactive approval is not implemented in the console yet",
-				console.DecisionDenied,
-			)})
+		if send == nil {
+			return agent.ConfirmNo
 		}
-		return agent.ConfirmNo
+
+		reply := make(chan agent.ConfirmResult, 1)
+		overlay := console.NewApprovalOverlay(toolName, description, safetyScore, reply)
+		send(console.SetOverlayMsg{Overlay: overlay})
+
+		var result agent.ConfirmResult
+		var reason string
+		var decision console.Decision
+
+		if timeout <= 0 {
+			timeout = defaultApprovalTimeout
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case res := <-reply:
+			result = res
+			switch res {
+			case agent.ConfirmYes:
+				decision = console.DecisionOnce
+				reason = "approved once"
+			case agent.ConfirmAlways:
+				decision = console.DecisionSession
+				reason = "auto-approved for session"
+			case agent.ConfirmNever:
+				decision = console.DecisionBlocked
+				reason = "blocked for session"
+			default:
+				decision = console.DecisionDenied
+				reason = "denied by operator"
+			}
+		case <-timer.C:
+			// Dismiss overlay if timed out
+			send(console.SetOverlayMsg{Overlay: nil})
+			result = agent.ConfirmNo
+			decision = console.DecisionDenied
+			reason = "approval timed out (denied)"
+		}
+
+		send(console.EntryMsg{Entry: console.NewApprovalEntry(
+			now(), toolName, "", safetyScore,
+			reason,
+			decision,
+		)})
+
+		return result
 	}
 }
 
@@ -256,9 +304,6 @@ func runAgentConsole(
 	// Approvals fail closed. Installing this before the first turn guarantees
 	// no code path can reach the agent's stdin prompt while tea owns the tty.
 	a.SetConfirm(consoleConfirm(prog.Send, time.Now))
-
-	fmt.Fprintf(errW, "%s transcript console (experimental): tool approvals are denied; use the plain REPL to execute tools\n",
-		ui.Yellow("warning:"))
 
 	// Restore the terminal whatever happens, including a panic in a view.
 	defer prog.Kill()
