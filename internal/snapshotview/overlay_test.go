@@ -60,6 +60,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 		},
 		Warnings:    []models.Warning{{Message: "low disk"}},
 		Publication: &models.PublicationEnvelope{ID: "pub-original"},
+		Vantage:     &models.VantageInfo{NodeName: "alpha", StableID: "stable-alpha"},
 	}
 
 	clone := snapshotview.Clone(orig)
@@ -73,6 +74,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	clone.Nodes[0].TurboQuant.Capabilities[0] = "MUTATED"
 	clone.Warnings[0].Message = "MUTATED"
 	clone.Publication.ID = "MUTATED"
+	clone.Vantage.NodeName = "MUTATED"
 
 	if orig.Nodes[0].Resources.GPUs[0].Model != "RTX 4090" {
 		t.Error("Clone mutated original GPU slice")
@@ -97,6 +99,9 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	}
 	if orig.Publication.ID != "pub-original" {
 		t.Error("Clone mutated original Publication envelope")
+	}
+	if orig.Vantage.NodeName != "alpha" {
+		t.Error("Clone mutated original Vantage")
 	}
 }
 

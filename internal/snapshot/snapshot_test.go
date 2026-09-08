@@ -433,6 +433,40 @@ func TestBuild_NetworkClassification(t *testing.T) {
 	}
 }
 
+func TestBuild_RecordsVantageFromLocalNode(t *testing.T) {
+	local := completeNode("node-a", 8192, 4000, "none")
+	local.Hostname = "localhost"
+	local.Identity = &models.NodeIdentity{StableID: "test-stable-id"}
+	remote := completeNode("node-b", 8192, 5000, "none")
+	remote.Hostname = "remote.example.com"
+
+	snap := Build([]models.NodeFacts{local, remote})
+	if snap.Vantage == nil {
+		t.Fatal("expected snapshot vantage from the collecting host")
+	}
+	if snap.Vantage.NodeName != "node-a" {
+		t.Errorf("vantage node = %q, want node-a", snap.Vantage.NodeName)
+	}
+	if snap.Vantage.StableID != "test-stable-id" {
+		t.Errorf("vantage stable id = %q, want test-stable-id", snap.Vantage.StableID)
+	}
+	if !snap.Vantage.ObservedAt.Equal(snap.Timestamp) {
+		t.Errorf("vantage observed_at = %v, want snapshot timestamp %v", snap.Vantage.ObservedAt, snap.Timestamp)
+	}
+}
+
+func TestBuild_NoVantageWhenNoLocalNode(t *testing.T) {
+	a := completeNode("node-a", 8192, 4000, "none")
+	a.Hostname = "remote-a.example.com"
+	b := completeNode("node-b", 8192, 5000, "none")
+	b.Hostname = "remote-b.example.com"
+
+	snap := Build([]models.NodeFacts{a, b})
+	if snap.Vantage != nil {
+		t.Errorf("expected no vantage when collecting host is absent, got %+v", snap.Vantage)
+	}
+}
+
 func TestIsPrivateLAN(t *testing.T) {
 	cases := []struct {
 		name string

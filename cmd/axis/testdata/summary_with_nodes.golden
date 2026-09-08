@@ -16,6 +16,12 @@
   RAM:  [█████████████████░░░░░░░░░░░░░] 58% 28GB / 48GB (4GB reserved) (16GB allocatable)
   GPUs: 1 available
 
+  REACHABILITY (vantage unknown, 15s ago)
+  ─────────────────────────────────
+  alpha       unknown           no route observed
+  beta        unknown           no route observed
+  gamma       unknown           no route observed
+
   WARNINGS
   ─────────────────────────────────
   ⚠ beta: high CPU load

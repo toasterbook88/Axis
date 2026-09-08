@@ -18,3 +18,7 @@ STDOUT:
   ─────────────────────────────────
   RAM:  [███████████████░░░░░░░░░░░░░░░] 50% 4GB / 8GB (4GB allocatable)
   GPUs: none detected
+
+  REACHABILITY (vantage unknown)
+  ─────────────────────────────────
+  local       unknown           no route observed

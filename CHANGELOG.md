@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Truth plane
+
+* Record snapshot vantage (the collecting host) at `snapshot.Build` and deep-copy it through reservation overlays. Cached reads keep the daemon host as vantage; render time does not re-infer the CLI host.
+* Replace `axis summary` pairwise CIDR `CLUSTER TOPOLOGY` with a vantage-labeled `REACHABILITY` view. Routes are `vantage → node` observations (network class + SSH handshake duration). Subnet equality is not edge evidence. See `docs/decisions/topology-truth-contract.md`.
+
 ## v0.17.1 (2026-09-07)
 
 Nine commits on `main` since `v0.17.0`. No new operator command surface. Cluster nodes pick this up with `axis update`, then `axis daemon restart && axis daemon status` where a daemon is installed.
