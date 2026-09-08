@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 // A proven-free port stopped nothing. It must not print "stopped", and it must
@@ -145,5 +146,73 @@ func TestClassifyModelStopRejectsUnmarkedSuccess(t *testing.T) {
 	}
 	if _, err := classifyModelStop("", errors.New("boom")); err == nil {
 		t.Fatal("expected the underlying error to surface")
+	}
+}
+
+func TestRunModelStopDiscoveryBypass(t *testing.T) {
+	cases := []struct {
+		name       string
+		targetNode string
+		cfgNodes   []config.NodeConfig
+		cacheSnap  *models.ClusterSnapshot
+		cacheErr   error
+		expected   string
+	}{
+		{
+			name:       "local node bypasses live discovery when cache unreachable",
+			targetNode: "local-node",
+			cfgNodes:   []config.NodeConfig{{Name: "local-node", Hostname: "127.0.0.1"}},
+			cacheErr:   errors.New("daemon cache unreachable"),
+			expected:   "stopped local-node:8081",
+		},
+		{
+			name:       "remote node resolves from daemon cache without live discovery",
+			targetNode: "remote-worker",
+			cfgNodes:   []config.NodeConfig{{Name: "remote-worker", Hostname: "10.0.0.5"}},
+			cacheSnap:  &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "remote-worker"}}},
+			expected:   "stopped remote-worker:8081",
+		},
+		{
+			name:       "omitted node defaults to local node without live discovery",
+			targetNode: "",
+			cfgNodes:   []config.NodeConfig{{Name: "primary-local", Hostname: "127.0.0.1"}},
+			cacheErr:   errors.New("daemon cache down"),
+			expected:   "stopped primary-local:8081",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prevFetch := fetchModelInventorySnapshot
+			fetchModelInventorySnapshot = func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+				if tc.cacheErr != nil {
+					return nil, "", tc.cacheErr
+				}
+				return tc.cacheSnap, "daemon-cache", nil
+			}
+			prevLoad := loadModelSnapshot
+			loadModelSnapshot = func(context.Context) (*models.ClusterSnapshot, error) {
+				t.Fatal("loadModelSnapshot must NOT be called")
+				return nil, errors.New("live discovery forbidden")
+			}
+			t.Cleanup(func() {
+				fetchModelInventorySnapshot = prevFetch
+				loadModelSnapshot = prevLoad
+			})
+
+			stubModelConfig(t, &config.Config{Nodes: tc.cfgNodes})
+
+			runner := &fakeModelRunner{stopDisposition: modelStopStopped}
+			cmd := modelStopCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+
+			if err := runModelStop(context.Background(), cmd, tc.targetNode, 8081, runner); err != nil {
+				t.Fatalf("runModelStop failed: %v", err)
+			}
+			if !strings.Contains(out.String(), tc.expected) {
+				t.Fatalf("expected %q, got %q", tc.expected, out.String())
+			}
+		})
 	}
 }
