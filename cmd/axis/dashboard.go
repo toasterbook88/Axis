@@ -135,6 +135,18 @@ func populateSummaryView(snap *models.ClusterSnapshot, meta daemon.Metadata) Clu
 		MeshPeers:        meta.MeshPeers,
 		Nodes:            snap.Nodes,
 	}
+	if snap.Vantage != nil {
+		view.VantageName = snap.Vantage.NodeName
+		if !snap.Vantage.ObservedAt.IsZero() {
+			view.VantageAge = time.Since(snap.Vantage.ObservedAt)
+			if view.VantageAge < 0 {
+				view.VantageAge = 0
+			}
+		}
+	}
+	if view.VantageAge == 0 && meta.CacheAgeSec > 0 {
+		view.VantageAge = time.Duration(meta.CacheAgeSec) * time.Second
+	}
 	if view.Version == "" {
 		view.Version = Version
 	}
@@ -174,6 +186,8 @@ type ClusterSummaryView struct {
 	MeshPeers        int
 	Warnings         []string
 	Nodes            []models.NodeFacts
+	VantageName      string
+	VantageAge       time.Duration
 }
 
 func (v ClusterSummaryView) Render() string {
@@ -243,104 +257,7 @@ func (v ClusterSummaryView) Render() string {
 		ui.DimColor.Fprintf(&b, "none detected\n")
 	}
 
-	// Topology
-	var topoLines []string
-	type linkKey struct {
-		nodeA string
-		nodeB string
-	}
-	type linkVal struct {
-		speedClass string
-		subnet     string
-	}
-	links := make(map[linkKey]linkVal)
-
-	for i := 0; i < len(v.Nodes); i++ {
-		for j := i + 1; j < len(v.Nodes); j++ {
-			nodeA := v.Nodes[i]
-			nodeB := v.Nodes[j]
-
-			bestSpeed := ""
-			bestSubnet := ""
-			for _, addrA := range nodeA.Addresses {
-				if addrA.Subnet == "" || strings.HasSuffix(addrA.Subnet, "/32") || strings.HasSuffix(addrA.Subnet, "/128") {
-					continue
-				}
-				if strings.HasPrefix(addrA.Interface, "docker") || strings.HasPrefix(addrA.Interface, "br-") || strings.HasPrefix(addrA.Interface, "veth") || strings.HasPrefix(addrA.Interface, "lo") {
-					continue
-				}
-
-				for _, addrB := range nodeB.Addresses {
-					if addrA.Subnet == addrB.Subnet {
-						speed := addrA.SpeedClass
-						if speedPriority(addrB.SpeedClass) > speedPriority(speed) {
-							speed = addrB.SpeedClass
-						}
-						if speedPriority(speed) > speedPriority(bestSpeed) {
-							bestSpeed = speed
-							bestSubnet = addrA.Subnet
-						}
-					}
-				}
-			}
-
-			if bestSpeed != "" {
-				key := linkKey{nodeA: nodeA.Name, nodeB: nodeB.Name}
-				if key.nodeA > key.nodeB {
-					key.nodeA, key.nodeB = key.nodeB, key.nodeA
-				}
-				links[key] = linkVal{speedClass: bestSpeed, subnet: bestSubnet}
-			}
-		}
-	}
-
-	var keys []linkKey
-	for k := range links {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].nodeA != keys[j].nodeA {
-			return keys[i].nodeA < keys[j].nodeA
-		}
-		return keys[i].nodeB < keys[j].nodeB
-	})
-
-	for _, k := range keys {
-		l := links[k]
-		var line strings.Builder
-		ui.WhiteColor.Fprintf(&line, "%-10s", k.nodeA)
-
-		switch l.speedClass {
-		case "thunderbolt":
-			ui.CyanColor.Fprintf(&line, " <======== (Thunderbolt: 10 Gbps) ========> ")
-		case "10gbe":
-			ui.CyanColor.Fprintf(&line, " <======== (10 GbE LAN: 10 Gbps)  ========> ")
-		case "gigabit":
-			ui.GreenColor.Fprintf(&line, " <........ (Gigabit LAN: 1 Gbps)  ........> ")
-		case "wifi":
-			ui.YellowColor.Fprintf(&line, " <~~~~~~~~ (Wi-Fi Wireless)        ~~~~~~~~> ")
-		case "tailscale":
-			ui.YellowColor.Fprintf(&line, " <-------- (Tailscale VPN)        --------> ")
-		case "wireguard":
-			ui.YellowColor.Fprintf(&line, " <-------- (WireGuard VPN)        --------> ")
-		default:
-			ui.DimColor.Fprintf(&line, " <-------- (Network Link)          --------> ")
-		}
-
-		ui.WhiteColor.Fprintf(&line, "%s", k.nodeB)
-		topoLines = append(topoLines, line.String())
-	}
-
-	if len(topoLines) > 0 {
-		b.WriteString("\n")
-		ui.WhiteColor.Fprintf(&b, "  ⚡ CLUSTER TOPOLOGY\n")
-		b.WriteString("  ==================\n")
-		for _, line := range topoLines {
-			b.WriteString("  ")
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-	}
+	v.renderReachability(&b)
 
 	// Mesh
 	if v.MeshPeers > 0 {
@@ -548,21 +465,94 @@ func RenderDoctorReport(checks []DoctorCheck) string {
 	return b.String()
 }
 
-func speedPriority(s string) int {
-	switch s {
-	case "thunderbolt":
-		return 7
-	case "10gbe":
-		return 6
-	case "gigabit":
-		return 5
-	case "wifi":
-		return 4
-	case "tailscale":
-		return 3
-	case "wireguard":
-		return 2
-	default:
-		return 1
+func (v ClusterSummaryView) renderReachability(b *strings.Builder) {
+	if len(v.Nodes) == 0 {
+		return
 	}
+
+	b.WriteString("\n")
+	ui.WhiteColor.Fprintf(b, "  %s\n", v.reachabilityHeader())
+	b.WriteString("  ─────────────────────────────────\n")
+
+	nodes := append([]models.NodeFacts(nil), v.Nodes...)
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].Name < nodes[j].Name
+	})
+
+	nameWidth := 10
+	for _, n := range nodes {
+		if len(n.Name) > nameWidth {
+			nameWidth = len(n.Name)
+		}
+	}
+
+	for _, n := range nodes {
+		b.WriteString("  ")
+		b.WriteString(formatReachabilityRow(n, v.VantageName, nameWidth))
+		b.WriteString("\n")
+	}
+}
+
+func (v ClusterSummaryView) reachabilityHeader() string {
+	age := v.VantageAge.Round(time.Second)
+	switch {
+	case v.VantageName != "" && age > 0:
+		return fmt.Sprintf("REACHABILITY (observed from %s, %s ago)", v.VantageName, age)
+	case v.VantageName != "":
+		return fmt.Sprintf("REACHABILITY (observed from %s)", v.VantageName)
+	case age > 0:
+		return fmt.Sprintf("REACHABILITY (vantage unknown, %s ago)", age)
+	default:
+		return "REACHABILITY (vantage unknown)"
+	}
+}
+
+func formatReachabilityRow(n models.NodeFacts, vantageName string, nameWidth int) string {
+	var line strings.Builder
+	ui.WhiteColor.Fprintf(&line, "%-*s", nameWidth, n.Name)
+	line.WriteString("  ")
+
+	if vantageName != "" && n.Name == vantageName {
+		ui.CyanColor.Fprintf(&line, "%-16s", "local")
+		ui.DimColor.Fprintf(&line, "  —")
+		if hasThunderboltIface(n) {
+			ui.CyanColor.Fprintf(&line, "   thunderbolt iface present")
+		}
+		return line.String()
+	}
+
+	class := n.NetworkClass
+	if class == "" {
+		class = models.NetworkClassUnknown
+	}
+
+	switch class {
+	case models.NetworkClassDirectLAN:
+		ui.GreenColor.Fprintf(&line, "%-16s", string(class))
+	case models.NetworkClassRelayed, models.NetworkClassVPN, models.NetworkClassTailscale:
+		ui.YellowColor.Fprintf(&line, "%-16s", string(class))
+	default:
+		class = models.NetworkClassUnknown
+		ui.DimColor.Fprintf(&line, "%-16s", string(class))
+	}
+
+	if class == models.NetworkClassUnknown {
+		ui.DimColor.Fprintf(&line, "  no route observed")
+	} else if n.SSHHandshakeLatencyMs > 0 {
+		ui.DimColor.Fprintf(&line, "  handshake %dms", n.SSHHandshakeLatencyMs)
+	}
+
+	if hasThunderboltIface(n) {
+		ui.CyanColor.Fprintf(&line, "   thunderbolt iface present")
+	}
+	return line.String()
+}
+
+func hasThunderboltIface(n models.NodeFacts) bool {
+	for _, addr := range n.Addresses {
+		if addr.SpeedClass == "thunderbolt" {
+			return true
+		}
+	}
+	return false
 }

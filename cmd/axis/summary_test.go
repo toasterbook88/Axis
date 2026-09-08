@@ -251,60 +251,194 @@ func TestSummaryStaleCacheIndicator(t *testing.T) {
 	}
 }
 
-func TestSummaryRenderTopology(t *testing.T) {
+func TestSummaryRenderReachability(t *testing.T) {
+	color.NoColor = true
+	defer func() { color.NoColor = false }()
+
+	snap := mixedReachabilitySnapshot()
+	view := populateSummaryView(snap, daemon.Metadata{CacheAgeSec: 90})
+	out := view.Render()
+
+	t.Run("T1_same_cidr_no_connectors", func(t *testing.T) {
+		assertNoPairwiseConnectors(t, out)
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "node-a") && strings.Contains(line, "node-b") {
+				t.Fatalf("same-CIDR nodes rendered on one connector line: %q", line)
+			}
+		}
+	})
+	t.Run("T2_darwin_null_subnet_present", func(t *testing.T) {
+		if !strings.Contains(out, "node-c") {
+			t.Fatalf("darwin node omitted:\n%s", out)
+		}
+		if !strings.Contains(out, "direct-lan") {
+			t.Fatalf("darwin node missing route class:\n%s", out)
+		}
+		if !strings.Contains(out, "handshake 38ms") {
+			t.Fatalf("darwin node missing handshake duration:\n%s", out)
+		}
+		if !strings.Contains(out, "thunderbolt iface present") {
+			t.Fatalf("darwin node missing thunderbolt node attribute:\n%s", out)
+		}
+	})
+	t.Run("T3_cached_vantage_is_snapshot_host", func(t *testing.T) {
+		if !strings.Contains(out, "observed from node-a") {
+			t.Fatalf("vantage is not the snapshot host:\n%s", out)
+		}
+		if strings.Contains(out, "observed from node-b") || strings.Contains(out, "observed from cli-host") {
+			t.Fatalf("vantage was inferred at render time:\n%s", out)
+		}
+		if got := reachabilityClass(out, "node-a"); got != "local" {
+			t.Fatalf("vantage node class = %q, want local:\n%s", got, out)
+		}
+		if got := reachabilityClass(out, "cli-host"); got != "relayed" {
+			t.Fatalf("non-vantage CLI-named node class = %q, want relayed:\n%s", got, out)
+		}
+	})
+	t.Run("T4_unknown_route_present", func(t *testing.T) {
+		if got := reachabilityClass(out, "node-d"); got != "unknown" {
+			t.Fatalf("node with no route observation class = %q, want unknown:\n%s", got, out)
+		}
+		if !strings.Contains(out, "no route observed") {
+			t.Fatalf("unknown state not explicit:\n%s", out)
+		}
+	})
+	t.Run("T5_no_pairwise_glyphs", func(t *testing.T) {
+		assertNoPairwiseConnectors(t, out)
+	})
+	t.Run("T6_vantage_label_present", func(t *testing.T) {
+		if !strings.Contains(out, "REACHABILITY (observed from node-a, 1m30s ago)") {
+			t.Fatalf("vantage label missing:\n%s", out)
+		}
+	})
+	t.Run("T7_observation_age", func(t *testing.T) {
+		if !strings.Contains(out, "1m30s ago") {
+			t.Fatalf("observation age missing:\n%s", out)
+		}
+	})
+	t.Run("R8_handshake_not_latency", func(t *testing.T) {
+		lower := strings.ToLower(out)
+		for _, banned := range []string{"latency", "rtt", "ping"} {
+			if strings.Contains(lower, banned) {
+				t.Errorf("route rendering labeled handshake as %q:\n%s", banned, out)
+			}
+		}
+	})
+}
+
+func TestSummaryRenderReachabilityGolden(t *testing.T) {
+	color.NoColor = true
+	defer func() { color.NoColor = false }()
+
+	view := populateSummaryView(mixedReachabilitySnapshot(), daemon.Metadata{CacheAgeSec: 90})
+	got := normalizeGoldenOutput(view.Render())
+	assertNormalizedGoldenText(t, "testdata/summary_reachability.golden", got)
+	assertNoPairwiseConnectors(t, got)
+}
+
+func TestSummaryRenderReachabilityUnknownVantage(t *testing.T) {
 	color.NoColor = true
 	defer func() { color.NoColor = false }()
 
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
 			{
-				Name: "M3 Pro",
+				Name: "node-a",
 				Addresses: []models.NetworkAddress{
-					{Kind: "ipv4", Address: "10.0.1.1", Subnet: "10.0.1.0/24", SpeedClass: "thunderbolt"},
+					{Kind: "ipv4", Address: "192.0.2.10", Subnet: "192.0.2.0/24", SpeedClass: "gigabit"},
 				},
 			},
 			{
-				Name: "M1 Scout",
+				Name:         "node-b",
+				NetworkClass: models.NetworkClassRelayed,
 				Addresses: []models.NetworkAddress{
-					{Kind: "ipv4", Address: "10.0.1.2", Subnet: "10.0.1.0/24", SpeedClass: "thunderbolt"},
-				},
-			},
-			{
-				Name: "NixOS",
-				Addresses: []models.NetworkAddress{
-					{Kind: "ipv4", Address: "192.168.1.1", Subnet: "192.168.1.0/24", SpeedClass: "gigabit"},
-					{Kind: "ipv4", Address: "100.64.0.1", Subnet: "100.64.0.0/10", SpeedClass: "tailscale"},
-				},
-			},
-			{
-				Name: "Foundry",
-				Addresses: []models.NetworkAddress{
-					{Kind: "ipv4", Address: "192.168.1.2", Subnet: "192.168.1.0/24", SpeedClass: "gigabit"},
-				},
-			},
-			{
-				Name: "Latitude",
-				Addresses: []models.NetworkAddress{
-					{Kind: "ipv4", Address: "100.64.0.2", Subnet: "100.64.0.0/10", SpeedClass: "tailscale"},
+					{Kind: "ipv4", Address: "192.0.2.20", Subnet: "192.0.2.0/24", SpeedClass: "gigabit"},
 				},
 			},
 		},
 	}
-
-	view := populateSummaryView(snap, daemon.Metadata{})
-	out := view.Render()
-
-	expectedLines := []string{
-		"⚡ CLUSTER TOPOLOGY",
-		"==================",
-		"M1 Scout   <======== (Thunderbolt: 10 Gbps) ========> M3 Pro",
-		"Foundry    <........ (Gigabit LAN: 1 Gbps)  ........> NixOS",
-		"Latitude   <-------- (Tailscale VPN)        --------> NixOS",
+	out := populateSummaryView(snap, daemon.Metadata{}).Render()
+	if !strings.Contains(out, "REACHABILITY (vantage unknown)") {
+		t.Fatalf("cached snapshot without vantage must name the absence:\n%s", out)
 	}
+	assertNoPairwiseConnectors(t, out)
+	if got := reachabilityClass(out, "node-a"); got != "unknown" {
+		t.Fatalf("node-a class = %q, want unknown:\n%s", got, out)
+	}
+	if got := reachabilityClass(out, "node-b"); got != "relayed" {
+		t.Fatalf("node-b class = %q, want relayed:\n%s", got, out)
+	}
+}
 
-	for _, expected := range expectedLines {
-		if !strings.Contains(out, expected) {
-			t.Errorf("expected output to contain %q, but got:\n%s", expected, out)
+func mixedReachabilitySnapshot() *models.ClusterSnapshot {
+	return &models.ClusterSnapshot{
+		Vantage: &models.VantageInfo{NodeName: "node-a"},
+		Nodes: []models.NodeFacts{
+			{
+				Name:         "node-a",
+				Status:       models.StatusComplete,
+				NetworkClass: models.NetworkClassDirectLAN,
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "192.0.2.10", Subnet: "192.0.2.0/24", SpeedClass: "gigabit"},
+				},
+			},
+			{
+				Name:                  "node-b",
+				Status:                models.StatusComplete,
+				NetworkClass:          models.NetworkClassRelayed,
+				SSHHandshakeLatencyMs: 212,
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "192.0.2.20", Subnet: "192.0.2.0/24", SpeedClass: "gigabit"},
+				},
+			},
+			{
+				Name:                  "node-c",
+				Status:                models.StatusComplete,
+				NetworkClass:          models.NetworkClassDirectLAN,
+				SSHHandshakeLatencyMs: 38,
+				Addresses: []models.NetworkAddress{
+					{Kind: "ipv4", Address: "192.0.2.30", SpeedClass: "thunderbolt"},
+				},
+			},
+			{
+				Name:   "node-d",
+				Status: models.StatusUnreachable,
+			},
+			{
+				Name:                  "cli-host",
+				Status:                models.StatusComplete,
+				NetworkClass:          models.NetworkClassRelayed,
+				SSHHandshakeLatencyMs: 200,
+			},
+		},
+	}
+}
+
+func reachabilityClass(out, node string) string {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == node {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+func assertNoPairwiseConnectors(t *testing.T, out string) {
+	t.Helper()
+	for _, glyph := range []string{
+		"CLUSTER TOPOLOGY",
+		"<========",
+		"<........",
+		"<~~~~~~~~",
+		"<--------",
+		"========>",
+		"........>",
+		"~~~~~~~~>",
+		"-------->",
+	} {
+		if strings.Contains(out, glyph) {
+			t.Errorf("pairwise connector %q still rendered:\n%s", glyph, out)
 		}
 	}
 }

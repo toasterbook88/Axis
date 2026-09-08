@@ -508,7 +508,16 @@ type ClusterSnapshot struct {
 	Warnings    []Warning            `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 	Freshness   *DiscoveryFreshness  `json:"freshness,omitempty" yaml:"freshness,omitempty"`
 	Publication *PublicationEnvelope `json:"publication,omitempty" yaml:"publication,omitempty"`
+	Vantage     *VantageInfo         `json:"vantage,omitempty" yaml:"vantage,omitempty"`
 	Topology    *PairwiseLinkMatrix  `json:"topology,omitempty" yaml:"topology,omitempty"`
+}
+
+// VantageInfo identifies the node that performed discovery for a snapshot.
+// Routes in the snapshot describe paths observed FROM this node.
+type VantageInfo struct {
+	NodeName   string    `json:"node_name" yaml:"node_name"`
+	StableID   string    `json:"stable_id,omitempty" yaml:"stable_id,omitempty"`
+	ObservedAt time.Time `json:"observed_at" yaml:"observed_at"`
 }
 
 // PairwiseLinkMatrix is the directional network topology between cluster
