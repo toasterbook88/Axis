@@ -1243,6 +1243,14 @@ func (a *Agent) SetModel(model string) {
 	a.model = model
 }
 
+// SafetyGate returns the shell safety gate used to check commands.
+func (a *Agent) SafetyGate() ShellSafetyGate {
+	if a == nil || a.safety == nil {
+		return DefaultSafetyGate(nil)
+	}
+	return a.safety
+}
+
 // SetRunShell replaces the local shell runner (e.g. after /model so OwnerLabel
 // provenance matches the live model on the guarded path).
 func (a *Agent) SetRunShell(r ShellRunner) {

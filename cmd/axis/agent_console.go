@@ -40,6 +40,9 @@ type consoleLauncher struct {
 	// disables slash handling.
 	slash func(string) (string, error)
 
+	// safety checks shell commands before execution.
+	safety agent.ShellSafetyGate
+
 	mu       sync.Mutex
 	cancels  map[console.TurnID]context.CancelFunc
 	inFlight int
@@ -151,6 +154,17 @@ func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, 
 
 		if cmdLine == "" {
 			return console.TurnDoneMsg{Turn: turn, Err: errors.New("empty shell command")}
+		}
+
+		gate := l.safety
+		if gate == nil {
+			gate = agent.DefaultSafetyGate(nil)
+		}
+		if allow, reason, score := gate(cmdLine); !allow {
+			return console.TurnDoneMsg{
+				Turn: turn,
+				Err:  fmt.Errorf("command blocked by safety check (score %d/100): %s", score, reason),
+			}
 		}
 
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
@@ -357,6 +371,9 @@ func runAgentConsole(
 	}
 	launcher := newConsoleLauncher(a.RunWithSinks, timeout, time.Now)
 	launcher.slash = consoleSlashRunner(a, mcpReg, target, loader)
+	if a != nil {
+		launcher.safety = a.SafetyGate()
+	}
 
 	var initialHistory []string
 	if a != nil && a.Conversation() != nil {

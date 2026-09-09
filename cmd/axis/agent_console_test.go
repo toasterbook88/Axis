@@ -698,3 +698,42 @@ func TestConsoleFleetThrottleOnFailure(t *testing.T) {
 		t.Fatalf("loader called %d times, want exactly 1 (throttled)", calls)
 	}
 }
+
+func TestConsoleShellEscapeSafetyBlocked(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	// Test default safety gate blocking destructive command
+	cmd := l.submit(context.Background())(1, "!rm -rf /")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err == nil {
+		t.Fatalf("expected safety block error for '!rm -rf /', got: %+v", msg)
+	}
+	if !strings.Contains(done.Err.Error(), "blocked by safety check") {
+		t.Fatalf("error should cite safety gate block, got: %v", done.Err)
+	}
+
+	// Test custom safety gate
+	customCalled := false
+	l.safety = func(command string) (bool, string, int) {
+		customCalled = true
+		return false, "policy violation", 95
+	}
+
+	cmd2 := l.submit(context.Background())(2, "!echo test")
+	msg2 := cmd2()
+
+	if !customCalled {
+		t.Fatal("custom safety gate was not called")
+	}
+	done2, ok := msg2.(console.TurnDoneMsg)
+	if !ok || done2.Turn != 2 || done2.Err == nil {
+		t.Fatalf("expected error from custom safety gate, got: %+v", msg2)
+	}
+	if !strings.Contains(done2.Err.Error(), "policy violation") {
+		t.Fatalf("error should cite custom reason, got: %v", done2.Err)
+	}
+}
