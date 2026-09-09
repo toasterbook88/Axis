@@ -150,6 +150,12 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 // runShell enforces Layer 4 Safety Evaluation (safety.Check / DefaultSafetyGate), blocking
 // destructive commands (score >= 80) before subprocess creation, and reports non-zero exit
 // codes faithfully via TurnDoneMsg.
+//
+// The escape shares the agent turn's per-request timeout (--timeout, default
+// 5m), so long-lived diagnostics such as `tail -f` are bounded the same way a
+// turn is. Captured output is capped to agent.MaxShellOutputRunes like every
+// other shell execution surface, so a verbose command cannot flood the
+// transcript.
 func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string) tea.Cmd {
 	cmdLine = strings.TrimSpace(cmdLine)
 	ctx, cancel := context.WithTimeout(parent, l.timeout)
@@ -190,7 +196,7 @@ func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, 
 		if trimmed != "" && l.prog != nil {
 			l.prog.Send(console.EntryMsg{
 				Turn:  turn,
-				Entry: console.NewNoticeEntry(l.now(), trimmed),
+				Entry: console.NewNoticeEntry(l.now(), agent.CapShellOutput(trimmed)),
 			})
 		}
 		if err != nil && l.prog != nil {

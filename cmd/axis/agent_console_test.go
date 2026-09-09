@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -610,14 +612,26 @@ func TestConsoleShellEscapeCancel(t *testing.T) {
 	l := newConsoleLauncher(nil, time.Minute, consoleClock)
 	l.prog = rec
 
-	cmd := l.submit(context.Background())(1, "!sleep 10")
+	ready := filepath.Join(t.TempDir(), "shell-escape-ready")
+	cmd := l.submit(context.Background())(1, "!touch "+ready+" && sleep 30")
 	doneCh := make(chan tea.Msg, 1)
 	go func() {
 		doneCh <- cmd()
 	}()
 
-	// Wait briefly for subprocess to launch
-	time.Sleep(50 * time.Millisecond)
+	// Poll for the marker file instead of sleeping a fixed interval: the
+	// cancel below must land on a running subprocess, and polling makes
+	// readiness deterministic on slow or loaded machines.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shell escape never signalled readiness")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	// Cancel the turn
 	l.cancel(1)
@@ -628,8 +642,46 @@ func TestConsoleShellEscapeCancel(t *testing.T) {
 		if !ok || done.Turn != 1 {
 			t.Fatalf("unexpected turn done message: %+v", msg)
 		}
+		if done.Err == nil {
+			t.Fatal("cancelled shell escape should report the kill as an error")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("shell command was not cancelled within timeout")
+	}
+}
+
+func TestConsoleShellEscapeOutputCapped(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	// seq emits well over 1MB of output; the console must cap it like every
+	// other shell execution surface instead of flooding the transcript.
+	cmd := l.submit(context.Background())(1, "!seq 1 200000")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+
+	var rendered string
+	for _, m := range rec.all() {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered += strings.Join(console.PlainAll(em.Entry.Render(100)), "\n")
+		}
+	}
+	if !strings.Contains(rendered, "[truncated to") {
+		t.Fatalf("expected truncation marker in capped shell output, got %d bytes", len(rendered))
+	}
+	// The cap is rune-based (agent.MaxShellOutputRunes); wrapping can expand
+	// short lines several-fold, so bound the flood generously while keeping it
+	// far below the ~1.4MB seq would otherwise print into the transcript.
+	if len(rendered) > 4*agent.MaxShellOutputRunes {
+		t.Fatalf("rendered shell output %d bytes exceeds the %d rune cap", len(rendered), 4*agent.MaxShellOutputRunes)
+	}
+	if strings.Contains(rendered, "\n200000") {
+		t.Fatal("uncapped tail of seq output reached the transcript")
 	}
 }
 
