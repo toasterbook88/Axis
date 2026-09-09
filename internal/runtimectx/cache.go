@@ -90,9 +90,16 @@ func LoadCachedWithAddr(ctx context.Context, daemonAddr string) (*Context, error
 		} else if pubSource == "disk-cache" || pubSource == "daemon-cache" {
 			pubSource = publication.SourceDaemonCache
 		}
+		assembledAt := publicationAssemblyTime(snap)
+		if snap.Timestamp.IsZero() {
+			models.AppendWarningIfMissing(snap, models.Warning{
+				Kind:    "cache",
+				Message: "publication assembly time fell back to read time because snapshot timestamp is zero",
+			})
+		}
 		publicationEnvelope, publicationErr := publication.Build(
 			pubSource,
-			time.Now().UTC(),
+			assembledAt,
 			snap,
 			ledgerEntries,
 			ledgerAvailable,
@@ -249,6 +256,13 @@ func loadDiskSnapshot() (*models.ClusterSnapshot, error) {
 		return nil, fmt.Errorf("parsing disk snapshot: %w", err)
 	}
 	return &snap, nil
+}
+
+func publicationAssemblyTime(snap *models.ClusterSnapshot) time.Time {
+	if snap != nil && !snap.Timestamp.IsZero() {
+		return snap.Timestamp.UTC()
+	}
+	return time.Now().UTC()
 }
 
 func bootstrapSkeletonSnapshot(cfg *config.Config) *models.ClusterSnapshot {

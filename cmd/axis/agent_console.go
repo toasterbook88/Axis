@@ -18,15 +18,10 @@ import (
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
-// The transcript console is an experimental interactive surface for
-// `axis agent`. It is opt-in behind --console because it cannot yet execute
-// tools: Bubble Tea owns stdin in raw mode, so the agent's synchronous
-// stdin approval prompt cannot run underneath it. Until an asynchronous
-// approval overlay exists the console denies every confirmation rather than
-// auto-approving or fighting the input reader for the terminal.
-//
-// Everything else — the plain REPL, single-shot prompts, non-TTY output — is
-// untouched by this file.
+// The transcript console is an opt-in interactive surface for `axis agent`
+// (--console, interactive TTY only). Bubble Tea owns stdin in raw mode, so
+// approvals go through ApprovalOverlay rather than a synchronous stdin prompt.
+// Yes is an explicit y; Enter does not approve; timeout and context cancel deny.
 
 // consoleRunner executes one agent turn. The launcher injects the real
 // Agent.RunWithSinks; tests inject a fake.

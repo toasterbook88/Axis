@@ -248,6 +248,43 @@ func TestLoadCachedFallbackToBootstrapSkeleton(t *testing.T) {
 	if rt.Snapshot.Publication.Source != "bootstrap" {
 		t.Fatalf("expected publication source 'bootstrap', got %q", rt.Snapshot.Publication.Source)
 	}
+	if !rt.Snapshot.Publication.AssembledAt.Equal(rt.Snapshot.Timestamp.UTC()) {
+		t.Fatalf("bootstrap AssembledAt = %v, want snapshot timestamp %v", rt.Snapshot.Publication.AssembledAt, rt.Snapshot.Timestamp)
+	}
+}
+
+func TestLoadCachedMintsPublicationAssembledAtFromSnapshotTimestamp(t *testing.T) {
+	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	diskSnap := &models.ClusterSnapshot{
+		Timestamp: observedAt,
+		Status:    models.SnapshotHealthy,
+		Nodes:     []models.NodeFacts{{Name: "node-a", Status: models.StatusComplete}},
+	}
+	restore := stubCacheDeps(t,
+		func(string) (*config.Config, error) { return &config.Config{}, nil },
+		func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+			return nil, "", errors.New("connection refused")
+		},
+		func() (*models.ClusterSnapshot, error) { return diskSnap, nil },
+		func() (*state.ClusterState, error) { return &state.ClusterState{}, nil },
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	defer restore()
+
+	before := time.Now().UTC()
+	rt, err := LoadCached(context.Background())
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	if rt.Snapshot.Publication == nil {
+		t.Fatal("expected minted publication envelope")
+	}
+	if rt.Snapshot.Publication.Source != "daemon-cache" {
+		t.Fatalf("source = %q, want daemon-cache", rt.Snapshot.Publication.Source)
+	}
+	if !rt.Snapshot.Publication.AssembledAt.Equal(observedAt) {
+		t.Fatalf("AssembledAt = %v, want snapshot timestamp %v (not read time after %v)", rt.Snapshot.Publication.AssembledAt, observedAt, before)
+	}
 }
 
 func TestDefaultCacheFetchAddressIsSocketNotPort8080(t *testing.T) {

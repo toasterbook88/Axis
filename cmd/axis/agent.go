@@ -318,7 +318,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cheapModel, "cheap-model", "", "Cheap/fast model for simple turns (enables multi-model routing; uses the same cloud provider as --cloud-model)")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
-	cmd.Flags().BoolVar(&useConsole, "console", false, "Transcript console (interactive TTY)")
+	cmd.Flags().BoolVar(&useConsole, "console", false, "Transcript console (interactive TTY). Approvals: y yes, n no; Enter does not approve")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd
 }
@@ -363,6 +363,13 @@ type agentREPLSession struct {
 	Out          io.Writer
 	ErrOut       io.Writer
 	ActiveTarget ModelChoice
+}
+
+func sessionRuntimeLoader(session *agentREPLSession) func(context.Context) (*runtimectx.Context, error) {
+	if session != nil && session.Runtime != nil {
+		return session.Runtime
+	}
+	return loadAgentShellRuntime
 }
 
 type REPLSelector struct {
