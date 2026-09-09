@@ -505,3 +505,44 @@ func TestLoadCachedStaleWarningAndVantageBadge(t *testing.T) {
 		t.Fatalf("expected stale warning alongside vantage badge, got warnings: %+v", rt.Snapshot.Warnings)
 	}
 }
+
+func TestLoadCachedReadsSocketDaemonWithUnixScheme(t *testing.T) {
+	var clientCalledAddr string
+	var reqURL string
+
+	prevClient := httpClientForAddr
+	httpClientForAddr = func(addr string, timeout time.Duration) (*http.Client, string) {
+		clientCalledAddr = addr
+		return &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				reqURL = r.URL.String()
+				snap := &models.ClusterSnapshot{
+					Timestamp: time.Now().UTC(),
+					Status:    models.SnapshotHealthy,
+				}
+				data, _ := json.Marshal(snap)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		}, "http://localhost"
+	}
+	defer func() { httpClientForAddr = prevClient }()
+
+	testAddr := "unix:///var/run/axis.sock"
+	snap, source, err := fetchDaemonHTTP(context.Background(), testAddr)
+	if err != nil {
+		t.Fatalf("fetchDaemonHTTP: %v", err)
+	}
+	if snap == nil || source != "daemon-cache" {
+		t.Fatalf("unexpected result: snap=%+v source=%q", snap, source)
+	}
+	if clientCalledAddr != testAddr {
+		t.Fatalf("httpClientForAddr called with %q, want %q", clientCalledAddr, testAddr)
+	}
+	if reqURL != "http://localhost/snapshot" {
+		t.Fatalf("request URL = %q, want http://localhost/snapshot", reqURL)
+	}
+}

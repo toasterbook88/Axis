@@ -248,6 +248,7 @@ func agentCmd() *cobra.Command {
 				ToolContext:             tc,
 				Output:                  w,
 				MCPRegistry:             mcpReg,
+				RuntimeLoader:           loader,
 			})
 
 			a = agent.New(cfg)
@@ -282,19 +283,20 @@ func agentCmd() *cobra.Command {
 
 			// REPL runtime extracted to agent_repl.go (runAgentInteractive).
 			return runAgentInteractive(agentREPLConfig{
-				Agent:        a,
-				MCPRegistry:  mcpReg,
-				ActiveTarget: activeTarget,
-				Timeout:      timeout,
-				HistoryPath:  historyPath,
-				UseConsole:   useConsole,
-				AutoApprove:  autoApprove,
-				Autonomy:     autonomy,
-				MaxTurns:     maxTurns,
-				ModelChoices: choices,
-				Ctx:          ctx,
-				Out:          w,
-				ErrOut:       errW,
+				Agent:         a,
+				MCPRegistry:   mcpReg,
+				ActiveTarget:  activeTarget,
+				Timeout:       timeout,
+				HistoryPath:   historyPath,
+				UseConsole:    useConsole,
+				AutoApprove:   autoApprove,
+				Autonomy:      autonomy,
+				MaxTurns:      maxTurns,
+				ModelChoices:  choices,
+				Ctx:           ctx,
+				Out:           w,
+				ErrOut:        errW,
+				RuntimeLoader: loader,
 			})
 		},
 	}
@@ -426,14 +428,19 @@ func (s *REPLSelector) Select(ctx context.Context, title string, options []ui.Se
 }
 
 // runPlainAgentREPL is the fallback scanner-based REPL when readline is unavailable.
-func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, mcpReg *mcpclient.Registry, activeTarget ModelChoice) error {
+func runPlainAgentREPL(ctx context.Context, a *agent.Agent, w, errW io.Writer, timeout time.Duration, historyPath string, mcpReg *mcpclient.Registry, activeTarget ModelChoice, optionalLoader ...func(context.Context) (*runtimectx.Context, error)) error {
 	fmt.Fprintln(errW, ui.Yellow("Note: using plain input mode (no arrow keys or history)"))
 	inReader := &UnbufferedLineReader{reader: os.Stdin}
+
+	loader := loadAgentShellRuntime
+	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
+		loader = optionalLoader[0]
+	}
 
 	session := &agentREPLSession{
 		Agent:        a,
 		MCPRegistry:  mcpReg,
-		Runtime:      loadAgentShellRuntime,
+		Runtime:      loader,
 		Selector:     &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, w), in: inReader, out: w},
 		In:           inReader,
 		Out:          w,
@@ -501,12 +508,17 @@ type agentSessionParams struct {
 	ToolContext             *agent.ToolContext
 	Output                  io.Writer
 	MCPRegistry             *mcpclient.Registry
+	RuntimeLoader           func(context.Context) (*runtimectx.Context, error)
 }
 
 // buildAgentSessionConfig assembles agent.Config for axis agent sessions.
 // Always injects guarded shell runners so Layer 4 cannot be accidentally dropped.
 func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 	model := p.Model
+	loader := p.RuntimeLoader
+	if loader == nil {
+		loader = loadAgentShellRuntime
+	}
 	return agent.Config{
 		Endpoint:                p.Endpoint,
 		Model:                   p.Model,
@@ -524,9 +536,9 @@ func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 		Knowledge:               p.Knowledge,
 		ToolContext:             p.ToolContext,
 		Output:                  p.Output,
-		RunShell:                guardedAgentShellRunner(model),
+		RunShell:                guardedAgentShellRunner(model, loader),
 		RunOnNode: func(ctx context.Context, node, command string) (string, error) {
-			return guardedAgentCommandRunner(model, node)(ctx, command)
+			return guardedAgentCommandRunner(model, node, loader)(ctx, command)
 		},
 		RunTask:     guardedAgentTaskRunner(),
 		MCPRegistry: p.MCPRegistry,
@@ -534,16 +546,20 @@ func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 }
 
 // guardedAgentShellRunner runs local shell via guarded execution (local node pin).
-func guardedAgentShellRunner(model string) agent.ShellRunner {
-	return guardedAgentCommandRunner(model, "")
+func guardedAgentShellRunner(model string, optionalLoader ...func(context.Context) (*runtimectx.Context, error)) agent.ShellRunner {
+	return guardedAgentCommandRunner(model, "", optionalLoader...)
 }
 
 // guardedAgentCommandRunner builds a ShellRunner that executes through Layer 4.
 // When requestedNode is empty, the canonical local node is resolved from the snapshot.
 // When set, RequestedNode is pinned (agent run_on_node) with OwnerSurfaceAgentRunOnNode.
-func guardedAgentCommandRunner(model, requestedNode string) agent.ShellRunner {
+func guardedAgentCommandRunner(model, requestedNode string, optionalLoader ...func(context.Context) (*runtimectx.Context, error)) agent.ShellRunner {
+	loader := loadAgentShellRuntime
+	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
+		loader = optionalLoader[0]
+	}
 	return func(ctx context.Context, command string) (string, error) {
-		rt, err := loadAgentShellRuntime(ctx)
+		rt, err := loader(ctx)
 		if err != nil {
 			return "", fmt.Errorf("load runtime context for guarded execution: %w", err)
 		}

@@ -3,6 +3,7 @@ package console
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/toasterbook88/axis/internal/agent"
@@ -101,9 +102,13 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 	var lines []Line
 
 	// Top border
-	borderTitle := fmt.Sprintf("┌─ Tool Execution Approval ─%s", strings.Repeat("─", boxWidth-28))
-	if len(borderTitle) > boxWidth {
-		borderTitle = borderTitle[:boxWidth]
+	titlePrefix := "┌─ Tool Execution Approval ─"
+	prefixRunes := utf8.RuneCountInString(titlePrefix)
+	var borderTitle string
+	if boxWidth > prefixRunes {
+		borderTitle = fmt.Sprintf("%s%s", titlePrefix, strings.Repeat("─", boxWidth-prefixRunes))
+	} else {
+		borderTitle = string([]rune(titlePrefix)[:boxWidth])
 	}
 	lines = append(lines, Line{Text: borderTitle, Style: StyleAccent})
 

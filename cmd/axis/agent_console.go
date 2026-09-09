@@ -14,6 +14,7 @@ import (
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -226,13 +227,17 @@ func consoleConfirmWithTimeout(ctx context.Context, send func(tea.Msg), now func
 // Output is captured rather than written to the terminal, and both the line
 // reader and the selector refuse, so no slash command can read stdin out from
 // under Bubble Tea.
-func consoleSlashRunner(a *agent.Agent, mcpReg *mcpclient.Registry, target ModelChoice) func(string) (string, error) {
+func consoleSlashRunner(a *agent.Agent, mcpReg *mcpclient.Registry, target ModelChoice, optionalLoader ...func(context.Context) (*runtimectx.Context, error)) func(string) (string, error) {
+	loader := loadAgentShellRuntime
+	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
+		loader = optionalLoader[0]
+	}
 	return func(line string) (string, error) {
 		var out strings.Builder
 		session := &agentREPLSession{
 			Agent:        a,
 			MCPRegistry:  mcpReg,
-			Runtime:      loadAgentShellRuntime,
+			Runtime:      loader,
 			Selector:     refusingSelector{},
 			In:           refusingLineReader{},
 			Out:          &out,
@@ -298,9 +303,14 @@ func runAgentConsole(
 	historyPath string,
 	mcpReg *mcpclient.Registry,
 	target ModelChoice,
+	optionalLoader ...func(context.Context) (*runtimectx.Context, error),
 ) error {
+	loader := loadAgentShellRuntime
+	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
+		loader = optionalLoader[0]
+	}
 	launcher := newConsoleLauncher(a.RunWithSinks, timeout, time.Now)
-	launcher.slash = consoleSlashRunner(a, mcpReg, target)
+	launcher.slash = consoleSlashRunner(a, mcpReg, target, loader)
 
 	model := console.NewModel(console.Options{
 		Submit: launcher.submit(ctx),

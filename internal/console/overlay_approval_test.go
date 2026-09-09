@@ -3,6 +3,7 @@ package console
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/toasterbook88/axis/internal/agent"
@@ -181,5 +182,45 @@ func TestApprovalOverlayEnterDoesNotApprove(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected reply on channel after 'y'")
+	}
+}
+
+func TestApprovalOverlayRenderUTF8ValidityAndAlignment(t *testing.T) {
+	overlay := NewApprovalOverlay("shell", "cat /tmp/data.txt", 45, nil)
+
+	widths := []int{30, 40, 60, 80, 100, 120, 200}
+	for _, w := range widths {
+		lines := overlay.Render(w)
+		if len(lines) < 2 {
+			t.Fatalf("expected at least 2 lines in rendered output for width %d, got %d", w, len(lines))
+		}
+
+		// Verify every line is valid UTF-8
+		for i, line := range lines {
+			if !utf8.ValidString(line.Text) {
+				t.Fatalf("width %d: line %d contains invalid UTF-8 bytes: %q", w, i, line.Text)
+			}
+		}
+
+		topBorder := lines[0].Text
+		bottomBorder := lines[len(lines)-1].Text
+
+		topRunes := utf8.RuneCountInString(topBorder)
+		bottomRunes := utf8.RuneCountInString(bottomBorder)
+
+		expectedBoxWidth := effectiveWidth(w) - 2
+		if expectedBoxWidth < 30 {
+			expectedBoxWidth = 30
+		}
+
+		if topRunes != expectedBoxWidth {
+			t.Errorf("width %d: top border rune count = %d, expected %d", w, topRunes, expectedBoxWidth)
+		}
+		if bottomRunes != expectedBoxWidth {
+			t.Errorf("width %d: bottom border rune count = %d, expected %d", w, bottomRunes, expectedBoxWidth)
+		}
+		if topRunes != bottomRunes {
+			t.Errorf("width %d: top (%d) and bottom (%d) border widths do not match", w, topRunes, bottomRunes)
+		}
 	}
 }
