@@ -737,3 +737,39 @@ func TestConsoleShellEscapeSafetyBlocked(t *testing.T) {
 		t.Fatalf("error should cite custom reason, got: %v", done2.Err)
 	}
 }
+
+func TestConsoleShellEscapeNonZeroExit(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	// Run command that exits non-zero
+	cmd := l.submit(context.Background())(1, "!sh -c 'exit 42'")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 {
+		t.Fatalf("unexpected turn done message structure: %+v", msg)
+	}
+	if done.Err == nil {
+		t.Fatal("expected non-zero exit to report non-nil TurnDoneMsg.Err")
+	}
+
+	// Verify an error entry was also sent to the console log
+	msgs := rec.all()
+	var foundError bool
+	for _, m := range msgs {
+		if em, ok := m.(console.EntryMsg); ok {
+			if _, isErr := em.Entry.(*console.ErrorEntry); isErr {
+				rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+				if strings.Contains(rendered, "command exited with error") {
+					foundError = true
+					break
+				}
+			}
+		}
+	}
+	if !foundError {
+		t.Fatalf("expected error entry rendered to console, got: %+v", msgs)
+	}
+}

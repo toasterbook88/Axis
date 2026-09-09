@@ -133,7 +133,23 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 	}
 }
 
-// runShell executes an instant local shell escape (!<cmd>) directly.
+// runShell executes an instant local shell escape (!<cmd>) directly in a local subshell.
+//
+// ARCHITECTURAL BOUNDARY (Layer 4 vs Operator Escape):
+// A console bang (!<cmd>) deliberately skips Layer 4 cluster placement and reservation
+// leases. While agent tool calls (run_shell, run_on_node) require Layer 4 to prevent
+// autonomous LLMs from oversubscribing nodes, an interactive shell escape is an explicit
+// human operator command (Standing Law 1: Operator is Commander).
+//
+// Routing !<cmd> through Layer 4 would introduce fatal operational paradoxes:
+// 1. Diagnostics Lockout: An operator could not run '!axis doctor' if the daemon/ledger was wedged.
+// 2. Low-Memory Rejection: Commands like '!free -m' or '!ps' would fail if free RAM was below the 1GB cap.
+// 3. Ledger/Disk Overhead: Every '!ls' would write task logs and acquire ledger file locks.
+//
+// However, to protect against accidental destructive inputs (e.g. bad clipboard paste),
+// runShell enforces Layer 4 Safety Evaluation (safety.Check / DefaultSafetyGate), blocking
+// destructive commands (score >= 80) before subprocess creation, and reports non-zero exit
+// codes faithfully via TurnDoneMsg.
 func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string) tea.Cmd {
 	cmdLine = strings.TrimSpace(cmdLine)
 	ctx, cancel := context.WithTimeout(parent, l.timeout)
@@ -183,7 +199,7 @@ func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, 
 				Entry: console.NewErrorEntry(l.now(), fmt.Sprintf("command exited with error: %v", err)),
 			})
 		}
-		return console.TurnDoneMsg{Turn: turn, Err: nil}
+		return console.TurnDoneMsg{Turn: turn, Err: err}
 	}
 }
 
