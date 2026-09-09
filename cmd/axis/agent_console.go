@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +44,19 @@ type consoleLauncher struct {
 	// safety checks shell commands before execution.
 	safety agent.ShellSafetyGate
 
+	// loader supplies the cached cluster runtime; it feeds the model catalog
+	// for the interactive picker.
+	loader func(context.Context) (*runtimectx.Context, error)
+
+	// activeTarget is the model choice captured at startup. The picker hands
+	// it to the switch session; the live model afterwards is the agent's own
+	// state (Agent.Model()), which the footer reads.
+	activeTarget ModelChoice
+
+	// modelSwitch applies a ModelChoice to the live agent. Tests inject a
+	// recording stub; production uses consoleModelSwitch.
+	modelSwitch func(choice ModelChoice, out io.Writer) error
+
 	mu       sync.Mutex
 	cancels  map[console.TurnID]context.CancelFunc
 	inFlight int
@@ -68,6 +82,9 @@ func newConsoleLauncher(run consoleRunner, timeout time.Duration, now func() tim
 // to its own bridge and writer and can never be misattributed.
 func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 	return func(turn console.TurnID, prompt string) tea.Cmd {
+		if prompt == "/model" || prompt == "/models" {
+			return l.runModelPicker(parent, turn)
+		}
 		if strings.HasPrefix(prompt, "/") {
 			return l.runSlash(turn, prompt)
 		}
@@ -206,6 +223,150 @@ func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, 
 			})
 		}
 		return console.TurnDoneMsg{Turn: turn, Err: err}
+	}
+}
+
+// modelNoticeWriter forwards each completed line written during a model
+// switch into the transcript as a notice entry.
+type modelNoticeWriter struct {
+	prog interface{ Send(tea.Msg) }
+	turn console.TurnID
+	now  func() time.Time
+	buf  []byte
+}
+
+func (w *modelNoticeWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := strings.TrimRight(string(w.buf[:idx]), "\r")
+		w.buf = w.buf[idx+1:]
+		if strings.TrimSpace(line) != "" && w.prog != nil {
+			w.prog.Send(console.EntryMsg{
+				Turn:  w.turn,
+				Entry: console.NewNoticeEntry(w.now(), line),
+			})
+		}
+	}
+	return len(p), nil
+}
+
+// pickerItems converts the collected catalog into picker rows using the same
+// detail formatting the REPL selector shows.
+func pickerItems(choices []ModelChoice) []console.PickerItem {
+	items := make([]console.PickerItem, 0, len(choices))
+	for _, c := range choices {
+		detail := c.ProviderName + " - " + c.ProviderKind
+		if c.ProviderKind == "local" {
+			if c.Node != "" {
+				detail = fmt.Sprintf("Remote node %s [%s] (%s)", c.Node, c.ProviderName, c.Endpoint)
+			} else {
+				detail = fmt.Sprintf("Local node [%s] (%s)", c.ProviderName, c.Endpoint)
+			}
+		}
+		items = append(items, console.PickerItem{ID: c.ID, Label: c.Model, Detail: detail, Disabled: c.Disabled})
+	}
+	return items
+}
+
+// consoleModelSwitch returns the switch function the picker applies: it reuses
+// the REPL switch contract wholesale (backend rebuild, guarded runner
+// refresh, OwnerLabel provenance) around the console's live agent, capturing
+// its status lines into the supplied writer.
+func consoleModelSwitch(a *agent.Agent, loader func(context.Context) (*runtimectx.Context, error), target ModelChoice) func(choice ModelChoice, out io.Writer) error {
+	return func(choice ModelChoice, out io.Writer) error {
+		session := &agentREPLSession{
+			Agent:        a,
+			Runtime:      loader,
+			Selector:     refusingSelector{},
+			In:           refusingLineReader{},
+			Out:          out,
+			ErrOut:       out,
+			ActiveTarget: target,
+		}
+		return switchAgentToModelChoice(session, choice)
+	}
+}
+
+// consoleFooterModel picks the statusline model label: the agent's live
+// model wins once it is set (it tracks /model switches), then the startup
+// choice captured at console launch.
+func consoleFooterModel(a *agent.Agent, target ModelChoice) string {
+	if a != nil {
+		if m := a.Model(); m != "" {
+			return m
+		}
+	}
+	if target.Model != "" {
+		return target.Model
+	}
+	if target.ID != "" {
+		return target.ID
+	}
+	return "default"
+}
+
+// runModelPicker opens the interactive model picker for arg-less /model.
+// Catalog loading happens here (off the UI loop) because collectModelChoices
+// probes resident endpoints. No approval gate applies: the picker only
+// switches inference targets, it executes nothing. Unlike approvals there is
+// no timeout — the picker is operator-initiated, owns the keyboard while
+// open, and Esc dismisses without a switch.
+func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+	l.mu.Lock()
+	l.inFlight++
+	l.mu.Unlock()
+
+	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			l.inFlight--
+			l.mu.Unlock()
+		}()
+
+		rt, err := l.loader(parent)
+		if err != nil || rt == nil {
+			return console.TurnDoneMsg{Turn: turn, Err: errors.New("model catalog unavailable: cached runtime load failed")}
+		}
+		choices := collectModelChoices(rt)
+		if len(choices) == 0 {
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewNoticeEntry(l.now(), "No models found (neither local Ollama models nor enabled cloud providers)."),
+			})
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		}
+
+		reply := make(chan string, 1)
+		l.prog.Send(console.SetOverlayMsg{
+			Overlay: console.NewModelPickerOverlay("Select active model for task routing:", pickerItems(choices), reply),
+		})
+
+		var chosenID string
+		select {
+		case chosenID = <-reply:
+		case <-parent.Done():
+			return console.TurnDoneMsg{Turn: turn, Err: parent.Err()}
+		}
+		if chosenID == "" {
+			return console.TurnDoneMsg{Turn: turn, Err: nil} // operator dismissed
+		}
+
+		chosen, err := findModelTargetByRef(choices, chosenID)
+		if err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: err}
+		}
+		if l.modelSwitch == nil {
+			return console.TurnDoneMsg{Turn: turn, Err: errors.New("model switching is not available in this console")}
+		}
+		nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
+		if err := l.modelSwitch(chosen, nw); err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: err}
+		}
+		return console.TurnDoneMsg{Turn: turn, Err: nil}
 	}
 }
 
@@ -396,6 +557,9 @@ func runAgentConsole(
 	if a != nil {
 		launcher.safety = a.SafetyGate()
 	}
+	launcher.loader = loader
+	launcher.activeTarget = target
+	launcher.modelSwitch = consoleModelSwitch(a, loader, target)
 
 	var initialHistory []string
 	if a != nil && a.Conversation() != nil {
@@ -411,15 +575,7 @@ func runAgentConsole(
 	var fleetMu sync.Mutex
 
 	footer := console.NewStatusFooter(console.StatusFooterConfig{
-		Model: func() string {
-			if target.Model != "" {
-				return target.Model
-			}
-			if target.ID != "" {
-				return target.ID
-			}
-			return "default"
-		},
+		Model: func() string { return consoleFooterModel(a, target) },
 		UsedTokens: func() int {
 			if a != nil {
 				return a.ContextTokens()
