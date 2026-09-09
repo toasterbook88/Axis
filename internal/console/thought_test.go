@@ -24,6 +24,12 @@ func TestExtractThought(t *testing.T) {
 	if thought != "still thinking" || answer != "" {
 		t.Fatalf("unclosed: thought=%q, answer=%q", thought, answer)
 	}
+	// Reversed tags: </think> precedes <think> (must not panic)
+	rawReversed := "Discussion about </think> tag: <think>actual thought</think>result"
+	thought, answer = extractThought(rawReversed)
+	if thought != "actual thought" || answer != "Discussion about </think> tag: result" {
+		t.Fatalf("reversed tags: thought=%q, answer=%q", thought, answer)
+	}
 }
 
 func TestParseStreamThought(t *testing.T) {
@@ -43,5 +49,11 @@ func TestParseStreamThought(t *testing.T) {
 	thought, answer, inThought = parseStreamThought("<think>done planning</think>Here is the plan")
 	if inThought || thought != "done planning" || answer != "Here is the plan" {
 		t.Fatalf("completed thought: inThought=%t, thought=%q, answer=%q", inThought, thought, answer)
+	}
+
+	// Reversed tags: </think> precedes <think> (must not panic)
+	thought, answer, inThought = parseStreamThought("Preceding </think> then <think>in progress")
+	if !inThought || thought != "in progress" || answer != "" {
+		t.Fatalf("reversed tags in stream: inThought=%t, thought=%q, answer=%q", inThought, thought, answer)
 	}
 }

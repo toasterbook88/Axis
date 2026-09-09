@@ -522,12 +522,8 @@ func (m Model) View() string {
 		_, answer, inThought := parseStreamThought(text)
 		if inThought {
 			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " thinking...", Style: StyleMuted})
-		} else {
-			display := text
-			if answer != "" {
-				display = answer
-			}
-			for _, l := range wrap(display, effectiveWidth(m.width)) {
+		} else if answer != "" {
+			for _, l := range wrap(answer, effectiveWidth(m.width)) {
 				lines = append(lines, Line{Text: l})
 			}
 		}

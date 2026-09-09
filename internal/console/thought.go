@@ -12,13 +12,15 @@ func extractThought(s string) (thought, answer string) {
 	if startIdx == -1 {
 		return "", s
 	}
-	endIdx := strings.Index(s, "</think>")
-	if endIdx == -1 {
+	afterStart := s[startIdx+len("<think>"):]
+	endRel := strings.Index(afterStart, "</think>")
+	if endRel == -1 {
 		// Unclosed <think>: treat everything after <think> as thought
-		thought = strings.TrimSpace(s[startIdx+len("<think>"):])
+		thought = strings.TrimSpace(afterStart)
 		answer = strings.TrimSpace(s[:startIdx])
 		return thought, answer
 	}
+	endIdx := startIdx + len("<think>") + endRel
 	thought = strings.TrimSpace(s[startIdx+len("<think>") : endIdx])
 	answer = strings.TrimSpace(s[:startIdx] + s[endIdx+len("</think>"):])
 	return thought, answer
@@ -31,10 +33,12 @@ func parseStreamThought(s string) (thought, answer string, inThought bool) {
 	if startIdx == -1 {
 		return "", s, false
 	}
-	endIdx := strings.Index(s, "</think>")
-	if endIdx == -1 {
-		return strings.TrimSpace(s[startIdx+len("<think>"):]), "", true
+	afterStart := s[startIdx+len("<think>"):]
+	endRel := strings.Index(afterStart, "</think>")
+	if endRel == -1 {
+		return strings.TrimSpace(afterStart), "", true
 	}
+	endIdx := startIdx + len("<think>") + endRel
 	thought = strings.TrimSpace(s[startIdx+len("<think>") : endIdx])
 	answer = strings.TrimSpace(s[:startIdx] + s[endIdx+len("</think>"):])
 	return thought, answer, false

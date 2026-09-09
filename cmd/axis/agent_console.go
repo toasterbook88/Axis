@@ -133,21 +133,28 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 // runShell executes an instant local shell escape (!<cmd>) directly.
 func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string) tea.Cmd {
 	cmdLine = strings.TrimSpace(cmdLine)
+	ctx, cancel := context.WithTimeout(parent, l.timeout)
+
+	l.mu.Lock()
+	l.cancels[turn] = cancel
+	l.inFlight++
+	l.mu.Unlock()
+
 	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			delete(l.cancels, turn)
+			l.inFlight--
+			l.mu.Unlock()
+			cancel()
+		}()
+
 		if cmdLine == "" {
-			if l.prog != nil {
-				l.prog.Send(console.EntryMsg{
-					Turn:  turn,
-					Entry: console.NewErrorEntry(l.now(), "empty shell command"),
-				})
-			}
 			return console.TurnDoneMsg{Turn: turn, Err: errors.New("empty shell command")}
 		}
 
-		ctx, cancel := context.WithTimeout(parent, l.timeout)
-		defer cancel()
-
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
+		cmd.WaitDelay = 100 * time.Millisecond
 		out, err := cmd.CombinedOutput()
 		trimmed := strings.TrimRight(string(out), "\n")
 		if trimmed != "" && l.prog != nil {
@@ -375,8 +382,8 @@ func runAgentConsole(
 			return "default"
 		},
 		UsedTokens: func() int {
-			if a != nil && a.Conversation() != nil {
-				return a.Conversation().EstimateTokens()
+			if a != nil {
+				return a.ContextTokens()
 			}
 			return 0
 		},
@@ -395,7 +402,7 @@ func runAgentConsole(
 		Fleet: func() string {
 			fleetMu.Lock()
 			defer fleetMu.Unlock()
-			if time.Since(lastFleetCheck) < 5*time.Second && cachedFleet != "unknown" {
+			if !lastFleetCheck.IsZero() && time.Since(lastFleetCheck) < 5*time.Second {
 				return cachedFleet
 			}
 			lastFleetCheck = time.Now()
@@ -408,8 +415,11 @@ func runAgentConsole(
 					} else {
 						cachedFleet = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
 					}
-					return cachedFleet
+				} else {
+					cachedFleet = "local"
 				}
+			} else {
+				cachedFleet = "unknown"
 			}
 			return cachedFleet
 		},

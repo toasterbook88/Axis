@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/console"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
 var consoleClock = func() time.Time { return time.Date(2026, 8, 25, 21, 35, 0, 0, time.UTC) }
@@ -600,5 +602,99 @@ func TestConsoleHelpShortcut(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("help output not captured in console entries: %+v", msgs)
+	}
+}
+
+func TestConsoleShellEscapeCancel(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	cmd := l.submit(context.Background())(1, "!sleep 10")
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- cmd()
+	}()
+
+	// Wait briefly for subprocess to launch
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the turn
+	l.cancel(1)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 {
+			t.Fatalf("unexpected turn done message: %+v", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shell command was not cancelled within timeout")
+	}
+}
+
+func TestConsoleShellEscapeEmpty(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	cmd := l.submit(context.Background())(1, "!   ")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err == nil {
+		t.Fatalf("expected error for empty shell command, got: %+v", msg)
+	}
+	if len(rec.all()) != 0 {
+		t.Fatalf("empty shell command should not send manual EntryMsg, got: %+v", rec.all())
+	}
+}
+
+func TestConsoleFleetThrottleOnFailure(t *testing.T) {
+	calls := 0
+	loader := func(ctx context.Context) (*runtimectx.Context, error) {
+		calls++
+		return nil, errors.New("daemon offline")
+	}
+
+	var lastFleetCheck time.Time
+	var cachedFleet string = "unknown"
+	var fleetMu sync.Mutex
+
+	fleetFn := func() string {
+		fleetMu.Lock()
+		defer fleetMu.Unlock()
+		if !lastFleetCheck.IsZero() && time.Since(lastFleetCheck) < 5*time.Second {
+			return cachedFleet
+		}
+		lastFleetCheck = time.Now()
+		rctx, err := loader(context.Background())
+		if err == nil && rctx != nil && rctx.Snapshot != nil {
+			s := rctx.Snapshot.Summary
+			if s.TotalNodes > 0 {
+				if s.ReachableNodes == s.TotalNodes {
+					cachedFleet = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
+				} else {
+					cachedFleet = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
+				}
+			} else {
+				cachedFleet = "local"
+			}
+		} else {
+			cachedFleet = "unknown"
+		}
+		return cachedFleet
+	}
+
+	// Call 10 times in a tight loop
+	for i := 0; i < 10; i++ {
+		res := fleetFn()
+		if res != "unknown" {
+			t.Fatalf("call %d returned %q, want 'unknown'", i, res)
+		}
+	}
+
+	if calls != 1 {
+		t.Fatalf("loader called %d times, want exactly 1 (throttled)", calls)
 	}
 }

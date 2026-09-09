@@ -1188,6 +1188,9 @@ func (a *Agent) Conversation() *chat.Conversation {
 
 // ContextTokens returns the current estimated conversation tokens.
 func (a *Agent) ContextTokens() int {
+	if a == nil || a.conv == nil {
+		return 0
+	}
 	return a.conv.EstimateTokens()
 }
 

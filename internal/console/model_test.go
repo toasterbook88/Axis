@@ -669,3 +669,19 @@ func TestModelIdleEscClearsInput(t *testing.T) {
 		t.Fatalf("after esc when idle: input = %q, want empty", m.Input())
 	}
 }
+
+func TestModelThinkingClosedBeforeAnswerDoesNotFlash(t *testing.T) {
+	m := newTestModel(noopSubmit)
+	m = typeText(m, "test")
+	m, _ = press(m, tea.KeyEnter)
+
+	// Stream contains closed think block, but NO answer tokens yet
+	streamChunk := "<think>secret internal reasoning</think>"
+	updated, _ := m.Update(StreamChunkMsg{Turn: m.Turn(), Text: streamChunk})
+	m = updated.(Model)
+
+	view := m.View()
+	if strings.Contains(view, "<think>") || strings.Contains(view, "secret internal reasoning") {
+		t.Fatalf("view should not flash raw thought block:\n%s", view)
+	}
+}
