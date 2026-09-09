@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -37,6 +39,9 @@ type consoleLauncher struct {
 	// slash routes a slash command through the existing REPL handler. Nil
 	// disables slash handling.
 	slash func(string) (string, error)
+
+	// safety checks shell commands before execution.
+	safety agent.ShellSafetyGate
 
 	mu       sync.Mutex
 	cancels  map[console.TurnID]context.CancelFunc
@@ -65,6 +70,12 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 	return func(turn console.TurnID, prompt string) tea.Cmd {
 		if strings.HasPrefix(prompt, "/") {
 			return l.runSlash(turn, prompt)
+		}
+		if prompt == "?" {
+			return l.runSlash(turn, "/help")
+		}
+		if strings.HasPrefix(prompt, "!") {
+			return l.runShell(parent, turn, strings.TrimPrefix(prompt, "!"))
 		}
 
 		ctx, cancel := context.WithTimeout(parent, l.timeout)
@@ -117,6 +128,82 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 		out, err := l.slash(line)
 		if out != "" && l.prog != nil {
 			l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), strings.TrimSpace(out))})
+		}
+		return console.TurnDoneMsg{Turn: turn, Err: err}
+	}
+}
+
+// runShell executes an instant local shell escape (!<cmd>) directly in a local subshell.
+//
+// ARCHITECTURAL BOUNDARY (Layer 4 vs Operator Escape):
+// A console bang (!<cmd>) deliberately skips Layer 4 cluster placement and reservation
+// leases. While agent tool calls (run_shell, run_on_node) require Layer 4 to prevent
+// autonomous LLMs from oversubscribing nodes, an interactive shell escape is an explicit
+// human operator command (Standing Law 1: Operator is Commander).
+//
+// Routing !<cmd> through Layer 4 would introduce fatal operational paradoxes:
+// 1. Diagnostics Lockout: An operator could not run '!axis doctor' if the daemon/ledger was wedged.
+// 2. Low-Memory Rejection: Commands like '!free -m' or '!ps' would fail if free RAM was below the 1GB cap.
+// 3. Ledger/Disk Overhead: Every '!ls' would write task logs and acquire ledger file locks.
+//
+// However, to protect against accidental destructive inputs (e.g. bad clipboard paste),
+// runShell enforces Layer 4 Safety Evaluation (safety.Check / DefaultSafetyGate), blocking
+// destructive commands (score >= 80) before subprocess creation, and reports non-zero exit
+// codes faithfully via TurnDoneMsg.
+//
+// The escape shares the agent turn's per-request timeout (--timeout, default
+// 5m), so long-lived diagnostics such as `tail -f` are bounded the same way a
+// turn is. Captured output is capped to agent.MaxShellOutputRunes like every
+// other shell execution surface, so a verbose command cannot flood the
+// transcript.
+func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string) tea.Cmd {
+	cmdLine = strings.TrimSpace(cmdLine)
+	ctx, cancel := context.WithTimeout(parent, l.timeout)
+
+	l.mu.Lock()
+	l.cancels[turn] = cancel
+	l.inFlight++
+	l.mu.Unlock()
+
+	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			delete(l.cancels, turn)
+			l.inFlight--
+			l.mu.Unlock()
+			cancel()
+		}()
+
+		if cmdLine == "" {
+			return console.TurnDoneMsg{Turn: turn, Err: errors.New("empty shell command")}
+		}
+
+		gate := l.safety
+		if gate == nil {
+			gate = agent.DefaultSafetyGate(nil)
+		}
+		if allow, reason, score := gate(cmdLine); !allow {
+			return console.TurnDoneMsg{
+				Turn: turn,
+				Err:  fmt.Errorf("command blocked by safety check (score %d/100): %s", score, reason),
+			}
+		}
+
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
+		cmd.WaitDelay = 100 * time.Millisecond
+		out, err := cmd.CombinedOutput()
+		trimmed := strings.TrimRight(string(out), "\n")
+		if trimmed != "" && l.prog != nil {
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewNoticeEntry(l.now(), agent.CapShellOutput(trimmed)),
+			})
+		}
+		if err != nil && l.prog != nil {
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewErrorEntry(l.now(), fmt.Sprintf("command exited with error: %v", err)),
+			})
 		}
 		return console.TurnDoneMsg{Turn: turn, Err: err}
 	}
@@ -306,10 +393,82 @@ func runAgentConsole(
 	}
 	launcher := newConsoleLauncher(a.RunWithSinks, timeout, time.Now)
 	launcher.slash = consoleSlashRunner(a, mcpReg, target, loader)
+	if a != nil {
+		launcher.safety = a.SafetyGate()
+	}
+
+	var initialHistory []string
+	if a != nil && a.Conversation() != nil {
+		for _, msg := range a.Conversation().Messages() {
+			if msg.Role == chat.RoleUser && strings.TrimSpace(msg.Content) != "" {
+				initialHistory = append(initialHistory, msg.Content)
+			}
+		}
+	}
+
+	var lastFleetCheck time.Time
+	var cachedFleet string = "unknown"
+	var fleetMu sync.Mutex
+
+	footer := console.NewStatusFooter(console.StatusFooterConfig{
+		Model: func() string {
+			if target.Model != "" {
+				return target.Model
+			}
+			if target.ID != "" {
+				return target.ID
+			}
+			return "default"
+		},
+		UsedTokens: func() int {
+			if a != nil {
+				return a.ContextTokens()
+			}
+			return 0
+		},
+		MaxTokens: func() int {
+			if a != nil {
+				return a.MaxTokens()
+			}
+			return 32768
+		},
+		Mode: func() string {
+			if a != nil {
+				return string(a.Autonomy())
+			}
+			return "default"
+		},
+		Fleet: func() string {
+			fleetMu.Lock()
+			defer fleetMu.Unlock()
+			if !lastFleetCheck.IsZero() && time.Since(lastFleetCheck) < 5*time.Second {
+				return cachedFleet
+			}
+			lastFleetCheck = time.Now()
+			rctx, err := loader(ctx)
+			if err == nil && rctx != nil && rctx.Snapshot != nil {
+				s := rctx.Snapshot.Summary
+				if s.TotalNodes > 0 {
+					if s.ReachableNodes == s.TotalNodes {
+						cachedFleet = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
+					} else {
+						cachedFleet = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
+					}
+				} else {
+					cachedFleet = "local"
+				}
+			} else {
+				cachedFleet = "unknown"
+			}
+			return cachedFleet
+		},
+	})
 
 	model := console.NewModel(console.Options{
-		Submit: launcher.submit(ctx),
-		Cancel: launcher.cancel,
+		Submit:  launcher.submit(ctx),
+		Cancel:  launcher.cancel,
+		Footer:  footer,
+		History: initialHistory,
 	})
 
 	prog := tea.NewProgram(model, consoleOptions(ctx).teaOptions()...)
