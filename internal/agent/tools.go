@@ -513,12 +513,23 @@ func ExecuteShellWithTimeout(timeout time.Duration) ShellRunner {
 		}
 
 		// Cap output to prevent blowing up the context window.
-		const maxOutput = 16000
-		if len([]rune(output)) > maxOutput {
-			output = truncateRune(output, maxOutput) + fmt.Sprintf("\n... [truncated to %d chars]", maxOutput)
-		}
+		output = CapShellOutput(output)
 		return output, nil
 	}
+}
+
+// MaxShellOutputRunes is the rune cap applied to captured shell output so a
+// verbose command cannot flood the model context window or a console
+// transcript. Every shell execution surface must apply it.
+const MaxShellOutputRunes = 16000
+
+// CapShellOutput truncates s to MaxShellOutputRunes runes, appending the
+// standard shell-output truncation marker when the cap bites.
+func CapShellOutput(s string) string {
+	if len([]rune(s)) <= MaxShellOutputRunes {
+		return s
+	}
+	return truncateRune(s, MaxShellOutputRunes) + fmt.Sprintf("\n... [truncated to %d chars]", MaxShellOutputRunes)
 }
 
 // truncateRune truncates a string to maxLen runes, appending "..." if truncated.

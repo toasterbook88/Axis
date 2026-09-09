@@ -21,6 +21,7 @@ func PersistPath(name string) string {
 // SaveToFile writes the conversation (excluding system messages) to the given path.
 func (c *Conversation) SaveToFile(path string) error {
 	var hist conversationHistory
+	c.mu.RLock()
 	for _, m := range c.messages {
 		// Skip system messages — they are reconstructed on load.
 		if m.Role == RoleSystem {
@@ -28,6 +29,7 @@ func (c *Conversation) SaveToFile(path string) error {
 		}
 		hist.Messages = append(hist.Messages, m)
 	}
+	c.mu.RUnlock()
 	data, err := json.MarshalIndent(hist, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal conversation: %w", err)
@@ -52,6 +54,8 @@ func (c *Conversation) LoadFromFile(path string) error {
 	if err := json.Unmarshal(data, &hist); err != nil {
 		return fmt.Errorf("unmarshal conversation: %w", err)
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, m := range hist.Messages {
 		// Skip system messages to avoid duplicates.
 		if m.Role == RoleSystem {
@@ -68,6 +72,8 @@ func (c *Conversation) LoadFromFile(path string) error {
 
 // HistoryCount returns the number of non-system messages in the conversation.
 func (c *Conversation) HistoryCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	n := 0
 	for _, m := range c.messages {
 		if m.Role != RoleSystem {

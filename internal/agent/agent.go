@@ -1188,6 +1188,9 @@ func (a *Agent) Conversation() *chat.Conversation {
 
 // ContextTokens returns the current estimated conversation tokens.
 func (a *Agent) ContextTokens() int {
+	if a == nil || a.conv == nil {
+		return 0
+	}
 	return a.conv.EstimateTokens()
 }
 
@@ -1238,6 +1241,14 @@ func (a *Agent) ExecuteToolDirect(ctx context.Context, name string, args json.Ra
 // SetModel updates the current active model name.
 func (a *Agent) SetModel(model string) {
 	a.model = model
+}
+
+// SafetyGate returns the shell safety gate used to check commands.
+func (a *Agent) SafetyGate() ShellSafetyGate {
+	if a == nil || a.safety == nil {
+		return DefaultSafetyGate(nil)
+	}
+	return a.safety
 }
 
 // SetRunShell replaces the local shell runner (e.g. after /model so OwnerLabel

@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/console"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
 var consoleClock = func() time.Time { return time.Date(2026, 8, 25, 21, 35, 0, 0, time.UTC) }
@@ -536,5 +540,288 @@ func TestLauncherDoesNotEmitForRetiredTurns(t *testing.T) {
 		if strings.Contains(next.(console.Model).View(), "late") {
 			t.Error("a retired turn's output was accepted by the model")
 		}
+	}
+}
+
+func TestConsoleShellEscapeShortcut(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	cmd := l.submit(context.Background())(1, "!echo hello-from-shell")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+
+	msgs := rec.all()
+	var found bool
+	for _, m := range msgs {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+			if strings.Contains(rendered, "hello-from-shell") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("shell output not captured in console entries: %+v", msgs)
+	}
+}
+
+func TestConsoleHelpShortcut(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.slash = func(cmd string) (string, error) {
+		if cmd == "/help" {
+			return "mock help text", nil
+		}
+		return "", errors.New("unexpected command")
+	}
+
+	cmd := l.submit(context.Background())(1, "?")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+
+	msgs := rec.all()
+	var found bool
+	for _, m := range msgs {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+			if strings.Contains(rendered, "mock help text") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("help output not captured in console entries: %+v", msgs)
+	}
+}
+
+func TestConsoleShellEscapeCancel(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	ready := filepath.Join(t.TempDir(), "shell-escape-ready")
+	cmd := l.submit(context.Background())(1, "!touch "+ready+" && sleep 30")
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- cmd()
+	}()
+
+	// Poll for the marker file instead of sleeping a fixed interval: the
+	// cancel below must land on a running subprocess, and polling makes
+	// readiness deterministic on slow or loaded machines.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shell escape never signalled readiness")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Cancel the turn
+	l.cancel(1)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 {
+			t.Fatalf("unexpected turn done message: %+v", msg)
+		}
+		if done.Err == nil {
+			t.Fatal("cancelled shell escape should report the kill as an error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shell command was not cancelled within timeout")
+	}
+}
+
+func TestConsoleShellEscapeOutputCapped(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	// seq emits well over 1MB of output; the console must cap it like every
+	// other shell execution surface instead of flooding the transcript.
+	cmd := l.submit(context.Background())(1, "!seq 1 200000")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+
+	var rendered string
+	for _, m := range rec.all() {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered += strings.Join(console.PlainAll(em.Entry.Render(100)), "\n")
+		}
+	}
+	if !strings.Contains(rendered, "[truncated to") {
+		t.Fatalf("expected truncation marker in capped shell output, got %d bytes", len(rendered))
+	}
+	// The cap is rune-based (agent.MaxShellOutputRunes); wrapping can expand
+	// short lines several-fold, so bound the flood generously while keeping it
+	// far below the ~1.4MB seq would otherwise print into the transcript.
+	if len(rendered) > 4*agent.MaxShellOutputRunes {
+		t.Fatalf("rendered shell output %d bytes exceeds the %d rune cap", len(rendered), 4*agent.MaxShellOutputRunes)
+	}
+	if strings.Contains(rendered, "\n200000") {
+		t.Fatal("uncapped tail of seq output reached the transcript")
+	}
+}
+
+func TestConsoleShellEscapeEmpty(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	cmd := l.submit(context.Background())(1, "!   ")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err == nil {
+		t.Fatalf("expected error for empty shell command, got: %+v", msg)
+	}
+	if len(rec.all()) != 0 {
+		t.Fatalf("empty shell command should not send manual EntryMsg, got: %+v", rec.all())
+	}
+}
+
+func TestConsoleFleetThrottleOnFailure(t *testing.T) {
+	calls := 0
+	loader := func(ctx context.Context) (*runtimectx.Context, error) {
+		calls++
+		return nil, errors.New("daemon offline")
+	}
+
+	var lastFleetCheck time.Time
+	var cachedFleet string = "unknown"
+	var fleetMu sync.Mutex
+
+	fleetFn := func() string {
+		fleetMu.Lock()
+		defer fleetMu.Unlock()
+		if !lastFleetCheck.IsZero() && time.Since(lastFleetCheck) < 5*time.Second {
+			return cachedFleet
+		}
+		lastFleetCheck = time.Now()
+		rctx, err := loader(context.Background())
+		if err == nil && rctx != nil && rctx.Snapshot != nil {
+			s := rctx.Snapshot.Summary
+			if s.TotalNodes > 0 {
+				if s.ReachableNodes == s.TotalNodes {
+					cachedFleet = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
+				} else {
+					cachedFleet = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
+				}
+			} else {
+				cachedFleet = "local"
+			}
+		} else {
+			cachedFleet = "unknown"
+		}
+		return cachedFleet
+	}
+
+	// Call 10 times in a tight loop
+	for i := 0; i < 10; i++ {
+		res := fleetFn()
+		if res != "unknown" {
+			t.Fatalf("call %d returned %q, want 'unknown'", i, res)
+		}
+	}
+
+	if calls != 1 {
+		t.Fatalf("loader called %d times, want exactly 1 (throttled)", calls)
+	}
+}
+
+func TestConsoleShellEscapeSafetyBlocked(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	// Test default safety gate blocking destructive command
+	cmd := l.submit(context.Background())(1, "!rm -rf /")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err == nil {
+		t.Fatalf("expected safety block error for '!rm -rf /', got: %+v", msg)
+	}
+	if !strings.Contains(done.Err.Error(), "blocked by safety check") {
+		t.Fatalf("error should cite safety gate block, got: %v", done.Err)
+	}
+
+	// Test custom safety gate
+	customCalled := false
+	l.safety = func(command string) (bool, string, int) {
+		customCalled = true
+		return false, "policy violation", 95
+	}
+
+	cmd2 := l.submit(context.Background())(2, "!echo test")
+	msg2 := cmd2()
+
+	if !customCalled {
+		t.Fatal("custom safety gate was not called")
+	}
+	done2, ok := msg2.(console.TurnDoneMsg)
+	if !ok || done2.Turn != 2 || done2.Err == nil {
+		t.Fatalf("expected error from custom safety gate, got: %+v", msg2)
+	}
+	if !strings.Contains(done2.Err.Error(), "policy violation") {
+		t.Fatalf("error should cite custom reason, got: %v", done2.Err)
+	}
+}
+
+func TestConsoleShellEscapeNonZeroExit(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	// Run command that exits non-zero
+	cmd := l.submit(context.Background())(1, "!sh -c 'exit 42'")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 {
+		t.Fatalf("unexpected turn done message structure: %+v", msg)
+	}
+	if done.Err == nil {
+		t.Fatal("expected non-zero exit to report non-nil TurnDoneMsg.Err")
+	}
+
+	// Verify an error entry was also sent to the console log
+	msgs := rec.all()
+	var foundError bool
+	for _, m := range msgs {
+		if em, ok := m.(console.EntryMsg); ok {
+			if _, isErr := em.Entry.(*console.ErrorEntry); isErr {
+				rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+				if strings.Contains(rendered, "command exited with error") {
+					foundError = true
+					break
+				}
+			}
+		}
+	}
+	if !foundError {
+		t.Fatalf("expected error entry rendered to console, got: %+v", msgs)
 	}
 }

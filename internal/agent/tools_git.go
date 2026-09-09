@@ -96,11 +96,8 @@ func (r *ToolRegistry) registerGitTools() {
 				return "No changes found.", nil
 			}
 
-			// Cap output
-			const maxOutput = 16000
-			if len([]rune(output)) > maxOutput {
-				output = truncateRune(output, maxOutput) + fmt.Sprintf("\n... [truncated to %d chars]", maxOutput)
-			}
+			// Cap output to prevent blowing up the context window.
+			output = CapShellOutput(output)
 			return output, nil
 		},
 	)

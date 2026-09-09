@@ -1,6 +1,9 @@
 package chat
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // Role constants for structured conversation messages.
 const (
@@ -36,6 +39,7 @@ type Message struct {
 
 // Conversation holds an ordered sequence of messages with token-budget awareness.
 type Conversation struct {
+	mu       sync.RWMutex
 	messages []Message
 	maxChars int // approximate token budget expressed as chars (4 chars ≈ 1 token)
 }
@@ -49,6 +53,8 @@ func NewConversation(maxTokens int) *Conversation {
 // Append adds a message and compacts older tool-result payloads when the
 // conversation exceeds the character budget.
 func (c *Conversation) Append(m Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.messages = append(c.messages, m)
 	if c.maxChars > 0 {
 		c.compact()
@@ -57,6 +63,8 @@ func (c *Conversation) Append(m Message) {
 
 // Messages returns the current message list (read-only copy).
 func (c *Conversation) Messages() []Message {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]Message, len(c.messages))
 	copy(out, c.messages)
 	return out
@@ -64,6 +72,8 @@ func (c *Conversation) Messages() []Message {
 
 // Clear removes all non-system messages, keeping the system prompt.
 func (c *Conversation) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var kept []Message
 	for _, m := range c.messages {
 		if m.Role == RoleSystem {
@@ -78,14 +88,22 @@ func (c *Conversation) Clear() {
 // caller is responsible for ensuring the snapshot is a valid conversation
 // (e.g. starts with a system message).
 func (c *Conversation) RestoreAll(msgs []Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.messages = append([]Message(nil), msgs...)
 }
 
 // Len returns the number of messages.
-func (c *Conversation) Len() int { return len(c.messages) }
+func (c *Conversation) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.messages)
+}
 
 // EstimateTokens returns a rough token count (chars / 4).
 func (c *Conversation) EstimateTokens() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.charLen() / 4
 }
 
@@ -150,6 +168,8 @@ func (c *Conversation) compactOldest() {
 // excluded (they are always preserved verbatim). The returned slice is a
 // copy; indices refer to positions in the current message list.
 func (c *Conversation) SummarizableMessages(protectLast int) []Message {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	n := len(c.messages) - protectLast
 	if n < 0 {
 		n = 0
@@ -170,6 +190,8 @@ func (c *Conversation) SummarizableMessages(protectLast int) []Message {
 // ReplaceRange replaces c.messages[start:end] with the given replacement
 // messages. Indices are clamped to valid bounds. A no-op if start > end.
 func (c *Conversation) ReplaceRange(start, end int, replacement []Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if start < 0 {
 		start = 0
 	}
@@ -191,6 +213,8 @@ func (c *Conversation) ReplaceRange(start, end int, replacement []Message) {
 // FirstNonSystemIndex returns the index of the first message that is not a
 // system message, or -1 if all messages are system messages.
 func (c *Conversation) FirstNonSystemIndex() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for i, m := range c.messages {
 		if m.Role != RoleSystem {
 			return i

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
@@ -1157,6 +1158,33 @@ func TestExecuteShellExitError(t *testing.T) {
 	}
 	if !strings.Contains(out, "[exit error]") {
 		t.Errorf("expected exit error annotation, got: %s", out)
+	}
+}
+
+func TestCapShellOutput(t *testing.T) {
+	// Exactly at the cap: returned unchanged, no marker.
+	atCap := strings.Repeat("x", MaxShellOutputRunes)
+	if got := CapShellOutput(atCap); got != atCap {
+		t.Errorf("output exactly at cap should pass through unchanged")
+	}
+
+	// Over the cap: head preserved, standard marker appended, bounded length.
+	over := strings.Repeat("x", 3*MaxShellOutputRunes)
+	got := CapShellOutput(over)
+	if !strings.HasPrefix(got, strings.Repeat("x", 1000)) {
+		t.Errorf("capped output should preserve the head of the input")
+	}
+	if !strings.Contains(got, "\n... [truncated to 16000 chars]") {
+		t.Errorf("capped output should carry the standard truncation marker, got suffix: %q", got[len(got)-60:])
+	}
+	if n := utf8.RuneCountInString(got); n > MaxShellOutputRunes+64 {
+		t.Errorf("capped output %d runes exceeds cap %d plus marker", n, MaxShellOutputRunes)
+	}
+
+	// Multibyte input truncates on rune boundaries, never mid-rune.
+	multi := strings.Repeat("é", 2*MaxShellOutputRunes)
+	if g := CapShellOutput(multi); !utf8.ValidString(g) {
+		t.Errorf("capped multibyte output must remain valid UTF-8")
 	}
 }
 

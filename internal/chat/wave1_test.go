@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -123,6 +125,37 @@ func TestConversationEstimateTokens(t *testing.T) {
 	if got := c.EstimateTokens(); got != 1 {
 		t.Fatalf("EstimateTokens() = %d, want 1", got)
 	}
+}
+
+func TestConversationConcurrentAccess(t *testing.T) {
+	c := NewConversation(1000)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Concurrently read tokens and messages
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = c.EstimateTokens()
+					_ = c.Messages()
+					_ = c.Len()
+				}
+			}
+		}()
+	}
+
+	// Concurrently append messages
+	for i := 0; i < 100; i++ {
+		c.Append(Message{Role: RoleUser, Content: fmt.Sprintf("message %d", i)})
+	}
+	close(stop)
+	wg.Wait()
 }
 
 func TestConversationCompactsOldToolResults(t *testing.T) {
