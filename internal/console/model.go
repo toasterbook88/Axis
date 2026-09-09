@@ -104,6 +104,7 @@ type Model struct {
 	width  int
 	height int
 
+	editor Editor
 	input  string
 	stream strings.Builder
 
@@ -139,6 +140,9 @@ type Options struct {
 	Cancel CancelFunc
 	Footer Footer
 
+	// History pre-seeds the command history ring.
+	History []string
+
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
@@ -158,8 +162,13 @@ func NewModel(opts Options) Model {
 	if grace <= 0 {
 		grace = defaultCancelGrace
 	}
+	ed := NewEditor()
+	if len(opts.History) > 0 {
+		ed.SetHistory(opts.History)
+	}
 	return Model{
 		width:       80,
+		editor:      ed,
 		submit:      opts.Submit,
 		cancel:      opts.Cancel,
 		footer:      opts.Footer,
@@ -283,8 +292,17 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) syncEditor() {
+	if len(m.editor.runes) == 0 && m.input != "" {
+		m.editor.SetText(m.input)
+	} else {
+		m.input = m.editor.Text()
+	}
+}
+
 // handleKey processes operator input.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.syncEditor()
 	key := msg.String()
 	if key != "ctrl+c" {
 		m.interrupts = 0
@@ -296,7 +314,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// not count toward the quit sequence: clearing a draft must not leave
 		// the session one accidental keystroke from exiting. Quitting takes
 		// two presses on an already-empty editor.
-		if m.input != "" {
+		if m.editor.Text() != "" {
+			m.editor.Clear()
 			m.input = ""
 			m.interrupts = 0
 			return m, nil
@@ -309,25 +328,76 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
+		if m.state == turnIdle {
+			m.editor.Clear()
+			m.input = ""
+			return m, nil
+		}
 		return m.requestCancel()
 
 	case "enter":
 		return m.submitInput()
 
 	case "backspace":
-		if m.input != "" {
-			runes := []rune(m.input)
-			m.input = string(runes[:len(runes)-1])
-		}
+		m.editor.Backspace()
+		m.input = m.editor.Text()
+		return m, nil
+
+	case "delete":
+		m.editor.Delete()
+		m.input = m.editor.Text()
+		return m, nil
+
+	case "left", "ctrl+b":
+		m.editor.MoveLeft()
+		return m, nil
+
+	case "right", "ctrl+f":
+		m.editor.MoveRight()
+		return m, nil
+
+	case "home", "ctrl+a":
+		m.editor.MoveHome()
+		return m, nil
+
+	case "end", "ctrl+e":
+		m.editor.MoveEnd()
+		return m, nil
+
+	case "ctrl+u":
+		m.editor.DeleteToStart()
+		m.input = m.editor.Text()
+		return m, nil
+
+	case "ctrl+k":
+		m.editor.DeleteToEnd()
+		m.input = m.editor.Text()
+		return m, nil
+
+	case "ctrl+w":
+		m.editor.DeleteWordBefore()
+		m.input = m.editor.Text()
+		return m, nil
+
+	case "up", "ctrl+p":
+		m.editor.HistoryUp()
+		m.input = m.editor.Text()
+		return m, nil
+
+	case "down", "ctrl+n":
+		m.editor.HistoryDown()
+		m.input = m.editor.Text()
 		return m, nil
 	}
 
 	// Space arrives as its own key type rather than a rune.
 	switch msg.Type {
 	case tea.KeyRunes:
-		m.input += string(msg.Runes)
+		m.editor.Insert(string(msg.Runes))
+		m.input = m.editor.Text()
 	case tea.KeySpace:
-		m.input += " "
+		m.editor.Insert(" ")
+		m.input = m.editor.Text()
 	}
 	return m, nil
 }
@@ -337,7 +407,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // not considered finished until it acknowledges or the grace period expires.
 func (m Model) requestCancel() (tea.Model, tea.Cmd) {
 	if len(m.queued) > 0 {
-		m.input = strings.Join(m.queued, " ")
+		m.editor.SetText(strings.Join(m.queued, " "))
+		m.input = m.editor.Text()
 		m.queued = nil
 	}
 	if m.state != turnRunning {
@@ -363,11 +434,12 @@ func (m Model) requestCancel() (tea.Model, tea.Cmd) {
 // submitInput commits the typed line. While a turn is in flight the line is
 // queued as a steering message and delivered at the next turn boundary.
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.input)
+	m.syncEditor()
+	text := strings.TrimSpace(m.editor.Submit())
+	m.input = ""
 	if text == "" {
 		return m, nil
 	}
-	m.input = ""
 
 	if m.state != turnIdle {
 		m.queued = append(m.queued, text)
@@ -402,8 +474,14 @@ func (m Model) finishTurn(err error) (Model, tea.Cmd) {
 	m.retired = m.turn
 
 	var cmds []tea.Cmd
-	if text := strings.TrimSpace(m.stream.String()); text != "" {
-		cmds = append(cmds, m.commit(NewAgentEntry(m.now(), text)))
+	if raw := strings.TrimSpace(m.stream.String()); raw != "" {
+		thought, answer := extractThought(raw)
+		if thought != "" {
+			cmds = append(cmds, m.commit(NewThinkingEntry(m.now(), thought)))
+		}
+		if answer != "" {
+			cmds = append(cmds, m.commit(NewAgentEntry(m.now(), answer)))
+		}
 	}
 	m.stream.Reset()
 
@@ -441,8 +519,17 @@ func (m Model) View() string {
 	// An in-progress response lives here until the turn ends, so scrollback
 	// never receives a partial line.
 	if text := m.stream.String(); text != "" {
-		for _, l := range wrap(text, effectiveWidth(m.width)) {
-			lines = append(lines, Line{Text: l})
+		_, answer, inThought := parseStreamThought(text)
+		if inThought {
+			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " thinking...", Style: StyleMuted})
+		} else {
+			display := text
+			if answer != "" {
+				display = answer
+			}
+			for _, l := range wrap(display, effectiveWidth(m.width)) {
+				lines = append(lines, Line{Text: l})
+			}
 		}
 	}
 
@@ -457,7 +544,13 @@ func (m Model) View() string {
 		lines = append(lines, m.overlay.Render(m.width)...)
 	}
 
-	lines = append(lines, Line{Gutter: "> ", Text: m.input})
+	m.syncEditor()
+	lines = append(lines, Line{
+		Gutter:    "> ",
+		Text:      m.editor.Text(),
+		HasCursor: true,
+		CursorPos: m.editor.Cursor(),
+	})
 
 	if m.footer != nil {
 		lines = append(lines, m.footer.Render(m.width)...)
@@ -484,3 +577,6 @@ func (m Model) Queued() []string { return append([]string(nil), m.queued...) }
 
 // Input returns the current editor contents.
 func (m Model) Input() string { return m.input }
+
+// History returns the history ring contents.
+func (m Model) History() []string { return m.editor.History() }

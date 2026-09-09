@@ -54,9 +54,11 @@ const (
 // indentation aligning a continuation) plus styled body text. Both fields are
 // plain — no escape sequences — so Gutter+Text is the exact cell width.
 type Line struct {
-	Gutter string
-	Text   string
-	Style  Style
+	Gutter    string
+	Text      string
+	Style     Style
+	HasCursor bool
+	CursorPos int // rune index within Text
 }
 
 // Width returns the terminal cells the line occupies.
@@ -73,7 +75,31 @@ func Paint(l Line) string {
 	if strings.TrimSpace(gutter) != "" {
 		gutter = ui.Dim(gutter)
 	}
-	return gutter + paintText(l.Text, l.Style)
+	if !l.HasCursor || !ui.Enabled() {
+		return gutter + paintText(l.Text, l.Style)
+	}
+	return gutter + paintWithCursor(l.Text, l.Style, l.CursorPos)
+}
+
+func paintWithCursor(text string, style Style, pos int) string {
+	runes := []rune(text)
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(runes) {
+		pos = len(runes)
+	}
+
+	before := paintText(string(runes[:pos]), style)
+	var cursorChar string
+	var after string
+	if pos < len(runes) {
+		cursorChar = lipgloss.NewStyle().Reverse(true).Render(string(runes[pos]))
+		after = paintText(string(runes[pos+1:]), style)
+	} else {
+		cursorChar = lipgloss.NewStyle().Reverse(true).Render(" ")
+	}
+	return before + cursorChar + after
 }
 
 func paintText(text string, style Style) string {

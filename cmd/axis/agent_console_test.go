@@ -538,3 +538,67 @@ func TestLauncherDoesNotEmitForRetiredTurns(t *testing.T) {
 		}
 	}
 }
+
+func TestConsoleShellEscapeShortcut(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	cmd := l.submit(context.Background())(1, "!echo hello-from-shell")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+
+	msgs := rec.all()
+	var found bool
+	for _, m := range msgs {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+			if strings.Contains(rendered, "hello-from-shell") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("shell output not captured in console entries: %+v", msgs)
+	}
+}
+
+func TestConsoleHelpShortcut(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.slash = func(cmd string) (string, error) {
+		if cmd == "/help" {
+			return "mock help text", nil
+		}
+		return "", errors.New("unexpected command")
+	}
+
+	cmd := l.submit(context.Background())(1, "?")
+	msg := cmd()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+
+	msgs := rec.all()
+	var found bool
+	for _, m := range msgs {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+			if strings.Contains(rendered, "mock help text") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("help output not captured in console entries: %+v", msgs)
+	}
+}

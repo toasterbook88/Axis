@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -66,6 +68,12 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 		if strings.HasPrefix(prompt, "/") {
 			return l.runSlash(turn, prompt)
 		}
+		if prompt == "?" {
+			return l.runSlash(turn, "/help")
+		}
+		if strings.HasPrefix(prompt, "!") {
+			return l.runShell(parent, turn, strings.TrimPrefix(prompt, "!"))
+		}
 
 		ctx, cancel := context.WithTimeout(parent, l.timeout)
 
@@ -119,6 +127,42 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 			l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), strings.TrimSpace(out))})
 		}
 		return console.TurnDoneMsg{Turn: turn, Err: err}
+	}
+}
+
+// runShell executes an instant local shell escape (!<cmd>) directly.
+func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string) tea.Cmd {
+	cmdLine = strings.TrimSpace(cmdLine)
+	return func() tea.Msg {
+		if cmdLine == "" {
+			if l.prog != nil {
+				l.prog.Send(console.EntryMsg{
+					Turn:  turn,
+					Entry: console.NewErrorEntry(l.now(), "empty shell command"),
+				})
+			}
+			return console.TurnDoneMsg{Turn: turn, Err: errors.New("empty shell command")}
+		}
+
+		ctx, cancel := context.WithTimeout(parent, l.timeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdLine)
+		out, err := cmd.CombinedOutput()
+		trimmed := strings.TrimRight(string(out), "\n")
+		if trimmed != "" && l.prog != nil {
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewNoticeEntry(l.now(), trimmed),
+			})
+		}
+		if err != nil && l.prog != nil {
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewErrorEntry(l.now(), fmt.Sprintf("command exited with error: %v", err)),
+			})
+		}
+		return console.TurnDoneMsg{Turn: turn, Err: nil}
 	}
 }
 
@@ -307,9 +351,75 @@ func runAgentConsole(
 	launcher := newConsoleLauncher(a.RunWithSinks, timeout, time.Now)
 	launcher.slash = consoleSlashRunner(a, mcpReg, target, loader)
 
+	var initialHistory []string
+	if a != nil && a.Conversation() != nil {
+		for _, msg := range a.Conversation().Messages() {
+			if msg.Role == chat.RoleUser && strings.TrimSpace(msg.Content) != "" {
+				initialHistory = append(initialHistory, msg.Content)
+			}
+		}
+	}
+
+	var lastFleetCheck time.Time
+	var cachedFleet string = "unknown"
+	var fleetMu sync.Mutex
+
+	footer := console.NewStatusFooter(console.StatusFooterConfig{
+		Model: func() string {
+			if target.Model != "" {
+				return target.Model
+			}
+			if target.ID != "" {
+				return target.ID
+			}
+			return "default"
+		},
+		UsedTokens: func() int {
+			if a != nil && a.Conversation() != nil {
+				return a.Conversation().EstimateTokens()
+			}
+			return 0
+		},
+		MaxTokens: func() int {
+			if a != nil {
+				return a.MaxTokens()
+			}
+			return 32768
+		},
+		Mode: func() string {
+			if a != nil {
+				return string(a.Autonomy())
+			}
+			return "default"
+		},
+		Fleet: func() string {
+			fleetMu.Lock()
+			defer fleetMu.Unlock()
+			if time.Since(lastFleetCheck) < 5*time.Second && cachedFleet != "unknown" {
+				return cachedFleet
+			}
+			lastFleetCheck = time.Now()
+			rctx, err := loader(ctx)
+			if err == nil && rctx != nil && rctx.Snapshot != nil {
+				s := rctx.Snapshot.Summary
+				if s.TotalNodes > 0 {
+					if s.ReachableNodes == s.TotalNodes {
+						cachedFleet = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
+					} else {
+						cachedFleet = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
+					}
+					return cachedFleet
+				}
+			}
+			return cachedFleet
+		},
+	})
+
 	model := console.NewModel(console.Options{
-		Submit: launcher.submit(ctx),
-		Cancel: launcher.cancel,
+		Submit:  launcher.submit(ctx),
+		Cancel:  launcher.cancel,
+		Footer:  footer,
+		History: initialHistory,
 	})
 
 	prog := tea.NewProgram(model, consoleOptions(ctx).teaOptions()...)

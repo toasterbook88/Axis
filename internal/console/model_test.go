@@ -555,3 +555,117 @@ func TestTurnIndependentEntriesSurviveIdle(t *testing.T) {
 		t.Errorf("turn-independent notice was dropped while idle:\n%s", got)
 	}
 }
+
+func TestModelCursorNavigationAndEdits(t *testing.T) {
+	m := newTestModel(noopSubmit)
+	m = typeText(m, "hello")
+
+	// Left twice -> cursor on 'l'
+	m, _ = press(m, tea.KeyLeft)
+	m, _ = press(m, tea.KeyLeft)
+	if m.editor.Cursor() != 3 {
+		t.Fatalf("cursor = %d, want 3", m.editor.Cursor())
+	}
+
+	// Insert X
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	m = updated.(Model)
+	if m.Input() != "helXlo" {
+		t.Fatalf("input = %q, want 'helXlo'", m.Input())
+	}
+
+	// Home
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = updated.(Model)
+	if m.editor.Cursor() != 0 {
+		t.Fatalf("after home: cursor = %d, want 0", m.editor.Cursor())
+	}
+
+	// End
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(Model)
+	if m.editor.Cursor() != 6 {
+		t.Fatalf("after end: cursor = %d, want 6", m.editor.Cursor())
+	}
+}
+
+func TestModelHistoryRingViaKeys(t *testing.T) {
+	m := newTestModel(noopSubmit)
+
+	// Submit cmd1
+	m = typeText(m, "cmd1")
+	m, _ = press(m, tea.KeyEnter)
+	updated, _ := m.Update(TurnDoneMsg{Turn: m.Turn()})
+	m = updated.(Model)
+
+	// Submit cmd2
+	m = typeText(m, "cmd2")
+	m, _ = press(m, tea.KeyEnter)
+	updated, _ = m.Update(TurnDoneMsg{Turn: m.Turn()})
+	m = updated.(Model)
+
+	// Active draft
+	m = typeText(m, "draft")
+
+	// Up -> cmd2
+	m, _ = press(m, tea.KeyUp)
+	if m.Input() != "cmd2" {
+		t.Fatalf("up 1: input = %q, want 'cmd2'", m.Input())
+	}
+
+	// Up -> cmd1
+	m, _ = press(m, tea.KeyUp)
+	if m.Input() != "cmd1" {
+		t.Fatalf("up 2: input = %q, want 'cmd1'", m.Input())
+	}
+
+	// Down -> cmd2
+	m, _ = press(m, tea.KeyDown)
+	if m.Input() != "cmd2" {
+		t.Fatalf("down 1: input = %q, want 'cmd2'", m.Input())
+	}
+
+	// Down -> draft
+	m, _ = press(m, tea.KeyDown)
+	if m.Input() != "draft" {
+		t.Fatalf("down 2: input = %q, want 'draft'", m.Input())
+	}
+}
+
+func TestModelThinkingBlockExtractedOnTurnDone(t *testing.T) {
+	m := newTestModel(noopSubmit)
+	m = typeText(m, "analyze cluster")
+	m, _ = press(m, tea.KeyEnter)
+
+	// Stream includes <think>...</think> and final answer
+	streamChunk := "<think>\nevaluating node health\n</think>\nCluster is operational."
+	updated, _ := m.Update(StreamChunkMsg{Turn: m.Turn(), Text: streamChunk})
+	m = updated.(Model)
+
+	// Finish turn commits entries
+	updated, out := m.Update(TurnDoneMsg{Turn: m.Turn()})
+	_ = updated.(Model)
+
+	lines := printed(out)
+	fullText := strings.Join(lines, "\n")
+
+	if !strings.Contains(fullText, "evaluating node health") {
+		t.Fatalf("thought missing from committed output:\n%s", fullText)
+	}
+	if !strings.Contains(fullText, "Cluster is operational.") {
+		t.Fatalf("answer missing from committed output:\n%s", fullText)
+	}
+}
+
+func TestModelIdleEscClearsInput(t *testing.T) {
+	m := newTestModel(noopSubmit)
+	m = typeText(m, "stale draft")
+	if m.Input() != "stale draft" {
+		t.Fatalf("input = %q, want 'stale draft'", m.Input())
+	}
+
+	m, _ = press(m, tea.KeyEsc)
+	if m.Input() != "" {
+		t.Fatalf("after esc when idle: input = %q, want empty", m.Input())
+	}
+}
