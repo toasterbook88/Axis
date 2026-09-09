@@ -67,6 +67,19 @@ func (o *ModelPickerOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 	case "esc", "ctrl+c", "q":
 		o.resolve("")
 		return nil, nil
+	case "up", "k", "ctrl+p":
+		if o.cursor > 0 {
+			o.cursor--
+		}
+	case "down", "j", "ctrl+n":
+		if o.cursor < len(o.items)-1 {
+			o.cursor++
+		}
+	case "enter":
+		if it := o.items[o.cursor]; !it.Disabled {
+			o.resolve(it.ID)
+			return nil, nil
+		}
 	}
 	return o, nil
 }
