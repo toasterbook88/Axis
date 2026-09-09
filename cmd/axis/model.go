@@ -38,6 +38,10 @@ var loadModelConfig = func() (*config.Config, error) {
 	return config.Load(config.DefaultConfigPath())
 }
 
+var signalModelDaemonRefresh = func(ctx context.Context, cacheAddr, trigger string) error {
+	return refreshDaemonCacheWithTrigger(ctx, cacheAddr, trigger)
+}
+
 type modelProcessRunner interface {
 	Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error
 	Stop(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, target modellife.StopTarget) (modelStopDisposition, error)
@@ -651,7 +655,14 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if startErr != nil {
 		return fmt.Errorf("started but probe failed: %w", startErr)
 	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
 	return nil
+}
+
+func warnModelDaemonRefresh(cmd *cobra.Command, cacheAddr, trigger string) {
+	if err := signalModelDaemonRefresh(context.Background(), cacheAddr, trigger); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: daemon cache refresh failed: %v\n", err)
+	}
 }
 
 func writeModelStartReceipt(cmd *cobra.Command, receipt models.ModelOperationReceipt, format string) error {
@@ -691,6 +702,7 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 		return writeErr
 	}
 	if disposition == modelStopStopped {
+		warnModelDaemonRefresh(cmd, cacheAddr, "manual")
 		return nil
 	}
 	return ExitCodeError{
@@ -777,6 +789,7 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 		return stopErr
 	}
 	if disposition == modelStopStopped {
+		warnModelDaemonRefresh(cmd, cacheAddr, "manual")
 		return nil
 	}
 	return ExitCodeError{
@@ -916,6 +929,19 @@ func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *conf
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return models.NodeFacts{}, nil, fmt.Errorf("node is required")
+	}
+	cfg, _ := loadModelConfig()
+	var targetCfg *config.NodeConfig
+	if cfg != nil {
+		for i := range cfg.Nodes {
+			if cfg.Nodes[i].Name == name {
+				targetCfg = &cfg.Nodes[i]
+				break
+			}
+		}
+	}
+	if nf, cfgNode, ok := resolveFromDaemonCache(ctx, "", name, targetCfg); ok {
+		return nf, cfgNode, nil
 	}
 	snap, err := loadModelSnapshot(ctx)
 	if err != nil {

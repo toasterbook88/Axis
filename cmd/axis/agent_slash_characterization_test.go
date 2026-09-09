@@ -74,10 +74,9 @@ func TestCharAllVerbsAreHandled(t *testing.T) {
 				// daemon it succeeds. Both outcomes are today's behavior; the
 				// dedicated row below pins the error string when one surfaces.
 			case "/skills":
-				// /skills always loads the runtime context first; without a
-				// nodes.yaml it errors the same way /reservations does. Same
-				// environment-dependent contract: error or success are both
-				// today's behavior depending on whether a daemon/config exists.
+				// /skills uses the session runtime loader (cache-first, same
+				// as startup). A nil session runtime prints the empty-skills
+				// path; a loader error is returned. Dedicated tests pin both.
 			default:
 				t.Fatalf("%s: unexpected error: %v", verb, err)
 			}

@@ -12,6 +12,7 @@ import (
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -19,18 +20,19 @@ import (
 // wiring. agentCmd assembles it; runAgentInteractive consumes it. Keeping the
 // struct explicit makes the runtime entry testable without a live TTY.
 type agentREPLConfig struct {
-	Agent        *agent.Agent
-	MCPRegistry  *mcpclient.Registry
-	ActiveTarget ModelChoice
-	Timeout      time.Duration
-	HistoryPath  string
-	UseConsole   bool
-	AutoApprove  bool
-	Autonomy     string
-	MaxTurns     int
-	ModelChoices []ModelChoice
-	Ctx          context.Context
-	Out, ErrOut  io.Writer
+	Agent         *agent.Agent
+	MCPRegistry   *mcpclient.Registry
+	ActiveTarget  ModelChoice
+	Timeout       time.Duration
+	HistoryPath   string
+	UseConsole    bool
+	AutoApprove   bool
+	Autonomy      string
+	MaxTurns      int
+	ModelChoices  []ModelChoice
+	Ctx           context.Context
+	Out, ErrOut   io.Writer
+	RuntimeLoader func(context.Context) (*runtimectx.Context, error)
 }
 
 // runAgentInteractive is the named REPL runtime entry extracted from agentCmd.
@@ -41,7 +43,7 @@ func runAgentInteractive(cfg agentREPLConfig) error {
 		if !consoleTTY() {
 			return fmt.Errorf("--console requires an interactive terminal")
 		}
-		return runAgentConsole(cfg.Ctx, cfg.Agent, cfg.ErrOut, cfg.Timeout, cfg.HistoryPath, cfg.MCPRegistry, cfg.ActiveTarget)
+		return runAgentConsole(cfg.Ctx, cfg.Agent, cfg.ErrOut, cfg.Timeout, cfg.HistoryPath, cfg.MCPRegistry, cfg.ActiveTarget, cfg.RuntimeLoader)
 	}
 	return runAgentREPLSession(cfg)
 }
@@ -111,14 +113,19 @@ func runAgentREPLSession(cfg agentREPLConfig) error {
 	// expose prompts to other local users.
 	rl, err := readline.NewEx(rlCfg)
 	if err != nil {
-		return runPlainAgentREPL(cfg.Ctx, cfg.Agent, out, errW, cfg.Timeout, cfg.HistoryPath, cfg.MCPRegistry, cfg.ActiveTarget)
+		return runPlainAgentREPL(cfg.Ctx, cfg.Agent, out, errW, cfg.Timeout, cfg.HistoryPath, cfg.MCPRegistry, cfg.ActiveTarget, cfg.RuntimeLoader)
 	}
 	defer rl.Close()
+
+	loader := cfg.RuntimeLoader
+	if loader == nil {
+		loader = loadAgentShellRuntime
+	}
 
 	session := &agentREPLSession{
 		Agent:        cfg.Agent,
 		MCPRegistry:  cfg.MCPRegistry,
-		Runtime:      loadAgentShellRuntime,
+		Runtime:      loader,
 		Selector:     &REPLSelector{terminal: ui.NewStdTerminal(os.Stdin, out), in: rl, out: out},
 		In:           rl,
 		Out:          out,

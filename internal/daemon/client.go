@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -249,19 +248,7 @@ func runHTTPClientForAddr(addr string) (*http.Client, string) {
 }
 
 func httpClientForAddrWithTimeout(addr string, timeout time.Duration) (*http.Client, string) {
-	client := &http.Client{
-		Timeout: timeout,
-	}
-	if auth.IsUnixAddr(addr) {
-		client.Transport = &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", addr)
-			},
-		}
-		return client, "http://localhost"
-	}
-	return client, addr
+	return auth.HttpClientForAddrWithTimeout(addr, timeout)
 }
 
 func fetchMetaWithToken(ctx context.Context, addr string, token string) (Metadata, error) {

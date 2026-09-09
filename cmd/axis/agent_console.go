@@ -14,18 +14,14 @@ import (
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
-// The transcript console is an experimental interactive surface for
-// `axis agent`. It is opt-in behind --console because it cannot yet execute
-// tools: Bubble Tea owns stdin in raw mode, so the agent's synchronous
-// stdin approval prompt cannot run underneath it. Until an asynchronous
-// approval overlay exists the console denies every confirmation rather than
-// auto-approving or fighting the input reader for the terminal.
-//
-// Everything else — the plain REPL, single-shot prompts, non-TTY output — is
-// untouched by this file.
+// The transcript console is an opt-in interactive surface for `axis agent`
+// (--console, interactive TTY only). Bubble Tea owns stdin in raw mode, so
+// approvals go through ApprovalOverlay rather than a synchronous stdin prompt.
+// Yes is an explicit y; Enter does not approve; timeout and context cancel deny.
 
 // consoleRunner executes one agent turn. The launcher injects the real
 // Agent.RunWithSinks; tests inject a fake.
@@ -145,23 +141,80 @@ func (l *consoleLauncher) draining() int {
 	return l.inFlight
 }
 
-// consoleConfirm fails closed. It never reads stdin: Bubble Tea holds the
-// terminal in raw mode, so a synchronous prompt would corrupt the input loop
-// and the display. Every attempt is reported to the operator so a denial is
-// never silent, and nothing is ever auto-approved.
-func consoleConfirm(send func(tea.Msg), now func() time.Time) agent.ConfirmFunc {
+const defaultApprovalTimeout = 2 * time.Minute
+
+// consoleConfirm bridges agent tool confirmation into Bubble Tea's overlay system.
+// It never reads stdin: Bubble Tea holds the terminal in raw mode, so a synchronous prompt
+// would corrupt the input loop and the display. Instead, it dispatches an ApprovalOverlay
+// to the program's event loop and waits on a Go channel for the operator's decision.
+func consoleConfirm(ctx context.Context, send func(tea.Msg), now func() time.Time) agent.ConfirmFunc {
+	return consoleConfirmWithTimeout(ctx, send, now, defaultApprovalTimeout)
+}
+
+func consoleConfirmWithTimeout(ctx context.Context, send func(tea.Msg), now func() time.Time, timeout time.Duration) agent.ConfirmFunc {
 	if now == nil {
 		now = time.Now
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return func(toolName, description string, safetyScore int) agent.ConfirmResult {
-		if send != nil {
-			send(console.EntryMsg{Entry: console.NewApprovalEntry(
-				now(), toolName, "", safetyScore,
-				"denied: interactive approval is not implemented in the console yet",
-				console.DecisionDenied,
-			)})
+		if send == nil {
+			return agent.ConfirmNo
 		}
-		return agent.ConfirmNo
+
+		reply := make(chan agent.ConfirmResult, 1)
+		overlay := console.NewApprovalOverlay(toolName, description, safetyScore, reply)
+		send(console.SetOverlayMsg{Overlay: overlay})
+
+		var result agent.ConfirmResult
+		var reason string
+		var decision console.Decision
+
+		if timeout <= 0 {
+			timeout = defaultApprovalTimeout
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case res := <-reply:
+			result = res
+			switch res {
+			case agent.ConfirmYes:
+				decision = console.DecisionOnce
+				reason = "approved once"
+			case agent.ConfirmAlways:
+				decision = console.DecisionSession
+				reason = "auto-approved for session"
+			case agent.ConfirmNever:
+				decision = console.DecisionBlocked
+				reason = "blocked for session"
+			default:
+				decision = console.DecisionDenied
+				reason = "denied by operator"
+			}
+		case <-timer.C:
+			// Dismiss overlay if timed out
+			send(console.SetOverlayMsg{Overlay: nil})
+			result = agent.ConfirmNo
+			decision = console.DecisionDenied
+			reason = "approval timed out (denied)"
+		case <-ctx.Done():
+			// Dismiss overlay if context canceled
+			send(console.SetOverlayMsg{Overlay: nil})
+			result = agent.ConfirmNo
+			decision = console.DecisionDenied
+			reason = "approval canceled (denied)"
+		}
+
+		send(console.EntryMsg{Entry: console.NewApprovalEntry(
+			now(), toolName, "", safetyScore,
+			reason,
+			decision,
+		)})
+
+		return result
 	}
 }
 
@@ -169,13 +222,17 @@ func consoleConfirm(send func(tea.Msg), now func() time.Time) agent.ConfirmFunc 
 // Output is captured rather than written to the terminal, and both the line
 // reader and the selector refuse, so no slash command can read stdin out from
 // under Bubble Tea.
-func consoleSlashRunner(a *agent.Agent, mcpReg *mcpclient.Registry, target ModelChoice) func(string) (string, error) {
+func consoleSlashRunner(a *agent.Agent, mcpReg *mcpclient.Registry, target ModelChoice, optionalLoader ...func(context.Context) (*runtimectx.Context, error)) func(string) (string, error) {
+	loader := loadAgentShellRuntime
+	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
+		loader = optionalLoader[0]
+	}
 	return func(line string) (string, error) {
 		var out strings.Builder
 		session := &agentREPLSession{
 			Agent:        a,
 			MCPRegistry:  mcpReg,
-			Runtime:      loadAgentShellRuntime,
+			Runtime:      loader,
 			Selector:     refusingSelector{},
 			In:           refusingLineReader{},
 			Out:          &out,
@@ -241,9 +298,14 @@ func runAgentConsole(
 	historyPath string,
 	mcpReg *mcpclient.Registry,
 	target ModelChoice,
+	optionalLoader ...func(context.Context) (*runtimectx.Context, error),
 ) error {
+	loader := loadAgentShellRuntime
+	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
+		loader = optionalLoader[0]
+	}
 	launcher := newConsoleLauncher(a.RunWithSinks, timeout, time.Now)
-	launcher.slash = consoleSlashRunner(a, mcpReg, target)
+	launcher.slash = consoleSlashRunner(a, mcpReg, target, loader)
 
 	model := console.NewModel(console.Options{
 		Submit: launcher.submit(ctx),
@@ -255,10 +317,7 @@ func runAgentConsole(
 
 	// Approvals fail closed. Installing this before the first turn guarantees
 	// no code path can reach the agent's stdin prompt while tea owns the tty.
-	a.SetConfirm(consoleConfirm(prog.Send, time.Now))
-
-	fmt.Fprintf(errW, "%s transcript console (experimental): tool approvals are denied; use the plain REPL to execute tools\n",
-		ui.Yellow("warning:"))
+	a.SetConfirm(consoleConfirm(ctx, prog.Send, time.Now))
 
 	// Restore the terminal whatever happens, including a panic in a view.
 	defer prog.Kill()

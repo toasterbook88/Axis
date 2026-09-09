@@ -238,7 +238,7 @@ HDD penalty: −15 for heavy inference.
 | `axis serve [--addr] [--refresh]` | HTTP API + daemon cache |
 | `axis daemon` | Lifecycle/cache commands plus native `service install\|status\|uninstall`; `status` emits `axis.output/v1` JSON |
 | `axis chat` | Removed; prints `use axis agent` |
-| `axis agent [--auto-approve] [--autonomy MODE] [--console]` | Agentic tool-calling assistant; REPL slash commands `/plan /todo /diff /undo /compact /autonomy /export /fleet`; `--console` opens the experimental transcript console (interactive TTY only; tool approvals are denied) |
+| `axis agent [--auto-approve] [--autonomy MODE] [--console] [--live]` | Agentic tool-calling assistant; REPL slash commands `/plan /todo /diff /undo /compact /autonomy /export /fleet`; default cluster context is daemon/disk cache (`LoadCached`), `--live` is an explicit discovery sweep. `--console` opens the transcript console (interactive TTY); tool approvals use an overlay (`y` yes, `n` no; Enter does not approve; timeout and cancel deny) |
 | `axis llm` | Removed; prints `use axis ai route` |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
 | `axis model` | List/inspect resident instances, dry-run placement planning, start/stop llama-server, await readiness, or query models |

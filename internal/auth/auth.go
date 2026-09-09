@@ -1,13 +1,17 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/persist"
 )
@@ -94,10 +98,33 @@ func SaveToken(token string) error {
 }
 
 // IsUnixAddr returns true if the address is a Unix socket path.
-// Requires an explicit path prefix (/, ./, ../) to avoid misidentifying
+// Requires an explicit path prefix (/, ./, ../, unix://) to avoid misidentifying
 // bare hostnames or IP addresses.
 func IsUnixAddr(addr string) bool {
 	return strings.HasPrefix(addr, "/") ||
 		strings.HasPrefix(addr, "./") ||
-		strings.HasPrefix(addr, "../")
+		strings.HasPrefix(addr, "../") ||
+		strings.HasPrefix(addr, "unix://")
+}
+
+// HttpClientForAddrWithTimeout returns an http.Client and base URL for the given address.
+// If addr is a Unix domain socket (checked via IsUnixAddr), it configures a Unix dialer
+// with keep-alives disabled to avoid leaking idle connections, and returns "http://localhost"
+// as the base URL.
+func HttpClientForAddrWithTimeout(addr string, timeout time.Duration) (*http.Client, string) {
+	client := &http.Client{
+		Timeout: timeout,
+	}
+	if IsUnixAddr(addr) {
+		socketPath := strings.TrimPrefix(addr, "unix://")
+		client.Transport = &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", socketPath)
+			},
+		}
+		return client, "http://localhost"
+	}
+	return client, addr
 }
