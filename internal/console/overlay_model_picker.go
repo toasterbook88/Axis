@@ -33,7 +33,9 @@ type ModelPickerOverlay struct {
 var _ Overlay = (*ModelPickerOverlay)(nil)
 
 // NewModelPickerOverlay constructs the modal. The reply channel receives the
-// selected PickerItem.ID, or "" when the operator dismisses it.
+// selected PickerItem.ID, or "" when the operator dismisses it. It must have
+// capacity >= 1 (buffered): a resolve to a full or unbuffered channel is
+// dropped without error.
 func NewModelPickerOverlay(title string, items []PickerItem, reply chan<- string) *ModelPickerOverlay {
 	return &ModelPickerOverlay{title: title, items: items, reply: reply}
 }
@@ -80,6 +82,9 @@ func (o *ModelPickerOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 			o.cursor++
 		}
 	case "enter":
+		if o.cursor >= len(o.items) {
+			return o, nil
+		}
 		if it := o.items[o.cursor]; !it.Disabled {
 			o.resolve(it.ID)
 			return nil, nil
@@ -94,6 +99,9 @@ const pickerWindowRows = 12
 
 // clipRunes truncates s to n runes, appending "…" when it bites.
 func clipRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	runes := []rune(s)
 	if len(runes) <= n {
 		return s
@@ -166,14 +174,14 @@ func (o *ModelPickerOverlay) Render(width int) []Line {
 		if it.Detail != "" {
 			text += " — " + it.Detail
 		}
-		lines = append(lines, Line{Text: clipRunes("│ "+glyph+text, boxWidth-1), Style: style})
+		lines = append(lines, Line{Text: "│ " + glyph + clipRunes(text, avail), Style: style})
 	}
 	if end < len(o.items) {
 		lines = append(lines, Line{Text: fmt.Sprintf("│   … %d below", len(o.items)-end), Style: StyleMuted})
 	}
 
 	lines = append(lines, Line{Text: "│", Style: StyleMuted})
-	lines = append(lines, Line{Text: "│ ↑/↓ navigate  enter select  esc cancel", Style: StyleStrong})
+	lines = append(lines, Line{Text: clipRunes("│ ↑/↓ navigate  enter select  esc cancel", boxWidth-1), Style: StyleStrong})
 	lines = append(lines, Line{Text: fmt.Sprintf("└%s", strings.Repeat("─", boxWidth-1)), Style: StyleAccent})
 
 	return lines

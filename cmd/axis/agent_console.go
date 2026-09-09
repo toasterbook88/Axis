@@ -255,7 +255,9 @@ func (w *modelNoticeWriter) Write(p []byte) (int, error) {
 }
 
 // pickerItems converts the collected catalog into picker rows using the same
-// detail formatting the REPL selector shows.
+// provider/node/endpoint detail formatting the REPL selector shows; the
+// disabled reason is preserved so the console shows why a row is not
+// selectable (the overlay adds its generic "(unreachable)" label marker).
 func pickerItems(choices []ModelChoice) []console.PickerItem {
 	items := make([]console.PickerItem, 0, len(choices))
 	for _, c := range choices {
@@ -266,6 +268,9 @@ func pickerItems(choices []ModelChoice) []console.PickerItem {
 			} else {
 				detail = fmt.Sprintf("Local node [%s] (%s)", c.ProviderName, c.Endpoint)
 			}
+		}
+		if c.Disabled && c.DisabledReason != "" {
+			detail = fmt.Sprintf("%s (%s)", detail, c.DisabledReason)
 		}
 		items = append(items, console.PickerItem{ID: c.ID, Label: c.Model, Detail: detail, Disabled: c.Disabled})
 	}
@@ -316,20 +321,33 @@ func consoleFooterModel(a *agent.Agent, target ModelChoice) string {
 // no timeout — the picker is operator-initiated, owns the keyboard while
 // open, and Esc dismisses without a switch.
 func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+	// Child context registered exactly like every other turn (runShell): an
+	// Esc during the keyboard-free catalog window must reach this Cmd, and
+	// the deferred cleanup clears the registration. On cancellation the
+	// overlay is dismissed and the turn reports clean — an operator cancel
+	// is not a failure, and a picker must never install over a retired turn.
+	ctx, cancel := context.WithCancel(parent)
+
 	l.mu.Lock()
+	l.cancels[turn] = cancel
 	l.inFlight++
 	l.mu.Unlock()
 
 	return func() tea.Msg {
 		defer func() {
 			l.mu.Lock()
+			delete(l.cancels, turn)
 			l.inFlight--
 			l.mu.Unlock()
+			cancel()
 		}()
 
-		rt, err := l.loader(parent)
-		if err != nil || rt == nil {
-			return console.TurnDoneMsg{Turn: turn, Err: errors.New("model catalog unavailable: cached runtime load failed")}
+		rt, err := l.loader(ctx)
+		if err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("model catalog unavailable: %w", err)}
+		}
+		if rt == nil {
+			return console.TurnDoneMsg{Turn: turn, Err: errors.New("model catalog unavailable: runtime loader returned no context")}
 		}
 		choices := collectModelChoices(rt)
 		if len(choices) == 0 {
@@ -340,6 +358,14 @@ func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.Tu
 			return console.TurnDoneMsg{Turn: turn, Err: nil}
 		}
 
+		// A cancel may have landed while the catalog was loading. Refuse to
+		// install over a cancelled turn.
+		select {
+		case <-ctx.Done():
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		default:
+		}
+
 		reply := make(chan string, 1)
 		l.prog.Send(console.SetOverlayMsg{
 			Overlay: console.NewModelPickerOverlay("Select active model for task routing:", pickerItems(choices), reply),
@@ -348,11 +374,22 @@ func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.Tu
 		var chosenID string
 		select {
 		case chosenID = <-reply:
-		case <-parent.Done():
-			return console.TurnDoneMsg{Turn: turn, Err: parent.Err()}
+		case <-ctx.Done():
+			if l.prog != nil {
+				l.prog.Send(console.SetOverlayMsg{Overlay: nil})
+			}
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
 		}
 		if chosenID == "" {
 			return console.TurnDoneMsg{Turn: turn, Err: nil} // operator dismissed
+		}
+		if ctx.Err() != nil {
+			// The turn was cancelled around the same moment as a selection:
+			// never switch on a retired turn.
+			if l.prog != nil {
+				l.prog.Send(console.SetOverlayMsg{Overlay: nil})
+			}
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
 		}
 
 		chosen, err := findModelTargetByRef(choices, chosenID)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -176,5 +177,52 @@ func TestModelPickerOverlayRenderScrollWindow(t *testing.T) {
 	}
 	if strings.Contains(plain, "model-00") || strings.Contains(plain, "model-01") || strings.Contains(plain, "model-02") {
 		t.Fatalf("rows above the window must be elided:\n%s", plain)
+	}
+}
+
+func TestModelPickerOverlayEmptyCatalogEnterNoop(t *testing.T) {
+	reply := make(chan string, 1)
+	o := NewModelPickerOverlay("pick", nil, reply)
+
+	updated, _ := o.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if o.Done() || updated == nil {
+		t.Fatal("enter on an empty catalog must be a no-op, not a panic")
+	}
+}
+
+func TestModelPickerOverlayNilReplyResolveSafe(t *testing.T) {
+	o := NewModelPickerOverlay("pick", []PickerItem{{ID: "a", Label: "a"}}, nil)
+
+	updated, _ := o.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated != nil || !o.Done() {
+		t.Fatal("nil reply must still resolve and dismiss")
+	}
+}
+
+func TestModelPickerOverlayUpdateAfterDoneIgnoresKeys(t *testing.T) {
+	reply := make(chan string, 1)
+	o := newTestPicker(reply)
+	o.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	updated, cmd := o.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if updated != nil || cmd != nil {
+		t.Fatal("Update after resolution must be inert")
+	}
+	if got := <-reply; got != "local:qwen3.8:8082" {
+		t.Fatalf("first resolve %q", got)
+	}
+	select {
+	case extra := <-reply:
+		t.Fatalf("no second resolve expected, got %q", extra)
+	default:
+	}
+}
+
+func TestModelPickerOverlayRenderNarrowWidth(t *testing.T) {
+	o := newTestPicker(make(chan string, 1))
+	for _, l := range o.Render(34) {
+		if n := utf8.RuneCountInString(l.Text); n > 33 {
+			t.Fatalf("row %q occupies %d cells, overflows the %d-wide box", l.Text, n, 34-2)
+		}
 	}
 }

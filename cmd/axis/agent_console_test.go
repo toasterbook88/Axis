@@ -1043,3 +1043,52 @@ func TestConsoleFooterModelFollowsAgent(t *testing.T) {
 		t.Fatalf("nil agent must fall back to target, got %q", got)
 	}
 }
+
+func TestConsoleModelPickerCancelDuringCatalogLoad(t *testing.T) {
+	// Regression for the review's critical turn-invariant finding: the
+	// picker turn must register its cancel like every other turn, so an Esc
+	// during the keyboard-free catalog window retires the turn cleanly and
+	// the picker never installs over it.
+	hn := pickerTestSetup(t)
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "granite3.1-moe:1b", MaxTokens: 4096})
+	rt := pickerTestRuntime(hn)
+
+	release := make(chan struct{})
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) {
+		<-release
+		return rt, nil
+	}
+	l.modelSwitch = consoleModelSwitch(a, l.loader, ModelChoice{Model: "granite3.1-moe:1b"})
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/model")()
+	}()
+
+	time.Sleep(20 * time.Millisecond) // the Cmd is parked inside the loader
+	l.cancel(1)                       // what requestCancel routes to on Esc
+	close(release)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancelled picker must end as a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled picker never resolved")
+	}
+	for _, m := range rec.all() {
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			if _, isPicker := som.Overlay.(*console.ModelPickerOverlay); isPicker {
+				t.Fatal("cancelled picker turn must not install an overlay")
+			}
+		}
+	}
+	if a.Model() != "granite3.1-moe:1b" {
+		t.Fatalf("cancel must not switch models, got %q", a.Model())
+	}
+}
