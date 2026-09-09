@@ -202,3 +202,113 @@ func TestGuardedAgentShellRunnerOwnerLabelFollowsModel(t *testing.T) {
 		t.Fatalf("OwnerLabel sequence = %v, want [model-a model-b]", labels)
 	}
 }
+
+func TestGuardedAgentRunnerHonorsInjectedRuntimeLoader(t *testing.T) {
+	prevRun := runGuardedAgentShell
+	prevDaemonMeta := fetchAgentDaemonMeta
+	t.Cleanup(func() {
+		runGuardedAgentShell = prevRun
+		fetchAgentDaemonMeta = prevDaemonMeta
+	})
+	fetchAgentDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
+		return daemon.Metadata{}, errors.New("no daemon")
+	}
+
+	var loadedFrom string
+	mockCachedLoader := func(context.Context) (*runtimectx.Context, error) {
+		loadedFrom = "cached"
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "local", Hostname: "localhost"}},
+			},
+		}, nil
+	}
+	mockLiveLoader := func(context.Context) (*runtimectx.Context, error) {
+		loadedFrom = "live"
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "local", Hostname: "localhost"}},
+			},
+		}, nil
+	}
+
+	runGuardedAgentShell = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		return execution.GuardedExecutionResult{OK: true, Node: "local", Output: "ok"}, nil
+	}
+
+	// Default fallback (no optionalLoader)
+	prevLoad := loadAgentShellRuntime
+	loadAgentShellRuntime = mockCachedLoader
+	t.Cleanup(func() { loadAgentShellRuntime = prevLoad })
+
+	runnerDefault := guardedAgentShellRunner("test-model")
+	if _, err := runnerDefault(context.Background(), "echo hi"); err != nil {
+		t.Fatalf("runnerDefault: %v", err)
+	}
+	if loadedFrom != "cached" {
+		t.Fatalf("default runner loadedFrom = %q, want cached", loadedFrom)
+	}
+
+	// Injected live loader (as when --live is passed)
+	runnerLive := guardedAgentShellRunner("test-model", mockLiveLoader)
+	if _, err := runnerLive(context.Background(), "echo hi"); err != nil {
+		t.Fatalf("runnerLive: %v", err)
+	}
+	if loadedFrom != "live" {
+		t.Fatalf("injected live runner loadedFrom = %q, want live", loadedFrom)
+	}
+
+	// Verify buildAgentSessionConfig wires RuntimeLoader to RunShell and RunOnNode
+	var sessionLoadedFrom string
+	mockSessionLoader := func(context.Context) (*runtimectx.Context, error) {
+		sessionLoadedFrom = "session-live"
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "local-node", Hostname: "localhost"}},
+			},
+		}, nil
+	}
+
+	cfg := buildAgentSessionConfig(agentSessionParams{
+		Model:         "session-model",
+		RuntimeLoader: mockSessionLoader,
+	})
+	if _, err := cfg.RunShell(context.Background(), "echo s"); err != nil {
+		t.Fatalf("cfg.RunShell: %v", err)
+	}
+	if sessionLoadedFrom != "session-live" {
+		t.Fatalf("cfg.RunShell sessionLoadedFrom = %q, want session-live", sessionLoadedFrom)
+	}
+
+	sessionLoadedFrom = ""
+	if _, err := cfg.RunOnNode(context.Background(), "local-node", "echo n"); err != nil {
+		t.Fatalf("cfg.RunOnNode: %v", err)
+	}
+	if sessionLoadedFrom != "session-live" {
+		t.Fatalf("cfg.RunOnNode sessionLoadedFrom = %q, want session-live", sessionLoadedFrom)
+	}
+}
+
+func TestConsoleSlashRunnerHonorsInjectedRuntimeLoader(t *testing.T) {
+	var loadedFrom string
+	mockLiveLoader := func(context.Context) (*runtimectx.Context, error) {
+		loadedFrom = "console-live"
+		return &runtimectx.Context{
+			Snapshot: &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{{Name: "local-node", Hostname: "localhost"}},
+			},
+		}, nil
+	}
+
+	slash := consoleSlashRunner(nil, nil, ModelChoice{}, mockLiveLoader)
+	out, err := slash("/facts")
+	if err != nil {
+		t.Fatalf("slash /facts: %v", err)
+	}
+	if loadedFrom != "console-live" {
+		t.Fatalf("loadedFrom = %q, want console-live", loadedFrom)
+	}
+	if !strings.Contains(out, "local-node") {
+		t.Fatalf("expected out to contain local-node, got: %q", out)
+	}
+}

@@ -244,9 +244,9 @@ func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) err
 	session.Agent.SetModel(choice.Model)
 	// Refresh guarded runners so OwnerLabel provenance tracks the live model
 	// after /model (Layer 4 contract — not the startup-captured name).
-	session.Agent.SetRunShell(guardedAgentShellRunner(choice.Model))
+	session.Agent.SetRunShell(guardedAgentShellRunner(choice.Model, session.Runtime))
 	session.Agent.SetRunOnNode(func(ctx context.Context, node, command string) (string, error) {
-		return guardedAgentCommandRunner(choice.Model, node)(ctx, command)
+		return guardedAgentCommandRunner(choice.Model, node, session.Runtime)(ctx, command)
 	})
 	session.ActiveTarget = choice
 	errW := session.ErrOut

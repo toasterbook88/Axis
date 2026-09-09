@@ -73,6 +73,12 @@ type Overlay interface {
 	Done() bool
 }
 
+// SetOverlayMsg installs or replaces the active overlay.
+// Passing a nil Overlay dismisses any active overlay.
+type SetOverlayMsg struct {
+	Overlay Overlay
+}
+
 // Footer renders the persistent status region below the input line.
 type Footer interface {
 	Render(width int) []Line
@@ -237,6 +243,10 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.commit(msg.Entry)
+
+	case SetOverlayMsg:
+		m.overlay = msg.Overlay
+		return m, nil
 
 	case StreamChunkMsg:
 		if m.stale(msg.Turn) {

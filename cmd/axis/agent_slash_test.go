@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -517,5 +519,59 @@ func TestMCPAgentMenu(t *testing.T) {
 	stripped := ui.StripANSIAndControls(output)
 	if !strings.Contains(stripped, "Status:   connected") {
 		t.Errorf("expected successful connected status, got: %q", stripped)
+	}
+}
+
+func TestSlashSkillsUsesSessionRuntime(t *testing.T) {
+	var loads int
+	var w, errW bytes.Buffer
+	session := &agentREPLSession{
+		Out:    &w,
+		ErrOut: &errW,
+		Runtime: func(context.Context) (*runtimectx.Context, error) {
+			loads++
+			return &runtimectx.Context{Skills: &skills.Store{}}, nil
+		},
+	}
+	handled, shouldExit, err := slashSkills(session, nil)
+	if err != nil || !handled || shouldExit {
+		t.Fatalf("slashSkills: handled=%v exit=%v err=%v", handled, shouldExit, err)
+	}
+	if loads != 1 {
+		t.Fatalf("session runtime loads = %d, want 1 (must not call live Load)", loads)
+	}
+	if !strings.Contains(w.String(), "No learned skills yet") {
+		t.Fatalf("expected empty-skills output, got %q", w.String())
+	}
+}
+
+func TestSlashSkillsLoaderError(t *testing.T) {
+	session := &agentREPLSession{
+		Out:    &bytes.Buffer{},
+		ErrOut: &bytes.Buffer{},
+		Runtime: func(context.Context) (*runtimectx.Context, error) {
+			return nil, errors.New("no live sweep")
+		},
+	}
+	_, _, err := slashSkills(session, nil)
+	if err == nil || !strings.Contains(err.Error(), "no live sweep") {
+		t.Fatalf("slashSkills error = %v, want wrapped no live sweep", err)
+	}
+}
+
+func TestCollectReservationListItemsFallbackUsesInjectedLoader(t *testing.T) {
+	var loads int
+	_, err := collectReservationListItems(func(context.Context) (*runtimectx.Context, error) {
+		loads++
+		return nil, errors.New("session-cache-miss")
+	})
+	if loads == 0 && err == nil {
+		t.Skip("daemon answered /v2/reservations; fallback not taken")
+	}
+	if err == nil || !strings.Contains(err.Error(), "session-cache-miss") {
+		t.Fatalf("fallback error = %v, want session-cache-miss", err)
+	}
+	if loads != 1 {
+		t.Fatalf("injected loader calls = %d, want 1", loads)
 	}
 }

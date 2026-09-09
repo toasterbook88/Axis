@@ -204,9 +204,8 @@ func slashNodes(session *agentREPLSession, _ []string) (bool, bool, error) {
 }
 
 // collectReservationListItems gathers ledger reservations, daemon-first with a
-// runtime-context fallback (extracted verbatim from the /reservations verb).
-func collectReservationListItems() ([]ReservationListItem, error) {
-	freshRt, err := runtimectx.Load(context.Background())
+// session-runtime fallback. It does not start a live discovery sweep.
+func collectReservationListItems(loadRuntime func(context.Context) (*runtimectx.Context, error)) ([]ReservationListItem, error) {
 	var items []ReservationListItem
 	daemonFetched := false
 	cacheAddr := api.DefaultAddr()
@@ -246,6 +245,10 @@ func collectReservationListItems() ([]ReservationListItem, error) {
 	}
 
 	if !daemonFetched {
+		if loadRuntime == nil {
+			loadRuntime = loadAgentShellRuntime
+		}
+		freshRt, err := loadRuntime(context.Background())
 		if err != nil {
 			return nil, fmt.Errorf("failed to load cluster status fallback: %w", err)
 		}
@@ -306,7 +309,7 @@ func gitDiffHEAD() (string, error) {
 }
 
 func slashReservations(session *agentREPLSession, _ []string) (bool, bool, error) {
-	items, err := collectReservationListItems()
+	items, err := collectReservationListItems(sessionRuntimeLoader(session))
 	if err != nil {
 		return true, false, err
 	}
@@ -315,15 +318,12 @@ func slashReservations(session *agentREPLSession, _ []string) (bool, bool, error
 }
 
 func slashSkills(session *agentREPLSession, _ []string) (bool, bool, error) {
-	freshRt, err := runtimectx.Load(context.Background())
+	freshRt, err := sessionRuntimeLoader(session)(context.Background())
 	if err != nil {
 		return true, false, fmt.Errorf("failed to load skills: %w", err)
 	}
-	if freshRt == nil {
-		return true, false, fmt.Errorf("failed to load skills: runtime context is nil")
-	}
 	w, errW := session.Out, session.ErrOut
-	if freshRt.Skills == nil || len(freshRt.Skills.Skills) == 0 {
+	if freshRt == nil || freshRt.Skills == nil || len(freshRt.Skills.Skills) == 0 {
 		fmt.Fprintln(w, "\nLearned skills:")
 		fmt.Fprintln(w, ui.DimColor.Sprint("  No learned skills yet\n"))
 		return true, false, nil

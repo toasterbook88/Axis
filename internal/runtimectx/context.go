@@ -36,7 +36,14 @@ var loadLedger = func() (*reservation.Ledger, error) {
 var applyReservationEntries = snapshotview.ApplyReservationEntries
 var loadSkills = skills.Load
 
+// Load performs a full live discovery sweep of cluster nodes.
+// It is equivalent to LoadLive.
 func Load(ctx context.Context) (*Context, error) {
+	return LoadLive(ctx)
+}
+
+// LoadLive performs a live discovery sweep across all configured cluster nodes.
+func LoadLive(ctx context.Context) (*Context, error) {
 	cfg, err := loadConfig(config.DefaultConfigPath())
 	if err != nil {
 		return nil, err

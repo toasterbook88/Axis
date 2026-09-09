@@ -304,6 +304,29 @@ func TestRunModelStartUsesPlanAndRunner(t *testing.T) {
 	}
 }
 
+func TestRunModelStartWarnsWhenDaemonRefreshFails(t *testing.T) {
+	stubModelSnapshot(t, testSnap())
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	prev := signalModelDaemonRefresh
+	t.Cleanup(func() { signalModelDaemonRefresh = prev })
+	signalModelDaemonRefresh = func(context.Context, string, string) error {
+		return errors.New("refresh down")
+	}
+	cmd := modelStartCmd()
+	var out, errBuf bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+	if err := runModelStart(context.Background(), cmd, "storage", "/mnt/models/a.gguf", 8081, &fakeModelRunner{}); err != nil {
+		t.Fatalf("start should succeed when refresh fails, got %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "daemon cache refresh failed") {
+		t.Fatalf("expected refresh warning on stderr, got %q", errBuf.String())
+	}
+	if !strings.Contains(out.String(), "started") {
+		t.Fatalf("expected start receipt, got %q", out.String())
+	}
+}
+
 func TestRunModelStartPropagatesWriterFailureAfterStarting(t *testing.T) {
 	stubModelSnapshot(t, testSnap())
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
