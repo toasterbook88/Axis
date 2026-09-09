@@ -1,6 +1,10 @@
 package console
 
 import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -84,7 +88,93 @@ func (o *ModelPickerOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 	return o, nil
 }
 
-// Render draws the picker modal. Populated in the render task.
+// pickerWindowRows caps how many item rows render at once; the window
+// follows the cursor so the highlighted row stays visible.
+const pickerWindowRows = 12
+
+// clipRunes truncates s to n runes, appending "…" when it bites.
+func clipRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
+}
+
+// Render draws the picker modal in the same bordered style as the approval
+// overlay: accent border, cursor glyph on the active row, muted rows for
+// disabled entries, and a bounded scroll window for long catalogs.
 func (o *ModelPickerOverlay) Render(width int) []Line {
-	return nil
+	width = effectiveWidth(width)
+	boxWidth := width - 2
+	if boxWidth < 30 {
+		boxWidth = 30
+	}
+
+	var lines []Line
+
+	title := strings.TrimSpace(o.title)
+	if title == "" {
+		title = "Select Model"
+	}
+	titlePrefix := "┌─ " + title + " ─"
+	if runes := utf8.RuneCountInString(titlePrefix); runes > boxWidth {
+		titlePrefix = clipRunes(titlePrefix, boxWidth)
+	} else {
+		titlePrefix += strings.Repeat("─", boxWidth-runes)
+	}
+	lines = append(lines, Line{Text: titlePrefix, Style: StyleAccent})
+
+	avail := boxWidth - 6 // "│ " + two-cell cursor column + padding
+	if avail < 10 {
+		avail = 10
+	}
+
+	start := o.cursor - 5
+	if start < 0 {
+		start = 0
+	}
+	if maxStart := len(o.items) - pickerWindowRows; start > maxStart {
+		start = maxStart
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + pickerWindowRows
+	if end > len(o.items) {
+		end = len(o.items)
+	}
+
+	if start > 0 {
+		lines = append(lines, Line{Text: fmt.Sprintf("│   … %d above", start), Style: StyleMuted})
+	}
+	for i := start; i < end; i++ {
+		it := o.items[i]
+		glyph := "  "
+		style := StylePlain
+		if i == o.cursor {
+			glyph = "▸ "
+			style = StyleAccent
+		}
+		if it.Disabled {
+			style = StyleMuted
+		}
+		text := it.Label
+		if it.Disabled && !strings.Contains(text, "unreachable") {
+			text += " (unreachable)"
+		}
+		if it.Detail != "" {
+			text += " — " + it.Detail
+		}
+		lines = append(lines, Line{Text: clipRunes("│ "+glyph+text, boxWidth-1), Style: style})
+	}
+	if end < len(o.items) {
+		lines = append(lines, Line{Text: fmt.Sprintf("│   … %d below", len(o.items)-end), Style: StyleMuted})
+	}
+
+	lines = append(lines, Line{Text: "│", Style: StyleMuted})
+	lines = append(lines, Line{Text: "│ ↑/↓ navigate  enter select  esc cancel", Style: StyleStrong})
+	lines = append(lines, Line{Text: fmt.Sprintf("└%s", strings.Repeat("─", boxWidth-1)), Style: StyleAccent})
+
+	return lines
 }

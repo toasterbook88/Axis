@@ -1,6 +1,8 @@
 package console
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -106,5 +108,73 @@ func TestModelPickerOverlayCtrlNavAliases(t *testing.T) {
 	case got := <-reply:
 		t.Fatalf("no reply expected, got %q", got)
 	default:
+	}
+}
+
+func renderPlain(lines []Line) string {
+	return strings.Join(PlainAll(lines), "\n")
+}
+
+func TestModelPickerOverlayRender(t *testing.T) {
+	reply := make(chan string, 1)
+	o := newTestPicker(reply)
+
+	lines := o.Render(80)
+	plain := renderPlain(lines)
+
+	if !strings.Contains(plain, "Select active model for task routing") {
+		t.Fatalf("title missing from border:\n%s", plain)
+	}
+	if !strings.Contains(plain, "└") {
+		t.Fatal("bottom border missing")
+	}
+	if n := strings.Count(plain, "▸"); n != 1 {
+		t.Fatalf("cursor glyph count %d, want 1\n%s", n, plain)
+	}
+	for _, want := range []string{"qwen3.8-27b", "cloud-x", "esc cancel"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("render missing %q\n%s", want, plain)
+		}
+	}
+	// top border + 2 items + blank separator + hint + bottom border
+	if len(lines) != 6 {
+		t.Fatalf("line count %d, want 6\n%s", len(lines), plain)
+	}
+}
+
+func TestModelPickerOverlayRenderDisabled(t *testing.T) {
+	o := NewModelPickerOverlay("pick", []PickerItem{
+		{ID: "x", Label: "x", Detail: "Local [x]"},
+		{ID: "dead", Label: "dead", Detail: "Remote node (unreachable)", Disabled: true},
+	}, make(chan string, 1))
+
+	plain := renderPlain(o.Render(80))
+	if !strings.Contains(plain, "dead (unreachable)") {
+		t.Fatalf("disabled row must carry the unreachable marker:\n%s", plain)
+	}
+	if strings.Contains(plain, "(unreachable) (unreachable)") {
+		t.Fatal("unreachable marker must not double-append")
+	}
+}
+
+func TestModelPickerOverlayRenderScrollWindow(t *testing.T) {
+	var items []PickerItem
+	for i := 0; i < 15; i++ {
+		items = append(items, PickerItem{ID: fmt.Sprintf("m%02d", i), Label: fmt.Sprintf("model-%02d", i)})
+	}
+	o := NewModelPickerOverlay("pick", items, make(chan string, 1))
+
+	for i := 0; i < 10; i++ {
+		o.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	plain := renderPlain(o.Render(80))
+	if !strings.Contains(plain, "model-10") {
+		t.Fatalf("cursor row must be inside the render window:\n%s", plain)
+	}
+	if !strings.Contains(plain, "3 above") {
+		t.Fatalf("elided rows above must be marked:\n%s", plain)
+	}
+	if strings.Contains(plain, "model-00") || strings.Contains(plain, "model-01") || strings.Contains(plain, "model-02") {
+		t.Fatalf("rows above the window must be elided:\n%s", plain)
 	}
 }
