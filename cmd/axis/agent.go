@@ -279,7 +279,7 @@ func agentCmd() *cobra.Command {
 				if printMode {
 					return runOneShotPiped(ctx, a, instruction, errW, timeout, historyPath)
 				}
-				fmt.Fprintf(errW, "Agent [%s] — max %d turns\n\n", ui.Bold(activeTarget.Model), maxTurns)
+				legacyOneShotBanner(errW, activeTarget.Model, maxTurns)
 
 				ctx2, cancel := agentRequestContext(ctx, timeout)
 				defer cancel()
@@ -292,9 +292,6 @@ func agentCmd() *cobra.Command {
 					_ = saveAgentConversation(a.Conversation(), historyPath, errW)
 				}
 				return nil
-			}
-			if printMode {
-				return ExitCodeError{Code: ExitErrGeneric, Message: "-p/--print requires a prompt argument"}
 			}
 
 			// REPL runtime extracted to agent_repl.go (runAgentInteractive).

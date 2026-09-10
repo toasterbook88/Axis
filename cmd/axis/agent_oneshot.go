@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // pipedToolObserver writes compact tool badges to stderr for -p runs:
@@ -35,8 +36,7 @@ func clipLine(s string, n int) string {
 
 func (o *pipedToolObserver) ToolCalled(id, name, args string) {
 	line := "→ " + name
-	if args != "" {
-		first := strings.SplitN(strings.TrimSpace(args), "\n", 2)[0]
+	if first := strings.SplitN(strings.TrimSpace(args), "\n", 2)[0]; first != "" {
 		line += " " + clipLine(first, 80)
 	}
 	fmt.Fprintf(o.w, "%s\n", line)
@@ -89,7 +89,7 @@ func (o *pipedToolObserver) MaxTurnsReached(max int) {
 // --auto-approve never reach it.
 func pipedConfirm(w io.Writer) agent.ConfirmFunc {
 	return func(tool, desc string, score int) agent.ConfirmResult {
-		fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --auto-approve or --autonomy full)\n", tool)
+		fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --autonomy full; --auto-approve only clears low-risk tools)\n", tool)
 		return agent.ConfirmNo
 	}
 }
@@ -102,6 +102,12 @@ func observerForPipedMode(printMode bool, errW io.Writer, verbose bool) agent.Ob
 		return nil
 	}
 	return &pipedToolObserver{w: errW, verbose: verbose}
+}
+
+// legacyOneShotBanner prints the session framing the pre-Track-5 one-shot
+// showed. -p suppresses it; the positional branch keeps it byte-for-byte.
+func legacyOneShotBanner(w io.Writer, model string, maxTurns int) {
+	fmt.Fprintf(w, "Agent [%s] — max %d turns\n\n", ui.Bold(model), maxTurns)
 }
 
 // confirmForPipedMode returns the fail-closed confirm for -p runs and nil

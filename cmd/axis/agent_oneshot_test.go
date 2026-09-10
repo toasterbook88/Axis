@@ -55,12 +55,49 @@ func TestPipedObserverVerboseGatesTurnEvents(t *testing.T) {
 func TestPipedObserverClipsLongArgs(t *testing.T) {
 	var buf bytes.Buffer
 	o := &pipedToolObserver{w: &buf}
-	long := strings.Repeat("x", 200)
-	o.ToolCalled("c1", "write_file", long)
+	o.ToolCalled("c1", "write_file", strings.Repeat("x", 200))
 
-	got := buf.String()
-	if !strings.Contains(got, "…") || strings.Count(got, "x") > 81 {
-		t.Fatalf("long args not clipped:\\n%s", got)
+	want := "→ write_file " + strings.Repeat("x", 79) + "…\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("long args not clipped exactly:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestPipedObserverLocalTargetDefault(t *testing.T) {
+	var buf bytes.Buffer
+	o := &pipedToolObserver{w: &buf}
+	o.ShellExecuting("c1", "", "", "uptime")
+	if got := buf.String(); !strings.Contains(got, "  ▶ local: uptime") {
+		t.Fatalf("default target missing:\n%s", got)
+	}
+}
+
+func TestPipedObserverBlankArgsNoTrailingSpace(t *testing.T) {
+	var buf bytes.Buffer
+	o := &pipedToolObserver{w: &buf}
+	o.ToolCalled("c1", "axis_facts", "   ")
+	if got := buf.String(); strings.HasSuffix(got, "axis_facts \n") || strings.Contains(got, "axis_facts  ") {
+		t.Fatalf("whitespace-only args left a trailing space:\n%q", got)
+	}
+}
+
+func TestClipLineEdges(t *testing.T) {
+	if got := clipLine("abc", 0); got != "" {
+		t.Fatalf("n=0 → %q, want empty", got)
+	}
+	if got := clipLine("abc", 3); got != "abc" {
+		t.Fatalf("exact-length → %q, want unchanged", got)
+	}
+	if got := clipLine("abcd", 3); got != "ab…" {
+		t.Fatalf("overflow → %q, want ab…", got)
+	}
+}
+
+func TestPipedObserverQuietStillPrintsCeiling(t *testing.T) {
+	var buf bytes.Buffer
+	(&pipedToolObserver{w: &buf}).MaxTurnsReached(25)
+	if !strings.Contains(buf.String(), "25-turn ceiling") {
+		t.Fatal("the turn-ceiling notice must print even when quiet")
 	}
 }
 
@@ -74,10 +111,10 @@ func TestPipedConfirmDeniesWithNotice(t *testing.T) {
 		t.Fatal("piped confirm must deny regardless of score — the approval flags compose on top")
 	}
 	if !strings.Contains(buf.String(), "not an interactive session") {
-		t.Fatalf("denial notice missing:\\n%s", buf.String())
+		t.Fatalf("denial notice missing:\n%s", buf.String())
 	}
 	if !strings.Contains(buf.String(), "--auto-approve") || !strings.Contains(buf.String(), "--autonomy full") {
-		t.Fatalf("notice must point at the escape hatches:\\n%s", buf.String())
+		t.Fatalf("notice must point at the escape hatches:\n%s", buf.String())
 	}
 }
 

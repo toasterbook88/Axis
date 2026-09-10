@@ -404,9 +404,19 @@ func TestCharRouteAgentInteractive(t *testing.T) {
 
 func TestCharOneShotLegacyContractUnchanged(t *testing.T) {
 	// Track 5 pins the legacy one-shot contract: positional without -p keeps
-	// the banner + stdout tool lines (nil observer). Only -p switches the
-	// output contract.
+	// the banner + stdout tool lines (nil observer, nil confirm). Only -p
+	// switches the output contract.
 	if o := observerForPipedMode(false, nil, false); o != nil {
 		t.Fatal("positional one-shot without -p must not gain an observer")
+	}
+	if c := confirmForPipedMode(false, nil); c != nil {
+		t.Fatal("positional one-shot without -p must not gain a piped confirm")
+	}
+	// The banner text the legacy branch prints must survive: a regression
+	// that drops or reroutes it changes scripted-output expectations.
+	var buf bytes.Buffer
+	legacyOneShotBanner(&buf, "model", 25)
+	if !strings.Contains(buf.String(), "Agent [model] — max 25 turns") {
+		t.Fatal("legacy one-shot banner contract changed")
 	}
 }
