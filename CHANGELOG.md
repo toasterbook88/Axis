@@ -1,9 +1,10 @@
 ## Unreleased
 
 ### Features
+* **Console is the default interactive surface:** bare `axis agent` on an interactive terminal now launches the transcript console; the legacy line-at-a-time REPL moves to `--plain` (unconditional downgrade, wins over `--console`). Scripted and non-TTY runs never engage the console. `--console` is retained as a force alias and marked deprecated in help.
 
 * **Agent cache-first startup:** `axis agent` loads cluster context from the local daemon unix socket, then disk `snapshot.json`, then a bootstrap skeleton. It does not present cache as live runtime: reads are badged with age, stale, and vantage (`unknown` if missing). `--live` is the explicit discovery sweep. Bootstrap publication source is `bootstrap`, never `live-runtime`. Minted fallback envelopes use the snapshot timestamp as `AssembledAt`, not read time.
-* **Console approvals:** `axis agent --console` presents an ApprovalOverlay. Yes is explicit `y`. Enter does not approve. Timeout (2 minutes) and context cancel deny. `--console` remains off by default.
+* **Console approvals:** the console presents an ApprovalOverlay. Yes is explicit `y`. Enter does not approve. Timeout (2 minutes) and context cancel deny. (Console default: see the console-default entry below.)
 * **Model cache refresh:** `axis model start` and `axis model stop` POST the existing daemon `/refresh` after a successful mutation. Refresh failure is a stderr warning; the mutation still succeeds.
 
 ### Truth plane

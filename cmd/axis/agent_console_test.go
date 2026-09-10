@@ -461,8 +461,11 @@ func TestConsoleRejectsSlashWhenUnwired(t *testing.T) {
 	}
 }
 
-func TestConsoleFlagIsOptInAndDefaultsOff(t *testing.T) {
-	// The console is opt-in and must not displace the standard REPL by default.
+func TestConsoleAndPlainFlagContract(t *testing.T) {
+	// Track 4 contract: the console is the default interactive surface on an
+	// interactive terminal. --console is retained as a force alias with its
+	// deprecation marked in the help, and --plain downgrades to the legacy
+	// REPL; both flags default off so scripted behavior is explicit.
 	cmd := agentCmd()
 	f := cmd.Flags().Lookup("console")
 	if f == nil {
@@ -471,8 +474,18 @@ func TestConsoleFlagIsOptInAndDefaultsOff(t *testing.T) {
 	if f.DefValue != "false" {
 		t.Errorf("--console default = %q, want false", f.DefValue)
 	}
-	if !strings.Contains(f.Usage, "interactive TTY") {
-		t.Errorf("--console usage does not state interactive TTY requirement: %q", f.Usage)
+	if !strings.Contains(f.Usage, "deprecated") {
+		t.Errorf("--console usage does not mark the deprecation: %q", f.Usage)
+	}
+	p := cmd.Flags().Lookup("plain")
+	if p == nil {
+		t.Fatal("--plain flag is not registered")
+	}
+	if p.DefValue != "false" {
+		t.Errorf("--plain default = %q, want false", p.DefValue)
+	}
+	if !strings.Contains(p.Usage, "legacy") {
+		t.Errorf("--plain usage does not state the legacy REPL: %q", p.Usage)
 	}
 }
 
