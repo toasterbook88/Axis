@@ -39,11 +39,11 @@ func (o *recordingObserver) ToolCalled(id, name, args string) {
 func (o *recordingObserver) ToolSkipped(id, name, reason string) {
 	o.record("skipped %s/%s: %s", id, name, reason)
 }
-func (o *recordingObserver) ToolSucceeded(id, name, summary string, resultLen int) {
-	o.record("ok %s/%s %q %d", id, name, summary, resultLen)
+func (o *recordingObserver) ToolSucceeded(id, name, summary string, resultLen int, elapsed time.Duration) {
+	o.record("ok %s/%s %q %d %s", id, name, summary, resultLen, elapsed.Truncate(time.Millisecond))
 }
-func (o *recordingObserver) ToolFailed(id, name string, err error) {
-	o.record("failed %s/%s: %v", id, name, err)
+func (o *recordingObserver) ToolFailed(id, name string, err error, elapsed time.Duration) {
+	o.record("failed %s/%s: %v %s", id, name, err, elapsed.Truncate(time.Millisecond))
 }
 func (o *recordingObserver) ShellExecuting(id, node, cwd, command string) {
 	o.record("shell id=%q node=%q cwd=%q cmd=%q", id, node, cwd, command)
@@ -56,8 +56,8 @@ func emitAll(a *Agent) {
 	a.emitCompactionSkipped(errors.New("budget"))
 	a.emitToolCalled("call-1", "axis_status", `{"cached":true}`)
 	a.emitToolSkipped("call-2", "bash", "dry-run")
-	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42)
-	a.emitToolFailed("call-3", "remote_grep", errors.New("dial timeout"))
+	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42, 120*time.Millisecond)
+	a.emitToolFailed("call-3", "remote_grep", errors.New("dial timeout"), 40*time.Millisecond)
 	a.emitShellExecuting("call-4", "", "", "ls")
 	a.emitMaxTurnsReached(25)
 }
@@ -80,8 +80,8 @@ func TestObserverReceivesEventsAndOutputStaysSilent(t *testing.T) {
 		"compaction skipped: budget",
 		`called call-1/axis_status {"cached":true}`,
 		"skipped call-2/bash: dry-run",
-		`ok call-1/axis_status "5 nodes" 42`,
-		"failed call-3/remote_grep: dial timeout",
+		`ok call-1/axis_status "5 nodes" 42 120ms`,
+		"failed call-3/remote_grep: dial timeout 40ms",
 		`shell id="call-4" node="" cwd="" cmd="ls"`,
 		"max turns 25",
 	}
@@ -148,7 +148,7 @@ func TestVerboseOnlyDetailStaysOutOfNonVerboseOutput(t *testing.T) {
 	a := &Agent{output: &buf} // verbose false
 
 	a.emitToolCalled("call-1", "axis_status", `{"cached":true}`)
-	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42)
+	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42, 3*time.Millisecond)
 
 	out := buf.String()
 	if strings.Contains(out, "Parameters:") {
@@ -170,7 +170,7 @@ func TestObserverGetsVerboseDetailRegardlessOfVerboseFlag(t *testing.T) {
 	a := &Agent{output: &buf, observer: obs} // verbose false
 
 	a.emitToolCalled("call-1", "axis_status", `{"cached":true}`)
-	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42)
+	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42, 5*time.Millisecond)
 
 	got := strings.Join(obs.all(), "\n")
 	if !strings.Contains(got, `{"cached":true}`) {
@@ -192,7 +192,7 @@ func TestRedactionHappensBeforeTheObserverSeesAnything(t *testing.T) {
 	const secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
 	a.emitToolCalled("c1", "bash", `{"cmd":"curl -H \"Authorization: Bearer `+secret+`\""}`)
 	a.emitShellExecuting("c2", "", "", "export API_KEY="+secret)
-	a.emitToolFailed("c3", "bash", errors.New("auth failed for Bearer "+secret))
+	a.emitToolFailed("c3", "bash", errors.New("auth failed for Bearer "+secret), 2*time.Millisecond)
 
 	got := strings.Join(obs.all(), "\n")
 	if strings.Contains(got, secret) {
@@ -235,7 +235,7 @@ func TestToolIDsReachTheObserver(t *testing.T) {
 	a := &Agent{output: &bytes.Buffer{}, observer: obs}
 
 	a.emitToolCalled("call-a", "axis_status", "")
-	a.emitToolSucceeded("call-a", "axis_status", "ok", 2)
+	a.emitToolSucceeded("call-a", "axis_status", "ok", 2, time.Millisecond)
 
 	for _, e := range obs.all() {
 		if !strings.Contains(e, "call-a") {

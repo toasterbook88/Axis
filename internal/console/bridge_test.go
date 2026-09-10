@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -140,24 +141,33 @@ func TestStreamWriterToleratesNilSender(t *testing.T) {
 }
 
 func TestBridgeRendersToolLifecycle(t *testing.T) {
+	// Track 3 lifecycle: the call opens an ephemeral pending card (never a
+	// committed entry) and each completion commits exactly one receipt card.
 	rec := &recorder{}
 	b := NewBridge(rec, 1, fixedNow)
 
 	b.ToolCalled("call-1", "axis_status", `{"cached":true}`)
-	b.ToolSucceeded("call-1", "axis_status", "5 nodes", 42)
-	b.ToolFailed("call-2", "remote_grep", errors.New("dial timeout"))
+	b.ToolSucceeded("call-1", "axis_status", "5 nodes", 42, 12*time.Millisecond)
+	b.ToolFailed("call-2", "remote_grep", errors.New("dial timeout"), 4*time.Millisecond)
+
+	var pending []ToolPendingMsg
+	for _, msg := range rec.msgs {
+		if pm, ok := msg.(ToolPendingMsg); ok {
+			pending = append(pending, pm)
+		}
+	}
+	if len(pending) != 1 || pending[0].ID != "call-1" || pending[0].Name != "axis_status" || pending[0].Turn != 1 {
+		t.Fatalf("expected one pending message for call-1/axis_status/turn 1, got %+v", pending)
+	}
 
 	got := rec.entries(80)
-	if len(got) != 3 {
-		t.Fatalf("got %d entries, want 3:\n%s", len(got), strings.Join(got, "\n"))
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2 (pending never commits):\n%s", len(got), strings.Join(got, "\n"))
 	}
-	if !strings.HasPrefix(got[0], "$ axis_status") {
-		t.Errorf("tool call entry = %q", got[0])
-	}
-	if !strings.Contains(got[1], "5 nodes") {
+	if !strings.Contains(got[0], "5 nodes") {
 		t.Errorf("success entry missing summary: %q", got[1])
 	}
-	if !strings.Contains(got[2], "error: dial timeout") {
+	if !strings.Contains(got[1], "error: dial timeout") {
 		t.Errorf("failure entry missing error: %q", got[2])
 	}
 }
@@ -165,15 +175,23 @@ func TestBridgeRendersToolLifecycle(t *testing.T) {
 func TestBridgeHidesToolArgumentsUnlessVerbose(t *testing.T) {
 	quiet := &recorder{}
 	NewBridge(quiet, 1, fixedNow).ToolCalled("call-1", "axis_status", `{"cached":true}`)
-	if strings.Contains(strings.Join(quiet.entries(80), ""), "cached") {
-		t.Error("non-verbose bridge leaked tool arguments into the transcript")
+	for _, msg := range quiet.msgs {
+		if pm, ok := msg.(ToolPendingMsg); ok && strings.Contains(pm.Args, "cached") {
+			t.Error("non-verbose bridge leaked tool arguments into the pending message")
+		}
 	}
 
 	loud := &recorder{}
 	b := NewBridge(loud, 1, fixedNow)
 	b.Verbose = true
 	b.ToolCalled("call-1", "axis_status", `{"cached":true}`)
-	if !strings.Contains(strings.Join(loud.entries(80), ""), "cached") {
+	var sawArgs bool
+	for _, msg := range loud.msgs {
+		if pm, ok := msg.(ToolPendingMsg); ok && strings.Contains(pm.Args, "cached") {
+			sawArgs = true
+		}
+	}
+	if !sawArgs {
 		t.Error("verbose bridge dropped tool arguments")
 	}
 }
@@ -283,18 +301,18 @@ func TestBridgeIsSafeUnderParallelToolResults(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			if i%2 == 0 {
-				b.ToolSucceeded("call", "axis_status", "ok", i)
+				b.ToolSucceeded("call", "axis_status", "ok", i, time.Millisecond)
 				return
 			}
-			b.ToolFailed("call", "remote_grep", errors.New("boom"))
+			b.ToolFailed("call", "remote_grep", errors.New("boom"), time.Millisecond)
 		}(i)
 	}
 	wg.Wait()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.msgs) != 32 {
-		t.Errorf("got %d messages, want 32", len(s.msgs))
+	if len(s.msgs) != 64 {
+		t.Errorf("got %d messages, want 64 (entry + resolution per call)", len(s.msgs))
 	}
 }
 
@@ -314,11 +332,15 @@ func TestBridgePreservesToolCallIDs(t *testing.T) {
 	rec := &recorder{}
 	b := NewBridge(rec, 1, fixedNow)
 	b.ToolCalled("call-a", "axis_status", "")
-	b.ToolSucceeded("call-a", "axis_status", "ok", 2)
-	b.ToolFailed("call-b", "remote_grep", errors.New("boom"))
+	b.ToolSucceeded("call-a", "axis_status", "ok", 2, 3*time.Millisecond)
+	b.ToolFailed("call-b", "remote_grep", errors.New("boom"), time.Millisecond)
 
 	var ids []string
 	for _, msg := range rec.msgs {
+		if pm, ok := msg.(ToolPendingMsg); ok {
+			ids = append(ids, pm.ID)
+			continue
+		}
 		e, ok := msg.(EntryMsg)
 		if !ok {
 			continue
@@ -360,7 +382,7 @@ func TestProducersCaptureTheirTurnAndNeverRereadIt(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close returned %v", err)
 	}
-	b.ToolSucceeded("call-1", "axis_status", "late result", 11)
+	b.ToolSucceeded("call-1", "axis_status", "late result", 11, time.Millisecond)
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()

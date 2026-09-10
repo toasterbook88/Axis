@@ -193,39 +193,56 @@ func (b *Bridge) CompactionSkipped(err error) {
 	b.emit(NewNoticeEntry(b.now(), "compaction skipped: "+err.Error()))
 }
 
-// ToolCalled opens a tool entry. Arguments are shown only in verbose mode: an
-// argument blob can be large, and the transcript is a reading surface before
-// it is a debugging one. The text is already redacted by internal/agent.
+// ToolCalled marks a tool call in flight: the pending card renders in the
+// console's ephemeral region and the completion entry commits the final
+// receipt card. Arguments are shown only in verbose mode: an argument blob
+// can be large, and the transcript is a reading surface before it is a
+// debugging one. The text is already redacted by internal/agent.
 func (b *Bridge) ToolCalled(id, name, args string) {
-	summary := ""
-	if b.Verbose && args != "" {
-		summary = args
+	if b.to == nil {
+		return
 	}
-	b.emit(NewToolEntry(b.now(), id, name, summary))
+	verboseArgs := ""
+	if b.Verbose && args != "" {
+		verboseArgs = args
+	}
+	b.to.Send(ToolPendingMsg{Turn: b.turn, ID: id, Name: name, Args: verboseArgs})
 }
 
-// ToolSkipped records a call not executed, such as under --dry-run.
+// ToolSkipped records a call not executed, such as under --dry-run. The
+// call was announced as pending, so the skip resolves it too.
 func (b *Bridge) ToolSkipped(id, name, reason string) {
 	e := NewToolEntry(b.now(), id, name, "")
 	e.Result = "skipped: " + reason
 	b.emit(e)
+	if b.to != nil {
+		b.to.Send(ToolResolvedMsg{Turn: b.turn, ID: id})
+	}
 }
 
 // ToolSucceeded records a completed call.
-func (b *Bridge) ToolSucceeded(id, name, summary string, resultLen int) {
+func (b *Bridge) ToolSucceeded(id, name, summary string, resultLen int, elapsed time.Duration) {
 	e := NewToolEntry(b.now(), id, name, "")
 	e.Result = summary
+	e.Elapsed = elapsed
 	if b.Verbose {
 		e.Result = fmt.Sprintf("%s (%d bytes)", summary, resultLen)
 	}
 	b.emit(e)
+	if b.to != nil {
+		b.to.Send(ToolResolvedMsg{Turn: b.turn, ID: id})
+	}
 }
 
 // ToolFailed records a call that returned an error.
-func (b *Bridge) ToolFailed(id, name string, err error) {
+func (b *Bridge) ToolFailed(id, name string, err error, elapsed time.Duration) {
 	e := NewToolEntry(b.now(), id, name, "")
 	e.Err = err
+	e.Elapsed = elapsed
 	b.emit(e)
+	if b.to != nil {
+		b.to.Send(ToolResolvedMsg{Turn: b.turn, ID: id})
+	}
 }
 
 // ShellExecuting records a command about to run. The command has passed the

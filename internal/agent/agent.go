@@ -483,12 +483,14 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 					defer wg.Done()
 					sem <- struct{}{}
 					defer func() { <-sem }()
+					start := time.Now()
 					result, err := a.dispatchToolCall(ctx, tc)
+					elapsed := time.Since(start)
 					outMu.Lock()
 					if err != nil {
-						a.emitToolFailed(tc.ID, tc.Function.Name, err)
+						a.emitToolFailed(tc.ID, tc.Function.Name, err, elapsed)
 					} else {
-						a.emitToolSucceeded(tc.ID, tc.Function.Name, formatToolResultSummary(tc.Function.Name, result), len(result))
+						a.emitToolSucceeded(tc.ID, tc.Function.Name, formatToolResultSummary(tc.Function.Name, result), len(result), elapsed)
 					}
 					outMu.Unlock()
 					results[i] = toolResult{result: result, err: err}
