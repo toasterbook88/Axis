@@ -914,3 +914,24 @@ func TestModelHistorySinkQueuedPersists(t *testing.T) {
 		t.Fatalf("history sink recorded %v, want trimmed + queued prompt", got)
 	}
 }
+
+func TestModelEscArmDoesNotSurviveAcrossTurns(t *testing.T) {
+	// The invariant that makes esc esc safe across turn boundaries: arm ->
+	// submit -> turn settles -> a single Esc on the re-typed draft must NOT
+	// clear it (Enter disarmed the gesture before the turn ever started).
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("prompt")})
+	m = send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = apply(m, TurnDoneMsg{Turn: 1})
+
+	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("new draft")})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !strings.Contains(m.View(), "new draft") {
+		t.Fatal("a single esc after a full turn cycle must not clear the draft")
+	}
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(m.View(), "new draft") {
+		t.Fatal("esc esc must still clear after the turn cycle")
+	}
+}
