@@ -830,6 +830,11 @@ func TestConsoleShellEscapeNonZeroExit(t *testing.T) {
 
 // pickerTestSetup stubs the catalog probes so collectModelChoices runs
 // offline; it returns the hostname needed for local resident snapshots.
+//
+// The stubs mutate package-level vars (probeEndpointFn, inferenceAILoadFn)
+// and restore them on cleanup. That is only safe while cmd/axis runs no
+// t.Parallel() tests — parallel subtests would race on those vars. If a
+// parallel test is ever added, convert these to per-test seams first.
 func pickerTestSetup(t *testing.T) string {
 	hn, err := os.Hostname()
 	if err != nil || hn == "" {
@@ -1090,5 +1095,46 @@ func TestConsoleModelPickerCancelDuringCatalogLoad(t *testing.T) {
 	}
 	if a.Model() != "granite3.1-moe:1b" {
 		t.Fatalf("cancel must not switch models, got %q", a.Model())
+	}
+}
+
+func TestConsoleModelPickerLoaderError(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) {
+		return nil, errors.New("daemon offline")
+	}
+
+	msg := l.submit(context.Background())(1, "/model")()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+	if done.Err == nil || !strings.Contains(done.Err.Error(), "model catalog unavailable") || !strings.Contains(done.Err.Error(), "daemon offline") {
+		t.Fatalf("expected the wrapped loader error, got %v", done.Err)
+	}
+	for _, m := range rec.all() {
+		if _, isOverlay := m.(console.SetOverlayMsg); isOverlay {
+			t.Fatal("no overlay expected when the loader fails")
+		}
+	}
+}
+
+func TestConsoleModelPickerLoaderNilContext(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) { return nil, nil }
+
+	msg := l.submit(context.Background())(1, "/model")()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+	if done.Err == nil || !strings.Contains(done.Err.Error(), "runtime loader returned no context") {
+		t.Fatalf("expected the nil-context loader error, got %v", done.Err)
 	}
 }
