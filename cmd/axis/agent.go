@@ -56,6 +56,7 @@ func agentCmd() *cobra.Command {
 		selectModel             bool
 		useConsole              bool
 		plain                   bool
+		printMode               bool
 		live                    bool
 	)
 
@@ -237,6 +238,8 @@ func agentCmd() *cobra.Command {
 				Backend:                 backend,
 				MaxTurns:                maxTurns,
 				MaxTokens:               maxTokens,
+				Observer:                observerForPipedMode(printMode, errW, verbose),
+				Confirm:                 confirmForPipedMode(printMode, errW),
 				AutoApprove:             autoApprove,
 				Autonomy:                agent.AutonomyMode(autonomy),
 				SystemExtra:             systemMsg,
@@ -264,10 +267,19 @@ func agentCmd() *cobra.Command {
 				}
 			}
 
-			// Single-shot mode.
+			// Single-shot mode. -p selects the piped output contract:
+			// assistant text on stdout, tool badges on stderr, no banner,
+			// fail-closed confirm. Positional without -p keeps the legacy
+			// behavior byte-for-byte.
+			if printMode && len(args) == 0 {
+				return ExitCodeError{Code: ExitErrGeneric, Message: "-p/--print requires a prompt argument"}
+			}
 			if len(args) > 0 {
 				instruction := strings.Join(args, " ")
-				fmt.Fprintf(errW, "Agent [%s] — max %d turns\n\n", ui.Bold(activeTarget.Model), maxTurns)
+				if printMode {
+					return runOneShotPiped(ctx, a, instruction, errW, timeout, historyPath)
+				}
+				legacyOneShotBanner(errW, activeTarget.Model, maxTurns)
 
 				ctx2, cancel := agentRequestContext(ctx, timeout)
 				defer cancel()
@@ -322,6 +334,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
 	cmd.Flags().BoolVar(&useConsole, "console", false, "Force the transcript console (deprecated: the console is now the default on an interactive terminal; use --plain for the legacy REPL). Approvals: y yes, n no; Enter does not approve")
 	cmd.Flags().BoolVar(&plain, "plain", false, "Run the legacy line-at-a-time REPL instead of the transcript console (takes precedence over --console)")
+	cmd.Flags().BoolVarP(&printMode, "print", "p", false, "One-shot piped execution: assistant text on stdout, tool badges and summary on stderr, no banner")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd
 }
@@ -517,6 +530,8 @@ type agentSessionParams struct {
 	Knowledge               *knowledge.ClusterKnowledge
 	ToolContext             *agent.ToolContext
 	Output                  io.Writer
+	Observer                agent.Observer
+	Confirm                 agent.ConfirmFunc
 	MCPRegistry             *mcpclient.Registry
 	RuntimeLoader           func(context.Context) (*runtimectx.Context, error)
 }
@@ -546,6 +561,8 @@ func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 		Knowledge:               p.Knowledge,
 		ToolContext:             p.ToolContext,
 		Output:                  p.Output,
+		Observer:                p.Observer,
+		Confirm:                 p.Confirm,
 		RunShell:                guardedAgentShellRunner(model, loader),
 		RunOnNode: func(ctx context.Context, node, command string) (string, error) {
 			return guardedAgentCommandRunner(model, node, loader)(ctx, command)
