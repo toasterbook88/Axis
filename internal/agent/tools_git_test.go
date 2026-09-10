@@ -104,3 +104,83 @@ func TestGitTools(t *testing.T) {
 		t.Errorf("expected differences in git_diff output, got %q", diff)
 	}
 }
+
+func TestDiffFragmentChangedFile(t *testing.T) {
+	old := "alpha\nbeta\ngamma"
+	new := "alpha\ndelta\ngamma"
+	got := diffFragment(old, new)
+	if !strings.Contains(got, "1 removed, 1 added") {
+		t.Fatalf("net counts missing: %q", got)
+	}
+	if !strings.Contains(got, "- beta") || !strings.Contains(got, "+ delta") {
+		t.Fatalf("first changed lines missing: %q", got)
+	}
+	if strings.Contains(got, "alpha") {
+		t.Fatalf("unchanged prefix leaked into the fragment: %q", got)
+	}
+}
+
+func TestDiffFragmentNewFile(t *testing.T) {
+	got := diffFragment("", "line1\nline2\nline3")
+	if !strings.Contains(got, "0 removed, 3 added") || !strings.Contains(got, "+ line1") {
+		t.Fatalf("new-file fragment wrong: %q", got)
+	}
+}
+
+func TestDiffFragmentIdenticalIsEmpty(t *testing.T) {
+	if got := diffFragment("same", "same\n"); got != "" {
+		t.Fatalf("no-op write produced a fragment: %q", got)
+	}
+}
+
+func TestWriteFileResultCarriesDiffFragment(t *testing.T) {
+	r := NewToolRegistry(nil)
+
+	// write_file restricts paths to the working directory, so the test runs
+	// inside its own temp dir and uses a relative path.
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	path := "notes.txt"
+	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := r.Execute(context.Background(), "write_file", []byte(`{"path":"notes.txt","content":"alpha\ndelta\ngamma"}`))
+	if err != nil {
+		t.Fatalf("write_file failed: %v", err)
+	}
+	if !strings.Contains(result, "- beta") || !strings.Contains(result, "+ delta") {
+		t.Fatalf("result missing diff fragment:\n%s", result)
+	}
+}
+
+func TestEditFileResultCarriesDiffFragment(t *testing.T) {
+	r := NewToolRegistry(nil)
+
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	path := "notes.txt"
+	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := r.Execute(context.Background(), "edit_file", []byte(`{"path":"notes.txt","target_content":"beta","replacement_content":"delta"}`))
+	if err != nil {
+		t.Fatalf("edit_file failed: %v", err)
+	}
+	if !strings.Contains(result, "- beta") || !strings.Contains(result, "+ delta") {
+		t.Fatalf("result missing diff fragment:\n%s", result)
+	}
+}

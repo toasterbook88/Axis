@@ -592,6 +592,57 @@ func validateToolPathForWrite(p string) (string, error) {
 
 // --- Tool: write_file ---
 
+// diffFragment renders a <=3-line preview of a file change for the tool
+// card: a removed/added count plus the first removed and first added line
+// around the first difference. It is deliberately a fragment, not a patch:
+// the transcript shows what changed, not the whole file.
+func diffFragment(oldContent, newContent string) string {
+	oldLines := []string{}
+	if oldContent != "" {
+		oldLines = strings.Split(strings.TrimRight(oldContent, "\n"), "\n")
+	}
+	newLines := []string{}
+	if newContent != "" {
+		newLines = strings.Split(strings.TrimRight(newContent, "\n"), "\n")
+	}
+
+	i := 0
+	for i < len(oldLines) && i < len(newLines) && oldLines[i] == newLines[i] {
+		i++
+	}
+	j := 0
+	for j < len(oldLines)-i && j < len(newLines)-i && oldLines[len(oldLines)-1-j] == newLines[len(newLines)-1-j] {
+		j++
+	}
+	removed := oldLines[i : len(oldLines)-j]
+	added := newLines[i : len(newLines)-j]
+	if len(removed) == 0 && len(added) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d removed, %d added", len(removed), len(added))
+	if len(removed) > 0 {
+		b.WriteString("\n- " + clipRunesForTool(removed[0], 60))
+	}
+	if len(added) > 0 {
+		b.WriteString("\n+ " + clipRunesForTool(added[0], 60))
+	}
+	return b.String()
+}
+
+// clipRunesForTool truncates to n runes, appending "…" when it bites.
+func clipRunesForTool(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
+}
+
 type writeFileArgs struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -624,10 +675,18 @@ func (r *ToolRegistry) registerWriteFile() {
 				return "", fmt.Errorf("cannot create parent directory: %w", err)
 			}
 			r.checkpoints.snapshot(clean)
+			var oldContent []byte
+			if data, err := os.ReadFile(clean); err == nil {
+				oldContent = data
+			}
 			if err := os.WriteFile(clean, []byte(a.Content), 0644); err != nil {
 				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
 			}
-			return fmt.Sprintf("Successfully wrote %d bytes to %s", len(a.Content), a.Path), nil
+			result := fmt.Sprintf("Successfully wrote %d bytes to %s", len(a.Content), a.Path)
+			if frag := diffFragment(string(oldContent), a.Content); frag != "" {
+				result += "\n" + frag
+			}
+			return result, nil
 		},
 	)
 }
@@ -700,10 +759,16 @@ func (r *ToolRegistry) registerEditFile() {
 				return "", fmt.Errorf("cannot write file %q: %w", clean, err)
 			}
 			n := strings.Count(string(data), a.TargetContent)
+			result := ""
 			if a.ReplaceAll {
-				return fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path), nil
+				result = fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path)
+			} else {
+				result = fmt.Sprintf("Successfully replaced target content in %s", a.Path)
 			}
-			return fmt.Sprintf("Successfully replaced target content in %s", a.Path), nil
+			if frag := diffFragment(string(data), newContent); frag != "" {
+				result += "\n" + frag
+			}
+			return result, nil
 		},
 	)
 }
