@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -57,11 +58,14 @@ type Observer interface {
 	ToolSkipped(id, name, reason string)
 
 	// ToolSucceeded reports a completed call. summary is the one-line human
-	// summary; resultLen is the full result size in bytes.
-	ToolSucceeded(id, name, summary string, resultLen int)
+	// summary; resultLen is the full result size in bytes; elapsed is the
+	// wall time of the execution itself (dispatch -> result), excluding
+	// worker-pool wait.
+	ToolSucceeded(id, name, summary string, resultLen int, elapsed time.Duration)
 
-	// ToolFailed reports a call that returned an error.
-	ToolFailed(id, name string, err error)
+	// ToolFailed reports a call that returned an error. elapsed carries the
+	// same execution-time measurement so failures show receipts too.
+	ToolFailed(id, name string, err error, elapsed time.Duration)
 
 	// ShellExecuting reports a shell command about to run. node is empty for
 	// the local machine; cwd may be empty. command is redacted.
@@ -141,26 +145,28 @@ func (a *Agent) emitToolSkipped(id, name, reason string) {
 	fmt.Fprintf(a.output, "  %s Skipped execution of %s\n", ui.Yellow("[dry-run]"), name)
 }
 
-func (a *Agent) emitToolSucceeded(id, name, summary string, resultLen int) {
+func (a *Agent) emitToolSucceeded(id, name, summary string, resultLen int, elapsed time.Duration) {
 	summary = redactForSurface(summary)
 	if a.observer != nil {
-		a.observer.ToolSucceeded(id, name, summary, resultLen)
+		a.observer.ToolSucceeded(id, name, summary, resultLen, elapsed)
 		return
 	}
-	fmt.Fprintf(a.output, "%s %s\n", ui.Green("✓"), summary)
+	// Parity target §Pillar 5: the timing receipt is unconditional on every
+	// surface, including the plain CLI fallback.
+	fmt.Fprintf(a.output, "%s %s (%s)\n", ui.Green("✓"), summary, elapsed.Truncate(time.Millisecond))
 	if a.verbose {
 		fmt.Fprintf(a.output, "  %s Result: %d chars\n", ui.Dim("←"), resultLen)
 	}
 }
 
-func (a *Agent) emitToolFailed(id, name string, err error) {
+func (a *Agent) emitToolFailed(id, name string, err error, elapsed time.Duration) {
 	err = redactErrorForSurface(err)
 	if a.observer != nil {
-		a.observer.ToolFailed(id, name, err)
+		a.observer.ToolFailed(id, name, err, elapsed)
 		return
 	}
 	fmt.Fprintf(a.output, "  %s %s\n", ui.Red("⚠"),
-		fmt.Sprintf("Error executing tool %q: %s", name, err.Error()))
+		fmt.Sprintf("Error executing tool %q: %s (%s elapsed)", name, err.Error(), elapsed.Truncate(time.Millisecond)))
 }
 
 func (a *Agent) emitShellExecuting(id, node, cwd, command string) {

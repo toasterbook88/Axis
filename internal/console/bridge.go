@@ -212,9 +212,10 @@ func (b *Bridge) ToolSkipped(id, name, reason string) {
 }
 
 // ToolSucceeded records a completed call.
-func (b *Bridge) ToolSucceeded(id, name, summary string, resultLen int) {
+func (b *Bridge) ToolSucceeded(id, name, summary string, resultLen int, elapsed time.Duration) {
 	e := NewToolEntry(b.now(), id, name, "")
 	e.Result = summary
+	e.Elapsed = elapsed
 	if b.Verbose {
 		e.Result = fmt.Sprintf("%s (%d bytes)", summary, resultLen)
 	}
@@ -222,9 +223,10 @@ func (b *Bridge) ToolSucceeded(id, name, summary string, resultLen int) {
 }
 
 // ToolFailed records a call that returned an error.
-func (b *Bridge) ToolFailed(id, name string, err error) {
+func (b *Bridge) ToolFailed(id, name string, err error, elapsed time.Duration) {
 	e := NewToolEntry(b.now(), id, name, "")
 	e.Err = err
+	e.Elapsed = elapsed
 	b.emit(e)
 }
 

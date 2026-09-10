@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -144,8 +145,8 @@ func TestBridgeRendersToolLifecycle(t *testing.T) {
 	b := NewBridge(rec, 1, fixedNow)
 
 	b.ToolCalled("call-1", "axis_status", `{"cached":true}`)
-	b.ToolSucceeded("call-1", "axis_status", "5 nodes", 42)
-	b.ToolFailed("call-2", "remote_grep", errors.New("dial timeout"))
+	b.ToolSucceeded("call-1", "axis_status", "5 nodes", 42, 12*time.Millisecond)
+	b.ToolFailed("call-2", "remote_grep", errors.New("dial timeout"), 4*time.Millisecond)
 
 	got := rec.entries(80)
 	if len(got) != 3 {
@@ -283,10 +284,10 @@ func TestBridgeIsSafeUnderParallelToolResults(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			if i%2 == 0 {
-				b.ToolSucceeded("call", "axis_status", "ok", i)
+				b.ToolSucceeded("call", "axis_status", "ok", i, time.Millisecond)
 				return
 			}
-			b.ToolFailed("call", "remote_grep", errors.New("boom"))
+			b.ToolFailed("call", "remote_grep", errors.New("boom"), time.Millisecond)
 		}(i)
 	}
 	wg.Wait()
@@ -314,8 +315,8 @@ func TestBridgePreservesToolCallIDs(t *testing.T) {
 	rec := &recorder{}
 	b := NewBridge(rec, 1, fixedNow)
 	b.ToolCalled("call-a", "axis_status", "")
-	b.ToolSucceeded("call-a", "axis_status", "ok", 2)
-	b.ToolFailed("call-b", "remote_grep", errors.New("boom"))
+	b.ToolSucceeded("call-a", "axis_status", "ok", 2, 3*time.Millisecond)
+	b.ToolFailed("call-b", "remote_grep", errors.New("boom"), time.Millisecond)
 
 	var ids []string
 	for _, msg := range rec.msgs {
@@ -360,7 +361,7 @@ func TestProducersCaptureTheirTurnAndNeverRereadIt(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close returned %v", err)
 	}
-	b.ToolSucceeded("call-1", "axis_status", "late result", 11)
+	b.ToolSucceeded("call-1", "axis_status", "late result", 11, time.Millisecond)
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()

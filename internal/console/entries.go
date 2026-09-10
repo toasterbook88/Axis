@@ -400,6 +400,10 @@ type ToolEntry struct {
 	Summary string
 	Result  string
 	Err     error
+
+	// Elapsed is the execution wall time carried by the completion events;
+	// zero for call-only entries.
+	Elapsed time.Duration
 }
 
 // NewToolEntry records a tool call at t.

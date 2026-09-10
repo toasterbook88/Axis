@@ -75,7 +75,7 @@ func TestConsoleSubmitProducesStreamThenCompletion(t *testing.T) {
 		if _, err := out.Write([]byte("node-a has 28 GB")); err != nil {
 			return err
 		}
-		obs.ToolSucceeded("call-1", "axis_status", "5 nodes", 7)
+		obs.ToolSucceeded("call-1", "axis_status", "5 nodes", 7, 9*time.Millisecond)
 		return nil
 	}, time.Minute, consoleClock)
 	l.prog = rec
