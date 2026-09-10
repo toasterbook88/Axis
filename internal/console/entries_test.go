@@ -310,3 +310,52 @@ func TestToolEntryCarriesCorrelationID(t *testing.T) {
 		t.Errorf("ID = %q, want call-7", e.ID)
 	}
 }
+
+func TestToolEntrySuccessReceipt(t *testing.T) {
+	e := NewToolEntry(fixedToolTime, "call-1", "axis_facts", "5 nodes ok")
+	e.Elapsed = 124 * time.Millisecond
+
+	got := strings.Join(PlainAll(e.Render(80)), "\n")
+	if !strings.Contains(got, "(124ms elapsed)") {
+		t.Fatalf("timing receipt missing:\n%s", got)
+	}
+}
+
+func TestToolEntryNoReceiptForPendingOnly(t *testing.T) {
+	e := NewToolEntry(fixedToolTime, "call-1", "axis_facts", "")
+
+	got := strings.Join(PlainAll(e.Render(80)), "\n")
+	if strings.Contains(got, "elapsed") {
+		t.Fatalf("call-only entry must not show a receipt:\n%s", got)
+	}
+}
+
+func TestToolEntryDiffLineColoring(t *testing.T) {
+	e := NewToolEntry(fixedToolTime, "call-1", "write_file", "")
+	e.Elapsed = 8 * time.Millisecond
+	e.Result = "+added line\n-removed line\ncontext line"
+
+	lines := e.Render(80)
+	var plus, minus, context Line
+	for _, l := range lines {
+		switch {
+		case strings.HasPrefix(l.Text, "+added") && plus.Text == "":
+			plus = l
+		case strings.HasPrefix(l.Text, "-removed") && minus.Text == "":
+			minus = l
+		case strings.HasPrefix(l.Text, "context line") && context.Text == "":
+			context = l
+		}
+	}
+	if plus.Style != StyleGood {
+		t.Errorf("added line style = %v, want Good", plus.Style)
+	}
+	if minus.Style != StyleBad {
+		t.Errorf("removed line style = %v, want Bad", minus.Style)
+	}
+	if context.Style != StyleMuted {
+		t.Errorf("context line style = %v, want Muted", context.Style)
+	}
+}
+
+var fixedToolTime = time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)

@@ -416,13 +416,37 @@ func (e *ToolEntry) Render(width int) []Line {
 	if e.Summary != "" {
 		head += " " + e.Summary
 	}
-	out := renderBody(e.base, width, head, StyleAccent)
+	style := StyleAccent
+	if e.Err != nil {
+		style = StyleBad
+	} else if e.Elapsed > 0 {
+		// A completed call: the head is the success receipt.
+		style = StyleGood
+	}
+	out := renderBody(e.base, width, head, style)
+
+	// Timing receipt: the agent measures execution wall time and the
+	// completion events carry it; a call-only entry (no completion) shows
+	// none.
+	if e.Elapsed > 0 {
+		out = append(out, renderContinuation(e.base, width,
+			fmt.Sprintf("(%s elapsed)", e.Elapsed.Truncate(time.Millisecond)), StyleMuted)...)
+	}
 
 	switch {
 	case e.Err != nil:
 		out = append(out, renderContinuation(e.base, width, "error: "+e.Err.Error(), StyleBad)...)
 	case e.Result != "":
-		out = append(out, renderContinuation(e.base, width, e.Result, StyleMuted)...)
+		for _, line := range strings.Split(e.Result, "\n") {
+			style := StyleMuted
+			switch {
+			case strings.HasPrefix(line, "+"):
+				style = StyleGood
+			case strings.HasPrefix(line, "-"):
+				style = StyleBad
+			}
+			out = append(out, renderContinuation(e.base, width, line, style)...)
+		}
 	}
 	return out
 }
