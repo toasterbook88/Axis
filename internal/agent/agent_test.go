@@ -1207,3 +1207,25 @@ func TestIsReadOnlyTool(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentModelConcurrentAccess(t *testing.T) {
+	a := New(Config{Endpoint: "http://localhost:11434", Model: "start", MaxTokens: 4096})
+	done := make(chan struct{})
+
+	// A writer like the console /model switch, and a reader like the
+	// statusline footer: must be race-free under -race.
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			a.SetModel(fmt.Sprintf("model-%d", i%7))
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			_ = a.Model()
+		}
+	}
+}
