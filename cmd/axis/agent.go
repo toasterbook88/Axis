@@ -55,6 +55,7 @@ func agentCmd() *cobra.Command {
 		allowRawCommandEvidence bool
 		selectModel             bool
 		useConsole              bool
+		plain                   bool
 		live                    bool
 	)
 
@@ -287,6 +288,7 @@ func agentCmd() *cobra.Command {
 				MCPRegistry:   mcpReg,
 				ActiveTarget:  activeTarget,
 				Timeout:       timeout,
+				Plain:         plain,
 				HistoryPath:   historyPath,
 				UseConsole:    useConsole,
 				AutoApprove:   autoApprove,
@@ -318,7 +320,8 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cheapModel, "cheap-model", "", "Cheap/fast model for simple turns (enables multi-model routing; uses the same cloud provider as --cloud-model)")
 	cmd.Flags().BoolVar(&allowRawCommandEvidence, "allow-raw-command-evidence", false, "Include raw command text in local backend evidence")
 	cmd.Flags().BoolVarP(&selectModel, "select", "s", false, "Interactively select the model to use on startup")
-	cmd.Flags().BoolVar(&useConsole, "console", false, "Transcript console (interactive TTY). Approvals: y yes, n no; Enter does not approve")
+	cmd.Flags().BoolVar(&useConsole, "console", false, "Force the transcript console (deprecated: the console is now the default on an interactive terminal; use --plain for the legacy REPL). Approvals: y yes, n no; Enter does not approve")
+	cmd.Flags().BoolVar(&plain, "plain", false, "Run the legacy line-at-a-time REPL instead of the transcript console (takes precedence over --console)")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd
 }
