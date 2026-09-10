@@ -401,3 +401,12 @@ func TestCharRouteAgentInteractive(t *testing.T) {
 		}
 	}
 }
+
+func TestCharOneShotLegacyContractUnchanged(t *testing.T) {
+	// Track 5 pins the legacy one-shot contract: positional without -p keeps
+	// the banner + stdout tool lines (nil observer). Only -p switches the
+	// output contract.
+	if o := observerForPipedMode(false, nil, false); o != nil {
+		t.Fatal("positional one-shot without -p must not gain an observer")
+	}
+}

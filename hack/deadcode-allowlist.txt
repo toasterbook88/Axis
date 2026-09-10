@@ -145,7 +145,6 @@ internal/chat/ollama.go GenerateStream
 
 # --- KEEP-ALLOW: console render variants (Thinking/Stream/Diff entries)
 internal/console/entries.go PlainAll
-internal/console/entries.go NewThinkingEntry
 internal/console/entries.go Render
 internal/console/entries.go NewStreamEntry
 internal/console/entries.go Append
