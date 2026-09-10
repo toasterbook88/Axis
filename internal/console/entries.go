@@ -437,13 +437,19 @@ func (e *ToolEntry) Render(width int) []Line {
 	case e.Err != nil:
 		out = append(out, renderContinuation(e.base, width, "error: "+e.Err.Error(), StyleBad)...)
 	case e.Result != "":
+		// Diff-sign coloring applies only to real diff fragments, which the
+		// file tools always introduce with their removed/added count line —
+		// a result that merely begins with "-" is not a patch.
+		isDiff := strings.Contains(e.Result, " removed, ") && strings.Contains(e.Result, " added")
 		for _, line := range strings.Split(e.Result, "\n") {
 			style := StyleMuted
-			switch {
-			case strings.HasPrefix(line, "+"):
-				style = StyleGood
-			case strings.HasPrefix(line, "-"):
-				style = StyleBad
+			if isDiff {
+				switch {
+				case strings.HasPrefix(line, "+"):
+					style = StyleGood
+				case strings.HasPrefix(line, "-"):
+					style = StyleBad
+				}
 			}
 			out = append(out, renderContinuation(e.base, width, line, style)...)
 		}

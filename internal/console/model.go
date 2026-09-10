@@ -160,11 +160,10 @@ type Model struct {
 
 // pendingTool is one in-flight row in the ephemeral region.
 type pendingTool struct {
-	turn      TurnID
-	id        string
-	name      string
-	args      string
-	startedAt time.Time
+	turn TurnID
+	id   string
+	name string
+	args string
 }
 
 // Options configures a console Model.
@@ -315,7 +314,6 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		if m.stale(msg.Turn) {
 			return m, nil
 		}
-		m.flushPendingTools(msg.Turn)
 		return m.finishTurn(msg.Err)
 
 	case cancelTimeoutMsg:
@@ -349,11 +347,10 @@ func (m *Model) addPendingTool(msg ToolPendingMsg) {
 		}
 	}
 	m.pendingTools = append(m.pendingTools, pendingTool{
-		turn:      msg.Turn,
-		id:        msg.ID,
-		name:      msg.Name,
-		args:      msg.Args,
-		startedAt: m.now(),
+		turn: msg.Turn,
+		id:   msg.ID,
+		name: msg.Name,
+		args: msg.Args,
 	})
 }
 
@@ -560,6 +557,10 @@ func (m Model) startTurn(text string) (Model, tea.Cmd) {
 func (m Model) finishTurn(err error) (Model, tea.Cmd) {
 	m.state = turnIdle
 	m.retired = m.turn
+	// Both retirement paths (acknowledged TurnDoneMsg and the cancel-grace
+	// timeout) flow through here: an abandoned turn's pending tool cards
+	// must never outlive it.
+	m.flushPendingTools(m.turn)
 
 	var cmds []tea.Cmd
 	if raw := strings.TrimSpace(m.stream.String()); raw != "" {
@@ -622,7 +623,7 @@ func (m Model) View() string {
 		if pt.args != "" {
 			row += " " + pt.args
 		}
-		lines = append(lines, Line{Text: row, Style: StyleMuted})
+		lines = append(lines, Line{Text: clipRunes(row, effectiveWidth(m.width)), Style: StyleMuted})
 	}
 
 	switch m.state {

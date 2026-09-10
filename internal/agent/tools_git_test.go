@@ -184,3 +184,45 @@ func TestEditFileResultCarriesDiffFragment(t *testing.T) {
 		t.Fatalf("result missing diff fragment:\n%s", result)
 	}
 }
+
+func TestDiffFragmentGrowAndShrink(t *testing.T) {
+	// Grow: more added lines than removed — the suffix scan must not
+	// underflow.
+	got := diffFragment("alpha\nbeta", "alpha\nx\ny\nz\nbeta")
+	if !strings.Contains(got, "0 removed, 3 added") || !strings.Contains(got, "+ x") {
+		t.Fatalf("grow shape wrong: %q", got)
+	}
+
+	// Shrink: more removed lines than added.
+	got = diffFragment("alpha\nx\ny\nz\nbeta", "alpha\nbeta")
+	if !strings.Contains(got, "3 removed, 0 added") || !strings.Contains(got, "- x") {
+		t.Fatalf("shrink shape wrong: %q", got)
+	}
+}
+
+func TestDiffFragmentEmptyNewContent(t *testing.T) {
+	got := diffFragment("one\ntwo\nthree", "")
+	if !strings.Contains(got, "3 removed, 0 added") {
+		t.Fatalf("clear-file fragment wrong: %q", got)
+	}
+	if !strings.Contains(got, "- one") {
+		t.Fatalf("first removed line missing: %q", got)
+	}
+}
+
+func TestDiffFragmentMultiLineBlocks(t *testing.T) {
+	old := "keep\nold1\nold2\nold3\nkeep2"
+	new := "keep\nnew1\nnew2\nkeep2"
+	got := diffFragment(old, new)
+	if !strings.Contains(got, "3 removed, 2 added") {
+		t.Fatalf("block counts wrong: %q", got)
+	}
+	// First removed/first added must come from the change region, not the
+	// shared prefix or suffix.
+	if !strings.Contains(got, "- old1") || !strings.Contains(got, "+ new1") {
+		t.Fatalf("block first lines wrong: %q", got)
+	}
+	if strings.Contains(got, "keep") {
+		t.Fatalf("shared context leaked into the fragment: %q", got)
+	}
+}

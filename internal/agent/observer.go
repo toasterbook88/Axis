@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/ui"
@@ -152,8 +153,16 @@ func (a *Agent) emitToolSucceeded(id, name, summary string, resultLen int, elaps
 		return
 	}
 	// Parity target §Pillar 5: the timing receipt is unconditional on every
-	// surface, including the plain CLI fallback.
-	fmt.Fprintf(a.output, "%s %s (%s)\n", ui.Green("✓"), summary, elapsed.Truncate(time.Millisecond))
+	// surface, including the plain CLI fallback. File tools carry multi-line
+	// diff fragments in their summaries, so the summary is printed line-wise
+	// and the receipt gets its own trailing line — the fragment's last line
+	// must not read as carrying the receipt.
+	lines := strings.Split(summary, "\n")
+	fmt.Fprintf(a.output, "%s %s\n", ui.Green("✓"), lines[0])
+	for _, l := range lines[1:] {
+		fmt.Fprintf(a.output, "  %s\n", l)
+	}
+	fmt.Fprintf(a.output, "  %s %s\n", ui.Dim("←"), elapsed.Truncate(time.Millisecond))
 	if a.verbose {
 		fmt.Fprintf(a.output, "  %s Result: %d chars\n", ui.Dim("←"), resultLen)
 	}

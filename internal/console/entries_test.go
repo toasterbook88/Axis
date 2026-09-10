@@ -333,7 +333,7 @@ func TestToolEntryNoReceiptForPendingOnly(t *testing.T) {
 func TestToolEntryDiffLineColoring(t *testing.T) {
 	e := NewToolEntry(fixedToolTime, "call-1", "write_file", "")
 	e.Elapsed = 8 * time.Millisecond
-	e.Result = "+added line\n-removed line\ncontext line"
+	e.Result = "1 removed, 1 added\n+added line\n-removed line\ncontext line"
 
 	lines := e.Render(80)
 	var plus, minus, context Line
