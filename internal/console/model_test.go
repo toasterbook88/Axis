@@ -657,7 +657,9 @@ func TestModelThinkingBlockExtractedOnTurnDone(t *testing.T) {
 	}
 }
 
-func TestModelIdleEscClearsInput(t *testing.T) {
+func TestModelIdleEscEscClearsInput(t *testing.T) {
+	// Track 3 follow-up: clearing an idle draft takes esc esc (matching the
+	// ctrl+c quit gesture); a single accidental Esc no longer wipes a draft.
 	m := newTestModel(noopSubmit)
 	m = typeText(m, "stale draft")
 	if m.Input() != "stale draft" {
@@ -665,8 +667,12 @@ func TestModelIdleEscClearsInput(t *testing.T) {
 	}
 
 	m, _ = press(m, tea.KeyEsc)
+	if m.Input() != "stale draft" {
+		t.Fatalf("after first esc when idle: input = %q, want unchanged draft", m.Input())
+	}
+	m, _ = press(m, tea.KeyEsc)
 	if m.Input() != "" {
-		t.Fatalf("after esc when idle: input = %q, want empty", m.Input())
+		t.Fatalf("after esc esc when idle: input = %q, want empty", m.Input())
 	}
 }
 
@@ -767,17 +773,23 @@ func TestModelPendingToolsFlushedOnCancelGraceExpiry(t *testing.T) {
 	// Regression for the review's flush defect: a turn cancelled mid-tool
 	// whose backend never acknowledges retires via cancelTimeoutMsg. The
 	// pending tool card must not survive as a phantom spinner row.
-	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, Now: nil})
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
 	m = startTurnFor(t, m)
 	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
 
-	updated, _ := m.Update(TurnDoneMsg{Turn: 1})
-	_ = updated
-	m = apply(m, ToolPendingMsg{Turn: 2, ID: "c2", Name: "remote_grep"})
-	m = apply(m, cancelTimeoutMsg{Turn: 2})
+	// Real sequence: Esc while running -> requestCancel sets turnCancelling;
+	// the backend never acknowledges, so the grace expiry fires.
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !m.Cancelling() {
+		t.Fatal("precondition: esc while running must request cancellation")
+	}
+	m = apply(m, cancelTimeoutMsg{Turn: 1})
 
-	if strings.Contains(m.View(), "remote_grep") {
+	if strings.Contains(m.View(), "axis_facts") {
 		t.Fatalf("cancel-grace expiry must flush pending cards:\n%s", m.View())
+	}
+	if m.Busy() {
+		t.Fatal("cancel-grace expiry must return the console to idle")
 	}
 }
 
@@ -818,4 +830,71 @@ type captureModelSender struct {
 
 func (s *captureModelSender) Send(msg tea.Msg) {
 	s.msgs = append(s.msgs, msg)
+}
+
+func TestModelEscEscClearsDraft(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = apply(m,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft text")})
+
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !strings.Contains(m.View(), "draft") {
+		t.Fatal("first esc must NOT clear the draft")
+	}
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(m.View(), "draft") {
+		t.Fatal("second esc must clear the draft")
+	}
+	if m.Input() != "" {
+		t.Fatal("editor must be empty after esc esc")
+	}
+}
+
+func TestModelOtherKeyDisarmsEsc(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = apply(m,
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")},
+		tea.KeyMsg{Type: tea.KeyEsc},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+
+	// The gesture was disarmed by the typed key: esc now arms again, not clears.
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !strings.Contains(m.View(), "draft") {
+		t.Fatal("disarmed gesture must not clear on a single esc")
+	}
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(m.View(), "draft") {
+		t.Fatal("second esc after re-arming must clear")
+	}
+}
+
+func TestModelEscEscEmptyEditorInert(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEsc}, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.Input() != "" {
+		t.Fatal("esc esc on an empty editor must stay empty")
+	}
+}
+
+func TestModelHistorySinkCalledOnSubmit(t *testing.T) {
+	var got []string
+	m := NewModel(Options{
+		Submit: func(TurnID, string) tea.Cmd { return nil },
+		HistorySink: func(text string) tea.Cmd {
+			got = append(got, text)
+			return nil
+		},
+	})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("  prompt one  ")})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(got) != 1 || got[0] != "prompt one" {
+		t.Fatalf("history sink got %v, want trimmed prompt once", got)
+	}
+
+	// Queued prompts persist too (they are submitted prompts).
+	m2 := apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
+	apply(m2, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(got) != 2 || got[1] != "second" {
+		t.Fatalf("queued prompt must reach the sink, got %v", got)
+	}
 }
