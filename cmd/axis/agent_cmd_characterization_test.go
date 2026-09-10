@@ -381,8 +381,9 @@ func TestCharRouteAgentInteractive(t *testing.T) {
 		{name: "console forces on tty", useConsole: true, tty: true, wantConsole: true},
 		{name: "plain wins over console", useConsole: true, plain: true, tty: true, wantConsole: false},
 		{name: "console by default on tty", useConsole: false, tty: true, wantConsole: true},
-		{name: "plain by default on tty", useConsole: false, plain: true, tty: true, wantConsole: false},
 		{name: "plain falls back on non-tty", useConsole: false, plain: true, tty: false, wantConsole: false},
+		{name: "no flags on non-tty falls back to repl", useConsole: false, plain: false, tty: false, wantConsole: false},
+		{name: "plain suppresses console error on non-tty", useConsole: true, plain: true, tty: false, wantConsole: false},
 	}
 	for _, tc := range cases {
 		gotConsole, err := routeAgentInteractive(tc.useConsole, tc.plain, tc.tty)

@@ -461,7 +461,7 @@ func TestConsoleRejectsSlashWhenUnwired(t *testing.T) {
 	}
 }
 
-func TestConsoleFlagIsOptInAndDefaultsOff(t *testing.T) {
+func TestConsoleAndPlainFlagContract(t *testing.T) {
 	// Track 4 contract: the console is the default interactive surface on an
 	// interactive terminal. --console is retained as a force alias with its
 	// deprecation marked in the help, and --plain downgrades to the legacy
