@@ -609,8 +609,19 @@ func runAgentConsole(
 			}
 		}
 	}
-	// Persisted prompt history follows the conversation seed, in file order.
-	initialHistory = append(initialHistory, loadConsoleHistory(consoleHistoryPath(), 100)...)
+	// Persisted prompt history follows the conversation seed, in file
+	// order. Consecutive duplicates collapse (a resumed conversation and
+	// the file overlap; a cancelled queue restore that gets resubmitted
+	// also re-lands), matching the editor ring's own dedupe at submit.
+	seeded := append(initialHistory, loadConsoleHistory(consoleHistoryPath(), 100)...)
+	initialHistory = initialHistory[:0]
+	for _, h := range seeded {
+		if len(initialHistory) > 0 && initialHistory[len(initialHistory)-1] == h {
+			continue
+		}
+		initialHistory = append(initialHistory, h)
+	}
+	trimConsoleHistory(consoleHistoryPath(), 500)
 
 	var lastFleetCheck time.Time
 	var cachedFleet string = "unknown"
@@ -724,7 +735,40 @@ func loadConsoleHistory(path string, max int) []string {
 	if len(out) > max {
 		out = out[len(out)-max:]
 	}
-	return out
+	// Consecutive duplicates collapse: a cancelled queue restore that gets
+	// resubmitted, and an append-race double-write, must not make the recall
+	// ring show the same prompt twice in a row.
+	deduped := out[:0]
+	for _, text := range out {
+		if len(deduped) > 0 && deduped[len(deduped)-1] == text {
+			continue
+		}
+		deduped = append(deduped, text)
+	}
+	return deduped
+}
+
+// trimConsoleHistory rewrites the history file keeping its last keep
+// entries. Appends are never trimmed, so a long-lived console would grow
+// the file without bound and slow every launch; this best-effort rewrite
+// runs once per launch.
+func trimConsoleHistory(path string, keep int) {
+	entries := loadConsoleHistory(path, keep)
+	if len(entries) == 0 {
+		return
+	}
+	var buf bytes.Buffer
+	for _, text := range entries {
+		entry, err := json.Marshal(struct {
+			Ts   string `json:"ts"`
+			Text string `json:"text"`
+		}{Ts: "", Text: text})
+		if err != nil {
+			return
+		}
+		buf.Write(append(entry, '\n'))
+	}
+	_ = persist.WritePrivateFileAtomic(path, buf.Bytes())
 }
 
 // appendConsoleHistory returns a tea.Cmd that appends one prompt to the

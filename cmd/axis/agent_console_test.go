@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1209,5 +1210,88 @@ func TestAppendConsoleHistory(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, entry.Ts); err != nil {
 		t.Fatalf("timestamp not RFC3339: %q", entry.Ts)
+	}
+}
+
+func TestLoadConsoleHistoryDedupesConsecutive(t *testing.T) {
+	// A cancelled queue restore that gets resubmitted, and a resumed
+	// conversation overlapping the file, both re-land the same prompt; the
+	// recall ring must not show consecutive duplicates.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	var buf bytes.Buffer
+	for _, text := range []string{"a", "b", "b", "b", "c"} {
+		entry, _ := json.Marshal(struct {
+			Ts   string `json:"ts"`
+			Text string `json:"text"`
+		}{Text: text})
+		buf.Write(append(entry, '\n'))
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadConsoleHistory(path, 100)
+	want := []string{"a", "b", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("history = %v, want %v (consecutive dupes collapsed)", got, want)
+	}
+}
+
+func TestTrimConsoleHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	var buf bytes.Buffer
+	for i := 0; i < 700; i++ {
+		entry, _ := json.Marshal(struct {
+			Ts   string `json:"ts"`
+			Text string `json:"text"`
+		}{Text: fmt.Sprintf("p%d", i)})
+		buf.Write(append(entry, '\n'))
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	trimConsoleHistory(path, 500)
+
+	got := loadConsoleHistory(path, 1000)
+	if len(got) != 500 || got[0] != "p200" || got[499] != "p699" {
+		t.Fatalf("trimmed history = %d entries [%v..%v], want last 500", len(got), got[0], got[len(got)-1])
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("rewritten file mode = %v, want private", info.Mode().Perm())
+	}
+}
+
+func TestAppendConsoleHistoryUnwritablePathYieldsNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "no-such-dir", "history.jsonl")
+	if msg := appendConsoleHistory(path, "lost")(); msg != nil {
+		t.Fatalf("best-effort append must yield nil on failure, got %v", msg)
+	}
+}
+
+func TestAppendConsoleHistoryConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			appendConsoleHistory(path, fmt.Sprintf("c%d", i))()
+		}(i)
+	}
+	wg.Wait()
+
+	got := loadConsoleHistory(path, 100)
+	if len(got) != 16 {
+		t.Fatalf("got %d entries, want 16 surviving concurrent appends", len(got))
 	}
 }
