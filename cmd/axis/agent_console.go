@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/mcpclient"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -606,6 +609,19 @@ func runAgentConsole(
 			}
 		}
 	}
+	// Persisted prompt history follows the conversation seed, in file
+	// order. Consecutive duplicates collapse (a resumed conversation and
+	// the file overlap; a cancelled queue restore that gets resubmitted
+	// also re-lands), matching the editor ring's own dedupe at submit.
+	seeded := append(initialHistory, loadConsoleHistory(consoleHistoryPath(), 100)...)
+	initialHistory = initialHistory[:0]
+	for _, h := range seeded {
+		if len(initialHistory) > 0 && initialHistory[len(initialHistory)-1] == h {
+			continue
+		}
+		initialHistory = append(initialHistory, h)
+	}
+	trimConsoleHistory(consoleHistoryPath(), 500)
 
 	var lastFleetCheck time.Time
 	var cachedFleet string = "unknown"
@@ -657,11 +673,15 @@ func runAgentConsole(
 		},
 	})
 
+	promptHistoryPath := consoleHistoryPath()
 	model := console.NewModel(console.Options{
 		Submit:  launcher.submit(ctx),
 		Cancel:  launcher.cancel,
 		Footer:  footer,
 		History: initialHistory,
+		HistorySink: func(text string) tea.Cmd {
+			return appendConsoleHistory(promptHistoryPath, text)
+		},
 	})
 
 	prog := tea.NewProgram(model, consoleOptions(ctx).teaOptions()...)
@@ -682,6 +702,97 @@ func runAgentConsole(
 		_ = saveAgentConversation(a.Conversation(), historyPath, errW)
 	}
 	return nil
+}
+
+// consoleHistoryPath is the persisted prompt-history file for the console.
+// Entries are one JSON object per line: {"ts":RFC3339,"text":prompt}.
+func consoleHistoryPath() string {
+	return persist.AxisPath("history.jsonl")
+}
+
+// loadConsoleHistory reads the last max prompt-history entries in
+// chronological order. A missing file is not an error; malformed lines are
+// skipped so a hand-edited file cannot wedge the console.
+func loadConsoleHistory(path string, max int) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(line), &entry) != nil || entry.Text == "" {
+			continue
+		}
+		out = append(out, entry.Text)
+	}
+	if len(out) > max {
+		out = out[len(out)-max:]
+	}
+	// Consecutive duplicates collapse: a cancelled queue restore that gets
+	// resubmitted, and an append-race double-write, must not make the recall
+	// ring show the same prompt twice in a row.
+	deduped := out[:0]
+	for _, text := range out {
+		if len(deduped) > 0 && deduped[len(deduped)-1] == text {
+			continue
+		}
+		deduped = append(deduped, text)
+	}
+	return deduped
+}
+
+// trimConsoleHistory rewrites the history file keeping its last keep
+// entries. Appends are never trimmed, so a long-lived console would grow
+// the file without bound and slow every launch; this best-effort rewrite
+// runs once per launch.
+func trimConsoleHistory(path string, keep int) {
+	entries := loadConsoleHistory(path, keep)
+	if len(entries) == 0 {
+		return
+	}
+	var buf bytes.Buffer
+	for _, text := range entries {
+		entry, err := json.Marshal(struct {
+			Ts   string `json:"ts"`
+			Text string `json:"text"`
+		}{Ts: "", Text: text})
+		if err != nil {
+			return
+		}
+		buf.Write(append(entry, '\n'))
+	}
+	_ = persist.WritePrivateFileAtomic(path, buf.Bytes())
+}
+
+// appendConsoleHistory returns a tea.Cmd that appends one prompt to the
+// history file, best effort: persistence failures must not disturb the
+// session. The append runs off the event loop.
+func appendConsoleHistory(path, text string) tea.Cmd {
+	return func() tea.Msg {
+		entry, err := json.Marshal(struct {
+			Ts   string `json:"ts"`
+			Text string `json:"text"`
+		}{Ts: time.Now().UTC().Format(time.RFC3339), Text: text})
+		if err != nil {
+			return nil
+		}
+		// OpenPrivateFile creates missing parents with 0600/0700 so a
+		// first-run AXIS_HOME is not world-readable.
+		f, err := persist.OpenPrivateFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+		f.Write(append(entry, '\n'))
+		return nil
+	}
 }
 
 // consoleTTY reports whether the console can own the terminal. Both streams

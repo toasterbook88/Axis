@@ -153,6 +153,13 @@ type Model struct {
 	// additional lock is needed.
 	pendingTools []pendingTool
 
+	// historySink persists submitted prompts off the event loop.
+	historySink func(text string) tea.Cmd
+
+	// escPending tracks the first Esc of the esc-esc clear gesture on an
+	// idle draft; any other key disarms it.
+	escPending bool
+
 	spinner    int
 	interrupts int // consecutive ctrl+c presses on an empty editor
 	quitting   bool
@@ -174,6 +181,10 @@ type Options struct {
 
 	// History pre-seeds the command history ring.
 	History []string
+
+	// HistorySink persists a submitted prompt, invoked as a tea.Cmd so the
+	// event loop never performs I/O. Nil disables persistence.
+	HistorySink func(text string) tea.Cmd
 
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
@@ -204,6 +215,7 @@ func NewModel(opts Options) Model {
 		submit:      opts.Submit,
 		cancel:      opts.Cancel,
 		footer:      opts.Footer,
+		historySink: opts.HistorySink,
 		cancelGrace: grace,
 		now:         now,
 	}
@@ -392,6 +404,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key != "ctrl+c" {
 		m.interrupts = 0
 	}
+	if key != "esc" {
+		m.escPending = false
+	}
 
 	switch key {
 	case "ctrl+c":
@@ -413,12 +428,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
-		if m.state == turnIdle {
-			m.editor.Clear()
-			m.input = ""
+		if m.state != turnIdle {
+			return m.requestCancel()
+		}
+		// agy-style esc esc: the first press arms the gesture, the second
+		// clears the draft. Clearing a draft on a single accidental Esc was
+		// too easy to trigger (same reasoning as the ctrl+c quit gesture).
+		if !m.escPending {
+			m.escPending = true
 			return m, nil
 		}
-		return m.requestCancel()
+		m.escPending = false
+		if m.editor.Text() != "" {
+			m.editor.Clear()
+			m.input = ""
+		}
+		return m, nil
 
 	case "enter":
 		return m.submitInput()
@@ -526,11 +551,18 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	var cmds []tea.Cmd
+	if m.historySink != nil {
+		cmds = append([]tea.Cmd{}, m.historySink(text))
+	}
 	if m.state != turnIdle {
 		m.queued = append(m.queued, text)
-		return m, m.commit(NewNoticeEntry(m.now(), "queued: "+text))
+		// Queued prompts persist too: batch the persistence command with
+		// the queue notice so neither is dropped.
+		return m, tea.Batch(append(cmds, m.commit(NewNoticeEntry(m.now(), "queued: "+text)))...)
 	}
-	return m.startTurn(text)
+	updated, startCmd := m.startTurn(text)
+	return updated, tea.Batch(append(cmds, startCmd)...)
 }
 
 // startTurn commits the operator's line and hands the prompt to the agent.
