@@ -685,3 +685,137 @@ func TestModelThinkingClosedBeforeAnswerDoesNotFlash(t *testing.T) {
 		t.Fatalf("view should not flash raw thought block:\n%s", view)
 	}
 }
+
+func startTurnFor(t *testing.T, m Model) Model {
+	t.Helper()
+	// Drive a real submission so turn/state/stale gating are in the live
+	// running state the way production events arrive.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return next.(Model)
+}
+
+func apply(m Model, msgs ...tea.Msg) Model {
+	for _, msg := range msgs {
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+	return m
+}
+
+func TestModelPendingToolCard(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts", Args: `node="cranium"`})
+
+	view := m.View()
+	if !strings.Contains(view, spinnerFrames[0]+" axis_facts") {
+		t.Fatalf("in-flight tool card missing from ephemeral view:\n%s", view)
+	}
+	if strings.Count(view, "axis_facts") != 1 {
+		t.Fatalf("duplicate pending rows:\n%s", view)
+	}
+}
+
+func TestModelPendingToolIdempotentByID(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"},
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
+
+	if got := strings.Count(m.View(), "axis_facts"); got != 1 {
+		t.Fatalf("expected one pending row for a repeated ID, got %d", got)
+	}
+}
+
+func TestModelPendingToolResolved(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"},
+		ToolResolvedMsg{Turn: 1, ID: "c1"})
+
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatalf("resolved card must leave the ephemeral region:\n%s", m.View())
+	}
+}
+
+func TestModelPendingToolsFlushedOnTurnDone(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"},
+		TurnDoneMsg{Turn: 1})
+
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatal("a settled turn must not leave ghost spinners")
+	}
+}
+
+func TestModelPendingToolStaleTurnIgnored(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
+
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatal("stale pending message must not add a row")
+	}
+}
+
+func TestModelPendingToolsFlushedOnCancelGraceExpiry(t *testing.T) {
+	// Regression for the review's flush defect: a turn cancelled mid-tool
+	// whose backend never acknowledges retires via cancelTimeoutMsg. The
+	// pending tool card must not survive as a phantom spinner row.
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, Now: nil})
+	m = startTurnFor(t, m)
+	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
+
+	updated, _ := m.Update(TurnDoneMsg{Turn: 1})
+	_ = updated
+	m = apply(m, ToolPendingMsg{Turn: 2, ID: "c2", Name: "remote_grep"})
+	m = apply(m, cancelTimeoutMsg{Turn: 2})
+
+	if strings.Contains(m.View(), "remote_grep") {
+		t.Fatalf("cancel-grace expiry must flush pending cards:\n%s", m.View())
+	}
+}
+
+func TestModelPendingToolBridgeToModelIntegration(t *testing.T) {
+	// Bridge -> model wiring: ToolCalled opens a pending row, the
+	// completion's EntryMsg commits the receipt card and the
+	// ToolResolvedMsg retires the pending row. Two tools stay in order.
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, Now: nil})
+	m = startTurnFor(t, m)
+
+	s := &captureModelSender{m: &m}
+	b := NewBridge(s, 1, nil)
+	b.ToolCalled("call-a", "axis_facts", "")
+	b.ToolCalled("call-b", "remote_grep", "")
+	m = apply(m, s.msgs...)
+	if !strings.Contains(m.View(), "axis_facts") || !strings.Contains(m.View(), "remote_grep") {
+		t.Fatalf("expected two pending rows in order:\n%s", m.View())
+	}
+
+	s.msgs = nil
+	b.ToolSucceeded("call-a", "axis_status", "ok", 2, 3*time.Millisecond)
+	m = apply(m, s.msgs...)
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatalf("resolved tool must leave the ephemeral region:\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatalf("resolved axis_facts must leave the ephemeral region:\n%s", m.View())
+	}
+	if !strings.Contains(m.View(), "remote_grep") {
+		t.Fatalf("unresolved remote_grep must remain pending:\n%s", m.View())
+	}
+}
+
+type captureModelSender struct {
+	m    *Model
+	msgs []tea.Msg
+}
+
+func (s *captureModelSender) Send(msg tea.Msg) {
+	s.msgs = append(s.msgs, msg)
+}

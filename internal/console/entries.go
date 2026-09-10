@@ -400,6 +400,10 @@ type ToolEntry struct {
 	Summary string
 	Result  string
 	Err     error
+
+	// Elapsed is the execution wall time carried by the completion events;
+	// zero for call-only entries.
+	Elapsed time.Duration
 }
 
 // NewToolEntry records a tool call at t.
@@ -412,13 +416,43 @@ func (e *ToolEntry) Render(width int) []Line {
 	if e.Summary != "" {
 		head += " " + e.Summary
 	}
-	out := renderBody(e.base, width, head, StyleAccent)
+	style := StyleAccent
+	if e.Err != nil {
+		style = StyleBad
+	} else if e.Elapsed > 0 {
+		// A completed call: the head is the success receipt.
+		style = StyleGood
+	}
+	out := renderBody(e.base, width, head, style)
+
+	// Timing receipt: the agent measures execution wall time and the
+	// completion events carry it; a call-only entry (no completion) shows
+	// none.
+	if e.Elapsed > 0 {
+		out = append(out, renderContinuation(e.base, width,
+			fmt.Sprintf("(%s elapsed)", e.Elapsed.Truncate(time.Millisecond)), StyleMuted)...)
+	}
 
 	switch {
 	case e.Err != nil:
 		out = append(out, renderContinuation(e.base, width, "error: "+e.Err.Error(), StyleBad)...)
 	case e.Result != "":
-		out = append(out, renderContinuation(e.base, width, e.Result, StyleMuted)...)
+		// Diff-sign coloring applies only to real diff fragments, which the
+		// file tools always introduce with their removed/added count line —
+		// a result that merely begins with "-" is not a patch.
+		isDiff := strings.Contains(e.Result, " removed, ") && strings.Contains(e.Result, " added")
+		for _, line := range strings.Split(e.Result, "\n") {
+			style := StyleMuted
+			if isDiff {
+				switch {
+				case strings.HasPrefix(line, "+"):
+					style = StyleGood
+				case strings.HasPrefix(line, "-"):
+					style = StyleBad
+				}
+			}
+			out = append(out, renderContinuation(e.base, width, line, style)...)
+		}
 	}
 	return out
 }
