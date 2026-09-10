@@ -74,7 +74,7 @@ PKG_LIST=$(go list ./... | grep -v '/examples/')
 # made the flake undiagnosable from CI alone. No diagnostic re-run — the
 # captured log IS the failure output.
 if ! go test $PKG_LIST -coverprofile="$total_profile" >"$profile_log" 2>&1; then
-  echo "ERROR: go test \$PKG_LIST -coverprofile failed; captured output below (kept at $profile_log):" >&2
+  echo "ERROR: go test \$PKG_LIST -coverprofile failed; captured output below (temp log deleted on exit):" >&2
   cat "$profile_log" >&2
   exit 1
 fi
