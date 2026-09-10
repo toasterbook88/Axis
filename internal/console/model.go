@@ -37,6 +37,24 @@ type StreamChunkMsg struct {
 	Text string
 }
 
+// ToolPendingMsg marks a tool call as in flight. It never commits to
+// scrollback: the pending card renders in the ephemeral region and is
+// retired when the completion entry (or the turn) lands. Args are already
+// redacted by internal/agent and are shown in verbose mode only.
+type ToolPendingMsg struct {
+	Turn TurnID
+	ID   string
+	Name string
+	Args string
+}
+
+// ToolResolvedMsg retires an in-flight tool card. The committed result card
+// travels separately as a normal EntryMsg.
+type ToolResolvedMsg struct {
+	Turn TurnID
+	ID   string
+}
+
 // TurnDoneMsg reports that a turn finished. Err is nil on success.
 type TurnDoneMsg struct {
 	Turn TurnID
@@ -129,9 +147,24 @@ type Model struct {
 
 	cancelGrace time.Duration
 
+	// pendingTools holds in-flight tool cards in arrival order for the
+	// ephemeral region. Keyed by tool-call ID; retired on completion or when
+	// the turn settles. Updated only from Update on the event loop, so no
+	// additional lock is needed.
+	pendingTools []pendingTool
+
 	spinner    int
 	interrupts int // consecutive ctrl+c presses on an empty editor
 	quitting   bool
+}
+
+// pendingTool is one in-flight row in the ephemeral region.
+type pendingTool struct {
+	turn      TurnID
+	id        string
+	name      string
+	args      string
+	startedAt time.Time
 }
 
 // Options configures a console Model.
@@ -264,10 +297,25 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		m.stream.WriteString(msg.Text)
 		return m, nil
 
+	case ToolPendingMsg:
+		if m.stale(msg.Turn) {
+			return m, nil
+		}
+		m.addPendingTool(msg)
+		return m, nil
+
+	case ToolResolvedMsg:
+		if m.stale(msg.Turn) {
+			return m, nil
+		}
+		m.removePendingTool(msg.ID)
+		return m, nil
+
 	case TurnDoneMsg:
 		if m.stale(msg.Turn) {
 			return m, nil
 		}
+		m.flushPendingTools(msg.Turn)
 		return m.finishTurn(msg.Err)
 
 	case cancelTimeoutMsg:
@@ -290,6 +338,46 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		return m, spinnerTick()
 	}
 	return m, nil
+}
+
+// addPendingTool records an in-flight tool card. A repeated ID is a no-op:
+// the ephemeral region must never show duplicate rows.
+func (m *Model) addPendingTool(msg ToolPendingMsg) {
+	for _, t := range m.pendingTools {
+		if t.id == msg.ID {
+			return
+		}
+	}
+	m.pendingTools = append(m.pendingTools, pendingTool{
+		turn:      msg.Turn,
+		id:        msg.ID,
+		name:      msg.Name,
+		args:      msg.Args,
+		startedAt: m.now(),
+	})
+}
+
+// removePendingTool retires one in-flight card by tool-call ID.
+func (m *Model) removePendingTool(id string) {
+	for i, t := range m.pendingTools {
+		if t.id == id {
+			m.pendingTools = append(m.pendingTools[:i], m.pendingTools[i+1:]...)
+			return
+		}
+	}
+}
+
+// flushPendingTools drops every in-flight card belonging to turn. A turn
+// that settles without emitting completions must not leave ghost spinners
+// behind.
+func (m *Model) flushPendingTools(turn TurnID) {
+	kept := m.pendingTools[:0]
+	for _, t := range m.pendingTools {
+		if t.turn != turn {
+			kept = append(kept, t)
+		}
+	}
+	m.pendingTools = kept
 }
 
 func (m *Model) syncEditor() {
@@ -527,6 +615,14 @@ func (m Model) View() string {
 				lines = append(lines, Line{Text: l})
 			}
 		}
+	}
+
+	for _, pt := range m.pendingTools {
+		row := spinnerFrames[m.spinner] + " " + pt.name
+		if pt.args != "" {
+			row += " " + pt.args
+		}
+		lines = append(lines, Line{Text: row, Style: StyleMuted})
 	}
 
 	switch m.state {

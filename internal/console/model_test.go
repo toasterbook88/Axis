@@ -685,3 +685,80 @@ func TestModelThinkingClosedBeforeAnswerDoesNotFlash(t *testing.T) {
 		t.Fatalf("view should not flash raw thought block:\n%s", view)
 	}
 }
+
+func startTurnFor(t *testing.T, m Model) Model {
+	t.Helper()
+	// Drive a real submission so turn/state/stale gating are in the live
+	// running state the way production events arrive.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return next.(Model)
+}
+
+func apply(m Model, msgs ...tea.Msg) Model {
+	for _, msg := range msgs {
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+	return m
+}
+
+func TestModelPendingToolCard(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, })
+	m = startTurnFor(t, m)
+	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts", Args: `node="cranium"`})
+
+	view := m.View()
+	if !strings.Contains(view, spinnerFrames[0]+" axis_facts") {
+		t.Fatalf("in-flight tool card missing from ephemeral view:\n%s", view)
+	}
+	if strings.Count(view, "axis_facts") != 1 {
+		t.Fatalf("duplicate pending rows:\n%s", view)
+	}
+}
+
+func TestModelPendingToolIdempotentByID(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, })
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"},
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
+
+	if got := strings.Count(m.View(), "axis_facts"); got != 1 {
+		t.Fatalf("expected one pending row for a repeated ID, got %d", got)
+	}
+}
+
+func TestModelPendingToolResolved(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, })
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"},
+		ToolResolvedMsg{Turn: 1, ID: "c1"})
+
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatalf("resolved card must leave the ephemeral region:\n%s", m.View())
+	}
+}
+
+func TestModelPendingToolsFlushedOnTurnDone(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, })
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"},
+		TurnDoneMsg{Turn: 1})
+
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatal("a settled turn must not leave ghost spinners")
+	}
+}
+
+func TestModelPendingToolStaleTurnIgnored(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, })
+	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
+
+	if strings.Contains(m.View(), "axis_facts") {
+		t.Fatal("stale pending message must not add a row")
+	}
+}
