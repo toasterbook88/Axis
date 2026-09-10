@@ -1,6 +1,8 @@
 ## Unreleased
 
 ### Features
+* **esc esc clears the console draft:** the first idle Esc arms the gesture, the second clears — a single accidental Esc no longer wipes a draft (mirrors the ctrl+c quit gesture). Esc during a running turn still cancels it.
+* **Console prompt history persists:** submitted prompts append to `~/.axis/history.jsonl` (best effort, private file) and the console re-seeds its recall ring with the last 100 entries at launch; consecutive duplicates collapse.
 * **Console is the default interactive surface:** bare `axis agent` on an interactive terminal now launches the transcript console; the legacy line-at-a-time REPL moves to `--plain` (unconditional downgrade, wins over `--console`). Scripted and non-TTY runs never engage the console. `--console` is retained as a force alias and marked deprecated in help.
 
 * **Agent cache-first startup:** `axis agent` loads cluster context from the local daemon unix socket, then disk `snapshot.json`, then a bootstrap skeleton. It does not present cache as live runtime: reads are badged with age, stale, and vantage (`unknown` if missing). `--live` is the explicit discovery sweep. Bootstrap publication source is `bootstrap`, never `live-runtime`. Minted fallback envelopes use the snapshot timestamp as `AssembledAt`, not read time.
