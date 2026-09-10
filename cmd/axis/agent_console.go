@@ -662,14 +662,14 @@ func runAgentConsole(
 		},
 	})
 
-	inputHistoryPath := consoleHistoryPath()
+	promptHistoryPath := consoleHistoryPath()
 	model := console.NewModel(console.Options{
 		Submit:  launcher.submit(ctx),
 		Cancel:  launcher.cancel,
 		Footer:  footer,
 		History: initialHistory,
 		HistorySink: func(text string) tea.Cmd {
-			return appendConsoleHistory(inputHistoryPath, text)
+			return appendConsoleHistory(promptHistoryPath, text)
 		},
 	})
 
@@ -739,7 +739,9 @@ func appendConsoleHistory(path, text string) tea.Cmd {
 		if err != nil {
 			return nil
 		}
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		// OpenPrivateFile creates missing parents with 0600/0700 so a
+		// first-run AXIS_HOME is not world-readable.
+		f, err := persist.OpenPrivateFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 		if err != nil {
 			return nil
 		}

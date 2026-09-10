@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -876,25 +877,40 @@ func TestModelEscEscEmptyEditorInert(t *testing.T) {
 	}
 }
 
-func TestModelHistorySinkCalledOnSubmit(t *testing.T) {
+// send applies one message and executes the returned command tree, so the
+// test observes persistence that runs inside commands — off the Update loop
+// — instead of trusting an eager call.
+func send(m Model, msg tea.Msg) Model {
+	next, cmd := m.Update(msg)
+	m = next.(Model)
+	_ = drain(cmd)
+	return m
+}
+
+func TestModelHistorySinkQueuedPersists(t *testing.T) {
+	var mu sync.Mutex
 	var got []string
-	m := NewModel(Options{
-		Submit: func(TurnID, string) tea.Cmd { return nil },
-		HistorySink: func(text string) tea.Cmd {
+	record := func(text string) tea.Cmd {
+		return func() tea.Msg {
+			mu.Lock()
+			defer mu.Unlock()
 			got = append(got, text)
 			return nil
-		},
-	})
-	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("  prompt one  ")})
-	m = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(got) != 1 || got[0] != "prompt one" {
-		t.Fatalf("history sink got %v, want trimmed prompt once", got)
+		}
 	}
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, HistorySink: record})
 
-	// Queued prompts persist too (they are submitted prompts).
-	m2 := apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
-	apply(m2, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(got) != 2 || got[1] != "second" {
-		t.Fatalf("queued prompt must reach the sink, got %v", got)
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("  prompt one  ")})
+	m = send(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// The turn is running now: a second prompt queues, and its persistence
+	// command must still execute even though the branch returns the queue
+	// notice.
+	_ = send(send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")}), tea.KeyMsg{Type: tea.KeyEnter})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 || got[0] != "prompt one" || got[1] != "second" {
+		t.Fatalf("history sink recorded %v, want trimmed + queued prompt", got)
 	}
 }

@@ -557,7 +557,9 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	}
 	if m.state != turnIdle {
 		m.queued = append(m.queued, text)
-		return m, m.commit(NewNoticeEntry(m.now(), "queued: "+text))
+		// Queued prompts persist too: batch the persistence command with
+		// the queue notice so neither is dropped.
+		return m, tea.Batch(append(cmds, m.commit(NewNoticeEntry(m.now(), "queued: "+text)))...)
 	}
 	updated, startCmd := m.startTurn(text)
 	return updated, tea.Batch(append(cmds, startCmd)...)
