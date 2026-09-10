@@ -29,7 +29,8 @@ unset AXIS_HOME
 # Single EXIT trap for the whole script: a second `trap ... EXIT` replaces this
 # one rather than adding to it. total_profile is created here for that reason.
 total_profile="$(mktemp)"
-trap 'rm -f "$total_profile"; rm -rf "$axis_test_home"' EXIT
+profile_log="$(mktemp)"
+trap 'rm -f "$total_profile" "$profile_log"; rm -rf "$axis_test_home"' EXIT
 
 check_threshold() {
   local label="$1"
@@ -68,9 +69,13 @@ package_coverage() {
 
 PKG_LIST=$(go list ./... | grep -v '/examples/')
 
-if ! go test $PKG_LIST -coverprofile="$total_profile" >/dev/null; then
-  echo "ERROR: go test $PKG_LIST -coverprofile failed. Re-running tests to show failure logs:" >&2
-  go test $PKG_LIST -coverprofile="$total_profile" -count=1
+# Capture the profile run's output instead of discarding it: when the run
+# fails intermittently (observed 2026-09-09, runner flake), the swallowed log
+# made the flake undiagnosable from CI alone. No diagnostic re-run — the
+# captured log IS the failure output.
+if ! go test $PKG_LIST -coverprofile="$total_profile" >"$profile_log" 2>&1; then
+  echo "ERROR: go test \$PKG_LIST -coverprofile failed; captured output below (kept at $profile_log):" >&2
+  cat "$profile_log" >&2
   exit 1
 fi
 
