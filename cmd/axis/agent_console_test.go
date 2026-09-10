@@ -15,7 +15,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/console"
+	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
@@ -823,5 +825,316 @@ func TestConsoleShellEscapeNonZeroExit(t *testing.T) {
 	}
 	if !foundError {
 		t.Fatalf("expected error entry rendered to console, got: %+v", msgs)
+	}
+}
+
+// pickerTestSetup stubs the catalog probes so collectModelChoices runs
+// offline; it returns the hostname needed for local resident snapshots.
+//
+// The stubs mutate package-level vars (probeEndpointFn, inferenceAILoadFn)
+// and restore them on cleanup. That is only safe while cmd/axis runs no
+// t.Parallel() tests — parallel subtests would race on those vars. If a
+// parallel test is ever added, convert these to per-test seams first.
+func pickerTestSetup(t *testing.T) string {
+	hn, err := os.Hostname()
+	if err != nil || hn == "" {
+		t.Skip("hostname unavailable")
+	}
+	prevProbe := probeEndpointFn
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() {
+		probeEndpointFn = prevProbe
+		inferenceAILoadFn = prevLoad
+	})
+	probeEndpointFn = func(string) bool { return true }
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
+	return hn
+}
+
+func pickerTestRuntime(hn string) *runtimectx.Context {
+	return &runtimectx.Context{
+		Snapshot: &models.ClusterSnapshot{
+			Nodes: []models.NodeFacts{{
+				Name:     "local-node",
+				Hostname: hn,
+				Status:   models.StatusComplete,
+				ResidentModels: []models.ResidentModel{
+					{Name: "qwen3.8-27b", Runtime: "llama.cpp", Port: 8082},
+				},
+			}},
+		},
+		Config: &config.Config{},
+	}
+}
+
+func awaitPickerOverlay(t *testing.T, rec *capture) *console.ModelPickerOverlay {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, m := range rec.all() {
+			if som, ok := m.(console.SetOverlayMsg); ok {
+				if po, ok := som.Overlay.(*console.ModelPickerOverlay); ok {
+					return po
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("model picker overlay was never installed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestConsoleModelPickerInstallsOverlayAndSwitches(t *testing.T) {
+	hn := pickerTestSetup(t)
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "granite3.1-moe:1b", MaxTokens: 4096})
+	rt := pickerTestRuntime(hn)
+
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) { return rt, nil }
+	l.modelSwitch = consoleModelSwitch(a, l.loader, ModelChoice{Model: "granite3.1-moe:1b"})
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/model")()
+	}()
+
+	picker := awaitPickerOverlay(t, rec)
+	picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("unexpected turn done message: %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("picker selection did not resolve the turn")
+	}
+
+	if a.Model() != "qwen3.8-27b" {
+		t.Fatalf("model not switched, got %q", a.Model())
+	}
+	found := false
+	for _, m := range rec.all() {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+			if strings.Contains(rendered, "Switched to") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("switch status line not captured in transcript")
+	}
+}
+
+func TestConsoleModelPickerCancelKeepsModel(t *testing.T) {
+	hn := pickerTestSetup(t)
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "granite3.1-moe:1b", MaxTokens: 4096})
+	rt := pickerTestRuntime(hn)
+
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) { return rt, nil }
+	l.modelSwitch = consoleModelSwitch(a, l.loader, ModelChoice{Model: "granite3.1-moe:1b"})
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/model")()
+	}()
+
+	picker := awaitPickerOverlay(t, rec)
+	picker.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancel must yield a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("picker dismissal did not resolve the turn")
+	}
+	if a.Model() != "granite3.1-moe:1b" {
+		t.Fatalf("cancel must not switch models, got %q", a.Model())
+	}
+	for _, m := range rec.all() {
+		if em, ok := m.(console.EntryMsg); ok {
+			rendered := strings.Join(console.PlainAll(em.Entry.Render(100)), " ")
+			if strings.Contains(rendered, "Switched to") {
+				t.Fatal("cancel must not emit a switch notice")
+			}
+		}
+	}
+}
+
+func TestConsoleModelPickerWithArgsUnchanged(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.slash = func(cmd string) (string, error) {
+		if cmd == "/model some-name" {
+			return "mock-slash-out", nil
+		}
+		return "", errors.New("unexpected command")
+	}
+
+	msg := l.submit(context.Background())(1, "/model some-name")()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+	for _, m := range rec.all() {
+		if _, isOverlay := m.(console.SetOverlayMsg); isOverlay {
+			t.Fatal("arg-less interception must not trigger for /model with args")
+		}
+		if em, ok := m.(console.EntryMsg); ok {
+			if strings.Contains(strings.Join(console.PlainAll(em.Entry.Render(100)), " "), "mock-slash-out") {
+				return
+			}
+		}
+	}
+	t.Fatal("slash output not captured")
+}
+
+func TestConsoleModelPickerNoChoices(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{Snapshot: &models.ClusterSnapshot{}, Config: &config.Config{}}, nil
+	}
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() { inferenceAILoadFn = prevLoad })
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
+
+	msg := l.submit(context.Background())(1, "/model")()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+	found := false
+	for _, m := range rec.all() {
+		if _, isOverlay := m.(console.SetOverlayMsg); isOverlay {
+			t.Fatal("no overlay expected when the catalog is empty")
+		}
+		if em, ok := m.(console.EntryMsg); ok {
+			if strings.Contains(strings.Join(console.PlainAll(em.Entry.Render(100)), " "), "No models found") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected the no-models notice in the transcript")
+	}
+}
+
+func TestConsoleFooterModelFollowsAgent(t *testing.T) {
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "startup-model", MaxTokens: 4096})
+	if got := consoleFooterModel(a, ModelChoice{Model: "target-model"}); got != "startup-model" {
+		t.Fatalf("live agent model should win, got %q", got)
+	}
+	a.SetModel("switched-model")
+	if got := consoleFooterModel(a, ModelChoice{Model: "target-model"}); got != "switched-model" {
+		t.Fatalf("footer must track switches, got %q", got)
+	}
+	if got := consoleFooterModel(nil, ModelChoice{Model: "target-model"}); got != "target-model" {
+		t.Fatalf("nil agent must fall back to target, got %q", got)
+	}
+}
+
+func TestConsoleModelPickerCancelDuringCatalogLoad(t *testing.T) {
+	// Regression for the review's critical turn-invariant finding: the
+	// picker turn must register its cancel like every other turn, so an Esc
+	// during the keyboard-free catalog window retires the turn cleanly and
+	// the picker never installs over it.
+	hn := pickerTestSetup(t)
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "granite3.1-moe:1b", MaxTokens: 4096})
+	rt := pickerTestRuntime(hn)
+
+	release := make(chan struct{})
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) {
+		<-release
+		return rt, nil
+	}
+	l.modelSwitch = consoleModelSwitch(a, l.loader, ModelChoice{Model: "granite3.1-moe:1b"})
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/model")()
+	}()
+
+	time.Sleep(20 * time.Millisecond) // the Cmd is parked inside the loader
+	l.cancel(1)                       // what requestCancel routes to on Esc
+	close(release)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancelled picker must end as a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled picker never resolved")
+	}
+	for _, m := range rec.all() {
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			if _, isPicker := som.Overlay.(*console.ModelPickerOverlay); isPicker {
+				t.Fatal("cancelled picker turn must not install an overlay")
+			}
+		}
+	}
+	if a.Model() != "granite3.1-moe:1b" {
+		t.Fatalf("cancel must not switch models, got %q", a.Model())
+	}
+}
+
+func TestConsoleModelPickerLoaderError(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) {
+		return nil, errors.New("daemon offline")
+	}
+
+	msg := l.submit(context.Background())(1, "/model")()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+	if done.Err == nil || !strings.Contains(done.Err.Error(), "model catalog unavailable") || !strings.Contains(done.Err.Error(), "daemon offline") {
+		t.Fatalf("expected the wrapped loader error, got %v", done.Err)
+	}
+	for _, m := range rec.all() {
+		if _, isOverlay := m.(console.SetOverlayMsg); isOverlay {
+			t.Fatal("no overlay expected when the loader fails")
+		}
+	}
+}
+
+func TestConsoleModelPickerLoaderNilContext(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) { return nil, nil }
+
+	msg := l.submit(context.Background())(1, "/model")()
+
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 {
+		t.Fatalf("unexpected turn done message: %+v", msg)
+	}
+	if done.Err == nil || !strings.Contains(done.Err.Error(), "runtime loader returned no context") {
+		t.Fatalf("expected the nil-context loader error, got %v", done.Err)
 	}
 }

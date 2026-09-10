@@ -52,20 +52,25 @@ type Agent struct {
 	// baseConfirm is the surface-installed confirm without autonomy
 	// wrapping. SetAutonomy re-wraps this instead of StdinConfirm so a
 	// raw-mode surface's confirm survives mode changes.
-	baseConfirm             ConfirmFunc
-	runShell                ShellRunner
-	runOnNode               NodeShellRunner
-	runTask                 TaskRunner
-	safety                  ShellSafetyGate
-	output                  io.Writer
-	observer                Observer
-	runMu                   sync.Mutex
-	maxTurns                int
-	maxTokens               int
-	verbose                 bool
-	dryRun                  bool
-	toolContext             *ToolContext
-	model                   string
+	baseConfirm ConfirmFunc
+	runShell    ShellRunner
+	runOnNode   NodeShellRunner
+	runTask     TaskRunner
+	safety      ShellSafetyGate
+	output      io.Writer
+	observer    Observer
+	runMu       sync.Mutex
+	maxTurns    int
+	maxTokens   int
+	verbose     bool
+	dryRun      bool
+	toolContext *ToolContext
+	model       string
+	// modelMu guards model for cross-goroutine readers: the console footer
+	// renders Model() on the tea event loop while /model switches write
+	// SetModel from a turn goroutine. (OwnerLabel and subagent construction
+	// read the field inside the agent's own serialized turn loop.)
+	modelMu                 sync.RWMutex
 	allowRawCommandEvidence bool
 	securityClass           BackendSecurityClass
 	// autoApproveAll is toggled when the operator selects "always" in confirmation.
@@ -1217,6 +1222,8 @@ func (a *Agent) Backend() ChatBackend {
 
 // Model returns the current active model name.
 func (a *Agent) Model() string {
+	a.modelMu.RLock()
+	defer a.modelMu.RUnlock()
 	return a.model
 }
 
@@ -1240,7 +1247,9 @@ func (a *Agent) ExecuteToolDirect(ctx context.Context, name string, args json.Ra
 
 // SetModel updates the current active model name.
 func (a *Agent) SetModel(model string) {
+	a.modelMu.Lock()
 	a.model = model
+	a.modelMu.Unlock()
 }
 
 // SafetyGate returns the shell safety gate used to check commands.
