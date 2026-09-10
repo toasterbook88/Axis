@@ -364,3 +364,40 @@ func TestCharSetupAgentStartupBackendCheapModelWarning(t *testing.T) {
 		t.Errorf("expected warning in ErrOut, got: %s", errW.String())
 	}
 }
+
+func TestCharRouteAgentInteractive(t *testing.T) {
+	// Track 4 contract: the transcript console is the default interactive
+	// surface on an interactive terminal; --plain downgrades unconditionally;
+	// --console forces the console and still errors on a non-TTY.
+	cases := []struct {
+		name         string
+		useConsole   bool
+		plain        bool
+		tty          bool
+		wantConsole  bool
+		wantErrToken string
+	}{
+		{name: "console forces on non-tty", useConsole: true, tty: false, wantErrToken: "requires an interactive terminal"},
+		{name: "console forces on tty", useConsole: true, tty: true, wantConsole: true},
+		{name: "plain wins over console", useConsole: true, plain: true, tty: true, wantConsole: false},
+		{name: "console by default on tty", useConsole: false, tty: true, wantConsole: true},
+		{name: "plain falls back on non-tty", useConsole: false, plain: true, tty: false, wantConsole: false},
+		{name: "no flags on non-tty falls back to repl", useConsole: false, plain: false, tty: false, wantConsole: false},
+		{name: "plain suppresses console error on non-tty", useConsole: true, plain: true, tty: false, wantConsole: false},
+	}
+	for _, tc := range cases {
+		gotConsole, err := routeAgentInteractive(tc.useConsole, tc.plain, tc.tty)
+		if tc.wantErrToken != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrToken) {
+				t.Fatalf("%s: expected error containing %q, got %v", tc.name, tc.wantErrToken, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error %v", tc.name, err)
+		}
+		if gotConsole != tc.wantConsole {
+			t.Fatalf("%s: routed console=%v, want %v", tc.name, gotConsole, tc.wantConsole)
+		}
+	}
+}

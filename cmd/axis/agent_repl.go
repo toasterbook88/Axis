@@ -33,16 +33,36 @@ type agentREPLConfig struct {
 	Ctx           context.Context
 	Out, ErrOut   io.Writer
 	RuntimeLoader func(context.Context) (*runtimectx.Context, error)
+
+	// Plain forces the legacy line-at-a-time REPL (takes precedence over
+	// --console and over the TTY default).
+	Plain bool
+}
+
+// routeAgentInteractive decides which surface the interactive command runs.
+// The transcript console is the default interactive surface on an interactive
+// terminal; --plain downgrades to the legacy line reader (takes precedence
+// over --console), and --console forces the console even when --plain would
+// not be needed. --console on a non-TTY remains an error.
+func routeAgentInteractive(useConsole, plain, tty bool) (bool, error) {
+	if plain {
+		return false, nil
+	}
+	if useConsole && !tty {
+		return true, fmt.Errorf("--console requires an interactive terminal")
+	}
+	return useConsole || tty, nil
 }
 
 // runAgentInteractive is the named REPL runtime entry extracted from agentCmd.
 // It owns: console attach and the REPL loop. Setup, one-turn processing, and
 // shutdown are separate functions so no single function carries the old CC 83.
 func runAgentInteractive(cfg agentREPLConfig) error {
-	if cfg.UseConsole {
-		if !consoleTTY() {
-			return fmt.Errorf("--console requires an interactive terminal")
-		}
+	routeConsole, err := routeAgentInteractive(cfg.UseConsole, cfg.Plain, consoleTTY())
+	if err != nil {
+		return err
+	}
+	if routeConsole {
 		return runAgentConsole(cfg.Ctx, cfg.Agent, cfg.ErrOut, cfg.Timeout, cfg.HistoryPath, cfg.MCPRegistry, cfg.ActiveTarget, cfg.RuntimeLoader)
 	}
 	return runAgentREPLSession(cfg)
