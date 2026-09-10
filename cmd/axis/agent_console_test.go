@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1149,5 +1151,63 @@ func TestConsoleModelPickerLoaderNilContext(t *testing.T) {
 	}
 	if done.Err == nil || !strings.Contains(done.Err.Error(), "runtime loader returned no context") {
 		t.Fatalf("expected the nil-context loader error, got %v", done.Err)
+	}
+}
+
+func TestLoadConsoleHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	var buf bytes.Buffer
+	for i := 0; i < 5; i++ {
+		entry, _ := json.Marshal(struct {
+			Ts   string `json:"ts"`
+			Text string `json:"text"`
+		}{Ts: fmt.Sprintf("2026-09-10T00:0%d:00Z", i), Text: fmt.Sprintf("prompt %d", i)})
+		buf.Write(append(entry, '\n'))
+	}
+	buf.WriteString("not json\n\n")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadConsoleHistory(path, 100)
+	if len(got) != 5 || got[0] != "prompt 0" || got[4] != "prompt 4" {
+		t.Fatalf("history = %v, want 5 in-order prompts with malformed lines skipped", got)
+	}
+
+	capped := loadConsoleHistory(path, 3)
+	if len(capped) != 3 || capped[0] != "prompt 2" {
+		t.Fatalf("capped history = %v, want last 3", capped)
+	}
+
+	if missing := loadConsoleHistory(filepath.Join(dir, "absent.jsonl"), 100); missing != nil {
+		t.Fatalf("missing file must yield nil, got %v", missing)
+	}
+}
+
+func TestAppendConsoleHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+
+	appendConsoleHistory(path, "first")()
+	appendConsoleHistory(path, "second")()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("file has %d lines, want 2", len(lines))
+	}
+	var entry struct {
+		Ts   string `json:"ts"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &entry); err != nil || entry.Text != "second" {
+		t.Fatalf("second line = %q, want a parseable second prompt", lines[1])
+	}
+	if _, err := time.Parse(time.RFC3339, entry.Ts); err != nil {
+		t.Fatalf("timestamp not RFC3339: %q", entry.Ts)
 	}
 }
