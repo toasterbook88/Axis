@@ -2,6 +2,7 @@ package console
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -181,6 +182,28 @@ type Model struct {
 	spinner    int
 	interrupts int // consecutive ctrl+c presses on an empty editor
 	quitting   bool
+
+	// atCompletion holds the active @ autocomplete state. Zero value is
+	// inactive; it is recomputed on every rune insertion and cleared by
+	// any navigation, deletion, or explicit dismissal.
+	atCompletion atCompletionState
+
+	// atCandidates supplies completion candidates for the text after the
+	// leading '@'. Nil disables @ completion entirely.
+	atCandidates func() []string
+}
+
+// atCompletionState tracks one active @ completion. Token is the text
+// between the '@' and the cursor (without the '@'); Start is the rune
+// offset of the '@' in the editor buffer; Candidates are the filtered
+// matches; Ghost is the accepted-prefix remainder rendered muted after
+// the cursor.
+type atCompletionState struct {
+	active     bool
+	token      string
+	start      int
+	candidates []string
+	ghost      string
 }
 
 // pendingTool is one in-flight row in the ephemeral region.
@@ -204,17 +227,24 @@ type Options struct {
 	// event loop never performs I/O. Nil disables persistence.
 	HistorySink func(text string) tea.Cmd
 
+	// Now supplies entry timestamps. Nil uses time.Now; tests inject a fixed
+	// clock so committed entries render deterministically.
+	Now func() time.Time
+
+	// AtCandidates supplies @ completion candidates. Nil disables @
+	// completion.
+	AtCandidates func() []string
+
 	// TokenEstimate supplies the /usage context-token estimate. Nil shows n/a.
 	TokenEstimate func() int
 
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
-
-	// Now supplies entry timestamps. Nil uses time.Now; tests inject a fixed
-	// clock so committed entries render deterministically.
-	Now func() time.Time
 }
+
+// Init starts the console.
+func (m Model) Init() tea.Cmd { return nil }
 
 // NewModel builds a console model.
 func NewModel(opts Options) Model {
@@ -237,15 +267,13 @@ func NewModel(opts Options) Model {
 		cancel:        opts.Cancel,
 		footer:        opts.Footer,
 		historySink:   opts.HistorySink,
+		atCandidates:  opts.AtCandidates,
 		tokenEstimate: opts.TokenEstimate,
 		sessionStart:  now(),
 		cancelGrace:   grace,
 		now:           now,
 	}
 }
-
-// Init starts the console.
-func (m Model) Init() tea.Cmd { return nil }
 
 // spinnerFrames is the busy indicator. ASCII so it survives any terminal.
 var spinnerFrames = []string{"-", "\\", "|", "/"}
@@ -491,6 +519,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editor.Clear()
 			m.input = ""
 			m.interrupts = 0
+			m.atCompletion = atCompletionState{}
 			return m, nil
 		}
 		m.interrupts++
@@ -501,6 +530,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
+		// An active completion consumes Esc before esc-esc arming: the
+		// operator is dismissing a suggestion, not starting the clear
+		// gesture.
+		if m.atCompletion.active {
+			m.atCompletion = atCompletionState{}
+			return m, nil
+		}
 		if m.state != turnIdle {
 			return m.requestCancel()
 		}
@@ -516,58 +552,72 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editor.Clear()
 			m.input = ""
 		}
+		m.atCompletion = atCompletionState{}
 		return m, nil
+
+	case "tab":
+		return m.acceptAtCompletion()
 
 	case "enter":
 		return m.submitInput()
 
 	case "backspace":
+		m.atCompletion = atCompletionState{}
 		m.editor.Backspace()
 		m.input = m.editor.Text()
 		return m, nil
 
 	case "delete":
+		m.atCompletion = atCompletionState{}
 		m.editor.Delete()
 		m.input = m.editor.Text()
 		return m, nil
 
 	case "left", "ctrl+b":
+		m.atCompletion = atCompletionState{}
 		m.editor.MoveLeft()
 		return m, nil
 
 	case "right", "ctrl+f":
+		m.atCompletion = atCompletionState{}
 		m.editor.MoveRight()
 		return m, nil
 
 	case "home", "ctrl+a":
+		m.atCompletion = atCompletionState{}
 		m.editor.MoveHome()
 		return m, nil
 
 	case "end", "ctrl+e":
+		m.atCompletion = atCompletionState{}
 		m.editor.MoveEnd()
 		return m, nil
 
 	case "ctrl+u":
+		m.atCompletion = atCompletionState{}
 		m.editor.DeleteToStart()
 		m.input = m.editor.Text()
 		return m, nil
 
 	case "ctrl+k":
+		m.atCompletion = atCompletionState{}
 		m.editor.DeleteToEnd()
 		m.input = m.editor.Text()
 		return m, nil
 
 	case "ctrl+w":
+		m.atCompletion = atCompletionState{}
 		m.editor.DeleteWordBefore()
 		m.input = m.editor.Text()
 		return m, nil
-
 	case "up", "ctrl+p":
+		m.atCompletion = atCompletionState{}
 		m.editor.HistoryUp()
 		m.input = m.editor.Text()
 		return m, nil
 
 	case "down", "ctrl+n":
+		m.atCompletion = atCompletionState{}
 		m.editor.HistoryDown()
 		m.input = m.editor.Text()
 		return m, nil
@@ -578,10 +628,75 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes:
 		m.editor.Insert(string(msg.Runes))
 		m.input = m.editor.Text()
+		return m, m.refreshAtCompletion()
 	case tea.KeySpace:
 		m.editor.Insert(" ")
 		m.input = m.editor.Text()
+		m.atCompletion = atCompletionState{}
 	}
+	return m, nil
+}
+
+// refreshAtCompletion recomputes the @ completion state after an insertion.
+// The completion is active only when the token under the cursor begins with
+// '@' and has at least one character of filter text; candidates come from
+// the configured source, filtered by case-insensitive prefix.
+func (m *Model) refreshAtCompletion() tea.Cmd {
+	m.atCompletion = atCompletionState{}
+	if m.atCandidates == nil {
+		return nil
+	}
+	token, start := m.editor.TokenBeforeCursor()
+	if len(token) < 2 || token[0] != '@' {
+		return nil
+	}
+	filter := strings.ToLower(token[1:])
+	var matches []string
+	for _, c := range m.atCandidates() {
+		if strings.HasPrefix(strings.ToLower(c), filter) {
+			matches = append(matches, c)
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	sort.Strings(matches)
+	ghost := ""
+	if prefix := commonPrefix(matches); strings.HasPrefix(strings.ToLower(prefix), filter) && len(prefix) > len(token)-1 {
+		ghost = prefix[len(token)-1:]
+	}
+	m.atCompletion = atCompletionState{
+		active:     true,
+		token:      token[1:],
+		start:      start,
+		candidates: matches,
+		ghost:      ghost,
+	}
+	return nil
+}
+
+// atGhost returns the ghost suffix to render after the typed text, or ""
+// when no completion with a prefix extension is active.
+func (m Model) atGhost() string {
+	if m.atCompletion.active {
+		return m.atCompletion.ghost
+	}
+	return ""
+}
+
+// acceptAtCompletion accepts the active completion's first candidate (or the
+// common prefix when it extends the typed text) and clears the state.
+func (m Model) acceptAtCompletion() (tea.Model, tea.Cmd) {
+	if !m.atCompletion.active || len(m.atCompletion.candidates) == 0 {
+		return m, nil
+	}
+	c := m.atCompletion.candidates[0]
+	if m.atCompletion.ghost != "" {
+		c = c[:len(m.atCompletion.token)+len(m.atCompletion.ghost)]
+	}
+	m.editor.AcceptCompletion(m.atCompletion.start, c)
+	m.input = m.editor.Text()
+	m.atCompletion = atCompletionState{}
 	return m, nil
 }
 
@@ -593,6 +708,7 @@ func (m Model) requestCancel() (tea.Model, tea.Cmd) {
 		m.editor.SetText(strings.Join(m.queued, " "))
 		m.input = m.editor.Text()
 		m.queued = nil
+		m.atCompletion = atCompletionState{}
 	}
 	if m.state != turnRunning {
 		return m, nil
@@ -614,10 +730,30 @@ func (m Model) requestCancel() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// commonPrefix returns the longest case-insensitive common prefix of the
+// given strings. Empty input yields "".
+func commonPrefix(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	prefix := items[0]
+	for _, s := range items[1:] {
+		for !strings.HasPrefix(strings.ToLower(s), strings.ToLower(prefix)) {
+			r := []rune(prefix)
+			prefix = string(r[:len(r)-1])
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
+}
+
 // submitInput commits the typed line. While a turn is in flight the line is
 // queued as a steering message and delivered at the next turn boundary.
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	m.syncEditor()
+	m.atCompletion = atCompletionState{}
 	text := strings.TrimSpace(m.editor.Submit())
 	m.input = ""
 	if text == "" {
@@ -763,11 +899,15 @@ func (m Model) View() string {
 	}
 
 	m.syncEditor()
+	inputText := m.editor.Text()
+	ghost := m.atGhost()
 	lines = append(lines, Line{
-		Gutter:    "> ",
-		Text:      m.editor.Text(),
-		HasCursor: true,
-		CursorPos: m.editor.Cursor(),
+		Gutter:     "> ",
+		Text:       inputText + ghost,
+		HasCursor:  true,
+		CursorPos:  m.editor.Cursor(),
+		HasGhost:   ghost != "",
+		GhostStart: len([]rune(inputText)),
 	})
 
 	if m.footer != nil {
