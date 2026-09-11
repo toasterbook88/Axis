@@ -639,25 +639,49 @@ func TestSkillChoicesRowIDs(t *testing.T) {
 }
 
 func TestMCPServerChoicesStatusPrecedence(t *testing.T) {
+	// One server per status tier, pinned by name: [failed] must outrank
+	// InitResult, [ready] must require InitResult, and the neither-case
+	// shows [not initialized]. Row order is sorted by server name, and ID
+	// must equal the registry name (the ID-based lookup contract).
 	reg := mcpclient.NewRegistry()
-	reg.Add(&mcpclient.ServerConnection{Name: "failed", Transport: "http", Err: errors.New("boom")})
-	reg.Add(&mcpclient.ServerConnection{Name: "ready", Transport: "http"})
+	failedConn := &mcpclient.ServerConnection{Name: "b-failed", Transport: "http", Err: errors.New("boom")}
+	failedConn.InitResult = &mcp.InitializeResult{}
+	reg.Add(failedConn)
+	reg.Add(&mcpclient.ServerConnection{Name: "c-ready", Transport: "http", InitResult: &mcp.InitializeResult{}})
+	reg.Add(&mcpclient.ServerConnection{Name: "a-uninit", Transport: "http"})
 
 	opts := mcpServerChoices(reg)
+	if len(opts) != 3 {
+		t.Fatalf("got %d rows, want 3", len(opts))
+	}
 	byID := map[string]ui.SelectOption{}
 	for _, o := range opts {
 		byID[o.ID] = o
+		if o.ID != o.Label {
+			t.Fatalf("row ID %q != registry name %q", o.ID, o.Label)
+		}
 	}
-	if s, ok := byID["ready"]; !ok || !strings.Contains(s.Detail, "[not initialized]") {
-		t.Fatalf("nil-InitResult server must show [not initialized], got %+v", s)
+	if s, ok := byID["b-failed"]; !ok || !strings.Contains(s.Detail, "[failed]") {
+		t.Fatalf("Err-set server must show [failed], got %+v", s)
+	}
+	if s, ok := byID["c-ready"]; !ok || !strings.Contains(s.Detail, "[ready]") {
+		t.Fatalf("InitResult server must show [ready], got %+v", s)
+	}
+	if s, ok := byID["a-uninit"]; !ok || !strings.Contains(s.Detail, "[not initialized]") {
+		t.Fatalf("uninitialized server row = %+v, want [not initialized]", s)
 	}
 }
 
 func TestMCPServerChoicesFailedWinsOverInit(t *testing.T) {
-	// Err must win even if InitResult is also set.
+	// Err must win even when InitResult is ALSO set: both fields set on one
+	// connection, the status must be [failed].
 	reg := mcpclient.NewRegistry()
-	broken := &mcpclient.ServerConnection{Name: "broken", Transport: "http", Err: errors.New("boom")}
-	reg.Add(broken)
+	reg.Add(&mcpclient.ServerConnection{
+		Name:       "broken",
+		Transport:  "http",
+		Err:        errors.New("boom"),
+		InitResult: &mcp.InitializeResult{},
+	})
 
 	opts := mcpServerChoices(reg)
 	if len(opts) != 1 || !strings.Contains(opts[0].Detail, "[failed]") {
