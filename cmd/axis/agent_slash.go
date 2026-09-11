@@ -317,6 +317,70 @@ func slashReservations(session *agentREPLSession, _ []string) (bool, bool, error
 	return true, false, nil
 }
 
+// skillChoices builds the interactive skill menu from the runtime's learned
+// skills, with the synthetic cancel row first — the single source both the
+// REPL selector and the console picker consume.
+func skillChoices(rt *runtimectx.Context) []ui.SelectOption {
+	if rt == nil || rt.Skills == nil || len(rt.Skills.Skills) == 0 {
+		return nil
+	}
+	opts := []ui.SelectOption{{ID: "none", Label: "Cancel (do not run any skill)"}}
+	for _, s := range rt.Skills.Skills {
+		opts = append(opts, ui.SelectOption{
+			ID:     s.ID,
+			Label:  s.Description,
+			Detail: fmt.Sprintf("Command: %s", s.Command),
+		})
+	}
+	return opts
+}
+
+// skillCommand resolves the selected skill back to its command.
+func skillCommand(rt *runtimectx.Context, id string) string {
+	if rt == nil || rt.Skills == nil {
+		return ""
+	}
+	for _, s := range rt.Skills.Skills {
+		if s.ID == id {
+			return s.Command
+		}
+	}
+	return ""
+}
+
+// mcpServerChoices builds the server menu from the registry.
+func mcpServerChoices(mcpReg *mcpclient.Registry) []ui.SelectOption {
+	if mcpReg == nil {
+		return nil
+	}
+	var opts []ui.SelectOption
+	for _, name := range mcpReg.Names() {
+		s := mcpReg.Get(name)
+		status := "[not initialized]"
+		if s.Err != nil {
+			status = "[failed]"
+		} else if s.InitResult != nil {
+			status = "[ready]"
+		}
+		opts = append(opts, ui.SelectOption{
+			ID:     name,
+			Label:  name,
+			Detail: fmt.Sprintf("Transport: %s %s", s.Transport, status),
+		})
+	}
+	return opts
+}
+
+// mcpActionChoices is the fixed per-server action menu.
+func mcpActionChoices(server string) []ui.SelectOption {
+	return []ui.SelectOption{
+		{ID: "tools", Label: "List Tools", Detail: "Show all tools exposed by this server"},
+		{ID: "resources", Label: "List Resources", Detail: "Show all data resources exposed by this server"},
+		{ID: "diagnostics", Label: "Show Server Status & Diagnostics", Detail: "Run a live ping and show connection details"},
+		{ID: "back", Label: "Back", Detail: "Return to the server menu"},
+	}
+}
+
 func slashSkills(session *agentREPLSession, _ []string) (bool, bool, error) {
 	freshRt, err := sessionRuntimeLoader(session)(context.Background())
 	if err != nil {
@@ -347,18 +411,7 @@ func slashSkills(session *agentREPLSession, _ []string) (bool, bool, error) {
 		return true, false, nil
 	}
 
-	var skillOptions []ui.SelectOption
-	skillOptions = append(skillOptions, ui.SelectOption{
-		ID:    "none",
-		Label: "Cancel (do not run any skill)",
-	})
-	for _, s := range freshRt.Skills.Skills {
-		skillOptions = append(skillOptions, ui.SelectOption{
-			ID:     s.ID,
-			Label:  s.Description,
-			Detail: fmt.Sprintf("Command: %s", s.Command),
-		})
-	}
+	skillOptions := skillChoices(freshRt)
 
 	res, err := session.Selector.Select(context.Background(), "Execute a learned skill:", skillOptions)
 	if err != nil {
@@ -469,22 +522,7 @@ func slashMCP(session *agentREPLSession, _ []string) (bool, bool, error) {
 	}
 
 	for {
-		names := mcpReg.Names()
-		var serverOptions []ui.SelectOption
-		for _, name := range names {
-			s := mcpReg.Get(name)
-			status := "[not initialized]"
-			if s.Err != nil {
-				status = "[failed]"
-			} else if s.InitResult != nil {
-				status = "[ready]"
-			}
-			serverOptions = append(serverOptions, ui.SelectOption{
-				ID:     name,
-				Label:  name,
-				Detail: fmt.Sprintf("Transport: %s %s", s.Transport, status),
-			})
-		}
+		serverOptions := mcpServerChoices(mcpReg)
 
 		serverIdx, err := session.Selector.Select(context.Background(), "Select an MCP Server:", serverOptions)
 		if err != nil {
@@ -494,15 +532,10 @@ func slashMCP(session *agentREPLSession, _ []string) (bool, bool, error) {
 			return true, false, nil
 		}
 
-		sc := mcpReg.Get(names[serverIdx.Index])
+		sc := mcpReg.Get(serverIdx.ID)
 
 		for {
-			actions := []ui.SelectOption{
-				{ID: "tools", Label: "List Tools", Detail: "Show all tools exposed by this server"},
-				{ID: "resources", Label: "List Resources", Detail: "Show all data resources exposed by this server"},
-				{ID: "diagnostics", Label: "Show Server Status & Diagnostics", Detail: "Run a live ping and show connection details"},
-				{ID: "back", Label: "Back", Detail: "Return to the server menu"},
-			}
+			actions := mcpActionChoices(sc.Name)
 
 			actionIdx, err := session.Selector.Select(context.Background(), fmt.Sprintf("MCP Server %q Actions:", sc.Name), actions)
 			if err != nil {
