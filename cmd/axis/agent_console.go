@@ -60,6 +60,22 @@ type consoleLauncher struct {
 	// recording stub; production uses consoleModelSwitch.
 	modelSwitch func(choice ModelChoice, out io.Writer) error
 
+	// skillEffect runs a chosen learned-skill command as the next agent
+	// prompt (the /skills selection effect). Tests inject a recorder.
+	skillEffect func(command string, out io.Writer) error
+
+	// mcpServer resolves a server connection for the /mcp picker; nil
+	// disables the picker.
+	mcpServer func(name string) *mcpclient.ServerConnection
+
+	// mcpAction prints a server listing for the selected action id
+	// (tools/resources/diagnostics) — the explore-then-read loop, committed
+	// to the transcript between selections.
+	mcpAction func(server, action string, out io.Writer)
+
+	// mcpRegistry supplies the connected-server registry for the /mcp menu.
+	mcpRegistry func() *mcpclient.Registry
+
 	mu       sync.Mutex
 	cancels  map[console.TurnID]context.CancelFunc
 	inFlight int
@@ -87,6 +103,12 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 	return func(turn console.TurnID, prompt string) tea.Cmd {
 		if prompt == "/model" || prompt == "/models" {
 			return l.runModelPicker(parent, turn)
+		}
+		if prompt == "/skills" {
+			return l.runSkillPicker(parent, turn)
+		}
+		if prompt == "/mcp" {
+			return l.runMCPPicker(parent, turn)
 		}
 		if strings.HasPrefix(prompt, "/") {
 			return l.runSlash(turn, prompt)
@@ -410,6 +432,154 @@ func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.Tu
 	}
 }
 
+// runSkillPicker opens the learned-skill picker for arg-less /skills.
+// The selection runs the skill's command as the next agent prompt through
+// skillEffect — the same effect the REPL selector produces.
+func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+	l.mu.Lock()
+	l.inFlight++
+	l.mu.Unlock()
+
+	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			l.inFlight--
+			l.mu.Unlock()
+		}()
+
+		rt, err := l.loader(parent)
+		if err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill catalog unavailable: %w", err)}
+		}
+		choices := skillChoices(rt)
+		if len(choices) <= 1 { // only the cancel row: nothing learned yet
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewNoticeEntry(l.now(), "No learned skills yet"),
+			})
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		}
+
+		reply := make(chan string, 1)
+		items := make([]console.PickerItem, 0, len(choices))
+		for _, c := range choices {
+			items = append(items, console.PickerItem{ID: c.ID, Label: c.Label, Detail: c.Detail})
+		}
+		l.prog.Send(console.SetOverlayMsg{
+			Overlay: console.NewModelPickerOverlay("Execute a learned skill:", items, reply),
+		})
+
+		var chosenID string
+		select {
+		case chosenID = <-reply:
+		case <-parent.Done():
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		}
+		if chosenID == "" || chosenID == "none" {
+			return console.TurnDoneMsg{Turn: turn, Err: nil} // operator cancelled
+		}
+		command := skillCommand(rt, chosenID)
+		if command == "" {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill %q not found", chosenID)}
+		}
+		if l.skillEffect == nil {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill execution is not available in this console")}
+		}
+		nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
+		fmt.Fprintf(nw, "Running skill command: %s\n", command)
+		if err := l.skillEffect(command, nw); err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: err}
+		}
+		return console.TurnDoneMsg{Turn: turn, Err: nil}
+	}
+}
+
+// runMCPPicker drives the staged /mcp explorer: server menu → action menu →
+// committed listing → action menu again ("Back" returns to the server menu).
+func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+	l.mu.Lock()
+	l.inFlight++
+	l.mu.Unlock()
+
+	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			l.inFlight--
+			l.mu.Unlock()
+		}()
+
+		for {
+			if l.mcpServer == nil {
+				return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("MCP picker is not available in this console")}
+			}
+
+			servers := mcpServerChoices(l.mcpRegistry())
+			if len(servers) == 0 {
+				l.prog.Send(console.EntryMsg{
+					Turn:  turn,
+					Entry: console.NewNoticeEntry(l.now(), "No MCP servers configured or connected."),
+				})
+				return console.TurnDoneMsg{Turn: turn, Err: nil}
+			}
+
+			serverID, ok := awaitPickerChoice(l.prog, parent, turn, "Select an MCP Server:", toPickerRows(servers))
+			if !ok {
+				return console.TurnDoneMsg{Turn: turn, Err: nil} // dismissed
+			}
+			if serverID == "" {
+				return console.TurnDoneMsg{Turn: turn, Err: nil}
+			}
+
+			for {
+				actions := mcpActionChoices(serverID)
+				actionID, ok := awaitPickerChoice(l.prog, parent, turn, fmt.Sprintf("MCP Server %q Actions:", serverID), toPickerRows(actions))
+				if !ok {
+					return console.TurnDoneMsg{Turn: turn, Err: nil}
+				}
+				if actionID == "" {
+					// Esc dismisses the whole /mcp explorer — navigating back
+					// on a dismissal would trap the operator in the loop.
+					return console.TurnDoneMsg{Turn: turn, Err: nil}
+				}
+				if actionID == "back" {
+					break
+				}
+				nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
+				l.mcpAction(serverID, actionID, nw)
+			}
+		}
+	}
+}
+
+// toPickerRows converts generic select options into picker rows.
+func toPickerRows(opts []ui.SelectOption) []console.PickerItem {
+	items := make([]console.PickerItem, 0, len(opts))
+	for _, o := range opts {
+		items = append(items, console.PickerItem{ID: o.ID, Label: o.Label, Detail: o.Detail, Disabled: false})
+	}
+	return items
+}
+
+// awaitPickerChoice installs a picker and blocks until the operator resolves
+// it. Returns ("", false) when the wait is interrupted (cancelled turn);
+// ("", true) on dismissal; (id, true) on selection.
+func awaitPickerChoice(prog interface{ Send(tea.Msg) }, parent context.Context, turn console.TurnID, title string, items []console.PickerItem) (string, bool) {
+	reply := make(chan string, 1)
+	prog.Send(console.SetOverlayMsg{
+		Overlay: console.NewModelPickerOverlay(title, items, reply),
+	})
+	select {
+	case id := <-reply:
+		fmt.Println("AWAIT-GOT:", id)
+		if id == "" {
+			return "", true // dismissed
+		}
+		return id, true
+	case <-parent.Done():
+		return "", false
+	}
+}
+
 // cancel aborts exactly one turn. Cancelling an unknown or settled turn is a
 // no-op, and never touches any other turn's context.
 func (l *consoleLauncher) cancel(turn console.TurnID) {
@@ -600,6 +770,29 @@ func runAgentConsole(
 	launcher.loader = loader
 	launcher.activeTarget = target
 	launcher.modelSwitch = consoleModelSwitch(a, loader, target)
+	launcher.skillEffect = func(command string, out io.Writer) error {
+		ctx2, cancel := agentRequestContext(ctx, timeout)
+		defer cancel()
+		return a.Run(ctx2, command)
+	}
+	if mcpReg != nil {
+		launcher.mcpRegistry = func() *mcpclient.Registry { return mcpReg }
+		launcher.mcpServer = func(name string) *mcpclient.ServerConnection { return mcpReg.Get(name) }
+		launcher.mcpAction = func(server, action string, out io.Writer) {
+			sc := mcpReg.Get(server)
+			if sc == nil {
+				return
+			}
+			switch action {
+			case "tools":
+				slashMCPListTools(out, sc)
+			case "resources":
+				slashMCPListResources(out, sc)
+			case "diagnostics":
+				slashMCPDiagnostics(out, sc)
+			}
+		}
+	}
 
 	var initialHistory []string
 	if a != nil && a.Conversation() != nil {
