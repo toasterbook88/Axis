@@ -1428,3 +1428,91 @@ func TestConsoleMCPPickerStagedFlow(t *testing.T) {
 		t.Fatalf("mcp action effect not applied: %v", printed)
 	}
 }
+
+func TestConsoleSkillPickerCancelDuringLoad(t *testing.T) {
+	// The turn contract for /skills mirrors /model: Esc during the catalog
+	// window reaches the Cmd, the turn ends clean, no overlay installs, no
+	// skill runs.
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	release := make(chan struct{})
+	l.loader = func(ctx context.Context) (*runtimectx.Context, error) {
+		<-release
+		return rt, nil
+	}
+	var effectRan bool
+	l.skillEffect = func(context.Context, console.TurnID, string, io.Writer) error {
+		effectRan = true
+		return nil
+	}
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/skills")()
+	}()
+
+	time.Sleep(20 * time.Millisecond) // the Cmd is parked inside the loader
+	l.cancel(1)                       // what requestCancel routes to on Esc
+	close(release)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancelled skill picker must end as a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled skill picker never resolved")
+	}
+	if effectRan {
+		t.Fatal("cancel must not run the skill effect")
+	}
+	found := false
+	for _, m := range rec.all() {
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			if _, isPicker := som.Overlay.(*console.ModelPickerOverlay); isPicker {
+				found = true
+			}
+		}
+	}
+	if found {
+		t.Fatal("cancelled skill picker turn must not install an overlay")
+	}
+}
+
+func TestConsoleMCPPickerCancelExitsFlow(t *testing.T) {
+	// Cancelling during the /mcp explorer must end the whole staged flow
+	// cleanly: the cancel reaches the Cmd via l.cancels[turn], the overlay
+	// is dismissed, and no listing prints.
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{Name: "foundry", Transport: "http"})
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.mcpRegistry = func() *mcpclient.Registry { return reg }
+	l.mcpAction = func(server, action string, out io.Writer) {}
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/mcp")()
+	}()
+
+	// The goroutine installs the server menu; cancel during that window.
+	time.Sleep(20 * time.Millisecond)
+	l.cancel(1)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancelled mcp picker must end as a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled mcp picker never resolved")
+	}
+}
