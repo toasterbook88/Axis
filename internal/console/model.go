@@ -403,8 +403,12 @@ func (m Model) usageLine() string {
 	wall := time.Since(m.sessionStart).Round(time.Second)
 	if m.usageStats != nil {
 		if in, out, turns := m.usageStats(); turns > 0 {
-			return fmt.Sprintf("── session: %s tokens in · %s out (real, %d turns) · %d turns total · %s wall ──",
-				FormatTokens(in), FormatTokens(out), turns, m.turn, wall)
+			turnWord := "turns"
+			if turns == 1 {
+				turnWord = "turn"
+			}
+			return fmt.Sprintf("── session: %s tokens in · %s out (real, %d %s reported) · %d turns total · %s wall ──",
+				FormatTokens(in), FormatTokens(out), turns, turnWord, m.turn, wall)
 		}
 	}
 	tokens := "n/a"

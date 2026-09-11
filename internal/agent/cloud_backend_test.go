@@ -52,6 +52,11 @@ func TestCloudBackend_OpenAI(t *testing.T) {
 	if resp.Content != "Let me find that file. " {
 		t.Errorf("expected final message content to be 'Let me find that file. ', got %q", resp.Content)
 	}
+	// The reported usage must be stamped on the returned message so the
+	// session accumulator totals real numbers.
+	if resp.UsageTokensIn != 10 || resp.UsageTokensOut != 20 {
+		t.Errorf("usage stamp = (%d, %d), want (10, 20)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
 	}
@@ -118,6 +123,10 @@ func TestCloudBackend_Anthropic(t *testing.T) {
 		t.Fatalf("unexpected ChatStream error: %v", err)
 	}
 
+	// The reported usage must be stamped on the returned message.
+	if resp.UsageTokensIn != 15 || resp.UsageTokensOut != 25 {
+		t.Errorf("usage stamp = (%d, %d), want (15, 25)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
 	if streamOut.String() != "Searching... " {
 		t.Errorf("expected streamed text to be 'Searching... ', got %q", streamOut.String())
 	}

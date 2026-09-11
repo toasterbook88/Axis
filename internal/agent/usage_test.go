@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -98,5 +97,4 @@ func TestAgentUsageStatsSkipsFailedTurns(t *testing.T) {
 	if in != 10 || outTok != 5 || turns != 1 {
 		t.Errorf("usage = (%d, %d, %d), want (10, 5, 1)", in, outTok, turns)
 	}
-	_ = strings.TrimSpace
 }

@@ -86,7 +86,10 @@ func agentCmd() *cobra.Command {
 				usageIn, usageOut, usageTurns := a.UsageStats()
 				if usageTurns > 0 {
 					// Real per-turn usage from the backend: prefer it over
-					// the char/4 whole-conversation estimate.
+					// the char/4 whole-conversation estimate. The cost line
+					// below still comes from the backend's lifetime totals
+					// (which include estimated turns and subagent traffic),
+					// so the token rows are labeled "(real)".
 					stats.TokensIn, stats.TokensOut = usageIn, usageOut
 				}
 				if stats.TokensIn > 0 || stats.TokensOut > 0 {
@@ -98,13 +101,17 @@ func agentCmd() *cobra.Command {
 					ui.WhiteColor.Fprintf(w, "  │                    SESSION SUMMARY                     │\n")
 					ui.WhiteColor.Fprintf(w, "  ├────────────────────────────────────────────────────────┤\n")
 
+					realNote := ""
+					if usageTurns > 0 {
+						realNote = " (real)"
+					}
 					totalStr := fmt.Sprintf("%-36d", totalTokens)
-					inStr := fmt.Sprintf("%-36d", stats.TokensIn)
-					outStr := fmt.Sprintf("%-36d", stats.TokensOut)
+					inStr := fmt.Sprintf("%-30d", stats.TokensIn)
+					outStr := fmt.Sprintf("%-30d", stats.TokensOut)
 
 					fmt.Fprintf(w, "  │  Tokens Consumed:  %s │\n", ui.Bold(totalStr))
-					fmt.Fprintf(w, "  │    - Input:        %s │\n", ui.Dim(inStr))
-					fmt.Fprintf(w, "  │    - Output:       %s │\n", ui.Dim(outStr))
+					fmt.Fprintf(w, "  │    - Input:  %s%s │\n", ui.Dim(inStr), realNote)
+					fmt.Fprintf(w, "  │    - Output: %s%s │\n", ui.Dim(outStr), realNote)
 					if stats.Cost > 0 {
 						costStr := fmt.Sprintf("$%-35.4f", stats.Cost)
 						fmt.Fprintf(w, "  │  Estimated Cost:   %s │\n", ui.Green(costStr))
