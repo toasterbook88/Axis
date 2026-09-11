@@ -576,7 +576,6 @@ func TestCollectReservationListItemsFallbackUsesInjectedLoader(t *testing.T) {
 	}
 }
 
-
 func TestSkillChoicesShape(t *testing.T) {
 	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
 		{ID: "s1", Description: "Check cluster", Command: "axis status"},
@@ -613,5 +612,55 @@ func TestMCPServerChoicesShape(t *testing.T) {
 	actions := mcpActionChoices("foundry")
 	if len(actions) != 4 || actions[3].ID != "back" {
 		t.Fatalf("action menu shape changed: %+v", actions)
+	}
+}
+
+func TestSkillChoicesEmptyVariants(t *testing.T) {
+	// Non-nil but empty store: no cancel row may leak when nothing exists.
+	if got := skillChoices(&runtimectx.Context{}); got != nil {
+		t.Fatalf("nil-store runtime must yield nil, got %+v", got)
+	}
+	if got := skillChoices(&runtimectx.Context{Skills: &skills.Store{}}); got != nil {
+		t.Fatalf("empty store must yield nil, got %+v", got)
+	}
+	if skillCommand(nil, "s1") != "" {
+		t.Fatal("skillCommand(nil) must be empty")
+	}
+}
+
+func TestSkillChoicesRowIDs(t *testing.T) {
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+	opts := skillChoices(rt)
+	if opts[1].ID != "s1" {
+		t.Fatalf("skill row ID = %q, want s1", opts[1].ID)
+	}
+}
+
+func TestMCPServerChoicesStatusPrecedence(t *testing.T) {
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{Name: "failed", Transport: "http", Err: errors.New("boom")})
+	reg.Add(&mcpclient.ServerConnection{Name: "ready", Transport: "http"})
+
+	opts := mcpServerChoices(reg)
+	byID := map[string]ui.SelectOption{}
+	for _, o := range opts {
+		byID[o.ID] = o
+	}
+	if s, ok := byID["ready"]; !ok || !strings.Contains(s.Detail, "[not initialized]") {
+		t.Fatalf("nil-InitResult server must show [not initialized], got %+v", s)
+	}
+}
+
+func TestMCPServerChoicesFailedWinsOverInit(t *testing.T) {
+	// Err must win even if InitResult is also set.
+	reg := mcpclient.NewRegistry()
+	broken := &mcpclient.ServerConnection{Name: "broken", Transport: "http", Err: errors.New("boom")}
+	reg.Add(broken)
+
+	opts := mcpServerChoices(reg)
+	if len(opts) != 1 || !strings.Contains(opts[0].Detail, "[failed]") {
+		t.Fatalf("failed server row = %+v, want [failed] status", opts)
 	}
 }

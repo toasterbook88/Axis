@@ -335,7 +335,7 @@ func skillChoices(rt *runtimectx.Context) []ui.SelectOption {
 	return opts
 }
 
-// skillCommandByID resolves the selected skill back to its command.
+// skillCommand resolves the selected skill back to its command.
 func skillCommand(rt *runtimectx.Context, id string) string {
 	if rt == nil || rt.Skills == nil {
 		return ""

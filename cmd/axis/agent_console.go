@@ -459,6 +459,9 @@ func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.Tu
 			})
 			return console.TurnDoneMsg{Turn: turn, Err: nil}
 		}
+		if l.skillEffect == nil {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill execution is not available in this console")}
+		}
 
 		reply := make(chan string, 1)
 		items := make([]console.PickerItem, 0, len(choices))
@@ -481,9 +484,6 @@ func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.Tu
 		command := skillCommand(rt, chosenID)
 		if command == "" {
 			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill %q not found", chosenID)}
-		}
-		if l.skillEffect == nil {
-			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill execution is not available in this console")}
 		}
 		nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
 		fmt.Fprintf(nw, "Running skill command: %s\n", command)
@@ -509,7 +509,7 @@ func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.Turn
 		}()
 
 		for {
-			if l.mcpServer == nil {
+			if l.mcpServer == nil || l.mcpRegistry == nil || l.mcpAction == nil {
 				return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("MCP picker is not available in this console")}
 			}
 
@@ -570,7 +570,6 @@ func awaitPickerChoice(prog interface{ Send(tea.Msg) }, parent context.Context, 
 	})
 	select {
 	case id := <-reply:
-		fmt.Println("AWAIT-GOT:", id)
 		if id == "" {
 			return "", true // dismissed
 		}
@@ -771,6 +770,9 @@ func runAgentConsole(
 	launcher.activeTarget = target
 	launcher.modelSwitch = consoleModelSwitch(a, loader, target)
 	launcher.skillEffect = func(command string, out io.Writer) error {
+		if a == nil {
+			return fmt.Errorf("agent is not available in this console")
+		}
 		ctx2, cancel := agentRequestContext(ctx, timeout)
 		defer cancel()
 		return a.Run(ctx2, command)
@@ -781,6 +783,7 @@ func runAgentConsole(
 		launcher.mcpAction = func(server, action string, out io.Writer) {
 			sc := mcpReg.Get(server)
 			if sc == nil {
+				fmt.Fprintf(out, "Server %q is no longer connected.\n", server)
 				return
 			}
 			switch action {
@@ -790,6 +793,8 @@ func runAgentConsole(
 				slashMCPListResources(out, sc)
 			case "diagnostics":
 				slashMCPDiagnostics(out, sc)
+			default:
+				fmt.Fprintf(out, "Unknown MCP action %q.\n", action)
 			}
 		}
 	}
