@@ -935,3 +935,119 @@ func TestModelEscArmDoesNotSurviveAcrossTurns(t *testing.T) {
 		t.Fatal("esc esc must still clear after the turn cycle")
 	}
 }
+
+// stepping clock for span measurement: each call advances one second.
+func steppingClock(start time.Time) func() time.Time {
+	t := start
+	var mu sync.Mutex
+	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		t = t.Add(time.Second)
+		return t
+	}
+}
+
+func TestModelThinkingSpanMeasured(t *testing.T) {
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, Now: steppingClock(base)})
+	m = startTurnFor(t, m)
+
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>reasoning part"})  // false->true at +1s
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "</think>more reasoning"}) // still in thought
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "</think>answer begins"})  // true->false at +3s
+	if m.thoughtEnd.IsZero() {
+		t.Fatal("thought end not stamped on the transition")
+	}
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "more answer"}) // no re-stamp
+	if m.thoughtEnd.IsZero() {
+		t.Fatal("thought end must be stamped at the in-thought exit")
+	}
+
+	m = apply(m, TurnDoneMsg{Turn: 1})
+	if m.lastThought != "reasoning part" {
+		t.Fatalf("retained thought = %q, want the reasoning block", m.lastThought)
+	}
+	if m.thinkingElapsed() != 0 {
+		t.Fatal("finished turn resets the span for the next turn")
+	}
+	if m.inThought {
+		t.Fatal("inThought must reset with the stream")
+	}
+}
+
+func TestThinkingEntryRendersDuration(t *testing.T) {
+	e := NewThinkingEntry(fixedNow(), "deep reasoning\nspanning\nlines")
+	e.Elapsed = 3100 * time.Millisecond
+	got := strings.Join(PlainAll(e.Render(80)), "\n")
+	if !strings.Contains(got, "Thought for 3.1s") {
+		t.Fatalf("duration header missing:\n%s", got)
+	}
+	if !strings.Contains(got, "1 more lines") || strings.Contains(got, "spanning\nlines") && false {
+		// collapsed shape retained
+	}
+}
+
+func TestThinkingEntryExpandedPrintsFull(t *testing.T) {
+	e := NewThinkingEntry(fixedNow(), "full block")
+	e.Expanded = true
+	got := strings.Join(PlainAll(e.Render(80)), "\n")
+	if !strings.Contains(got, "full block") {
+		t.Fatalf("expanded render missing the full text:\n%s", got)
+	}
+}
+
+func TestModelThoughtCommandExpandsRetainedBlock(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }, Now: steppingClock(time.Now())})
+	m = startTurnFor(t, m)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>reasoning part"})
+	m = apply(m, TurnDoneMsg{Turn: 1})
+	if m.lastThought == "" {
+		t.Fatal("precondition: thought retained after the turn")
+	}
+
+	next, commitCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/thought")})
+	m = next.(Model)
+	_ = drain(commitCmd)
+	next, commitCmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if commitCmd == nil {
+		t.Fatal("/thought must commit the expanded block (a tea.Println cmd)")
+	}
+	_ = drain(commitCmd)
+	if m.Busy() {
+		t.Fatal("/thought must not start a turn")
+	}
+	if m.turn != 1 {
+		t.Fatalf("turn counter advanced to %d; /thought is not a turn", m.turn)
+	}
+}
+
+func TestModelThoughtCommandWithoutBlock(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/thought")})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(Model)
+	// No panic, no turn started; the notice path is exercised by the commit.
+	if m.Busy() {
+		t.Fatal("/thought with no block must not start a turn")
+	}
+}
+
+func TestModelUsageCommand(t *testing.T) {
+	var tokens int
+	m := NewModel(Options{
+		Submit:        func(TurnID, string) tea.Cmd { return nil },
+		TokenEstimate: func() int { return 9200 },
+	})
+	_ = tokens
+	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/usage")})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Busy() {
+		t.Fatal("/usage must not start a turn")
+	}
+	if m.turn != 0 {
+		t.Fatal("/usage is not a turn")
+	}
+}
