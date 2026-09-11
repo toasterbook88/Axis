@@ -1329,7 +1329,7 @@ func TestConsoleSkillPickerRunsCommand(t *testing.T) {
 	l.loader = func(context.Context) (*runtimectx.Context, error) { return rt, nil }
 
 	var ran string
-	l.skillEffect = func(command string, out io.Writer) error {
+	l.skillEffect = func(_ context.Context, _ console.TurnID, command string, out io.Writer) error {
 		ran = command
 		return nil
 	}
@@ -1390,7 +1390,6 @@ func TestConsoleMCPPickerStagedFlow(t *testing.T) {
 	l := newConsoleLauncher(nil, time.Minute, consoleClock)
 	l.prog = rec
 	l.mcpRegistry = func() *mcpclient.Registry { return reg }
-	l.mcpServer = func(name string) *mcpclient.ServerConnection { return reg.Get(name) }
 	var printed []string
 	l.mcpAction = func(server, action string, out io.Writer) {
 		printed = append(printed, server+"/"+action)
