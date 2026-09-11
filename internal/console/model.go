@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -160,6 +161,23 @@ type Model struct {
 	// idle draft; any other key disarms it.
 	escPending bool
 
+	// Thinking-span receipt measurement: chunk arrival is stamped at the
+	// inThought transitions (only the console sees where the reasoning
+	// block begins and ends in the stream).
+	inThought    bool
+	thoughtStart time.Time
+	thoughtEnd   time.Time
+
+	// lastThought retains the most recent committed thinking block in full
+	// for /thought (committed entries are immutable and not re-rendered).
+	lastThought string
+
+	// tokenEstimate supplies the /usage context estimate; nil disables.
+	tokenEstimate func() int
+
+	// sessionStart anchors the /usage wall-time line.
+	sessionStart time.Time
+
 	spinner    int
 	interrupts int // consecutive ctrl+c presses on an empty editor
 	quitting   bool
@@ -186,6 +204,9 @@ type Options struct {
 	// event loop never performs I/O. Nil disables persistence.
 	HistorySink func(text string) tea.Cmd
 
+	// TokenEstimate supplies the /usage context-token estimate. Nil shows n/a.
+	TokenEstimate func() int
+
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
@@ -210,14 +231,16 @@ func NewModel(opts Options) Model {
 		ed.SetHistory(opts.History)
 	}
 	return Model{
-		width:       80,
-		editor:      ed,
-		submit:      opts.Submit,
-		cancel:      opts.Cancel,
-		footer:      opts.Footer,
-		historySink: opts.HistorySink,
-		cancelGrace: grace,
-		now:         now,
+		width:         80,
+		editor:        ed,
+		submit:        opts.Submit,
+		cancel:        opts.Cancel,
+		footer:        opts.Footer,
+		historySink:   opts.HistorySink,
+		tokenEstimate: opts.TokenEstimate,
+		sessionStart:  now(),
+		cancelGrace:   grace,
+		now:           now,
 	}
 }
 
@@ -306,6 +329,7 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.stream.WriteString(msg.Text)
+		m.stampThinkingSpan()
 		return m, nil
 
 	case ToolPendingMsg:
@@ -350,6 +374,31 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+// expandThought re-commits the most recent thinking block in full. Committed
+// entries are immutable, so the expand is a new block, never an in-place
+// edit of scrollback.
+func (m Model) expandThought() tea.Cmd {
+	if m.lastThought == "" {
+		return m.commit(NewNoticeEntry(m.now(), "no thinking block recorded this session"))
+	}
+	e := NewThinkingEntry(m.now(), m.lastThought)
+	e.Expanded = true
+	return m.commit(e)
+}
+
+// usageLine renders the /usage v1 block: context-token estimate, turn
+// counter, and session wall time. No dollar cost and no in/out split: the
+// repo has neither per-model metering nor a pricing source, and a fabricated
+// figure would violate the Sources-of-Truth rule.
+func (m Model) usageLine() string {
+	tokens := "n/a"
+	if m.tokenEstimate != nil {
+		tokens = fmt.Sprintf("~%s", FormatTokens(m.tokenEstimate()))
+	}
+	return fmt.Sprintf("── session: %s tokens (estimate) · %d turns · %s wall ──",
+		tokens, m.turn, time.Since(m.sessionStart).Round(time.Second))
+}
+
 // addPendingTool records an in-flight tool card. A repeated ID is a no-op:
 // the ephemeral region must never show duplicate rows.
 func (m *Model) addPendingTool(msg ToolPendingMsg) {
@@ -387,6 +436,30 @@ func (m *Model) flushPendingTools(turn TurnID) {
 		}
 	}
 	m.pendingTools = kept
+}
+
+// stampThinkingProgress tracks the inThought transitions across chunk
+// arrival: start on false->true, end on true->false. The elapsed is a
+// receipt-measured span (console-observed), the same honesty level as the
+// ToolEntry elapsed is agent-measured where the agent owns timing.
+func (m *Model) stampThinkingSpan() {
+	_, _, inThought := parseStreamThought(m.stream.String())
+	switch {
+	case inThought && !m.inThought:
+		m.thoughtStart = m.now()
+	case !inThought && m.inThought:
+		m.thoughtEnd = m.now()
+	}
+	m.inThought = inThought
+}
+
+// thinkingElapsed returns the measured thinking span for the finished turn,
+// zero when none was observed or the span is still open.
+func (m Model) thinkingElapsed() time.Duration {
+	if m.thoughtEnd.IsZero() || m.thoughtStart.IsZero() {
+		return 0
+	}
+	return m.thoughtEnd.Sub(m.thoughtStart)
 }
 
 func (m *Model) syncEditor() {
@@ -551,6 +624,16 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Console-local commands intercept before persistence and turns: they
+	// touch model-retained state, never become turns, and stay out of
+	// history.jsonl (they are commands, not prompts).
+	switch text {
+	case "/thought":
+		return m, m.expandThought()
+	case "/usage":
+		return m, m.commit(NewNoticeEntry(m.now(), m.usageLine()))
+	}
+
 	var cmds []tea.Cmd
 	if m.historySink != nil {
 		cmds = append([]tea.Cmd{}, m.historySink(text))
@@ -595,16 +678,26 @@ func (m Model) finishTurn(err error) (Model, tea.Cmd) {
 	m.flushPendingTools(m.turn)
 
 	var cmds []tea.Cmd
+	var lastThought string
 	if raw := strings.TrimSpace(m.stream.String()); raw != "" {
 		thought, answer := extractThought(raw)
 		if thought != "" {
-			cmds = append(cmds, m.commit(NewThinkingEntry(m.now(), thought)))
+			entry := NewThinkingEntry(m.now(), thought)
+			entry.Elapsed = m.thinkingElapsed()
+			lastThought = thought
+			cmds = append(cmds, m.commit(entry))
 		}
 		if answer != "" {
 			cmds = append(cmds, m.commit(NewAgentEntry(m.now(), answer)))
 		}
 	}
 	m.stream.Reset()
+	m.inThought = false
+	m.thoughtStart = time.Time{}
+	m.thoughtEnd = time.Time{}
+	if lastThought != "" {
+		m.lastThought = lastThought
+	}
 
 	if err != nil {
 		cmds = append(cmds, m.commit(NewErrorEntry(m.now(), err.Error())))
