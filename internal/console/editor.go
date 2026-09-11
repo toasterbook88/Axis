@@ -204,3 +204,28 @@ func (e *Editor) Submit() string {
 	e.draft = ""
 	return text
 }
+
+// TokenBeforeCursor scans back from the cursor to the nearest whitespace
+// boundary (or start of input) and returns the token under the cursor plus
+// its rune start offset. Used by @ completion to decide whether an
+// autocomplete is active.
+func (e *Editor) TokenBeforeCursor() (token string, start int) {
+	i := e.cursor
+	for i > 0 && !unicode.IsSpace(e.runes[i-1]) {
+		i--
+	}
+	return string(e.runes[i:e.cursor]), i
+}
+
+// AcceptCompletion replaces the text after the '@' at rune offset start
+// with the given candidate and leaves a trailing space, matching shell
+// completion conventions. The '@' itself is preserved.
+func (e *Editor) AcceptCompletion(start int, text string) {
+	if start < 0 || start >= len(e.runes) || e.runes[start] != '@' {
+		return
+	}
+	tail := append([]rune(nil), e.runes[e.cursor:]...)
+	e.runes = append(e.runes[:start+1], append([]rune(text), ' ')...)
+	e.runes = append(e.runes, tail...)
+	e.cursor = start + 1 + len([]rune(text)) + 1
+}

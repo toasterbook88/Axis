@@ -59,6 +59,12 @@ type Line struct {
 	Style     Style
 	HasCursor bool
 	CursorPos int // rune index within Text
+
+	// HasGhost marks the tail of Text as an autocomplete ghost suffix: it
+	// renders muted (and, when a cursor follows it, with the cursor glyph
+	// pushed past the real text). Plain() is unchanged — ghost text is part
+	// of Text, so golden tests and width math keep seeing one plain string.
+	HasGhost bool
 }
 
 // Width returns the terminal cells the line occupies.
@@ -78,10 +84,10 @@ func Paint(l Line) string {
 	if !l.HasCursor || !ui.Enabled() {
 		return gutter + paintText(l.Text, l.Style)
 	}
-	return gutter + paintWithCursor(l.Text, l.Style, l.CursorPos)
+	return gutter + paintWithCursor(l.Text, l.Style, l.CursorPos, l.HasGhost)
 }
 
-func paintWithCursor(text string, style Style, pos int) string {
+func paintWithCursor(text string, style Style, pos int, ghost bool) string {
 	runes := []rune(text)
 	if pos < 0 {
 		pos = 0
@@ -90,16 +96,40 @@ func paintWithCursor(text string, style Style, pos int) string {
 		pos = len(runes)
 	}
 
-	before := paintText(string(runes[:pos]), style)
+	var realLen = len(runes)
+	if ghost {
+		// The ghost suffix lives at the tail; the real text ends before it.
+		// Ghost runs never contain spaces (completion candidates are node
+		// names), so the last space separates them.
+		if i := strings.LastIndex(text, " "); i >= 0 && i >= pos {
+			realLen = len([]rune(text[:i]))
+		}
+	}
+
+	before := paintText(string(runes[:min(pos, realLen)]), style)
 	var cursorChar string
 	var after string
-	if pos < len(runes) {
+	switch {
+	case pos < realLen:
 		cursorChar = lipgloss.NewStyle().Reverse(true).Render(string(runes[pos]))
-		after = paintText(string(runes[pos+1:]), style)
-	} else {
+		mid := paintText(string(runes[pos+1:realLen]), style)
+		after = mid + paintGhost(runes[realLen:])
+	case pos == realLen && pos < len(runes):
+		// Cursor sits at the ghost boundary: paint the ghost, then park
+		// the cursor glyph after it.
+		cursorChar = paintGhost(runes[realLen:])
+		after = lipgloss.NewStyle().Reverse(true).Render(" ")
+	default:
 		cursorChar = lipgloss.NewStyle().Reverse(true).Render(" ")
 	}
 	return before + cursorChar + after
+}
+
+func paintGhost(runes []rune) string {
+	if len(runes) == 0 {
+		return ""
+	}
+	return ui.Dim(string(runes))
 }
 
 func paintText(text string, style Style) string {

@@ -867,6 +867,8 @@ func runAgentConsole(
 
 	var lastFleetCheck time.Time
 	var cachedFleet string = "unknown"
+	var cachedNodes []string
+	var fleetNodesMu sync.Mutex
 	var fleetMu sync.Mutex
 
 	footer := console.NewStatusFooter(console.StatusFooterConfig{
@@ -930,6 +932,25 @@ func runAgentConsole(
 		},
 		HistorySink: func(text string) tea.Cmd {
 			return appendConsoleHistory(promptHistoryPath, text)
+		},
+		// @ completion candidates: node names from the cached runtime
+		// snapshot, refreshed alongside the footer's fleet gauge.
+		AtCandidates: func() []string {
+			fleetNodesMu.Lock()
+			defer fleetNodesMu.Unlock()
+			if time.Since(lastFleetCheck) >= 5*time.Second {
+				rctx, err := loader(ctx)
+				if err == nil && rctx != nil && rctx.Snapshot != nil {
+					names := make([]string, 0, len(rctx.Snapshot.Nodes))
+					for _, n := range rctx.Snapshot.Nodes {
+						if n.Name != "" {
+							names = append(names, n.Name)
+						}
+					}
+					cachedNodes = names
+				}
+			}
+			return append([]string(nil), cachedNodes...)
 		},
 	})
 
