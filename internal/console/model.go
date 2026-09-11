@@ -519,6 +519,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editor.Clear()
 			m.input = ""
 			m.interrupts = 0
+			m.atCompletion = atCompletionState{}
 			return m, nil
 		}
 		m.interrupts++
@@ -551,6 +552,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editor.Clear()
 			m.input = ""
 		}
+		m.atCompletion = atCompletionState{}
 		return m, nil
 
 	case "tab":
@@ -706,6 +708,7 @@ func (m Model) requestCancel() (tea.Model, tea.Cmd) {
 		m.editor.SetText(strings.Join(m.queued, " "))
 		m.input = m.editor.Text()
 		m.queued = nil
+		m.atCompletion = atCompletionState{}
 	}
 	if m.state != turnRunning {
 		return m, nil
@@ -750,6 +753,7 @@ func commonPrefix(items []string) string {
 // queued as a steering message and delivered at the next turn boundary.
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	m.syncEditor()
+	m.atCompletion = atCompletionState{}
 	text := strings.TrimSpace(m.editor.Submit())
 	m.input = ""
 	if text == "" {
@@ -895,12 +899,15 @@ func (m Model) View() string {
 	}
 
 	m.syncEditor()
+	inputText := m.editor.Text()
+	ghost := m.atGhost()
 	lines = append(lines, Line{
-		Gutter:    "> ",
-		Text:      m.editor.Text() + m.atGhost(),
-		HasCursor: true,
-		CursorPos: m.editor.Cursor(),
-		HasGhost:  m.atCompletion.active && m.atCompletion.ghost != "",
+		Gutter:     "> ",
+		Text:       inputText + ghost,
+		HasCursor:  true,
+		CursorPos:  m.editor.Cursor(),
+		HasGhost:   ghost != "",
+		GhostStart: len([]rune(inputText)),
 	})
 
 	if m.footer != nil {

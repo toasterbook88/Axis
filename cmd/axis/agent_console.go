@@ -865,10 +865,17 @@ func runAgentConsole(
 	}
 	trimConsoleHistory(consoleHistoryPath(), 500)
 
-	var lastFleetCheck time.Time
-	var cachedFleet string = "unknown"
-	var cachedNodes []string
-	var fleetNodesMu sync.Mutex
+	// One shared, mutex-guarded fleet snapshot feeds both the footer's
+	// gauge and the @ completion candidates. Refreshes happen only inside
+	// the footer's Fleet closure, which bubbletea invokes from the render
+	// path (once per 5s at most); the @ candidates read the same snapshot
+	// without performing I/O on the event loop.
+	type fleetSnapshot struct {
+		checkedAt time.Time
+		summary   string
+		nodes     []string
+	}
+	var fleet fleetSnapshot
 	var fleetMu sync.Mutex
 
 	footer := console.NewStatusFooter(console.StatusFooterConfig{
@@ -894,26 +901,33 @@ func runAgentConsole(
 		Fleet: func() string {
 			fleetMu.Lock()
 			defer fleetMu.Unlock()
-			if !lastFleetCheck.IsZero() && time.Since(lastFleetCheck) < 5*time.Second {
-				return cachedFleet
+			if !fleet.checkedAt.IsZero() && time.Since(fleet.checkedAt) < 5*time.Second {
+				return fleet.summary
 			}
-			lastFleetCheck = time.Now()
+			fleet.checkedAt = time.Now()
 			rctx, err := loader(ctx)
 			if err == nil && rctx != nil && rctx.Snapshot != nil {
 				s := rctx.Snapshot.Summary
 				if s.TotalNodes > 0 {
 					if s.ReachableNodes == s.TotalNodes {
-						cachedFleet = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
+						fleet.summary = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
 					} else {
-						cachedFleet = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
+						fleet.summary = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
 					}
 				} else {
-					cachedFleet = "local"
+					fleet.summary = "local"
 				}
+				nodes := make([]string, 0, len(rctx.Snapshot.Nodes))
+				for _, n := range rctx.Snapshot.Nodes {
+					if n.Name != "" {
+						nodes = append(nodes, n.Name)
+					}
+				}
+				fleet.nodes = nodes
 			} else {
-				cachedFleet = "unknown"
+				fleet.summary = "unknown"
 			}
-			return cachedFleet
+			return fleet.summary
 		},
 	})
 
@@ -933,24 +947,13 @@ func runAgentConsole(
 		HistorySink: func(text string) tea.Cmd {
 			return appendConsoleHistory(promptHistoryPath, text)
 		},
-		// @ completion candidates: node names from the cached runtime
-		// snapshot, refreshed alongside the footer's fleet gauge.
+		// @ completion candidates: node names from the shared fleet
+		// snapshot. Pure lock-and-copy read — the loader runs only in the
+		// footer's refresh path, never on a keystroke.
 		AtCandidates: func() []string {
-			fleetNodesMu.Lock()
-			defer fleetNodesMu.Unlock()
-			if time.Since(lastFleetCheck) >= 5*time.Second {
-				rctx, err := loader(ctx)
-				if err == nil && rctx != nil && rctx.Snapshot != nil {
-					names := make([]string, 0, len(rctx.Snapshot.Nodes))
-					for _, n := range rctx.Snapshot.Nodes {
-						if n.Name != "" {
-							names = append(names, n.Name)
-						}
-					}
-					cachedNodes = names
-				}
-			}
-			return append([]string(nil), cachedNodes...)
+			fleetMu.Lock()
+			defer fleetMu.Unlock()
+			return append([]string(nil), fleet.nodes...)
 		},
 	})
 

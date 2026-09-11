@@ -65,6 +65,12 @@ type Line struct {
 	// pushed past the real text). Plain() is unchanged — ghost text is part
 	// of Text, so golden tests and width math keep seeing one plain string.
 	HasGhost bool
+
+	// GhostStart is the rune offset where the ghost suffix begins, valid
+	// only when HasGhost is true. Paint needs the explicit boundary; the
+	// model knows it exactly, and guessing from the flattened string is
+	// wrong whenever the token is not preceded by a space.
+	GhostStart int
 }
 
 // Width returns the terminal cells the line occupies.
@@ -84,10 +90,10 @@ func Paint(l Line) string {
 	if !l.HasCursor || !ui.Enabled() {
 		return gutter + paintText(l.Text, l.Style)
 	}
-	return gutter + paintWithCursor(l.Text, l.Style, l.CursorPos, l.HasGhost)
+	return gutter + paintWithCursor(l.Text, l.Style, l.CursorPos, l.HasGhost, l.GhostStart)
 }
 
-func paintWithCursor(text string, style Style, pos int, ghost bool) string {
+func paintWithCursor(text string, style Style, pos int, ghost bool, ghostStart int) string {
 	runes := []rune(text)
 	if pos < 0 {
 		pos = 0
@@ -96,14 +102,9 @@ func paintWithCursor(text string, style Style, pos int, ghost bool) string {
 		pos = len(runes)
 	}
 
-	var realLen = len(runes)
-	if ghost {
-		// The ghost suffix lives at the tail; the real text ends before it.
-		// Ghost runs never contain spaces (completion candidates are node
-		// names), so the last space separates them.
-		if i := strings.LastIndex(text, " "); i >= 0 && i >= pos {
-			realLen = len([]rune(text[:i]))
-		}
+	realLen := len(runes)
+	if ghost && ghostStart >= 0 && ghostStart <= len(runes) {
+		realLen = ghostStart
 	}
 
 	before := paintText(string(runes[:min(pos, realLen)]), style)
@@ -115,10 +116,9 @@ func paintWithCursor(text string, style Style, pos int, ghost bool) string {
 		mid := paintText(string(runes[pos+1:realLen]), style)
 		after = mid + paintGhost(runes[realLen:])
 	case pos == realLen && pos < len(runes):
-		// Cursor sits at the ghost boundary: paint the ghost, then park
-		// the cursor glyph after it.
-		cursorChar = paintGhost(runes[realLen:])
-		after = lipgloss.NewStyle().Reverse(true).Render(" ")
+		// Cursor sits at the ghost boundary: the ghost dims under it.
+		cursorChar = lipgloss.NewStyle().Reverse(true).Render(string(runes[pos]))
+		after = paintGhost(runes[pos+1:])
 	default:
 		cursorChar = lipgloss.NewStyle().Reverse(true).Render(" ")
 	}
