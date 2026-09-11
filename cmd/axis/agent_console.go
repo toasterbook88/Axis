@@ -60,6 +60,19 @@ type consoleLauncher struct {
 	// recording stub; production uses consoleModelSwitch.
 	modelSwitch func(choice ModelChoice, out io.Writer) error
 
+	// skillEffect runs a chosen learned-skill command as the agent prompt for
+	// turn. The turn is supplied so the run's context registers in the
+	// launcher's cancels map (Esc aborts a running skill like any turn).
+	skillEffect func(ctx context.Context, turn console.TurnID, command string, out io.Writer) error
+
+	// mcpAction prints a server listing for the selected action id
+	// (tools/resources/diagnostics) — the explore-then-read loop, committed
+	// to the transcript between selections.
+	mcpAction func(server, action string, out io.Writer)
+
+	// mcpRegistry supplies the connected-server registry for the /mcp menu.
+	mcpRegistry func() *mcpclient.Registry
+
 	mu       sync.Mutex
 	cancels  map[console.TurnID]context.CancelFunc
 	inFlight int
@@ -87,6 +100,12 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 	return func(turn console.TurnID, prompt string) tea.Cmd {
 		if prompt == "/model" || prompt == "/models" {
 			return l.runModelPicker(parent, turn)
+		}
+		if prompt == "/skills" {
+			return l.runSkillPicker(parent, turn)
+		}
+		if prompt == "/mcp" {
+			return l.runMCPPicker(parent, turn)
 		}
 		if strings.HasPrefix(prompt, "/") {
 			return l.runSlash(turn, prompt)
@@ -410,6 +429,201 @@ func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.Tu
 	}
 }
 
+// runSkillPicker opens the learned-skill picker for arg-less /skills.
+// The selection runs the skill's command as the next agent prompt through
+// skillEffect — the same effect the REPL selector produces.
+func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+	// Child context registered exactly like every other turn (runShell,
+	// runModelPicker): an Esc during the keyboard-free catalog window must
+	// reach this Cmd, and the deferred cleanup clears the registration.
+	ctx, cancel := context.WithCancel(parent)
+
+	l.mu.Lock()
+	l.cancels[turn] = cancel
+	l.inFlight++
+	l.mu.Unlock()
+
+	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			delete(l.cancels, turn)
+			l.inFlight--
+			l.mu.Unlock()
+			cancel()
+		}()
+
+		rt, err := l.loader(ctx)
+		if err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill catalog unavailable: %w", err)}
+		}
+		choices := skillChoices(rt)
+		if len(choices) <= 1 { // only the cancel row: nothing learned yet
+			l.prog.Send(console.EntryMsg{
+				Turn:  turn,
+				Entry: console.NewNoticeEntry(l.now(), "No learned skills yet"),
+			})
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		}
+		if l.skillEffect == nil {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill execution is not available in this console")}
+		}
+
+		// Refuse to install over a turn cancelled while the catalog loaded.
+		select {
+		case <-ctx.Done():
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		default:
+		}
+
+		reply := make(chan string, 1)
+		items := make([]console.PickerItem, 0, len(choices))
+		for _, c := range choices {
+			items = append(items, console.PickerItem{ID: c.ID, Label: c.Label, Detail: c.Detail})
+		}
+		l.prog.Send(console.SetOverlayMsg{
+			Overlay: console.NewModelPickerOverlay("Execute a learned skill:", items, reply),
+		})
+
+		var chosenID string
+		select {
+		case chosenID = <-reply:
+		case <-ctx.Done():
+			if l.prog != nil {
+				l.prog.Send(console.SetOverlayMsg{Overlay: nil})
+			}
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		}
+		if chosenID == "" || chosenID == "none" {
+			return console.TurnDoneMsg{Turn: turn, Err: nil} // operator cancelled
+		}
+		if ctx.Err() != nil {
+			// A cancellation landed around the same moment as the selection:
+			// never run a skill for a retired turn.
+			return console.TurnDoneMsg{Turn: turn, Err: nil}
+		}
+		command := skillCommand(rt, chosenID)
+		if command == "" {
+			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill %q not found", chosenID)}
+		}
+		nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
+		fmt.Fprintf(nw, "Running skill command: %s\n", command)
+		if err := l.skillEffect(ctx, turn, command, nw); err != nil {
+			return console.TurnDoneMsg{Turn: turn, Err: err}
+		}
+		return console.TurnDoneMsg{Turn: turn, Err: nil}
+	}
+}
+
+// runMCPPicker drives the staged /mcp explorer: server menu → action menu →
+// committed listing → action menu again ("Back" returns to the server menu).
+func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+	// Child context registered exactly like every other turn: an Esc during
+	// the keyboard-free menu window must reach this Cmd.
+	ctx, cancel := context.WithCancel(parent)
+
+	l.mu.Lock()
+	l.cancels[turn] = cancel
+	l.inFlight++
+	l.mu.Unlock()
+
+	return func() tea.Msg {
+		defer func() {
+			l.mu.Lock()
+			delete(l.cancels, turn)
+			l.inFlight--
+			l.mu.Unlock()
+			cancel()
+		}()
+
+		for {
+			if l.mcpRegistry == nil || l.mcpAction == nil {
+				return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("MCP picker is not available in this console")}
+			}
+
+			servers := mcpServerChoices(l.mcpRegistry())
+			if len(servers) == 0 {
+				l.prog.Send(console.EntryMsg{
+					Turn:  turn,
+					Entry: console.NewNoticeEntry(l.now(), "No MCP servers configured or connected."),
+				})
+				return console.TurnDoneMsg{Turn: turn, Err: nil}
+			}
+
+			serverID, ok := awaitPickerChoice(l.prog, ctx, "Select an MCP Server:", toPickerRows(servers))
+			if !ok {
+				return console.TurnDoneMsg{Turn: turn, Err: nil} // dismissed
+			}
+			if serverID == "" {
+				return console.TurnDoneMsg{Turn: turn, Err: nil}
+			}
+
+			for {
+				actions := mcpActionChoices(serverID)
+				actionID, ok := awaitPickerChoice(l.prog, ctx, fmt.Sprintf("MCP Server %q Actions:", serverID), toPickerRows(actions))
+				if !ok {
+					return console.TurnDoneMsg{Turn: turn, Err: nil}
+				}
+				if actionID == "" {
+					// Esc dismisses the whole /mcp explorer — navigating back
+					// on a dismissal would trap the operator in the loop.
+					return console.TurnDoneMsg{Turn: turn, Err: nil}
+				}
+				if actionID == "back" {
+					break
+				}
+				nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
+				l.mcpAction(serverID, actionID, nw)
+			}
+		}
+	}
+}
+
+// toPickerRows converts generic select options into picker rows.
+func toPickerRows(opts []ui.SelectOption) []console.PickerItem {
+	items := make([]console.PickerItem, 0, len(opts))
+	for _, o := range opts {
+		items = append(items, console.PickerItem{ID: o.ID, Label: o.Label, Detail: o.Detail, Disabled: false})
+	}
+	return items
+}
+
+// awaitPickerChoice installs a picker and blocks until the operator resolves
+// it. Returns ("", false) when the wait is interrupted (cancelled turn);
+// ("", true) on dismissal; (id, true) on selection.
+func awaitPickerChoice(prog interface{ Send(tea.Msg) }, parent context.Context, title string, items []console.PickerItem) (string, bool) {
+	// Refuse to install over an already-cancelled turn: a picker owned by a
+	// retired turn must never own the keyboard.
+	select {
+	case <-parent.Done():
+		return "", false
+	default:
+	}
+
+	reply := make(chan string, 1)
+	prog.Send(console.SetOverlayMsg{
+		Overlay: console.NewModelPickerOverlay(title, items, reply),
+	})
+	select {
+	case id := <-reply:
+		if parent.Err() != nil {
+			// A cancellation landed around the same moment as the selection.
+			if prog != nil {
+				prog.Send(console.SetOverlayMsg{Overlay: nil})
+			}
+			return "", false
+		}
+		if id == "" {
+			return "", true // dismissed
+		}
+		return id, true
+	case <-parent.Done():
+		if prog != nil {
+			prog.Send(console.SetOverlayMsg{Overlay: nil})
+		}
+		return "", false
+	}
+}
+
 // cancel aborts exactly one turn. Cancelling an unknown or settled turn is a
 // no-op, and never touches any other turn's context.
 func (l *consoleLauncher) cancel(turn console.TurnID) {
@@ -600,6 +814,34 @@ func runAgentConsole(
 	launcher.loader = loader
 	launcher.activeTarget = target
 	launcher.modelSwitch = consoleModelSwitch(a, loader, target)
+	launcher.skillEffect = func(ctx context.Context, turn console.TurnID, command string, out io.Writer) error {
+		if a == nil {
+			return fmt.Errorf("agent is not available in this console")
+		}
+		ctx2, cancel := agentRequestContext(ctx, timeout)
+		defer cancel()
+		return a.RunWithSinks(ctx2, command, nil, out)
+	}
+	if mcpReg != nil {
+		launcher.mcpRegistry = func() *mcpclient.Registry { return mcpReg }
+		launcher.mcpAction = func(server, action string, out io.Writer) {
+			sc := mcpReg.Get(server)
+			if sc == nil {
+				fmt.Fprintf(out, "Server %q is no longer connected.\n", server)
+				return
+			}
+			switch action {
+			case "tools":
+				slashMCPListTools(out, sc)
+			case "resources":
+				slashMCPListResources(out, sc)
+			case "diagnostics":
+				slashMCPDiagnostics(out, sc)
+			default:
+				fmt.Fprintf(out, "Unknown MCP action %q.\n", action)
+			}
+		}
+	}
 
 	var initialHistory []string
 	if a != nil && a.Conversation() != nil {

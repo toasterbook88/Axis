@@ -575,3 +575,116 @@ func TestCollectReservationListItemsFallbackUsesInjectedLoader(t *testing.T) {
 		t.Fatalf("injected loader calls = %d, want 1", loads)
 	}
 }
+
+func TestSkillChoicesShape(t *testing.T) {
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+
+	opts := skillChoices(rt)
+	if len(opts) != 2 {
+		t.Fatalf("got %d options, want cancel row + 1 skill", len(opts))
+	}
+	if opts[0].ID != "none" {
+		t.Fatalf("first row = %q, want the cancel row", opts[0].ID)
+	}
+	if opts[1].Label != "Check cluster" || opts[1].Detail != "Command: axis status" {
+		t.Fatalf("skill row = %+v", opts[1])
+	}
+
+	if got := skillCommand(rt, "s1"); got != "axis status" {
+		t.Fatalf("skillCommand = %q", got)
+	}
+	if got := skillCommand(rt, "missing"); got != "" {
+		t.Fatalf("unknown id → %q, want empty", got)
+	}
+	if skillChoices(nil) != nil {
+		t.Fatal("nil runtime must yield no choices")
+	}
+}
+
+func TestMCPServerChoicesShape(t *testing.T) {
+	// Empty registry: no rows (the handlers keep their own empty-message
+	// paths; the builder only shapes what exists).
+	if got := mcpServerChoices(nil); got != nil {
+		t.Fatalf("nil registry must yield nil, got %+v", got)
+	}
+	actions := mcpActionChoices("foundry")
+	if len(actions) != 4 || actions[3].ID != "back" {
+		t.Fatalf("action menu shape changed: %+v", actions)
+	}
+}
+
+func TestSkillChoicesEmptyVariants(t *testing.T) {
+	// Non-nil but empty store: no cancel row may leak when nothing exists.
+	if got := skillChoices(&runtimectx.Context{}); got != nil {
+		t.Fatalf("nil-store runtime must yield nil, got %+v", got)
+	}
+	if got := skillChoices(&runtimectx.Context{Skills: &skills.Store{}}); got != nil {
+		t.Fatalf("empty store must yield nil, got %+v", got)
+	}
+	if skillCommand(nil, "s1") != "" {
+		t.Fatal("skillCommand(nil) must be empty")
+	}
+}
+
+func TestSkillChoicesRowIDs(t *testing.T) {
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+	opts := skillChoices(rt)
+	if opts[1].ID != "s1" {
+		t.Fatalf("skill row ID = %q, want s1", opts[1].ID)
+	}
+}
+
+func TestMCPServerChoicesStatusPrecedence(t *testing.T) {
+	// One server per status tier, pinned by name: [failed] must outrank
+	// InitResult, [ready] must require InitResult, and the neither-case
+	// shows [not initialized]. Row order is sorted by server name, and ID
+	// must equal the registry name (the ID-based lookup contract).
+	reg := mcpclient.NewRegistry()
+	failedConn := &mcpclient.ServerConnection{Name: "b-failed", Transport: "http", Err: errors.New("boom")}
+	failedConn.InitResult = &mcp.InitializeResult{}
+	reg.Add(failedConn)
+	reg.Add(&mcpclient.ServerConnection{Name: "c-ready", Transport: "http", InitResult: &mcp.InitializeResult{}})
+	reg.Add(&mcpclient.ServerConnection{Name: "a-uninit", Transport: "http"})
+
+	opts := mcpServerChoices(reg)
+	if len(opts) != 3 {
+		t.Fatalf("got %d rows, want 3", len(opts))
+	}
+	byID := map[string]ui.SelectOption{}
+	for _, o := range opts {
+		byID[o.ID] = o
+		if o.ID != o.Label {
+			t.Fatalf("row ID %q != registry name %q", o.ID, o.Label)
+		}
+	}
+	if s, ok := byID["b-failed"]; !ok || !strings.Contains(s.Detail, "[failed]") {
+		t.Fatalf("Err-set server must show [failed], got %+v", s)
+	}
+	if s, ok := byID["c-ready"]; !ok || !strings.Contains(s.Detail, "[ready]") {
+		t.Fatalf("InitResult server must show [ready], got %+v", s)
+	}
+	if s, ok := byID["a-uninit"]; !ok || !strings.Contains(s.Detail, "[not initialized]") {
+		t.Fatalf("uninitialized server row = %+v, want [not initialized]", s)
+	}
+}
+
+func TestMCPServerChoicesFailedWinsOverInit(t *testing.T) {
+	// Err must win even when InitResult is ALSO set: both fields set on one
+	// connection, the status must be [failed].
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{
+		Name:       "broken",
+		Transport:  "http",
+		Err:        errors.New("boom"),
+		InitResult: &mcp.InitializeResult{},
+	})
+
+	opts := mcpServerChoices(reg)
+	if len(opts) != 1 || !strings.Contains(opts[0].Detail, "[failed]") {
+		t.Fatalf("failed server row = %+v, want [failed] status", opts)
+	}
+}

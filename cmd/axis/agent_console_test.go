@@ -21,8 +21,10 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/console"
+	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/skills"
 )
 
 var consoleClock = func() time.Time { return time.Date(2026, 8, 25, 21, 35, 0, 0, time.UTC) }
@@ -885,18 +887,28 @@ func pickerTestRuntime(hn string) *runtimectx.Context {
 }
 
 func awaitPickerOverlay(t *testing.T, rec *capture) *console.ModelPickerOverlay {
+	return awaitPickerOverlayN(t, rec, 1)
+}
+
+// awaitPickerOverlayN waits until the Nth picker overlay has been installed
+// (staged /mcp flows install one per menu) and returns it.
+func awaitPickerOverlayN(t *testing.T, rec *capture, n int) *console.ModelPickerOverlay {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		var found []*console.ModelPickerOverlay
 		for _, m := range rec.all() {
 			if som, ok := m.(console.SetOverlayMsg); ok {
 				if po, ok := som.Overlay.(*console.ModelPickerOverlay); ok {
-					return po
+					found = append(found, po)
 				}
 			}
 		}
+		if len(found) >= n {
+			return found[n-1]
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("model picker overlay was never installed")
+			t.Fatalf("only %d picker overlays installed, wanted #%d", len(found), n)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -1304,5 +1316,203 @@ func TestConsoleTokenEstimateWired(t *testing.T) {
 	a.Conversation().Append(chat.Message{Role: chat.RoleUser, Content: strings.Repeat("x", 400)})
 	if a.ContextTokens() <= 0 {
 		t.Fatal("precondition: agent token estimate should be positive")
+	}
+}
+
+func TestConsoleSkillPickerRunsCommand(t *testing.T) {
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) { return rt, nil }
+
+	var ran string
+	l.skillEffect = func(_ context.Context, _ console.TurnID, command string, out io.Writer) error {
+		ran = command
+		return nil
+	}
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/skills")()
+	}()
+
+	picker := awaitPickerOverlay(t, rec)
+	picker.Update(tea.KeyMsg{Type: tea.KeyDown}) // skip the cancel row
+	picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("unexpected turn done: %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("skill picker did not resolve")
+	}
+	if ran != "axis status" {
+		t.Fatalf("skill effect ran %q, want axis status", ran)
+	}
+}
+
+func TestConsoleSkillPickerEmpty(t *testing.T) {
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.loader = func(context.Context) (*runtimectx.Context, error) {
+		return &runtimectx.Context{}, nil
+	}
+
+	msg := l.submit(context.Background())(1, "/skills")()
+	done, ok := msg.(console.TurnDoneMsg)
+	if !ok || done.Turn != 1 || done.Err != nil {
+		t.Fatalf("unexpected turn done: %+v", msg)
+	}
+	found := false
+	for _, m := range rec.all() {
+		if em, ok := m.(console.EntryMsg); ok {
+			if strings.Contains(strings.Join(console.PlainAll(em.Entry.Render(100)), " "), "No learned skills") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected the no-skills notice")
+	}
+}
+
+func TestConsoleMCPPickerStagedFlow(t *testing.T) {
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{Name: "foundry", Transport: "http"})
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.mcpRegistry = func() *mcpclient.Registry { return reg }
+	var printed []string
+	l.mcpAction = func(server, action string, out io.Writer) {
+		printed = append(printed, server+"/"+action)
+	}
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/mcp")()
+	}()
+
+	// Stage 1: server menu appears; select "foundry".
+	picker := awaitPickerOverlayN(t, rec, 1)
+	if picker.Cursor() != 0 {
+		t.Fatal("cursor must start on the first server")
+	}
+	picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Stage 2: action menu appears; row 0 = List Tools.
+	picker2 := awaitPickerOverlayN(t, rec, 2)
+	picker2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// After the listing commits, the action menu re-opens (staged loop).
+	picker3 := awaitPickerOverlayN(t, rec, 3)
+	picker3.Update(tea.KeyMsg{Type: tea.KeyEsc}) // exit the whole /mcp explorer
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("unexpected turn done: %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("mcp picker did not resolve")
+	}
+	if len(printed) == 0 || printed[0] != "foundry/tools" {
+		t.Fatalf("mcp action effect not applied: %v", printed)
+	}
+}
+
+func TestConsoleSkillPickerCancelDuringLoad(t *testing.T) {
+	// The turn contract for /skills mirrors /model: Esc during the catalog
+	// window reaches the Cmd, the turn ends clean, no overlay installs, no
+	// skill runs.
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+
+	release := make(chan struct{})
+	l.loader = func(ctx context.Context) (*runtimectx.Context, error) {
+		<-release
+		return rt, nil
+	}
+	var effectRan bool
+	l.skillEffect = func(context.Context, console.TurnID, string, io.Writer) error {
+		effectRan = true
+		return nil
+	}
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/skills")()
+	}()
+
+	time.Sleep(20 * time.Millisecond) // the Cmd is parked inside the loader
+	l.cancel(1)                       // what requestCancel routes to on Esc
+	close(release)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancelled skill picker must end as a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled skill picker never resolved")
+	}
+	if effectRan {
+		t.Fatal("cancel must not run the skill effect")
+	}
+	found := false
+	for _, m := range rec.all() {
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			if _, isPicker := som.Overlay.(*console.ModelPickerOverlay); isPicker {
+				found = true
+			}
+		}
+	}
+	if found {
+		t.Fatal("cancelled skill picker turn must not install an overlay")
+	}
+}
+
+func TestConsoleMCPPickerCancelExitsFlow(t *testing.T) {
+	// Cancelling during the /mcp explorer must end the whole staged flow
+	// cleanly: the cancel reaches the Cmd via l.cancels[turn], the overlay
+	// is dismissed, and no listing prints.
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{Name: "foundry", Transport: "http"})
+	rec := &capture{}
+	l := newConsoleLauncher(nil, time.Minute, consoleClock)
+	l.prog = rec
+	l.mcpRegistry = func() *mcpclient.Registry { return reg }
+	l.mcpAction = func(server, action string, out io.Writer) {}
+
+	doneCh := make(chan tea.Msg, 1)
+	go func() {
+		doneCh <- l.submit(context.Background())(1, "/mcp")()
+	}()
+
+	// The goroutine installs the server menu; cancel during that window.
+	time.Sleep(20 * time.Millisecond)
+	l.cancel(1)
+
+	select {
+	case msg := <-doneCh:
+		done, ok := msg.(console.TurnDoneMsg)
+		if !ok || done.Turn != 1 || done.Err != nil {
+			t.Fatalf("cancelled mcp picker must end as a clean turn, got %+v", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled mcp picker never resolved")
 	}
 }
