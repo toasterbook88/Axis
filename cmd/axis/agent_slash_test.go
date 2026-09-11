@@ -575,3 +575,43 @@ func TestCollectReservationListItemsFallbackUsesInjectedLoader(t *testing.T) {
 		t.Fatalf("injected loader calls = %d, want 1", loads)
 	}
 }
+
+
+func TestSkillChoicesShape(t *testing.T) {
+	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
+		{ID: "s1", Description: "Check cluster", Command: "axis status"},
+	}}}
+
+	opts := skillChoices(rt)
+	if len(opts) != 2 {
+		t.Fatalf("got %d options, want cancel row + 1 skill", len(opts))
+	}
+	if opts[0].ID != "none" {
+		t.Fatalf("first row = %q, want the cancel row", opts[0].ID)
+	}
+	if opts[1].Label != "Check cluster" || opts[1].Detail != "Command: axis status" {
+		t.Fatalf("skill row = %+v", opts[1])
+	}
+
+	if got := skillCommand(rt, "s1"); got != "axis status" {
+		t.Fatalf("skillCommand = %q", got)
+	}
+	if got := skillCommand(rt, "missing"); got != "" {
+		t.Fatalf("unknown id → %q, want empty", got)
+	}
+	if skillChoices(nil) != nil {
+		t.Fatal("nil runtime must yield no choices")
+	}
+}
+
+func TestMCPServerChoicesShape(t *testing.T) {
+	// Empty registry: no rows (the handlers keep their own empty-message
+	// paths; the builder only shapes what exists).
+	if got := mcpServerChoices(nil); got != nil {
+		t.Fatalf("nil registry must yield nil, got %+v", got)
+	}
+	actions := mcpActionChoices("foundry")
+	if len(actions) != 4 || actions[3].ID != "back" {
+		t.Fatalf("action menu shape changed: %+v", actions)
+	}
+}
