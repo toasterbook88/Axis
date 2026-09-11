@@ -175,6 +175,10 @@ type Model struct {
 	// tokenEstimate supplies the /usage context estimate; nil disables.
 	tokenEstimate func() int
 
+	// usageStats supplies the session's real accumulated token usage and
+	// how many turns reported it. Nil or zero turns shows the estimate.
+	usageStats func() (in, out, turns int)
+
 	// sessionStart anchors the /usage wall-time line.
 	sessionStart time.Time
 
@@ -207,6 +211,10 @@ type Options struct {
 	// TokenEstimate supplies the /usage context-token estimate. Nil shows n/a.
 	TokenEstimate func() int
 
+	// UsageStats supplies real session token usage for /usage. Nil falls
+	// back to the TokenEstimate.
+	UsageStats func() (in, out, turns int)
+
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
@@ -238,6 +246,7 @@ func NewModel(opts Options) Model {
 		footer:        opts.Footer,
 		historySink:   opts.HistorySink,
 		tokenEstimate: opts.TokenEstimate,
+		usageStats:    opts.UsageStats,
 		sessionStart:  now(),
 		cancelGrace:   grace,
 		now:           now,
@@ -391,12 +400,19 @@ func (m Model) expandThought() tea.Cmd {
 // repo has neither per-model metering nor a pricing source, and a fabricated
 // figure would violate the Sources-of-Truth rule.
 func (m Model) usageLine() string {
+	wall := time.Since(m.sessionStart).Round(time.Second)
+	if m.usageStats != nil {
+		if in, out, turns := m.usageStats(); turns > 0 {
+			return fmt.Sprintf("── session: %s tokens in · %s out (real, %d turns) · %d turns total · %s wall ──",
+				FormatTokens(in), FormatTokens(out), turns, m.turn, wall)
+		}
+	}
 	tokens := "n/a"
 	if m.tokenEstimate != nil {
 		tokens = fmt.Sprintf("~%s", FormatTokens(m.tokenEstimate()))
 	}
 	return fmt.Sprintf("── session: %s tokens (estimate) · %d turns · %s wall ──",
-		tokens, m.turn, time.Since(m.sessionStart).Round(time.Second))
+		tokens, m.turn, wall)
 }
 
 // addPendingTool records an in-flight tool card. A repeated ID is a no-op:

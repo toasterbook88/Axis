@@ -83,6 +83,12 @@ func agentCmd() *cobra.Command {
 					return
 				}
 				stats := a.Stats()
+				usageIn, usageOut, usageTurns := a.UsageStats()
+				if usageTurns > 0 {
+					// Real per-turn usage from the backend: prefer it over
+					// the char/4 whole-conversation estimate.
+					stats.TokensIn, stats.TokensOut = usageIn, usageOut
+				}
 				if stats.TokensIn > 0 || stats.TokensOut > 0 {
 					totalTokens := stats.TokensIn + stats.TokensOut
 					w := cmd.ErrOrStderr()
