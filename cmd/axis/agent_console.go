@@ -679,6 +679,13 @@ func runAgentConsole(
 		Cancel:  launcher.cancel,
 		Footer:  footer,
 		History: initialHistory,
+		// Same source the footer's context gauge reads (a.ContextTokens).
+		TokenEstimate: func() int {
+			if a != nil {
+				return a.ContextTokens()
+			}
+			return 0
+		},
 		HistorySink: func(text string) tea.Cmd {
 			return appendConsoleHistory(promptHistoryPath, text)
 		},

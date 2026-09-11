@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/models"
@@ -1293,5 +1294,15 @@ func TestAppendConsoleHistoryConcurrent(t *testing.T) {
 	got := loadConsoleHistory(path, 100)
 	if len(got) != 16 {
 		t.Fatalf("got %d entries, want 16 surviving concurrent appends", len(got))
+	}
+}
+
+func TestConsoleTokenEstimateWired(t *testing.T) {
+	// The /usage estimate must read the live agent context (same source the
+	// footer uses), not render n/a in the shipped console.
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "m", MaxTokens: 4096})
+	a.Conversation().Append(chat.Message{Role: chat.RoleUser, Content: strings.Repeat("x", 400)})
+	if a.ContextTokens() <= 0 {
+		t.Fatal("precondition: agent token estimate should be positive")
 	}
 }

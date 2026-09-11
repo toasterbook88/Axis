@@ -365,6 +365,11 @@ type ThinkingEntry struct {
 	base
 	Text     string
 	Expanded bool
+
+	// Elapsed is the receipt-measured thinking span: the console stamps
+	// chunk-arrival at the inThought transitions (only the console sees
+	// where the reasoning block begins and ends in the stream).
+	Elapsed time.Duration
 }
 
 // NewThinkingEntry records a reasoning block at t.
@@ -376,6 +381,22 @@ func NewThinkingEntry(t time.Time, text string) *ThinkingEntry {
 const collapsedThinkingLines = 2
 
 func (e *ThinkingEntry) Render(width int) []Line {
+	if e.Elapsed > 0 {
+		head := renderBody(e.base, width, fmt.Sprintf("Thought for %s", e.Elapsed.Truncate(100*time.Millisecond)), StyleMuted)
+		if e.Expanded {
+			return append(head, renderBody(e.base, width, e.Text, StylePlain)...)
+		}
+		return append(head, e.collapsedBody(width)...)
+	}
+	if e.Expanded {
+		return renderBody(e.base, width, e.Text, StylePlain)
+	}
+	return e.collapsedBody(width)
+}
+
+// collapsedBody is the pre-#412-shape collapsed summary: at most
+// collapsedThinkingLines lines of the block plus an elision marker.
+func (e *ThinkingEntry) collapsedBody(width int) []Line {
 	body := e.Text
 	if !e.Expanded {
 		lines := strings.Split(strings.TrimSpace(e.Text), "\n")
