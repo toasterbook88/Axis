@@ -818,7 +818,9 @@ func runAgentConsole(
 		if a == nil {
 			return fmt.Errorf("agent is not available in this console")
 		}
-		return a.RunWithSinks(ctx, command, nil, out)
+		ctx2, cancel := agentRequestContext(ctx, timeout)
+		defer cancel()
+		return a.RunWithSinks(ctx2, command, nil, out)
 	}
 	if mcpReg != nil {
 		launcher.mcpRegistry = func() *mcpclient.Registry { return mcpReg }
