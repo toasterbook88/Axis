@@ -983,8 +983,8 @@ func TestThinkingEntryRendersDuration(t *testing.T) {
 	if !strings.Contains(got, "Thought for 3.1s") {
 		t.Fatalf("duration header missing:\n%s", got)
 	}
-	if !strings.Contains(got, "1 more lines") || strings.Contains(got, "spanning\nlines") && false {
-		// collapsed shape retained
+	if !strings.Contains(got, "1 more lines") {
+		t.Fatalf("collapsed shape must be retained under the duration header:\n%s", got)
 	}
 }
 
