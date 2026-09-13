@@ -30,6 +30,9 @@ type mockChunkMessage struct {
 type mockStreamChunk struct {
 	Message mockChunkMessage `json:"message"`
 	Done    bool             `json:"done"`
+	// Final-chunk token counts, matching chat.chatStreamChunk.
+	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
+	EvalCount       int `json:"eval_count,omitempty"`
 }
 
 // --- Helpers ---
@@ -1227,5 +1230,14 @@ func TestAgentModelConcurrentAccess(t *testing.T) {
 		default:
 			_ = a.Model()
 		}
+	}
+}
+
+// usageResponse creates streaming chunks whose final chunk carries real
+// token counts, like a modern Ollama daemon reports.
+func usageResponse(promptTokens, evalTokens int, text string) []mockStreamChunk {
+	return []mockStreamChunk{
+		{Message: mockChunkMessage{Role: "assistant", Content: text}, Done: false},
+		{Done: true, PromptEvalCount: promptTokens, EvalCount: evalTokens},
 	}
 }

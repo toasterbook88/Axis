@@ -66,6 +66,14 @@ type Agent struct {
 	dryRun      bool
 	toolContext *ToolContext
 	model       string
+	// usageMu guards the session usage accumulator. Responses report real
+	// token counts on the returned Message (Ollama final chunk, cloud usage
+	// block); accumulateUsage totals them. Stats() reads it from the tea
+	// event loop and the -p summary reads it after Run returns.
+	usageMu    sync.RWMutex
+	usageIn    int
+	usageOut   int
+	usageTurns int
 	// modelMu guards model for cross-goroutine readers: the console footer
 	// renders Model() on the tea event loop while /model switches write
 	// SetModel from a turn goroutine. (OwnerLabel and subagent construction
@@ -438,6 +446,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 			return fmt.Errorf("chat stream (turn %d): %w", turn, err)
 		}
 
+		a.accumulateUsage(resp.UsageTokensIn, resp.UsageTokensOut)
 		a.conv.Append(resp)
 
 		// If no tool calls, the model produced a final text answer — done.
@@ -1301,6 +1310,29 @@ type AgentStats struct {
 	TokensIn  int
 	TokensOut int
 	Cost      float64
+}
+
+// accumulateUsage totals one response turn's reported usage. Zero counts
+// from backends that do not report usage leave the accumulator untouched,
+// so mixed real/estimated sessions never fabricate numbers.
+func (a *Agent) accumulateUsage(in, out int) {
+	if in <= 0 && out <= 0 {
+		return
+	}
+	a.usageMu.Lock()
+	defer a.usageMu.Unlock()
+	a.usageIn += in
+	a.usageOut += out
+	a.usageTurns++
+}
+
+// UsageStats returns the session's accumulated real token usage: totals
+// plus how many turns reported usage. Turns is zero when the backend
+// never reported usage, which distinguishes "no data" from "zero tokens".
+func (a *Agent) UsageStats() (in, out, turns int) {
+	a.usageMu.RLock()
+	defer a.usageMu.RUnlock()
+	return a.usageIn, a.usageOut, a.usageTurns
 }
 
 // Stats returns the accumulated statistics from the underlying client, if supported.

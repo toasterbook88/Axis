@@ -1051,3 +1051,55 @@ func TestModelUsageCommand(t *testing.T) {
 		t.Fatal("/usage is not a turn")
 	}
 }
+
+func TestModelUsageCommandRealUsagePreferred(t *testing.T) {
+	// When the backend reported usage, /usage shows the real in/out split.
+	m := NewModel(Options{
+		Submit:        func(TurnID, string) tea.Cmd { return nil },
+		TokenEstimate: func() int { return 9200 },
+		UsageStats:    func() (int, int, int) { return 1234, 567, 3 },
+		Now:           fixedNow,
+	})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/usage")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("/usage must commit a notice (tea.Println cmd)")
+	}
+	var notice string
+	for _, msg := range drain(cmd) {
+		if s, ok := printedText(msg); ok {
+			notice += s + "\n"
+		}
+	}
+	if !strings.Contains(notice, "1.2k tokens in") || !strings.Contains(notice, "567 out") || !strings.Contains(notice, "real, 3 turns") {
+		t.Errorf("usage line missing real split: %s", notice)
+	}
+	if strings.Contains(notice, "estimate") {
+		t.Errorf("estimate shown despite real usage: %s", notice)
+	}
+}
+
+func TestModelUsageCommandEstimateFallback(t *testing.T) {
+	// Zero reporting turns (backend without usage) falls back to the
+	// char/4 estimate, clearly labeled.
+	m := NewModel(Options{
+		Submit:        func(TurnID, string) tea.Cmd { return nil },
+		TokenEstimate: func() int { return 9200 },
+		UsageStats:    func() (int, int, int) { return 0, 0, 0 },
+		Now:           fixedNow,
+	})
+	m = apply(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/usage")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("/usage must commit a notice (tea.Println cmd)")
+	}
+	var notice string
+	for _, msg := range drain(cmd) {
+		if s, ok := printedText(msg); ok {
+			notice += s + "\n"
+		}
+	}
+	if !strings.Contains(notice, "~9.2k tokens (estimate)") {
+		t.Errorf("estimate line wrong: %s", notice)
+	}
+}

@@ -928,6 +928,13 @@ func runAgentConsole(
 			}
 			return 0
 		},
+		// /usage prefers the backend-reported per-turn totals.
+		UsageStats: func() (int, int, int) {
+			if a == nil {
+				return 0, 0, 0
+			}
+			return a.UsageStats()
+		},
 		HistorySink: func(text string) tea.Cmd {
 			return appendConsoleHistory(promptHistoryPath, text)
 		},

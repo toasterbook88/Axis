@@ -52,6 +52,11 @@ func TestCloudBackend_OpenAI(t *testing.T) {
 	if resp.Content != "Let me find that file. " {
 		t.Errorf("expected final message content to be 'Let me find that file. ', got %q", resp.Content)
 	}
+	// The reported usage must be stamped on the returned message so the
+	// session accumulator totals real numbers.
+	if resp.UsageTokensIn != 10 || resp.UsageTokensOut != 20 {
+		t.Errorf("usage stamp = (%d, %d), want (10, 20)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
 	}
@@ -118,6 +123,10 @@ func TestCloudBackend_Anthropic(t *testing.T) {
 		t.Fatalf("unexpected ChatStream error: %v", err)
 	}
 
+	// The reported usage must be stamped on the returned message.
+	if resp.UsageTokensIn != 15 || resp.UsageTokensOut != 25 {
+		t.Errorf("usage stamp = (%d, %d), want (15, 25)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
 	if streamOut.String() != "Searching... " {
 		t.Errorf("expected streamed text to be 'Searching... ', got %q", streamOut.String())
 	}
@@ -148,6 +157,36 @@ func TestCloudBackend_Anthropic(t *testing.T) {
 	expectedCost := (40.0 / 1000.0) * 0.015
 	if cost != expectedCost {
 		t.Errorf("expected cost %f, got %f", expectedCost, cost)
+	}
+}
+
+func TestCloudBackend_Anthropic_MultiMessageDeltaDoesNotInflateStats(t *testing.T) {
+	// Anthropic may emit several message_delta events with a running
+	// output_tokens total. Stats must end at the final total, not the sum.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"usage\": {\"input_tokens\": 10}}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"hi\"}}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\": \"message_delta\", \"usage\": {\"output_tokens\": 10}}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\": \"message_delta\", \"usage\": {\"output_tokens\": 25}}\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudBackendWithKey("anthropic", "anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.UsageTokensIn != 10 || resp.UsageTokensOut != 25 {
+		t.Fatalf("stamp = (%d, %d), want (10, 25)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
+	_, tokensOut, _ := backend.Stats()
+	if tokensOut != 25 {
+		t.Fatalf("Stats tokensOut = %d, want 25 (got inflated sum if deltas were added whole)", tokensOut)
 	}
 }
 
