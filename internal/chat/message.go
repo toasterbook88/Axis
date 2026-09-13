@@ -35,6 +35,14 @@ type Message struct {
 	// RouterChoice records which backend handled this turn when a routing
 	// backend is in use. Not serialized to the wire (internal telemetry only).
 	RouterChoice string `json:"-"`
+
+	// UsageTokensIn/UsageTokensOut carry the real token counts the backend
+	// reported for this response turn (prompt/eval for Ollama, usage block
+	// for cloud backends). Zero when the backend does not report usage.
+	// Not serialized: telemetry only, and replaying history must not
+	// double-count stored usage.
+	UsageTokensIn  int `json:"-"`
+	UsageTokensOut int `json:"-"`
 }
 
 // Conversation holds an ordered sequence of messages with token-budget awareness.

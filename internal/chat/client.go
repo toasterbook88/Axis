@@ -57,6 +57,12 @@ type chatRequest struct {
 type chatStreamChunk struct {
 	Message chatChunkMessage `json:"message"`
 	Done    bool             `json:"done"`
+
+	// Final-chunk token counts. Ollama reports them only on the chunk
+	// with done=true; every intermediate chunk carries zeros. The final
+	// chunk has no message content.
+	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
+	EvalCount       int `json:"eval_count,omitempty"`
 }
 
 type chatChunkMessage struct {
@@ -135,6 +141,10 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, tools []ToolDef
 		}
 
 		if chunk.Done {
+			// The final chunk carries real token counts from the daemon.
+			// Zero when the backend does not report them.
+			result.UsageTokensIn = chunk.PromptEvalCount
+			result.UsageTokensOut = chunk.EvalCount
 			break
 		}
 	}

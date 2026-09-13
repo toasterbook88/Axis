@@ -133,8 +133,13 @@ func runOneShotPiped(ctx context.Context, a *agent.Agent, instruction string, er
 		fmt.Fprintf(errW, "error: Agent failed: %v\n", err)
 		return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 	}
-	fmt.Fprintf(errW, "── ~%d tokens (estimate) · %s elapsed ──\n",
-		a.ContextTokens(), time.Since(start).Round(time.Second))
+	if usageIn, usageOut, usageTurns := a.UsageStats(); usageTurns > 0 {
+		fmt.Fprintf(errW, "── %d tokens in · %d out (real, %d turns) · %s elapsed ──\n",
+			usageIn, usageOut, usageTurns, time.Since(start).Round(time.Second))
+	} else {
+		fmt.Fprintf(errW, "── ~%d tokens (estimate) · %s elapsed ──\n",
+			a.ContextTokens(), time.Since(start).Round(time.Second))
+	}
 	if historyPath != "" {
 		_ = saveAgentConversation(a.Conversation(), historyPath, errW)
 	}
