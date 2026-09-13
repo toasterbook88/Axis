@@ -450,10 +450,12 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		case "message_delta":
 			if event.Usage != nil {
 				// Anthropic's message_delta output_tokens is the running
-				// total for the message, not an increment; assign, do not
-				// accumulate. Backend internal totals keep the same
-				// cumulative semantics.
-				b.accumulateTokens(0, event.Usage.OutputTokens)
+				// total for the message, not an increment. Stamp assigns;
+				// Stats only adds the delta since the last reported total
+				// so multiple deltas cannot inflate tokensOut/cost.
+				if event.Usage.OutputTokens > reportedOut {
+					b.accumulateTokens(0, event.Usage.OutputTokens-reportedOut)
+				}
 				reportedOut = event.Usage.OutputTokens
 				usageReported = true
 			}
