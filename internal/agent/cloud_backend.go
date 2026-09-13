@@ -162,6 +162,7 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 
 	var accumulatedTools []chat.ToolCall
 	indexMap := make(map[int]int)
+	var reportedIn, reportedOut int
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -185,6 +186,7 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		if len(chunk.Choices) == 0 {
 			if chunk.Usage != nil {
 				b.accumulateTokens(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
+				reportedIn, reportedOut = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
 				usageReported = true
 			}
 			continue
@@ -235,6 +237,10 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		}
 	}
 
+	// Stamp what the provider actually reported so the session accumulator
+	// totals real numbers; estimated counts stay in the backend only.
+	result.UsageTokensIn = reportedIn
+	result.UsageTokensOut = reportedOut
 	// If token usage wasn't reported in the stream, estimate it.
 	if !usageReported {
 		pLen := 0
@@ -392,6 +398,7 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 	var accumulatedTools []chat.ToolCall
 	toolInputBufs := make(map[string]*strings.Builder)
 	blockToToolID := make(map[int]string)
+	var reportedIn, reportedOut int
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -442,12 +449,20 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 			}
 		case "message_delta":
 			if event.Usage != nil {
-				b.accumulateTokens(0, event.Usage.OutputTokens)
+				// Anthropic's message_delta output_tokens is the running
+				// total for the message, not an increment. Stamp assigns;
+				// Stats only adds the delta since the last reported total
+				// so multiple deltas cannot inflate tokensOut/cost.
+				if event.Usage.OutputTokens > reportedOut {
+					b.accumulateTokens(0, event.Usage.OutputTokens-reportedOut)
+				}
+				reportedOut = event.Usage.OutputTokens
 				usageReported = true
 			}
 		case "message_start":
 			if event.Message != nil && event.Message.Usage != nil {
 				b.accumulateTokens(event.Message.Usage.InputTokens, 0)
+				reportedIn = event.Message.Usage.InputTokens
 				usageReported = true
 			}
 		}
@@ -470,6 +485,11 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 			result.Content = clean
 		}
 	}
+
+	// Stamp what the provider actually reported so the session accumulator
+	// totals real numbers; estimated counts stay in the backend only.
+	result.UsageTokensIn = reportedIn
+	result.UsageTokensOut = reportedOut
 
 	// If token usage wasn't reported in the stream, estimate it.
 	if !usageReported {
