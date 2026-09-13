@@ -184,9 +184,16 @@ func TestCloudBackend_Anthropic_MultiMessageDeltaDoesNotInflateStats(t *testing.
 	if resp.UsageTokensIn != 10 || resp.UsageTokensOut != 25 {
 		t.Fatalf("stamp = (%d, %d), want (10, 25)", resp.UsageTokensIn, resp.UsageTokensOut)
 	}
-	_, tokensOut, _ := backend.Stats()
+	tokensIn, tokensOut, cost := backend.Stats()
+	if tokensIn != 10 {
+		t.Fatalf("Stats tokensIn = %d, want 10", tokensIn)
+	}
 	if tokensOut != 25 {
 		t.Fatalf("Stats tokensOut = %d, want 25 (got inflated sum if deltas were added whole)", tokensOut)
+	}
+	wantCost := (35.0 / 1000.0) * 0.015
+	if cost != wantCost {
+		t.Fatalf("Stats cost = %f, want %f", cost, wantCost)
 	}
 }
 
