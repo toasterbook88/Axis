@@ -55,11 +55,35 @@ func TestAtCompletionInactiveWithoutAt(t *testing.T) {
 	}
 }
 
-func TestAtCompletionInactiveForBareAt(t *testing.T) {
-	// '@' with no filter text yet: token is just "@", len < 2, inactive.
-	m := typeText(atTestModel(noopSubmit, []string{"lab-1"}), "@")
+func TestAtCompletionActiveForBareAt(t *testing.T) {
+	// Bare '@' with empty filter: active, all candidates, ghost = first sorted
+	// (or common-prefix when that extends; here names share no prefix).
+	m := typeText(atTestModel(noopSubmit, []string{"lab-1", "foundry"}), "@")
+	ac := m.atCompletion
+	if !ac.active {
+		t.Fatal("completion not active for bare @")
+	}
+	if ac.token != "" {
+		t.Errorf("token = %q, want empty", ac.token)
+	}
+	want := []string{"lab-1", "foundry"}
+	if len(ac.candidates) != 2 || ac.candidates[0] != want[0] || ac.candidates[1] != want[1] {
+		t.Errorf("candidates = %v, want %v", ac.candidates, want)
+	}
+	if ac.ghost != "lab-1" {
+		t.Errorf("ghost = %q, want %q (first sorted)", ac.ghost, "lab-1")
+	}
+}
+
+func TestTabAcceptsBareAtFirstCandidate(t *testing.T) {
+	// Bare '@' + Tab accepts the first sorted candidate with a trailing space.
+	m := typeText(atTestModel(noopSubmit, []string{"lab-1", "lab-2"}), "@")
+	m, _ = press(m, tea.KeyTab)
+	if m.Input() != "@lab-2 " {
+		t.Errorf("input after Tab = %q, want %q", m.Input(), "@lab-2 ")
+	}
 	if m.atCompletion.active {
-		t.Error("completion active for bare @")
+		t.Error("completion state survived acceptance")
 	}
 }
 

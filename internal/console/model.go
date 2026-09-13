@@ -658,16 +658,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // refreshAtCompletion recomputes the @ completion state after an insertion.
-// The completion is active only when the token under the cursor begins with
-// '@' and has at least one character of filter text; candidates come from
-// the configured source, filtered by case-insensitive prefix.
+// The completion is active when the token under the cursor begins with '@'
+// (including bare '@' with an empty filter); candidates come from the
+// configured source, filtered by case-insensitive prefix. Non-empty filters
+// keep the common-prefix ghost when it extends beyond the typed text. Bare
+// '@' ghosts the first sorted match so Tab accept-first inserts a full name.
 func (m *Model) refreshAtCompletion() tea.Cmd {
 	m.atCompletion = atCompletionState{}
 	if m.atCandidates == nil {
 		return nil
 	}
 	token, start := m.editor.TokenBeforeCursor()
-	if len(token) < 2 || token[0] != '@' {
+	if len(token) < 1 || token[0] != '@' {
 		return nil
 	}
 	filter := strings.ToLower(token[1:])
@@ -684,6 +686,12 @@ func (m *Model) refreshAtCompletion() tea.Cmd {
 	ghost := ""
 	if prefix := commonPrefix(matches); strings.HasPrefix(strings.ToLower(prefix), filter) && len(prefix) > len(token)-1 {
 		ghost = prefix[len(token)-1:]
+	}
+	// Bare @: William — ghost the first sorted node. Overrides a short
+	// common-prefix ghost so Tab accept-first still inserts a full name
+	// (existing acceptAtCompletion uses token+ghost length).
+	if filter == "" && len(matches) > 0 {
+		ghost = matches[0]
 	}
 	m.atCompletion = atCompletionState{
 		active:     true,
