@@ -1,6 +1,7 @@
 ## Unreleased
 
 ### Features
+* **Console footer real usage:** when the backend has reported per-turn token usage, the statusline shows `usage: <in>/<out>` on wide terminals. The context gauge stays occupancy (`ContextTokens` / max); session spend is not painted as window fill. No usage segment when the backend reported none.
 * **One-shot piped execution:** `axis agent -p "prompt"` runs one instruction with a pipeline-clean output contract — the assistant's text on stdout, compact tool badges with timing receipts and a session summary on stderr, no session banner, and a fail-closed confirm (denies with a pointer to `--auto-approve`/`--autonomy full` instead of blocking). Positional one-shot without `-p` keeps the legacy behavior byte-for-byte.
 * **esc esc clears the console draft:** the first idle Esc arms the gesture, the second clears — a single accidental Esc no longer wipes a draft (mirrors the ctrl+c quit gesture). Esc during a running turn still cancels it.
 * **Console prompt history persists:** submitted prompts append to `~/.axis/history.jsonl` (best effort, private file) and the console re-seeds its recall ring with the last 100 entries at launch; consecutive duplicates collapse.

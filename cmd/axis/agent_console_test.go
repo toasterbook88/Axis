@@ -1319,6 +1319,18 @@ func TestConsoleTokenEstimateWired(t *testing.T) {
 	}
 }
 
+func TestConsoleFooterUsageNilIsNoData(t *testing.T) {
+	in, out, turns := consoleFooterUsage(nil)
+	if in != 0 || out != 0 || turns != 0 {
+		t.Fatalf("nil agent usage = (%d, %d, %d), want (0, 0, 0)", in, out, turns)
+	}
+	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "m"})
+	in, out, turns = consoleFooterUsage(a)
+	if turns != 0 {
+		t.Fatalf("fresh agent turns = %d, want 0 (no fabricated usage)", turns)
+	}
+}
+
 func TestConsoleSkillPickerRunsCommand(t *testing.T) {
 	rt := &runtimectx.Context{Skills: &skills.Store{Skills: []skills.LearnedSkill{
 		{ID: "s1", Description: "Check cluster", Command: "axis status"},

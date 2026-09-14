@@ -11,11 +11,17 @@ type StatusFooterConfig struct {
 	// Model returns the name of the active model.
 	Model func() string
 
-	// UsedTokens returns the current estimated context tokens.
+	// UsedTokens returns the current estimated context-window occupancy.
+	// This is not session spend: occupancy can shrink on compact; spend cannot.
 	UsedTokens func() int
 
 	// MaxTokens returns the context token limit.
 	MaxTokens func() int
+
+	// UsageStats returns real session token usage (in, out, turns reported).
+	// Turns == 0 means the backend never reported usage; the usage segment
+	// is omitted rather than fabricating zeros.
+	UsageStats func() (in, out, turns int)
 
 	// Mode returns the autonomy mode (e.g. "default", "edit", "full").
 	Mode func() string
@@ -104,6 +110,13 @@ func (f *StatusFooter) Render(width int) []Line {
 		fleet = f.cfg.Fleet()
 	}
 
+	usageIn, usageOut, usageTurns := 0, 0, 0
+	if f.cfg.UsageStats != nil {
+		usageIn, usageOut, usageTurns = f.cfg.UsageStats()
+	}
+	hasUsage := usageTurns > 0
+	usageText := fmt.Sprintf("usage: %s/%s", FormatTokens(usageIn), FormatTokens(usageOut))
+
 	bar, pct := FormatContextBar(used, max, 10)
 	ctxFull := fmt.Sprintf("context: [%s] %d%% (%s/%s)", bar, pct, FormatTokens(used), FormatTokens(max))
 	ctxMedium := fmt.Sprintf("context: [%s] %d%%", bar, pct)
@@ -113,7 +126,11 @@ func (f *StatusFooter) Render(width int) []Line {
 
 	if width >= 80 {
 		segments = append(segments, "model: "+model, ctxFull)
-		if mode != "" {
+		if hasUsage {
+			// Real spend is not occupancy: keep the context bar on UsedTokens
+			// and surface in/out separately. Mode yields the column.
+			segments = append(segments, usageText)
+		} else if mode != "" {
 			segments = append(segments, "mode: "+mode)
 		}
 		if fleet != "" {
