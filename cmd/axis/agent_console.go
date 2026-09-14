@@ -336,6 +336,16 @@ func consoleFooterModel(a *agent.Agent, target ModelChoice) string {
 	return "default"
 }
 
+// consoleFooterUsage is the real in/out/turns triple the status footer and
+// /usage share. A nil agent is "no data" (turns == 0), not fabricated zeros
+// presented as usage.
+func consoleFooterUsage(a *agent.Agent) (in, out, turns int) {
+	if a == nil {
+		return 0, 0, 0
+	}
+	return a.UsageStats()
+}
+
 // runModelPicker opens the interactive model picker for arg-less /model.
 // Catalog loading happens here (off the UI loop) because collectModelChoices
 // probes resident endpoints. No approval gate applies: the picker only
@@ -924,6 +934,11 @@ func runAgentConsole(
 				return a.MaxTokens()
 			}
 			return 32768
+		},
+		// Same source /usage prefers: real in/out when the backend reported
+		// at least one turn; omitted from the footer otherwise.
+		UsageStats: func() (int, int, int) {
+			return consoleFooterUsage(a)
 		},
 		Mode: func() string {
 			if a != nil {
