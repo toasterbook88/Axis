@@ -1326,8 +1326,8 @@ func TestConsoleFooterUsageNilIsNoData(t *testing.T) {
 	}
 	a := agent.New(agent.Config{Endpoint: "http://localhost:11434", Model: "m"})
 	in, out, turns = consoleFooterUsage(a)
-	if turns != 0 {
-		t.Fatalf("fresh agent turns = %d, want 0 (no fabricated usage)", turns)
+	if in != 0 || out != 0 || turns != 0 {
+		t.Fatalf("fresh agent usage = (%d, %d, %d), want (0, 0, 0)", in, out, turns)
 	}
 }
 
