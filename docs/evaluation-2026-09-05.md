@@ -1,5 +1,7 @@
 # AXIS repository evaluation — 2026-09-05
 
+**Archive, not current-state.** Snapshot of `c5102a4` on 2026-09-05. Do not treat §8 as open work on current `main`. By v0.17.1 several recs had already shipped: `/v2/metrics` bearer auth, coverage-gate raises, `SECURITY.md` `v0.17.x`, `noun_registry` removal, and the `safety_scaffolded` test-tag drop. Live facts stay in `docs/current-state.md`.
+
 **Report type:** mixed. Architecture, security, and wiring claims are from **static inspection** of this worktree. Runtime claims below cite **captured commands** from the same worktree. This is not a production-approval stamp.
 
 **Scope:** the local repository clone at `c5102a411cdc4831fea16ac7f6a803d71b3a0a96` (`refactor/agent-startup-model`, two commits ahead of `origin/main` at `129045b`). Untracked: `docs/quality/` (deadcode triage notes). Open PR: https://github.com/toasterbook88/Axis/pull/396 (CI Test & Build, govulncheck, CodeQL success at capture time).
