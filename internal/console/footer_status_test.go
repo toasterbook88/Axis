@@ -68,15 +68,15 @@ func TestStatusFooterShowsRealUsageWithoutHijackingContextBar(t *testing.T) {
 		Mode:       func() string { return "default" },
 		Fleet:      func() string { return "10/10 ok" },
 	}
-	text := NewStatusFooter(cfg).Render(100)[0].Text
+	text := NewStatusFooter(cfg).Render(120)[0].Text
 	if !strings.Contains(text, "context: [") || !strings.Contains(text, "(9.2k/32k)") {
 		t.Fatalf("context occupancy missing from footer: %s", text)
 	}
-	if !strings.Contains(text, "usage: 1.2k/340") {
-		t.Fatalf("real usage segment missing: %s", text)
+	if !strings.Contains(text, "usage: 1.2k/340 · default") {
+		t.Fatalf("real usage+mode segment missing: %s", text)
 	}
 	if strings.Contains(text, "mode: default") {
-		t.Fatalf("mode should yield the column when usage is shown: %s", text)
+		t.Fatalf("mode should ride the usage segment, not take its own column: %s", text)
 	}
 	if !strings.Contains(text, "fleet: 10/10 ok") {
 		t.Fatalf("fleet missing when usage is shown: %s", text)

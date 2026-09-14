@@ -115,7 +115,6 @@ func (f *StatusFooter) Render(width int) []Line {
 		usageIn, usageOut, usageTurns = f.cfg.UsageStats()
 	}
 	hasUsage := usageTurns > 0
-	usageText := fmt.Sprintf("usage: %s/%s", FormatTokens(usageIn), FormatTokens(usageOut))
 
 	bar, pct := FormatContextBar(used, max, 10)
 	ctxFull := fmt.Sprintf("context: [%s] %d%% (%s/%s)", bar, pct, FormatTokens(used), FormatTokens(max))
@@ -128,7 +127,9 @@ func (f *StatusFooter) Render(width int) []Line {
 		segments = append(segments, "model: "+model, ctxFull)
 		if hasUsage {
 			// Real spend is not occupancy: keep the context bar on UsedTokens
-			// and surface in/out separately. Mode yields the column.
+			// and surface in/out separately. Mode rides the same segment so
+			// autonomy stays visible after turn 1 without a third column.
+			usageText := fmt.Sprintf("usage: %s/%s · %s", FormatTokens(usageIn), FormatTokens(usageOut), mode)
 			segments = append(segments, usageText)
 		} else if mode != "" {
 			segments = append(segments, "mode: "+mode)
