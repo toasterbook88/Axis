@@ -1,4 +1,9 @@
-## Unreleased
+## v0.18.1 (2026-09-15)
+
+### Fixed
+* **Console streaming panic:** interactive `axis agent` console sessions crashed with `panic: strings: illegal use of non-zero Builder copied by value` on any streamed response of two or more chunks. `Model.stream` was a `strings.Builder` value inside a value-receiver Elm loop; every Bubble Tea model copy invalidated the Builder's address self-stamp and the next write panicked. It is now a `*strings.Builder` allocated in the constructor with a lazy guard at the write site, so all Elm copies share one heap Builder. The regression test delivers its second chunk from a separate goroutine — the shape that actually triggers the copy — and was verified to panic at the pre-fix code.
+
+## v0.18.0 (2026-09-14)
 
 ### Features
 * **Console footer real usage:** when the backend has reported per-turn token usage, the statusline shows `usage: <in>/<out> · <mode>` on wide terminals. The context gauge stays occupancy (`ContextTokens` / max); session spend is not painted as window fill. Autonomy mode rides the usage segment so it stays visible after turn 1. No usage segment when the backend reported none.

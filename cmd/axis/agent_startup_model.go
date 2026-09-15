@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -609,6 +610,45 @@ func syntheticLocalOllamaTarget(name string) ModelChoice {
 	}
 }
 
+// ollamaHasModel reports whether the local Ollama daemon actually has the named
+// model on disk right now (GET /api/tags), so a stale configured default never
+// wins over live reality. Called before any syntheticLocalOllamaTarget is
+// honored: a default_model that is not on disk must fall through to the live
+// catalog, not become a guaranteed-failing session.
+var ollamaHasModelFn = func(name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chat.DefaultEndpoint+"/api/tags", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	var body struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false
+	}
+	for _, m := range body.Models {
+		n := m.Name
+		// Ollama tags include the explicit ":latest" suffix; a configured
+		// default without a tag means latest.
+		if n == name || n == name+":latest" || strings.TrimSuffix(n, ":latest") == strings.TrimSuffix(name, ":latest") {
+			return true
+		}
+	}
+	return false
+}
+
 // findModelTargetByRef resolves /model <ref> against the catalog.
 // Prefer exact ID, then unique model name among non-disabled choices.
 func findModelTargetByRef(choices []ModelChoice, ref string) (ModelChoice, error) {
@@ -717,7 +757,10 @@ func resolveStartupModelTarget(
 			if t, ok := matchLocalModel(reqModel); ok {
 				return t, agent.CloudBackendOptions{}, nil
 			}
-			// Explicit local model not in catalog: bind to default local ollama endpoint
+			// Explicit operator --model in local mode: honor the named model.
+			// If it is not on disk, the Ollama error at first use is the honest
+			// signal (operator intent must not be silently swapped for another
+			// model). Only the IMPLICIT default path (auto mode) falls back.
 			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 		}
 		if t, ok := firstLocal(); ok {
@@ -737,12 +780,21 @@ func resolveStartupModelTarget(
 			if t, ok := matchLocalModel(reqModel); ok {
 				return t, agent.CloudBackendOptions{}, nil
 			}
-			// Honor operator/default name even when not yet in the snapshot catalog.
-			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
+			// Honor operator/default name only when the weights are actually
+			// on disk right now. A stale configured default must not become a
+			// guaranteed-failing session — fall through to the live catalog.
+			if ollamaHasModelFn(reqModel) {
+				return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
+			}
 		}
 		// Prefer any usable local target from the catalog
 		if t, ok := firstLocal(); ok {
 			return t, agent.CloudBackendOptions{}, nil
+		}
+		// Explicit default explicitly absent from disk AND catalog: keep the
+		// legacy last-resort behavior so the operator sees the real error.
+		if reqModel != "" {
+			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 		}
 		// Else credentialed cloud by priority + cheapest model on that provider
 		if t, opts, err := resolveCloudStartupTarget(rt, ""); err == nil {

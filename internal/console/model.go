@@ -126,7 +126,7 @@ type Model struct {
 
 	editor Editor
 	input  string
-	stream strings.Builder
+	stream *strings.Builder
 
 	turn  TurnID
 	state turnState
@@ -276,6 +276,7 @@ func NewModel(opts Options) Model {
 		footer:        opts.Footer,
 		historySink:   opts.HistorySink,
 		atCandidates:  opts.AtCandidates,
+		stream:        &strings.Builder{},
 		tokenEstimate: opts.TokenEstimate,
 		usageStats:    opts.UsageStats,
 		sessionStart:  now(),
@@ -364,6 +365,9 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 	case StreamChunkMsg:
 		if m.stale(msg.Turn) {
 			return m, nil
+		}
+		if m.stream == nil {
+			m.stream = &strings.Builder{}
 		}
 		m.stream.WriteString(msg.Text)
 		m.stampThinkingSpan()

@@ -84,6 +84,86 @@ func TestCloudBackend_OpenAI(t *testing.T) {
 	}
 }
 
+// Regression for the live session failure: a LiteLLM-routed ollama Qwen GGUF
+// under streaming emits the tool call as a whole-message bare JSON object in
+// delta.content (finish_reason stop, no native tool_calls). The fallback
+// extractor must promote it so the agent executes the call instead of showing
+// raw JSON to the operator. Content chunks must NOT stream to the operator
+// once the whole-message JSON is recognized as a tool call.
+func TestCloudBackend_OpenAI_BareJSONToolCallPromoted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Exact shape captured from the failing endpoint: pretty-printed JSON,
+		// one big content chunk, then stop.
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"{\\n  \\\"name\\\": \\\"axis_status\\\",\\n  \\\"arguments\\\": {}\\n}\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var streamOut bytes.Buffer
+	tools := []chat.ToolDef{{Type: "function", Function: chat.ToolDefFunction{Name: "axis_status", Description: "cluster status"}}}
+	msgs := []chat.Message{{Role: chat.RoleUser, Content: "Hello"}}
+	resp, err := backend.ChatStream(context.Background(), msgs, tools, &streamOut)
+	if err != nil {
+		t.Fatalf("unexpected ChatStream error: %v", err)
+	}
+
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected the bare JSON to be promoted to 1 tool call, got %d (content %q)", len(resp.ToolCalls), resp.Content)
+	}
+	tc := resp.ToolCalls[0]
+	if tc.Function.Name != "axis_status" {
+		t.Errorf("expected axis_status, got %q", tc.Function.Name)
+	}
+	if resp.Content != "" {
+		t.Errorf("whole-message JSON must be stripped from content, got %q", resp.Content)
+	}
+	if streamOut.Len() != 0 {
+		t.Errorf("operator must not see raw tool-call JSON on the stream, got %q", streamOut.String())
+	}
+}
+
+// The Hermes drift shape ({"thought","action"}) must also be promoted, with
+// the thought kept as visible content so the operator still sees the reasoning.
+func TestCloudBackend_OpenAI_HermesThoughtActionPromoted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"{\\\"thought\\\": \\\"Reading the config.\\\", \\\"action\\\": {\\\"name\\\": \\\"read_file\\\", \\\"arguments\\\": {\\\"path\\\": \\\"~/.axis/ai.yaml\\\"}}}\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tools := []chat.ToolDef{{Type: "function", Function: chat.ToolDefFunction{Name: "read_file", Description: "read file"}}}
+	resp, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "cat ~/.axis/ai.yaml"}}, tools, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected ChatStream error: %v", err)
+	}
+
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Function.Name != "read_file" {
+		t.Errorf("expected read_file, got %q", resp.ToolCalls[0].Function.Name)
+	}
+	if args := resp.ToolCalls[0].Function.Arguments; string(args) != `{"path": "~/.axis/ai.yaml"}` {
+		t.Errorf("unexpected arguments: %s", string(args))
+	}
+	if resp.Content != "Reading the config." {
+		t.Errorf("thought should remain as content, got %q", resp.Content)
+	}
+}
+
 func TestCloudBackend_Anthropic(t *testing.T) {
 	// Mock Anthropic SSE stream server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
