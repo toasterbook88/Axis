@@ -228,6 +228,16 @@ func TestRunGuardedRemoteConnectFailureReturnsDialError(t *testing.T) {
 	}
 }
 
+func (s *scriptedRemoteExecutor) Connect(ctx context.Context) error { return nil }
+
+func (s *scriptedRemoteExecutor) RunWithStdin(ctx context.Context, command string, stdin []byte) (string, error) {
+	s.t.Helper()
+	step := s.nextStep("run_with_stdin")
+	s.calls = append(s.calls, remoteCall{method: "run_with_stdin", command: command})
+	_ = stdin
+	return step.stdout, step.err
+}
+
 func (s *scriptedRemoteExecutor) Run(ctx context.Context, command string) (string, error) {
 	s.t.Helper()
 	step := s.nextStep("run")

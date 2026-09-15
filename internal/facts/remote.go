@@ -53,7 +53,9 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	}
 
 	// Wrap executor so every Run uses bash --noprofile --norc (bundle + legacy).
-	c.Exec = withBashForced(c.Exec)
+	// Shared transport wrapper — the same fish-safe launcher the guarded
+	// execution path applies.
+	c.Exec = transport.WithBashForced(c.Exec)
 
 	if err := c.Exec.Connect(ctx); err != nil {
 		facts.Status = models.StatusUnreachable

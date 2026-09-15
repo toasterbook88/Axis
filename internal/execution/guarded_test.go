@@ -795,6 +795,12 @@ type stubRemoteExecutor struct {
 	runFunc func(context.Context, string) (string, error)
 }
 
+func (s *stubRemoteExecutor) Connect(ctx context.Context) error { return nil }
+
+func (s *stubRemoteExecutor) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
+	return s.runFunc(ctx, cmd)
+}
+
 func (s *stubRemoteExecutor) Run(ctx context.Context, cmd string) (string, error) {
 	return s.runFunc(ctx, cmd)
 }
