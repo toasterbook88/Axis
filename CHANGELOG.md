@@ -1,4 +1,4 @@
-## Unreleased
+## v0.18.0 (2026-09-14)
 
 ### Features
 * **Console footer real usage:** when the backend has reported per-turn token usage, the statusline shows `usage: <in>/<out> · <mode>` on wide terminals. The context gauge stays occupancy (`ContextTokens` / max); session spend is not painted as window fill. Autonomy mode rides the usage segment so it stays visible after turn 1. No usage segment when the backend reported none.
