@@ -1103,3 +1103,17 @@ func TestModelUsageCommandEstimateFallback(t *testing.T) {
 		t.Errorf("estimate line wrong: %s", notice)
 	}
 }
+
+func TestModelStreamBuilderSurvivesElmCopies(t *testing.T) {
+	// Regression for the v0.18.0 console panic: stream was a strings.Builder
+	// VALUE in a value-receiver Model — the second StreamChunkMsg through the
+	// Elm loop (Update -> route) hit strings.Builder.copyCheck and killed the
+	// program. With a *strings.Builder the two chunks must concatenate.
+	m := NewModel(Options{})
+	first, _ := m.Update(StreamChunkMsg{Turn: m.Turn(), Text: "chunk-one"})
+	second, _ := first.(Model).Update(StreamChunkMsg{Turn: m.Turn(), Text: "chunk-two"})
+	got := second.(Model).stream.String()
+	if got != "chunk-onechunk-two" {
+		t.Fatalf("streamed text lost across Update copies: %q", got)
+	}
+}
