@@ -40,6 +40,13 @@ type rawToolCallJSON struct {
 	Input      json.RawMessage `json:"input,omitempty"`
 }
 
+// hermesActionJSON is the {"thought": "...", "action": {...}} shape models
+// drift into when native tool calling fails: the action nests the tool call.
+type hermesActionJSON struct {
+	Thought string           `json:"thought"`
+	Action  *rawToolCallJSON `json:"action"`
+}
+
 // ExtractFallbackToolCalls inspects text content for embedded tool call patterns when
 // the backend stream returned no native tool calls. It validates detected tool names
 // against toolDefs. If matches are found, it returns the extracted ToolCalls and
@@ -97,7 +104,39 @@ func ExtractFallbackToolCalls(content string, toolDefs []ToolDef) ([]ToolCall, s
 		return extracted, strings.TrimSpace(clean)
 	}
 
+	// 3. Whole-message bare JSON: some backends (observed with a LiteLLM-routed
+	// ollama Qwen GGUF under streaming) emit the tool call as an unfenced JSON
+	// object filling the whole message. Only promote when the ENTIRE content is
+	// a single JSON object — JSON embedded in prose stays inert (injection guard).
+	trimmed := strings.TrimSpace(clean)
+	if strings.HasPrefix(trimmed, "{") {
+		if calls, thought := extractBareJSON(trimmed, validTools); len(calls) > 0 {
+			return calls, thought
+		}
+	}
+
 	return nil, content
+}
+
+// extractBareJSON promotes a whole-message JSON object to a tool call. It
+// accepts the direct shape ({"name","arguments"}) and the Hermes drift shape
+// ({"thought","action":{"name","arguments"}}). On success it returns the tool
+// call(s) and the remaining visible content: the thought text when present,
+// otherwise empty (the JSON was the whole message).
+func extractBareJSON(raw string, validTools map[string]bool) ([]ToolCall, string) {
+	// Hermes drift: {"thought": "...", "action": {"name": ..., "arguments": ...}}.
+	var hermes hermesActionJSON
+	if err := json.Unmarshal([]byte(raw), &hermes); err == nil && hermes.Action != nil {
+		if tc, ok := rawItemToToolCall(*hermes.Action, validTools, 1); ok {
+			return []ToolCall{tc}, strings.TrimSpace(hermes.Thought)
+		}
+	}
+
+	// Direct whole-message tool call: {"name": "...", "arguments": {...}}.
+	if tc, ok := parseSingleToolJSON(raw, validTools, 1); ok {
+		return []ToolCall{tc}, ""
+	}
+	return nil, ""
 }
 
 func parseSingleToolJSON(raw string, validTools map[string]bool, seq int) (ToolCall, bool) {
