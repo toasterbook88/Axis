@@ -109,6 +109,7 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot = msg.Snapshot
 		m.loading = false
 		m.lastRefresh = msg.Timestamp
+		m.source = msg.Source
 		m.loadErr = nil
 		m.statusMsg = fmt.Sprintf("Snapshot loaded: %d nodes", len(m.snapshot.Nodes))
 		// Schedule next refresh
@@ -188,8 +189,14 @@ func renderHeaderWithLogo(m Model) string {
 	}
 
 	version := buildinfo.Version
-	status := fmt.Sprintf("Nodes: %d/%d  |  Last: %s  |  v%s",
-		healthyCount, nodeCount, m.lastRefresh, version)
+	sourceBadge := m.source
+	if sourceBadge == "" {
+		sourceBadge = "unknown"
+	}
+	// Cache explicitness: the operator always sees which authority produced
+	// the fleet view — daemon cache, live sweep, or on-disk file fallback.
+	status := fmt.Sprintf("Nodes: %d/%d  |  %s  |  Last: %s  |  v%s",
+		healthyCount, nodeCount, sourceBadge, m.lastRefresh, version)
 
 	header := lipgloss.JoinHorizontal(lipgloss.Center,
 		RenderLogoSmall(),
@@ -237,7 +244,7 @@ func renderInspectorEnhanced(m Model) string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		tabBar,
-		"─"+strings.Repeat("─", m.width-2),
+		"─"+strings.Repeat("─", max(m.width-2, 0)),
 		tabContent,
 	)
 

@@ -1,25 +1,48 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/persist"
 )
 
-// loadSnapshotCmd loads the daemon snapshot asynchronously.
+// loadSnapshotCmd loads the cluster snapshot for the dashboard.
+// Authority order: the local daemon cache first (freshness-badged,
+// publication-bound), then an explicit on-disk snapshot.json fallback when
+// the daemon is unavailable. When both fail the error names both — the
+// truth plane must not fabricate an empty fleet.
 func loadSnapshotCmd() tea.Cmd {
 	return func() tea.Msg {
-		snapshot, freshness, err := loadDaemonSnapshot()
-		if err != nil {
-			return loadErrMsg{Err: err}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		snap, source, err := daemon.FetchSnapshot(ctx, api.DefaultAddr())
+		cancel()
+		if err == nil {
+			return snapshotLoadedMsg{
+				Snapshot:  snap,
+				Timestamp: formatFreshness(snap.Timestamp),
+				Source:    source,
+			}
+		}
+
+		snapshot, freshness, fileErr := loadDaemonSnapshot()
+		if fileErr != nil {
+			return loadErrMsg{
+				Err: fmt.Errorf("no daemon cache (%v) and no snapshot file (%v); run: axis daemon start", err, fileErr),
+			}
 		}
 		return snapshotLoadedMsg{
 			Snapshot:  snapshot,
 			Timestamp: formatFreshness(freshness),
+			Source:    "file",
 		}
 	}
 }
