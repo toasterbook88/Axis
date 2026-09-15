@@ -10,6 +10,8 @@ import (
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/snapshotview"
 	"github.com/toasterbook88/axis/internal/state"
 )
 
@@ -20,23 +22,39 @@ type PlacementModal struct {
 	confirmed bool
 	cancelled bool
 
-	decision     *models.PlacementDecision
-	candidates   []models.NodeFacts
+	snapshot     *models.ClusterSnapshot
+	source       string
+	freshness    string
+	requirements models.TaskRequirements
+	explanation  *models.PlacementExplanation
 	scoringError error
 	width        int
 }
 
-// NewPlacementModal creates an initialized placement wizard modal.
-func NewPlacementModal() PlacementModal {
+// NewPlacementModal creates a placement wizard bound to the snapshot already
+// displayed by the dashboard. Scoring never silently switches authority.
+func NewPlacementModal(snapshot *models.ClusterSnapshot, source, freshness string) PlacementModal {
 	input := textinput.New()
-	input.Placeholder = "e.g., run 16GB VRAM model inference"
+	input.Placeholder = "e.g., run ollama inference on a 7b model"
 	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	input.Focus()
 	input.CharLimit = 200
-	input.Width = 50
+	input.Width = 60
+	if strings.TrimSpace(source) == "" {
+		source = "unknown"
+	}
+	if strings.TrimSpace(freshness) == "" {
+		freshness = "unknown"
+	}
 
-	return PlacementModal{input: input, width: 60}
+	return PlacementModal{
+		input:     input,
+		snapshot:  snapshotview.Clone(snapshot),
+		source:    source,
+		freshness: freshness,
+		width:     76,
+	}
 }
 
 // Init initializes the modal.
@@ -57,8 +75,8 @@ func (m PlacementModal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case placementScoredMsg:
 		m.loading = false
-		m.decision = msg.Decision
-		m.candidates = msg.Candidates
+		m.requirements = msg.Requirements
+		m.explanation = msg.Explanation
 		m.scoringError = msg.Error
 		return m, nil
 
@@ -67,12 +85,21 @@ func (m PlacementModal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "esc":
 			m.cancelled = true
 			return m, nil
+		case "e":
+			if m.explanation != nil || m.scoringError != nil {
+				m.explanation = nil
+				m.scoringError = nil
+				m.input.Focus()
+				return m, textinput.Blink
+			}
 		case "enter":
 			if m.loading || m.confirmed {
 				return m, nil
 			}
-			if m.decision != nil {
-				m.confirmed = true
+			if m.explanation != nil {
+				if m.explanation.Decision.OK {
+					m.confirmed = true
+				}
 				return m, nil
 			}
 			if strings.TrimSpace(m.input.Value()) == "" {
@@ -80,7 +107,11 @@ func (m PlacementModal) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.loading = true
 			m.scoringError = nil
-			return m, placeTaskCmd(m.input.Value())
+			m.input.Blur()
+			return m, placeTaskCmd(m.input.Value(), m.snapshot)
+		}
+		if m.explanation != nil || m.scoringError != nil {
+			return m, nil
 		}
 	}
 
@@ -102,7 +133,10 @@ func (m PlacementModal) View() string {
 		Render("Workload Placement Wizard")
 	instructions := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("248")).
-		Render("Preview the advisory placement decision from the current snapshot")
+		Render("Preview deterministic placement from the snapshot on screen")
+	provenance := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Render(fmt.Sprintf("Snapshot: %s · observed %s", m.source, m.freshness))
 	inputLabel := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("63")).
 		Render("Requirements:")
@@ -111,94 +145,155 @@ func (m PlacementModal) View() string {
 	switch {
 	case m.loading:
 		content = lipgloss.JoinVertical(lipgloss.Left,
-			title, "", instructions, "", inputLabel, m.input.View(), "",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("Analyzing cluster capacity..."),
-		)
-	case m.confirmed:
-		content = lipgloss.JoinVertical(lipgloss.Left,
-			title, "",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("Placement selected (advisory)"), "",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Render("No task was executed"),
-			"Press Escape to close",
+			title, provenance, "", instructions, "", inputLabel, m.input.View(), "",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("Analyzing eligible nodes and rank order..."),
 		)
 	case m.scoringError != nil:
 		content = lipgloss.JoinVertical(lipgloss.Left,
-			title, "",
+			title, provenance, "",
 			lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("Unable to score placement"), "",
-			m.scoringError.Error(), "", "Press Escape to close",
+			m.scoringError.Error(), "", "Press e to edit, Escape to close",
 		)
-	case m.decision != nil:
-		content = renderPlacementDecision(m, title, instructions, inputLabel)
+	case m.explanation != nil:
+		content = renderPlacementDecision(m, title, provenance, instructions, inputLabel)
 	default:
 		content = lipgloss.JoinVertical(lipgloss.Left,
-			title, "", instructions, "", inputLabel, m.input.View(), "",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Render("Examples:"),
+			title, provenance, "", instructions, "", inputLabel, m.input.View(), "",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Render("Try a recognized workload description:"),
+			"  • build a Go project",
 			"  • run ollama inference on a 7b model",
-			"  • build go project with 8GB RAM",
-			"  • run 16GB VRAM model inference",
+			"",
+			"Enter score · Escape close",
 		)
 	}
 	return border.Render(content)
 }
 
-func renderPlacementDecision(m PlacementModal, title, instructions, inputLabel string) string {
-	score := fmt.Sprintf("FitScore: %d/100", m.decision.FitScore)
-	scoreColor := "196"
-	if m.decision.FitScore >= 80 {
-		scoreColor = "42"
-	} else if m.decision.FitScore >= 50 {
-		scoreColor = "226"
-	}
-
-	node := m.decision.Node
+func renderPlacementDecision(m PlacementModal, title, provenance, instructions, inputLabel string) string {
+	decision := m.explanation.Decision
+	node := decision.Node
 	if node == "" {
 		node = "No suitable node"
 	}
 
-	reasoning := make([]string, 0, min(len(m.decision.Reasoning), 4))
-	for i, reason := range m.decision.Reasoning {
+	reasoning := make([]string, 0, min(len(decision.Reasoning), 4)+1)
+	for i, reason := range decision.Reasoning {
 		if i >= 4 {
+			reasoning = append(reasoning, fmt.Sprintf("  + %d more", len(decision.Reasoning)-4))
 			break
 		}
 		reasoning = append(reasoning, "  • "+reason)
 	}
+	if len(reasoning) == 0 {
+		reasoning = append(reasoning, "  • No eligible node satisfied the inferred requirements")
+	}
+
+	ranked := make([]string, 0, min(len(m.explanation.Eligible), 3))
+	for i, candidate := range m.explanation.Eligible {
+		if i >= 3 {
+			break
+		}
+		ranked = append(ranked, fmt.Sprintf("  %d. %s · %s",
+			i+1, candidate.Node, candidateSummary(candidate, m.snapshot)))
+	}
+	if len(ranked) == 0 {
+		ranked = append(ranked, "  No eligible candidates")
+	}
+
+	diagnostic := ""
+	if decision.OK {
+		diagnostic = fmt.Sprintf("Diagnostic fit: %d/100 · rank order is authoritative", decision.FitScore)
+	}
+	action := "No eligible recommendation to accept · e edit · Escape close"
+	if decision.OK {
+		action = "Advisory only — Enter accepts and closes; no task is executed\ne edit · Escape cancel"
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left,
-		title, "", instructions, "", inputLabel, m.input.View(), "",
-		lipgloss.NewStyle().Bold(true).Render("Top candidate: ")+node,
-		lipgloss.NewStyle().Foreground(lipgloss.Color(scoreColor)).Render(score), "",
-		lipgloss.NewStyle().Bold(true).Render("Reasoning:"),
+		title, provenance, "", instructions, "", inputLabel, m.input.View(), "",
+		lipgloss.NewStyle().Bold(true).Render("Inferred requirements"),
+		"  "+formatRequirements(m.requirements), "",
+		lipgloss.NewStyle().Bold(true).Render("Recommendation: ")+node,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(diagnostic), "",
+		lipgloss.NewStyle().Bold(true).Render("Deterministic rank order"),
+		strings.Join(ranked, "\n"), "",
+		lipgloss.NewStyle().Bold(true).Render("Why"),
 		strings.Join(reasoning, "\n"), "",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Render("Press Enter to confirm selection, Escape to cancel"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Render(action),
 	)
 }
 
-type placementScoredMsg struct {
-	Decision   *models.PlacementDecision
-	Candidates []models.NodeFacts
-	Error      error
+func formatRequirements(req models.TaskRequirements) string {
+	parts := []string{"class " + string(req.Workload.Class)}
+	if req.MinFreeRAMMB > 0 {
+		parts = append(parts, fmt.Sprintf("RAM ≥ %s", formatMB(req.MinFreeRAMMB)))
+	}
+	if req.ContextWindowTokens > 0 {
+		parts = append(parts, fmt.Sprintf("context %dK", req.ContextWindowTokens/1000))
+	}
+	if len(req.RequiredTools) > 0 {
+		parts = append(parts, "tools "+strings.Join(req.RequiredTools, ", "))
+	}
+	if len(req.PreferredBackends) > 0 {
+		parts = append(parts, "prefers "+strings.Join(req.PreferredBackends, ", "))
+	}
+	return strings.Join(parts, " · ")
 }
 
-// placeTaskCmd scores the prompt against the current daemon snapshot.
-// The existing axis task place command is advisory, so confirmation here does
-// not execute a task or mutate cluster state.
-func placeTaskCmd(prompt string) tea.Cmd {
+func candidateSummary(candidate models.PlacementCandidateExplanation, snapshot *models.ClusterSnapshot) string {
+	parts := []string{fmt.Sprintf("headroom %s", formatMB(candidate.HeadroomMB))}
+	if snapshot != nil {
+		for _, node := range snapshot.Nodes {
+			if node.Name != candidate.Node {
+				continue
+			}
+			if node.Resources != nil && len(node.Resources.GPUs) > 0 {
+				parts = append(parts, fmt.Sprintf("%d GPU", len(node.Resources.GPUs)))
+			}
+			if len(node.ResidentModels) > 0 {
+				parts = append(parts, fmt.Sprintf("%d warm model", len(node.ResidentModels)))
+			}
+			break
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatMB(value int64) string {
+	if value >= 1024 {
+		return fmt.Sprintf("%.1fGiB", float64(value)/1024)
+	}
+	return fmt.Sprintf("%dMiB", value)
+}
+
+type placementScoredMsg struct {
+	Requirements models.TaskRequirements
+	Explanation  *models.PlacementExplanation
+	Error        error
+}
+
+// placeTaskCmd scores the prompt against the exact snapshot displayed when the
+// wizard opened. It is advisory and never executes or mutates cluster state.
+func placeTaskCmd(prompt string, snapshot *models.ClusterSnapshot) tea.Cmd {
 	return func() tea.Msg {
-		snapshot, _, err := loadDaemonSnapshot()
-		if err != nil {
-			return placementScoredMsg{Error: err}
+		if snapshot == nil {
+			return placementScoredMsg{Error: fmt.Errorf("no displayed snapshot is available; close the wizard and recover the dashboard first")}
 		}
 
 		requirements := placement.InferRequirements(prompt)
 		clusterState, stateErr := state.Load()
-		if stateErr != nil && clusterState == nil {
-			return placementScoredMsg{Error: stateErr}
-		}
 
-		decision := placement.SelectBestNode(requirements, snapshot.Nodes, clusterState)
+		explanation := placement.ExplainPlacement(requirements, snapshot.Nodes, clusterState)
+		warnings := append([]models.Warning(nil), snapshot.Warnings...)
 		if stateErr != nil {
-			decision.Reasoning = append(decision.Reasoning, "warning: cluster state could not be fully loaded: "+stateErr.Error())
+			warnings = append(warnings, models.Warning{
+				Kind:    "state",
+				Message: "cluster state could not be fully loaded: " + stateErr.Error(),
+			})
 		}
-		return placementScoredMsg{Decision: &decision, Candidates: snapshot.Nodes}
+		explanation.Decision.Reasoning = runtimectx.PrependWarningReasoning(
+			explanation.Decision.Reasoning, warnings)
+		return placementScoredMsg{Requirements: requirements, Explanation: &explanation}
 	}
 }
 

@@ -1,9 +1,11 @@
 package tui
 
 import (
-	"github.com/toasterbook88/axis/internal/persist"
 	"strings"
 	"testing"
+
+	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 // Regression: renderInspectorEnhanced panicked with "strings: negative
@@ -74,14 +76,31 @@ func TestSnapshotLoadedMsgRetainsSource(t *testing.T) {
 	}
 }
 
-// Footer must advertise the placement wizard and help keys; these were
-// wired but undiscoverable.
-func TestFooterAdvertisesHiddenKeys(t *testing.T) {
+// Footer must keep every primary interaction visible after the normal
+// snapshot-loaded path sets a status message.
+func TestFooterKeepsKeybindingsVisibleAfterSnapshotLoad(t *testing.T) {
 	m := NewModel()
-	out := renderFooter(m)
-	for _, want := range []string{"[p] Place task", "[?] Help"} {
+	next, _ := UpdateWithRefresh(m, snapshotLoadedMsg{
+		Snapshot:  &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "node-a"}}},
+		Timestamp: "9:41AM",
+		Source:    "daemon-cache",
+	})
+	m = next.(Model)
+
+	out := stripANSI(renderFooter(m))
+	for _, want := range []string{
+		"Snapshot loaded: 1 nodes",
+		"[j/k] Navigate",
+		"[h/l] Tabs",
+		"[1-4] Jump",
+		"[Enter] Select",
+		"[p] Place",
+		"[r] Refresh",
+		"[?] Help",
+		"[q] Quit",
+	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("footer missing %q in %q", want, out)
+			t.Fatalf("post-load footer missing %q in %q", want, out)
 		}
 	}
 }

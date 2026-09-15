@@ -219,22 +219,26 @@ func renderInspector(m Model) string {
 	return renderInspectorEnhanced(m)
 }
 
-// renderFooter returns the status bar and keybindings.
+// renderFooter keeps navigation discoverable even while transient status is
+// present. Startup always sets a status message, so replacing the key legend
+// with status would hide the primary interaction path on every normal launch.
 func renderFooter(m Model) string {
-	if m.statusMsg != "" {
-		return lipgloss.NewStyle().
-			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("252")).
-			Padding(0, 1).
-			Width(m.width).
-			Render(m.statusMsg)
-	}
-
-	keys := "[j/k] Navigate  [1-4] Tabs  [p] Place task  [r] Refresh  [?] Help  [q] Quit"
-	return lipgloss.NewStyle().
+	keys := "[j/k] Navigate  [h/l] Tabs  [1-4] Jump  [Enter] Select  [p] Place  [r] Refresh  [?] Help  [q] Quit"
+	keyBar := lipgloss.NewStyle().
 		Background(lipgloss.Color("63")).
 		Foreground(lipgloss.Color("252")).
 		Padding(0, 1).
 		Width(m.width).
 		Render(keys)
+	if m.statusMsg == "" {
+		return keyBar
+	}
+
+	statusBar := lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Foreground(lipgloss.Color("252")).
+		Padding(0, 1).
+		Width(m.width).
+		Render(m.statusMsg)
+	return lipgloss.JoinVertical(lipgloss.Left, statusBar, keyBar)
 }
