@@ -167,6 +167,14 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	usageReported := false
+	// Content chunks that begin a possible whole-message JSON tool call are
+	// held back: some backends (LiteLLM-routed ollama Qwen under streaming)
+	// emit the tool call as an unfenced JSON object in delta.content with
+	// finish_reason stop. Streaming it eagerly would show the operator raw
+	// JSON and the call would never execute. The buffer is only engaged when
+	// the first content chunk starts with '{' — ordinary prose streams live.
+	var jsonBuf strings.Builder
+	deferredJSON := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -194,10 +202,20 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 
 		delta := chunk.Choices[0].Delta
 		if delta.Content != "" {
-			if w != nil {
-				fmt.Fprint(w, delta.Content)
+			if !deferredJSON && jsonBuf.Len() == 0 && len(result.Content) == 0 && strings.HasPrefix(strings.TrimLeft(delta.Content, " \t\r\n"), "{") {
+				deferredJSON = true
 			}
-			result.Content += delta.Content
+			if deferredJSON {
+				// Hold the possible whole-message JSON back from the operator
+				// stream; it is flushed at stream end if it turns out to be
+				// ordinary content (e.g. prose that merely starts with '{').
+				jsonBuf.WriteString(delta.Content)
+			} else {
+				if w != nil {
+					fmt.Fprint(w, delta.Content)
+				}
+				result.Content += delta.Content
+			}
 		}
 
 		for _, tcDelta := range delta.ToolCalls {
@@ -231,10 +249,31 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 
 	result.ToolCalls = accumulatedTools
 	if len(result.ToolCalls) == 0 && len(tools) > 0 {
-		if fallbackCalls, clean := chat.ExtractFallbackToolCalls(result.Content, tools); len(fallbackCalls) > 0 {
+		candidate := result.Content
+		if deferredJSON {
+			// Whole-message JSON was held back: try promoting it BEFORE any
+			// flush so the operator never sees raw tool-call JSON. If it is
+			// not a tool call, treat the buffered bytes as ordinary content.
+			if fallbackCalls, clean := chat.ExtractFallbackToolCalls(jsonBuf.String(), tools); len(fallbackCalls) > 0 {
+				result.ToolCalls = fallbackCalls
+				result.Content = clean
+			} else {
+				if w != nil {
+					fmt.Fprint(w, jsonBuf.String())
+				}
+				result.Content += jsonBuf.String()
+			}
+		} else if fallbackCalls, clean := chat.ExtractFallbackToolCalls(candidate, tools); len(fallbackCalls) > 0 {
 			result.ToolCalls = fallbackCalls
 			result.Content = clean
 		}
+	} else if deferredJSON {
+		// Native tool calls arrived alongside buffered JSON content; flush the
+		// buffer so no bytes are lost.
+		if w != nil {
+			fmt.Fprint(w, jsonBuf.String())
+		}
+		result.Content += jsonBuf.String()
 	}
 
 	// Stamp what the provider actually reported so the session accumulator
