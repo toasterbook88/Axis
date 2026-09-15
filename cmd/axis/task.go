@@ -631,6 +631,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 		return "No nodes found in cluster."
 	}
 
+	gpuSummary := ""
 	ramSummary := "unknown"
 	pressure := "unknown"
 	extraLines := ""
@@ -642,6 +643,47 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 			ramSummary = fmt.Sprintf("%dMB free", best.Resources.RAMFreeMB)
 		}
 		pressure = best.Resources.Pressure
+		if len(best.Resources.GPUs) > 0 {
+			parts := make([]string, 0, len(best.Resources.GPUs))
+			for _, g := range best.Resources.GPUs {
+				p := g.Model
+				if g.VRAMMB > 0 {
+					p += fmt.Sprintf(" %dMB", g.VRAMMB)
+				}
+				if len(g.Capabilities) > 0 {
+					p += fmt.Sprintf(" [%s]", strings.Join(g.Capabilities, ","))
+				}
+				parts = append(parts, p)
+			}
+			gpuSummary = strings.Join(parts, "; ")
+		}
+	}
+	// Resident models are the strongest warm-start signal for inference
+	// tasks: a node already serving the model skips the weight load.
+	if len(best.ResidentModels) > 0 {
+		parts := make([]string, 0, len(best.ResidentModels))
+		for _, rm := range best.ResidentModels {
+			p := fmt.Sprintf("%s on %s:%d", rm.Name, rm.Runtime, rm.Port)
+			if rm.SizeVRAMMB > 0 {
+				p += fmt.Sprintf(" (%dMB VRAM)", rm.SizeVRAMMB)
+			}
+			parts = append(parts, p)
+		}
+		extraLines += "\n- Resident models here: " + strings.Join(parts, "; ")
+	}
+	// Disk weights tell the LLM what can be started locally without a
+	// download; distinct from resident (loaded) models.
+	if len(best.DiskWeights) > 0 {
+		weights := make([]string, 0, 3)
+		for i, dw := range best.DiskWeights {
+			if i >= 3 {
+				weights = append(weights, fmt.Sprintf("+%d more", len(best.DiskWeights)-3))
+				break
+			}
+			w := fmt.Sprintf("%s (%s)", dw.Name, dw.Format)
+			weights = append(weights, w)
+		}
+		extraLines += "\n- Weights on disk here: " + strings.Join(weights, ", ")
 	}
 	if best.TurboQuant != nil && best.TurboQuant.Supported && len(best.TurboQuant.Backends) > 0 {
 		status := "detected"
@@ -703,16 +745,28 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	return fmt.Sprintf(`AXIS CLUSTER CONTEXT (paste as system prompt):
 
 - Source: %s
-- Best node: %s (%s, %s pressure)
+- Best node: %s (%s, %s pressure)%s
 - Context hint: %s
 - Tools: %v
 - Summary: %s
 - Task: %s
-- Live tools: start read-only MCP with: axis mcp serve%s
+- Read-only tools: `+"`axis mcp serve`"+` (MCP), `+"`axis status --cached`"+`, `+"`axis task place <desc>`"+`, `+"`axis model list`"+`%s
 
-Be precise. Use real node names and tools above.`,
+Be precise. Use real node names and tools above. Placement is advisory:
+execute via `+"`axis task run --script/--exec`"+` (guarded, reserved, confirmed)
+or model lifecycle via `+"`axis model start --node <name> --weights <path> --port <p>`"+`.`,
 		sourceOrLive(source), best.Name, ramSummary, pressure,
-		contextHint(reqs), toolsList(best), clusterSummaryLine(snap), task, extraLines)
+		gpuLine(gpuSummary), contextHint(reqs), toolsList(best),
+		clusterSummaryLine(snap), task, extraLines)
+}
+
+// gpuLine renders the optional GPU segment of the best-node line. Empty
+// when the node reports no GPUs, so the line stays truthful.
+func gpuLine(gpuSummary string) string {
+	if gpuSummary == "" {
+		return ""
+	}
+	return "; GPU: " + gpuSummary
 }
 
 func clusterSummaryLine(snap *models.ClusterSnapshot) string {

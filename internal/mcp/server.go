@@ -154,7 +154,7 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 	s.AddTool(
 		mcpproto.NewTool(
 			"cluster_snapshot",
-			mcpproto.WithDescription("Return the current AXIS cluster snapshot"),
+			mcpproto.WithDescription("Return the current AXIS cluster snapshot: per-node hardware, RAM and pressure, GPUs with VRAM, installed tools, resident models, and warnings. Output includes the snapshot source and age — prefer fresh sources; never guess cluster state."),
 			mcpproto.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
@@ -165,7 +165,7 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 	s.AddTool(
 		mcpproto.NewTool(
 			"placement_decision",
-			mcpproto.WithDescription("Select the best node for a task (advisory only)"),
+			mcpproto.WithDescription("Select the best node for a task: returns the chosen node, fit score, and per-node reasoning from the deterministic ranker (advisory only — this does not reserve or execute; pair with guarded execution for that). Include the reasoning verbatim when reporting."),
 			mcpproto.WithReadOnlyHintAnnotation(true),
 			mcpproto.WithString(
 				"description",

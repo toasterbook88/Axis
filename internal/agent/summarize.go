@@ -42,6 +42,22 @@ func summarizeSnapshot(snap *models.ClusterSnapshot) string {
 				line += fmt.Sprintf(", GPUs: %s", strings.Join(gpuNames, ", "))
 			}
 		}
+		// Resident models are the live-warm signal: a node already serving the
+		// requested model saves a full weight load. One compact segment per
+		// model keeps the per-turn prompt injection cheap.
+		if len(n.ResidentModels) > 0 {
+			modelParts := make([]string, 0, len(n.ResidentModels))
+			for _, rm := range n.ResidentModels {
+				p := rm.Name
+				if rm.SizeVRAMMB > 0 {
+					p += fmt.Sprintf(" (%dMB VRAM)", rm.SizeVRAMMB)
+				} else if rm.SizeRAMMB > 0 {
+					p += fmt.Sprintf(" (%dMB RAM)", rm.SizeRAMMB)
+				}
+				modelParts = append(modelParts, p)
+			}
+			line += fmt.Sprintf(", resident: %s", strings.Join(modelParts, ", "))
+		}
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}

@@ -55,13 +55,12 @@ func BuildSystemPrompt(cluster *ClusterSummaryForPrompt, extra string) string {
 
 	fmt.Fprintf(&b, "AXIS version: %s\n", buildinfo.Version)
 
-	b.WriteString("\nAvailable AXIS commands the user can run:\n")
-	b.WriteString("- `axis facts`          — local hardware facts\n")
-	b.WriteString("- `axis status`         — cluster snapshot (all nodes)\n")
-	b.WriteString("- `axis task place`     — advisory placement for a task\n")
-	b.WriteString("- `axis task context`   — execution context for agents\n")
-	b.WriteString("- `axis task run`       — execute a task on a selected node\n")
-	b.WriteString("- `axis doctor`         — validate config, SSH, and daemon health\n")
+	b.WriteString("\nHow to work with the cluster:\n")
+	b.WriteString("- You have first-class tools: axis_status, axis_facts, axis_place, axis_summary, axis_reservations. Prefer them over guessing — they read the live fact plane.\n")
+	b.WriteString("- For placement questions, call axis_place with the task description; report the chosen node and reasoning verbatim. Placement is advisory.\n")
+	b.WriteString("- Mutating actions (run_shell, run_on_node, axis_run_task, write_file, edit_file) go through safety checks and operator confirmation. Never assume approval.\n")
+	b.WriteString("- For models: axis model list shows what is resident where; axis model start/stop manage llama-server instances; axis model query prompts a resident model directly.\n")
+	b.WriteString("- CLI equivalents the user can run: axis facts, axis status, axis task place, axis task context, axis task run, axis doctor.\n")
 
 	if cluster != nil {
 		b.WriteString("\nCurrent cluster summary (snapshot at session start):\n")
