@@ -38,6 +38,9 @@ func (s *stubExec) Run(_ context.Context, cmd string) (string, error) {
 	s.runs = append(s.runs, cmd)
 	return "Linux\n", nil
 }
+func (s *stubExec) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
+	return s.Run(ctx, cmd)
+}
 
 func TestBashForcedExecutor_WrapsRun(t *testing.T) {
 	inner := &stubExec{}
@@ -144,6 +147,9 @@ type fixedExec struct {
 func (f *fixedExec) Connect(context.Context) error               { return nil }
 func (f *fixedExec) Close() error                                { return nil }
 func (f *fixedExec) Run(context.Context, string) (string, error) { return f.out, nil }
+func (f *fixedExec) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
+	return f.Run(ctx, cmd)
+}
 
 func TestLinuxThermalFromBundleTemps(t *testing.T) {
 	st := linuxThermalStateFromTempLines("96000\n45000\n")
