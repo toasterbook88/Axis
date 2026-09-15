@@ -230,7 +230,7 @@ func renderFooter(m Model) string {
 			Render(m.statusMsg)
 	}
 
-	keys := "[j/k] Navigate  [1-4] Tabs  [r] Refresh  [h/l] Switch Tab  [q] Quit"
+	keys := "[j/k] Navigate  [1-4] Tabs  [p] Place task  [r] Refresh  [?] Help  [q] Quit"
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color("63")).
 		Foreground(lipgloss.Color("252")).
