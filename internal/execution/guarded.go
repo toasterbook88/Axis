@@ -31,6 +31,8 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/turboexec"
+
+	"encoding/base64"
 )
 
 const (
@@ -942,11 +944,26 @@ func runRemote(
 	defer executor.Close()
 
 	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
-	writeJSONCmd := transport.BuildRemoteWriteCommand(remoteContextPath, contextJSON)
-	if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
-		resp.Error = err.Error()
-		resp.ExitCode = 1
-		return resp, err
+	// Deliver the context over SSH stdin when the payload (or its base64 form)
+	// would push the command string past the remote kernel's MAX_ARG_STRLEN —
+	// the limit applies to the entire command string ssh hands the remote shell
+	// as one argv element, so chunking inside one command does not dodge it.
+	if stdinExec, ok := executor.(transport.StdinRemoteExecutor); len(contextJSON) > transport.MaxContextInlineBytes && ok {
+		writeJSONCmd := fmt.Sprintf("mkdir -p $(dirname %s) && base64 -d > %s",
+			shellescape.Quote(remoteContextPath), shellescape.Quote(remoteContextPath))
+		encoded := []byte(base64.StdEncoding.EncodeToString(contextJSON))
+		if _, err := stdinExec.RunWithStdin(ctx, writeJSONCmd, encoded); err != nil {
+			resp.Error = err.Error()
+			resp.ExitCode = 1
+			return resp, err
+		}
+	} else {
+		writeJSONCmd := transport.BuildRemoteWriteCommand(remoteContextPath, contextJSON)
+		if _, err := executor.Run(ctx, writeJSONCmd); err != nil {
+			resp.Error = err.Error()
+			resp.ExitCode = 1
+			return resp, err
+		}
 	}
 
 	execID := resp.ExecID

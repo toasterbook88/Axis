@@ -92,9 +92,26 @@ var (
 
 // Executor abstracts command execution on a target node.
 // This is the seam where axisd-based collection will later plug in.
+// StdinRemoteExecutor is implemented by executors that can feed stdin to the
+// remote process, enabling large payload delivery without inflating the
+// command string (MAX_ARG_STRLEN).
+type StdinRemoteExecutor interface {
+	RunWithStdin(ctx context.Context, cmd string, stdin []byte) (stdout string, err error)
+}
+
+// MaxContextInlineBytes is the largest execution-context payload (post-base64)
+// that may ride in the command string. Above this, delivery switches to SSH
+// stdin. Budget: 131072 MAX_ARG_STRLEN minus base64 expansion (4/3) headroom
+// and shell overhead.
+const MaxContextInlineBytes = 90 * 1024
+
 type Executor interface {
 	Connect(ctx context.Context) error
 	Run(ctx context.Context, cmd string) (stdout string, err error)
+	// RunWithStdin feeds stdin to the remote process. Used for large payloads
+	// that cannot ride in the command string (MAX_ARG_STRLEN). Executors that
+	// do not support it fall back to chunked command delivery.
+	RunWithStdin(ctx context.Context, cmd string, stdin []byte) (stdout string, err error)
 	Close() error
 }
 
@@ -341,6 +358,61 @@ func (e *SSHExecutor) Close() error {
 		return err
 	}
 	return nil
+}
+
+// RunWithStdin executes a command via SSH, feeding stdin to the remote process.
+// Used to deliver large payloads (execution context) without inflating the
+// command string: ssh passes cmd to the remote shell as ONE argv element, and
+// Linux MAX_ARG_STRLEN (131072) applies to that whole string — payloads over
+// ~90KB fail execve with E2BIG ("Argument list too long") on some shells (fish).
+func (e *SSHExecutor) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
+	e.mu.RLock()
+	client := e.client
+	e.mu.RUnlock()
+	if client == nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := e.Connect(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+			return "", err
+		}
+		e.mu.RLock()
+		client = e.client
+		e.mu.RUnlock()
+	}
+	if client == nil {
+		return "", fmt.Errorf("ssh client not connected")
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("ssh session: %w", err)
+	}
+	defer session.Close()
+
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+	session.Stdin = bytes.NewReader(stdin)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(cmd)
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGKILL)
+		return "", ctx.Err()
+	case err := <-done:
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return stdout.String(), err
+	}
 }
 
 // Run executes a command via SSH and returns stdout.

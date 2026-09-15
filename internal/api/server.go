@@ -43,9 +43,10 @@ type KnowledgeResponse struct {
 }
 
 type RunRequest struct {
-	Description string `json:"description"`
-	Mode        string `json:"mode,omitempty"`
-	Confirm     string `json:"confirm,omitempty"`
+	Description   string `json:"description"`
+	Mode          string `json:"mode,omitempty"`
+	Confirm       string `json:"confirm,omitempty"`
+	RequestedNode string `json:"requested_node,omitempty"`
 }
 
 type RunResponse struct {
@@ -358,6 +359,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Description:      req.Description,
 			Mode:             req.Mode,
 			Confirm:          req.Confirm,
+			RequestedNode:    req.RequestedNode,
 			OwnerSurface:     execution.OwnerSurfaceHTTPRun,
 			OwnerLabel:       requestCallerLabel(r),
 			Events:           events.GuardedExecutionSink{},
