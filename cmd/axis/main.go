@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/mattn/go-isatty"
 	"io"
 	"os"
 	"runtime"
@@ -74,6 +75,12 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Front door: a bare, interactive `axis` opens the dashboard.
+			// Any argument or a non-TTY session keeps the scripting-safe
+			// help text. No flag plumbing: the TTY check decides.
+			if len(args) == 0 && isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd()) {
+				return runTUI(cmd, args)
+			}
 			return cmd.Help()
 		},
 	}

@@ -25,6 +25,7 @@ type Model struct {
 	// Status
 	statusMsg string
 	quitting  bool
+	source    string // provenance of the displayed snapshot: daemon-cache, live, file
 
 	// Modal overlays
 	modal       PlacementModal
@@ -56,10 +57,12 @@ func (m Model) View() string {
 	return ViewWithLogo(m)
 }
 
-// snapshotLoadedMsg carries a loaded snapshot.
+// snapshotLoadedMsg carries a loaded snapshot plus its provenance source
+// (daemon-cache, live, file) so views can badge what the operator is seeing.
 type snapshotLoadedMsg struct {
 	Snapshot  *models.ClusterSnapshot
 	Timestamp string
+	Source    string
 }
 
 // loadErrMsg carries a load error.
