@@ -58,6 +58,12 @@ func (e *bashForcedExecutor) Connect(ctx context.Context) error {
 	return e.inner.Connect(ctx)
 }
 
+// RunWithStdin forwards stdin through the bash wrapper: `bash -c "cmd"` passes its
+// own stdin to the executed command, so payload bytes reach the remote pipeline.
+func (e *bashForcedExecutor) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
+	return e.inner.RunWithStdin(ctx, WrapBash(cmd), stdin)
+}
+
 func (e *bashForcedExecutor) Close() error {
 	return e.inner.Close()
 }
