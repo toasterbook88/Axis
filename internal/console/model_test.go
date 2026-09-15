@@ -1109,11 +1109,29 @@ func TestModelStreamBuilderSurvivesElmCopies(t *testing.T) {
 	// VALUE in a value-receiver Model — the second StreamChunkMsg through the
 	// Elm loop (Update -> route) hit strings.Builder.copyCheck and killed the
 	// program. With a *strings.Builder the two chunks must concatenate.
+	//
+	// The second chunk must be written from a different goroutine: within a
+	// single goroutine the compiler reuses the same stack slot for the value
+	// receiver, so copyCheck never trips and the test would pass even against
+	// the pre-fix code. The real Bubble Tea runtime delivers each message on
+	// its own event-loop goroutine, which forces the Model copy to relocate.
 	m := NewModel(Options{})
 	first, _ := m.Update(StreamChunkMsg{Turn: m.Turn(), Text: "chunk-one"})
-	second, _ := first.(Model).Update(StreamChunkMsg{Turn: m.Turn(), Text: "chunk-two"})
-	got := second.(Model).stream.String()
-	if got != "chunk-onechunk-two" {
-		t.Fatalf("streamed text lost across Update copies: %q", got)
+
+	out := make(chan Model, 1)
+	go func() {
+		second, _ := first.(Model).Update(StreamChunkMsg{Turn: m.Turn(), Text: "chunk-two"})
+		out <- second.(Model)
+	}()
+	select {
+	case second := <-out:
+		// fmt.Sprint compiles against both the pre-fix value field and the
+		// post-fix pointer field, so this test fails (panicking inside the
+		// goroutine) at base instead of failing to build there.
+		if got := fmt.Sprint(second.stream); got != "chunk-onechunk-two" {
+			t.Fatalf("streamed text lost across Update copies: %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the second chunk")
 	}
 }
