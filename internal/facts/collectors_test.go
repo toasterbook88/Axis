@@ -49,6 +49,9 @@ func (f *fakeRemoteExecutor) Run(_ context.Context, cmd string) (string, error) 
 	}
 	return "", fmt.Errorf("unexpected command: %s", cmd)
 }
+func (f *fakeRemoteExecutor) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
+	return f.Run(ctx, cmd)
+}
 
 func (f *fakeRemoteExecutor) Close() error {
 	f.closed = true
