@@ -92,6 +92,45 @@ func TestDaemonRestartUnreadyWithLastErrorIsNotFresh(t *testing.T) {
 
 // A current-version daemon that is merely still starting gets a bounded grace
 // period and must not be terminated if it becomes ready within it.
+func TestDaemonRestartUnreadyThenReadyAvoidsTermination(t *testing.T) {
+	starting := daemon.Metadata{Version: current(), Ready: false, Stale: false}
+	h := &restartHarness{metas: []daemon.Metadata{starting, starting, serving()}, pid: 111}
+	h.install(t)
+
+	var out bytes.Buffer
+	if err := restartDaemon(context.Background(), "127.0.0.1:1", &out); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if h.terminates != 0 || h.spawns != 0 {
+		t.Fatalf("a daemon that became ready in grace must not be restarted: terminates=%d spawns=%d", h.terminates, h.spawns)
+	}
+	// It must reach this outcome through the grace poll, not by being wrongly
+	// short-circuited as already fresh while Ready was still false.
+	if !strings.Contains(out.String(), "became ready") {
+		t.Fatalf("expected the grace path, got %q", out.String())
+	}
+	if h.fetches < 2 {
+		t.Fatalf("grace path must re-poll, only %d fetch(es)", h.fetches)
+	}
+}
+
+// If the grace period expires, exactly one terminate/start cycle happens.
+func TestDaemonRestartPersistentlyUnreadyRestartsExactlyOnce(t *testing.T) {
+	starting := daemon.Metadata{Version: current(), Ready: false, Stale: false}
+	h := &restartHarness{metas: []daemon.Metadata{starting}, pid: 111}
+	h.install(t)
+
+	var out bytes.Buffer
+	_ = restartDaemon(context.Background(), "127.0.0.1:1", &out)
+	if h.terminates != 1 {
+		t.Fatalf("terminate count = %d, want exactly 1", h.terminates)
+	}
+	if h.spawns != 1 {
+		t.Fatalf("spawn count = %d, want exactly 1", h.spawns)
+	}
+}
+
+// Cancellation during the grace period aborts without touching the daemon.
 func TestDaemonRestartContextCancelledDuringGrace(t *testing.T) {
 	starting := daemon.Metadata{Version: current(), Ready: false, Stale: false}
 	h := &restartHarness{metas: []daemon.Metadata{starting}, pid: 111}
@@ -113,6 +152,22 @@ func TestDaemonRestartContextCancelledDuringGrace(t *testing.T) {
 
 // GUD-004: a ready daemon running a different binary version gets no grace and
 // is restarted. This is the split-binary guard.
+func TestDaemonRestartReadyButWrongVersionGetsNoGrace(t *testing.T) {
+	wrong := daemon.Metadata{Version: "0.0.1-other", Ready: true, Stale: false}
+	h := &restartHarness{metas: []daemon.Metadata{wrong, wrong, serving()}, pid: 111}
+	h.install(t)
+
+	var out bytes.Buffer
+	_ = restartDaemon(context.Background(), "127.0.0.1:1", &out)
+	if strings.Contains(out.String(), "already fresh") {
+		t.Fatalf("a wrong-version daemon must never be called fresh: %q", out.String())
+	}
+	if h.terminates != 1 || h.spawns != 1 {
+		t.Fatalf("wrong version must restart once without grace: terminates=%d spawns=%d", h.terminates, h.spawns)
+	}
+}
+
+// A stale daemon also gets no grace.
 func TestDaemonRestartStaleGetsNoGrace(t *testing.T) {
 	stale := daemon.Metadata{Version: current(), Ready: true, Stale: true}
 	h := &restartHarness{metas: []daemon.Metadata{stale, stale, serving()}, pid: 111}

@@ -102,3 +102,50 @@ func TestLoadDaemonSnapshotCorruptCache(t *testing.T) {
 		t.Fatalf("expected nil snapshot on error, got %+v", snap)
 	}
 }
+
+func TestLoadSnapshotCmdMessages(t *testing.T) {
+	t.Run("success carries formatted timestamp", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv(persist.AxisHomeEnv, home)
+		ts := time.Date(2026, 8, 24, 14, 5, 0, 0, time.UTC)
+		writeSnapshot(t, home, &models.ClusterSnapshot{
+			Timestamp: ts,
+			Nodes:     []models.NodeFacts{{Name: "n"}},
+		})
+
+		msg := loadSnapshotCmd()()
+		loaded, ok := msg.(snapshotLoadedMsg)
+		if !ok {
+			t.Fatalf("expected snapshotLoadedMsg, got %T", msg)
+		}
+		if loaded.Snapshot == nil || len(loaded.Snapshot.Nodes) != 1 {
+			t.Fatalf("unexpected snapshot in msg: %+v", loaded.Snapshot)
+		}
+		if loaded.Timestamp != "2:05PM" {
+			t.Fatalf("Timestamp = %q, want %q", loaded.Timestamp, "2:05PM")
+		}
+	})
+
+	t.Run("missing cache surfaces loadErrMsg", func(t *testing.T) {
+		t.Setenv(persist.AxisHomeEnv, t.TempDir())
+
+		msg := loadSnapshotCmd()()
+		errMsg, ok := msg.(loadErrMsg)
+		if !ok {
+			t.Fatalf("expected loadErrMsg, got %T", msg)
+		}
+		if errMsg.Err == nil {
+			t.Fatal("expected non-nil error in loadErrMsg")
+		}
+	})
+}
+
+func TestFormatFreshness(t *testing.T) {
+	if got := formatFreshness(time.Time{}); got != "unknown" {
+		t.Fatalf("formatFreshness(zero) = %q, want %q", got, "unknown")
+	}
+	ts := time.Date(2026, 8, 24, 9, 41, 0, 0, time.UTC)
+	if got, want := formatFreshness(ts), "9:41AM"; got != want {
+		t.Fatalf("formatFreshness = %q, want %q", got, want)
+	}
+}

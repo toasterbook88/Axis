@@ -1,8 +1,12 @@
 package models
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestModelSpecTotalMemoryMB(t *testing.T) {
@@ -135,5 +139,50 @@ func TestModelSpecFromPath(t *testing.T) {
 	}
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("spec should be valid: %v", err)
+	}
+}
+
+func TestModelSpecJSONAndYAMLSerialization(t *testing.T) {
+	spec := ModelSpec{
+		Schema:       "axis.model-spec/v1",
+		ID:           "ms-test1234",
+		Name:         "test-model",
+		Format:       ModelFormatGGUF,
+		WeightsPath:  "/models/test.gguf",
+		Accelerators: []AcceleratorType{AcceleratorCUDA, AcceleratorCPU},
+		Memory: ModelMemoryRequirements{
+			WeightSizeMB:      2048,
+			ContextOverheadMB: 512,
+			RuntimeOverheadMB: 256,
+			MinVRAMMB:         1024,
+			RecommendedVRAMMB: 2560,
+		},
+		ObservedAt: time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC),
+	}
+
+	// Test JSON
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("json marshal failed: %v", err)
+	}
+	var unmarshaledJSON ModelSpec
+	if err := json.Unmarshal(data, &unmarshaledJSON); err != nil {
+		t.Fatalf("json unmarshal failed: %v", err)
+	}
+	if unmarshaledJSON.ID != spec.ID || unmarshaledJSON.Memory.TotalMemoryMB() != spec.Memory.TotalMemoryMB() {
+		t.Fatalf("unmarshaled JSON mismatch: %+v", unmarshaledJSON)
+	}
+
+	// Test YAML
+	yamlData, err := yaml.Marshal(spec)
+	if err != nil {
+		t.Fatalf("yaml marshal failed: %v", err)
+	}
+	var unmarshaledYAML ModelSpec
+	if err := yaml.Unmarshal(yamlData, &unmarshaledYAML); err != nil {
+		t.Fatalf("yaml unmarshal failed: %v", err)
+	}
+	if unmarshaledYAML.ID != spec.ID || unmarshaledYAML.Memory.TotalMemoryMB() != spec.Memory.TotalMemoryMB() {
+		t.Fatalf("unmarshaled YAML mismatch: %+v", unmarshaledYAML)
 	}
 }

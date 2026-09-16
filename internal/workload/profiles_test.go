@@ -89,3 +89,19 @@ func TestProfilesHaveConsistentRequirements(t *testing.T) {
 		}
 	}
 }
+
+func TestNoNilBackendsInProfiles(t *testing.T) {
+	for _, p := range DefaultRegistry() {
+		// RequiredTools and PreferredBackends should be nil or valid; never contain empty strings
+		for _, tool := range p.RequiredTools {
+			if tool == "" {
+				t.Errorf("profile %q has empty string in RequiredTools", p.Class)
+			}
+		}
+		for _, backend := range p.PreferredBackends {
+			if backend == "" {
+				t.Errorf("profile %q has empty string in PreferredBackends", p.Class)
+			}
+		}
+	}
+}

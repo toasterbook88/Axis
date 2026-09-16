@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/toasterbook88/axis/internal/config"
 )
 
 // mockClient implements mcpclient.MCPClient for testing.
@@ -97,6 +98,47 @@ func TestRegistryConnectedNames(t *testing.T) {
 	}
 }
 
+func TestRegistryListAllTools(t *testing.T) {
+	r := NewRegistry()
+	r.servers["a"] = &ServerConnection{
+		Name:       "a",
+		InitResult: &mcp.InitializeResult{},
+		Tools:      []mcp.Tool{{Name: "tool-a"}, {Name: "tool-a2"}},
+	}
+	r.servers["b"] = &ServerConnection{
+		Name:       "b",
+		InitResult: &mcp.InitializeResult{},
+		Tools:      []mcp.Tool{{Name: "tool-b"}},
+	}
+
+	tools := r.ListAllTools()
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(tools))
+	}
+}
+
+func TestRegistryFindTool(t *testing.T) {
+	r := NewRegistry()
+	r.servers["a"] = &ServerConnection{
+		Name:       "a",
+		InitResult: &mcp.InitializeResult{},
+		Tools:      []mcp.Tool{{Name: "find-me"}},
+	}
+
+	entry, ok := r.FindTool("find-me")
+	if !ok {
+		t.Fatal("expected to find tool")
+	}
+	if entry.Server != "a" || entry.Tool.Name != "find-me" {
+		t.Fatalf("unexpected entry: %+v", entry)
+	}
+
+	_, ok = r.FindTool("missing")
+	if ok {
+		t.Fatal("expected not to find tool")
+	}
+}
+
 func TestRegistryClose(t *testing.T) {
 	mock := &mockClient{}
 	r := NewRegistry()
@@ -108,9 +150,56 @@ func TestRegistryClose(t *testing.T) {
 	}
 }
 
+func TestParseArgs(t *testing.T) {
+	tests := []struct {
+		input string
+		want  map[string]any
+	}{
+		{"", nil},
+		{`{"key":"value"}`, map[string]any{"key": "value"}},
+	}
+
+	for _, tt := range tests {
+		got, err := ParseArgs(tt.input)
+		if err != nil {
+			t.Fatalf("ParseArgs(%q) error: %v", tt.input, err)
+		}
+		if tt.want == nil && got != nil {
+			t.Fatalf("ParseArgs(%q) expected nil, got %v", tt.input, got)
+		}
+		if tt.want != nil {
+			if len(got) != len(tt.want) {
+				t.Fatalf("ParseArgs(%q) expected %v, got %v", tt.input, tt.want, got)
+			}
+		}
+	}
+}
+
 func TestParseArgsInvalidJSON(t *testing.T) {
 	_, err := ParseArgs("not-json")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestConnectAllUnsupportedTransport(t *testing.T) {
+	r := NewRegistry()
+	cfg := &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "dummy", Hostname: "localhost", SSHUser: "root"},
+		},
+		MCPServers: map[string]config.MCPServerConfig{
+			"bad": {Transport: "unknown"},
+		},
+	}
+	ctx := context.Background()
+	r.ConnectAll(ctx, cfg)
+
+	sc := r.Get("bad")
+	if sc == nil {
+		t.Fatal("expected server connection to exist")
+	}
+	if sc.Err == nil {
+		t.Fatal("expected error for unsupported transport")
 	}
 }

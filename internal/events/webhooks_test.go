@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,5 +93,66 @@ func TestWebhookDispatchRetry(t *testing.T) {
 	expectedAttempts := int32(4)
 	if atomic.LoadInt32(&calls) != expectedAttempts {
 		t.Errorf("expected %d post attempts, got %d", expectedAttempts, calls)
+	}
+}
+
+func TestWebhookDeadLetter(t *testing.T) {
+	// Temporarily shorten backoff for testing speed
+	originalBackoff := backoffBase
+	backoffBase = 1 * time.Millisecond
+	defer func() { backoffBase = originalBackoff }()
+
+	tempDir := t.TempDir()
+	_ = isolateEventBus(t, tempDir)
+	dlPath := filepath.Join(tempDir, "webhook-deadletter.jsonl")
+	if err := os.WriteFile(dlPath, nil, 0o644); err != nil {
+		t.Fatalf("precreate dead-letter: %v", err)
+	}
+	if err := os.Chmod(dlPath, 0o644); err != nil {
+		t.Fatalf("chmod dead-letter: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	netutil.AllowInternalHost("127.0.0.1")
+	defer netutil.ResetInternalAllowlist()
+	SetWebhooks([]string{server.URL})
+	defer SetWebhooks(nil)
+
+	EmitToBuffer(nil, "test.deadletter.event", map[string]any{"data": "dead"})
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
+
+	// Verify that the dead-letter log is written
+	if _, err := os.Stat(dlPath); err != nil {
+		t.Fatalf("expected dead-letter file %s to exist, got error: %v", dlPath, err)
+	}
+	if info, err := os.Stat(dlPath); err != nil {
+		t.Fatalf("stat dead-letter file: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("dead-letter mode = %o, want 600", got)
+	}
+
+	// Read and verify dead-letter content
+	f, err := os.Open(dlPath)
+	if err != nil {
+		t.Fatalf("failed to open dead-letter file: %v", err)
+	}
+	defer f.Close()
+
+	var dl WebhookDeadLetter
+	if err := json.NewDecoder(f).Decode(&dl); err != nil {
+		t.Fatalf("failed to decode dead-letter entry: %v", err)
+	}
+
+	if dl.URL != server.URL {
+		t.Errorf("expected URL %s, got %s", server.URL, dl.URL)
+	}
+	if dl.Event.Name != "test.deadletter.event" {
+		t.Errorf("expected event name test.deadletter.event, got %s", dl.Event.Name)
 	}
 }

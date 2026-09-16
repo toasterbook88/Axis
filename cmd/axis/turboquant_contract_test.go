@@ -1,0 +1,174 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/state"
+)
+
+func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
+	// Self-isolate, as many other tests in this package already do. The cluster
+	// snapshot below is fully injected, but planTaskExplanation still reads the
+	// operator's ~/.axis/ai.yaml, which adds inference-role reasoning and so
+	// changes the golden output. Bisected to that file: removing it makes this
+	// pass.
+	//
+	// Both variables are required: persist.AxisDir() gives a non-empty AXIS_HOME
+	// precedence over HOME, so isolating HOME alone still reads the operator's
+	// store whenever AXIS_HOME is exported.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AXIS_HOME", t.TempDir())
+
+	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
+	defer restore()
+
+	explanation, source, err := planTaskExplanation(
+		context.Background(),
+		"run 128k ollama inference",
+		true,
+		false,
+		func(context.Context) (*models.ClusterSnapshot, string, error) {
+			return &models.ClusterSnapshot{
+				Nodes: []models.NodeFacts{goldenTurboQuantNode()},
+			}, "daemon-cache", nil
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("planTaskPlacement: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := printOutput(&out, placementExplainOutput{
+		Source:      source,
+		Explanation: explanation,
+	}, "json"); err != nil {
+		t.Fatalf("printOutput: %v", err)
+	}
+
+	assertNormalizedGoldenText(t,
+		filepath.Join("testdata", "task_place_turboquant_json.golden"),
+		normalizeGoldenOutput(out.String()),
+	)
+}
+
+func TestTaskContextTurboQuantGolden(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{goldenTurboQuantNode()},
+		Summary: models.ClusterSummary{
+			TotalNodes:         1,
+			TotalReservableMB:  8192,
+			TotalAllocatableMB: 8192,
+			TotalReservedMB:    0,
+		},
+	}
+
+	actual := buildContextBlock(
+		snap,
+		models.TaskRequirements{
+			Description:         "run 128k ollama inference",
+			RequiredTools:       []string{"ollama"},
+			MinFreeRAMMB:        4096,
+			ContextWindowTokens: 128000,
+			PrefersTurboQuant:   true,
+		},
+		"run 128k ollama inference",
+		"daemon-cache",
+		nil,
+		nil,
+	)
+
+	assertNormalizedGoldenText(t,
+		filepath.Join("testdata", "task_context_turboquant.golden"),
+		normalizeGoldenOutput(actual),
+	)
+}
+
+func TestStatusTurboQuantJSONGolden(t *testing.T) {
+	restoreLive := stubStatusLiveLoader(t, func(context.Context) (*models.ClusterSnapshot, string, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes:  []models.NodeFacts{goldenTurboQuantNode()},
+			Summary: models.ClusterSummary{
+				TotalNodes:         1,
+				ReachableNodes:     1,
+				TotalRAMMB:         16384,
+				TotalFreeRAMMB:     8192,
+				TotalReservableMB:  8192,
+				TotalAllocatableMB: 8192,
+			},
+		}, "live", nil
+	})
+	defer restoreLive()
+
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd := statusCmd()
+		cmd.SetArgs([]string{"--format", "json"})
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("status Execute: %v", err)
+	}
+
+	assertNormalizedGoldenText(t,
+		filepath.Join("testdata", "status_turboquant_json.golden"),
+		normalizeGoldenOutput(renderGoldenSections(stderr, normalizeGoldenOutput(stdout))),
+	)
+}
+
+func goldenTurboQuantNode() models.NodeFacts {
+	return models.NodeFacts{
+		Name:   "mlx-node",
+		Status: models.StatusComplete,
+		Resources: &models.Resources{
+			CPUCores:       10,
+			RAMTotalMB:     16384,
+			RAMFreeMB:      8192,
+			MemoryTopology: models.MemoryTopologyUnified,
+			MemoryClass:    4,
+			Pressure:       "none",
+			PressureSource: "darwin-vm-pressure",
+		},
+		RAMReservedMB:    0,
+		RAMAllocatableMB: 8192,
+		Tools: []models.ToolInfo{
+			{Name: "ollama", Version: "0.7.0"},
+		},
+		Ollama: &models.OllamaInfo{
+			Installed: true,
+			Listening: true,
+			Models:    []string{"llama3:8b"},
+		},
+		TurboQuant: &models.TurboQuantInfo{
+			Supported:    true,
+			Verified:     true,
+			Backends:     []string{"mlx"},
+			Capabilities: []string{"apple-silicon", "backend-probed", "cpu-fallback", "long-context", "ollama-present"},
+		},
+	}
+}
+
+func normalizeGoldenOutput(s string) string {
+	return strings.TrimSpace(s)
+}
+
+func assertNormalizedGoldenText(t *testing.T, path string, actual string) {
+	t.Helper()
+	if os.Getenv("UPDATE_GOLDEN") == "true" {
+		_ = os.WriteFile(path, []byte(actual), 0644)
+	}
+	expectedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", path, err)
+	}
+	expected := normalizeGoldenOutput(string(expectedBytes))
+	if actual != expected {
+		t.Fatalf("golden mismatch for %s\nEXPECTED:\n%s\nACTUAL:\n%s", path, expected, actual)
+	}
+}

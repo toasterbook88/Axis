@@ -38,6 +38,8 @@ func TestViewWithLogoZeroWidthDoesNotPanic(t *testing.T) {
 	}
 }
 
+// Cache explicitness: the header must badge the provenance of the snapshot
+// it displays. An unknown source renders "unknown", never a fabricated one.
 func TestHeaderBadgesSnapshotSource(t *testing.T) {
 	m := modelWithNodes(1)
 	m.source = "daemon-cache"

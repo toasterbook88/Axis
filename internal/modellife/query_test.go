@@ -2,11 +2,122 @@ package modellife
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestQueryHTTP_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var req chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(req.Messages) == 0 {
+			http.Error(w, "no messages", http.StatusBadRequest)
+			return
+		}
+
+		resp := chatCompletionResponse{
+			ID:    "chatcmpl-test-123",
+			Model: req.Model,
+			Choices: []chatCompletionChoice{
+				{
+					Index: 0,
+					Message: chatCompletionMessage{
+						Role:    "assistant",
+						Content: "Hello from mock model!",
+					},
+					FinishReason: "stop",
+				},
+			},
+			Usage: chatCompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 5,
+				TotalTokens:      15,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	temp := 0.7
+	req := QueryRequest{
+		Model:        "mock-model",
+		Prompt:       "Say hello",
+		SystemPrompt: "You are a test assistant.",
+		MaxTokens:    128,
+		Temperature:  &temp,
+	}
+
+	result, err := QueryHTTP(context.Background(), srv.URL, req, nil)
+	if err != nil {
+		t.Fatalf("QueryHTTP failed: %v", err)
+	}
+	if result.Content != "Hello from mock model!" {
+		t.Fatalf("content = %q, want 'Hello from mock model!'", result.Content)
+	}
+	if result.PromptTokens != 10 {
+		t.Fatalf("prompt_tokens = %d, want 10", result.PromptTokens)
+	}
+	if result.CompletionTokens != 5 {
+		t.Fatalf("completion_tokens = %d, want 5", result.CompletionTokens)
+	}
+	if result.TotalTokens != 15 {
+		t.Fatalf("total_tokens = %d, want 15", result.TotalTokens)
+	}
+	if result.Model != "mock-model" {
+		t.Fatalf("model = %q, want mock-model", result.Model)
+	}
+}
+
+func TestQueryHTTP_ZeroTemperature(t *testing.T) {
+	var receivedTemp *float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatCompletionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		receivedTemp = req.Temperature
+
+		resp := chatCompletionResponse{
+			ID:    "chatcmpl-zero-temp",
+			Model: req.Model,
+			Choices: []chatCompletionChoice{
+				{Message: chatCompletionMessage{Role: "assistant", Content: "deterministic output"}},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	req := QueryRequest{
+		Model:       "mock-model",
+		Prompt:      "Deterministic prompt",
+		Temperature: &zero,
+	}
+
+	result, err := QueryHTTP(context.Background(), srv.URL, req, nil)
+	if err != nil {
+		t.Fatalf("QueryHTTP failed: %v", err)
+	}
+	if receivedTemp == nil {
+		t.Fatal("expected temperature to be sent in JSON payload, got nil")
+	}
+	if *receivedTemp != 0.0 {
+		t.Fatalf("received temperature = %v, want 0.0", *receivedTemp)
+	}
+	if result.Content != "deterministic output" {
+		t.Fatalf("content = %q, want deterministic output", result.Content)
+	}
+}
 
 func TestQueryHTTP_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

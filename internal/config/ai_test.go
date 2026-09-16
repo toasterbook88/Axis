@@ -106,3 +106,51 @@ roles: {}
 		t.Fatalf("expected unsupported kind, got %v", err)
 	}
 }
+
+func TestLoadAI_DisabledBackend(t *testing.T) {
+	path := writeAI(t, `
+backends:
+  - name: off
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+    enabled: false
+roles: {}
+`)
+	cfg, err := config.LoadAI(path)
+	if err != nil {
+		t.Fatalf("LoadAI: %v", err)
+	}
+	if cfg.Backends[0].IsEnabled() {
+		t.Fatal("expected disabled")
+	}
+	if len(cfg.BackendByName(true)) != 0 {
+		t.Fatal("enabledOnly map should be empty")
+	}
+}
+
+func TestLoadAI_AdvertiseURL(t *testing.T) {
+	path := writeAI(t, `
+backends:
+  - name: local-nemotron
+    kind: openai-compatible
+    base_url: http://127.0.0.1:8081/v1
+    advertise_url: http://nemotron.example.com/v1
+    node: node-a
+roles:
+  nemotron:
+    prefer: [local-nemotron]
+    model: nemotron-3.5-lightning
+`)
+	cfg, err := config.LoadAI(path)
+	if err != nil {
+		t.Fatalf("LoadAI: %v", err)
+	}
+	if len(cfg.Backends) != 1 {
+		t.Fatalf("backends=%d", len(cfg.Backends))
+	}
+	got := cfg.Backends[0].AdvertiseURL
+	want := "http://nemotron.example.com/v1"
+	if got != want {
+		t.Fatalf("AdvertiseURL = %q, want %q", got, want)
+	}
+}

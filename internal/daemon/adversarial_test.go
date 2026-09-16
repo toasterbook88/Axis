@@ -54,6 +54,49 @@ func TestLedgerCorruptionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestSIGKILLDuringHeartbeat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	limits := reservation.DefaultLimits()
+	limits.HeartbeatStaleWindow = 50 * time.Millisecond // very short window
+
+	ledger := reservation.NewLedger(limits, nil)
+	ledger.SetNodeCapacity("node-a", 8192)
+
+	// Reserve some RAM
+	entry, err := ledger.Reserve(reservation.Entry{
+		ID:    "exec-1",
+		Node:  "node-a",
+		RAMMB: 1024,
+	})
+	if err != nil {
+		t.Fatalf("reserve failed: %v", err)
+	}
+
+	// Verify it's active
+	if ledger.Summary().TotalReservedMB != 1024 {
+		t.Fatalf("expected 1024 reserved, got %d", ledger.Summary().TotalReservedMB)
+	}
+
+	// Sleep past the heartbeat window to simulate SIGKILL of the owner
+	time.Sleep(100 * time.Millisecond)
+
+	// Force a load to trigger reconciliation
+	if err := ledger.Load(); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	// Ensure the reservation was reclaimed
+	if ledger.Summary().TotalReservedMB != 0 {
+		t.Fatalf("expected 0 reserved after reclaim, got %d", ledger.Summary().TotalReservedMB)
+	}
+
+	if err := ledger.Heartbeat(entry.ID); err == nil {
+		t.Error("expected heartbeat to fail for reclaimed entry")
+	}
+}
+
 func TestMeshPartitionCoalescing(t *testing.T) {
 	var callCount int32
 	collector := func(context.Context) (*models.ClusterSnapshot, error) {

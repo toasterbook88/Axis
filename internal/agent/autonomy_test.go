@@ -4,6 +4,35 @@ import (
 	"testing"
 )
 
+func TestParseAutonomyMode(t *testing.T) {
+	cases := []struct {
+		in   string
+		want AutonomyMode
+		err  bool
+	}{
+		{"default", AutonomyDefault, false},
+		{"edit", AutonomyEdit, false},
+		{"full", AutonomyFull, false},
+		{"", AutonomyDefault, false},
+		{"bogus", AutonomyDefault, true},
+	}
+	for _, c := range cases {
+		got, err := ParseAutonomyMode(c.in)
+		if c.err {
+			if err == nil {
+				t.Errorf("ParseAutonomyMode(%q): expected error, got %v", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseAutonomyMode(%q): unexpected error %v", c.in, err)
+		}
+		if got != c.want {
+			t.Errorf("ParseAutonomyMode(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestIsFileEditTool(t *testing.T) {
 	yes := []string{"write_file", "edit_file", "multi_edit"}
 	no := []string{"run_shell", "read_file", "run_on_node", "spawn_subagent", "axis_run_task"}
@@ -57,6 +86,37 @@ func TestAutonomyDefaultDelegatesMutatingToFallback(t *testing.T) {
 	}
 	if !rec.called {
 		t.Fatalf("default mode should call fallback for run_shell")
+	}
+}
+
+func TestAutonomyEditAutoApprovesFileEdits(t *testing.T) {
+	rec := &recorderConfirm{}
+	fn := autonomyConfirm(AutonomyEdit, rec.confirm)
+	// file edits auto-approved, no fallback
+	if got := fn("edit_file", "x", 0); got != ConfirmYes {
+		t.Fatalf("edit mode edit_file should auto-approve, got %v", got)
+	}
+	if rec.called {
+		t.Fatalf("edit mode edit_file should not hit fallback")
+	}
+	if got := fn("multi_edit", "x", 0); got != ConfirmYes {
+		t.Fatalf("edit mode multi_edit should auto-approve, got %v", got)
+	}
+	// shell low-risk auto-approved
+	rec.called = false
+	if got := fn("run_shell", "x", 50); got != ConfirmYes {
+		t.Fatalf("edit mode low-risk shell should auto-approve, got %v", got)
+	}
+	if rec.called {
+		t.Fatalf("edit mode low-risk shell should not hit fallback")
+	}
+	// shell high-risk delegates to fallback
+	rec.called = false
+	if got := fn("run_shell", "x", 75); got != ConfirmNo {
+		t.Fatalf("edit mode high-risk shell should delegate (ConfirmNo), got %v", got)
+	}
+	if !rec.called {
+		t.Fatalf("edit mode high-risk shell should hit fallback")
 	}
 }
 

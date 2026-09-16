@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 func TestPlacementModalReceivesScoreAndConfirmsAdvisorySelection(t *testing.T) {
@@ -51,6 +52,30 @@ func TestPlacementModalEscapeCancels(t *testing.T) {
 	}
 	if !updated.(PlacementModal).cancelled {
 		t.Fatal("Escape did not cancel the modal")
+	}
+}
+
+func TestPlaceTaskCmdUsesProvidedSnapshotWithoutDiskCache(t *testing.T) {
+	t.Setenv(persist.AxisHomeEnv, t.TempDir())
+	snapshot := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		Name:   "displayed-node",
+		Status: models.StatusComplete,
+		Resources: &models.Resources{
+			RAMFreeMB:        32768,
+			RAMAllocatableMB: 32768,
+		},
+	}}}
+
+	msg := placeTaskCmd("run a task", snapshot)()
+	result, ok := msg.(placementScoredMsg)
+	if !ok {
+		t.Fatalf("placeTaskCmd returned %T, want placementScoredMsg", msg)
+	}
+	if result.Error != nil {
+		t.Fatalf("provided snapshot produced error: %v", result.Error)
+	}
+	if result.Explanation == nil || result.Explanation.Decision.Node != "displayed-node" {
+		t.Fatalf("decision = %+v, want displayed-node", result.Explanation)
 	}
 }
 
@@ -108,5 +133,46 @@ func TestPlacementModalRendersAuthorityRequirementsAndRankOrder(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("placement view missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestPlaceTaskCmdPrependsSnapshotWarnings(t *testing.T) {
+	snapshot := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{{
+			Name:   "node-a",
+			Status: models.StatusComplete,
+			Resources: &models.Resources{
+				RAMFreeMB:        32768,
+				RAMAllocatableMB: 32768,
+			},
+		}},
+		Warnings: []models.Warning{
+			{Kind: "cache", Message: "cached snapshot is stale"},
+			{Kind: "discovery", Message: "node-b unreachable"},
+		},
+	}
+
+	msg := placeTaskCmd("run a build", snapshot)()
+	result, ok := msg.(placementScoredMsg)
+	if !ok {
+		t.Fatalf("placeTaskCmd returned %T, want placementScoredMsg", msg)
+	}
+	if result.Error != nil {
+		t.Fatalf("scoring produced error: %v", result.Error)
+	}
+	reasoning := result.Explanation.Decision.Reasoning
+	if len(reasoning) < 2 {
+		t.Fatalf("reasoning = %v, want at least warning+score", reasoning)
+	}
+	if !strings.HasPrefix(reasoning[0], "warning: cached snapshot is stale") {
+		t.Fatalf("first reasoning = %q, want cache warning first", reasoning[0])
+	}
+	if !strings.HasPrefix(reasoning[1], "warning: node-b unreachable") {
+		t.Fatalf("second reasoning = %q, want discovery warning second", reasoning[1])
+	}
+	// The 4-reason truncation in renderPlacementDecision must not drop the warnings.
+	out := stripANSI(renderPlacementDecision(PlacementModal{explanation: result.Explanation}, "", "", "", ""))
+	if !strings.Contains(out, "cached snapshot is stale") || !strings.Contains(out, "node-b unreachable") {
+		t.Fatalf("rendered decision dropped warnings:\n%s", out)
 	}
 }

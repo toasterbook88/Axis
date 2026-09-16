@@ -9,6 +9,49 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
+func TestBuildUsesRealLoadAndReservationOverlay(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "alpha",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  4096,
+					Load1M:     1.5,
+					Load5M:     1.0,
+					Load15M:    0.5,
+				},
+				Ollama: &models.OllamaInfo{Installed: true, Running: true},
+			},
+		},
+	}
+	st := &state.ClusterState{
+		Nodes: map[string]state.NodeState{
+			"alpha": {ReservedMB: 1024},
+		},
+	}
+
+	k := Build(snap, st, "alpha")
+	if k == nil {
+		t.Fatal("expected knowledge")
+	}
+	if k.BestNode != "alpha" {
+		t.Fatalf("BestNode = %q, want alpha", k.BestNode)
+	}
+	if k.Load["alpha"] != 1.5 {
+		t.Fatalf("Load[alpha] = %.2f, want 1.5", k.Load["alpha"])
+	}
+	if k.Snapshot.Nodes[0].RAMReservedMB != 1024 {
+		t.Fatalf("RAMReservedMB = %d, want 1024", k.Snapshot.Nodes[0].RAMReservedMB)
+	}
+	if k.Snapshot.Nodes[0].RAMAllocatableMB != 3072 {
+		t.Fatalf("RAMAllocatableMB = %d, want 3072", k.Snapshot.Nodes[0].RAMAllocatableMB)
+	}
+	if _, ok := k.Ollama["alpha"]; !ok {
+		t.Fatal("expected ollama map entry for alpha")
+	}
+}
+
 func TestBuildIsNilSafe(t *testing.T) {
 	k := Build(nil, nil, "")
 	if k == nil {

@@ -42,6 +42,46 @@ func TestHealthPayloadWithMetaNoError(t *testing.T) {
 	}
 }
 
+func TestToolDefinitionsReturnsTwoKnownTools(t *testing.T) {
+	defs := ToolDefinitions()
+	if len(defs) < 2 {
+		t.Fatalf("expected at least 2 tool definitions, got %d", len(defs))
+	}
+	names := make(map[string]bool)
+	for _, d := range defs {
+		names[d.Name] = true
+		if d.Description == "" {
+			t.Errorf("tool %q has empty description", d.Name)
+		}
+		if d.InputSchema == nil {
+			t.Errorf("tool %q has nil InputSchema", d.Name)
+		}
+	}
+	if !names["axis_execute"] {
+		t.Error("expected axis_execute tool")
+	}
+	if !names["axis_knowledge"] {
+		t.Error("expected axis_knowledge tool")
+	}
+}
+
+func TestNormalizeAddrPrependsHTTP(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"127.0.0.1:42425", "http://127.0.0.1:42425"},
+		{"  127.0.0.1:42425/  ", "http://127.0.0.1:42425"},
+		{"http://127.0.0.1:42425", "http://127.0.0.1:42425"},
+		{"https://remote:8080", "https://remote:8080"},
+	}
+	for _, tc := range cases {
+		if got := NormalizeAddr(tc.in); got != tc.want {
+			t.Errorf("NormalizeAddr(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestNewWithZeroIntervalUsesDefault(t *testing.T) {
 	d := New(0, func(_ context.Context) (*models.ClusterSnapshot, error) {
 		return &models.ClusterSnapshot{}, nil
@@ -65,6 +105,21 @@ func TestDefaultSnapshotPathContainsDotAxis(t *testing.T) {
 	}
 	if !strings.HasSuffix(p, "snapshot.json") {
 		t.Errorf("expected snapshot.json suffix, got %q", p)
+	}
+}
+
+func TestCloneSnapshotProducesIndependentCopy(t *testing.T) {
+	orig := &models.ClusterSnapshot{
+		Status: models.SnapshotHealthy,
+		Nodes:  []models.NodeFacts{{Name: "alpha"}},
+	}
+	clone := CloneSnapshot(orig)
+	if clone == orig {
+		t.Fatal("expected new pointer")
+	}
+	clone.Nodes[0].Name = "mutated"
+	if orig.Nodes[0].Name != "alpha" {
+		t.Error("mutating clone changed original")
 	}
 }
 

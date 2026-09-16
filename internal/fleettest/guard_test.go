@@ -145,6 +145,91 @@ func TestValidateAcceptsContainedPaths(t *testing.T) {
 
 // TestEnvOverrideCannotEscape covers the specific incident this guard exists to
 // prevent: an AXIS_HOME supplied from the environment pointing at a live store.
+func TestEnvOverrideCannotEscape(t *testing.T) {
+	g, err := NewGuard(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	realStore := filepath.Join(t.TempDir(), ".axis")
+	if err := os.MkdirAll(realStore, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AXIS_HOME", realStore)
+
+	if err := Validate(g.Root, os.Getenv("AXIS_HOME")); err == nil {
+		t.Fatal("an environment-supplied AXIS_HOME outside the run root must be rejected")
+	}
+
+	// The guard's own environment must never carry the escaping value.
+	for _, kv := range g.Env() {
+		if strings.HasPrefix(kv, "AXIS_HOME=") && strings.Contains(kv, realStore) {
+			t.Fatalf("guard environment leaked the external store: %q", kv)
+		}
+	}
+}
+
+func TestEnvIsolatesBothAxisHomeAndHome(t *testing.T) {
+	g, err := NewGuard(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	env := strings.Join(g.Env(), "\n")
+	for _, want := range []string{
+		"AXIS_HOME=" + g.AxisHome,
+		"HOME=" + g.Home,
+		"AXIS_FLEET_ROOT=" + g.Root,
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("Env() missing %q; got:\n%s", want, env)
+		}
+	}
+	// HOME matters independently: persist falls back to it when AXIS_HOME is
+	// empty, so isolating only AXIS_HOME still leaves a path to the real store.
+	if !strings.Contains(env, "HOME="+g.Home) {
+		t.Error("Env() must isolate HOME as well as AXIS_HOME")
+	}
+}
+
+func TestRemoteCommandSelfVerifiesContainment(t *testing.T) {
+	script := RemoteCommand("/tmp/axis-fleet-run-remote", "axis facts")
+	for _, want := range []string{
+		"AXIS_FLEET_ROOT=",
+		`AXIS_HOME="$AXIS_FLEET_ROOT/axis-home"`,
+		`HOME="$AXIS_FLEET_ROOT/home"`,
+		"cd -P", "pwd -P",
+		"escapes run root",
+		"exit 78",
+		"axis facts",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("remote command missing %q:\n%s", want, script)
+		}
+	}
+	if !strings.HasPrefix(script, "set -eu") {
+		t.Error("remote command must fail fast")
+	}
+}
+
+func TestRemoteCommandQuotesRootWithSpaces(t *testing.T) {
+	script := RemoteCommand("/tmp/run dir/with 'quote", "true")
+	if !strings.Contains(script, `'/tmp/run dir/with '\''quote'`) {
+		t.Errorf("run root was not shell-quoted:\n%s", script)
+	}
+}
+
+func TestRemoteEnvDerivesFromRemoteRoot(t *testing.T) {
+	env := strings.Join(RemoteEnv("/srv/run-1"), "\n")
+	for _, want := range []string{
+		"AXIS_HOME=/srv/run-1/axis-home",
+		"HOME=/srv/run-1/home",
+		"AXIS_FLEET_ROOT=/srv/run-1",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("RemoteEnv missing %q; got:\n%s", want, env)
+		}
+	}
+}
+
 func TestContainmentErrorNamesBothPaths(t *testing.T) {
 	err := Validate("/tmp/root", "/etc/passwd")
 	if err == nil {

@@ -9,6 +9,110 @@ import (
 	"testing"
 )
 
+func TestJSONLLogger(t *testing.T) {
+	tempDir := t.TempDir()
+	tempLog := filepath.Join(tempDir, "test_events.jsonl")
+	if err := ResetTestLog(tempLog); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
+
+	// Verify initially empty
+	evs, err := getRecentEventsFromFile(10)
+	if err != nil {
+		t.Fatalf("getRecentEventsFromFile failed: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Errorf("expected 0 events, got %d", len(evs))
+	}
+
+	// Append events
+	evt1 := NewEvent("test.event.a", map[string]any{"x": 1})
+	evt2 := NewEvent("test.event.b", map[string]any{"x": 2})
+
+	if err := appendEventToFile(evt1); err != nil {
+		t.Fatalf("appendEventToFile failed: %v", err)
+	}
+	if err := appendEventToFile(evt2); err != nil {
+		t.Fatalf("appendEventToFile failed: %v", err)
+	}
+
+	// Retrieve events
+	evs, err = getRecentEventsFromFile(10)
+	if err != nil {
+		t.Fatalf("getRecentEventsFromFile failed: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(evs))
+	}
+	if evs[0].Name != "test.event.a" || evs[1].Name != "test.event.b" {
+		t.Errorf("unexpected retrieved events: %+v", evs)
+	}
+
+	// Test limit
+	evs, err = getRecentEventsFromFile(1)
+	if err != nil {
+		t.Fatalf("getRecentEventsFromFile failed: %v", err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0].Name != "test.event.b" {
+		t.Errorf("expected test.event.b, got %s", evs[0].Name)
+	}
+}
+
+func TestEventPersistenceUsesPrivateModes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "axis")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod file: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("Chmod dir: %v", err)
+	}
+	if err := ResetTestLog(path); err != nil {
+		t.Fatalf("ResetTestLog: %v", err)
+	}
+	t.Cleanup(func() { SetLogPath("") })
+
+	if _, err := allocateSequence(); err != nil {
+		t.Fatalf("allocateSequence: %v", err)
+	}
+	if err := appendEventToFile(NewEvent("privacy.test", nil)); err != nil {
+		t.Fatalf("appendEventToFile: %v", err)
+	}
+	if err := rotateLogsUnderLock(path); err != nil {
+		t.Fatalf("rotateLogsUnderLock: %v", err)
+	}
+
+	for _, privatePath := range []string{
+		dir,
+		path,
+		filepath.Join(dir, "event-sequence"),
+		filepath.Join(dir, "event-sequence.lock"),
+		filepath.Join(dir, "events.lock"),
+	} {
+		info, err := os.Stat(privatePath)
+		if err != nil {
+			t.Fatalf("Stat(%s): %v", privatePath, err)
+		}
+		want := os.FileMode(0o600)
+		if info.IsDir() {
+			want = 0o700
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("mode(%s) = %o, want %o", privatePath, got, want)
+		}
+	}
+}
+
 func TestFlockSequenceAllocation(t *testing.T) {
 	tempDir := t.TempDir()
 	tempLog := filepath.Join(tempDir, "events.jsonl")

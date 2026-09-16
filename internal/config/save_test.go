@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSaveAtomicCreatesSecureConfig(t *testing.T) {
@@ -31,6 +32,37 @@ func TestSaveAtomicCreatesSecureConfig(t *testing.T) {
 	}
 	if loaded.Nodes[0].Name != "node-a" {
 		t.Fatalf("unexpected config: %+v", loaded)
+	}
+}
+
+func TestSaveAtomicSkipsSemanticNoop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.yaml")
+	cfg := testSaveConfig("node-a")
+	if _, err := SaveAtomic(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := SaveAtomic(path, testSaveConfig("node-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || result.BackupPath != "" {
+		t.Fatalf("expected no-op, got %+v", result)
+	}
+	matches, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("unexpected backups: %v", matches)
+	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %o, want 600 after semantic no-op", got)
 	}
 }
 
@@ -92,4 +124,40 @@ func TestNextBackupPathUsesBaseWhenMissing(t *testing.T) {
 	if got != want {
 		t.Fatalf("nextBackupPath = %q, want %q", got, want)
 	}
+}
+
+func TestNextBackupPathSkipsExistingAndAvoidsInfiniteLoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.yaml")
+	now := mustParseTime(t, "2026-07-14T12:00:00Z")
+	base := path + ".bak-20260714T120000Z"
+	if err := os.WriteFile(base, []byte("a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(base+"-1", []byte("b"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := nextBackupPath(path, now)
+	if got != base+"-2" {
+		t.Fatalf("nextBackupPath = %q, want %q", got, base+"-2")
+	}
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts.UTC()
+}
+
+func testSaveConfig(name string) *Config {
+	return &Config{Nodes: []NodeConfig{{
+		Name:       name,
+		Hostname:   "localhost",
+		SSHUser:    "operator",
+		Role:       "primary",
+		TimeoutSec: 10,
+	}}}
 }
