@@ -12,6 +12,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/persist"
+	"github.com/toasterbook88/axis/internal/transport"
 )
 
 type fakeRemoteExecutor struct {
@@ -38,7 +39,7 @@ func (f *fakeRemoteExecutor) Run(_ context.Context, cmd string) (string, error) 
 	}
 	// Match pre-wrap keys against bash-forced form used by RemoteCollector.
 	for k, res := range f.exact {
-		if WrapBash(k) == cmd {
+		if transport.WrapBash(k) == cmd {
 			return res.out, res.err
 		}
 	}

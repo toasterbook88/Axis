@@ -116,7 +116,7 @@ axis doctor
 | `axis completion` | Shell completions (bash/zsh/fish/powershell) |
 | `axis mesh` | Gossip mesh peer diagnostics (`axis mesh status\|peers`) |
 | `axis observations` | Execution observations tracked by the cluster |
-| `axis tui` | Interactive full-screen Bubble Tea cluster dashboard |
+| `axis tui` | Interactive full-screen cluster dashboard with source-badged snapshots and advisory placement preview |
 
 ### Experimental / Secondary Surfaces
 

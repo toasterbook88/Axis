@@ -204,7 +204,7 @@ func TestDiskWeightsDiscoveryScriptPythonParsesAfterUnquotedHeredoc(t *testing.T
 	if !ok {
 		t.Fatal("expected heredoc terminator")
 	}
-	// WrapBash quotes <<'PY' with POSIX '"'"'. fish -c strips that, leaving
+	// transport.WrapBash quotes <<'PY' with POSIX '"'"'. fish -c strips that, leaving
 	// an unquoted <<PY so bash expands \\ to \ before python sees the source.
 	expanded := strings.ReplaceAll(body, `\\`, `\`)
 	cmd := exec.Command("python3", "-c", "import ast,sys; ast.parse(sys.stdin.read())")
