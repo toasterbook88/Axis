@@ -92,7 +92,7 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 		}
 		taskCtx, cancel := context.WithCancel(context.Background())
 		task := &backgroundTask{
-			command:   fmt.Sprintf("[subagent on %s] %s", firstNonEmpty(sa.TargetNode, "auto"), truncateForLog(sa.Prompt, 100)),
+			command:   fmt.Sprintf("[subagent on %s] %s", firstNonEmpty(sa.TargetNode, "auto"), truncateRunes(sa.Prompt, 100)),
 			node:      sa.TargetNode,
 			startedAt: time.Now(),
 			cancel:    cancel,
@@ -121,7 +121,7 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 				ui.Cyan("⤷"), task.id, child.subAgentDepth, firstNonEmpty(sa.TargetNode, "auto"), maxTurns)
 		}
 		return fmt.Sprintf("Sub-agent task %s started in background on %s (prompt: %s). Use `check_task` with id %q to monitor output.",
-			task.id, firstNonEmpty(sa.TargetNode, "auto"), truncateForLog(sa.Prompt, 80), task.id), nil
+			task.id, firstNonEmpty(sa.TargetNode, "auto"), truncateRunes(sa.Prompt, 80), task.id), nil
 	}
 
 	if a.verbose {
@@ -203,13 +203,6 @@ func finalAssistantText(conv *chat.Conversation) string {
 		}
 	}
 	return ""
-}
-
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
 }
 
 func buildSubAgentSystemPrompt(targetNode, extra string) string {

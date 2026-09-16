@@ -155,8 +155,7 @@ func b64field(kv remoteBundleKV, key string) string {
 }
 
 // tryBundleCollect fills facts from a single remote bash invocation.
-// Returns false when the bundle path should fall back to legacy multi-Run.
-// On false, facts are left unchanged (no partial reasons recorded) so legacy
+// Returns false when the bundle failed; caller records a partial reason.
 // can still yield StatusComplete.
 func (c *RemoteCollector) tryBundleCollect(ctx context.Context, facts *models.NodeFacts) bool {
 	out, err := c.Exec.Run(ctx, remoteFactBundleScript)

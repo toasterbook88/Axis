@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 )
 
 // maxRepoInstructionsBytes caps injected AGENTS.md content so a huge file
@@ -27,7 +26,7 @@ func loadRepoInstructions(startDir string) (path, content string, ok bool) {
 			text := strings.TrimSpace(string(data))
 			if text != "" {
 				if len(text) > maxRepoInstructionsBytes {
-					text = truncateUTF8Prefix(text, maxRepoInstructionsBytes) +
+					text = truncateUTF8(text, maxRepoInstructionsBytes) +
 						fmt.Sprintf("\n\n… [truncated: AGENTS.md exceeds %d bytes]", maxRepoInstructionsBytes)
 				}
 				return candidate, text, true
@@ -41,22 +40,6 @@ func loadRepoInstructions(startDir string) (path, content string, ok bool) {
 		dir = parent
 	}
 	return "", "", false
-}
-
-// truncateUTF8Prefix returns a prefix of s of at most maxBytes that is valid UTF-8.
-// maxBytes is a byte budget (not rune count), matching the prompt size cap.
-func truncateUTF8Prefix(s string, maxBytes int) string {
-	if maxBytes <= 0 {
-		return ""
-	}
-	if len(s) <= maxBytes {
-		return s
-	}
-	// Walk back from the cut so we never bisect a multi-byte rune.
-	for maxBytes > 0 && !utf8.ValidString(s[:maxBytes]) {
-		maxBytes--
-	}
-	return s[:maxBytes]
 }
 
 // formatRepoInstructionsBlock builds the system-prompt section for repo rules.

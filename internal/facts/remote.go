@@ -34,11 +34,10 @@ func NewRemoteCollector(name, role, hostname string, exec transport.Executor) *R
 //   - connect/first-command fail → unreachable
 //   - subsequent command fail → partial
 //
-// Collection strategy (utility-preserving):
+// Collection strategy:
 //  1. Force bash for all remote probes (avoids non-POSIX login shells for scripts).
-//  2. Prefer a one-shot fact bundle (one SSH session worth of shell work).
-//  3. Fall back to the legacy multi-Run path if the bundle fails.
-//  4. Always run best-effort AI resident discovery (ollama/llama/mlx) + TurboQuant.
+//  2. Run a one-shot fact bundle (one SSH session worth of shell work).
+//  3. Always run best-effort AI resident discovery (ollama/llama/mlx) + TurboQuant.
 func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error) {
 	facts := &models.NodeFacts{
 		Name: c.NodeName,
@@ -74,11 +73,15 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		}
 	}
 
-	// Fast path: single remote bash script for core facts.
-	usedBundle := c.tryBundleCollect(ctx, facts)
-	if !usedBundle {
-		// Legacy multi-Run path — same field coverage as before.
+	// Single remote bash script for core facts. Bundle failure falls back to
+	// the legacy multi-Run collector so the node still contributes partial
+	// field data (OS, RAM, tools, etc.) to placement decisions.
+	if !c.tryBundleCollect(ctx, facts) {
 		c.collectLegacy(ctx, facts)
+		facts.PartialReasons = append(facts.PartialReasons, models.PartialReason{
+			Probe:   "fact_bundle",
+			Message: "remote fact bundle failed or returned unparseable output; fell back to legacy probes",
+		})
 	}
 
 	// Best-effort AI discovery (same as before; runs under bash-forced executor).
@@ -408,54 +411,6 @@ func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkA
 	return addrs
 }
 
-// parseRemoteAddrLine parses an address line from `ip -o addr` or fallback output.
-// ip -o format: "2: eth0    inet 192.168.1.5/24 brd ..."
-// fallback: "eth0 192.168.1.5" or just "192.168.1.5"
-func parseRemoteAddrLine(line string) models.NetworkAddress {
-	fields := strings.Fields(line)
-
-	var addrField, ifName string
-	for i, f := range fields {
-		if f == "inet" || f == "inet6" {
-			if i+1 < len(fields) {
-				addrField = fields[i+1]
-			}
-			if i >= 2 {
-				ifName = strings.TrimSuffix(fields[1], ":")
-			}
-			break
-		}
-	}
-
-	// Fallback: might be "ifname 1.2.3.4" or just "1.2.3.4"
-	if addrField == "" {
-		switch len(fields) {
-		case 1:
-			addrField = fields[0]
-		case 2:
-			ifName = fields[0]
-			addrField = fields[1]
-		}
-	}
-
-	ip, subnet := parseAddressWithOptionalCIDR(addrField)
-	if ip == nil {
-		return models.NetworkAddress{}
-	}
-
-	kind := "ipv4"
-	if ip.To4() == nil {
-		kind = "ipv6"
-	}
-	return models.NetworkAddress{
-		Kind:       kind,
-		Address:    ip.String(),
-		Interface:  ifName,
-		Subnet:     subnet,
-		SpeedClass: classifyInterfaceSpeed(ifName, ip),
-	}
-}
-
 func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
 	toolDefs := defaultToolDefs()
 	var tools []models.ToolInfo
@@ -484,134 +439,6 @@ func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
 		tools = append(tools, ti)
 	}
 	return tools
-}
-
-// discoverOllamaRobust does ONE SSH command that gathers everything robustly.
-func (c *RemoteCollector) discoverDiskWeights(ctx context.Context, facts *models.NodeFacts) {
-	if facts == nil || c.Exec == nil {
-		return
-	}
-	out, err := c.Exec.Run(ctx, DiskWeightsDiscoveryScript)
-	if err != nil {
-		return
-	}
-	res := parseDiskWeightsJSON(out)
-	facts.DiskWeights = res.Weights
-	facts.DiskWeightsTruncated = res.Truncated
-}
-
-func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
-	info := models.OllamaInfo{Installed: false}
-
-	out, err := c.Exec.Run(ctx, OllamaDiscoveryScript)
-	if err != nil {
-		info.Error = err.Error()
-		return info, nil
-	}
-
-	// parse the JSON blob
-	var parsed ollamaDiscoveryPayload
-	if json.Unmarshal([]byte(out), &parsed) == nil {
-		return parsed.OllamaInfo, parsed.ResidentModels
-	}
-	return info, nil
-}
-
-// discoverLlamaServerRobust probes for a running llama-server process on the
-// remote node via a single SSH command and returns its resident models.
-func (c *RemoteCollector) discoverLlamaServerRobust(ctx context.Context) []models.ResidentModel {
-	out, err := c.Exec.Run(ctx, LlamaServerDiscoveryScript)
-	if err != nil {
-		return nil
-	}
-	var parsed llamaServerDiscoveryPayload
-	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
-		return withResidentPort(parsed.ResidentModels, parsed.Port)
-	}
-	return nil
-}
-
-// discoverMLXRobust probes for a running mlx_lm.server process on the remote
-// node via a single SSH command and queries its /v1/models endpoint to
-// enumerate resident models.
-func (c *RemoteCollector) discoverMLXRobust(ctx context.Context) []models.ResidentModel {
-	out, err := c.Exec.Run(ctx, MLXDiscoveryScript)
-	if err != nil {
-		return nil
-	}
-	var parsed mlxDiscoveryPayload
-	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
-		return withResidentPort(parsed.ResidentModels, parsed.Port)
-	}
-	return nil
-}
-
-func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {
-	switch strings.ToLower(strings.TrimSpace(osName)) {
-	case "darwin":
-		out, err := c.Exec.Run(ctx, "diskutil info / 2>/dev/null")
-		if err != nil {
-			return "unknown"
-		}
-		return parseDiskutilStorageClass(out)
-	case "linux":
-		out, err := c.Exec.Run(ctx, `findmnt -n -o SOURCE / 2>/dev/null`)
-		if err != nil {
-			return "unknown"
-		}
-		return resolveLinuxStorageClass(
-			strings.TrimSpace(out),
-			func(device string) (linuxBlockDeviceInfo, error) {
-				return c.remoteLinuxBlockDeviceInfo(ctx, device)
-			},
-			func(info linuxBlockDeviceInfo) ([]string, error) {
-				return c.remoteLinuxBlockDeviceSlaves(ctx, info)
-			},
-			func(device string) (string, error) {
-				return c.remoteLinuxRotational(ctx, device)
-			},
-		)
-	default:
-		return "unknown"
-	}
-}
-
-func (c *RemoteCollector) remoteLinuxBlockDeviceInfo(ctx context.Context, device string) (linuxBlockDeviceInfo, error) {
-	out, err := c.Exec.Run(ctx, fmt.Sprintf("lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA %q 2>/dev/null", strings.TrimSpace(device)))
-	if err != nil {
-		return linuxBlockDeviceInfo{}, err
-	}
-	return parseLinuxBlockDeviceInfo(out)
-}
-
-func (c *RemoteCollector) remoteLinuxBlockDeviceSlaves(ctx context.Context, info linuxBlockDeviceInfo) ([]string, error) {
-	sysfsName := linuxSysfsBlockName(info)
-	if sysfsName == "" {
-		return nil, fmt.Errorf("no sysfs block name for %+v", info)
-	}
-	out, err := c.Exec.Run(ctx, fmt.Sprintf("ls -1 /sys/class/block/%s/slaves 2>/dev/null", sysfsName))
-	if err != nil {
-		return nil, err
-	}
-
-	var parents []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		name := filepath.Base(strings.TrimSpace(line))
-		if name == "" {
-			continue
-		}
-		parents = append(parents, filepath.Join("/dev", name))
-	}
-	sort.Strings(parents)
-	return parents, nil
-}
-
-func (c *RemoteCollector) remoteLinuxRotational(ctx context.Context, device string) (string, error) {
-	base := fallbackLinuxBlockBase(device)
-	if base == "" {
-		return "", fmt.Errorf("no block device base for %q", device)
-	}
-	return c.Exec.Run(ctx, fmt.Sprintf("cat /sys/block/%s/queue/rotational 2>/dev/null", base))
 }
 
 func (c *RemoteCollector) remoteBatteryPercent(ctx context.Context, osName string) (int, bool) {
@@ -749,5 +576,177 @@ func (c *RemoteCollector) remoteThermalZones(ctx context.Context, osName string)
 		return []models.ThermalZone{{Type: "cpu", State: state}}
 	default:
 		return nil
+	}
+}
+
+func (c *RemoteCollector) discoverDiskWeights(ctx context.Context, facts *models.NodeFacts) {
+	if facts == nil || c.Exec == nil {
+		return
+	}
+	out, err := c.Exec.Run(ctx, DiskWeightsDiscoveryScript)
+	if err != nil {
+		return
+	}
+	res := parseDiskWeightsJSON(out)
+	facts.DiskWeights = res.Weights
+	facts.DiskWeightsTruncated = res.Truncated
+}
+
+func (c *RemoteCollector) discoverOllamaRobust(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
+	info := models.OllamaInfo{Installed: false}
+
+	out, err := c.Exec.Run(ctx, OllamaDiscoveryScript)
+	if err != nil {
+		info.Error = err.Error()
+		return info, nil
+	}
+
+	// parse the JSON blob
+	var parsed ollamaDiscoveryPayload
+	if json.Unmarshal([]byte(out), &parsed) == nil {
+		return parsed.OllamaInfo, parsed.ResidentModels
+	}
+	return info, nil
+}
+
+// discoverLlamaServerRobust probes for a running llama-server process on the
+// remote node via a single SSH command and returns its resident models.
+func (c *RemoteCollector) discoverLlamaServerRobust(ctx context.Context) []models.ResidentModel {
+	out, err := c.Exec.Run(ctx, LlamaServerDiscoveryScript)
+	if err != nil {
+		return nil
+	}
+	var parsed llamaServerDiscoveryPayload
+	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
+		return withResidentPort(parsed.ResidentModels, parsed.Port)
+	}
+	return nil
+}
+
+// discoverMLXRobust probes for a running mlx_lm.server process on the remote
+// node via a single SSH command and queries its /v1/models endpoint to
+// enumerate resident models.
+func (c *RemoteCollector) discoverMLXRobust(ctx context.Context) []models.ResidentModel {
+	out, err := c.Exec.Run(ctx, MLXDiscoveryScript)
+	if err != nil {
+		return nil
+	}
+	var parsed mlxDiscoveryPayload
+	if json.Unmarshal([]byte(out), &parsed) == nil && parsed.Installed {
+		return withResidentPort(parsed.ResidentModels, parsed.Port)
+	}
+	return nil
+}
+
+func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "darwin":
+		out, err := c.Exec.Run(ctx, "diskutil info / 2>/dev/null")
+		if err != nil {
+			return "unknown"
+		}
+		return parseDiskutilStorageClass(out)
+	case "linux":
+		out, err := c.Exec.Run(ctx, `findmnt -n -o SOURCE / 2>/dev/null`)
+		if err != nil {
+			return "unknown"
+		}
+		return resolveLinuxStorageClass(
+			strings.TrimSpace(out),
+			func(device string) (linuxBlockDeviceInfo, error) {
+				return c.remoteLinuxBlockDeviceInfo(ctx, device)
+			},
+			func(info linuxBlockDeviceInfo) ([]string, error) {
+				return c.remoteLinuxBlockDeviceSlaves(ctx, info)
+			},
+			func(device string) (string, error) {
+				return c.remoteLinuxRotational(ctx, device)
+			},
+		)
+	default:
+		return "unknown"
+	}
+}
+
+func (c *RemoteCollector) remoteLinuxBlockDeviceInfo(ctx context.Context, device string) (linuxBlockDeviceInfo, error) {
+	out, err := c.Exec.Run(ctx, fmt.Sprintf("lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA %q 2>/dev/null", strings.TrimSpace(device)))
+	if err != nil {
+		return linuxBlockDeviceInfo{}, err
+	}
+	return parseLinuxBlockDeviceInfo(out)
+}
+
+func (c *RemoteCollector) remoteLinuxBlockDeviceSlaves(ctx context.Context, info linuxBlockDeviceInfo) ([]string, error) {
+	sysfsName := linuxSysfsBlockName(info)
+	if sysfsName == "" {
+		return nil, fmt.Errorf("no sysfs block name for %+v", info)
+	}
+	out, err := c.Exec.Run(ctx, fmt.Sprintf("ls -1 /sys/class/block/%s/slaves 2>/dev/null", sysfsName))
+	if err != nil {
+		return nil, err
+	}
+
+	var parents []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		name := filepath.Base(strings.TrimSpace(line))
+		if name == "" {
+			continue
+		}
+		parents = append(parents, filepath.Join("/dev", name))
+	}
+	sort.Strings(parents)
+	return parents, nil
+}
+
+func (c *RemoteCollector) remoteLinuxRotational(ctx context.Context, device string) (string, error) {
+	base := fallbackLinuxBlockBase(device)
+	if base == "" {
+		return "", fmt.Errorf("no block device base for %q", device)
+	}
+	return c.Exec.Run(ctx, fmt.Sprintf("cat /sys/block/%s/queue/rotational 2>/dev/null", base))
+}
+
+// parseRemoteAddrLine parses an address line from `ip -o addr` or fallback output.
+func parseRemoteAddrLine(line string) models.NetworkAddress {
+	fields := strings.Fields(line)
+
+	var addrField, ifName string
+	for i, f := range fields {
+		if f == "inet" || f == "inet6" {
+			if i+1 < len(fields) {
+				addrField = fields[i+1]
+			}
+			if i >= 2 {
+				ifName = strings.TrimSuffix(fields[1], ":")
+			}
+			break
+		}
+	}
+
+	if addrField == "" {
+		switch len(fields) {
+		case 1:
+			addrField = fields[0]
+		case 2:
+			ifName = fields[0]
+			addrField = fields[1]
+		}
+	}
+
+	ip, subnet := parseAddressWithOptionalCIDR(addrField)
+	if ip == nil {
+		return models.NetworkAddress{}
+	}
+
+	kind := "ipv4"
+	if ip.To4() == nil {
+		kind = "ipv6"
+	}
+	return models.NetworkAddress{
+		Kind:       kind,
+		Address:    ip.String(),
+		Interface:  ifName,
+		Subnet:     subnet,
+		SpeedClass: classifyInterfaceSpeed(ifName, ip),
 	}
 }

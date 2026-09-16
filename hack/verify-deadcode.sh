@@ -51,7 +51,7 @@ if ! raw_out="$(go run golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION} ./...
   exit 1
 fi
 # Strip download-progress lines (only at line starts, keep real findings).
-dead_raw="$(printf '%s\n' "$raw_out" | grep -v '^go: downloading ' || true)"
+dead_raw="$(printf '%s\n' "$raw_out" | grep -v '^go: downloading ' | grep -v '^go: .*switching to ' || true)"
 if [[ -z "$(printf '%s\n' "$dead_raw" | grep -v '^go: ' || true)" ]]; then
   # nothing but download lines and/or go: errors → tool did not produce findings
   if printf '%s\n' "$dead_raw" | grep -q '^go: ' ; then

@@ -5,24 +5,6 @@ import (
 	"testing"
 )
 
-func TestExtractReasoning(t *testing.T) {
-	input := "<think>\nThinking about the cluster status...\nLooking at nodes.\n</think>\nHere is the answer."
-	thinking, clean := ExtractReasoning(input)
-
-	if thinking != "Thinking about the cluster status...\nLooking at nodes." {
-		t.Errorf("unexpected thinking: %q", thinking)
-	}
-	if clean != "Here is the answer." {
-		t.Errorf("unexpected clean content: %q", clean)
-	}
-
-	noThink := "Just plain text."
-	th2, cl2 := ExtractReasoning(noThink)
-	if th2 != "" || cl2 != noThink {
-		t.Errorf("unexpected non-thinking result: th=%q cl=%q", th2, cl2)
-	}
-}
-
 func TestExtractFallbackToolCalls(t *testing.T) {
 	toolDefs := []ToolDef{
 		{

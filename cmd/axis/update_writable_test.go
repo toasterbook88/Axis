@@ -74,7 +74,7 @@ func TestInstallReleaseFailsFastOnUnwritableTarget(t *testing.T) {
 	prevInspect := inspectBinary
 	defer func() { inspectBinary = prevInspect }()
 	inspectBinary = func(path string) (installInfo, error) {
-		abs := mustAbs(path)
+		abs, _ := filepath.Abs(path)
 		return installInfo{Path: abs, Resolved: abs, IsAxis: true, Version: "0.1.0"}, nil
 	}
 
