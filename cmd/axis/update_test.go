@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -35,11 +33,6 @@ func buildTestArchive(t *testing.T, content []byte) []byte {
 }
 
 // checksumLine returns the sha256 hex line for data/name as in checksums.txt.
-func checksumLine(data []byte, name string) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]) + "  " + name
-}
-
 func TestUpdateRefusesDowngradeInstall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ghRelease{TagName: "v0.4.0"})

@@ -13,14 +13,6 @@ func neverUseLinuxStorageSlaves(t *testing.T) func(linuxBlockDeviceInfo) ([]stri
 	}
 }
 
-func neverUseLinuxStorageFallback(t *testing.T) func(string) (string, error) {
-	t.Helper()
-	return func(string) (string, error) {
-		t.Fatal("fallback should not be used when ancestry resolution succeeds")
-		return "", nil
-	}
-}
-
 func TestParseDiskutilStorageClass_NVMe(t *testing.T) {
 	input := `   Device Identifier:         disk3s1s1
    Device Node:               /dev/disk3s1s1

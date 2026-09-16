@@ -51,17 +51,6 @@ func (o *recordingObserver) ShellExecuting(id, node, cwd, command string) {
 func (o *recordingObserver) MaxTurnsReached(max int) { o.record("max turns %d", max) }
 
 // emitAll drives every emit helper once with fixed arguments.
-func emitAll(a *Agent) {
-	a.emitTurnStarted(1, 25)
-	a.emitCompactionSkipped(errors.New("budget"))
-	a.emitToolCalled("call-1", "axis_status", `{"cached":true}`)
-	a.emitToolSkipped("call-2", "bash", "dry-run")
-	a.emitToolSucceeded("call-1", "axis_status", "5 nodes", 42, 120*time.Millisecond)
-	a.emitToolFailed("call-3", "remote_grep", errors.New("dial timeout"), 40*time.Millisecond)
-	a.emitShellExecuting("call-4", "", "", "ls")
-	a.emitMaxTurnsReached(25)
-}
-
 func TestRedactionAlsoCoversTheFallbackOutput(t *testing.T) {
 	var buf bytes.Buffer
 	a := &Agent{output: &buf, verbose: true}

@@ -31,31 +31,6 @@ func newTestClient(t *testing.T, mcpSrv *httptest.Server, qdrantSrv *httptest.Se
 // mcpHandler returns an http.Handler that responds to JSON-RPC requests with
 // the provided result payload (raw JSON). Use for tools/list responses which
 // are returned directly without a content envelope.
-func mcpHandler(method string, result any) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req rpcRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		if req.Method != method {
-			http.Error(w, "unexpected method: "+req.Method, http.StatusBadRequest)
-			return
-		}
-		raw, _ := json.Marshal(result)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(rpcResponse{Result: raw})
-	})
-}
-
-// toolCallHandler returns an http.Handler for tools/call requests.
-// It wraps result in the FastMCP 3.x content envelope:
-//
-//	{"content":[{"type":"text","text":"<json>"}],"isError":false}
 func toolCallHandler(result any) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -93,19 +68,6 @@ func toolCallHandler(result any) http.Handler {
 }
 
 // qdrantHandler returns an http.Handler simulating the Qdrant collection endpoint.
-func qdrantHandler(pointsCount int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"result": map[string]any{
-				"points_count": pointsCount,
-			},
-		})
-	})
-}
-
-// — Status tests —
-
 func TestStatus_MCPUnreachableReturnsError(t *testing.T) {
 	// Port 1 will refuse the connection immediately.
 	client := NewClientWithOptions("127.0.0.1", "tok", 1, 1, 500*time.Millisecond)

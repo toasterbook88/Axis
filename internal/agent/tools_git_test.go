@@ -1,36 +1,9 @@
 package agent
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 )
-
-func setupTestGitRepo(t *testing.T) string {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found in PATH, skipping git tools tests")
-	}
-
-	tmpDir := t.TempDir()
-
-	// Initialize git repo
-	cmd := exec.Command("git", "init")
-	cmd.Dir = tmpDir
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("failed to init git: %v", err)
-	}
-
-	// Configure git email/name so commit works in CI
-	cmd = exec.Command("git", "config", "user.email", "test@example.com")
-	cmd.Dir = tmpDir
-	_ = cmd.Run()
-	cmd = exec.Command("git", "config", "user.name", "Test User")
-	cmd.Dir = tmpDir
-	_ = cmd.Run()
-
-	return tmpDir
-}
 
 func TestDiffFragmentChangedFile(t *testing.T) {
 	old := "alpha\nbeta\ngamma"

@@ -8,7 +8,6 @@ import (
 )
 
 var (
-	thinkTagRegex      = regexp.MustCompile(`(?s)<think>(.*?)</think>`)
 	toolCallTagRegex   = regexp.MustCompile(`(?s)<tool_call>(.*?)</tool_call>`)
 	jsonCodeBlockRegex = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(\\{.*?\\}|\\[.*?\\])\\s*\\n?```")
 )

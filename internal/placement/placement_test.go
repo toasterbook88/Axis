@@ -30,35 +30,6 @@ func nodeComplete(name string, freeRAM int64, pressure string, tools ...string) 
 	}
 }
 
-func nodeTurboQuant(name string, freeRAM int64, pressure string, backends ...string) models.NodeFacts {
-	n := nodeComplete(name, freeRAM, pressure, "ollama")
-	n.Ollama = &models.OllamaInfo{
-		Installed: true,
-		Listening: true,
-		Models:    []string{"llama3:8b"},
-	}
-	n.TurboQuant = &models.TurboQuantInfo{
-		Supported:    true,
-		Verified:     true,
-		Backends:     backends,
-		Capabilities: []string{"long-context"},
-	}
-	return n
-}
-
-func nodeTurboQuantDetected(name string, freeRAM int64, pressure string, backends ...string) models.NodeFacts {
-	n := nodeTurboQuant(name, freeRAM, pressure, backends...)
-	n.TurboQuant.Verified = false
-	return n
-}
-
-func nodeUnifiedMemory(name string, freeRAM int64, pressure string, class int, tools ...string) models.NodeFacts {
-	n := nodeComplete(name, freeRAM, pressure, tools...)
-	n.Resources.MemoryTopology = models.MemoryTopologyUnified
-	n.Resources.MemoryClass = class
-	return n
-}
-
 func nodeUnreachable(name string) models.NodeFacts {
 	return models.NodeFacts{
 		Name:        name,
@@ -383,17 +354,6 @@ func TestFilter_NilStateSkipsFailureCheck(t *testing.T) {
 }
 
 // --- PeakRAMMB empirical filter tests ---
-
-func freshInferenceObs(node string, reqs models.TaskRequirements, peakRAMMB int64) models.ExecutionObservation {
-	return models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements(node, reqs, ""),
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 3,
-		LastSuccess: true,
-		WallTimeMS:  45000,
-		PeakRAMMB:   peakRAMMB,
-	}
-}
 
 func TestRankerRespectsCustomSystemReserve(t *testing.T) {
 	nodeA := nodeComplete("nodeA", 6000, "none")

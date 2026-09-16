@@ -1,9 +1,7 @@
 package reservation
 
 import (
-	"bufio"
 	"bytes"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
@@ -130,36 +128,6 @@ func TestReclaimDoesNotEmitSuccessReceiptWhenPersistenceFails(t *testing.T) {
 	} else if !strings.Contains(got, "failed to persist ledger during reclaim") {
 		t.Fatalf("persistence failure log missing:\n%s", got)
 	}
-}
-
-func assertMaintenanceReceipt(t *testing.T, logs *bytes.Buffer, authority, objectType, objectID, oldValue, newValue string) {
-	t.Helper()
-	scanner := bufio.NewScanner(bytes.NewReader(logs.Bytes()))
-	for scanner.Scan() {
-		var record map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			t.Fatalf("decode log record: %v", err)
-		}
-		if record["msg"] != "maintenance receipt" {
-			continue
-		}
-		for key, want := range map[string]string{
-			"source_authority": authority,
-			"object_type":      objectType,
-			"object_id":        objectID,
-			"old_value":        oldValue,
-			"new_value":        newValue,
-		} {
-			if record[key] != want {
-				t.Fatalf("%s = %#v, want %q (record=%v)", key, record[key], want, record)
-			}
-		}
-		return
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan logs: %v", err)
-	}
-	t.Fatalf("maintenance receipt not found in logs:\n%s", logs.String())
 }
 
 func TestReserve_PerNodeSystemReserve(t *testing.T) {

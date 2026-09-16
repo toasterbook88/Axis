@@ -58,19 +58,3 @@ func testGuardedRuntime(t *testing.T, nodes []models.NodeFacts) *runtimectx.Cont
 		}(),
 	}
 }
-
-type stubPortForwardingExecutor struct {
-	stubRemoteExecutor
-	forwardCalled bool
-	localVal      int
-	remoteVal     int
-	retPort       int
-	retErr        error
-}
-
-func (s *stubPortForwardingExecutor) ForwardLocal(ctx context.Context, localPort, remotePort int) (int, func(), error) {
-	s.forwardCalled = true
-	s.localVal = localPort
-	s.remoteVal = remotePort
-	return s.retPort, func() {}, s.retErr
-}

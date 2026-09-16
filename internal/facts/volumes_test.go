@@ -6,19 +6,6 @@ import (
 
 // Fixture is POSIX `df -kP` (no fstype). Virtual mounts must be dropped;
 // real block and network mounts must appear with size, mount, and bus hint.
-const sampleDFKP = `Filesystem     1024-blocks     Used Available Capacity Mounted on
-/dev/nvme0n1p2   460800000 230400000 207360000      53% /
-tmpfs              8388608         0   8388608       0% /tmp
-devtmpfs           4096000         0   4096000       0% /dev
-overlay           46080000  20000000  24000000      46% /var/lib/docker/overlay2/abc
-/dev/sda1        104857600  10485760  89128960      11% /mnt/models
-/dev/disk4s1     104857600  10485760  89128960      11% /Volumes/My Passport
-
-//nas/share       524288000  52428800 440401920      11% /mnt/nas
-192.0.2.10:/export 2097152000 10485760 1981808640       1% /mnt/nfs
-
-`
-
 func TestDFSourceIsNetwork(t *testing.T) {
 	cases := []struct {
 		device string
