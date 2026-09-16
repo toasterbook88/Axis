@@ -201,6 +201,12 @@ func TestCloudBackend_OpenAI_NativeToolCallsAndDeferredJSONContent(t *testing.T)
 	if resp.ToolCalls[0].Function.Name != "axis_status" {
 		t.Errorf("expected axis_status, got %q", resp.ToolCalls[0].Function.Name)
 	}
+	if resp.ToolCalls[0].ID != "call_1" {
+		t.Errorf("tool call ID = %q, want %q", resp.ToolCalls[0].ID, "call_1")
+	}
+	if string(resp.ToolCalls[0].Function.Arguments) != "{}" {
+		t.Errorf("tool call arguments = %q, want %q", resp.ToolCalls[0].Function.Arguments, "{}")
+	}
 	wantContent := "{ some context before the call"
 	if resp.Content != wantContent {
 		t.Errorf("result.Content = %q, want %q", resp.Content, wantContent)
