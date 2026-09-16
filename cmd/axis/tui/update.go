@@ -26,25 +26,54 @@ const refreshInterval = 30 * time.Second
 
 // UpdateWithRefresh extends the base Update to handle auto-refresh ticks.
 func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch lifecycle := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = lifecycle.Width
+		m.height = lifecycle.Height
+		if m.modalActive {
+			updated, cmd := m.modal.Update(msg)
+			m.modal = updated.(PlacementModal)
+			return m, cmd
+		}
+		return m, nil
+	case snapshotLoadedMsg:
+		m.snapshot = lifecycle.Snapshot
+		m.loading = false
+		m.lastRefresh = lifecycle.Timestamp
+		m.source = lifecycle.Source
+		m.loadErr = nil
+		m.statusMsg = fmt.Sprintf("Snapshot loaded: %d nodes", len(m.snapshot.Nodes))
+		return m, tickCmd(refreshInterval)
+	case loadErrMsg:
+		m.loading = false
+		m.loadErr = lifecycle.Err
+		if m.snapshot != nil {
+			m.statusMsg = "Refresh failed; showing previous snapshot: " + lifecycle.Err.Error()
+		} else {
+			m.statusMsg = "Error: " + lifecycle.Err.Error()
+		}
+		return m, tickCmd(5 * time.Second)
+	case tickMsg:
+		if !m.loading {
+			m.loading = true
+			return m, loadSnapshotCmd()
+		}
+		return m, tickCmd(refreshInterval)
+	}
 	if m.modalActive {
 		updated, cmd := m.modal.Update(msg)
 		m.modal = updated.(PlacementModal)
 		if m.modal.cancelled || m.modal.confirmed {
 			m.modalActive = false
-			if m.modal.confirmed {
-				m.statusMsg = "Placement selected; task place remains advisory"
+			if m.modal.confirmed && m.modal.explanation != nil {
+				m.statusMsg = fmt.Sprintf("Recommended: %s · advisory only · no task executed",
+					m.modal.explanation.Decision.Node)
 			}
 		}
 		return m, cmd
 	}
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		// Viewport disabled - using direct rendering instead
-		return m, nil
-
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -63,7 +92,6 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "r":
 			m.loading = true
-			m.lastRefresh = "loading..."
 			m.statusMsg = "Refreshing cluster snapshot..."
 			return m, loadSnapshotCmd()
 
@@ -90,12 +118,16 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "p":
-			m.modal = NewPlacementModal()
+			if m.snapshot == nil {
+				m.statusMsg = "Placement needs a snapshot; follow the recovery steps and press r"
+				return m, nil
+			}
+			m.modal = NewPlacementModal(m.snapshot, m.source, m.lastRefresh)
 			m.modalActive = true
 			return m, m.modal.Init()
 
 		case "?":
-			m.statusMsg = "j/k: navigate | 1-4: tabs | r: refresh | h/l: switch tab | q: quit"
+			m.statusMsg = "j/k navigate | 1-4 tabs | h/l switch | p place | r refresh | ? help | q quit"
 			return m, nil
 
 		case "enter":
@@ -105,32 +137,6 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case snapshotLoadedMsg:
-		m.snapshot = msg.Snapshot
-		m.loading = false
-		m.lastRefresh = msg.Timestamp
-		m.source = msg.Source
-		m.loadErr = nil
-		m.statusMsg = fmt.Sprintf("Snapshot loaded: %d nodes", len(m.snapshot.Nodes))
-		// Schedule next refresh
-		return m, tickCmd(refreshInterval)
-
-	case loadErrMsg:
-		m.loading = false
-		m.loadErr = msg.Err
-		m.statusMsg = "Error: " + msg.Err.Error()
-		// Retry after delay
-		return m, tickCmd(5 * time.Second)
-
-	case tickMsg:
-		// Auto-refresh trigger
-		if !m.loading {
-			m.loading = true
-			m.lastRefresh = "refreshing..."
-			return m, loadSnapshotCmd()
-		}
-		// Still loading, schedule next tick
-		return m, tickCmd(refreshInterval)
 	}
 
 	// Update (no-op for direct rendering)
@@ -160,9 +166,8 @@ func ViewWithLogo(m Model) string {
 		b.WriteString(RenderLogo())
 		b.WriteString("\n\n")
 		b.WriteString("  Loading cluster snapshot...")
-	} else if m.loadErr != nil {
-		b.WriteString("Error: ")
-		b.WriteString(m.loadErr.Error())
+	} else if m.loadErr != nil && m.snapshot == nil {
+		b.WriteString(renderSnapshotRecovery(m.loadErr))
 	} else {
 		b.WriteString(renderFleetTable(m))
 		b.WriteString("\n")
@@ -173,6 +178,35 @@ func ViewWithLogo(m Model) string {
 	b.WriteString(renderFooter(m))
 
 	return b.String()
+}
+
+func renderSnapshotRecovery(err error) string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("196")).
+		Render("Snapshot unavailable")
+	command := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("229"))
+	detail := "unknown error"
+	if err != nil {
+		detail = err.Error()
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(detail),
+		"",
+		"AXIS needs observed cluster state before it can show or place work.",
+		"",
+		"First-time setup",
+		"  1. "+command.Render("axis init"),
+		"  2. "+command.Render("axis daemon service install"),
+		"",
+		"Already configured",
+		"  • "+command.Render("axis daemon start")+" in another terminal",
+		"  • Press "+command.Render("r")+" here to retry immediately",
+		"The TUI starts nothing until you run one of these commands.",
+	)
 }
 
 // renderHeaderWithLogo renders the header with status bar.

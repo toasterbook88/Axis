@@ -22,6 +22,7 @@ The live repo currently contains:
 
 - Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models
 - Cluster snapshot assembly and advisory placement
+- A full-screen `axis tui` dashboard whose placement wizard uses the exact displayed snapshot, exposes source/freshness, inferred requirements, deterministic rank order, and an explicit advisory/no-execution boundary; missing snapshots render operator-controlled setup and retry steps
 - An agentic tool-calling assistant (`axis agent`) that consumes the fact plane (`axis chat` was removed). Default cluster context is the local daemon/disk cache (`LoadCached`); `--live` is an explicit discovery sweep. Cache reads are badged (age, stale, vantage). `--console` is an opt-in TTY transcript console with an approval overlay (`y` yes, `n` no; Enter does not approve)
 - A local HTTP API with task execution
 - A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
@@ -96,6 +97,7 @@ Top-level commands currently registered in the binary:
 | `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
+| `axis tui` | Interactive cluster dashboard | Daemon-cache-first snapshot with source/freshness badges; placement preview scores the displayed snapshot and remains advisory |
 | `axis daemon start` | Start daemon HTTP API | Alias for `axis serve`; `--addr` and `--refresh` flags |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
