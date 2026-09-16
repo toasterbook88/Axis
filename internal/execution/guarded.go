@@ -932,21 +932,22 @@ func runRemote(
 		}
 	}()
 
-	executor := transport.WithBashForced(NewRemoteExecutor(targetConfig))
+	rawExecutor := NewRemoteExecutor(targetConfig)
 	// Route over the discovered fast path (e.g. GbE/Thunderbolt) when available,
 	// keeping targetConfig for SSH identity/host-key verification.
 	if resolvedDialTarget != "" {
-		if sshExec, ok := NewRemoteExecutor(targetConfig).(*transport.SSHExecutor); ok {
+		if sshExec, ok := rawExecutor.(*transport.SSHExecutor); ok {
 			sshExec.ResolvedDialTarget = resolvedDialTarget
 		}
 	}
+	executor := transport.WithBashForced(rawExecutor)
 	defer executor.Close()
 
 	// Every command this path delivers — context write AND run command — is
-	// wrapped as `/usr/bin/env bash -c '<script>'` by the executor above.
-	// sshd hands the string to the node's login shell ($SHELL -c); on fish
-	// nodes the POSIX assignments in RemoteExecPrefix output would be
-	// rejected by fish itself before bash starts (status 127). The wrapper
+	// wrapped as `/usr/bin/env bash --noprofile --norc -c '<script>'` by the
+	// executor above. sshd hands the string to the node's login shell ($SHELL
+	// -c); on fish nodes the POSIX assignments in RemoteExecPrefix output would
+	// be rejected by fish itself before bash starts (status 127). The wrapper
 	// makes the outer form a pure external invocation any shell can exec.
 
 	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())

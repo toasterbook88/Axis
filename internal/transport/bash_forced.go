@@ -64,11 +64,10 @@ func (e *BashForcedExecutor) Connect(ctx context.Context) error {
 	return e.inner.Connect(ctx)
 }
 
-// RunWithStdin forwards stdin through the bash wrapper: `bash -c "cmd"` passes
-// its own stdin to the executed command, so payload bytes reach the remote
-// RunWithStdin forwards stdin through the bash wrapper: `bash -c "cmd"` passes
-// its own stdin to the executed command, so payload bytes reach the remote
-// pipeline. The inner executor must implement StdinRemoteExecutor.
+// RunWithStdin forwards stdin through the bash wrapper: `/usr/bin/env bash
+// --noprofile --norc -c "cmd"` passes its own stdin to the executed command,
+// so payload bytes reach the remote pipeline. The inner executor must implement
+// StdinRemoteExecutor.
 func (e *BashForcedExecutor) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (string, error) {
 	stdinExec, ok := e.inner.(StdinRemoteExecutor)
 	if !ok {
