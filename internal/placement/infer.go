@@ -9,7 +9,7 @@ import (
 // It delegates to the internal/workload package for structured profile matching.
 //
 // An optional InferRequirementsOptions may be provided to inject a semantic
-// Classifier (e.g. llmrouter.Engine). All existing call-sites that pass no
+// Classifier (optional semantic classifier). All existing call-sites that pass no
 // options continue to use the legacy string-matcher path unchanged.
 func InferRequirements(desc string, opts ...workload.InferRequirementsOptions) models.TaskRequirements {
 	return workload.InferRequirements(desc, opts...)

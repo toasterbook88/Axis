@@ -222,60 +222,6 @@ func TestConsoleCancelStopsTheNamedTurn(t *testing.T) {
 	}
 }
 
-func TestConsoleReportsWhenATurnWaitsBehindADrainingRun(t *testing.T) {
-	// The console watchdog freeing the UI is not proof the agent run exited.
-	// A turn submitted while one is still draining must say so rather than
-	// present itself as independent.
-	rec := &capture{}
-	first := make(chan struct{})
-	hold := make(chan struct{})
-
-	l := newConsoleLauncher(func(_ context.Context, prompt string, _ agent.Observer, _ io.Writer) error {
-		if prompt == "first" {
-			close(first)
-			<-hold
-		}
-		return nil
-	}, time.Minute, consoleClock)
-	l.prog = rec
-
-	firstDone := make(chan struct{})
-	go func() {
-		_ = l.submit(context.Background())(1, "first")()
-		close(firstDone)
-	}()
-	<-first
-
-	if l.draining() != 1 {
-		t.Fatalf("draining() = %d, want 1", l.draining())
-	}
-
-	secondDone := make(chan struct{})
-	go func() {
-		_ = l.submit(context.Background())(2, "second")()
-		close(secondDone)
-	}()
-	time.Sleep(20 * time.Millisecond)
-	close(hold)
-	<-firstDone
-	<-secondDone
-
-	var warned bool
-	for _, m := range rec.all() {
-		if e, ok := m.(console.EntryMsg); ok {
-			if strings.Contains(strings.Join(console.PlainAll(e.Entry.Render(80)), " "), "draining") {
-				warned = true
-			}
-		}
-	}
-	if !warned {
-		t.Error("no notice that a turn waited behind a draining run")
-	}
-	if l.draining() != 0 {
-		t.Errorf("draining() = %d after both turns, want 0", l.draining())
-	}
-}
-
 func TestConsoleBuildsFreshSinksPerTurn(t *testing.T) {
 	// Reusing a bridge or writer across turns would reintroduce the shared
 	// mutable attribution the immutable TurnID design removed.

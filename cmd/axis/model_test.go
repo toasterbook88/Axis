@@ -504,7 +504,7 @@ printf '%s\n' llama-server
 		}
 	})
 
-	cmd := exec.Command("/bin/sh", "-c", shellStop(8081))
+	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 8081}))
 	cmd.Env = []string{
 		"PATH=" + dir,
 		"AXIS_TEST_LOG=" + logPath,
@@ -535,7 +535,7 @@ printf '%s\n' "$*" > "$AXIS_TEST_LOG"
 exit 1
 `)
 
-	cmd := exec.Command("/bin/sh", "-c", shellStop(8082))
+	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 8082}))
 	cmd.Env = []string{"PATH=" + dir, "AXIS_TEST_LOG=" + logPath}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("shellStop: %v: %s", err, out)
@@ -551,7 +551,7 @@ exit 1
 
 func TestShellStopFailsWhenNoPortToolExists(t *testing.T) {
 	dir := t.TempDir()
-	cmd := exec.Command("/bin/sh", "-c", shellStop(8083))
+	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 8083}))
 	cmd.Env = []string{"PATH=" + dir}
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
@@ -572,7 +572,7 @@ printf '%s\n' 4242
 printf '%s\n' postgres
 `)
 
-	cmd := exec.Command("/bin/sh", "-c", shellStop(5432))
+	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 5432}))
 	cmd.Env = []string{"PATH=" + dir}
 	out, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
@@ -592,10 +592,9 @@ func writeModelTestExecutable(t *testing.T, path, body string) {
 }
 
 func TestResolveModelNodeRefusesUnconfiguredRemoteNode(t *testing.T) {
-	stubModelSnapshot(t, testSnap())
 	stubModelConfig(t, &config.Config{})
 
-	_, _, err := resolveModelNode(context.Background(), "storage")
+	_, _, err := resolveModelNodeFromSnapshot(testSnap(), "storage")
 	if err == nil || !strings.Contains(err.Error(), "no configuration entry") {
 		t.Fatalf("expected unconfigured remote-node error, got %v", err)
 	}
@@ -604,10 +603,9 @@ func TestResolveModelNodeRefusesUnconfiguredRemoteNode(t *testing.T) {
 func TestResolveModelNodeAllowsUnconfiguredLocalNode(t *testing.T) {
 	snap := testSnap()
 	snap.Nodes[0].Hostname = "127.0.0.1"
-	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{})
 
-	node, cfgNode, err := resolveModelNode(context.Background(), "storage")
+	node, cfgNode, err := resolveModelNodeFromSnapshot(snap, "storage")
 	if err != nil {
 		t.Fatalf("resolve local node: %v", err)
 	}

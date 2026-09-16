@@ -925,31 +925,6 @@ func resolveModelStopTargetNode(ctx context.Context, nodeName, cacheAddr string)
 	return resolveModelNodeFromSnapshot(snap, nodeName)
 }
 
-func resolveModelNode(ctx context.Context, name string) (models.NodeFacts, *config.NodeConfig, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return models.NodeFacts{}, nil, fmt.Errorf("node is required")
-	}
-	cfg, _ := loadModelConfig()
-	var targetCfg *config.NodeConfig
-	if cfg != nil {
-		for i := range cfg.Nodes {
-			if cfg.Nodes[i].Name == name {
-				targetCfg = &cfg.Nodes[i]
-				break
-			}
-		}
-	}
-	if nf, cfgNode, ok := resolveFromDaemonCache(ctx, "", name, targetCfg); ok {
-		return nf, cfgNode, nil
-	}
-	snap, err := loadModelSnapshot(ctx)
-	if err != nil {
-		return models.NodeFacts{}, nil, err
-	}
-	return resolveModelNodeFromSnapshot(snap, name)
-}
-
 func resolveModelNodeFromSnapshot(snap *models.ClusterSnapshot, name string) (models.NodeFacts, *config.NodeConfig, error) {
 	if snap == nil {
 		return models.NodeFacts{}, nil, fmt.Errorf("no cluster snapshot")
@@ -1090,10 +1065,6 @@ func shellStart(argv []string, port int) string {
 			"nohup %s >/dev/null 2>&1 &",
 		port, strings.Join(quoted, " "),
 	)
-}
-
-func shellStop(port int) string {
-	return shellStopTarget(modellife.StopTarget{Port: port})
 }
 
 func shellStopTarget(target modellife.StopTarget) string {

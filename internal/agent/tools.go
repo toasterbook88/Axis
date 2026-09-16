@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"sync/atomic"
+
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
@@ -24,7 +26,6 @@ import (
 	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
-	"sync/atomic"
 )
 
 // ToolRegistry maps tool names to their definitions and executors.
@@ -294,7 +295,7 @@ func (r *ToolRegistry) registerReservations(tc *ToolContext) {
 				}
 				fmt.Fprintf(&b, "- %s: %d active tasks, %d MB reserved\n", name, ns.ActiveTasks, ns.ReservedMB)
 				if ns.LastTask != "" {
-					fmt.Fprintf(&b, "  Last task: %s\n", truncate(ns.LastTask, 60))
+					fmt.Fprintf(&b, "  Last task: %s\n", truncateRunes(ns.LastTask, 60))
 				}
 				if len(ns.ActiveExecs) > 0 {
 					fmt.Fprintf(&b, "  Active execs: %s\n", strings.Join(ns.ActiveExecs, ", "))
@@ -342,7 +343,7 @@ func (r *ToolRegistry) registerReadFile() {
 			}
 			content := string(data)
 			if len(data) > maxFileSize {
-				content = truncateRune(content, maxFileSize) + "\n... [truncated due to size limit]"
+				content = truncateRunes(content, maxFileSize) + "\n... [truncated due to size limit]"
 			}
 			return content, nil
 		},
@@ -529,19 +530,7 @@ func CapShellOutput(s string) string {
 	if len([]rune(s)) <= MaxShellOutputRunes {
 		return s
 	}
-	return truncateRune(s, MaxShellOutputRunes) + fmt.Sprintf("\n... [truncated to %d chars]", MaxShellOutputRunes)
-}
-
-// truncateRune truncates a string to maxLen runes, appending "..." if truncated.
-func truncateRune(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return string(runes[:maxLen])
-	}
-	return string(runes[:maxLen-3]) + "..."
+	return truncateRunes(s, MaxShellOutputRunes) + fmt.Sprintf("\n... [truncated to %d chars]", MaxShellOutputRunes)
 }
 
 // validateToolPathForWrite validates and resolves a path for writing files,

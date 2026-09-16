@@ -30,8 +30,6 @@ const (
 	KindAgent    Kind = "agent"    // assistant message
 	KindThinking Kind = "thinking" // reasoning block extracted from the stream
 	KindTool     Kind = "tool"     // tool call and its result
-	KindStream   Kind = "stream"   // long-running incremental output
-	KindDiff     Kind = "diff"     // file write rendered as a diff
 	KindApproval Kind = "approval" // resolved approval record
 	KindNotice   Kind = "notice"   // runtime/system event
 	KindError    Kind = "error"    // failure in any of the above
@@ -178,8 +176,6 @@ var gutter = map[Kind]string{
 	KindAgent:    "*",
 	KindThinking: "~",
 	KindTool:     "$",
-	KindStream:   "|",
-	KindDiff:     "#",
 	KindApproval: "?",
 	KindNotice:   "-",
 	KindError:    "!",
@@ -504,88 +500,6 @@ func (e *ToolEntry) Render(width int) []Line {
 			}
 			out = append(out, renderContinuation(e.base, width, line, style)...)
 		}
-	}
-	return out
-}
-
-// StreamEntry accumulates incremental output from a long-running tool such as
-// remote_tail_logs. It is the one entry that mutates after creation.
-type StreamEntry struct {
-	base
-	ID    string
-	Label string
-	Lines []string
-	Done  bool
-
-	// Limit caps retained lines so a chatty log tail cannot grow the
-	// transcript without bound.
-	Limit int
-}
-
-// defaultStreamLimit bounds retained lines for a stream entry.
-const defaultStreamLimit = 200
-
-// NewStreamEntry opens a stream labelled label at t.
-func NewStreamEntry(t time.Time, id, label string) *StreamEntry {
-	return &StreamEntry{
-		base:  base{kind: KindStream, at: t},
-		ID:    id,
-		Label: label,
-		Limit: defaultStreamLimit,
-	}
-}
-
-// Append adds one line, dropping the oldest when at the limit.
-func (e *StreamEntry) Append(line string) {
-	limit := e.Limit
-	if limit <= 0 {
-		limit = defaultStreamLimit
-	}
-	e.Lines = append(e.Lines, line)
-	if len(e.Lines) > limit {
-		e.Lines = e.Lines[len(e.Lines)-limit:]
-	}
-}
-
-// Close marks the stream finished.
-func (e *StreamEntry) Close() { e.Done = true }
-
-func (e *StreamEntry) Render(width int) []Line {
-	head := e.Label
-	if !e.Done {
-		head += " (streaming)"
-	}
-	out := renderBody(e.base, width, head, StyleAccent)
-	for _, line := range e.Lines {
-		out = append(out, renderContinuation(e.base, width, line, StyleMuted)...)
-	}
-	return out
-}
-
-// DiffEntry renders a proposed or applied file write.
-type DiffEntry struct {
-	base
-	Path string
-	Diff string
-}
-
-// NewDiffEntry records a file write at t. diff is pre-rendered by the caller
-// so this entry stays a pure layout concern.
-func NewDiffEntry(t time.Time, path, diff string) *DiffEntry {
-	return &DiffEntry{base: base{kind: KindDiff, at: t}, Path: path, Diff: diff}
-}
-
-func (e *DiffEntry) Render(width int) []Line {
-	out := renderBody(e.base, width, e.Path, StyleStrong)
-	for _, line := range strings.Split(strings.TrimRight(e.Diff, "\n"), "\n") {
-		style := StylePlain
-		switch {
-		case strings.HasPrefix(line, "+"):
-			style = StyleGood
-		case strings.HasPrefix(line, "-"):
-			style = StyleBad
-		}
-		out = append(out, renderContinuation(e.base, width, line, style)...)
 	}
 	return out
 }

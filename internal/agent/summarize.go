@@ -29,7 +29,7 @@ func summarizeSnapshot(snap *models.ClusterSnapshot) string {
 		}
 		status := string(n.Status)
 		if n.Error != "" {
-			status += " — " + truncate(n.Error, 40)
+			status += " — " + truncateRunes(n.Error, 40)
 		}
 		line := fmt.Sprintf("- %s (%s): %s", n.Name, n.Hostname, status)
 		if n.Resources != nil {
@@ -69,7 +69,7 @@ func summarizeSnapshot(snap *models.ClusterSnapshot) string {
 				fmt.Fprintf(&b, "... and %d more warnings\n", len(snap.Warnings)-i)
 				break
 			}
-			fmt.Fprintf(&b, "- %s: %s\n", w.Node, truncate(w.Message, 60))
+			fmt.Fprintf(&b, "- %s: %s\n", w.Node, truncateRunes(w.Message, 60))
 		}
 	}
 
@@ -82,7 +82,7 @@ func summarizeNodeFacts(n models.NodeFacts) string {
 	fmt.Fprintf(&b, "Node: %s (%s/%s, %s)\n", n.Name, n.OS, n.Arch, n.Hostname)
 	if n.Resources != nil {
 		r := n.Resources
-		fmt.Fprintf(&b, "CPU: %d cores (%s)\n", r.CPUCores, truncate(r.CPUModel, 40))
+		fmt.Fprintf(&b, "CPU: %d cores (%s)\n", r.CPUCores, truncateRunes(r.CPUModel, 40))
 		fmt.Fprintf(&b, "RAM: %d MB total, %d MB free\n", r.RAMTotalMB, r.RAMFreeMB)
 		fmt.Fprintf(&b, "Disk: %d GB total, %d GB free\n", r.DiskTotalGB, r.DiskFreeGB)
 		if r.Load1M > 0 {
@@ -112,7 +112,7 @@ func summarizeNodeFacts(n models.NodeFacts) string {
 	}
 	fmt.Fprintf(&b, "Status: %s\n", n.Status)
 	if n.Error != "" {
-		fmt.Fprintf(&b, "Error: %s\n", truncate(n.Error, 100))
+		fmt.Fprintf(&b, "Error: %s\n", truncateRunes(n.Error, 100))
 	}
 	return b.String()
 }
@@ -138,17 +138,4 @@ func summarizePlacementDecision(dec models.PlacementDecision) string {
 		}
 	}
 	return b.String()
-}
-
-// truncate truncates a string to maxLen runes, appending "..." if truncated.
-// Safe for UTF-8 — operates on runes, not bytes.
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return string(runes[:maxLen])
-	}
-	return string(runes[:maxLen-3]) + "..."
 }

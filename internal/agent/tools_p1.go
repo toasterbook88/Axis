@@ -231,9 +231,9 @@ func (r *ToolRegistry) registerWebFetch() {
 
 // looksLikeHTML detects HTML content even when the content-type is generic.
 func looksLikeHTML(s string) bool {
-	return strings.Contains(strings.ToLower(s[:min(len(s), 512)]), "<html") ||
-		strings.Contains(strings.ToLower(s[:min(len(s), 512)]), "<body") ||
-		strings.Contains(strings.ToLower(s[:min(len(s), 512)]), "<div")
+	return strings.Contains(strings.ToLower(s[:minInt(len(s), 512)]), "<html") ||
+		strings.Contains(strings.ToLower(s[:minInt(len(s), 512)]), "<body") ||
+		strings.Contains(strings.ToLower(s[:minInt(len(s), 512)]), "<div")
 }
 
 // htmlToText strips HTML markup to readable text: removes script/style blocks,
@@ -276,13 +276,6 @@ func collapseWhitespace(s string) string {
 	blankRe := regexp.MustCompile(`\n{3,}`)
 	out = blankRe.ReplaceAllString(out, "\n\n")
 	return strings.TrimSpace(out)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // --- Tool: web_search ---

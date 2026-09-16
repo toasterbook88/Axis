@@ -8,14 +8,14 @@ import (
 
 // Classifier is the interface for semantic workload classification.
 //
-// It is satisfied by llmrouter.Engine (via its ClassifyWorkload method) and by
+// It is satisfied by test doubles and optional semantic classifiers;
 // test doubles. A nil Classifier passed inside InferRequirementsOptions causes
 // InferRequirements to use the legacy string-matcher (analyzeDescription)
 // instead.
 //
 // Implementations must:
 //   - be safe for concurrent use
-//   - enforce their own latency budget (the llmrouter.Engine default is 150 ms)
+//   - enforce their own latency budget (implementations should set a tight latency budget)
 //   - never contact cloud endpoints (local inference only, per AXIS doctrine)
 type Classifier interface {
 	// ClassifyWorkload maps a task description to a WorkloadProfileMatch.
