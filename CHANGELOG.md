@@ -1,3 +1,8 @@
+## Unreleased
+
+### Features
+* **Truthful TUI placement preview:** the dashboard placement wizard now scores the exact snapshot already on screen, badges its source and observation time, shows inferred requirements and deterministic candidate rank order, and labels `FitScore` as diagnostic rather than the ranking objective. Confirmation remains advisory and explicitly executes nothing. Snapshot failures now render setup/recovery commands and state that the TUI starts nothing until the operator chooses a command; `axis daemon service install` remains the explicit persistent path and installs and starts the service.
+
 ## v0.18.1 (2026-09-15)
 
 ### Fixed
