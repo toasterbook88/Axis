@@ -20,6 +20,7 @@ type rawToolCallJSON struct {
 	Parameters json.RawMessage `json:"parameters,omitempty"`
 	Args       json.RawMessage `json:"args,omitempty"`
 	Input      json.RawMessage `json:"input,omitempty"`
+	Thought    json.RawMessage `json:"thought,omitempty"`
 }
 
 // hermesActionJSON is the {"thought": "...", "action": {...}} shape models
@@ -51,7 +52,7 @@ func ExtractFallbackToolCalls(content string, toolDefs []ToolDef) ([]ToolCall, s
 	for _, match := range toolCallMatches {
 		if len(match) > 1 {
 			raw := strings.TrimSpace(match[1])
-			if tc, ok := parseSingleToolJSON(raw, validTools, len(extracted)+1); ok {
+			if tc, _, ok := parseSingleToolJSON(raw, validTools, len(extracted)+1); ok {
 				extracted = append(extracted, tc)
 			}
 		}
@@ -66,7 +67,7 @@ func ExtractFallbackToolCalls(content string, toolDefs []ToolDef) ([]ToolCall, s
 	for _, match := range codeBlockMatches {
 		if len(match) > 1 {
 			raw := strings.TrimSpace(match[1])
-			if tc, ok := parseSingleToolJSON(raw, validTools, len(extracted)+1); ok {
+			if tc, _, ok := parseSingleToolJSON(raw, validTools, len(extracted)+1); ok {
 				extracted = append(extracted, tc)
 			} else {
 				// Check if it's an array of tool calls
@@ -115,18 +116,42 @@ func extractBareJSON(raw string, validTools map[string]bool) ([]ToolCall, string
 	}
 
 	// Direct whole-message tool call: {"name": "...", "arguments": {...}}.
-	if tc, ok := parseSingleToolJSON(raw, validTools, 1); ok {
-		return []ToolCall{tc}, ""
+	// Some flat drifts also include a top-level "thought" field; preserve it
+	// as visible content, mirroring the nested Hermes action shape.
+	if tc, thought, ok := parseSingleToolJSON(raw, validTools, 1); ok {
+		return []ToolCall{tc}, thought
 	}
 	return nil, ""
 }
 
-func parseSingleToolJSON(raw string, validTools map[string]bool, seq int) (ToolCall, bool) {
+// parseSingleToolJSON parses one tool-call JSON object. On success it returns
+// the ToolCall, any top-level "thought" text (only when the thought field is a
+// JSON string; non-string values are ignored so they cannot suppress a valid
+// call), and true.
+func parseSingleToolJSON(raw string, validTools map[string]bool, seq int) (ToolCall, string, bool) {
 	var item rawToolCallJSON
 	if err := json.Unmarshal([]byte(raw), &item); err != nil {
-		return ToolCall{}, false
+		return ToolCall{}, "", false
 	}
-	return rawItemToToolCall(item, validTools, seq)
+	tc, ok := rawItemToToolCall(item, validTools, seq)
+	if !ok {
+		return ToolCall{}, "", false
+	}
+	return tc, extractThoughtString(item.Thought), true
+}
+
+// extractThoughtString returns the string value of a JSON RawMessage only when
+// it is a JSON string; otherwise it returns empty. This prevents a malformed
+// (non-string) thought field from causing the whole parse to fail.
+func extractThoughtString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
 }
 
 func rawItemToToolCall(item rawToolCallJSON, validTools map[string]bool, seq int) (ToolCall, bool) {

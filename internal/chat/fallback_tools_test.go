@@ -138,6 +138,19 @@ func TestExtractFallbackToolCallsBareWholeMessageJSON(t *testing.T) {
 			t.Errorf("content should be untouched, got %q", clean)
 		}
 	})
+
+	t.Run("TrailingProseStaysInert", func(t *testing.T) {
+		// JSON that parses but has trailing prose after the top-level object
+		// must NOT be promoted (Go's Unmarshal rejects trailing non-whitespace).
+		input := `{"name":"axis_status","arguments":{}} done!`
+		calls, clean := ExtractFallbackToolCalls(input, toolDefs)
+		if len(calls) != 0 {
+			t.Fatalf("trailing prose must prevent promotion, got %d calls", len(calls))
+		}
+		if clean != input {
+			t.Errorf("content should be untouched, got %q", clean)
+		}
+	})
 }
 
 // Models that drift into a Hermes-style action protocol emit a JSON object
@@ -161,6 +174,60 @@ func TestExtractFallbackToolCallsHermesThoughtAction(t *testing.T) {
 	}
 	if clean != "I should read the config file." {
 		t.Errorf("thought should remain as content, got %q", clean)
+	}
+}
+
+// Flat Hermes drift: a single JSON object with both a top-level "thought"
+// field and the tool-call fields. The thought should be preserved as visible
+// content, just like the nested action variant.
+func TestExtractFallbackToolCallsFlatThoughtAction(t *testing.T) {
+	toolDefs := []ToolDef{{Function: ToolDefFunction{Name: "read_file"}}}
+	input := `{"thought": "I should read the config file.", "name": "read_file", "arguments": {"path": "~/.axis/ai.yaml"}}`
+	calls, clean := ExtractFallbackToolCalls(input, toolDefs)
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(calls))
+	}
+	if calls[0].Function.Name != "read_file" {
+		t.Errorf("expected read_file, got %s", calls[0].Function.Name)
+	}
+	var args map[string]string
+	if err := json.Unmarshal(calls[0].Function.Arguments, &args); err != nil || args["path"] != "~/.axis/ai.yaml" {
+		t.Errorf("unexpected arguments: %s", string(calls[0].Function.Arguments))
+	}
+	if clean != "I should read the config file." {
+		t.Errorf("thought should remain as content, got %q", clean)
+	}
+}
+
+// A non-string top-level "thought" field must not fail the whole parse and
+// suppress a valid registered tool call.
+func TestExtractFallbackToolCallsFlatNonStringThoughtIgnored(t *testing.T) {
+	toolDefs := []ToolDef{{Function: ToolDefFunction{Name: "read_file"}}}
+	input := `{"thought": 123, "name": "read_file", "arguments": {"path": "~/.axis/ai.yaml"}}`
+	calls, clean := ExtractFallbackToolCalls(input, toolDefs)
+	if len(calls) != 1 {
+		t.Fatalf("non-string thought must not suppress call, got %d", len(calls))
+	}
+	if calls[0].Function.Name != "read_file" {
+		t.Errorf("expected read_file, got %s", calls[0].Function.Name)
+	}
+	// Thought is ignored because it is not a JSON string.
+	if clean != "" {
+		t.Errorf("clean content should be empty when thought is non-string, got %q", clean)
+	}
+}
+
+// A flat thought/action object whose tool name is not registered is just
+// chatter; it must pass through untouched.
+func TestExtractFallbackToolCallsFlatUnknownActionIgnored(t *testing.T) {
+	toolDefs := []ToolDef{{Function: ToolDefFunction{Name: "read_file"}}}
+	input := `{"thought": "thinking", "name": "unknown_tool", "arguments": {}}`
+	calls, clean := ExtractFallbackToolCalls(input, toolDefs)
+	if len(calls) != 0 {
+		t.Fatalf("unknown flat action must not execute, got %d calls", len(calls))
+	}
+	if clean != input {
+		t.Errorf("content should be untouched, got %q", clean)
 	}
 }
 

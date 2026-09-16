@@ -23,8 +23,7 @@ import (
 )
 
 type RemoteExecutor interface {
-	Run(context.Context, string) (string, error)
-	Close() error
+	transport.Executor
 }
 
 type StreamingRemoteExecutor interface {
@@ -106,14 +105,15 @@ func runRemote(
 		}
 	}()
 
-	executor := NewRemoteExecutor(targetConfig)
+	rawExecutor := NewRemoteExecutor(targetConfig)
 	// Route over the discovered fast path (e.g. GbE/Thunderbolt) when available,
 	// keeping targetConfig for SSH identity/host-key verification.
 	if resolvedDialTarget != "" {
-		if sshExec, ok := executor.(*transport.SSHExecutor); ok {
+		if sshExec, ok := rawExecutor.(*transport.SSHExecutor); ok {
 			sshExec.ResolvedDialTarget = resolvedDialTarget
 		}
 	}
+	executor := transport.WithBashForced(rawExecutor)
 	defer executor.Close()
 
 	remoteContextPath := fmt.Sprintf("/tmp/axis-knows-%d.json", time.Now().UTC().UnixNano())
