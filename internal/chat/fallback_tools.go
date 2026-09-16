@@ -38,6 +38,7 @@ type rawToolCallJSON struct {
 	Parameters json.RawMessage `json:"parameters,omitempty"`
 	Args       json.RawMessage `json:"args,omitempty"`
 	Input      json.RawMessage `json:"input,omitempty"`
+	Thought    string          `json:"thought,omitempty"`
 }
 
 // hermesActionJSON is the {"thought": "...", "action": {...}} shape models
@@ -133,8 +134,13 @@ func extractBareJSON(raw string, validTools map[string]bool) ([]ToolCall, string
 	}
 
 	// Direct whole-message tool call: {"name": "...", "arguments": {...}}.
-	if tc, ok := parseSingleToolJSON(raw, validTools, 1); ok {
-		return []ToolCall{tc}, ""
+	// Some flat drifts also include a top-level "thought" field; preserve it
+	// as visible content, mirroring the nested Hermes action shape.
+	var item rawToolCallJSON
+	if err := json.Unmarshal([]byte(raw), &item); err == nil {
+		if tc, ok := rawItemToToolCall(item, validTools, 1); ok {
+			return []ToolCall{tc}, strings.TrimSpace(item.Thought)
+		}
 	}
 	return nil, ""
 }
