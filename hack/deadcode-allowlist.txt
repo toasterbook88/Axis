@@ -1,127 +1,64 @@
-# Deadcode allowlist — symbols reported by `deadcode ./...` that are
-# intentionally retained. One entry per line: <package/file path fragment> <function-name>
-# Lines starting with # are comments. Matching is path-substring + exact func
-# name, line-agnostic (entries survive upstream edits).
+# Deadcode allowlist — regenerated in simplify/loc-cut-30.
+# Format: <path fragment> <func-name>  (path must be a prefix of deadcode path)
+# Keep: build-tagged fleettest, intentional API surface, test-only helpers.
 #
-# Full triage rationale lives in docs/quality/deadcode-triage.md. Update that
-# doc when adding an entry here.
-#
-# --- KEEP-ALLOW: interface satisfaction (deadcode cannot see compile-time
-# --- assertions like `var _ workload.Classifier = (*Engine)(nil)`)
-# --- KEEP-ALLOW: build-tagged consumers (//go:build fleet, make test-fleet)
-# (guard.go symbols: containment guard, physical-resolution, remote helpers)
-internal/fleettest NewGuard
-internal/fleettest Validate
-internal/fleettest resolvePhysical
-internal/fleettest hasDotDot
-internal/fleettest Env
-internal/fleettest RemoteRoot
-internal/fleettest RemoteEnv
-internal/fleettest RemoteCommand
-# --- KEEP-ALLOW: Tier-3 distributed planner surface (#175), PlanSingleNode live
-# (planner.go symbols: Planner struct, NewPlanner, validateSnapshot,
-#  normalizeManifest, planConfidence, indexLinks, etc.)
-# --- KEEP-ALLOW: engine internals (semantic classification path, docs/future
-# --- hybrid-orchestration-spec.md §4.1)
-# --- KEEP-ALLOW: llmrouter remaining surface (provider options + Tier-3 cost/
-# --- latency comparators, same rationale as the cloud.go block above)
-# --- KEEP-ALLOW: remaining llmrouter probe/registry (same rationale)
-internal/llmrouter/probe.go ProbeAllBackends
-internal/llmrouter/probe.go ViewLocality
-internal/llmrouter/probe.go ProbeBackend
-internal/fleettest shellQuote
-internal/fleettest Error
-# --- KEEP-ALLOW: modelplan planner internals (Planner struct from #175)
-# (planner.go remaining internals — distributed-planner math and candidate
-#  graph; same #175 rationale)
-
-# --- DELETE candidates per triage (not yet deleted; tracked for phase 2)
-
-# --- KEEP: accessor API (MCPRegistry/Backend accessors, ExecuteShell variant)
 internal/agent/agent.go MCPRegistry
 internal/agent/agent.go Backend
 internal/agent/tools.go ExecuteShell
-
-# --- DECIDE: Serve vs Run (one of the two entry points is dead)
 internal/api/server.go Serve
-
-# --- KEEP-ALLOW: chat engine/ollama client library surface
-
-# --- KEEP-ALLOW: console render variants (Thinking/Stream/Diff entries)
 internal/console/entries.go PlainAll
-internal/console/entries.go Render
-internal/console/entries.go Append
-internal/console/entries.go Close
-internal/console/entries.go Render
-internal/console/entries.go Render
-
-# --- DECIDE: cortex lock primitives have no CLI path yet
+internal/cortex/client.go NewClient
 internal/cortex/client.go AcquireLock
 internal/cortex/client.go ReleaseLock
-internal/cortex/client.go NewClient
-
-# --- DECIDE: RunGuarded wrapper vs RunGuardedStream; CanReserve/ApplyReservationView
 internal/daemon/client.go RunGuarded
 internal/daemon/daemon.go CanReserve
 internal/daemon/daemon.go ApplyReservationView
-
-# --- KEEP-ALLOW: discovery variants
 internal/discovery/discovery.go Discover
 internal/discovery/discovery.go DiscoverWithWarnings
 internal/discovery/discovery.go DiscoverSeeded
-
-# --- KEEP-ALLOW: MCP subscriber extension API (observational event surface)
 internal/events/events.go RegisterInterest
 internal/events/events.go GetInterests
 internal/events/events.go SetEventBufferSize
 internal/events/logger.go SetLogPath
 internal/events/logger.go ResetTestLog
 internal/events/webhooks.go ShutdownWebhooks
-
-# --- DECIDE: pairwise topology enrichment (#266) not wired to MCP
 internal/facts/disk_weights.go ParseDiskWeightFindTSV
-
-# --- KEEP-ALLOW: lock API completeness
+internal/facts/identity.go detectRemoteNodeIdentity
+internal/facts/identity.go detectRemoteHostname
+internal/facts/volume_diskutil.go posixSingleQuote
+internal/fleettest/guard.go Error
+internal/fleettest/guard.go NewGuard
+internal/fleettest/guard.go Validate
+internal/fleettest/guard.go resolvePhysical
+internal/fleettest/guard.go hasDotDot
+internal/fleettest/guard.go Env
+internal/fleettest/guard.go RemoteRoot
+internal/fleettest/guard.go RemoteEnv
+internal/fleettest/guard.go RemoteCommand
+internal/fleettest/guard.go shellQuote
+internal/llmrouter/probe.go ProbeBackend
+internal/llmrouter/probe.go ProbeAllBackends
+internal/llmrouter/probe.go ViewLocality
 internal/lockutil/lock_unix.go LockEx
-
-# --- KEEP-ALLOW: client SDK surface for agent MCP integration
 internal/mcpclient/call.go CallToolWithProgress
 internal/mcpclient/connection.go SetProgressHandler
+internal/mcpclient/registry.go Add
 internal/mcpclient/registry.go ConnectedNames
 internal/mcpclient/registry.go FindTool
-internal/mcpclient/registry.go Add
-
-# --- DECIDE: verifyHMAC — check whether HMAC verification is wired
 internal/mesh/mesh.go verifyHMAC
-
-# --- KEEP-ALLOW: model type helpers/error impls
 internal/models/memory.go AllocatableRAMMB
 internal/models/types.go Error
-
-# --- KEEP-ALLOW: allowlist reset API
 internal/netutil/url.go ResetInternalAllowlist
-
-# --- DECIDE: Headroom/clusterPressurePenalty helpers
 internal/placement/ranker.go Headroom
 internal/placement/ranker.go clusterPressurePenalty
-
-# --- KEEP: LearnAllow/LearnDeny intentionally disabled (approvals unscoped), documented in source
 internal/safety/structured.go LearnAllow
 internal/safety/structured.go LearnDeny
-
-# --- KEEP-ALLOW: IsConfigured API
 internal/secrets/secrets.go IsConfigured
-
-# --- DECIDE: AutoDiscoverSkills — wire into axis skills or delete
-
-# --- KEEP-ALLOW: LocalExecutor symmetry + SSH dial-target constructor
 internal/transport/local.go Connect
 internal/transport/local.go Stream
 internal/transport/local.go ForwardLocal
 internal/transport/local.go Close
 internal/transport/ssh.go NewSSHExecutorWithDialTarget
-
-# --- KEEP-ALLOW: presentational API (spinner/errors/color/select/table)
 internal/ui/color.go Boldf
 internal/ui/color.go StatusIcon
 internal/ui/color.go FprintBold
@@ -131,10 +68,10 @@ internal/ui/errors.go PrintSuccess
 internal/ui/errors.go FprintSuccess
 internal/ui/select.go NewDefaultSelector
 internal/ui/select.go Select
-internal/ui/spinner.go spinnerCapable
 internal/ui/spinner.go NewSpinner
 internal/ui/spinner.go Start
 internal/ui/spinner.go Update
 internal/ui/spinner.go Stop
 internal/ui/spinner.go animate
+internal/ui/spinner.go spinnerCapable
 internal/ui/table.go RowCount

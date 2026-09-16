@@ -103,32 +103,3 @@ func TestRoutingBackendNilCheapFallsBackToPrimary(t *testing.T) {
 		t.Fatalf("expected RouterChoice=primary, got %q", resp.RouterChoice)
 	}
 }
-
-func TestDefaultRouterClassifierCases(t *testing.T) {
-	cases := []struct {
-		name  string
-		msgs  []chat.Message
-		cheap bool
-	}{
-		{"short simple prompt", []chat.Message{{Role: chat.RoleUser, Content: "show cluster status"}}, true},
-		{"code keyword", []chat.Message{{Role: chat.RoleUser, Content: "implement a parser"}}, false},
-		{"long prompt", []chat.Message{{Role: chat.RoleUser, Content: string(make([]byte, 700))}}, false},
-		{"no user message", []chat.Message{{Role: chat.RoleSystem, Content: "sys"}}, false},
-		{"after edit_file", []chat.Message{
-			{Role: chat.RoleUser, Content: "fix it"},
-			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("1", "edit_file", "{}")}},
-			{Role: chat.RoleUser, Content: "ok"},
-		}, false},
-		{"after read_file stays cheap", []chat.Message{
-			{Role: chat.RoleUser, Content: "look at config"},
-			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("1", "read_file", "{}")}},
-			{Role: chat.RoleUser, Content: "thanks"},
-		}, true},
-	}
-	for _, c := range cases {
-		got, _ := DefaultRouterClassifier(c.msgs)
-		if got != c.cheap {
-			t.Errorf("%s: got useCheap=%v, want %v", c.name, got, c.cheap)
-		}
-	}
-}

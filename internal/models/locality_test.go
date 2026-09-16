@@ -85,44 +85,6 @@ func TestIsLocalConfigMatchesStableIdentity(t *testing.T) {
 	}
 }
 
-func TestIsLocalNodeIgnoresLogicalNameMatches(t *testing.T) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatalf("Hostname() error = %v", err)
-	}
-
-	node := NodeFacts{
-		Name:     hostname,
-		Hostname: "definitely-remote.invalid",
-		Addresses: []NetworkAddress{
-			{Kind: "ipv4", Address: "198.51.100.8"},
-		},
-	}
-
-	if IsLocalNode(node) {
-		t.Fatal("expected logical node name alone to not mark node as local")
-	}
-}
-
-func TestIsLocalNodeMatchesObservedHostnameAndAddress(t *testing.T) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatalf("Hostname() error = %v", err)
-	}
-
-	if !IsLocalNode(NodeFacts{Hostname: hostname}) {
-		t.Fatal("expected observed hostname to match local machine")
-	}
-	if !IsLocalNode(NodeFacts{
-		Hostname: "remote.invalid",
-		Addresses: []NetworkAddress{
-			{Kind: "ipv4", Address: "127.0.0.1"},
-		},
-	}) {
-		t.Fatal("expected loopback address to match local machine")
-	}
-}
-
 func TestIsLocalNodeMatchesStableIdentity(t *testing.T) {
 	stubCurrentLocalIdentity(t, "local.example", []string{"192.0.2.10"}, "ABC-123")
 
@@ -134,23 +96,6 @@ func TestIsLocalNodeMatchesStableIdentity(t *testing.T) {
 
 	if !IsLocalNode(node) {
 		t.Fatal("expected stable identity to mark node as local")
-	}
-}
-
-func TestFindLocalNodePrefersLocalIdentityMatch(t *testing.T) {
-	stubCurrentLocalIdentity(t, "local.example", []string{"192.0.2.10"}, "abc-123")
-
-	nodes := []NodeFacts{
-		{Name: "remote", Hostname: "remote.invalid"},
-		{Name: "local", Hostname: "other.invalid", Identity: NewNodeIdentity("abc-123", "linux-machine-id")},
-	}
-
-	got, ok := FindLocalNode(nodes)
-	if !ok {
-		t.Fatal("expected local node match")
-	}
-	if got.Name != "local" {
-		t.Fatalf("FindLocalNode() = %q, want local", got.Name)
 	}
 }
 

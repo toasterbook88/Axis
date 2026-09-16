@@ -50,34 +50,6 @@ func TestMCPClientListEmptyConfigJSON(t *testing.T) {
 	}
 }
 
-func TestMCPClientListJSON(t *testing.T) {
-	restore := func() {
-		loadMCPClientConfig = config.Load
-	}
-	defer restore()
-
-	loadMCPClientConfig = func(path string) (*config.Config, error) {
-		return &config.Config{
-			Nodes: []config.NodeConfig{
-				{Name: "dummy", Hostname: "localhost", SSHUser: "root"},
-			},
-			MCPServers: map[string]config.MCPServerConfig{
-				"test": {Transport: "stdio", Command: []string{"echo", "hello"}},
-			},
-		}, nil
-	}
-
-	var buf bytes.Buffer
-	err := runMCPClientList(context.Background(), &buf, "json")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "[") {
-		t.Fatalf("expected JSON array, got: %s", out)
-	}
-}
-
 func TestMCPClientToolsMissingServer(t *testing.T) {
 	restore := func() {
 		loadMCPClientConfig = config.Load

@@ -161,14 +161,7 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 	if a.verbose {
 		fmt.Fprintf(a.output, "%s Started background task %s (%s)\n", ui.Cyan("⤴"), task.id, loc)
 	}
-	return fmt.Sprintf("Background task %s started: running %s. Command: %s\nUse check_task with id %q to poll for results.", task.id, loc, truncateForLog(args.Command, 120), task.id), nil
-}
-
-func truncateForLog(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-3] + "..."
+	return fmt.Sprintf("Background task %s started: running %s. Command: %s\nUse check_task with id %q to poll for results.", task.id, loc, truncateRunes(args.Command, 120), task.id), nil
 }
 
 // checkBackgroundTask returns the status and captured output of a task. If
@@ -231,7 +224,7 @@ func formatTaskStatus(t *backgroundTask) string {
 	if t.node != "" {
 		fmt.Fprintf(&b, "Node: %s\n", t.node)
 	}
-	fmt.Fprintf(&b, "Command: %s\n", truncateForLog(t.command, 200))
+	fmt.Fprintf(&b, "Command: %s\n", truncateRunes(t.command, 200))
 	fmt.Fprintf(&b, "Started: %s ago\n", time.Since(t.startedAt).Round(time.Second))
 	fmt.Fprintf(&b, "Output (%d chars):\n", len(output))
 	if output == "" {
@@ -268,7 +261,7 @@ func (a *Agent) listBackgroundTasks() string {
 		if t.node != "" {
 			where = t.node
 		}
-		fmt.Fprintf(&b, "  %s  [%s]  %s  (%s)  %s\n", t.id, state, where, time.Since(t.startedAt).Round(time.Second), truncateForLog(t.command, 60))
+		fmt.Fprintf(&b, "  %s  [%s]  %s  (%s)  %s\n", t.id, state, where, time.Since(t.startedAt).Round(time.Second), truncateRunes(t.command, 60))
 	}
 	return b.String()
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -34,11 +33,10 @@ func NewRemoteCollector(name, role, hostname string, exec transport.Executor) *R
 //   - connect/first-command fail → unreachable
 //   - subsequent command fail → partial
 //
-// Collection strategy (utility-preserving):
+// Collection strategy:
 //  1. Force bash for all remote probes (avoids non-POSIX login shells for scripts).
-//  2. Prefer a one-shot fact bundle (one SSH session worth of shell work).
-//  3. Fall back to the legacy multi-Run path if the bundle fails.
-//  4. Always run best-effort AI resident discovery (ollama/llama/mlx) + TurboQuant.
+//  2. Run a one-shot fact bundle (one SSH session worth of shell work).
+//  3. Always run best-effort AI resident discovery (ollama/llama/mlx) + TurboQuant.
 func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error) {
 	facts := &models.NodeFacts{
 		Name: c.NodeName,
@@ -52,7 +50,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		CollectedAt: time.Now().UTC(),
 	}
 
-	// Wrap executor so every Run uses bash --noprofile --norc (bundle + legacy).
+	// Wrap executor so every Run uses bash --noprofile --norc.
 	c.Exec = withBashForced(c.Exec)
 
 	if err := c.Exec.Connect(ctx); err != nil {
@@ -72,11 +70,14 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		}
 	}
 
-	// Fast path: single remote bash script for core facts.
-	usedBundle := c.tryBundleCollect(ctx, facts)
-	if !usedBundle {
-		// Legacy multi-Run path — same field coverage as before.
-		c.collectLegacy(ctx, facts)
+	// Single remote bash script for core facts. Bundle failure is recorded as
+	// partial rather than falling back to the old multi-Run collector.
+	if !c.tryBundleCollect(ctx, facts) {
+		facts.Status = models.StatusPartial
+		facts.PartialReasons = append(facts.PartialReasons, models.PartialReason{
+			Probe:   "fact_bundle",
+			Message: "remote fact bundle failed or returned unparseable output",
+		})
 	}
 
 	// Best-effort AI discovery (same as before; runs under bash-forced executor).
@@ -122,369 +123,6 @@ func appendToolUnique(tools []models.ToolInfo, add models.ToolInfo) []models.Too
 	return append(tools, add)
 }
 
-// collectLegacy is the pre-bundle multi-Run fact path (full field coverage).
-func (c *RemoteCollector) collectLegacy(ctx context.Context, facts *models.NodeFacts) {
-	partial := false
-	note := func(probe string, err error) {
-		partial = true
-		msg := ""
-		if err != nil {
-			msg = err.Error()
-		}
-		facts.PartialReasons = append(facts.PartialReasons, models.PartialReason{Probe: probe, Message: msg})
-	}
-
-	osOut, err := c.Exec.Run(ctx, "uname -s")
-	if err != nil {
-		note("uname_s", err)
-	}
-	osName := strings.ToLower(strings.TrimSpace(osOut))
-	facts.OS = osName
-	if hostname, err := detectRemoteHostname(ctx, c.Exec); err != nil {
-		note("hostname", err)
-		facts.Hostname = c.Hostname
-	} else {
-		facts.Hostname = hostname
-	}
-	facts.Identity = detectRemoteNodeIdentity(ctx, c.Exec, osName)
-
-	if archOut, err := c.Exec.Run(ctx, "uname -m"); err != nil {
-		note("uname_m", err)
-	} else {
-		facts.Arch = strings.TrimSpace(archOut)
-	}
-
-	var verCmd string
-	if osName == "darwin" {
-		verCmd = "sw_vers -productVersion"
-	} else {
-		verCmd = "uname -r"
-	}
-	if verOut, err := c.Exec.Run(ctx, verCmd); err != nil {
-		note("os_version", err)
-	} else {
-		facts.OSVersion = strings.TrimSpace(verOut)
-	}
-
-	res, resPartial := c.remoteResources(ctx, osName, facts.Arch)
-	facts.Resources = res
-	if resPartial {
-		note("resources", fmt.Errorf("one or more resource probes failed"))
-	}
-
-	facts.Addresses = c.remoteAddresses(ctx)
-	facts.Tools = c.remoteTools(ctx)
-
-	if partial {
-		facts.Status = models.StatusPartial
-	} else {
-		facts.Status = models.StatusComplete
-	}
-}
-
-func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch string) (*models.Resources, bool) {
-	r := &models.Resources{Pressure: "none"}
-	partial := false
-
-	// CPU cores
-	var coresCmd, modelCmd string
-	if osName == "darwin" {
-		coresCmd = "sysctl -n hw.ncpu"
-		modelCmd = "sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model"
-	} else {
-		coresCmd = "nproc"
-		modelCmd = "grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2"
-	}
-
-	if out, err := c.Exec.Run(ctx, coresCmd); err != nil {
-		partial = true
-	} else {
-		r.CPUCores, _ = strconv.Atoi(strings.TrimSpace(out))
-	}
-
-	if out, err := c.Exec.Run(ctx, modelCmd); err == nil {
-		r.CPUModel = strings.TrimSpace(out)
-	}
-	r.MemoryTopology, r.MemoryClass = detectMemoryTopology(osName, arch, r.CPUModel)
-
-	// RAM
-	if osName == "darwin" {
-		if out, err := c.Exec.Run(ctx, "sysctl -n hw.memsize"); err != nil {
-			partial = true
-		} else {
-			totalBytes, _ := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-			r.RAMTotalMB = totalBytes / (1024 * 1024)
-		}
-		if out, err := c.Exec.Run(ctx, "vm_stat"); err != nil {
-			partial = true
-		} else {
-			r.RAMFreeMB = parseDarwinFreeRAM(out)
-		}
-	} else {
-		if out, err := c.Exec.Run(ctx, `grep -E 'MemTotal|MemAvailable|MemFree' /proc/meminfo`); err != nil {
-			partial = true
-		} else {
-			total, avail, err := parseLinuxMeminfo(out)
-			if err != nil {
-				partial = true
-			} else {
-				r.RAMTotalMB = total
-				r.RAMFreeMB = avail
-			}
-		}
-	}
-
-	if r.RAMTotalMB > 0 {
-		r.Pressure = computePressure(r.RAMTotalMB, r.RAMFreeMB)
-		r.PressureSource = "free-ram"
-	}
-
-	if source, level, stall10, someAvg10, fullAvg10, ok := c.remotePressureSignal(ctx, osName); ok {
-		r.Pressure = mergePressureLevels(r.Pressure, level)
-		r.PressureSource = source
-		r.PressureStall10 = stall10
-		r.MemoryPSISomeAvg10 = someAvg10
-		r.MemoryPSIFullAvg10 = fullAvg10
-	}
-
-	var loadCmd string
-	if osName == "darwin" {
-		loadCmd = "sysctl -n vm.loadavg"
-	} else {
-		loadCmd = "cat /proc/loadavg"
-	}
-	if out, err := c.Exec.Run(ctx, loadCmd); err != nil {
-		partial = true
-	} else {
-		var load1, load5, load15 float64
-		var parseErr error
-		if osName == "darwin" {
-			load1, load5, load15, parseErr = parseDarwinLoadavg(out)
-		} else {
-			load1, load5, load15, parseErr = parseLoadavgFields(out)
-		}
-		if parseErr != nil {
-			partial = true
-		} else {
-			r.Load1M = load1
-			r.Load5M = load5
-			r.Load15M = load15
-		}
-	}
-
-	// Disk
-	if out, err := c.Exec.Run(ctx, "df -kP /"); err != nil {
-		partial = true
-	} else {
-		total, free, err := parseDFOutput(out)
-		if err != nil {
-			partial = true
-		} else {
-			r.DiskTotalGB = total
-			r.DiskFreeGB = free
-		}
-	}
-
-	if out, err := c.Exec.Run(ctx, "df -kPl"); err == nil {
-		if vols, err := ParseDFVolumes(out); err == nil {
-			r.Volumes = vols
-		}
-	}
-	if out, err := c.Exec.Run(ctx, `if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`); err == nil {
-		r.Volumes = mergeVolumes(r.Volumes, ParseMountNetworkVolumes(out))
-	}
-	if !strings.EqualFold(osName, "darwin") {
-		if out, err := c.Exec.Run(ctx, sysfsBlockTableCmd); err == nil {
-			ApplySysfsBlockTable(r.Volumes, out)
-		}
-	}
-
-	if strings.EqualFold(osName, "darwin") {
-		for i := range r.Volumes {
-			v := &r.Volumes[i]
-			if v.Kind == "network" || v.Device == "" {
-				continue
-			}
-			out, err := c.Exec.Run(ctx, "diskutil info "+posixSingleQuote(v.Device))
-
-			if err != nil {
-				continue
-			}
-			applyDiskutilObservation(v, out)
-		}
-	}
-
-	// GPU (best-effort)
-	var gpuCmd string
-	if osName == "darwin" {
-		gpuCmd = `system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'`
-	} else {
-		// Try nvidia-smi first, fall back to lspci
-		gpuCmd = `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`
-	}
-	if out, err := c.Exec.Run(ctx, gpuCmd); err == nil {
-		out = strings.TrimSpace(out)
-		if out != "" {
-			// Detect format: nvidia-smi CSV has commas, lspci/system_profiler does not
-			if strings.Contains(out, ", ") && !strings.Contains(out, "Chipset Model") {
-				r.GPUs = parseNvidiaSMIOutput(out)
-			} else if strings.Contains(out, "Chipset Model") {
-				r.GPUs = parseSystemProfilerGPUs(out)
-			} else {
-				for _, line := range strings.Split(out, "\n") {
-					if line = strings.TrimSpace(line); line != "" {
-						r.GPUs = append(r.GPUs, models.GPUFromString(line))
-					}
-				}
-			}
-		}
-	}
-
-	// Storage class (best-effort)
-	r.StorageClass = c.remoteStorageClass(ctx, osName)
-
-	// Battery and thermal (best-effort)
-	if pct, ok := c.remoteBatteryPercent(ctx, osName); ok {
-		r.BatteryPercent = &pct
-	}
-	r.PowerSource = c.remotePowerSource(ctx, osName)
-	r.ThermalState = c.remoteThermalState(ctx, osName)
-	r.ThermalZones = c.remoteThermalZones(ctx, osName)
-
-	return r, partial
-}
-
-func (c *RemoteCollector) remotePressureSignal(ctx context.Context, osName string) (source string, level string, stall10 float64, someAvg float64, fullAvg float64, ok bool) {
-	switch strings.ToLower(strings.TrimSpace(osName)) {
-	case "linux":
-		out, err := c.Exec.Run(ctx, "cat /proc/pressure/memory 2>/dev/null")
-		if err != nil || strings.TrimSpace(out) == "" {
-			return "", "", 0, 0, 0, false
-		}
-		stall10, ok := parseLinuxPressureStall10(out)
-		if !ok {
-			return "", "", 0, 0, 0, false
-		}
-		someAvg, fullAvg, _ := parseLinuxPSI(out)
-		return "linux-psi", linuxPressureLevel(stall10), stall10, someAvg, fullAvg, true
-	case "darwin":
-		out, err := c.Exec.Run(ctx, "sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null")
-		if err != nil || strings.TrimSpace(out) == "" {
-			return "", "", 0, 0, 0, false
-		}
-		level, ok := parseDarwinMemoryPressureLevel(out)
-		if !ok {
-			return "", "", 0, 0, 0, false
-		}
-		someAvg, fullAvg := MapDarwinPressureToPSI(level)
-		return "darwin-vm-pressure", darwinPressureLevel(level), 0, someAvg, fullAvg, true
-	default:
-		return "", "", 0, 0, 0, false
-	}
-}
-
-func (c *RemoteCollector) remoteAddresses(ctx context.Context) []models.NetworkAddress {
-	var addrs []models.NetworkAddress
-	// Try `ip -o addr` first (outputs: "2: eth0 inet 192.168.1.5/24 ..."), fallback to basic ip/ifconfig
-	cmd := `if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`
-
-	out, err := c.Exec.Run(ctx, cmd)
-	if err != nil {
-		return addrs
-	}
-
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		addr := parseRemoteAddrLine(line)
-		if addr.Address != "" {
-			addrs = append(addrs, addr)
-		}
-	}
-	return addrs
-}
-
-// parseRemoteAddrLine parses an address line from `ip -o addr` or fallback output.
-// ip -o format: "2: eth0    inet 192.168.1.5/24 brd ..."
-// fallback: "eth0 192.168.1.5" or just "192.168.1.5"
-func parseRemoteAddrLine(line string) models.NetworkAddress {
-	fields := strings.Fields(line)
-
-	var addrField, ifName string
-	for i, f := range fields {
-		if f == "inet" || f == "inet6" {
-			if i+1 < len(fields) {
-				addrField = fields[i+1]
-			}
-			if i >= 2 {
-				ifName = strings.TrimSuffix(fields[1], ":")
-			}
-			break
-		}
-	}
-
-	// Fallback: might be "ifname 1.2.3.4" or just "1.2.3.4"
-	if addrField == "" {
-		switch len(fields) {
-		case 1:
-			addrField = fields[0]
-		case 2:
-			ifName = fields[0]
-			addrField = fields[1]
-		}
-	}
-
-	ip, subnet := parseAddressWithOptionalCIDR(addrField)
-	if ip == nil {
-		return models.NetworkAddress{}
-	}
-
-	kind := "ipv4"
-	if ip.To4() == nil {
-		kind = "ipv6"
-	}
-	return models.NetworkAddress{
-		Kind:       kind,
-		Address:    ip.String(),
-		Interface:  ifName,
-		Subnet:     subnet,
-		SpeedClass: classifyInterfaceSpeed(ifName, ip),
-	}
-}
-
-func (c *RemoteCollector) remoteTools(ctx context.Context) []models.ToolInfo {
-	toolDefs := defaultToolDefs()
-	var tools []models.ToolInfo
-
-	for _, td := range toolDefs {
-		pathOut, err := c.Exec.Run(ctx, fmt.Sprintf("command -v %s 2>/dev/null", td.name))
-		if err != nil {
-			continue
-		}
-		path := strings.TrimSpace(pathOut)
-		if path == "" {
-			continue
-		}
-
-		ti := models.ToolInfo{
-			Name:  td.name,
-			Path:  path,
-			Class: td.class,
-		}
-
-		if td.versionCmd != "" {
-			if vOut, err := c.Exec.Run(ctx, td.versionCmd+" 2>/dev/null"); err == nil {
-				ti.Version = parseVersionString(vOut)
-			}
-		}
-		tools = append(tools, ti)
-	}
-	return tools
-}
-
-// discoverOllamaRobust does ONE SSH command that gathers everything robustly.
 func (c *RemoteCollector) discoverDiskWeights(ctx context.Context, facts *models.NodeFacts) {
 	if facts == nil || c.Exec == nil {
 		return
@@ -612,140 +250,47 @@ func (c *RemoteCollector) remoteLinuxRotational(ctx context.Context, device stri
 	return c.Exec.Run(ctx, fmt.Sprintf("cat /sys/block/%s/queue/rotational 2>/dev/null", base))
 }
 
-func (c *RemoteCollector) remoteBatteryPercent(ctx context.Context, osName string) (int, bool) {
-	switch strings.ToLower(strings.TrimSpace(osName)) {
-	case "darwin":
-		out, err := c.Exec.Run(ctx, "pmset -g batt 2>/dev/null")
-		if err != nil {
-			return 0, false
-		}
-		return parsePmsetBattery(out)
-	case "linux":
-		out, err := c.Exec.Run(ctx, "cat /sys/class/power_supply/BAT0/capacity /sys/class/power_supply/BAT1/capacity /sys/class/power_supply/BATT/capacity 2>/dev/null | head -1")
-		if err != nil {
-			return 0, false
-		}
-		if pct, err := strconv.Atoi(strings.TrimSpace(out)); err == nil && pct >= 0 && pct <= 100 {
-			return pct, true
-		}
-		return 0, false
-	default:
-		return 0, false
-	}
-}
+// parseRemoteAddrLine parses an address line from `ip -o addr` or fallback output.
+func parseRemoteAddrLine(line string) models.NetworkAddress {
+	fields := strings.Fields(line)
 
-func (c *RemoteCollector) remoteThermalState(ctx context.Context, osName string) string {
-	switch strings.ToLower(strings.TrimSpace(osName)) {
-	case "darwin":
-		out, err := c.Exec.Run(ctx, "pmset -g therm 2>/dev/null")
-		if err != nil {
-			return ""
-		}
-		return parsePmsetThermal(out)
-	case "linux":
-		out, err := c.Exec.Run(ctx, "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null")
-		if err != nil {
-			return ""
-		}
-		var maxTemp int
-		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			if temp, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && temp > maxTemp {
-				maxTemp = temp
+	var addrField, ifName string
+	for i, f := range fields {
+		if f == "inet" || f == "inet6" {
+			if i+1 < len(fields) {
+				addrField = fields[i+1]
 			}
+			if i >= 2 {
+				ifName = strings.TrimSuffix(fields[1], ":")
+			}
+			break
 		}
-		if maxTemp == 0 {
-			return ""
-		}
-		tempC := maxTemp / 1000
-		switch {
-		case tempC >= 95:
-			return "critical"
-		case tempC >= 85:
-			return "serious"
-		case tempC >= 75:
-			return "fair"
-		default:
-			return "nominal"
-		}
-	default:
-		return ""
 	}
-}
 
-func (c *RemoteCollector) remotePowerSource(ctx context.Context, osName string) string {
-	switch strings.ToLower(strings.TrimSpace(osName)) {
-	case "darwin":
-		out, err := c.Exec.Run(ctx, "pmset -g batt 2>/dev/null")
-		if err != nil {
-			return ""
+	if addrField == "" {
+		switch len(fields) {
+		case 1:
+			addrField = fields[0]
+		case 2:
+			ifName = fields[0]
+			addrField = fields[1]
 		}
-		return parsePmsetPowerSource(out)
-	case "linux":
-		for _, name := range []string{"BAT0", "BAT1", "BATT", "AC", "ACAD", "ADP1"} {
-			out, err := c.Exec.Run(ctx, fmt.Sprintf("cat /sys/class/power_supply/%s/status 2>/dev/null", name))
-			if err != nil {
-				continue
-			}
-			status := strings.TrimSpace(out)
-			switch strings.ToLower(status) {
-			case "charging", "full", "not charging":
-				return "ac"
-			case "discharging":
-				return "battery"
-			}
-		}
-		return ""
-	default:
-		return ""
 	}
-}
 
-func (c *RemoteCollector) remoteThermalZones(ctx context.Context, osName string) []models.ThermalZone {
-	switch strings.ToLower(strings.TrimSpace(osName)) {
-	case "linux":
-		out, err := c.Exec.Run(ctx, "for z in /sys/class/thermal/thermal_zone*; do cat \"$z/temp\" 2>/dev/null; echo; cat \"$z/type\" 2>/dev/null; echo; done")
-		if err != nil || out == "" {
-			return nil
-		}
-		var zones []models.ThermalZone
-		lines := strings.Split(strings.TrimSpace(out), "\n")
-		for i := 0; i+1 < len(lines); i += 2 {
-			tempMilli, err := strconv.Atoi(strings.TrimSpace(lines[i]))
-			if err != nil {
-				continue
-			}
-			tempC := float64(tempMilli) / 1000.0
-			zoneType := strings.TrimSpace(lines[i+1])
-			if zoneType == "" {
-				zoneType = fmt.Sprintf("zone_%d", len(zones))
-			}
-			zones = append(zones, models.ThermalZone{
-				Type:  zoneType,
-				TempC: tempC,
-				State: thermalStateFromTempC(tempC),
-			})
-		}
-		return zones
-	case "darwin":
-		out, err := c.Exec.Run(ctx, "pmset -g therm 2>/dev/null")
-		if err != nil {
-			return nil
-		}
-		limit := parseCPUThermalLimit(out)
-		if limit == 0 {
-			return nil
-		}
-		state := "nominal"
-		switch {
-		case limit < 50:
-			state = "critical"
-		case limit < 80:
-			state = "serious"
-		case limit < 100:
-			state = "fair"
-		}
-		return []models.ThermalZone{{Type: "cpu", State: state}}
-	default:
-		return nil
+	ip, subnet := parseAddressWithOptionalCIDR(addrField)
+	if ip == nil {
+		return models.NetworkAddress{}
+	}
+
+	kind := "ipv4"
+	if ip.To4() == nil {
+		kind = "ipv6"
+	}
+	return models.NetworkAddress{
+		Kind:       kind,
+		Address:    ip.String(),
+		Interface:  ifName,
+		Subnet:     subnet,
+		SpeedClass: classifyInterfaceSpeed(ifName, ip),
 	}
 }

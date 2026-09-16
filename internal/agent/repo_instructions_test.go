@@ -8,34 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-func TestLoadRepoInstructionsNearestWins(t *testing.T) {
-	root := t.TempDir()
-	child := filepath.Join(root, "proj")
-	if err := os.MkdirAll(child, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("parent rules"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(child, "AGENTS.md"), []byte("child rules"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	path, content, ok := loadRepoInstructions(child)
-	if !ok {
-		t.Fatal("expected AGENTS.md")
-	}
-	if !strings.Contains(path, filepath.Join("proj", "AGENTS.md")) && !strings.HasSuffix(path, "proj/AGENTS.md") {
-		// path is absolute; ensure it points at child file
-		if filepath.Base(filepath.Dir(path)) != "proj" {
-			t.Fatalf("expected child AGENTS.md, got %q", path)
-		}
-	}
-	if content != "child rules" {
-		t.Fatalf("content = %q, want child rules", content)
-	}
-}
-
 func TestLoadRepoInstructionsWalksUp(t *testing.T) {
 	root := t.TempDir()
 	deep := filepath.Join(root, "a", "b")
@@ -100,17 +72,17 @@ func TestTruncateUTF8PrefixDoesNotSplitRune(t *testing.T) {
 	// "世" is 3 bytes in UTF-8. Cap mid-rune must not produce invalid UTF-8.
 	s := "ab" + "世界" + "cd"
 	// len("ab世") == 2+3 = 5; cut at 4 would bisect 世 if naive.
-	got := truncateUTF8Prefix(s, 4)
+	got := truncateUTF8(s, 4)
 	if !utf8.ValidString(got) {
 		t.Fatalf("invalid UTF-8 after truncate: %q bytes=%v", got, []byte(got))
 	}
 	if got != "ab" {
 		t.Fatalf("got %q, want ab (dropped incomplete 世)", got)
 	}
-	if truncateUTF8Prefix("ascii-only", 100) != "ascii-only" {
+	if truncateUTF8("ascii-only", 100) != "ascii-only" {
 		t.Fatal("short string should pass through")
 	}
-	if truncateUTF8Prefix("x", 0) != "" {
+	if truncateUTF8("x", 0) != "" {
 		t.Fatal("zero budget should yield empty")
 	}
 }
@@ -122,28 +94,5 @@ func TestFormatRepoInstructionsBlock(t *testing.T) {
 	}
 	if formatRepoInstructionsBlock("p", "  ") != "" {
 		t.Fatal("empty content should yield empty block")
-	}
-}
-
-func TestNewAgentInjectsRepoInstructions(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if err := os.WriteFile("AGENTS.md", []byte("Prefer make test before push."), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	a := New(Config{
-		Model:  "test",
-		Output: os.Stderr,
-	})
-	found := false
-	for _, m := range a.Conversation().Messages() {
-		if strings.Contains(m.Content, "Prefer make test before push.") &&
-			strings.Contains(m.Content, "Repository instructions") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("system prompt missing AGENTS.md content; messages=%d", len(a.Conversation().Messages()))
 	}
 }

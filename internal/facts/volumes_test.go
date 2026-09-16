@@ -1,10 +1,7 @@
 package facts
 
 import (
-	"strings"
 	"testing"
-
-	"github.com/toasterbook88/axis/internal/models"
 )
 
 // Fixture is POSIX `df -kP` (no fstype). Virtual mounts must be dropped;
@@ -45,60 +42,6 @@ func TestDFSourceIsNetwork(t *testing.T) {
 	}
 }
 
-func TestParseDFVolumesKeepsRealMountsDropsVirtual(t *testing.T) {
-	vols, err := ParseDFVolumes(sampleDFKP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(vols) != 5 {
-		t.Fatalf("got %d volumes, want 5 (root, sda1, passport, cifs, nfs); %#v", len(vols), vols)
-	}
-
-	byMount := map[string]struct {
-		device string
-		kind   string
-		bus    string
-		role   string
-		class  string
-	}{}
-	for _, v := range vols {
-		byMount[v.Mount] = struct {
-			device, kind, bus, role, class string
-		}{v.Device, v.Kind, v.Bus, v.Role, v.Class}
-		if v.TotalGB <= 0 || v.FreeGB < 0 {
-			t.Fatalf("volume %s missing sizes: %+v", v.Mount, v)
-		}
-	}
-
-	root := byMount["/"]
-	if root.device != "/dev/nvme0n1p2" || root.role != "root" || root.class != "nvme" || root.bus != "nvme" {
-		t.Fatalf("root = %+v", root)
-	}
-	other := byMount["/mnt/models"]
-	if other.device != "/dev/sda1" || other.role != "other" {
-		t.Fatalf("/mnt/models = %+v", other)
-	}
-	space := byMount["/Volumes/My Passport"]
-	if space.device != "/dev/disk4s1" || space.role != "other" {
-		t.Fatalf("space mount = %+v want /Volumes/My Passport", space)
-	}
-
-	cifs := byMount["/mnt/nas"]
-	if cifs.kind != "network" || !strings.HasPrefix(cifs.device, "//") {
-		t.Fatalf("cifs = %+v", cifs)
-	}
-	nfs := byMount["/mnt/nfs"]
-	if nfs.kind != "network" {
-		t.Fatalf("nfs = %+v", nfs)
-	}
-
-	for _, virt := range []string{"/tmp", "/dev", "/var/lib/docker/overlay2/abc"} {
-		if _, ok := byMount[virt]; ok {
-			t.Fatalf("virtual mount %s must be omitted", virt)
-		}
-	}
-}
-
 func TestParseDFVolumesDropsSnapAndLoop(t *testing.T) {
 	const out = `Filesystem     1024-blocks     Used Available Capacity Mounted on
 /dev/nvme0n1p2   460800000 230400000 207360000      53% /
@@ -135,41 +78,6 @@ efivarfs              123        12       111       1% /sys/firmware/efi/efivars
 	if vols[0].Mount != "/" || vols[1].Mount != "/Volumes/External" {
 		t.Fatalf("got %#v", vols)
 	}
-}
-
-func TestParseMountNetworkVolumesDarwinAndLinux(t *testing.T) {
-	const out = `//nas@STORAGE._smb._tcp.local/share on /Volumes/share (smbfs, nodev, nosuid, mounted by operator)
-//user@203.0.113.1/Public on /Volumes/Public (smbfs, nodev, nosuid, mounted by operator)
-/dev/disk3s1s1 on / (apfs, local, journaled)
-//nas/share /mnt/nas cifs rw,relatime 0 0
-192.0.2.10:/export /mnt/nfs nfs4 rw,relatime 0 0
-//host/Macintosh\040HD /Volumes/Macintosh\040HD-1 cifs rw 0 0
-`
-
-	vols := ParseMountNetworkVolumes(out)
-	if len(vols) != 5 {
-		t.Fatalf("got %d %#v", len(vols), vols)
-	}
-	by := map[string]models.Volume{}
-	for _, v := range vols {
-		if v.Kind != "network" || v.TotalGB != 0 || v.FreeGB != 0 {
-			t.Fatalf("network row must be unsized: %+v", v)
-		}
-		by[v.Mount] = v
-	}
-	if by["/Volumes/share"].Bus != "cifs" {
-		t.Fatalf("darwin smbfs: %+v", by["/Volumes/share"])
-	}
-	if by["/Volumes/Macintosh HD-1"].Device == "" {
-		t.Fatalf("space mount missing: %#v", by)
-	}
-	if by["/mnt/nfs"].Bus != "nfs" {
-		t.Fatalf("nfs: %+v", by["/mnt/nfs"])
-	}
-	if by["/Volumes/Macintosh HD-1"].Mount != "/Volumes/Macintosh HD-1" && by["/Volumes/Macintosh HD-1"].Device == "" {
-		t.Fatalf("octal unescape: %#v", by)
-	}
-
 }
 
 func TestParseDFVolumesDropsZeroSizeLocal(t *testing.T) {

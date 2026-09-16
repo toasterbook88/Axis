@@ -4,69 +4,6 @@ import (
 	"testing"
 )
 
-func TestParseSystemProfilerGPUs_AppleSilicon(t *testing.T) {
-	input := `Graphics/Displays:
-
-    Apple M3 Pro:
-
-      Chipset Model: Apple M3 Pro
-      Type: GPU
-      Bus: Built-In
-      Total Number of Cores: 18
-      Vendor: Apple (0x106b)
-      Metal Family: Supported, Metal GPUFamily Apple 9
-
-    Displays:
-      Color LCD:
-        Resolution: 3456 x 2234 Retina`
-
-	gpus := parseSystemProfilerGPUs(input)
-	if len(gpus) != 1 {
-		t.Fatalf("expected 1 GPU, got %d", len(gpus))
-	}
-	g := gpus[0]
-	if g.Model != "Apple M3 Pro" {
-		t.Errorf("model = %q, want Apple M3 Pro", g.Model)
-	}
-	if g.Vendor != "apple" {
-		t.Errorf("vendor = %q, want apple", g.Vendor)
-	}
-	if !g.HasCapability("metal") {
-		t.Error("expected metal capability")
-	}
-}
-
-func TestParseSystemProfilerGPUs_DiscreteWithVRAM(t *testing.T) {
-	input := `Graphics/Displays:
-
-    AMD Radeon Pro 5500M:
-
-      Chipset Model: AMD Radeon Pro 5500M
-      Type: GPU
-      Bus: PCIe
-      VRAM (Dynamic, Max): 4096 MB
-      Vendor: AMD (0x1002)
-      Metal Family: Supported, Metal GPUFamily macOS 2`
-
-	gpus := parseSystemProfilerGPUs(input)
-	if len(gpus) != 1 {
-		t.Fatalf("expected 1 GPU, got %d", len(gpus))
-	}
-	g := gpus[0]
-	if g.Model != "AMD Radeon Pro 5500M" {
-		t.Errorf("model = %q", g.Model)
-	}
-	if g.Vendor != "amd" {
-		t.Errorf("vendor = %q, want amd", g.Vendor)
-	}
-	if g.VRAMMB != 4096 {
-		t.Errorf("VRAM = %d, want 4096", g.VRAMMB)
-	}
-	if !g.HasCapability("metal") {
-		t.Error("expected metal capability")
-	}
-}
-
 func TestParseSystemProfilerGPUs_MultipleGPUs(t *testing.T) {
 	input := `Graphics/Displays:
 

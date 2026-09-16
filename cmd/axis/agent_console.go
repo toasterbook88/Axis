@@ -644,6 +644,7 @@ func (l *consoleLauncher) cancel(turn console.TurnID) {
 		cancel()
 	}
 }
+
 const defaultApprovalTimeout = 2 * time.Minute
 
 // consoleConfirm bridges agent tool confirmation into Bubble Tea's overlay system.

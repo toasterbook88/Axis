@@ -13,7 +13,6 @@ var (
 	jsonCodeBlockRegex = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(\\{.*?\\}|\\[.*?\\])\\s*\\n?```")
 )
 
-
 // rawToolCallJSON represents typical shapes of JSON tool calls emitted by models in text.
 type rawToolCallJSON struct {
 	Name       string          `json:"name"`

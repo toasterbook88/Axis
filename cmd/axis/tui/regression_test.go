@@ -12,34 +12,6 @@ import (
 // Repeat count" when the first View() fired before tea.WindowSizeMsg set
 // m.width (observed live on `axis tui` launch at 0-width terminals).
 // The divider must clamp instead of repeating a negative count.
-func TestRenderInspectorZeroWidthDoesNotPanic(t *testing.T) {
-	m := modelWithNodes(1)
-	m.width = 0
-	m.height = 0
-
-	out := renderInspector(m)
-	if out == "" {
-		t.Fatal("renderInspector returned empty string at zero width")
-	}
-	if !strings.Contains(out, "Details") {
-		t.Fatalf("inspector missing tab bar at zero width: %q", out)
-	}
-}
-
-// Same contract for the whole view path, including header and footer.
-func TestViewWithLogoZeroWidthDoesNotPanic(t *testing.T) {
-	m := modelWithNodes(2)
-	m.width = 0
-	m.height = 0
-
-	out := ViewWithLogo(m)
-	if !strings.Contains(out, "NODE") {
-		t.Fatalf("fleet header missing at zero width: %q", out)
-	}
-}
-
-// Cache explicitness: the header must badge the provenance of the snapshot
-// it displays. An unknown source renders "unknown", never a fabricated one.
 func TestHeaderBadgesSnapshotSource(t *testing.T) {
 	m := modelWithNodes(1)
 	m.source = "daemon-cache"

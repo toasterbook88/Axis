@@ -4,12 +4,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/mattn/go-isatty"
 	"io"
 	"os"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-isatty"
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/buildinfo"

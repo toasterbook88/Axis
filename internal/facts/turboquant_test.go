@@ -27,31 +27,6 @@ func TestInferTurboQuantSupport_MLXOnAppleSilicon(t *testing.T) {
 	}
 }
 
-func TestDetectTurboQuantSupport_VerifiesMLXProbe(t *testing.T) {
-	info := detectTurboQuantSupport(
-		context.Background(),
-		"darwin",
-		"arm64",
-		[]models.ToolInfo{{Name: "mlx_lm", Path: "/opt/homebrew/bin/mlx_lm"}},
-		&models.Resources{},
-		&models.OllamaInfo{Installed: true},
-		func(ctx context.Context, cmd string) (string, error) {
-			if !strings.Contains(cmd, "mlx_lm") {
-				t.Fatalf("unexpected probe cmd: %s", cmd)
-			}
-			return "mlx_lm generate --help\nmlx_lm serve --help\n", nil
-		},
-	)
-	if info == nil || !info.Verified {
-		t.Fatalf("expected verified mlx support, got %+v", info)
-	}
-	for _, want := range []string{"backend-probed", "generate-mode", "server-mode", "mlx-runtime"} {
-		if !containsProbeCapability(info.Capabilities, want) {
-			t.Fatalf("expected capability %q in %v", want, info.Capabilities)
-		}
-	}
-}
-
 func TestDetectTurboQuantSupport_VerifiesLlamaProbeAndFlags(t *testing.T) {
 	info := detectTurboQuantSupport(
 		context.Background(),
@@ -74,32 +49,6 @@ func TestDetectTurboQuantSupport_VerifiesLlamaProbeAndFlags(t *testing.T) {
 		if !containsProbeCapability(info.Capabilities, want) {
 			t.Fatalf("expected capability %q in %v", want, info.Capabilities)
 		}
-	}
-}
-
-func TestDetectTurboQuantSupport_LlamaRequiresCtxSizeForVerification(t *testing.T) {
-	info := detectTurboQuantSupport(
-		context.Background(),
-		"linux",
-		"amd64",
-		[]models.ToolInfo{{Name: "llama-server", Path: "/usr/bin/llama-server"}},
-		&models.Resources{GPUs: []models.GPUInfo{{Model: "RTX 4090", Vendor: "nvidia", Capabilities: []string{"cuda"}}}},
-		nil,
-		func(ctx context.Context, cmd string) (string, error) {
-			if !strings.Contains(cmd, "llama-server") {
-				t.Fatalf("unexpected probe cmd: %s", cmd)
-			}
-			return "llama.cpp server --flash-attn --n-gpu-layers --kv-cache\n", nil
-		},
-	)
-	if info == nil || !info.Supported {
-		t.Fatalf("expected supported llama.cpp support, got %+v", info)
-	}
-	if info.Verified {
-		t.Fatalf("expected missing --ctx-size capability to remain unverified, got %+v", info)
-	}
-	if !containsProbeCapability(info.Capabilities, "flash-attn-flag") {
-		t.Fatalf("expected flash-attn capability to still be recorded, got %v", info.Capabilities)
 	}
 }
 

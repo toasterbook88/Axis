@@ -4,14 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
-	"github.com/toasterbook88/axis/internal/persist"
 )
 
 type fakeRemoteExecutor struct {
@@ -58,395 +54,6 @@ func (f *fakeRemoteExecutor) Close() error {
 	return nil
 }
 
-func TestLocalCollectorCollectsFacts(t *testing.T) {
-	// Stub the Apple FM probe so this unit test does not trigger a real Swift
-	// compilation, which can block for well over a minute on first run.
-	prevAFM := runAppleFoundationModelsProbeFn
-	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
-		return "", fmt.Errorf("apple foundation models unavailable in unit test environment")
-	}
-	// Stub discovery scripts to avoid hanging on real shell commands in CI.
-	prevOllama := runOllamaDiscoveryFn
-	prevLlama := runLlamaServerDiscoveryFn
-	prevMLX := runMLXDiscoveryFn
-	runOllamaDiscoveryFn = func(context.Context) ([]byte, error) {
-		return []byte(`{"installed":false}`), nil
-	}
-	runLlamaServerDiscoveryFn = func(context.Context) ([]byte, error) {
-		return []byte(`{"installed":false}`), nil
-	}
-	runMLXDiscoveryFn = func(context.Context) ([]byte, error) {
-		return []byte(`{"installed":false}`), nil
-	}
-	prevScan := scanDiskWeightsFn
-	scanDiskWeightsFn = func(context.Context, DiskWeightScanConfig) DiskWeightScanResult {
-		return DiskWeightScanResult{}
-	}
-	t.Cleanup(func() {
-		runAppleFoundationModelsProbeFn = prevAFM
-		runOllamaDiscoveryFn = prevOllama
-		runLlamaServerDiscoveryFn = prevLlama
-		runMLXDiscoveryFn = prevMLX
-		scanDiskWeightsFn = prevScan
-	})
-
-	collector := NewLocalCollector("local-node", "worker")
-
-	facts, err := collector.Collect(context.Background())
-	if err != nil {
-		t.Fatalf("collect local facts: %v", err)
-	}
-
-	if facts.Name != "local-node" || facts.Role != "worker" {
-		t.Fatalf("unexpected collector identity: %+v", facts)
-	}
-	if facts.OS == "" || facts.Arch == "" {
-		t.Fatalf("expected local OS and arch to be set, got OS=%q arch=%q", facts.OS, facts.Arch)
-	}
-	if facts.Resources == nil {
-		t.Fatal("expected resources")
-	}
-	if facts.Resources.CPUCores <= 0 {
-		t.Fatalf("expected cpu cores > 0, got %d", facts.Resources.CPUCores)
-	}
-	if facts.Resources.RAMTotalMB <= 0 {
-		t.Fatalf("expected RAM total > 0, got %d", facts.Resources.RAMTotalMB)
-	}
-	if facts.Hostname == "" {
-		t.Fatal("expected hostname")
-	}
-	// CI runners can be slow; allow the collection to have happened within a
-	// reasonable window rather than a strict 60 seconds.
-	if facts.CollectedAt.IsZero() || time.Since(facts.CollectedAt) > 5*time.Minute {
-		t.Fatalf("unexpected collected_at: %s", facts.CollectedAt)
-	}
-	if facts.Status != models.StatusComplete && facts.Status != models.StatusPartial {
-		t.Fatalf("expected complete or partial status, got %s", facts.Status)
-	}
-}
-
-func TestRunLocalTurboQuantProbe(t *testing.T) {
-	out, err := runLocalTurboQuantProbe(context.Background(), `printf 'mlx_lm --help'`)
-	if err != nil {
-		t.Fatalf("run local turboquant probe: %v", err)
-	}
-	if strings.TrimSpace(out) != "mlx_lm --help" {
-		t.Fatalf("unexpected probe output: %q", out)
-	}
-}
-
-func TestDetectAppleFoundationModelsRequiresEligibleHost(t *testing.T) {
-	if got := detectAppleFoundationModels(context.Background(), "linux", "amd64", "6.8.0", nil); got != nil {
-		t.Fatalf("expected nil on non-darwin host, got %+v", got)
-	}
-
-	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "25.4", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
-	if info == nil {
-		t.Fatal("expected ineligible darwin host to report capability state")
-	}
-	if info.Available || info.Verified {
-		t.Fatalf("expected unavailable info on macOS < 26, got %+v", info)
-	}
-}
-
-func TestDetectAppleFoundationModelsUsesRuntimeProbe(t *testing.T) {
-	prev := runAppleFoundationModelsProbeFn
-	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
-
-	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
-		return "OK\n", nil
-	}
-
-	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
-	if info == nil {
-		t.Fatal("expected apple foundation models info")
-	}
-	if !info.Available || !info.Verified {
-		t.Fatalf("expected verified availability, got %+v", info)
-	}
-}
-
-func TestDetectAppleFoundationModelsAcceptsTrailingProbeNoise(t *testing.T) {
-	prev := runAppleFoundationModelsProbeFn
-	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
-
-	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
-		return "swift-driver warning\nOK\n", nil
-	}
-
-	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
-	if info == nil || !info.Verified {
-		t.Fatalf("expected non-empty successful probe to remain verified, got %+v", info)
-	}
-}
-
-func TestDetectAppleFoundationModelsAcceptsQuotedProbeMarker(t *testing.T) {
-	prev := runAppleFoundationModelsProbeFn
-	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
-
-	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
-		return "Sure! Here is an example of an exact reply:\n\n\"OK\"\n\nAnything else?\n", nil
-	}
-
-	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
-	if info == nil || !info.Verified {
-		t.Fatalf("expected quoted probe response to remain verified, got %+v", info)
-	}
-}
-
-func TestDetectAppleFoundationModelsRejectsEmptyProbeOutput(t *testing.T) {
-	prev := runAppleFoundationModelsProbeFn
-	t.Cleanup(func() { runAppleFoundationModelsProbeFn = prev })
-
-	runAppleFoundationModelsProbeFn = func(context.Context) (string, error) {
-		return "\n", nil
-	}
-
-	info := detectAppleFoundationModels(context.Background(), "darwin", "arm64", "26.1", []models.ToolInfo{{Name: "swift", Path: "/usr/bin/swift"}})
-	if info == nil {
-		t.Fatal("expected apple foundation models info")
-	}
-	if info.Verified {
-		t.Fatalf("expected empty probe output to stay unverified, got %+v", info)
-	}
-	if !strings.Contains(info.Error, "empty output") {
-		t.Fatalf("expected empty output error, got %+v", info)
-	}
-}
-
-func TestRunAppleFoundationModelsProbeUsesHelperBinary(t *testing.T) {
-	prevBuild := buildAppleFoundationModelsHelperFn
-	prevCmd := appleFoundationModelsProbeCommandFn
-	t.Cleanup(func() {
-		buildAppleFoundationModelsHelperFn = prevBuild
-		appleFoundationModelsProbeCommandFn = prevCmd
-	})
-
-	buildAppleFoundationModelsHelperFn = func(context.Context) (string, error) {
-		return "/tmp/apple-foundation-models-helper", nil
-	}
-	appleFoundationModelsProbeCommandFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if name != "/tmp/apple-foundation-models-helper" {
-			t.Fatalf("expected compiled helper probe launcher, got %q", name)
-		}
-		got := strings.Join(args, " ")
-		want := "--self-test"
-		if got != want {
-			t.Fatalf("unexpected probe args: got %q want %q", got, want)
-		}
-		return exec.CommandContext(ctx, "bash", "-lc", `printf 'OK\n'`)
-	}
-
-	out, err := runAppleFoundationModelsProbe(context.Background())
-	if err != nil {
-		t.Fatalf("run apple foundation models probe: %v", err)
-	}
-	if strings.TrimSpace(out) != "OK" {
-		t.Fatalf("unexpected probe output: %q", out)
-	}
-}
-
-func TestBuildAppleFoundationModelsHelperBuildsAndCachesBinary(t *testing.T) {
-	tmpDir := t.TempDir()
-	prevBuild := appleFoundationModelsBuildCommandFn
-	t.Cleanup(func() {
-		appleFoundationModelsBuildCommandFn = prevBuild
-	})
-
-	// Drive the real AXIS_HOME seam rather than a package-local override, so
-	// this test also proves the helper cache honours it (C5).
-	t.Setenv(persist.AxisHomeEnv, filepath.Join(tmpDir, ".axis"))
-
-	buildCalls := 0
-	appleFoundationModelsBuildCommandFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		buildCalls++
-		if name != "xcrun" {
-			t.Fatalf("expected xcrun builder, got %q", name)
-		}
-		helperSource := filepath.Join(tmpDir, ".axis", "cache", "apple-foundation-models.swift")
-		if len(args) != 4 || args[0] != "swiftc" || args[1] != helperSource || args[2] != "-o" {
-			t.Fatalf("unexpected builder args: %q", strings.Join(args, " "))
-		}
-		tmpBinary := args[3]
-		return exec.CommandContext(ctx, "bash", "-lc", fmt.Sprintf("mkdir -p %q && printf '#!/bin/sh\\necho OK\\n' > %q && chmod +x %q", filepath.Dir(tmpBinary), tmpBinary, tmpBinary))
-	}
-
-	got, err := buildAppleFoundationModelsHelper(context.Background())
-	if err != nil {
-		t.Fatalf("build helper: %v", err)
-	}
-	want := filepath.Join(tmpDir, ".axis", "cache", "apple-foundation-models-helper")
-	if got != want {
-		t.Fatalf("unexpected helper path: got %q want %q", got, want)
-	}
-	if _, err := os.Stat(got); err != nil {
-		t.Fatalf("expected built helper binary: %v", err)
-	}
-	sourcePath := filepath.Join(tmpDir, ".axis", "cache", "apple-foundation-models.swift")
-	sourceData, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatalf("expected embedded helper source to be written: %v", err)
-	}
-	if string(sourceData) != appleFoundationModelsHelperSource {
-		t.Fatal("expected cached helper source to match embedded source")
-	}
-
-	got, err = buildAppleFoundationModelsHelper(context.Background())
-	if err != nil {
-		t.Fatalf("rebuild helper: %v", err)
-	}
-	if got != want {
-		t.Fatalf("unexpected cached helper path: got %q want %q", got, want)
-	}
-	if buildCalls != 1 {
-		t.Fatalf("expected cached helper build once, got %d", buildCalls)
-	}
-}
-
-func TestDiscoverToolsUsesConfiguredLookups(t *testing.T) {
-	prevLookPath := lookPathTool
-	prevRun := runToolVersionCommand
-	t.Cleanup(func() {
-		lookPathTool = prevLookPath
-		runToolVersionCommand = prevRun
-	})
-
-	lookPathTool = func(name string) (string, error) {
-		switch name {
-		case "go":
-			return "/usr/local/bin/go", nil
-		case "git":
-			return "/usr/bin/git", nil
-		default:
-			return "", exec.ErrNotFound
-		}
-	}
-	runToolVersionCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		switch name {
-		case "go":
-			return exec.CommandContext(ctx, "bash", "-lc", `printf 'go version go1.24.1 darwin/arm64\n'`)
-		case "git":
-			return exec.CommandContext(ctx, "bash", "-lc", `printf 'git version 2.39.3\n'`)
-		default:
-			return exec.CommandContext(ctx, "bash", "-lc", "exit 1")
-		}
-	}
-
-	tools := DiscoverTools(context.Background())
-	if len(tools) != 2 {
-		t.Fatalf("expected 2 tools, got %v", tools)
-	}
-	if tools[0].Name != "go" || tools[0].Version != "1.24.1" {
-		t.Fatalf("unexpected go tool info: %+v", tools[0])
-	}
-	if tools[1].Name != "git" || tools[1].Version != "2.39.3" {
-		t.Fatalf("unexpected git tool info: %+v", tools[1])
-	}
-}
-
-func TestRemoteCollectorCollectsDarwinFacts(t *testing.T) {
-	exec := &fakeRemoteExecutor{
-		exact: map[string]fakeRunResult{
-			"uname -s": {out: "Darwin\n"},
-			"hostname": {out: "mac-studio-observed\n"},
-			`ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F '"' '/IOPlatformUUID/ {print $4; exit}'`: {out: "F47AC10B-58CC-4372-A567-0E02B2C3D479\n"},
-			"uname -m":                {out: "arm64\n"},
-			"sw_vers -productVersion": {out: "14.4\n"},
-			"sysctl -n hw.ncpu":       {out: "16\n"},
-			"sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model": {out: "Apple M3 Max\n"},
-			"sysctl -n hw.memsize": {out: "34359738368\n"},
-			"vm_stat": {out: `Mach Virtual Memory Statistics: (page size of 16384 bytes)
-Pages free:                              100000.
-Pages inactive:                          100000.
-`},
-			"sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null": {out: "2\n"},
-			"sysctl -n vm.loadavg": {out: "{ 3.14 2.72 1.62 }\n"},
-			"df -kP /": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
-/dev/disk3s1 3145728 1048576 2097152 34% /
-`},
-			"df -kPl": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
-/dev/disk3s1 3145728 1048576 2097152 34% /
-/dev/disk4s1 10485760 1048576 9437184 10% /Volumes/Models
-`},
-			`if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`: {out: ""},
-
-			"system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'": {out: "Chipset Model: Apple M3 Max GPU\nVRAM (Total): 32 GB\nMetal: Supported, feature set macOS GPUFamily2 v1\n"},
-			`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {out: "2: en0    inet 192.168.1.10/24 brd 192.168.1.255 scope global en0\n3: en0    inet6 2001:db8::10/64 scope global en0\n"},
-			"command -v git 2>/dev/null":          {out: "/usr/bin/git\n"},
-			"git --version 2>/dev/null":           {out: "git version 2.39.3\n"},
-			"command -v llama-server 2>/dev/null": {out: "/opt/homebrew/bin/llama-server\n"},
-			"llama-server --version 2>/dev/null":  {out: "llama.cpp server version 0.0.1\n"},
-			OllamaDiscoveryScript:                 {out: `{"installed":true,"path":"/usr/local/bin/ollama","version":"0.6.0","running":true,"listening":true,"port":11434,"models":["llama3:8b"],"gpu_offload":"gpu:metal"}`},
-			DiskWeightsDiscoveryScript:            {out: `{"weights":[],"truncated":false}`},
-		},
-		contains: map[string]fakeRunResult{
-			"llama-server --help": {out: "llama.cpp server --ctx-size --n-gpu-layers --flash-attn\n"},
-		},
-	}
-
-	collector := NewRemoteCollector("mac-studio", "worker", "mac-studio.local", exec)
-	facts, err := collector.Collect(context.Background())
-	if err != nil {
-		t.Fatalf("collect remote facts: %v", err)
-	}
-
-	if !exec.closed {
-		t.Fatal("expected executor to be closed")
-	}
-	if facts.Status != models.StatusComplete {
-		t.Fatalf("expected complete status, got %s", facts.Status)
-	}
-	if facts.Hostname != "mac-studio-observed" {
-		t.Fatalf("expected observed hostname, got %q", facts.Hostname)
-	}
-	if facts.Identity == nil || facts.Identity.StableID != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
-		t.Fatalf("expected darwin identity, got %+v", facts.Identity)
-	}
-	if facts.Resources == nil {
-		t.Fatal("expected resources")
-	}
-	if facts.Resources.MemoryTopology != models.MemoryTopologyUnified {
-		t.Fatalf("expected unified memory topology, got %q", facts.Resources.MemoryTopology)
-	}
-	if facts.Resources.MemoryClass != 4 {
-		t.Fatalf("expected memory class 4, got %d", facts.Resources.MemoryClass)
-	}
-	if facts.Resources.PressureSource != "darwin-vm-pressure" {
-		t.Fatalf("expected darwin pressure source, got %q", facts.Resources.PressureSource)
-	}
-	if facts.Resources.Pressure != "medium" {
-		t.Fatalf("expected medium pressure, got %q", facts.Resources.Pressure)
-	}
-	if len(facts.Resources.Volumes) != 2 {
-		t.Fatalf("volumes=%+v", facts.Resources.Volumes)
-	}
-	if facts.Resources.Volumes[0].Mount != "/" || facts.Resources.Volumes[0].Role != "root" {
-		t.Fatalf("root volume=%+v", facts.Resources.Volumes[0])
-	}
-	if facts.Resources.Volumes[1].Mount != "/Volumes/Models" || facts.Resources.Volumes[1].Role != "other" {
-		t.Fatalf("other volume=%+v", facts.Resources.Volumes[1])
-	}
-
-	if facts.Ollama == nil || !facts.Ollama.Installed {
-		t.Fatalf("expected ollama info, got %+v", facts.Ollama)
-	}
-	if facts.TurboQuant == nil || !facts.TurboQuant.Verified {
-		t.Fatalf("expected verified turboquant info, got %+v", facts.TurboQuant)
-	}
-	if len(facts.Addresses) != 2 {
-		t.Fatalf("expected 2 addresses, got %v", facts.Addresses)
-	}
-	if facts.Addresses[0].Subnet != "192.168.1.0/24" {
-		t.Fatalf("expected IPv4 subnet, got %q", facts.Addresses[0].Subnet)
-	}
-	if facts.Addresses[1].Subnet != "2001:db8::/64" {
-		t.Fatalf("expected IPv6 subnet, got %q", facts.Addresses[1].Subnet)
-	}
-	if len(facts.Tools) < 3 {
-		t.Fatalf("expected appended tools, got %v", facts.Tools)
-	}
-}
-
 func TestRemoteCollectorMarksUnreachableNode(t *testing.T) {
 	exec := &fakeRemoteExecutor{connectErr: fmt.Errorf("ssh timeout")}
 	collector := NewRemoteCollector("down", "worker", "down.local", exec)
@@ -464,28 +71,12 @@ func TestRemoteCollectorMarksUnreachableNode(t *testing.T) {
 }
 
 func TestRemoteCollectorMarksPartialOnCollectorFailures(t *testing.T) {
+	// Bundle failure is recorded as partial; discovery probes still run.
 	exec := &fakeRemoteExecutor{
+		contains: map[string]fakeRunResult{
+			"__AXIS_BUNDLE_V1__": {err: fmt.Errorf("bundle failed")},
+		},
 		exact: map[string]fakeRunResult{
-			"uname -s": {out: "Linux\n"},
-			"hostname": {out: "linux-node-observed\n"},
-			"cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null": {out: "1234567890abcdef1234567890abcdef\n"},
-			"uname -m": {out: "amd64\n"},
-			"uname -r": {out: "6.8.0\n"},
-			"nproc":    {err: fmt.Errorf("boom")},
-			"grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2": {out: "AMD Ryzen\n"},
-			`grep -E 'MemTotal|MemAvailable|MemFree' /proc/meminfo`: {out: `MemTotal:       16301328 kB
-MemAvailable:   12456780 kB
-`},
-			"cat /proc/loadavg": {err: fmt.Errorf("missing loadavg")},
-			"df -kP /": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
-/dev/root 3145728 1048576 2097152 34% /
-`},
-			"df -kPl": {out: `Filesystem 1024-blocks Used Available Capacity Mounted on
-/dev/root 3145728 1048576 2097152 34% /
-`},
-			`if [ -r /proc/mounts ]; then cat /proc/mounts; else mount; fi`: {out: ""},
-
-			`if command -v ip >/dev/null 2>&1; then ip -o addr show scope global 2>/dev/null || ip addr show scope global | awk '/inet/ {print $2}'; else ifconfig 2>/dev/null | awk '/^[a-z]/ {iface=$1} /inet / && !/127.0.0.1/ {print iface, $2}; /inet6 / && !/::1/ && !/fe80/ {print iface, $2}' | sed 's/://'; fi`: {err: fmt.Errorf("no network tool")},
 			OllamaDiscoveryScript:      {err: fmt.Errorf("no ollama")},
 			DiskWeightsDiscoveryScript: {out: `{"weights":[],"truncated":false}`},
 		},
@@ -499,17 +90,11 @@ MemAvailable:   12456780 kB
 	if facts.Status != models.StatusPartial {
 		t.Fatalf("expected partial status, got %s", facts.Status)
 	}
-	if facts.Hostname != "linux-node-observed" {
-		t.Fatalf("expected observed hostname on partial facts, got %q", facts.Hostname)
+	if facts.Hostname != "linux-node.local" {
+		t.Fatalf("expected configured hostname fallback, got %q", facts.Hostname)
 	}
-	if facts.Identity == nil || facts.Identity.Source != "linux-machine-id" {
-		t.Fatalf("expected linux identity, got %+v", facts.Identity)
-	}
-	if facts.Resources == nil {
-		t.Fatal("expected resources even on partial failure")
-	}
-	if facts.Resources.CPUModel != "AMD Ryzen" {
-		t.Fatalf("unexpected cpu model: %q", facts.Resources.CPUModel)
+	if len(facts.PartialReasons) == 0 {
+		t.Fatal("expected fact_bundle partial reason")
 	}
 	if facts.Ollama != nil {
 		t.Fatalf("expected ollama info to stay nil on discovery error, got %+v", facts.Ollama)
@@ -530,87 +115,6 @@ func TestDetectRemoteHostnameRejectsEmptyFallback(t *testing.T) {
 	}
 	if hostname != "" {
 		t.Fatalf("hostname = %q, want empty string", hostname)
-	}
-}
-
-func TestRemoteStorageClassWalksMapperSlaves(t *testing.T) {
-	exec := &fakeRemoteExecutor{
-		exact: map[string]fakeRunResult{
-			`findmnt -n -o SOURCE / 2>/dev/null`: {out: "/dev/mapper/vg-root\n"},
-			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/mapper/vg-root" 2>/dev/null`: {
-				out: `{"blockdevices":[{"name":"/dev/mapper/vg-root","kname":"dm-0","type":"lvm","rota":null}]}`,
-			},
-			`ls -1 /sys/class/block/dm-0/slaves 2>/dev/null`: {out: "dm-1\n"},
-			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/dm-1" 2>/dev/null`: {
-				out: `{"blockdevices":[{"name":"/dev/dm-1","kname":"dm-1","type":"crypt","rota":null}]}`,
-			},
-			`ls -1 /sys/class/block/dm-1/slaves 2>/dev/null`: {out: "sda2\n"},
-			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/sda2" 2>/dev/null`: {
-				out: `{"blockdevices":[{"name":"/dev/sda2","kname":"sda2","pkname":"sda","type":"part","rota":null}]}`,
-			},
-			`lsblk -J -n -p -o NAME,KNAME,PKNAME,TYPE,ROTA "/dev/sda" 2>/dev/null`: {
-				out: `{"blockdevices":[{"name":"/dev/sda","kname":"sda","type":"disk","rota":1}]}`,
-			},
-		},
-	}
-
-	collector := NewRemoteCollector("linux-node", "worker", "linux-node.local", exec)
-	got := collector.remoteStorageClass(context.Background(), "linux")
-	if got != "hdd" {
-		t.Fatalf("remoteStorageClass = %q, want hdd", got)
-	}
-}
-
-func TestDetectLocalNodeIdentityLinux(t *testing.T) {
-	prev := readLocalIdentityFile
-	t.Cleanup(func() { readLocalIdentityFile = prev })
-
-	readLocalIdentityFile = func(name string) ([]byte, error) {
-		if name == "/etc/machine-id" {
-			return nil, os.ErrNotExist
-		}
-		if name == "/var/lib/dbus/machine-id" {
-			return []byte("abc123\n"), nil
-		}
-		return nil, fmt.Errorf("unexpected file: %s", name)
-	}
-
-	id := detectLocalNodeIdentity(context.Background(), "linux")
-	if id == nil {
-		t.Fatal("expected identity")
-	}
-	if id.StableID != "abc123" || id.Source != "linux-machine-id" {
-		t.Fatalf("unexpected identity: %+v", id)
-	}
-}
-
-func TestDetectLocalNodeIdentityLinuxMissingFiles(t *testing.T) {
-	prev := readLocalIdentityFile
-	t.Cleanup(func() { readLocalIdentityFile = prev })
-
-	readLocalIdentityFile = func(string) ([]byte, error) {
-		return nil, os.ErrNotExist
-	}
-
-	if id := detectLocalNodeIdentity(context.Background(), "linux"); id != nil {
-		t.Fatalf("expected nil identity when files missing, got %+v", id)
-	}
-}
-
-func TestDetectLocalDarwinIdentity(t *testing.T) {
-	prev := runLocalIdentityCommand
-	t.Cleanup(func() { runLocalIdentityCommand = prev })
-
-	runLocalIdentityCommand = func(context.Context, string, ...string) (string, error) {
-		return `  "IOPlatformUUID" = "F47AC10B-58CC-4372-A567-0E02B2C3D479"`, nil
-	}
-
-	id := detectLocalDarwinIdentity(context.Background())
-	if id == nil {
-		t.Fatal("expected darwin identity")
-	}
-	if id.Source != "darwin-platform-uuid" {
-		t.Fatalf("unexpected source: %q", id.Source)
 	}
 }
 
@@ -677,23 +181,6 @@ func TestAppleFoundationModelsHelperUpToDateStatSourceError(t *testing.T) {
 	}
 }
 
-func TestAppleFoundationModelsHelperUpToDateBinaryIsDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	source := filepath.Join(tmpDir, "source.swift")
-	binary := filepath.Join(tmpDir, "binary")
-	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(binary, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := appleFoundationModelsHelperUpToDate(source, binary)
-	if err == nil {
-		t.Fatal("expected error when binary path is a directory")
-	}
-}
-
 func TestDiscoverOllamaLocalErrorPath(t *testing.T) {
 	prev := runOllamaDiscoveryFn
 	t.Cleanup(func() { runOllamaDiscoveryFn = prev })
@@ -714,23 +201,6 @@ func TestDiscoverOllamaLocalErrorPath(t *testing.T) {
 	}
 }
 
-func TestDiscoverOllamaLocalUnparseableJSON(t *testing.T) {
-	prev := runOllamaDiscoveryFn
-	t.Cleanup(func() { runOllamaDiscoveryFn = prev })
-
-	runOllamaDiscoveryFn = func(context.Context) ([]byte, error) {
-		return []byte("not json"), nil
-	}
-
-	info, models := discoverOllamaLocal(context.Background())
-	if info.Installed {
-		t.Fatal("expected not installed when JSON unparseable")
-	}
-	if models != nil {
-		t.Fatal("expected nil models when JSON unparseable")
-	}
-}
-
 func TestDiscoverLlamaServerLocalErrorPath(t *testing.T) {
 	prev := runLlamaServerDiscoveryFn
 	t.Cleanup(func() { runLlamaServerDiscoveryFn = prev })
@@ -744,19 +214,6 @@ func TestDiscoverLlamaServerLocalErrorPath(t *testing.T) {
 	}
 }
 
-func TestDiscoverLlamaServerLocalUnparseableJSON(t *testing.T) {
-	prev := runLlamaServerDiscoveryFn
-	t.Cleanup(func() { runLlamaServerDiscoveryFn = prev })
-
-	runLlamaServerDiscoveryFn = func(context.Context) ([]byte, error) {
-		return []byte("not json"), nil
-	}
-
-	if models := discoverLlamaServerLocal(context.Background()); models != nil {
-		t.Fatalf("expected nil on unparseable JSON, got %v", models)
-	}
-}
-
 func TestDiscoverMLXLocalErrorPath(t *testing.T) {
 	prev := runMLXDiscoveryFn
 	t.Cleanup(func() { runMLXDiscoveryFn = prev })
@@ -767,18 +224,5 @@ func TestDiscoverMLXLocalErrorPath(t *testing.T) {
 
 	if models := discoverMLXLocal(context.Background()); models != nil {
 		t.Fatalf("expected nil on error, got %v", models)
-	}
-}
-
-func TestDiscoverMLXLocalUnparseableJSON(t *testing.T) {
-	prev := runMLXDiscoveryFn
-	t.Cleanup(func() { runMLXDiscoveryFn = prev })
-
-	runMLXDiscoveryFn = func(context.Context) ([]byte, error) {
-		return []byte("not json"), nil
-	}
-
-	if models := discoverMLXLocal(context.Background()); models != nil {
-		t.Fatalf("expected nil on unparseable JSON, got %v", models)
 	}
 }

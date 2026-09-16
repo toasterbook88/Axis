@@ -504,8 +504,6 @@ func (e *ToolEntry) Render(width int) []Line {
 	return out
 }
 
-
-
 // Decision is how an approval resolved. There are two grant tiers, not three:
 // internal/agent's ConfirmAlways is scoped to the running process, so
 // "session" is the widest grant this architecture offers.
