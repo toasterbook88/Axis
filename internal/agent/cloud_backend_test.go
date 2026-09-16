@@ -129,6 +129,87 @@ func TestCloudBackend_OpenAI_BareJSONToolCallPromoted(t *testing.T) {
 	}
 }
 
+// Buffered JSON that is NOT a registered tool call must be flushed as ordinary
+// content to both the operator stream and result.Content, not dropped.
+func TestCloudBackend_OpenAI_DeferredJSONFlushesAsContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// First chunk starts with '{' but is ordinary prose, not a tool call.
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"{\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \" looks like a JSON object but is just text.\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var streamOut bytes.Buffer
+	tools := []chat.ToolDef{{Type: "function", Function: chat.ToolDefFunction{Name: "axis_status", Description: "cluster status"}}}
+	resp, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "Hello"}}, tools, &streamOut)
+	if err != nil {
+		t.Fatalf("unexpected ChatStream error: %v", err)
+	}
+
+	if len(resp.ToolCalls) != 0 {
+		t.Fatalf("prose starting with { must not be promoted, got %d tool calls", len(resp.ToolCalls))
+	}
+	want := "{ looks like a JSON object but is just text."
+	if resp.Content != want {
+		t.Errorf("result.Content = %q, want %q", resp.Content, want)
+	}
+	if streamOut.String() != want {
+		t.Errorf("streamOut = %q, want %q", streamOut.String(), want)
+	}
+}
+
+// Native tool_calls and buffered JSON content can coexist. The native calls
+// must be preserved and the buffered bytes must still reach the operator.
+func TestCloudBackend_OpenAI_NativeToolCallsAndDeferredJSONContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// JSON-looking prefix buffered, then content, then native tool_call
+		// streamed across the usual name-then-arguments chunks.
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"{\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \" some context before the call\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"axis_status\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"}\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var streamOut bytes.Buffer
+	tools := []chat.ToolDef{{Type: "function", Function: chat.ToolDefFunction{Name: "axis_status", Description: "cluster status"}}}
+	resp, err := backend.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "Hello"}}, tools, &streamOut)
+	if err != nil {
+		t.Fatalf("unexpected ChatStream error: %v", err)
+	}
+
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 native tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Function.Name != "axis_status" {
+		t.Errorf("expected axis_status, got %q", resp.ToolCalls[0].Function.Name)
+	}
+	wantContent := "{ some context before the call"
+	if resp.Content != wantContent {
+		t.Errorf("result.Content = %q, want %q", resp.Content, wantContent)
+	}
+	if streamOut.String() != wantContent {
+		t.Errorf("streamOut = %q, want %q", streamOut.String(), wantContent)
+	}
+}
+
 // The Hermes drift shape ({"thought","action"}) must also be promoted, with
 // the thought kept as visible content so the operator still sees the reasoning.
 func TestCloudBackend_OpenAI_HermesThoughtActionPromoted(t *testing.T) {
