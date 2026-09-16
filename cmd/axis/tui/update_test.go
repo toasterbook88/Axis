@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -169,6 +170,30 @@ func TestUpdateLoadErrorSchedulesRetry(t *testing.T) {
 	}
 }
 
+func TestRefreshErrorKeepsPreviousSnapshotVisible(t *testing.T) {
+	m := modelWithNodes(1)
+	m.snapshot.Nodes[0].Name = "known-node"
+	m.source = "daemon-cache"
+	m.lastRefresh = "9:41AM"
+
+	next, cmd := UpdateWithRefresh(m, loadErrMsg{Err: errBoom})
+	if cmd == nil {
+		t.Fatal("refresh error should schedule a retry")
+	}
+	got := next.(Model)
+	if !strings.Contains(got.statusMsg, "Refresh failed; showing previous snapshot") {
+		t.Fatalf("status = %q, want stale-snapshot warning", got.statusMsg)
+	}
+
+	out := stripANSI(ViewWithLogo(got))
+	if !strings.Contains(out, "known-node") {
+		t.Fatalf("previous snapshot missing after refresh error:\n%s", out)
+	}
+	if strings.Contains(out, "Snapshot unavailable") {
+		t.Fatalf("refresh error incorrectly replaced valid snapshot with onboarding:\n%s", out)
+	}
+}
+
 func TestUpdateTickSkipsWhenLoading(t *testing.T) {
 	m := NewModel()
 	m.loading = true
@@ -190,28 +215,130 @@ func TestUpdateWindowSize(t *testing.T) {
 	}
 }
 
-func TestUpdateOpensPlacementModal(t *testing.T) {
+func TestUpdateOpensPlacementModalWithDisplayedAuthority(t *testing.T) {
 	m := modelWithNodes(1)
+	m.source = "daemon-cache"
+	m.lastRefresh = "9:41AM"
 	next, cmd := UpdateWithRefresh(m, keyMsg("p"))
 	if cmd == nil {
 		t.Fatal("placement key returned nil command, want text-input blink command")
 	}
-	if !next.(Model).modalActive {
+	got := next.(Model)
+	if !got.modalActive {
 		t.Fatal("placement key did not activate modal")
+	}
+	if got.modal.snapshot == m.snapshot {
+		t.Fatal("placement modal retained mutable dashboard snapshot pointer")
+	}
+	if got.modal.source != "daemon-cache" || got.modal.freshness != "9:41AM" {
+		t.Fatalf("modal authority = %q/%q, want daemon-cache/9:41AM", got.modal.source, got.modal.freshness)
+	}
+}
+
+func TestPlacementModalPreservesObservedTimeDuringRefresh(t *testing.T) {
+	m := modelWithNodes(1)
+	m.source = "daemon-cache"
+	m.lastRefresh = "9:41AM"
+
+	next, refreshCmd := UpdateWithRefresh(m, keyMsg("r"))
+	if refreshCmd == nil {
+		t.Fatal("manual refresh returned nil command")
+	}
+	m = next.(Model)
+	if m.lastRefresh != "9:41AM" {
+		t.Fatalf("in-flight refresh changed observed time to %q", m.lastRefresh)
+	}
+
+	next, _ = UpdateWithRefresh(m, keyMsg("p"))
+	got := next.(Model)
+	if !got.modalActive {
+		t.Fatal("placement modal did not open during in-flight refresh")
+	}
+	if got.modal.freshness != "9:41AM" {
+		t.Fatalf("modal freshness = %q, want last observed time", got.modal.freshness)
+	}
+	refreshed := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "new-node", Status: models.StatusComplete}}}
+	next, tick := UpdateWithRefresh(got, snapshotLoadedMsg{
+		Snapshot:  refreshed,
+		Timestamp: "9:42AM",
+		Source:    "live",
+	})
+	if tick == nil {
+		t.Fatal("snapshot completion while modal is open did not schedule next refresh")
+	}
+	got = next.(Model)
+	if got.loading || got.snapshot != refreshed || got.source != "live" || got.lastRefresh != "9:42AM" {
+		t.Fatalf("root lifecycle not updated behind modal: loading=%v source=%q freshness=%q snapshot=%p",
+			got.loading, got.source, got.lastRefresh, got.snapshot)
+	}
+	if !got.modalActive {
+		t.Fatal("snapshot completion closed the placement modal")
+	}
+	if got.modal.snapshot.Nodes[0].Name != "node" || got.modal.freshness != "9:41AM" {
+		t.Fatalf("modal authority changed during refresh: node=%q freshness=%q",
+			got.modal.snapshot.Nodes[0].Name, got.modal.freshness)
 	}
 }
 
 func TestUpdateRoutesKeysToPlacementModal(t *testing.T) {
 	m := modelWithNodes(1)
 	m.modalActive = true
-	m.modal = NewPlacementModal()
-
+	m.modal = NewPlacementModal(m.snapshot, "file", "unknown")
 	next, cmd := UpdateWithRefresh(m, tea.KeyMsg{Type: tea.KeyEscape})
 	if cmd != nil {
 		t.Fatalf("modal escape returned command %v, want nil", cmd)
 	}
 	if next.(Model).modalActive {
 		t.Fatal("modal remained active after Escape")
+	}
+}
+
+func TestUpdatePlacementConfirmationNamesNodeAndExecutionBoundary(t *testing.T) {
+	m := modelWithNodes(1)
+	m.modalActive = true
+	m.modal = NewPlacementModal(m.snapshot, "daemon-cache", "9:41AM")
+	m.modal.explanation = &models.PlacementExplanation{
+		Decision: models.PlacementDecision{Node: "node-a", OK: true},
+	}
+
+	next, _ := UpdateWithRefresh(m, tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(Model)
+	if got.modalActive {
+		t.Fatal("confirmed placement modal remained active")
+	}
+	if want := "Recommended: node-a · advisory only · no task executed"; got.statusMsg != want {
+		t.Fatalf("status = %q, want %q", got.statusMsg, want)
+	}
+}
+
+func TestSnapshotRecoveryExplainsExplicitSetupAndRetry(t *testing.T) {
+	m := NewModel()
+	m.loading = false
+	m.loadErr = errBoom
+
+	out := stripANSI(ViewWithLogo(m))
+	for _, want := range []string{
+		"Snapshot unavailable",
+		"axis init",
+		"axis daemon service install",
+		"axis daemon start",
+		"Press r here to retry immediately",
+		"The TUI starts nothing until you run one of these commands.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("recovery view missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestHelpListsPlacementAndRefreshKeys(t *testing.T) {
+	m := modelWithNodes(1)
+	next, _ := UpdateWithRefresh(m, keyMsg("?"))
+	status := next.(Model).statusMsg
+	for _, want := range []string{"p place", "r refresh", "? help"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("help status missing %q in %q", want, status)
+		}
 	}
 }
 

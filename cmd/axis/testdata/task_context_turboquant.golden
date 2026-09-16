@@ -6,8 +6,10 @@ AXIS CLUSTER CONTEXT (paste as system prompt):
 - Tools: [ollama]
 - Summary: 1 nodes, 8192MB allocatable across cluster (0MB reserved of 8192MB reservable)
 - Task: run 128k ollama inference
-- Live tools: start read-only MCP with: axis mcp serve
+- Read-only tools: `axis mcp serve` (MCP), `axis status --cached`, `axis task place <desc>`, `axis model list`
 - TurboQuant verified: mlx (apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present)
 - TurboQuant matrix: mlx-node=verified/env-only (mlx)
 
-Be precise. Use real node names and tools above.
+Be precise. Use real node names and tools above. Placement is advisory:
+execute via `axis task run --script/--exec` (guarded, reserved, confirmed)
+or model lifecycle via `axis model start --node <name> --weights <path> --port <p>`.
