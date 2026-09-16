@@ -11,7 +11,7 @@ import (
 )
 
 func TestWrapBash_FishSafePureExternal(t *testing.T) {
-	got := WrapBash("uname -s")
+	got := transport.WrapBash("uname -s")
 	// Must be pure external argv form — no POSIX assignments/loops that fish rejects.
 	if strings.Contains(got, "axis_bash_launcher=") || strings.Contains(got, "for c in") || strings.HasPrefix(got, "B=") {
 		t.Fatalf("launcher must not use POSIX shell syntax (breaks fish): %q", got)
@@ -23,7 +23,7 @@ func TestWrapBash_FishSafePureExternal(t *testing.T) {
 		t.Fatalf("script missing: %q", got)
 	}
 	// Idempotent.
-	if WrapBash(got) != got {
+	if transport.WrapBash(got) != got {
 		t.Fatalf("WrapBash should be idempotent")
 	}
 }
@@ -44,7 +44,7 @@ func (s *stubExec) RunWithStdin(ctx context.Context, cmd string, stdin []byte) (
 
 func TestBashForcedExecutor_WrapsRun(t *testing.T) {
 	inner := &stubExec{}
-	ex := withBashForced(inner)
+	ex := transport.WithBashForced(inner)
 	if _, err := ex.Run(context.Background(), "uname -s"); err != nil {
 		t.Fatal(err)
 	}
@@ -54,19 +54,18 @@ func TestBashForcedExecutor_WrapsRun(t *testing.T) {
 	if !strings.HasPrefix(inner.runs[0], "/usr/bin/env bash --noprofile --norc -c ") {
 		t.Fatalf("command not env-bash-wrapped: %q", inner.runs[0])
 	}
-	ex2 := withBashForced(ex)
-	if _, ok := ex2.(*bashForcedExecutor); !ok {
-		t.Fatalf("expected bashForcedExecutor, got %T", ex2)
+	ex2 := transport.WithBashForced(ex)
+	if _, ok := ex2.(*transport.BashForcedExecutor); !ok {
+		t.Fatalf("expected BashForcedExecutor, got %T", ex2)
 	}
-	_ = transport.Executor(ex)
 }
 
 func TestWrapBash_MatchesViaWrapBashEquality(t *testing.T) {
 	cmd := "uname -s"
-	if WrapBash(cmd) == cmd {
+	if transport.WrapBash(cmd) == cmd {
 		t.Fatal("WrapBash should transform command")
 	}
-	if WrapBash(WrapBash(cmd)) != WrapBash(cmd) {
+	if transport.WrapBash(transport.WrapBash(cmd)) != transport.WrapBash(cmd) {
 		t.Fatal("WrapBash should be idempotent for already-wrapped commands")
 	}
 }
