@@ -80,3 +80,6 @@ axis-current
 
 # Editor state
 .cursor/
+
+# Interlinked harness runtime state (local agent-guard daemon)
+.interlinked/
