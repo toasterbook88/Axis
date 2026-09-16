@@ -183,17 +183,6 @@ type taskRunIntent struct {
 	requiresConfirmation bool
 }
 
-func reservationMBForRequirements(reqs models.TaskRequirements) int64 {
-	return execution.ReservationMBForRequirements(reqs)
-}
-
-func ensureReservationCapacity(snap *models.ClusterSnapshot, node string, reservationMB int64) error {
-	if !execution.CanReserve(snap, node, reservationMB) {
-		return fmt.Errorf("node %s cannot reserve %d MB (current reservations exceed cap)", node, reservationMB)
-	}
-	return nil
-}
-
 func resolveTaskRunIntent(input string, execFlag, scriptFlag bool, skillStore *skills.Store) (taskRunIntent, error) {
 	if execFlag && scriptFlag {
 		return taskRunIntent{}, fmt.Errorf("use either --exec for a raw command or --script for a known script/skill, not both")
@@ -791,10 +780,6 @@ func sourceOrLive(source string) string {
 		return "live"
 	}
 	return source
-}
-
-func remoteExecPrefix(node, contextPath string, extraEnv []string) string {
-	return execution.RemoteExecPrefix(node, contextPath, extraEnv)
 }
 
 func contextHint(reqs models.TaskRequirements) string {

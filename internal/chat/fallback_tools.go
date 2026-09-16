@@ -13,22 +13,6 @@ var (
 	jsonCodeBlockRegex = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(\\{.*?\\}|\\[.*?\\])\\s*\\n?```")
 )
 
-// ExtractReasoning extracts any <think>...</think> blocks from content.
-// Returns the accumulated thinking text (trimmed) and the content with thinking blocks removed.
-func ExtractReasoning(content string) (thinking string, cleanContent string) {
-	if !strings.Contains(content, "<think>") {
-		return "", content
-	}
-	var thoughts []string
-	matches := thinkTagRegex.FindAllStringSubmatch(content, -1)
-	for _, m := range matches {
-		if len(m) > 1 && strings.TrimSpace(m[1]) != "" {
-			thoughts = append(thoughts, strings.TrimSpace(m[1]))
-		}
-	}
-	clean := thinkTagRegex.ReplaceAllString(content, "")
-	return strings.Join(thoughts, "\n\n"), strings.TrimSpace(clean)
-}
 
 // rawToolCallJSON represents typical shapes of JSON tool calls emitted by models in text.
 type rawToolCallJSON struct {

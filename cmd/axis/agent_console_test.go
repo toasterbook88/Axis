@@ -246,8 +246,8 @@ func TestConsoleReportsWhenATurnWaitsBehindADrainingRun(t *testing.T) {
 	}()
 	<-first
 
-	if l.draining() != 1 {
-		t.Fatalf("draining() = %d, want 1", l.draining())
+	if l.inFlight != 1 {
+		t.Fatalf("draining() = %d, want 1", l.inFlight)
 	}
 
 	secondDone := make(chan struct{})
@@ -271,8 +271,8 @@ func TestConsoleReportsWhenATurnWaitsBehindADrainingRun(t *testing.T) {
 	if !warned {
 		t.Error("no notice that a turn waited behind a draining run")
 	}
-	if l.draining() != 0 {
-		t.Errorf("draining() = %d after both turns, want 0", l.draining())
+	if l.inFlight != 0 {
+		t.Errorf("draining() = %d after both turns, want 0", l.inFlight)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -118,7 +119,7 @@ func TestShellStopClassifiesFreePortByInspectionCapability(t *testing.T) {
 
 	// A port in the ephemeral-but-unused range; the script only inspects it.
 	const freePort = 39733
-	out, err := exec.Command("bash", "-c", shellStop(freePort)).CombinedOutput()
+	out, err := exec.Command("bash", "-c", shellStopTarget(modellife.StopTarget{Port: freePort})).CombinedOutput()
 
 	disposition, cerr := classifyModelStop(string(out), err)
 	if cerr != nil {

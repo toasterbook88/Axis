@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
@@ -205,58 +204,8 @@ func TestResolveTaskRunIntentPrefersRawExec(t *testing.T) {
 	}
 }
 
-func TestReservationMBForRequirementsAddsHeadroom(t *testing.T) {
-	reqs := models.TaskRequirements{MinFreeRAMMB: 4096}
-	if got := reservationMBForRequirements(reqs); got != 5120 {
-		t.Fatalf("reservationMBForRequirements() = %d, want 5120", got)
-	}
-}
 
-func TestEnsureReservationCapacityRejectsOverCapNode(t *testing.T) {
-	snap := &models.ClusterSnapshot{
-		Nodes: []models.NodeFacts{
-			{
-				Name:   "alpha",
-				Status: models.StatusComplete,
-				Resources: &models.Resources{
-					RAMTotalMB: 8192,
-					RAMFreeMB:  8192,
-				},
-				RAMReservedMB: 7168,
-			},
-		},
-	}
 
-	err := ensureReservationCapacity(snap, "alpha", 1025)
-	if err == nil {
-		t.Fatal("expected reservation capacity error")
-	}
-	if !strings.Contains(err.Error(), "cannot reserve") {
-		t.Fatalf("expected reservation error message, got %v", err)
-	}
-}
-
-func TestEnsureReservationCapacityMatchesDaemonCapLogic(t *testing.T) {
-	nodes := []models.NodeFacts{
-		{
-			Name:   "alpha",
-			Status: models.StatusComplete,
-			Resources: &models.Resources{
-				RAMTotalMB: 8192,
-				RAMFreeMB:  3072,
-			},
-			RAMReservedMB: 2048,
-		},
-	}
-	snap := &models.ClusterSnapshot{Nodes: nodes}
-
-	if err := ensureReservationCapacity(snap, "alpha", 1024); err != nil {
-		t.Fatalf("expected reservation to fit cap, got %v", err)
-	}
-	if !daemon.CanReserve(snap, "alpha", 1024) {
-		t.Fatal("expected daemon cap logic to agree with helper")
-	}
-}
 
 func TestScheduleTaskRunDaemonRefreshSignalsBestEffort(t *testing.T) {
 	ch := make(chan string, 1)

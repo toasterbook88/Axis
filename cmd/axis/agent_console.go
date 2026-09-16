@@ -644,15 +644,6 @@ func (l *consoleLauncher) cancel(turn console.TurnID) {
 		cancel()
 	}
 }
-
-// draining reports how many agent runs have not yet returned. The console
-// watchdog freeing the UI is not proof that a run has exited.
-func (l *consoleLauncher) draining() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.inFlight
-}
-
 const defaultApprovalTimeout = 2 * time.Minute
 
 // consoleConfirm bridges agent tool confirmation into Bubble Tea's overlay system.

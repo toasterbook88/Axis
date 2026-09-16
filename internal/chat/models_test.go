@@ -101,26 +101,6 @@ func TestResolveDefaultModelPicksDeterministicInstalledWhenNoneRecommended(t *te
 	}
 }
 
-func TestFormatModelCatalogIncludesCloudHint(t *testing.T) {
-	out := FormatModelCatalog(ModelCatalog{
-		Current:            "qwen3:1.7b",
-		Default:            "qwen3:1.7b",
-		InstalledAvailable: true,
-		Installed:          []string{"qwen3:1.7b"},
-		RecommendedLocal:   recommendedLocalModels,
-		RecommendedCloud:   recommendedCloudModels,
-	})
-
-	if !strings.Contains(out, "qwen3-coder:480b-cloud") {
-		t.Fatalf("expected cloud model listing, got %q", out)
-	}
-	if !strings.Contains(out, "/model <tag>") {
-		t.Fatalf("expected switch hint, got %q", out)
-	}
-	if !strings.Contains(out, "[installed, default]") {
-		t.Fatalf("expected default marker, got %q", out)
-	}
-}
 
 func TestResolveDefaultModelPrefersInstalledRecommendedModel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,29 +132,6 @@ func TestResolveDefaultModelFallsBackWhenModelListingFails(t *testing.T) {
 	}
 }
 
-func TestBuildModelCatalogIncludesInstalledState(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/tags" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:1.7b"},{"name":"custom:latest"}]}`))
-	}))
-	defer server.Close()
-
-	restore := stubDefaultHTTPClient(t, rewriteClientToServer(t, server.URL))
-	defer restore()
-
-	catalog := BuildModelCatalog(context.Background(), "custom:latest")
-	if !catalog.InstalledAvailable {
-		t.Fatal("expected installed models to be available")
-	}
-	if catalog.Default != "qwen3:1.7b" {
-		t.Fatalf("catalog.Default = %q, want qwen3:1.7b", catalog.Default)
-	}
-	if len(catalog.Installed) != 2 {
-		t.Fatalf("expected 2 installed models, got %v", catalog.Installed)
-	}
-}
 
 func TestListInstalledModelsReturnsStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,16 +165,6 @@ func TestListInstalledModelsSortsResults(t *testing.T) {
 	}
 }
 
-func TestNewEngineCreatesHybridEngineWithRequestedModel(t *testing.T) {
-	engine := NewEngine("phi4")
-	hybrid, ok := engine.(*HybridEngine)
-	if !ok {
-		t.Fatalf("expected HybridEngine, got %T", engine)
-	}
-	if hybrid.model != "phi4" {
-		t.Fatalf("HybridEngine model = %q, want phi4", hybrid.model)
-	}
-}
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 

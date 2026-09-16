@@ -705,7 +705,7 @@ func TestAppendWarningIfMissingDeduplicates(t *testing.T) {
 }
 
 func TestRemoteExecPrefixIncludesQuotedEnv(t *testing.T) {
-	got := remoteExecPrefix("node a", "/tmp/context file", []string{"ALPHA=beta gamma", "EMPTY="})
+	got := execution.RemoteExecPrefix("node a", "/tmp/context file", []string{"ALPHA=beta gamma", "EMPTY="})
 	for _, want := range []string{
 		"BEST_NODE='node a'",
 		"AXIS_CONTEXT_FILE='/tmp/context file'",

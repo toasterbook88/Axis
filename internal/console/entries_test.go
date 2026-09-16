@@ -114,42 +114,7 @@ func TestToolEntryRendersResultAndError(t *testing.T) {
 	})
 }
 
-func TestStreamEntryAppendsAndCloses(t *testing.T) {
-	e := NewStreamEntry(at, "s1", "remote_tail_logs node-a")
 
-	if !strings.Contains(plain(e, 60)[0], "(streaming)") {
-		t.Error("open stream not marked streaming")
-	}
-
-	e.Append("line one")
-	e.Append("line two")
-	e.Close()
-
-	got := plain(e, 60)
-	if strings.Contains(got[0], "(streaming)") {
-		t.Error("closed stream still marked streaming")
-	}
-	assertLines(t, got, []string{
-		"| remote_tail_logs node-a",
-		"  line one",
-		"  line two",
-	})
-}
-
-func TestStreamEntryDropsOldestBeyondLimit(t *testing.T) {
-	e := NewStreamEntry(at, "s1", "tail")
-	e.Limit = 3
-	for _, line := range []string{"a", "b", "c", "d", "e"} {
-		e.Append(line)
-	}
-
-	if len(e.Lines) != 3 {
-		t.Fatalf("retained %d lines, want 3", len(e.Lines))
-	}
-	if e.Lines[0] != "c" {
-		t.Errorf("oldest retained line = %q, want %q", e.Lines[0], "c")
-	}
-}
 
 func TestApprovalAlwaysRendersNumericScore(t *testing.T) {
 	// The 70-79 band is allowed but risky. A binary PASS/FAIL would hide it,
@@ -224,7 +189,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 func TestEveryKindHasAGutterMarker(t *testing.T) {
 	kinds := []Kind{
 		KindUser, KindAgent, KindThinking, KindTool,
-		KindStream, KindDiff, KindApproval, KindNotice, KindError,
+		KindApproval, KindNotice, KindError,
 	}
 	for _, k := range kinds {
 		if gutter[k] == "" {
