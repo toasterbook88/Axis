@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"syscall"
 	"time"
@@ -183,7 +187,7 @@ func buildMeshStatus(ctx context.Context, cfg *config.Config, cacheAddr string) 
 
 	queryCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
 	defer cancel()
-	peers, err := fetchDaemonMesh(queryCtx, cacheAddr)
+	peers, err := fetchDaemonMeshAll(queryCtx, cacheAddr)
 	if err != nil {
 		report.Daemon = "unavailable"
 		report.DaemonError = err.Error()
@@ -254,7 +258,7 @@ func runDaemonMeshPeers(cmd *cobra.Command) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 	defer cancel()
 
-	peers, err := fetchDaemonMesh(ctx, meshCacheAddr(cmd))
+	peers, err := fetchDaemonMeshAll(ctx, meshCacheAddr(cmd))
 	if err != nil {
 		msg := "daemon unavailable"
 		detail := err.Error()
@@ -408,4 +412,32 @@ func udpPortHeld(port int) (bool, error) {
 
 func udpAddrInUse(err error) bool {
 	return errors.Is(err, syscall.EADDRINUSE)
+}
+
+func fetchDaemonMeshAll(ctx context.Context, addr string) ([]mesh.Peer, error) {
+	req, client, err := newDaemonRequest(ctx, addr, http.MethodGet, "/v2/mesh", url.Values{"view": []string{"all"}})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			return nil, fmt.Errorf("mesh query failed: %s", resp.Status)
+		}
+		return nil, fmt.Errorf("mesh query failed: %s: %s", resp.Status, msg)
+	}
+	var payload struct {
+		Peers []mesh.Peer `json:"peers"`
+		Count int         `json:"count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decoding mesh response: %w", err)
+	}
+	return payload.Peers, nil
 }
