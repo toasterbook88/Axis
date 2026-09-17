@@ -264,13 +264,13 @@ func writeFactStub(t *testing.T, dir, name, body string) {
 // that root is one process cmdline. This keeps the self-match scenario testable
 // without the real host's processes contaminating the result.
 //
-// Modeling caveat: the `-x` branch models "first argv token basename" rather
-// than real pgrep's kernel `comm` name (truncated to 15 chars). That is
-// sufficient for the positive control, which launches the stub as
-// "/usr/local/bin/ollama serve", but a daemon whose argv[0] is a wrapper
-// (e.g. `env ollama serve`) would be missed here while real pgrep -x would
-// also miss it (comm would be "env"). The -f fallback covers that case in
-// production; these tests exercise the -x path deliberately.
+// Modeling note: the `-x` branch matches the first argv token's basename rather
+// than the kernel's `comm` name. For the names used here the two agree, so the
+// approximation is adequate; it would diverge only for `comm` values truncated
+// past 15 characters or for interpreted scripts. Which branch is exercised
+// varies: the positive control and the two constant-stub cases (multi-PID,
+// non-numeric) are answered by `-x`, while the down-state and self-match
+// regressions find nothing under `-x` and fall through to the `-f` branch.
 const fakeProcPgrepStub = `
 pat=""
 exact=0
