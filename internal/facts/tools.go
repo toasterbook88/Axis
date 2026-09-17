@@ -40,7 +40,17 @@ const OllamaDiscoveryScript = `set -o pipefail;
 		OLLAMA_BIN=$(command -v ollama || echo "/usr/local/bin/ollama /opt/ollama/ollama ~/.ollama/bin/ollama" | tr ' ' '\n' | while read p; do [ -x "$p" ] && echo "$p" && break; done)
 		if [ -z "$OLLAMA_BIN" ]; then echo '{"installed":false}'; exit 0; fi
 		VERSION=$($OLLAMA_BIN --version 2>/dev/null | head -1)
-		PGREP=$(pgrep -f "$OLLAMA_BIN" || echo "")
+		# Match the daemon by process name first (precise), then fall back to
+		# a bracketed cmdline pattern. The bracket keeps the probe's own
+		# bash -c argv -- which embeds this script text -- from matching
+		# itself; head -1 collapses multi-instance output to one PID; the
+		# numeric guard rejects any non-PID line so the value can never
+		# word-split a later test.
+		PGREP=$(pgrep -x ollama 2>/dev/null | head -1 || true)
+		if [ -z "$PGREP" ]; then PGREP=$(pgrep -f '[o]llama serve' 2>/dev/null | head -1 || true); fi
+		case "$PGREP" in ''|*[!0-9]*) PGREP="";; esac
+		RUNNING=false
+		[ -n "$PGREP" ] && RUNNING=true
 		MODELS=$($OLLAMA_BIN list 2>/dev/null | tail -n +2 | awk 'NF { printf "%s\"%s\"", (n++ ? "," : ""), $1 }')
 		if [ -n "$MODELS" ]; then
 			MODELS="[$MODELS]"
@@ -114,7 +124,7 @@ PYEOF
 		# the field) by emitting an empty string. Treat null and any
 		# failure to parse as empty.
 		KEEPALIVE=$(curl -s --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('default_keep_alive'); print('' if v is None else v)" 2>/dev/null || echo "")
-		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$( [ -n \"$PGREP\" ] && echo true || echo false ),\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\"}"
+		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\"}"
 	`
 
 // LlamaServerDiscoveryScript is the bash script used to detect a running
