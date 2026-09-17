@@ -93,15 +93,18 @@ func startUDP(ctx context.Context, cfg *config.Config, discovered map[string]con
 // WatchBeaconChanges runs a long-lived beacon broadcaster/listener pair and
 // updates the provided registry as beacon-derived nodes appear, change, or age
 // out. onChange is called only when the observed registry meaningfully changes.
-func WatchBeaconChanges(ctx context.Context, cfg *config.Config, registry *BeaconRegistry, onChange func()) {
+//
+// A non-nil error means the UDP listener did not start. Callers must not
+// treat an empty registry as "no peers" in that case — the scan never ran.
+func WatchBeaconChanges(ctx context.Context, cfg *config.Config, registry *BeaconRegistry, onChange func()) error {
 	if cfg == nil || cfg.Discovery == nil || !cfg.Discovery.Enabled || registry == nil {
-		return
+		return nil
 	}
 
 	startBeaconBroadcaster(ctx, cfg)
 	pc, secret, err := openBeaconListener(cfg)
 	if err != nil {
-		return
+		return err
 	}
 
 	listenForBeacons(ctx, pc, secret, func(b Beacon) {
@@ -124,6 +127,7 @@ func WatchBeaconChanges(ctx context.Context, cfg *config.Config, registry *Beaco
 			}
 		}
 	}()
+	return nil
 }
 
 func startBeaconBroadcaster(ctx context.Context, cfg *config.Config) {
@@ -165,7 +169,7 @@ func openBeaconListener(cfg *config.Config) (*net.UDPConn, string, error) {
 		return nil, "", net.InvalidAddrError("discovery disabled")
 	}
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
-	if err != nil {
+		if err != nil {
 		return nil, "", err
 	}
 	return pc, secret, nil
