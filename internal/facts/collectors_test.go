@@ -1,9 +1,13 @@
 package facts
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -225,5 +229,171 @@ func TestDiscoverMLXLocalErrorPath(t *testing.T) {
 
 	if models := discoverMLXLocal(context.Background()); models != nil {
 		t.Fatalf("expected nil on error, got %v", models)
+	}
+}
+
+// --- Ollama discovery script: hermetic, real bash -c -------------------------
+//
+// The ollama probe ships as a bash script executed via `bash -c`. Its tests
+// historically keyed a fake executor on the script *string* and returned canned
+// JSON, so the script itself was never executed and two compounding defects in
+// its `running` expression went unobserved:
+//
+//  1. self-match — `pgrep -f "$OLLAMA_BIN"` matched the probe's own `bash -c`
+//     argv, because that argv embeds the script text, which contained the
+//     literal binary path in its fallback list;
+//  2. quote-loss — the value came from `$( [ -n \"$PGREP\" ] && echo true ... )`
+//     inside a double-quoted echo, where the escaped quotes reach `test` as
+//     literal characters instead of quoting the expansion.
+//
+// Together they produced `[: too many arguments` -> `running:false` on a host
+// serving models, and (quotes intact, nothing matched) `running:true` on a host
+// with no daemon at all. These tests execute the real script through `bash -c`
+// with a sandboxed PATH and a controlled process table.
+
+// writeFactStub installs an executable stub named `name` into dir.
+func writeFactStub(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fakeProcPgrepStub returns a `pgrep` stub that searches a controlled process
+// table under $FAKE_PROC_ROOT instead of the live host's /proc. Each file in
+// that root is one process cmdline. This keeps the self-match scenario testable
+// without the real host's processes contaminating the result.
+const fakeProcPgrepStub = `
+pat=""
+exact=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f) ;;
+    -x) exact=1;;
+    -*) ;;
+    *) pat="$1";;
+  esac
+  shift
+done
+root="${FAKE_PROC_ROOT:-}"
+[ -n "$root" ] || exit 1
+n=0
+for f in "$root"/*; do
+  [ -f "$f" ] || continue
+  n=$((n+1))
+  if [ "$exact" = "1" ]; then
+    first=$(tr '\0' ' ' < "$f" | awk '{print $1}')
+    if [ "$(basename "$first")" = "$pat" ]; then echo $((4000+n)); fi
+  else
+    if grep -qE -- "$pat" "$f" 2>/dev/null; then echo $((4000+n)); fi
+  fi
+done
+exit 0
+`
+
+// ollamaProbeSandbox builds a sandboxed PATH containing a stub ollama binary,
+// the given pgrep implementation, and stubs for every other host tool the script
+// touches, so the probe runs hermetically with no network access.
+func ollamaProbeSandbox(t *testing.T, pgrepBody string) []string {
+	t.Helper()
+	bin := t.TempDir()
+	writeFactStub(t, bin, "ollama", `case "$1" in
+  list) echo "NAME ID SIZE"; echo "stub:7b aaa 1GB";;
+  ps) echo "";;
+  --version) echo "ollama version 0.0.0-stub";;
+  *) echo "";;
+esac`)
+	writeFactStub(t, bin, "pgrep", pgrepBody)
+	writeFactStub(t, bin, "lsof", "exit 1")
+	writeFactStub(t, bin, "ss", "exit 1")
+	writeFactStub(t, bin, "netstat", "exit 1")
+	writeFactStub(t, bin, "curl", "exit 1")
+	return withSandboxedPATH(bin)
+}
+
+// runOllamaProbe executes the real discovery script through `bash -c` — the
+// exact invocation used by internal/facts/local.go — and returns its payload.
+func runOllamaProbe(t *testing.T, env []string) models.OllamaInfo {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	cmd := exec.Command("bash", "-c", OllamaDiscoveryScript)
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload ollamaDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	return payload.OllamaInfo
+}
+
+// TestOllamaDiscoveryScriptReportsRunningFromDaemon is the positive control:
+// with a daemon in the process table the probe must report running.
+func TestOllamaDiscoveryScriptReportsRunningFromDaemon(t *testing.T) {
+	procRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(procRoot, "1"), []byte("/usr/local/bin/ollama serve"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(ollamaProbeSandbox(t, fakeProcPgrepStub), "FAKE_PROC_ROOT="+procRoot)
+	if got := runOllamaProbe(t, env); !got.Running {
+		t.Fatalf("running = false with a daemon present; want true")
+	}
+}
+
+// TestOllamaDiscoveryScriptReportsNotRunningWhenNothingMatches is the
+// false-positive regression. The historical expression reported `running:true`
+// when pgrep matched nothing, because the test was `[ -n "$PGREP" ]` with the
+// quotes passed to `test` literally and then word-split. A host with no daemon
+// must report running=false.
+func TestOllamaDiscoveryScriptReportsNotRunningWhenNothingMatches(t *testing.T) {
+	procRoot := t.TempDir() // empty process table
+	env := append(ollamaProbeSandbox(t, fakeProcPgrepStub), "FAKE_PROC_ROOT="+procRoot)
+	got := runOllamaProbe(t, env)
+	if got.Running {
+		t.Fatalf("running = true with an empty process table; want false")
+	}
+	if !got.Installed {
+		t.Fatalf("installed = false; the stub binary should satisfy discovery")
+	}
+}
+
+// TestOllamaDiscoveryScriptIgnoresProbeSelfMatch is the self-match regression.
+// The probe's own `bash -c` argv embeds this script's text. When that text
+// contained the literal binary path, `pgrep -f` matched the probe itself and the
+// host reported as running with no daemon. Here the process table holds exactly
+// that text and nothing else; the probe must report running=false.
+func TestOllamaDiscoveryScriptIgnoresProbeSelfMatch(t *testing.T) {
+	procRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(procRoot, "1"), []byte("bash -c "+OllamaDiscoveryScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(ollamaProbeSandbox(t, fakeProcPgrepStub), "FAKE_PROC_ROOT="+procRoot)
+	if got := runOllamaProbe(t, env); got.Running {
+		t.Fatal("running = true, but the only match was the probe's own script text (self-match)")
+	}
+}
+
+// TestOllamaDiscoveryScriptToleratesMultiplePIDs guards the `[: too many
+// arguments` failure: a pgrep that emits several numeric lines must not corrupt
+// the `running` value or the JSON.
+func TestOllamaDiscoveryScriptToleratesMultiplePIDs(t *testing.T) {
+	env := ollamaProbeSandbox(t, `echo 4242; echo 9999; echo 12345`)
+	got := runOllamaProbe(t, env)
+	if !got.Running {
+		t.Fatalf("running = false with numeric PIDs present; want true")
+	}
+}
+
+// TestOllamaDiscoveryScriptRejectsNonNumericPgrepOutput guards the numeric
+// validation: a non-PID line (e.g. a cmdline echoed by a misbehaving pgrep) must
+// not be accepted as evidence of a running daemon.
+func TestOllamaDiscoveryScriptRejectsNonNumericPgrepOutput(t *testing.T) {
+	env := ollamaProbeSandbox(t, `echo "bash -c set -o pipefail"`)
+	if got := runOllamaProbe(t, env); got.Running {
+		t.Fatalf("running = true for non-numeric pgrep output; want false")
 	}
 }
