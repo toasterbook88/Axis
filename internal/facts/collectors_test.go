@@ -263,6 +263,14 @@ func writeFactStub(t *testing.T, dir, name, body string) {
 // table under $FAKE_PROC_ROOT instead of the live host's /proc. Each file in
 // that root is one process cmdline. This keeps the self-match scenario testable
 // without the real host's processes contaminating the result.
+//
+// Modeling caveat: the `-x` branch models "first argv token basename" rather
+// than real pgrep's kernel `comm` name (truncated to 15 chars). That is
+// sufficient for the positive control, which launches the stub as
+// "/usr/local/bin/ollama serve", but a daemon whose argv[0] is a wrapper
+// (e.g. `env ollama serve`) would be missed here while real pgrep -x would
+// also miss it (comm would be "env"). The -f fallback covers that case in
+// production; these tests exercise the -x path deliberately.
 const fakeProcPgrepStub = `
 pat=""
 exact=0
@@ -395,5 +403,52 @@ func TestOllamaDiscoveryScriptRejectsNonNumericPgrepOutput(t *testing.T) {
 	env := ollamaProbeSandbox(t, `echo "bash -c set -o pipefail"`)
 	if got := runOllamaProbe(t, env); got.Running {
 		t.Fatalf("running = true for non-numeric pgrep output; want false")
+	}
+}
+
+// TestOllamaDiscoveryScriptHasNoSelfMatchingPattern is the static guard for the
+// bug class these tests exist for. The probe's own `bash -c` argv embeds this
+// script's text, so any literal the script searches for is also present in the
+// very process being inspected — a pattern that matches its own source is a
+// guaranteed false positive. The -f fallback must therefore be bracketed, and
+// the legacy "$OLLAMA_BIN" grep (whose expanded value is a literal path present
+// in the fallback list) must not come back.
+func TestOllamaDiscoveryScriptHasNoSelfMatchingPattern(t *testing.T) {
+	if strings.Contains(OllamaDiscoveryScript, `pgrep -f "$OLLAMA_BIN"`) {
+		t.Fatal("script greps $OLLAMA_BIN: the literal binary path appears in the script text, so the probe matches itself")
+	}
+	if !strings.Contains(OllamaDiscoveryScript, "[o]llama serve") {
+		t.Fatal("bracketed -f fallback missing: a literal pattern would self-match the probe's own argv")
+	}
+	if strings.Contains(OllamaDiscoveryScript, `pgrep -f "ollama`) {
+		t.Fatal("unbracketed -f pattern present: the probe's own cmdline contains this script text")
+	}
+}
+
+// TestOllamaDiscoveryScriptMultiPIDEmitsNoStderr pins the exact failure symptom
+// rather than only its effect. The historical expression word-split a multi-line
+// PGREP into extra `test` arguments, which bash reported as
+// "[: too many arguments" on stderr. Asserting stderr is clean catches a
+// reintroduction earlier and more legibly than the resulting false value alone.
+func TestOllamaDiscoveryScriptMultiPIDEmitsNoStderr(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	env := ollamaProbeSandbox(t, `echo 4242; echo 9999; echo 12345`)
+	cmd := exec.Command("bash", "-c", OllamaDiscoveryScript)
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+	if strings.Contains(stderr.String(), "too many arguments") {
+		t.Fatalf("word-split regression: stderr = %q", stderr.String())
+	}
+	var payload ollamaDiscoveryPayload
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(stdout.Bytes()), err)
+	}
+	if !payload.OllamaInfo.Running {
+		t.Fatal("running = false with numeric PIDs present; want true")
 	}
 }
