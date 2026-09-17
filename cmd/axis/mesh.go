@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -159,7 +161,7 @@ func buildMeshStatus(ctx context.Context, cfg *config.Config, cacheAddr string) 
 		report.DiscoveryListener = "probe failed"
 		report.Warnings = append(report.Warnings, fmt.Sprintf("discovery port :%d probe failed: %v", report.BeaconPort, err))
 	} else if bound {
-		report.DiscoveryListener = "bound"
+		report.DiscoveryListener = "occupied"
 	} else if report.DiscoveryEnabled {
 		report.DiscoveryListener = "not listening"
 		report.Warnings = append(report.Warnings, fmt.Sprintf("discovery enabled but UDP :%d is free", report.BeaconPort))
@@ -171,7 +173,7 @@ func buildMeshStatus(ctx context.Context, cfg *config.Config, cacheAddr string) 
 		report.GossipListener = "probe failed"
 		report.Warnings = append(report.Warnings, fmt.Sprintf("gossip port :%d probe failed: %v", report.GossipPort, err))
 	} else if bound {
-		report.GossipListener = "bound"
+		report.GossipListener = "occupied"
 	} else if report.MeshEnabled {
 		report.GossipListener = "not listening"
 		report.Warnings = append(report.Warnings, fmt.Sprintf("mesh enabled at daemon start but UDP :%d is free; changing discovery.enabled does not start gossip until restart", report.GossipPort))
@@ -396,7 +398,14 @@ func discoveryBeaconInterval(cfg *config.Config) int {
 func udpPortHeld(port int) (bool, error) {
 	pc, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		return true, nil
+		if udpAddrInUse(err) {
+			return true, nil
+		}
+		return false, err
 	}
 	return false, pc.Close()
+}
+
+func udpAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE)
 }

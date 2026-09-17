@@ -243,3 +243,30 @@ func TestWatchBeaconChangesReturnsListenError(t *testing.T) {
 		t.Fatal("expected listen error when port is already bound")
 	}
 }
+
+func TestUDPPortHeldReportsOccupiedPort(t *testing.T) {
+	holder, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+	port := holder.LocalAddr().(*net.UDPAddr).Port
+
+	held, err := udpPortHeld(port)
+	if err != nil {
+		t.Fatalf("occupied port should not be a probe failure: %v", err)
+	}
+	if !held {
+		t.Fatal("expected port to be occupied")
+	}
+}
+
+func TestUDPPortHeldPreservesNonConflictErrors(t *testing.T) {
+	held, err := udpPortHeld(-1)
+	if err == nil {
+		t.Fatal("expected probe error for an invalid port")
+	}
+	if held {
+		t.Fatal("a probe failure must not be reported as occupied")
+	}
+}
