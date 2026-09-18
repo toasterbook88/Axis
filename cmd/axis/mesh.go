@@ -189,9 +189,15 @@ func buildMeshStatus(ctx context.Context, cfg *config.Config, cacheAddr string) 
 	defer cancel()
 	peers, err := fetchDaemonMeshAll(queryCtx, cacheAddr)
 	if err != nil {
-		report.Daemon = "unavailable"
-		report.DaemonError = err.Error()
-		report.Warnings = append(report.Warnings, "daemon unavailable; status is local config plus UDP bind probes")
+		if strings.Contains(err.Error(), "daemon ignored view=all") {
+			report.Daemon = "incompatible"
+			report.DaemonError = err.Error() + "; restart the daemon to support view=all"
+			report.Warnings = append(report.Warnings, "daemon is running but incompatible; restart the daemon to support view=all")
+		} else {
+			report.Daemon = "unavailable"
+			report.DaemonError = err.Error()
+			report.Warnings = append(report.Warnings, "daemon unavailable; status is local config plus UDP bind probes")
+		}
 		return report
 	}
 	report.Daemon = "reachable"
@@ -260,8 +266,13 @@ func runDaemonMeshPeers(cmd *cobra.Command) error {
 
 	peers, err := fetchDaemonMeshAll(ctx, meshCacheAddr(cmd))
 	if err != nil {
+		isStale := strings.Contains(err.Error(), "daemon ignored view=all")
 		msg := "daemon unavailable"
 		detail := err.Error()
+		if isStale {
+			msg = "daemon incompatible"
+			detail += "; restart the daemon or use --live"
+		}
 		if format == "json" || format == "yaml" {
 			return printOutput(cmd.OutOrStdout(), map[string]any{
 				"source":   "daemon",
@@ -271,7 +282,7 @@ func runDaemonMeshPeers(cmd *cobra.Command) error {
 				"warnings": []string{msg + ": " + detail},
 			}, format)
 		}
-		_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "daemon unavailable: %s\n", detail)
+		_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", msg, detail)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -435,9 +446,13 @@ func fetchDaemonMeshAll(ctx context.Context, addr string) ([]mesh.Peer, error) {
 	var payload struct {
 		Peers []mesh.Peer `json:"peers"`
 		Count int         `json:"count"`
+		View  string      `json:"view"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decoding mesh response: %w", err)
+	}
+	if payload.View != "all" {
+		return nil, fmt.Errorf("daemon ignored view=all (incompatible or stale daemon)")
 	}
 	return payload.Peers, nil
 }

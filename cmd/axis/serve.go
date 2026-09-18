@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -27,7 +26,7 @@ type serveDaemon interface {
 	WatchState(context.Context, string)
 	WatchSkills(context.Context, string)
 	WatchDiscovery(context.Context, string)
-	WatchMesh(context.Context, mesh.Peer)
+	WatchMesh(context.Context)
 	WaitStopped(context.Context)
 	Snapshot() (*models.ClusterSnapshot, bool)
 	Meta() daemon.Metadata
@@ -56,6 +55,13 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 
 	d := newServeDaemon(refreshInterval)
 	d.Start(ctx)
+	defer func() {
+		stop() // Cancel BEFORE draining: goroutines exit only on cancellation
+		drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
+		defer cancel()
+		d.WaitStopped(drainCtx)
+	}()
+
 	d.WatchConfig(ctx, config.DefaultConfigPath())
 	d.WatchState(ctx, state.Path())
 	d.WatchSkills(ctx, skills.Path())
@@ -64,30 +70,21 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 	// Start mesh (side-by-side with discovery) if enabled
 	cfg, _ := config.Load(config.DefaultConfigPath())
 	if cfg == nil || cfg.IsMeshEnabled() {
-		h, _ := os.Hostname()
-		selfPeer := mesh.Peer{
-			Name:     "localhost", // Advisory name
-			Hostname: h,
-		}
-		d.WatchMesh(ctx, selfPeer)
+		d.WatchMesh(ctx)
 	}
 
 	protocol := "http"
 	if auth.IsUnixAddr(addr) {
 		protocol = "unix"
 	}
-	fmt.Fprintf(out, "AXIS HTTP API listening on %s://%s\n", protocol, addr)
+	if _, err := fmt.Fprintf(out, "AXIS HTTP API listening on %s://%s\n", protocol, addr); err != nil {
+		return err
+	}
 
 	// ServeWithContext blocks until ctx is cancelled or a listen error.
-	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then we wait for
-	// the background refresh goroutines to finish.
-	err = serveHTTPAPI(ctx, addr, d, token, pprof)
-
-	drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
-	defer cancel()
-	d.WaitStopped(drainCtx)
-
-	return err
+	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then the deferred
+	// cleanup waits for background goroutines to finish.
+	return serveHTTPAPI(ctx, addr, d, token, pprof)
 }
 
 func serveCmd() *cobra.Command {

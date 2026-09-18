@@ -169,7 +169,7 @@ func openBeaconListener(cfg *config.Config) (*net.UDPConn, string, error) {
 		return nil, "", net.InvalidAddrError("discovery disabled")
 	}
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
-		if err != nil {
+	if err != nil {
 		return nil, "", err
 	}
 	return pc, secret, nil

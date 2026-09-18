@@ -488,7 +488,7 @@ func (d *Daemon) watchFileWithFingerprint(ctx context.Context, path, trigger str
 }
 
 // WatchMesh starts the mesh gossip layer and refreshes cache on peer events
-func (d *Daemon) WatchMesh(ctx context.Context, self mesh.Peer) {
+func (d *Daemon) WatchMesh(ctx context.Context) {
 	if d.mesh == nil {
 		return
 	}

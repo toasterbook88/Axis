@@ -136,6 +136,33 @@ func TestActivePeers(t *testing.T) {
 	}
 }
 
+func TestSelectPeers(t *testing.T) {
+	self := Peer{Name: "node-a", Hostname: "10.0.0.1", StableID: "id-a"}
+	m := New(self, DefaultConfig(), nil)
+
+	m.mu.Lock()
+	m.peers["id-b"] = &Peer{Name: "node-b", StableID: "id-b", State: PeerTrusted}
+	m.peers["id-c"] = &Peer{Name: "node-c", StableID: "id-c", State: PeerDiscovered}
+	m.peers["id-d"] = &Peer{Name: "node-d", StableID: "id-d", State: PeerVerified}
+	m.peers["id-e"] = &Peer{Name: "node-e", StableID: "id-e", State: PeerDead}
+	m.mu.Unlock()
+
+	all := m.SelectPeers("all")
+	if len(all) != 4 {
+		t.Fatalf("expected 4 peers for view=all, got %d", len(all))
+	}
+
+	active := m.SelectPeers("")
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active peers for default view, got %d", len(active))
+	}
+
+	verifiedOnly := m.SelectPeers("active")
+	if len(verifiedOnly) != 2 {
+		t.Fatalf("expected 2 active peers for view=active, got %d", len(verifiedOnly))
+	}
+}
+
 func TestDetectFailures_SuspectAndDead(t *testing.T) {
 	self := Peer{Name: "node-a", Hostname: "10.0.0.1", StableID: "id-a"}
 	cfg := DefaultConfig()

@@ -164,6 +164,89 @@ discovery:
 	}
 }
 
+func TestMeshPeersRejectsStaleDaemonWithoutViewAll(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	writeMeshTestConfig(t, tempHome, `nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: axis
+`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Stale daemon does not return "view":"all"
+		_, _ = w.Write([]byte(`{"peers":[],"count":0}`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := fetchDaemonMeshAll(context.Background(), server.URL)
+	if err == nil {
+		t.Fatal("expected error when daemon ignores view=all, got nil")
+	}
+	if !strings.Contains(err.Error(), "daemon ignored view=all") {
+		t.Fatalf("expected stale daemon error, got %v", err)
+	}
+
+	cmd := meshCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--cache-addr", server.URL, "peers"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mesh peers: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "daemon ignored view=all") {
+		t.Fatalf("expected stale daemon error in output, got %q", got)
+	}
+	if !strings.Contains(got, "daemon incompatible") {
+		t.Fatalf("expected 'daemon incompatible' label in output, got %q", got)
+	}
+	if strings.Contains(got, "daemon unavailable") {
+		t.Fatalf("expected daemon not to be marked unavailable when reachable, got %q", got)
+	}
+	if !strings.Contains(got, "--live") {
+		t.Fatalf("expected --live hint on mesh peers, got %q", got)
+	}
+}
+
+func TestMeshStatusReportsIncompatibleDaemon(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	writeMeshTestConfig(t, tempHome, `nodes:
+  - name: local
+    hostname: localhost
+    ssh_user: axis
+`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Stale daemon does not return "view":"all"
+		_, _ = w.Write([]byte(`{"peers":[],"count":0}`))
+	}))
+	t.Cleanup(server.Close)
+
+	cmd := meshCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--cache-addr", server.URL, "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mesh status: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "incompatible") {
+		t.Fatalf("expected 'incompatible' daemon status, got %q", got)
+	}
+	if strings.Contains(got, "unavailable") {
+		t.Fatalf("expected daemon not to be marked unavailable when reachable, got %q", got)
+	}
+	if strings.Contains(got, "--live") {
+		t.Fatalf("expected mesh status NOT to offer invalid --live flag hint, got %q", got)
+	}
+}
+
 func TestMeshPeersLiveReportsListenerFailure(t *testing.T) {
 	holder, err := net.ListenPacket("udp", ":0")
 	if err != nil {
