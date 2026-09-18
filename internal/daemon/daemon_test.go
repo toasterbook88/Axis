@@ -802,6 +802,107 @@ func TestWatchDiscoveryRefreshesOnBeaconChange(t *testing.T) {
 	t.Fatalf("expected beacon change refresh, got meta=%+v calls=%d snap=%+v", d.Meta(), calls.Load(), snap)
 }
 
+func TestWatchDiscoverySurfacesErrorOnBindFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+
+	configPath := filepath.Join(home, ".axis", "nodes.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configBody := []byte("nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: axis\n    role: primary\ndiscovery:\n  enabled: true\n  udp_port: " + strconv.Itoa(port) + "\n  beacon_interval_sec: 60\n  secret: shared\n")
+	if err := os.WriteFile(configPath, configBody, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	prevPoll := watchConfigPollInterval
+	watchConfigPollInterval = 10 * time.Millisecond
+	defer func() { watchConfigPollInterval = prevPoll }()
+
+	d := New(time.Minute, func(ctx context.Context) (*models.ClusterSnapshot, error) {
+		return &models.ClusterSnapshot{
+			Status: models.SnapshotHealthy,
+			Nodes: []models.NodeFacts{
+				{Name: "local", Status: models.StatusComplete},
+			},
+		}, nil
+	})
+	d.SetSnapshotPath("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)
+		defer drainCancel()
+		d.WaitStopped(drainCtx)
+		watchConfigPollInterval = prevPoll
+	}()
+
+	d.WatchDiscovery(ctx, configPath)
+	time.Sleep(3 * watchConfigPollInterval)
+
+	meta := d.Meta()
+	if meta.LastError == "" {
+		t.Fatalf("expected LastError on bind failure, got empty string")
+	}
+
+	if err := d.RefreshNow(ctx); err != nil {
+		t.Fatalf("RefreshNow: %v", err)
+	}
+	snap, ok := d.Snapshot()
+	if !ok {
+		t.Fatalf("expected snapshot to be present")
+	}
+	var foundDiscoveryWarn bool
+	for _, w := range snap.Warnings {
+		if w.Kind == "discovery" {
+			foundDiscoveryWarn = true
+			break
+		}
+	}
+	if !foundDiscoveryWarn {
+		t.Fatalf("expected discovery warning in snapshot warnings, got: %+v", snap.Warnings)
+	}
+
+	_ = pc.Close()
+	configBodyDisabled := []byte("nodes:\n  - name: local\n    hostname: localhost\n    ssh_user: axis\n    role: primary\ndiscovery:\n  enabled: false\n")
+	if err := os.WriteFile(configPath, configBodyDisabled, 0o644); err != nil {
+		t.Fatalf("write disabled config: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		meta = d.Meta()
+		if meta.LastError == "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if meta.LastError != "" {
+		t.Fatalf("expected LastError to be cleared after disabling discovery, got %q", meta.LastError)
+	}
+
+	if err := d.RefreshNow(ctx); err != nil {
+		t.Fatalf("RefreshNow after recovery: %v", err)
+	}
+	snap, ok = d.Snapshot()
+	if !ok {
+		t.Fatalf("expected snapshot after recovery")
+	}
+	for _, w := range snap.Warnings {
+		if w.Kind == "discovery" {
+			t.Fatalf("expected discovery warning to be cleared from snapshot, got %+v", snap.Warnings)
+		}
+	}
+}
+
 func TestRefreshInjectsReservationViewIntoSnapshot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

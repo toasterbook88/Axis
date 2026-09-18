@@ -244,6 +244,15 @@ func (m *Mesh) ActivePeers() []Peer {
 	return out
 }
 
+// SelectPeers returns peers for the requested view: "all" includes every
+// known peer; anything else returns only verified/trusted peers.
+func (m *Mesh) SelectPeers(view string) []Peer {
+	if view == "all" {
+		return m.Peers()
+	}
+	return m.ActivePeers()
+}
+
 // Trust promotes a discovered/verified peer to trusted status.
 func (m *Mesh) Trust(id string) error {
 	m.mu.Lock()
@@ -318,7 +327,7 @@ func (m *Mesh) listenLoop(ctx context.Context) {
 			continue
 		}
 
-		m.handleMessage(msg, addr)
+		m.handleMessage(msg)
 	}
 }
 
@@ -350,7 +359,7 @@ func (m *Mesh) failureDetectorLoop(ctx context.Context) {
 	}
 }
 
-func (m *Mesh) handleMessage(msg gossipMessage, from *net.UDPAddr) {
+func (m *Mesh) handleMessage(msg gossipMessage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

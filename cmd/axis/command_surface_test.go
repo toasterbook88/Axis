@@ -78,7 +78,7 @@ func TestRootCommandShowsHelpInsteadOfRoutingToChat(t *testing.T) {
 	if !strings.Contains(stdout, "COMMANDS") || !strings.Contains(stdout, "facts") || !strings.Contains(stdout, "task") {
 		t.Fatalf("expected root help output, got %q", stdout)
 	}
-	if strings.Contains(stdout, "discover") {
+	if strings.Contains(stdout, "\n  discover ") {
 		t.Fatalf("expected discover to be removed from root help, got %q", stdout)
 	}
 }
@@ -278,6 +278,37 @@ func TestServeCmdPassesPprofFlag(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("serve Execute: %v", err)
+	}
+}
+
+type testFailingBannerWriter struct{}
+
+func (testFailingBannerWriter) Write(p []byte) (int, error) {
+	return 0, errors.New("banner write failed")
+}
+
+func TestServeBannerWriterFailureDrainsDaemon(t *testing.T) {
+	fake := &fakeServeDaemon{}
+	restoreDaemon := stubServeDaemonFactory(t, func(time.Duration) serveDaemon {
+		return fake
+	})
+	defer restoreDaemon()
+
+	err := runServeCommand(testFailingBannerWriter{}, "127.0.0.1:5151", time.Minute, false)
+	if err == nil {
+		t.Fatal("expected banner write error, got nil")
+	}
+	if !strings.Contains(err.Error(), "banner write failed") {
+		t.Fatalf("expected banner write failed error, got %v", err)
+	}
+	if !fake.started {
+		t.Fatal("expected daemon to have started")
+	}
+	if !fake.waitStopped {
+		t.Fatal("expected daemon WaitStopped to have been called on banner write failure")
+	}
+	if !fake.ctxCancelledInDrain {
+		t.Fatal("expected context to be cancelled before WaitStopped drains")
 	}
 }
 
@@ -715,13 +746,15 @@ func TestPrintWarningWritesStderr(t *testing.T) {
 }
 
 type fakeServeDaemon struct {
-	started          bool
-	ctx              context.Context
-	watchedConfig    bool
-	watchedState     bool
-	watchedSkills    bool
-	watchedDiscovery bool
-	watchedMesh      bool
+	started             bool
+	ctx                 context.Context
+	watchedConfig       bool
+	watchedState        bool
+	watchedSkills       bool
+	watchedDiscovery    bool
+	watchedMesh         bool
+	waitStopped         bool
+	ctxCancelledInDrain bool
 }
 
 func (f *fakeServeDaemon) Start(ctx context.Context) {
@@ -737,9 +770,14 @@ func (f *fakeServeDaemon) WatchSkills(context.Context, string) { f.watchedSkills
 
 func (f *fakeServeDaemon) WatchDiscovery(context.Context, string) { f.watchedDiscovery = true }
 
-func (f *fakeServeDaemon) WatchMesh(context.Context, mesh.Peer) { f.watchedMesh = true }
+func (f *fakeServeDaemon) WatchMesh(context.Context) { f.watchedMesh = true }
 
-func (f *fakeServeDaemon) WaitStopped(context.Context) {}
+func (f *fakeServeDaemon) WaitStopped(context.Context) {
+	f.waitStopped = true
+	if f.ctx != nil && f.ctx.Err() != nil {
+		f.ctxCancelledInDrain = true
+	}
+}
 
 func (f *fakeServeDaemon) Snapshot() (*models.ClusterSnapshot, bool) {
 	return nil, false

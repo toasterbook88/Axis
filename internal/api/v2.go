@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/reservation"
@@ -346,14 +345,16 @@ func (h *v2Handlers) handleMesh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "mesh not available")
 		return
 	}
-	peers := m.ActivePeers()
-	if peers == nil {
-		peers = []mesh.Peer{} // Ensure we output an empty array instead of null
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	view := r.URL.Query().Get("view")
+	peers := m.SelectPeers(view)
+	resp := map[string]any{
 		"peers": peers,
 		"count": len(peers),
-	})
+	}
+	if view != "" {
+		resp["view"] = view
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type V2DryRunRequest struct {

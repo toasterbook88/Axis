@@ -23,9 +23,6 @@ internal/events/logger.go SetLogPath
 internal/events/logger.go ResetTestLog
 internal/events/webhooks.go ShutdownWebhooks
 internal/facts/disk_weights.go ParseDiskWeightFindTSV
-internal/facts/identity.go detectRemoteNodeIdentity
-internal/facts/identity.go detectRemoteHostname
-internal/facts/volume_diskutil.go posixSingleQuote
 internal/fleettest/guard.go Error
 internal/fleettest/guard.go NewGuard
 internal/fleettest/guard.go Validate
