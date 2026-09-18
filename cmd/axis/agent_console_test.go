@@ -671,7 +671,7 @@ func TestConsoleShellEscapeEmpty(t *testing.T) {
 
 func TestConsoleFleetThrottleOnFailure(t *testing.T) {
 	calls := 0
-	loader := func(ctx context.Context) (*runtimectx.Context, error) {
+	loader := func(_ context.Context) (*runtimectx.Context, error) {
 		calls++
 		return nil, errors.New("daemon offline")
 	}
