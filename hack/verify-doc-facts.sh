@@ -95,9 +95,11 @@ reject_stale_claim() {
   fi
 }
 
-if grep -qF 'd.WatchMesh(ctx, selfPeer)' cmd/axis/serve.go; then
+if grep -qF 'd.WatchMesh(' cmd/axis/serve.go; then
   reject_stale_claim 'mesh.*(scaffold|not wired)|scaffold.*mesh|not wired.*mesh' \
     README.md docs/architecture.md docs/current-state.md docs/lifecycle.md
+else
+  fail "cmd/axis/serve.go no longer calls d.WatchMesh; if renamed, update the anchor pattern in this script"
 fi
 
 if grep -qF 'meshCfg.SharedSecret = cfg.Discovery.Secret' internal/daemon/daemon.go; then

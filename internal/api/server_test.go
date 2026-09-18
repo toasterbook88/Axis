@@ -435,6 +435,56 @@ func TestV2EndpointsReturnSuccess(t *testing.T) {
 	}
 }
 
+func TestV2MeshViewEcho(t *testing.T) {
+	m := mesh.New(mesh.Peer{Name: "self"}, mesh.DefaultConfig(), nil)
+	cache := &fakeCache{
+		meta:         daemon.Metadata{Ready: true},
+		meshInstance: m,
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, cache, "test-token")
+
+	// 1. view=all echoes view
+	req := httptest.NewRequest(http.MethodGet, "/v2/mesh?view=all", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Peers []mesh.Peer `json:"peers"`
+		Count int         `json:"count"`
+		View  string      `json:"view"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.View != "all" {
+		t.Fatalf("expected view=all echoed, got %q", payload.View)
+	}
+
+	// 2. default view does not echo view (or has empty view)
+	reqDef := httptest.NewRequest(http.MethodGet, "/v2/mesh", nil)
+	reqDef.Header.Set("Authorization", "Bearer test-token")
+	recDef := httptest.NewRecorder()
+	mux.ServeHTTP(recDef, reqDef)
+
+	if recDef.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recDef.Code, recDef.Body.String())
+	}
+	var payloadDef struct {
+		View string `json:"view"`
+	}
+	if err := json.Unmarshal(recDef.Body.Bytes(), &payloadDef); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payloadDef.View != "" {
+		t.Fatalf("expected empty view in default, got %q", payloadDef.View)
+	}
+}
+
 func TestV2ReservationsCRUD(t *testing.T) {
 	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
 	ledger.SetNodeCapacity("node-a", 16384)
