@@ -110,12 +110,13 @@ type Daemon struct {
 	ledger         *reservation.Ledger
 	mesh           *mesh.Mesh
 
-	snapshot      *models.ClusterSnapshot
-	collectedAt   time.Time
-	nextRefreshAt time.Time
-	lastTrigger   string
-	lastConfigAt  time.Time
-	lastError     string
+	snapshot         *models.ClusterSnapshot
+	collectedAt      time.Time
+	nextRefreshAt    time.Time
+	lastTrigger      string
+	lastConfigAt     time.Time
+	lastError        string
+	discoveryWarning string
 
 	// Phase 3: refresh metrics
 	refreshCount        int64
@@ -387,7 +388,7 @@ func (d *Daemon) WatchSkills(ctx context.Context, skillsPath string) {
 // appear, change, or age out.
 func (d *Daemon) WatchDiscovery(ctx context.Context, configPath string) {
 	if d.beaconRegistry == nil {
-		return
+		d.beaconRegistry = discovery.NewBeaconRegistry()
 	}
 
 	d.wg.Add(1)
@@ -414,14 +415,81 @@ func (d *Daemon) WatchDiscovery(ctx context.Context, configPath string) {
 
 			cfg, err := config.Load(configPath)
 			if err != nil || cfg == nil || cfg.Discovery == nil || !cfg.Discovery.Enabled {
+				d.mu.Lock()
+				if d.lastError == d.discoveryWarning {
+					d.lastError = ""
+				}
+				d.discoveryWarning = ""
+				var snapCopy *models.ClusterSnapshot
+				snapshotPath := d.snapshotPath
+				if d.snapshot != nil {
+					newWarnings := make([]models.Warning, 0, len(d.snapshot.Warnings))
+					for _, w := range d.snapshot.Warnings {
+						if w.Kind != "discovery" {
+							newWarnings = append(newWarnings, w)
+						}
+					}
+					d.snapshot.Warnings = newWarnings
+					snapCopy = snapshotview.Clone(d.snapshot)
+					d.snapshotPublished.Store(snapCopy)
+				}
+				d.publishMetadataLocked()
+				d.mu.Unlock()
+				if snapCopy != nil && snapshotPath != "" {
+					_ = persistSnapshot(snapshotPath, snapCopy)
+				}
 				return
 			}
 
 			watchCtx, cancel := context.WithCancel(ctx)
 			watcherCancel = cancel
-			discovery.WatchBeaconChanges(watchCtx, cfg, d.beaconRegistry, func() {
+			if err := discovery.WatchBeaconChanges(watchCtx, cfg, d.beaconRegistry, func() {
 				d.scheduleRefresh(RefreshTriggerBeaconChange)
-			})
+			}); err != nil {
+				slog.Error("daemon: failed to start discovery beacon watcher", "error", err)
+				d.mu.Lock()
+				d.lastError = err.Error()
+				d.discoveryWarning = err.Error()
+				var snapCopy *models.ClusterSnapshot
+				snapshotPath := d.snapshotPath
+				if d.snapshot != nil {
+					models.AppendWarningIfMissing(d.snapshot, models.Warning{
+						Kind:    "discovery",
+						Message: err.Error(),
+					})
+					snapCopy = snapshotview.Clone(d.snapshot)
+					d.snapshotPublished.Store(snapCopy)
+				}
+				d.publishMetadataLocked()
+				d.mu.Unlock()
+				if snapCopy != nil && snapshotPath != "" {
+					_ = persistSnapshot(snapshotPath, snapCopy)
+				}
+				return
+			}
+			d.mu.Lock()
+			if d.lastError == d.discoveryWarning {
+				d.lastError = ""
+			}
+			d.discoveryWarning = ""
+			var snapCopy *models.ClusterSnapshot
+			snapshotPath := d.snapshotPath
+			if d.snapshot != nil {
+				newWarnings := make([]models.Warning, 0, len(d.snapshot.Warnings))
+				for _, w := range d.snapshot.Warnings {
+					if w.Kind != "discovery" {
+						newWarnings = append(newWarnings, w)
+					}
+				}
+				d.snapshot.Warnings = newWarnings
+				snapCopy = snapshotview.Clone(d.snapshot)
+				d.snapshotPublished.Store(snapCopy)
+			}
+			d.publishMetadataLocked()
+			d.mu.Unlock()
+			if snapCopy != nil && snapshotPath != "" {
+				_ = persistSnapshot(snapshotPath, snapCopy)
+			}
 		}
 
 		lastFingerprint, _ = fingerprintFile(configPath)
@@ -758,8 +826,16 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 			Message: skillErr.Error(),
 		})
 	}
+	if d.discoveryWarning != "" {
+		models.AppendWarningIfMissing(d.snapshot, models.Warning{
+			Kind:    "discovery",
+			Message: d.discoveryWarning,
+		})
+		d.lastError = d.discoveryWarning
+	} else {
+		d.lastError = ""
+	}
 	d.collectedAt = now
-	d.lastError = ""
 
 	snapCopy := d.snapshot
 	snapshotPath := d.snapshotPath
@@ -938,7 +1014,11 @@ func (d *Daemon) Invalidate() {
 	path := d.snapshotPath
 	d.snapshot = nil
 	d.collectedAt = time.Time{}
-	d.lastError = ""
+	if d.discoveryWarning != "" {
+		d.lastError = d.discoveryWarning
+	} else {
+		d.lastError = ""
+	}
 	d.snapshotPublished.Store(nil)
 	d.publishMetadataLocked()
 	d.mu.Unlock()
