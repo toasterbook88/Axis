@@ -1,7 +1,30 @@
 ## Unreleased
 
+## v0.19.0 (2026-09-18)
+
+Thirteen pull requests merged on `main` since `v0.18.1`. This release introduces the interactive TUI front door with truthful placement preview, a resident-model and GPU/disk weight truth plane, a daemon-first diagnostic mesh facade, non-POSIX remote shell hardening, and a major 38% codebase refactoring.
+
 ### Features
-* **Truthful TUI placement preview:** the dashboard placement wizard now scores the exact snapshot already on screen, badges its source and observation time, shows inferred requirements and deterministic candidate rank order, and labels `FitScore` as diagnostic rather than the ranking objective. Confirmation remains advisory and explicitly executes nothing. Snapshot failures now render setup/recovery commands and state that the TUI starts nothing until the operator chooses a command; `axis daemon service install` remains the explicit persistent path and installs and starts the service.
+
+* **Interactive TUI front door:** running bare `axis` on an interactive terminal opens the full-screen Bubble Tea cluster dashboard; scripted and non-TTY invocations continue printing standard help (#429).
+* **Truthful TUI placement wizard:** the dashboard placement wizard scores the exact snapshot already on screen, badges observation time, shows inferred requirements and deterministic rank order, and labels `FitScore` as diagnostic rather than the ranking objective. Confirmation remains advisory and explicitly executes nothing. Snapshot failures render setup/recovery guidance and state that the TUI starts nothing until the operator chooses a command (#434).
+* **AI resident-model & disk-weight truth plane:** surfaces canonical resident model discovery across llama-server and Ollama backends, integrates GPU and disk weight allocations into placement scoring, and provides deterministic hardware-fit placement planning via `axis model` and `axis ai` (#432).
+* **Daemon-first diagnostic mesh facade:** `axis mesh status` and `axis mesh peers` query the daemon and `/v2/mesh` rather than opening conflicting UDP listeners; cleanly separates the discovery beacon plane (UDP 42424) from the gossip mesh plane (UDP 42426); adds `/v2/mesh?view=all` with view echoing; differentiates `daemon incompatible` from `daemon unavailable`; surfaces listener bind failures in daemon `LastError` and snapshot discovery warnings with full recovery when reconfigured (#438).
+
+### Fixed
+
+* **Fish shell execution safety:** remote guarded executions wrap commands with `bash -lc` to ensure POSIX-compatible execution on nodes with non-POSIX login shells such as fish (#433).
+* **Daemon execution context delivery:** forwards stdin streams properly across SSH execution layers and honors explicit node pinning through the daemon `/run` API (#430).
+* **Ollama process probe self-match safety:** running-state process checks exclude the probe process itself to prevent false-positive running detections (#437).
+* **Agent tool call promotion:** whole-message bare JSON and Hermes tool calls are cleanly promoted to structured tool invocations (#427).
+* **Agent startup model check:** live backend checks verify model availability before defaulting to implicit model tags, avoiding failures on unpulled models (#428).
+* **Serve graceful drain order:** signals context cancellation prior to `WaitStopped` in `serve.go` to prevent HTTP shutdown drain timeouts (#438).
+
+### Refactoring & Architecture
+
+* **Decoupled package taxonomy:** cut 38% of Go LOC by breaking up god packages into focused modules (`internal/modellife`, `internal/modelplan`, `internal/modelinventory`, `internal/multipath`), strengthening layered architectural invariance (#436).
+* **Agent test coverage:** added characterization tests covering deferred JSON flush paths and Hermes grammar drift (#435).
+* **Dependencies:** bumped `anthropics/claude-code-action` from 1.0.216 to 1.0.222 in CI (#423).
 
 ## v0.18.1 (2026-09-15)
 

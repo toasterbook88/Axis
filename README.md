@@ -20,7 +20,7 @@ with native distributed model lifecycle, optional gossip mesh discovery, AI agen
 AXIS is built as a 5-layer stack. Each layer is subordinate to the one below it —
 advisory surfaces never override observed state.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  Layer 5: ADVISORY                                              │
 │  Chat · Agent · MCP Server                                      │
@@ -84,7 +84,7 @@ axis doctor
 ### Stable Operator Path
 
 | Command | Purpose |
-|---------|---------|
+| --- | --- |
 | `axis version` | Print build version, commit, and Go version |
 | `axis init` | Interactive cluster configuration wizard |
 | `axis node facts` | Local hardware/tool snapshot (`--format json\|yaml`); `axis facts` still works |
@@ -124,11 +124,10 @@ These commands are shipped but advisory or experimental. They do not override
 observed cluster state.
 
 | Command | Purpose |
-|---------|---------|
+| --- | --- |
 | `axis mcp serve` | Read-only MCP server over stdio |
 | `axis chat` | Removed; use `axis agent` |
 | `axis agent` | Tool-calling agent loop |
-
 
 ## Placement Algorithm
 
@@ -167,7 +166,7 @@ The placement engine uses a deterministic **Filter → Rank → Select** pipelin
 
 AXIS manages resident inference models across cluster nodes through a deterministic 5-phase lifecycle pipeline with structured, typed receipts (`axis.model-operation/v1`):
 
-```
+```text
 ┌────────┐      ┌────────┐      ┌────────┐      ┌────────┐      ┌────────┐
 │  PLAN  │ ───> │ START  │ ───> │ AWAIT  │ ───> │ QUERY  │ ───> │  STOP  │
 └────────┘      └────────┘      └────────┘      └────────┘      └────────┘
@@ -185,7 +184,7 @@ AXIS manages resident inference models across cluster nodes through a determinis
 ### v1 Routes (Unix socket: `~/.axis/axis.sock`)
 
 | Route | Auth | Purpose |
-|-------|------|---------|
+| --- | --- | --- |
 | `GET /health` | No | Daemon health |
 | `GET /snapshot` | Yes | Full ClusterSnapshot |
 | `GET /snapshot/meta` | Yes | Cache metadata |
@@ -261,7 +260,7 @@ publication unless the operator explicitly authorizes rewriting the tag.
 
 ## Project Layout
 
-```
+```text
 axis/
 ├── cmd/axis/          Cobra CLI entry point
 ├── internal/          Private packages (46 packages)
@@ -310,9 +309,4 @@ For AI agents working in this repo, see [AGENTS.md](AGENTS.md).
 
 ---
 
-<p align="center">
-  <a href="https://axismcp.app">axismcp.app</a> ·
-  <a href="https://axismcp.tech">axismcp.tech</a> ·
-  <a href="https://smithsolutionssc.com">smithsolutionssc.com</a> ·
-  <a href="https://twitter.com/AXISBRIDGEMACOS">@AXISBRIDGEMACOS</a>
-</p>
+[axismcp.app](https://axismcp.app) · [axismcp.tech](https://axismcp.tech) · [smithsolutionssc.com](https://smithsolutionssc.com) · [@AXISBRIDGEMACOS](https://twitter.com/AXISBRIDGEMACOS)

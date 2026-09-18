@@ -285,7 +285,7 @@ func renderDaemonService(goos, exe, addr, refresh, home string) ([]byte, error) 
 			_ = xml.EscapeText(&escaped, []byte(value))
 			return escaped.String()
 		}
-		return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+		return fmt.Appendf(nil, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Managed by AXIS. -->
 <plist version="1.0">
@@ -312,9 +312,9 @@ func renderDaemonService(goos, exe, addr, refresh, home string) ([]byte, error) 
   <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, daemonLaunchdLabel, writeXML(exe), writeXML(addr), writeXML(refresh), writeXML(home), writeXML(home), writeXML(filepath.Join(home, "Library", "Logs", "Axis", "daemon.stdout.log")), writeXML(filepath.Join(home, "Library", "Logs", "Axis", "daemon.stderr.log")))), nil
+`, daemonLaunchdLabel, writeXML(exe), writeXML(addr), writeXML(refresh), writeXML(home), writeXML(home), writeXML(filepath.Join(home, "Library", "Logs", "Axis", "daemon.stdout.log")), writeXML(filepath.Join(home, "Library", "Logs", "Axis", "daemon.stderr.log"))), nil
 	case "linux":
-		return []byte(fmt.Sprintf(`# Managed by AXIS.
+		return fmt.Appendf(nil, `# Managed by AXIS.
 [Unit]
 Description=AXIS snapshot daemon
 After=network-online.target
@@ -331,7 +331,7 @@ UMask=0077
 
 [Install]
 WantedBy=default.target
-`, systemdArgument(exe), systemdArgument(addr), systemdArgument(refresh))), nil
+`, systemdArgument(exe), systemdArgument(addr), systemdArgument(refresh)), nil
 	default:
 		return nil, unsupportedDaemonServicePlatform(goos)
 	}

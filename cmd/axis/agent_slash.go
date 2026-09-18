@@ -372,7 +372,7 @@ func mcpServerChoices(mcpReg *mcpclient.Registry) []ui.SelectOption {
 }
 
 // mcpActionChoices is the fixed per-server action menu.
-func mcpActionChoices(server string) []ui.SelectOption {
+func mcpActionChoices(_ string) []ui.SelectOption {
 	return []ui.SelectOption{
 		{ID: "tools", Label: "List Tools", Detail: "Show all tools exposed by this server"},
 		{ID: "resources", Label: "List Resources", Detail: "Show all data resources exposed by this server"},
