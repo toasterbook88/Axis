@@ -46,7 +46,7 @@ case "$(printf '%s' "$OS" | tr '[:upper:]' '[:lower:]')" in
     printf 'meminfo_b64=%s\n' "$(grep -E 'MemTotal|MemAvailable|MemFree' /proc/meminfo 2>/dev/null | base64 | tr -d '\n')"
     printf 'loadavg=%s\n' "$(cat /proc/loadavg 2>/dev/null)"
     printf 'pressure_b64=%s\n' "$(cat /proc/pressure/memory 2>/dev/null | base64 | tr -d '\n')"
-    printf 'gpu_b64=%s\n' "$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //' | base64 | tr -d '\n')"
+    printf 'gpu_b64=%s\n' "$(nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //' | base64 | tr -d '\n')"
     printf 'identity=%s\n' "$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null)"
     printf 'battery=%s\n' "$(cat /sys/class/power_supply/BAT0/capacity /sys/class/power_supply/BAT1/capacity /sys/class/power_supply/BATT/capacity 2>/dev/null | head -1)"
     printf 'power=%s\n' "$(for n in AC ADP0 ACAD Mains; do s=$(cat /sys/class/power_supply/$n/status 2>/dev/null); [ -n "$s" ] && echo "$s" && break; done)"

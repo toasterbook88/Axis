@@ -184,6 +184,7 @@ func (c *Config) MembershipFingerprint() string {
 type DiscoveryConfig struct {
 	Enabled        bool   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	UDPPort        int    `json:"udp_port,omitempty" yaml:"udp_port,omitempty"`
+	GossipPort     int    `json:"gossip_port,omitempty" yaml:"gossip_port,omitempty"` // mesh gossip listen port; defaults to 42426, deliberately NOT udp_port — beacon and gossip are separate UDP planes
 	BeaconInterval int    `json:"beacon_interval_sec,omitempty" yaml:"beacon_interval_sec,omitempty"`
 	Secret         string `json:"secret,omitempty" yaml:"secret,omitempty"`
 }

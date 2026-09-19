@@ -209,42 +209,59 @@ func NewDefault(interval time.Duration) *Daemon {
 	if cfg == nil || cfg.IsMeshEnabled() {
 		var selfPeer mesh.Peer
 		var seedPeers []mesh.Peer
+		meshDisabled := false
 
+		// Beacon (discovery) and gossip (mesh) are separate UDP planes.
+		// Default gossip to 42426 and NEVER inherit the beacon udp_port:
+		// sharing one port makes the daemon's two listeners fight over the
+		// bind and pins the cache in a self-inflicted degraded state.
+		gossipPort := 42426
 		if cfg != nil {
-			// Find the local node config
-			var localNode config.NodeConfig
-			var foundLocal bool
-			for _, n := range cfg.Nodes {
-				if n.IsLocal() {
-					localNode = n
-					foundLocal = true
-					break
+			if cfg.Discovery != nil {
+				beaconPort := 42424
+				if cfg.Discovery.UDPPort > 0 {
+					beaconPort = cfg.Discovery.UDPPort
+				}
+				if cfg.Discovery.GossipPort > 0 {
+					gossipPort = cfg.Discovery.GossipPort
+				} else if beaconPort != 42424 {
+					// Legacy configs with a custom udp_port predate the split;
+					// keep gossip on it only when it is not the beacon default.
+					gossipPort = beaconPort
+				}
+				if gossipPort == beaconPort {
+					slog.Error("daemon: beacon and gossip listeners cannot share a UDP port; mesh disabled until config is corrected",
+						"gossip_port", gossipPort, "udp_port", beaconPort)
+					meshDisabled = true
 				}
 			}
 
-			udpPort := 42426
-			if cfg.Discovery != nil && cfg.Discovery.UDPPort > 0 {
-				udpPort = cfg.Discovery.UDPPort
-			}
-
-			if foundLocal {
-				selfPeer = meshPeerFromNode(localNode, udpPort)
-			}
-
-			for _, n := range cfg.Nodes {
-				// Don't add ourselves as a seed
-				if foundLocal && n.Name == localNode.Name {
-					continue
+			if !meshDisabled {
+				var localNode config.NodeConfig
+				var foundLocal bool
+				for _, n := range cfg.Nodes {
+					if n.IsLocal() {
+						localNode = n
+						foundLocal = true
+						break
+					}
 				}
-				seedPeers = append(seedPeers, meshPeerFromNode(n, udpPort))
+				if foundLocal {
+					selfPeer = meshPeerFromNode(localNode, gossipPort)
+				}
+				for _, n := range cfg.Nodes {
+					// Don't add ourselves as a seed
+					if foundLocal && n.Name == localNode.Name {
+						continue
+					}
+					seedPeers = append(seedPeers, meshPeerFromNode(n, gossipPort))
+				}
 			}
 		}
 
 		meshCfg := mesh.DefaultConfig()
-		if cfg != nil && cfg.Discovery != nil {
-			if cfg.Discovery.UDPPort > 0 {
-				meshCfg.ListenAddr = fmt.Sprintf(":%d", cfg.Discovery.UDPPort)
-			}
+		if cfg != nil && cfg.Discovery != nil && !meshDisabled {
+			meshCfg.ListenAddr = fmt.Sprintf(":%d", gossipPort)
 			if cfg.Discovery.BeaconInterval > 0 {
 				meshCfg.GossipInterval = time.Duration(cfg.Discovery.BeaconInterval) * time.Second
 			}
@@ -253,9 +270,11 @@ func NewDefault(interval time.Duration) *Daemon {
 			}
 		}
 
-		d.mesh = mesh.New(selfPeer, meshCfg, nil)
-		for _, seed := range seedPeers {
-			d.mesh.AddSeed(seed)
+		if !meshDisabled {
+			d.mesh = mesh.New(selfPeer, meshCfg, nil)
+			for _, seed := range seedPeers {
+				d.mesh.AddSeed(seed)
+			}
 		}
 	}
 	return d
