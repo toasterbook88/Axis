@@ -96,6 +96,14 @@ func listDaemonProcs() ([]doctorDaemonProc, error) {
 		if err != nil || pid == self {
 			continue
 		}
+		commBytes, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
+		if err != nil {
+			continue
+		}
+		comm := strings.TrimSpace(string(commBytes))
+		if !strings.HasPrefix(comm, "axis") {
+			continue
+		}
 		raw, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
 		if err != nil {
 			// The process exited between ReadDir and here, or it belongs

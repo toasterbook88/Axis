@@ -169,3 +169,158 @@ func TestPlanSingleNodeValidation(t *testing.T) {
 		t.Fatal("expected error for port > 65535")
 	}
 }
+
+// TestPlanSingleNodeNeverSumsVRAMAcrossGPUs pins the per-device VRAM contract:
+// a model larger than the best single GPU must never qualify for full offload
+// just because two smaller GPUs sum past the requirement. llama.cpp cannot
+// pool VRAM across devices for a single model without explicit tensor-split,
+// which the planner does not model.
+func TestPlanSingleNodeNeverSumsVRAMAcrossGPUs(t *testing.T) {
+	// 12 GiB required; two 7 GiB GPUs. Sum = 14 GiB (old bug: "full offload"),
+	// best single device = 7 GiB (correct: cannot fully offload).
+	spec := models.ModelSpec{
+		ID:     "ms-vram-sum",
+		Name:   "twelve-gb-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      12288,
+			ContextOverheadMB: 512,
+			RuntimeOverheadMB: 256,
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "dual-gpu-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{Model: "NVIDIA A", Vendor: "nvidia", VRAMMB: 7168, Capabilities: []string{"cuda"}},
+						{Model: "NVIDIA B", Vendor: "nvidia", VRAMMB: 7168, Capabilities: []string{"cuda"}},
+					},
+				},
+			},
+			{
+				Name:   "single-big-gpu-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{Model: "NVIDIA C", Vendor: "nvidia", VRAMMB: 24576, Capabilities: []string{"cuda"}},
+					},
+				},
+			},
+		},
+	}
+
+	plan, err := PlanSingleNode(snap, spec, 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+
+	for _, c := range plan.Candidates {
+		var reasoning string
+		for _, r := range c.Reasoning {
+			if strings.Contains(r, "offload") {
+				reasoning = r
+			}
+		}
+		switch c.Node {
+		case "dual-gpu-node":
+			// Best single device is 7168 MiB < 13056 required: must NOT claim full offload.
+			if strings.Contains(reasoning, "full accelerator offload") {
+				t.Errorf("dual-gpu-node claimed full offload: %q (VRAM was pooled across GPUs)", reasoning)
+			}
+		case "single-big-gpu-node":
+			// 24576 MiB single device >= 13056 required: full offload is genuinely possible.
+			if !strings.Contains(reasoning, "full accelerator offload") {
+				t.Errorf("single-big-gpu-node lost full offload verdict: %q", reasoning)
+			}
+		}
+	}
+
+	// The reported VRAM figures must describe the best single device, not the pool.
+	for _, c := range plan.Candidates {
+		if c.Node == "dual-gpu-node" && c.VRAMTotalMB > 7168 {
+			t.Errorf("dual-gpu-node VRAMTotalMB = %d, want best single device (7168); pooled values leak into output", c.VRAMTotalMB)
+		}
+	}
+}
+
+// TestPlanSingleNodePrefersMeasuredFreeVRAM pins the free-VRAM contract: when
+// the fact plane reports a measured VRAMFreeMB, fit math uses it instead of
+// total; when it reports 0 (unmeasured), the total is used as the fallback and
+// never presented as a measurement.
+func TestPlanSingleNodePrefersMeasuredFreeVRAM(t *testing.T) {
+	// GPU with 24576 MiB total but only 2048 MiB measured free (9 GiB resident
+	// model loaded). A 12 GiB model must NOT claim full offload.
+	spec := models.ModelSpec{
+		ID:     "ms-free-vram",
+		Name:   "twelve-gb-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      12288,
+			ContextOverheadMB: 512,
+			RuntimeOverheadMB: 256,
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "busy-gpu-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{Model: "NVIDIA Busy", Vendor: "nvidia", VRAMMB: 24576, VRAMFreeMB: 2048, Capabilities: []string{"cuda"}},
+					},
+				},
+			},
+			{
+				Name:   "unmeasured-gpu-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{Model: "NVIDIA Idle", Vendor: "nvidia", VRAMMB: 24576, Capabilities: []string{"cuda"}},
+					},
+				},
+			},
+		},
+	}
+
+	plan, err := PlanSingleNode(snap, spec, 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+
+	for _, c := range plan.Candidates {
+		switch c.Node {
+		case "busy-gpu-node":
+			if c.VRAMFreeMB != 2048 {
+				t.Errorf("busy-gpu-node VRAMFreeMB = %d, want measured 2048 (total-as-free leak)", c.VRAMFreeMB)
+			}
+			for _, r := range c.Reasoning {
+				if strings.Contains(r, "full accelerator offload") {
+					t.Errorf("busy-gpu-node claimed full offload with 2048 MiB free: %q", r)
+				}
+			}
+		case "unmeasured-gpu-node":
+			// No measurement: falls back to total; full offload verdict is the
+			// planner's honest best estimate, not a false claim.
+			if c.VRAMFreeMB != 24576 {
+				t.Errorf("unmeasured-gpu-node VRAMFreeMB = %d, want total fallback 24576", c.VRAMFreeMB)
+			}
+		}
+	}
+}

@@ -203,22 +203,9 @@ func runModelAwait(ctx context.Context, cmd *cobra.Command, targetID string, tim
 		return fmt.Errorf("instance ID is required")
 	}
 
-	var (
-		snap   *models.ClusterSnapshot
-		source string
-		err    error
-	)
-	if live {
-		snap, err = loadModelSnapshot(ctx)
-		source = "live"
-	} else {
-		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
-	}
+	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "await", false)
 	if err != nil {
-		if live {
-			return fmt.Errorf("collect live cluster snapshot for model await: %w", err)
-		}
-		return fmt.Errorf("load cluster snapshot from daemon cache for model await: %w (use --live for an explicit live collection)", err)
+		return err
 	}
 
 	inventory := modelinventory.FromSnapshot(snap, source)
@@ -295,22 +282,9 @@ func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, node
 	}
 
 	startedAt := time.Now().UTC()
-	var (
-		snap   *models.ClusterSnapshot
-		source string
-		err    error
-	)
-	if live {
-		snap, err = loadModelSnapshot(ctx)
-		source = "live"
-	} else {
-		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
-	}
+	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "query", false)
 	if err != nil {
-		if live {
-			return fmt.Errorf("collect live cluster snapshot for model query: %w", err)
-		}
-		return fmt.Errorf("load cluster snapshot from daemon cache for model query: %w (use --live for an explicit live collection)", err)
+		return err
 	}
 
 	inventory := modelinventory.FromSnapshot(snap, source)
@@ -414,28 +388,48 @@ func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, node
 	return nil
 }
 
-func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string, port int, live bool, cacheAddr, format string) error {
-	var (
-		snap   *models.ClusterSnapshot
-		source string
-		err    error
-	)
+// loadModelCommandSnapshot is the single snapshot-acquisition seam for the
+// model subcommands: cache-first unless --live, with an explicit opt-in
+// fallback to live collection for advisory (read-only) commands. Mutating
+// commands (start/stop/await) never fall back silently — a lifecycle mutation
+// must run against the snapshot the daemon published, or fail loudly.
+func loadModelCommandSnapshot(ctx context.Context, live bool, cacheAddr, command string, allowLiveFallback bool) (*models.ClusterSnapshot, string, error) {
 	if live {
-		snap, err = loadModelSnapshot(ctx)
-		source = "live"
-	} else {
-		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
-	}
-	if err != nil {
-		if live {
-			return fmt.Errorf("collect live cluster snapshot for model plan: %w", err)
+		snap, err := loadModelSnapshot(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("collect live cluster snapshot for model %s: %w", command, err)
 		}
-		return fmt.Errorf("load cluster snapshot from daemon cache for model plan: %w (use --live for an explicit live collection)", err)
+		return snap, "live", nil
+	}
+	snap, source, err := fetchModelInventorySnapshot(ctx, cacheAddr)
+	if err == nil {
+		return snap, source, nil
+	}
+	if !allowLiveFallback {
+		return nil, "", fmt.Errorf("load cluster snapshot from daemon cache for model %s: %w (use --live for an explicit live collection)", command, err)
+	}
+	// Auto-degrade: an advisory dry-run should not hard-fail just because
+	// this node runs no daemon (status already falls back to live). The
+	// snapshot source is printed with the output, so the operator always
+	// sees which path produced it.
+	fallback, liveErr := loadModelSnapshot(ctx)
+	if liveErr != nil {
+		return nil, "", fmt.Errorf("load cluster snapshot from daemon cache for model %s: %w (live collection also failed: %v; use --live for an explicit live collection)", command, err, liveErr)
+	}
+	return fallback, "live-fallback", nil
+}
+
+func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string, port int, live bool, cacheAddr, format string) error {
+	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "plan", true)
+	if err != nil {
+		return err
 	}
 
 	spec, err := resolveModelSpec(specOrWeights, snap)
 	if err != nil {
-		return err
+		// An unresolvable spec is a "no placement target exists" condition,
+		// not a generic crash: reuse the taxonomy's dedicated code.
+		return ExitCodeError{Code: ExitErrNoNodesFit, Message: err.Error()}
 	}
 
 	plan, err := modelplan.PlanSingleNode(snap, spec, port)
@@ -556,22 +550,9 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if format == "" {
 		format = "text"
 	}
-	var (
-		snap   *models.ClusterSnapshot
-		source string
-		err    error
-	)
-	if live {
-		snap, err = loadModelSnapshot(ctx)
-		source = "live"
-	} else {
-		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
-	}
+	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "start", false)
 	if err != nil {
-		if live {
-			return fmt.Errorf("collect live cluster snapshot for model start: %w", err)
-		}
-		return fmt.Errorf("load cluster snapshot from daemon cache for model start: %w (use --live for an explicit live collection)", err)
+		return err
 	}
 
 	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)

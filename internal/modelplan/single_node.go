@@ -108,21 +108,25 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 			ramTotalMB = node.Resources.RAMTotalMB
 		}
 
-		vramTotalMB, vramFreeMB, accName, hasAcc := evaluateNodeAccelerator(node, spec.Accelerators)
+		acc := evaluateNodeAccelerator(node, spec.Accelerators)
 
-		// Check if required memory can be satisfied by VRAM, RAM, or a combination
-		canFitVRAM := hasAcc && (vramTotalMB >= reqMemory || vramFreeMB >= reqMemory)
+		// VRAM fit is always evaluated against the best single device: llama.cpp
+		// cannot pool VRAM across GPUs for one model without explicit tensor-split,
+		// which this planner does not model. RAM is a separate pool; the combined
+		// VRAM+RAM check below is the only place pooling is legitimate (spill to
+		// system RAM), and it is labeled as a pool in its reason string.
+		canFitVRAM := acc.Compatible && acc.BestDevice.TotalMB >= reqMemory
 		canFitRAM := ramFreeMB >= reqMemory
 
-		if !canFitVRAM && !canFitRAM && (vramFreeMB+ramFreeMB < reqMemory) {
-			exclusions = append(exclusions, fmt.Sprintf("insufficient memory: required %d MiB, but node has %d MiB free RAM and %d MiB free VRAM",
-				reqMemory, ramFreeMB, vramFreeMB))
+		if !canFitVRAM && !canFitRAM && (acc.BestDevice.FreeMB+ramFreeMB < reqMemory) {
+			exclusions = append(exclusions, fmt.Sprintf("insufficient memory: required %d MiB, but node has %d MiB free RAM and %d MiB free VRAM (best single device)",
+				reqMemory, ramFreeMB, acc.BestDevice.FreeMB))
 		}
 
 		// Check minimum VRAM requirement if declared
-		if spec.Memory.MinVRAMMB > 0 && vramFreeMB < spec.Memory.MinVRAMMB {
-			exclusions = append(exclusions, fmt.Sprintf("insufficient VRAM for minimum offload: requires %d MiB, node has %d MiB",
-				spec.Memory.MinVRAMMB, vramFreeMB))
+		if spec.Memory.MinVRAMMB > 0 && acc.BestDevice.FreeMB < spec.Memory.MinVRAMMB {
+			exclusions = append(exclusions, fmt.Sprintf("insufficient VRAM for minimum offload: requires %d MiB, node has %d MiB (best single device)",
+				spec.Memory.MinVRAMMB, acc.BestDevice.FreeMB))
 		}
 
 		// 4. Pressure / thermal guardrails
@@ -144,7 +148,7 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 		}
 
 		// Eligible candidate - compute fit score
-		candidate := scoreEligibleNode(node, spec, targetPort, ramFreeMB, ramTotalMB, vramTotalMB, vramFreeMB, accName, hasAcc)
+		candidate := scoreEligibleNode(node, spec, targetPort, ramFreeMB, ramTotalMB, acc)
 		plan.Candidates = append(plan.Candidates, candidate)
 	}
 
@@ -175,21 +179,39 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 	return plan, nil
 }
 
-func evaluateNodeAccelerator(node models.NodeFacts, requested []models.AcceleratorType) (int64, int64, string, bool) {
+// acceleratorDevice is the per-device VRAM budget the planner plans against.
+// FreeMB falls back to TotalMB when the fact plane has no measured free figure
+// (GPUInfo carries only total today); callers must disclose that fallback in
+// operator-facing output rather than present it as a measured value.
+type acceleratorDevice struct {
+	TotalMB int64
+	FreeMB  int64
+}
+
+// acceleratorFit is the result of evaluating a node's GPUs against the
+// requested accelerator types. All fit math uses BestDevice, the largest
+// compatible single device — never a cross-GPU pool, which llama.cpp cannot
+// use for one model without explicit tensor-split.
+type acceleratorFit struct {
+	Compatible     bool              // at least one GPU matches the requested accelerators
+	DeviceName     string            // best compatible device, "Model (backend)"
+	BestDevice     acceleratorDevice // largest compatible single device
+	DeviceCount    int               // number of compatible devices (for multi-GPU annotation)
+	AllSameBackend bool              // every compatible device shares one backend family
+	lastBackend    string            // backend family of the previous compatible device, loop-local
+}
+
+// evaluateNodeAccelerator reports the best single compatible device on a node.
+// The returned fit is the planner's entire VRAM contract: consumers evaluate
+// against BestDevice and may annotate multi-device setups, but must never sum
+// VRAM across devices as if it were one pool.
+func evaluateNodeAccelerator(node models.NodeFacts, requested []models.AcceleratorType) acceleratorFit {
+	fit := acceleratorFit{}
 	if node.Resources == nil || len(node.Resources.GPUs) == 0 {
-		return 0, 0, "cpu", false
+		return fit
 	}
 
-	var totalVRAM, freeVRAM int64
-	var bestAcc string
-	hasCompatible := false
-
 	for _, gpu := range node.Resources.GPUs {
-		vram := int64(gpu.VRAMMB)
-		totalVRAM += vram
-		// If explicit free VRAM isn't available, treat total as potential capacity
-		freeVRAM += vram
-
 		gpuAcc := "unknown"
 		if gpu.HasCapability("cuda") || strings.EqualFold(gpu.Vendor, "nvidia") {
 			gpuAcc = "cuda"
@@ -199,18 +221,35 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 			gpuAcc = "rocm"
 		}
 
-		if matchesAccelerator(gpuAcc, requested) {
-			hasCompatible = true
-			if bestAcc == "" {
-				bestAcc = fmt.Sprintf("%s (%s)", gpu.Model, gpuAcc)
-			}
+		if !matchesAccelerator(gpuAcc, requested) {
+			continue
 		}
+
+		vram := int64(gpu.VRAMMB)
+		// Prefer the measured free figure; fall back to total only when the
+		// fact plane could not measure free VRAM (0 = unmeasured). This keeps
+		// fit math conservative on real measurements and honest on absence.
+		free := vram
+		if gpu.VRAMFreeMB > 0 {
+			free = int64(gpu.VRAMFreeMB)
+		}
+
+		fit.DeviceCount++
+		if fit.DeviceCount > 1 {
+			fit.AllSameBackend = fit.AllSameBackend && fit.lastBackend == gpuAcc
+		} else {
+			fit.AllSameBackend = true
+		}
+		fit.lastBackend = gpuAcc
+
+		if vram > fit.BestDevice.TotalMB {
+			fit.BestDevice = acceleratorDevice{TotalMB: vram, FreeMB: free}
+			fit.DeviceName = fmt.Sprintf("%s (%s)", gpu.Model, gpuAcc)
+		}
+		fit.Compatible = true
 	}
 
-	if !hasCompatible {
-		return 0, 0, "cpu", false
-	}
-	return totalVRAM, freeVRAM, bestAcc, true
+	return fit
 }
 
 func matchesAccelerator(acc string, requested []models.AcceleratorType) bool {
@@ -242,27 +281,35 @@ func scoreEligibleNode(
 	node models.NodeFacts,
 	spec models.ModelSpec,
 	targetPort int,
-	ramFreeMB, ramTotalMB, vramTotalMB, vramFreeMB int64,
-	accName string,
-	hasAcc bool,
+	ramFreeMB, ramTotalMB int64,
+	acc acceleratorFit,
 ) ModelCandidateScore {
 	score := 50
 	var reasoning []string
 
 	reqMemory := spec.Memory.TotalMemoryMB()
 
-	// 1. Accelerator offload capability
-	if hasAcc && vramFreeMB >= reqMemory {
+	// 1. Accelerator offload capability — always against the best single device.
+	if acc.Compatible && acc.BestDevice.FreeMB >= reqMemory {
 		score += 30
-		reasoning = append(reasoning, fmt.Sprintf("full accelerator offload possible (%d MiB VRAM free >= %d MiB required)", vramFreeMB, reqMemory))
-	} else if hasAcc && vramFreeMB >= spec.Memory.WeightSizeMB {
+		reasoning = append(reasoning, fmt.Sprintf("full accelerator offload possible (%d MiB VRAM free >= %d MiB required)", acc.BestDevice.FreeMB, reqMemory))
+	} else if acc.Compatible && acc.BestDevice.FreeMB >= spec.Memory.WeightSizeMB {
 		score += 20
-		reasoning = append(reasoning, fmt.Sprintf("weights fit in VRAM (%d MiB free >= %d MiB weights)", vramFreeMB, spec.Memory.WeightSizeMB))
-	} else if hasAcc && vramFreeMB > 0 {
+		reasoning = append(reasoning, fmt.Sprintf("weights fit in VRAM (%d MiB free >= %d MiB weights)", acc.BestDevice.FreeMB, spec.Memory.WeightSizeMB))
+	} else if acc.Compatible && acc.BestDevice.FreeMB > 0 {
 		score += 10
-		reasoning = append(reasoning, fmt.Sprintf("partial VRAM offload possible (%d MiB free)", vramFreeMB))
+		reasoning = append(reasoning, fmt.Sprintf("partial VRAM offload possible (%d MiB free)", acc.BestDevice.FreeMB))
 	} else {
 		reasoning = append(reasoning, "CPU inference execution")
+	}
+
+	// Multi-device annotation: informational only, never added capacity.
+	if acc.DeviceCount > 1 {
+		if acc.AllSameBackend {
+			reasoning = append(reasoning, fmt.Sprintf("%d compatible %s devices present; tensor-split possible (--split-mode layer) but not modeled in this plan", acc.DeviceCount, acc.DeviceName[strings.LastIndex(acc.DeviceName, "("):]))
+		} else {
+			reasoning = append(reasoning, fmt.Sprintf("%d compatible devices present across mixed backends; tensor-split across backends is not modeled", acc.DeviceCount))
+		}
 	}
 
 	// 2. RAM Headroom
@@ -306,9 +353,9 @@ func scoreEligibleNode(
 		Node:            node.Name,
 		Score:           score,
 		Fit:             fit,
-		Accelerator:     accName,
-		VRAMTotalMB:     vramTotalMB,
-		VRAMFreeMB:      vramFreeMB,
+		Accelerator:     acc.DeviceName,
+		VRAMTotalMB:     acc.BestDevice.TotalMB,
+		VRAMFreeMB:      acc.BestDevice.FreeMB,
 		RAMFreeMB:       ramFreeMB,
 		RAMTotalMB:      ramTotalMB,
 		PortAvailable:   true,

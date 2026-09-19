@@ -103,7 +103,7 @@ func localGPUsLinux(ctx context.Context) []models.GPUInfo {
 }
 
 func localGPUsNvidiaSMI(ctx context.Context) []models.GPUInfo {
-	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil
 	}
@@ -117,7 +117,7 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ", ", 2)
+		parts := strings.Split(line, ", ")
 		name := strings.TrimSpace(parts[0])
 		gpu := models.GPUInfo{
 			Model:        name,
@@ -127,6 +127,13 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 		if len(parts) >= 2 {
 			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
 				gpu.VRAMMB = vram
+			}
+		}
+		// memory.free is present only when the query requests it; older callers
+		// (and the two-column remote fallback) legitimately omit it.
+		if len(parts) >= 3 {
+			if free, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
+				gpu.VRAMFreeMB = free
 			}
 		}
 		gpus = append(gpus, gpu)

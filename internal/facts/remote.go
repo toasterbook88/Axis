@@ -325,7 +325,7 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 		gpuCmd = `system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'`
 	} else {
 		// Try nvidia-smi first, fall back to lspci
-		gpuCmd = `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`
+		gpuCmd = `nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`
 	}
 	if out, err := c.Exec.Run(ctx, gpuCmd); err == nil {
 		out = strings.TrimSpace(out)
