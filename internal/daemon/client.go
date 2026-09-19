@@ -74,6 +74,15 @@ func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, s
 	if meta.Stale {
 		models.AppendWarningIfMissing(&snap, staleCacheWarning(meta))
 	}
+	// A degraded cache (non-empty LastError) means the fact plane itself is
+	// unhealthy; every consumer reading through this helper inherits the
+	// warning, so degraded state is never silently rendered as green.
+	if meta.LastError != "" {
+		models.AppendWarningIfMissing(&snap, models.Warning{
+			Kind:    "cache",
+			Message: fmt.Sprintf("daemon cache is degraded: %s; see axis daemon status", meta.LastError),
+		})
+	}
 	if snap.Freshness != nil && snap.Freshness.Warning != "" {
 		models.AppendWarningIfMissing(&snap, models.Warning{
 			Kind:    "discovery",
