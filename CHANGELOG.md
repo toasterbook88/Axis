@@ -1,5 +1,21 @@
 ## Unreleased
 
+## v0.19.1 (2026-09-18)
+
+One pull request merged on `main` since `v0.19.0`. This patch release brings single-device VRAM honesty to model placement, free GPU memory probing, mesh UDP isolation, doctor process enumeration resilience, and unified model snapshot acquisition.
+
+### Features
+
+* **Single-device VRAM honesty & multi-GPU annotations:** `axis model plan` evaluates accelerator fit against the best single device rather than summing VRAM across distinct GPUs into an imaginary shared pool. Multi-device nodes are annotated with tensor-split feasibility (`--split-mode layer`) without misrepresenting distinct devices as pooled capacity (#440).
+* **Measured GPU free memory:** queries `nvidia-smi` for `memory.free` and records `VRAMFreeMB` in `models.GPUInfo`, enabling real VRAM headroom evaluation while honestly disclosing unmeasured capacity (#440).
+
+### Fixed
+
+* **Mesh UDP port isolation:** cleanly separates the discovery beacon listen port (`UDP :42424`) from the gossip mesh listen port (`UDP :42426`) in daemon initialization and adds `gossip_port` to discovery configuration, eliminating self-inflicted bind address collisions (#440).
+* **Doctor process probe resilience:** filters `/proc/<pid>/comm` before attempting to read `/proc/<pid>/cmdline`, preventing `listDaemonProcs` and `axis doctor` from hanging on processes stuck in `exit_mm` or uninterruptible sleep `D`-state (#440).
+* **Unified model command snapshot seam:** introduces `loadModelCommandSnapshot` for all `axis model` subcommands, providing cache-first snapshot loading with advisory live fallback for read-only commands (`plan`, `inspect`, `query`) and `ExitErrNoNodesFit` error classification for unresolvable specs (#440).
+* **Degraded daemon cache surfacing:** `daemon.FetchSnapshot` appends a typed warning when the daemon cache is degraded (`LastError != ""`), preventing unhealthy fact plane state from rendering as green (#440).
+
 ## v0.19.0 (2026-09-18)
 
 Thirteen pull requests merged on `main` since `v0.18.1`. This release introduces the interactive TUI front door with truthful placement preview, a resident-model and GPU/disk weight truth plane, a daemon-first diagnostic mesh facade, non-POSIX remote shell hardening, and a major 38% codebase refactoring.
