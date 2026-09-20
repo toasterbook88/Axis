@@ -401,10 +401,6 @@ func meshGossipPort(cfg *config.Config) int {
 		if cfg.Discovery.GossipPort > 0 {
 			return cfg.Discovery.GossipPort
 		}
-		if cfg.Discovery.UDPPort > 0 && cfg.Discovery.UDPPort != defaultBeaconPort {
-			// Legacy configs with a custom udp_port predate the beacon/gossip split.
-			return cfg.Discovery.UDPPort
-		}
 	}
 	return defaultGossipPort
 }

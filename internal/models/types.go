@@ -56,11 +56,12 @@ const (
 
 // GPUInfo describes a single GPU with vendor, model, VRAM, and capabilities.
 type GPUInfo struct {
-	Vendor       string   `json:"vendor" yaml:"vendor"`                                 // apple, nvidia, amd, intel, unknown
-	Model        string   `json:"model" yaml:"model"`                                   // e.g. "Apple M3 Pro", "NVIDIA GeForce RTX 4090"
-	VRAMMB       int      `json:"vram_mb,omitempty" yaml:"vram_mb,omitempty"`           // 0 means unknown or unified
-	VRAMFreeMB   int      `json:"vram_free_mb,omitempty" yaml:"vram_free_mb,omitempty"` // measured free VRAM; 0 means unmeasured — consumers must not read 0 as "no VRAM free"
-	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"` // metal, cuda, rocm, vulkan
+	Vendor           string   `json:"vendor" yaml:"vendor"`                                             // apple, nvidia, amd, intel, unknown
+	Model            string   `json:"model" yaml:"model"`                                               // e.g. "Apple M3 Pro", "NVIDIA GeForce RTX 4090"
+	VRAMMB           int      `json:"vram_mb,omitempty" yaml:"vram_mb,omitempty"`                       // 0 means unknown or unified
+	VRAMFreeMB       int      `json:"vram_free_mb,omitempty" yaml:"vram_free_mb,omitempty"`             // measured free VRAM; valid when VRAMFreeMeasured is true or VRAMFreeMB > 0
+	VRAMFreeMeasured bool     `json:"vram_free_measured,omitempty" yaml:"vram_free_measured,omitempty"` // true when VRAMFreeMB was explicitly measured (even if 0 MB free)
+	Capabilities     []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`             // metal, cuda, rocm, vulkan
 }
 
 // GPUName returns the model string for display purposes.
