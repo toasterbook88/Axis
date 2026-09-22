@@ -20,17 +20,18 @@ const (
 
 // ModelCandidateScore is a scored placement candidate node.
 type ModelCandidateScore struct {
-	Node            string       `json:"node" yaml:"node"`
-	Score           int          `json:"score" yaml:"score"`
-	Fit             CandidateFit `json:"fit" yaml:"fit"`
-	Accelerator     string       `json:"accelerator" yaml:"accelerator"`
-	VRAMTotalMB     int64        `json:"vram_total_mb" yaml:"vram_total_mb"`
-	VRAMFreeMB      int64        `json:"vram_free_mb" yaml:"vram_free_mb"`
-	RAMFreeMB       int64        `json:"ram_free_mb" yaml:"ram_free_mb"`
-	RAMTotalMB      int64        `json:"ram_total_mb" yaml:"ram_total_mb"`
-	PortAvailable   bool         `json:"port_available" yaml:"port_available"`
-	HasLocalWeights bool         `json:"has_local_weights" yaml:"has_local_weights"`
-	Reasoning       []string     `json:"reasoning" yaml:"reasoning"`
+	Node             string       `json:"node" yaml:"node"`
+	Score            int          `json:"score" yaml:"score"`
+	Fit              CandidateFit `json:"fit" yaml:"fit"`
+	Accelerator      string       `json:"accelerator" yaml:"accelerator"`
+	VRAMTotalMB      int64        `json:"vram_total_mb" yaml:"vram_total_mb"`
+	VRAMFreeMB       int64        `json:"vram_free_mb" yaml:"vram_free_mb"`
+	VRAMFreeMeasured bool         `json:"vram_free_measured" yaml:"vram_free_measured"`
+	RAMFreeMB        int64        `json:"ram_free_mb" yaml:"ram_free_mb"`
+	RAMTotalMB       int64        `json:"ram_total_mb" yaml:"ram_total_mb"`
+	PortAvailable    bool         `json:"port_available" yaml:"port_available"`
+	HasLocalWeights  bool         `json:"has_local_weights" yaml:"has_local_weights"`
+	Reasoning        []string     `json:"reasoning" yaml:"reasoning"`
 }
 
 // ModelExcludedCandidate describes a node excluded from placement with reasons.
@@ -184,19 +185,20 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 // only when the fact plane could not measure free VRAM. Callers must disclose
 // that fallback in operator-facing output rather than present it as a measured value.
 type acceleratorDevice struct {
-	TotalMB int64
-	FreeMB  int64
+	TotalMB      int64
+	FreeMB       int64
+	FreeMeasured bool
 }
 
 // acceleratorFit is the result of evaluating a node's GPUs against the
-// requested accelerator types. All fit math uses BestDevice, the largest
-// compatible single device — never a cross-GPU pool, which llama.cpp cannot
+// requested accelerator types. All fit math uses BestDevice, the most-free
+// compatible single device (tied by total capacity) — never a cross-GPU pool, which llama.cpp cannot
 // use for one model without explicit tensor-split.
 type acceleratorFit struct {
 	Compatible     bool              // at least one GPU matches the requested accelerators
 	DeviceName     string            // best compatible device, "Model (backend)"
 	Backend        string            // backend family of the best device (cuda, metal, rocm)
-	BestDevice     acceleratorDevice // largest compatible single device
+	BestDevice     acceleratorDevice // most-free compatible single device (tied by total capacity)
 	DeviceCount    int               // number of compatible devices (for multi-GPU annotation)
 	AllSameBackend bool              // every compatible device shares one backend family
 	lastBackend    string            // backend family of the previous compatible device, loop-local
@@ -228,8 +230,12 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 
 		vram := int64(gpu.VRAMMB)
 		// Prefer the measured free figure; fall back to total only when the
-		// fact plane could not measure free VRAM. This keeps fit math conservative
-		// on real measurements (even when 0 MB free) and honest on absence.
+		// fact plane could not measure free VRAM. A positive free value is
+		// always a real measurement: the flag exists only to disambiguate a
+		// measured 0 (exhausted card) from an unmeasured 0, so requiring it
+		// alone would discard genuine readings from snapshots written before
+		// #442 added the field. This keeps fit math conservative on real
+		// measurements (even when 0 MB free) and honest on absence.
 		free := vram
 		if gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0 {
 			free = int64(gpu.VRAMFreeMB)
@@ -247,7 +253,7 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 			free > fit.BestDevice.FreeMB ||
 			(free == fit.BestDevice.FreeMB && vram > fit.BestDevice.TotalMB)
 		if isBetter {
-			fit.BestDevice = acceleratorDevice{TotalMB: vram, FreeMB: free}
+			fit.BestDevice = acceleratorDevice{TotalMB: vram, FreeMB: free, FreeMeasured: gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0}
 			fit.DeviceName = fmt.Sprintf("%s (%s)", gpu.Model, gpuAcc)
 			fit.Backend = gpuAcc
 		}
@@ -359,17 +365,18 @@ func scoreEligibleNode(
 	}
 
 	return ModelCandidateScore{
-		Node:            node.Name,
-		Score:           score,
-		Fit:             fit,
-		Accelerator:     acc.DeviceName,
-		VRAMTotalMB:     acc.BestDevice.TotalMB,
-		VRAMFreeMB:      acc.BestDevice.FreeMB,
-		RAMFreeMB:       ramFreeMB,
-		RAMTotalMB:      ramTotalMB,
-		PortAvailable:   true,
-		HasLocalWeights: localWeights,
-		Reasoning:       reasoning,
+		Node:             node.Name,
+		Score:            score,
+		Fit:              fit,
+		Accelerator:      acc.DeviceName,
+		VRAMTotalMB:      acc.BestDevice.TotalMB,
+		VRAMFreeMB:       acc.BestDevice.FreeMB,
+		VRAMFreeMeasured: acc.BestDevice.FreeMeasured,
+		RAMFreeMB:        ramFreeMB,
+		RAMTotalMB:       ramTotalMB,
+		PortAvailable:    true,
+		HasLocalWeights:  localWeights,
+		Reasoning:        reasoning,
 	}
 }
 
@@ -397,8 +404,10 @@ func FormatModelPlacementPlanText(plan ModelPlacementPlan) string {
 				localNote = " [local weights present]"
 			}
 			accText := c.Accelerator
-			if c.VRAMFreeMB > 0 {
-				accText = fmt.Sprintf("%s (VRAM: %d MiB)", c.Accelerator, c.VRAMFreeMB)
+			if c.VRAMFreeMeasured {
+				accText = fmt.Sprintf("%s (VRAM: %d MiB free)", c.Accelerator, c.VRAMFreeMB)
+			} else if c.VRAMTotalMB > 0 {
+				accText = fmt.Sprintf("%s (VRAM: %d MiB total, unmeasured)", c.Accelerator, c.VRAMTotalMB)
 			}
 			sb.WriteString(fmt.Sprintf("  %d. %-12s Score: %2d/100 (%-9s)  RAM: %6d MiB free  Acc: %-25s Port %d: free%s\n",
 				i+1, c.Node, c.Score, c.Fit, c.RAMFreeMB, accText, plan.TargetPort, localNote))
