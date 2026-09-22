@@ -1,5 +1,15 @@
 ## Unreleased
 
+Two pull requests merged on `main` since `v0.19.1`.
+
+### Fixed
+
+* **Installer no longer unlinks a running binary:** `install.sh`'s legacy-path cleanup removed any superseded copy that identified as AXIS without checking whether a process was currently executing it. A systemd unit or launchd job that had already mapped the binary kept running it from the deleted inode, so the file was gone while the daemon was still serving and the next restart had no binary to start. `path_in_use()` now refuses to remove a path a running process holds — resolving `/proc/<pid>/exe` for real binaries and `/proc/<pid>/fd/*` for interpreted wrappers — and tells the operator to restart the process instead. The absolute legacy candidates are also overridable via `AXIS_LEGACY_CANDIDATES`, which `make test-install` uses to sandbox them so the suite can no longer delete the host binary on any machine with a system install (#445).
+* **Free-VRAM-gated placement eligibility:** `axis model plan` gates candidate eligibility on *measured* free VRAM rather than total capacity, so a node with a saturated card no longer claims full offload or slips past the insufficient-memory check. `models.GPUInfo` gains `VRAMFreeMeasured` so a card genuinely reporting 0 MiB free is evaluated honestly instead of falling back to `TotalMB`; the best device is chosen by most free VRAM (tie-broken by total), so an idle card wins over a busier one with higher capacity (#442).
+* **Gossip UDP port decoupling:** removes legacy code that copied the beacon `udp_port` onto `gossipPort` in the daemon and CLI, which produced a false beacon/gossip collision and could silently disable the mesh (#442).
+* **Snapshot source in plan text:** `FormatModelPlacementPlanText` now prints `Snapshot Source: %s`, eliminating silent cache-to-live degradation on the operator CLI text surface (#442).
+* **Backend referencing safety:** replaces unsafe string slicing of `DeviceName` with direct backend referencing, removing a potential slice panic in multi-device tensor-split reasoning (#442).
+
 ## v0.19.1 (2026-09-18)
 
 One pull request merged on `main` since `v0.19.0`. This patch release brings single-device VRAM honesty to model placement, free GPU memory probing, mesh UDP isolation, doctor process enumeration resilience, and unified model snapshot acquisition.
