@@ -497,7 +497,13 @@ echo ""
 # a binary other users and systemd units depend on.
 LEGACY_PATHS=()
 FOREIGN_PATHS=()
-for cand in "$HOME/.local/bin/axis" "$HOME/go/bin/axis" "/usr/local/bin/axis" "/opt/homebrew/bin/axis"; do
+# Overridable so hermetic test runs can sandbox the candidates. A hardcoded
+# list made hack/install-tests.sh delete the host's real /usr/local/bin/axis on
+# every run: the suite installs to a sandbox outside $HOME, which classifies the
+# scope as "system", and the real system binary was then a superseded copy.
+DEFAULT_LEGACY_CANDIDATES="$HOME/.local/bin/axis $HOME/go/bin/axis /usr/local/bin/axis /opt/homebrew/bin/axis"
+LEGACY_CANDIDATES="${AXIS_LEGACY_CANDIDATES:-$DEFAULT_LEGACY_CANDIDATES}"
+for cand in $LEGACY_CANDIDATES; do
     [ -f "$cand" ] || continue
     [ "$cand" -ef "$CANONICAL" ] && continue
 
