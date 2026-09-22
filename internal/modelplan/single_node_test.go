@@ -324,3 +324,200 @@ func TestPlanSingleNodePrefersMeasuredFreeVRAM(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanSingleNode_OverloadedZeroVRAM ensures a fully exhausted card reporting
+// 0 MiB free (with VRAMFreeMeasured=true) is never treated as empty (total fallback).
+func TestPlanSingleNode_OverloadedZeroVRAM(t *testing.T) {
+	spec := models.ModelSpec{
+		ID:     "ms-zero-vram",
+		Name:   "small-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      4096,
+			ContextOverheadMB: 512,
+			RuntimeOverheadMB: 256,
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "exhausted-gpu-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{
+							Model:            "NVIDIA RTX 4090",
+							Vendor:           "nvidia",
+							VRAMMB:           24576,
+							VRAMFreeMB:       0,
+							VRAMFreeMeasured: true,
+							Capabilities:     []string{"cuda"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	plan, err := PlanSingleNode(snap, spec, 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	if len(plan.Candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(plan.Candidates))
+	}
+	cand := plan.Candidates[0]
+	if cand.VRAMFreeMB != 0 {
+		t.Errorf("cand.VRAMFreeMB = %d, want 0 (must not fall back to TotalMB 24576)", cand.VRAMFreeMB)
+	}
+	for _, r := range cand.Reasoning {
+		if strings.Contains(r, "offload possible") {
+			t.Errorf("exhausted-gpu-node must not claim VRAM offload with 0 free: %q", r)
+		}
+	}
+}
+
+// TestPlanSingleNode_EligibilityGatesOnFreeVRAM ensures that a card with large total
+// VRAM but insufficient free VRAM and insufficient RAM is properly excluded.
+func TestPlanSingleNode_EligibilityGatesOnFreeVRAM(t *testing.T) {
+	spec := models.ModelSpec{
+		ID:     "ms-tight-vram",
+		Name:   "twelve-gb-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      10240,
+			ContextOverheadMB: 1024,
+			RuntimeOverheadMB: 1024, // total required: 12288 MiB
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+	// Node has 24 GiB total VRAM, but only 2 GiB free, and only 1 GiB free RAM.
+	// Total available (2048 + 1024 = 3072 MiB) is far below 12288 MiB required.
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "tight-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  1024,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{
+							Model:            "NVIDIA RTX 4090",
+							Vendor:           "nvidia",
+							VRAMMB:           24576,
+							VRAMFreeMB:       2048,
+							VRAMFreeMeasured: true,
+							Capabilities:     []string{"cuda"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	plan, err := PlanSingleNode(snap, spec, 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	if len(plan.Candidates) != 0 {
+		t.Fatalf("expected 0 candidates, got %d (tight node should have been excluded)", len(plan.Candidates))
+	}
+	if len(plan.Excluded) != 1 {
+		t.Fatalf("expected 1 excluded node, got %d", len(plan.Excluded))
+	}
+	if plan.Excluded[0].Node != "tight-node" {
+		t.Errorf("excluded node = %q, want tight-node", plan.Excluded[0].Node)
+	}
+}
+
+// TestPlanSingleNode_BestDevicePrefersFreeVRAM ensures that when a node has multiple GPUs,
+// the device with the most free VRAM is selected as BestDevice, not merely the largest total.
+func TestPlanSingleNode_BestDevicePrefersFreeVRAM(t *testing.T) {
+	spec := models.ModelSpec{
+		ID:     "ms-multi-gpu",
+		Name:   "eight-gb-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      7000,
+			ContextOverheadMB: 512,
+			RuntimeOverheadMB: 512, // total required: 8024 MiB
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+	// GPU 0: 24 GiB total, but only 1 GiB free (busy).
+	// GPU 1: 16 GiB total, 15 GiB free (idle).
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{
+			{
+				Name:   "dual-gpu-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{
+							Model:            "NVIDIA RTX 4090",
+							Vendor:           "nvidia",
+							VRAMMB:           24576,
+							VRAMFreeMB:       1024,
+							VRAMFreeMeasured: true,
+							Capabilities:     []string{"cuda"},
+						},
+						{
+							Model:            "NVIDIA RTX 4080",
+							Vendor:           "nvidia",
+							VRAMMB:           16384,
+							VRAMFreeMB:       15360,
+							VRAMFreeMeasured: true,
+							Capabilities:     []string{"cuda"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	plan, err := PlanSingleNode(snap, spec, 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	if len(plan.Candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(plan.Candidates))
+	}
+	cand := plan.Candidates[0]
+	if cand.VRAMFreeMB != 15360 {
+		t.Errorf("cand.VRAMFreeMB = %d, want 15360 (RTX 4080 with 15 GiB free must be chosen over busy RTX 4090)", cand.VRAMFreeMB)
+	}
+	if !strings.Contains(cand.Accelerator, "RTX 4080") {
+		t.Errorf("cand.Accelerator = %q, want RTX 4080", cand.Accelerator)
+	}
+}
+
+// TestFormatModelPlacementPlanText_PrintsSnapshotSource ensures that text plan
+// output displays Snapshot Source prominently.
+func TestFormatModelPlacementPlanText_PrintsSnapshotSource(t *testing.T) {
+	plan := ModelPlacementPlan{
+		Spec: models.ModelSpec{
+			ID:   "test-spec",
+			Name: "test-model",
+		},
+		TargetPort:     8080,
+		PublicationID:  "pub-12345",
+		SnapshotSource: "daemon-cache",
+	}
+
+	out := FormatModelPlacementPlanText(plan)
+	if !strings.Contains(out, "Snapshot Source: daemon-cache") {
+		t.Errorf("FormatModelPlacementPlanText missing Snapshot Source: got %q", out)
+	}
+	if !strings.Contains(out, "Snapshot Publication: pub-12345") {
+		t.Errorf("FormatModelPlacementPlanText missing Snapshot Publication: got %q", out)
+	}
+}

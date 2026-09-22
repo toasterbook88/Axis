@@ -353,3 +353,30 @@ func TestUDPPortHeldPreservesNonConflictErrors(t *testing.T) {
 		t.Fatal("a probe failure must not be reported as occupied")
 	}
 }
+
+func TestMeshGossipPort(t *testing.T) {
+	// Nil / empty discovery defaults to 42426
+	if got := meshGossipPort(nil); got != 42426 {
+		t.Errorf("meshGossipPort(nil) = %d, want 42426", got)
+	}
+
+	// Custom gossip_port is honored
+	cfg := &config.Config{
+		Discovery: &config.DiscoveryConfig{
+			GossipPort: 50002,
+		},
+	}
+	if got := meshGossipPort(cfg); got != 50002 {
+		t.Errorf("meshGossipPort(custom gossip) = %d, want 50002", got)
+	}
+
+	// Custom beacon UDPPort does NOT collide or hijack gossip port
+	cfgBeacon := &config.Config{
+		Discovery: &config.DiscoveryConfig{
+			UDPPort: 50000,
+		},
+	}
+	if got := meshGossipPort(cfgBeacon); got != 42426 {
+		t.Errorf("meshGossipPort(custom beacon UDPPort) = %d, want default 42426", got)
+	}
+}

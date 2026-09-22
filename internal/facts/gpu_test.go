@@ -113,6 +113,12 @@ NVIDIA GeForce MX250, 2048`
 	if gpus[0].VRAMMB != 24564 {
 		t.Errorf("gpu[0].VRAM = %d, want 24564", gpus[0].VRAMMB)
 	}
+	if gpus[0].VRAMFreeMB != 0 {
+		t.Errorf("gpu[0].VRAMFreeMB = %d, want 0", gpus[0].VRAMFreeMB)
+	}
+	if gpus[0].VRAMFreeMeasured {
+		t.Errorf("gpu[0].VRAMFreeMeasured = true, want false for 2-column input")
+	}
 	if gpus[0].Vendor != "nvidia" {
 		t.Errorf("gpu[0].Vendor = %q", gpus[0].Vendor)
 	}
@@ -122,6 +128,46 @@ NVIDIA GeForce MX250, 2048`
 
 	if gpus[1].VRAMMB != 2048 {
 		t.Errorf("gpu[1].VRAM = %d, want 2048", gpus[1].VRAMMB)
+	}
+	if gpus[1].VRAMFreeMeasured {
+		t.Errorf("gpu[1].VRAMFreeMeasured = true, want false for 2-column input")
+	}
+}
+
+func TestParseNvidiaSMIOutput_ThreeColumnsWithFreeVRAM(t *testing.T) {
+	input := `NVIDIA GeForce RTX 4090, 24564, 20480
+NVIDIA GeForce RTX 3080, 10240, 0`
+
+	gpus := parseNvidiaSMIOutput(input)
+	if len(gpus) != 2 {
+		t.Fatalf("expected 2 GPUs, got %d", len(gpus))
+	}
+
+	if gpus[0].Model != "NVIDIA GeForce RTX 4090" {
+		t.Errorf("gpu[0].Model = %q", gpus[0].Model)
+	}
+	if gpus[0].VRAMMB != 24564 {
+		t.Errorf("gpu[0].VRAMMB = %d, want 24564", gpus[0].VRAMMB)
+	}
+	if gpus[0].VRAMFreeMB != 20480 {
+		t.Errorf("gpu[0].VRAMFreeMB = %d, want 20480", gpus[0].VRAMFreeMB)
+	}
+	if !gpus[0].VRAMFreeMeasured {
+		t.Errorf("gpu[0].VRAMFreeMeasured = false, want true")
+	}
+
+	// Crucial check: 0 free VRAM on an exhausted card is recorded as measured 0, not unmeasured.
+	if gpus[1].Model != "NVIDIA GeForce RTX 3080" {
+		t.Errorf("gpu[1].Model = %q", gpus[1].Model)
+	}
+	if gpus[1].VRAMMB != 10240 {
+		t.Errorf("gpu[1].VRAMMB = %d, want 10240", gpus[1].VRAMMB)
+	}
+	if gpus[1].VRAMFreeMB != 0 {
+		t.Errorf("gpu[1].VRAMFreeMB = %d, want 0", gpus[1].VRAMFreeMB)
+	}
+	if !gpus[1].VRAMFreeMeasured {
+		t.Errorf("gpu[1].VRAMFreeMeasured = false, want true for measured 0 free VRAM")
 	}
 }
 

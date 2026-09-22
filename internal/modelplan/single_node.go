@@ -115,7 +115,7 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 		// which this planner does not model. RAM is a separate pool; the combined
 		// VRAM+RAM check below is the only place pooling is legitimate (spill to
 		// system RAM), and it is labeled as a pool in its reason string.
-		canFitVRAM := acc.Compatible && acc.BestDevice.TotalMB >= reqMemory
+		canFitVRAM := acc.Compatible && acc.BestDevice.FreeMB >= reqMemory
 		canFitRAM := ramFreeMB >= reqMemory
 
 		if !canFitVRAM && !canFitRAM && (acc.BestDevice.FreeMB+ramFreeMB < reqMemory) {
@@ -180,9 +180,9 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 }
 
 // acceleratorDevice is the per-device VRAM budget the planner plans against.
-// FreeMB falls back to TotalMB when the fact plane has no measured free figure
-// (GPUInfo carries only total today); callers must disclose that fallback in
-// operator-facing output rather than present it as a measured value.
+// FreeMB reflects measured free VRAM when available, and falls back to TotalMB
+// only when the fact plane could not measure free VRAM. Callers must disclose
+// that fallback in operator-facing output rather than present it as a measured value.
 type acceleratorDevice struct {
 	TotalMB int64
 	FreeMB  int64
@@ -195,6 +195,7 @@ type acceleratorDevice struct {
 type acceleratorFit struct {
 	Compatible     bool              // at least one GPU matches the requested accelerators
 	DeviceName     string            // best compatible device, "Model (backend)"
+	Backend        string            // backend family of the best device (cuda, metal, rocm)
 	BestDevice     acceleratorDevice // largest compatible single device
 	DeviceCount    int               // number of compatible devices (for multi-GPU annotation)
 	AllSameBackend bool              // every compatible device shares one backend family
@@ -227,10 +228,10 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 
 		vram := int64(gpu.VRAMMB)
 		// Prefer the measured free figure; fall back to total only when the
-		// fact plane could not measure free VRAM (0 = unmeasured). This keeps
-		// fit math conservative on real measurements and honest on absence.
+		// fact plane could not measure free VRAM. This keeps fit math conservative
+		// on real measurements (even when 0 MB free) and honest on absence.
 		free := vram
-		if gpu.VRAMFreeMB > 0 {
+		if gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0 {
 			free = int64(gpu.VRAMFreeMB)
 		}
 
@@ -242,9 +243,13 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 		}
 		fit.lastBackend = gpuAcc
 
-		if vram > fit.BestDevice.TotalMB {
+		isBetter := fit.DeviceCount == 1 ||
+			free > fit.BestDevice.FreeMB ||
+			(free == fit.BestDevice.FreeMB && vram > fit.BestDevice.TotalMB)
+		if isBetter {
 			fit.BestDevice = acceleratorDevice{TotalMB: vram, FreeMB: free}
 			fit.DeviceName = fmt.Sprintf("%s (%s)", gpu.Model, gpuAcc)
+			fit.Backend = gpuAcc
 		}
 		fit.Compatible = true
 	}
@@ -306,7 +311,11 @@ func scoreEligibleNode(
 	// Multi-device annotation: informational only, never added capacity.
 	if acc.DeviceCount > 1 {
 		if acc.AllSameBackend {
-			reasoning = append(reasoning, fmt.Sprintf("%d compatible %s devices present; tensor-split possible (--split-mode layer) but not modeled in this plan", acc.DeviceCount, acc.DeviceName[strings.LastIndex(acc.DeviceName, "("):]))
+			backend := acc.Backend
+			if backend == "" {
+				backend = "accelerator"
+			}
+			reasoning = append(reasoning, fmt.Sprintf("%d compatible %s devices present; tensor-split possible (--split-mode layer) but not modeled in this plan", acc.DeviceCount, backend))
 		} else {
 			reasoning = append(reasoning, fmt.Sprintf("%d compatible devices present across mixed backends; tensor-split across backends is not modeled", acc.DeviceCount))
 		}
@@ -374,6 +383,9 @@ func FormatModelPlacementPlanText(plan ModelPlacementPlan) string {
 	sb.WriteString(fmt.Sprintf("Target Port: %d\n", plan.TargetPort))
 	if plan.PublicationID != "" {
 		sb.WriteString(fmt.Sprintf("Snapshot Publication: %s\n", plan.PublicationID))
+	}
+	if plan.SnapshotSource != "" {
+		sb.WriteString(fmt.Sprintf("Snapshot Source: %s\n", plan.SnapshotSource))
 	}
 	sb.WriteString("\n")
 

@@ -390,9 +390,9 @@ func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, node
 
 // loadModelCommandSnapshot is the single snapshot-acquisition seam for the
 // model subcommands: cache-first unless --live, with an explicit opt-in
-// fallback to live collection for advisory (read-only) commands. Mutating
-// commands (start/stop/await) never fall back silently — a lifecycle mutation
-// must run against the snapshot the daemon published, or fail loudly.
+// fallback to live collection for advisory planning (plan). Mutating or
+// target-executing commands (start/stop/await/query) never fall back silently —
+// they must run against the snapshot the daemon published, or fail loudly.
 func loadModelCommandSnapshot(ctx context.Context, live bool, cacheAddr, command string, allowLiveFallback bool) (*models.ClusterSnapshot, string, error) {
 	if live {
 		snap, err := loadModelSnapshot(ctx)
