@@ -134,6 +134,7 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 		if len(parts) >= 3 {
 			if free, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
 				gpu.VRAMFreeMB = free
+				gpu.VRAMFreeMeasured = true
 			}
 		}
 		gpus = append(gpus, gpu)

@@ -224,10 +224,6 @@ func NewDefault(interval time.Duration) *Daemon {
 				}
 				if cfg.Discovery.GossipPort > 0 {
 					gossipPort = cfg.Discovery.GossipPort
-				} else if beaconPort != 42424 {
-					// Legacy configs with a custom udp_port predate the split;
-					// keep gossip on it only when it is not the beacon default.
-					gossipPort = beaconPort
 				}
 				if gossipPort == beaconPort {
 					slog.Error("daemon: beacon and gossip listeners cannot share a UDP port; mesh disabled until config is corrected",
