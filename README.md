@@ -305,7 +305,7 @@ For AI agents working in this repo, see [AGENTS.md](AGENTS.md).
 
 ## License
 
-[MIT](LICENSE) — Smith Software Solutions LLC
+[MIT](LICENSE) — Smith Software Solutions
 
 ---
 

@@ -6,7 +6,7 @@ AXIS supports the latest tagged release line for security fixes.
 
 | Version | Supported |
 | --- | --- |
-| `v0.17.x` | yes |
+| `v0.19.x` | yes |
 | older tagged releases | no |
 | `main` | best effort only; use a tagged release for operator-facing deployments |
 
