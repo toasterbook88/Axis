@@ -10,7 +10,10 @@ permissions:
   pull-requests: read
   issues: read
 
-network: defaults
+network:
+  allowed:
+    - defaults
+    - claude
 
 engine: claude
 
