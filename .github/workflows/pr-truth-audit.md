@@ -12,6 +12,8 @@ permissions:
 
 network: defaults
 
+engine: claude
+
 safe-outputs:
   add-comment:
     max: 1
