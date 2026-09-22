@@ -1,6 +1,9 @@
 ## Unreleased
 
-Two pull requests merged on `main` since `v0.19.1`.
+## v0.19.2 (2026-09-21)
+
+Two pull requests merged on `main` since `v0.19.1`. This patch release closes the
+installer deletion defect class and hardens model-placement VRAM accounting.
 
 ### Fixed
 
