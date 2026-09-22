@@ -393,6 +393,49 @@ else
     bad "existing AXIS binary upgrades in place" "$out"
 fi
 
+# 15. A legacy path executed by a running process must NOT be unlinked. Six
+#     fleet incidents came from exactly this: the daemon kept running on the
+#     deleted inode, so the next restart had no binary left to start.
+make_release 9.9.9 "$GOOD_BODY"
+
+# 15a. Held by a live process -> kept.
+H="$WORK/t15a/home"; D="$WORK/t15a/bin"; mkdir -p "$H/.local/bin" "$D"
+printf '#!/bin/sh\nif [ "$1" = version ]; then echo "axis 0.0.1"; exit 0; fi\nsleep 60\n' > "$H/.local/bin/axis"
+chmod +x "$H/.local/bin/axis"
+"$H/.local/bin/axis" hold &
+HOLDER=$!
+sleep 1
+if kill -0 "$HOLDER" 2>/dev/null; then
+    out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9)
+    if [ -f "$H/.local/bin/axis" ]; then
+        ok "a legacy path held by a running process is kept"
+    else
+        bad "a legacy path held by a running process is kept" \
+            "it was deleted while in use (this is the regression)"
+    fi
+    if printf '%s' "$out" | grep -q 'KEPT'; then
+        ok "the kept path is reported to the operator"
+    else
+        bad "the kept path is reported to the operator" "$(printf '%s' "$out" | grep -i 'superseded\|removed\|KEPT' | head -3)"
+    fi
+else
+    bad "a legacy path held by a running process is kept" "holder process failed to start"
+fi
+kill "$HOLDER" 2>/dev/null || true
+wait "$HOLDER" 2>/dev/null || true
+
+# 15b. Control: the identical layout with no holder IS removed, so 15a is not
+#      passing merely because cleanup is broken in general.
+H="$WORK/t15b/home"; D="$WORK/t15b/bin"; mkdir -p "$H/.local/bin" "$D"
+printf '#!/bin/sh\nif [ "$1" = version ]; then echo "axis 0.0.1"; exit 0; fi\nsleep 60\n' > "$H/.local/bin/axis"
+chmod +x "$H/.local/bin/axis"
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9)
+if [ ! -f "$H/.local/bin/axis" ]; then
+    ok "an unheld legacy path is still removed"
+else
+    bad "an unheld legacy path is still removed" "cleanup stopped working"
+fi
+
 echo
 printf 'install.sh: %d assertions passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

@@ -401,6 +401,26 @@ dir_needs_sudo() {
     [ -w "$parent" ] && return 1 || return 0
 }
 
+# True when some running process currently holds $1 as its executable. A
+# systemd unit or launchd job that already mapped a binary keeps running it
+# until restarted, so deleting the file leaves the node with a daemon on a
+# deleted inode and no way to start it again.
+#
+# A real binary resolves through /proc/<pid>/exe. An interpreted one (a wrapper
+# script) has the kernel's interpreter in .../exe and the script itself open as
+# a file descriptor, so both are checked. Reads of other users' /proc entries
+# fail silently and are treated as "not holding", matching rm's own inability to
+# unlink a file it cannot see; the caller keeps its fail-closed default.
+path_in_use() {
+    local target="$1" real hit
+    real=$(canonicalize_path "$target" 2>/dev/null) || real="$target"
+    # -lname needs an exact literal match, so try both the resolved and the
+    # caller-supplied spelling.
+    hit=$(find /proc/[0-9]*/exe /proc/[0-9]*/fd/* -lname "$target" -print -quit 2>/dev/null)
+    [ -z "$hit" ] && hit=$(find /proc/[0-9]*/exe /proc/[0-9]*/fd/* -lname "$real" -print -quit 2>/dev/null)
+    [ -n "$hit" ]
+}
+
 SUDO=""
 if dir_needs_sudo "$AXIS_INSTALL_DIR"; then
     if [ "$(id -u)" -eq 0 ]; then
@@ -531,6 +551,14 @@ if [ ${#LEGACY_PATHS[@]} -gt 0 ]; then
     else
         echo "Removing superseded AXIS installs:"
         for p in "${LEGACY_PATHS[@]}"; do
+            # Never unlink a binary a live process is executing. Six fleet
+            # incidents traced here: the daemon kept running on the deleted
+            # inode, and the next restart had no binary left to start.
+            if path_in_use "$p"; then
+                echo "    KEPT $p — a running process is executing it; restart that process first"
+                echo "         (deleting it would leave the service on a deleted inode with no binary to restart)"
+                continue
+            fi
             rm_sudo=""
             dir_needs_sudo "$(dirname "$p")" && [ "$(id -u)" -ne 0 ] && rm_sudo="sudo"
             if $rm_sudo rm -f "$p" 2>/dev/null; then
