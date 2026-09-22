@@ -46,8 +46,23 @@ make_release() {
 }
 
 run_install() {  # env overrides passed as VAR=VAL before the call
-    env "$@" \
+    # Sandbox the absolute legacy candidates so the suite can never touch a real
+    # host binary. Without this, a sandbox target outside $HOME is classified as
+    # "system" scope, the hardcoded candidate list matches the real
+    # /usr/local/bin/axis, and the installer deletes it via sudo. That is not
+    # hypothetical: it removed this host's binary on 2026-09-21, twice, and is
+    # the same mechanism behind six earlier "mysterious" fleet deletions.
+    #
+    # The $HOME-relative candidates are kept, derived from the HOME this call
+    # passes, so tests that depend on candidate discovery (system-scope shadow
+    # retirement, AXIS_KEEP_LEGACY, the in-use guard) still exercise it. Only the
+    # machine-absolute paths are replaced with sandbox stand-ins.
+    local h="" a
+    for a in "$@"; do case "$a" in HOME=*) h="${a#HOME=}" ;; esac; done
+    [ -n "$h" ] || h="$HOME"
+    env AXIS_LEGACY_CANDIDATES="${AXIS_LEGACY_CANDIDATES:-$h/.local/bin/axis $h/go/bin/axis /nonexistent/axis-test-sandbox}" \
         AXIS_RELEASE_BASE_URL="file://$WORK/releases" \
+        "$@" \
         bash "$INSTALL_SH" 2>&1
 }
 
@@ -125,10 +140,8 @@ fi
 make_release 9.9.9 "$GOOD_BODY"
 H="$WORK/t5/home"; SYS="$WORK/t5/system"; mkdir -p "$H/.local/bin" "$SYS"
 printf '#!/bin/sh\necho "axis 0.0.1"\n' > "$SYS/axis"; chmod +x "$SYS/axis"
-# Point the hardcoded system candidate at our sandbox for this case only.
-sed "s#\"/usr/local/bin/axis\"#\"$SYS/axis\"#" "$INSTALL_SH" > "$WORK/t5/install.sh"
-out=$(env HOME="$H" AXIS_INSTALL_DIR="$H/.local/bin" AXIS_VERSION=v9.9.9 \
-      AXIS_RELEASE_BASE_URL="file://$WORK/releases" bash "$WORK/t5/install.sh" 2>&1)
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$H/.local/bin" AXIS_VERSION=v9.9.9 \
+      AXIS_LEGACY_CANDIDATES="$SYS/axis")
 if [ -f "$SYS/axis" ]; then
     ok "user-scope install preserves the system copy"
 else
@@ -391,6 +404,70 @@ if "$D/axis" version 2>/dev/null | grep -q '9.9.9'; then
     ok "existing AXIS binary upgrades in place"
 else
     bad "existing AXIS binary upgrades in place" "$out"
+fi
+
+# 15. A legacy path executed by a running process must NOT be unlinked. Six
+#     fleet incidents came from exactly this: the daemon kept running on the
+#     deleted inode, so the next restart had no binary left to start.
+make_release 9.9.9 "$GOOD_BODY"
+
+# 15a. Held by a live process -> kept.
+H="$WORK/t15a/home"; D="$WORK/t15a/bin"; mkdir -p "$H/.local/bin" "$D"
+printf '#!/bin/sh\nif [ "$1" = version ]; then echo "axis 0.0.1"; exit 0; fi\nsleep 60\n' > "$H/.local/bin/axis"
+chmod +x "$H/.local/bin/axis"
+"$H/.local/bin/axis" hold &
+HOLDER=$!
+sleep 1
+if kill -0 "$HOLDER" 2>/dev/null; then
+    out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9)
+    if [ -f "$H/.local/bin/axis" ]; then
+        ok "a legacy path held by a running process is kept"
+    else
+        bad "a legacy path held by a running process is kept" \
+            "it was deleted while in use (this is the regression)"
+    fi
+    if printf '%s' "$out" | grep -q 'KEPT'; then
+        ok "the kept path is reported to the operator"
+    else
+        bad "the kept path is reported to the operator" "$(printf '%s' "$out" | grep -i 'superseded\|removed\|KEPT' | head -3)"
+    fi
+else
+    bad "a legacy path held by a running process is kept" "holder process failed to start"
+fi
+kill "$HOLDER" 2>/dev/null || true
+wait "$HOLDER" 2>/dev/null || true
+
+# 15b. Control: the identical layout with no holder IS removed, so 15a is not
+#      passing merely because cleanup is broken in general.
+H="$WORK/t15b/home"; D="$WORK/t15b/bin"; mkdir -p "$H/.local/bin" "$D"
+printf '#!/bin/sh\nif [ "$1" = version ]; then echo "axis 0.0.1"; exit 0; fi\nsleep 60\n' > "$H/.local/bin/axis"
+chmod +x "$H/.local/bin/axis"
+out=$(run_install HOME="$H" AXIS_INSTALL_DIR="$D" AXIS_VERSION=v9.9.9)
+if [ ! -f "$H/.local/bin/axis" ]; then
+    ok "an unheld legacy path is still removed"
+else
+    bad "an unheld legacy path is still removed" "cleanup stopped working"
+fi
+
+# 16. The suite must not be able to reach a real host binary. Regression for
+#     2026-09-21: a sandbox target outside $HOME classified the scope as
+#     "system", the hardcoded candidate list matched the real
+#     /usr/local/bin/axis, and the installer deleted it via sudo — twice in one
+#     session, and the same mechanism behind six earlier fleet deletions.
+out=$(run_install HOME="$WORK/t16/home" AXIS_INSTALL_DIR="$WORK/t16/bin" \
+      AXIS_VERSION=v9.9.9 AXIS_DRY_RUN=1)
+case "$out" in
+    *"/usr/local/bin/axis"*)
+        bad "suite is hermetic against the host binary" \
+            "install.sh still plans against /usr/local/bin/axis" ;;
+    *) ok "suite is hermetic against the host binary" ;;
+esac
+# And the default list the suite supplies must contain no machine-absolute path.
+if printf '%s' "${AXIS_LEGACY_CANDIDATES:-$WORK/t16/home/.local/bin/axis $WORK/t16/home/go/bin/axis /nonexistent/axis-test-sandbox}" \
+   | tr ' ' '\n' | grep -qE '^/(usr|opt)/'; then
+    bad "sandboxed candidate list holds no host path" "found a system path"
+else
+    ok "sandboxed candidate list holds no host path"
 fi
 
 echo
