@@ -20,18 +20,23 @@ const (
 
 // ModelCandidateScore is a scored placement candidate node.
 type ModelCandidateScore struct {
-	Node             string       `json:"node" yaml:"node"`
-	Score            int          `json:"score" yaml:"score"`
-	Fit              CandidateFit `json:"fit" yaml:"fit"`
-	Accelerator      string       `json:"accelerator" yaml:"accelerator"`
-	VRAMTotalMB      int64        `json:"vram_total_mb" yaml:"vram_total_mb"`
-	VRAMFreeMB       int64        `json:"vram_free_mb" yaml:"vram_free_mb"`
-	VRAMFreeMeasured bool         `json:"vram_free_measured" yaml:"vram_free_measured"`
-	RAMFreeMB        int64        `json:"ram_free_mb" yaml:"ram_free_mb"`
-	RAMTotalMB       int64        `json:"ram_total_mb" yaml:"ram_total_mb"`
-	PortAvailable    bool         `json:"port_available" yaml:"port_available"`
-	HasLocalWeights  bool         `json:"has_local_weights" yaml:"has_local_weights"`
-	Reasoning        []string     `json:"reasoning" yaml:"reasoning"`
+	Node        string       `json:"node" yaml:"node"`
+	Score       int          `json:"score" yaml:"score"`
+	Fit         CandidateFit `json:"fit" yaml:"fit"`
+	Accelerator string       `json:"accelerator" yaml:"accelerator"`
+	VRAMTotalMB int64        `json:"vram_total_mb" yaml:"vram_total_mb"`
+	VRAMFreeMB  int64        `json:"vram_free_mb" yaml:"vram_free_mb"`
+	// VRAMFreeMeasured is part of the axis model plan JSON contract. It is
+	// derived by observedFreeVRAM, not copied from the snapshot flag. A
+	// positive free value from a collector that omitted the flag is still
+	// measured. No external parser is known; do not drop or rename the field
+	// without a changelog note.
+	VRAMFreeMeasured bool     `json:"vram_free_measured" yaml:"vram_free_measured"`
+	RAMFreeMB        int64    `json:"ram_free_mb" yaml:"ram_free_mb"`
+	RAMTotalMB       int64    `json:"ram_total_mb" yaml:"ram_total_mb"`
+	PortAvailable    bool     `json:"port_available" yaml:"port_available"`
+	HasLocalWeights  bool     `json:"has_local_weights" yaml:"has_local_weights"`
+	Reasoning        []string `json:"reasoning" yaml:"reasoning"`
 }
 
 // ModelExcludedCandidate describes a node excluded from placement with reasons.
@@ -204,6 +209,30 @@ type acceleratorFit struct {
 	lastBackend    string            // backend family of the previous compatible device, loop-local
 }
 
+// observedFreeVRAM is the only definition of a GPU's free-VRAM reading.
+// Gate math and the plan label both use it, so they cannot drift.
+//
+//	flag   free MB   meaning            number used   label
+//	true   0         exhausted          0             "0 MiB free"
+//	false  0         unknown            total         "N MiB total, unmeasured"
+//	false  > 0       stale / pre-#442   free          "N MiB free"
+//	true   > 0       current collector  free          "N MiB free"
+//
+// A negative VRAMFreeMB is garbage. It is unmeasured and is not used as free;
+// the number used is total capacity. The flag exists only to tell a measured
+// 0 from an unknown 0. A positive free value is a measurement even when a
+// collector that predates #442 omitted the flag.
+func observedFreeVRAM(gpu models.GPUInfo) (freeMB int64, measured bool) {
+	total := int64(gpu.VRAMMB)
+	if gpu.VRAMFreeMB < 0 {
+		return total, false
+	}
+	if gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0 {
+		return int64(gpu.VRAMFreeMB), true
+	}
+	return total, false
+}
+
 // evaluateNodeAccelerator reports the best single compatible device on a node.
 // The returned fit is the planner's entire VRAM contract: consumers evaluate
 // against BestDevice and may annotate multi-device setups, but must never sum
@@ -229,17 +258,7 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 		}
 
 		vram := int64(gpu.VRAMMB)
-		// Prefer the measured free figure; fall back to total only when the
-		// fact plane could not measure free VRAM. A positive free value is
-		// always a real measurement: the flag exists only to disambiguate a
-		// measured 0 (exhausted card) from an unmeasured 0, so requiring it
-		// alone would discard genuine readings from snapshots written before
-		// #442 added the field. This keeps fit math conservative on real
-		// measurements (even when 0 MB free) and honest on absence.
-		free := vram
-		if gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0 {
-			free = int64(gpu.VRAMFreeMB)
-		}
+		free, measured := observedFreeVRAM(gpu)
 
 		fit.DeviceCount++
 		if fit.DeviceCount > 1 {
@@ -253,7 +272,7 @@ func evaluateNodeAccelerator(node models.NodeFacts, requested []models.Accelerat
 			free > fit.BestDevice.FreeMB ||
 			(free == fit.BestDevice.FreeMB && vram > fit.BestDevice.TotalMB)
 		if isBetter {
-			fit.BestDevice = acceleratorDevice{TotalMB: vram, FreeMB: free, FreeMeasured: gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0}
+			fit.BestDevice = acceleratorDevice{TotalMB: vram, FreeMB: free, FreeMeasured: measured}
 			fit.DeviceName = fmt.Sprintf("%s (%s)", gpu.Model, gpuAcc)
 			fit.Backend = gpuAcc
 		}

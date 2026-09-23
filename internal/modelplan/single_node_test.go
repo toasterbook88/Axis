@@ -599,6 +599,88 @@ func TestPlanSingleNode_GateKeepsUnflaggedPositiveFree(t *testing.T) {
 	}
 }
 
+func tinyCUDASpec(id string) models.ModelSpec {
+	return models.ModelSpec{
+		ID:     id,
+		Name:   "tiny-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      512,
+			ContextOverheadMB: 128,
+			RuntimeOverheadMB: 128,
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+}
+
+func oneGPUSnapshot(name string, gpu models.GPUInfo) *models.ClusterSnapshot {
+	return &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{{
+			Name:   name,
+			Status: models.StatusComplete,
+			Resources: &models.Resources{
+				RAMFreeMB:  32000,
+				RAMTotalMB: 64000,
+				GPUs:       []models.GPUInfo{gpu},
+			},
+		}},
+	}
+}
+
+// TestPlanThenFormat_StalePre442KeepsFreeLabel runs the planner and the printer
+// on one snapshot. A display-only fixture that presets VRAMFreeMeasured cannot
+// catch a gate that forgets to derive the flag.
+func TestPlanThenFormat_StalePre442KeepsFreeLabel(t *testing.T) {
+	snap := oneGPUSnapshot("stale-node", models.GPUInfo{
+		Model:        "NVIDIA RTX 4090",
+		Vendor:       "nvidia",
+		VRAMMB:       24576,
+		VRAMFreeMB:   1024,
+		Capabilities: []string{"cuda"},
+	})
+	plan, err := PlanSingleNode(snap, tinyCUDASpec("ms-plan-format"), 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	text := FormatModelPlacementPlanText(plan)
+	if !strings.Contains(text, "1024 MiB free") {
+		t.Errorf("plan text = %q, want 1024 MiB free", text)
+	}
+	if strings.Contains(text, "24576") {
+		t.Errorf("plan text printed total capacity %q", text)
+	}
+}
+
+func TestPlanSingleNode_NegativeFreeVRAMIsUnmeasured(t *testing.T) {
+	snap := oneGPUSnapshot("garbage-node", models.GPUInfo{
+		Model:            "NVIDIA RTX 4090",
+		Vendor:           "nvidia",
+		VRAMMB:           24576,
+		VRAMFreeMB:       -5,
+		VRAMFreeMeasured: true,
+		Capabilities:     []string{"cuda"},
+	})
+	plan, err := PlanSingleNode(snap, tinyCUDASpec("ms-negative-free"), 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	if len(plan.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(plan.Candidates))
+	}
+	cand := plan.Candidates[0]
+	if cand.VRAMFreeMB != 24576 || cand.VRAMFreeMeasured {
+		t.Errorf("candidate free=%d measured=%v, want total 24576 and unmeasured", cand.VRAMFreeMB, cand.VRAMFreeMeasured)
+	}
+	text := FormatModelPlacementPlanText(plan)
+	if !strings.Contains(text, "24576 MiB total, unmeasured") {
+		t.Errorf("plan text = %q, want total unmeasured label", text)
+	}
+	if strings.Contains(text, "-5") {
+		t.Errorf("plan text used the negative free figure: %q", text)
+	}
+}
+
 // TestFormatModelPlacementPlanText_PrintsSnapshotSource ensures that text plan
 // output displays Snapshot Source prominently.
 func TestFormatModelPlacementPlanText_PrintsSnapshotSource(t *testing.T) {

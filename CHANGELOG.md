@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Fixed
+
+* **Stale free-VRAM stays free in plan text:** `axis model plan` treats a positive `VRAMFreeMB` as measured even when a snapshot omits `VRAMFreeMeasured`. Fit math and the printed label both say `N MiB free`. A measured 0 stays `0 MiB free`. An unknown 0, and a negative free figure, fall back to total capacity and print `N MiB total, unmeasured`. Plan JSON gains `vram_free_measured` on each candidate; no external parser of that object is known.
+
 ## v0.19.2 (2026-09-21)
 
 Two pull requests merged on `main` since `v0.19.1`. This patch release closes the
