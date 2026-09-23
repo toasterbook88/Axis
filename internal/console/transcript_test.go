@@ -67,6 +67,11 @@ func TestSpinnerFrozenWhileOverlayOpen(t *testing.T) {
 	if !strings.Contains(view, "run_shell") || !strings.Contains(view, "safety 22") {
 		t.Fatalf("overlay content missing:\n%s", view)
 	}
+	m.overlay.(*ApprovalOverlay).SetWhy("write in workspace")
+	view = m.View()
+	if !strings.Contains(view, "safety 22 · write in workspace") {
+		t.Fatalf("overlay content missing:\n%s", view)
+	}
 }
 
 func TestQuestionMarkCommitsKeymap(t *testing.T) {
