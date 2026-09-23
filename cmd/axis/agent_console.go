@@ -1008,7 +1008,7 @@ func runAgentConsole(
 		},
 		Mode: func() string {
 			if a != nil {
-				return string(a.Autonomy())
+				return agent.DisplayScope(a.Autonomy())
 			}
 			return "default"
 		},
@@ -1035,7 +1035,7 @@ func runAgentConsole(
 		Footer: footer,
 		Mode: func() string {
 			if a != nil {
-				return string(a.Autonomy())
+				return agent.DisplayScope(a.Autonomy())
 			}
 			return "default"
 		},

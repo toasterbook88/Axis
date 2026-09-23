@@ -194,7 +194,7 @@ func (r *ToolRegistry) Defs() []chat.ToolDef {
 // visible reports whether the model may call name in the current scope.
 // Never/pr2-hidden/dropped names deny before any dynamic grant applies.
 func (r *ToolRegistry) visible(name string) bool {
-	if name == "" || neverTool(name) || pr2Hidden(name) || name == "axis_summary" {
+	if name == "" || neverTool(name) || name == "axis_summary" {
 		return false
 	}
 	if r.extraVisible(name) {
@@ -214,9 +214,11 @@ func (r *ToolRegistry) Visible(name string) bool {
 // Execute dispatches a registered tool. Model-facing calls go through
 // Agent dispatch, which rejects names that are not Visible. Operator
 // surfaces (slash commands, harness scripts) may call scope-hidden tools
-// here, but the never set and the PR2-hidden set deny unconditionally.
+// here, but the never set denies unconditionally.
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	if neverTool(name) || pr2Hidden(name) {
+	// The never set denies unconditionally — no scope grant, no direct
+	// surface, no child run can reach these executors.
+	if neverTool(name) {
 		return "", fmt.Errorf("tool %q not available in this mode", name)
 	}
 	exec, ok := r.executors[name]

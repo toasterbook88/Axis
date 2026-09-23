@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -56,47 +57,60 @@ func TestEditScopeAddsWriteTools(t *testing.T) {
 			t.Errorf("edit defs missing %s", want)
 		}
 	}
-	// run_shell and axis_run_task are PR2-hidden: not advertised at ANY
-	// scope in v1, including edit and exec.
+	// Edit does NOT reveal the guarded-exec tools.
 	for _, hidden := range []string{"run_shell", "axis_run_task", "spawn_subagent"} {
 		if containsName(names, hidden) {
-			t.Fatalf("edit defs advertised a PR2-hidden or never tool: %v", names)
+			t.Fatalf("edit defs advertised a guarded-exec or never tool: %v", names)
 		}
 	}
 }
 
-func TestExecScopeMatchesEditInV1(t *testing.T) {
-	// The exec tier exists as the guarded-exec grant, but PR2-hidden tools
-	// (run_shell, axis_run_task) are not advertised at any scope in v1, so
-	// exec's advertised set equals edit's.
+func TestExecScopeAddsGuardedExec(t *testing.T) {
+	// The exec grant (autonomy full) reveals run_shell and axis_run_task;
+	// both always route through their confirm/safety dispatch paths.
 	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
 	r.SetScope(ScopeExec)
 	names := defNames(r)
-	for _, hidden := range []string{"run_shell", "axis_run_task", "fleet_exec", "run_on_node", "spawn_subagent"} {
-		if containsName(names, hidden) {
-			t.Fatalf("exec defs advertised a PR2-hidden or never tool: %v", names)
+	for _, want := range []string{"run_shell", "axis_run_task", "write_file", "undo_last"} {
+		if !containsName(names, want) {
+			t.Fatalf("exec defs missing %s: %v", want, names)
 		}
 	}
-	if !containsName(names, "write_file") || !containsName(names, "undo_last") {
-		t.Fatalf("exec defs should include the edit set, got: %v", names)
+	for _, hidden := range []string{"fleet_exec", "run_on_node", "spawn_subagent"} {
+		if containsName(names, hidden) {
+			t.Fatalf("exec defs advertised a never tool: %v", names)
+		}
 	}
 }
 
-// TestPr2HiddenDeniedAtEveryScopeAndDirect pins the v1 contract: run_shell
-// and axis_run_task are rejected by Execute (operator direct path) at every
-// scope, and never dump the registry.
-func TestPr2HiddenDeniedAtEveryScopeAndDirect(t *testing.T) {
-	for _, scope := range []ToolScope{ScopeObserve, ScopeEdit, ScopeExec} {
+// TestEditStageDoesNotReachGuardedExec pins tier promotion ordering: edit
+// never reveals exec tools, exec never reveals never-set tools.
+func TestEditStageDoesNotReachGuardedExec(t *testing.T) {
+	for _, scope := range []ToolScope{ScopeObserve, ScopeEdit} {
 		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
 		r.SetScope(scope)
 		for _, name := range []string{"run_shell", "axis_run_task"} {
-			_, err := r.Execute(context.Background(), name, json.RawMessage(`{}`))
-			if err == nil || !strings.Contains(err.Error(), "not available in this mode") {
-				t.Errorf("scope %s: Execute(%q) = %v, want 'not available in this mode'", scope, name, err)
-			}
 			if r.Visible(name) {
-				t.Errorf("scope %s: %q must not be visible", scope, name)
+				t.Errorf("scope %s: %q must stay hidden", scope, name)
 			}
+		}
+	}
+}
+
+// TestGuardedExecTierRevealsRejectsDirectRouteDirectly pins the PR2 tier:
+// run_shell and axis_run_task are visible only at exec; the operator direct
+// path reaches the executors, which still refuse to run outside the agent
+// safety gate (axis_run_task) or reject direct execution for shell routing.
+func TestGuardedExecTierRevealsRejectsDirectRouteDirectly(t *testing.T) {
+	for _, scope := range []ToolScope{ScopeObserve, ScopeEdit, ScopeExec} {
+		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+		r.SetScope(scope)
+		expect := scope == ScopeExec
+		if r.Visible("run_shell") != expect {
+			t.Errorf("scope %s: run_shell visible = %v, want %v", scope, r.Visible("run_shell"), expect)
+		}
+		if r.Visible("axis_run_task") != expect {
+			t.Errorf("scope %s: axis_run_task visible = %v, want %v", scope, r.Visible("axis_run_task"), expect)
 		}
 	}
 }
@@ -203,5 +217,47 @@ func TestHiddenToolDoesNotRun(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "fleet_exec") || strings.Contains(err.Error(), "run_on_node") {
 		t.Fatalf("error listed a hidden tool: %v", err)
+	}
+}
+
+// TestExecScopeModelTurnRunsShellThroughConfirm drives the real dispatch
+// path at exec scope: the model's run_shell call routes through
+// dispatchShell (confirm + safety), then runs.
+func TestExecScopeModelTurnRunsShell(t *testing.T) {
+	server := mockOllamaChat(t, [][]mockStreamChunk{
+		toolCallResponse("run_shell", `{"command":"echo pr2-exec-output"}`),
+		textResponse("done"),
+	})
+	defer server.Close()
+
+	var out bytes.Buffer
+	var gotCmd string
+	agent := New(Config{
+		Endpoint:    server.URL,
+		Model:       "test-model",
+		Output:      &out,
+		Confirm:     alwaysConfirm(),
+		Autonomy:    AutonomyFull,
+		ToolContext: &ToolContext{},
+		RunShell: func(_ context.Context, command string) (string, error) {
+			gotCmd = command
+			return "ok: pr2-exec-output", nil
+		},
+	})
+
+	if err := agent.Run(context.Background(), "echo check"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(gotCmd, "pr2-exec-output") {
+		t.Fatalf("RunShell not reached; cmd=%q", gotCmd)
+	}
+
+	// Edit scope must NOT route the model's shell call.
+	agent.tools.SetScope(ScopeEdit)
+	_, err := agent.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: "run_shell", Arguments: json.RawMessage(`{"command":"echo no"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not available in this mode") {
+		t.Fatalf("edit scope must reject run_shell, got %v", err)
 	}
 }

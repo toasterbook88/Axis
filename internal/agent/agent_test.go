@@ -225,10 +225,10 @@ func TestToolShellBlockedByDesign(t *testing.T) {
 
 	_, err := r.Execute(context.Background(), "run_shell", json.RawMessage(`{"command":"echo hello"}`))
 	if err == nil {
-		t.Fatal("expected error — run_shell is PR2-hidden and cannot execute in v1")
+		t.Fatal("expected error — direct shell execution must refuse")
 	}
-	if !strings.Contains(err.Error(), "not available in this mode") {
-		t.Errorf("expected 'not available in this mode', got: %s", err.Error())
+	if !strings.Contains(err.Error(), "safety gate") {
+		t.Errorf("expected 'safety gate' error, got: %s", err.Error())
 	}
 }
 

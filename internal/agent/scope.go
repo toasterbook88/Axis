@@ -54,10 +54,22 @@ func observeTool(name string) bool {
 }
 
 // editTool is the edit-grant set: workspace writes. run_shell is NOT here —
-// it is PR2-hidden (pr2Hidden) until the guarded-exec PR advertises it.
+// it joins the exec grant with axis_run_task (guarded execution).
 func editTool(name string) bool {
 	switch name {
 	case "write_file", "edit_file", "multi_edit":
+		return true
+	default:
+		return false
+	}
+}
+
+// execTool is the guarded-exec grant set. Tools here are visible only at
+// ScopeExec and always route through their confirm/safety dispatch paths:
+// run_shell through dispatchShell, axis_run_task through dispatchRunTask.
+func execTool(name string) bool {
+	switch name {
+	case "run_shell", "axis_run_task":
 		return true
 	default:
 		return false
@@ -89,25 +101,12 @@ func observeDeferred(name string) bool {
 	}
 }
 
-// pr2Hidden is deferred to the guarded-exec PR: the executors stay
-// registered for safety routes, but v1 never advertises or dispatches
-// these at ANY scope. Flipping them into exec visibility is a one-line
-// change in toolVisible.
-func pr2Hidden(name string) bool {
-	switch name {
-	case "run_shell", "axis_run_task":
-		return true
-	default:
-		return false
-	}
-}
-
 // toolVisible reports whether name is advertised and callable in scope.
 // MCP tools are visible when connected, under their real mcp_ names.
 // Unknown names fail closed: a dynamically registered tool must be
 // granted visibility via allowExtra before the model can call it.
 func toolVisible(name string, scope ToolScope) bool {
-	if name == "" || neverTool(name) || pr2Hidden(name) || name == "axis_summary" {
+	if name == "" || neverTool(name) || name == "axis_summary" {
 		return false
 	}
 	if strings.HasPrefix(name, "mcp_") || observeTool(name) {
@@ -123,6 +122,10 @@ func toolVisible(name string, scope ToolScope) bool {
 	}
 	if editTool(name) {
 		return scope == ScopeEdit || scope == ScopeExec
+	}
+	if execTool(name) {
+		// Guarded-exec grant only: always confirm/safety-gated at dispatch.
+		return scope == ScopeExec
 	}
 	return false
 }
