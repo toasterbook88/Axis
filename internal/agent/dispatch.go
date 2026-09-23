@@ -97,6 +97,14 @@ func formatToolResultSummary(toolName, result string) string {
 	return fmt.Sprintf("%s returned %d chars", toolName, len(result))
 }
 
+func withSafetyWhy(reason, desc string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || strings.Contains(desc, "safety why:") {
+		return desc
+	}
+	return "safety why: " + reason + "\n" + desc
+}
+
 // dispatchToolCall handles a single tool call with safety gating and confirmation.
 func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string, error) {
 	name := tc.Function.Name
@@ -297,7 +305,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
-		decision := a.askConfirm("run_shell", promptDesc, safetyScore)
+		decision := a.askConfirm("run_shell", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -387,7 +395,7 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
-		decision := a.askConfirm("run_on_node", promptDesc, safetyScore)
+		decision := a.askConfirm("run_on_node", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -488,7 +496,7 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
-		decision := a.askConfirm("fleet_exec", promptDesc, safetyScore)
+		decision := a.askConfirm("fleet_exec", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -656,7 +664,7 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 	// Confirm without holding dispatchMu: the operator overlay is the only thing
 	// this turn must wait on, and Autonomy() needs the lock to paint/mutate
 	// itself while the prompt is open. Same pattern as dispatchShell.
-	decision := a.askConfirm("axis_run_task", promptDesc, prepared.Result.DumbScore)
+	decision := a.askConfirm("axis_run_task", withSafetyWhy(prepared.Result.BlockReason, promptDesc), prepared.Result.DumbScore)
 	a.dispatchMu.Lock()
 	switch decision {
 	case ConfirmNo:

@@ -79,6 +79,9 @@ type consoleLauncher struct {
 
 	// prog is the running program. Set before the first turn is submitted.
 	prog interface{ Send(tea.Msg) }
+
+	// evidence labels a finished tool cell from the latest snapshot probe.
+	evidence func(name string) (badge, intent string)
 }
 
 func newConsoleLauncher(run consoleRunner, timeout time.Duration, now func() time.Time) *consoleLauncher {
@@ -145,6 +148,7 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 			// Fresh sinks per turn, both stamped with this immutable id.
 			writer := console.NewStreamWriter(l.prog, turn)
 			bridge := console.NewBridge(l.prog, turn, l.now)
+			bridge.SetEvidence(l.evidence)
 			defer writer.Close()
 
 			err := l.run(ctx, prompt, bridge, writer)
@@ -165,8 +169,11 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 			return console.TurnDoneMsg{Turn: turn, Err: errors.New("slash commands are not available in this console")}
 		}
 		out, err := l.slash(line)
-		if out != "" && l.prog != nil {
-			l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), strings.TrimSpace(out))})
+		if l.prog != nil {
+			if out != "" {
+				l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), strings.TrimSpace(out))})
+			}
+			l.prog.Send(console.RefreshTitleMsg{})
 		}
 		return console.TurnDoneMsg{Turn: turn, Err: err}
 	}
@@ -645,12 +652,25 @@ func (l *consoleLauncher) cancel(turn console.TurnID) {
 	}
 }
 
-const defaultApprovalTimeout = 2 * time.Minute
+const defaultApprovalTimeout = console.ApprovalFailClosed
 
 // consoleConfirm bridges agent tool confirmation into Bubble Tea's overlay system.
 // It never reads stdin: Bubble Tea holds the terminal in raw mode, so a synchronous prompt
 // would corrupt the input loop and the display. Instead, it dispatches an ApprovalOverlay
 // to the program's event loop and waits on a Go channel for the operator's decision.
+func splitSafetyWhy(desc string) (why, argv string) {
+	const prefix = "safety why: "
+	if strings.HasPrefix(desc, prefix) {
+		rest := strings.TrimPrefix(desc, prefix)
+		line, tail, found := strings.Cut(rest, "\n")
+		if !found {
+			return strings.TrimSpace(line), ""
+		}
+		return strings.TrimSpace(line), tail
+	}
+	return "", desc
+}
+
 func consoleConfirm(ctx context.Context, send func(tea.Msg), now func() time.Time) agent.ConfirmFunc {
 	return consoleConfirmWithTimeout(ctx, send, now, defaultApprovalTimeout)
 }
@@ -668,8 +688,11 @@ func consoleConfirmWithTimeout(ctx context.Context, send func(tea.Msg), now func
 		}
 
 		reply := make(chan agent.ConfirmResult, 1)
-		overlay := console.NewApprovalOverlay(toolName, description, safetyScore, reply)
+		why, argv := splitSafetyWhy(description)
+		overlay := console.NewApprovalOverlay(toolName, argv, safetyScore, reply)
+		overlay.SetWhy(why)
 		send(console.SetOverlayMsg{Overlay: overlay})
+		opened := now()
 
 		var result agent.ConfirmResult
 		var reason string
@@ -712,11 +735,12 @@ func consoleConfirmWithTimeout(ctx context.Context, send func(tea.Msg), now func
 			reason = "approval canceled (denied)"
 		}
 
-		send(console.EntryMsg{Entry: console.NewApprovalEntry(
-			now(), toolName, "", safetyScore,
-			reason,
-			decision,
-		)})
+		entry := console.NewApprovalEntry(now(), toolName, "", safetyScore, reason, decision)
+		entry.Elapsed = now().Sub(opened)
+		if entry.Elapsed < 0 {
+			entry.Elapsed = 0
+		}
+		send(console.EntryMsg{Entry: entry})
 
 		return result
 	}
@@ -876,6 +900,9 @@ func runAgentConsole(
 		checkedAt time.Time
 		summary   string
 		nodes     []string
+		pubID     string
+		source    string
+		assembled time.Time
 	}
 	var fleet fleetSnapshot
 	var fleetMu sync.Mutex
@@ -886,6 +913,14 @@ func runAgentConsole(
 		fleet.checkedAt = time.Now()
 		rctx, err := loader(ctx)
 		if err == nil && rctx != nil && rctx.Snapshot != nil {
+			if rctx.Snapshot.Publication != nil {
+				fleet.pubID = rctx.Snapshot.Publication.ID
+				fleet.source = rctx.Snapshot.Publication.Source
+				fleet.assembled = rctx.Snapshot.Publication.AssembledAt
+			}
+			if fleet.assembled.IsZero() {
+				fleet.assembled = rctx.Snapshot.Timestamp
+			}
 			s := rctx.Snapshot.Summary
 			if s.TotalNodes > 0 {
 				if s.ReachableNodes == s.TotalNodes {
@@ -912,6 +947,31 @@ func runAgentConsole(
 	fleetMu.Lock()
 	refreshFleetLocked()
 	fleetMu.Unlock()
+	launcher.evidence = func(name string) (string, string) {
+		switch name {
+		case "axis_status", "axis_facts", "axis_place":
+		default:
+			return "", ""
+		}
+		fleetMu.Lock()
+		defer fleetMu.Unlock()
+		intent := map[string]string{
+			"axis_status": "cluster status",
+			"axis_facts":  "local facts",
+			"axis_place":  "placement",
+		}[name]
+		if fleet.pubID == "" && fleet.assembled.IsZero() {
+			return "", intent
+		}
+		badge := "live"
+		if strings.Contains(fleet.source, "cache") {
+			badge = "cached"
+		}
+		if fleet.pubID != "" {
+			badge += " " + fleet.pubID
+		}
+		return badge, intent
+	}
 
 	footer := console.NewStatusFooter(console.StatusFooterConfig{
 		Model: func() string { return consoleFooterModel(a, target) },
@@ -938,14 +998,33 @@ func runAgentConsole(
 			}
 			return "default"
 		},
-		Snapshot: func() string { return "no snapshot" },
+		Snapshot: func() string {
+			fleetMu.Lock()
+			defer fleetMu.Unlock()
+			if time.Since(fleet.checkedAt) >= 5*time.Second {
+				refreshFleetLocked()
+			}
+			if fleet.pubID != "" {
+				return "snap " + fleet.pubID
+			}
+			if !fleet.assembled.IsZero() {
+				return "snap " + fleet.assembled.UTC().Format("15:04Z")
+			}
+			return "no snapshot"
+		},
 	})
 
 	promptHistoryPath := consoleHistoryPath()
 	model := console.NewModel(console.Options{
-		Submit:  launcher.submit(ctx),
-		Cancel:  launcher.cancel,
-		Footer:  footer,
+		Submit: launcher.submit(ctx),
+		Cancel: launcher.cancel,
+		Footer: footer,
+		Mode: func() string {
+			if a != nil {
+				return string(a.Autonomy())
+			}
+			return "default"
+		},
 		History: initialHistory,
 		// Same source the footer's context gauge reads (a.ContextTokens).
 		TokenEstimate: func() int {

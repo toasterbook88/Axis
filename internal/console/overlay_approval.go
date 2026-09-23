@@ -17,6 +17,7 @@ type ApprovalOverlay struct {
 	tool        string
 	description string
 	score       int
+	why         string
 	reply       chan<- agent.ConfirmResult
 
 	done     bool
@@ -29,9 +30,12 @@ type ApprovalOverlay struct {
 	now func() time.Time
 }
 
-// approvalFailClosed is how long an unanswered approval may sit before it
-// denies. The charter fail-closed window is 600s.
-const approvalFailClosed = 600 * time.Second
+// ApprovalFailClosed is how long an unanswered approval may sit before it
+// denies. The console wait and the painted countdown use this one deadline.
+const ApprovalFailClosed = 600 * time.Second
+
+// approvalFailClosed is the unexported alias used inside this package.
+const approvalFailClosed = ApprovalFailClosed
 
 // approvalTickMsg advances the countdown. deadline ties the tick to one box.
 type approvalTickMsg struct {
@@ -55,6 +59,14 @@ func (o *ApprovalOverlay) clock() time.Time {
 		return time.Now()
 	}
 	return o.now()
+}
+
+// SetWhy records the safety-gate reason shown next to the score.
+func (o *ApprovalOverlay) SetWhy(why string) {
+	if o == nil {
+		return
+	}
+	o.why = strings.TrimSpace(why)
 }
 
 func (o *ApprovalOverlay) remaining() time.Duration {
@@ -186,10 +198,20 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 		Style: riskStyle,
 	})
 
+	why := o.why
+	if why == "" {
+		why = "no gate finding"
+	}
 	lines = append(lines, Line{
-		Text:  fmt.Sprintf("│ safety %d", o.score),
+		Text:  fmt.Sprintf("│ safety %d · %s", o.score, clipRunes(why, 72)),
 		Style: StyleMuted,
 	})
+	if argv := clipRunes(strings.TrimSpace(o.description), 160); argv != "" {
+		lines = append(lines, Line{
+			Text:  "│ argv " + argv,
+			Style: StylePlain,
+		})
+	}
 	cwd, err := os.Getwd()
 	if err != nil || cwd == "" {
 		cwd = "."

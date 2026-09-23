@@ -72,6 +72,19 @@ func neverTool(name string) bool {
 	}
 }
 
+// observeDeferred is registered but not a read. Observe must not advertise it.
+// undo_last becomes visible with the edit grant. The rest stay hidden.
+func observeDeferred(name string) bool {
+	switch name {
+	case "undo_last", "review_changes", "run_background", "check_task",
+		"list_background_tasks", "branch_session", "rollback_session",
+		"web_fetch", "web_search":
+		return true
+	default:
+		return false
+	}
+}
+
 // toolVisible reports whether name is advertised and callable in scope.
 // MCP tools are visible when connected, under their real mcp_ names.
 func toolVisible(name string, scope ToolScope) bool {
@@ -81,10 +94,10 @@ func toolVisible(name string, scope ToolScope) bool {
 	if strings.HasPrefix(name, "mcp_") || observeTool(name) {
 		return true
 	}
+	if observeDeferred(name) {
+		return name == "undo_last" && (scope == ScopeEdit || scope == ScopeExec)
+	}
 	if !editTool(name) && name != "axis_run_task" {
-		// Registered tools that are neither writes, shell, guarded exec,
-		// nor the never-set stay visible. That covers read tools and any
-		// session tool the operator did not prohibit.
 		return true
 	}
 	switch scope {

@@ -93,6 +93,9 @@ type Overlay interface {
 	Done() bool
 }
 
+// RefreshTitleMsg asks the console to repaint the terminal title from Mode.
+type RefreshTitleMsg struct{}
+
 // SetOverlayMsg installs or replaces the active overlay.
 // Passing a nil Overlay dismisses any active overlay.
 type SetOverlayMsg struct {
@@ -260,7 +263,9 @@ type Options struct {
 }
 
 // Init starts the console.
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return tea.SetWindowTitle("axis agent · " + m.modeLabel())
+}
 
 // NewModel builds a console model.
 func NewModel(opts Options) Model {
@@ -385,6 +390,13 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 			m.lastTool = &cp
 		}
 		return m, m.commit(msg.Entry)
+
+	case RefreshTitleMsg:
+		title := "axis agent · " + m.modeLabel()
+		if m.overlay != nil {
+			title = "axis agent · action required"
+		}
+		return m, tea.SetWindowTitle(title)
 
 	case SetOverlayMsg:
 		m.overlay = msg.Overlay

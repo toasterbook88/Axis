@@ -36,7 +36,7 @@ func TestObserveDefsHideProhibitedTools(t *testing.T) {
 			t.Errorf("observe defs missing %s", want)
 		}
 	}
-	for _, hidden := range []string{"spawn_subagent", "fleet_exec", "run_on_node", "remote_write_file", "run_shell", "axis_run_task", "write_file"} {
+	for _, hidden := range []string{"spawn_subagent", "fleet_exec", "run_on_node", "remote_write_file", "run_shell", "axis_run_task", "write_file", "run_background", "undo_last"} {
 		if containsName(names, hidden) {
 			t.Errorf("observe defs advertised %s: %v", hidden, names)
 		}
