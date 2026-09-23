@@ -100,26 +100,45 @@ func TestEnterAndLastExpandCollapsedTool(t *testing.T) {
 	}
 	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.lastTool == nil || !m.lastTool.Expanded {
-		t.Fatal("Enter did not expand the last tool cell")
+	pager, ok := m.overlay.(*PagerOverlay)
+	if !ok {
+		t.Fatalf("Enter did not open a pager, overlay=%T", m.overlay)
 	}
+	body := strings.Join(plainLines(pager.Render(80)), "\n")
+	if strings.Contains(body, "more lines") || !strings.Contains(body, "row") {
+		t.Fatalf("pager did not show the tool body:\n%s", body)
+	}
+	if pager.lines[0] != "row" || pager.lines[len(pager.lines)-1] != "row" || len(pager.lines) != 12 {
+		t.Fatalf("pager lines = %d %q", len(pager.lines), pager.lines)
+	}
+	m.overlay = nil
 	m.lastTool.Expanded = false
 	m.editor.SetText("/last")
 	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.lastTool == nil || !m.lastTool.Expanded {
-		t.Fatal("/last did not expand the last tool cell")
+	if _, ok := m.overlay.(*PagerOverlay); !ok {
+		t.Fatalf("/last did not open a pager, overlay=%T", m.overlay)
 	}
 }
 
 func TestApprovalCountdownFailsClosed(t *testing.T) {
 	reply := make(chan agent.ConfirmResult, 1)
 	overlay := NewApprovalOverlay("run_shell", "echo hi", 22, reply)
+	start := time.Unix(1_700_000_000, 0)
+	cur := start
+	overlay.now = func() time.Time { return cur }
+	overlay.deadline = start.Add(approvalFailClosed)
+
 	view := strings.Join(plainLines(overlay.Render(80)), "\n")
-	if !strings.Contains(view, "fail-closed") || !strings.Contains(view, "10m0s") {
-		t.Fatalf("countdown missing from a fresh box:\n%s", view)
+	if !strings.Contains(view, "timeout 10m0s fail-closed") {
+		t.Fatalf("fresh countdown:\n%s", view)
 	}
-	overlay.deadline = time.Now().Add(-time.Second)
+	cur = cur.Add(time.Second)
+	view = strings.Join(plainLines(overlay.Render(80)), "\n")
+	if !strings.Contains(view, "timeout 9m59s fail-closed") {
+		t.Fatalf("countdown did not decrease:\n%s", view)
+	}
+	cur = start.Add(approvalFailClosed)
 	updated, _ := overlay.Update(approvalTickMsg{deadline: overlay.deadline})
 	if updated != nil {
 		t.Fatal("expired box stayed open")

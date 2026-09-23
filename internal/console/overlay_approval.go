@@ -23,9 +23,10 @@ type ApprovalOverlay struct {
 	decision agent.ConfirmResult
 	explain  bool
 
-	// deadline is when an unanswered box fails closed. Zero means the
-	// constructor default, approvalFailClosed.
+	// deadline is when an unanswered box fails closed.
 	deadline time.Time
+	// now is the clock Render and the timeout use. Tests replace it.
+	now func() time.Time
 }
 
 // approvalFailClosed is how long an unanswered approval may sit before it
@@ -44,8 +45,24 @@ func NewApprovalOverlay(tool, description string, score int, reply chan<- agent.
 		description: description,
 		score:       score,
 		reply:       reply,
+		now:         time.Now,
 		deadline:    time.Now().Add(approvalFailClosed),
 	}
+}
+
+func (o *ApprovalOverlay) clock() time.Time {
+	if o.now == nil {
+		return time.Now()
+	}
+	return o.now()
+}
+
+func (o *ApprovalOverlay) remaining() time.Duration {
+	left := o.deadline.Sub(o.clock())
+	if left < 0 {
+		return 0
+	}
+	return left.Round(time.Second)
 }
 
 // Arm starts the one-second countdown. The console calls it when the box opens.
@@ -78,7 +95,7 @@ func (o *ApprovalOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 		if o.done || !tick.deadline.Equal(o.deadline) {
 			return o, nil
 		}
-		if !time.Now().Before(o.deadline) {
+		if !o.clock().Before(o.deadline) {
 			o.resolve(agent.ConfirmNo)
 			return nil, nil
 		}
@@ -208,12 +225,8 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 
 	// Keystroke prompt line
 	lines = append(lines, Line{Text: "│", Style: StyleMuted})
-	left := time.Until(o.deadline).Round(time.Second)
-	if left < 0 {
-		left = 0
-	}
 	lines = append(lines, Line{
-		Text:  fmt.Sprintf("│ timeout %s fail-closed", left),
+		Text:  fmt.Sprintf("│ timeout %s fail-closed", o.remaining()),
 		Style: StyleMuted,
 	})
 	promptText := "│ [y] run  [n] deny  [esc] deny"

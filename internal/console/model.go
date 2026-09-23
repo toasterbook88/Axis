@@ -461,7 +461,8 @@ func (m Model) expandLastTool() (tea.Model, tea.Cmd) {
 	e := *m.lastTool
 	e.Expanded = true
 	m.lastTool = &e
-	return m, m.commit(&e)
+	m.overlay = NewPagerOverlay(e.Name, pagerBody(&e))
+	return m, nil
 }
 
 func (m Model) expandThought() tea.Cmd {
