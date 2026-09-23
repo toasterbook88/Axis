@@ -45,7 +45,7 @@ func DisplayScope(mode AutonomyMode) string {
 func observeTool(name string) bool {
 	switch name {
 	case "read_file", "list_directory", "grep_search", "symbol_search", "todo",
-		"axis_status", "axis_facts", "axis_place", "axis_summary", "axis_reservations",
+		"axis_status", "axis_facts", "axis_place", "axis_reservations",
 		"git_status", "git_diff", "git_log":
 		return true
 	default:
@@ -53,9 +53,11 @@ func observeTool(name string) bool {
 	}
 }
 
+// editTool is the edit-grant set: workspace writes. run_shell is NOT here —
+// it is PR2-hidden (pr2Hidden) until the guarded-exec PR advertises it.
 func editTool(name string) bool {
 	switch name {
-	case "write_file", "edit_file", "multi_edit", "run_shell":
+	case "write_file", "edit_file", "multi_edit":
 		return true
 	default:
 		return false
@@ -65,7 +67,8 @@ func editTool(name string) bool {
 func neverTool(name string) bool {
 	switch name {
 	case "spawn_subagent", "fleet_exec", "run_on_node", "remote_write_file",
-		"remote_tail_logs", "remote_read_file", "remote_grep", "remote_list":
+		"remote_tail_logs", "remote_read_file", "remote_grep", "remote_list",
+		"run_background":
 		return true
 	default:
 		return false
@@ -73,10 +76,11 @@ func neverTool(name string) bool {
 }
 
 // observeDeferred is registered but not a read. Observe must not advertise it.
-// undo_last becomes visible with the edit grant. The rest stay hidden.
+// The edit grant reveals undo_last and review_changes. The rest stay hidden
+// until a later PR names a grant for them.
 func observeDeferred(name string) bool {
 	switch name {
-	case "undo_last", "review_changes", "run_background", "check_task",
+	case "undo_last", "review_changes", "check_task",
 		"list_background_tasks", "branch_session", "rollback_session",
 		"web_fetch", "web_search":
 		return true
@@ -85,29 +89,42 @@ func observeDeferred(name string) bool {
 	}
 }
 
+// pr2Hidden is deferred to the guarded-exec PR: the executors stay
+// registered for safety routes, but v1 never advertises or dispatches
+// these at ANY scope. Flipping them into exec visibility is a one-line
+// change in toolVisible.
+func pr2Hidden(name string) bool {
+	switch name {
+	case "run_shell", "axis_run_task":
+		return true
+	default:
+		return false
+	}
+}
+
 // toolVisible reports whether name is advertised and callable in scope.
 // MCP tools are visible when connected, under their real mcp_ names.
+// Unknown names fail closed: a dynamically registered tool must be
+// granted visibility via allowExtra before the model can call it.
 func toolVisible(name string, scope ToolScope) bool {
-	if name == "" || neverTool(name) {
+	if name == "" || neverTool(name) || pr2Hidden(name) || name == "axis_summary" {
 		return false
 	}
 	if strings.HasPrefix(name, "mcp_") || observeTool(name) {
 		return true
 	}
 	if observeDeferred(name) {
-		return name == "undo_last" && (scope == ScopeEdit || scope == ScopeExec)
+		switch name {
+		case "undo_last", "review_changes":
+			return scope == ScopeEdit || scope == ScopeExec
+		default:
+			return false
+		}
 	}
-	if !editTool(name) && name != "axis_run_task" {
-		return true
+	if editTool(name) {
+		return scope == ScopeEdit || scope == ScopeExec
 	}
-	switch scope {
-	case ScopeEdit:
-		return editTool(name)
-	case ScopeExec:
-		return editTool(name) || name == "axis_run_task"
-	default:
-		return false
-	}
+	return false
 }
 
 // VisibleToolPrompt is the system-prompt tool list for the defs the model

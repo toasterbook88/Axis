@@ -39,6 +39,9 @@ type ToolRegistry struct {
 	// and review_changes can recover prior state within a session.
 	checkpoints *checkpointer
 	scope       ToolScope
+	// extraAllowed grants visibility to dynamically registered tool names
+	// (session-added tools, test probes) on top of the static scope lists.
+	extraAllowed map[string]bool
 }
 
 // ToolExecutor runs a tool and returns its string result.
@@ -156,6 +159,24 @@ func (r *ToolRegistry) SetScope(scope ToolScope) {
 	r.scope = scope
 }
 
+// allowExtra grants visibility for a dynamically registered tool that is
+// not in the static scope lists (session-added tools, test probes). It
+// survives scope changes but cannot override the never or PR2-hidden sets.
+func (r *ToolRegistry) allowExtra(name string) {
+	if r.extraAllowed == nil {
+		r.extraAllowed = make(map[string]bool)
+	}
+	r.extraAllowed[name] = true
+}
+
+func (r *ToolRegistry) extraVisible(name string) bool {
+	if r.extraAllowed == nil {
+		return false
+	}
+	_, registered := r.executors[name]
+	return r.extraAllowed[name] && registered
+}
+
 // Defs returns the tool definitions the model may see in the current scope.
 func (r *ToolRegistry) Defs() []chat.ToolDef {
 	if r == nil {
@@ -163,11 +184,23 @@ func (r *ToolRegistry) Defs() []chat.ToolDef {
 	}
 	out := make([]chat.ToolDef, 0, len(r.defs))
 	for _, def := range r.defs {
-		if toolVisible(def.Function.Name, r.scope) {
+		if r.visible(def.Function.Name) {
 			out = append(out, def)
 		}
 	}
 	return out
+}
+
+// visible reports whether the model may call name in the current scope.
+// Never/pr2-hidden/dropped names deny before any dynamic grant applies.
+func (r *ToolRegistry) visible(name string) bool {
+	if name == "" || neverTool(name) || pr2Hidden(name) || name == "axis_summary" {
+		return false
+	}
+	if r.extraVisible(name) {
+		return true
+	}
+	return toolVisible(name, r.scope)
 }
 
 // Visible reports whether the model may call name in the current scope.
@@ -175,12 +208,17 @@ func (r *ToolRegistry) Visible(name string) bool {
 	if r == nil {
 		return false
 	}
-	return toolVisible(name, r.scope)
+	return r.visible(name)
 }
 
 // Execute dispatches a registered tool. Model-facing calls go through
-// Agent dispatch, which rejects names that are not Visible.
+// Agent dispatch, which rejects names that are not Visible. Operator
+// surfaces (slash commands, harness scripts) may call scope-hidden tools
+// here, but the never set and the PR2-hidden set deny unconditionally.
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if neverTool(name) || pr2Hidden(name) {
+		return "", fmt.Errorf("tool %q not available in this mode", name)
+	}
 	exec, ok := r.executors[name]
 	if !ok {
 		return "", fmt.Errorf("unknown tool %q — available tools: %s", name, r.visibleNames())
@@ -197,7 +235,7 @@ func (r *ToolRegistry) HasTool(name string) bool {
 func (r *ToolRegistry) visibleNames() string {
 	names := make([]string, 0, len(r.defs))
 	for _, def := range r.defs {
-		if toolVisible(def.Function.Name, r.scope) {
+		if r.visible(def.Function.Name) {
 			names = append(names, def.Function.Name)
 		}
 	}

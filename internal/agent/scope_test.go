@@ -47,29 +47,104 @@ func TestObserveDefsHideProhibitedTools(t *testing.T) {
 	}
 }
 
-func TestEditScopeAddsWriteAndShell(t *testing.T) {
+func TestEditScopeAddsWriteTools(t *testing.T) {
 	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
 	r.SetScope(ScopeEdit)
 	names := defNames(r)
-	for _, want := range []string{"write_file", "edit_file", "multi_edit", "run_shell", "read_file"} {
+	for _, want := range []string{"write_file", "edit_file", "multi_edit", "undo_last", "review_changes", "read_file"} {
 		if !containsName(names, want) {
 			t.Errorf("edit defs missing %s", want)
 		}
 	}
-	if containsName(names, "axis_run_task") || containsName(names, "spawn_subagent") {
-		t.Fatalf("edit defs advertised a guarded or never tool: %v", names)
+	// run_shell and axis_run_task are PR2-hidden: not advertised at ANY
+	// scope in v1, including edit and exec.
+	for _, hidden := range []string{"run_shell", "axis_run_task", "spawn_subagent"} {
+		if containsName(names, hidden) {
+			t.Fatalf("edit defs advertised a PR2-hidden or never tool: %v", names)
+		}
 	}
 }
 
-func TestExecScopeAddsRunTaskOnly(t *testing.T) {
+func TestExecScopeMatchesEditInV1(t *testing.T) {
+	// The exec tier exists as the guarded-exec grant, but PR2-hidden tools
+	// (run_shell, axis_run_task) are not advertised at any scope in v1, so
+	// exec's advertised set equals edit's.
 	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
 	r.SetScope(ScopeExec)
 	names := defNames(r)
-	if !containsName(names, "axis_run_task") || !containsName(names, "run_shell") {
-		t.Fatalf("exec defs = %v", names)
+	for _, hidden := range []string{"run_shell", "axis_run_task", "fleet_exec", "run_on_node", "spawn_subagent"} {
+		if containsName(names, hidden) {
+			t.Fatalf("exec defs advertised a PR2-hidden or never tool: %v", names)
+		}
 	}
-	if containsName(names, "fleet_exec") || containsName(names, "run_on_node") {
-		t.Fatalf("exec defs advertised a never tool: %v", names)
+	if !containsName(names, "write_file") || !containsName(names, "undo_last") {
+		t.Fatalf("exec defs should include the edit set, got: %v", names)
+	}
+}
+
+// TestPr2HiddenDeniedAtEveryScopeAndDirect pins the v1 contract: run_shell
+// and axis_run_task are rejected by Execute (operator direct path) at every
+// scope, and never dump the registry.
+func TestPr2HiddenDeniedAtEveryScopeAndDirect(t *testing.T) {
+	for _, scope := range []ToolScope{ScopeObserve, ScopeEdit, ScopeExec} {
+		r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+		r.SetScope(scope)
+		for _, name := range []string{"run_shell", "axis_run_task"} {
+			_, err := r.Execute(context.Background(), name, json.RawMessage(`{}`))
+			if err == nil || !strings.Contains(err.Error(), "not available in this mode") {
+				t.Errorf("scope %s: Execute(%q) = %v, want 'not available in this mode'", scope, name, err)
+			}
+			if r.Visible(name) {
+				t.Errorf("scope %s: %q must not be visible", scope, name)
+			}
+		}
+	}
+}
+
+// TestNeverSetDeniedOnDirectPath pins that the operator-facing Execute also
+// hard-denies the never set — no path reaches those executors.
+func TestNeverSetDeniedOnDirectPath(t *testing.T) {
+	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+	for _, name := range []string{"spawn_subagent", "fleet_exec", "run_on_node", "remote_write_file", "run_background"} {
+		_, err := r.Execute(context.Background(), name, json.RawMessage(`{}`))
+		if err == nil || !strings.Contains(err.Error(), "not available in this mode") {
+			t.Errorf("Execute(%q) = %v, want hard-deny", name, err)
+		}
+	}
+}
+
+// TestUnknownNameFailsClosed pins that a name unknown to the static scope
+// lists is not advertised or callable unless explicitly granted.
+func TestUnknownNameFailsClosed(t *testing.T) {
+	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+	r.add("custom_probe", "test probe",
+		json.RawMessage(`{"type":"object","properties":{}}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) { return "ok", nil })
+
+	if r.Visible("custom_probe") {
+		t.Fatal("unknown dynamic tool must fail closed until granted")
+	}
+	for _, d := range r.Defs() {
+		if d.Function.Name == "custom_probe" {
+			t.Fatal("unknown dynamic tool must not appear in Defs")
+		}
+	}
+
+	// After an explicit grant it is visible and callable; scope changes
+	// keep the grant.
+	r.allowExtra("custom_probe")
+	if !r.Visible("custom_probe") {
+		t.Fatal("granted dynamic tool must be visible")
+	}
+	r.SetScope(ScopeEdit)
+	if !r.Visible("custom_probe") {
+		t.Fatal("dynamic grant must survive scope changes")
+	}
+
+	// A grant cannot resurrect a never-set name.
+	r.allowExtra("spawn_subagent")
+	if r.Visible("spawn_subagent") {
+		t.Fatal("allowExtra must not override the never set")
 	}
 }
 

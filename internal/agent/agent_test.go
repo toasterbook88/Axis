@@ -225,10 +225,10 @@ func TestToolShellBlockedByDesign(t *testing.T) {
 
 	_, err := r.Execute(context.Background(), "run_shell", json.RawMessage(`{"command":"echo hello"}`))
 	if err == nil {
-		t.Fatal("expected error — run_shell must go through agent safety gate")
+		t.Fatal("expected error — run_shell is PR2-hidden and cannot execute in v1")
 	}
-	if !strings.Contains(err.Error(), "safety gate") {
-		t.Errorf("expected 'safety gate' error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "not available in this mode") {
+		t.Errorf("expected 'not available in this mode', got: %s", err.Error())
 	}
 }
 
@@ -797,29 +797,19 @@ func TestAgentEmptyToolCalls(t *testing.T) {
 }
 
 func TestAgentShellDeclinedByOperator(t *testing.T) {
-	server := mockOllamaChat(t, [][]mockStreamChunk{
-		toolCallResponse("run_shell", `{"command":"echo hello"}`),
-		textResponse("OK, I won't run that."),
-	})
-	defer server.Close()
-
-	var out bytes.Buffer
+	// run_shell is PR2-hidden: the model-facing dispatch rejects it before
+	// confirm; decline behavior is exercised directly on dispatchShell.
 	agent := New(Config{
-		Endpoint:    server.URL,
-		Model:       "test-model",
-		Output:      &out,
 		Confirm:     neverConfirm(),
 		ToolContext: &ToolContext{},
 	})
-	agent.tools.SetScope(ScopeEdit)
 
-	err := agent.Run(context.Background(), "run something")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := agent.dispatchShell(context.Background(), json.RawMessage(`{"command":"echo hello"}`))
+	if err == nil {
+		t.Fatal("expected decline error")
 	}
-	output := out.String()
-	if !strings.Contains(output, "declined") {
-		t.Errorf("expected 'declined' message, got: %s", output)
+	if !strings.Contains(err.Error(), "operator declined") {
+		t.Errorf("expected 'operator declined' message, got: %s", err.Error())
 	}
 }
 
@@ -926,18 +916,8 @@ func TestAgentShellBlockedBySafety(t *testing.T) {
 }
 
 func TestAgentShellBlockedBySafetyOverride(t *testing.T) {
-	server := mockOllamaChat(t, [][]mockStreamChunk{
-		toolCallResponse("run_shell", `{"command":"rm -rf /"}`),
-		textResponse("Safety override succeeded."),
-	})
-	defer server.Close()
-
-	var out bytes.Buffer
 	called := false
 	agent := New(Config{
-		Endpoint:    server.URL,
-		Model:       "test-model",
-		Output:      &out,
 		Confirm:     alwaysConfirm(),
 		ToolContext: &ToolContext{},
 		RunShell: func(ctx context.Context, command string) (string, error) {
@@ -948,9 +928,8 @@ func TestAgentShellBlockedBySafetyOverride(t *testing.T) {
 			return "mock override success", nil
 		},
 	})
-	agent.tools.SetScope(ScopeEdit)
 
-	err := agent.Run(context.Background(), "delete everything")
+	_, err := agent.dispatchShell(context.Background(), json.RawMessage(`{"command":"rm -rf /"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -960,18 +939,8 @@ func TestAgentShellBlockedBySafetyOverride(t *testing.T) {
 }
 
 func TestAgentShellExecutesWhenApproved(t *testing.T) {
-	server := mockOllamaChat(t, [][]mockStreamChunk{
-		toolCallResponse("run_shell", `{"command":"echo agent-test-output"}`),
-		textResponse("Done."),
-	})
-	defer server.Close()
-
-	var out bytes.Buffer
 	called := false
 	agent := New(Config{
-		Endpoint:    server.URL,
-		Model:       "test-model",
-		Output:      &out,
 		Confirm:     alwaysConfirm(),
 		ToolContext: &ToolContext{},
 		RunShell: func(ctx context.Context, command string) (string, error) {
@@ -982,27 +951,16 @@ func TestAgentShellExecutesWhenApproved(t *testing.T) {
 			return `{"ok":true,"node":"alpha","output":"agent-test-output"}`, nil
 		},
 	})
-	agent.tools.SetScope(ScopeEdit)
 
-	err := agent.Run(context.Background(), "echo test")
+	out, err := agent.dispatchShell(context.Background(), json.RawMessage(`{"command":"echo agent-test-output"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !called {
 		t.Fatal("expected injected RunShell to be called")
 	}
-
-	// Check the conversation has the shell result.
-	msgs := agent.Conversation().Messages()
-	found := false
-	for _, m := range msgs {
-		if m.Role == chat.RoleTool && strings.Contains(m.Content, "agent-test-output") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected shell output 'agent-test-output' in conversation")
+	if !strings.Contains(out, "agent-test-output") {
+		t.Errorf("expected shell output in result, got: %s", out)
 	}
 }
 
@@ -1070,10 +1028,10 @@ func TestDispatchRunOnNodeUsesGuardedRunner(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 
-	// Registry direct execute must not bypass the agent gate.
+	// Registry direct execute hard-denies the never set.
 	_, err = a.tools.Execute(context.Background(), "run_on_node", args)
-	if err == nil || !strings.Contains(err.Error(), "safety gate") {
-		t.Fatalf("expected registry safety-gate error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not available in this mode") {
+		t.Fatalf("expected registry hard-deny, got %v", err)
 	}
 }
 
@@ -1100,37 +1058,23 @@ func TestDispatchRunOnNodeViaToolCallPath(t *testing.T) {
 }
 
 func TestAgentNeverBlocksAllFutureShell(t *testing.T) {
-	// First call: operator selects "never" → second shell call should auto-block.
-	neverOnce := func() ConfirmFunc {
-		return func(toolName, description string, safetyScore int) ConfirmResult {
-			return ConfirmNever
-		}
-	}
-
-	server := mockOllamaChat(t, [][]mockStreamChunk{
-		toolCallResponse("run_shell", `{"command":"echo first"}`),
-		toolCallResponse("run_shell", `{"command":"echo second"}`),
-		textResponse("All done."),
-	})
-	defer server.Close()
-
-	var out bytes.Buffer
+	// Operator selects "never" → session-wide block for all future shell.
+	// Exercised directly on dispatchShell; the loop rejects run_shell in v1.
 	agent := New(Config{
-		Endpoint:    server.URL,
-		Model:       "test-model",
-		Output:      &out,
-		Confirm:     neverOnce(),
+		Confirm: func(toolName, description string, safetyScore int) ConfirmResult {
+			return ConfirmNever
+		},
 		ToolContext: &ToolContext{},
 	})
-	agent.tools.SetScope(ScopeEdit)
 
-	err := agent.Run(context.Background(), "run two commands")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := agent.dispatchShell(context.Background(), json.RawMessage(`{"command":"echo first"}`))
+	if err == nil || !strings.Contains(err.Error(), "blocked all shell commands") {
+		t.Fatalf("expected session block on ConfirmNever, got: %v", err)
 	}
-	output := out.String()
-	if !strings.Contains(output, "blocked all shell commands") {
-		t.Errorf("expected session block message, got: %s", output)
+
+	_, err = agent.dispatchShell(context.Background(), json.RawMessage(`{"command":"echo second"}`))
+	if err == nil || !strings.Contains(err.Error(), "blocked all shell commands") {
+		t.Fatalf("expected persistent session block, got: %v", err)
 	}
 }
 
