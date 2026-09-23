@@ -76,9 +76,15 @@ type Agent struct {
 	// blockAll is toggled when the operator selects "never" in confirmation.
 	blockAll    bool
 	mcpRegistry *mcpclient.Registry
-	// dispatchMu serializes operator confirmation prompts and the shared
-	// autoApproveAll/blockAll state across concurrent tool dispatches. The
+	// dispatchMu guards autoApproveAll, blockAll, and the confirm func.
+	// It must not be held across a blocking confirm: the console footer
+	// calls Autonomy() on the UI goroutine, and that takes this lock.
+	// Holding it while the UI paints deadlocks the approval overlay, so
+	// the screen stays on "working".
 	dispatchMu sync.Mutex
+	// confirmGate serializes operator prompts so concurrent tool calls
+	// do not interleave overlays. It is not taken by the UI goroutine.
+	confirmGate sync.Mutex
 	// runnerMu protects runShell/runOnNode against concurrent /model refresh
 	// while tool dispatch and background launches read them.
 	runnerMu sync.RWMutex
@@ -310,6 +316,20 @@ func (a *Agent) SetConfirm(fn ConfirmFunc) {
 	defer a.dispatchMu.Unlock()
 	a.baseConfirm = fn
 	a.confirm = a.wrapConfirm(fn)
+}
+
+// askConfirm runs the operator prompt without holding dispatchMu.
+// confirmGate keeps concurrent prompts from drawing on top of each other.
+func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
+	a.dispatchMu.Lock()
+	fn := a.confirm
+	a.dispatchMu.Unlock()
+	if fn == nil {
+		return ConfirmNo
+	}
+	a.confirmGate.Lock()
+	defer a.confirmGate.Unlock()
+	return fn(tool, desc, score)
 }
 
 // wrapConfirm applies the active autonomy policy to a base confirm.
