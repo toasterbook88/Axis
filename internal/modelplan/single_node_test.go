@@ -281,7 +281,7 @@ func TestPlanSingleNodePrefersMeasuredFreeVRAM(t *testing.T) {
 					RAMFreeMB:  32000,
 					RAMTotalMB: 64000,
 					GPUs: []models.GPUInfo{
-						{Model: "NVIDIA Busy", Vendor: "nvidia", VRAMMB: 24576, VRAMFreeMB: 2048, Capabilities: []string{"cuda"}},
+						{Model: "NVIDIA Busy", Vendor: "nvidia", VRAMMB: 24576, VRAMFreeMB: 2048, VRAMFreeMeasured: true, Capabilities: []string{"cuda"}},
 					},
 				},
 			},
@@ -500,6 +500,187 @@ func TestPlanSingleNode_BestDevicePrefersFreeVRAM(t *testing.T) {
 	}
 }
 
+// TestPlanSingleNode_GateKeepsUnflaggedPositiveFree locks the eligibility gate for
+// the one case a pre-#442 snapshot can produce: a real free-VRAM figure with no
+// VRAMFreeMeasured field (the field was added in #442, so older binaries omit it
+// while still writing a genuine vram_free_mb).
+//
+// A flag-only condition treats that as "not measured" and falls back to total
+// capacity, overstating headroom — the exact defect #440/#442 exist to prevent.
+// The positive value is a measurement regardless of the flag; the flag's only job
+// is disambiguating a measured 0 (exhausted card) from an unmeasured 0, which the
+// second node below pins so a naive "free > 0" rewrite cannot regress it.
+func TestPlanSingleNode_GateKeepsUnflaggedPositiveFree(t *testing.T) {
+	spec := models.ModelSpec{
+		ID:     "ms-unflagged-free",
+		Name:   "tiny-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      512,
+			ContextOverheadMB: 128,
+			RuntimeOverheadMB: 128,
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+	snap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{
+			{
+				// Real free value, flag absent — the shape a v0.19.1 collector emits.
+				Name:   "unflagged-free-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{
+							Model:        "NVIDIA RTX 4090",
+							Vendor:       "nvidia",
+							VRAMMB:       24576,
+							VRAMFreeMB:   1024, // genuinely measured free
+							Capabilities: []string{"cuda"},
+						},
+					},
+				},
+			},
+			{
+				// Measured zero: flag set, value 0. Must stay 0, never the total.
+				Name:   "exhausted-zero-node",
+				Status: models.StatusComplete,
+				Resources: &models.Resources{
+					RAMFreeMB:  32000,
+					RAMTotalMB: 64000,
+					GPUs: []models.GPUInfo{
+						{
+							Model:            "NVIDIA RTX 4090",
+							Vendor:           "nvidia",
+							VRAMMB:           24576,
+							VRAMFreeMB:       0,
+							VRAMFreeMeasured: true,
+							Capabilities:     []string{"cuda"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	plan, err := PlanSingleNode(snap, spec, 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+
+	seen := map[string]ModelCandidateScore{}
+	for _, c := range plan.Candidates {
+		seen[c.Node] = c
+	}
+
+	cand, ok := seen["unflagged-free-node"]
+	if !ok {
+		t.Fatalf("unflagged-free-node missing from candidates: %+v", plan.Candidates)
+	}
+	if cand.VRAMFreeMB != 1024 {
+		t.Errorf("unflagged-free-node VRAMFreeMB = %d, want 1024: a positive free value is a real "+
+			"measurement even when VRAMFreeMeasured is absent; falling back to total (%d) overstates headroom",
+			cand.VRAMFreeMB, cand.VRAMTotalMB)
+	}
+	if !cand.VRAMFreeMeasured {
+		t.Errorf("unflagged-free-node VRAMFreeMeasured = false, want true: FreeMeasured must be derived " +
+			"from the same disjunction the gate uses, or the plan text renders this measured value as 'unmeasured'")
+	}
+
+	exhausted, ok := seen["exhausted-zero-node"]
+	if !ok {
+		t.Fatalf("exhausted-zero-node missing from candidates: %+v", plan.Candidates)
+	}
+	if exhausted.VRAMFreeMB != 0 {
+		t.Errorf("exhausted-zero-node VRAMFreeMB = %d, want 0: a measured zero must not fall back to total",
+			exhausted.VRAMFreeMB)
+	}
+}
+
+func tinyCUDASpec(id string) models.ModelSpec {
+	return models.ModelSpec{
+		ID:     id,
+		Name:   "tiny-model",
+		Format: models.ModelFormatGGUF,
+		Memory: models.ModelMemoryRequirements{
+			WeightSizeMB:      512,
+			ContextOverheadMB: 128,
+			RuntimeOverheadMB: 128,
+		},
+		Accelerators: []models.AcceleratorType{models.AcceleratorCUDA},
+	}
+}
+
+func oneGPUSnapshot(name string, gpu models.GPUInfo) *models.ClusterSnapshot {
+	return &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Nodes: []models.NodeFacts{{
+			Name:   name,
+			Status: models.StatusComplete,
+			Resources: &models.Resources{
+				RAMFreeMB:  32000,
+				RAMTotalMB: 64000,
+				GPUs:       []models.GPUInfo{gpu},
+			},
+		}},
+	}
+}
+
+// TestPlanThenFormat_StalePre442KeepsFreeLabel runs the planner and the printer
+// on one snapshot. A display-only fixture that presets VRAMFreeMeasured cannot
+// catch a gate that forgets to derive the flag.
+func TestPlanThenFormat_StalePre442KeepsFreeLabel(t *testing.T) {
+	snap := oneGPUSnapshot("stale-node", models.GPUInfo{
+		Model:        "NVIDIA RTX 4090",
+		Vendor:       "nvidia",
+		VRAMMB:       24576,
+		VRAMFreeMB:   1024,
+		Capabilities: []string{"cuda"},
+	})
+	plan, err := PlanSingleNode(snap, tinyCUDASpec("ms-plan-format"), 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	text := FormatModelPlacementPlanText(plan)
+	if !strings.Contains(text, "1024 MiB free") {
+		t.Errorf("plan text = %q, want 1024 MiB free", text)
+	}
+	if strings.Contains(text, "24576") {
+		t.Errorf("plan text printed total capacity %q", text)
+	}
+}
+
+func TestPlanSingleNode_NegativeFreeVRAMIsUnmeasured(t *testing.T) {
+	snap := oneGPUSnapshot("garbage-node", models.GPUInfo{
+		Model:            "NVIDIA RTX 4090",
+		Vendor:           "nvidia",
+		VRAMMB:           24576,
+		VRAMFreeMB:       -5,
+		VRAMFreeMeasured: true,
+		Capabilities:     []string{"cuda"},
+	})
+	plan, err := PlanSingleNode(snap, tinyCUDASpec("ms-negative-free"), 8080)
+	if err != nil {
+		t.Fatalf("PlanSingleNode: %v", err)
+	}
+	if len(plan.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(plan.Candidates))
+	}
+	cand := plan.Candidates[0]
+	if cand.VRAMFreeMB != 24576 || cand.VRAMFreeMeasured {
+		t.Errorf("candidate free=%d measured=%v, want total 24576 and unmeasured", cand.VRAMFreeMB, cand.VRAMFreeMeasured)
+	}
+	text := FormatModelPlacementPlanText(plan)
+	if !strings.Contains(text, "24576 MiB total, unmeasured") {
+		t.Errorf("plan text = %q, want total unmeasured label", text)
+	}
+	if strings.Contains(text, "-5") {
+		t.Errorf("plan text used the negative free figure: %q", text)
+	}
+}
+
 // TestFormatModelPlacementPlanText_PrintsSnapshotSource ensures that text plan
 // output displays Snapshot Source prominently.
 func TestFormatModelPlacementPlanText_PrintsSnapshotSource(t *testing.T) {
@@ -519,5 +700,134 @@ func TestFormatModelPlacementPlanText_PrintsSnapshotSource(t *testing.T) {
 	}
 	if !strings.Contains(out, "Snapshot Publication: pub-12345") {
 		t.Errorf("FormatModelPlacementPlanText missing Snapshot Publication: got %q", out)
+	}
+}
+
+// TestFormatModelPlacementPlanText_DisclosesMeasuredFreeAndUnmeasuredFallback
+// verifies that text output labels measured free VRAM explicitly, discloses
+// measured zero on exhausted cards, and labels unmeasured total VRAM fallbacks.
+func TestFormatModelPlacementPlanText_DisclosesMeasuredFreeAndUnmeasuredFallback(t *testing.T) {
+	plan := ModelPlacementPlan{
+		Spec: models.ModelSpec{
+			ID:   "test-spec",
+			Name: "test-model",
+		},
+		TargetPort: 8080,
+		Candidates: []ModelCandidateScore{
+			{
+				Node:             "measured-node",
+				Score:            90,
+				Fit:              FitExcellent,
+				Accelerator:      "RTX 4090 (cuda)",
+				VRAMTotalMB:      24576,
+				VRAMFreeMB:       16384,
+				VRAMFreeMeasured: true,
+				RAMFreeMB:        32000,
+			},
+			{
+				Node:             "exhausted-node",
+				Score:            60,
+				Fit:              FitMarginal,
+				Accelerator:      "RTX 3080 (cuda)",
+				VRAMTotalMB:      10240,
+				VRAMFreeMB:       0,
+				VRAMFreeMeasured: true,
+				RAMFreeMB:        32000,
+			},
+			{
+				Node:             "unmeasured-node",
+				Score:            70,
+				Fit:              FitExcellent,
+				Accelerator:      "Apple M4 (metal)",
+				VRAMTotalMB:      16384,
+				VRAMFreeMB:       16384,
+				VRAMFreeMeasured: false,
+				RAMFreeMB:        16000,
+			},
+			{
+				Node:             "cpu-node",
+				Score:            40,
+				Fit:              FitMarginal,
+				Accelerator:      "cpu",
+				VRAMTotalMB:      0,
+				VRAMFreeMB:       0,
+				VRAMFreeMeasured: false,
+				RAMFreeMB:        16000,
+			},
+		},
+	}
+
+	out := FormatModelPlacementPlanText(plan)
+
+	// 1. Measured node discloses "N MiB free"
+	if !strings.Contains(out, "RTX 4090 (cuda) (VRAM: 16384 MiB free)") {
+		t.Errorf("expected measured free label, got:\n%s", out)
+	}
+
+	// 2. Exhausted node discloses "0 MiB free" instead of hiding VRAM
+	if !strings.Contains(out, "RTX 3080 (cuda) (VRAM: 0 MiB free)") {
+		t.Errorf("expected measured zero free label on exhausted node, got:\n%s", out)
+	}
+
+	// 3. Unmeasured node discloses "N MiB total, unmeasured"
+	if !strings.Contains(out, "Apple M4 (metal) (VRAM: 16384 MiB total, unmeasured)") {
+		t.Errorf("expected unmeasured fallback label, got:\n%s", out)
+	}
+
+	// 4. CPU node renders without VRAM label
+	if strings.Contains(out, "Acc: cpu (VRAM:") {
+		t.Errorf("expected no VRAM label on CPU node, got:\n%s", out)
+	}
+}
+
+// TestFormatModelPlacementPlanText_StalePre442EntryKeepsFreeLabel is the display
+// counterpart to TestPlanSingleNode_GateKeepsUnflaggedPositiveFree. A stale
+// pre-#442 snapshot entry carries a real free figure with no VRAMFreeMeasured
+// field, so flag and value disagree. The score's VRAMFreeMeasured is *derived*
+// by evaluateNodeAccelerator from the same disjunction the gate uses
+// (gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0) — the display does not re-derive
+// it — so such an entry arrives here with VRAMFreeMeasured=true and must be
+// labelled free, showing the free value, not VRAMTotalMB.
+//
+// The existing fixture above cannot catch this class: its unmeasured-node case
+// sets VRAMTotalMB == VRAMFreeMB == 16384, so "show total" and "show free" render
+// identically and the assertion passes vacuously. Differing values are what make
+// the number and the label independently observable.
+func TestFormatModelPlacementPlanText_StalePre442EntryKeepsFreeLabel(t *testing.T) {
+	plan := ModelPlacementPlan{
+		Spec: models.ModelSpec{
+			ID:   "test-spec",
+			Name: "test-model",
+		},
+		TargetPort: 8080,
+		Candidates: []ModelCandidateScore{
+			{
+				// free (1024) and total (24576) differ, so the number and the
+				// label are independently observable. VRAMFreeMeasured=true is
+				// what the real plumbing produces for this entry: evaluateNode-
+				// Accelerator derives it from the same disjunction the gate uses,
+				// because a positive free value is a measurement regardless of the
+				// upstream flag.
+				Node:             "stale-pre442-node",
+				Score:            75,
+				Fit:              FitGood,
+				Accelerator:      "NVIDIA RTX 4090 (cuda)",
+				VRAMTotalMB:      24576,
+				VRAMFreeMB:       1024,
+				VRAMFreeMeasured: true,
+				RAMFreeMB:        32000,
+			},
+		},
+	}
+
+	out := FormatModelPlacementPlanText(plan)
+
+	if strings.Contains(out, "24576 MiB") {
+		t.Errorf("stale-pre442-node rendered the total (%d) instead of the free value: a positive "+
+			"free value is a real measurement and must be labelled as free\nout:\n%s",
+			24576, out)
+	}
+	if !strings.Contains(out, "NVIDIA RTX 4090 (cuda) (VRAM: 1024 MiB free)") {
+		t.Errorf("stale-pre442-node expected 'VRAM: 1024 MiB free' label, got:\n%s", out)
 	}
 }
