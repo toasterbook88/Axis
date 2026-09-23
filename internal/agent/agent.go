@@ -198,34 +198,7 @@ func New(cfg Config) *Agent {
 
 	sysPrompt += "\n\nYou have access to tools. When you need cluster data or file operations, use the tools rather than guessing. " +
 		"If a tool call fails, read the error and try a corrected call. " +
-		"Never fabricate tool results.\n" +
-		"\nYou have first-class tools to inspect and modify the workspace directly:\n" +
-		"- `read_file` to read the contents of a file.\n" +
-		"- `write_file` to create or overwrite a file with new content.\n" +
-		"- `edit_file` to replace a specific block of text inside a file (unique by default; set replace_all=true to replace every occurrence).\n" +
-		"- `multi_edit` to apply several text replacements to one file in a single call — prefer this over repeated edit_file calls.\n" +
-		"- `list_directory` to list directory entries.\n" +
-		"- `grep_search` to find a pattern or query recursively within text files.\n" +
-		"- `symbol_search` to find symbol definitions (functions/types/consts) by name — Go-aware via AST, generic for other languages.\n" +
-		"- `run_shell` to execute a shell command (Layer-4 guarded execution on the local node; returns a guarded JSON result).\n" +
-		"- `axis_run_task` to execute a command on the best/targeted cluster node under placement control (Layer-4 guarded).\n" +
-		"- `run_on_node` to run a shell command on a specific named cluster node through Layer-4 guarded execution with a requested-node pin (returns a guarded JSON result).\n" +
-		"- `remote_read_file` / `remote_grep` / `remote_list` to read files, grep, and list directories on remote cluster nodes (read-only, no confirmation).\n" +
-		"- `remote_write_file` to create or update a file on a remote cluster node via SSH (requires confirmation).\n" +
-		"- `remote_tail_logs` to tail systemd unit logs or file logs on a remote cluster node (read-only).\n" +
-		"- `fleet_exec` to execute a shell command across multiple cluster nodes in parallel (or all nodes) and aggregate results.\n" +
-		"- `spawn_subagent` to delegate a focused sub-task to a child agent that runs its own tool loop on a target node (sync or async) — use this to parallelize work across nodes (e.g. tests on worker-1 while a build runs on builder).\n" +
-		"- `git_status` to view repository status.\n" +
-		"- `git_diff` to view git differences.\n" +
-		"- `git_log` to view git commit history.\n" +
-		"- `undo_last` to undo the most recent file edit (restores prior content from the session checkpoint).\n" +
-		"- `review_changes` to review uncommitted changes the session has made.\n" +
-		"- `web_fetch` to fetch a URL and return readable text (docs, issues, articles, endpoints).\n" +
-		"- `web_search` to search the web (DuckDuckGo, no API key needed) and return top results.\n" +
-		"- `run_background` to start a long-running command (build, tests, training) in the background and get a task id; use `check_task` to poll its output and `list_background_tasks` to see all running tasks. This lets you keep working while long jobs run.\n" +
-		"- `branch_session` / `rollback_session` to snapshot the conversation and rewind to it if a risky approach fails (file changes are not auto-reverted — use undo_last for those).\n" +
-		"\nFor multi-step work, use the `todo` tool to break the task into a tracked plan and mark progress as you go (ops: init, append, start, done, drop, view). This keeps long tasks organized.\n" +
-		"\nExternal capabilities and MCP services are auto-registered. You can invoke any external tool prefixed with `mcp_` (e.g. `mcp_cortex_recall` or `mcp_cortex_remember` to interact with the Cortex shared vector memory).\n"
+		"Never fabricate tool results. Footer status is chrome, not cluster inventory.\n"
 	conv.Append(chat.Message{Role: chat.RoleSystem, Content: sysPrompt})
 
 	// Build tool registry.
@@ -234,9 +207,11 @@ func New(cfg Config) *Agent {
 		tc = NewToolContext(&RuntimeView{}, nil)
 	}
 	tools := NewToolRegistry(tc)
+	tools.SetScope(ScopeFor(cfg.Autonomy))
 	if cfg.MCPRegistry != nil {
 		tools.RegisterMCPTools(cfg.MCPRegistry)
 	}
+	conv.Append(chat.Message{Role: chat.RoleSystem, Content: visibleToolsMessage(tools)})
 	// When Cortex cluster-memory tools are connected, make them first-class:
 	// instruct the model to recall before non-trivial work, remember discoveries,
 	// lock shared files before mutation, and publish significant events — so
@@ -357,11 +332,42 @@ func (a *Agent) SetAutonomy(mode AutonomyMode) {
 	a.dispatchMu.Lock()
 	defer a.dispatchMu.Unlock()
 	a.autonomy = mode
+	if a.tools != nil {
+		a.tools.SetScope(ScopeFor(mode))
+		a.refreshVisibleTools()
+	}
 	base := a.baseConfirm
 	if base == nil {
 		base = StdinConfirm()
 	}
 	a.confirm = autonomyConfirm(mode, base)
+}
+
+func visibleToolsMessage(r *ToolRegistry) string {
+	if r == nil {
+		return VisibleToolPrompt(nil)
+	}
+	defs := r.Defs()
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		names = append(names, def.Function.Name)
+	}
+	return VisibleToolPrompt(names)
+}
+
+func (a *Agent) refreshVisibleTools() {
+	if a == nil || a.conv == nil {
+		return
+	}
+	msg := chat.Message{Role: chat.RoleSystem, Content: visibleToolsMessage(a.tools)}
+	msgs := a.conv.Messages()
+	for i, m := range msgs {
+		if m.Role == chat.RoleSystem && strings.HasPrefix(m.Content, "Tools you may call right now:") {
+			a.conv.ReplaceRange(i, i+1, []chat.Message{msg})
+			return
+		}
+	}
+	a.conv.Append(msg)
 }
 
 // RunWithSinks executes one turn against turn-scoped sinks, restoring the
@@ -544,18 +550,17 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 // formatToolResultSummary produces a human-readable one-line summary of a
 // tool result for operator feedback.
 func (a *Agent) ToolNames() string {
-	names := make([]string, 0, len(a.tools.executors))
-	for n := range a.tools.executors {
-		names = append(names, n)
+	if a.tools == nil {
+		return ""
 	}
-	return strings.Join(names, ", ")
+	return a.tools.visibleNames()
 }
 
 func (a *Agent) ToolDefs() []chat.ToolDef {
 	if a.tools == nil {
 		return nil
 	}
-	return a.tools.defs
+	return a.tools.Defs()
 }
 
 // Conversation returns the underlying conversation for inspection/testing.

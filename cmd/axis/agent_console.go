@@ -938,15 +938,7 @@ func runAgentConsole(
 			}
 			return "default"
 		},
-		Fleet: func() string {
-			fleetMu.Lock()
-			defer fleetMu.Unlock()
-			if !fleet.checkedAt.IsZero() && time.Since(fleet.checkedAt) < 5*time.Second {
-				return fleet.summary
-			}
-			refreshFleetLocked()
-			return fleet.summary
-		},
+		Snapshot: func() string { return "no snapshot" },
 	})
 
 	promptHistoryPath := consoleHistoryPath()

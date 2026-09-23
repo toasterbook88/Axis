@@ -179,6 +179,7 @@ type Model struct {
 	// usageStats supplies the session's real accumulated token usage and
 	// how many turns reported it. Nil or zero turns shows the estimate.
 	usageStats func() (in, out, turns int)
+	mode       func() string
 
 	// sessionStart anchors the /usage wall-time line.
 	sessionStart time.Time
@@ -246,6 +247,9 @@ type Options struct {
 	// back to the TokenEstimate.
 	UsageStats func() (in, out, turns int)
 
+	// Mode returns default, edit, or full for the terminal title.
+	Mode func() string
+
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
@@ -279,9 +283,25 @@ func NewModel(opts Options) Model {
 		stream:        &strings.Builder{},
 		tokenEstimate: opts.TokenEstimate,
 		usageStats:    opts.UsageStats,
+		mode:          opts.Mode,
 		sessionStart:  now(),
 		cancelGrace:   grace,
 		now:           now,
+	}
+}
+
+func (m Model) modeLabel() string {
+	raw := ""
+	if m.mode != nil {
+		raw = m.mode()
+	}
+	switch raw {
+	case "edit":
+		return "edit"
+	case "full", "exec":
+		return "exec"
+	default:
+		return "observe"
 	}
 }
 
@@ -360,7 +380,11 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 
 	case SetOverlayMsg:
 		m.overlay = msg.Overlay
-		return m, nil
+		title := "axis agent · " + m.modeLabel()
+		if m.overlay != nil {
+			title = "axis agent · action required"
+		}
+		return m, tea.SetWindowTitle(title)
 
 	case StreamChunkMsg:
 		if m.stale(msg.Turn) {
@@ -583,6 +607,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.acceptAtCompletion()
 
 	case "enter":
+		switch strings.TrimSpace(m.editor.Text()) {
+		case "?":
+			m.editor.Clear()
+			m.input = ""
+			return m, m.commit(NewNoticeEntry(m.now(), KeymapText()))
+		case "/":
+			m.editor.Clear()
+			m.input = ""
+			return m, m.commit(NewNoticeEntry(m.now(), SlashPaletteText()))
+		}
 		return m.submitInput()
 
 	case "backspace":
@@ -919,11 +953,13 @@ func (m Model) View() string {
 		lines = append(lines, Line{Text: clipRunes(row, effectiveWidth(m.width)), Style: StyleMuted})
 	}
 
-	switch m.state {
-	case turnRunning:
-		lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " working", Style: StyleMuted})
-	case turnCancelling:
-		lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " cancelling", Style: StyleMuted})
+	if m.overlay == nil {
+		switch m.state {
+		case turnRunning:
+			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " working", Style: StyleMuted})
+		case turnCancelling:
+			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " cancelling", Style: StyleMuted})
+		}
 	}
 
 	if m.overlay != nil {

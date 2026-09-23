@@ -102,9 +102,13 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	name := tc.Function.Name
 	args := tc.Function.Arguments
 
-	// 1. Check if tool exists.
+	// 1. Check if tool exists and is visible in the current scope.
+	// A registered name that the model cannot see fails closed and does not run.
 	if !a.tools.HasTool(name) {
 		return "", fmt.Errorf("unknown tool %q — available tools: %s", name, a.ToolNames())
+	}
+	if !a.tools.Visible(name) {
+		return "", fmt.Errorf("tool %q is not available in this mode", name)
 	}
 
 	// 2. Validate JSON arguments.

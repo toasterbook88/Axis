@@ -2,6 +2,7 @@ package console
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -54,13 +55,9 @@ func (o *ApprovalOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 		o.resolve(agent.ConfirmNo)
 		return nil, nil
 
-	case "a", "A":
-		o.resolve(agent.ConfirmAlways)
-		return nil, nil
-
-	case "v", "V":
-		o.resolve(agent.ConfirmNever)
-		return nil, nil
+	case "enter":
+		// Enter does not approve.
+		return o, nil
 
 	case "?":
 		o.explain = !o.explain
@@ -128,12 +125,18 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 		Style: riskStyle,
 	})
 
-	if o.score > 0 {
-		lines = append(lines, Line{
-			Text:  fmt.Sprintf("│ Safety Score: %d/100", o.score),
-			Style: StyleMuted,
-		})
+	lines = append(lines, Line{
+		Text:  fmt.Sprintf("│ safety %d", o.score),
+		Style: StyleMuted,
+	})
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		cwd = "."
 	}
+	lines = append(lines, Line{
+		Text:  fmt.Sprintf("│ cwd %s", clipRunes(cwd, 48)),
+		Style: StyleMuted,
+	})
 
 	// Details / description lines
 	lines = append(lines, Line{Text: "│ Details:", Style: StyleMuted})
@@ -161,7 +164,7 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 
 	// Keystroke prompt line
 	lines = append(lines, Line{Text: "│", Style: StyleMuted})
-	promptText := "│ [y]es  [n]o  [a]lways  ne[v]er  [?]explain"
+	promptText := "│ [y] run  [n] deny  [esc] deny"
 	lines = append(lines, Line{Text: promptText, Style: StyleStrong})
 
 	// Bottom border

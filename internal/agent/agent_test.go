@@ -142,8 +142,8 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 			t.Errorf("expected tool %q to be registered", name)
 		}
 	}
-	if len(r.Defs()) != len(expected) {
-		t.Errorf("expected %d tool defs, got %d", len(expected), len(r.Defs()))
+	if len(r.Defs()) == len(expected) {
+		t.Errorf("observe mode advertised every registered tool")
 	}
 }
 
@@ -471,6 +471,7 @@ func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
 		Confirm:     confirm,
 		ToolContext: &ToolContext{},
 	})
+	agent.tools.SetScope(ScopeEdit)
 
 	_, err := agent.dispatchToolCall(context.Background(), chat.ToolCall{
 		Function: chat.ToolCallFunction{
@@ -810,6 +811,7 @@ func TestAgentShellDeclinedByOperator(t *testing.T) {
 		Confirm:     neverConfirm(),
 		ToolContext: &ToolContext{},
 	})
+	agent.tools.SetScope(ScopeEdit)
 
 	err := agent.Run(context.Background(), "run something")
 	if err != nil {
@@ -836,6 +838,7 @@ func TestAgentMutatingToolDeclinedByOperator(t *testing.T) {
 		Confirm:     neverConfirm(),
 		ToolContext: &ToolContext{},
 	})
+	agent.tools.SetScope(ScopeEdit)
 
 	err := agent.Run(context.Background(), "write hello to foo.txt")
 	if err != nil {
@@ -945,6 +948,7 @@ func TestAgentShellBlockedBySafetyOverride(t *testing.T) {
 			return "mock override success", nil
 		},
 	})
+	agent.tools.SetScope(ScopeEdit)
 
 	err := agent.Run(context.Background(), "delete everything")
 	if err != nil {
@@ -978,6 +982,7 @@ func TestAgentShellExecutesWhenApproved(t *testing.T) {
 			return `{"ok":true,"node":"alpha","output":"agent-test-output"}`, nil
 		},
 	})
+	agent.tools.SetScope(ScopeEdit)
 
 	err := agent.Run(context.Background(), "echo test")
 	if err != nil {
@@ -1086,17 +1091,11 @@ func TestDispatchRunOnNodeViaToolCallPath(t *testing.T) {
 		},
 	})
 	args := json.RawMessage(mustJSON(t, map[string]any{"node": "foundry", "command": "echo hi"}))
-	out, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+	_, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
 		Function: chat.ToolCallFunction{Name: "run_on_node", Arguments: args},
 	})
-	if err != nil {
-		t.Fatalf("dispatchToolCall: %v", err)
-	}
-	if !called {
-		t.Fatal("RunOnNode not called via dispatchToolCall")
-	}
-	if !strings.Contains(out, "ok") {
-		t.Fatalf("out = %q", out)
+	if err == nil || called {
+		t.Fatalf("hidden run_on_node ran or was accepted: err=%v called=%v", err, called)
 	}
 }
 
@@ -1123,6 +1122,7 @@ func TestAgentNeverBlocksAllFutureShell(t *testing.T) {
 		Confirm:     neverOnce(),
 		ToolContext: &ToolContext{},
 	})
+	agent.tools.SetScope(ScopeEdit)
 
 	err := agent.Run(context.Background(), "run two commands")
 	if err != nil {

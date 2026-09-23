@@ -115,13 +115,12 @@ func TestBranchSnapshotIsIndependentOfLaterEdits(t *testing.T) {
 	a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "live", ToolCalls: []chat.ToolCall{toolCall("1", "x", "{}")}})
 	// The branch stack snapshot must NOT reflect the live append.
 	snap := a.branchStack[0].messages
-	if len(snap) != 3 {
-		t.Fatalf("snapshot len = %d, want 3 (New's system + test system + user)", len(snap))
+	if len(snap) != 4 {
+		t.Fatalf("snapshot len = %d, want 4 (New's two system messages + test system + user)", len(snap))
 	}
-	// Rollback should restore exactly the 3-message state.
 	a.rollbackSession("snap")
-	if a.conv.Len() != 3 {
-		t.Fatalf("post-rollback len = %d, want 3", a.conv.Len())
+	if a.conv.Len() != 4 {
+		t.Fatalf("post-rollback len = %d, want 4", a.conv.Len())
 	}
 }
 
