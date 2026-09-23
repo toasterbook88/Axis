@@ -18,5 +18,5 @@ func SlashPaletteText() string {
 
 // KeymapText is the one-screen keymap shown when the operator submits ?.
 func KeymapText() string {
-	return "esc stop turn   ctrl-c twice quit   y/n only when boxed   enter does not approve   / commands   ? keymap"
+	return "esc stop turn   ctrl-c twice quit   y/n only when boxed   enter expands the last tool cell   /last expands it too   enter does not approve   / commands   ? keymap"
 }

@@ -173,6 +173,10 @@ type Model struct {
 	// for /thought (committed entries are immutable and not re-rendered).
 	lastThought string
 
+	// lastTool is the most recent tool cell. /last and Enter on an empty
+	// composer reprint it expanded. Scrollback itself is not rewritten.
+	lastTool *ToolEntry
+
 	// tokenEstimate supplies the /usage context estimate; nil disables.
 	tokenEstimate func() int
 
@@ -376,15 +380,23 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		if m.stale(msg.Turn) {
 			return m, nil
 		}
+		if te, ok := msg.Entry.(*ToolEntry); ok {
+			cp := *te
+			m.lastTool = &cp
+		}
 		return m, m.commit(msg.Entry)
 
 	case SetOverlayMsg:
 		m.overlay = msg.Overlay
 		title := "axis agent · " + m.modeLabel()
+		var arm tea.Cmd
 		if m.overlay != nil {
 			title = "axis agent · action required"
+			if box, ok := m.overlay.(*ApprovalOverlay); ok {
+				arm = box.Arm()
+			}
 		}
-		return m, tea.SetWindowTitle(title)
+		return m, tea.Batch(tea.SetWindowTitle(title), arm)
 
 	case StreamChunkMsg:
 		if m.stale(msg.Turn) {
@@ -442,6 +454,16 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 // expandThought re-commits the most recent thinking block in full. Committed
 // entries are immutable, so the expand is a new block, never an in-place
 // edit of scrollback.
+func (m Model) expandLastTool() (tea.Model, tea.Cmd) {
+	if m.lastTool == nil {
+		return m, m.commit(NewNoticeEntry(m.now(), "no tool cell to expand"))
+	}
+	e := *m.lastTool
+	e.Expanded = true
+	m.lastTool = &e
+	return m, m.commit(&e)
+}
+
 func (m Model) expandThought() tea.Cmd {
 	if m.lastThought == "" {
 		return m.commit(NewNoticeEntry(m.now(), "no thinking block recorded this session"))
@@ -616,6 +638,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editor.Clear()
 			m.input = ""
 			return m, m.commit(NewNoticeEntry(m.now(), SlashPaletteText()))
+		case "/last":
+			m.editor.Clear()
+			m.input = ""
+			return m.expandLastTool()
+		}
+		if strings.TrimSpace(m.editor.Text()) == "" && m.lastTool != nil && !m.lastTool.Expanded {
+			return m.expandLastTool()
 		}
 		return m.submitInput()
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,19 @@ type ApprovalOverlay struct {
 	done     bool
 	decision agent.ConfirmResult
 	explain  bool
+
+	// deadline is when an unanswered box fails closed. Zero means the
+	// constructor default, approvalFailClosed.
+	deadline time.Time
+}
+
+// approvalFailClosed is how long an unanswered approval may sit before it
+// denies. The charter fail-closed window is 600s.
+const approvalFailClosed = 600 * time.Second
+
+// approvalTickMsg advances the countdown. deadline ties the tick to one box.
+type approvalTickMsg struct {
+	deadline time.Time
 }
 
 // NewApprovalOverlay constructs a modal for operator confirmation.
@@ -30,7 +44,26 @@ func NewApprovalOverlay(tool, description string, score int, reply chan<- agent.
 		description: description,
 		score:       score,
 		reply:       reply,
+		deadline:    time.Now().Add(approvalFailClosed),
 	}
+}
+
+// Arm starts the one-second countdown. The console calls it when the box opens.
+func (o *ApprovalOverlay) Arm() tea.Cmd {
+	if o == nil {
+		return nil
+	}
+	if o.deadline.IsZero() {
+		o.deadline = time.Now().Add(approvalFailClosed)
+	}
+	return o.tick()
+}
+
+func (o *ApprovalOverlay) tick() tea.Cmd {
+	deadline := o.deadline
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return approvalTickMsg{deadline: deadline}
+	})
 }
 
 // compile-time check that ApprovalOverlay satisfies Overlay
@@ -39,6 +72,17 @@ var _ Overlay = (*ApprovalOverlay)(nil)
 func (o *ApprovalOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 	if o.done {
 		return nil, nil
+	}
+
+	if tick, ok := msg.(approvalTickMsg); ok {
+		if o.done || !tick.deadline.Equal(o.deadline) {
+			return o, nil
+		}
+		if !time.Now().Before(o.deadline) {
+			o.resolve(agent.ConfirmNo)
+			return nil, nil
+		}
+		return o, o.tick()
 	}
 
 	key, ok := msg.(tea.KeyMsg)
@@ -164,6 +208,14 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 
 	// Keystroke prompt line
 	lines = append(lines, Line{Text: "│", Style: StyleMuted})
+	left := time.Until(o.deadline).Round(time.Second)
+	if left < 0 {
+		left = 0
+	}
+	lines = append(lines, Line{
+		Text:  fmt.Sprintf("│ timeout %s fail-closed", left),
+		Style: StyleMuted,
+	})
 	promptText := "│ [y] run  [n] deny  [esc] deny"
 	lines = append(lines, Line{Text: promptText, Style: StyleStrong})
 

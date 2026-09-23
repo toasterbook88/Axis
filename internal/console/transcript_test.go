@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/toasterbook88/axis/internal/agent"
 )
 
 func TestToolCellCollapsesLongOutput(t *testing.T) {
@@ -81,6 +83,63 @@ func TestQuestionMarkCommitsKeymap(t *testing.T) {
 	if !strings.Contains(KeymapText(), "esc stop turn") || !strings.Contains(SlashPaletteText(), "/plan") {
 		t.Fatal("keymap or palette missing wired commands")
 	}
+}
+
+func TestEnterAndLastExpandCollapsedTool(t *testing.T) {
+	m := NewModel(Options{Now: func() time.Time { return time.Unix(0, 0) }})
+	var lines []string
+	for i := 0; i < 12; i++ {
+		lines = append(lines, "row")
+	}
+	e := NewToolEntry(time.Unix(0, 0), "1", "axis_status", "cluster")
+	e.Result = strings.Join(lines, "\n")
+	updated, _ := m.Update(EntryMsg{Entry: e})
+	m = updated.(Model)
+	if m.lastTool == nil || m.lastTool.Expanded {
+		t.Fatal("last tool was not stored collapsed")
+	}
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.lastTool == nil || !m.lastTool.Expanded {
+		t.Fatal("Enter did not expand the last tool cell")
+	}
+	m.lastTool.Expanded = false
+	m.editor.SetText("/last")
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.lastTool == nil || !m.lastTool.Expanded {
+		t.Fatal("/last did not expand the last tool cell")
+	}
+}
+
+func TestApprovalCountdownFailsClosed(t *testing.T) {
+	reply := make(chan agent.ConfirmResult, 1)
+	overlay := NewApprovalOverlay("run_shell", "echo hi", 22, reply)
+	view := strings.Join(plainLines(overlay.Render(80)), "\n")
+	if !strings.Contains(view, "fail-closed") || !strings.Contains(view, "10m0s") {
+		t.Fatalf("countdown missing from a fresh box:\n%s", view)
+	}
+	overlay.deadline = time.Now().Add(-time.Second)
+	updated, _ := overlay.Update(approvalTickMsg{deadline: overlay.deadline})
+	if updated != nil {
+		t.Fatal("expired box stayed open")
+	}
+	select {
+	case res := <-reply:
+		if res != agent.ConfirmNo {
+			t.Fatalf("timeout result = %v, want deny", res)
+		}
+	default:
+		t.Fatal("timeout did not reply")
+	}
+}
+
+func plainLines(lines []Line) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.Plain()
+	}
+	return out
 }
 
 func TestApprovalCellKeepsOutcome(t *testing.T) {
