@@ -14,7 +14,7 @@ func TestSymbolSearchGoAST(t *testing.T) {
 	writeFile(t, "sample.go", "package main\n\nfunc Foo() {}\n\nfunc (r *Bar) Method() {}\n\ntype Bar struct{ X int }\n\nconst Pi = 3.14\n")
 	r := newTestToolRegistry(t)
 
-	out, err := execTool(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Foo", "path": "."}))
+	out, err := execToolName(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Foo", "path": "."}))
 	if err != nil {
 		t.Fatalf("symbol_search: %v", err)
 	}
@@ -22,17 +22,17 @@ func TestSymbolSearchGoAST(t *testing.T) {
 		t.Fatalf("expected Foo function hit, got: %s", out)
 	}
 
-	out, _ = execTool(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Method", "path": "."}))
+	out, _ = execToolName(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Method", "path": "."}))
 	if !strings.Contains(out, "method Method") {
 		t.Fatalf("expected method hit, got: %s", out)
 	}
 
-	out, _ = execTool(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Bar", "path": "."}))
+	out, _ = execToolName(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Bar", "path": "."}))
 	if !strings.Contains(out, "type Bar") {
 		t.Fatalf("expected type Bar hit, got: %s", out)
 	}
 
-	out, _ = execTool(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Pi", "path": "."}))
+	out, _ = execToolName(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Pi", "path": "."}))
 	if !strings.Contains(out, "Pi") {
 		t.Fatalf("expected Pi hit, got: %s", out)
 	}
@@ -42,7 +42,7 @@ func TestSymbolSearchNoMatch(t *testing.T) {
 	chdirToTempDir(t)
 	writeFile(t, "sample.go", "package main\n\nfunc Foo() {}\n")
 	r := newTestToolRegistry(t)
-	out, _ := execTool(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Nonexistent", "path": "."}))
+	out, _ := execToolName(t, r, "symbol_search", mustJSON(t, map[string]any{"query": "Nonexistent", "path": "."}))
 	if !strings.Contains(out, "No symbols matching") {
 		t.Fatalf("expected no-match message, got: %s", out)
 	}
@@ -55,7 +55,7 @@ func TestWebFetchStripsHTML(t *testing.T) {
 	}))
 	defer srv.Close()
 	r := newTestToolRegistry(t)
-	out, err := execTool(t, r, "web_fetch", mustJSON(t, map[string]any{"url": srv.URL}))
+	out, err := execToolName(t, r, "web_fetch", mustJSON(t, map[string]any{"url": srv.URL}))
 	if err != nil {
 		t.Fatalf("web_fetch: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestWebFetchStripsHTML(t *testing.T) {
 
 func TestWebFetchRejectsNonHTTP(t *testing.T) {
 	r := newTestToolRegistry(t)
-	_, err := execTool(t, r, "web_fetch", mustJSON(t, map[string]any{"url": "file:///etc/passwd"}))
+	_, err := execToolName(t, r, "web_fetch", mustJSON(t, map[string]any{"url": "file:///etc/passwd"}))
 	if err == nil || !strings.Contains(err.Error(), "http or https") {
 		t.Fatalf("expected scheme rejection, got %v", err)
 	}
@@ -82,7 +82,7 @@ func TestWebFetchJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 	r := newTestToolRegistry(t)
-	out, err := execTool(t, r, "web_fetch", mustJSON(t, map[string]any{"url": srv.URL}))
+	out, err := execToolName(t, r, "web_fetch", mustJSON(t, map[string]any{"url": srv.URL}))
 	if err != nil {
 		t.Fatalf("web_fetch json: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestUndoLastRestoresPriorContent(t *testing.T) {
 	writeFile(t, "u.txt", "original\n")
 	r := newTestToolRegistry(t)
 
-	_, err := execTool(t, r, "edit_file", mustJSON(t, map[string]any{
+	_, err := execToolName(t, r, "edit_file", mustJSON(t, map[string]any{
 		"path": "u.txt", "target_content": "original", "replacement_content": "changed",
 	}))
 	if err != nil {
@@ -106,7 +106,7 @@ func TestUndoLastRestoresPriorContent(t *testing.T) {
 		t.Fatalf("precondition: got %q", got)
 	}
 
-	out, err := execTool(t, r, "undo_last", mustJSON(t, map[string]any{}))
+	out, err := execToolName(t, r, "undo_last", mustJSON(t, map[string]any{}))
 	if err != nil {
 		t.Fatalf("undo_last: %v", err)
 	}
@@ -122,14 +122,14 @@ func TestUndoLastDeletesNewFile(t *testing.T) {
 	chdirToTempDir(t)
 	r := newTestToolRegistry(t)
 
-	_, err := execTool(t, r, "write_file", mustJSON(t, map[string]any{"path": "new.txt", "content": "fresh"}))
+	_, err := execToolName(t, r, "write_file", mustJSON(t, map[string]any{"path": "new.txt", "content": "fresh"}))
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, err := os.Stat("new.txt"); err != nil {
 		t.Fatalf("file should exist")
 	}
-	out, err := execTool(t, r, "undo_last", mustJSON(t, map[string]any{}))
+	out, err := execToolName(t, r, "undo_last", mustJSON(t, map[string]any{}))
 	if err != nil {
 		t.Fatalf("undo: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestUndoLastDeletesNewFile(t *testing.T) {
 
 func TestUndoLastEmpty(t *testing.T) {
 	r := newTestToolRegistry(t)
-	out, err := execTool(t, r, "undo_last", mustJSON(t, map[string]any{}))
+	out, err := execToolName(t, r, "undo_last", mustJSON(t, map[string]any{}))
 	if err != nil || !strings.Contains(out, "Nothing to undo") {
 		t.Fatalf("expected empty message, got: %q err %v", out, err)
 	}
@@ -163,13 +163,13 @@ func TestReviewChangesInGitRepo(t *testing.T) {
 	mustRunGit(t, dir, "commit", "-m", "base")
 
 	r := newTestToolRegistry(t)
-	_, err := execTool(t, r, "edit_file", mustJSON(t, map[string]any{
+	_, err := execToolName(t, r, "edit_file", mustJSON(t, map[string]any{
 		"path": "base.txt", "target_content": "v1", "replacement_content": "v2",
 	}))
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
-	out, err := execTool(t, r, "review_changes", mustJSON(t, map[string]any{}))
+	out, err := execToolName(t, r, "review_changes", mustJSON(t, map[string]any{}))
 	if err != nil {
 		t.Fatalf("review_changes: %v", err)
 	}
