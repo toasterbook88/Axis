@@ -93,6 +93,9 @@ type Overlay interface {
 	Done() bool
 }
 
+// RefreshTitleMsg asks the console to repaint the terminal title from Mode.
+type RefreshTitleMsg struct{}
+
 // SetOverlayMsg installs or replaces the active overlay.
 // Passing a nil Overlay dismisses any active overlay.
 type SetOverlayMsg struct {
@@ -173,12 +176,17 @@ type Model struct {
 	// for /thought (committed entries are immutable and not re-rendered).
 	lastThought string
 
+	// lastTool is the most recent tool cell. /last and Enter on an empty
+	// composer reprint it expanded. Scrollback itself is not rewritten.
+	lastTool *ToolEntry
+
 	// tokenEstimate supplies the /usage context estimate; nil disables.
 	tokenEstimate func() int
 
 	// usageStats supplies the session's real accumulated token usage and
 	// how many turns reported it. Nil or zero turns shows the estimate.
 	usageStats func() (in, out, turns int)
+	mode       func() string
 
 	// sessionStart anchors the /usage wall-time line.
 	sessionStart time.Time
@@ -246,13 +254,18 @@ type Options struct {
 	// back to the TokenEstimate.
 	UsageStats func() (in, out, turns int)
 
+	// Mode returns default, edit, or full for the terminal title.
+	Mode func() string
+
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
 }
 
 // Init starts the console.
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return tea.SetWindowTitle("axis agent · " + m.modeLabel())
+}
 
 // NewModel builds a console model.
 func NewModel(opts Options) Model {
@@ -279,9 +292,25 @@ func NewModel(opts Options) Model {
 		stream:        &strings.Builder{},
 		tokenEstimate: opts.TokenEstimate,
 		usageStats:    opts.UsageStats,
+		mode:          opts.Mode,
 		sessionStart:  now(),
 		cancelGrace:   grace,
 		now:           now,
+	}
+}
+
+func (m Model) modeLabel() string {
+	raw := ""
+	if m.mode != nil {
+		raw = m.mode()
+	}
+	switch raw {
+	case "edit":
+		return "edit"
+	case "full", "exec":
+		return "exec"
+	default:
+		return "observe"
 	}
 }
 
@@ -356,11 +385,30 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		if m.stale(msg.Turn) {
 			return m, nil
 		}
+		if te, ok := msg.Entry.(*ToolEntry); ok {
+			cp := *te
+			m.lastTool = &cp
+		}
 		return m, m.commit(msg.Entry)
+
+	case RefreshTitleMsg:
+		title := "axis agent · " + m.modeLabel()
+		if m.overlay != nil {
+			title = "axis agent · action required"
+		}
+		return m, tea.SetWindowTitle(title)
 
 	case SetOverlayMsg:
 		m.overlay = msg.Overlay
-		return m, nil
+		title := "axis agent · " + m.modeLabel()
+		var arm tea.Cmd
+		if m.overlay != nil {
+			title = "axis agent · action required"
+			if box, ok := m.overlay.(*ApprovalOverlay); ok {
+				arm = box.Arm()
+			}
+		}
+		return m, tea.Batch(tea.SetWindowTitle(title), arm)
 
 	case StreamChunkMsg:
 		if m.stale(msg.Turn) {
@@ -418,6 +466,17 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 // expandThought re-commits the most recent thinking block in full. Committed
 // entries are immutable, so the expand is a new block, never an in-place
 // edit of scrollback.
+func (m Model) expandLastTool() (tea.Model, tea.Cmd) {
+	if m.lastTool == nil {
+		return m, m.commit(NewNoticeEntry(m.now(), "no tool cell to expand"))
+	}
+	e := *m.lastTool
+	e.Expanded = true
+	m.lastTool = &e
+	m.overlay = NewPagerOverlay(e.Name, pagerBody(&e))
+	return m, nil
+}
+
 func (m Model) expandThought() tea.Cmd {
 	if m.lastThought == "" {
 		return m.commit(NewNoticeEntry(m.now(), "no thinking block recorded this session"))
@@ -583,6 +642,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.acceptAtCompletion()
 
 	case "enter":
+		switch strings.TrimSpace(m.editor.Text()) {
+		case "?":
+			m.editor.Clear()
+			m.input = ""
+			return m, m.commit(NewNoticeEntry(m.now(), KeymapText()))
+		case "/":
+			m.editor.Clear()
+			m.input = ""
+			return m, m.commit(NewNoticeEntry(m.now(), SlashPaletteText()))
+		case "/last":
+			m.editor.Clear()
+			m.input = ""
+			return m.expandLastTool()
+		}
+		if strings.TrimSpace(m.editor.Text()) == "" && m.lastTool != nil && !m.lastTool.Expanded {
+			return m.expandLastTool()
+		}
 		return m.submitInput()
 
 	case "backspace":
@@ -919,11 +995,13 @@ func (m Model) View() string {
 		lines = append(lines, Line{Text: clipRunes(row, effectiveWidth(m.width)), Style: StyleMuted})
 	}
 
-	switch m.state {
-	case turnRunning:
-		lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " working", Style: StyleMuted})
-	case turnCancelling:
-		lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " cancelling", Style: StyleMuted})
+	if m.overlay == nil {
+		switch m.state {
+		case turnRunning:
+			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " working", Style: StyleMuted})
+		case turnCancelling:
+			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " cancelling", Style: StyleMuted})
+		}
 	}
 
 	if m.overlay != nil {

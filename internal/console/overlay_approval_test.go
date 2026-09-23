@@ -56,16 +56,13 @@ func TestApprovalOverlayApproveAlways(t *testing.T) {
 	overlay := NewApprovalOverlay("status", "check node status", 10, reply)
 
 	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if updated != nil {
-		t.Fatal("expected overlay to dismiss itself on 'a'")
+	if updated == nil {
+		t.Fatal("always-allow is not a grant; overlay must stay open")
 	}
 	select {
 	case res := <-reply:
-		if res != agent.ConfirmAlways {
-			t.Fatalf("expected ConfirmAlways, got %v", res)
-		}
+		t.Fatalf("a must not decide, got %v", res)
 	default:
-		t.Fatal("expected reply on channel")
 	}
 }
 
@@ -74,16 +71,13 @@ func TestApprovalOverlayBlockNever(t *testing.T) {
 	overlay := NewApprovalOverlay("shell", "reboot", 95, reply)
 
 	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
-	if updated != nil {
-		t.Fatal("expected overlay to dismiss itself on 'v'")
+	if updated == nil {
+		t.Fatal("never-allow is not a grant; overlay must stay open")
 	}
 	select {
 	case res := <-reply:
-		if res != agent.ConfirmNever {
-			t.Fatalf("expected ConfirmNever, got %v", res)
-		}
+		t.Fatalf("v must not decide, got %v", res)
 	default:
-		t.Fatal("expected reply on channel")
 	}
 }
 

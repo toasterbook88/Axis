@@ -2,7 +2,9 @@ package console
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,11 +17,29 @@ type ApprovalOverlay struct {
 	tool        string
 	description string
 	score       int
+	why         string
 	reply       chan<- agent.ConfirmResult
 
 	done     bool
 	decision agent.ConfirmResult
 	explain  bool
+
+	// deadline is when an unanswered box fails closed.
+	deadline time.Time
+	// now is the clock Render and the timeout use. Tests replace it.
+	now func() time.Time
+}
+
+// ApprovalFailClosed is how long an unanswered approval may sit before it
+// denies. The console wait and the painted countdown use this one deadline.
+const ApprovalFailClosed = 600 * time.Second
+
+// approvalFailClosed is the unexported alias used inside this package.
+const approvalFailClosed = ApprovalFailClosed
+
+// approvalTickMsg advances the countdown. deadline ties the tick to one box.
+type approvalTickMsg struct {
+	deadline time.Time
 }
 
 // NewApprovalOverlay constructs a modal for operator confirmation.
@@ -29,7 +49,50 @@ func NewApprovalOverlay(tool, description string, score int, reply chan<- agent.
 		description: description,
 		score:       score,
 		reply:       reply,
+		now:         time.Now,
+		deadline:    time.Now().Add(approvalFailClosed),
 	}
+}
+
+func (o *ApprovalOverlay) clock() time.Time {
+	if o.now == nil {
+		return time.Now()
+	}
+	return o.now()
+}
+
+// SetWhy records the safety-gate reason shown next to the score.
+func (o *ApprovalOverlay) SetWhy(why string) {
+	if o == nil {
+		return
+	}
+	o.why = strings.TrimSpace(why)
+}
+
+func (o *ApprovalOverlay) remaining() time.Duration {
+	left := o.deadline.Sub(o.clock())
+	if left < 0 {
+		return 0
+	}
+	return left.Round(time.Second)
+}
+
+// Arm starts the one-second countdown. The console calls it when the box opens.
+func (o *ApprovalOverlay) Arm() tea.Cmd {
+	if o == nil {
+		return nil
+	}
+	if o.deadline.IsZero() {
+		o.deadline = time.Now().Add(approvalFailClosed)
+	}
+	return o.tick()
+}
+
+func (o *ApprovalOverlay) tick() tea.Cmd {
+	deadline := o.deadline
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return approvalTickMsg{deadline: deadline}
+	})
 }
 
 // compile-time check that ApprovalOverlay satisfies Overlay
@@ -38,6 +101,17 @@ var _ Overlay = (*ApprovalOverlay)(nil)
 func (o *ApprovalOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 	if o.done {
 		return nil, nil
+	}
+
+	if tick, ok := msg.(approvalTickMsg); ok {
+		if o.done || !tick.deadline.Equal(o.deadline) {
+			return o, nil
+		}
+		if !o.clock().Before(o.deadline) {
+			o.resolve(agent.ConfirmNo)
+			return nil, nil
+		}
+		return o, o.tick()
 	}
 
 	key, ok := msg.(tea.KeyMsg)
@@ -54,13 +128,9 @@ func (o *ApprovalOverlay) Update(msg tea.Msg) (Overlay, tea.Cmd) {
 		o.resolve(agent.ConfirmNo)
 		return nil, nil
 
-	case "a", "A":
-		o.resolve(agent.ConfirmAlways)
-		return nil, nil
-
-	case "v", "V":
-		o.resolve(agent.ConfirmNever)
-		return nil, nil
+	case "enter":
+		// Enter does not approve.
+		return o, nil
 
 	case "?":
 		o.explain = !o.explain
@@ -128,12 +198,28 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 		Style: riskStyle,
 	})
 
-	if o.score > 0 {
+	why := o.why
+	if why == "" {
+		why = "no gate finding"
+	}
+	lines = append(lines, Line{
+		Text:  fmt.Sprintf("│ safety %d · %s", o.score, clipRunes(why, 72)),
+		Style: StyleMuted,
+	})
+	if argv := clipRunes(strings.TrimSpace(o.description), 160); argv != "" {
 		lines = append(lines, Line{
-			Text:  fmt.Sprintf("│ Safety Score: %d/100", o.score),
-			Style: StyleMuted,
+			Text:  "│ argv " + argv,
+			Style: StylePlain,
 		})
 	}
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		cwd = "."
+	}
+	lines = append(lines, Line{
+		Text:  fmt.Sprintf("│ cwd %s", clipRunes(cwd, 48)),
+		Style: StyleMuted,
+	})
 
 	// Details / description lines
 	lines = append(lines, Line{Text: "│ Details:", Style: StyleMuted})
@@ -161,7 +247,11 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 
 	// Keystroke prompt line
 	lines = append(lines, Line{Text: "│", Style: StyleMuted})
-	promptText := "│ [y]es  [n]o  [a]lways  ne[v]er  [?]explain"
+	lines = append(lines, Line{
+		Text:  fmt.Sprintf("│ timeout %s fail-closed", o.remaining()),
+		Style: StyleMuted,
+	})
+	promptText := "│ [y] run  [n] deny  [esc] deny"
 	lines = append(lines, Line{Text: promptText, Style: StyleStrong})
 
 	// Bottom border

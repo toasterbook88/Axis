@@ -272,6 +272,65 @@ func TestConsoleStampsEachTurnWithItsOwnID(t *testing.T) {
 	}
 }
 
+func TestToolEvidenceBadgeDoesNotCallBootstrapLive(t *testing.T) {
+	boot := toolEvidenceBadge("bootstrap", "pub-boot")
+	if strings.Contains(boot, "live") || !strings.HasPrefix(boot, "bootstrap ") {
+		t.Fatalf("bootstrap badge = %q", boot)
+	}
+	live := toolEvidenceBadge("live-runtime", "pub-live")
+	if live != "live pub-live" {
+		t.Fatalf("live badge = %q", live)
+	}
+	cached := toolEvidenceBadge("daemon-cache", "pub-cache")
+	if cached != "cached pub-cache" {
+		t.Fatalf("cache badge = %q", cached)
+	}
+	if toolEvidenceBadge("", "") != "" {
+		t.Fatal("empty source invented a badge")
+	}
+}
+
+func TestConsoleApprovalRecordsElapsedOnTheLivePath(t *testing.T) {
+	rec := &capture{}
+	var n int
+	start := time.Unix(100, 0)
+	now := func() time.Time {
+		n++
+		return start.Add(time.Duration(n) * time.Second)
+	}
+	confirm := consoleConfirmWithTimeout(context.Background(), func(m tea.Msg) {
+		rec.Send(m)
+		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
+			som.Overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		}
+	}, now, time.Minute)
+	if got := confirm("run_shell", "safety why: write in workspace\necho hi", 22); got != agent.ConfirmYes {
+		t.Fatalf("confirm = %v", got)
+	}
+	var found bool
+	for _, msg := range rec.all() {
+		em, ok := msg.(console.EntryMsg)
+		if !ok || em.Entry == nil {
+			continue
+		}
+		ae, ok := em.Entry.(*console.ApprovalEntry)
+		if !ok {
+			continue
+		}
+		found = true
+		if ae.Elapsed <= 0 {
+			t.Fatalf("live approval cell elapsed = %s", ae.Elapsed)
+		}
+		text := strings.Join(console.PlainAll(ae.Render(100)), "\n")
+		if !strings.Contains(text, "allowed") {
+			t.Fatalf("approval cell missing outcome:\n%s", text)
+		}
+	}
+	if !found {
+		t.Fatal("confirm did not commit an approval cell")
+	}
+}
+
 func TestConsoleApprovalFailsClosedWithoutReadingStdin(t *testing.T) {
 	// Bubble Tea holds stdin in raw mode. A synchronous prompt would corrupt
 	// the input loop, so the console uses an overlay and times out / fails closed
@@ -331,7 +390,7 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 		t.Fatalf("expected ConfirmNo, got %v", got)
 	}
 
-	// Approving 'a' delivers ConfirmAlways
+	// 'a' is not a standing grant. The box stays open until the timeout denies.
 	confirmAlways := consoleConfirmWithTimeout(context.Background(), func(m tea.Msg) {
 		rec.Send(m)
 		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
@@ -339,8 +398,8 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 		}
 	}, consoleClock, time.Second)
 
-	if got := confirmAlways("shell", "status", 15); got != agent.ConfirmAlways {
-		t.Fatalf("expected ConfirmAlways, got %v", got)
+	if got := confirmAlways("shell", "status", 15); got != agent.ConfirmNo {
+		t.Fatalf("a must not grant always, got %v", got)
 	}
 }
 

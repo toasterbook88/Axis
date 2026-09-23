@@ -74,6 +74,7 @@ func TestParallelToolDispatchRunsConcurrently(t *testing.T) {
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
 	// Register the slow_probe tool on the existing registry.
+	a.tools.allowExtra("slow_probe")
 	a.tools.add("slow_probe",
 		"A test tool that sleeps briefly.",
 		json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}`),
@@ -141,6 +142,7 @@ func TestParallelDispatchPreservesToolCallOrder(t *testing.T) {
 		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
+	a.tools.allowExtra("idx_probe")
 	a.tools.add("idx_probe",
 		"Returns the index passed in.",
 		json.RawMessage(`{"type":"object","properties":{"i":{"type":"integer"}},"required":["i"]}`),
@@ -189,6 +191,7 @@ func TestDryRunSkipsConcurrentDispatch(t *testing.T) {
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
 	called := int32(0)
+	a.tools.allowExtra("slow_probe")
 	a.tools.add("slow_probe", "test", json.RawMessage(`{"type":"object"}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			atomic.AddInt32(&called, 1)

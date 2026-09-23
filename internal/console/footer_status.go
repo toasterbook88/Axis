@@ -24,10 +24,23 @@ type StatusFooterConfig struct {
 	UsageStats func() (in, out, turns int)
 
 	// Mode returns the autonomy mode (e.g. "default", "edit", "full").
+	// The footer prints observe, edit, or exec. It never prints a fleet fraction.
 	Mode func() string
 
-	// Fleet returns the cluster fleet reachability summary (e.g. "10/10 ok").
-	Fleet func() string
+	// Snapshot returns a real snapshot age or publication id.
+	// Empty means the footer prints "no snapshot".
+	Snapshot func() string
+}
+
+func chromeMode(mode string) string {
+	switch mode {
+	case "edit":
+		return "edit"
+	case "full", "exec":
+		return "exec"
+	default:
+		return "observe"
+	}
 }
 
 // StatusFooter renders a persistent 1-line situational awareness footer below the editor.
@@ -98,16 +111,15 @@ func (f *StatusFooter) Render(width int) []Line {
 		}
 	}
 
-	mode := "default"
+	mode := chromeMode("")
 	if f.cfg.Mode != nil {
-		if m := f.cfg.Mode(); m != "" {
-			mode = m
-		}
+		mode = chromeMode(f.cfg.Mode())
 	}
-
-	fleet := ""
-	if f.cfg.Fleet != nil {
-		fleet = f.cfg.Fleet()
+	snap := "no snapshot"
+	if f.cfg.Snapshot != nil {
+		if s := strings.TrimSpace(f.cfg.Snapshot()); s != "" {
+			snap = s
+		}
 	}
 
 	usageIn, usageOut, usageTurns := 0, 0, 0
@@ -134,14 +146,9 @@ func (f *StatusFooter) Render(width int) []Line {
 		} else if mode != "" {
 			segments = append(segments, "mode: "+mode)
 		}
-		if fleet != "" {
-			segments = append(segments, "fleet: "+fleet)
-		}
+		segments = append(segments, snap)
 	} else if width >= 60 {
-		segments = append(segments, "model: "+model, ctxMedium)
-		if fleet != "" {
-			segments = append(segments, "fleet: "+fleet)
-		}
+		segments = append(segments, "model: "+model, ctxMedium, snap)
 	} else if width >= 40 {
 		segments = append(segments, "model: "+model, ctxCompact)
 	} else {

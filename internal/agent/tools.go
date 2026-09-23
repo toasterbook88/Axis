@@ -38,6 +38,10 @@ type ToolRegistry struct {
 	// checkpoints snapshots file content before each mutation so undo_last
 	// and review_changes can recover prior state within a session.
 	checkpoints *checkpointer
+	scope       ToolScope
+	// extraAllowed grants visibility to dynamically registered tool names
+	// (session-added tools, test probes) on top of the static scope lists.
+	extraAllowed map[string]bool
 }
 
 // ToolExecutor runs a tool and returns its string result.
@@ -112,7 +116,7 @@ type ShellRunner func(context.Context, string) (string, error)
 
 // NewToolRegistry creates the default set of agent tools.
 func NewToolRegistry(tc *ToolContext) *ToolRegistry {
-	r := &ToolRegistry{executors: make(map[string]ToolExecutor), todos: newTodoStore(), checkpoints: newCheckpointer()}
+	r := &ToolRegistry{executors: make(map[string]ToolExecutor), todos: newTodoStore(), checkpoints: newCheckpointer(), scope: ScopeObserve}
 	r.registerStatus(tc)
 	r.registerFacts(tc)
 	r.registerPlace(tc)
@@ -146,17 +150,78 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	return r
 }
 
-// Defs returns Ollama-compatible tool definitions for the /api/chat request.
-func (r *ToolRegistry) Defs() []chat.ToolDef {
-	return r.defs
+// SetScope changes which registered tools Defs and Execute will offer.
+// The default is observe.
+func (r *ToolRegistry) SetScope(scope ToolScope) {
+	if scope == "" {
+		scope = ScopeObserve
+	}
+	r.scope = scope
 }
 
-// Execute dispatches a tool call. Returns an error message string (not a Go
-// error) so the agent loop can feed it back to the model for self-correction.
+// allowExtra grants visibility for a dynamically registered tool that is
+// not in the static scope lists (session-added tools, test probes). It
+// survives scope changes but cannot override the never or PR2-hidden sets.
+func (r *ToolRegistry) allowExtra(name string) {
+	if r.extraAllowed == nil {
+		r.extraAllowed = make(map[string]bool)
+	}
+	r.extraAllowed[name] = true
+}
+
+func (r *ToolRegistry) extraVisible(name string) bool {
+	if r.extraAllowed == nil {
+		return false
+	}
+	_, registered := r.executors[name]
+	return r.extraAllowed[name] && registered
+}
+
+// Defs returns the tool definitions the model may see in the current scope.
+func (r *ToolRegistry) Defs() []chat.ToolDef {
+	if r == nil {
+		return nil
+	}
+	out := make([]chat.ToolDef, 0, len(r.defs))
+	for _, def := range r.defs {
+		if r.visible(def.Function.Name) {
+			out = append(out, def)
+		}
+	}
+	return out
+}
+
+// visible reports whether the model may call name in the current scope.
+// Never/pr2-hidden/dropped names deny before any dynamic grant applies.
+func (r *ToolRegistry) visible(name string) bool {
+	if name == "" || neverTool(name) || pr2Hidden(name) || name == "axis_summary" {
+		return false
+	}
+	if r.extraVisible(name) {
+		return true
+	}
+	return toolVisible(name, r.scope)
+}
+
+// Visible reports whether the model may call name in the current scope.
+func (r *ToolRegistry) Visible(name string) bool {
+	if r == nil {
+		return false
+	}
+	return r.visible(name)
+}
+
+// Execute dispatches a registered tool. Model-facing calls go through
+// Agent dispatch, which rejects names that are not Visible. Operator
+// surfaces (slash commands, harness scripts) may call scope-hidden tools
+// here, but the never set and the PR2-hidden set deny unconditionally.
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if neverTool(name) || pr2Hidden(name) {
+		return "", fmt.Errorf("tool %q not available in this mode", name)
+	}
 	exec, ok := r.executors[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool %q — available tools: %s", name, r.availableNames())
+		return "", fmt.Errorf("unknown tool %q — available tools: %s", name, r.visibleNames())
 	}
 	return exec(ctx, args)
 }
@@ -167,10 +232,12 @@ func (r *ToolRegistry) HasTool(name string) bool {
 	return ok
 }
 
-func (r *ToolRegistry) availableNames() string {
-	names := make([]string, 0, len(r.executors))
-	for n := range r.executors {
-		names = append(names, n)
+func (r *ToolRegistry) visibleNames() string {
+	names := make([]string, 0, len(r.defs))
+	for _, def := range r.defs {
+		if r.visible(def.Function.Name) {
+			names = append(names, def.Function.Name)
+		}
 	}
 	return strings.Join(names, ", ")
 }
@@ -453,7 +520,7 @@ func DefaultSafetyGate(tc *ToolContext) ShellSafetyGate {
 		if result.Blocked {
 			return false, fmt.Sprintf("blocked (score %d/100): %s", result.Score, result.Reason), result.Score
 		}
-		return true, "", result.Score
+		return true, result.Reason, result.Score
 	}
 }
 

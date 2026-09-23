@@ -451,6 +451,12 @@ type ToolEntry struct {
 	// Elapsed is the execution wall time carried by the completion events;
 	// zero for call-only entries.
 	Elapsed time.Duration
+
+	// Badge is a cache/live marker such as "cached" or "live".
+	Badge string
+
+	// Expanded shows the full result. Long results stay collapsed until set.
+	Expanded bool
 }
 
 // NewToolEntry records a tool call at t.
@@ -462,6 +468,12 @@ func (e *ToolEntry) Render(width int) []Line {
 	head := e.Name
 	if e.Summary != "" {
 		head += " " + e.Summary
+	}
+	if e.Elapsed > 0 {
+		head += " " + e.Elapsed.Truncate(time.Millisecond).String()
+	}
+	if e.Badge != "" {
+		head += " " + e.Badge
 	}
 	style := StyleAccent
 	if e.Err != nil {
@@ -484,11 +496,21 @@ func (e *ToolEntry) Render(width int) []Line {
 	case e.Err != nil:
 		out = append(out, renderContinuation(e.base, width, "error: "+e.Err.Error(), StyleBad)...)
 	case e.Result != "":
+		result := e.Result
+		if e.Name == "axis_place" && !strings.Contains(result, "advisory") {
+			result += "\nadvisory — not reserved"
+		}
+		lines := strings.Split(result, "\n")
+		const collapseAfter = 8
+		if !e.Expanded && len(lines) > collapseAfter {
+			hidden := len(lines) - collapseAfter
+			lines = append(lines[:collapseAfter], fmt.Sprintf("... %d more lines", hidden))
+		}
 		// Diff-sign coloring applies only to real diff fragments, which the
 		// file tools always introduce with their removed/added count line —
 		// a result that merely begins with "-" is not a patch.
-		isDiff := strings.Contains(e.Result, " removed, ") && strings.Contains(e.Result, " added")
-		for _, line := range strings.Split(e.Result, "\n") {
+		isDiff := strings.Contains(result, " removed, ") && strings.Contains(result, " added")
+		for _, line := range lines {
 			style := StyleMuted
 			if isDiff {
 				switch {
@@ -525,6 +547,7 @@ type ApprovalEntry struct {
 	Score    int
 	Reason   string
 	Decision Decision
+	Elapsed  time.Duration
 }
 
 // NewApprovalEntry records a resolved approval at t.
@@ -550,6 +573,14 @@ func (e *ApprovalEntry) Render(width int) []Line {
 		style = StyleBad
 	}
 	out := renderBody(e.base, width, head, style)
+	if e.Elapsed > 0 {
+		label := "allowed"
+		if e.Decision == DecisionDenied || e.Decision == DecisionBlocked {
+			label = "denied"
+		}
+		out = append(out, renderContinuation(e.base, width,
+			fmt.Sprintf("%s %s", label, e.Elapsed.Truncate(time.Millisecond)), StyleMuted)...)
+	}
 
 	// The score is always rendered numerically with its reason: a binary
 	// pass/fail would hide the risky-but-allowed band below the hard block.

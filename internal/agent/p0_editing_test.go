@@ -18,6 +18,29 @@ func execTool(t *testing.T, r *ToolRegistry, name string, args string) (string, 
 	return r.Execute(context.Background(), name, json.RawMessage(args))
 }
 
+// execDirect invokes a registered executor, bypassing the schema-scope
+// gate. Use ONLY for tests that exercise a hidden tool's behavior (never /
+// PR2-hidden tools whose executors stay registered for their safety routes
+// and the later guarded-exec PR).
+func execDirect(t *testing.T, r *ToolRegistry, name string, args string) (string, error) {
+	t.Helper()
+	exec, ok := r.executors[name]
+	if !ok {
+		t.Fatalf("tool %q not registered", name)
+	}
+	return exec(context.Background(), json.RawMessage(args))
+}
+
+// execDirectRaw is execDirect with pre-marshaled JSON arguments.
+func execDirectRaw(t *testing.T, r *ToolRegistry, name string, args json.RawMessage) (string, error) {
+	t.Helper()
+	exec, ok := r.executors[name]
+	if !ok {
+		t.Fatalf("tool %q not registered", name)
+	}
+	return exec(context.Background(), args)
+}
+
 // chdirToTempDir changes into a fresh temp dir (so validateToolPath's CWD
 // restriction is satisfied) and restores the original dir on cleanup.
 func chdirToTempDir(t *testing.T) string {

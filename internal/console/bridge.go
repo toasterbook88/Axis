@@ -158,6 +158,18 @@ type Bridge struct {
 	// verbose flag this is purely a rendering choice; the observer always
 	// receives the full event.
 	Verbose bool
+
+	// evidence returns a cache/live badge and a one-line intent for a tool.
+	// Nil leaves both empty.
+	evidence func(name string) (badge, intent string)
+}
+
+// SetEvidence attaches the snapshot label used when a tool cell is committed.
+func (b *Bridge) SetEvidence(fn func(name string) (badge, intent string)) {
+	if b == nil {
+		return
+	}
+	b.evidence = fn
 }
 
 // NewBridge returns an agent.Observer for one turn. Like the stream writer it
@@ -225,6 +237,9 @@ func (b *Bridge) ToolSucceeded(id, name, summary string, resultLen int, elapsed 
 	e := NewToolEntry(b.now(), id, name, "")
 	e.Result = summary
 	e.Elapsed = elapsed
+	if b.evidence != nil {
+		e.Badge, e.Summary = b.evidence(name)
+	}
 	if b.Verbose {
 		e.Result = fmt.Sprintf("%s (%d bytes)", summary, resultLen)
 	}
