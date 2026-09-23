@@ -161,7 +161,8 @@ func (r *ToolRegistry) SetScope(scope ToolScope) {
 
 // allowExtra grants visibility for a dynamically registered tool that is
 // not in the static scope lists (session-added tools, test probes). It
-// survives scope changes but cannot override the never or PR2-hidden sets.
+// survives scope changes but cannot override the never set, and cannot
+// elevate exec-tier tools outside ScopeExec.
 func (r *ToolRegistry) allowExtra(name string) {
 	if r.extraAllowed == nil {
 		r.extraAllowed = make(map[string]bool)
@@ -192,9 +193,13 @@ func (r *ToolRegistry) Defs() []chat.ToolDef {
 }
 
 // visible reports whether the model may call name in the current scope.
-// Never/pr2-hidden/dropped names deny before any dynamic grant applies.
+// Never-set, dropped names, and exec-tier tools outside ScopeExec deny
+// before any dynamic extra grant applies.
 func (r *ToolRegistry) visible(name string) bool {
 	if name == "" || neverTool(name) || name == "axis_summary" {
+		return false
+	}
+	if execTool(name) && r.scope != ScopeExec {
 		return false
 	}
 	if r.extraVisible(name) {

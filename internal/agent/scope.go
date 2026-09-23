@@ -3,8 +3,8 @@ package agent
 import "strings"
 
 // ToolScope is the set of tools the model may see and call.
-// Observe is the default. Edit adds workspace writes and run_shell.
-// Exec is the guarded-exec grant: edit plus axis_run_task.
+// Observe is the default. Edit adds workspace writes and review tools.
+// Exec is the guarded-exec grant: edit plus run_shell and axis_run_task.
 // Tools in the never set stay registered for safety routes but are
 // never advertised and never dispatched.
 type ToolScope string
@@ -29,7 +29,7 @@ func ScopeFor(mode AutonomyMode) ToolScope {
 	}
 }
 
-// DisplayScope is the footer name for a mode. It is observe or edit,
+// DisplayScope is the footer name for a mode. It is observe, edit, or exec,
 // never a raw autonomy string and never a fleet fraction.
 func DisplayScope(mode AutonomyMode) string {
 	switch ScopeFor(mode) {

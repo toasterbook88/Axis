@@ -160,6 +160,49 @@ func TestUnknownNameFailsClosed(t *testing.T) {
 	if r.Visible("spawn_subagent") {
 		t.Fatal("allowExtra must not override the never set")
 	}
+
+	// A grant cannot elevate an exec-tier tool outside ScopeExec.
+	r.SetScope(ScopeObserve)
+	r.allowExtra("run_shell")
+	if r.Visible("run_shell") {
+		t.Fatal("allowExtra must not elevate run_shell at observe scope")
+	}
+	r.SetScope(ScopeEdit)
+	if r.Visible("run_shell") {
+		t.Fatal("allowExtra must not elevate run_shell at edit scope")
+	}
+	r.SetScope(ScopeExec)
+	if !r.Visible("run_shell") {
+		t.Fatal("run_shell must be visible at exec scope")
+	}
+
+	r.SetScope(ScopeObserve)
+	r.allowExtra("axis_run_task")
+	if r.Visible("axis_run_task") {
+		t.Fatal("allowExtra must not elevate axis_run_task at observe scope")
+	}
+	r.SetScope(ScopeEdit)
+	if r.Visible("axis_run_task") {
+		t.Fatal("allowExtra must not elevate axis_run_task at edit scope")
+	}
+	r.SetScope(ScopeExec)
+	if !r.Visible("axis_run_task") {
+		t.Fatal("axis_run_task must be visible at exec scope")
+	}
+
+	// Defs must also omit exec tools at observe and edit even if allowExtra was set.
+	r.SetScope(ScopeObserve)
+	for _, d := range r.Defs() {
+		if d.Function.Name == "run_shell" || d.Function.Name == "axis_run_task" {
+			t.Fatalf("exec tool %s must not appear in Defs at observe scope", d.Function.Name)
+		}
+	}
+	r.SetScope(ScopeEdit)
+	for _, d := range r.Defs() {
+		if d.Function.Name == "run_shell" || d.Function.Name == "axis_run_task" {
+			t.Fatalf("exec tool %s must not appear in Defs at edit scope", d.Function.Name)
+		}
+	}
 }
 
 func TestDefaultSafetyGateKeepsPromptReason(t *testing.T) {
