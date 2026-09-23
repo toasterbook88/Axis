@@ -331,7 +331,7 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 		t.Fatalf("expected ConfirmNo, got %v", got)
 	}
 
-	// Approving 'a' delivers ConfirmAlways
+	// 'a' is not a standing grant. The box stays open until the timeout denies.
 	confirmAlways := consoleConfirmWithTimeout(context.Background(), func(m tea.Msg) {
 		rec.Send(m)
 		if som, ok := m.(console.SetOverlayMsg); ok && som.Overlay != nil {
@@ -339,8 +339,8 @@ func TestConsoleApprovalInteractiveDecisions(t *testing.T) {
 		}
 	}, consoleClock, time.Second)
 
-	if got := confirmAlways("shell", "status", 15); got != agent.ConfirmAlways {
-		t.Fatalf("expected ConfirmAlways, got %v", got)
+	if got := confirmAlways("shell", "status", 15); got != agent.ConfirmNo {
+		t.Fatalf("a must not grant always, got %v", got)
 	}
 }
 
