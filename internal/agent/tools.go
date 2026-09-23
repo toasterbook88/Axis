@@ -482,7 +482,7 @@ func DefaultSafetyGate(tc *ToolContext) ShellSafetyGate {
 		if result.Blocked {
 			return false, fmt.Sprintf("blocked (score %d/100): %s", result.Score, result.Reason), result.Score
 		}
-		return true, "", result.Score
+		return true, result.Reason, result.Score
 	}
 }
 

@@ -658,6 +658,27 @@ const defaultApprovalTimeout = console.ApprovalFailClosed
 // It never reads stdin: Bubble Tea holds the terminal in raw mode, so a synchronous prompt
 // would corrupt the input loop and the display. Instead, it dispatches an ApprovalOverlay
 // to the program's event loop and waits on a Go channel for the operator's decision.
+// toolEvidenceBadge labels a tool cell from the publication source.
+// live-runtime is the only source called live. A bootstrap skeleton is not live.
+func toolEvidenceBadge(source, pubID string) string {
+	var badge string
+	switch source {
+	case "live-runtime":
+		badge = "live"
+	case "bootstrap":
+		badge = "bootstrap"
+	default:
+		if source == "" && pubID == "" {
+			return ""
+		}
+		badge = "cached"
+	}
+	if pubID != "" {
+		badge += " " + pubID
+	}
+	return strings.TrimSpace(badge)
+}
+
 func splitSafetyWhy(desc string) (why, argv string) {
 	const prefix = "safety why: "
 	if strings.HasPrefix(desc, prefix) {
@@ -940,6 +961,9 @@ func runAgentConsole(
 			fleet.nodes = nodes
 		} else {
 			fleet.summary = "unknown"
+			fleet.pubID = ""
+			fleet.source = ""
+			fleet.assembled = time.Time{}
 		}
 	}
 
@@ -960,17 +984,7 @@ func runAgentConsole(
 			"axis_facts":  "local facts",
 			"axis_place":  "placement",
 		}[name]
-		if fleet.pubID == "" && fleet.assembled.IsZero() {
-			return "", intent
-		}
-		badge := "live"
-		if strings.Contains(fleet.source, "cache") {
-			badge = "cached"
-		}
-		if fleet.pubID != "" {
-			badge += " " + fleet.pubID
-		}
-		return badge, intent
+		return toolEvidenceBadge(fleet.source, fleet.pubID), intent
 	}
 
 	footer := console.NewStatusFooter(console.StatusFooterConfig{

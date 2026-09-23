@@ -73,6 +73,40 @@ func TestExecScopeAddsRunTaskOnly(t *testing.T) {
 	}
 }
 
+func TestDefaultSafetyGateKeepsPromptReason(t *testing.T) {
+	allow, reason, score := DefaultSafetyGate(nil)("git push origin main")
+	if !allow {
+		t.Fatal("git push should stay in the prompt band, not block")
+	}
+	if reason == "" || score == 0 {
+		t.Fatalf("allow path dropped the gate reason: allow=%v reason=%q score=%d", allow, reason, score)
+	}
+	var got string
+	a := &Agent{
+		safety: DefaultSafetyGate(nil),
+		output: io.Discard,
+		tools:  NewToolRegistry(NewToolContext(&RuntimeView{}, nil)),
+		confirm: func(tool, desc string, sc int) ConfirmResult {
+			got = desc
+			if sc != score {
+				t.Errorf("confirm score = %d, gate score = %d", sc, score)
+			}
+			return ConfirmNo
+		},
+	}
+	a.tools.SetScope(ScopeEdit)
+	_, err := a.dispatchShell(context.Background(), json.RawMessage(`{"command":"git push origin main"}`))
+	if err == nil {
+		t.Fatal("expected the operator denial to return")
+	}
+	if !strings.Contains(got, "safety why: "+strings.TrimSpace(reason)) || !strings.Contains(got, "git push origin main") {
+		t.Fatalf("confirm description = %q, want the gate reason %q and the command", got, reason)
+	}
+	if strings.Contains(got, "no gate finding") {
+		t.Fatalf("confirm description invented an empty finding: %q", got)
+	}
+}
+
 func TestHiddenToolDoesNotRun(t *testing.T) {
 	a := &Agent{
 		tools:  NewToolRegistry(NewToolContext(&RuntimeView{}, nil)),

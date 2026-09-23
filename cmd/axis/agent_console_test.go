@@ -272,6 +272,24 @@ func TestConsoleStampsEachTurnWithItsOwnID(t *testing.T) {
 	}
 }
 
+func TestToolEvidenceBadgeDoesNotCallBootstrapLive(t *testing.T) {
+	boot := toolEvidenceBadge("bootstrap", "pub-boot")
+	if strings.Contains(boot, "live") || !strings.HasPrefix(boot, "bootstrap ") {
+		t.Fatalf("bootstrap badge = %q", boot)
+	}
+	live := toolEvidenceBadge("live-runtime", "pub-live")
+	if live != "live pub-live" {
+		t.Fatalf("live badge = %q", live)
+	}
+	cached := toolEvidenceBadge("daemon-cache", "pub-cache")
+	if cached != "cached pub-cache" {
+		t.Fatalf("cache badge = %q", cached)
+	}
+	if toolEvidenceBadge("", "") != "" {
+		t.Fatal("empty source invented a badge")
+	}
+}
+
 func TestConsoleApprovalRecordsElapsedOnTheLivePath(t *testing.T) {
 	rec := &capture{}
 	var n int
