@@ -12,7 +12,7 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		Mode:       func() string { return "default" },
-		Fleet:      func() string { return "10/10 ok" },
+		Snapshot:   func() string { return "snap pub-1" },
 	}
 	footer := NewStatusFooter(cfg)
 
@@ -24,8 +24,9 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 	text80 := lines80[0].Text
 	if !strings.Contains(text80, "model: qwen3.8-9b") ||
 		!strings.Contains(text80, "context: [") ||
-		!strings.Contains(text80, "mode: default") ||
-		!strings.Contains(text80, "fleet: 10/10 ok") {
+		!strings.Contains(text80, "mode: observe") ||
+		!strings.Contains(text80, "snap pub-1") ||
+		strings.Contains(text80, "fleet:") {
 		t.Fatalf("wide footer missing segments: %s", text80)
 	}
 	if utf8.RuneCountInString(text80) != 100 {
@@ -36,8 +37,9 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 	lines70 := footer.Render(70)
 	text70 := lines70[0].Text
 	if !strings.Contains(text70, "model: qwen3.8-9b") ||
-		!strings.Contains(text70, "fleet: 10/10 ok") ||
-		strings.Contains(text70, "mode: default") {
+		!strings.Contains(text70, "snap pub-1") ||
+		strings.Contains(text70, "fleet:") ||
+		strings.Contains(text70, "mode: observe") {
 		t.Fatalf("medium footer unexpected segments: %s", text70)
 	}
 	if utf8.RuneCountInString(text70) != 70 {
@@ -66,20 +68,23 @@ func TestStatusFooterShowsRealUsageWithoutHijackingContextBar(t *testing.T) {
 		MaxTokens:  func() int { return 32768 },
 		UsageStats: func() (int, int, int) { return 1200, 340, 2 },
 		Mode:       func() string { return "default" },
-		Fleet:      func() string { return "10/10 ok" },
+		Snapshot:   func() string { return "" },
 	}
 	text := NewStatusFooter(cfg).Render(120)[0].Text
 	if !strings.Contains(text, "context: [") || !strings.Contains(text, "(9.2k/32k)") {
 		t.Fatalf("context occupancy missing from footer: %s", text)
 	}
-	if !strings.Contains(text, "usage: 1.2k/340 · default") {
+	if !strings.Contains(text, "usage: 1.2k/340 · observe") {
 		t.Fatalf("real usage+mode segment missing: %s", text)
 	}
-	if strings.Contains(text, "mode: default") {
+	if strings.Contains(text, "mode: observe") {
 		t.Fatalf("mode should ride the usage segment, not take its own column: %s", text)
 	}
-	if !strings.Contains(text, "fleet: 10/10 ok") {
-		t.Fatalf("fleet missing when usage is shown: %s", text)
+	if strings.Contains(text, "fleet:") {
+		t.Fatalf("footer showed a fleet fraction: %s", text)
+	}
+	if !strings.Contains(text, "no snapshot") {
+		t.Fatalf("empty snapshot should read no snapshot: %s", text)
 	}
 	// 1200+340 vs 32768 would be ~4%. Occupancy 9200/32768 is ~28%.
 	if strings.Contains(text, " 4%") {
@@ -96,15 +101,17 @@ func TestStatusFooterOmitsUsageWhenBackendReportedNone(t *testing.T) {
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		UsageStats: func() (int, int, int) { return 0, 0, 0 },
-		Mode:       func() string { return "default" },
-		Fleet:      func() string { return "10/10 ok" },
+		Mode:       func() string { return "edit" },
 	}
 	text := NewStatusFooter(cfg).Render(100)[0].Text
 	if strings.Contains(text, "usage:") {
 		t.Fatalf("usage segment fabricated from zero turns: %s", text)
 	}
-	if !strings.Contains(text, "mode: default") {
+	if !strings.Contains(text, "mode: edit") {
 		t.Fatalf("mode missing when usage is absent: %s", text)
+	}
+	if strings.Contains(text, "fleet:") {
+		t.Fatalf("footer showed a fleet fraction: %s", text)
 	}
 }
 
@@ -114,14 +121,14 @@ func TestStatusFooterHidesUsageOnMediumWidth(t *testing.T) {
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		UsageStats: func() (int, int, int) { return 1200, 340, 2 },
-		Fleet:      func() string { return "10/10 ok" },
+		Snapshot:   func() string { return "snap pub-1" },
 	}
 	text := NewStatusFooter(cfg).Render(70)[0].Text
 	if strings.Contains(text, "usage:") {
 		t.Fatalf("usage segment should wait for >=80 cols: %s", text)
 	}
-	if !strings.Contains(text, "fleet: 10/10 ok") {
-		t.Fatalf("medium footer dropped fleet: %s", text)
+	if !strings.Contains(text, "snap pub-1") || strings.Contains(text, "fleet:") {
+		t.Fatalf("medium footer chrome: %s", text)
 	}
 }
 
