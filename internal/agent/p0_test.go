@@ -239,16 +239,17 @@ func TestCompactContextSummarizesOldTurns(t *testing.T) {
 	if after >= before {
 		t.Fatalf("expected token count to drop after compaction: before=%d after=%d", before, after)
 	}
-	// The summary message must be present.
+	// The summary message must be present, carrying the user role so the
+	// wire payload always contains a user message for template guards.
 	found := false
 	for _, m := range a.conv.Messages() {
-		if m.Role == chat.RoleSystem && strings.Contains(m.Content, "Compacted earlier conversation") {
+		if m.Role == chat.RoleUser && strings.Contains(m.Content, "Compacted earlier conversation") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("compacted summary message not found in conversation")
+		t.Fatalf("compacted summary message (user role) not found in conversation")
 	}
 	// A summarization backend call must have been made (nil tools).
 	sawSummarizeCall := false
@@ -284,5 +285,74 @@ func TestCompactContextNoopBelowThreshold(t *testing.T) {
 	}
 	if len(bk.toolsSeen) != 0 {
 		t.Fatalf("no backend call expected below threshold, got %v", bk.toolsSeen)
+	}
+}
+
+func TestCompactContextKeepsUserMessageOnWire(t *testing.T) {
+	// Regression test for the Jinja "No user query found in messages" 500:
+	// compacting [system, user, assistant/tool × N] must leave a user-role
+	// message in the conversation and user content on the wire, even though
+	// the original user turn falls inside the compacted range.
+	bk := &scriptedBackend{}
+	a := New(Config{
+		Backend:     bk,
+		MaxTurns:    2,
+		MaxTokens:   200,
+		Output:      io.Discard,
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+	a.conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys prompt"})
+	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "initial query"})
+	big := strings.Repeat("tool output content ", 40) // ~760 chars per message
+	for i := 0; i < 6; i++ {
+		a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "ok"})
+		a.conv.Append(chat.Message{Role: chat.RoleTool, ToolCallID: "c", Content: big})
+	}
+	bk.responses = []chat.Message{{Role: chat.RoleAssistant, Content: "SUMMARY: did things."}}
+
+	if err := a.compactContext(context.Background()); err != nil {
+		t.Fatalf("compactContext failed: %v", err)
+	}
+	// The compacted summary itself must carry the user role.
+	foundUserSummary := false
+	for _, m := range a.conv.Messages() {
+		if m.Role == chat.RoleUser && strings.Contains(m.Content, "Compacted earlier conversation") {
+			foundUserSummary = true
+			break
+		}
+	}
+	if !foundUserSummary {
+		t.Fatalf("compacted summary with user role not found: %+v", a.conv.Messages())
+	}
+	// The wire form must contain non-empty user content for template guards:
+	// with the summary carrying the user role, at least one user message
+	// survives regardless of what compaction deleted.
+	if !hasUserRole(a.conv.Messages()) {
+		t.Fatalf("conversation contains no user role after compaction")
+	}
+	sawUserContent := false
+	for _, m := range a.conv.Messages() {
+		if m.Role == chat.RoleUser && strings.TrimSpace(m.Content) != "" {
+			sawUserContent = true
+			break
+		}
+	}
+	if !sawUserContent {
+		t.Fatalf("conversation contains no user content after compaction")
+	}
+}
+
+func TestHasUserRole(t *testing.T) {
+	if hasUserRole(nil) {
+		t.Fatalf("empty sequence must report no user role")
+	}
+	if hasUserRole([]chat.Message{{Role: chat.RoleSystem, Content: "s"}}) {
+		t.Fatalf("system-only sequence must report no user role")
+	}
+	if !hasUserRole([]chat.Message{
+		{Role: chat.RoleSystem, Content: "s"},
+		{Role: chat.RoleUser, Content: "q"},
+	}) {
+		t.Fatalf("sequence with user message must report user role")
 	}
 }
