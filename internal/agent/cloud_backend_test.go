@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -422,5 +423,91 @@ func TestCloudBackend_Anthropic_MultiTurnEstimate(t *testing.T) {
 	}
 	if cost <= 0 {
 		t.Errorf("expected positive cost after two turns, got %f", cost)
+	}
+}
+
+func TestCloudBackend_OpenAI_ConsolidatesSystemMessages(t *testing.T) {
+	var receivedMessages []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if rawMsgs, ok := body["messages"].([]any); ok {
+			for _, rm := range rawMsgs {
+				if m, ok := rm.(map[string]any); ok {
+					receivedMessages = append(receivedMessages, m)
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewOpenAICompatibleBackend(server.URL, "test-model", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msgs := []chat.Message{
+		{Role: chat.RoleSystem, Content: "base sys prompt"},
+		{Role: chat.RoleSystem, Content: "tools available"},
+		{Role: chat.RoleSystem, Content: "cortex memory instructions"},
+		{Role: chat.RoleUser, Content: "hi"},
+	}
+
+	_, err = backend.ChatStream(context.Background(), msgs, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+
+	if len(receivedMessages) != 2 {
+		t.Fatalf("expected 2 wire messages (1 merged system + 1 user), got %d", len(receivedMessages))
+	}
+	if receivedMessages[0]["role"] != "system" {
+		t.Errorf("expected first message role to be system, got %v", receivedMessages[0]["role"])
+	}
+	expectedContent := "base sys prompt\n\ntools available\n\ncortex memory instructions"
+	if receivedMessages[0]["content"] != expectedContent {
+		t.Errorf("expected merged system content %q, got %q", expectedContent, receivedMessages[0]["content"])
+	}
+	if receivedMessages[1]["role"] != "user" {
+		t.Errorf("expected second message role to be user, got %v", receivedMessages[1]["role"])
+	}
+}
+
+func TestCloudBackend_Anthropic_JoinsMultipleSystemMessages(t *testing.T) {
+	var receivedSystem string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if sys, ok := body["system"].(string); ok {
+			receivedSystem = sys
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"ok\"}}\n\n")
+	}))
+	defer server.Close()
+
+	backend, err := NewCloudBackendWithKey("anthropic", "anthropic", server.URL, "mock-key", "claude-3-5-sonnet", 0.015)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msgs := []chat.Message{
+		{Role: chat.RoleSystem, Content: "base sys prompt"},
+		{Role: chat.RoleSystem, Content: "tools available"},
+		{Role: chat.RoleUser, Content: "hi"},
+	}
+
+	_, err = backend.ChatStream(context.Background(), msgs, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+
+	expectedSystem := "base sys prompt\n\ntools available"
+	if receivedSystem != expectedSystem {
+		t.Errorf("expected joined system prompt %q, got %q", expectedSystem, receivedSystem)
 	}
 }

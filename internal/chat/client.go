@@ -81,6 +81,8 @@ func (c *Client) ChatStream(ctx context.Context, msgs []Message, tools []ToolDef
 		return Message{}, fmt.Errorf("ollama not ready: %w", err)
 	}
 
+	msgs = ConsolidateMessages(msgs)
+
 	body := chatRequest{
 		Model:    c.Model,
 		Messages: msgs,
