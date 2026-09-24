@@ -5,6 +5,7 @@
 internal/agent/agent.go MCPRegistry
 internal/agent/agent.go Backend
 internal/agent/tools.go ExecuteShell
+internal/agent/tools.go allowExtra
 internal/api/server.go Serve
 internal/console/entries.go PlainAll
 internal/cortex/client.go NewClient

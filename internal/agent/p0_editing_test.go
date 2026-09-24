@@ -13,9 +13,32 @@ func newTestToolRegistry(t *testing.T) *ToolRegistry {
 	return NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
 }
 
-func execTool(t *testing.T, r *ToolRegistry, name string, args string) (string, error) {
+func execToolName(t *testing.T, r *ToolRegistry, name string, args string) (string, error) {
 	t.Helper()
 	return r.Execute(context.Background(), name, json.RawMessage(args))
+}
+
+// execDirect invokes a registered executor, bypassing the schema-scope
+// gate. Use ONLY for tests that exercise a hidden tool's behavior (never /
+// PR2-hidden tools whose executors stay registered for their safety routes
+// and the later guarded-exec PR).
+func execDirect(t *testing.T, r *ToolRegistry, name string, args string) (string, error) {
+	t.Helper()
+	exec, ok := r.executors[name]
+	if !ok {
+		t.Fatalf("tool %q not registered", name)
+	}
+	return exec(context.Background(), json.RawMessage(args))
+}
+
+// execDirectRaw is execDirect with pre-marshaled JSON arguments.
+func execDirectRaw(t *testing.T, r *ToolRegistry, name string, args json.RawMessage) (string, error) {
+	t.Helper()
+	exec, ok := r.executors[name]
+	if !ok {
+		t.Fatalf("tool %q not registered", name)
+	}
+	return exec(context.Background(), args)
 }
 
 // chdirToTempDir changes into a fresh temp dir (so validateToolPath's CWD
@@ -56,7 +79,7 @@ func TestEditFileReplaceAll(t *testing.T) {
 	r := newTestToolRegistry(t)
 
 	// Default (no replace_all): non-unique → error.
-	_, err := execTool(t, r, "edit_file", mustJSON(t, map[string]any{
+	_, err := execToolName(t, r, "edit_file", mustJSON(t, map[string]any{
 		"path": "f.txt", "target_content": "foo", "replacement_content": "FOO",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "not unique") {
@@ -64,7 +87,7 @@ func TestEditFileReplaceAll(t *testing.T) {
 	}
 
 	// replace_all=true replaces every occurrence.
-	out, err := execTool(t, r, "edit_file", mustJSON(t, map[string]any{
+	out, err := execToolName(t, r, "edit_file", mustJSON(t, map[string]any{
 		"path": "f.txt", "target_content": "foo", "replacement_content": "FOO", "replace_all": true,
 	}))
 	if err != nil {
@@ -83,7 +106,7 @@ func TestEditFileUniqueStillWorks(t *testing.T) {
 	writeFile(t, "u.txt", "alpha\nbeta\ngamma\n")
 	r := newTestToolRegistry(t)
 
-	_, err := execTool(t, r, "edit_file", mustJSON(t, map[string]any{
+	_, err := execToolName(t, r, "edit_file", mustJSON(t, map[string]any{
 		"path": "u.txt", "target_content": "beta", "replacement_content": "BETA",
 	}))
 	if err != nil {
@@ -104,7 +127,7 @@ func TestMultiEditAppliesAllInOrder(t *testing.T) {
 		{"old_string": "two\nthree", "new_string": "TWO\nTHREE"},
 		{"old_string": "four", "new_string": "FOUR"},
 	}
-	_, err := execTool(t, r, "multi_edit", mustJSON(t, map[string]any{"path": "m.txt", "edits": edits}))
+	_, err := execToolName(t, r, "multi_edit", mustJSON(t, map[string]any{"path": "m.txt", "edits": edits}))
 	if err != nil {
 		t.Fatalf("multi_edit failed: %v", err)
 	}
@@ -125,7 +148,7 @@ func TestMultiEditStopsOnFirstError(t *testing.T) {
 		{"old_string": "MISSING", "new_string": "x"},
 		{"old_string": "beta", "new_string": "BETA"},
 	}
-	_, err := execTool(t, r, "multi_edit", mustJSON(t, map[string]any{"path": "e.txt", "edits": edits}))
+	_, err := execToolName(t, r, "multi_edit", mustJSON(t, map[string]any{"path": "e.txt", "edits": edits}))
 	if err == nil || !strings.Contains(err.Error(), "edit #2") {
 		t.Fatalf("expected edit #2 error, got %v", err)
 	}
@@ -144,7 +167,7 @@ func TestMultiEditReplaceAllWithinBatch(t *testing.T) {
 		{"old_string": "x", "new_string": "Y", "replace_all": true},
 		{"old_string": "Y Y Y", "new_string": "Z"},
 	}
-	_, err := execTool(t, r, "multi_edit", mustJSON(t, map[string]any{"path": "r.txt", "edits": edits}))
+	_, err := execToolName(t, r, "multi_edit", mustJSON(t, map[string]any{"path": "r.txt", "edits": edits}))
 	if err != nil {
 		t.Fatalf("multi_edit failed: %v", err)
 	}
@@ -157,7 +180,7 @@ func TestTodoLifecycle(t *testing.T) {
 	r := newTestToolRegistry(t)
 
 	// init
-	out, err := execTool(t, r, "todo", mustJSON(t, map[string]any{
+	out, err := execToolName(t, r, "todo", mustJSON(t, map[string]any{
 		"op": "init",
 		"items": []map[string]any{
 			{"content": "write tests", "phase": "Test"},
@@ -172,7 +195,7 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 
 	// start one
-	out, err = execTool(t, r, "todo", mustJSON(t, map[string]any{"op": "start", "task": "write tests"}))
+	out, err = execToolName(t, r, "todo", mustJSON(t, map[string]any{"op": "start", "task": "write tests"}))
 	if err != nil {
 		t.Fatalf("todo start: %v", err)
 	}
@@ -181,7 +204,7 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 
 	// done
-	out, err = execTool(t, r, "todo", mustJSON(t, map[string]any{"op": "done", "task": "write tests"}))
+	out, err = execToolName(t, r, "todo", mustJSON(t, map[string]any{"op": "done", "task": "write tests"}))
 	if err != nil {
 		t.Fatalf("todo done: %v", err)
 	}
@@ -190,7 +213,7 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 
 	// append
-	out, err = execTool(t, r, "todo", mustJSON(t, map[string]any{
+	out, err = execToolName(t, r, "todo", mustJSON(t, map[string]any{
 		"op": "append", "phase": "Test",
 		"items": []map[string]any{{"content": "add edge case"}},
 	}))
@@ -202,7 +225,7 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 
 	// drop
-	out, err = execTool(t, r, "todo", mustJSON(t, map[string]any{"op": "drop", "task": "update docs"}))
+	out, err = execToolName(t, r, "todo", mustJSON(t, map[string]any{"op": "drop", "task": "update docs"}))
 	if err != nil {
 		t.Fatalf("todo drop: %v", err)
 	}
@@ -211,7 +234,7 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 
 	// view
-	out, err = execTool(t, r, "todo", mustJSON(t, map[string]any{"op": "view"}))
+	out, err = execToolName(t, r, "todo", mustJSON(t, map[string]any{"op": "view"}))
 	if err != nil {
 		t.Fatalf("todo view: %v", err)
 	}
@@ -222,10 +245,10 @@ func TestTodoLifecycle(t *testing.T) {
 
 func TestTodoStartUnknownTaskErrors(t *testing.T) {
 	r := newTestToolRegistry(t)
-	execTool(t, r, "todo", mustJSON(t, map[string]any{
+	execToolName(t, r, "todo", mustJSON(t, map[string]any{
 		"op": "init", "items": []map[string]any{{"content": "only task"}},
 	}))
-	_, err := execTool(t, r, "todo", mustJSON(t, map[string]any{"op": "done", "task": "nonexistent"}))
+	_, err := execToolName(t, r, "todo", mustJSON(t, map[string]any{"op": "done", "task": "nonexistent"}))
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found error, got %v", err)
 	}

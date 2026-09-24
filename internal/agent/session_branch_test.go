@@ -115,13 +115,12 @@ func TestBranchSnapshotIsIndependentOfLaterEdits(t *testing.T) {
 	a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "live", ToolCalls: []chat.ToolCall{toolCall("1", "x", "{}")}})
 	// The branch stack snapshot must NOT reflect the live append.
 	snap := a.branchStack[0].messages
-	if len(snap) != 3 {
-		t.Fatalf("snapshot len = %d, want 3 (New's system + test system + user)", len(snap))
+	if len(snap) != 4 {
+		t.Fatalf("snapshot len = %d, want 4 (New's two system messages + test system + user)", len(snap))
 	}
-	// Rollback should restore exactly the 3-message state.
 	a.rollbackSession("snap")
-	if a.conv.Len() != 3 {
-		t.Fatalf("post-rollback len = %d, want 3", a.conv.Len())
+	if a.conv.Len() != 4 {
+		t.Fatalf("post-rollback len = %d, want 4", a.conv.Len())
 	}
 }
 
@@ -129,22 +128,16 @@ func TestDispatchBranchSessionViaToolCall(t *testing.T) {
 	a := newBranchTestAgent(t)
 	a.conv.Append(chat.Message{Role: chat.RoleSystem, Content: "sys"})
 	// Special-cased dispatch path (as the agent loop would invoke it).
-	out, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+	_, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
 		Function: chat.ToolCallFunction{Name: "branch_session", Arguments: json.RawMessage(`{"label":"via-dispatch"}`)},
 	})
-	if err != nil {
-		t.Fatalf("dispatch branch_session: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("observe mode must hide branch_session, got %v", err)
 	}
-	if !strings.Contains(out, "via-dispatch") {
-		t.Fatalf("expected label in dispatch output, got: %s", out)
-	}
-	out, err = a.dispatchToolCall(context.Background(), chat.ToolCall{
+	_, err = a.dispatchToolCall(context.Background(), chat.ToolCall{
 		Function: chat.ToolCallFunction{Name: "rollback_session", Arguments: json.RawMessage(`{"label":"via-dispatch"}`)},
 	})
-	if err != nil {
-		t.Fatalf("dispatch rollback_session: %v", err)
-	}
-	if !strings.Contains(out, "via-dispatch") {
-		t.Fatalf("expected label in rollback output, got: %s", out)
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("observe mode must hide rollback_session, got %v", err)
 	}
 }

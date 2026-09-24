@@ -92,6 +92,11 @@ func (b *CloudBackend) ChatStream(ctx context.Context, msgs []chat.Message, tool
 
 // streamOpenAI handles standard OpenAI/OpenRouter/Groq SSE streaming.
 func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, tools []chat.ToolDef, w io.Writer) (chat.Message, error) {
+	// Consolidate leading system messages so Jinja chat templates (e.g. Qwen,
+	// Mistral, Llama) do not reject multiple system messages with
+	// "System message must be at the beginning".
+	msgs = chat.ConsolidateMessages(msgs)
+
 	// 1. Convert messages to OpenAI format.
 	type openAIMessage struct {
 		Role       string           `json:"role"`
@@ -309,12 +314,14 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 // streamAnthropic handles Anthropic native messages streaming.
 func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message, tools []chat.ToolDef, w io.Writer) (chat.Message, error) {
 	// 1. Extract system prompt and construct messages list.
-	var systemPrompt string
+	var systemParts []string
 	var anthropicMsgs []map[string]any
 
 	for _, m := range msgs {
 		if m.Role == chat.RoleSystem {
-			systemPrompt = m.Content
+			if trimmed := strings.TrimSpace(m.Content); trimmed != "" {
+				systemParts = append(systemParts, trimmed)
+			}
 			continue
 		}
 
@@ -399,7 +406,7 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		"stream":     true,
 		"max_tokens": 4096,
 	}
-	if systemPrompt != "" {
+	if systemPrompt := strings.Join(systemParts, "\n\n"); systemPrompt != "" {
 		reqBody["system"] = systemPrompt
 	}
 	if len(anthropicTools) > 0 {

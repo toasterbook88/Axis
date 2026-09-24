@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Fixed
+
+* **Consolidated leading system messages for Jinja templates:** collapses contiguous leading system messages into a single system message on OpenAI-compatible, Anthropic, and Ollama streaming backends. Many model templates (notably Qwen, Mistral, and Llama standard Jinja templates) strictly reject multiple system messages with `System message must be at the beginning.`, which previously failed turns on resident models like Qwen 3.8. Anthropic backend now joins all system message segments rather than dropping preceding ones. On turn 0 failure, unresponded user turns are pruned from history.
+* **Stale free-VRAM stays free in plan text:** `axis model plan` treats a positive `VRAMFreeMB` as measured even when a snapshot omits `VRAMFreeMeasured`. Fit math and the printed label both say `N MiB free`. A measured 0 stays `0 MiB free`. An unknown 0, and a negative free figure, fall back to total capacity and print `N MiB total, unmeasured`. Plan JSON gains `vram_free_measured` on each candidate; no external parser of that object is known.
+
 ## v0.19.2 (2026-09-21)
 
 Two pull requests merged on `main` since `v0.19.1`. This patch release closes the

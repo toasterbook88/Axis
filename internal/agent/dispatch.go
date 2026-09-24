@@ -97,14 +97,26 @@ func formatToolResultSummary(toolName, result string) string {
 	return fmt.Sprintf("%s returned %d chars", toolName, len(result))
 }
 
+func withSafetyWhy(reason, desc string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || strings.Contains(desc, "safety why:") {
+		return desc
+	}
+	return "safety why: " + reason + "\n" + desc
+}
+
 // dispatchToolCall handles a single tool call with safety gating and confirmation.
 func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string, error) {
 	name := tc.Function.Name
 	args := tc.Function.Arguments
 
-	// 1. Check if tool exists.
+	// 1. Check if tool exists and is visible in the current scope.
+	// A registered name that the model cannot see fails closed and does not run.
 	if !a.tools.HasTool(name) {
 		return "", fmt.Errorf("unknown tool %q — available tools: %s", name, a.ToolNames())
+	}
+	if !a.tools.Visible(name) {
+		return "", fmt.Errorf("tool %q is not available in this mode", name)
 	}
 
 	// 2. Validate JSON arguments.
@@ -185,6 +197,7 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 				a.dispatchMu.Unlock()
 				return "", fmt.Errorf("operator has blocked all tool execution for this session")
 			}
+			a.dispatchMu.Unlock()
 
 			description := fmt.Sprintf("Execute tool %s with arguments: %s", name, string(args))
 			if name == "write_file" {
@@ -228,7 +241,8 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 				}
 			}
 
-			decision := a.confirm(name, description, 0)
+			decision := a.askConfirm(name, description, 0)
+			a.dispatchMu.Lock()
 			switch decision {
 			case ConfirmNo:
 				a.dispatchMu.Unlock()
@@ -291,8 +305,8 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
+		decision := a.askConfirm("run_shell", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
-		decision := a.confirm("run_shell", promptDesc, safetyScore)
 		switch decision {
 		case ConfirmNo:
 			a.dispatchMu.Unlock()
@@ -381,8 +395,8 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
+		decision := a.askConfirm("run_on_node", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
-		decision := a.confirm("run_on_node", promptDesc, safetyScore)
 		switch decision {
 		case ConfirmNo:
 			a.dispatchMu.Unlock()
@@ -482,8 +496,8 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
+		decision := a.askConfirm("fleet_exec", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
-		decision := a.confirm("fleet_exec", promptDesc, safetyScore)
 		switch decision {
 		case ConfirmNo:
 			a.dispatchMu.Unlock()
@@ -647,8 +661,11 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d) - REASON: %s]\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
 	}
 
+	// Confirm without holding dispatchMu: the operator overlay is the only thing
+	// this turn must wait on, and Autonomy() needs the lock to paint/mutate
+	// itself while the prompt is open. Same pattern as dispatchShell.
+	decision := a.askConfirm("axis_run_task", withSafetyWhy(prepared.Result.BlockReason, promptDesc), prepared.Result.DumbScore)
 	a.dispatchMu.Lock()
-	decision := a.confirm("axis_run_task", promptDesc, prepared.Result.DumbScore)
 	switch decision {
 	case ConfirmNo:
 		a.dispatchMu.Unlock()

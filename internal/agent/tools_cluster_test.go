@@ -35,11 +35,11 @@ func TestRunOnNodeRegistryRequiresAgentDispatch(t *testing.T) {
 		Config: &config.Config{Nodes: []config.NodeConfig{{Name: "only", Hostname: "h"}}},
 	}, nil)
 	r := NewToolRegistry(tc)
-	_, err := execTool(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "ghost", "command": "ls"}))
+	_, err := execDirect(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "ghost", "command": "ls"}))
 	if err == nil || !strings.Contains(err.Error(), "safety gate") {
 		t.Fatalf("expected safety-gate dispatch error, got %v", err)
 	}
-	_, err = execTool(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "any", "command": "ls"}))
+	_, err = execDirect(t, r, "run_on_node", mustJSON(t, map[string]any{"node": "any", "command": "ls"}))
 	if err == nil || !strings.Contains(err.Error(), "safety gate") {
 		t.Fatalf("expected safety-gate dispatch error, got %v", err)
 	}
@@ -49,12 +49,12 @@ func TestRemoteReadFileValidation(t *testing.T) {
 	tc := NewToolContext(&RuntimeView{Config: &config.Config{}}, nil)
 	r := NewToolRegistry(tc)
 	// missing path
-	_, err := execTool(t, r, "remote_read_file", mustJSON(t, map[string]any{"node": "x"}))
+	_, err := execDirect(t, r, "remote_read_file", mustJSON(t, map[string]any{"node": "x"}))
 	if err == nil || !strings.Contains(err.Error(), "requires") {
 		t.Fatalf("expected validation error, got %v", err)
 	}
 	// unknown node → not found (no SSH attempt)
-	_, err = execTool(t, r, "remote_read_file", mustJSON(t, map[string]any{"node": "ghost", "path": "/etc/hostname"}))
+	_, err = execDirect(t, r, "remote_read_file", mustJSON(t, map[string]any{"node": "ghost", "path": "/etc/hostname"}))
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found, got %v", err)
 	}
@@ -63,11 +63,11 @@ func TestRemoteReadFileValidation(t *testing.T) {
 func TestRemoteGrepAndListValidation(t *testing.T) {
 	tc := NewToolContext(&RuntimeView{Config: &config.Config{}}, nil)
 	r := NewToolRegistry(tc)
-	_, err := execTool(t, r, "remote_grep", mustJSON(t, map[string]any{"node": "x"}))
+	_, err := execDirect(t, r, "remote_grep", mustJSON(t, map[string]any{"node": "x"}))
 	if err == nil || !strings.Contains(err.Error(), "requires") {
 		t.Fatalf("remote_grep validation: %v", err)
 	}
-	_, err = execTool(t, r, "remote_list", mustJSON(t, map[string]any{}))
+	_, err = execDirect(t, r, "remote_list", mustJSON(t, map[string]any{}))
 	if err == nil || !strings.Contains(err.Error(), "requires") {
 		t.Fatalf("remote_list validation: %v", err)
 	}

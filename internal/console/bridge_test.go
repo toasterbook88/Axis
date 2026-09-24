@@ -164,6 +164,17 @@ func TestBridgeRendersToolLifecycle(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d entries, want 2 (pending never commits):\n%s", len(got), strings.Join(got, "\n"))
 	}
+	b.SetEvidence(func(name string) (string, string) {
+		if name == "axis_status" {
+			return "cached pub-1", "cluster status"
+		}
+		return "", ""
+	})
+	b.ToolSucceeded("call-3", "axis_status", "5 nodes", 42, 12*time.Millisecond)
+	got = rec.entries(80)
+	if !strings.Contains(got[len(got)-1], "cached pub-1") || !strings.Contains(got[len(got)-1], "cluster status") {
+		t.Errorf("live tool cell missing badge or intent: %q", got[len(got)-1])
+	}
 	if !strings.Contains(got[0], "5 nodes") {
 		t.Errorf("success entry missing summary: %q", got[1])
 	}

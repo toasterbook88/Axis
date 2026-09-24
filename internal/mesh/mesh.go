@@ -124,7 +124,7 @@ func DefaultConfig() Config {
 // Mesh manages peer discovery and gossip protocol.
 type Mesh struct {
 	mu         sync.RWMutex
-	peers      map[string]*Peer // key: stable_id or hostname
+	peers      map[string]*Peer // key: stable_id or cluster-unique node Name
 	self       Peer
 	cfg        Config
 	generation uint64
@@ -282,11 +282,31 @@ func (m *Mesh) AddSeed(p Peer) {
 	m.peers[key] = &p
 }
 
+// peerKey identifies a peer uniquely: StableID when present, otherwise the
+// cluster-unique node Name. Hostname must never be the identity: each node's
+// nodes.yaml describes its peers by the address its author can reach, so
+// keying by hostname multiplied every multi-homed node into one entry per
+// address variant (tailscale, secondary NIC, LAN alias).
 func (m *Mesh) peerKey(p Peer) string {
 	if p.StableID != "" {
 		return p.StableID
 	}
-	return p.Hostname
+	return p.Name
+}
+
+// findPeer resolves an incoming peer identity to a stored entry. The direct
+// key match is the fast path; a name match reconciles the same physical node
+// described under a different address by the sending side.
+func (m *Mesh) findPeer(p Peer) (*Peer, bool) {
+	if ep, ok := m.peers[m.peerKey(p)]; ok {
+		return ep, true
+	}
+	for _, ep := range m.peers {
+		if p.Name != "" && ep.Name == p.Name {
+			return ep, true
+		}
+	}
+	return nil, false
 }
 
 // listenLoop reads incoming UDP gossip messages.
@@ -366,8 +386,7 @@ func (m *Mesh) handleMessage(msg gossipMessage) {
 	now := time.Now()
 	switch msg.Type {
 	case "ping":
-		key := m.peerKey(msg.Sender)
-		if p, ok := m.peers[key]; ok {
+		if p, ok := m.findPeer(msg.Sender); ok {
 			p.LastSeen = now
 			p.MissedPings = 0
 			if p.State == PeerSuspect {
@@ -385,8 +404,7 @@ func (m *Mesh) handleMessage(msg gossipMessage) {
 		}
 
 	case "leave":
-		key := m.peerKey(msg.Sender)
-		if p, ok := m.peers[key]; ok {
+		if p, ok := m.findPeer(msg.Sender); ok {
 			p.State = PeerDead
 			m.logger.Info("peer announced departure", "peer", p.Name)
 			if m.OnPeerLeave != nil {
@@ -398,13 +416,20 @@ func (m *Mesh) handleMessage(msg gossipMessage) {
 
 // mergePeer integrates a gossipped peer into our local state.
 // Never demotes a trusted peer. Never exceeds MaxPeers.
+//
+// Peer-exchange collision rules:
+//   - Self is ignored by Name, not just by key: our own gossip arrives back
+//     under every local address the sending hop used (tailscale, secondary
+//     NIC), and only the config-hostname variant matches the self key.
+//   - A peer learned from gossip must not inherit the sender's "config"
+//     provenance: on this node it is gossip-sourced, so the failure detector
+//     can evict it once it stops being refreshed.
 func (m *Mesh) mergePeer(p Peer, now time.Time) {
-	key := m.peerKey(p)
-	if key == m.peerKey(m.self) {
-		return // ignore self
+	if m.self.Name != "" && p.Name == m.self.Name {
+		return // ignore self under any source address
 	}
 
-	existing, ok := m.peers[key]
+	existing, ok := m.findPeer(p)
 	if !ok {
 		if len(m.peers) >= m.cfg.MaxPeers {
 			return // cap reached for new peers
@@ -413,10 +438,8 @@ func (m *Mesh) mergePeer(p Peer, now time.Time) {
 		p.State = PeerDiscovered
 		p.FirstSeen = now
 		p.LastSeen = now
-		if p.Source == "" {
-			p.Source = "gossip"
-		}
-		m.peers[key] = &p
+		p.Source = "gossip"
+		m.peers[m.peerKey(p)] = &p
 		m.logger.Info("new peer discovered", "peer", p.Name, "source", p.Source)
 		if m.OnPeerJoin != nil {
 			go m.OnPeerJoin(p)
