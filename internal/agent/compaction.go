@@ -27,10 +27,16 @@ const minSummarizable = 4
 const maxSummarizeContentChars = 2000
 
 // compactContext summarizes older conversation turns into a single compressed
-// system message when the conversation approaches the token budget. It is
+// user message when the conversation approaches the token budget. It is
 // advisory: on any backend failure it silently falls back to the existing
 // truncation policy in chat.Conversation, so the agent never breaks because
 // compaction failed.
+//
+// The summary is inserted as a user-role message (not system): compaction can
+// delete every original user turn, and model chat templates behind tool
+// calling (notably Qwen Jinja templates via LiteLLM) reject payloads with no
+// user-role message ("No user query found in messages"). A user-role summary
+// keeps the wire invariant intact regardless of what was compacted.
 func (a *Agent) compactContext(ctx context.Context) error {
 	if a.maxTokens <= 0 {
 		return nil
@@ -53,7 +59,8 @@ func (a *Agent) compactContext(ctx context.Context) error {
 
 	// Replace the oldest non-system messages (up to len-protectLast) with a
 	// single compacted summary message, preserving the system prompt and the
-	// recent working context.
+	// recent working context. The summary carries the user role so a
+	// user-role message always survives compaction (see above).
 	start := a.conv.FirstNonSystemIndex()
 	if start < 0 {
 		return nil
@@ -63,7 +70,7 @@ func (a *Agent) compactContext(ctx context.Context) error {
 		return nil
 	}
 	a.conv.ReplaceRange(start, end, []chat.Message{
-		{Role: chat.RoleSystem, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
+		{Role: chat.RoleUser, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
 	})
 
 	if a.verbose {
@@ -134,11 +141,23 @@ func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens 
 	}
 
 	a.conv.ReplaceRange(start, end, []chat.Message{
-		{Role: chat.RoleSystem, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
+		{Role: chat.RoleUser, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
 	})
 
 	afterTokens = a.conv.EstimateTokens()
 	return beforeTokens, afterTokens, len(candidates), nil
+}
+
+// hasUserRole reports whether any message in the sequence carries the user
+// role. Used to uphold the wire invariant that model chat templates require
+// at least one user-role message per dispatch.
+func hasUserRole(msgs []chat.Message) bool {
+	for _, m := range msgs {
+		if m.Role == chat.RoleUser {
+			return true
+		}
+	}
+	return false
 }
 
 // summarizeViaBackend runs a single no-tools, non-streamed exchange against the
@@ -154,4 +173,16 @@ func (a *Agent) summarizeViaBackend(ctx context.Context, prompt string) (string,
 		return "", err
 	}
 	return resp.Content, nil
+}
+
+// firstNonSystemIndexIn returns the index of the first non-system message in
+// the slice, or -1 when every message is system-role. Used by the user-role
+// re-inject to position the rescued prompt after any leading system messages.
+func firstNonSystemIndexIn(msgs []chat.Message) int {
+	for i, m := range msgs {
+		if m.Role != chat.RoleSystem {
+			return i
+		}
+	}
+	return -1
 }
