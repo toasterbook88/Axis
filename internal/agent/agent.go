@@ -395,6 +395,7 @@ func (a *Agent) RunWithSinks(ctx context.Context, userPrompt string, obs Observe
 }
 
 func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
+	userMsgIdx := a.conv.Len()
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
 
 	for turn := 0; turn < a.maxTurns; turn++ {
@@ -454,11 +455,30 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 			}
 		}
 
+		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
+
+		// Wire invariant: model chat templates behind tool calling (notably
+		// Qwen Jinja templates via LiteLLM) reject payloads with no user-role
+		// message. Compaction can delete every original user turn, so if none
+		// survived, re-inject this turn's prompt after the leading system
+		// messages rather than sending a user-less payload into a template
+		// guard.
+		if !hasUserRole(clonedMsgs) {
+			insert := firstNonSystemIndexIn(clonedMsgs)
+			if insert < 0 {
+				insert = len(clonedMsgs)
+			}
+			clonedMsgs = append(clonedMsgs[:insert], append([]chat.Message{{Role: chat.RoleUser, Content: userPrompt}}, clonedMsgs[insert:]...)...)
+		}
+
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
 		resp, err := a.client.ChatStream(ctx, clonedMsgs, toolDefs, cw)
 		cw.Close()
 		if err != nil {
+			if turn == 0 {
+				a.conv.ReplaceRange(userMsgIdx, userMsgIdx+1, nil)
+			}
 			return fmt.Errorf("chat stream (turn %d): %w", turn, err)
 		}
 
