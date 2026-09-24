@@ -1,8 +1,6 @@
 ---
 name: PR Truth & Boundary Audit
 on:
-  pull_request:
-    types: [opened, synchronize]
   workflow_dispatch:
 
 permissions:
