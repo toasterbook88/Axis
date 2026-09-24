@@ -30,3 +30,20 @@ func TestWatchBeaconChangesDisabledIsNotAnError(t *testing.T) {
 		t.Fatalf("disabled discovery: %v", err)
 	}
 }
+
+func TestListenUDPSharedAllowsConcurrentBind(t *testing.T) {
+	first, err := ListenUDPShared(0)
+	if err != nil {
+		t.Fatalf("first shared bind: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	port := first.LocalAddr().(*net.UDPAddr).Port
+
+	// Simulates the CLI --live scanner binding the beacon port while the
+	// daemon's listener already holds it.
+	second, err := ListenUDPShared(port)
+	if err != nil {
+		t.Fatalf("concurrent shared bind on :%d must succeed: %v", port, err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+}
