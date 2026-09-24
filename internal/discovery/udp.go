@@ -6,10 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
@@ -163,12 +167,44 @@ func startBeaconBroadcaster(ctx context.Context, cfg *config.Config) {
 	}()
 }
 
+// ListenUDPShared binds a UDP port with SO_REUSEADDR and SO_REUSEPORT so the
+// daemon's long-lived beacon listener and the CLI's temporary --live scanner
+// can share the discovery plane. Without it, running `axis mesh peers --live`
+// on a node whose daemon already holds the beacon port fails with
+// address-already-in-use instead of scanning.
+//
+// SO_REUSEPORT distributes datagrams across all sharing sockets, so a live
+// scan briefly takes a share of beacons from the daemon. The beacon interval
+// (default 3s) and the daemon refresh window (default 60s) tolerate that.
+func ListenUDPShared(port int) (*net.UDPConn, error) {
+	lc := net.ListenConfig{Control: controlReusePort}
+	pc, err := lc.ListenPacket(context.Background(), "udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return nil, err
+	}
+	udpConn, ok := pc.(*net.UDPConn)
+	if !ok {
+		_ = pc.Close()
+		return nil, fmt.Errorf("discovery: udp listen returned %T", pc)
+	}
+	return udpConn, nil
+}
+
+// controlReusePort sets SO_REUSEADDR and SO_REUSEPORT on the bound socket so
+// multiple processes can share one UDP discovery port.
+func controlReusePort(network, address string, conn syscall.RawConn) error {
+	return conn.Control(func(fd uintptr) {
+		_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+		_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+	})
+}
+
 func openBeaconListener(cfg *config.Config) (*net.UDPConn, string, error) {
 	port, _, secret, _, ok := udpSettings(cfg)
 	if !ok {
 		return nil, "", net.InvalidAddrError("discovery disabled")
 	}
-	pc, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+	pc, err := ListenUDPShared(port)
 	if err != nil {
 		return nil, "", err
 	}

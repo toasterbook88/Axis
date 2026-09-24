@@ -367,3 +367,53 @@ func TestSelectFanOut_LessThanFanOut(t *testing.T) {
 		t.Errorf("with fewer peers than fan_out, should return all: got %d", len(targets))
 	}
 }
+
+func TestMergePeer_IgnoresSelfEchoUnderAlternateAddress(t *testing.T) {
+	self := Peer{Name: "node-a", Hostname: "192.0.2.10", StableID: ""}
+	m := New(self, DefaultConfig(), nil)
+
+	// Our own gossip arriving back under an alternate local address
+	// (tailscale or secondary NIC) must not register as a new peer.
+	echo := Peer{Name: "node-a", Hostname: "192.0.2.99", StableID: "", Source: "config", Generation: 2}
+	m.mergePeer(echo, time.Now())
+
+	if got := len(m.Peers()); got != 0 {
+		t.Fatalf("self echo under alternate address should be ignored, got %d entries", got)
+	}
+}
+
+func TestMergePeer_CollapsesAddressVariantsOfSameNode(t *testing.T) {
+	self := Peer{Name: "self", Hostname: "192.0.2.10", StableID: ""}
+	m := New(self, DefaultConfig(), nil)
+	m.AddSeed(Peer{Name: "node-b", Hostname: "192.0.2.20", StableID: ""})
+
+	// The same node heard under a different address (authored by a peer
+	// whose nodes.yaml lists that address) must collapse into the seed.
+	m.mergePeer(Peer{Name: "node-b", Hostname: "192.0.2.99", StableID: "", Source: "config"}, time.Now())
+
+	peers := m.Peers()
+	if len(peers) != 1 {
+		t.Fatalf("address variant of a known node must collapse, got %d entries", len(peers))
+	}
+	if peers[0].Hostname != "192.0.2.20" {
+		t.Fatalf("trusted seed address must win over gossipped variant, got %q", peers[0].Hostname)
+	}
+}
+
+func TestMergePeer_MergedEntryIsGossipSourced(t *testing.T) {
+	self := Peer{Name: "self", Hostname: "192.0.2.10", StableID: ""}
+	m := New(self, DefaultConfig(), nil)
+
+	// A seed entry from another node's config arrives via gossip carrying
+	// Source "config"; on our table it is gossip-sourced so the failure
+	// detector can evict it once it stops being refreshed.
+	m.mergePeer(Peer{Name: "stray", Hostname: "192.0.2.30", StableID: "", Source: "config"}, time.Now())
+
+	peers := m.Peers()
+	if len(peers) != 1 {
+		t.Fatalf("expected 1 merged peer, got %d", len(peers))
+	}
+	if peers[0].Source != "gossip" {
+		t.Fatalf("merged entry must not inherit sender's config provenance, got %q", peers[0].Source)
+	}
+}
