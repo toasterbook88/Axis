@@ -4,6 +4,10 @@ self-hosted-runner:
     - trusted
 
 paths:
+  .github/workflows/*.lock.yml:
+    ignore:
+      - '.*'
   .github/workflows/refresh-current-state.yml:
     ignore:
       - 'constant expression "false" in condition'
+
