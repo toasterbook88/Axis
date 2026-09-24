@@ -1185,3 +1185,26 @@ func usageResponse(promptTokens, evalTokens int, text string) []mockStreamChunk 
 		{Done: true, PromptEvalCount: promptTokens, EvalCount: evalTokens},
 	}
 }
+
+func TestAgentTurn0FailureCleansUpUserPrompt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	agent := New(Config{
+		Endpoint: server.URL,
+		Model:    "test-model",
+	})
+
+	initialLen := agent.Conversation().Len()
+
+	err := agent.Run(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("expected error from 500 response, got nil")
+	}
+
+	if got := agent.Conversation().Len(); got != initialLen {
+		t.Fatalf("conversation length after turn 0 error = %d, want initial %d (user prompt must be removed on failure)", got, initialLen)
+	}
+}

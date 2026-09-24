@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 )
 
@@ -229,4 +230,67 @@ func (c *Conversation) FirstNonSystemIndex() int {
 		}
 	}
 	return -1
+}
+
+// ConsolidateMessages normalizes a message sequence for wire dispatch to LLM
+// backends.
+//
+// Many model templates (notably Qwen, Mistral, and Llama Jinja2/minijinja
+// chat templates) enforce that at most one system message may exist and that
+// it must appear at the beginning of the sequence (via Jinja's loop.first check).
+// If a second system message is encountered, the template raises an exception
+// ("System message must be at the beginning"). Furthermore, APIs like Anthropic
+// accept only a single top-level system parameter rather than multiple system
+// messages.
+//
+// ConsolidateMessages merges all contiguous leading system messages into a
+// single RoleSystem message at index 0 with double-newline separation. Any
+// subsequent RoleSystem messages that appear after conversation turns (e.g.
+// post-compaction markers or dynamic context) have their content converted to
+// a RoleUser advisory message ("[System Note]\n...") so that on the wire,
+// exactly one RoleSystem message exists and it is strictly at index 0.
+func ConsolidateMessages(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	// 1. Identify and merge all contiguous leading system messages.
+	var leadingSystemContent []string
+	idx := 0
+	for idx < len(msgs) && msgs[idx].Role == RoleSystem {
+		trimmed := strings.TrimSpace(msgs[idx].Content)
+		if trimmed != "" {
+			leadingSystemContent = append(leadingSystemContent, trimmed)
+		}
+		idx++
+	}
+
+	out := make([]Message, 0, len(msgs)-idx+1)
+	if len(leadingSystemContent) > 0 {
+		out = append(out, Message{
+			Role:    RoleSystem,
+			Content: strings.Join(leadingSystemContent, "\n\n"),
+		})
+	}
+
+	// 2. Process remaining messages. If any non-leading RoleSystem message is
+	// encountered, convert it to RoleUser so that the wire format never sends
+	// a second system message to templates that reject it.
+	for ; idx < len(msgs); idx++ {
+		m := msgs[idx]
+		if m.Role == RoleSystem {
+			trimmed := strings.TrimSpace(m.Content)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, Message{
+				Role:    RoleUser,
+				Content: "[System Note]\n" + trimmed,
+			})
+			continue
+		}
+		out = append(out, m)
+	}
+
+	return out
 }
