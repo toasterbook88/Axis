@@ -51,14 +51,14 @@ func TestLoadRepoInstructionsWalksUp(t *testing.T) {
 }
 
 func TestLoadRepoInstructionsMissing(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempRepoRoot(t)
 	if _, _, ok := loadRepoInstructions(dir); ok {
 		t.Fatal("expected no instructions")
 	}
 }
 
 func TestLoadRepoInstructionsTruncates(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempRepoRoot(t)
 	// Build content larger than the cap.
 	big := strings.Repeat("x", maxRepoInstructionsBytes+100)
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(big), 0o644); err != nil {
@@ -77,7 +77,7 @@ func TestLoadRepoInstructionsTruncates(t *testing.T) {
 }
 
 func TestLoadRepoInstructionsTruncatesTrimmedNotLeadingWhitespace(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempRepoRoot(t)
 	// Leading whitespace would dominate a raw-byte truncate; trimmed path keeps real rules.
 	body := strings.Repeat(" ", 100) + "REAL-RULE-START " + strings.Repeat("y", maxRepoInstructionsBytes)
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(body), 0o644); err != nil {
@@ -106,7 +106,7 @@ func TestFormatRepoInstructionsBlock(t *testing.T) {
 }
 
 func TestNewAgentInjectsRepoInstructions(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempRepoRoot(t)
 	t.Chdir(dir)
 	if err := os.WriteFile("AGENTS.md", []byte("Prefer make test before push."), 0o644); err != nil {
 		t.Fatal(err)
@@ -125,5 +125,47 @@ func TestNewAgentInjectsRepoInstructions(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("system prompt missing AGENTS.md content; messages=%d", len(a.Conversation().Messages()))
+	}
+}
+
+// tempRepoRoot creates a hermetic fixture root: a TempDir containing a
+// repository sentinel, so the walk-up in loadRepoInstructions terminates
+// inside the fixture regardless of where TMPDIR sits on the host.
+func tempRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestLoadRepoInstructionsStopsAtSentinel pins the walk boundary: with no
+// AGENTS.md inside the repo tree, the walk must stop at the sentinel instead
+// of leaking an AGENTS.md planted in a parent directory (e.g. the operator's
+// home). This is the regression for the Hermes Pass-19 finding.
+func TestLoadRepoInstructionsStopsAtSentinel(t *testing.T) {
+	// Plant an AGENTS.md above the fixture tree, outside any sentinel.
+	plant := filepath.Join(os.TempDir(), "AGENTS.md")
+	_, readErr := os.ReadFile(plant)
+	had := readErr == nil
+	if had {
+		_ = os.Rename(plant, plant+".bak-probe")
+		defer func() {
+			if had {
+				_ = os.Rename(plant+".bak-probe", plant)
+			} else {
+				_ = os.Remove(plant)
+			}
+		}()
+	}
+	if err := os.WriteFile(plant, []byte("# parent leak"), 0o644); err != nil {
+		t.Skipf("cannot plant probe file: %v", err)
+	}
+
+	dir := tempRepoRoot(t)
+	path, content, ok := loadRepoInstructions(dir)
+	if ok {
+		t.Fatalf("sentinel must stop the walk; got path=%q content=%.40q", path, content)
 	}
 }
