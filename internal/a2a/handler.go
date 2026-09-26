@@ -36,6 +36,9 @@ func (h *Handler) EnsureDefaults() {
 
 // ServeTasks registers the A2A task routes. wrap must apply withAuth (or
 // equivalent); when nil, routes are registered bare (tests only).
+// Production wire-up always wraps with withAuth; when the API token is empty,
+// withAuth is a no-op (same as /run — F9). Prefer a non-empty token before any
+// TCP listener.
 //
 // Routes:
 //
@@ -160,7 +163,11 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	principal := PrincipalHashFromRequest(r)
 	task, ok := h.Store.Get(id, principal)
 	if !ok {
-		// F6: missing and foreign principal look the same.
+		// F6: missing / foreign principal / expired → same 404 (store binding).
+		// Under today's single shared API token, authenticated callers share one
+		// principal hash; multi-principal isolation is defense-in-depth until
+		// multi-token auth exists. E2E "foreign" get with a wrong bearer is F1
+		// (withAuth 401), not a Store.Get principal-mismatch proof.
 		writeErr(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -169,6 +176,9 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // PrincipalHashFromRequest derives a stable principal id from the bearer
 // token (or empty-auth sentinel). Used for task ownership binding (F6).
+// With one shared API token all authed callers share this hash; binding is
+// still enforced in Store.Get but E2E does not prove cross-token isolation
+// beyond wrong-bearer rejection at withAuth (F1).
 func PrincipalHashFromRequest(r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
 	parts := strings.Fields(authHeader)

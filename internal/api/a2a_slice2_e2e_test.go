@@ -20,7 +20,10 @@ import (
 
 // TestA2ASlice2E2E is the slice-2v1 end-to-end harness (not unit-tests-after-code).
 // It starts ServeWithContext on a temp unix socket with a NON-EMPTY token +
-// cardFn and writes a verifiable JSON artifact covering F1–F5 (+ F6 lite).
+// cardFn and writes a verifiable JSON artifact covering F1–F5.
+// F9: token must be non-empty so withAuth is not a no-op (same policy as /run).
+// F6-lite: wrong-bearer GET is proven as F1 (401 at withAuth); store principal
+// binding exists in code but this E2E does not prove multi-principal isolation.
 func TestA2ASlice2E2E(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "axis-a2a-slice2.sock")
 	token := "test-token-a2a-slice2-v1"
@@ -76,6 +79,9 @@ func TestA2ASlice2E2E(t *testing.T) {
 		"head_sha":      sha,
 		"started_at":    time.Now().Format(time.RFC3339),
 		"failure_modes": []string{"F1", "F2", "F3", "F4", "F5", "F6-lite"},
+		// F6-lite receipt = F1 foreign-bearer 401; store is principal-hash bound
+		// but E2E did not exercise Store.Get cross-principal mismatch.
+		"f6_lite_note":  "F1 foreign-bearer + store principal binding present (unproven multi-principal)",
 		"no_fleet_roll": true,
 		"no_tcp_opened": true,
 		"streaming":     false,
@@ -210,7 +216,7 @@ func TestA2ASlice2E2E(t *testing.T) {
 		t.Fatalf("unknown skill state = %s, want rejected (F4)", unkTask.Status.State)
 	}
 
-	// --- F6 lite: foreign principal (wrong bearer) → 401 ---
+	// --- F6-lite / F1: wrong bearer → 401 at withAuth (does not reach Store.Get) ---
 	foreignReq, _ := http.NewRequest(http.MethodGet, "http://axis/a2a/v1/tasks/"+obsTask.ID, nil)
 	foreignReq.Header.Set("Authorization", "Bearer foreign-token-not-valid")
 	foreignResp, err := httpClient.Do(foreignReq)
@@ -219,10 +225,11 @@ func TestA2ASlice2E2E(t *testing.T) {
 	}
 	foreignResp.Body.Close()
 	artifact["foreign_principal_get_status"] = foreignResp.StatusCode
+	artifact["foreign_get_note"] = "wrong bearer rejected by withAuth (F1); not a Store.Get principal-isolation proof"
 	if foreignResp.StatusCode != http.StatusUnauthorized &&
 		foreignResp.StatusCode != http.StatusForbidden &&
 		foreignResp.StatusCode != http.StatusNotFound {
-		t.Fatalf("foreign get = %d, want 401/403/404 (F6)", foreignResp.StatusCode)
+		t.Fatalf("foreign get = %d, want 401/403/404 (F1 foreign-bearer / F6-lite)", foreignResp.StatusCode)
 	}
 
 	artifact["f3_unix_dial_ok"] = true
@@ -271,6 +278,9 @@ func truncateStr(s string, n int) string {
 	return s[:n] + "…"
 }
 
+// gitHeadSHA returns git rev-parse HEAD of the repository under test.
+// Run this harness on the committed tip (after the feature commit) so the
+// artifact filename and head_sha match the PR head, not an earlier base SHA.
 func gitHeadSHA() string {
 	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
 	if err != nil {

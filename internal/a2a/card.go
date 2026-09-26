@@ -7,8 +7,10 @@
 //   - Task methods (POST /a2a/v1/message:send, GET /a2a/v1/tasks/{id}) require
 //     the same bearer auth as /run. Observe skills only; exec-shaped skills
 //     reject fail-closed. Streaming/subscribe remain out of scope.
-//   - Skills are derived from the schema-mask tool scopes: a card reflects
-//     what the local node actually serves, never what a caller asks for.
+//   - Skills advertised on the card follow the live scope tier (v1 wire-up:
+//     ScopeObserve). Schema-mask tool scopes remain the longer-term source of
+//     truth; a card reflects what the local node actually serves, never what
+//     a caller asks for.
 package a2a
 
 import (

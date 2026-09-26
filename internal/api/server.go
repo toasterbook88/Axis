@@ -180,6 +180,10 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	}
 }
 
+// withAuth enforces the shared API bearer token (same policy as /run).
+// F9: when token == "", this is a no-op and the next handler runs unauthenticated —
+// identical to /run. Production TCP listeners should use a non-empty token; the
+// A2A slice-2 E2E harness requires a non-empty token for that reason.
 func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {
@@ -211,6 +215,8 @@ func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	// A2A slice 2v1: authenticated task send/get on the same mux as /run.
 	// Public agent card is mounted separately in ServeWithContext (outside withAuth).
+	// F9: task routes inherit /run token policy — withAuth no-ops when token=="";
+	// E2E and any TCP expose should use a non-empty token.
 	a2a.ServeTasks(mux, &a2a.Handler{
 		Store:   a2a.NewStore(0),
 		Scope:   a2a.ScopeObserve, // live scope; reject over-tier (F4)

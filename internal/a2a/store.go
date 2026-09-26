@@ -11,6 +11,8 @@ import (
 const defaultTaskTTL = 30 * time.Minute
 
 // Store is an in-memory, principal-bound task store with TTL expiry (F6, F7).
+// Principal binding is enforced on Get; with a single shared API token all
+// authenticated callers share one principal hash (defense-in-depth today).
 type Store struct {
 	mu   sync.RWMutex
 	byID map[string]*Task
