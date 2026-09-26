@@ -217,13 +217,19 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	// Public agent card is mounted separately in ServeWithContext (outside withAuth).
 	// F9: task routes inherit /run token policy — withAuth no-ops when token=="";
 	// E2E and any TCP expose should use a non-empty token.
+	a2aQueue := a2a.NewApprovalQueue()
 	a2a.ServeTasks(mux, &a2a.Handler{
 		Store:   a2a.NewStore(0),
 		Scope:   a2a.ScopeObserve, // live scope; reject over-tier (F4)
 		Observe: cacheObserve{cache: cache},
+		Queue:   a2aQueue,
 	}, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAuth(next, token)
 	})
+	// Slice 3: operator approve/reject for exec-shaped tasks. Approve runs
+	// the task synchronously through the guarded pipeline (the approver
+	// waits for the streamed result — same semantics as /run).
+	registerA2AApprovalRoutes(mux, a2aQueue, token, cache)
 
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -528,4 +534,64 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// registerA2AApprovalRoutes mounts the operator approve/reject routes for
+// exec-shaped A2A tasks. Both routes are token-authenticated like /run.
+// Approve dispatches the task through WireRunStreamResponse (the same
+// guarded pipeline as /run) so the approver sees the streamed result.
+func registerA2AApprovalRoutes(mux *http.ServeMux, queue *a2a.ApprovalQueue, token string, cache snapshotCache) {
+	mux.HandleFunc("/a2a/v1/tasks/approve/", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/a2a/v1/tasks/approve/")
+		task, ok := queue.Approve(strings.TrimSpace(id))
+		if !ok {
+			writeError(w, http.StatusNotFound, "task not pending")
+			return
+		}
+		if task.SkillID != "guarded-exec" {
+			a2a.WriteTaskJSON(w, http.StatusOK, task)
+			return
+		}
+		text := ""
+		if len(task.History) > 0 {
+			text = a2a.TextFromMessage(task.History[0])
+		}
+		guardedReq := execution.GuardedExecutionRequest{
+			Description:      text,
+			Mode:             "script",
+			OwnerSurface:     execution.OwnerSurfaceHTTPRun,
+			OwnerLabel:       requestCallerLabel(r),
+			Events:           events.GuardedExecutionSink{},
+			BuildContextJSON: knowledge.ExecutionContextJSON,
+			OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
+				scheduleCacheRefresh(cache, trigger)
+			},
+		}
+		emitResult, streamed, err := daemon.WireRunStreamResponse(w, r, &guardedReq)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		_ = emitResult
+		if streamed {
+			return
+		}
+	}, token))
+	mux.HandleFunc("/a2a/v1/tasks/reject/", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/a2a/v1/tasks/reject/")
+		task, ok := queue.Reject(strings.TrimSpace(id), "operator rejected")
+		if !ok {
+			writeError(w, http.StatusNotFound, "task not pending")
+			return
+		}
+		a2a.WriteTaskJSON(w, http.StatusOK, task)
+	}, token))
 }
