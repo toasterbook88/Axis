@@ -164,3 +164,51 @@ func TestA2AApprovalRoutesEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Pending list route: the operator board view of queued approval tasks.
+func TestA2AApprovalPendingList(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "axis.sock")
+	token := "test-token-pending"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ServeWithContext(ctx, socketPath, nil, token, false, func() a2a.AgentCard {
+		return a2a.Card(a2a.CardOptions{Name: "pending-probe", Version: "test", Scope: a2a.ScopeObserve})
+	})}()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("unix", socketPath, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	httpClient := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+		return net.DialTimeout("unix", socketPath, 2*time.Second)
+	}}}
+
+	req, _ := http.NewRequest(http.MethodPost, "http://axis/a2a/v1/message:send", strings.NewReader(`{"skillId":"guarded-exec","message":{"role":"user","parts":[{"type":"text","text":"x"}]}}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	list, err := httpClient.Get("http://axis/a2a/v1/tasks/pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Tasks []a2a.Task `json:"tasks"`
+	}
+	_ = json.NewDecoder(list.Body).Decode(&body)
+	list.Body.Close()
+	if len(body.Tasks) != 1 {
+		t.Fatalf("pending list = %d tasks, want 1", len(body.Tasks))
+	}
+	if body.Tasks[0].Status.State != a2a.TaskStatePending {
+		t.Fatalf("pending task state = %q", body.Tasks[0].Status.State)
+	}
+}

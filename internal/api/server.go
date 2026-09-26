@@ -230,6 +230,14 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	// the task synchronously through the guarded pipeline (the approver
 	// waits for the streamed result — same semantics as /run).
 	registerA2AApprovalRoutes(mux, a2aQueue, token, cache)
+	// Operator board view: list pending approval tasks.
+	mux.HandleFunc("/a2a/v1/tasks/pending", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, a2aTaskList{Tasks: a2aQueue.Pending()})
+	}, token))
 
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -632,4 +640,8 @@ func registerA2AApprovalRoutes(mux *http.ServeMux, queue *a2a.ApprovalQueue, tok
 		}
 		a2a.WriteTaskJSON(w, http.StatusOK, task)
 	}, token))
+}
+
+type a2aTaskList struct {
+	Tasks []a2a.Task `json:"tasks"`
 }
