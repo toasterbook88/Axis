@@ -124,7 +124,7 @@ AXIS is organized into five architectural trust/role tiers. Higher tiers consume
 ```text
 Layer 5  Advisory     internal/chat  internal/agent  internal/console
                         internal/mcp  internal/api  internal/cortex
-                        internal/mcpclient
+                        internal/mcpclient  internal/a2a
 Layer 4  Execution    internal/execution  internal/safety  internal/reservation
                         internal/scripts  internal/skills  internal/modellife
                         internal/modelinventory
@@ -156,6 +156,8 @@ internal/transport/   SSH execution layer (host-key verification must stay on)
 ```text
 internal/daemon/         Background snapshot refresh, in-memory cache
 internal/api/            Optional local HTTP API (axis serve)
+internal/a2a/            A2A agent-card surface (/.well-known/agent-card.json):
+                         scope-derived skills advertised to the mesh
 internal/mcp/            MCP server (axis mcp serve): 20 tools (17 read-only
                          diagnostics + 3 advisory lease primitives); see
                          docs/runbooks/mcp-network-tools.md for the full list
