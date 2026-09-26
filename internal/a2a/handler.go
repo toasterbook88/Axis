@@ -17,6 +17,9 @@ type Handler struct {
 	Store   *Store
 	Scope   ScopeTier // live scope; v1 wire-up is ScopeObserve
 	Observe ObserveData
+	// Queue holds exec-shaped tasks pending operator approval (slice 3).
+	// Nil skips enqueue. This package does not promote those tasks.
+	Queue *ApprovalQueue
 	// Now is optional clock override for tests.
 	Now func() time.Time
 }
@@ -45,6 +48,10 @@ func (h *Handler) EnsureDefaults() {
 //	POST /a2a/v1/message:send
 //	GET  /a2a/v1/tasks/{id}
 //
+// POST /a2a/v1/tasks/{id}/approve and POST /a2a/v1/tasks/{id}/reject are
+// registered by internal/api. They are the only promotion and rejection
+// routes, and approve calls the guarded runner.
+//
 // Binding: HTTP+JSON under /a2a/v1/ matching A2A 1.0 naming (message:send).
 // Proposal-literal tasks/send is a future alias — no TCK claim.
 func ServeTasks(mux *http.ServeMux, h *Handler, wrap func(http.HandlerFunc) http.HandlerFunc) {
@@ -56,7 +63,7 @@ func ServeTasks(mux *http.ServeMux, h *Handler, wrap func(http.HandlerFunc) http
 		wrap = func(next http.HandlerFunc) http.HandlerFunc { return next }
 	}
 	mux.HandleFunc("/a2a/v1/message:send", wrap(h.HandleSend))
-	mux.HandleFunc("/a2a/v1/tasks/", wrap(h.HandleGet))
+	mux.HandleFunc("/a2a/v1/tasks/", wrap(h.HandleTasksDispatch))
 }
 
 // HandleSend implements POST /a2a/v1/message:send.
@@ -95,13 +102,23 @@ func (h *Handler) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 	allow := AllowedSkillIDs(h.Scope)
 
-	// Gate B / F4 / F2: exec-shaped and unknown / over-tier → reject fail-closed.
-	// Never enter RunGuarded from this slice (observe-only wire-up).
-	if IsExecShaped(skillID) || !allow[skillID] {
-		reason := "skill not allowed for live scope"
-		if IsExecShaped(skillID) {
-			reason = "exec-shaped skill rejected on observe-only A2A surface (fail-closed)"
+	// Gate B / F4 / F2: exec-shaped tasks enter the approval queue in
+	// Pending state — NEVER executed here. Only the operator approval
+	// route promotes them (slice 3). Unknown / over-tier skills reject
+	// fail-closed.
+	if IsExecShaped(skillID) {
+		task.Status = TaskStatus{State: TaskStatePending, Timestamp: now}
+		if h.Queue != nil {
+			stored := h.Queue.Enqueue(task)
+			*task = *stored
 		}
+		task.Metadata["approvalRequired"] = true
+		h.Store.Put(task)
+		writeJSON(w, http.StatusOK, taskPublic(task))
+		return
+	}
+	if !allow[skillID] {
+		reason := "skill not allowed for live scope"
 		task.Status = TaskStatus{
 			State:     TaskStateRejected,
 			Timestamp: now,

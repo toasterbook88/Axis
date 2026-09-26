@@ -217,13 +217,27 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	// Public agent card is mounted separately in ServeWithContext (outside withAuth).
 	// F9: task routes inherit /run token policy — withAuth no-ops when token=="";
 	// E2E and any TCP expose should use a non-empty token.
-	a2a.ServeTasks(mux, &a2a.Handler{
+	a2aQueue := a2a.NewApprovalQueue()
+	a2aHandler := &a2a.Handler{
 		Store:   a2a.NewStore(0),
 		Scope:   a2a.ScopeObserve, // live scope; reject over-tier (F4)
 		Observe: cacheObserve{cache: cache},
-	}, func(next http.HandlerFunc) http.HandlerFunc {
+		Queue:   a2aQueue,
+	}
+	a2a.ServeTasks(mux, a2aHandler, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAuth(next, token)
 	})
+	// Slice 3: the only approve/reject routes. Approve requires confirm=YES
+	// and then runs the guarded pipeline, same contract as /run.
+	registerA2AApprovalRoutes(mux, a2aHandler, token, cache)
+	// Operator board view: list pending approval tasks.
+	mux.HandleFunc("/a2a/v1/tasks/pending", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, a2aTaskList{Tasks: a2aQueue.Pending()})
+	}, token))
 
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -528,4 +542,176 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// registerA2AApprovalRoutes mounts the only operator approve and reject
+// routes. Both use the same bearer policy as /run. Approve requires the
+// caller to send confirm=YES and an explicit mode, then dispatches through
+// the guarded runner. Neither route is the /tasks/approve/{id} shape.
+func registerA2AApprovalRoutes(mux *http.ServeMux, h *a2a.Handler, token string, cache snapshotCache) {
+	mux.HandleFunc("/a2a/v1/tasks/{id}/approve", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		approveA2ATask(w, r, h, cache)
+	}, token))
+	mux.HandleFunc("/a2a/v1/tasks/{id}/reject", withAuth(func(w http.ResponseWriter, r *http.Request) {
+		rejectA2ATask(w, r, h)
+	}, token))
+}
+
+func approveA2ATask(w http.ResponseWriter, r *http.Request, h *a2a.Handler, cache snapshotCache) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h == nil || h.Queue == nil || h.Store == nil {
+		writeError(w, http.StatusNotFound, "task not pending")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusNotFound, "unknown task")
+		return
+	}
+	var body struct {
+		Confirm string `json:"confirm"`
+		Mode    string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	confirm := strings.TrimSpace(body.Confirm)
+	mode := strings.ToLower(strings.TrimSpace(body.Mode))
+	if confirm != execution.ConfirmWord {
+		writeError(w, http.StatusBadRequest, "confirm must be YES to authorize execution")
+		return
+	}
+	if mode == "" {
+		writeError(w, http.StatusBadRequest, "mode is required (use script or exec)")
+		return
+	}
+	if mode != execution.ModeScript && mode != execution.ModeExec {
+		writeError(w, http.StatusBadRequest, "mode must be script or exec")
+		return
+	}
+
+	task, ok := h.Queue.Approve(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "task not pending")
+		return
+	}
+	text := ""
+	if len(task.History) > 0 {
+		text = strings.TrimSpace(a2a.TextFromMessage(task.History[0]))
+	}
+	if text == "" {
+		persistA2ARun(w, h, task, execution.GuardedExecutionResult{OK: false, Error: "description is required"}, nil, false)
+		return
+	}
+
+	guardedReq := execution.GuardedExecutionRequest{
+		Description:      text,
+		Mode:             mode,
+		Confirm:          confirm,
+		OwnerSurface:     execution.OwnerSurfaceA2ATask,
+		OwnerLabel:       requestCallerLabel(r),
+		Events:           events.GuardedExecutionSink{},
+		BuildContextJSON: knowledge.ExecutionContextJSON,
+		OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
+			scheduleCacheRefresh(cache, trigger)
+		},
+	}
+	emitResult, streamed, err := daemon.WireRunStreamResponse(w, r, &guardedReq)
+	if err != nil {
+		persistA2ARun(w, h, task, execution.GuardedExecutionResult{OK: false, Error: err.Error()}, nil, false)
+		return
+	}
+
+	rc, rcErr := loadRunnerContext(r.Context())
+	if rcErr != nil {
+		res := execution.GuardedExecutionResult{OK: false, Description: text, Mode: mode, Error: rcErr.Error()}
+		persistA2ARun(w, h, task, res, emitResult, streamed)
+		return
+	}
+	rtCtx := &runtimectx.Context{
+		Config:   rc.cfg,
+		Snapshot: rc.snap,
+		State:    rc.State,
+		Skills:   rc.skillStore,
+		Ledger:   rc.ledger,
+	}
+	res, runErr := runLiveGuarded(r.Context(), rtCtx, guardedReq)
+	res = daemon.NormalizeRunResult(res, runErr)
+	persistA2ARun(w, h, task, res, emitResult, streamed)
+}
+
+func rejectA2ATask(w http.ResponseWriter, r *http.Request, h *a2a.Handler) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h == nil || h.Queue == nil || h.Store == nil {
+		writeError(w, http.StatusNotFound, "task not pending")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusNotFound, "unknown task")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if reason == "" {
+		writeError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+	task, ok := h.Queue.Reject(id, reason)
+	if !ok {
+		writeError(w, http.StatusNotFound, "task not pending")
+		return
+	}
+	h.Store.Put(task)
+	writePublicA2ATask(w, http.StatusOK, task)
+}
+
+func persistA2ARun(w http.ResponseWriter, h *a2a.Handler, task *a2a.Task, res execution.GuardedExecutionResult, emitResult func(execution.GuardedExecutionResult) error, streamed bool) {
+	cp := *task
+	now := time.Now()
+	if res.OK && res.Error == "" {
+		cp.Status = a2a.TaskStatus{State: a2a.TaskStateCompleted, Timestamp: now}
+	} else {
+		msg := res.Error
+		if msg == "" {
+			msg = res.BlockReason
+		}
+		if msg == "" {
+			msg = "guarded execution failed"
+		}
+		cp.Status = a2a.TaskStatus{
+			State:     a2a.TaskStateFailed,
+			Timestamp: now,
+			Message:   &a2a.Message{Role: "agent", Parts: []a2a.Part{{Type: "text", Text: msg}}},
+		}
+	}
+	h.Store.Put(&cp)
+	if streamed && emitResult != nil {
+		_ = emitResult(res)
+		return
+	}
+	writePublicA2ATask(w, http.StatusOK, &cp)
+}
+
+func writePublicA2ATask(w http.ResponseWriter, status int, task *a2a.Task) {
+	pub := *task
+	pub.PrincipalHash = ""
+	a2a.WriteTaskJSON(w, status, &pub)
+}
+
+type a2aTaskList struct {
+	Tasks []a2a.Task `json:"tasks"`
 }
