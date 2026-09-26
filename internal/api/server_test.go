@@ -1385,7 +1385,7 @@ func TestServeWithContextGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ServeWithContext(ctx, socketPath, cache, "", false)
+		errChan <- ServeWithContext(ctx, socketPath, cache, "", false, nil)
 	}()
 
 	// Wait for socket
@@ -1460,7 +1460,7 @@ func TestPprofEndpointsEnabled(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ServeWithContext(ctx, socketPath, cache, token, true)
+		errChan <- ServeWithContext(ctx, socketPath, cache, token, true, nil)
 	}()
 
 	// Wait for socket to appear
@@ -1507,7 +1507,7 @@ func TestPprofEndpointsDisabledByDefault(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ServeWithContext(ctx, socketPath, cache, "", false)
+		errChan <- ServeWithContext(ctx, socketPath, cache, "", false, nil)
 	}()
 
 	// Wait for socket to appear
@@ -1552,7 +1552,7 @@ func TestPprofEndpointsRequireAuthWhenTokenSet(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ServeWithContext(ctx, socketPath, cache, token, true)
+		errChan <- ServeWithContext(ctx, socketPath, cache, token, true, nil)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
