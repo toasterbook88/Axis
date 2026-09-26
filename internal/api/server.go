@@ -576,10 +576,48 @@ func registerA2AApprovalRoutes(mux *http.ServeMux, queue *a2a.ApprovalQueue, tok
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		_ = emitResult
-		if streamed {
+
+		rc, rcErr := loadRunnerContext(r.Context())
+		if rcErr != nil {
+			if streamed {
+				_ = emitResult(execution.GuardedExecutionResult{
+					OK:    false,
+					Error: rcErr.Error(),
+				})
+				return
+			}
+			a2a.WriteTaskJSON(w, http.StatusOK, func() *a2a.Task {
+				cp := *task
+				cp.Status = a2a.TaskStatus{State: a2a.TaskStateFailed, Timestamp: time.Now(), Message: &a2a.Message{Role: "agent", Parts: []a2a.Part{{Type: "text", Text: rcErr.Error()}}}}
+				return &cp
+			}())
 			return
 		}
+
+		rtCtx := &runtimectx.Context{
+			Config:   rc.cfg,
+			Snapshot: rc.snap,
+			State:    rc.State,
+			Skills:   rc.skillStore,
+			Ledger:   rc.ledger,
+		}
+
+		res, runErr := runLiveGuarded(r.Context(), rtCtx, guardedReq)
+		res = daemon.NormalizeRunResult(res, runErr)
+
+		if streamed {
+			_ = emitResult(res)
+			return
+		}
+
+		a2a.WriteTaskJSON(w, http.StatusOK, func() *a2a.Task {
+			cp := *task
+			cp.Status = a2a.TaskStatus{State: a2a.TaskStateCompleted, Timestamp: time.Now()}
+			if res.Error != "" {
+				cp.Status = a2a.TaskStatus{State: a2a.TaskStateFailed, Timestamp: time.Now(), Message: &a2a.Message{Role: "agent", Parts: []a2a.Part{{Type: "text", Text: res.Error}}}}
+			}
+			return &cp
+		}())
 	}, token))
 	mux.HandleFunc("/a2a/v1/tasks/reject/", withAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
