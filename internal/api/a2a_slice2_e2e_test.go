@@ -194,8 +194,10 @@ func TestA2ASlice2E2E(t *testing.T) {
 	artifact["task_exec_http_status"] = execResp.StatusCode
 	artifact["task_exec_rejected"] = execTask.Status.State == a2a.TaskStateRejected
 	artifact["task_exec_state"] = string(execTask.Status.State)
-	if execTask.Status.State != a2a.TaskStateRejected {
-		t.Fatalf("guarded-exec state = %s, want rejected (F2/F4)", execTask.Status.State)
+	// Slice 3: exec-shaped tasks enter the approval queue as pending, not
+	// rejected -- the operator approval route decides execution.
+	if execTask.Status.State != a2a.TaskStatePending {
+		t.Fatalf("guarded-exec state = %s, want pending (approval queue)", execTask.Status.State)
 	}
 
 	unkReq, _ := http.NewRequest(http.MethodPost, "http://axis/a2a/v1/message:send", strings.NewReader(
