@@ -37,6 +37,7 @@ const (
 	OwnerSurfaceAgentRunShell  = "agent-run-shell"
 	OwnerSurfaceAgentRunOnNode = "agent-run-on-node"
 	OwnerSurfaceAgentRunTask   = "agent-run-task"
+	OwnerSurfaceA2ATask        = "a2a-task" // mesh-delegated A2A task facade
 )
 
 var executionHeartbeatInterval = 15 * time.Second
