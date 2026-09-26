@@ -89,6 +89,10 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 	// A2A agent card: advertise this node's identity and scope-derived skills
 	// at /.well-known/agent-card.json. Card URL uses the mesh-reachable
 	// listener address.
+	// High-1 fix: the card URL must be a reachable base URL. The default
+	// listener is a Unix socket (~/.axis/axis.sock) — advertising
+	// "http://<socket-path>" is nonsense. Only TCP listeners get a card URL;
+	// Unix-socket daemons omit the URL field (v1 limit, documented).
 	cardFn := func() a2a.AgentCard {
 		name := ""
 		if snap, ok := d.Snapshot(); ok {
@@ -99,12 +103,15 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		if name == "" {
 			name = "axis-node"
 		}
-		return a2a.Card(a2a.CardOptions{
+		opts := a2a.CardOptions{
 			Name:    name,
 			Version: buildinfo.Version,
-			URL:     "http://" + addr,
-			Scope:   a2a.ScopeObserve,
-		})
+			Scope:   a2a.ScopeObserve, // v1: always observe (High-2 fix, see below)
+		}
+		if !auth.IsUnixAddr(addr) {
+			opts.URL = "http://" + addr
+		}
+		return a2a.Card(opts)
 	}
 	return serveHTTPAPI(ctx, addr, d, token, pprof, cardFn)
 }

@@ -59,25 +59,24 @@ const (
 
 // CardOptions configures card generation for one node.
 type CardOptions struct {
-	Name        string    // cluster-unique node name (mesh identity)
-	Version     string    // axis build version (buildinfo.Version)
-	URL         string    // base URL the A2A surface is reachable at (tailnet addr)
-	Scope       ScopeTier // the node's current schema-mask tier
-	IncludeLogs bool      // git_log advertised as a read skill (optional)
+	Name    string    // cluster-unique node name (mesh identity)
+	Version string    // axis build version (buildinfo.Version)
+	URL     string    // base URL the A2A surface is reachable at; omit for Unix-socket listeners (v1 limit: no URL advertised)
+	Scope   ScopeTier // v1 is always ScopeObserve (see Card); the field exists so edit/exec wiring needs no signature change
 }
 
 // Card builds the AgentCard for a node at the given scope tier. Skills are
 // derived from the tier, not from caller input — a node can never advertise
 // a tier it is not currently serving.
 func Card(o CardOptions) AgentCard {
-	skills := skillsForScope(o.Scope, o.IncludeLogs)
+	skills := skillsForScope(o.Scope)
 	desc := "AXIS cluster node — " + string(o.Scope) + " scope"
 	return AgentCard{
 		Name:               o.Name,
 		Description:        desc,
 		Version:            o.Version,
 		URL:                o.URL,
-		Capabilities:       Capabilities{Streaming: true},
+		Capabilities:       Capabilities{Streaming: false}, // v1: card-only; no task/streaming methods yet
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
 		Skills:             skills,
@@ -88,7 +87,7 @@ func Card(o CardOptions) AgentCard {
 // Mirrors the schema-mask contract: observe is read-only; edit adds
 // workspace writes; exec adds guarded execution (advertised only when the
 // node is actually serving that tier).
-func skillsForScope(scope ScopeTier, includeLogs bool) []Skill {
+func skillsForScope(scope ScopeTier) []Skill {
 	var out []Skill
 	add := func(id, name, desc string) {
 		out = append(out, Skill{ID: id, Name: name, Description: desc, Tags: []string{string(scope)}})
@@ -123,5 +122,3 @@ func ServeCard(mux *http.ServeMux, cardFn func() AgentCard) {
 		_ = json.NewEncoder(w).Encode(cardFn())
 	})
 }
-
-// Timestamp helper kept for future task-method slices.
