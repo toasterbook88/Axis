@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/a2a"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/mesh"
@@ -40,8 +42,8 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 	return daemon.NewDefault(refreshInterval)
 }
 
-var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string, pprof bool) error {
-	return api.ServeWithContext(ctx, addr, d, token, pprof)
+var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string, pprof bool, cardFn func() a2a.AgentCard) error {
+	return api.ServeWithContext(ctx, addr, d, token, pprof, cardFn)
 }
 
 func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, pprof bool) error {
@@ -84,7 +86,27 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 	// ServeWithContext blocks until ctx is cancelled or a listen error.
 	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then the deferred
 	// cleanup waits for background goroutines to finish.
-	return serveHTTPAPI(ctx, addr, d, token, pprof)
+	// A2A agent card: advertise this node's identity and scope-derived skills
+	// at /.well-known/agent-card.json. Card URL uses the mesh-reachable
+	// listener address.
+	cardFn := func() a2a.AgentCard {
+		name := ""
+		if snap, ok := d.Snapshot(); ok {
+			if n, found := models.FindLocalNode(snap.Nodes); found {
+				name = n.Name
+			}
+		}
+		if name == "" {
+			name = "axis-node"
+		}
+		return a2a.Card(a2a.CardOptions{
+			Name:    name,
+			Version: buildinfo.Version,
+			URL:     "http://" + addr,
+			Scope:   a2a.ScopeObserve,
+		})
+	}
+	return serveHTTPAPI(ctx, addr, d, token, pprof, cardFn)
 }
 
 func serveCmd() *cobra.Command {

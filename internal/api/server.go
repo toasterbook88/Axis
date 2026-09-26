@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/a2a"
 	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
@@ -106,7 +107,7 @@ const (
 var runLiveGuarded = execution.RunGuarded
 
 func Serve(addr string, cache snapshotCache, token string, pprof bool) error {
-	return ServeWithContext(context.Background(), addr, cache, token, pprof)
+	return ServeWithContext(context.Background(), addr, cache, token, pprof, nil)
 }
 
 func newHTTPServer(handler http.Handler) *http.Server {
@@ -123,10 +124,15 @@ func newHTTPServer(handler http.Handler) *http.Server {
 
 // ServeWithContext starts the HTTP/Unix API server and blocks until ctx is
 // cancelled or a fatal listen error occurs. On cancellation it performs a
-// graceful shutdown with a 10-second drain before returning nil.
-func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string, pprof bool) error {
+// graceful shutdown with a 10-second drain before returning nil. When
+// cardFn is non-nil, the standard A2A well-known route
+// (/.well-known/agent-card.json) is served alongside the API routes.
+func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string, pprof bool, cardFn func() a2a.AgentCard) error {
 	mux := http.NewServeMux()
 	registerRoutes(mux, cache, token)
+	if cardFn != nil {
+		a2a.ServeCard(mux, cardFn)
+	}
 	if pprof {
 		registerPprofRoutes(mux, token)
 	}

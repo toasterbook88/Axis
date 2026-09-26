@@ -54,7 +54,7 @@ func TestFetchDaemonMeshAgainstProductionServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	served := make(chan error, 1)
-	go func() { served <- api.ServeWithContext(ctx, socketPath, cache, token, false) }()
+	go func() { served <- api.ServeWithContext(ctx, socketPath, cache, token, false, nil) }()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

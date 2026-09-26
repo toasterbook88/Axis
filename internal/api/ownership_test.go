@@ -49,10 +49,10 @@ func TestServeWithContextRefusesSecondDaemon(t *testing.T) {
 	defer cancel()
 
 	first := make(chan error, 1)
-	go func() { first <- ServeWithContext(ctx, socketPath, cache, "", false) }()
+	go func() { first <- ServeWithContext(ctx, socketPath, cache, "", false, nil) }()
 	waitForSocket(t, socketPath)
 
-	err := ServeWithContext(context.Background(), socketPath, cache, "", false)
+	err := ServeWithContext(context.Background(), socketPath, cache, "", false, nil)
 	if !errors.Is(err, ErrDaemonAlreadyRunning) {
 		t.Fatalf("second daemon: got %v, want ErrDaemonAlreadyRunning", err)
 	}
