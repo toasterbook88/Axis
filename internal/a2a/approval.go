@@ -13,7 +13,7 @@ package a2a
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
+	"sort"
 	"sync"
 	"time"
 )
@@ -31,18 +31,15 @@ const TaskStateApproved TaskState = "approved"
 type ApprovalQueue struct {
 	mu      sync.Mutex
 	pending map[string]*Task
-	// Approved delivers tasks promoted by the operator. The daemon's
-	// execution pump consumes this channel; capacity bounds memory.
-	Approved chan *Task
-	now      func() time.Time
+	now     func() time.Time
 }
 
-// NewApprovalQueue returns an empty queue.
+// NewApprovalQueue returns an empty queue. Nothing in the queue runs a
+// command; the api approval route is the only caller that dispatches.
 func NewApprovalQueue() *ApprovalQueue {
 	return &ApprovalQueue{
-		pending:  make(map[string]*Task),
-		Approved: make(chan *Task, 16),
-		now:      time.Now,
+		pending: make(map[string]*Task),
+		now:     time.Now,
 	}
 }
 
@@ -76,9 +73,7 @@ func (q *ApprovalQueue) Approve(id string) (*Task, bool) {
 	if !ok {
 		return nil, false
 	}
-	if t.SkillID != "guarded-exec" && t.SkillID != "workspace-write" {
-		// Only exec-shaped tasks ride the approval queue; observe tasks
-		// complete inline in the send handler.
+	if !IsExecShaped(t.SkillID) {
 		return nil, false
 	}
 	delete(q.pending, id)
@@ -113,6 +108,7 @@ func (q *ApprovalQueue) Pending() []Task {
 	for _, t := range q.pending {
 		out = append(out, *t)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
@@ -123,73 +119,16 @@ func WriteTaskJSON(w http.ResponseWriter, status int, t *Task) {
 	_ = json.NewEncoder(w).Encode(t)
 }
 
-// HandleApprove implements POST /a2a/v1/tasks/{id}/approve. Requires the
-// same bearer auth as the send route (mounted behind the same wrap).
-func (h *Handler) HandleApprove(w http.ResponseWriter, r *http.Request) {
-	h.EnsureDefaults()
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	id := strings.TrimPrefix(r.URL.Path, "/a2a/v1/tasks/")
-	id = strings.TrimSuffix(id, "/approve")
-	if id == "" || strings.Contains(id, "/") {
-		writeErr(w, http.StatusNotFound, "unknown task")
-		return
-	}
-	t, ok := h.Queue.Approve(id)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "task not pending")
-		return
-	}
-	WriteTaskJSON(w, http.StatusOK, t)
-}
-
-// HandleReject implements POST /a2a/v1/tasks/{id}/reject.
-func (h *Handler) HandleReject(w http.ResponseWriter, r *http.Request) {
-	h.EnsureDefaults()
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	id := strings.TrimPrefix(r.URL.Path, "/a2a/v1/tasks/")
-	id = strings.TrimSuffix(id, "/reject")
-	if id == "" || strings.Contains(id, "/") {
-		writeErr(w, http.StatusNotFound, "unknown task")
-		return
-	}
-	body := struct {
-		Reason string `json:"reason"`
-	}{}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	t, ok := h.Queue.Reject(id, body.Reason)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "task not pending")
-		return
-	}
-	WriteTaskJSON(w, http.StatusOK, t)
-}
-
-// HandleTasksDispatch routes /a2a/v1/tasks/{id}[/approve|/reject] and
-// /a2a/v1/tasks/{id} to their handlers based on method + path suffix.
-// Registered on the same mux pattern as HandleGet (registered later in
-// ServeTasks) so approve/reject are reached before the generic GET.
+// HandleTasksDispatch serves GET /a2a/v1/tasks/{id}. Approve and reject are
+// not registered here; internal/api owns those routes so a task cannot be
+// promoted without the guarded runner. A nil Queue therefore has nothing to
+// call and cannot panic.
 func (h *Handler) HandleTasksDispatch(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/a2a/v1/tasks/")
-	switch {
-	case strings.HasSuffix(path, "/approve") && r.Method == http.MethodPost:
-		r.URL.Path = "/a2a/v1/tasks/" + strings.TrimSuffix(path, "/approve")
-		h.HandleApprove(w, r)
-	case strings.HasSuffix(path, "/reject") && r.Method == http.MethodPost:
-		r.URL.Path = "/a2a/v1/tasks/" + strings.TrimSuffix(path, "/reject")
-		h.HandleReject(w, r)
-	default:
-		if r.Method != http.MethodGet {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unroutable task path: " + r.URL.Path})
-			return
-		}
-		h.HandleGet(w, r)
+	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unroutable task path: " + r.URL.Path})
+		return
 	}
+	h.HandleGet(w, r)
 }

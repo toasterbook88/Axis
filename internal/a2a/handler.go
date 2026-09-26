@@ -18,7 +18,7 @@ type Handler struct {
 	Scope   ScopeTier // live scope; v1 wire-up is ScopeObserve
 	Observe ObserveData
 	// Queue holds exec-shaped tasks pending operator approval (slice 3).
-	// Nil disables the approval routes.
+	// Nil skips enqueue. This package does not promote those tasks.
 	Queue *ApprovalQueue
 	// Now is optional clock override for tests.
 	Now func() time.Time
@@ -47,10 +47,10 @@ func (h *Handler) EnsureDefaults() {
 //
 //	POST /a2a/v1/message:send
 //	GET  /a2a/v1/tasks/{id}
-//	POST /a2a/v1/tasks/{id}/approve   (slice 3; Queue != nil; registered by
-//	                                   internal/api which owns the guarded
-//	                                   dispatch — approval routes there)
-//	POST /a2a/v1/tasks/{id}/reject    (slice 3; Queue != nil)
+//
+// POST /a2a/v1/tasks/{id}/approve and POST /a2a/v1/tasks/{id}/reject are
+// registered by internal/api. They are the only promotion and rejection
+// routes, and approve calls the guarded runner.
 //
 // Binding: HTTP+JSON under /a2a/v1/ matching A2A 1.0 naming (message:send).
 // Proposal-literal tasks/send is a future alias — no TCK claim.

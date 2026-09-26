@@ -2,7 +2,6 @@ package a2a
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -97,36 +96,56 @@ func TestApprovalRoutes_EndToEnd(t *testing.T) {
 		t.Fatalf("queue count = %d, want 1", len(h.Queue.Pending()))
 	}
 
-	// 2. approve it → state approved, task delivered on the channel
-	resp2, err := http.Post(srv.URL+"/a2a/v1/tasks/"+sent.ID+"/approve", "application/json", nil)
+	// This mux does not promote. The only approve/reject routes live on the
+	// api server, which is the package that can call the guarded runner.
+	resp2, err := http.Post(srv.URL+"/a2a/v1/tasks/"+sent.ID+"/approve", "application/json", strings.NewReader(`{"confirm":"YES","mode":"exec"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp2.Body.Close()
-	// The approve route runs the task synchronously through the guarded
-	// pipeline; the queue is empty afterward.
-	if len(h.Queue.Pending()) != 0 {
-		t.Fatalf("queue count after approve = %d, want 0", len(h.Queue.Pending()))
+	if resp2.StatusCode == http.StatusOK {
+		t.Fatalf("bare a2a approve status = %d; this mux must not promote", resp2.StatusCode)
+	}
+	if len(h.Queue.Pending()) != 1 {
+		t.Fatalf("queue count after bare approve = %d, want 1", len(h.Queue.Pending()))
+	}
+	gotResp, err := http.Get(srv.URL + "/a2a/v1/tasks/" + sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Task
+	_ = json.NewDecoder(gotResp.Body).Decode(&got)
+	gotResp.Body.Close()
+	if got.Status.State != TaskStatePending {
+		t.Fatalf("store state after bare approve = %q, want pending", got.Status.State)
 	}
 
-	// 3. reject a second one
-	resp3, err := http.Post(srv.URL+"/a2a/v1/message:send", "application/json", strings.NewReader(send))
+	resp4, err := http.Post(srv.URL+"/a2a/v1/tasks/"+sent.ID+"/reject", "application/json", strings.NewReader(`{"reason":"no"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sent2 Task
-	_ = json.NewDecoder(resp3.Body).Decode(&sent2)
-	resp3.Body.Close()
-	resp4, err := http.Post(srv.URL+"/a2a/v1/tasks/"+sent2.ID+"/reject", "application/json", strings.NewReader(`{"reason":"no"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rej Task
-	raw, _ := io.ReadAll(resp4.Body)
 	resp4.Body.Close()
-	t.Logf("reject status: %d raw: %s", resp4.StatusCode, string(raw[:min(len(raw), 200)]))
-	_ = json.Unmarshal(raw, &rej)
-	if rej.Status.State != TaskStateRejected {
-		t.Fatalf("reject state = %q", rej.Status.State)
+	if resp4.StatusCode == http.StatusOK {
+		t.Fatalf("bare a2a reject status = %d; this mux must not decide the task", resp4.StatusCode)
+	}
+	if len(h.Queue.Pending()) != 1 {
+		t.Fatalf("queue count after bare reject = %d, want 1", len(h.Queue.Pending()))
+	}
+}
+
+func TestApproveRouteNilQueueDoesNotPanic(t *testing.T) {
+	h := &Handler{Store: NewStore(0), Scope: ScopeObserve, Now: func() time.Time { return time.Unix(0, 0) }}
+	mux := http.NewServeMux()
+	ServeTasks(mux, h, nil)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/a2a/v1/tasks/abc/approve", "application/json", strings.NewReader(`{"confirm":"YES","mode":"exec"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("nil queue approve status = %d, want 400", resp.StatusCode)
 	}
 }
