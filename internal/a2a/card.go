@@ -1,16 +1,16 @@
-// Package a2a implements a minimal, read-only slice of the Agent-to-Agent
-// (A2A) protocol: an Agent Card that advertises this node's identity and
-// capabilities to the rest of the mesh, served at
-// /.well-known/agent-card.json by the local AXIS daemon.
+// Package a2a implements a minimal slice of the Agent-to-Agent (A2A) protocol:
+// an Agent Card at /.well-known/agent-card.json plus authenticated task
+// send/get on the same axis serve mux (slice 2v1).
 //
-// Scope discipline (see findings/2026-09-25-a2a-agent-card-mesh-proposal.md):
-//   - v1 exposes ONLY the card. Task methods (tasks/send, tasks/sendSubscribe)
-//     are deliberately not implemented in this slice.
-//   - Skills are derived from the schema-mask tool scopes: a card reflects
-//     what the local node actually serves, never what a caller asks for.
-//   - The card is public-by-design (no secret, no auth) — it advertises
-//     metadata only, the same information the mesh gossip already carries,
-//     in the standardized well-known location.
+// Scope discipline (see a2a-slice2-design + agent-card mesh proposal):
+//   - Card stays public-by-design (metadata only).
+//   - Task methods (POST /a2a/v1/message:send, GET /a2a/v1/tasks/{id}) require
+//     the same bearer auth as /run. Observe skills only; exec-shaped skills
+//     reject fail-closed. Streaming/subscribe remain out of scope.
+//   - Skills advertised on the card follow the live scope tier (v1 wire-up:
+//     ScopeObserve). Schema-mask tool scopes remain the longer-term source of
+//     truth; a card reflects what the local node actually serves, never what
+//     a caller asks for.
 package a2a
 
 import (
@@ -76,7 +76,7 @@ func Card(o CardOptions) AgentCard {
 		Description:        desc,
 		Version:            o.Version,
 		URL:                o.URL,
-		Capabilities:       Capabilities{Streaming: false}, // v1: card-only; no task/streaming methods yet
+		Capabilities:       Capabilities{Streaming: false}, // slice2v1: sync send+get only; no subscribe/SSE
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
 		Skills:             skills,

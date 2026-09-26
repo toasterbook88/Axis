@@ -127,6 +127,7 @@ func newHTTPServer(handler http.Handler) *http.Server {
 // graceful shutdown with a 10-second drain before returning nil. When
 // cardFn is non-nil, the standard A2A well-known route
 // (/.well-known/agent-card.json) is served alongside the API routes.
+// Authenticated A2A task send/get routes are always registered in registerRoutes.
 func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string, pprof bool, cardFn func() a2a.AgentCard) error {
 	mux := http.NewServeMux()
 	registerRoutes(mux, cache, token)
@@ -179,6 +180,10 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	}
 }
 
+// withAuth enforces the shared API bearer token (same policy as /run).
+// F9: when token == "", this is a no-op and the next handler runs unauthenticated —
+// identical to /run. Production TCP listeners should use a non-empty token; the
+// A2A slice-2 E2E harness requires a non-empty token for that reason.
 func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {
@@ -208,6 +213,18 @@ func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 }
 
 func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
+	// A2A slice 2v1: authenticated task send/get on the same mux as /run.
+	// Public agent card is mounted separately in ServeWithContext (outside withAuth).
+	// F9: task routes inherit /run token policy — withAuth no-ops when token=="";
+	// E2E and any TCP expose should use a non-empty token.
+	a2a.ServeTasks(mux, &a2a.Handler{
+		Store:   a2a.NewStore(0),
+		Scope:   a2a.ScopeObserve, // live scope; reject over-tier (F4)
+		Observe: cacheObserve{cache: cache},
+	}, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAuth(next, token)
+	})
+
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
