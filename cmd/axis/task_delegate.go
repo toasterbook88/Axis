@@ -18,6 +18,10 @@ import (
 
 var buildA2AClient = resolveA2AClient
 
+var loadA2AConfig = func() (*config.Config, error) {
+	return config.Load(config.DefaultConfigPath())
+}
+
 func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2a.Client, error) {
 	nodeName = strings.TrimSpace(nodeName)
 	addrOverride = strings.TrimSpace(addrOverride)
@@ -31,7 +35,7 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 
 	isLocal := nodeName == "" || nodeName == "local" || nodeName == "localhost" || nodeName == "127.0.0.1"
 
-	cfg, err := config.Load(config.DefaultConfigPath())
+	cfg, err := loadA2AConfig()
 	if err == nil && cfg != nil {
 		if nodeCfg, ok := cfg.FindNode(nodeName); ok {
 			if nodeCfg.IsLocal() {
@@ -170,7 +174,24 @@ func taskDelegateCmd() *cobra.Command {
 			}
 
 			if format == "json" {
-				return printOutput(cmd.OutOrStdout(), task, "json")
+				if writeErr := printOutput(cmd.OutOrStdout(), task, "json"); writeErr != nil {
+					return writeErr
+				}
+				if task.Status.State == a2a.TaskStateRejected {
+					reason := ""
+					if task.Status.Message != nil {
+						reason = a2a.TextFromMessage(*task.Status.Message)
+					}
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s was rejected: %s", task.ID, reason)}
+				}
+				if task.Status.State == a2a.TaskStateFailed {
+					errText := ""
+					if task.Status.Message != nil {
+						errText = a2a.TextFromMessage(*task.Status.Message)
+					}
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s failed: %s", task.ID, errText)}
+				}
+				return nil
 			}
 
 			var b strings.Builder
@@ -262,7 +283,13 @@ func taskStatusCmd() *cobra.Command {
 			}
 
 			if format == "json" {
-				return printOutput(cmd.OutOrStdout(), task, "json")
+				if writeErr := printOutput(cmd.OutOrStdout(), task, "json"); writeErr != nil {
+					return writeErr
+				}
+				if task.Status.State == a2a.TaskStateFailed || task.Status.State == a2a.TaskStateRejected {
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s is %s", task.ID, task.Status.State)}
+				}
+				return nil
 			}
 
 			var b strings.Builder
@@ -368,7 +395,17 @@ func taskApproveCmd() *cobra.Command {
 			}
 
 			if format == "json" {
-				return printOutput(cmd.OutOrStdout(), task, "json")
+				if writeErr := printOutput(cmd.OutOrStdout(), task, "json"); writeErr != nil {
+					return writeErr
+				}
+				if task.Status.State == a2a.TaskStateFailed {
+					errText := ""
+					if task.Status.Message != nil {
+						errText = a2a.TextFromMessage(*task.Status.Message)
+					}
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s execution failed: %s", taskID, errText)}
+				}
+				return nil
 			}
 
 			var b strings.Builder

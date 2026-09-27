@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/a2a"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -471,5 +472,230 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 	}
 	if c3.BaseURL != "http://10.0.0.5:8080" {
 		t.Errorf("expected http://10.0.0.5:8080, got %s", c3.BaseURL)
+	}
+}
+
+func TestTaskDelegateCmd_SendRejectedAndFailed_JSON(t *testing.T) {
+	stateToReturn := a2a.TaskStateRejected
+	messageToReturn := "skill over tier"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		task := a2a.Task{
+			ID: "task-bad-json",
+			Status: a2a.TaskStatus{
+				State: stateToReturn,
+				Message: &a2a.Message{
+					Parts: []a2a.Part{{Type: "text", Text: messageToReturn}},
+				},
+				Timestamp: time.Now(),
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	}))
+	defer ts.Close()
+
+	// 1. Rejected with --format json
+	cmd := taskDelegateCmd()
+	var outBuf bytes.Buffer
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"cachyos", "bad command", "--addr", ts.URL, "--format", "json"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for rejected task in JSON mode, got nil")
+	}
+	codeErr, ok := err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	var resTask a2a.Task
+	if err := json.Unmarshal(outBuf.Bytes(), &resTask); err != nil {
+		t.Fatalf("expected valid JSON output on rejection, got err: %v, raw: %s", err, outBuf.String())
+	}
+	if resTask.Status.State != a2a.TaskStateRejected {
+		t.Errorf("expected rejected task state in JSON output, got: %s", resTask.Status.State)
+	}
+
+	// 2. Failed with --format json
+	stateToReturn = a2a.TaskStateFailed
+	messageToReturn = "execution crash"
+	outBuf.Reset()
+
+	cmd = taskDelegateCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"cachyos", "bad command", "--addr", ts.URL, "--format", "json"})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for failed task in JSON mode, got nil")
+	}
+	codeErr, ok = err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	resTask = a2a.Task{}
+	if err := json.Unmarshal(outBuf.Bytes(), &resTask); err != nil {
+		t.Fatalf("expected valid JSON output on failure, got err: %v, raw: %s", err, outBuf.String())
+	}
+	if resTask.Status.State != a2a.TaskStateFailed {
+		t.Errorf("expected failed task state in JSON output, got: %s", resTask.Status.State)
+	}
+}
+
+func TestTaskStatusCmd_RejectedAndFailed_JSON(t *testing.T) {
+	stateToReturn := a2a.TaskStateRejected
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		task := a2a.Task{
+			ID: "task-st-bad",
+			Status: a2a.TaskStatus{
+				State:     stateToReturn,
+				Timestamp: time.Now(),
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	}))
+	defer ts.Close()
+
+	// 1. Rejected with --format json
+	var outBuf bytes.Buffer
+	cmd := taskStatusCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"samson", "task-st-bad", "--addr", ts.URL, "--format", "json"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for rejected task in JSON mode, got nil")
+	}
+	codeErr, ok := err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	var res a2a.Task
+	if err := json.Unmarshal(outBuf.Bytes(), &res); err != nil {
+		t.Fatalf("expected valid JSON on rejected status, got err: %v, raw: %s", err, outBuf.String())
+	}
+	if res.Status.State != a2a.TaskStateRejected {
+		t.Errorf("expected rejected state, got %s", res.Status.State)
+	}
+
+	// 2. Failed with --format json
+	stateToReturn = a2a.TaskStateFailed
+	outBuf.Reset()
+	cmd = taskStatusCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"samson", "task-st-bad", "--addr", ts.URL, "--format", "json"})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for failed task in JSON mode, got nil")
+	}
+	codeErr, ok = err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	res = a2a.Task{}
+	if err := json.Unmarshal(outBuf.Bytes(), &res); err != nil {
+		t.Fatalf("expected valid JSON on failed status, got err: %v, raw: %s", err, outBuf.String())
+	}
+	if res.Status.State != a2a.TaskStateFailed {
+		t.Errorf("expected failed state, got %s", res.Status.State)
+	}
+}
+
+func TestTaskApproveCmd_Failed_JSON(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		task := a2a.Task{
+			ID: "task-app-fail",
+			Status: a2a.TaskStatus{
+				State:     a2a.TaskStateFailed,
+				Timestamp: time.Now(),
+				Message:   &a2a.Message{Parts: []a2a.Part{{Type: "text", Text: "exit code 127"}}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	}))
+	defer ts.Close()
+
+	var outBuf bytes.Buffer
+	cmd := taskApproveCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"cachyos", "task-app-fail", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL, "--format", "json"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when approved task execution fails in JSON mode, got nil")
+	}
+	codeErr, ok := err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	var res a2a.Task
+	if err := json.Unmarshal(outBuf.Bytes(), &res); err != nil {
+		t.Fatalf("expected valid JSON on failed approve output, got: %v", err)
+	}
+	if res.Status.State != a2a.TaskStateFailed {
+		t.Errorf("expected failed state, got %s", res.Status.State)
+	}
+}
+
+func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
+	origLoad := loadA2AConfig
+	defer func() { loadA2AConfig = origLoad }()
+
+	loadA2AConfig = func() (*config.Config, error) {
+		return &config.Config{
+			Nodes: []config.NodeConfig{
+				{
+					Name:     "cachyos",
+					Hostname: "192.168.1.50",
+					Endpoints: []config.NodeEndpoint{
+						{Name: "tailscale", Hostname: "100.64.0.5"},
+					},
+				},
+				{
+					Name:     "samson",
+					Hostname: "192.168.1.60",
+				},
+			},
+		}, nil
+	}
+
+	// 1. PrimaryHostname from Endpoints takes precedence
+	c1, err := resolveA2AClient("cachyos", "", 5*time.Second)
+	if err != nil {
+		t.Fatalf("resolve cachyos failed: %v", err)
+	}
+	if c1.BaseURL != "http://100.64.0.5:42425" {
+		t.Errorf("expected http://100.64.0.5:42425, got %s", c1.BaseURL)
+	}
+
+	// 2. PrimaryHostname fallback to Hostname when no endpoints
+	c2, err := resolveA2AClient("samson", "", 5*time.Second)
+	if err != nil {
+		t.Fatalf("resolve samson failed: %v", err)
+	}
+	if c2.BaseURL != "http://192.168.1.60:42425" {
+		t.Errorf("expected http://192.168.1.60:42425, got %s", c2.BaseURL)
+	}
+
+	// 3. Unknown remote node returns informative error
+	_, err = resolveA2AClient("unknown-node", "", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for unknown node, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found in") || !strings.Contains(err.Error(), "nodes.yaml") {
+		t.Errorf("expected 'not found in ... nodes.yaml' error, got %v", err)
+	}
+
+	// 4. Local node still resolves to unix socket
+	cLocal, err := resolveA2AClient("local", "", 5*time.Second)
+	if err != nil {
+		t.Fatalf("resolve local failed: %v", err)
+	}
+	if cLocal.BaseURL != "http://localhost" {
+		t.Errorf("expected http://localhost, got %s", cLocal.BaseURL)
 	}
 }
