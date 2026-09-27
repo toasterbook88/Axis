@@ -466,12 +466,12 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 	}
 
 	// 3. Direct IP with port
-	c3, err := resolveA2AClient("10.0.0.5:8080", "", 5*time.Second)
+	c3, err := resolveA2AClient("192.0.2.5:8080", "", 5*time.Second)
 	if err != nil {
 		t.Fatalf("resolve direct IP failed: %v", err)
 	}
-	if c3.BaseURL != "http://10.0.0.5:8080" {
-		t.Errorf("expected http://10.0.0.5:8080, got %s", c3.BaseURL)
+	if c3.BaseURL != "http://192.0.2.5:8080" {
+		t.Errorf("expected http://192.0.2.5:8080, got %s", c3.BaseURL)
 	}
 }
 
@@ -650,14 +650,14 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 			Nodes: []config.NodeConfig{
 				{
 					Name:     "cachyos",
-					Hostname: "192.168.1.50",
+					Hostname: "192.0.2.50",
 					Endpoints: []config.NodeEndpoint{
-						{Name: "tailscale", Hostname: "100.64.0.5"},
+						{Name: "tailscale", Hostname: "192.0.2.5"},
 					},
 				},
 				{
 					Name:     "samson",
-					Hostname: "192.168.1.60",
+					Hostname: "192.0.2.60",
 				},
 			},
 		}, nil
@@ -668,8 +668,8 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve cachyos failed: %v", err)
 	}
-	if c1.BaseURL != "http://100.64.0.5:42425" {
-		t.Errorf("expected http://100.64.0.5:42425, got %s", c1.BaseURL)
+	if c1.BaseURL != "http://192.0.2.5:42425" {
+		t.Errorf("expected http://192.0.2.5:42425, got %s", c1.BaseURL)
 	}
 
 	// 2. PrimaryHostname fallback to Hostname when no endpoints
@@ -677,8 +677,8 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve samson failed: %v", err)
 	}
-	if c2.BaseURL != "http://192.168.1.60:42425" {
-		t.Errorf("expected http://192.168.1.60:42425, got %s", c2.BaseURL)
+	if c2.BaseURL != "http://192.0.2.60:42425" {
+		t.Errorf("expected http://192.0.2.60:42425, got %s", c2.BaseURL)
 	}
 
 	// 3. Unknown remote node returns informative error
