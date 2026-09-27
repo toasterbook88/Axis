@@ -1,0 +1,227 @@
+// Copyright (c) 2026 Smith Software Solutions
+package a2a
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestNewClient_Normalization(t *testing.T) {
+	c1 := NewClient("127.0.0.1:8080/", "tok1", nil)
+	if c1.BaseURL != "http://127.0.0.1:8080" {
+		t.Fatalf("expected http://127.0.0.1:8080, got %s", c1.BaseURL)
+	}
+	if c1.Token != "tok1" {
+		t.Fatalf("expected tok1, got %s", c1.Token)
+	}
+	if c1.HTTPClient == nil {
+		t.Fatal("expected default HTTPClient")
+	}
+
+	c2 := NewClient("https://foundry.lan:8080", "tok2", &http.Client{Timeout: 5 * time.Second})
+	if c2.BaseURL != "https://foundry.lan:8080" {
+		t.Fatalf("expected https://foundry.lan:8080, got %s", c2.BaseURL)
+	}
+}
+
+func TestClient_FetchCard(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/agent-card.json" {
+			http.NotFound(w, r)
+			return
+		}
+		card := Card(CardOptions{
+			Name:    "test-node",
+			Version: "0.19.4",
+			Scope:   ScopeObserve,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(card)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "tok", ts.Client())
+	card, err := client.FetchCard(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCard failed: %v", err)
+	}
+	if card.Name != "test-node" {
+		t.Fatalf("expected card name test-node, got %s", card.Name)
+	}
+	if card.Capabilities.Streaming {
+		t.Fatal("expected streaming to be false")
+	}
+}
+
+func TestClient_Send(t *testing.T) {
+	var gotAuth string
+	var gotBody SendRequest
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/a2a/v1/message:send" {
+			http.NotFound(w, r)
+			return
+		}
+		gotAuth = r.Header.Get("Authorization")
+		if gotAuth != "Bearer test-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "unauthorized"})
+			return
+		}
+
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		task := Task{
+			ID:      "task-123",
+			SkillID: gotBody.SkillID,
+			Status: TaskStatus{
+				State:     TaskStateCompleted,
+				Timestamp: time.Now(),
+			},
+			Artifacts: []Artifact{
+				{
+					Name:  "status-result",
+					Parts: []Part{{Type: "text", Text: "all nodes healthy"}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	}))
+	defer ts.Close()
+
+	// 1. Success path
+	client := NewClient(ts.URL, "test-secret", ts.Client())
+	task, err := client.Send(context.Background(), SendRequest{
+		SkillID: "axis-status",
+		Message: Message{Role: "user", Parts: []Part{{Type: "text", Text: "run check"}}},
+	})
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if task.ID != "task-123" {
+		t.Fatalf("expected task id task-123, got %s", task.ID)
+	}
+	if task.Status.State != TaskStateCompleted {
+		t.Fatalf("expected task completed, got %s", task.Status.State)
+	}
+	if len(task.Artifacts) == 0 || task.Artifacts[0].Parts[0].Text != "all nodes healthy" {
+		t.Fatalf("unexpected artifacts: %+v", task.Artifacts)
+	}
+
+	// 2. Unauth path
+	badClient := NewClient(ts.URL, "wrong-token", ts.Client())
+	_, err = badClient.Send(context.Background(), SendRequest{
+		SkillID: "axis-status",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("expected unauthorized error, got: %v", err)
+	}
+}
+
+func TestClient_Get(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/a2a/v1/tasks/task-abc" {
+			task := Task{
+				ID: "task-abc",
+				Status: TaskStatus{
+					State:     TaskStateWorking,
+					Timestamp: time.Now(),
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(task)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "task not found"})
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "token", ts.Client())
+
+	// Empty ID validation
+	if _, err := client.Get(context.Background(), ""); err == nil {
+		t.Fatal("expected error on empty task id")
+	}
+
+	// Success
+	task, err := client.Get(context.Background(), "task-abc")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if task.ID != "task-abc" || task.Status.State != TaskStateWorking {
+		t.Fatalf("unexpected task: %+v", task)
+	}
+
+	// Not found
+	if _, err := client.Get(context.Background(), "unknown"); err == nil {
+		t.Fatal("expected error on not found task")
+	}
+}
+
+func TestClient_ApproveAndReject(t *testing.T) {
+	var gotApproveBody map[string]string
+	var gotRejectBody map[string]string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/a2a/v1/tasks/task-pending/approve" {
+			_ = json.NewDecoder(r.Body).Decode(&gotApproveBody)
+			task := Task{
+				ID: "task-pending",
+				Status: TaskStatus{
+					State:     TaskStateApproved,
+					Timestamp: time.Now(),
+				},
+			}
+			_ = json.NewEncoder(w).Encode(task)
+			return
+		}
+		if r.URL.Path == "/a2a/v1/tasks/task-pending/reject" {
+			_ = json.NewDecoder(r.Body).Decode(&gotRejectBody)
+			task := Task{
+				ID: "task-pending",
+				Status: TaskStatus{
+					State:     TaskStateRejected,
+					Timestamp: time.Now(),
+					Message:   &Message{Role: "agent", Parts: []Part{{Type: "text", Text: gotRejectBody["reason"]}}},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(task)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "token", ts.Client())
+
+	// Approve
+	task, err := client.Approve(context.Background(), "task-pending", "YES", "script")
+	if err != nil {
+		t.Fatalf("Approve failed: %v", err)
+	}
+	if task.Status.State != TaskStateApproved {
+		t.Fatalf("expected approved, got %s", task.Status.State)
+	}
+	if gotApproveBody["confirm"] != "YES" || gotApproveBody["mode"] != "script" {
+		t.Fatalf("unexpected approve body: %+v", gotApproveBody)
+	}
+
+	// Reject
+	rejectedTask, err := client.Reject(context.Background(), "task-pending", "operator cancelled")
+	if err != nil {
+		t.Fatalf("Reject failed: %v", err)
+	}
+	if rejectedTask.Status.State != TaskStateRejected {
+		t.Fatalf("expected rejected, got %s", rejectedTask.Status.State)
+	}
+	if gotRejectBody["reason"] != "operator cancelled" {
+		t.Fatalf("unexpected reject reason: %s", gotRejectBody["reason"])
+	}
+}

@@ -54,6 +54,10 @@ func taskCmd() *cobra.Command {
 	cmd.AddCommand(taskRunCmd())
 	cmd.AddCommand(taskHistoryCmd())
 	cmd.AddCommand(taskLogsCmd())
+	cmd.AddCommand(taskDelegateCmd())
+	cmd.AddCommand(taskStatusCmd())
+	cmd.AddCommand(taskApproveCmd())
+	cmd.AddCommand(taskRejectCmd())
 	return cmd
 }
 
