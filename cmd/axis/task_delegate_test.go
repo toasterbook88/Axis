@@ -652,7 +652,7 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 					Name:     "cachyos",
 					Hostname: "192.0.2.50",
 					Endpoints: []config.NodeEndpoint{
-						{Name: "tailscale", Hostname: "192.0.2.5"},
+						{Name: "primary", Hostname: "192.0.2.5"},
 					},
 				},
 				{
