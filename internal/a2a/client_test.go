@@ -2,6 +2,7 @@
 package a2a
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -323,5 +324,27 @@ func TestDecodeTaskOrError_StructuredAndCapped(t *testing.T) {
 	_, err = clientRaw.Get(context.Background(), "t1")
 	if err == nil || !strings.Contains(err.Error(), "plain text fatal crash") || !strings.Contains(err.Error(), "500") {
 		t.Fatalf("expected raw text error message and status code, got: %v", err)
+	}
+
+	// 3. Oversized error payload capped at 1 MB
+	tsHuge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		buf := bytes.Repeat([]byte("X"), 2<<20) // 2 MB
+		_, _ = w.Write(buf)
+	}))
+	defer tsHuge.Close()
+
+	clientHuge := NewClient(tsHuge.URL, "", tsHuge.Client())
+	_, err = clientHuge.Get(context.Background(), "t1")
+	if err == nil {
+		t.Fatal("expected error on huge response")
+	}
+	prefix := "server error (500 Internal Server Error): "
+	if !strings.HasPrefix(err.Error(), prefix) {
+		t.Fatalf("unexpected error prefix: %v", err)
+	}
+	cappedBody := strings.TrimPrefix(err.Error(), prefix)
+	if len(cappedBody) != 1<<20 {
+		t.Fatalf("expected capped body length of %d bytes (1MB), got %d", 1<<20, len(cappedBody))
 	}
 }

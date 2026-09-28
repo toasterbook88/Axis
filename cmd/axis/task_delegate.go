@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -22,11 +23,28 @@ var loadA2AConfig = func() (*config.Config, error) {
 	return config.Load(config.DefaultConfigPath())
 }
 
+var loadAPIToken = auth.LoadOrGenerateToken
+
+func formatHostPort(host, defaultPort string) string {
+	host = strings.TrimSpace(host)
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return fmt.Sprintf("%s:%s", host, defaultPort)
+	}
+	if strings.Contains(host, ":") {
+		// Bare IPv6 literal without brackets or port
+		return fmt.Sprintf("[%s]:%s", host, defaultPort)
+	}
+	return fmt.Sprintf("%s:%s", host, defaultPort)
+}
+
 func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2a.Client, error) {
 	nodeName = strings.TrimSpace(nodeName)
 	addrOverride = strings.TrimSpace(addrOverride)
 
-	token, err := auth.LoadOrGenerateToken()
+	token, err := loadAPIToken()
 	if err != nil {
 		return nil, fmt.Errorf("loading api token: %w", err)
 	}
@@ -52,9 +70,7 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 				if host == "" {
 					return nil, fmt.Errorf("node %q has no resolvable hostname in %s", nodeName, config.DefaultConfigPath())
 				}
-				if !strings.Contains(host, ":") {
-					host = fmt.Sprintf("%s:42425", host)
-				}
+				host = formatHostPort(host, "42425")
 				addr := daemon.NormalizeAddr(host)
 				httpClient, baseURL := auth.HttpClientForAddrWithTimeout(addr, timeout)
 				return a2a.NewClient(baseURL, token, httpClient), nil

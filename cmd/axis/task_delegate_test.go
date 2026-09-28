@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -325,10 +327,10 @@ func TestTaskStatusCmd(t *testing.T) {
 
 func TestTaskApproveCmd(t *testing.T) {
 	var gotBody map[string]string
-	serverCalled := false
+	var serverCalled atomic.Bool
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverCalled = true
+		serverCalled.Store(true)
 		if r.URL.Path != "/a2a/v1/tasks/task-app-1/approve" {
 			http.NotFound(w, r)
 			return
@@ -349,7 +351,7 @@ func TestTaskApproveCmd(t *testing.T) {
 	defer ts.Close()
 
 	// 1. Missing confirm - must fail before dialing server
-	serverCalled = false
+	serverCalled.Store(false)
 	cmd := taskApproveCmd()
 	cmd.SetArgs([]string{"cachyos", "task-app-1", "--addr", ts.URL})
 	err := cmd.Execute()
@@ -359,12 +361,12 @@ func TestTaskApproveCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "--confirm YES is required") {
 		t.Errorf("expected confirm required error, got %v", err)
 	}
-	if serverCalled {
+	if serverCalled.Load() {
 		t.Errorf("expected server NOT to be called when --confirm is missing")
 	}
 
 	// 2. Invalid mode - must fail before dialing server
-	serverCalled = false
+	serverCalled.Store(false)
 	cmd = taskApproveCmd()
 	cmd.SetArgs([]string{"cachyos", "task-app-1", "--confirm", "YES", "--mode", "invalid", "--addr", ts.URL})
 	err = cmd.Execute()
@@ -374,12 +376,12 @@ func TestTaskApproveCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "mode must be script or exec") {
 		t.Errorf("expected mode validation error, got %v", err)
 	}
-	if serverCalled {
+	if serverCalled.Load() {
 		t.Errorf("expected server NOT to be called when --mode is invalid")
 	}
 
 	// 3. Success path
-	serverCalled = false
+	serverCalled.Store(false)
 	var outBuf bytes.Buffer
 	cmd = taskApproveCmd()
 	cmd.SetOut(&outBuf)
@@ -389,7 +391,7 @@ func TestTaskApproveCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task approve Execute failed: %v", err)
 	}
-	if !serverCalled {
+	if !serverCalled.Load() {
 		t.Errorf("expected server to be called on valid approve")
 	}
 
@@ -441,10 +443,10 @@ func TestTaskApproveCmd(t *testing.T) {
 
 func TestTaskRejectCmd(t *testing.T) {
 	var gotBody map[string]string
-	serverCalled := false
+	var serverCalled atomic.Bool
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverCalled = true
+		serverCalled.Store(true)
 		if r.URL.Path != "/a2a/v1/tasks/task-rej-1/reject" {
 			http.NotFound(w, r)
 			return
@@ -464,7 +466,7 @@ func TestTaskRejectCmd(t *testing.T) {
 	defer ts.Close()
 
 	// 1. Missing reason - must fail before dialing server
-	serverCalled = false
+	serverCalled.Store(false)
 	cmd := taskRejectCmd()
 	cmd.SetArgs([]string{"cachyos", "task-rej-1", "--addr", ts.URL})
 	err := cmd.Execute()
@@ -474,12 +476,12 @@ func TestTaskRejectCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "--reason is required") {
 		t.Errorf("expected reason required error, got %v", err)
 	}
-	if serverCalled {
+	if serverCalled.Load() {
 		t.Errorf("expected server NOT to be called when --reason is missing")
 	}
 
 	// 2. Success path
-	serverCalled = false
+	serverCalled.Store(false)
 	var outBuf bytes.Buffer
 	cmd = taskRejectCmd()
 	cmd.SetOut(&outBuf)
@@ -489,7 +491,7 @@ func TestTaskRejectCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task reject Execute failed: %v", err)
 	}
-	if !serverCalled {
+	if !serverCalled.Load() {
 		t.Errorf("expected server to be called on valid reject")
 	}
 
@@ -504,6 +506,10 @@ func TestTaskRejectCmd(t *testing.T) {
 }
 
 func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
+	origToken := loadAPIToken
+	defer func() { loadAPIToken = origToken }()
+	loadAPIToken = func() (string, error) { return "test-token", nil }
+
 	// 1. Addr override takes precedence
 	c1, err := resolveA2AClient("any-node", "http://custom:1234", 5*time.Second)
 	if err != nil {
@@ -740,6 +746,10 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	origLoad := loadA2AConfig
 	defer func() { loadA2AConfig = origLoad }()
 
+	origToken := loadAPIToken
+	defer func() { loadAPIToken = origToken }()
+	loadAPIToken = func() (string, error) { return "test-token", nil }
+
 	loadA2AConfig = func() (*config.Config, error) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
@@ -757,6 +767,10 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 				{
 					Name:     "empty-host-node",
 					Hostname: "",
+				},
+				{
+					Name:     "ipv6-node",
+					Hostname: "2001:db8::1",
 				},
 			},
 		}, nil
@@ -805,5 +819,55 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	}
 	if cLocal.BaseURL != "http://localhost" {
 		t.Errorf("expected http://localhost, got %s", cLocal.BaseURL)
+	}
+
+	// 6. IPv6 remote node wraps address in brackets with default port
+	cIPv6, err := resolveA2AClient("ipv6-node", "", 5*time.Second)
+	if err != nil {
+		t.Fatalf("resolve ipv6 node failed: %v", err)
+	}
+	if cIPv6.BaseURL != "http://[2001:db8::1]:42425" {
+		t.Errorf("expected http://[2001:db8::1]:42425, got %s", cIPv6.BaseURL)
+	}
+}
+
+func TestResolveA2AClient_TokenError(t *testing.T) {
+	origToken := loadAPIToken
+	defer func() { loadAPIToken = origToken }()
+	loadAPIToken = func() (string, error) {
+		return "", errors.New("keystore locked")
+	}
+
+	_, err := resolveA2AClient("cachyos", "", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error when token fails to load, got nil")
+	}
+	if !strings.Contains(err.Error(), "loading api token: keystore locked") {
+		t.Fatalf("expected wrapped token error, got: %v", err)
+	}
+}
+
+func TestFormatHostPort(t *testing.T) {
+	tests := []struct {
+		input       string
+		defaultPort string
+		expected    string
+	}{
+		{"cachyos", "42425", "cachyos:42425"},
+		{"cachyos:8080", "42425", "cachyos:8080"},
+		{"192.0.2.5", "42425", "192.0.2.5:42425"},
+		{"192.0.2.5:8080", "42425", "192.0.2.5:8080"},
+		{"2001:db8::1", "42425", "[2001:db8::1]:42425"},
+		{"[2001:db8::1]", "42425", "[2001:db8::1]:42425"},
+		{"[2001:db8::1]:8080", "42425", "[2001:db8::1]:8080"},
+		{"::1", "42425", "[::1]:42425"},
+		{"[::1]:9999", "42425", "[::1]:9999"},
+	}
+
+	for _, tc := range tests {
+		got := formatHostPort(tc.input, tc.defaultPort)
+		if got != tc.expected {
+			t.Errorf("formatHostPort(%q, %q) = %q, expected %q", tc.input, tc.defaultPort, got, tc.expected)
+		}
 	}
 }

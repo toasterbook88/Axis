@@ -36,10 +36,16 @@ func TestMain(m *testing.M) {
 	notInstalled := func(context.Context) doctorBackendStatus { return doctorBackendStatus{Installed: false} }
 	doctorProbeOllama = notInstalled
 	doctorProbeLlamaServer = notInstalled
-	doctorProbeMLX = notInstalled
+	// A2A task delegate loads or generates tokens; stub globally so unit tests
+	// do not mutate ~/.axis or fail in hermetic/read-only test environments.
+	prevToken := loadAPIToken
+	loadAPIToken = func() (string, error) {
+		return "test-token", nil
+	}
 
 	code := m.Run()
 
+	loadAPIToken = prevToken
 	doctorProbeMLX = prevMLX
 	doctorProbeLlamaServer = prevLlama
 	doctorProbeOllama = prevOllama
