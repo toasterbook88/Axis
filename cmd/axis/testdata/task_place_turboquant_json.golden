@@ -12,14 +12,28 @@
           "also matched class: local-llm-inference"
         ]
       },
+      "ranking": {
+        "objective": "capacity",
+        "source": "default",
+        "metric": {
+          "name": "allocatable_ram",
+          "value": 8192,
+          "unit": "MB",
+          "provenance": "derived"
+        },
+        "decisive_by": "only_candidate"
+      },
       "reasoning": [
+        "ranking objective: capacity (default)",
+        "ranking metric: allocatable_ram = 8192MB (derived)",
+        "decisive criterion: only_candidate",
         "workload class: long-context-inference",
         "workload note: also matched class: local-llm-inference",
         "long-context task hint: ~128000 tokens",
         "unified memory topology (class 4)",
         "turboquant-aware backend verified: mlx",
         "turboquant capabilities: apple-silicon, backend-probed, cpu-fallback, long-context, ollama-present",
-        "LLM fit: 98/100 (excellent for small models)",
+        "diagnostic suitability: 98/100 (excellent for small models; not the ranking key)",
         "remote node (via SSH)",
         "8192MB allocatable (0MB reserved of 8192MB reservable pool; 16384MB total)",
         "pressure: none",
@@ -34,6 +48,12 @@
         "fit_score": 98,
         "is_local": false,
         "headroom_mb": 7168,
+        "ranking_metric": {
+          "name": "allocatable_ram",
+          "value": 8192,
+          "unit": "MB",
+          "provenance": "derived"
+        },
         "reasoning": [
           "turboquant-aware backend verified: mlx",
           "0MB allocatable headroom (0MB allocatable capacity, 0MB leased/reserved)",

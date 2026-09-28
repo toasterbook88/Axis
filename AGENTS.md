@@ -209,19 +209,25 @@ internal/versioncmp/  Semantic and platform version comparison helpers
   Apple Foundation Models)
 - **ClusterSnapshot** — `[]NodeFacts` + cluster aggregates, health status,
   warnings
-- **PlacementDecision** — selected node, FitScore 0–100, IsLocal, reasoning
-  strings
+- **PlacementDecision** — selected node, typed capacity ranking, diagnostic
+  FitScore 0–100, IsLocal, reasoning strings
 - **NodeStatus**: `complete | partial | unreachable | error`
 
 ### Placement ranking (stable sort order)
 
-RAM pressure → GPU score → preferred backend → effective headroom → TurboQuant
-rank → unified memory rank → allocatable RAM → reservation ratio → node name.
+Default objective: **capacity**. Headline ranking metric: **allocatable_ram (MB)**
+with `derived` provenance.
+FitScore is diagnostic only and must not be treated as the sort key
+(`docs/decisions/placement-selection-contract.md`).
 
-Scoring components: allocatable RAM (max 30), pressure (max 25), GPU (max 25),
-CPU cores (max 10), local bonus (10), TurboQuant (5–25 if preferred), unified
-memory (8–18 on Apple Silicon; upper end requires TurboQuant verification).
-HDD penalty: −15 for heavy inference.
+Rank order: allocatable RAM → empirical observation → resident model locality →
+preferred backend → GPU score → effective headroom → TurboQuant rank → unified
+memory rank → pressure → model warmth → reservation ratio/share → node name.
+
+Diagnostic suitability components (not ranking): allocatable RAM (max 30),
+pressure (max 25), GPU (max 25), CPU cores (max 10), local bonus (10), TurboQuant
+(5–25 if preferred), unified memory (8–18 on Apple Silicon), HDD penalty −15 for
+heavy inference.
 
 ## CLI Subcommands
 

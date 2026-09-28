@@ -5,19 +5,39 @@
   "workload": {
     "class": "long-context-inference"
   },
+  "ranking": {
+    "objective": "capacity",
+    "source": "default",
+    "metric": {
+      "name": "allocatable_ram",
+      "value": 8192,
+      "unit": "MB",
+      "provenance": "derived"
+    },
+    "decisive_by": "residual_headroom",
+    "tie_break": {
+      "criterion": "residual_headroom",
+      "winner_value": "7168MB",
+      "runner_value": "2048MB"
+    }
+  },
   "reasoning": [
+    "ranking objective: capacity (default)",
+    "ranking metric: allocatable_ram = 8192MB (derived)",
+    "decisive criterion: residual_headroom",
+    "capacity tied; residual_headroom winner=7168MB runner-up=2048MB",
     "workload class: long-context-inference",
     "long-context task hint: ~128000 tokens",
     "unified memory topology (class 4)",
     "turboquant-aware backend verified: llama.cpp",
     "turboquant capabilities: backend-probed, ctx-size-flag, flash-attn-flag, llama.cpp-runtime",
-    "LLM fit: 96/100 (excellent for small models)",
+    "diagnostic suitability: 96/100 (excellent for small models; not the ranking key)",
     "remote node (via SSH)",
     "8192MB allocatable (0MB reserved of 8192MB reservable pool; 16384MB total)",
     "pressure: none",
     "8 CPU cores",
     "selected from 2 eligible nodes",
-    "runner-up \"plain-node\" scored 63/100"
+    "runner-up \"plain-node\" ranking metric: allocatable_ram = 8192MB (derived)"
   ],
   "ok": true
 }

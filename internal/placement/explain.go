@@ -282,9 +282,10 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 
 	return models.PlacementCandidateExplanation{
 		Node:       n.Name,
-		FitScore:   ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs),
+		FitScore:   ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs), // diagnostic only
 		IsLocal:    models.IsLocalNode(n),
 		HeadroomMB: headroom,
+		Metric:     CapacityMetric(n),
 		Reasoning:  reasoning,
 	}
 }

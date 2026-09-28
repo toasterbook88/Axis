@@ -72,7 +72,8 @@ type GuardedExecutionResult struct {
 	Node           string                      `json:"node,omitempty"`
 	Tool           string                      `json:"tool,omitempty"`
 	Workload       models.WorkloadProfileMatch `json:"workload,omitempty"`
-	FitScore       int                         `json:"fit_score,omitempty"`
+	FitScore       int                         `json:"fit_score,omitempty"` // diagnostic only; not the ranking key
+	Ranking        *models.PlacementRanking    `json:"ranking,omitempty"`
 	IsLocal        bool                        `json:"is_local,omitempty"`
 	Reasoning      []string                    `json:"reasoning,omitempty"`
 	Blocked        bool                        `json:"blocked,omitempty"`
@@ -343,6 +344,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.Tool = decision.Tool
 	prepared.Result.Workload = decision.Workload
 	prepared.Result.FitScore = decision.FitScore
+	prepared.Result.Ranking = decision.Ranking
 	prepared.Result.IsLocal = decision.IsLocal
 
 	if !decision.OK {

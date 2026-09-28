@@ -38,6 +38,45 @@ var prepareTaskGuarded = execution.PrepareGuardedExecution
 var runPreparedTaskGuarded = execution.RunPreparedExecution
 var taskRunStdinIsTerminal = ui.StdinIsTerminal
 var taskRunStdoutIsTerminal = ui.StdoutIsTerminal
+
+// rankingHeadlineLabel returns the ranking-metric name for the placement
+// headline, falling back to "ranking unavailable" when the structured ranking
+// is absent. FitScore is intentionally not the headline (placement-selection-
+// contract): it is a diagnostic suitability score, not the sort key.
+func rankingHeadlineLabel(d models.PlacementDecision) string {
+	if d.Ranking != nil {
+		return d.Ranking.Metric.Name
+	}
+	return "ranking unavailable"
+}
+
+func rankingHeadlineValue(d models.PlacementDecision) string {
+	if d.Ranking == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.0f%s", d.Ranking.Metric.Value, d.Ranking.Metric.Unit)
+}
+
+// printExecutionRanking renders the structured ranking for task run / dry-run.
+// FitScore is reported separately as a diagnostic, never as the ranking key.
+func printExecutionRanking(w io.Writer, ranking *models.PlacementRanking) {
+	if ranking == nil {
+		fmt.Fprintln(w, "  Ranking: unavailable")
+		return
+	}
+	fmt.Fprintf(w, "  Ranking: objective=%s (%s), %s=%.0f%s, provenance=%s, decisive=%s\n",
+		ranking.Objective,
+		ranking.Source,
+		ranking.Metric.Name,
+		ranking.Metric.Value,
+		ranking.Metric.Unit,
+		ranking.Metric.Provenance,
+		ranking.DecisiveBy)
+	if tie := ranking.TieBreak; tie != nil {
+		fmt.Fprintf(w, "  Tie-break: %s (%s vs %s)\n", tie.Criterion, tie.WinnerValue, tie.RunnerValue)
+	}
+}
+
 var taskRunStderrIsTerminal = ui.StderrIsTerminal
 var signalTaskRunDaemonRefresh = func(ctx context.Context, trigger string) error {
 	return refreshDaemonCacheWithTrigger(ctx, api.DefaultAddr(), trigger)
@@ -136,11 +175,12 @@ func taskPlaceCmd() *cobra.Command {
 			if cacheRequested {
 				fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), source)
 			}
-			fmt.Fprintf(w, "%s %s (%s, fit %s)\n",
+			fmt.Fprintf(w, "%s %s (%s, %s %s)\n",
 				ui.Green("✓"),
 				ui.Bold(decision.Node),
 				locality,
-				ui.Cyan(fmt.Sprintf("%d/100", decision.FitScore)))
+				ui.Dim(rankingHeadlineLabel(decision)),
+				ui.Cyan(rankingHeadlineValue(decision)))
 			if decision.Tool != "" {
 				fmt.Fprintf(w, "  %s %s\n", ui.Dim("Tool:"), decision.Tool)
 			}
@@ -301,7 +341,8 @@ func taskRunCmd() *cobra.Command {
 					scheduleTaskRunDaemonRefresh(trigger)
 				},
 				OnReady: func(resp execution.GuardedExecutionResult) {
-					fmt.Fprintf(w, "Selected node: %s (fit %d/100)\n", resp.Node, resp.FitScore)
+					fmt.Fprintf(w, "Selected node: %s\n", resp.Node)
+					printExecutionRanking(w, resp.Ranking)
 					for _, reason := range resp.Reasoning {
 						fmt.Fprintf(w, "  - %s\n", reason)
 					}
@@ -405,7 +446,8 @@ func confirmTaskRunExecution(cmd *cobra.Command, prepared execution.PreparedExec
 	fmt.Fprintln(errW, "About to run guarded execution:")
 	fmt.Fprintf(errW, "  Node: %s\n", prepared.Result.Node)
 	fmt.Fprintf(errW, "  Workload: %s\n", workloadClass)
-	fmt.Fprintf(errW, "  Fit score: %d/100\n", prepared.Result.FitScore)
+	fmt.Fprintf(errW, "  Fit score: %d/100 (diagnostic; not the ranking key)\n", prepared.Result.FitScore)
+	printExecutionRanking(errW, prepared.Result.Ranking)
 	fmt.Fprintf(errW, "  Reservation headroom: %dMB\n", prepared.ReservationMB)
 	fmt.Fprintf(errW, "  Locality: %s\n", locality)
 	fmt.Fprintf(errW, "  Command: %s\n", prepared.Command)
@@ -426,7 +468,8 @@ func printDryRunPlan(w io.Writer, prepared execution.PreparedExecution) error {
 	fmt.Fprintf(w, "  Mode: %s\n", prepared.Result.Mode)
 	fmt.Fprintf(w, "  Intent: %s\n", prepared.Result.Intent)
 	fmt.Fprintf(w, "  Command: %s\n", prepared.Command)
-	fmt.Fprintf(w, "  Fit score: %d/100\n", prepared.Result.FitScore)
+	printExecutionRanking(w, prepared.Result.Ranking)
+	fmt.Fprintf(w, "  Diagnostic suitability: %d/100 (not the ranking key)\n", prepared.Result.FitScore)
 	fmt.Fprintf(w, "  Locality: %s\n", localityLabel(prepared.Result.IsLocal))
 	fmt.Fprintf(w, "  Reservation: %dMB\n", prepared.ReservationMB)
 	if prepared.Result.Tool != "" {
