@@ -182,12 +182,16 @@ func (c *Client) Reject(ctx context.Context, taskID, reason string) (*Task, erro
 }
 
 func decodeTaskOrError(resp *http.Response) (*Task, error) {
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
+	// Bound only the error body. On a misrouted --addr, or a proxy sitting in
+	// front of a downed node, this is the path that can return an arbitrarily
+	// large HTML page. Success payloads stay uncapped so a task whose artifacts
+	// exceed the cap still decodes instead of failing with a truncated-JSON
+	// error. This mirrors FetchCard, which caps only its error body.
 	if resp.StatusCode >= 400 {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return nil, fmt.Errorf("reading response body: %w", err)
+		}
 		var errResp struct {
 			Error string `json:"error"`
 		}
@@ -195,6 +199,11 @@ func decodeTaskOrError(resp *http.Response) (*Task, error) {
 			return nil, fmt.Errorf("server error (%s): %s", resp.Status, errResp.Error)
 		}
 		return nil, fmt.Errorf("server error (%s): %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
 	var task Task

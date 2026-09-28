@@ -348,3 +348,39 @@ func TestDecodeTaskOrError_StructuredAndCapped(t *testing.T) {
 		t.Fatalf("expected capped body length of %d bytes (1MB), got %d", 1<<20, len(cappedBody))
 	}
 }
+
+// TestDecodeTaskOrError_LargeSuccessPayloadUncapped guards the success path
+// against the error-path body cap. A task whose artifacts exceed the cap (a
+// large guarded-exec log dump, for example) must still decode: the cap exists
+// to bound memory on hostile or misrouted error pages, not to truncate valid
+// task responses into an "unexpected end of JSON input" decode failure.
+func TestDecodeTaskOrError_LargeSuccessPayloadUncapped(t *testing.T) {
+	big := strings.Repeat("L", (1<<20)+4096) // comfortably over 1 MiB
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Task{
+			ID:      "task-big",
+			SkillID: "guarded-exec",
+			Status:  TaskStatus{State: TaskStateCompleted, Timestamp: time.Now()},
+			Artifacts: []Artifact{{
+				Name:  "exec-output",
+				Parts: []Part{{Type: "text", Text: big}},
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "", ts.Client())
+	task, err := client.Get(context.Background(), "task-big")
+	if err != nil {
+		t.Fatalf("large success payload must decode, got: %v", err)
+	}
+	if len(task.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(task.Artifacts))
+	}
+	if task.Artifacts[0].Parts[0].Text != big {
+		t.Fatalf("artifact text was truncated: got %d bytes, want %d",
+			len(task.Artifacts[0].Parts[0].Text), len(big))
+	}
+}
