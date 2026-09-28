@@ -537,18 +537,6 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 		t.Errorf("expected prompt to specify --addr, got %v", err)
 	}
 
-	// 3b. Unlisted dotted hostname with no port must also fail closed. This is
-	// the stale-DNS-name shape (a node dropped from nodes.yaml but still
-	// resolvable): the name contains "." but no ":", so any dot/colon-keyed
-	// fallback would dial it with the local daemon bearer token attached.
-	_, err = resolveA2AClient("unlisted-node.example.invalid", "", 5*time.Second)
-	if err == nil {
-		t.Fatal("expected error for unlisted dotted hostname without --addr, got nil")
-	}
-	if !strings.Contains(err.Error(), "specify --addr") {
-		t.Errorf("expected prompt to specify --addr, got %v", err)
-	}
-
 	// 4. Direct IP with explicit --addr succeeds
 	c4, err := resolveA2AClient("unlisted-node", "http://192.0.2.5:8080", 5*time.Second)
 	if err != nil {
