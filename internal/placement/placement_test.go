@@ -1,6 +1,9 @@
 package placement
 
 import (
+	"encoding/json"
+	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -505,9 +508,142 @@ func TestSelectSuccess_RunnerUpComparison(t *testing.T) {
 		if contains(r, "runner-up") && contains(r, "m3") {
 			foundRunnerUp = true
 		}
+		// P4/P5: runner-up must use ranking metric, never FitScore as order story.
+		if contains(r, "runner-up") && contains(r, "scored") && contains(r, "/100") {
+			t.Errorf("runner-up must not use FitScore comparison, got: %s", r)
+		}
 	}
 	if !foundRunnerUp {
 		t.Errorf("expected runner-up comparison, got: %v", d.Reasoning)
+	}
+}
+
+// TestSelectSuccess_RankingHonestyB2B3 locks the placement-selection-contract
+// rendering rules for the default capacity objective (S3/S5/P2/P4/P5).
+func TestSelectSuccess_RankingHonestyB2B3(t *testing.T) {
+	// Make diagnostic FitScore actively disagree with the capacity objective.
+	high := nodeComplete("high-ram", 14000, "none", "ollama")
+	high.Resources.RAMTotalMB = 32768
+	high.Hostname = "remote.invalid"
+	high.NetworkClass = models.NetworkClassTailscale
+	high.Ollama = &models.OllamaInfo{Installed: true, Running: true, Listening: true}
+	low := nodeComplete("low-ram", 4000, "none", "ollama")
+	low.Resources.RAMTotalMB = 8192
+	low.NetworkClass = models.NetworkClassDirectLAN
+	if hostname, err := os.Hostname(); err == nil {
+		low.Hostname = hostname
+	}
+	low.Ollama = &models.OllamaInfo{Installed: true, Running: true, Listening: true}
+	reqs := models.TaskRequirements{
+		RequiredTools: []string{"ollama"},
+		MinFreeRAMMB:  1024,
+		Workload:      models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference},
+	}
+
+	d := SelectBestNode(reqs, []models.NodeFacts{low, high}, nil)
+	if !d.OK || d.Node != "high-ram" {
+		t.Fatalf("expected high-ram selected by allocatable RAM, got OK=%v node=%s", d.OK, d.Node)
+	}
+	if ComputeTaskFitScore(low, models.IsLocalNode(low), nil, reqs) <= d.FitScore {
+		t.Fatalf("test setup must make low-ram diagnostic score exceed winner: low=%d high=%d", ComputeTaskFitScore(low, models.IsLocalNode(low), nil, reqs), d.FitScore)
+	}
+	if d.Ranking == nil {
+		t.Fatal("successful decision must include structured ranking")
+	}
+	if d.Ranking.Objective != models.PlacementObjectiveCapacity {
+		t.Fatalf("ranking objective = %q, want %q", d.Ranking.Objective, models.PlacementObjectiveCapacity)
+	}
+	if d.Ranking.Source != models.ObjectiveSourceDefault {
+		t.Fatalf("ranking objective source = %q, want %q", d.Ranking.Source, models.ObjectiveSourceDefault)
+	}
+	if d.Ranking.Metric.Name != RankingMetricAllocRAM || d.Ranking.Metric.Unit != RankingMetricUnitMB {
+		t.Fatalf("ranking metric = %#v", d.Ranking.Metric)
+	}
+	if d.Ranking.Metric.Provenance != models.MetricProvenanceDerived {
+		t.Fatalf("ranking provenance = %q", d.Ranking.Metric.Provenance)
+	}
+	wantMetric := CapacityMetric(high).Value
+	if d.Ranking.Metric.Value != wantMetric {
+		t.Fatalf("ranking metric value = %v, want %v (must match sort key)", d.Ranking.Metric.Value, wantMetric)
+	}
+	if d.Ranking.DecisiveBy != models.RankingCriterionAllocatableCapacity || d.Ranking.TieBreak != nil {
+		t.Fatalf("unexpected decisive comparison: %#v", d.Ranking)
+	}
+
+	// Winner's metric must be >= runner-up's metric under the capacity objective.
+	ranked := RankCandidates(FilterCandidates(reqs, []models.NodeFacts{low, high}, nil), reqs, nil)
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 ranked candidates, got %d", len(ranked))
+	}
+	if CapacityMetric(ranked[0]).Value < CapacityMetric(ranked[1]).Value {
+		t.Fatalf("rank order violates ranking metric: %v < %v", CapacityMetric(ranked[0]).Value, CapacityMetric(ranked[1]).Value)
+	}
+
+	var hasObjective, hasMetric, hasDiagnostic, hasRunnerMetric, hasLLMFit bool
+	for _, r := range d.Reasoning {
+		if contains(r, "ranking objective: capacity") {
+			hasObjective = true
+		}
+		if contains(r, "ranking metric: allocatable_ram") {
+			hasMetric = true
+		}
+		if contains(r, "diagnostic suitability:") && contains(r, "not the ranking key") {
+			hasDiagnostic = true
+		}
+		if contains(r, "runner-up") && contains(r, "ranking metric:") {
+			hasRunnerMetric = true
+		}
+		if contains(r, "LLM fit:") {
+			hasLLMFit = true
+		}
+		if contains(r, "runner-up") && contains(r, "scored") && contains(r, "/100") {
+			t.Errorf("runner-up FitScore comparison forbidden: %s", r)
+		}
+	}
+	if !hasObjective {
+		t.Errorf("missing ranking objective line: %v", d.Reasoning)
+	}
+	if !hasMetric {
+		t.Errorf("missing ranking metric line: %v", d.Reasoning)
+	}
+	if !hasDiagnostic {
+		t.Errorf("missing diagnostic suitability line: %v", d.Reasoning)
+	}
+	if !hasRunnerMetric {
+		t.Errorf("missing runner-up ranking metric line: %v", d.Reasoning)
+	}
+	if hasLLMFit {
+		t.Errorf("LLM fit headline line must be retired: %v", d.Reasoning)
+	}
+
+	// Explain path: eligible order and per-candidate ranking metric match RankCandidates.
+	explanation := ExplainPlacement(reqs, []models.NodeFacts{low, high}, nil)
+	if explanation.Decision.Node != d.Node || explanation.Decision.Ranking == nil || explanation.Decision.Ranking.Metric.Value != d.Ranking.Metric.Value {
+		t.Fatalf("explain decision diverged from SelectBestNode: %#v vs %#v", explanation.Decision, d)
+	}
+	if len(explanation.Eligible) != 2 {
+		t.Fatalf("expected 2 eligible, got %d", len(explanation.Eligible))
+	}
+	if explanation.Eligible[0].Node != ranked[0].Name || explanation.Eligible[1].Node != ranked[1].Name {
+		t.Fatalf("eligible order %v %v != ranked %v %v",
+			explanation.Eligible[0].Node, explanation.Eligible[1].Node, ranked[0].Name, ranked[1].Name)
+	}
+	if explanation.Eligible[0].Metric.Value != CapacityMetric(ranked[0]).Value {
+		t.Fatalf("eligible[0] ranking metric %v != %v", explanation.Eligible[0].Metric.Value, CapacityMetric(ranked[0]).Value)
+	}
+}
+
+func TestSelectSuccess_ZeroCapacityMetricRemainsPresent(t *testing.T) {
+	d := SelectBestNode(models.TaskRequirements{}, []models.NodeFacts{nodeComplete("zero", 0, "none")}, nil)
+	if !d.OK || d.Ranking == nil || d.Ranking.Metric.Value != 0 {
+		t.Fatalf("unexpected zero-capacity decision: %#v", d)
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"metric":{"name":"allocatable_ram","value":0,"unit":"MB","provenance":"derived"}`) {
+		t.Fatalf("zero ranking metric must remain explicit: %s", b)
 	}
 }
 
@@ -1698,4 +1834,131 @@ func TestComputeTaskFitScorePressureGradientAndSkew(t *testing.T) {
 	if scoreB < scoreBBalanced {
 		t.Logf("skew penalty applied successfully: overloaded nodeB score=%d vs balanced=%d", scoreB, scoreBBalanced)
 	}
+}
+
+// TestRankingStepsAreSingleSourceOfTruth is a property test over the unified
+// comparator. For randomized candidate sets it asserts:
+//  1. Total preorder: the sort order is total and transitive (every pair is
+//     comparable; if a>=b and b>=c then a>=c).
+//  2. Decisive-criterion honesty: the criterion reported by decisiveComparison
+//     between the winner and runner-up is exactly the first step in
+//     rankComparisonSteps where their keys differ, or NodeName when all ranked
+//     steps tie. This pins the explanation to the same pipeline that produced
+//     the order, so the two cannot drift.
+func TestRankingStepsAreSingleSourceOfTruth(t *testing.T) {
+	rng := rand.New(rand.NewSource(20260928)) // deterministic seed
+	reqs := models.TaskRequirements{MemoryRequestMB: 512}
+	reqsTurbo := models.TaskRequirements{MemoryRequestMB: 512, PrefersTurboQuant: true}
+
+	cases := 0
+	for trial := 0; trial < 400; trial++ {
+		n := 2 + rng.Intn(5) // 2..6 candidates
+		nodes := make([]models.NodeFacts, n)
+		for i := range nodes {
+			// Vary the inputs that feed every rankKey field. freeRAM and
+			// reserved drive allocatableRAM/headroom/reservation; pressure,
+			// GPU, tools, resident models, and TurboQuant backends cover the
+			// rest. Names are unique so the terminal tiebreak is a total order.
+			freeRAM := int64(rng.Intn(32768))
+			pressure := []string{"none", "low", "medium", "high"}[rng.Intn(4)]
+			tools := []string{"ollama"}
+			if rng.Intn(2) == 0 {
+				tools = append(tools, "llama-server")
+			}
+			nodes[i] = nodeComplete(fmt.Sprintf("node-%d", i), freeRAM, pressure, tools...)
+			nodes[i].RAMReservedMB = int64(rng.Intn(4096))
+			if rng.Intn(2) == 0 {
+				nodes[i].RAMReservedMB = 0
+			}
+			if rng.Intn(3) == 0 {
+				nodes[i].ResidentModels = []models.ResidentModel{{Name: "qwen", Runtime: "ollama"}}
+			}
+			if rng.Intn(3) == 0 {
+				nodes[i] = nodeTurboQuant(nodes[i].Name, freeRAM, pressure, "mlx")
+			}
+		}
+
+		for _, r := range []models.TaskRequirements{reqs, reqsTurbo} {
+			cases++
+			ranked, keys := rankCandidatesWithKeys(nodes, r, nil)
+			if len(ranked) != len(nodes) {
+				t.Fatalf("trial %d: ranked length %d != %d", trial, len(ranked), len(nodes))
+			}
+
+			// Property 1: total preorder via compareRankKeys + name fallback.
+			// For every pair (i,j) in ranked order, the comparator must not
+			// prefer j over i (i.e. the sort is consistent with the comparator).
+			steps := rankComparisonSteps(r)
+			rankedKeys := keys // already aligned with ranked by rankCandidatesWithKeys
+			for i := 0; i < len(rankedKeys); i++ {
+				for j := i + 1; j < len(rankedKeys); j++ {
+					c := compareRankKeys(steps, rankedKeys[i], rankedKeys[j])
+					if c == 0 {
+						// Tied on ranked steps: terminal name order must put i before j.
+						if ranked[i].Name > ranked[j].Name {
+							t.Fatalf("trial %d: tied pair out of name order at %d,%d (%q > %q)", trial, i, j, ranked[i].Name, ranked[j].Name)
+						}
+						continue
+					}
+					if c < 0 {
+						t.Fatalf("trial %d: sort violates comparator at %d,%d (comparator prefers later)", trial, i, j)
+					}
+				}
+			}
+			// Transitivity: compareRankKeys is a sign-reduction of ordered
+			// scalar comparisons, which is transitive by construction; the
+			// property above plus unique names gives a total order. Sanity-check
+			// transitivity on three arbitrary indices.
+			if len(rankedKeys) >= 3 {
+				a, b, c := rankedKeys[0], rankedKeys[1], rankedKeys[2]
+				ab := compareRankKeys(steps, a, b)
+				bc := compareRankKeys(steps, b, c)
+				ac := compareRankKeys(steps, a, c)
+				if ab > 0 && bc > 0 && ac <= 0 {
+					t.Fatalf("trial %d: transitivity violation (a>b, b>c, but a<=c)", trial)
+				}
+				if ab < 0 && bc < 0 && ac >= 0 {
+					t.Fatalf("trial %d: transitivity violation (a<b, b<c, but a>=c)", trial)
+				}
+			}
+
+			// Property 2: decisive criterion honesty for the winner/runner-up.
+			if len(ranked) < 2 {
+				continue
+			}
+			gotCriterion, gotTie := decisiveComparison(ranked[0], ranked[1], rankedKeys[0], rankedKeys[1], r)
+			wantCriterion := models.RankingCriterionNodeName
+			wantTieBreak := &models.RankingTieBreak{
+				Criterion:   models.RankingCriterionNodeName,
+				WinnerValue: ranked[0].Name,
+				RunnerValue: ranked[1].Name,
+			}
+			for _, s := range steps {
+				if s.compare(rankedKeys[0], rankedKeys[1]) == 0 {
+					continue
+				}
+				wantCriterion = s.criterion
+				if s.render == nil {
+					wantTieBreak = nil // headline metric: no tie-break (value is in Ranking.Metric)
+				} else {
+					wantTieBreak = &models.RankingTieBreak{
+						Criterion:   s.criterion,
+						WinnerValue: s.render(rankedKeys[0]),
+						RunnerValue: s.render(rankedKeys[1]),
+					}
+				}
+				break
+			}
+			if gotCriterion != wantCriterion {
+				t.Fatalf("trial %d: decisive criterion = %q, want %q", trial, gotCriterion, wantCriterion)
+			}
+			if (gotTie == nil) != (wantTieBreak == nil) {
+				t.Fatalf("trial %d: decisive tie-break presence mismatch: got=%v want=%v", trial, gotTie, wantTieBreak)
+			}
+			if gotTie != nil && (gotTie.WinnerValue != wantTieBreak.WinnerValue || gotTie.RunnerValue != wantTieBreak.RunnerValue) {
+				t.Fatalf("trial %d: decisive tie-break values = (w=%q r=%q), want (w=%q r=%q)", trial, gotTie.WinnerValue, gotTie.RunnerValue, wantTieBreak.WinnerValue, wantTieBreak.RunnerValue)
+			}
+		}
+	}
+	t.Logf("ran %d randomized ranking cases", cases)
 }

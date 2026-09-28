@@ -10,28 +10,53 @@ import (
 
 // SelectBestNode runs the full placement pipeline: filter → rank → select.
 // Reasoning is diagnostic: on failure it explains why each node was excluded;
-// on success it explains fit score, locality, and runner-up comparison.
+// on success it states the ranking objective/metric, locality, and runner-up
+// comparison under the same metric (not FitScore).
 func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts, st *state.ClusterState) models.PlacementDecision {
 	candidates := FilterCandidates(reqs, nodes, st)
 	if len(candidates) == 0 {
 		return buildFailureDecision(reqs, nodes, st)
 	}
 
-	ranked := RankCandidates(candidates, reqs, st)
+	ranked, rankedKeys := rankCandidatesWithKeys(candidates, reqs, st)
 	best := ranked[0]
 	local := models.IsLocalNode(best)
 
-	decision := buildSuccessDecision(best, ranked, reqs, local, st)
+	decision := buildSuccessDecision(best, ranked, rankedKeys, reqs, local, st)
 	decision.Workload = reqs.Workload
 	return decision
 }
 
-func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs models.TaskRequirements, local bool, st *state.ClusterState) models.PlacementDecision {
+func buildCapacityRanking(best models.NodeFacts, ranked []models.NodeFacts, rankedKeys []rankKey, reqs models.TaskRequirements) *models.PlacementRanking {
+	ranking := &models.PlacementRanking{
+		Objective:  models.PlacementObjectiveCapacity,
+		Source:     models.ObjectiveSourceDefault,
+		Metric:     CapacityMetric(best),
+		DecisiveBy: models.RankingCriterionOnlyCandidate,
+	}
+	if len(ranked) > 1 && len(rankedKeys) > 1 {
+		ranking.DecisiveBy, ranking.TieBreak = decisiveComparison(best, ranked[1], rankedKeys[0], rankedKeys[1], reqs)
+	}
+	return ranking
+}
+
+func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, rankedKeys []rankKey, reqs models.TaskRequirements, local bool, st *state.ClusterState) models.PlacementDecision {
 	decision := models.PlacementDecision{
 		Node:     best.Name,
 		OK:       true,
-		FitScore: ComputeTaskFitScore(best, local, st, reqs),
+		FitScore: ComputeTaskFitScore(best, local, st, reqs), // diagnostic only
 		IsLocal:  local,
+		Ranking:  buildCapacityRanking(best, ranked, rankedKeys, reqs),
+	}
+
+	// Structured ranking is authoritative; prose is rendered from it.
+	decision.Reasoning = append(decision.Reasoning,
+		fmt.Sprintf("ranking objective: %s (%s)", decision.Ranking.Objective, decision.Ranking.Source),
+		fmt.Sprintf("ranking metric: %s = %.0f%s (%s)", decision.Ranking.Metric.Name, decision.Ranking.Metric.Value, decision.Ranking.Metric.Unit, decision.Ranking.Metric.Provenance),
+		fmt.Sprintf("decisive criterion: %s", decision.Ranking.DecisiveBy))
+	if tie := decision.Ranking.TieBreak; tie != nil {
+		decision.Reasoning = append(decision.Reasoning,
+			fmt.Sprintf("capacity tied; %s winner=%s runner-up=%s", tie.Criterion, tie.WinnerValue, tie.RunnerValue))
 	}
 
 	if reqs.Workload.Class != "" && reqs.Workload.Class != models.ClassUnknown {
@@ -84,10 +109,9 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		decision.Reasoning = append(decision.Reasoning, reason)
 	}
 
-	// Fit score summary
-	fitLabel := fitLabel(decision.FitScore)
+	// Diagnostic suitability only — not the ranking key (contract P5).
 	decision.Reasoning = append(decision.Reasoning,
-		fmt.Sprintf("LLM fit: %d/100 (%s)", decision.FitScore, fitLabel))
+		fmt.Sprintf("diagnostic suitability: %d/100 (%s; not the ranking key)", decision.FitScore, fitLabel(decision.FitScore)))
 
 	// Locality
 	if local {
@@ -148,11 +172,10 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 		}
 	}
 
-	// Runner-up comparison
+	// Runner-up comparison under the same headline metric, never FitScore.
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
-		ruLocal := models.IsLocalNode(runnerUp)
-		ruScore := ComputeTaskFitScore(runnerUp, ruLocal, st, reqs)
+		ruMetric := CapacityMetric(runnerUp)
 		bestShare := clusterReservationShare(best, ranked)
 		runnerShare := clusterReservationShare(runnerUp, ranked)
 		runnerObservation := empiricalObservation(runnerUp, reqs, st)
@@ -171,7 +194,7 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, reqs
 				fmt.Sprintf("lower cluster reservation share favored: %.0f%% vs runner-up %.0f%%", bestShare*100, runnerShare*100))
 		}
 		decision.Reasoning = append(decision.Reasoning,
-			fmt.Sprintf("runner-up %q scored %d/100", runnerUp.Name, ruScore))
+			fmt.Sprintf("runner-up %q ranking metric: %s = %.0f%s (%s)", runnerUp.Name, ruMetric.Name, ruMetric.Value, ruMetric.Unit, ruMetric.Provenance))
 	}
 
 	// Soft failure memory penalty reasoning

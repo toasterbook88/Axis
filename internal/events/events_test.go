@@ -185,6 +185,81 @@ func TestCortexEventPublishing(t *testing.T) {
 	}
 }
 
+func TestShouldPublishEventToCortex(t *testing.T) {
+	if ShouldPublishEventToCortex(EventDaemonRefreshPre) {
+		t.Fatal("daemon.refresh.pre must not publish to Cortex")
+	}
+	if ShouldPublishEventToCortex(EventDaemonRefreshPost) {
+		t.Fatal("daemon.refresh.post must not publish to Cortex")
+	}
+	if ShouldPublishEventToCortex(EventSnapshotCollected) {
+		t.Fatal("snapshot.collected must not publish to Cortex")
+	}
+	if !ShouldPublishEventToCortex(EventTaskPlacementRequested) {
+		t.Fatal("task.placement.requested should publish to Cortex")
+	}
+	if !ShouldPublishEventToCortex("file_changed") {
+		t.Fatal("file_changed should publish to Cortex")
+	}
+}
+
+func TestCortexDaemonTelemetryNotPublished(t *testing.T) {
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"result":  map[string]any{"status": "ok"},
+		})
+	}))
+	defer server.Close()
+
+	u, _ := url.Parse(server.URL)
+	host, portStr, _ := net.SplitHostPort(u.Host)
+	port, _ := strconv.Atoi(portStr)
+
+	tempDir := t.TempDir()
+	_ = isolateEventBus(t, tempDir)
+	cClient := cortex.NewClientWithOptions(host, "test-token", port, 6333, 1*time.Second)
+	SetCortexClient(cClient)
+	t.Cleanup(func() { SetCortexClient(nil) })
+
+	EmitToBuffer(nil, EventDaemonRefreshPre, map[string]any{"trigger": "interval"})
+	EmitToBuffer(nil, EventSnapshotCollected, map[string]any{"node_count": 8})
+	EmitToBuffer(nil, EventDaemonRefreshPost, map[string]any{"trigger": "interval"})
+	if err := FlushEvents(15 * time.Second); err != nil {
+		t.Fatalf("FlushEvents: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if called {
+		t.Fatal("daemon telemetry events must not call Cortex publish_event")
+	}
+
+	// Local log still receives them
+	got := GetRecentEvents(10)
+	var names []string
+	for _, e := range got {
+		names = append(names, e.Name)
+	}
+	want := map[string]bool{
+		EventDaemonRefreshPre:  false,
+		EventSnapshotCollected: false,
+		EventDaemonRefreshPost: false,
+	}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, ok := range want {
+		if !ok {
+			t.Errorf("expected local event log to contain %s; got %v", n, names)
+		}
+	}
+}
+
 func TestEventFiltering(t *testing.T) {
 	tempDir := t.TempDir()
 	_ = isolateEventBus(t, tempDir)
@@ -193,14 +268,13 @@ func TestEventFiltering(t *testing.T) {
 	var taskEvents []Event
 	var allEvents []Event
 	var wg sync.WaitGroup
-	wg.Add(3) // task listener once; wildcard listener for both emitted events
+	wg.Add(2) // 1 for task.started, 1 for reservation.released (received by allEvents)
 
 	// Register listener with filter
 	cancelTask := RegisterListener(func(e Event) {
 		mu.Lock()
 		taskEvents = append(taskEvents, e)
 		mu.Unlock()
-		wg.Done()
 	}, "task.*")
 	defer cancelTask()
 

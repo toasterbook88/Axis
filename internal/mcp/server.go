@@ -480,24 +480,27 @@ func simulateWorkloadPlanTool(ctx context.Context, req mcpproto.CallToolRequest,
 	best := placement.SelectBestNode(reqs, snapCopy.Nodes, st)
 
 	// Build the ranked candidate list with fit scores, mirroring what the
-	// selector internally considered. FilterCandidates prunes unsuitable
-	// nodes; RankCandidates orders the survivors.
+	// Build the ranked candidate list under the same ranking metric as
+	// SelectBestNode. fit_score remains diagnostic only (placement-selection-
+	// contract); the ranking metric is the authoritative ordering key.
 	candidates := placement.FilterCandidates(reqs, snapCopy.Nodes, st)
 	ranked := placement.RankCandidates(candidates, reqs, st)
 	explained := make([]map[string]any, 0, len(ranked))
 	for _, n := range ranked {
 		explained = append(explained, map[string]any{
-			"node":        n.Name,
-			"fit_score":   placement.ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs),
-			"is_local":    models.IsLocalNode(n),
-			"alloc_mb":    n.RAMAllocatableMB,
-			"reserved_mb": n.RAMReservedMB,
+			"node":           n.Name,
+			"ranking_metric": placement.CapacityMetric(n),
+			"fit_score":      placement.ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs), // diagnostic
+			"is_local":       models.IsLocalNode(n),
+			"alloc_mb":       n.RAMAllocatableMB,
+			"reserved_mb":    n.RAMReservedMB,
 		})
 	}
 
 	out := map[string]any{
 		"best_node":         best.Node,
-		"fit_score":         best.FitScore,
+		"ranking":           best.Ranking,
+		"fit_score":         best.FitScore, // diagnostic only; not the ranking key
 		"ok":                best.OK,
 		"reasoning":         best.Reasoning,
 		"ranked_candidates": explained,

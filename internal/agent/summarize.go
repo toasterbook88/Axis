@@ -123,11 +123,21 @@ func summarizePlacementDecision(dec models.PlacementDecision) string {
 		return "Placement: no suitable node found for this task."
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Placement: %s (fit score: %d/100", dec.Node, dec.FitScore)
+	if dec.Ranking != nil {
+		fmt.Fprintf(&b, "Placement: %s (%s = %.0f%s, provenance: %s", dec.Node, dec.Ranking.Metric.Name, dec.Ranking.Metric.Value, dec.Ranking.Metric.Unit, dec.Ranking.Metric.Provenance)
+	} else {
+		fmt.Fprintf(&b, "Placement: %s (diagnostic suitability: %d/100", dec.Node, dec.FitScore)
+	}
 	if dec.IsLocal {
 		b.WriteString(", local")
 	}
 	b.WriteString(")\n")
+	if dec.Ranking != nil {
+		fmt.Fprintf(&b, "Ranking objective: %s (%s); decisive criterion: %s\n", dec.Ranking.Objective, dec.Ranking.Source, dec.Ranking.DecisiveBy)
+		if tie := dec.Ranking.TieBreak; tie != nil {
+			fmt.Fprintf(&b, "Tie-break: %s (%s vs %s)\n", tie.Criterion, tie.WinnerValue, tie.RunnerValue)
+		}
+	}
 	if dec.Workload.Class != "" {
 		fmt.Fprintf(&b, "Workload class: %s\n", dec.Workload.Class)
 	}
