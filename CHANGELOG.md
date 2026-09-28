@@ -1,3 +1,29 @@
+## v0.19.4 (2026-09-28)
+
+Ten pull requests merged on `main` since `v0.19.3`. This patch release ships the A2A agent-card and task plane (cards, authenticated observe send/get, approval queue for exec-shaped work, delegate CLI), honest placement ranking, and related docs/deps housekeeping.
+
+### Features
+
+* **A2A agent cards:** each node serves `/.well-known/agent-card.json` with capability metadata (name, description, version, url, capabilities, skills). Skills derive from the schema-mask scope tier — observe / edit / exec — so a node advertises only the tier it actually serves. Wired through `api.ServeWithContext` with a nil-safe `cardFn` hook; `cmd/axis serve` builds the card from the local snapshot identity at the default observe tier (#464).
+* **A2A slice 2 — authenticated task send+get (observe-only):** `POST /a2a/v1/message:send` and `GET /a2a/v1/tasks/{id}` behind the same bearer `withAuth` as `/run`. Observe skills (`axis-status`, `axis-facts`, `axis-place`, `axis-reservations`, `workspace-read`) map to read helpers only; exec-shaped / unknown / over-tier skills reject fail-closed on send. Public agent card remains outside auth with `Streaming=false`. Owner surface `a2a-task` (#465).
+* **A2A slice 3 — approval queue for exec-shaped tasks:** `guarded-exec` and `workspace-write` park as `pending` on send (no timer, no batch, no auto-approve). The only promotion path is `POST /a2a/v1/tasks/{id}/approve` with `confirm=YES` and `mode` of `script` or `exec`, which runs `runLiveGuarded` once and stores `completed` or `failed`. `POST .../reject` requires a non-empty reason. Unknown skills still reject at send (#466).
+* **A2A slice 4 — task delegate CLI and lifecycle client:** native Go `internal/a2a` client (Unix socket + TCP, bearer attach) with `FetchCard` / `Send` / `Get` / `Approve` / `Reject`, plus `axis task delegate|status|approve|reject` mounted under `axis task` for cross-node delegation against the slice 2/3 HTTP surface (#468).
+* **Honest placement ranking metric:** surfaces the real ranking objective (`allocatable_ram`) as the placement headline across CLI, HTTP, MCP, and agent surfaces; FitScore remains diagnostic suitability only. Adds structured `PlacementRanking` (objective, source, metric, decisive criterion, tie-break) and unifies the ranker comparator + decisive-criterion walk into a single `[]comparisonStep` pipeline so explanation cannot drift from sort order (#474).
+
+### Fixed
+
+* **Repo-instructions walk stops at repository sentinels:** `loadRepoInstructions` no longer ascends past `.git` / `go.mod` (or above `$HOME`) looking for `AGENTS.md`, so a parent-tree or home-directory `AGENTS.md` cannot leak into the agent system prompt (#463).
+
+### Documentation
+
+* **Authority secrets:** documents that API token rotation requires a daemon restart (token is captured by value at route registration — deleting the file alone yields 401), and documents `AXIS_ALLOW_OFFBOX_BEARER` next to the API Tokens section (#471).
+
+### Tests & housekeeping
+
+* **A2A slice-2 E2E artifact** restamped against the post-slice-3 deployment tip (#467).
+* Bump `github.com/mark3labs/mcp-go` 1.1.0 → 1.1.1 (#472).
+* Bump GitHub Actions minor/patch group (`anthropics/claude-code-action`, `github/gh-aw-actions/setup`) (#473).
+
 ## v0.19.3 (2026-09-25)
 
 ### Fixed
