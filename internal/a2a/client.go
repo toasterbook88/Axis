@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -24,7 +25,7 @@ type Client struct {
 func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 	baseURL = strings.TrimSpace(baseURL)
 	baseURL = strings.TrimRight(baseURL, "/")
-	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") && !strings.HasPrefix(baseURL, "unix://") {
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "http://" + baseURL
 	}
 	if httpClient == nil {
@@ -93,7 +94,7 @@ func (c *Client) Get(ctx context.Context, taskID string) (*Task, error) {
 		return nil, errors.New("task id cannot be empty")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/a2a/v1/tasks/"+taskID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/a2a/v1/tasks/"+url.PathEscape(taskID), nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating get task request: %w", err)
 	}
@@ -129,7 +130,7 @@ func (c *Client) Approve(ctx context.Context, taskID, confirm, mode string) (*Ta
 		return nil, fmt.Errorf("marshaling approve body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/a2a/v1/tasks/"+taskID+"/approve", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/a2a/v1/tasks/"+url.PathEscape(taskID)+"/approve", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("creating approve request: %w", err)
 	}
@@ -162,7 +163,7 @@ func (c *Client) Reject(ctx context.Context, taskID, reason string) (*Task, erro
 		return nil, fmt.Errorf("marshaling reject body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/a2a/v1/tasks/"+taskID+"/reject", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/a2a/v1/tasks/"+url.PathEscape(taskID)+"/reject", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("creating reject request: %w", err)
 	}
@@ -181,7 +182,7 @@ func (c *Client) Reject(ctx context.Context, taskID, reason string) (*Task, erro
 }
 
 func decodeTaskOrError(resp *http.Response) (*Task, error) {
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}

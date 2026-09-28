@@ -26,7 +26,10 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 	nodeName = strings.TrimSpace(nodeName)
 	addrOverride = strings.TrimSpace(addrOverride)
 
-	token, _ := auth.LoadOrGenerateToken()
+	token, err := auth.LoadOrGenerateToken()
+	if err != nil {
+		return nil, fmt.Errorf("loading api token: %w", err)
+	}
 
 	if addrOverride != "" {
 		httpClient, baseURL := auth.HttpClientForAddrWithTimeout(addrOverride, timeout)
@@ -45,6 +48,10 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 				if host == "" {
 					host = nodeCfg.Hostname
 				}
+				host = strings.TrimSpace(host)
+				if host == "" {
+					return nil, fmt.Errorf("node %q has no resolvable hostname in %s", nodeName, config.DefaultConfigPath())
+				}
 				if !strings.Contains(host, ":") {
 					host = fmt.Sprintf("%s:42425", host)
 				}
@@ -52,28 +59,11 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 				httpClient, baseURL := auth.HttpClientForAddrWithTimeout(addr, timeout)
 				return a2a.NewClient(baseURL, token, httpClient), nil
 			}
-		} else if !isLocal && (strings.Contains(nodeName, ".") || strings.Contains(nodeName, ":")) {
-			addr := nodeName
-			if !strings.Contains(addr, ":") {
-				addr = fmt.Sprintf("%s:42425", addr)
-			}
-			addr = daemon.NormalizeAddr(addr)
-			httpClient, baseURL := auth.HttpClientForAddrWithTimeout(addr, timeout)
-			return a2a.NewClient(baseURL, token, httpClient), nil
 		} else if !isLocal {
-			return nil, fmt.Errorf("node %q not found in %s", nodeName, config.DefaultConfigPath())
+			return nil, fmt.Errorf("node %q not found in %s (specify --addr to dial an unlisted endpoint)", nodeName, config.DefaultConfigPath())
 		}
 	} else if !isLocal {
-		if strings.Contains(nodeName, ".") || strings.Contains(nodeName, ":") {
-			addr := nodeName
-			if !strings.Contains(addr, ":") {
-				addr = fmt.Sprintf("%s:42425", addr)
-			}
-			addr = daemon.NormalizeAddr(addr)
-			httpClient, baseURL := auth.HttpClientForAddrWithTimeout(addr, timeout)
-			return a2a.NewClient(baseURL, token, httpClient), nil
-		}
-		return nil, fmt.Errorf("loading cluster configuration: %w", err)
+		return nil, fmt.Errorf("loading cluster configuration: %w (specify --addr to dial an unlisted endpoint)", err)
 	}
 
 	// Local node fallback: connect via default local unix socket
@@ -216,7 +206,7 @@ func taskDelegateCmd() *cobra.Command {
 				}
 			case a2a.TaskStatePending:
 				fmt.Fprintf(&b, "%s Task %s queued on %s (pending operator approval)\n", ui.Yellow("⏸"), ui.Bold(task.ID), targetNode)
-				fmt.Fprintf(&b, "  To approve: axis task approve %s %s --confirm YES\n", targetNode, task.ID)
+				fmt.Fprintf(&b, "  To approve: axis task approve %s %s --confirm %s\n", targetNode, task.ID, execution.ConfirmWord)
 				fmt.Fprintf(&b, "  To reject:  axis task reject %s %s --reason <reason>\n", targetNode, task.ID)
 			case a2a.TaskStateRejected:
 				reason := ""
@@ -405,6 +395,13 @@ func taskApproveCmd() *cobra.Command {
 					}
 					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s execution failed: %s", taskID, errText)}
 				}
+				if task.Status.State == a2a.TaskStateRejected {
+					reason := ""
+					if task.Status.Message != nil {
+						reason = a2a.TextFromMessage(*task.Status.Message)
+					}
+					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s was rejected: %s", taskID, reason)}
+				}
 				return nil
 			}
 
@@ -425,6 +422,14 @@ func taskApproveCmd() *cobra.Command {
 				fmt.Fprintf(&b, "%s Task %s execution failed: %s\n", ui.Red("✗"), ui.Bold(taskID), errText)
 				_, _ = fmt.Fprint(cmd.OutOrStdout(), b.String())
 				return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s execution failed: %s", taskID, errText)}
+			} else if task.Status.State == a2a.TaskStateRejected {
+				reason := ""
+				if task.Status.Message != nil {
+					reason = a2a.TextFromMessage(*task.Status.Message)
+				}
+				fmt.Fprintf(&b, "%s Task %s was rejected: %s\n", ui.Red("✗"), ui.Bold(taskID), reason)
+				_, _ = fmt.Fprint(cmd.OutOrStdout(), b.String())
+				return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s was rejected: %s", taskID, reason)}
 			} else {
 				fmt.Fprintf(&b, "%s Task %s approved: %s\n", ui.Cyan("•"), ui.Bold(taskID), task.Status.State)
 			}

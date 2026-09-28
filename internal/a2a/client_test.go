@@ -106,6 +106,12 @@ func TestClient_Send(t *testing.T) {
 	if task.ID != "task-123" {
 		t.Fatalf("expected task id task-123, got %s", task.ID)
 	}
+	if gotBody.SkillID != "axis-status" {
+		t.Fatalf("expected skill axis-status in captured body, got: %s", gotBody.SkillID)
+	}
+	if len(gotBody.Message.Parts) == 0 || gotBody.Message.Parts[0].Text != "run check" {
+		t.Fatalf("unexpected message in captured body: %+v", gotBody.Message)
+	}
 	if task.Status.State != TaskStateCompleted {
 		t.Fatalf("expected task completed, got %s", task.Status.State)
 	}
@@ -125,6 +131,11 @@ func TestClient_Send(t *testing.T) {
 
 func TestClient_Get(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "unauthorized"})
+			return
+		}
 		if r.URL.Path == "/a2a/v1/tasks/task-abc" {
 			task := Task{
 				ID: "task-abc",
@@ -162,6 +173,12 @@ func TestClient_Get(t *testing.T) {
 	if _, err := client.Get(context.Background(), "unknown"); err == nil {
 		t.Fatal("expected error on not found task")
 	}
+
+	// Unauthorized
+	unauthClient := NewClient(ts.URL, "wrong-token", ts.Client())
+	if _, err := unauthClient.Get(context.Background(), "task-abc"); err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("expected unauthorized error on Get, got: %v", err)
+	}
 }
 
 func TestClient_ApproveAndReject(t *testing.T) {
@@ -169,6 +186,12 @@ func TestClient_ApproveAndReject(t *testing.T) {
 	var gotRejectBody map[string]string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "unauthorized"})
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/a2a/v1/tasks/task-pending/approve" {
 			_ = json.NewDecoder(r.Body).Decode(&gotApproveBody)
@@ -223,5 +246,82 @@ func TestClient_ApproveAndReject(t *testing.T) {
 	}
 	if gotRejectBody["reason"] != "operator cancelled" {
 		t.Fatalf("unexpected reject reason: %s", gotRejectBody["reason"])
+	}
+
+	// Unauthorized
+	unauthClient := NewClient(ts.URL, "bad-token", ts.Client())
+	if _, err := unauthClient.Approve(context.Background(), "task-pending", "YES", "script"); err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("expected unauthorized error on Approve, got: %v", err)
+	}
+	if _, err := unauthClient.Reject(context.Background(), "task-pending", "risk"); err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("expected unauthorized error on Reject, got: %v", err)
+	}
+}
+
+func TestClient_TaskID_PathEscaped(t *testing.T) {
+	var capturedPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Task{ID: "task-1", Status: TaskStatus{State: TaskStateCompleted}})
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "tok", ts.Client())
+	specialID := "job/123?test#part"
+
+	_, err := client.Get(context.Background(), specialID)
+	if err != nil {
+		t.Fatalf("Get with special ID failed: %v", err)
+	}
+	expectedGet := "/a2a/v1/tasks/job%2F123%3Ftest%23part"
+	if capturedPath != expectedGet {
+		t.Fatalf("expected path %s, got %s", expectedGet, capturedPath)
+	}
+
+	_, err = client.Approve(context.Background(), specialID, "YES", "script")
+	if err != nil {
+		t.Fatalf("Approve with special ID failed: %v", err)
+	}
+	expectedApprove := "/a2a/v1/tasks/job%2F123%3Ftest%23part/approve"
+	if capturedPath != expectedApprove {
+		t.Fatalf("expected path %s, got %s", expectedApprove, capturedPath)
+	}
+
+	_, err = client.Reject(context.Background(), specialID, "risk")
+	if err != nil {
+		t.Fatalf("Reject with special ID failed: %v", err)
+	}
+	expectedReject := "/a2a/v1/tasks/job%2F123%3Ftest%23part/reject"
+	if capturedPath != expectedReject {
+		t.Fatalf("expected path %s, got %s", expectedReject, capturedPath)
+	}
+}
+
+func TestDecodeTaskOrError_StructuredAndCapped(t *testing.T) {
+	// 1. Structured error extracted cleanly
+	tsJSON := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "specific failure reason"})
+	}))
+	defer tsJSON.Close()
+
+	client := NewClient(tsJSON.URL, "", tsJSON.Client())
+	_, err := client.Get(context.Background(), "t1")
+	if err == nil || !strings.Contains(err.Error(), "specific failure reason") || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("expected structured error message and status code, got: %v", err)
+	}
+
+	// 2. Unstructured error fallback
+	tsRaw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("plain text fatal crash"))
+	}))
+	defer tsRaw.Close()
+
+	clientRaw := NewClient(tsRaw.URL, "", tsRaw.Client())
+	_, err = clientRaw.Get(context.Background(), "t1")
+	if err == nil || !strings.Contains(err.Error(), "plain text fatal crash") || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("expected raw text error message and status code, got: %v", err)
 	}
 }

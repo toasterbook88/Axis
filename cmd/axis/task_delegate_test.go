@@ -325,8 +325,10 @@ func TestTaskStatusCmd(t *testing.T) {
 
 func TestTaskApproveCmd(t *testing.T) {
 	var gotBody map[string]string
+	serverCalled := false
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverCalled = true
 		if r.URL.Path != "/a2a/v1/tasks/task-app-1/approve" {
 			http.NotFound(w, r)
 			return
@@ -346,7 +348,8 @@ func TestTaskApproveCmd(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// 1. Missing confirm
+	// 1. Missing confirm - must fail before dialing server
+	serverCalled = false
 	cmd := taskApproveCmd()
 	cmd.SetArgs([]string{"cachyos", "task-app-1", "--addr", ts.URL})
 	err := cmd.Execute()
@@ -356,8 +359,12 @@ func TestTaskApproveCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "--confirm YES is required") {
 		t.Errorf("expected confirm required error, got %v", err)
 	}
+	if serverCalled {
+		t.Errorf("expected server NOT to be called when --confirm is missing")
+	}
 
-	// 2. Invalid mode
+	// 2. Invalid mode - must fail before dialing server
+	serverCalled = false
 	cmd = taskApproveCmd()
 	cmd.SetArgs([]string{"cachyos", "task-app-1", "--confirm", "YES", "--mode", "invalid", "--addr", ts.URL})
 	err = cmd.Execute()
@@ -367,8 +374,12 @@ func TestTaskApproveCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "mode must be script or exec") {
 		t.Errorf("expected mode validation error, got %v", err)
 	}
+	if serverCalled {
+		t.Errorf("expected server NOT to be called when --mode is invalid")
+	}
 
 	// 3. Success path
+	serverCalled = false
 	var outBuf bytes.Buffer
 	cmd = taskApproveCmd()
 	cmd.SetOut(&outBuf)
@@ -377,6 +388,9 @@ func TestTaskApproveCmd(t *testing.T) {
 	err = cmd.Execute()
 	if err != nil {
 		t.Fatalf("task approve Execute failed: %v", err)
+	}
+	if !serverCalled {
+		t.Errorf("expected server to be called on valid approve")
 	}
 
 	if gotBody["confirm"] != execution.ConfirmWord || gotBody["mode"] != "exec" {
@@ -390,12 +404,47 @@ func TestTaskApproveCmd(t *testing.T) {
 	if !strings.Contains(outStr, "reboot initiated") {
 		t.Errorf("expected message text in output, got: %s", outStr)
 	}
+
+	// 4. Server returns rejected state (text mode) -> must exit code 4
+	tsRej := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		task := a2a.Task{
+			ID: "task-app-rej",
+			Status: a2a.TaskStatus{
+				State:     a2a.TaskStateRejected,
+				Timestamp: time.Now(),
+				Message:   &a2a.Message{Parts: []a2a.Part{{Type: "text", Text: "operator denied execution"}}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	}))
+	defer tsRej.Close()
+
+	outBuf.Reset()
+	cmd = taskApproveCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"cachyos", "task-app-rej", "--confirm", "YES", "--mode", "exec", "--addr", tsRej.URL})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when approved task returns rejected, got nil")
+	}
+	codeErr, ok := err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	outStr = ui.StripANSIAndControls(outBuf.String())
+	if !strings.Contains(outStr, "was rejected: operator denied execution") {
+		t.Errorf("expected rejected message in output, got: %s", outStr)
+	}
 }
 
 func TestTaskRejectCmd(t *testing.T) {
 	var gotBody map[string]string
+	serverCalled := false
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverCalled = true
 		if r.URL.Path != "/a2a/v1/tasks/task-rej-1/reject" {
 			http.NotFound(w, r)
 			return
@@ -414,7 +463,8 @@ func TestTaskRejectCmd(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// 1. Missing reason
+	// 1. Missing reason - must fail before dialing server
+	serverCalled = false
 	cmd := taskRejectCmd()
 	cmd.SetArgs([]string{"cachyos", "task-rej-1", "--addr", ts.URL})
 	err := cmd.Execute()
@@ -424,8 +474,12 @@ func TestTaskRejectCmd(t *testing.T) {
 	if !strings.Contains(err.Error(), "--reason is required") {
 		t.Errorf("expected reason required error, got %v", err)
 	}
+	if serverCalled {
+		t.Errorf("expected server NOT to be called when --reason is missing")
+	}
 
 	// 2. Success path
+	serverCalled = false
 	var outBuf bytes.Buffer
 	cmd = taskRejectCmd()
 	cmd.SetOut(&outBuf)
@@ -434,6 +488,9 @@ func TestTaskRejectCmd(t *testing.T) {
 	err = cmd.Execute()
 	if err != nil {
 		t.Fatalf("task reject Execute failed: %v", err)
+	}
+	if !serverCalled {
+		t.Errorf("expected server to be called on valid reject")
 	}
 
 	if gotBody["reason"] != "risk too high" {
@@ -465,13 +522,22 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 		t.Errorf("expected unix socket base URL http://localhost, got %s", c2.BaseURL)
 	}
 
-	// 3. Direct IP with port
-	c3, err := resolveA2AClient("192.0.2.5:8080", "", 5*time.Second)
-	if err != nil {
-		t.Fatalf("resolve direct IP failed: %v", err)
+	// 3. Unlisted direct IP without --addr must fail closed (no arbitrary credentials leak)
+	_, err = resolveA2AClient("192.0.2.5:8080", "", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for unlisted direct IP without --addr, got nil")
 	}
-	if c3.BaseURL != "http://192.0.2.5:8080" {
-		t.Errorf("expected http://192.0.2.5:8080, got %s", c3.BaseURL)
+	if !strings.Contains(err.Error(), "specify --addr") {
+		t.Errorf("expected prompt to specify --addr, got %v", err)
+	}
+
+	// 4. Direct IP with explicit --addr succeeds
+	c4, err := resolveA2AClient("unlisted-node", "http://192.0.2.5:8080", 5*time.Second)
+	if err != nil {
+		t.Fatalf("resolve direct IP with --addr failed: %v", err)
+	}
+	if c4.BaseURL != "http://192.0.2.5:8080" {
+		t.Errorf("expected http://192.0.2.5:8080, got %s", c4.BaseURL)
 	}
 }
 
@@ -604,14 +670,17 @@ func TestTaskStatusCmd_RejectedAndFailed_JSON(t *testing.T) {
 	}
 }
 
-func TestTaskApproveCmd_Failed_JSON(t *testing.T) {
+func TestTaskApproveCmd_RejectedAndFailed_JSON(t *testing.T) {
+	stateToReturn := a2a.TaskStateRejected
+	messageToReturn := "operator denied execution"
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		task := a2a.Task{
 			ID: "task-app-fail",
 			Status: a2a.TaskStatus{
-				State:     a2a.TaskStateFailed,
+				State:     stateToReturn,
 				Timestamp: time.Now(),
-				Message:   &a2a.Message{Parts: []a2a.Part{{Type: "text", Text: "exit code 127"}}},
+				Message:   &a2a.Message{Parts: []a2a.Part{{Type: "text", Text: messageToReturn}}},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -619,6 +688,7 @@ func TestTaskApproveCmd_Failed_JSON(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	// 1. Rejected with --format json -> exit code 4
 	var outBuf bytes.Buffer
 	cmd := taskApproveCmd()
 	cmd.SetOut(&outBuf)
@@ -626,13 +696,38 @@ func TestTaskApproveCmd_Failed_JSON(t *testing.T) {
 
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("expected error when approved task execution fails in JSON mode, got nil")
+		t.Fatal("expected error when approved task returns rejected in JSON mode, got nil")
 	}
 	codeErr, ok := err.(ExitCodeError)
 	if !ok || codeErr.Code != ExitErrCommandFail {
 		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
 	}
 	var res a2a.Task
+	if err := json.Unmarshal(outBuf.Bytes(), &res); err != nil {
+		t.Fatalf("expected valid JSON on rejected approve output, got: %v", err)
+	}
+	if res.Status.State != a2a.TaskStateRejected {
+		t.Errorf("expected rejected state, got %s", res.Status.State)
+	}
+
+	// 2. Failed with --format json -> exit code 4
+	stateToReturn = a2a.TaskStateFailed
+	messageToReturn = "exit code 127"
+	outBuf.Reset()
+
+	cmd = taskApproveCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"cachyos", "task-app-fail", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL, "--format", "json"})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when approved task execution fails in JSON mode, got nil")
+	}
+	codeErr, ok = err.(ExitCodeError)
+	if !ok || codeErr.Code != ExitErrCommandFail {
+		t.Errorf("expected ExitErrCommandFail (code 4), got %v", err)
+	}
+	res = a2a.Task{}
 	if err := json.Unmarshal(outBuf.Bytes(), &res); err != nil {
 		t.Fatalf("expected valid JSON on failed approve output, got: %v", err)
 	}
@@ -659,6 +754,10 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 					Name:     "samson",
 					Hostname: "192.0.2.60",
 				},
+				{
+					Name:     "empty-host-node",
+					Hostname: "",
+				},
 			},
 		}, nil
 	}
@@ -681,7 +780,16 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 		t.Errorf("expected http://192.0.2.60:42425, got %s", c2.BaseURL)
 	}
 
-	// 3. Unknown remote node returns informative error
+	// 3. Node with empty hostname fails closed rather than dialing loopback
+	_, err = resolveA2AClient("empty-host-node", "", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for node with empty hostname, got nil")
+	}
+	if !strings.Contains(err.Error(), "no resolvable hostname") {
+		t.Errorf("expected 'no resolvable hostname' error, got %v", err)
+	}
+
+	// 4. Unknown remote node returns informative error
 	_, err = resolveA2AClient("unknown-node", "", 5*time.Second)
 	if err == nil {
 		t.Fatal("expected error for unknown node, got nil")
@@ -690,7 +798,7 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 		t.Errorf("expected 'not found in ... nodes.yaml' error, got %v", err)
 	}
 
-	// 4. Local node still resolves to unix socket
+	// 5. Local node still resolves to unix socket
 	cLocal, err := resolveA2AClient("local", "", 5*time.Second)
 	if err != nil {
 		t.Fatalf("resolve local failed: %v", err)
