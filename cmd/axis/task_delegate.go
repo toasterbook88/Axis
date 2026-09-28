@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -40,9 +42,50 @@ func formatHostPort(host, defaultPort string) string {
 	return fmt.Sprintf("%s:%s", host, defaultPort)
 }
 
+// allowOffboxBearerEnv is the break-glass switch for --addr aimed at a
+// non-loopback TCP host. Without it, resolveA2AClient refuses the dial so
+// the cluster token in ~/.axis/token cannot be attached to an unlisted host.
+const allowOffboxBearerEnv = "AXIS_ALLOW_OFFBOX_BEARER"
+
+// addrKeepsClusterBearer reports whether addr is the local daemon: a unix
+// socket, or HTTP to a loopback host. Anything else is off-box.
+func addrKeepsClusterBearer(addr string) bool {
+	if auth.IsUnixAddr(addr) {
+		return true
+	}
+	host := dialHost(addr)
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func dialHost(addr string) string {
+	raw := strings.TrimSpace(addr)
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return ""
+		}
+		raw = u.Host
+	}
+	host, _, err := net.SplitHostPort(raw)
+	if err != nil {
+		host = raw
+	}
+	return strings.Trim(strings.ToLower(host), "[]")
+}
+
 func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2a.Client, error) {
 	nodeName = strings.TrimSpace(nodeName)
 	addrOverride = strings.TrimSpace(addrOverride)
+
+	// Classify --addr before reading the token. LoadOrGenerateToken can create
+	// ~/.axis/token, and a refused dial must not touch that file or attach it.
+	if addrOverride != "" && !addrKeepsClusterBearer(addrOverride) && os.Getenv(allowOffboxBearerEnv) != "1" {
+		return nil, fmt.Errorf("refusing off-box --addr %q: it would attach the cluster token (set %s=1 to allow)", addrOverride, allowOffboxBearerEnv)
+	}
 
 	token, err := loadAPIToken()
 	if err != nil {
@@ -76,10 +119,10 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 				return a2a.NewClient(baseURL, token, httpClient), nil
 			}
 		} else if !isLocal {
-			return nil, fmt.Errorf("node %q not found in %s (specify --addr to dial an unlisted endpoint)", nodeName, config.DefaultConfigPath())
+			return nil, fmt.Errorf("node %q not found in %s (specify --addr to dial an unlisted endpoint; off-box --addr is refused unless %s=1)", nodeName, config.DefaultConfigPath(), allowOffboxBearerEnv)
 		}
 	} else if !isLocal {
-		return nil, fmt.Errorf("loading cluster configuration: %w (specify --addr to dial an unlisted endpoint)", err)
+		return nil, fmt.Errorf("loading cluster configuration: %w (specify --addr to dial an unlisted endpoint; off-box --addr is refused unless %s=1)", err, allowOffboxBearerEnv)
 	}
 
 	// Local node fallback: connect via default local unix socket
@@ -252,7 +295,7 @@ func taskDelegateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringVar(&skill, "skill", "", "Skill ID to invoke (e.g. axis-status, guarded-exec)")
 	cmd.Flags().StringVar(&confirm, "confirm", "", "Confirmation token (e.g. YES)")
-	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (unix socket or loopback). Off-box TCP requires AXIS_ALLOW_OFFBOX_BEARER=1")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "Request timeout")
 	return cmd
 }
@@ -349,7 +392,7 @@ func taskStatusCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
-	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (unix socket or loopback). Off-box TCP requires AXIS_ALLOW_OFFBOX_BEARER=1")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "Request timeout")
 	return cmd
 }
@@ -458,7 +501,7 @@ func taskApproveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringVar(&confirm, "confirm", "", "Confirmation token (required: YES)")
 	cmd.Flags().StringVar(&mode, "mode", "script", "Execution mode: script or exec")
-	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (unix socket or loopback). Off-box TCP requires AXIS_ALLOW_OFFBOX_BEARER=1")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "Request timeout")
 	return cmd
 }
@@ -513,7 +556,7 @@ func taskRejectCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringVar(&reason, "reason", "", "Reason for rejection (required)")
-	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&addr, "addr", "", "Override target daemon address (unix socket or loopback). Off-box TCP requires AXIS_ALLOW_OFFBOX_BEARER=1")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "Request timeout")
 	return cmd
 }

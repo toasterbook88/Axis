@@ -506,26 +506,50 @@ func TestTaskRejectCmd(t *testing.T) {
 }
 
 func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
+	t.Setenv(allowOffboxBearerEnv, "")
 	origToken := loadAPIToken
 	defer func() { loadAPIToken = origToken }()
-	loadAPIToken = func() (string, error) { return "test-token", nil }
-
-	// 1. Addr override takes precedence
-	c1, err := resolveA2AClient("any-node", "http://custom:1234", 5*time.Second)
-	if err != nil {
-		t.Fatalf("resolve with addr failed: %v", err)
-	}
-	if c1.BaseURL != "http://custom:1234" {
-		t.Errorf("expected http://custom:1234, got %s", c1.BaseURL)
+	var tokenLoads atomic.Int32
+	loadAPIToken = func() (string, error) {
+		tokenLoads.Add(1)
+		return "test-token", nil
 	}
 
-	// 2. Local target resolves to socket
+	// 1. Off-box --addr is refused before the cluster token is read.
+	// Userinfo that looks like a loopback host must not hide the real host.
+	for _, addr := range []string{
+		"http://custom:1234",
+		"http://192.0.2.5:8080",
+		"http://127.0.0.1@192.0.2.5:8080",
+		"http://169.254.169.254/",
+		"http://localhost.example/a2a",
+	} {
+		before := tokenLoads.Load()
+		client, err := resolveA2AClient("any-node", addr, 5*time.Second)
+		if err == nil || client != nil {
+			t.Fatalf("addr %q: expected refusal, client=%v err=%v", addr, client, err)
+		}
+		if !strings.Contains(err.Error(), allowOffboxBearerEnv) {
+			t.Errorf("addr %q: expected refusal to name %s, got %v", addr, allowOffboxBearerEnv, err)
+		}
+		if strings.Contains(err.Error(), "test-token") {
+			t.Errorf("addr %q: refusal contains the cluster token: %v", addr, err)
+		}
+		if tokenLoads.Load() != before {
+			t.Errorf("addr %q: refusal loaded the cluster token", addr)
+		}
+	}
+
+	// 2. Local target resolves to socket and keeps the token.
 	c2, err := resolveA2AClient("local", "", 5*time.Second)
 	if err != nil {
 		t.Fatalf("resolve local failed: %v", err)
 	}
 	if c2.BaseURL != "http://localhost" {
 		t.Errorf("expected unix socket base URL http://localhost, got %s", c2.BaseURL)
+	}
+	if c2.Token != "test-token" {
+		t.Errorf("expected local client to keep the cluster token")
 	}
 
 	// 3. Unlisted direct IP without --addr must fail closed (no arbitrary credentials leak)
@@ -536,14 +560,59 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 	if !strings.Contains(err.Error(), "specify --addr") {
 		t.Errorf("expected prompt to specify --addr, got %v", err)
 	}
-
-	// 4. Direct IP with explicit --addr succeeds
-	c4, err := resolveA2AClient("unlisted-node", "http://192.0.2.5:8080", 5*time.Second)
-	if err != nil {
-		t.Fatalf("resolve direct IP with --addr failed: %v", err)
+	if strings.Contains(err.Error(), "test-token") {
+		t.Errorf("unlisted-node error contains the cluster token: %v", err)
 	}
-	if c4.BaseURL != "http://192.0.2.5:8080" {
-		t.Errorf("expected http://192.0.2.5:8080, got %s", c4.BaseURL)
+
+	// 4. Loopback and unix --addr still attach the token (local daemon and httptest).
+	for _, addr := range []string{
+		"http://127.0.0.1:9",
+		"http://[::1]:9",
+		"/tmp/axis-slice4.sock",
+	} {
+		client, err := resolveA2AClient("unlisted-node", addr, 5*time.Second)
+		if err != nil {
+			t.Fatalf("addr %q: expected local client, got %v", addr, err)
+		}
+		if client.Token != "test-token" {
+			t.Errorf("addr %q: expected cluster token on local client", addr)
+		}
+	}
+
+	// 5. Break-glass attaches the token to an off-box --addr.
+	t.Setenv(allowOffboxBearerEnv, "1")
+	c5, err := resolveA2AClient("unlisted-node", "http://192.0.2.5:8080", 5*time.Second)
+	if err != nil {
+		t.Fatalf("break-glass off-box --addr failed: %v", err)
+	}
+	if c5.BaseURL != "http://192.0.2.5:8080" {
+		t.Errorf("expected http://192.0.2.5:8080, got %s", c5.BaseURL)
+	}
+	if c5.Token != "test-token" {
+		t.Errorf("expected break-glass client to carry the cluster token")
+	}
+}
+
+func TestAddrKeepsClusterBearer(t *testing.T) {
+	cases := []struct {
+		addr string
+		keep bool
+	}{
+		{"/tmp/axis.sock", true},
+		{"unix:///tmp/axis.sock", true},
+		{"http://127.0.0.1:42425", true},
+		{"http://localhost:42425", true},
+		{"http://[::1]:42425", true},
+		{"http://192.0.2.5:8080", false},
+		{"http://127.0.0.1@192.0.2.5:8080", false},
+		{"http://169.254.169.254/", false},
+		{"localhost.example:42425", false},
+		{"http://custom:1234", false},
+	}
+	for _, tc := range cases {
+		if got := addrKeepsClusterBearer(tc.addr); got != tc.keep {
+			t.Errorf("addrKeepsClusterBearer(%q) = %v, want %v", tc.addr, got, tc.keep)
+		}
 	}
 }
 
@@ -783,6 +852,9 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	}
 	if c1.BaseURL != "http://192.0.2.5:42425" {
 		t.Errorf("expected http://192.0.2.5:42425, got %s", c1.BaseURL)
+	}
+	if c1.Token != "test-token" {
+		t.Errorf("listed peer still receives the cluster token on the mesh path")
 	}
 
 	// 2. PrimaryHostname fallback to Hostname when no endpoints
