@@ -50,13 +50,14 @@ func toolCall(id, name string, args string) chat.ToolCall {
 }
 
 func TestParallelToolDispatchRunsConcurrently(t *testing.T) {
-	// Register a slow tool whose execution records start/end timestamps so we
-	// can verify the calls overlapped rather than running sequentially.
+	// Barrier: every tool blocks until all have entered execution, so max
+	// in-flight is deterministic (no sleep/timing flake). Also CAS the max
+	// counter — a plain Load/Store can overwrite a higher value under race.
+	const n = 3
 	var inFlight int32
 	var maxInFlight int32
-	startTimes := make([]time.Time, 3)
-	endTimes := make([]time.Time, 3)
-	var idx int32
+	var arrived int32
+	release := make(chan struct{})
 
 	a := New(Config{
 		Backend: &scriptedBackend{responses: []chat.Message{
@@ -73,38 +74,40 @@ func TestParallelToolDispatchRunsConcurrently(t *testing.T) {
 		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
-	// Register the slow_probe tool on the existing registry.
 	a.tools.allowExtra("slow_probe")
 	a.tools.add("slow_probe",
-		"A test tool that sleeps briefly.",
+		"A test tool that barriers until all peers have started.",
 		json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
-			i := atomic.AddInt32(&idx, 1) - 1
 			cur := atomic.AddInt32(&inFlight, 1)
-			if cur > atomic.LoadInt32(&maxInFlight) {
-				atomic.StoreInt32(&maxInFlight, cur)
+			for {
+				old := atomic.LoadInt32(&maxInFlight)
+				if cur <= old || atomic.CompareAndSwapInt32(&maxInFlight, old, cur) {
+					break
+				}
 			}
-			startTimes[i] = time.Now()
-			time.Sleep(120 * time.Millisecond)
-			endTimes[i] = time.Now()
+			if atomic.AddInt32(&arrived, 1) == n {
+				close(release)
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				atomic.AddInt32(&inFlight, -1)
+				return "", ctx.Err()
+			}
 			atomic.AddInt32(&inFlight, -1)
 			return "ok", nil
 		},
 	)
 
-	start := time.Now()
 	if err := a.Run(context.Background(), "run three probes"); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	elapsed := time.Since(start)
-
-	// Sequential execution would take ~360ms; concurrent should be well under
-	// 300ms (3 × 120ms overlapping with a 6-way pool).
-	if elapsed > 300*time.Millisecond {
-		t.Fatalf("expected concurrent dispatch (<300ms), took %v", elapsed)
-	}
 	if maxInFlight < 2 {
 		t.Fatalf("expected at least 2 concurrent tool executions, max in-flight was %d", maxInFlight)
+	}
+	if got := atomic.LoadInt32(&arrived); got != n {
+		t.Fatalf("expected %d tools to arrive at barrier, got %d", n, got)
 	}
 	// Results must be appended in original tool-call order.
 	msgs := a.conv.Messages()
