@@ -3,6 +3,7 @@
 package placement
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -52,39 +53,57 @@ func isBlockingFailure(class models.FailureClass) bool {
 	return false
 }
 
-// RankCandidates sorts nodes deterministically.
-// Priority order:
-//  1. Highest allocatable RAM
+const (
+	RankingMetricAllocRAM = "allocatable_ram"
+	RankingMetricUnitMB   = "MB"
+)
+
+func CapacityMetric(n models.NodeFacts) models.RankingMetric {
+	return models.RankingMetric{
+		Name:       RankingMetricAllocRAM,
+		Value:      float64(allocatableRAM(n)),
+		Unit:       RankingMetricUnitMB,
+		Provenance: models.MetricProvenanceDerived,
+	}
+}
+
+type rankKey struct {
+	idx                     int
+	allocatableRAM          int64
+	empirical               *models.ExecutionObservation
+	residentModelRank       int
+	preferredBackendRank    int
+	gpuScore                int
+	headroom                int64
+	turboQuantRank          int
+	unifiedMemoryRank       int
+	pressureRank            int
+	modelWarmthRank         int
+	reservationRatio        float64
+	clusterReservationShare float64
+}
+
+// buildRankKeys captures the deterministic comparator inputs for the default
+// capacity objective. Priority order:
+//  1. Highest allocatable RAM (ranking metric / headline)
 //  2. Best exact-scope empirical observation (fresh only)
 //  3. Resident model locality for the requested runtime
 //  4. Preferred backend rank
 //  5. GPU score
 //  6. Highest effective headroom (free-with-state - requirement)
-//  7. Highest unified-memory suitability / TurboQuant for matching asks
-//  8. Lowest RAM pressure (soft tie-break after hard blockers)
-//  9. Lowest reservation ratio and cluster reservation share
+//  7. Highest TurboQuant rank when requested
+//  8. Highest unified-memory suitability
+//  9. Lowest RAM pressure (soft tie-break after hard blockers)
+//  10. Highest resident-model warmth
+//  11. Lowest reservation ratio
+//  12. Lowest cluster reservation share
+//  13. Node name ascending (stable tiebreak)
 //
-// 10. Node name ascending (stable tiebreak)
-func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
+// FitScore is intentionally not used as a sort key (placement-selection-contract §2).
+func buildRankKeys(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []rankKey {
 	// Precompute cluster-level constants once to avoid O(N) scans inside
 	// the per-node loop and the comparator.
 	clusterReserved := totalReservedFromNodes(candidates)
-
-	type rankKey struct {
-		idx                     int
-		allocatableRAM          int64
-		empirical               *models.ExecutionObservation
-		residentModelRank       int
-		preferredBackendRank    int
-		gpuScore                int
-		headroom                int64
-		turboQuantRank          int
-		unifiedMemoryRank       int
-		pressureRank            int
-		modelWarmthRank         int
-		reservationRatio        float64
-		clusterReservationShare float64
-	}
 
 	keys := make([]rankKey, len(candidates))
 	for i, n := range candidates {
@@ -138,67 +157,216 @@ func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements,
 			clusterReservationShare: share,
 		}
 	}
+	return keys
+}
+
+// comparisonStep is one entry in the single ordered comparison pipeline that
+// both sorts candidates and identifies the decisive criterion. Each step knows
+// how to order two rankKeys (sign: positive means a is preferred over b) and
+// how to render a key's value for decisive-criterion reporting.
+//
+// This is the single source of truth for ranking order. sortCandidates and
+// decisiveComparison both walk the same steps, so the reported decisive
+// criterion can never drift from the order the sort actually used.
+type comparisonStep struct {
+	criterion models.RankingCriterion
+	// compare returns >0 if a is preferred over b, <0 if b over a, 0 if tied.
+	compare func(a, b rankKey) int
+	// render renders a key's value for this criterion (used for tie-break
+	// reporting). nil for the headline metric, which reports no tie-break.
+	render func(k rankKey) string
+}
+
+// headlineStep is the ranking-metric step: it decides by allocatable RAM and
+// reports the criterion with no tie-break value (the metric is already in
+// PlacementRanking.Metric).
+var headlineStep = comparisonStep{
+	criterion: models.RankingCriterionAllocatableCapacity,
+	compare:   func(a, b rankKey) int { return cmpInt64(a.allocatableRAM, b.allocatableRAM) },
+	render:    nil,
+}
+
+// rankComparisonSteps returns the ordered comparison pipeline for the default
+// capacity objective. The TurboQuant step is included only when the request
+// prefers TurboQuant, so a gated step can never be reported as decisive (or
+// affect ordering) when it was not part of the sort.
+func rankComparisonSteps(reqs models.TaskRequirements) []comparisonStep {
+	steps := make([]comparisonStep, 0, 13)
+	steps = append(steps, headlineStep)
+	steps = append(steps,
+		comparisonStep{
+			criterion: models.RankingCriterionEmpiricalHistory,
+			compare:   func(a, b rankKey) int { return compareObservationPreference(a.empirical, b.empirical) },
+			render:    func(k rankKey) string { return formatObservationRank(k.empirical) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionResidentModel,
+			compare:   func(a, b rankKey) int { return cmpInt(a.residentModelRank, b.residentModelRank) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.residentModelRank) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionPreferredBackend,
+			compare:   func(a, b rankKey) int { return cmpInt(a.preferredBackendRank, b.preferredBackendRank) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.preferredBackendRank) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionGPU,
+			compare:   func(a, b rankKey) int { return cmpInt(a.gpuScore, b.gpuScore) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.gpuScore) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionResidualHeadroom,
+			compare:   func(a, b rankKey) int { return cmpInt64(a.headroom, b.headroom) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%dMB", k.headroom) },
+		},
+	)
+	if reqs.PrefersTurboQuant {
+		steps = append(steps, comparisonStep{
+			criterion: models.RankingCriterionTurboQuant,
+			compare:   func(a, b rankKey) int { return cmpInt(a.turboQuantRank, b.turboQuantRank) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.turboQuantRank) },
+		})
+	}
+	steps = append(steps,
+		comparisonStep{
+			criterion: models.RankingCriterionUnifiedMemory,
+			compare:   func(a, b rankKey) int { return cmpInt(a.unifiedMemoryRank, b.unifiedMemoryRank) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.unifiedMemoryRank) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionPressure,
+			compare:   func(a, b rankKey) int { return -cmpInt(a.pressureRank, b.pressureRank) }, // lower pressure wins
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.pressureRank) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionModelWarmth,
+			compare:   func(a, b rankKey) int { return cmpInt(a.modelWarmthRank, b.modelWarmthRank) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%d", k.modelWarmthRank) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionReservationRatio,
+			compare:   func(a, b rankKey) int { return -cmpFloat64(a.reservationRatio, b.reservationRatio) }, // lower wins
+			render:    func(k rankKey) string { return fmt.Sprintf("%.6f", k.reservationRatio) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionClusterReservationShare,
+			compare:   func(a, b rankKey) int { return -cmpFloat64(a.clusterReservationShare, b.clusterReservationShare) }, // lower wins
+			render:    func(k rankKey) string { return fmt.Sprintf("%.6f", k.clusterReservationShare) },
+		},
+	)
+	return steps
+}
+
+// compareRankKeys returns >0 if a is preferred over b under the capacity
+// objective, <0 if b over a, and 0 if tied on every step except the terminal
+// node-name tiebreak. The node-name step is the final total order and is
+// applied here so callers that need a strict ordering (sort) get one; callers
+// that only need the decisive criterion (decisiveComparison) stop before it.
+func compareRankKeys(steps []comparisonStep, a, b rankKey) int {
+	for _, s := range steps {
+		if c := s.compare(a, b); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+// cmpInt / cmpInt64 / cmpFloat64 return the sign of a-b.
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func cmpInt64(a, b int64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func cmpFloat64(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func rankCandidatesWithKeys(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) ([]models.NodeFacts, []rankKey) {
+	keys := buildRankKeys(candidates, reqs, st)
+	steps := rankComparisonSteps(reqs)
 
 	sort.SliceStable(keys, func(i, j int) bool {
-		if keys[i].allocatableRAM != keys[j].allocatableRAM {
-			return keys[i].allocatableRAM > keys[j].allocatableRAM
+		if c := compareRankKeys(steps, keys[i], keys[j]); c != 0 {
+			return c > 0
 		}
-
-		if cmp := compareObservationPreference(keys[i].empirical, keys[j].empirical); cmp != 0 {
-			return cmp > 0
-		}
-
-		if keys[i].residentModelRank != keys[j].residentModelRank {
-			return keys[i].residentModelRank > keys[j].residentModelRank
-		}
-
-		if keys[i].preferredBackendRank != keys[j].preferredBackendRank {
-			return keys[i].preferredBackendRank > keys[j].preferredBackendRank
-		}
-
-		if keys[i].gpuScore != keys[j].gpuScore {
-			return keys[i].gpuScore > keys[j].gpuScore
-		}
-
-		if keys[i].headroom != keys[j].headroom {
-			return keys[i].headroom > keys[j].headroom
-		}
-
-		if reqs.PrefersTurboQuant {
-			if keys[i].turboQuantRank != keys[j].turboQuantRank {
-				return keys[i].turboQuantRank > keys[j].turboQuantRank
-			}
-		}
-
-		if keys[i].unifiedMemoryRank != keys[j].unifiedMemoryRank {
-			return keys[i].unifiedMemoryRank > keys[j].unifiedMemoryRank
-		}
-
-		if keys[i].pressureRank != keys[j].pressureRank {
-			return keys[i].pressureRank < keys[j].pressureRank
-		}
-
-		if keys[i].modelWarmthRank != keys[j].modelWarmthRank {
-			return keys[i].modelWarmthRank > keys[j].modelWarmthRank
-		}
-
-		if keys[i].reservationRatio != keys[j].reservationRatio {
-			return keys[i].reservationRatio < keys[j].reservationRatio
-		}
-
-		if keys[i].clusterReservationShare != keys[j].clusterReservationShare {
-			return keys[i].clusterReservationShare < keys[j].clusterReservationShare
-		}
-
+		// Terminal total order: node name ascending. This is intentionally
+		// outside the steps slice so decisiveComparison can detect "tied on
+		// every ranked criterion" and report the name tiebreak itself.
 		return candidates[keys[i].idx].Name < candidates[keys[j].idx].Name
 	})
 
 	ranked := make([]models.NodeFacts, len(keys))
+	rankedKeys := make([]rankKey, len(keys))
 	for i, k := range keys {
 		ranked[i] = candidates[k.idx]
+		rankedKeys[i] = k
 	}
 
+	return ranked, rankedKeys
+}
+
+func RankCandidates(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []models.NodeFacts {
+	ranked, _ := rankCandidatesWithKeys(candidates, reqs, st)
 	return ranked
+}
+
+// decisiveComparison walks the same ordered steps used by the sort and returns
+// the first criterion that distinguished winner from runner-up, plus rendered
+// values for tie-break reporting. The headline step (allocatable RAM) reports
+// no tie-break because its value is already in PlacementRanking.Metric. If
+// every ranked step ties, the node-name terminal tiebreak is reported.
+func decisiveComparison(winner, runner models.NodeFacts, winnerKey, runnerKey rankKey, reqs models.TaskRequirements) (models.RankingCriterion, *models.RankingTieBreak) {
+	steps := rankComparisonSteps(reqs)
+	for _, s := range steps {
+		if s.compare(winnerKey, runnerKey) == 0 {
+			continue
+		}
+		if s.render == nil {
+			return s.criterion, nil
+		}
+		return s.criterion, &models.RankingTieBreak{
+			Criterion:   s.criterion,
+			WinnerValue: s.render(winnerKey),
+			RunnerValue: s.render(runnerKey),
+		}
+	}
+	return models.RankingCriterionNodeName, &models.RankingTieBreak{
+		Criterion:   models.RankingCriterionNodeName,
+		WinnerValue: winner.Name,
+		RunnerValue: runner.Name,
+	}
+}
+
+func formatObservationRank(obs *models.ExecutionObservation) string {
+	if obs == nil {
+		return "none"
+	}
+	return fmt.Sprintf("success=%t,peak_ram=%dMB,peak_vram=%dMB,wall=%dms,samples=%d",
+		obs.LastSuccess, obs.PeakRAMMB, obs.PeakVRAMMB, obs.WallTimeMS, obs.SampleCount)
 }
 
 func hasTool(n models.NodeFacts, name string) bool {

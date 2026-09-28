@@ -145,27 +145,36 @@ func printPlacementExplanationText(destination io.Writer, explanation models.Pla
 		if explanation.Decision.IsLocal {
 			locality = ui.Green("local")
 		}
-		fmt.Fprintf(out, "%s %s (%s, fit %s)\n",
+		fmt.Fprintf(out, "%s %s (%s, %s %s)\n",
 			ui.Green("✓"),
 			ui.Bold(explanation.Decision.Node),
 			locality,
-			ui.Cyan(fmt.Sprintf("%d/100", explanation.Decision.FitScore)))
+			ui.Dim(rankingHeadlineLabel(explanation.Decision)),
+			ui.Cyan(rankingHeadlineValue(explanation.Decision)))
 	} else {
 		fmt.Fprintf(out, "%s %s\n", ui.Red("✗"), "No suitable node found.")
 	}
 
 	if len(explanation.Eligible) > 0 {
 		fmt.Fprintf(out, "\n%s\n", ui.Bold("Advisory Placement"))
+		if explanation.Decision.Ranking != nil {
+			ranking := explanation.Decision.Ranking
+			fmt.Fprintf(out, "%s objective=%s (%s); metric provenance=%s; decisive=%s\n",
+				ui.Dim("Ranked by"), ranking.Objective, ranking.Source, ranking.Metric.Provenance, ranking.DecisiveBy)
+		} else {
+			fmt.Fprintf(out, "%s unavailable\n", ui.Dim("Ranking"))
+		}
 		for i, candidate := range explanation.Eligible {
 			locality := ui.Dim("remote")
 			if candidate.IsLocal {
 				locality = ui.Green("local")
 			}
-			fmt.Fprintf(out, "%d. %s (%s, fit %s, headroom %s)\n",
+			fmt.Fprintf(out, "%d. %s (%s, %s %s, residual headroom %s)\n",
 				i+1,
 				ui.Bold(candidate.Node),
 				locality,
-				ui.Cyan(fmt.Sprintf("%d/100", candidate.FitScore)),
+				candidate.Metric.Name,
+				ui.Cyan(fmt.Sprintf("%.0f%s", candidate.Metric.Value, candidate.Metric.Unit)),
 				ui.Cyan(fmt.Sprintf("%dMB", candidate.HeadroomMB)))
 			for _, reason := range candidate.Reasoning {
 				fmt.Fprintf(out, "   %s %s\n", ui.Dim("-"), reason)

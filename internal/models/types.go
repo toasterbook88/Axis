@@ -564,24 +564,92 @@ func (r TaskRequirements) GetMemoryRequestMB() int64 {
 	return r.MemoryRequestMB
 }
 
+type PlacementObjective string
+
+const (
+	PlacementObjectiveCapacity PlacementObjective = "capacity"
+)
+
+type ObjectiveSource string
+
+const (
+	ObjectiveSourceDefault  ObjectiveSource = "default"
+	ObjectiveSourceExplicit ObjectiveSource = "explicit"
+)
+
+type MetricProvenance string
+
+const (
+	MetricProvenanceEmpirical MetricProvenance = "empirical"
+	MetricProvenanceProbed    MetricProvenance = "probed"
+	MetricProvenanceDerived   MetricProvenance = "derived"
+	MetricProvenanceEstimated MetricProvenance = "estimated"
+)
+
+type RankingCriterion string
+
+const (
+	RankingCriterionOnlyCandidate           RankingCriterion = "only_candidate"
+	RankingCriterionAllocatableCapacity     RankingCriterion = "allocatable_capacity"
+	RankingCriterionEmpiricalHistory        RankingCriterion = "empirical_history"
+	RankingCriterionResidentModel           RankingCriterion = "resident_model"
+	RankingCriterionPreferredBackend        RankingCriterion = "preferred_backend"
+	RankingCriterionGPU                     RankingCriterion = "gpu"
+	RankingCriterionResidualHeadroom        RankingCriterion = "residual_headroom"
+	RankingCriterionTurboQuant              RankingCriterion = "turboquant"
+	RankingCriterionUnifiedMemory           RankingCriterion = "unified_memory"
+	RankingCriterionPressure                RankingCriterion = "pressure"
+	RankingCriterionModelWarmth             RankingCriterion = "model_warmth"
+	RankingCriterionReservationRatio        RankingCriterion = "reservation_ratio"
+	RankingCriterionClusterReservationShare RankingCriterion = "cluster_reservation_share"
+	RankingCriterionNodeName                RankingCriterion = "node_name"
+)
+
+type RankingMetric struct {
+	Name       string           `json:"name" yaml:"name"`
+	Value      float64          `json:"value" yaml:"value"`
+	Unit       string           `json:"unit" yaml:"unit"`
+	Provenance MetricProvenance `json:"provenance" yaml:"provenance"`
+}
+
+// RankingTieBreak records the first comparator after the headline metric that
+// distinguished the winner from the runner-up. Values are rendered from the
+// exact comparator keys so heterogeneous criteria remain unambiguous.
+type RankingTieBreak struct {
+	Criterion   RankingCriterion `json:"criterion" yaml:"criterion"`
+	WinnerValue string           `json:"winner_value" yaml:"winner_value"`
+	RunnerValue string           `json:"runner_value" yaml:"runner_value"`
+}
+
+type PlacementRanking struct {
+	Objective  PlacementObjective `json:"objective" yaml:"objective"`
+	Source     ObjectiveSource    `json:"source" yaml:"source"`
+	Metric     RankingMetric      `json:"metric" yaml:"metric"`
+	DecisiveBy RankingCriterion   `json:"decisive_by" yaml:"decisive_by"`
+	TieBreak   *RankingTieBreak   `json:"tie_break,omitempty" yaml:"tie_break,omitempty"`
+}
+
 // PlacementDecision is the output of the placement engine.
-// OK is false when no node qualifies.
+// OK is false when no node qualifies. Ranking is present for every successful
+// decision; FitScore remains diagnostic and never orders candidates.
 type PlacementDecision struct {
 	Node      string               `json:"node" yaml:"node"`
 	Tool      string               `json:"tool,omitempty" yaml:"tool,omitempty"`
-	FitScore  int                  `json:"fit_score" yaml:"fit_score"`
+	FitScore  int                  `json:"fit_score" yaml:"fit_score"` // diagnostic only; not the ranking key
 	IsLocal   bool                 `json:"is_local" yaml:"is_local"`
 	Workload  WorkloadProfileMatch `json:"workload,omitempty" yaml:"workload,omitempty"`
+	Ranking   *PlacementRanking    `json:"ranking,omitempty" yaml:"ranking,omitempty"`
 	Reasoning []string             `json:"reasoning" yaml:"reasoning"`
 	OK        bool                 `json:"ok" yaml:"ok"`
 }
 
 type PlacementCandidateExplanation struct {
-	Node       string   `json:"node" yaml:"node"`
-	FitScore   int      `json:"fit_score" yaml:"fit_score"`
-	IsLocal    bool     `json:"is_local" yaml:"is_local"`
-	HeadroomMB int64    `json:"headroom_mb,omitempty" yaml:"headroom_mb,omitempty"`
-	Reasoning  []string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+	Node       string        `json:"node" yaml:"node"`
+	FitScore   int           `json:"fit_score" yaml:"fit_score"` // diagnostic only
+	IsLocal    bool          `json:"is_local" yaml:"is_local"`
+	HeadroomMB int64         `json:"headroom_mb,omitempty" yaml:"headroom_mb,omitempty"`
+	Metric     RankingMetric `json:"ranking_metric" yaml:"ranking_metric"`
+	Reasoning  []string      `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
 }
 
 type PlacementExclusion struct {

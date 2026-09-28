@@ -77,6 +77,27 @@ const (
 	EventSnapshotCollected = "snapshot.collected"
 )
 
+// cortexDaemonTelemetryEvents are high-frequency Axis daemon lifecycle names.
+// They remain on the local events.jsonl / ring buffer, but are not forwarded to
+// Cortex (Foundry SQLite event bus). Re-enable by removing names from this set
+// if you intentionally want Cortex to mirror daemon refresh again.
+//
+// Background: these three types made up ~99.97% of Cortex events (~3/min) and
+// drowned agent coordination signals. Canonical daemon history stays in
+// ~/.axis/events.jsonl on each node.
+var cortexDaemonTelemetryEvents = map[string]struct{}{
+	EventDaemonRefreshPre:  {},
+	EventDaemonRefreshPost: {},
+	EventSnapshotCollected: {},
+}
+
+// ShouldPublishEventToCortex reports whether an event name should be fan-out
+// to the Cortex publish_event tool. Local file log always receives every event.
+func ShouldPublishEventToCortex(name string) bool {
+	_, blocked := cortexDaemonTelemetryEvents[name]
+	return !blocked
+}
+
 // =============================================================================
 // Event Type
 // =============================================================================
@@ -363,11 +384,14 @@ func processEvent(evt Event) {
 	}
 	bufferMu.Unlock()
 
-	// 4. Publish to Cortex asynchronously
+	// 4. Publish to Cortex asynchronously (coordination events only).
+	// Daemon interval refresh/snapshot telemetry is blocked here; it still
+	// lands in the local JSONL log (step 2 above). Cortex also ignores these
+	// types at publish_event ingress as defense in depth.
 	cortexMu.Lock()
 	cClient := cortexClient
 	cortexMu.Unlock()
-	if cClient != nil {
+	if cClient != nil && ShouldPublishEventToCortex(evt.Name) {
 		inflightAdd(1)
 		go func(ev Event) {
 			defer inflightAdd(-1)

@@ -60,7 +60,8 @@ type RunResponse struct {
 	Node           string                      `json:"node,omitempty"`
 	Tool           string                      `json:"tool,omitempty"`
 	Workload       models.WorkloadProfileMatch `json:"workload,omitempty"`
-	FitScore       int                         `json:"fit_score,omitempty"`
+	FitScore       int                         `json:"fit_score,omitempty"` // diagnostic only; not the ranking key
+	Ranking        *models.PlacementRanking    `json:"ranking,omitempty"`
 	IsLocal        bool                        `json:"is_local,omitempty"`
 	Reasoning      []string                    `json:"reasoning,omitempty"`
 	Blocked        bool                        `json:"blocked,omitempty"`

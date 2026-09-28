@@ -48,7 +48,7 @@ Finally, `TaskRequirements` carries no OS or architecture constraint, so a platf
 - **Feasibility** — whether a node can execute the task at all. Hard, boolean, AXIS-owned.
 - **Objective** — the operator-selected criterion by which feasible nodes are ordered.
 - **Ranking metric** — the single quantity, in stated units, that the chosen objective sorts by. Must be the number displayed.
-- **Provenance** — whether the metric came from `empirical` (observed execution), `probed` (capability micro-probe), or `estimated` (structural facts only). Rendered with the decision.
+- **Provenance** — whether the metric came from `empirical` (observed execution), `probed` (capability micro-probe), `derived` (deterministic arithmetic over observed/configured state), or `estimated` (modeled from structural facts). Rendered with the decision.
 
 ## 4. Feasibility filter
 
@@ -66,17 +66,18 @@ Extends the existing `evaluateCandidates` / `ExclusionReasons` mechanism in `int
 
 `TaskRequirements` gains `OS string` and `Arch string`. Both are populated by workload classification where inferable and may be set explicitly.
 
-**Model fit is conditional and must degrade honestly.** Model weight size is known when it comes from resident-model facts (`ResidentModel.WeightSizeMB`), from the local model inventory, or from an explicit requirement. `ResidentModel.SizeRAMMB` and `ResidentModel.SizeVRAMMB` are observations of current residency, not substitutes for model weight size. When weight size is unknown, **the filter does not apply** and the decision records `model_fit: unknown`. AXIS must not guess a model's memory footprint from its name.
+**Model fit is conditional and must degrade honestly.** Model size is known when it comes from resident-model facts (`ResidentModel.SizeVRAMMB`), from the local model inventory, or from an explicit requirement. When size is unknown, **the filter does not apply** and the decision records `model_fit: unknown`. AXIS must not guess a model's memory footprint from its name.
 
 Usable accelerator memory is `GPUInfo.VRAMMB` for discrete GPUs, and allocatable system RAM for unified-memory nodes (where `VRAMMB` is reported as 0). This corrects a current asymmetry in which unified-memory nodes score zero VRAM despite their real ceiling being system RAM.
 
 ## 5. Objectives
 
-`PlacementObjective` is a new field on the placement request, not on `TaskRequirements` — it is an operator preference, not a property of the task.
+`PlacementObjective` belongs on the placement request, not on `TaskRequirements` — it is an operator preference, not a property of the task. The first implementation exposes only the behavior-preserving `capacity` default. Explicit objective selection and additional policies land separately.
 
 | Objective | Ranking metric | Units | Notes |
 | --- | --- | --- | --- |
-| `headroom` | allocatable RAM remaining after placement | MB | Today's behavior, named and preserved |
+| `capacity` | allocatable RAM before placement | MB | Today's primary comparator, named honestly and preserved |
+| `headroom` | allocatable RAM remaining after placement | MB | Future explicit policy; not an alias for capacity |
 | `fastest` | predicted completion time | seconds | Empirical → probed → estimated |
 | `local` | route cost from vantage | ordinal | Per the topology truth contract; vantage-labeled |
 | `spread` | resulting cluster reservation skew | stddev | The current skew penalty term, promoted to an objective |
@@ -84,13 +85,13 @@ Usable accelerator memory is `GPUInfo.VRAMMB` for discrete GPUs, and allocatable
 
 Each objective is a total order over feasible candidates with a deterministic tiebreak chain ending in node name ascending, preserving determinism.
 
-**`fastest` degrades explicitly.** With an empirical observation for the exact scope it uses observed wall time. With capability probes but no observation it uses a modeled estimate. With neither it falls back to `headroom` ordering **and says so** — it never presents an estimate it cannot support.
+**`fastest` degrades explicitly.** With an empirical observation for the exact scope it uses observed wall time. With capability probes but no observation it uses a modeled estimate. With neither it falls back to `capacity` ordering **and says so** — it never presents an estimate it cannot support.
 
 ## 6. Default objective
 
-Default is `headroom`, matching current behavior so that upgrading changes no placement outcome by itself.
+Default is `capacity`, exactly matching the current first comparator so that this contract correction changes no placement outcome by itself.
 
-The default is configurable and is **always displayed**, so operators can see that a policy choice is in effect rather than inheriting one invisibly. Documentation should recommend setting an explicit objective.
+The default will become configurable when explicit objective plumbing lands. It is **always displayed** now, so operators can see that a policy choice is in effect rather than inheriting one invisibly.
 
 This default is deliberately conservative. Much of the absurdity motivating this contract — a trivial command routed to a large relayed node, a platform-specific command placed on an incompatible OS — is corrected by the feasibility filter regardless of objective, so the default need not carry that weight.
 
@@ -118,7 +119,7 @@ Binding on CLI, HTTP, MCP, agent, and chat surfaces. This is what `docs/invarian
 | --- | --- |
 | **P1** | The decision states the objective in effect and whether it was default or explicit. |
 | **P2** | The displayed headline number is the ranking metric, with units. |
-| **P3** | Metric provenance (`empirical` / `probed` / `estimated`) is shown. |
+| **P3** | Metric provenance (`empirical` / `probed` / `derived` / `estimated`) is shown. |
 | **P4** | Runner-up is reported using the same metric as the winner. |
 | **P5** | No dimensionless composite may appear as a headline or ordering basis. |
 | **P6** | When an objective degrades for lack of data, the degradation is stated. |
@@ -142,7 +143,7 @@ B3 dissolves under P2 and P4: the number an operator reads is the number that de
 | **S1** | Platform-specific command against a mixed-OS cluster | Incompatible-OS nodes excluded with a stated reason (B4) |
 | **S2** | Trivial command vs large inference task | Rankings differ; identical ordering across unrelated tasks is a failure (B2) |
 | **S3** | Any decision output | Headline number equals the ranking metric (B3, P2) |
-| **S4** | Cluster with no probes, objective `fastest` | Degrades to `headroom` and states the degradation (P6) |
+| **S4** | Cluster with no probes, objective `fastest` | Degrades to `capacity` and states the degradation (P6) |
 | **S5** | No objective configured | Default named explicitly in output (P1) |
 | **S6** | Requested model size unknown | Model-fit filter does not apply; `model_fit: unknown` recorded |
 | **S7** | Unified-memory node, model larger than allocatable RAM | Excluded by model fit |
@@ -154,7 +155,7 @@ S1 and S2 are regressions of live failures recorded in the audit.
 
 ## 11. Consequences
 
-**Behavior.** Default `headroom` means no placement outcome changes on upgrade from ranking alone. The feasibility filter *will* change outcomes — that is its purpose, and every exclusion is stated.
+**Behavior.** Default `capacity` names the existing comparator and causes no placement outcome change. A future explicit `headroom` objective will rank by post-placement residual and may change outcomes. The feasibility filter *will* change outcomes — that is its purpose, and every exclusion is stated.
 
 **Removed.** `ComputeTaskFitScore` as sort key and headline. Its dimension breakdown remains available in `placement explain` as diagnostic detail. Existing tests asserting fit-score-driven ordering encode the rejected model and must be replaced rather than adjusted.
 
