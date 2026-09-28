@@ -70,6 +70,12 @@ API-key files should also be `0600`.
 - `~/.axis/token` holds the local API token for `axis serve`.
 - Written atomically with `0600` permissions.
 - `AXIS_API_TOKEN` env var overrides the file.
+- `AXIS_ALLOW_OFFBOX_BEARER=1` is the **break-glass switch** for `axis task delegate/status/approve/reject --addr` aimed at a non-loopback TCP host.
+  - **What it does** — permits the A2A task CLI to dial a `--addr` that is neither a Unix socket, `localhost`, nor a loopback IP, *with the cluster bearer token attached*.
+  - **Why the default is off** — the token is a long-lived cluster credential; `resolveA2AClient` (`cmd/axis/task_delegate.go`) classifies the dial host via `addrKeepsClusterBearer`/`dialHost` and returns **before** the token is read, so a refused dial never touches `~/.axis/token` and never attaches it. Unlisted names are refused outright.
+  - **The safe alternative** — add the peer to `nodes.yaml` and address it by node name. `nodes.yaml` peers receive the token on the mesh path; only the ad-hoc `--addr` path is gated.
+  - **When to set it** — deliberately, for a one-off diagnostic against a host not yet in `nodes.yaml`. Do not export it in a shell profile: `=1` globally disables the protection for every `axis task --addr` invocation.
+  - **Fails closed on** userinfo smuggling (`http://127.0.0.1@evil.com/` resolves to `evil.com`, refused), empty host, and non-loopback IP literals.
 
 ### Cloud Provider API Keys
 
@@ -110,7 +116,7 @@ API-key files should also be `0600`.
 | SSH known_hosts | Update file manually or via `ssh-keyscan`. AXIS reads it on next connection. | Yes (per-connection) |
 | UDP beacon secret | Edit `nodes.yaml` `discovery.secret`. Daemon restarts listener on next poll. | Yes |
 | Mesh gossip secret | Edit `nodes.yaml` `discovery.secret`, then restart the daemon. | No |
-| API token (`~/.axis/token`) | Delete file and/or change `AXIS_API_TOKEN`. AXIS regenerates on next `auth.LoadOrGenerateToken()`. | Yes |
+| API token (`~/.axis/token`) | **Restart required.** Stop the daemon, delete the file or set `AXIS_API_TOKEN`, restart the daemon, then restart any long-lived process that read the old value. `auth.LoadOrGenerateToken()` regenerates on next read, but `withAuth` (`internal/api/server.go:187`) captures the token **by value in a handler closure at route-registration time** (`registerRoutes` ← `cmd/axis/serve.go:53`), so a live daemon compares the old string for its whole lifetime while clients read fresh per call (`internal/daemon/client.go:35,133,151`) — deleting the file alone yields 401 across the API. See also: `docs/evaluations/2026-07-25-truth-integrity-audit.md` ("Deleting a token is not a cleanup; it invalidates live sessions."). | No (daemon restart) |
 | Cloud provider API keys | Rotate env var or file contents outside AXIS. | Yes (per-request) |
 
 ## Summary Table
