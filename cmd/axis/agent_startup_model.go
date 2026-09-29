@@ -807,11 +807,33 @@ func resolveStartupModelTarget(
 }
 
 var probeEndpointFn = func(url string) bool {
+	// Resolve-and-attach the bearer for keyed endpoints. Health probing runs
+	// against the same mux the daemon serves, so an authenticated endpoint
+	// must be probed WITH its key or a 401 false-labels it "unreachable".
+	// apiKeyForAIBackend's endpoint match is the documented fallback when no
+	// backend name is given; endpoints absent from ai.yaml resolve "" and
+	// stay keyless (snapshot-based probes).
+	bearer := apiKeyForAIBackend("", url)
+	if bearer == "" {
+		// Health probing uses a suffix ai.yaml's base_url does not carry
+		// ("/v1/models" or "/api/tags" vs base_url ending at "/v1"). Exact
+		// trim-equality cannot match, so retry once against the base form.
+		// Strip only the probe-path components, one at a time, so the
+		// candidate ends at the base_url form ("/v1") rather than bare root.
+		stripped := strings.TrimSuffix(strings.TrimSuffix(url, "/models"), "/api/tags")
+		stripped = strings.TrimRight(stripped, "/")
+		if stripped != url {
+			bearer = apiKeyForAIBackend("", stripped)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return false
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
