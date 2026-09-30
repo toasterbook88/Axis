@@ -12,6 +12,7 @@
 - [White Paper v1](white_paper_v1.md) — project motivation, architecture overview, and planned direction
 - [Doctrine](doctrine.md) — product boundary, decision rules, and execution principles
 - [Future Roadmap](future-roadmap.md) — strategic options, phased direction, and feature guardrails
+- [Apple Foundation Models Roadmap](plans/apple-foundation-models-roadmap.md) — planning only: AFM probe rigor, remote placement, guarded helper exec, ai.yaml cascade. Not shipped behavior.
 
 ## Runbooks
 
