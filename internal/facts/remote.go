@@ -664,16 +664,23 @@ func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, fac
 	out, err := c.Exec.Run(ctx, AppleFoundationModelsDiscoveryScript)
 	trimmed := strings.TrimSpace(out)
 	switch {
-	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || strings.HasPrefix(trimmed, "OK") || strings.HasPrefix(trimmed, "AVAILABLE")):
+	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE"):
 		facts.AppleFM = &models.AppleFoundationModelsInfo{
 			Version:   facts.OSVersion,
 			Available: true,
 			Verified:  true,
 		}
-	case err == nil && (trimmed == "UNVERIFIED" || strings.HasPrefix(trimmed, "UNVERIFIED")):
+	case err == nil && strings.HasPrefix(trimmed, "UNAVAILABLE:"):
 		facts.AppleFM = &models.AppleFoundationModelsInfo{
 			Version:   facts.OSVersion,
-			Available: true,
+			Available: false,
+			Verified:  false,
+			Error:     trimmed,
+		}
+	case err == nil && trimmed == "UNVERIFIED":
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: false,
 			Verified:  false,
 			Error:     "foundation models framework imported but runtime availability unverified",
 		}

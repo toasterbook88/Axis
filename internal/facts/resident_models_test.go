@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -723,6 +724,15 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 		if facts.AppleFM == nil || !facts.AppleFM.Available || !facts.AppleFM.Verified {
 			t.Fatalf("expected available and verified AppleFM, got %+v", facts.AppleFM)
 		}
+		foundTool := false
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				foundTool = true
+			}
+		}
+		if !foundTool {
+			t.Error("expected apple-foundation-models tool to be appended")
+		}
 	})
 
 	t.Run("darwin arm64 with UNVERIFIED probe (import-only)", func(t *testing.T) {
@@ -744,12 +754,79 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 		if facts.AppleFM == nil {
 			t.Fatal("expected AppleFM to be populated")
 		}
-		if !facts.AppleFM.Available || facts.AppleFM.Verified {
-			t.Fatalf("expected Available=true, Verified=false, got %+v", facts.AppleFM)
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false, got %+v", facts.AppleFM)
+		}
+		if !strings.Contains(facts.AppleFM.Error, "unverified") {
+			t.Errorf("error = %q, want unverified message", facts.AppleFM.Error)
 		}
 		for _, tool := range facts.Tools {
 			if tool.Name == "apple-foundation-models" {
 				t.Error("unverified AppleFM must not append apple-foundation-models tool")
+			}
+		}
+	})
+
+	t.Run("darwin arm64 with UNAVAILABLE:modelNotReady probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "UNAVAILABLE:modelNotReady\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false, got %+v", facts.AppleFM)
+		}
+		if facts.AppleFM.Error != "UNAVAILABLE:modelNotReady" {
+			t.Errorf("error = %q, want UNAVAILABLE:modelNotReady", facts.AppleFM.Error)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("unavailable AppleFM must not append apple-foundation-models tool")
+			}
+		}
+	})
+
+	t.Run("darwin arm64 with failed probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {err: errors.New("exit 1"), out: "probe execution error\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false, got %+v", facts.AppleFM)
+		}
+		if facts.AppleFM.Error != "probe execution error" {
+			t.Errorf("error = %q, want 'probe execution error'", facts.AppleFM.Error)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("failed probe must not append apple-foundation-models tool")
 			}
 		}
 	})

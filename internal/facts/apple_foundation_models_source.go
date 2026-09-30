@@ -103,7 +103,7 @@ fi
 if [ -x "$HOME/.cache/axis/apple-foundation-models-helper" ]; then
   "$HOME/.cache/axis/apple-foundation-models-helper" --self-test 2>/dev/null && echo "OK" && exit 0
 fi
-xcrun swift -e 'import FoundationModels; guard case .available = SystemLanguageModel.default.availability else { exit(1) }' 2>/dev/null && echo "AVAILABLE" && exit 0
+xcrun swift -e 'import FoundationModels; switch SystemLanguageModel.default.availability { case .available: print("AVAILABLE"); case .unavailable(let r): print("UNAVAILABLE:\(r)") }' 2>/dev/null && exit 0
 xcrun swift -e 'import FoundationModels' 2>/dev/null && echo "UNVERIFIED" && exit 0
 exit 1
 `
