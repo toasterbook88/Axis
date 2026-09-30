@@ -28,7 +28,7 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	explanation, source, err := planTaskExplanation(
+	explanation, source, _, err := planTaskExplanation(
 		context.Background(),
 		"run 128k ollama inference",
 		true,

@@ -13,7 +13,7 @@ func TestPlanTaskPlacementPrefersCacheWhenAvailable(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	decision, source, _, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
 		true,
@@ -48,7 +48,7 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	decision, source, _, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
 		true,
@@ -82,7 +82,7 @@ func TestPlanTaskPlacementCachedOnlyFailsWhenCacheFails(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	decision, source, _, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
 		false,
@@ -113,7 +113,7 @@ func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	decision, source, _, err := planTaskPlacement(
 		context.Background(),
 		"analyze a git repo",
 		false,

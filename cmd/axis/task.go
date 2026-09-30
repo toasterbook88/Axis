@@ -130,22 +130,16 @@ func taskPlaceCmd() *cobra.Command {
 			// --cached matches the default cache-first read and does not override --live.
 			_ = cached
 
-			read, err := loadCommandSnapshot(
+			decision, source, age, err := planTaskPlacement(
 				ctx,
-				live,
+				desc,
+				!live,
 				cachedOnly,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
 					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
 				loadTaskLiveSnapshot,
 			)
-			var decision models.PlacementDecision
-			source, age := "", ""
-			if err == nil {
-				var explanation models.PlacementExplanation
-				explanation, source, age, err = explainPlacementFromSnapshot(ctx, desc, read.snap, read.source, read.age)
-				decision = explanation.Decision
-			}
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
@@ -214,12 +208,12 @@ func planTaskPlacement(
 	cachedOnly bool,
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-) (models.PlacementDecision, string, error) {
-	explanation, source, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
+) (models.PlacementDecision, string, string, error) {
+	explanation, source, age, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
 	if err != nil {
-		return models.PlacementDecision{}, "", err
+		return models.PlacementDecision{}, "", "", err
 	}
-	return explanation.Decision, source, nil
+	return explanation.Decision, source, age, nil
 }
 
 func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
