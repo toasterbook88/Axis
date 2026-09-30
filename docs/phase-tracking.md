@@ -10,4 +10,4 @@
 | Phase 6 | **Completed** | Trust-and-foundations work: GPU/storage/network enrichment, stable identity, and failure-memory placement signals |
 | Phase 7 | **Completed** | Runtime hardening: streamed `/run`, reservation durability, forwarded provenance, and discovery freshness |
 
-Current release: **v0.12.2**
+Phase completion is not the release record. The repo version constant is `internal/buildinfo/version.go`, repeated in the generated fact in `docs/current-state.md`. Published releases are on GitHub Releases.
