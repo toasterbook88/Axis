@@ -292,6 +292,90 @@ func TestToolReadFilePathValidation(t *testing.T) {
 	}
 }
 
+func TestToolReadFileHomeExpansionAndMarkdownFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	// Write doc.md in tmpDir
+	mdPath := filepath.Join(tmpDir, "README.md")
+	if err := os.WriteFile(mdPath, []byte("# Documentation"), 0644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	// 1. Markdown fallback: reading "README" without extension should find "README.md"
+	res, err := r.Execute(context.Background(), "read_file", json.RawMessage(`{"path":"README"}`))
+	if err != nil {
+		t.Fatalf("expected markdown fallback to resolve README.md, got err: %v", err)
+	}
+	if !strings.Contains(res, "# Documentation") {
+		t.Fatalf("expected content from README.md, got: %s", res)
+	}
+
+	// 2. Tilde expansion unit test
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if got := expandHome("~"); got != home {
+			t.Errorf("expandHome(~) = %q, want %q", got, home)
+		}
+		if got := expandHome("~/sub/dir"); got != filepath.Join(home, "sub/dir") {
+			t.Errorf("expandHome(~/sub/dir) = %q, want %q", got, filepath.Join(home, "sub/dir"))
+		}
+	}
+}
+
+func TestToolPlaceReturnsRunnerUps(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:     "node-a",
+				Hostname: "node-a",
+				Status:   models.StatusComplete,
+				Resources: &models.Resources{
+					RAMTotalMB: 32000,
+					RAMFreeMB:  24000,
+					CPUCores:   8,
+				},
+			},
+			{
+				Name:     "node-b",
+				Hostname: "node-b",
+				Status:   models.StatusComplete,
+				Resources: &models.Resources{
+					RAMTotalMB: 64000,
+					RAMFreeMB:  48000,
+					CPUCores:   16,
+				},
+			},
+		},
+		Summary: models.ClusterSummary{
+			TotalNodes:     2,
+			ReachableNodes: 2,
+		},
+		Status: models.SnapshotHealthy,
+	}
+
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
+	r := NewToolRegistry(tc)
+
+	res, err := r.Execute(context.Background(), "axis_place", json.RawMessage(`{"description":"run heavy inference"}`))
+	if err != nil {
+		t.Fatalf("unexpected axis_place error: %v", err)
+	}
+	if !strings.Contains(res, "Placement:") {
+		t.Fatalf("expected Placement in result, got: %s", res)
+	}
+	if !strings.Contains(res, "Runner-up candidates:") {
+		t.Fatalf("expected Runner-up candidates in result, got: %s", res)
+	}
+}
+
 func TestToolListDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	for _, name := range []string{"a.txt", "b.txt"} {

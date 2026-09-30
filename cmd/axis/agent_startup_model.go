@@ -745,6 +745,10 @@ func resolveStartupModelTarget(
 	reqModel := strings.TrimSpace(requestedModel)
 	cloudReq := strings.TrimSpace(cloudModelFlag)
 
+	optsForChoice := func(c ModelChoice) (agent.CloudBackendOptions, error) {
+		return cloudOptsForTarget(func(context.Context) (*runtimectx.Context, error) { return rt, nil }, &c)
+	}
+
 	switch providerMode {
 	case "cloud":
 		// Only --cloud-model is an explicit cloud model request. When empty, select the
@@ -755,7 +759,8 @@ func resolveStartupModelTarget(
 	case "local":
 		if reqModel != "" {
 			if t, ok := matchLocalModel(reqModel); ok {
-				return t, agent.CloudBackendOptions{}, nil
+				opts, err := optsForChoice(t)
+				return t, opts, err
 			}
 			// Explicit operator --model in local mode: honor the named model.
 			// If it is not on disk, the Ollama error at first use is the honest
@@ -764,7 +769,8 @@ func resolveStartupModelTarget(
 			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 		}
 		if t, ok := firstLocal(); ok {
-			return t, agent.CloudBackendOptions{}, nil
+			opts, err := optsForChoice(t)
+			return t, opts, err
 		}
 		// Fallback local default name
 		name := resolveAgentModel("", rt)
@@ -778,7 +784,8 @@ func resolveStartupModelTarget(
 		// Effective requested model (flag / default_model / preferred) matching local catalog
 		if reqModel != "" {
 			if t, ok := matchLocalModel(reqModel); ok {
-				return t, agent.CloudBackendOptions{}, nil
+				opts, err := optsForChoice(t)
+				return t, opts, err
 			}
 			// Honor operator/default name only when the weights are actually
 			// on disk right now. A stale configured default must not become a
@@ -789,7 +796,8 @@ func resolveStartupModelTarget(
 		}
 		// Prefer any usable local target from the catalog
 		if t, ok := firstLocal(); ok {
-			return t, agent.CloudBackendOptions{}, nil
+			opts, err := optsForChoice(t)
+			return t, opts, err
 		}
 		// Explicit default explicitly absent from disk AND catalog: keep the
 		// legacy last-resort behavior so the operator sees the real error.

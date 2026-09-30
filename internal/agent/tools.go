@@ -303,7 +303,7 @@ type placeArgs struct {
 
 func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 	r.add("axis_place",
-		"Select the best node for a task description. Returns a human-readable placement decision with node name, fit score, and reasoning.",
+		"Select the best node for a task description. Returns a human-readable placement decision with node name, fit score, reasoning, and top runner-up candidate nodes.",
 		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"}},"required":["description"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a placeArgs
@@ -318,8 +318,8 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 				return "Placement: no nodes available in snapshot.", nil
 			}
 			reqs := placement.InferRequirements(a.Description)
-			decision := placement.SelectBestNode(reqs, view.Snapshot.Nodes, view.State)
-			return summarizePlacementDecision(decision), nil
+			explanation := placement.ExplainPlacement(reqs, view.Snapshot.Nodes, view.State)
+			return summarizePlacementExplanation(explanation), nil
 		},
 	)
 }
@@ -470,6 +470,20 @@ func (r *ToolRegistry) registerListDirectory() {
 	)
 }
 
+// expandHome replaces a leading ~ or ~/ with the user's home directory.
+func expandHome(p string) string {
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	} else if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
 // validateToolPath validates and resolves a path for file tools, preventing
 // directory traversal outside the current working directory. Symlinks are
 // resolved before the bounds check to prevent symlink-based escapes.
@@ -478,14 +492,23 @@ func validateToolPath(p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot determine working directory: %w", err)
 	}
-	clean := filepath.Clean(p)
+	clean := filepath.Clean(expandHome(p))
 	if !filepath.IsAbs(clean) {
 		clean = filepath.Join(cwd, clean)
 	}
 	// Resolve symlinks to their real destination.
 	resolved, err := filepath.EvalSymlinks(clean)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve path %q: %w", p, err)
+		// Fallback: if path has no extension and clean + ".md" exists, try that.
+		if filepath.Ext(clean) == "" {
+			if mdResolved, mdErr := filepath.EvalSymlinks(clean + ".md"); mdErr == nil {
+				resolved = mdResolved
+				err = nil
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve path %q: %w", p, err)
+		}
 	}
 	// Ensure the resolved path is within cwd.
 	rel, err := filepath.Rel(cwd, resolved)
@@ -614,7 +637,7 @@ func validateToolPathForWrite(p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot determine working directory: %w", err)
 	}
-	clean := filepath.Clean(p)
+	clean := filepath.Clean(expandHome(p))
 	if !filepath.IsAbs(clean) {
 		clean = filepath.Join(cwd, clean)
 	}

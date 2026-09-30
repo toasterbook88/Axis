@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -15,8 +16,15 @@ func summarizeSnapshot(snap *models.ClusterSnapshot) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Cluster: %d nodes (%d reachable), status: %s\n",
+	fmt.Fprintf(&b, "Cluster: %d nodes (%d reachable), status: %s",
 		snap.Summary.TotalNodes, snap.Summary.ReachableNodes, snap.Status)
+	if !snap.Timestamp.IsZero() {
+		age := time.Since(snap.Timestamp).Round(time.Second)
+		if age >= 0 {
+			fmt.Fprintf(&b, " (age: %s)", age)
+		}
+	}
+	b.WriteByte('\n')
 	if snap.Summary.TotalRAMMB > 0 {
 		fmt.Fprintf(&b, "Total RAM: %d MB total, %d MB free\n",
 			snap.Summary.TotalRAMMB, snap.Summary.TotalFreeRAMMB)
@@ -147,5 +155,57 @@ func summarizePlacementDecision(dec models.PlacementDecision) string {
 			fmt.Fprintf(&b, "- %s\n", r)
 		}
 	}
+	return b.String()
+}
+
+// summarizePlacementExplanation returns a compact human-readable summary
+// of placement decision, runner-up candidates, and exclusion reasons.
+func summarizePlacementExplanation(exp models.PlacementExplanation) string {
+	var b strings.Builder
+	b.WriteString(summarizePlacementDecision(exp.Decision))
+	if !exp.Decision.OK {
+		return b.String()
+	}
+
+	var runnerUps []models.PlacementCandidateExplanation
+	for _, cand := range exp.Eligible {
+		if cand.Node != exp.Decision.Node {
+			runnerUps = append(runnerUps, cand)
+		}
+	}
+
+	if len(runnerUps) > 0 {
+		b.WriteString("\nRunner-up candidates:\n")
+		const maxRunners = 3
+		for i, r := range runnerUps {
+			if i >= maxRunners {
+				fmt.Fprintf(&b, "... and %d more eligible nodes\n", len(runnerUps)-i)
+				break
+			}
+			line := fmt.Sprintf("- %s: %s = %.0f%s (suitability: %d/100", r.Node, r.Metric.Name, r.Metric.Value, r.Metric.Unit, r.FitScore)
+			if r.IsLocal {
+				line += ", local"
+			}
+			if r.HeadroomMB > 0 {
+				line += fmt.Sprintf(", headroom: %dMB", r.HeadroomMB)
+			}
+			line += ")"
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+
+	if len(exp.Excluded) > 0 {
+		b.WriteString("\nExcluded nodes:\n")
+		const maxExcl = 3
+		for i, ex := range exp.Excluded {
+			if i >= maxExcl {
+				fmt.Fprintf(&b, "... and %d more excluded nodes\n", len(exp.Excluded)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", ex.Node, strings.Join(ex.Reasons, ", "))
+		}
+	}
+
 	return b.String()
 }
