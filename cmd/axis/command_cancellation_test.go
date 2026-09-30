@@ -37,7 +37,7 @@ func TestOperatorCommandsHonorCanceledContext(t *testing.T) {
 				}))
 			},
 			cmd: func() commandWithArgs {
-				return commandWithArgs{command: placementExplainCmd(), args: []string{"intent"}}
+				return commandWithArgs{command: placementExplainCmd(), args: []string{"--live", "intent"}}
 			},
 		},
 		{
@@ -58,7 +58,7 @@ func TestOperatorCommandsHonorCanceledContext(t *testing.T) {
 					return nil, "", requireCanceledContext(t, ctx)
 				}))
 			},
-			cmd: func() commandWithArgs { return commandWithArgs{command: statusCmd()} },
+			cmd: func() commandWithArgs { return commandWithArgs{command: statusCmd(), args: []string{"--live"}} },
 		},
 		{
 			name: "task place",
@@ -68,7 +68,7 @@ func TestOperatorCommandsHonorCanceledContext(t *testing.T) {
 				}))
 			},
 			cmd: func() commandWithArgs {
-				return commandWithArgs{command: taskPlaceCmd(), args: []string{"intent"}}
+				return commandWithArgs{command: taskPlaceCmd(), args: []string{"--live", "intent"}}
 			},
 		},
 		{

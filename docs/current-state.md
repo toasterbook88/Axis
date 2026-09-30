@@ -28,8 +28,8 @@ The live repo currently contains:
 - A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
 - Native per-user daemon service install/status/uninstall for launchd and
   systemd, with managed-file ownership checks
-- Explicit cached status reads via `axis status --cached`
-- Explicit cached placement reads via `axis task place --cached`
+- Cache-first `axis status` / `axis cluster status` / `axis task place` / `axis placement explain` inside the 5-minute daemon publication window (`--live` forces a sweep; source and age are always printed)
+- `axis task context` still opts into the daemon cache with `--cached`
 - Explicit cached context reads via `axis task context --cached`
 - Explicit cache refresh via `axis daemon refresh`
 - Explicit cache invalidation via `axis daemon invalidate`
@@ -91,9 +91,9 @@ Top-level commands currently registered in the binary:
 | --- | --- | --- |
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
-| `axis status` | Collect cluster snapshot | Colored table by default; `--format json\|yaml` for machines; `--cached` uses the local daemon cache; `--cached-only` fails without daemon |
-| `axis task place` | Advisory placement | Human output/JSON; flat `PlacementDecision` output; `--cached` uses the local daemon cache |
-| `axis placement explain` | Detailed placement breakdown | Shows eligible and excluded nodes with per-node reasoning; JSON wraps in `explanation` envelope |
+| `axis status` | Collect cluster snapshot | Cache-first inside the 5-minute daemon publication window; prints source and age; `--live` sweeps; `--format json\|yaml` includes source and age; `--cached-only` fails closed when missing or stale |
+| `axis task place` | Advisory placement | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; flat `PlacementDecision` JSON includes source and age |
+| `axis placement explain` | Detailed placement breakdown | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; JSON wraps in `explanation` and includes source and age |
 | `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
@@ -109,7 +109,7 @@ Top-level commands currently registered in the binary:
 | `axis llm` | Removed | Prints `use: axis ai route` |
 | `axis model list\|inspect` | Inspect resident model instances | Daemon cache by default; `--live` explicitly performs a fresh cluster collection; text, JSON, and YAML output |
 | `axis model start\|stop` | Manage llama-server | Requires an explicit node and port; start also requires a weight path on an observed local volume |
-| `axis cluster` | Fleet snapshot | `status` (live; `--cached` opt-in), `summary` |
+| `axis cluster` | Fleet snapshot | `status` (cache-first for 5 minutes; `--live` sweeps), `summary` |
 | `axis node` | This machine | `facts` (localhost). Root `axis facts` still works |
 
 | `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
@@ -260,8 +260,8 @@ In practical terms:
 - The streamed `/run` contract now carries explicit execution state-change events (`execution-reserved`, `execution-finished`) in addition to ready/output/final-result events, cross-boundary callers can replay those into their existing callback hooks instead of losing reservation/finish semantics at the daemon/API seam, and early runtime/load failures now stay inside that same final-result stream contract instead of falling back to buffered JSON
 - Local daemon `/run` callers now share one execution transport path, and that path no longer inherits the short snapshot/meta HTTP timeout, so long-running daemon-hop executions are bounded by caller context instead of a fixed 5-second client timeout
 - `axis status`, `axis task place`, and `axis task context` now overlay local reservation state on live reads and can surface typed discovery freshness plus publication component evidence in machine-readable output. Daemon metadata and snapshot payloads carry the same publication ID; cached clients reject missing or mismatched IDs and preserve snapshot-native freshness instead of backfilling it from a separate metadata response.
-- Most read surfaces still hit live discovery by default unless `--cached` is used explicitly
-- Daemon freshness policy: 7 refresh triggers (startup, interval, manual, config-change, state-change, skills-change, beacon-change) plus execution events; staleness threshold is configurable (default 5 min, exposed via `stale_threshold_sec` in metadata); `--cached` is explicit and operator-facing, never a hidden fallback
+- `axis status`, `axis cluster status`, `axis task place`, and `axis placement explain` are cache-first when the daemon publication is inside the 5-minute stale threshold (`defaultStaleThreshold`). Each command prints the publication source and age. A missing or older publication falls back to one live sweep with one warning and is not presented as a fresh cache hit. `--live` forces a sweep. `--cached-only` still fails closed when the cache is missing or stale. `--cached` remains accepted and does not widen that window.
+- Daemon freshness policy: 7 refresh triggers (startup, interval, manual, config-change, state-change, skills-change, beacon-change) plus execution events; staleness threshold is configurable (default 5 min, exposed via `stale_threshold_sec` in metadata). The four commands above use that default window automatically. Other read surfaces still require an explicit `--cached` unless they already document their own cache-first default (`axis agent`, `axis model list` / `inspect`).
 - State maintenance and ledger startup/explicit reconciliation emit typed structured receipts only after the cleaned authority has been persisted successfully; these logs are advisory and are never replayed into state
 
 ## Recommended Next Sequence

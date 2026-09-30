@@ -208,26 +208,30 @@ cluster RAM, not just record that "something ran somewhere."
 
 ## Cached Reads Doctrine
 
-AXIS provides cached reads over the daemon snapshot cache (`--cached`, `--cached-only`).
-These are explicit, operator-facing flags, not hidden fallbacks.
+Status and placement read surfaces (`axis status`, `axis cluster status`,
+`axis task place`, `axis placement explain`) are cache-first by default over the
+daemon snapshot cache. A publication inside the stale threshold (default 5
+minutes) is served without a sweep; a missing or older publication triggers
+exactly one live sweep that is warned about and never presented as a fresh
+cache hit. Opt-in flags remain available: `--live` forces a sweep, and
+`--cached-only` fails closed instead of sweeping.
 
 Cached reads must:
 
-- be opt-in via a visible flag
-- surface their data source (`source: daemon-cache` vs `source: live-snapshot`)
-- never silently substitute stale data when live data is available and requested
+- default to cache-first on the read surfaces that declare it, inside the
+  stale threshold
+- always surface their data source and publication age
+  (`source: daemon-cache` vs `source: live-fallback`, `age: <duration|none>`)
+- never silently substitute stale data when live data is available and
+  requested (`--live` must skip the cache entirely)
+- fail closed under `--cached-only` rather than falling back to a sweep
 - stay constrained to the daemon cache boundary (snapshot + context blocks)
 
 Cached reads must NOT:
 
 - extend into MCP tool calls, HTTP helpers, or other external context sources
-- introduce hidden fallback chains where a cache miss silently escalates to a
-  remote call the operator did not request
+- present a cache miss or stale publication as a fresh cache hit
 - mask staleness by omitting age or provenance metadata
-
-If a future feature needs external context (MCP, HTTP), it must request it
-explicitly under its own flag or subcommand. The cached-read surface is not a
-general-purpose data bus.
 
 ## Documentation Doctrine
 

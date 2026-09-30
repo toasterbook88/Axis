@@ -24,7 +24,7 @@ func TestPlacementExplainCmdHumanOutput(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := placementCmd()
-		cmd.SetArgs([]string{"explain", "analyze a git repo"})
+		cmd.SetArgs([]string{"explain", "--live", "analyze a git repo"})
 		return cmd.Execute()
 	})
 	if err != nil {
