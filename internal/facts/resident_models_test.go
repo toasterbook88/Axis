@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -656,4 +657,142 @@ esac`)
 	if resident["process_start_token"] != "Thu Sep 3 09:00:00 2026" {
 		t.Fatalf("process_start_token = %#v", resident["process_start_token"])
 	}
+}
+
+func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("darwin arm64 with macOS 27 and OK probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "OK\n"},
+			},
+		}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift", Version: "6.1"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if !facts.AppleFM.Available || !facts.AppleFM.Verified {
+			t.Fatalf("expected available and verified AppleFM, got %+v", facts.AppleFM)
+		}
+		if facts.AppleFM.Version != "27.2" {
+			t.Errorf("version = %q, want 27.2", facts.AppleFM.Version)
+		}
+		foundTool := false
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				foundTool = true
+				if tool.Path != "/usr/bin/swift" {
+					t.Errorf("tool path = %q, want /usr/bin/swift", tool.Path)
+				}
+				if tool.Version != "27.2" {
+					t.Errorf("tool version = %q, want 27.2", tool.Version)
+				}
+			}
+		}
+		if !foundTool {
+			t.Error("expected apple-foundation-models tool to be appended")
+		}
+	})
+
+	t.Run("darwin arm64 with AVAILABLE probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "AVAILABLE\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil || !facts.AppleFM.Available || !facts.AppleFM.Verified {
+			t.Fatalf("expected available and verified AppleFM, got %+v", facts.AppleFM)
+		}
+	})
+
+	t.Run("darwin arm64 older macOS 15 returns version error", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("legacy-mac", "worker", "legacy.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "15.7.1",
+			Tools:     []models.ToolInfo{{Name: "swift"}},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated with error")
+		}
+		if facts.AppleFM.Available {
+			t.Error("expected Available = false for older macOS")
+		}
+		if !strings.Contains(facts.AppleFM.Error, "requires macOS 26 or later") {
+			t.Errorf("unexpected error message: %q", facts.AppleFM.Error)
+		}
+	})
+
+	t.Run("darwin arm64 missing swift returns toolchain error", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools:     []models.ToolInfo{},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated with error")
+		}
+		if facts.AppleFM.Available {
+			t.Error("expected Available = false without swift")
+		}
+		if !strings.Contains(facts.AppleFM.Error, "swift toolchain not detected") {
+			t.Errorf("unexpected error message: %q", facts.AppleFM.Error)
+		}
+	})
+
+	t.Run("darwin x86_64 returns nil", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("imac", "worker", "imac.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "x86_64",
+			OSVersion: "15.7.9",
+			Tools:     []models.ToolInfo{{Name: "swift"}},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM != nil {
+			t.Errorf("expected AppleFM to be nil for x86_64, got %+v", facts.AppleFM)
+		}
+	})
+
+	t.Run("linux returns nil", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("cranium", "primary", "cranium.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "linux",
+			Arch:      "amd64",
+			OSVersion: "6.8.0",
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM != nil {
+			t.Errorf("expected AppleFM to be nil for linux, got %+v", facts.AppleFM)
+		}
+	})
 }

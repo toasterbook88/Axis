@@ -107,6 +107,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)
 	})
+	c.discoverAppleFoundationModels(ctx, facts)
 
 	if len(facts.PartialReasons) > 0 && facts.Status == models.StatusComplete {
 		facts.Status = models.StatusPartial
@@ -636,6 +637,60 @@ func (c *RemoteCollector) discoverMLXRobust(ctx context.Context) []models.Reside
 		return withResidentPort(parsed.ResidentModels, parsed.Port)
 	}
 	return nil
+}
+
+func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, facts *models.NodeFacts) {
+	if facts == nil || c.Exec == nil {
+		return
+	}
+	if !strings.EqualFold(facts.OS, "darwin") || !strings.Contains(strings.ToLower(facts.Arch), "arm64") {
+		return
+	}
+	if !supportsAppleFoundationModelsOS(facts.OSVersion) {
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version: facts.OSVersion,
+			Error:   "requires macOS 26 or later on Apple silicon (Apple platform versioning)",
+		}
+		return
+	}
+	if _, ok := findToolInfo(facts.Tools, "swift"); !ok {
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version: facts.OSVersion,
+			Error:   "swift toolchain not detected",
+		}
+		return
+	}
+
+	out, err := c.Exec.Run(ctx, AppleFoundationModelsDiscoveryScript)
+	trimmed := strings.TrimSpace(out)
+	available := err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || strings.HasPrefix(trimmed, "OK") || strings.HasPrefix(trimmed, "AVAILABLE"))
+	info := &models.AppleFoundationModelsInfo{
+		Version:   facts.OSVersion,
+		Available: available,
+		Verified:  available,
+	}
+	if err != nil || !available {
+		info.Error = trimmed
+		if info.Error == "" && err != nil {
+			info.Error = err.Error()
+		}
+		if info.Error == "" {
+			info.Error = "apple foundation models probe failed"
+		}
+	}
+	facts.AppleFM = info
+	if info.Available && info.Verified {
+		toolPath := "swift"
+		if swiftTool, ok := findToolInfo(facts.Tools, "swift"); ok && swiftTool.Path != "" {
+			toolPath = swiftTool.Path
+		}
+		facts.Tools = appendToolUnique(facts.Tools, models.ToolInfo{
+			Name:    "apple-foundation-models",
+			Path:    toolPath,
+			Version: info.Version,
+			Class:   models.ToolClassRuntime,
+		})
+	}
 }
 
 func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {

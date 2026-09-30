@@ -230,7 +230,7 @@ func TestFilterAllowsLightTaskOnCriticalLinuxPSI(t *testing.T) {
 	}
 }
 
-func TestFilterAppleFoundationModelsIsLocalOnly(t *testing.T) {
+func TestFilterAppleFoundationModelsAllowsRemoteAndPrefersLocal(t *testing.T) {
 	local := nodeComplete("local-mac", 8192, "none", "apple-foundation-models")
 	local.Hostname = "localhost"
 	local.AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, Version: "26.1"}
@@ -239,14 +239,34 @@ func TestFilterAppleFoundationModelsIsLocalOnly(t *testing.T) {
 	remote.Hostname = "remote-mac.local"
 	remote.AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, Version: "26.1"}
 
+	unverified := nodeComplete("unverified-mac", 8192, "none")
+	unverified.Hostname = "unverified-mac.local"
+
 	reqs := models.TaskRequirements{
 		RequiredTools:     []string{"apple-foundation-models"},
 		PreferredBackends: []string{"apple-foundation-models"},
 	}
 
-	result := FilterCandidates(reqs, []models.NodeFacts{remote, local}, nil)
-	if len(result) != 1 || result[0].Name != "local-mac" {
-		t.Fatalf("expected only verified local apple node, got %v", names(result))
+	result := FilterCandidates(reqs, []models.NodeFacts{unverified, remote, local}, nil)
+	if len(result) != 2 {
+		t.Fatalf("expected both local and remote verified apple nodes, got %v", names(result))
+	}
+
+	// Local node ranks first due to local preferred backend rank (4 vs 3) and localBonus.
+	ranked := RankCandidates(result, reqs, nil)
+	if len(ranked) != 2 || ranked[0].Name != "local-mac" {
+		t.Fatalf("expected local-mac to rank first, got %v", names(ranked))
+	}
+
+	// When only remote verified mac is present, it qualifies and is selected.
+	remoteOnly := FilterCandidates(reqs, []models.NodeFacts{unverified, remote}, nil)
+	if len(remoteOnly) != 1 || remoteOnly[0].Name != "remote-mac" {
+		t.Fatalf("expected remote-mac to qualify when local is absent, got %v", names(remoteOnly))
+	}
+
+	dec := SelectBestNode(reqs, remoteOnly, nil)
+	if !dec.OK || dec.Node != "remote-mac" {
+		t.Fatalf("expected remote-mac to be selected, got %#v", dec)
 	}
 }
 
