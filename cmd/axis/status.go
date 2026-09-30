@@ -93,10 +93,14 @@ func statusCmd() *cobra.Command {
 
 					if err != nil {
 						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
-					} else {
-						if writeErr := printStatusText(cmd, snap, source, age); writeErr != nil {
-							return writeErr
+						if cachedOnly {
+							// --cached-only fails closed: report once and
+							// stop the watch loop instead of rendering a
+							// missing or stale publication forever.
+							return err
 						}
+					} else if writeErr := printStatusText(cmd, snap, source, age); writeErr != nil {
+						return writeErr
 					}
 
 					select {
@@ -410,7 +414,9 @@ func fallbackSource(source string) string {
 
 // commandSnapshot is one read of the cluster publication, with the age that
 // the command must print. Age is "none" when no publication clock is available
-// (including a live sweep taken because the daemon cache was missing).
+// (including a live sweep taken because the daemon cache was missing). On a
+// stale-cache fallback the age is the rejected publication's age, matching the
+// stale warning.
 type commandSnapshot struct {
 	snap   *models.ClusterSnapshot
 	source string
@@ -483,7 +489,10 @@ func loadCommandSnapshot(
 			message = fmt.Sprintf("using live snapshot (daemon cache stale, age %s)", staleAge)
 		}
 		appendWarningIfMissing(liveSnap, models.Warning{Kind: "cache", Message: message})
-		return commandSnapshot{snap: liveSnap, source: fallbackSource(liveSource), age: publicationAgeLabel(liveSnap)}, nil
+		// The age field reports the daemon publication. Here the rejected
+		// stale publication is the relevant one, so keep staleAge rather
+		// than the fresh live snapshot's age (normally 0s).
+		return commandSnapshot{snap: liveSnap, source: fallbackSource(liveSource), age: staleAge}, nil
 	}
 	appendWarningIfMissing(liveSnap, models.Warning{
 		Kind:    "cache",
