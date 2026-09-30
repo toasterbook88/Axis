@@ -71,11 +71,12 @@ reasons — do not collapse them into one outcome:
    with a different token returns `401 invalid api token`. A 2026-09-28 note
    recorded seven nodes / seven distinct tokens; that is a snapshot, not current
    inventory.
-2. **No node listens on TCP 42425.** Every daemon runs `--addr <unix socket>`.
-   A listed `nodes.yaml` name is still dialed at `<hostname>:42425`.
+2. **A closed TCP 42425 is a different failure.** A listed `nodes.yaml` name
+   is still dialed at `<hostname>:42425` (`resolveA2AClient`). This page does not
+   claim whether any daemon is listening on that port.
 
-A live peer with the wrong token is the 401. Nothing listening on `:42425` hits
-the CLI's own 30s `--timeout` (`task_delegate.go`) and `main` exits **1**
+A live peer with the wrong token is the 401. If nothing accepts the `:42425`
+dial, the CLI's own 30s `--timeout` (`task_delegate.go`) fires and `main` exits **1**
 (`ExitErrGeneric` for a context error in `cmd/axis/main.go`). Exit 124 is not an
 Axis exit path. Treat a hang as "nothing accepted the TCP dial", not as a
 transient auth failure.
