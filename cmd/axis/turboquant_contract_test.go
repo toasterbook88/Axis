@@ -109,7 +109,7 @@ func TestStatusTurboQuantJSONGolden(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := statusCmd()
-		cmd.SetArgs([]string{"--format", "json"})
+		cmd.SetArgs([]string{"--live", "--format", "json"})
 		return cmd.Execute()
 	})
 	if err != nil {

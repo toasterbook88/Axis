@@ -40,8 +40,12 @@ const ShutdownDrainTimeout = 10 * time.Second
 const (
 	defaultRefreshInterval = time.Minute
 	defaultRefreshTimeout  = 60 * time.Second
-	defaultStaleThreshold  = 5 * time.Minute
-	DefaultAddr            = "127.0.0.1:42425"
+	// DefaultStaleThreshold is how old a daemon publication may be before
+	// readers must not treat it as fresh. Daemon.Meta uses the same duration
+	// unless an operator overrides it with SetStaleThreshold.
+	DefaultStaleThreshold = 5 * time.Minute
+	defaultStaleThreshold = DefaultStaleThreshold
+	DefaultAddr           = "127.0.0.1:42425"
 )
 
 type Collector func(context.Context) (*models.ClusterSnapshot, error)
