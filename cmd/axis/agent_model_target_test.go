@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -754,5 +755,51 @@ func TestModelChoicesLocalNodeBindingKeepsBaseURL(t *testing.T) {
 	}
 	if choices[0].Disabled {
 		t.Fatalf("reachable base_url must stay enabled, got %+v", choices[0])
+	}
+}
+
+func TestResolveStartupModelTargetLocalOpenAIThreadsAPIKey(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() { inferenceAILoadFn = prevLoad })
+
+	keyFile := filepath.Join(t.TempDir(), "test.key")
+	if err := os.WriteFile(keyFile, []byte("secret-key-123\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{
+			{
+				Name:       "local-hub",
+				Kind:       config.AIBackendOpenAICompatible,
+				BaseURL:    "http://127.0.0.1:4000/v1",
+				APIKeyFile: keyFile,
+			},
+		},
+	}
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return cfg, nil }
+
+	choices := []ModelChoice{
+		{
+			ID:           "ai-role:bonsai",
+			Model:        "bonsai-2-27b",
+			Protocol:     agent.ProtocolOpenAI,
+			ProviderName: "ai-backend:local-hub",
+			ProviderKind: "local",
+			Endpoint:     "http://127.0.0.1:4000/v1",
+		},
+	}
+
+	// When selecting a local OpenAI-compatible choice via resolveStartupModelTarget,
+	// the returned CloudBackendOptions must contain the resolved API key.
+	target, opts, err := resolveStartupModelTarget("bonsai-2-27b", "auto", "", nil, nil, choices)
+	if err != nil {
+		t.Fatalf("resolveStartupModelTarget: %v", err)
+	}
+	if target.Model != "bonsai-2-27b" {
+		t.Fatalf("target.Model = %q, want bonsai-2-27b", target.Model)
+	}
+	if opts.APIKey != "secret-key-123" {
+		t.Fatalf("opts.APIKey = %q, want secret-key-123", opts.APIKey)
 	}
 }
