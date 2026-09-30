@@ -252,7 +252,7 @@ func TestFilterAppleFoundationModelsAllowsRemoteAndPrefersLocal(t *testing.T) {
 		t.Fatalf("expected both local and remote verified apple nodes, got %v", names(result))
 	}
 
-	// Local node ranks first due to local preferred backend rank (4 vs 3) and localBonus.
+	// Local node ranks first due to local preferred backend rank (4 vs 3).
 	ranked := RankCandidates(result, reqs, nil)
 	if len(ranked) != 2 || ranked[0].Name != "local-mac" {
 		t.Fatalf("expected local-mac to rank first, got %v", names(ranked))

@@ -663,23 +663,37 @@ func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, fac
 
 	out, err := c.Exec.Run(ctx, AppleFoundationModelsDiscoveryScript)
 	trimmed := strings.TrimSpace(out)
-	available := err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || strings.HasPrefix(trimmed, "OK") || strings.HasPrefix(trimmed, "AVAILABLE"))
-	info := &models.AppleFoundationModelsInfo{
-		Version:   facts.OSVersion,
-		Available: available,
-		Verified:  available,
-	}
-	if err != nil || !available {
-		info.Error = trimmed
-		if info.Error == "" && err != nil {
-			info.Error = err.Error()
+	switch {
+	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || strings.HasPrefix(trimmed, "OK") || strings.HasPrefix(trimmed, "AVAILABLE")):
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: true,
+			Verified:  true,
 		}
-		if info.Error == "" {
+	case err == nil && (trimmed == "UNVERIFIED" || strings.HasPrefix(trimmed, "UNVERIFIED")):
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: true,
+			Verified:  false,
+			Error:     "foundation models framework imported but runtime availability unverified",
+		}
+	default:
+		info := &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: false,
+			Verified:  false,
+		}
+		if trimmed != "" {
+			info.Error = trimmed
+		} else if err != nil {
+			info.Error = err.Error()
+		} else {
 			info.Error = "apple foundation models probe failed"
 		}
+		facts.AppleFM = info
 	}
-	facts.AppleFM = info
-	if info.Available && info.Verified {
+
+	if facts.AppleFM != nil && facts.AppleFM.Available && facts.AppleFM.Verified {
 		toolPath := "swift"
 		if swiftTool, ok := findToolInfo(facts.Tools, "swift"); ok && swiftTool.Path != "" {
 			toolPath = swiftTool.Path
@@ -687,7 +701,7 @@ func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, fac
 		facts.Tools = appendToolUnique(facts.Tools, models.ToolInfo{
 			Name:    "apple-foundation-models",
 			Path:    toolPath,
-			Version: info.Version,
+			Version: facts.AppleFM.Version,
 			Class:   models.ToolClassRuntime,
 		})
 	}
