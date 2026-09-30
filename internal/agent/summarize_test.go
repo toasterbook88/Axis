@@ -114,3 +114,36 @@ func TestSummarizePlacementExplanationIncludesRunnerUpsAndExcluded(t *testing.T)
 		}
 	}
 }
+
+func TestSummarizePlacementExplanationRendersExclusionsWhenNoNodeFits(t *testing.T) {
+	exp := models.PlacementExplanation{
+		Decision: models.PlacementDecision{
+			OK: false,
+		},
+		Excluded: []models.PlacementExclusion{
+			{
+				Node:    "axis5",
+				Reasons: []string{"insufficient RAM: 3122 MB free < 16384 MB required"},
+			},
+			{
+				Node:    "nixos",
+				Reasons: []string{"missing required tool: docker"},
+			},
+		},
+	}
+
+	got := summarizePlacementExplanation(exp)
+	for _, want := range []string{
+		"Placement: no suitable node found for this task.",
+		"Excluded nodes:",
+		"- axis5: insufficient RAM",
+		"- nixos: missing required tool: docker",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Runner-up candidates:") {
+		t.Fatalf("summary should not contain runner-ups when no node fits:\n%s", got)
+	}
+}

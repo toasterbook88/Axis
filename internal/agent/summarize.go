@@ -163,35 +163,33 @@ func summarizePlacementDecision(dec models.PlacementDecision) string {
 func summarizePlacementExplanation(exp models.PlacementExplanation) string {
 	var b strings.Builder
 	b.WriteString(summarizePlacementDecision(exp.Decision))
-	if !exp.Decision.OK {
-		return b.String()
-	}
-
-	var runnerUps []models.PlacementCandidateExplanation
-	for _, cand := range exp.Eligible {
-		if cand.Node != exp.Decision.Node {
-			runnerUps = append(runnerUps, cand)
+	if exp.Decision.OK {
+		var runnerUps []models.PlacementCandidateExplanation
+		for _, cand := range exp.Eligible {
+			if cand.Node != exp.Decision.Node {
+				runnerUps = append(runnerUps, cand)
+			}
 		}
-	}
 
-	if len(runnerUps) > 0 {
-		b.WriteString("\nRunner-up candidates:\n")
-		const maxRunners = 3
-		for i, r := range runnerUps {
-			if i >= maxRunners {
-				fmt.Fprintf(&b, "... and %d more eligible nodes\n", len(runnerUps)-i)
-				break
+		if len(runnerUps) > 0 {
+			b.WriteString("\nRunner-up candidates:\n")
+			const maxRunners = 3
+			for i, r := range runnerUps {
+				if i >= maxRunners {
+					fmt.Fprintf(&b, "... and %d more eligible nodes\n", len(runnerUps)-i)
+					break
+				}
+				line := fmt.Sprintf("- %s: %s = %.0f%s (suitability: %d/100", r.Node, r.Metric.Name, r.Metric.Value, r.Metric.Unit, r.FitScore)
+				if r.IsLocal {
+					line += ", local"
+				}
+				if r.HeadroomMB > 0 {
+					line += fmt.Sprintf(", headroom: %dMB", r.HeadroomMB)
+				}
+				line += ")"
+				b.WriteString(line)
+				b.WriteByte('\n')
 			}
-			line := fmt.Sprintf("- %s: %s = %.0f%s (suitability: %d/100", r.Node, r.Metric.Name, r.Metric.Value, r.Metric.Unit, r.FitScore)
-			if r.IsLocal {
-				line += ", local"
-			}
-			if r.HeadroomMB > 0 {
-				line += fmt.Sprintf(", headroom: %dMB", r.HeadroomMB)
-			}
-			line += ")"
-			b.WriteString(line)
-			b.WriteByte('\n')
 		}
 	}
 
