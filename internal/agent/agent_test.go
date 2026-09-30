@@ -18,6 +18,7 @@ import (
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/netutil"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 // Mock types mirroring the chat package's internal streaming types.
@@ -127,7 +128,7 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 	r := NewToolRegistry(tc)
 
 	expected := []string{
-		"axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_status", "axis_facts", "axis_models", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "write_file", "edit_file",
 		"multi_edit", "list_directory", "grep_search", "symbol_search",
 		"run_shell", "git_status", "git_diff", "git_log", "axis_run_task",
@@ -253,6 +254,135 @@ func TestToolSummary(t *testing.T) {
 	}
 }
 
+func TestToolFactsWithNode(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:     "node-a",
+				Hostname: "node-a.local",
+				OS:       "linux",
+				Arch:     "amd64",
+				Resources: &models.Resources{
+					CPUCores:   8,
+					RAMTotalMB: 16384,
+					RAMFreeMB:  8192,
+				},
+				Status: models.StatusComplete,
+			},
+			{
+				Name:     "node-b",
+				Hostname: "node-b.local",
+				OS:       "darwin",
+				Arch:     "arm64",
+				Resources: &models.Resources{
+					CPUCores:   10,
+					RAMTotalMB: 32768,
+					RAMFreeMB:  24576,
+				},
+				Status: models.StatusComplete,
+			},
+		},
+	}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
+	r := NewToolRegistry(tc)
+
+	// Target node-b specifically
+	res, err := r.Execute(context.Background(), "axis_facts", json.RawMessage(`{"node":"node-b"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "node-b") || !strings.Contains(res, "darwin/arm64") {
+		t.Fatalf("expected node-b facts, got: %s", res)
+	}
+
+	// Unknown node lists known nodes
+	res, err = r.Execute(context.Background(), "axis_facts", json.RawMessage(`{"node":"node-unknown"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "not found") || !strings.Contains(res, "node-a, node-b") {
+		t.Fatalf("expected not found message, got: %s", res)
+	}
+}
+
+func TestToolModels(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "node-a",
+				ResidentModels: []models.ResidentModel{
+					{
+						Name:       "qwen3-coder",
+						Runtime:    "llama.cpp",
+						Port:       8082,
+						SizeVRAMMB: 8192,
+					},
+				},
+				Ollama: &models.OllamaInfo{
+					Installed: true,
+					Version:   "0.5.12",
+					Models:    []string{"llama3.2:latest"},
+				},
+			},
+		},
+	}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
+	r := NewToolRegistry(tc)
+
+	res, err := r.Execute(context.Background(), "axis_models", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "qwen3-coder on node-a") {
+		t.Fatalf("expected resident model in output, got: %s", res)
+	}
+	if !strings.Contains(res, "llama3.2:latest") {
+		t.Fatalf("expected ollama model in output, got: %s", res)
+	}
+}
+
+func TestToolPlaceWithExplicitConstraints(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "small-node",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  4096,
+					CPUCores:   4,
+				},
+				Status: models.StatusComplete,
+			},
+			{
+				Name: "large-node",
+				Resources: &models.Resources{
+					RAMTotalMB: 65536,
+					RAMFreeMB:  32768,
+					CPUCores:   16,
+				},
+				Status: models.StatusComplete,
+			},
+		},
+	}
+	state := &state.ClusterState{
+		Nodes: map[string]state.NodeState{},
+	}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap, State: state}, nil)
+	r := NewToolRegistry(tc)
+
+	// Require 16GB RAM explicitly: small-node must be excluded
+	res, err := r.Execute(context.Background(), "axis_place", json.RawMessage(`{"description":"data processing","min_ram_mb":16384}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "large-node") {
+		t.Fatalf("expected large-node to win, got: %s", res)
+	}
+	if !strings.Contains(res, "small-node") || !strings.Contains(res, "need 16384MB free RAM") {
+		t.Fatalf("expected small-node to be excluded for RAM, got: %s", res)
+	}
+}
+
 func TestToolReadFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "test.txt")
@@ -289,6 +419,90 @@ func TestToolReadFilePathValidation(t *testing.T) {
 	// EvalSymlinks may report lstat failure for non-existent paths outside cwd.
 	if !strings.Contains(err.Error(), "escapes") && !strings.Contains(err.Error(), "cannot resolve") {
 		t.Errorf("expected 'escapes' or 'cannot resolve' error, got: %s", err.Error())
+	}
+}
+
+func TestToolReadFileHomeExpansionAndMarkdownFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	// Write doc.md in tmpDir
+	mdPath := filepath.Join(tmpDir, "README.md")
+	if err := os.WriteFile(mdPath, []byte("# Documentation"), 0644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	// 1. Markdown fallback: reading "README" without extension should find "README.md"
+	res, err := r.Execute(context.Background(), "read_file", json.RawMessage(`{"path":"README"}`))
+	if err != nil {
+		t.Fatalf("expected markdown fallback to resolve README.md, got err: %v", err)
+	}
+	if !strings.Contains(res, "# Documentation") {
+		t.Fatalf("expected content from README.md, got: %s", res)
+	}
+
+	// 2. Tilde expansion unit test
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if got := expandHome("~"); got != home {
+			t.Errorf("expandHome(~) = %q, want %q", got, home)
+		}
+		if got := expandHome("~/sub/dir"); got != filepath.Join(home, "sub/dir") {
+			t.Errorf("expandHome(~/sub/dir) = %q, want %q", got, filepath.Join(home, "sub/dir"))
+		}
+	}
+}
+
+func TestToolPlaceReturnsRunnerUps(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:     "node-a",
+				Hostname: "node-a",
+				Status:   models.StatusComplete,
+				Resources: &models.Resources{
+					RAMTotalMB: 32000,
+					RAMFreeMB:  24000,
+					CPUCores:   8,
+				},
+			},
+			{
+				Name:     "node-b",
+				Hostname: "node-b",
+				Status:   models.StatusComplete,
+				Resources: &models.Resources{
+					RAMTotalMB: 64000,
+					RAMFreeMB:  48000,
+					CPUCores:   16,
+				},
+			},
+		},
+		Summary: models.ClusterSummary{
+			TotalNodes:     2,
+			ReachableNodes: 2,
+		},
+		Status: models.SnapshotHealthy,
+	}
+
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
+	r := NewToolRegistry(tc)
+
+	res, err := r.Execute(context.Background(), "axis_place", json.RawMessage(`{"description":"run heavy inference"}`))
+	if err != nil {
+		t.Fatalf("unexpected axis_place error: %v", err)
+	}
+	if !strings.Contains(res, "Placement:") {
+		t.Fatalf("expected Placement in result, got: %s", res)
+	}
+	if !strings.Contains(res, "Runner-up candidates:") {
+		t.Fatalf("expected Runner-up candidates in result, got: %s", res)
 	}
 }
 
@@ -1139,7 +1353,7 @@ func TestCapShellOutput(t *testing.T) {
 
 func TestIsReadOnlyTool(t *testing.T) {
 	readOnly := []string{
-		"axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_status", "axis_facts", "axis_models", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "list_directory",
 	}
 	for _, name := range readOnly {

@@ -45,7 +45,7 @@ func DisplayScope(mode AutonomyMode) string {
 func observeTool(name string) bool {
 	switch name {
 	case "read_file", "list_directory", "grep_search", "symbol_search", "todo",
-		"axis_status", "axis_facts", "axis_place", "axis_reservations",
+		"axis_status", "axis_facts", "axis_models", "axis_place", "axis_reservations",
 		"git_status", "git_diff", "git_log":
 		return true
 	default:

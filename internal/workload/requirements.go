@@ -2,6 +2,8 @@ package workload
 
 import (
 	"context"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -34,6 +36,11 @@ func InferRequirements(desc string, opts ...InferRequirementsOptions) models.Tas
 
 	// Backend inference (preferences based on description keywords)
 	InferBackends(desc, &reqs)
+
+	// Explicit RAM inference (e.g. "needs 500GB RAM", "16 GB memory", "4096MB")
+	if explicitRAM := parseExplicitRAM(desc); explicitRAM > reqs.MinFreeRAMMB {
+		reqs.MinFreeRAMMB = explicitRAM
+	}
 
 	return reqs
 }
@@ -240,4 +247,35 @@ func resolveWorkloadMatch(desc string, opts []InferRequirementsOptions) models.W
 		// Classifier failed — fall through to legacy.
 	}
 	return matchFromSignals(analyzeDescription(desc))
+}
+
+var explicitRAMRegex = regexp.MustCompile(`(?i)\b(?:needs|needing|requiring|requires|min|minimum)\s*(\d+(?:\.\d+)?)\s*(tb|tib|gb|gib|mb|mib)(?:\s*(?:of\s*)?(?:free\s*)?(?:ram|memory))?\b`)
+
+// parseExplicitRAM extracts requested RAM values in MB from natural language descriptions.
+func parseExplicitRAM(desc string) int64 {
+	matches := explicitRAMRegex.FindAllStringSubmatch(desc, -1)
+	var maxRAM int64
+	for _, m := range matches {
+		if len(m) < 3 || m[1] == "" {
+			continue
+		}
+		numStr, unit := m[1], m[2]
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil || val <= 0 {
+			continue
+		}
+		var mb int64
+		switch strings.ToLower(unit) {
+		case "tb", "tib":
+			mb = int64(val * 1024 * 1024)
+		case "gb", "gib":
+			mb = int64(val * 1024)
+		case "mb", "mib":
+			mb = int64(val)
+		}
+		if mb > maxRAM {
+			maxRAM = mb
+		}
+	}
+	return maxRAM
 }

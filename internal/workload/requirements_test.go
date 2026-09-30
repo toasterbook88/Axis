@@ -572,3 +572,34 @@ func TestInferBackends(t *testing.T) {
 		}
 	})
 }
+
+func TestExplicitRAMParsing(t *testing.T) {
+	tests := []struct {
+		desc    string
+		wantRAM int64
+	}{
+		{"run massive model that requires 500GB RAM", 500 * 1024},
+		{"python job needing 16GB RAM", 16 * 1024},
+		{"batch process requiring 32 GB memory", 32 * 1024},
+		{"task requiring 4096MB memory", 4096},
+		{"distributed compile needing 1TB RAM", 1024 * 1024},
+		{"min 8GiB free ram", 8 * 1024},
+		{"plain prompt with no memory keywords", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := parseExplicitRAM(tt.desc)
+			if got != tt.wantRAM {
+				t.Fatalf("parseExplicitRAM(%q) = %d, want %d", tt.desc, got, tt.wantRAM)
+			}
+		})
+	}
+}
+
+func TestInferRequirementsExplicitRAM(t *testing.T) {
+	reqs := InferRequirements("run massive model that requires 500GB RAM")
+	if reqs.MinFreeRAMMB != 500*1024 {
+		t.Fatalf("MinFreeRAMMB = %d, want %d", reqs.MinFreeRAMMB, 500*1024)
+	}
+}
