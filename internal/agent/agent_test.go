@@ -18,6 +18,7 @@ import (
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/netutil"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 // Mock types mirroring the chat package's internal streaming types.
@@ -127,7 +128,7 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 	r := NewToolRegistry(tc)
 
 	expected := []string{
-		"axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_status", "axis_facts", "axis_models", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "write_file", "edit_file",
 		"multi_edit", "list_directory", "grep_search", "symbol_search",
 		"run_shell", "git_status", "git_diff", "git_log", "axis_run_task",
@@ -250,6 +251,135 @@ func TestToolSummary(t *testing.T) {
 	}
 	if !strings.Contains(result, "1 nodes (1 reachable), status: healthy") {
 		t.Errorf("expected summary result, got: %s", result)
+	}
+}
+
+func TestToolFactsWithNode(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name:     "node-a",
+				Hostname: "node-a.local",
+				OS:       "linux",
+				Arch:     "amd64",
+				Resources: &models.Resources{
+					CPUCores:   8,
+					RAMTotalMB: 16384,
+					RAMFreeMB:  8192,
+				},
+				Status: models.StatusComplete,
+			},
+			{
+				Name:     "node-b",
+				Hostname: "node-b.local",
+				OS:       "darwin",
+				Arch:     "arm64",
+				Resources: &models.Resources{
+					CPUCores:   10,
+					RAMTotalMB: 32768,
+					RAMFreeMB:  24576,
+				},
+				Status: models.StatusComplete,
+			},
+		},
+	}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
+	r := NewToolRegistry(tc)
+
+	// Target node-b specifically
+	res, err := r.Execute(context.Background(), "axis_facts", json.RawMessage(`{"node":"node-b"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "node-b") || !strings.Contains(res, "darwin/arm64") {
+		t.Fatalf("expected node-b facts, got: %s", res)
+	}
+
+	// Unknown node lists known nodes
+	res, err = r.Execute(context.Background(), "axis_facts", json.RawMessage(`{"node":"node-unknown"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "not found") || !strings.Contains(res, "node-a, node-b") {
+		t.Fatalf("expected not found message, got: %s", res)
+	}
+}
+
+func TestToolModels(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "node-a",
+				ResidentModels: []models.ResidentModel{
+					{
+						Name:       "qwen3-coder",
+						Runtime:    "llama.cpp",
+						Port:       8082,
+						SizeVRAMMB: 8192,
+					},
+				},
+				Ollama: &models.OllamaInfo{
+					Installed: true,
+					Version:   "0.5.12",
+					Models:    []string{"llama3.2:latest"},
+				},
+			},
+		},
+	}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
+	r := NewToolRegistry(tc)
+
+	res, err := r.Execute(context.Background(), "axis_models", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "qwen3-coder on node-a") {
+		t.Fatalf("expected resident model in output, got: %s", res)
+	}
+	if !strings.Contains(res, "llama3.2:latest") {
+		t.Fatalf("expected ollama model in output, got: %s", res)
+	}
+}
+
+func TestToolPlaceWithExplicitConstraints(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{
+			{
+				Name: "small-node",
+				Resources: &models.Resources{
+					RAMTotalMB: 8192,
+					RAMFreeMB:  4096,
+					CPUCores:   4,
+				},
+				Status: models.StatusComplete,
+			},
+			{
+				Name: "large-node",
+				Resources: &models.Resources{
+					RAMTotalMB: 65536,
+					RAMFreeMB:  32768,
+					CPUCores:   16,
+				},
+				Status: models.StatusComplete,
+			},
+		},
+	}
+	state := &state.ClusterState{
+		Nodes: map[string]state.NodeState{},
+	}
+	tc := NewToolContext(&RuntimeView{Snapshot: snap, State: state}, nil)
+	r := NewToolRegistry(tc)
+
+	// Require 16GB RAM explicitly: small-node must be excluded
+	res, err := r.Execute(context.Background(), "axis_place", json.RawMessage(`{"description":"data processing","min_ram_mb":16384}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res, "large-node") {
+		t.Fatalf("expected large-node to win, got: %s", res)
+	}
+	if !strings.Contains(res, "small-node") || !strings.Contains(res, "need 16384MB free RAM") {
+		t.Fatalf("expected small-node to be excluded for RAM, got: %s", res)
 	}
 }
 
@@ -1223,7 +1353,7 @@ func TestCapShellOutput(t *testing.T) {
 
 func TestIsReadOnlyTool(t *testing.T) {
 	readOnly := []string{
-		"axis_status", "axis_facts", "axis_place", "axis_summary",
+		"axis_status", "axis_facts", "axis_models", "axis_place", "axis_summary",
 		"axis_reservations", "read_file", "list_directory",
 	}
 	for _, name := range readOnly {

@@ -119,6 +119,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r := &ToolRegistry{executors: make(map[string]ToolExecutor), todos: newTodoStore(), checkpoints: newCheckpointer(), scope: ScopeObserve}
 	r.registerStatus(tc)
 	r.registerFacts(tc)
+	r.registerModels(tc)
 	r.registerPlace(tc)
 	r.registerSummary(tc)
 	r.registerReservations(tc)
@@ -279,18 +280,66 @@ func (r *ToolRegistry) registerStatus(tc *ToolContext) {
 
 // --- Tool: axis_facts ---
 
+type factsArgs struct {
+	Node string `json:"node,omitempty"`
+}
+
 func (r *ToolRegistry) registerFacts(tc *ToolContext) {
 	r.add("axis_facts",
-		"Return a compact human-readable summary of local hardware facts for the current machine (CPU, RAM, disk, GPUs, installed tools, Ollama status).",
-		json.RawMessage(`{"type":"object","properties":{}}`),
+		"Return a detailed human-readable summary of hardware facts for a cluster node (CPU, RAM, disk, GPUs, installed tools, Ollama models, resident models). Defaults to the local node if 'node' is not specified.",
+		json.RawMessage(`{"type":"object","properties":{"node":{"type":"string","description":"Optional node name or hostname to inspect (e.g. 'cachyos', 'samson', 'cranium'). If omitted, defaults to the local node."}}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a factsArgs
+			if len(args) > 0 && string(args) != "{}" && string(args) != "null" {
+				_ = json.Unmarshal(args, &a)
+			}
 			view := tc.GetView()
-			if view != nil && view.Snapshot != nil {
+			if view == nil || view.Snapshot == nil || len(view.Snapshot.Nodes) == 0 {
+				return "No cluster snapshot available — cluster may not be configured.", nil
+			}
+			target := strings.TrimSpace(a.Node)
+			if target == "" {
 				if n, ok := models.FindLocalNode(view.Snapshot.Nodes); ok {
 					return summarizeNodeFacts(n), nil
 				}
+				return summarizeNodeFacts(view.Snapshot.Nodes[0]), nil
 			}
-			return "Local node not found in snapshot.", nil
+			for _, n := range view.Snapshot.Nodes {
+				if strings.EqualFold(n.Name, target) || strings.EqualFold(n.Hostname, target) {
+					return summarizeNodeFacts(n), nil
+				}
+			}
+			known := make([]string, 0, len(view.Snapshot.Nodes))
+			for _, n := range view.Snapshot.Nodes {
+				known = append(known, n.Name)
+			}
+			return fmt.Sprintf("Node %q not found in cluster snapshot. Known nodes: %s", target, strings.Join(known, ", ")), nil
+		},
+	)
+}
+
+// --- Tool: axis_models ---
+
+type modelsArgs struct {
+	Node string `json:"node,omitempty"`
+}
+
+func (r *ToolRegistry) registerModels(tc *ToolContext) {
+	r.add("axis_models",
+		"Discover AI models across the cluster: active resident model instances (in VRAM/RAM), local Ollama models on nodes, and configured inference roles and backends from ai.yaml. Optionally filter by node.",
+		json.RawMessage(`{"type":"object","properties":{"node":{"type":"string","description":"Optional node name to filter models by (e.g. 'cranium', 'samson')"}}}`),
+		func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a modelsArgs
+			if len(args) > 0 && string(args) != "{}" && string(args) != "null" {
+				_ = json.Unmarshal(args, &a)
+			}
+			view := tc.GetView()
+			var snap *models.ClusterSnapshot
+			if view != nil {
+				snap = view.Snapshot
+			}
+			aiCfg, _ := config.LoadAIOrEmpty("")
+			return summarizeClusterModels(snap, aiCfg, strings.TrimSpace(a.Node)), nil
 		},
 	)
 }
@@ -298,13 +347,17 @@ func (r *ToolRegistry) registerFacts(tc *ToolContext) {
 // --- Tool: axis_place ---
 
 type placeArgs struct {
-	Description string `json:"description"`
+	Description   string   `json:"description"`
+	MinRAMMB      int64    `json:"min_ram_mb,omitempty"`
+	RequiredTools []string `json:"required_tools,omitempty"`
+	RequireGPU    bool     `json:"require_gpu,omitempty"`
+	PreferLocal   bool     `json:"prefer_local,omitempty"`
 }
 
 func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 	r.add("axis_place",
-		"Select the best node for a task description. Returns a human-readable placement decision with node name, fit score, reasoning, and top runner-up candidate nodes.",
-		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"}},"required":["description"]}`),
+		"Select the best node for a task description and optional explicit constraints (min_ram_mb, required_tools, require_gpu, prefer_local). Returns a human-readable placement decision with winning node, fit score, decisive criteria, runner-up candidate nodes, and excluded node reasons.",
+		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"},"min_ram_mb":{"type":"integer","description":"Optional minimum free RAM in MB required for the task"},"required_tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names required on the node (e.g. ['docker', 'go'])"},"require_gpu":{"type":"boolean","description":"Optional requirement that the node must have a dedicated GPU"},"prefer_local":{"type":"boolean","description":"Optional preference to keep execution on the local node if eligible"}},"required":["description"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a placeArgs
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -318,6 +371,18 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 				return "Placement: no nodes available in snapshot.", nil
 			}
 			reqs := placement.InferRequirements(a.Description)
+			if a.MinRAMMB > 0 {
+				reqs.MinFreeRAMMB = a.MinRAMMB
+			}
+			if len(a.RequiredTools) > 0 {
+				reqs.RequiredTools = append(reqs.RequiredTools, a.RequiredTools...)
+			}
+			if a.RequireGPU {
+				reqs.PreferredBackends = append(reqs.PreferredBackends, "cuda", "metal", "rocm")
+			}
+			if a.PreferLocal {
+				reqs.Description += " local"
+			}
 			explanation := placement.ExplainPlacement(reqs, view.Snapshot.Nodes, view.State)
 			return summarizePlacementExplanation(explanation), nil
 		},
