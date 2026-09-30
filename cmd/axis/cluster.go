@@ -8,7 +8,7 @@ func clusterCmd() *cobra.Command {
 		Short: "The fleet: status, summary",
 		Long: `Look at every configured node.
 
-  axis cluster status     live snapshot (opt in to cache with --cached)
+  axis cluster status     daemon publication inside 5 minutes (--live to sweep)
   axis cluster summary    one-screen dashboard
 
 This machine is axis node facts. Health checks are axis doctor.`,
