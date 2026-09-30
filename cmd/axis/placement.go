@@ -109,22 +109,6 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 	return cmd
 }
 
-func planTaskExplanation(
-	ctx context.Context,
-	desc string,
-	cached bool,
-	cachedOnly bool,
-	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-) (models.PlacementExplanation, string, error) {
-	snap, source, err := collectStatusSnapshot(ctx, cached, cachedOnly, cachedLoader, liveLoader)
-	if err != nil {
-		return models.PlacementExplanation{}, "", err
-	}
-	explanation, source, _, err := explainPlacementFromSnapshot(ctx, desc, snap, source, "")
-	return explanation, source, err
-}
-
 func explainPlacementFromSnapshot(ctx context.Context, desc string, snap *models.ClusterSnapshot, source, age string) (models.PlacementExplanation, string, string, error) {
 	if snap == nil {
 		return models.PlacementExplanation{}, "", "", fmt.Errorf("cluster snapshot is empty")

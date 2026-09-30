@@ -207,21 +207,6 @@ func taskPlaceCmd() *cobra.Command {
 	return cmd
 }
 
-func planTaskPlacement(
-	ctx context.Context,
-	desc string,
-	cached bool,
-	cachedOnly bool,
-	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-) (models.PlacementDecision, string, error) {
-	explanation, source, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
-	if err != nil {
-		return models.PlacementDecision{}, "", err
-	}
-	return explanation.Decision, source, nil
-}
-
 func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {
 	models.AppendWarningIfMissing(snap, warning)
 }

@@ -9,14 +9,13 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
-func TestPlanTaskPlacementPrefersCacheWhenAvailable(t *testing.T) {
+func TestTaskPlaceUsesCacheWhenAvailable(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	read, err := loadCommandSnapshot(
 		context.Background(),
-		"analyze a git repo",
-		true,
+		false,
 		false,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
 			return &models.ClusterSnapshot{
@@ -26,32 +25,33 @@ func TestPlanTaskPlacementPrefersCacheWhenAvailable(t *testing.T) {
 			}, "daemon-cache", nil
 		},
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
-			return &models.ClusterSnapshot{
-				Nodes: []models.NodeFacts{
-					nodeComplete("live-node", 8192, "low", "git"),
-				},
-			}, "live", nil
+			t.Fatal("expected fresh cache to avoid live collection")
+			return nil, "", nil
 		},
 	)
 	if err != nil {
-		t.Fatalf("planTaskPlacement: %v", err)
+		t.Fatalf("loadCommandSnapshot: %v", err)
 	}
-	if source != "daemon-cache" {
-		t.Fatalf("expected daemon-cache source, got %q", source)
+	if read.source != "daemon-cache" {
+		t.Fatalf("expected daemon-cache source, got %q", read.source)
 	}
+	explanation, _, _, err := explainPlacementFromSnapshot(context.Background(), "analyze a git repo", read.snap, read.source, read.age)
+	if err != nil {
+		t.Fatalf("explainPlacementFromSnapshot: %v", err)
+	}
+	decision := explanation.Decision
 	if decision.Node != "cached-node" {
 		t.Fatalf("expected cached-node, got %q", decision.Node)
 	}
 }
 
-func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
+func TestTaskPlaceFallsBackToLiveWhenCacheFails(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	read, err := loadCommandSnapshot(
 		context.Background(),
-		"analyze a git repo",
-		true,
+		false,
 		false,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
 			return nil, "", context.DeadlineExceeded
@@ -65,11 +65,16 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 		},
 	)
 	if err != nil {
-		t.Fatalf("planTaskPlacement: %v", err)
+		t.Fatalf("loadCommandSnapshot: %v", err)
 	}
-	if source != "live-fallback" {
-		t.Fatalf("expected live-fallback source, got %q", source)
+	if read.source != "live-fallback" {
+		t.Fatalf("expected live-fallback source, got %q", read.source)
 	}
+	explanation, _, _, err := explainPlacementFromSnapshot(context.Background(), "analyze a git repo", read.snap, read.source, read.age)
+	if err != nil {
+		t.Fatalf("explainPlacementFromSnapshot: %v", err)
+	}
+	decision := explanation.Decision
 	if decision.Node != "live-node" {
 		t.Fatalf("expected live-node, got %q", decision.Node)
 	}
@@ -78,13 +83,12 @@ func TestPlanTaskPlacementFallsBackToLiveWhenCacheFails(t *testing.T) {
 	}
 }
 
-func TestPlanTaskPlacementCachedOnlyFailsWhenCacheFails(t *testing.T) {
+func TestTaskPlaceCachedOnlyFailsWhenCacheFails(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	read, err := loadCommandSnapshot(
 		context.Background(),
-		"analyze a git repo",
 		false,
 		true,
 		func(context.Context) (*models.ClusterSnapshot, string, error) {
@@ -98,47 +102,40 @@ func TestPlanTaskPlacementCachedOnlyFailsWhenCacheFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cached-only cache failure")
 	}
-	if source != "" {
-		t.Fatalf("expected empty source on cached-only failure, got %q", source)
-	}
-	if decision.OK || decision.Node != "" || decision.FitScore != 0 || len(decision.Reasoning) != 0 {
-		t.Fatalf("expected empty decision on cached-only failure, got %#v", decision)
+	if read.snap != nil || read.source != "" || read.age != "" {
+		t.Fatalf("expected empty snapshot on cached-only failure, got %#v", read)
 	}
 	if got := err.Error(); got != "daemon cache unavailable: context deadline exceeded" {
 		t.Fatalf("unexpected cached-only error: %q", got)
 	}
 }
 
-func TestPlanTaskPlacementUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
+func TestTaskPlaceUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	decision, source, err := planTaskPlacement(
+	alpha := nodeComplete("alpha", 8192, "low", "git")
+	alpha.RAMReservedMB = 4096
+	alpha.RAMAllocatableMB = 4096
+
+	beta := nodeComplete("beta", 6144, "low", "git")
+	beta.RAMReservedMB = 0
+	beta.RAMAllocatableMB = 6144
+
+	explanation, source, _, err := explainPlacementFromSnapshot(
 		context.Background(),
 		"analyze a git repo",
-		false,
-		false,
-		nil,
-		func(context.Context) (*models.ClusterSnapshot, string, error) {
-			alpha := nodeComplete("alpha", 8192, "low", "git")
-			alpha.RAMReservedMB = 4096
-			alpha.RAMAllocatableMB = 4096
-
-			beta := nodeComplete("beta", 6144, "low", "git")
-			beta.RAMReservedMB = 0
-			beta.RAMAllocatableMB = 6144
-
-			return &models.ClusterSnapshot{
-				Nodes: []models.NodeFacts{alpha, beta},
-			}, "live", nil
-		},
+		&models.ClusterSnapshot{Nodes: []models.NodeFacts{alpha, beta}},
+		"live",
+		"",
 	)
 	if err != nil {
-		t.Fatalf("planTaskPlacement: %v", err)
+		t.Fatalf("explainPlacementFromSnapshot: %v", err)
 	}
 	if source != "live" {
 		t.Fatalf("expected live source, got %q", source)
 	}
+	decision := explanation.Decision
 	if decision.Node != "beta" {
 		t.Fatalf("expected beta after reservation overlay, got %q", decision.Node)
 	}
