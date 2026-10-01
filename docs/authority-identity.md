@@ -80,7 +80,7 @@ Placement locality is determined by `models.IsLocalNode(n NodeFacts) bool` (`int
 ### Placement Consequences
 
 - `internal/placement/selector.go`: `SelectBestNode` sets `PlacementDecision.IsLocal = models.IsLocalNode(best)`.
-- `internal/placement/explain.go`: locality gates Apple Foundation Models (`requiresAppleFoundationModels` is local-only).
+- `internal/placement/explain.go`: Apple Foundation Models are verified across local and remote Apple Silicon nodes (local node preferred).
 - `internal/placement/ranker.go`: local nodes receive a +10 `localBonus` in the fit score.
 - `internal/placement/selector.go`: Ollama and Apple Foundation Model workloads append reasoning such as `"local node preferred for ollama"`.
 

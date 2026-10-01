@@ -32,11 +32,8 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 	eval := candidateEvaluation{Node: n}
 
 	if requiresAppleFoundationModels(reqs) {
-		switch {
-		case !models.IsLocalNode(n):
-			eval.ExclusionReasons = append(eval.ExclusionReasons, "apple foundation models are local-only")
-		case !appleFoundationModelsReady(n):
-			eval.ExclusionReasons = append(eval.ExclusionReasons, "apple foundation models not verified on local node")
+		if !appleFoundationModelsReady(n) {
+			eval.ExclusionReasons = append(eval.ExclusionReasons, "apple foundation models not verified")
 		}
 	}
 
@@ -180,8 +177,12 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 	if reason := residentModelReason(n, reqs); reason != "" {
 		reasoning = append(reasoning, reason)
 	}
-	if requiresAppleFoundationModels(reqs) && models.IsLocalNode(n) && appleFoundationModelsReady(n) {
-		reasoning = append(reasoning, "local Apple Foundation Models path verified")
+	if requiresAppleFoundationModels(reqs) && appleFoundationModelsReady(n) {
+		if models.IsLocalNode(n) {
+			reasoning = append(reasoning, "local Apple Foundation Models path verified")
+		} else {
+			reasoning = append(reasoning, "remote Apple Foundation Models path verified")
+		}
 	} else if reqs.PrefersTurboQuant && turboQuantSupported(n) {
 		backends := turboQuantBackends(n)
 		if backends == "" {

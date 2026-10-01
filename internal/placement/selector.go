@@ -70,8 +70,12 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, rank
 	if requiresTool(reqs.RequiredTools, "ollama") && models.IsLocalNode(best) {
 		decision.Reasoning = append(decision.Reasoning, "local node preferred for ollama")
 	}
-	if requiresAppleFoundationModels(reqs) && models.IsLocalNode(best) {
-		decision.Reasoning = append(decision.Reasoning, "local Apple Foundation Models path verified")
+	if requiresAppleFoundationModels(reqs) && appleFoundationModelsReady(best) {
+		if models.IsLocalNode(best) {
+			decision.Reasoning = append(decision.Reasoning, "local Apple Foundation Models path verified")
+		} else {
+			decision.Reasoning = append(decision.Reasoning, "remote Apple Foundation Models path verified")
+		}
 	}
 	if reqs.ContextWindowTokens > 0 {
 		decision.Reasoning = append(decision.Reasoning,
@@ -236,14 +240,9 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 
 	for _, n := range nodes {
 		if requiresAppleFoundationModels(reqs) {
-			switch {
-			case !models.IsLocalNode(n):
+			if !appleFoundationModelsReady(n) {
 				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: excluded (apple foundation models are local-only)", n.Name))
-				continue
-			case !appleFoundationModelsReady(n):
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: excluded (apple foundation models not verified on local node)", n.Name))
+					fmt.Sprintf("  %s: excluded (apple foundation models not verified)", n.Name))
 				continue
 			}
 		}

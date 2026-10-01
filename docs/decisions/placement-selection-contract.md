@@ -54,7 +54,7 @@ Finally, `TaskRequirements` carries no OS or architecture constraint, so a platf
 
 Extends the existing `evaluateCandidates` / `ExclusionReasons` mechanism in `internal/placement/explain.go`. Present criteria are retained.
 
-**Existing (retained):** node status, critical memory pressure, battery floor, thermal throttle state, Apple Foundation Models locality, blocking failure classes / tombstones, required tools, minimum RAM, empirical peak-RAM exceeding allocatable.
+**Existing (retained):** node status, critical memory pressure, battery floor, thermal throttle state, Apple Foundation Models readiness, blocking failure classes / tombstones, required tools, minimum RAM, empirical peak-RAM exceeding allocatable.
 
 **New:**
 
