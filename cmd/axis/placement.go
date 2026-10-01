@@ -61,20 +61,16 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 			// --cached matches the default cache-first read and does not override --live.
 			_ = cached
 
-			read, err := loadCommandSnapshot(
+			explanation, source, age, err := planTaskExplanation(
 				ctx,
-				live,
+				desc,
+				!live,
 				cachedOnly,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
 					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
 				loadTaskLiveSnapshot,
 			)
-			var explanation models.PlacementExplanation
-			var source, age string
-			if err == nil {
-				explanation, source, age, err = explainPlacementFromSnapshot(ctx, desc, read.snap, read.source, read.age)
-			}
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
@@ -107,6 +103,23 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
+}
+
+func planTaskExplanation(
+	ctx context.Context,
+	desc string,
+	cached bool,
+	cachedOnly bool,
+	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+) (models.PlacementExplanation, string, string, error) {
+	// cached/cachedOnly try the daemon publication first. Neither set means
+	// an explicit live sweep (--live, or the historical cached=false path).
+	read, err := loadCommandSnapshot(ctx, !cached && !cachedOnly, cachedOnly, cachedLoader, liveLoader)
+	if err != nil {
+		return models.PlacementExplanation{}, "", "", err
+	}
+	return explainPlacementFromSnapshot(ctx, desc, read.snap, read.source, read.age)
 }
 
 func explainPlacementFromSnapshot(ctx context.Context, desc string, snap *models.ClusterSnapshot, source, age string) (models.PlacementExplanation, string, string, error) {
