@@ -90,3 +90,20 @@ do {
 	Darwin.exit(1)
 }
 `
+
+// AppleFoundationModelsDiscoveryScript probes whether Apple Foundation Models
+// runtime or framework is available on a Darwin node.
+const AppleFoundationModelsDiscoveryScript = `set +e
+if [ -x "$HOME/.axis/cache/apple-foundation-models-helper" ]; then
+  "$HOME/.axis/cache/apple-foundation-models-helper" --self-test 2>/dev/null && echo "OK" && exit 0
+fi
+if [ -x "$HOME/Library/Caches/axis/apple-foundation-models-helper" ]; then
+  "$HOME/Library/Caches/axis/apple-foundation-models-helper" --self-test 2>/dev/null && echo "OK" && exit 0
+fi
+if [ -x "$HOME/.cache/axis/apple-foundation-models-helper" ]; then
+  "$HOME/.cache/axis/apple-foundation-models-helper" --self-test 2>/dev/null && echo "OK" && exit 0
+fi
+xcrun swift -e 'import FoundationModels; switch SystemLanguageModel.default.availability { case .available: print("AVAILABLE"); case .unavailable(let r): print("UNAVAILABLE:\(r)") }' 2>/dev/null && exit 0
+xcrun swift -e 'import FoundationModels' 2>/dev/null && echo "UNVERIFIED" && exit 0
+exit 1
+`
