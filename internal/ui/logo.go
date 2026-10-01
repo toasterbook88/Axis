@@ -6,20 +6,17 @@ import (
 	"strings"
 )
 
-// axisLogo is a 9-row ANSI Shadow figlet rendering of "AXIS". Lines are stored
-// at their natural width; the gradient maps columns against the widest row so
-// every row shares the same horizontal color position. Backslashes are literal
-// (raw string) — do not escape them.
+// axisLogo is the 6-row Unicode ANSI Shadow figlet of "AXIS" (27 columns).
+// Lines are stored at their natural width; the gradient maps columns against
+// the widest row so every row shares the same horizontal color position.
+// Strokes are block and box-drawing runes. There is no '_' ground line.
 var axisLogo = []string{
-	`_____/\\\\\\\\\_____/\\\_______/\\\__/\\\\\\\\\\\_____/\\\\\\\\\\\___`,
-	`___/\\\\\\\\\\\\\__\///\\\___/\\\/__\/////\\\///____/\\\/////////\\\_`,
-	`__/\\\/////////\\\___\///\\\\\\/________\/\\\______\//\\\______\///__`,
-	`_\/\\\_______\/\\\_____\//\\\\__________\/\\\_______\////\\\_________`,
-	`_\/\\\\\\\\\\\\\\\______\/\\\\__________\/\\\__________\////\\\______`,
-	`_\/\\\/////////\\\______/\\\\\\_________\/\\\_____________\////\\\___`,
-	`_\/\\\_______\/\\\____/\\\////\\\_______\/\\\______/\\\______\//\\\__`,
-	`_\/\\\_______\/\\\__/\\\/___\///\\\__/\\\\\\\\\\\_\///\\\\\\\\\\\/___`,
-	`_\///________\///__\///_______\///__\///////////____\///////////_____`,
+	` █████╗ ██╗  ██╗██╗███████╗`,
+	`██╔══██╗╚██╗██╔╝██║██╔════╝`,
+	`███████║ ╚███╔╝ ██║███████╗`,
+	`██╔══██║ ██╔██╗ ██║╚════██║`,
+	`██║  ██║██╔╝ ██╗██║███████║`,
+	`╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝`,
 }
 
 // logo gradient endpoints: bright cyan (top-left) → magenta (bottom-right).
