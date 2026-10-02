@@ -9,9 +9,23 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+// drainModelEventsBeforeTempCleanup runs before t.TempDir removal. Evict and
+// resume enqueue an event that creates files in the temp AXIS home after the
+// command returns. RemoveAll returns ENOTEMPTY if that create lands between
+// readdir and rmdir.
+func drainModelEventsBeforeTempCleanup(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := events.FlushEvents(5 * time.Second); err != nil {
+			t.Errorf("FlushEvents: %v", err)
+		}
+	})
+}
 
 func makeDualGPUSnapshot() *models.ClusterSnapshot {
 	now := time.Now().UTC()
@@ -56,6 +70,7 @@ func TestModelEvictByModelName(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -92,6 +107,7 @@ func TestModelEvictByGPUIndex(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -124,6 +140,7 @@ func TestModelEvictAll(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -156,6 +173,7 @@ func TestModelEvictGPUIndexFiltersAll(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -216,6 +234,7 @@ func TestModelEvictForcePersistsMode(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -272,6 +291,7 @@ func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	origAxis := os.Getenv("AXIS_HOME")
 	os.Setenv("HOME", tmpDir)
@@ -313,6 +333,7 @@ func TestModelEvictStopLabelsReclaimedVRAMEstimated(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	origAxis := os.Getenv("AXIS_HOME")
 	os.Setenv("HOME", tmpDir)
@@ -344,6 +365,7 @@ func TestModelEvictReceiptSaveFailureIsNotSuccess(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	blocked := filepath.Join(tmpDir, "not-a-directory")
 	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -405,6 +427,7 @@ func TestModelResumeByReceiptID(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -459,6 +482,7 @@ func TestModelResumeAwaitsReceiptPort(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -510,6 +534,7 @@ func TestModelResumeSystemUnitStartsOnSystemBus(t *testing.T) {
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
 
 	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
@@ -583,6 +608,7 @@ func TestModelResumeUnitNameUsesSnapshotSupervisorAndPort(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	drainModelEventsBeforeTempCleanup(t)
 
 	runner := &fakeModelRunner{}
 	prevRunner := defaultModelRunner
