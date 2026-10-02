@@ -55,7 +55,8 @@ type EvictionReceipt struct {
 	Schema           string                      `json:"schema"` // "axis.eviction-receipt/v1"
 	ID               string                      `json:"id"`     // "mo-<uuid>"
 	Node             string                      `json:"node"`
-	Action           string                      `json:"action"` // "evict" | "resume"
+	Action           string                      `json:"action"`         // "evict" | "resume"
+	Mode             string                      `json:"mode,omitempty"` // stop | freeze | force
 	Status           models.ModelOperationStatus `json:"status"`
 	Disposition      string                      `json:"disposition"`
 	ReclaimedVRAMMB  int64                       `json:"reclaimed_vram_mb"`
@@ -121,13 +122,22 @@ func BuildEvictShellScript(targets []EvictTarget, mode EvictMode) string {
 
 		unit := strings.TrimSpace(t.SupervisorUnit)
 		if unit != "" {
-			if mode == EvictModeFreeze {
+			switch mode {
+			case EvictModeFreeze:
 				if t.SupervisorType == "systemd-user" {
 					sb.WriteString(fmt.Sprintf("systemctl --user freeze %s 2>/dev/null || true; ", shellQuote(unit)))
 				} else if t.SupervisorType == "systemd-system" {
 					sb.WriteString(fmt.Sprintf("systemctl freeze %s 2>/dev/null || true; ", shellQuote(unit)))
 				}
-			} else {
+			case EvictModeForce:
+				// Runtime mask dies on reboot. A persistent mask would still
+				// block the unit after the emergency is over.
+				if t.SupervisorType == "systemd-user" {
+					sb.WriteString(fmt.Sprintf("systemctl --user mask --runtime %s 2>/dev/null || true; ", shellQuote(unit)))
+				} else if t.SupervisorType == "systemd-system" {
+					sb.WriteString(fmt.Sprintf("systemctl mask --runtime %s 2>/dev/null || true; ", shellQuote(unit)))
+				}
+			default:
 				if t.SupervisorType == "systemd-user" {
 					sb.WriteString(fmt.Sprintf("systemctl --user stop %s 2>/dev/null || true; ", shellQuote(unit)))
 				} else if t.SupervisorType == "systemd-system" {
@@ -170,6 +180,13 @@ func BuildResumeShellScript(receipt EvictionReceipt) string {
 	for _, inst := range receipt.EvictedInstances {
 		unit := strings.TrimSpace(inst.SupervisorUnit)
 		if unit != "" {
+			if receipt.Mode == string(EvictModeForce) {
+				if inst.SupervisorType == "systemd-user" {
+					sb.WriteString(fmt.Sprintf("systemctl --user unmask --runtime %s 2>/dev/null || true; ", shellQuote(unit)))
+				} else if inst.SupervisorType == "systemd-system" {
+					sb.WriteString(fmt.Sprintf("systemctl unmask --runtime %s 2>/dev/null || true; ", shellQuote(unit)))
+				}
+			}
 			if inst.SupervisorType == "systemd-user" {
 				sb.WriteString(fmt.Sprintf("systemctl --user unfreeze %s 2>/dev/null || true; ", shellQuote(unit)))
 				sb.WriteString(fmt.Sprintf("systemctl --user start %s 2>/dev/null || true; ", shellQuote(unit)))

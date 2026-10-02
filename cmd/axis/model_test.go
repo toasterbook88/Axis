@@ -32,6 +32,8 @@ type fakeModelRunner struct {
 	queryErr        error
 	queriedTargets  []string
 	awaitedTargets  []string
+	awaitedPorts    []int
+	awaitTimeouts   []time.Duration
 	evictedTargets  []modellife.EvictTarget
 	evictErr        error
 	resumedReceipts []modellife.EvictionReceipt
@@ -65,6 +67,8 @@ func (f *fakeModelRunner) Probe(_ context.Context, _ models.NodeFacts, _ *config
 }
 func (f *fakeModelRunner) Await(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error) {
 	f.awaitedTargets = append(f.awaitedTargets, instance.ID)
+	f.awaitedPorts = append(f.awaitedPorts, instance.Port)
+	f.awaitTimeouts = append(f.awaitTimeouts, opts.Timeout)
 	if f.awaitReceipt != nil {
 		return *f.awaitReceipt, f.awaitErr
 	}

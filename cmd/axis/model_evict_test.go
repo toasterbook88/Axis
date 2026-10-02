@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +150,234 @@ func TestModelEvictAll(t *testing.T) {
 	}
 }
 
+func TestModelEvictGPUIndexFiltersAll(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--node", "cranium", "--gpu", "1", "--all"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if len(runner.evictedTargets) != 1 {
+		t.Fatalf("evicted targets count = %d, want 1 (GPU 1 only)", len(runner.evictedTargets))
+	}
+	if runner.evictedTargets[0].Model != "coder7b" {
+		t.Errorf("expected coder7b for --gpu 1 --all, got %q", runner.evictedTargets[0].Model)
+	}
+}
+
+func TestModelEvictGPUIndexMissesEmptyIndices(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	for ni := range snap.Nodes {
+		for ri := range snap.Nodes[ni].ResidentModels {
+			snap.Nodes[ni].ResidentModels[ri].GPUIndices = nil
+		}
+	}
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	runner := &fakeModelRunner{}
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--node", "cranium", "--gpu", "0"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected no match when GPU indices were not observed")
+	}
+	if !strings.Contains(err.Error(), "no resident model instances matched") {
+		t.Fatalf("error = %v, want no resident model instances matched", err)
+	}
+	if len(runner.evictedTargets) != 0 {
+		t.Fatalf("unexpected eviction occurred: %+v", runner.evictedTargets)
+	}
+}
+
+func TestModelEvictForcePersistsMode(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "force"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if loaded.Mode != string(modellife.EvictModeForce) {
+		t.Fatalf("receipt mode = %q, want force", loaded.Mode)
+	}
+	script := modellife.BuildResumeShellScript(*loaded)
+	if !strings.Contains(script, "systemctl --user unmask --runtime 'bonsai2-27b.service'") {
+		t.Fatalf("forced receipt resume script = %s", script)
+	}
+}
+
+func loadOnlyEvictionReceipt(t *testing.T) *modellife.EvictionReceipt {
+	t.Helper()
+	entries, err := os.ReadDir(modellife.ReceiptDirectory())
+	if err != nil {
+		t.Fatalf("receipt dir: %v", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "evict-") && strings.HasSuffix(entry.Name(), ".json") {
+			names = append(names, entry.Name())
+		}
+	}
+	if len(names) != 1 {
+		t.Fatalf("receipt files = %v, want one", names)
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(names[0], "evict-"), ".json")
+	loaded, err := modellife.LoadEvictionReceipt(id)
+	if err != nil {
+		t.Fatalf("load receipt: %v", err)
+	}
+	return loaded
+}
+
+func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "freeze"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "reclaimed 0 MiB") {
+		t.Fatalf("output = %q, want reclaimed 0 MiB", buf.String())
+	}
+	if strings.Contains(buf.String(), "9842") {
+		t.Fatalf("freeze reported weight size as reclaimed VRAM: %q", buf.String())
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if loaded.ReclaimedVRAMMB != 0 {
+		t.Fatalf("receipt reclaimed = %d, want 0", loaded.ReclaimedVRAMMB)
+	}
+	if len(loaded.EvictedInstances) != 1 || loaded.EvictedInstances[0].VRAMFreedMB != 0 {
+		t.Fatalf("instance freed = %+v, want 0", loaded.EvictedInstances)
+	}
+}
+
+func TestModelEvictStopLabelsReclaimedVRAMEstimated(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "stop"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "reclaimed 9842 MiB estimated") {
+		t.Fatalf("output = %q, want estimated weight-size figure", buf.String())
+	}
+}
+
+func TestModelEvictReceiptSaveFailureIsNotSuccess(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	blocked := filepath.Join(tmpDir, "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", blocked)
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected receipt save failure")
+	}
+	if strings.Contains(buf.String(), "evicted ") {
+		t.Fatalf("save failure printed success: %q", buf.String())
+	}
+	if len(runner.evictedTargets) != 1 {
+		t.Fatalf("evict calls = %d, want the stop to have been attempted", len(runner.evictedTargets))
+	}
+}
+
 func TestModelEvictFailsWhenNoMatch(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
@@ -221,5 +450,165 @@ func TestModelResumeByReceiptID(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "resumed on cranium") {
 		t.Errorf("output does not report resume: %q", buf.String())
+	}
+}
+
+func TestModelResumeAwaitsReceiptPort(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	receipt := modellife.EvictionReceipt{
+		ID:   "mo-await-port",
+		Node: "cranium",
+		EvictedInstances: []modellife.EvictedInstanceReceipt{
+			{
+				InstanceID:     "mi-cranium-llama.cpp-8082",
+				Model:          "bonsai2-27b",
+				Port:           8082,
+				SupervisorType: "systemd-user",
+				SupervisorUnit: "bonsai2-27b.service",
+			},
+		},
+	}
+	if _, err := modellife.SaveEvictionReceipt(receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelResumeCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--receipt", "mo-await-port", "--timeout", "45s"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model resume failed: %v\n%s", err, buf.String())
+	}
+	if len(runner.resumedReceipts) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(runner.resumedReceipts))
+	}
+	if len(runner.awaitedPorts) != 1 || runner.awaitedPorts[0] != 8082 {
+		t.Fatalf("awaited ports = %v, want [8082]", runner.awaitedPorts)
+	}
+	if len(runner.awaitTimeouts) != 1 || runner.awaitTimeouts[0] != 45*time.Second {
+		t.Fatalf("await timeouts = %v, want 45s", runner.awaitTimeouts)
+	}
+}
+
+func TestModelResumeSystemUnitStartsOnSystemBus(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	receipt := modellife.EvictionReceipt{
+		ID:   "mo-system-unit",
+		Node: "cranium",
+		EvictedInstances: []modellife.EvictedInstanceReceipt{
+			{
+				Model:          "coder7b",
+				Port:           8081,
+				SupervisorType: "systemd-system",
+				SupervisorUnit: "coder7b.service",
+			},
+		},
+	}
+	if _, err := modellife.SaveEvictionReceipt(receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelResumeCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--receipt", "mo-system-unit"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model resume failed: %v\n%s", err, buf.String())
+	}
+	if len(runner.resumedReceipts) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(runner.resumedReceipts))
+	}
+	script := modellife.BuildResumeShellScript(runner.resumedReceipts[0])
+	if strings.Contains(script, "--user") {
+		t.Fatalf("system unit resume used the user bus: %s", script)
+	}
+	if !strings.Contains(script, "systemctl start 'coder7b.service'") {
+		t.Fatalf("system unit resume script = %s", script)
+	}
+}
+
+func TestModelResumeUnitNameRequiresKnownSupervisor(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelResumeCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"missing-unit", "--node", "cranium"})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "supervisor type unknown") {
+		t.Fatalf("error = %v, want supervisor type unknown\n%s", err, buf.String())
+	}
+	if len(runner.resumedReceipts) != 0 {
+		t.Fatalf("resume ran without a supervisor: %+v", runner.resumedReceipts)
+	}
+}
+
+func TestModelResumeUnitNameUsesSnapshotSupervisorAndPort(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelResumeCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--timeout", "15s"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model resume failed: %v\n%s", err, buf.String())
+	}
+	if len(runner.resumedReceipts) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(runner.resumedReceipts))
+	}
+	got := runner.resumedReceipts[0].EvictedInstances
+	if len(got) != 1 || got[0].SupervisorType != "systemd-user" || got[0].Port != 8082 {
+		t.Fatalf("resumed instance = %+v, want systemd-user port 8082", got)
+	}
+	if len(runner.awaitedPorts) != 1 || runner.awaitedPorts[0] != 8082 {
+		t.Fatalf("awaited ports = %v, want [8082]", runner.awaitedPorts)
+	}
+	script := modellife.BuildResumeShellScript(runner.resumedReceipts[0])
+	if !strings.Contains(script, "systemctl --user start 'bonsai2-27b.service'") {
+		t.Fatalf("unit resume script = %s", script)
 	}
 }

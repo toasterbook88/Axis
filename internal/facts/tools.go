@@ -127,41 +127,119 @@ PYEOF
 		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\"}"
 	`
 
-// LlamaServerDiscoveryScript is the bash script used to detect a running
-// llama-server process, extract its loaded model from the command line, and
-// report it as a resident model. Works locally and over SSH.
+// LlamaServerDiscoveryScript is the bash script used to detect running
+// llama-server processes, extract each loaded model from that process's
+// command line, and report one resident model per PID. Works locally and
+// over SSH.
 //
-// pgrep is trimmed to a single PID with | head -1 to handle multiple instances
-// deterministically. The --model/-m and --port/-p flags are parsed with awk
-// to handle both --flag=value and --flag value forms. Port defaults to 8080
-// (llama-server's own default) when the process does not set one.
+// A GPU index is recorded only when nvidia-smi maps that PID to a device,
+// or, when that row is missing, when the argv carries --main-gpu / -mg.
+// A missing observation is omitted. It is not reported as GPU 0.
+// --model/-m and --port/-p accept both --flag=value and --flag value.
+// Port defaults to 8080 when a process does not set one. The payload's
+// top-level port is the first resident's port.
 const LlamaServerDiscoveryScript = `set -o pipefail;
-		PGREP=$(pgrep -x llama-server 2>/dev/null | head -1 || true)
-		if [ -z "$PGREP" ]; then PGREP=$(pgrep -f '[l]lama-server' 2>/dev/null | head -1 || true); fi
-		case "$PGREP" in ''|*[!0-9]*) PGREP="";; esac
+		RAW_PIDS=$(pgrep -x llama-server 2>/dev/null || true)
+		if [ -z "$RAW_PIDS" ]; then RAW_PIDS=$(pgrep -f '[l]lama-server' 2>/dev/null || true); fi
+		PIDS=""
+		for _pid in $RAW_PIDS; do
+			case "$_pid" in ''|*[!0-9]*) continue;; esac
+			PIDS="$PIDS $_pid"
+		done
+		PIDS=$(echo "$PIDS" | awk '{$1=$1; print}')
+		FIRST=$(echo "$PIDS" | awk '{print $1}')
 		LSBIN=$(command -v llama-server || echo "")
-		if [ -z "$LSBIN" ] && [ -n "$PGREP" ]; then
-			LSBIN=$(readlink /proc/"$PGREP"/exe 2>/dev/null || echo "")
+		if [ -z "$LSBIN" ] && [ -n "$FIRST" ]; then
+			LSBIN=$(readlink /proc/"$FIRST"/exe 2>/dev/null || echo "")
 		fi
-		if [ -z "$LSBIN" ] && [ -n "$PGREP" ]; then
-			LSBIN=$(ps -p "$PGREP" -o args= 2>/dev/null | awk '{print $1; exit}' || echo "")
+		if [ -z "$LSBIN" ] && [ -n "$FIRST" ]; then
+			LSBIN=$(ps -p "$FIRST" -o args= 2>/dev/null | awk '{print $1; exit}' || echo "")
 		fi
 		if [ -z "$LSBIN" ]; then echo '{"installed":false}'; exit 0; fi
 		VERSION=unknown
 		if [ -x "$LSBIN" ]; then VERSION=$("$LSBIN" --version 2>/dev/null | head -1); fi
 		RUNNING=false
-		[ -n "$PGREP" ] && RUNNING=true
+		[ -n "$PIDS" ] && RUNNING=true
+		GPU_TABLE=""
+		APP_TABLE=""
+		if command -v nvidia-smi >/dev/null 2>&1; then
+			GPU_TABLE=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits 2>/dev/null || true)
+			APP_TABLE=$(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader,nounits 2>/dev/null || true)
+		fi
+		axis_gpu_indices_for_pid() {
+			_pid=$1
+			_cmd=$2
+			_idx=$(printf '%s\n__AXIS_APPS__\n%s\n' "$GPU_TABLE" "$APP_TABLE" | awk -F, -v pid="$_pid" '
+				function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+				$0 == "__AXIS_APPS__" { phase = 1; next }
+				phase == 0 {
+					idx = trim($1); uuid = trim($2)
+					if (idx ~ /^[0-9]+$/ && uuid != "") u2i[uuid] = idx
+					next
+				}
+				{
+					uuid = trim($1); p = trim($2)
+					if (p == pid && (uuid in u2i)) {
+						idx = u2i[uuid]
+						if (!(idx in seen)) { seen[idx] = 1; list = (list == "" ? idx : list "," idx) }
+					}
+				}
+				END { print list }
+			')
+			if [ -z "$_idx" ]; then
+				_idx=$(printf '%s\n' "$_cmd" | awk '{for(i=1;i<=NF;i++){if($i=="--main-gpu"||$i=="-mg"){print $(i+1);exit}if($i~/^(--main-gpu=|-mg=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+			fi
+			if printf '%s' "$_idx" | grep -qE '^[0-9]+(,[0-9]+)*$'; then
+				printf '%s' "$_idx"
+			fi
+		}
+		RESIDENT_ITEMS=""
 		PORT=8080
-		CMDLINE=""
-		PROCESS_OWNER=""
-		PROCESS_START_TOKEN=""
-		if [ -n "$PGREP" ]; then
+		for PGREP in $PIDS; do
 			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
 			PROCESS_OWNER=$(ps -p "$PGREP" -o user= 2>/dev/null | awk '{$1=$1; print}' || echo "")
 			PROCESS_START_TOKEN=$(ps -p "$PGREP" -o lstart= 2>/dev/null | awk '{$1=$1; print}' || echo "")
-			PORT_ARG=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--port"||$i=="-p"){print $(i+1);exit}if($i~/^(--port=|-p=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
-			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then PORT="$PORT_ARG"; fi
-		fi
+			THIS_PORT=8080
+			PORT_ARG=$(printf '%s\n' "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--port"||$i=="-p"){print $(i+1);exit}if($i~/^(--port=|-p=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then THIS_PORT="$PORT_ARG"; fi
+			MODEL=$(printf '%s\n' "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+			if [ -z "$MODEL" ]; then continue; fi
+			SUPERVISOR="none"
+			SUPERVISOR_UNIT=""
+			CGROUP_DATA=$(cat /proc/"$PGREP"/cgroup 2>/dev/null || echo "")
+			if [ -n "$CGROUP_DATA" ]; then
+				if echo "$CGROUP_DATA" | grep -q "user@"; then
+					SUPERVISOR="systemd-user"
+					SUPERVISOR_UNIT=$(echo "$CGROUP_DATA" | grep -oE '[^/:]+\.service' | awk 'END {print}' || echo "")
+				elif echo "$CGROUP_DATA" | grep -q "system.slice"; then
+					SUPERVISOR="systemd-system"
+					SUPERVISOR_UNIT=$(echo "$CGROUP_DATA" | grep -oE '[^/:]+\.service' | awk 'END {print}' || echo "")
+				fi
+			fi
+			MNAME=$(basename "$MODEL" | sed 's/\.[^.]*$//')
+			GPU_LAYERS=$(printf '%s\n' "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--n-gpu-layers"||$i=="-ngl"){print $(i+1);exit}if($i~/^(--n-gpu-layers=|-ngl=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+			PROC="cpu"
+			[ -n "$GPU_LAYERS" ] && [ "$GPU_LAYERS" -gt 0 ] 2>/dev/null && PROC="gpu"
+			SIZE_BYTES=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
+			SIZE_MB=$((SIZE_BYTES / 1048576))
+			MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
+			LSBIN_ESC=$(echo "$LSBIN" | sed 's/\\/\\\\/g; s/"/\\"/g')
+			PROCESS_OWNER_ESC=$(echo "$PROCESS_OWNER" | sed 's/\\/\\\\/g; s/"/\\"/g')
+			PROCESS_START_TOKEN_ESC=$(echo "$PROCESS_START_TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')
+			SUPERVISOR_ESC=$(echo "$SUPERVISOR" | sed 's/"/\\"/g')
+			SUPERVISOR_UNIT_ESC=$(echo "$SUPERVISOR_UNIT" | sed 's/"/\\"/g')
+			GPU_JSON=""
+			GPU_IDX=$(axis_gpu_indices_for_pid "$PGREP" "$CMDLINE")
+			if [ -n "$GPU_IDX" ]; then GPU_JSON=",\"gpu_indices\":[$GPU_IDX]"; fi
+			if [ -z "$RESIDENT_ITEMS" ]; then PORT="$THIS_PORT"; fi
+			ITEM="{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"port\":$THIS_PORT,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"supervisor_type\":\"$SUPERVISOR_ESC\",\"supervisor_unit\":\"$SUPERVISOR_UNIT_ESC\",\"source\":\"llama-server-ps\"$GPU_JSON}"
+			if [ -n "$RESIDENT_ITEMS" ]; then
+				RESIDENT_ITEMS="$RESIDENT_ITEMS,$ITEM"
+			else
+				RESIDENT_ITEMS="$ITEM"
+			fi
+		done
+		if [ -n "$RESIDENT_ITEMS" ]; then RESIDENT="[$RESIDENT_ITEMS]"; else RESIDENT="[]"; fi
 		LISTENING=false
 		if command -v lsof >/dev/null 2>&1 && lsof -i :"$PORT" 2>/dev/null | grep -q LISTEN; then
 			LISTENING=true
@@ -169,37 +247,6 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 			LISTENING=true
 		elif command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q ":$PORT "; then
 			LISTENING=true
-		fi
-		RESIDENT="[]"
-		if [ -n "$PGREP" ]; then
-			MODEL=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
-			if [ -n "$MODEL" ]; then
-				SUPERVISOR="none"
-				SUPERVISOR_UNIT=""
-				CGROUP_DATA=$(cat /proc/"$PGREP"/cgroup 2>/dev/null || echo "")
-				if [ -n "$CGROUP_DATA" ]; then
-					if echo "$CGROUP_DATA" | grep -q "user@"; then
-						SUPERVISOR="systemd-user"
-						SUPERVISOR_UNIT=$(echo "$CGROUP_DATA" | grep -oE '[^/:]+\.service' | awk 'END {print}' || echo "")
-					elif echo "$CGROUP_DATA" | grep -q "system.slice"; then
-						SUPERVISOR="systemd-system"
-						SUPERVISOR_UNIT=$(echo "$CGROUP_DATA" | grep -oE '[^/:]+\.service' | awk 'END {print}' || echo "")
-					fi
-				fi
-				MNAME=$(basename "$MODEL" | sed 's/\.[^.]*$//')
-				GPU_LAYERS=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--n-gpu-layers"||$i=="-ngl"){print $(i+1);exit}if($i~/^(--n-gpu-layers=|-ngl=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
-				PROC="cpu"
-				[ -n "$GPU_LAYERS" ] && [ "$GPU_LAYERS" -gt 0 ] 2>/dev/null && PROC="gpu"
-				SIZE_BYTES=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
-				SIZE_MB=$((SIZE_BYTES / 1048576))
-				MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
-				LSBIN_ESC=$(echo "$LSBIN" | sed 's/\\/\\\\/g; s/"/\\"/g')
-				PROCESS_OWNER_ESC=$(echo "$PROCESS_OWNER" | sed 's/\\/\\\\/g; s/"/\\"/g')
-				PROCESS_START_TOKEN_ESC=$(echo "$PROCESS_START_TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')
-				SUPERVISOR_ESC=$(echo "$SUPERVISOR" | sed 's/"/\\"/g')
-				SUPERVISOR_UNIT_ESC=$(echo "$SUPERVISOR_UNIT" | sed 's/"/\\"/g')
-				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"supervisor_type\":\"$SUPERVISOR_ESC\",\"supervisor_unit\":\"$SUPERVISOR_UNIT_ESC\",\"source\":\"llama-server-ps\"}]"
-			fi
 		fi
 		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":$PORT,\"resident_models\":$RESIDENT}"
 	`

@@ -4,7 +4,28 @@
 - **Proposal ID**: `RFC-2026-005`
 - **Target Release**: AXIS `0.14.15` / `0.15.0`
 - **Authors**: Antigravity Assistant & Operator Pair
-- **Status**: Ready for Implementation Review
+- **Status**: Proposal. Partial behavior is on the eviction branch. Not a runbook.
+
+## Implementation status
+
+This file stays a proposal. `docs/README.md` still marks it planning-only. The clauses below are what the eviction branch implements. Everything else in this document, including the target release line above, is not shipped behavior.
+
+Landed on the eviction branch:
+
+- Discovery emits one resident per llama-server PID and `gpu_indices` when nvidia-smi or `--main-gpu` says so.
+- `--gpu` filters, including when `--all` is also set.
+- `force` is a runtime mask plus SIGKILL. `stop` does not mask. Resume of a forced receipt unmasks before start.
+- `resume` awaits the port up to `--timeout`.
+- Receipt save failure fails the command.
+- Freeze reports 0 MiB reclaimed. Stop and force text labels the MiB figure as estimated.
+
+Still planning-only:
+
+- `--drain-timeout`
+- measured VRAM delta
+- Cortex bus
+- journald
+- blackboard
 
 ---
 

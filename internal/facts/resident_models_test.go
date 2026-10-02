@@ -706,6 +706,124 @@ esac`)
 	}
 }
 
+// TestLlamaServerDiscoveryScriptPublishesEveryPIDAndGPUIndex is the regression
+// for pgrep | head -1 and a resident object that never carried gpu_indices.
+// Each llama-server PID is one resident. A GPU index comes from nvidia-smi,
+// or from --main-gpu when that PID has no compute-apps row. A PID with neither
+// observation does not gain a default index of 0.
+func TestLlamaServerDiscoveryScriptPublishesEveryPIDAndGPUIndex(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	modelDir := t.TempDir()
+	writeModel := func(name string) string {
+		t.Helper()
+		p := filepath.Join(modelDir, name)
+		if err := os.WriteFile(p, []byte("gguf"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	alpha := writeModel("alpha.gguf")
+	beta := writeModel("beta.gguf")
+	gamma := writeModel("gamma.gguf")
+	delta := writeModel("delta.gguf")
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", "printf '%s\\n' 101 202 303 404")
+	writeStub("ps", `
+case "$*" in
+  *"-p 101 "*) echo "llama-server --model `+alpha+` --port 8082 --n-gpu-layers 32" ;;
+  *"-p 202 "*) echo "llama-server --model `+beta+` --port 8084 --n-gpu-layers 32" ;;
+  *"-p 303 "*) echo "llama-server --model `+gamma+` --port 8090 --n-gpu-layers 32" ;;
+  *"-p 404 "*) echo "llama-server --model `+delta+` --port 8091 --n-gpu-layers 32 --main-gpu 1" ;;
+esac`)
+	writeStub("nvidia-smi", `
+case "$*" in
+  *--query-gpu=index,uuid*) printf '%s\n' '0, GPU-aaa' '1, GPU-bbb' ;;
+  *--query-compute-apps=gpu_uuid,pid*) printf '%s\n' 'GPU-aaa, 101' 'GPU-bbb, 202' ;;
+  *) exit 1 ;;
+esac`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload struct {
+		Port           int              `json:"port"`
+		ResidentModels []map[string]any `json:"resident_models"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if payload.Port != 8082 {
+		t.Fatalf("top-level port = %d, want 8082 from the first resident", payload.Port)
+	}
+	byPID := map[int]map[string]any{}
+	for _, resident := range payload.ResidentModels {
+		pid, _ := resident["pid"].(float64)
+		byPID[int(pid)] = resident
+	}
+	if len(byPID) != 4 {
+		t.Fatalf("resident pids = %v, want 101 202 303 404", pidKeys(byPID))
+	}
+	assertResidentPort(t, byPID[101], 8082)
+	assertResidentPort(t, byPID[202], 8084)
+	assertResidentPort(t, byPID[303], 8090)
+	assertResidentPort(t, byPID[404], 8091)
+	assertGPUIndices(t, byPID[101], []int{0})
+	assertGPUIndices(t, byPID[202], []int{1})
+	if _, ok := byPID[303]["gpu_indices"]; ok {
+		t.Fatalf("pid 303 gpu_indices = %#v, want the field absent", byPID[303]["gpu_indices"])
+	}
+	assertGPUIndices(t, byPID[404], []int{1})
+}
+
+func pidKeys(m map[int]map[string]any) []int {
+	keys := make([]int, 0, len(m))
+	for pid := range m {
+		keys = append(keys, pid)
+	}
+	return keys
+}
+
+func assertResidentPort(t *testing.T, resident map[string]any, want int) {
+	t.Helper()
+	got, _ := resident["port"].(float64)
+	if int(got) != want {
+		t.Fatalf("pid %v port = %v, want %d", resident["pid"], resident["port"], want)
+	}
+}
+
+func assertGPUIndices(t *testing.T, resident map[string]any, want []int) {
+	t.Helper()
+	raw, ok := resident["gpu_indices"].([]any)
+	if !ok {
+		t.Fatalf("pid %v gpu_indices = %#v, want %v", resident["pid"], resident["gpu_indices"], want)
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("pid %v gpu_indices = %#v, want %v", resident["pid"], raw, want)
+	}
+	for i, item := range raw {
+		got, _ := item.(float64)
+		if int(got) != want[i] {
+			t.Fatalf("pid %v gpu_indices = %#v, want %v", resident["pid"], raw, want)
+		}
+	}
+}
+
 func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T) {
 	ctx := context.Background()
 
