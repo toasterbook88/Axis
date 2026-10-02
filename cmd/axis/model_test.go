@@ -32,6 +32,19 @@ type fakeModelRunner struct {
 	queryErr        error
 	queriedTargets  []string
 	awaitedTargets  []string
+	evictedTargets  []modellife.EvictTarget
+	evictErr        error
+	resumedReceipts []modellife.EvictionReceipt
+	resumeErr       error
+}
+
+func (f *fakeModelRunner) Evict(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, targets []modellife.EvictTarget, _ modellife.EvictMode) error {
+	f.evictedTargets = append(f.evictedTargets, targets...)
+	return f.evictErr
+}
+func (f *fakeModelRunner) Resume(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, receipt modellife.EvictionReceipt) error {
+	f.resumedReceipts = append(f.resumedReceipts, receipt)
+	return f.resumeErr
 }
 
 func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, plan modellife.StartPlan) error {

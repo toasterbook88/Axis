@@ -299,6 +299,14 @@ type ResidentModel struct {
 	// default_keep_alive. 1.0 = freshly loaded, 0.0 = expired or unknown.
 	// Always non-negative; clamped to [0, 1] at compute time.
 	WarmthScore float64 `json:"warmth_score,omitempty" yaml:"warmth_score,omitempty"`
+
+	// SupervisorType is the process supervisor managing the instance ("systemd-user",
+	// "systemd-system", or "none" / empty when unmanaged).
+	SupervisorType string `json:"supervisor_type,omitempty" yaml:"supervisor_type,omitempty"`
+	// SupervisorUnit is the service unit name (e.g. "bonsai2-27b.service").
+	SupervisorUnit string `json:"supervisor_unit,omitempty" yaml:"supervisor_unit,omitempty"`
+	// GPUIndices records physical GPU device indices occupied by the model.
+	GPUIndices []int `json:"gpu_indices,omitempty" yaml:"gpu_indices,omitempty"`
 }
 
 // TurboQuantInfo records whether a node appears able to run a TurboQuant-like

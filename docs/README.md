@@ -13,6 +13,7 @@
 - [Doctrine](doctrine.md) — product boundary, decision rules, and execution principles
 - [Future Roadmap](future-roadmap.md) — strategic options, phased direction, and feature guardrails
 - [Apple Foundation Models Roadmap](plans/apple-foundation-models-roadmap.md) — planning only: AFM probe rigor, remote placement, guarded helper exec, ai.yaml cascade. Not shipped behavior.
+- [Emergency GPU Eviction & Observability Proposal](plans/emergency-gpu-eviction-and-observability-proposal.md) — planning only: supervisor-aware preemption, multi-GPU targeting, hardware VRAM verification, zero-bloat logging. Not shipped behavior.
 
 ## Runbooks
 

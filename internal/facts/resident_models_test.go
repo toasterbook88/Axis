@@ -507,6 +507,52 @@ func TestLlamaServerDiscoveryScriptFindsRunningBinaryOutsidePATH(t *testing.T) {
 	}
 }
 
+func TestLlamaServerDiscoveryScriptExtractsSupervisorUnitFromCgroup(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	model := filepath.Join(t.TempDir(), "supervised-model.gguf")
+	if err := os.WriteFile(model, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `echo "llama-server --model `+model+` --port 8082"`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+	writeStub("cat", `echo "0::/user.slice/user-1000.slice/user@1000.service/app.slice/bonsai2-27b.service"`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload llamaServerDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if len(payload.ResidentModels) != 1 {
+		t.Fatalf("resident_models = %#v, want 1", payload.ResidentModels)
+	}
+	rm := payload.ResidentModels[0]
+	if rm.SupervisorType != "systemd-user" {
+		t.Errorf("supervisor_type = %q, want systemd-user", rm.SupervisorType)
+	}
+	if rm.SupervisorUnit != "bonsai2-27b.service" {
+		t.Errorf("supervisor_unit = %q, want bonsai2-27b.service", rm.SupervisorUnit)
+	}
+}
+
 func TestLlamaServerDiscoveryScriptReportsWeightSizeNotVRAM(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

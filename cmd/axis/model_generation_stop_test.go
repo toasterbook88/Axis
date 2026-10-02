@@ -189,3 +189,27 @@ func TestShellStopTargetIncludesGenerationRevalidation(t *testing.T) {
 		t.Fatal("generation-bound stop omitted start token check")
 	}
 }
+
+func TestShellStopTargetIncludesSupervisorNeutralization(t *testing.T) {
+	targetUser := modellife.StopTarget{
+		Port:           8082,
+		PID:            4242,
+		SupervisorType: "systemd-user",
+		SupervisorUnit: "bonsai2-27b.service",
+	}
+	scriptUser := shellStopTarget(targetUser)
+	if !strings.Contains(scriptUser, "systemctl --user stop 'bonsai2-27b.service'") {
+		t.Fatalf("expected systemctl --user stop in script, got: %s", scriptUser)
+	}
+
+	targetSystem := modellife.StopTarget{
+		Port:           8081,
+		PID:            4243,
+		SupervisorType: "systemd-system",
+		SupervisorUnit: "ollama.service",
+	}
+	scriptSystem := shellStopTarget(targetSystem)
+	if !strings.Contains(scriptSystem, "systemctl stop 'ollama.service'") {
+		t.Fatalf("expected systemctl stop in script, got: %s", scriptSystem)
+	}
+}

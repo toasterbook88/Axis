@@ -174,6 +174,18 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 		if [ -n "$PGREP" ]; then
 			MODEL=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 			if [ -n "$MODEL" ]; then
+				SUPERVISOR="none"
+				SUPERVISOR_UNIT=""
+				CGROUP_DATA=$(cat /proc/"$PGREP"/cgroup 2>/dev/null || echo "")
+				if [ -n "$CGROUP_DATA" ]; then
+					if echo "$CGROUP_DATA" | grep -q "user@"; then
+						SUPERVISOR="systemd-user"
+						SUPERVISOR_UNIT=$(echo "$CGROUP_DATA" | grep -oE '[^/:]+\.service' | awk 'END {print}' || echo "")
+					elif echo "$CGROUP_DATA" | grep -q "system.slice"; then
+						SUPERVISOR="systemd-system"
+						SUPERVISOR_UNIT=$(echo "$CGROUP_DATA" | grep -oE '[^/:]+\.service' | awk 'END {print}' || echo "")
+					fi
+				fi
 				MNAME=$(basename "$MODEL" | sed 's/\.[^.]*$//')
 				GPU_LAYERS=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--n-gpu-layers"||$i=="-ngl"){print $(i+1);exit}if($i~/^(--n-gpu-layers=|-ngl=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 				PROC="cpu"
@@ -184,7 +196,9 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				LSBIN_ESC=$(echo "$LSBIN" | sed 's/\\/\\\\/g; s/"/\\"/g')
 				PROCESS_OWNER_ESC=$(echo "$PROCESS_OWNER" | sed 's/\\/\\\\/g; s/"/\\"/g')
 				PROCESS_START_TOKEN_ESC=$(echo "$PROCESS_START_TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')
-				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"source\":\"llama-server-ps\"}]"
+				SUPERVISOR_ESC=$(echo "$SUPERVISOR" | sed 's/"/\\"/g')
+				SUPERVISOR_UNIT_ESC=$(echo "$SUPERVISOR_UNIT" | sed 's/"/\\"/g')
+				RESIDENT="[{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"supervisor_type\":\"$SUPERVISOR_ESC\",\"supervisor_unit\":\"$SUPERVISOR_UNIT_ESC\",\"source\":\"llama-server-ps\"}]"
 			fi
 		fi
 		echo "{\"installed\":true,\"path\":\"$LSBIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":$PORT,\"resident_models\":$RESIDENT}"

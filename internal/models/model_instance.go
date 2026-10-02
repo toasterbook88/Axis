@@ -35,6 +35,9 @@ type ModelInstance struct {
 	ProcessStartToken string             `json:"process_start_token,omitempty" yaml:"process_start_token,omitempty"`
 	ExpiresAt         time.Time          `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
 	WarmthScore       float64            `json:"warmth_score,omitempty" yaml:"warmth_score,omitempty"`
+	SupervisorType    string             `json:"supervisor_type,omitempty" yaml:"supervisor_type,omitempty"`
+	SupervisorUnit    string             `json:"supervisor_unit,omitempty" yaml:"supervisor_unit,omitempty"`
+	GPUIndices        []int              `json:"gpu_indices,omitempty" yaml:"gpu_indices,omitempty"`
 	ObservedAt        time.Time          `json:"observed_at,omitempty" yaml:"observed_at,omitempty"`
 }
 
