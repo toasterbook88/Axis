@@ -664,10 +664,8 @@ func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, fac
 	out, err := c.Exec.Run(ctx, AppleFoundationModelsDiscoveryScript)
 	trimmed := strings.TrimSpace(out)
 	lines := strings.Split(trimmed, "\n")
-	firstLine := strings.TrimSpace(lines[0])
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
 	switch {
-	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || (firstLine == "OK" && lastLine == "OK")):
+	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || (len(lines) == 2 && strings.TrimSpace(lines[0]) == "OK" && strings.TrimSpace(lines[1]) == "OK")):
 		facts.AppleFM = &models.AppleFoundationModelsInfo{
 			Version:   facts.OSVersion,
 			Available: true,

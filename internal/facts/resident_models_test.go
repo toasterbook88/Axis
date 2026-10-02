@@ -765,6 +765,35 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 		}
 	})
 
+	t.Run("darwin arm64 rejects multiline OK with embedded errors", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "OK\nUNAVAILABLE:modelNotReady\nOK\n"},
+			},
+		}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false for embedded errors, got %+v", facts.AppleFM)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("rejected probe must not append apple-foundation-models tool")
+			}
+		}
+	})
+
 	t.Run("darwin arm64 with UNVERIFIED probe (import-only)", func(t *testing.T) {
 		exec := &fakeRemoteExecutor{
 			exact: map[string]fakeRunResult{
