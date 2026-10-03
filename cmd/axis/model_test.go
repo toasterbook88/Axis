@@ -32,6 +32,22 @@ type fakeModelRunner struct {
 	queryErr        error
 	queriedTargets  []string
 	awaitedTargets  []string
+	awaitedPorts    []int
+	awaitTimeouts   []time.Duration
+	evictedTargets  []modellife.EvictTarget
+	evictResult     modellife.EvictResult
+	evictErr        error
+	resumedReceipts []modellife.EvictionReceipt
+	resumeErr       error
+}
+
+func (f *fakeModelRunner) Evict(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, targets []modellife.EvictTarget, _ modellife.EvictMode) (modellife.EvictResult, error) {
+	f.evictedTargets = append(f.evictedTargets, targets...)
+	return f.evictResult, f.evictErr
+}
+func (f *fakeModelRunner) Resume(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, receipt modellife.EvictionReceipt) error {
+	f.resumedReceipts = append(f.resumedReceipts, receipt)
+	return f.resumeErr
 }
 
 func (f *fakeModelRunner) Start(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, plan modellife.StartPlan) error {
@@ -52,6 +68,8 @@ func (f *fakeModelRunner) Probe(_ context.Context, _ models.NodeFacts, _ *config
 }
 func (f *fakeModelRunner) Await(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error) {
 	f.awaitedTargets = append(f.awaitedTargets, instance.ID)
+	f.awaitedPorts = append(f.awaitedPorts, instance.Port)
+	f.awaitTimeouts = append(f.awaitTimeouts, opts.Timeout)
 	if f.awaitReceipt != nil {
 		return *f.awaitReceipt, f.awaitErr
 	}

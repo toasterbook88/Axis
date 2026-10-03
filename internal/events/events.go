@@ -65,6 +65,14 @@ const (
 	EventReservationReleased = "reservation.released"
 )
 
+// Model eviction and resume lifecycle
+const (
+	EventModelEvictionRequested = "model.eviction.requested"
+	EventModelEvicted           = "model.evicted"
+	EventModelResumeRequested   = "model.resume.requested"
+	EventModelResumed           = "model.resumed"
+)
+
 // Daemon & Snapshot lifecycle
 const (
 	// EventDaemonRefreshPre is emitted before a daemon snapshot refresh begins.
