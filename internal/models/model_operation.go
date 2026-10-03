@@ -52,5 +52,10 @@ type ModelOperationReceipt struct {
 	TotalTokens      int                  `json:"total_tokens,omitempty" yaml:"total_tokens,omitempty"`
 	EndpointURL      string               `json:"endpoint_url,omitempty" yaml:"endpoint_url,omitempty"`
 	ResponseText     string               `json:"response_text,omitempty" yaml:"response_text,omitempty"`
+	SpecSource       string               `json:"spec_source,omitempty" yaml:"spec_source,omitempty"`
+	DeviceKind       string               `json:"device_kind,omitempty" yaml:"device_kind,omitempty"`
+	DeviceIndex      *int                 `json:"device_index,omitempty" yaml:"device_index,omitempty"`
+	VRAMFreeMeasured bool                 `json:"vram_free_measured,omitempty" yaml:"vram_free_measured,omitempty"`
+	PortSource       string               `json:"port_source,omitempty" yaml:"port_source,omitempty"`
 	Error            string               `json:"error,omitempty" yaml:"error,omitempty"`
 }

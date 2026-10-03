@@ -74,7 +74,7 @@ func modelCmd() *cobra.Command {
 }
 
 func modelPlanCmd() *cobra.Command {
-	var cacheAddr, format string
+	var cacheAddr, format, writeProfile string
 	var port int
 	var live bool
 	cmd := &cobra.Command{
@@ -93,33 +93,42 @@ func modelPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
+	cmd.Flags().StringVar(&writeProfile, "write-profile", "", "Write the selected axis.model-run/v1 profile to this path")
 	return cmd
 }
 
 func modelStartCmd() *cobra.Command {
-	var node, weights, cacheAddr, format string
-	var port int
+	var node, weights, cacheAddr, format, fromPlan, nGPULayers string
+	var port, ctxSize, batchSize, ubatchSize, threads int
 	var live bool
 	cmd := &cobra.Command{
 		Use:          "start",
 		Short:        "Start llama-server on a named node (explicit port and weights)",
 		SilenceUsage: true,
-		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateOutputFormat(&format, "text", "json", "yaml")(cmd, args); err != nil {
+				return err
+			}
+			return requireModelStartIdentity(cmd)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
 			defer cancel()
 			return runModelStart(ctx, cmd, node, weights, port, defaultModelRunner)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "Cluster node name (required)")
-	cmd.Flags().StringVar(&weights, "weights", "", "GGUF path on a named local volume (required)")
-	cmd.Flags().IntVar(&port, "port", 0, "Listen port (required; no default)")
+	cmd.Flags().StringVar(&node, "node", "", "Cluster node name (required unless --from-plan supplies it)")
+	cmd.Flags().StringVar(&weights, "weights", "", "GGUF path on a named local volume (required unless --from-plan supplies it)")
+	cmd.Flags().IntVar(&port, "port", 0, "Listen port (required unless --from-plan has an explicit port)")
+	cmd.Flags().StringVar(&fromPlan, "from-plan", "", "Read an axis.model-run/v1 profile JSON file")
+	cmd.Flags().StringVar(&nGPULayers, "n-gpu-layers", "", "llama-server -ngl value: an integer >= 1, auto, or all")
+	cmd.Flags().IntVar(&ctxSize, "ctx-size", 0, "llama-server context length (-c); omitted when unset")
+	cmd.Flags().IntVar(&batchSize, "batch-size", 0, "llama-server logical batch size (-b); omitted when unset")
+	cmd.Flags().IntVar(&ubatchSize, "ubatch-size", 0, "llama-server physical batch size (-ub); omitted when unset")
+	cmd.Flags().IntVar(&threads, "threads", 0, "llama-server threads (-t); must be within observed CPU cores")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Start operation receipt format: text, json, or yaml")
-	_ = cmd.MarkFlagRequired("node")
-	_ = cmd.MarkFlagRequired("weights")
-	_ = cmd.MarkFlagRequired("port")
 	return cmd
 }
 
@@ -504,6 +513,12 @@ func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string,
 		return err
 	}
 	plan.SnapshotSource = source
+	if cmd.Flags().Changed("port") && plan.Selected != nil {
+		plan.Selected.PortSource = models.PortSourceExplicit
+	}
+	if err := writeSelectedRunProfile(cmd, plan.Selected); err != nil {
+		return err
+	}
 
 	if format == "json" || format == "yaml" {
 		if writeErr := printOutput(cmd.OutOrStdout(), plan, format); writeErr != nil {
@@ -617,18 +632,25 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if format == "" {
 		format = "text"
 	}
+	profile, err := profileForModelStart(cmd, nodeName, weights, port)
+	if err != nil {
+		return err
+	}
 	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "start", false)
 	if err != nil {
 		return err
 	}
+	if profile.SnapshotPublicationID == "" && snap.Publication != nil {
+		profile.SnapshotPublicationID = snap.Publication.ID
+	}
 
-	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, profile.Node)
 	if err != nil {
 		return err
 	}
 
 	for _, res := range nf.ResidentModels {
-		if res.Port == port {
+		if res.Port == profile.Port {
 			receipt := models.ModelOperationReceipt{
 				Schema:         "axis.model-operation/v1",
 				ID:             models.GenerateID("mo"),
@@ -636,13 +658,13 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 				Status:         models.ModelOperationRejected,
 				Disposition:    "port_occupied",
 				Node:           nf.Name,
-				Engine:         "llama.cpp",
-				Port:           port,
+				Engine:         profile.Engine,
+				Port:           profile.Port,
 				SnapshotSource: source,
 				SnapshotAt:     snap.Timestamp,
 				StartedAt:      startedAt,
 				CompletedAt:    time.Now().UTC(),
-				Error:          fmt.Sprintf("port %d already occupied by resident model %q (%s)", port, res.Name, res.Runtime),
+				Error:          fmt.Sprintf("port %d already occupied by resident model %q (%s)", profile.Port, res.Name, res.Runtime),
 			}
 			if snap.Publication != nil {
 				receipt.PublicationID = snap.Publication.ID
@@ -650,12 +672,12 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 			_ = writeModelStartReceipt(cmd, receipt, format)
 			return ExitCodeError{
 				Code:    ExitErrCommandFail,
-				Message: fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, port, receipt.Error),
+				Message: fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, profile.Port, receipt.Error),
 			}
 		}
 	}
 
-	plan, err := modellife.PlanStart(nf, weights, port)
+	plan, err := modellife.PlanStartProfile(nf, profile)
 	if err != nil {
 		return err
 	}
@@ -671,22 +693,27 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	}
 
 	receipt := models.ModelOperationReceipt{
-		Schema:         "axis.model-operation/v1",
-		ID:             models.GenerateID("mo"),
-		Action:         models.ModelOperationStart,
-		Status:         models.ModelOperationCompleted,
-		Disposition:    "started",
-		Node:           plan.Node,
-		Engine:         "llama.cpp",
-		Port:           plan.Port,
-		Model:          path.Base(plan.Weights),
-		Weights:        plan.Weights,
-		Volume:         plan.Volume,
-		Executable:     executable,
-		SnapshotSource: source,
-		SnapshotAt:     snap.Timestamp,
-		StartedAt:      startedAt,
-		CompletedAt:    time.Now().UTC(),
+		Schema:           "axis.model-operation/v1",
+		ID:               models.GenerateID("mo"),
+		Action:           models.ModelOperationStart,
+		Status:           models.ModelOperationCompleted,
+		Disposition:      "started",
+		Node:             plan.Node,
+		Engine:           plan.Profile.Engine,
+		Port:             plan.Port,
+		Model:            path.Base(plan.Weights),
+		Weights:          plan.Weights,
+		Volume:           plan.Volume,
+		Executable:       executable,
+		SnapshotSource:   source,
+		SnapshotAt:       snap.Timestamp,
+		StartedAt:        startedAt,
+		CompletedAt:      time.Now().UTC(),
+		SpecSource:       plan.Profile.SpecSource,
+		DeviceKind:       plan.Profile.DeviceKind,
+		DeviceIndex:      plan.Profile.DeviceIndex,
+		VRAMFreeMeasured: plan.Profile.VRAMFreeMeasured,
+		PortSource:       plan.Profile.PortSource,
 	}
 	if snap.Publication != nil {
 		receipt.PublicationID = snap.Publication.ID
@@ -1363,6 +1390,9 @@ func resolveModelNodeFromSnapshot(snap *models.ClusterSnapshot, name string) (mo
 type liveModelRunner struct{}
 
 func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error {
+	if err := modellife.ExecArgvMatchesProfile(plan); err != nil {
+		return err
+	}
 	if len(plan.Argv) == 0 {
 		return fmt.Errorf("empty argv")
 	}
