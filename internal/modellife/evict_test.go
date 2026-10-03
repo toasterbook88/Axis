@@ -344,12 +344,21 @@ func TestBuildEvictShellScriptAllowsAlreadyExitedPID(t *testing.T) {
 		SupervisorUnit:    "bonsai2-27b.service",
 	}}, EvictModeStop)
 	stubs := `
+mkdir -p "${log}.bin"
+ln -s "$(command -v awk)" "${log}.bin/awk"
+export PATH="${log}.bin"
 ps() {
   echo "ps $*" >> "$log"
   return 0
 }
-kill() { echo "kill $*" >> "$log"; return 0; }
 systemctl() { echo "systemctl $*" >> "$log"; return 0; }
+kill() {
+  echo "kill $*" >> "$log"
+  case "$1" in
+    -0) return 1 ;;
+    *) return 0 ;;
+  esac
+}
 `
 	stdout, log, code := runEvictScript(t, script, stubs)
 	if code != 0 {
@@ -357,6 +366,9 @@ systemctl() { echo "systemctl $*" >> "$log"; return 0; }
 	}
 	if strings.Contains(stdout, "generation mismatch") {
 		t.Fatalf("already exited pid must not be reported as a mismatch, stdout=%q", stdout)
+	}
+	if !strings.Contains(stdout, EvictMarkerOk+":unmeasured") {
+		t.Fatalf("stdout = %q, want %s:unmeasured", stdout, EvictMarkerOk)
 	}
 	if !strings.Contains(log, "kill -KILL 4242") {
 		t.Fatalf("evict continues when the pid is already gone, log=%q", log)
