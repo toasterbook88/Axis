@@ -27,12 +27,18 @@ const (
 	EngineLlamaCpp = "llama.cpp"
 	// EngineOllama places a model on an Ollama server that is already listening.
 	EngineOllama = "ollama"
+	// EngineMLX starts mlx_lm.server on unified memory.
+	EngineMLX = "mlx"
 	// ToolLlamaServer is the observed tool name for llama.cpp.
 	ToolLlamaServer = "llama-server"
+	// ToolMLXServer is the observed mlx_lm.server binary, not the mlx_lm console tool.
+	ToolMLXServer = "mlx_lm.server"
 	// ArtifactWeightsPath is a local weight file, not an Ollama model name.
 	ArtifactWeightsPath = "weights-path"
 	// ArtifactOllamaModelName is an Ollama model name, not a GGUF path.
 	ArtifactOllamaModelName = "ollama-model-name"
+	// ArtifactMLXModelDir is a local MLX weight directory, not a Hub repo id.
+	ArtifactMLXModelDir = "mlx-model-dir"
 	// IndexSourceNvidiaSMI is the only index source a llama-server pin may name.
 	IndexSourceNvidiaSMI = "nvidia-smi"
 )
@@ -339,6 +345,8 @@ func (p ModelRunProfile) Validate() error {
 	switch p.Engine {
 	case EngineOllama:
 		return p.validateOllama()
+	case EngineMLX:
+		return p.validateMLX()
 	case EngineLlamaCpp:
 	default:
 		return fmt.Errorf("engine %q is not supported", p.Engine)
@@ -392,6 +400,40 @@ func (p ModelRunProfile) validateOllama() error {
 	}
 	if p.OllamaNumCtx != nil && *p.OllamaNumCtx < 1 {
 		return fmt.Errorf("ollama num_ctx must be >= 1")
+	}
+	return nil
+}
+
+func (p ModelRunProfile) validateMLX() error {
+	if strings.TrimSpace(p.MLXModel) == "" {
+		return fmt.Errorf("mlx model is required")
+	}
+	if p.ArtifactKind != "" && p.ArtifactKind != ArtifactMLXModelDir {
+		return fmt.Errorf("mlx artifact must be %s", ArtifactMLXModelDir)
+	}
+	if strings.TrimSpace(p.WeightsPath) != "" && path.Clean(strings.TrimSpace(p.WeightsPath)) != "." {
+		return fmt.Errorf("--mlx-model and --weights are mutually exclusive")
+	}
+	if p.BindHost != "" && p.BindHost != "127.0.0.1" {
+		return fmt.Errorf("bind host must be 127.0.0.1")
+	}
+	if p.Port < 1 || p.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	if p.OllamaModel != "" || p.OllamaNumCtx != nil || p.OllamaKeepAlive != "" || p.OllamaNumGPU != nil {
+		return fmt.Errorf("only mlx launch fields are supported")
+	}
+	if p.NGPULayers != nil || p.NGPULayersMode != "" || p.ContextTokens != nil || p.BatchSize != nil || p.UBatchSize != nil || p.Threads != nil || p.DeviceIndex != nil || p.IndexSource != "" {
+		return fmt.Errorf("only mlx launch fields are supported")
+	}
+	if p.PrefillStepSize != nil && *p.PrefillStepSize < 1 {
+		return fmt.Errorf("prefill-step-size must be >= 1")
+	}
+	if p.PromptCacheBytes != nil && *p.PromptCacheBytes < 1 {
+		return fmt.Errorf("prompt-cache-bytes must be >= 1")
+	}
+	if p.KVBits != nil && *p.KVBits < 1 {
+		return fmt.Errorf("kv-bits must be >= 1")
 	}
 	return nil
 }

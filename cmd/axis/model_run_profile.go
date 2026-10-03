@@ -16,9 +16,16 @@ func requireModelStartIdentity(cmd *cobra.Command) error {
 		return nil
 	}
 	ollamaSet := cmd.Flags().Changed("ollama-model")
+	mlxSet := cmd.Flags().Changed("mlx-model")
 	weightsSet := cmd.Flags().Changed("weights")
 	if ollamaSet && weightsSet {
 		return fmt.Errorf("--ollama-model and --weights are mutually exclusive")
+	}
+	if mlxSet && weightsSet {
+		return fmt.Errorf("--mlx-model and --weights are mutually exclusive")
+	}
+	if ollamaSet && mlxSet {
+		return fmt.Errorf("--mlx-model and --ollama-model are mutually exclusive")
 	}
 	if ollamaSet {
 		if !cmd.Flags().Changed("node") {
@@ -30,6 +37,25 @@ func requireModelStartIdentity(cmd *cobra.Command) error {
 		}
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("ollama model is required")
+		}
+		return nil
+	}
+	if mlxSet {
+		var missing []string
+		for _, name := range []string{"node", "port"} {
+			if !cmd.Flags().Changed(name) {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf(`required flag(s) "%s" not set`, strings.Join(missing, `", "`))
+		}
+		name, err := cmd.Flags().GetString("mlx-model")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("mlx model is required")
 		}
 		return nil
 	}
@@ -167,6 +193,42 @@ func applyChangedStartFlags(cmd *cobra.Command, profile *models.ModelRunProfile)
 			return err
 		}
 		profile.OllamaKeepAlive = value
+	}
+	if cmd.Flags().Changed("mlx-model") {
+		value, err := cmd.Flags().GetString("mlx-model")
+		if err != nil {
+			return err
+		}
+		profile.MLXModel = strings.TrimSpace(value)
+		profile.Engine = models.EngineMLX
+		profile.ArtifactKind = models.ArtifactMLXModelDir
+		profile.ToolName = models.ToolMLXServer
+		profile.WeightsPath = ""
+		profile.Volume = ""
+		if profile.BindHost == "" {
+			profile.BindHost = "127.0.0.1"
+		}
+	}
+	if cmd.Flags().Changed("prefill-step-size") {
+		value, err := cmd.Flags().GetInt("prefill-step-size")
+		if err != nil {
+			return err
+		}
+		profile.PrefillStepSize = &value
+	}
+	if cmd.Flags().Changed("prompt-cache-bytes") {
+		value, err := cmd.Flags().GetInt64("prompt-cache-bytes")
+		if err != nil {
+			return err
+		}
+		profile.PromptCacheBytes = &value
+	}
+	if cmd.Flags().Changed("kv-bits") {
+		value, err := cmd.Flags().GetInt("kv-bits")
+		if err != nil {
+			return err
+		}
+		profile.KVBits = &value
 	}
 	return nil
 }

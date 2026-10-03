@@ -207,3 +207,32 @@ func TestValidateOllamaAllowsModelNameAndRefusesForeignFields(t *testing.T) {
 		t.Fatalf("llama with ollama field err=%v", err)
 	}
 }
+
+func TestValidateMLXRequiresDirectoryAndRefusesForeignFields(t *testing.T) {
+	profile := ModelRunProfile{
+		Schema:       ModelRunSchema,
+		Engine:       EngineMLX,
+		ArtifactKind: ArtifactMLXModelDir,
+		MLXModel:     "/mnt/models/qwen",
+		BindHost:     "127.0.0.1",
+		Port:         8080,
+	}
+	if err := profile.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	profile.WeightsPath = "/mnt/models/a.gguf"
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("weights err=%v", err)
+	}
+	profile.WeightsPath = ""
+	profile.OllamaModel = "mistral"
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "only mlx") {
+		t.Fatalf("ollama err=%v", err)
+	}
+	profile.OllamaModel = ""
+	bits := 0
+	profile.KVBits = &bits
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "kv-bits") {
+		t.Fatalf("kv err=%v", err)
+	}
+}

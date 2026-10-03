@@ -85,7 +85,7 @@ if command -v lsblk >/dev/null 2>&1; then
 fi
 
 # Tools: path + version (same tool set as defaultToolDefs)
-for t in go python3 git jq nix docker ollama mlx_lm llama-cli llama-server node swift cargo gcc; do
+for t in go python3 git jq nix docker ollama mlx_lm mlx_lm.server llama-cli llama-server node swift cargo gcc; do
   p=$(command -v "$t" 2>/dev/null)
   if [ -n "$p" ]; then
     printf 'tool_%s=%s\n' "$t" "$p"
@@ -97,7 +97,7 @@ for t in go python3 git jq nix docker ollama mlx_lm llama-cli llama-server node 
       nix) v=$("$p" --version 2>/dev/null | head -1) ;;
       docker) v=$("$p" --version 2>/dev/null | head -1) ;;
       ollama) v=$("$p" --version 2>/dev/null | head -1) ;;
-      mlx_lm) v=$("$p" --help 2>/dev/null | head -1) ;;
+      mlx_lm|mlx_lm.server) v=$("$p" --help 2>/dev/null | head -1) ;;
       llama-cli|llama-server) v=$("$p" --version 2>/dev/null | head -1) ;;
       node) v=$("$p" --version 2>/dev/null | head -1) ;;
       swift) v=$("$p" --version 2>/dev/null | head -1) ;;

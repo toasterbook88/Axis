@@ -98,12 +98,13 @@ func modelPlanCmd() *cobra.Command {
 }
 
 func modelStartCmd() *cobra.Command {
-	var node, weights, cacheAddr, format, fromPlan, nGPULayers, ollamaModel, ollamaKeepAlive string
-	var port, ctxSize, batchSize, ubatchSize, threads, mainGPU, ollamaNumCtx int
+	var node, weights, cacheAddr, format, fromPlan, nGPULayers, ollamaModel, ollamaKeepAlive, mlxModel string
+	var port, ctxSize, batchSize, ubatchSize, threads, mainGPU, ollamaNumCtx, prefillStepSize, kvBits int
+	var promptCacheBytes int64
 	var live bool
 	cmd := &cobra.Command{
 		Use:          "start",
-		Short:        "Start llama-server, or place an Ollama model on the server already listening",
+		Short:        "Start llama-server, place an Ollama model, or start mlx_lm.server (its HTTP API is not for production)",
 		SilenceUsage: true,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateOutputFormat(&format, "text", "json", "yaml")(cmd, args); err != nil {
@@ -130,6 +131,10 @@ func modelStartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Ollama model name to load on 127.0.0.1:11434; replaces --weights")
 	cmd.Flags().StringVar(&ollamaKeepAlive, "ollama-keep-alive", "", "Ollama keep_alive for this load; omitted unless set")
 	cmd.Flags().IntVar(&ollamaNumCtx, "ollama-num-ctx", 0, "Ollama options.num_ctx; omitted unless set")
+	cmd.Flags().StringVar(&mlxModel, "mlx-model", "", "Local MLX weight directory on a named volume; replaces --weights. The MLX HTTP API is not for production")
+	cmd.Flags().IntVar(&prefillStepSize, "prefill-step-size", 0, "mlx_lm.server --prefill-step-size; omitted unless set")
+	cmd.Flags().Int64Var(&promptCacheBytes, "prompt-cache-bytes", 0, "mlx_lm.server --prompt-cache-bytes; omitted unless set")
+	cmd.Flags().IntVar(&kvBits, "kv-bits", 0, "mlx_lm.server --kv-bits; omitted unless set")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Start operation receipt format: text, json, or yaml")
@@ -141,7 +146,7 @@ func modelStopCmd() *cobra.Command {
 	var port int
 	cmd := &cobra.Command{
 		Use:          "stop [generation-id]",
-		Short:        "Stop an observed llama-server generation, unload an Ollama model, or use legacy node/port flags",
+		Short:        "Stop an observed llama-server or MLX generation, unload an Ollama model, or use legacy node/port flags",
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
@@ -694,6 +699,10 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 		}
 	}
 
+	if profile.Engine == models.EngineMLX {
+		return placeMLXModel(ctx, cmd, nf, cfgNode, profile, source, snap, startedAt, format)
+	}
+
 	plan, err := modellife.PlanStartProfile(nf, profile)
 	if err != nil {
 		return err
@@ -841,7 +850,7 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 	if instance.Engine == models.EngineOllama {
 		return stopOllamaGeneration(ctx, cmd, snap, instance, format, startedAt)
 	}
-	if instance.Engine != "llama.cpp" {
+	if instance.Engine != models.EngineLlamaCpp && instance.Engine != models.EngineMLX {
 		return fmt.Errorf("model generation %s uses unsupported stop engine %q", generationID, instance.Engine)
 	}
 	target := modellife.StopTarget{
@@ -854,6 +863,9 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 		SupervisorType:    instance.SupervisorType,
 		SupervisorUnit:    instance.SupervisorUnit,
 		GPUIndices:        append([]int(nil), instance.GPUIndices...),
+	}
+	if instance.Engine == models.EngineMLX {
+		target.Engine = models.EngineMLX
 	}
 	if err := target.Validate(); err != nil {
 		return fmt.Errorf("model generation %s has incomplete stop evidence: %w", generationID, err)
@@ -1541,15 +1553,19 @@ func shellQuery(port int, req modellife.QueryRequest) (string, error) {
 }
 
 func shellStart(argv []string, port int) string {
+	return shellStartLabeled("llama-server", argv, port)
+}
+
+func shellStartLabeled(label string, argv []string, port int) string {
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
 		quoted[i] = shellQuote(a)
 	}
 	return shellListenerLookup(port) + fmt.Sprintf(
 		"if test -n \"$_axis_pids\"; then "+
-			"echo \"refusing to start llama-server: port %d already has listener pid(s) $_axis_pids\" >&2; exit 1; fi; "+
+			"echo \"refusing to start %s: port %d already has listener pid(s) $_axis_pids\" >&2; exit 1; fi; "+
 			"nohup %s >/dev/null 2>&1 &",
-		port, strings.Join(quoted, " "),
+		label, port, strings.Join(quoted, " "),
 	)
 }
 
@@ -1568,9 +1584,13 @@ func shellStopTarget(target modellife.StopTarget) string {
 			supervisorCmd = fmt.Sprintf("systemctl stop %s 2>/dev/null || true; ", shellQuote(unit))
 		}
 	}
+	ownerGuard := shellLlamaServerOwnerGuard(port)
+	if target.Engine == models.EngineMLX {
+		ownerGuard = shellMLXOwnerGuard(port)
+	}
 	return shellListenerLookup(port) +
 		"if test -z \"$_axis_pids\"; then echo '" + modelStopMarker + "not_running'; exit 0; fi; " +
-		shellLlamaServerOwnerGuard(port) +
+		ownerGuard +
 		shellGenerationGuard(target) +
 		supervisorCmd +
 		killCmd +
@@ -1603,6 +1623,31 @@ func shellProbe(port int) string {
 		port,
 	) + shellLlamaServerOwnerGuard(port) + fmt.Sprintf(
 		"curl -fsS --max-time 5 http://127.0.0.1:%d/v1/models >/dev/null",
+		port,
+	)
+}
+
+func shellMLXProbe(port int) string {
+	return shellListenerLookup(port) + fmt.Sprintf(
+		"if test -z \"$_axis_pids\"; then echo \"no listener on port %d\" >&2; exit 1; fi; ",
+		port,
+	) + shellMLXOwnerGuard(port) + fmt.Sprintf(
+		"curl -fsS --max-time 5 http://127.0.0.1:%d/v1/models >/dev/null",
+		port,
+	)
+}
+
+func shellMLXOwnerGuard(port int) string {
+	return fmt.Sprintf(
+		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; echo '"+modelStopMarker+"inspection_unavailable' >&2; exit 127; fi; "+
+			"for _axis_pid in $_axis_pids; do "+
+			"case \"$_axis_pid\" in ''|*[!0-9]*) echo \"refusing invalid listener pid $_axis_pid\" >&2; exit 1;; esac; "+
+			"_axis_comm=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_comm=${_axis_comm##*/}; "+
+			"if test \"$_axis_comm\" = mlx_lm.server; then continue; fi; "+
+			"_axis_args=$(ps -p \"$_axis_pid\" -o args=) || exit $?; "+
+			"if ! printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<NF;i++) if($i==\"-m\" && $(i+1)==\"mlx_lm.server\") ok=1} END{exit ok?0:1}'; then "+
+			"echo \"refusing port %d: pid $_axis_pid is $_axis_comm, not mlx_lm.server\" >&2; echo '"+modelStopMarker+"wrong_owner' >&2; exit 1; fi; "+
+			"done; ",
 		port,
 	)
 }
@@ -1642,9 +1687,118 @@ func runOnNode(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeC
 	return err
 }
 
-// runNodeScript is the local-or-SSH curl seam for Ollama. Tests replace it.
+// runNodeScript is the local-or-SSH seam for Ollama and MLX. Tests replace it.
 // llama-server start and stop keep calling runOnNodeCapturing directly.
 var runNodeScript = runOnNodeCapturing
+
+func mlxImportObserved(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig) (bool, error) {
+	for _, tool := range node.Tools {
+		if strings.EqualFold(tool.Name, models.ToolMLXServer) {
+			return false, nil
+		}
+	}
+	python := ""
+	for _, tool := range node.Tools {
+		if strings.EqualFold(tool.Name, "python3") && strings.TrimSpace(tool.Path) != "" {
+			python = tool.Path
+			break
+		}
+	}
+	if python == "" {
+		return false, nil
+	}
+	script := shellQuote(python) + " -c " + shellQuote("import mlx_lm") + " >/dev/null 2>&1 && echo axis-mlx-import:ok || echo axis-mlx-import:missing"
+	out, err := runNodeScript(ctx, node, cfgNode, script)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(out, "axis-mlx-import:ok"), nil
+}
+
+func probeMLXServer(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error {
+	script := shellMLXProbe(port)
+	var last error
+	for i := 0; i < 10; i++ {
+		if _, err := runNodeScript(ctx, node, cfgNode, script); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if last == nil {
+		last = fmt.Errorf("probe failed")
+	}
+	return last
+}
+
+func placeMLXModel(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, profile models.ModelRunProfile, source string, snap *models.ClusterSnapshot, startedAt time.Time, format string) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	importOK, importErr := mlxImportObserved(ctx, node, cfgNode)
+	if importErr != nil {
+		return importErr
+	}
+	argv, err := modellife.MLXArgv(node, profile, importOK)
+	if err != nil {
+		return err
+	}
+	volume, _ := models.NamedLocalVolume(node, profile.MLXModel)
+	dev := models.ObserveLaunchDevice(node)
+	receipt := models.ModelOperationReceipt{
+		Schema:         "axis.model-operation/v1",
+		ID:             models.GenerateID("mo"),
+		Action:         models.ModelOperationStart,
+		Status:         models.ModelOperationCompleted,
+		Disposition:    "started",
+		Node:           node.Name,
+		Engine:         models.EngineMLX,
+		Port:           profile.Port,
+		Model:          path.Base(profile.MLXModel),
+		Weights:        profile.MLXModel,
+		Volume:         volume,
+		Executable:     argv[0],
+		SnapshotSource: source,
+		StartedAt:      startedAt,
+		CompletedAt:    time.Now().UTC(),
+		DeviceKind:     dev.Kind,
+		PortSource:     profile.PortSource,
+	}
+	if snap != nil {
+		receipt.SnapshotAt = snap.Timestamp
+		if snap.Publication != nil {
+			receipt.PublicationID = snap.Publication.ID
+		}
+	}
+	if _, startErr := runNodeScript(ctx, node, cfgNode, shellStartLabeled("mlx_lm.server", argv, profile.Port)); startErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = startErr.Error()
+		receipt.CompletedAt = time.Now().UTC()
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("mlx start failed: %w", startErr)
+	}
+	if probeErr := probeMLXServer(ctx, node, cfgNode, profile.Port); probeErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = probeErr.Error()
+		receipt.CompletedAt = time.Now().UTC()
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("started but probe failed: %w", probeErr)
+	}
+	receipt.CompletedAt = time.Now().UTC()
+	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	cacheAddr, _ := cmd.Flags().GetString("cache-addr")
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
 
 func placeOllamaModel(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, profile models.ModelRunProfile, source string, snap *models.ClusterSnapshot, startedAt time.Time, format string) error {
 	if err := profile.Validate(); err != nil {
