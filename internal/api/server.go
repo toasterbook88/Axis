@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/a2a"
 	"github.com/toasterbook88/axis/internal/auth"
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/events"
@@ -254,6 +256,40 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	}
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/healthz", healthHandler)
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>AXIS API</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;background:#0d1117;color:#c9d1d9}
+h1{color:#58a6ff}a{color:#58a6ff}code{background:#161b22;padding:.2em .4em;border-radius:4px}
+ul{list-style:none;padding:0}li{padding:.3rem 0}
+</style>
+</head>
+<body>
+<h1>AXIS HTTP API</h1>
+<p>Local-first, reservation-aware cluster substrate — v%s</p>
+<h2>Public endpoints</h2>
+<ul>
+<li><a href="/health">/health</a> — service health</li>
+<li><a href="/.well-known/agent-card.json">/.well-known/agent-card.json</a> — A2A agent card</li>
+</ul>
+<h2>Authenticated endpoints (Bearer token)</h2>
+<ul>
+<li><code>/snapshot</code> — cluster snapshot</li>
+<li><code>/tools</code> — MCP tool definitions</li>
+<li><code>/run</code> — guarded task execution</li>
+<li><code>/a2a/v1/message:send</code> — A2A task send</li>
+</ul>
+</body>
+</html>`, buildinfo.Version)
+	})
 
 	mux.HandleFunc("/snapshot", withAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

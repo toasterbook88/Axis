@@ -1,0 +1,16 @@
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "/tmp/air"
+
+[build]
+cmd = "go build -o /tmp/air/axis ./cmd/axis/"
+bin = "/tmp/air/axis"
+args_bin = ["serve", "--addr", "0.0.0.0:3000"]
+include_ext = ["go"]
+exclude_dir = ["tmp", "vendor", "testdata", "docs", "artifacts", "benchmarks", "examples", "scratch", ".git"]
+exclude_regex = ["_test.go"]
+delay = 300
+stop_on_error = true
+
+[log]
+time = false

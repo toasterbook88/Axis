@@ -1,0 +1,27 @@
+services:
+  axis:
+    image: golang:1.26
+    working_dir: /app
+    volumes:
+      - .:/app
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - axis-state:/root/.axis
+    ports:
+      - "3000:3000"
+    command: ["sh", "-ec", "go mod download && go install github.com/air-verse/air@latest && exec air"]
+    environment:
+      # Air needs polling for bind-mounted directories
+      - AIR_POLL_INTERVAL=500
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
+  axis-state:
