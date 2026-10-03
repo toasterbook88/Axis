@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,102 @@ func makeDualGPUSnapshot() *models.ClusterSnapshot {
 				},
 			},
 		},
+	}
+}
+
+func TestModelEvictDefaultsToLiveSnapshot(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	cacheCalls := 0
+	prevLive := loadModelSnapshot
+	loadModelSnapshot = func(context.Context) (*models.ClusterSnapshot, error) { return snap, nil }
+	prevFetch := fetchModelInventorySnapshot
+	fetchModelInventorySnapshot = func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		cacheCalls++
+		return snap, "daemon-cache", nil
+	}
+	t.Cleanup(func() {
+		loadModelSnapshot = prevLive
+		fetchModelInventorySnapshot = prevFetch
+	})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if cacheCalls != 0 {
+		t.Fatalf("default evict read the daemon cache %d times", cacheCalls)
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if loaded.SnapshotSource != "live" {
+		t.Fatalf("snapshot source = %q, want live", loaded.SnapshotSource)
+	}
+}
+
+func TestModelEvictLiveFalseUsesDaemonCache(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	liveCalls := 0
+	prevLive := loadModelSnapshot
+	loadModelSnapshot = func(context.Context) (*models.ClusterSnapshot, error) {
+		liveCalls++
+		return snap, nil
+	}
+	prevFetch := fetchModelInventorySnapshot
+	fetchModelInventorySnapshot = func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return snap, "daemon-cache", nil
+	}
+	t.Cleanup(func() {
+		loadModelSnapshot = prevLive
+		fetchModelInventorySnapshot = prevFetch
+	})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--live=false"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if liveCalls != 0 {
+		t.Fatalf("--live=false collected a live snapshot %d times", liveCalls)
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if loaded.SnapshotSource != "daemon-cache" {
+		t.Fatalf("snapshot source = %q, want daemon-cache", loaded.SnapshotSource)
 	}
 }
 
@@ -327,7 +424,138 @@ func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
 	}
 }
 
-func TestModelEvictStopLabelsReclaimedVRAMEstimated(t *testing.T) {
+func TestModelEvictStopUsesObservedVRAMDelta(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{
+		evictResult: modellife.EvictResult{VRAMMeasured: true, ReclaimedVRAMMB: 800},
+	}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "stop"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "reclaimed 800 MiB observed") {
+		t.Fatalf("output = %q, want observed delta", buf.String())
+	}
+	if strings.Contains(buf.String(), "9842") || strings.Contains(buf.String(), "estimated") {
+		t.Fatalf("output used the snapshot estimate: %q", buf.String())
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if !loaded.VRAMObserved || loaded.ReclaimedVRAMMB != 800 {
+		t.Fatalf("receipt observed=%v reclaimed=%d, want observed 800", loaded.VRAMObserved, loaded.ReclaimedVRAMMB)
+	}
+	if len(loaded.EvictedInstances) != 1 || loaded.EvictedInstances[0].VRAMFreedMB != 800 {
+		t.Fatalf("instance freed = %+v, want 800", loaded.EvictedInstances)
+	}
+}
+
+func TestModelEvictAllKeepsObservedDeltaOnTheReceipt(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{
+		evictResult: modellife.EvictResult{VRAMMeasured: true, ReclaimedVRAMMB: 800},
+	}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--all", "--node", "cranium", "--mode", "stop"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "reclaimed 800 MiB observed") {
+		t.Fatalf("output = %q, want the node-wide observed delta", buf.String())
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if !loaded.VRAMObserved || loaded.ReclaimedVRAMMB != 800 {
+		t.Fatalf("receipt observed=%v reclaimed=%d, want observed 800", loaded.VRAMObserved, loaded.ReclaimedVRAMMB)
+	}
+	if len(loaded.EvictedInstances) != 2 {
+		t.Fatalf("instances = %d, want 2", len(loaded.EvictedInstances))
+	}
+	for _, inst := range loaded.EvictedInstances {
+		if inst.VRAMFreedMB != 0 {
+			t.Fatalf("per-instance freed = %d, want 0 when the delta is node-wide", inst.VRAMFreedMB)
+		}
+	}
+}
+
+func TestModelEvictFreezeIgnoresMeasuredDelta(t *testing.T) {
+	snap := makeDualGPUSnapshot()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+
+	tmpDir := t.TempDir()
+	drainModelEventsBeforeTempCleanup(t)
+	origHome := os.Getenv("HOME")
+	origAxis := os.Getenv("AXIS_HOME")
+	os.Setenv("HOME", tmpDir)
+	os.Setenv("AXIS_HOME", filepath.Join(tmpDir, ".axis"))
+	defer os.Setenv("HOME", origHome)
+	defer os.Setenv("AXIS_HOME", origAxis)
+
+	runner := &fakeModelRunner{
+		evictResult: modellife.EvictResult{VRAMMeasured: true, ReclaimedVRAMMB: 800, Freeze: true},
+	}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	defer func() { defaultModelRunner = prevRunner }()
+
+	cmd := modelEvictCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "freeze"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "reclaimed 0 MiB") || strings.Contains(buf.String(), "800") {
+		t.Fatalf("output = %q, want reclaimed 0 MiB", buf.String())
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if loaded.VRAMObserved || loaded.ReclaimedVRAMMB != 0 {
+		t.Fatalf("receipt observed=%v reclaimed=%d, want unobserved 0", loaded.VRAMObserved, loaded.ReclaimedVRAMMB)
+	}
+	if len(loaded.EvictedInstances) != 1 || loaded.EvictedInstances[0].VRAMFreedMB != 0 {
+		t.Fatalf("instance freed = %+v, want 0", loaded.EvictedInstances)
+	}
+}
+
+func TestModelEvictStopUnmeasuredDoesNotUseSnapshot(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
@@ -354,8 +582,18 @@ func TestModelEvictStopLabelsReclaimedVRAMEstimated(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
 	}
-	if !strings.Contains(buf.String(), "reclaimed 9842 MiB estimated") {
-		t.Fatalf("output = %q, want estimated weight-size figure", buf.String())
+	if !strings.Contains(buf.String(), "VRAM unmeasured") {
+		t.Fatalf("output = %q, want VRAM unmeasured", buf.String())
+	}
+	if strings.Contains(buf.String(), "9842") || strings.Contains(buf.String(), "estimated") {
+		t.Fatalf("unmeasured evict reused the snapshot size: %q", buf.String())
+	}
+	loaded := loadOnlyEvictionReceipt(t)
+	if loaded.VRAMObserved || loaded.ReclaimedVRAMMB != 0 {
+		t.Fatalf("receipt observed=%v reclaimed=%d, want unmeasured 0", loaded.VRAMObserved, loaded.ReclaimedVRAMMB)
+	}
+	if len(loaded.EvictedInstances) != 1 || loaded.EvictedInstances[0].VRAMFreedMB != 0 {
+		t.Fatalf("instance freed = %+v, want 0", loaded.EvictedInstances)
 	}
 }
 

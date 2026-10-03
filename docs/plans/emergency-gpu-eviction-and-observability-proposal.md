@@ -2,13 +2,13 @@
 **Engineering Proposal and Implementation Specification for AXIS**
 
 - **Proposal ID**: `RFC-2026-005`
-- **Target Release**: AXIS `0.14.15` / `0.15.0`
+- **Target Release**: not a release claim. See `internal/buildinfo/version.go`.
 - **Authors**: Antigravity Assistant & Operator Pair
 - **Status**: Proposal. Partial behavior is on the eviction branch. Not a runbook.
 
 ## Implementation status
 
-This file stays a proposal. `docs/README.md` still marks it planning-only. The clauses below are what the eviction branch implements. Everything else in this document, including the target release line above, is not shipped behavior.
+This file stays a proposal. The clauses below are what the eviction branch implements. Everything else in this document, including the target-release line above, is not shipped behavior.
 
 Landed on the eviction branch:
 
@@ -17,15 +17,18 @@ Landed on the eviction branch:
 - `force` is a runtime mask plus SIGKILL. `stop` does not mask. Resume of a forced receipt unmasks before start.
 - `resume` awaits the port up to `--timeout`.
 - Receipt save failure fails the command.
-- Freeze reports 0 MiB reclaimed. Stop and force text labels the MiB figure as estimated.
+- Before any `systemctl` or `kill`, stop and force refuse a living PID whose comm is not `llama-server`, or whose process start token does not match. An already-exited PID is not a mismatch.
+- The success marker is `__AXIS_EVICT_OK__:measured:<delta>`, `:unmeasured`, or `:freeze`. `<delta>` is the signed change in summed nvidia-smi `memory.used`. A PID that is still present does not get a marker.
+- The receipt's `reclaimed_vram_mb` is that delta when `vram_observed` is true. An unmeasured stop or force records 0 and the text says `VRAM unmeasured`. Freeze records 0. A node-wide delta is not copied onto every instance.
+- `axis model evict` defaults `--live` to true. `--live=false` reads the daemon cache and fails if that cache is missing.
 
 Still planning-only:
 
 - `--drain-timeout`
-- measured VRAM delta
-- Cortex bus
-- journald
-- blackboard
+- Cortex bus, journald, and blackboard
+- zero-bloat log rotation and the 4-tier observability pipeline
+- `model.eviction.requested` and `model.resume.requested` (the branch emits local `model.evicted` and `model.resumed` only)
+- fleet-wide eviction in one command
 
 ---
 
@@ -38,10 +41,11 @@ This proposal addresses two critical operational vulnerabilities in the AXIS clu
 2. **The "Stealth Mode" Observability Deficit**:
    AXIS currently operates with virtually zero structured logging across its most failure-sensitive packages: `internal/transport` (SSH), `internal/facts` (hardware probes), `internal/placement` (ranking logic), and `internal/modellife` (server lifecycle). Probes and connection drops fail silently.
 
-This specification introduces:
-- **`axis model evict` and `axis model resume`**: Deterministic, supervisor-aware, generation-guarded commands that preempt models, neutralize supervisor restart loops, verify hardware VRAM release, and provide 1-step resumption.
-- **The 4-Tier Observability Pipeline**: Coordinated logging across local event logs, immutable receipt stores, the cluster coordination event bus, and host `journald`.
-- **The Zero-Bloat Storage Budget**: A mathematical rotation model guaranteeing an absolute hard ceiling of **< 120 MB total disk footprint forever** on any cluster node.
+This specification proposes the following. The status section is the list of what the eviction branch actually does.
+
+- **`axis model evict` and `axis model resume`**: supervisor-aware preemption and one-step resume. On the branch, evict checks the process owner and start token before it stops or kills, and the receipt uses the observed VRAM marker from the status section. `--drain-timeout` is not a flag.
+- **The 4-Tier Observability Pipeline**: local event logs, receipts, a cluster event bus, and host `journald`. Not implemented. The branch writes a local receipt and a local event.
+- **The Zero-Bloat Storage Budget**: a rotation model with a hard ceiling under 120 MB. Not implemented.
 
 ---
 
@@ -68,16 +72,19 @@ axis model evict [<target-spec>] [flags]
 | `--node` | `string` | local | Cluster node to target. |
 | `--gpu` | `int` | `-1` | Target only models occupying a specific GPU index (e.g. `--gpu 0`). |
 | `--all` | `bool` | `false` | Evict all resident models across all GPUs on the target node. |
-| `--mode` | `string` | `stop` | `stop` (clean supervisor stop), `freeze` (cgroups v2 freeze), or `force` (instant SIGKILL + mask). |
-| `--drain-timeout`| `duration` | `0s` | Grace period for in-flight requests (default: `0s` for emergency preemption). |
-| `--live` | `bool` | `false` | Bypass daemon cache and perform live fleet discovery. |
+| `--mode` | `string` | `stop` | `stop` (supervisor stop), `freeze` (cgroup freeze, no kill), or `force` (runtime mask plus SIGKILL). |
+| `--live` | `bool` | `true` | Select targets from a fresh snapshot. `--live=false` uses the daemon cache and fails if that cache is missing. |
 | `--format` | `string` | `text` | Output format: `text`, `json`, or `yaml`. |
+
+`--drain-timeout` is not implemented.
 
 #### Example Invocation & Output
 ```bash
 $ axis model evict --node node1 --gpu 0
-evicted qwen-27b on node1:gpu0 (reclaimed 9,842 MiB in 84ms) receipt mo-8f92a1
+evicted qwen-27b on node1 (reclaimed 800 MiB observed in 84ms) receipt mo-8f92a1
 ```
+
+`800` is an observed `memory.used` delta, not a model weight. An unmeasured stop prints `VRAM unmeasured` and records 0. Freeze prints `reclaimed 0 MiB`.
 
 ---
 
@@ -100,14 +107,18 @@ axis model resume [<target-spec>] [flags]
 #### Example Invocation & Output
 ```bash
 $ axis model resume --receipt mo-8f92a1
-resuming qwen-27b on node1:8082...
-ready node1:8082 instance mi-node1-llama.cpp-8082 in 1840ms
-restoration completed: 1/1 models active
+resumed on node1 in 1840ms operation mo-8f92a1
 ```
+
+That line is the branch's text format. The branch also awaits each receipt port up to `--timeout`.
 
 ---
 
 ## 3. The 4-Tier Observability & Audit Pipeline
+
+Not implemented on the eviction branch. A successful evict or resume writes a local receipt and emits `model.evicted` or `model.resumed` on the local event log. It does not publish to Cortex, journald, or a blackboard. `model.eviction.requested` and `model.resume.requested` are unused.
+
+The diagram below is the proposal, not current behavior.
 
 Every eviction and resumption action is committed to four coordinated planes:
 
@@ -138,6 +149,8 @@ Every eviction and resumption action is committed to four coordinated planes:
 ---
 
 ## 4. Zero-Bloat Log Rotation & Storage Budget
+
+Not implemented. This branch does not install a rotation budget.
 
 To accommodate rich structured logging without allowing disk usage to grow over time, AXIS adopts a mathematically bounded storage model:
 
@@ -220,6 +233,8 @@ type ResidentModel struct {
 
 ### 6.2 Eviction Receipt Schema (`axis.eviction-receipt/v1`)
 
+The struct below is the original proposal. It is not the receipt the branch writes. See `EvictionReceipt` in `internal/modellife/evict.go`, which includes `mode` and `vram_observed` and does not include `residual_gpu_vram_mb`.
+
 ```go
 type EvictionReceipt struct {
     Schema            string                   `json:"schema"` // "axis.eviction-receipt/v1"
@@ -240,41 +255,17 @@ type EvictionReceipt struct {
 }
 ```
 
-### 6.3 Remote Preemption Shell Script Template
+### 6.3 Remote preemption result marker
 
-Generated by `internal/modellife` and dispatched via `internal/transport`:
+`BuildEvictShellScript` in `internal/modellife/evict.go` is the script the branch runs. The old template in this section (`set -e`, `sudo systemctl stop`, and `__AXIS_EVICT_OK__:$VRAM_PRE:$VRAM_POST`) is not that script.
 
-```bash
-set -e
+The script checks process comm and the process start token before any `systemctl` or `kill`. Stop and force then print one line:
 
-# 1. Capture Pre-Eviction Baseline VRAM
-VRAM_PRE=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null || echo 0)
+- `__AXIS_EVICT_OK__:measured:<delta>` when nvidia-smi reports `memory.used` before and after, and the targeted PIDs are gone from compute-apps. `<delta>` is the signed sum of that change, in MiB.
+- `__AXIS_EVICT_OK__:unmeasured` when nvidia-smi is absent and `kill -0` shows the targeted PIDs are gone.
+- `__AXIS_EVICT_OK__:freeze` for freeze. Freeze does not kill and does not sample VRAM.
 
-# 2. Supervisor-Aware Neutralization (Prevents Resurrection)
-if [ "$SUPERVISOR" = "systemd-user" ] && [ -n "$TARGET_UNIT" ]; then
-    systemctl --user stop "$TARGET_UNIT"
-elif [ "$SUPERVISOR" = "systemd-system" ] && [ -n "$TARGET_UNIT" ]; then
-    sudo systemctl stop "$TARGET_UNIT"
-fi
-
-# 3. Verified PID Kill (Generation-Bound Safeguard)
-if [ -n "$TARGET_PID" ]; then
-    kill -KILL "$TARGET_PID" 2>/dev/null || true
-fi
-
-# 4. Polling Hardware VRAM Release (Up to 3.0 seconds)
-for i in {1..30}; do
-    ACTIVE=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep "^$TARGET_PID$" || true)
-    if [ -z "$ACTIVE" ]; then
-        break
-    fi
-    sleep 0.1
-done
-
-# 5. Capture Post-Eviction Baseline & Emit Proof Marker
-VRAM_POST=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null || echo 0)
-echo "__AXIS_EVICT_OK__:$VRAM_PRE:$VRAM_POST"
-```
+A targeted PID that is still present does not get a success marker. A bare `__AXIS_EVICT_OK__` is not a successful evict. Resume still prints the bare marker.
 
 ---
 

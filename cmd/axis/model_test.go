@@ -35,14 +35,15 @@ type fakeModelRunner struct {
 	awaitedPorts    []int
 	awaitTimeouts   []time.Duration
 	evictedTargets  []modellife.EvictTarget
+	evictResult     modellife.EvictResult
 	evictErr        error
 	resumedReceipts []modellife.EvictionReceipt
 	resumeErr       error
 }
 
-func (f *fakeModelRunner) Evict(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, targets []modellife.EvictTarget, _ modellife.EvictMode) error {
+func (f *fakeModelRunner) Evict(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, targets []modellife.EvictTarget, _ modellife.EvictMode) (modellife.EvictResult, error) {
 	f.evictedTargets = append(f.evictedTargets, targets...)
-	return f.evictErr
+	return f.evictResult, f.evictErr
 }
 func (f *fakeModelRunner) Resume(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, receipt modellife.EvictionReceipt) error {
 	f.resumedReceipts = append(f.resumedReceipts, receipt)

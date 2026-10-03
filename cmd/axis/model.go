@@ -50,7 +50,7 @@ type modelProcessRunner interface {
 	Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
 	Await(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error)
 	Query(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, req modellife.QueryRequest) (modellife.QueryResult, error)
-	Evict(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, targets []modellife.EvictTarget, mode modellife.EvictMode) error
+	Evict(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, targets []modellife.EvictTarget, mode modellife.EvictMode) (modellife.EvictResult, error)
 	Resume(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, receipt modellife.EvictionReceipt) error
 }
 
@@ -176,7 +176,7 @@ func modelEvictCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "Evict all resident models across all GPUs on the target node")
 	cmd.Flags().StringVar(&mode, "mode", "stop", "Eviction strategy: stop (supervisor stop), freeze (cgroup freeze), force")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
-	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().BoolVar(&live, "live", true, "Select targets from a fresh snapshot. Set --live=false to use the daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	return cmd
 }
@@ -458,6 +458,8 @@ func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, node
 // fallback to live collection for advisory planning (plan). Mutating or
 // target-executing commands (start/stop/await/query) never fall back silently —
 // they must run against the snapshot the daemon published, or fail loudly.
+// model evict passes live=true by default because it kills the selected PIDs.
+// --live=false still fails closed when the cache is missing.
 func loadModelCommandSnapshot(ctx context.Context, live bool, cacheAddr, command string, allowLiveFallback bool) (*models.ClusterSnapshot, string, error) {
 	if live {
 		snap, err := loadModelSnapshot(ctx)
@@ -922,19 +924,7 @@ func runModelEvict(ctx context.Context, cmd *cobra.Command, targetSpec, nodeName
 
 	var targets []modellife.EvictTarget
 	var evictedInsts []modellife.EvictedInstanceReceipt
-	var totalFreedMB int64
 	for _, inst := range candidates {
-		freedMB := inst.SizeVRAMMB
-		if freedMB <= 0 {
-			freedMB = inst.WeightSizeMB
-		}
-		// Freeze keeps the CUDA allocation. Reporting the weight size as
-		// reclaimed VRAM would say the GPU was cleared when it was not.
-		if mode == modellife.EvictModeFreeze {
-			freedMB = 0
-		}
-		totalFreedMB += freedMB
-
 		targets = append(targets, modellife.EvictTarget{
 			InstanceID:        inst.ID,
 			GenerationID:      inst.GenerationID,
@@ -959,11 +949,21 @@ func runModelEvict(ctx context.Context, cmd *cobra.Command, targetSpec, nodeName
 			GPUIndices:     append([]int(nil), inst.GPUIndices...),
 			SupervisorType: inst.SupervisorType,
 			SupervisorUnit: inst.SupervisorUnit,
-			VRAMFreedMB:    freedMB,
 		})
 	}
 
-	evictErr := runner.Evict(ctx, nf, cfgNode, targets, mode)
+	result, evictErr := runner.Evict(ctx, nf, cfgNode, targets, mode)
+	reclaimedMB := int64(0)
+	vramObserved := false
+	// Freeze keeps the allocation. A node-wide delta is not split across
+	// instances, and an unmeasured stop must not reuse the snapshot size.
+	if evictErr == nil && mode != modellife.EvictModeFreeze && result.VRAMMeasured {
+		reclaimedMB = result.ReclaimedVRAMMB
+		vramObserved = true
+		if len(evictedInsts) == 1 {
+			evictedInsts[0].VRAMFreedMB = reclaimedMB
+		}
+	}
 
 	receipt := modellife.EvictionReceipt{
 		Schema:           "axis.eviction-receipt/v1",
@@ -973,7 +973,8 @@ func runModelEvict(ctx context.Context, cmd *cobra.Command, targetSpec, nodeName
 		Mode:             string(mode),
 		Status:           models.ModelOperationCompleted,
 		Disposition:      "evicted",
-		ReclaimedVRAMMB:  totalFreedMB,
+		ReclaimedVRAMMB:  reclaimedMB,
+		VRAMObserved:     vramObserved,
 		DurationMS:       time.Since(startedAt).Milliseconds(),
 		EvictedInstances: evictedInsts,
 		SnapshotSource:   source,
@@ -1183,9 +1184,20 @@ func writeModelEvictReceipt(cmd *cobra.Command, receipt modellife.EvictionReceip
 		if len(receipt.EvictedInstances) == 1 {
 			targetDesc = receipt.EvictedInstances[0].Model
 		}
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (reclaimed %d MiB estimated in %dms) receipt %s\n",
-			targetDesc, receipt.Node, receipt.ReclaimedVRAMMB, receipt.DurationMS, receipt.ID)
-		return err
+		switch {
+		case receipt.Mode == string(modellife.EvictModeFreeze):
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (reclaimed 0 MiB in %dms) receipt %s\n",
+				targetDesc, receipt.Node, receipt.DurationMS, receipt.ID)
+			return err
+		case receipt.VRAMObserved:
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (reclaimed %d MiB observed in %dms) receipt %s\n",
+				targetDesc, receipt.Node, receipt.ReclaimedVRAMMB, receipt.DurationMS, receipt.ID)
+			return err
+		default:
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (VRAM unmeasured in %dms) receipt %s\n",
+				targetDesc, receipt.Node, receipt.DurationMS, receipt.ID)
+			return err
+		}
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s: %s operation %s\n",
 		receipt.Disposition, receipt.Node, receipt.Error, receipt.ID)
@@ -1415,16 +1427,17 @@ func (r liveModelRunner) Query(ctx context.Context, node models.NodeFacts, cfgNo
 	return modellife.ParseQueryResponse(raw, time.Since(start), fmt.Sprintf("%s:%d", node.Name, instance.Port))
 }
 
-func (liveModelRunner) Evict(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, targets []modellife.EvictTarget, mode modellife.EvictMode) error {
+func (liveModelRunner) Evict(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, targets []modellife.EvictTarget, mode modellife.EvictMode) (modellife.EvictResult, error) {
 	script := modellife.BuildEvictShellScript(targets, mode)
 	out, err := runOnNodeCapturing(ctx, node, cfgNode, script)
 	if err != nil {
-		return fmt.Errorf("evict on %s failed: %w (output: %s)", node.Name, err, strings.TrimSpace(out))
+		return modellife.EvictResult{}, fmt.Errorf("evict on %s failed: %w (output: %s)", node.Name, err, strings.TrimSpace(out))
 	}
-	if !strings.Contains(out, modellife.EvictMarkerOk) {
-		return fmt.Errorf("evict on %s did not emit confirmation marker (output: %s)", node.Name, strings.TrimSpace(out))
+	result, err := modellife.ParseEvictOutput(out)
+	if err != nil {
+		return modellife.EvictResult{}, fmt.Errorf("evict on %s: %w (output: %s)", node.Name, err, strings.TrimSpace(out))
 	}
-	return nil
+	return result, nil
 }
 
 func (liveModelRunner) Resume(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, receipt modellife.EvictionReceipt) error {
