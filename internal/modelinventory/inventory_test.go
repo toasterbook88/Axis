@@ -139,3 +139,34 @@ func TestFromSnapshotDerivesGenerationIDOnlyFromCompleteProcessEvidence(t *testi
 		t.Fatalf("incomplete evidence invented generation id %q", incomplete.GenerationID)
 	}
 }
+
+func TestFromSnapshotPreservesSupervisorAndGPUMetadata(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{{
+			Name:   "node-gpu",
+			Status: models.StatusComplete,
+			ResidentModels: []models.ResidentModel{{
+				Name:           "bonsai2-27b",
+				Runtime:        "llama.cpp",
+				Port:           8082,
+				SupervisorType: "systemd-user",
+				SupervisorUnit: "bonsai2-27b.service",
+				GPUIndices:     []int{0},
+			}},
+		}},
+	}
+	inventory := FromSnapshot(snap, "live")
+	if len(inventory.Instances) != 1 {
+		t.Fatalf("instances = %#v, want 1", inventory.Instances)
+	}
+	inst := inventory.Instances[0]
+	if inst.SupervisorType != "systemd-user" {
+		t.Errorf("supervisor_type = %q, want systemd-user", inst.SupervisorType)
+	}
+	if inst.SupervisorUnit != "bonsai2-27b.service" {
+		t.Errorf("supervisor_unit = %q, want bonsai2-27b.service", inst.SupervisorUnit)
+	}
+	if len(inst.GPUIndices) != 1 || inst.GPUIndices[0] != 0 {
+		t.Errorf("gpu_indices = %#v, want [0]", inst.GPUIndices)
+	}
+}

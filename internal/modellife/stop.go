@@ -15,6 +15,9 @@ type StopTarget struct {
 	ProcessOwner      string
 	ProcessStartToken string
 	GenerationID      string
+	SupervisorType    string
+	SupervisorUnit    string
+	GPUIndices        []int
 }
 
 func (t StopTarget) IsGenerationBound() bool {
