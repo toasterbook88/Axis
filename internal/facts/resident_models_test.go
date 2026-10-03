@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -505,6 +507,52 @@ func TestLlamaServerDiscoveryScriptFindsRunningBinaryOutsidePATH(t *testing.T) {
 	}
 }
 
+func TestLlamaServerDiscoveryScriptExtractsSupervisorUnitFromCgroup(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	model := filepath.Join(t.TempDir(), "supervised-model.gguf")
+	if err := os.WriteFile(model, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `echo "llama-server --model `+model+` --port 8082"`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+	writeStub("cat", `echo "0::/user.slice/user-1000.slice/user@1000.service/app.slice/bonsai2-27b.service"`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload llamaServerDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if len(payload.ResidentModels) != 1 {
+		t.Fatalf("resident_models = %#v, want 1", payload.ResidentModels)
+	}
+	rm := payload.ResidentModels[0]
+	if rm.SupervisorType != "systemd-user" {
+		t.Errorf("supervisor_type = %q, want systemd-user", rm.SupervisorType)
+	}
+	if rm.SupervisorUnit != "bonsai2-27b.service" {
+		t.Errorf("supervisor_unit = %q, want bonsai2-27b.service", rm.SupervisorUnit)
+	}
+}
+
 func TestLlamaServerDiscoveryScriptReportsWeightSizeNotVRAM(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -656,4 +704,424 @@ esac`)
 	if resident["process_start_token"] != "Thu Sep 3 09:00:00 2026" {
 		t.Fatalf("process_start_token = %#v", resident["process_start_token"])
 	}
+}
+
+// TestLlamaServerDiscoveryScriptPublishesEveryPIDAndGPUIndex is the regression
+// for pgrep | head -1 and a resident object that never carried gpu_indices.
+// Each llama-server PID is one resident. A GPU index comes from nvidia-smi,
+// or from --main-gpu when that PID has no compute-apps row. A PID with neither
+// observation does not gain a default index of 0.
+func TestLlamaServerDiscoveryScriptPublishesEveryPIDAndGPUIndex(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	modelDir := t.TempDir()
+	writeModel := func(name string) string {
+		t.Helper()
+		p := filepath.Join(modelDir, name)
+		if err := os.WriteFile(p, []byte("gguf"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	alpha := writeModel("alpha.gguf")
+	beta := writeModel("beta.gguf")
+	gamma := writeModel("gamma.gguf")
+	delta := writeModel("delta.gguf")
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("llama-server", `echo b9999`)
+	writeStub("pgrep", "printf '%s\\n' 101 202 303 404")
+	writeStub("ps", `
+case "$*" in
+  *"-p 101 "*) echo "llama-server --model `+alpha+` --port 8082 --n-gpu-layers 32" ;;
+  *"-p 202 "*) echo "llama-server --model `+beta+` --port 8084 --n-gpu-layers 32" ;;
+  *"-p 303 "*) echo "llama-server --model `+gamma+` --port 8090 --n-gpu-layers 32" ;;
+  *"-p 404 "*) echo "llama-server --model `+delta+` --port 8091 --n-gpu-layers 32 --main-gpu 1" ;;
+esac`)
+	writeStub("nvidia-smi", `
+case "$*" in
+  *--query-gpu=index,uuid*) printf '%s\n' '0, GPU-aaa' '1, GPU-bbb' ;;
+  *--query-compute-apps=gpu_uuid,pid*) printf '%s\n' 'GPU-aaa, 101' 'GPU-bbb, 202' ;;
+  *) exit 1 ;;
+esac`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload struct {
+		Port           int              `json:"port"`
+		ResidentModels []map[string]any `json:"resident_models"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if payload.Port != 8082 {
+		t.Fatalf("top-level port = %d, want 8082 from the first resident", payload.Port)
+	}
+	byPID := map[int]map[string]any{}
+	for _, resident := range payload.ResidentModels {
+		pid, _ := resident["pid"].(float64)
+		byPID[int(pid)] = resident
+	}
+	if len(byPID) != 4 {
+		t.Fatalf("resident pids = %v, want 101 202 303 404", pidKeys(byPID))
+	}
+	assertResidentPort(t, byPID[101], 8082)
+	assertResidentPort(t, byPID[202], 8084)
+	assertResidentPort(t, byPID[303], 8090)
+	assertResidentPort(t, byPID[404], 8091)
+	assertGPUIndices(t, byPID[101], []int{0})
+	assertGPUIndices(t, byPID[202], []int{1})
+	if _, ok := byPID[303]["gpu_indices"]; ok {
+		t.Fatalf("pid 303 gpu_indices = %#v, want the field absent", byPID[303]["gpu_indices"])
+	}
+	assertGPUIndices(t, byPID[404], []int{1})
+}
+
+func pidKeys(m map[int]map[string]any) []int {
+	keys := make([]int, 0, len(m))
+	for pid := range m {
+		keys = append(keys, pid)
+	}
+	return keys
+}
+
+func assertResidentPort(t *testing.T, resident map[string]any, want int) {
+	t.Helper()
+	got, _ := resident["port"].(float64)
+	if int(got) != want {
+		t.Fatalf("pid %v port = %v, want %d", resident["pid"], resident["port"], want)
+	}
+}
+
+func assertGPUIndices(t *testing.T, resident map[string]any, want []int) {
+	t.Helper()
+	raw, ok := resident["gpu_indices"].([]any)
+	if !ok {
+		t.Fatalf("pid %v gpu_indices = %#v, want %v", resident["pid"], resident["gpu_indices"], want)
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("pid %v gpu_indices = %#v, want %v", resident["pid"], raw, want)
+	}
+	for i, item := range raw {
+		got, _ := item.(float64)
+		if int(got) != want[i] {
+			t.Fatalf("pid %v gpu_indices = %#v, want %v", resident["pid"], raw, want)
+		}
+	}
+}
+
+func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("darwin arm64 with macOS 27 and OK probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "OK\n"},
+			},
+		}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift", Version: "6.1"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if !facts.AppleFM.Available || !facts.AppleFM.Verified {
+			t.Fatalf("expected available and verified AppleFM, got %+v", facts.AppleFM)
+		}
+		if facts.AppleFM.Version != "27.2" {
+			t.Errorf("version = %q, want 27.2", facts.AppleFM.Version)
+		}
+		foundTool := false
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				foundTool = true
+				if tool.Path != "/usr/bin/swift" {
+					t.Errorf("tool path = %q, want /usr/bin/swift", tool.Path)
+				}
+				if tool.Version != "27.2" {
+					t.Errorf("tool version = %q, want 27.2", tool.Version)
+				}
+			}
+		}
+		if !foundTool {
+			t.Error("expected apple-foundation-models tool to be appended")
+		}
+	})
+
+	t.Run("darwin arm64 with AVAILABLE probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "AVAILABLE\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil || !facts.AppleFM.Available || !facts.AppleFM.Verified {
+			t.Fatalf("expected available and verified AppleFM, got %+v", facts.AppleFM)
+		}
+		foundTool := false
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				foundTool = true
+			}
+		}
+		if !foundTool {
+			t.Error("expected apple-foundation-models tool to be appended")
+		}
+	})
+
+	t.Run("darwin arm64 with multiline OK probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "OK\nOK\n"},
+			},
+		}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil || !facts.AppleFM.Available || !facts.AppleFM.Verified {
+			t.Fatalf("expected available and verified AppleFM for multiline OK, got %+v", facts.AppleFM)
+		}
+		foundTool := false
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				foundTool = true
+			}
+		}
+		if !foundTool {
+			t.Error("expected apple-foundation-models tool to be appended")
+		}
+	})
+
+	t.Run("darwin arm64 rejects multiline OK with embedded errors", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "OK\nUNAVAILABLE:modelNotReady\nOK\n"},
+			},
+		}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false for embedded errors, got %+v", facts.AppleFM)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("rejected probe must not append apple-foundation-models tool")
+			}
+		}
+	})
+
+	t.Run("darwin arm64 with UNVERIFIED probe (import-only)", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "UNVERIFIED\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false, got %+v", facts.AppleFM)
+		}
+		if !strings.Contains(facts.AppleFM.Error, "unverified") {
+			t.Errorf("error = %q, want unverified message", facts.AppleFM.Error)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("unverified AppleFM must not append apple-foundation-models tool")
+			}
+		}
+	})
+
+	t.Run("darwin arm64 with UNAVAILABLE:modelNotReady probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {out: "UNAVAILABLE:modelNotReady\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false, got %+v", facts.AppleFM)
+		}
+		if facts.AppleFM.Error != "UNAVAILABLE:modelNotReady" {
+			t.Errorf("error = %q, want UNAVAILABLE:modelNotReady", facts.AppleFM.Error)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("unavailable AppleFM must not append apple-foundation-models tool")
+			}
+		}
+	})
+
+	t.Run("darwin arm64 with failed probe", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{
+			exact: map[string]fakeRunResult{
+				AppleFoundationModelsDiscoveryScript: {err: errors.New("exit 1"), out: "probe execution error\n"},
+			},
+		}
+		c := NewRemoteCollector("m3", "worker", "m3.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.0",
+			Tools: []models.ToolInfo{
+				{Name: "swift", Path: "/usr/bin/swift"},
+			},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated")
+		}
+		if facts.AppleFM.Available || facts.AppleFM.Verified {
+			t.Fatalf("expected Available=false, Verified=false, got %+v", facts.AppleFM)
+		}
+		if facts.AppleFM.Error != "probe execution error" {
+			t.Errorf("error = %q, want 'probe execution error'", facts.AppleFM.Error)
+		}
+		for _, tool := range facts.Tools {
+			if tool.Name == "apple-foundation-models" {
+				t.Error("failed probe must not append apple-foundation-models tool")
+			}
+		}
+	})
+
+	t.Run("darwin arm64 older macOS 15 returns version error", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("legacy-mac", "worker", "legacy.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "15.7.1",
+			Tools:     []models.ToolInfo{{Name: "swift"}},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated with error")
+		}
+		if facts.AppleFM.Available {
+			t.Error("expected Available = false for older macOS")
+		}
+		if !strings.Contains(facts.AppleFM.Error, "requires macOS 26 or later") {
+			t.Errorf("unexpected error message: %q", facts.AppleFM.Error)
+		}
+	})
+
+	t.Run("darwin arm64 missing swift returns toolchain error", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "arm64",
+			OSVersion: "27.2",
+			Tools:     []models.ToolInfo{},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM == nil {
+			t.Fatal("expected AppleFM to be populated with error")
+		}
+		if facts.AppleFM.Available {
+			t.Error("expected Available = false without swift")
+		}
+		if !strings.Contains(facts.AppleFM.Error, "swift toolchain not detected") {
+			t.Errorf("unexpected error message: %q", facts.AppleFM.Error)
+		}
+	})
+
+	t.Run("darwin x86_64 returns nil", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("imac", "worker", "imac.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "darwin",
+			Arch:      "x86_64",
+			OSVersion: "15.7.9",
+			Tools:     []models.ToolInfo{{Name: "swift"}},
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM != nil {
+			t.Errorf("expected AppleFM to be nil for x86_64, got %+v", facts.AppleFM)
+		}
+	})
+
+	t.Run("linux returns nil", func(t *testing.T) {
+		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
+		c := NewRemoteCollector("cranium", "primary", "cranium.local", exec)
+		facts := &models.NodeFacts{
+			OS:        "linux",
+			Arch:      "amd64",
+			OSVersion: "6.8.0",
+		}
+		c.discoverAppleFoundationModels(ctx, facts)
+		if facts.AppleFM != nil {
+			t.Errorf("expected AppleFM to be nil for linux, got %+v", facts.AppleFM)
+		}
+	})
 }

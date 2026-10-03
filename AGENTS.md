@@ -238,7 +238,7 @@ heavy inference.
 | `axis update [--check] [--all] [--path]` | Self-update via GitHub Releases (running install by default; `--all` for validated shadows); SHA-256 verified |
 | `axis version` | Print build version, commit, date, go, platform |
 | `axis facts [--format json\|yaml]` | Local node facts (alias of `axis node facts`) |
-| `axis status [--cached] [--format]` | Cluster snapshot (alias of `axis cluster status`) |
+| `axis status [--live] [--cached-only] [--format]` | Cluster snapshot (alias of `axis cluster status`); cache-first inside the 5-minute stale threshold, prints source and age; `--live` forces a sweep, `--cached-only` fails closed |
 | `axis task` | Task subcommands: `place`, `context`, `run` |
 | `axis placement explain` | Detailed per-node placement breakdown |
 | `axis profile match` | Workload class inference |

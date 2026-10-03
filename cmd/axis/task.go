@@ -102,6 +102,7 @@ func taskCmd() *cobra.Command {
 
 type taskPlaceOutput struct {
 	Source   string                   `json:"source" yaml:"source"`
+	Age      string                   `json:"age,omitempty" yaml:"age,omitempty"`
 	Decision models.PlacementDecision `json:"decision" yaml:"decision"`
 }
 
@@ -109,23 +110,30 @@ func taskPlaceCmd() *cobra.Command {
 	var format string
 	var cached bool
 	var cachedOnly bool
+	var live bool
 	var cacheAddr string
 
 	cmd := &cobra.Command{
-		Use:     "place [description]",
-		Short:   "Select the best node to run a task (advisory only)",
-		Args:    cobra.ExactArgs(1),
-		PreRunE: validateOutputFormat(&format, "text", "json"),
+		Use:   "place [description]",
+		Short: "Select the best node to run a task (advisory only)",
+		Args:  cobra.ExactArgs(1),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateOutputFormat(&format, "text", "json")(cmd, args); err != nil {
+				return err
+			}
+			return rejectLiveAndCachedOnly(live, cachedOnly)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
-			cacheRequested := cached || cachedOnly
+			// --cached matches the default cache-first read and does not override --live.
+			_ = cached
 
-			decision, source, err := planTaskPlacement(
+			decision, source, age, err := planTaskPlacement(
 				ctx,
 				desc,
-				cacheRequested,
+				!live,
 				cachedOnly,
 				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
 					return fetchTaskSnapshot(ctx, cacheAddr)
@@ -141,23 +149,18 @@ func taskPlaceCmd() *cobra.Command {
 			}
 
 			if format == "json" {
-				var payload any = decision
-				if cacheRequested {
-					payload = taskPlaceOutput{
-						Source:   source,
-						Decision: decision,
-					}
-				}
-				return printOutput(cmd.OutOrStdout(), payload, "json")
+				return printOutput(cmd.OutOrStdout(), taskPlaceOutput{
+					Source:   source,
+					Age:      age,
+					Decision: decision,
+				}, "json")
 			}
 
 			// Human-readable output
 			var rendered strings.Builder
 			w := &rendered
+			fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), formatReadOrigin(source, age))
 			if !decision.OK {
-				if cacheRequested {
-					fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), source)
-				}
 				fmt.Fprintf(w, "%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
 					fmt.Fprintf(w, "  %s %s\n", ui.Dim("-"), r)
@@ -171,9 +174,6 @@ func taskPlaceCmd() *cobra.Command {
 			locality := ui.Dim("remote")
 			if decision.IsLocal {
 				locality = ui.Green("local")
-			}
-			if cacheRequested {
-				fmt.Fprintf(w, "%s %s\n", ui.Dim("Source:"), source)
 			}
 			fmt.Fprintf(w, "%s %s (%s, %s %s)\n",
 				ui.Green("✓"),
@@ -194,8 +194,9 @@ func taskPlaceCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
-	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
+	cmd.Flags().BoolVar(&cached, "cached", false, "Read the daemon publication when it is inside the 5-minute stale threshold (this is the default)")
+	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require a fresh daemon publication; fail instead of falling back to a live sweep")
+	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	return cmd
 }
@@ -207,12 +208,12 @@ func planTaskPlacement(
 	cachedOnly bool,
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-) (models.PlacementDecision, string, error) {
-	explanation, source, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
+) (models.PlacementDecision, string, string, error) {
+	explanation, source, age, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
 	if err != nil {
-		return models.PlacementDecision{}, "", err
+		return models.PlacementDecision{}, "", "", err
 	}
-	return explanation.Decision, source, nil
+	return explanation.Decision, source, age, nil
 }
 
 func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {

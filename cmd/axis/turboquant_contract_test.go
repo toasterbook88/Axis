@@ -14,10 +14,9 @@ import (
 
 func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 	// Self-isolate, as many other tests in this package already do. The cluster
-	// snapshot below is fully injected, but planTaskExplanation still reads the
-	// operator's ~/.axis/ai.yaml, which adds inference-role reasoning and so
-	// changes the golden output. Bisected to that file: removing it makes this
-	// pass.
+	// snapshot below is fully injected, but explainPlacementFromSnapshot still
+	// reads the operator's ~/.axis/ai.yaml, which adds inference-role reasoning
+	// and so changes the golden output.
 	//
 	// Both variables are required: persist.AxisDir() gives a non-empty AXIS_HOME
 	// precedence over HOME, so isolating HOME alone still reads the operator's
@@ -28,20 +27,15 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 	restore := stubPlacementState(t, &state.ClusterState{Nodes: map[string]state.NodeState{}}, nil)
 	defer restore()
 
-	explanation, source, err := planTaskExplanation(
+	explanation, source, _, err := explainPlacementFromSnapshot(
 		context.Background(),
 		"run 128k ollama inference",
-		true,
-		false,
-		func(context.Context) (*models.ClusterSnapshot, string, error) {
-			return &models.ClusterSnapshot{
-				Nodes: []models.NodeFacts{goldenTurboQuantNode()},
-			}, "daemon-cache", nil
-		},
-		nil,
+		&models.ClusterSnapshot{Nodes: []models.NodeFacts{goldenTurboQuantNode()}},
+		"daemon-cache",
+		"",
 	)
 	if err != nil {
-		t.Fatalf("planTaskPlacement: %v", err)
+		t.Fatalf("explainPlacementFromSnapshot: %v", err)
 	}
 
 	var out bytes.Buffer
@@ -109,7 +103,7 @@ func TestStatusTurboQuantJSONGolden(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := statusCmd()
-		cmd.SetArgs([]string{"--format", "json"})
+		cmd.SetArgs([]string{"--live", "--format", "json"})
 		return cmd.Execute()
 	})
 	if err != nil {

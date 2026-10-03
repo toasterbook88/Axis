@@ -56,6 +56,9 @@ func FromSnapshot(snap *models.ClusterSnapshot, source string) models.ModelInven
 				ProcessStartToken: resident.ProcessStartToken,
 				ExpiresAt:         resident.ExpiresAt,
 				WarmthScore:       resident.WarmthScore,
+				SupervisorType:    resident.SupervisorType,
+				SupervisorUnit:    resident.SupervisorUnit,
+				GPUIndices:        append([]int(nil), resident.GPUIndices...),
 				ObservedAt:        node.CollectedAt,
 			}
 			byID[instance.ID] = instance

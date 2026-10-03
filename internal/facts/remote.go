@@ -107,6 +107,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)
 	})
+	c.discoverAppleFoundationModels(ctx, facts)
 
 	if len(facts.PartialReasons) > 0 && facts.Status == models.StatusComplete {
 		facts.Status = models.StatusPartial
@@ -636,6 +637,82 @@ func (c *RemoteCollector) discoverMLXRobust(ctx context.Context) []models.Reside
 		return withResidentPort(parsed.ResidentModels, parsed.Port)
 	}
 	return nil
+}
+
+func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, facts *models.NodeFacts) {
+	if facts == nil || c.Exec == nil {
+		return
+	}
+	if !strings.EqualFold(facts.OS, "darwin") || !strings.Contains(strings.ToLower(facts.Arch), "arm64") {
+		return
+	}
+	if !supportsAppleFoundationModelsOS(facts.OSVersion) {
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version: facts.OSVersion,
+			Error:   "requires macOS 26 or later on Apple silicon (Apple platform versioning)",
+		}
+		return
+	}
+	if _, ok := findToolInfo(facts.Tools, "swift"); !ok {
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version: facts.OSVersion,
+			Error:   "swift toolchain not detected",
+		}
+		return
+	}
+
+	out, err := c.Exec.Run(ctx, AppleFoundationModelsDiscoveryScript)
+	trimmed := strings.TrimSpace(out)
+	lines := strings.Split(trimmed, "\n")
+	switch {
+	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || (len(lines) == 2 && strings.TrimSpace(lines[0]) == "OK" && strings.TrimSpace(lines[1]) == "OK")):
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: true,
+			Verified:  true,
+		}
+	case err == nil && strings.HasPrefix(trimmed, "UNAVAILABLE:"):
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: false,
+			Verified:  false,
+			Error:     trimmed,
+		}
+	case err == nil && trimmed == "UNVERIFIED":
+		facts.AppleFM = &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: false,
+			Verified:  false,
+			Error:     "foundation models framework imported but runtime availability unverified",
+		}
+	default:
+		info := &models.AppleFoundationModelsInfo{
+			Version:   facts.OSVersion,
+			Available: false,
+			Verified:  false,
+		}
+		if trimmed != "" {
+			info.Error = trimmed
+		} else if err != nil {
+			info.Error = err.Error()
+		} else {
+			info.Error = "apple foundation models probe failed"
+		}
+		facts.AppleFM = info
+	}
+
+	if facts.AppleFM != nil && facts.AppleFM.Available && facts.AppleFM.Verified {
+		toolPath := "swift"
+		if swiftTool, ok := findToolInfo(facts.Tools, "swift"); ok && swiftTool.Path != "" {
+			toolPath = swiftTool.Path
+		}
+		facts.Tools = appendToolUnique(facts.Tools, models.ToolInfo{
+			Name:    "apple-foundation-models",
+			Path:    toolPath,
+			Version: facts.AppleFM.Version,
+			Class:   models.ToolClassRuntime,
+		})
+	}
 }
 
 func (c *RemoteCollector) remoteStorageClass(ctx context.Context, osName string) string {

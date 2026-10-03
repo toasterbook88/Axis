@@ -23,7 +23,7 @@ func TestTaskPlaceCmdHumanOutput(t *testing.T) {
 
 	stdout, stderr, err := captureProcessOutput(t, func() error {
 		cmd := taskPlaceCmd()
-		cmd.SetArgs([]string{"analyze a git repo"})
+		cmd.SetArgs([]string{"--live", "analyze a git repo"})
 		return cmd.Execute()
 	})
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/modelinventory"
 	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/modelplan"
@@ -48,6 +50,8 @@ type modelProcessRunner interface {
 	Probe(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error
 	Await(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, opts modellife.AwaitOptions) (models.ModelOperationReceipt, error)
 	Query(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, instance models.ModelInstance, req modellife.QueryRequest) (modellife.QueryResult, error)
+	Evict(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, targets []modellife.EvictTarget, mode modellife.EvictMode) (modellife.EvictResult, error)
+	Resume(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, receipt modellife.EvictionReceipt) error
 }
 
 var defaultModelRunner modelProcessRunner = liveModelRunner{}
@@ -62,6 +66,8 @@ func modelCmd() *cobra.Command {
 	cmd.AddCommand(modelPlanCmd())
 	cmd.AddCommand(modelStartCmd())
 	cmd.AddCommand(modelStopCmd())
+	cmd.AddCommand(modelEvictCmd())
+	cmd.AddCommand(modelResumeCmd())
 	cmd.AddCommand(modelAwaitCmd())
 	cmd.AddCommand(modelQueryCmd())
 	return cmd
@@ -142,6 +148,65 @@ func modelStopCmd() *cobra.Command {
 	cmd.Flags().IntVar(&port, "port", 0, "Legacy llama-server listen port")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
+	return cmd
+}
+
+func modelEvictCmd() *cobra.Command {
+	var node, cacheAddr, format, mode string
+	var gpuIndex int
+	var all, live bool
+	cmd := &cobra.Command{
+		Use:          "evict [target-spec]",
+		Short:        "Preempt resident models from GPU and neutralize supervisor restart loops",
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			targetSpec := ""
+			if len(args) == 1 {
+				targetSpec = args[0]
+			}
+			return runModelEvict(ctx, cmd, targetSpec, node, gpuIndex, all, mode, live, cacheAddr, format, defaultModelRunner)
+		},
+	}
+	cmd.Flags().StringVar(&node, "node", "", "Target cluster node (defaults to local node)")
+	cmd.Flags().IntVar(&gpuIndex, "gpu", -1, "Target models occupying a specific physical GPU index")
+	cmd.Flags().BoolVar(&all, "all", false, "Evict all resident models across all GPUs on the target node")
+	cmd.Flags().StringVar(&mode, "mode", "stop", "Eviction strategy: stop (supervisor stop), freeze (cgroup freeze), force")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().BoolVar(&live, "live", true, "Select targets from a fresh snapshot. Set --live=false to use the daemon cache")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
+	return cmd
+}
+
+func modelResumeCmd() *cobra.Command {
+	var receiptID, node, cacheAddr, format string
+	var timeout time.Duration
+	var live bool
+	cmd := &cobra.Command{
+		Use:          "resume [target-spec]",
+		Short:        "Restore previously evicted models from receipt or unit name",
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout+10*time.Second)
+			defer cancel()
+			targetSpec := ""
+			if len(args) == 1 {
+				targetSpec = args[0]
+			}
+			return runModelResume(ctx, cmd, targetSpec, receiptID, node, timeout, live, cacheAddr, format, defaultModelRunner)
+		},
+	}
+	cmd.Flags().StringVar(&receiptID, "receipt", "", "Restore models using an eviction receipt ID")
+	cmd.Flags().StringVar(&node, "node", "", "Target cluster node")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "Maximum time to wait for model readiness probe")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
+	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	return cmd
 }
 
@@ -393,6 +458,8 @@ func runModelQuery(ctx context.Context, cmd *cobra.Command, target, prompt, node
 // fallback to live collection for advisory planning (plan). Mutating or
 // target-executing commands (start/stop/await/query) never fall back silently —
 // they must run against the snapshot the daemon published, or fail loudly.
+// model evict passes live=true by default because it kills the selected PIDs.
+// --live=false still fails closed when the cache is missing.
 func loadModelCommandSnapshot(ctx context.Context, live bool, cacheAddr, command string, allowLiveFallback bool) (*models.ClusterSnapshot, string, error) {
 	if live {
 		snap, err := loadModelSnapshot(ctx)
@@ -732,6 +799,9 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 		ProcessOwner:      instance.ProcessOwner,
 		ProcessStartToken: instance.ProcessStartToken,
 		GenerationID:      instance.GenerationID,
+		SupervisorType:    instance.SupervisorType,
+		SupervisorUnit:    instance.SupervisorUnit,
+		GPUIndices:        append([]int(nil), instance.GPUIndices...),
 	}
 	if err := target.Validate(); err != nil {
 		return fmt.Errorf("model generation %s has incomplete stop evidence: %w", generationID, err)
@@ -777,6 +847,361 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 		Code:    ExitErrCommandFail,
 		Message: fmt.Sprintf("model generation stop on %s:%d: %s", instance.Node, instance.Port, modelStopExplanation(disposition)),
 	}
+}
+
+func runModelEvict(ctx context.Context, cmd *cobra.Command, targetSpec, nodeName string, gpuIndex int, all bool, modeStr string, live bool, cacheAddr, format string, runner modelProcessRunner) error {
+	startedAt := time.Now().UTC()
+	mode := modellife.EvictMode(strings.TrimSpace(modeStr))
+	if mode == "" {
+		mode = modellife.EvictModeStop
+	}
+
+	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "evict", false)
+	if err != nil {
+		return err
+	}
+
+	inventory := modelinventory.FromSnapshot(snap, source)
+	if len(inventory.Instances) == 0 {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: "no resident model instances found",
+		}
+	}
+
+	var candidates []models.ModelInstance
+	for _, inst := range inventory.Instances {
+		if nodeName != "" && !strings.EqualFold(inst.Node, nodeName) {
+			continue
+		}
+		matchesTarget := targetSpec != "" && (strings.EqualFold(inst.ID, targetSpec) ||
+			strings.EqualFold(inst.GenerationID, targetSpec) ||
+			strings.EqualFold(inst.Model, targetSpec) ||
+			strings.EqualFold(inst.SupervisorUnit, targetSpec) ||
+			(inst.Port > 0 && targetSpec == strconv.Itoa(inst.Port)))
+		// --gpu is a filter on whatever target or --all selected. It also
+		// selects on its own. An index match is required whenever it is set,
+		// including when --all would otherwise keep every resident.
+		if !matchesTarget && !all && gpuIndex < 0 {
+			continue
+		}
+		if gpuIndex >= 0 {
+			matchesGPU := false
+			for _, g := range inst.GPUIndices {
+				if g == gpuIndex {
+					matchesGPU = true
+					break
+				}
+			}
+			if !matchesGPU {
+				continue
+			}
+		}
+		candidates = append(candidates, inst)
+	}
+
+	if len(candidates) == 0 {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: fmt.Sprintf("no resident model instances matched evict criteria (target: %q, node: %q, gpu: %d, all: %v)", targetSpec, nodeName, gpuIndex, all),
+		}
+	}
+
+	targetNodeName := candidates[0].Node
+	for _, c := range candidates {
+		if c.Node != targetNodeName {
+			return ExitCodeError{
+				Code:    ExitErrCommandFail,
+				Message: "eviction across multiple nodes in a single command is not supported; target nodes individually with --node",
+			}
+		}
+	}
+
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, targetNodeName)
+	if err != nil {
+		return err
+	}
+
+	var targets []modellife.EvictTarget
+	var evictedInsts []modellife.EvictedInstanceReceipt
+	for _, inst := range candidates {
+		targets = append(targets, modellife.EvictTarget{
+			InstanceID:        inst.ID,
+			GenerationID:      inst.GenerationID,
+			Model:             inst.Model,
+			Port:              inst.Port,
+			PID:               inst.PID,
+			Executable:        inst.Executable,
+			ProcessOwner:      inst.ProcessOwner,
+			ProcessStartToken: inst.ProcessStartToken,
+			SupervisorType:    inst.SupervisorType,
+			SupervisorUnit:    inst.SupervisorUnit,
+			GPUIndices:        append([]int(nil), inst.GPUIndices...),
+			WeightSizeMB:      inst.WeightSizeMB,
+			SizeVRAMMB:        inst.SizeVRAMMB,
+		})
+
+		evictedInsts = append(evictedInsts, modellife.EvictedInstanceReceipt{
+			InstanceID:     inst.ID,
+			Model:          inst.Model,
+			Port:           inst.Port,
+			PID:            inst.PID,
+			GPUIndices:     append([]int(nil), inst.GPUIndices...),
+			SupervisorType: inst.SupervisorType,
+			SupervisorUnit: inst.SupervisorUnit,
+		})
+	}
+
+	result, evictErr := runner.Evict(ctx, nf, cfgNode, targets, mode)
+	reclaimedMB := int64(0)
+	vramObserved := false
+	// Freeze keeps the allocation. A node-wide delta is not split across
+	// instances, and an unmeasured stop must not reuse the snapshot size.
+	if evictErr == nil && mode != modellife.EvictModeFreeze && result.VRAMMeasured {
+		reclaimedMB = result.ReclaimedVRAMMB
+		vramObserved = true
+		if len(evictedInsts) == 1 {
+			evictedInsts[0].VRAMFreedMB = reclaimedMB
+		}
+	}
+
+	receipt := modellife.EvictionReceipt{
+		Schema:           "axis.eviction-receipt/v1",
+		ID:               models.GenerateID("mo"),
+		Node:             nf.Name,
+		Action:           "evict",
+		Mode:             string(mode),
+		Status:           models.ModelOperationCompleted,
+		Disposition:      "evicted",
+		ReclaimedVRAMMB:  reclaimedMB,
+		VRAMObserved:     vramObserved,
+		DurationMS:       time.Since(startedAt).Milliseconds(),
+		EvictedInstances: evictedInsts,
+		SnapshotSource:   source,
+		StartedAt:        startedAt,
+		CompletedAt:      time.Now().UTC(),
+	}
+	if snap.Publication != nil {
+		receipt.PublicationID = snap.Publication.ID
+	}
+	if evictErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = evictErr.Error()
+	} else {
+		receipt.ResumeCommand = fmt.Sprintf("axis model resume --receipt %s", receipt.ID)
+		if _, saveErr := modellife.SaveEvictionReceipt(receipt); saveErr != nil {
+			receipt.Status = models.ModelOperationFailed
+			receipt.Disposition = "failed"
+			receipt.Error = saveErr.Error()
+			evictErr = saveErr
+		} else {
+			events.EmitToBuffer(nil, events.EventModelEvicted, map[string]any{
+				"receipt_id":        receipt.ID,
+				"node":              receipt.Node,
+				"reclaimed_vram_mb": receipt.ReclaimedVRAMMB,
+				"evicted_instances": len(receipt.EvictedInstances),
+			})
+		}
+	}
+
+	if writeErr := writeModelEvictReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	if evictErr != nil {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: fmt.Sprintf("eviction failed on %s: %v", nf.Name, evictErr),
+		}
+	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func runModelResume(ctx context.Context, cmd *cobra.Command, targetSpec, receiptID, nodeName string, timeout time.Duration, live bool, cacheAddr, format string, runner modelProcessRunner) error {
+	startedAt := time.Now().UTC()
+	if strings.TrimSpace(receiptID) == "" && strings.TrimSpace(targetSpec) == "" {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: "must specify a target-spec or --receipt <id> to resume",
+		}
+	}
+
+	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "resume", false)
+	if err != nil {
+		return err
+	}
+
+	var receipt *modellife.EvictionReceipt
+	if strings.TrimSpace(receiptID) != "" {
+		loaded, loadErr := modellife.LoadEvictionReceipt(receiptID)
+		if loadErr != nil {
+			return ExitCodeError{
+				Code:    ExitErrCommandFail,
+				Message: fmt.Sprintf("unable to load receipt %q: %v", receiptID, loadErr),
+			}
+		}
+		receipt = loaded
+	} else {
+		unit := targetSpec
+		if !strings.HasSuffix(unit, ".service") {
+			unit += ".service"
+		}
+		inventory := modelinventory.FromSnapshot(snap, source)
+		var found *models.ModelInstance
+		for i := range inventory.Instances {
+			inst := &inventory.Instances[i]
+			if nodeName != "" && !strings.EqualFold(inst.Node, nodeName) {
+				continue
+			}
+			if strings.EqualFold(inst.SupervisorUnit, unit) || strings.EqualFold(inst.SupervisorUnit, targetSpec) {
+				found = inst
+				break
+			}
+		}
+		if found == nil || strings.TrimSpace(found.SupervisorType) == "" {
+			return ExitCodeError{
+				Code:    ExitErrCommandFail,
+				Message: "supervisor type unknown",
+			}
+		}
+		receipt = &modellife.EvictionReceipt{
+			Schema: "axis.eviction-receipt/v1",
+			ID:     models.GenerateID("mo"),
+			Node:   found.Node,
+			Action: "resume",
+			EvictedInstances: []modellife.EvictedInstanceReceipt{
+				{
+					InstanceID:     found.ID,
+					Model:          found.Model,
+					Port:           found.Port,
+					PID:            found.PID,
+					SupervisorType: found.SupervisorType,
+					SupervisorUnit: found.SupervisorUnit,
+				},
+			},
+		}
+	}
+
+	targetNode := receipt.Node
+	if targetNode == "" {
+		targetNode = nodeName
+	}
+
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, targetNode)
+	if err != nil {
+		return err
+	}
+
+	resumeErr := runner.Resume(ctx, nf, cfgNode, *receipt)
+	if resumeErr == nil && ctx.Err() != nil {
+		resumeErr = ctx.Err()
+	}
+	if resumeErr == nil {
+		for _, inst := range receipt.EvictedInstances {
+			if inst.Port < 1 || inst.Port > 65535 {
+				continue
+			}
+			opts := modellife.AwaitOptions{
+				Timeout:        timeout,
+				SnapshotSource: source,
+				SnapshotAt:     snap.Timestamp,
+			}
+			if snap.Publication != nil {
+				opts.PublicationID = snap.Publication.ID
+			}
+			_, awaitErr := runner.Await(ctx, nf, cfgNode, models.ModelInstance{
+				ID:             inst.InstanceID,
+				Model:          inst.Model,
+				Node:           nf.Name,
+				Port:           inst.Port,
+				PID:            inst.PID,
+				SupervisorType: inst.SupervisorType,
+				SupervisorUnit: inst.SupervisorUnit,
+			}, opts)
+			if awaitErr != nil {
+				resumeErr = awaitErr
+				break
+			}
+			if ctx.Err() != nil {
+				resumeErr = ctx.Err()
+				break
+			}
+		}
+	}
+
+	resumedReceipt := modellife.EvictionReceipt{
+		Schema:           "axis.eviction-receipt/v1",
+		ID:               models.GenerateID("mo"),
+		Node:             nf.Name,
+		Action:           "resume",
+		Status:           models.ModelOperationCompleted,
+		Disposition:      "resumed",
+		DurationMS:       time.Since(startedAt).Milliseconds(),
+		EvictedInstances: receipt.EvictedInstances,
+		SnapshotSource:   source,
+		StartedAt:        startedAt,
+		CompletedAt:      time.Now().UTC(),
+	}
+	if snap.Publication != nil {
+		resumedReceipt.PublicationID = snap.Publication.ID
+	}
+	if resumeErr != nil {
+		resumedReceipt.Status = models.ModelOperationFailed
+		resumedReceipt.Disposition = "failed"
+		resumedReceipt.Error = resumeErr.Error()
+	} else {
+		events.EmitToBuffer(nil, events.EventModelResumed, map[string]any{
+			"receipt_id": receipt.ID,
+			"node":       nf.Name,
+		})
+	}
+
+	if writeErr := writeModelEvictReceipt(cmd, resumedReceipt, format); writeErr != nil {
+		return writeErr
+	}
+	if resumeErr != nil {
+		return ExitCodeError{
+			Code:    ExitErrCommandFail,
+			Message: fmt.Sprintf("resume failed on %s: %v", nf.Name, resumeErr),
+		}
+	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func writeModelEvictReceipt(cmd *cobra.Command, receipt modellife.EvictionReceipt, format string) error {
+	if format == "json" || format == "yaml" {
+		return printOutput(cmd.OutOrStdout(), receipt, format)
+	}
+	if receipt.Status == models.ModelOperationCompleted {
+		if receipt.Action == "resume" {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "resumed on %s in %dms operation %s\n",
+				receipt.Node, receipt.DurationMS, receipt.ID)
+			return err
+		}
+		targetDesc := fmt.Sprintf("%d instance(s)", len(receipt.EvictedInstances))
+		if len(receipt.EvictedInstances) == 1 {
+			targetDesc = receipt.EvictedInstances[0].Model
+		}
+		switch {
+		case receipt.Mode == string(modellife.EvictModeFreeze):
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (reclaimed 0 MiB in %dms) receipt %s\n",
+				targetDesc, receipt.Node, receipt.DurationMS, receipt.ID)
+			return err
+		case receipt.VRAMObserved:
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (reclaimed %d MiB observed in %dms) receipt %s\n",
+				targetDesc, receipt.Node, receipt.ReclaimedVRAMMB, receipt.DurationMS, receipt.ID)
+			return err
+		default:
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "evicted %s on %s (VRAM unmeasured in %dms) receipt %s\n",
+				targetDesc, receipt.Node, receipt.DurationMS, receipt.ID)
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s: %s operation %s\n",
+		receipt.Disposition, receipt.Node, receipt.Error, receipt.ID)
+	return err
 }
 
 func modelStopOperationStatus(disposition modelStopDisposition, err error) models.ModelOperationStatus {
@@ -1002,6 +1427,31 @@ func (r liveModelRunner) Query(ctx context.Context, node models.NodeFacts, cfgNo
 	return modellife.ParseQueryResponse(raw, time.Since(start), fmt.Sprintf("%s:%d", node.Name, instance.Port))
 }
 
+func (liveModelRunner) Evict(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, targets []modellife.EvictTarget, mode modellife.EvictMode) (modellife.EvictResult, error) {
+	script := modellife.BuildEvictShellScript(targets, mode)
+	out, err := runOnNodeCapturing(ctx, node, cfgNode, script)
+	if err != nil {
+		return modellife.EvictResult{}, fmt.Errorf("evict on %s failed: %w (output: %s)", node.Name, err, strings.TrimSpace(out))
+	}
+	result, err := modellife.ParseEvictOutput(out)
+	if err != nil {
+		return modellife.EvictResult{}, fmt.Errorf("evict on %s: %w (output: %s)", node.Name, err, strings.TrimSpace(out))
+	}
+	return result, nil
+}
+
+func (liveModelRunner) Resume(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, receipt modellife.EvictionReceipt) error {
+	script := modellife.BuildResumeShellScript(receipt)
+	out, err := runOnNodeCapturing(ctx, node, cfgNode, script)
+	if err != nil {
+		return fmt.Errorf("resume on %s failed: %w (output: %s)", node.Name, err, strings.TrimSpace(out))
+	}
+	if !strings.Contains(out, modellife.EvictMarkerOk) {
+		return fmt.Errorf("resume on %s did not emit confirmation marker (output: %s)", node.Name, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 func shellQuery(port int, req modellife.QueryRequest) (string, error) {
 	var messages []map[string]string
 	if strings.TrimSpace(req.SystemPrompt) != "" {
@@ -1054,10 +1504,20 @@ func shellStopTarget(target modellife.StopTarget) string {
 	if target.IsGenerationBound() {
 		killCmd = fmt.Sprintf("kill -KILL \"%d\" || exit $?; ", target.PID)
 	}
+	supervisorCmd := ""
+	if strings.TrimSpace(target.SupervisorUnit) != "" {
+		unit := strings.TrimSpace(target.SupervisorUnit)
+		if target.SupervisorType == "systemd-user" {
+			supervisorCmd = fmt.Sprintf("systemctl --user stop %s 2>/dev/null || true; ", shellQuote(unit))
+		} else if target.SupervisorType == "systemd-system" {
+			supervisorCmd = fmt.Sprintf("systemctl stop %s 2>/dev/null || true; ", shellQuote(unit))
+		}
+	}
 	return shellListenerLookup(port) +
 		"if test -z \"$_axis_pids\"; then echo '" + modelStopMarker + "not_running'; exit 0; fi; " +
 		shellLlamaServerOwnerGuard(port) +
 		shellGenerationGuard(target) +
+		supervisorCmd +
 		killCmd +
 		"echo '" + modelStopMarker + "stopped'"
 }

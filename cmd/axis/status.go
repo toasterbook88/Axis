@@ -22,6 +22,7 @@ var loadStatusRuntime = runtimectx.Load
 
 type statusOutput struct {
 	Source   string                  `json:"source" yaml:"source"`
+	Age      string                  `json:"age,omitempty" yaml:"age,omitempty"`
 	Snapshot *models.ClusterSnapshot `json:"snapshot" yaml:"snapshot"`
 }
 
@@ -29,6 +30,7 @@ func statusCmd() *cobra.Command {
 	var format string
 	var cached bool
 	var cachedOnly bool
+	var live bool
 	var cacheAddr string
 	var watch bool
 	var watchInterval time.Duration
@@ -45,13 +47,29 @@ func statusCmd() *cobra.Command {
 			if err := validateWatchInterval(cmd, args); err != nil {
 				return err
 			}
+			if err := rejectLiveAndCachedOnly(live, cachedOnly); err != nil {
+				return err
+			}
 			if watch && format != "text" {
 				return fmt.Errorf("--watch only supports --format text")
 			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cacheRequested := cached || cachedOnly
+			// --cached is accepted and matches the default cache-first read.
+			// It does not widen the 5-minute window or override --live.
+			_ = cached
+			load := func(ctx context.Context) (commandSnapshot, error) {
+				return loadCommandSnapshot(
+					ctx,
+					live,
+					cachedOnly,
+					func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
+						return fetchStatusSnapshot(ctx, cacheAddr)
+					},
+					loadStatusLiveSnapshot,
+				)
+			}
 
 			if watch {
 				ticker := time.NewTicker(watchInterval)
@@ -64,16 +82,9 @@ func statusCmd() *cobra.Command {
 					}
 
 					fetchCtx, fetchCancel := context.WithTimeout(cmd.Context(), 10*time.Second)
-					snap, source, err := collectStatusSnapshot(
-						fetchCtx,
-						cacheRequested,
-						cachedOnly,
-						func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-							return fetchStatusSnapshot(ctx, cacheAddr)
-						},
-						loadStatusLiveSnapshot,
-					)
+					read, err := load(fetchCtx)
 					fetchCancel()
+					snap, source, age := read.snap, read.source, read.age
 
 					// Clear terminal screen and move cursor to home
 					if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J"); writeErr != nil {
@@ -82,10 +93,14 @@ func statusCmd() *cobra.Command {
 
 					if err != nil {
 						ui.FprintError(cmd.ErrOrStderr(), fmt.Sprintf("%v", err), "")
-					} else {
-						if writeErr := printStatusText(cmd, snap, source); writeErr != nil {
-							return writeErr
+						if cachedOnly {
+							// --cached-only fails closed: report once and
+							// stop the watch loop instead of rendering a
+							// missing or stale publication forever.
+							return err
 						}
+					} else if writeErr := printStatusText(cmd, snap, source, age); writeErr != nil {
+						return writeErr
 					}
 
 					select {
@@ -99,15 +114,7 @@ func statusCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 
-			snap, source, err := collectStatusSnapshot(
-				ctx,
-				cacheRequested,
-				cachedOnly,
-				func(ctx context.Context) (*models.ClusterSnapshot, string, error) {
-					return fetchStatusSnapshot(ctx, cacheAddr)
-				},
-				loadStatusLiveSnapshot,
-			)
+			read, err := load(ctx)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
@@ -118,27 +125,28 @@ func statusCmd() *cobra.Command {
 
 			switch format {
 			case "json", "yaml":
-				var payload any = snap
-				if cacheRequested {
-					payload = statusOutput{Source: source, Snapshot: snap}
-				}
-				return printOutput(cmd.OutOrStdout(), payload, format)
+				return printOutput(cmd.OutOrStdout(), statusOutput{
+					Source:   read.source,
+					Age:      read.age,
+					Snapshot: read.snap,
+				}, format)
 			default:
-				return printStatusText(cmd, snap, source)
+				return printStatusText(cmd, read.snap, read.source, read.age)
 			}
 		},
 	}
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
-	cmd.Flags().BoolVar(&cached, "cached", false, "Use the local daemon snapshot cache when available")
-	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require daemon cache; fail instead of falling back to live discovery")
+	cmd.Flags().BoolVar(&cached, "cached", false, "Read the daemon publication when it is inside the 5-minute stale threshold (this is the default)")
+	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require a fresh daemon publication; fail instead of falling back to a live sweep")
+	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Watch status in real-time")
 	cmd.Flags().DurationVarP(&watchInterval, "watch-interval", "i", 3*time.Second, "Watch refresh interval")
 	return cmd
 }
 
-func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source string) error {
+func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source, age string) error {
 	var rendered strings.Builder
 	out := &rendered
 
@@ -196,12 +204,8 @@ func printStatusText(cmd *cobra.Command, snap *models.ClusterSnapshot, source st
 	}
 
 	fmt.Fprintln(out)
-	sourceLabel := source
-	if sourceLabel == "" {
-		sourceLabel = "live"
-	}
 	fmt.Fprintf(out, "%s %s | %s\n",
-		ui.Dim("Snapshot:"), sourceLabel,
+		ui.Dim("Snapshot:"), formatReadOrigin(source, age),
 		ui.Dim(snap.Timestamp.Format(time.RFC3339)))
 	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
 	return err
@@ -405,5 +409,189 @@ func fallbackSource(source string) string {
 		return "live-fallback"
 	default:
 		return normalized + "-fallback"
+	}
+}
+
+// commandSnapshot is one read of the cluster publication, with the age that
+// the command must print. Age is "none" when no publication clock is available
+// (including a live sweep taken because the daemon cache was missing). On a
+// stale-cache fallback the age is the rejected publication's age, matching the
+// stale warning.
+type commandSnapshot struct {
+	snap   *models.ClusterSnapshot
+	source string
+	age    string
+}
+
+func rejectLiveAndCachedOnly(live, cachedOnly bool) error {
+	if live && cachedOnly {
+		return fmt.Errorf("--live and --cached-only cannot be combined")
+	}
+	return nil
+}
+
+// loadCommandSnapshot is the cache-first read used by axis status, axis task
+// place, and axis placement explain. It uses the daemon publication already
+// fetched by FetchSnapshot. A publication is fresh only inside
+// daemon.DefaultStaleThreshold (the same 5-minute gate as Daemon.Meta). A
+// missing or older publication is not returned as a fresh hit.
+func loadCommandSnapshot(
+	ctx context.Context,
+	live bool,
+	cachedOnly bool,
+	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+) (commandSnapshot, error) {
+	if live {
+		snap, source, err := liveLoader(ctx)
+		if err != nil {
+			return commandSnapshot{}, err
+		}
+		return commandSnapshot{snap: snap, source: sourceOrLive(source), age: publicationAgeLabel(snap)}, nil
+	}
+
+	var (
+		cacheErr error
+		stale    bool
+		staleAge string
+	)
+	if cachedLoader == nil {
+		cacheErr = fmt.Errorf("no cache loader")
+	} else {
+		snap, source, err := cachedLoader(ctx)
+		if err != nil {
+			cacheErr = err
+		} else if fresh, label := publicationIsFresh(snap); fresh {
+			return commandSnapshot{snap: snap, source: sourceOrLive(source), age: label}, nil
+		} else {
+			stale = true
+			staleAge = label
+		}
+	}
+
+	if cachedOnly {
+		if stale {
+			return commandSnapshot{}, fmt.Errorf("daemon cache stale: publication age %s exceeds %s", staleAge, daemon.DefaultStaleThreshold)
+		}
+		if cacheErr == nil {
+			cacheErr = fmt.Errorf("empty cache")
+		}
+		return commandSnapshot{}, fmt.Errorf("daemon cache unavailable: %w", cacheErr)
+	}
+
+	liveSnap, liveSource, liveErr := liveLoader(ctx)
+	if liveErr != nil {
+		return commandSnapshot{}, liveErr
+	}
+	if stale {
+		message := "using live snapshot (daemon cache stale)"
+		if staleAge != "" && staleAge != "none" {
+			message = fmt.Sprintf("using live snapshot (daemon cache stale, age %s)", staleAge)
+		}
+		appendWarningIfMissing(liveSnap, models.Warning{Kind: "cache", Message: message})
+		// The age field reports the daemon publication. Here the rejected
+		// stale publication is the relevant one, so keep staleAge rather
+		// than the fresh live snapshot's age (normally 0s).
+		return commandSnapshot{snap: liveSnap, source: fallbackSource(liveSource), age: staleAge}, nil
+	}
+	appendWarningIfMissing(liveSnap, models.Warning{
+		Kind:    "cache",
+		Message: "using live snapshot (daemon cache unavailable)",
+	})
+	// Live-because-missing has no daemon publication age to report.
+	return commandSnapshot{snap: liveSnap, source: fallbackSource(liveSource), age: "none"}, nil
+}
+
+func publicationIsFresh(snap *models.ClusterSnapshot) (bool, string) {
+	if snap == nil {
+		return false, "none"
+	}
+	age, known := publicationAge(snap)
+	label := "none"
+	if known {
+		label = age.Round(time.Second).String()
+	}
+	if daemonMarkedPublicationStale(snap) {
+		return false, label
+	}
+	if known && age > daemon.DefaultStaleThreshold {
+		return false, label
+	}
+	if !known {
+		// A successful cache read with no clock is not evidence the publication
+		// is older than the threshold. Real daemon publications always carry
+		// AssembledAt; this keeps clockless test doubles on the cache path.
+		return true, "none"
+	}
+	return true, label
+}
+
+func publicationAge(snap *models.ClusterSnapshot) (time.Duration, bool) {
+	if snap == nil {
+		return 0, false
+	}
+	now := time.Now()
+	if snap.Publication != nil && !snap.Publication.AssembledAt.IsZero() {
+		age := now.Sub(snap.Publication.AssembledAt)
+		if age < 0 {
+			age = 0
+		}
+		return age, true
+	}
+	if snap.Publication != nil && snap.Publication.CacheAgeSec > 0 {
+		return time.Duration(snap.Publication.CacheAgeSec) * time.Second, true
+	}
+	if !snap.Timestamp.IsZero() {
+		age := now.Sub(snap.Timestamp)
+		if age < 0 {
+			age = 0
+		}
+		return age, true
+	}
+	return 0, false
+}
+
+func publicationAgeLabel(snap *models.ClusterSnapshot) string {
+	age, known := publicationAge(snap)
+	if !known {
+		return "none"
+	}
+	return age.Round(time.Second).String()
+}
+
+func daemonMarkedPublicationStale(snap *models.ClusterSnapshot) bool {
+	if snap == nil {
+		return false
+	}
+	for _, warning := range snap.Warnings {
+		if strings.Contains(warning.Message, "daemon cache is stale") {
+			return true
+		}
+	}
+	return false
+}
+
+func formatReadOrigin(source, age string) string {
+	if strings.TrimSpace(age) == "" {
+		age = "none"
+	}
+	return fmt.Sprintf("%s | age %s", humanReadSource(source), age)
+}
+
+func humanReadSource(source string) string {
+	switch sourceOrLive(source) {
+	case "live", "live-fallback", "live-runtime":
+		return "live sweep"
+	case "daemon-cache", "disk-cache":
+		return "daemon cache"
+	default:
+		normalized := sourceOrLive(source)
+		if strings.Contains(normalized, "live") {
+			return "live sweep"
+		}
+		if strings.Contains(normalized, "cache") {
+			return "daemon cache"
+		}
+		return normalized
 	}
 }

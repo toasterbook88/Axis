@@ -931,8 +931,12 @@ func preferredBackendRank(n models.NodeFacts, reqs models.TaskRequirements) int 
 		rank := 0
 		switch strings.ToLower(backend) {
 		case "apple-foundation-models":
-			if models.IsLocalNode(n) && appleFoundationModelsReady(n) {
-				rank = 4
+			if appleFoundationModelsReady(n) {
+				if models.IsLocalNode(n) {
+					rank = 4
+				} else {
+					rank = 3
+				}
 			}
 		case "llama.cpp":
 			switch {

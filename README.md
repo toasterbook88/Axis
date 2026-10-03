@@ -74,10 +74,10 @@ axis doctor
 axis cluster status
 ```
 
-`axis cluster status` is a live snapshot. After a daemon is running, opt into the cache:
+`axis cluster status` reads the daemon publication when it is inside the 5-minute stale window and prints the source and age. Force a sweep with:
 
 ```bash
-axis cluster status --cached
+axis cluster status --live
 ```
 
 ### 3. Placement (advisory)
@@ -196,7 +196,7 @@ Default HTTP / A2A listen address: Unix socket `~/.axis/axis.sock`. TCP is opt-i
 | `axis version` | Build version, commit, Go version |
 | `axis init` | Interactive cluster configuration (`--config` overrides `~/.axis/nodes.yaml`) |
 | `axis node facts` | This machine (`axis facts` is the same command) |
-| `axis cluster status` | Live snapshot; `--cached` / `--cached-only` read the daemon |
+| `axis cluster status` | Daemon publication inside 5 minutes (prints source and age); `--live` sweeps; `--cached-only` fails closed |
 | `axis task place` | Advisory placement (`--format text\|json`) |
 | `axis placement explain` | Per-node ranking explanation (one intent argument) |
 | `axis task run` | Guarded execution with safety gates |

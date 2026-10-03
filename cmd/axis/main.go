@@ -44,7 +44,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		Long: `Look first, then act.
 
-  axis cluster status     every node (live; --cached to opt in)
+  axis cluster status     every node (cache-first for 5 minutes; --live to sweep)
   axis node facts         this machine
   axis agent              ask questions (advisory)
   axis model start        llama-server on a named node (--node --weights --port)

@@ -97,6 +97,7 @@ func TestStatusCommandPropagatesWriterFailures(t *testing.T) {
 	cmd := statusCmd()
 	cmd.SetOut(rejectingOutputWriter{err: wantErr})
 	cmd.SetErr(&strings.Builder{})
+	cmd.SetArgs([]string{"--live"})
 	if err := cmd.Execute(); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want writer failure", err)
 	}
@@ -111,7 +112,7 @@ func TestPlacementCommandPropagatesWriterFailures(t *testing.T) {
 	cmd := placementExplainCmd()
 	cmd.SetOut(rejectingOutputWriter{err: wantErr})
 	cmd.SetErr(&strings.Builder{})
-	cmd.SetArgs([]string{"intent"})
+	cmd.SetArgs([]string{"--live", "intent"})
 	if err := cmd.Execute(); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want writer failure", err)
 	}
@@ -137,7 +138,7 @@ func TestTaskPlaceCommandPropagatesWriterFailures(t *testing.T) {
 	cmd := taskPlaceCmd()
 	cmd.SetOut(rejectingOutputWriter{err: wantErr})
 	cmd.SetErr(&strings.Builder{})
-	cmd.SetArgs([]string{"intent"})
+	cmd.SetArgs([]string{"--live", "intent"})
 	if err := cmd.Execute(); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want writer failure", err)
 	}
@@ -299,7 +300,7 @@ func TestReadCommandsUseConfiguredErrorWriter(t *testing.T) {
 				}))
 			},
 			cmd: func() commandWithArgs {
-				return commandWithArgs{command: placementExplainCmd(), args: []string{"intent"}}
+				return commandWithArgs{command: placementExplainCmd(), args: []string{"--live", "intent"}}
 			},
 		},
 		{
@@ -310,7 +311,7 @@ func TestReadCommandsUseConfiguredErrorWriter(t *testing.T) {
 				}))
 			},
 			cmd: func() commandWithArgs {
-				return commandWithArgs{command: statusCmd()}
+				return commandWithArgs{command: statusCmd(), args: []string{"--live"}}
 			},
 		},
 		{
