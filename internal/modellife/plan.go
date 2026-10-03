@@ -21,24 +21,6 @@ type StartPlan struct {
 	Profile models.ModelRunProfile
 }
 
-// PlanStart validates weights sit on a named local volume and that
-// llama-server is an observed tool. Port must be explicit and valid.
-// Optional launch fields stay unset, so the argv is the historical default.
-func PlanStart(node models.NodeFacts, weights string, port int) (StartPlan, error) {
-	weights = path.Clean(strings.TrimSpace(weights))
-	return PlanStartProfile(node, models.ModelRunProfile{
-		Schema:       models.ModelRunSchema,
-		Node:         node.Name,
-		Engine:       models.EngineLlamaCpp,
-		ToolName:     models.ToolLlamaServer,
-		ArtifactKind: models.ArtifactWeightsPath,
-		WeightsPath:  weights,
-		BindHost:     "127.0.0.1",
-		Port:         port,
-		PortSource:   models.PortSourceExplicit,
-	})
-}
-
 // PlanStartProfile validates profile against the observed node and derives argv.
 // A non-empty refusal list, a plan-default port, or an offload without measured
 // discrete VRAM returns an error and no argv.

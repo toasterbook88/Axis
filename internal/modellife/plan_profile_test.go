@@ -99,7 +99,7 @@ func TestPlanStartProfileRefusesMainGPUThatWasNotObserved(t *testing.T) {
 }
 
 func TestPlanStartDefaultArgvIsExact(t *testing.T) {
-	plan, err := PlanStart(storageNode(), "/mnt/models/a.gguf", 8081)
+	plan, err := planStartDefault(storageNode(), "/mnt/models/a.gguf", 8081)
 	if err != nil {
 		t.Fatal(err)
 	}
