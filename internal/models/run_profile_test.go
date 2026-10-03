@@ -158,3 +158,52 @@ func TestNewPlanProfileRecordsToolAndVolumeRefusals(t *testing.T) {
 		t.Fatalf("unmeasured discrete device = %+v", profile)
 	}
 }
+
+func TestValidateOllamaAllowsModelNameAndRefusesForeignFields(t *testing.T) {
+	profile := ModelRunProfile{
+		Schema:       ModelRunSchema,
+		Node:         "storage",
+		Engine:       EngineOllama,
+		ArtifactKind: ArtifactOllamaModelName,
+		OllamaModel:  "mistral",
+		BindHost:     "127.0.0.1",
+	}
+	if err := profile.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := 1024
+	profile.OllamaNumCtx = &ctx
+	profile.OllamaKeepAlive = "10m"
+	if err := profile.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	gpus := 1
+	profile.OllamaNumGPU = &gpus
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "num_gpu") {
+		t.Fatalf("num_gpu err=%v", err)
+	}
+	profile.OllamaNumGPU = nil
+	profile.MLXModel = "mlx"
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "mlx") {
+		t.Fatalf("mlx err=%v", err)
+	}
+	profile.MLXModel = ""
+	pin := 0
+	profile.DeviceIndex = &pin
+	profile.IndexSource = IndexSourceNvidiaSMI
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "main_gpu") {
+		t.Fatalf("pin err=%v", err)
+	}
+
+	llama := ModelRunProfile{
+		Schema:      ModelRunSchema,
+		Engine:      EngineLlamaCpp,
+		BindHost:    "127.0.0.1",
+		Port:        8081,
+		WeightsPath: "/mnt/models/a.gguf",
+		OllamaModel: "mistral",
+	}
+	if err := llama.Validate(); err == nil || !strings.Contains(err.Error(), "llama-server") {
+		t.Fatalf("llama with ollama field err=%v", err)
+	}
+}

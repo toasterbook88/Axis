@@ -98,12 +98,12 @@ func modelPlanCmd() *cobra.Command {
 }
 
 func modelStartCmd() *cobra.Command {
-	var node, weights, cacheAddr, format, fromPlan, nGPULayers string
-	var port, ctxSize, batchSize, ubatchSize, threads, mainGPU int
+	var node, weights, cacheAddr, format, fromPlan, nGPULayers, ollamaModel, ollamaKeepAlive string
+	var port, ctxSize, batchSize, ubatchSize, threads, mainGPU, ollamaNumCtx int
 	var live bool
 	cmd := &cobra.Command{
 		Use:          "start",
-		Short:        "Start llama-server on a named node (explicit port and weights)",
+		Short:        "Start llama-server, or place an Ollama model on the server already listening",
 		SilenceUsage: true,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateOutputFormat(&format, "text", "json", "yaml")(cmd, args); err != nil {
@@ -127,6 +127,9 @@ func modelStartCmd() *cobra.Command {
 	cmd.Flags().IntVar(&ubatchSize, "ubatch-size", 0, "llama-server physical batch size (-ub); omitted when unset")
 	cmd.Flags().IntVar(&threads, "threads", 0, "llama-server threads (-t); must be within observed CPU cores")
 	cmd.Flags().IntVar(&mainGPU, "main-gpu", 0, "llama-server --main-gpu; omitted unless set; must match an observed nvidia-smi index")
+	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Ollama model name to load on 127.0.0.1:11434; replaces --weights")
+	cmd.Flags().StringVar(&ollamaKeepAlive, "ollama-keep-alive", "", "Ollama keep_alive for this load; omitted unless set")
+	cmd.Flags().IntVar(&ollamaNumCtx, "ollama-num-ctx", 0, "Ollama options.num_ctx; omitted unless set")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Start operation receipt format: text, json, or yaml")
@@ -134,17 +137,26 @@ func modelStartCmd() *cobra.Command {
 }
 
 func modelStopCmd() *cobra.Command {
-	var node, cacheAddr, format string
+	var node, cacheAddr, format, ollamaModel string
 	var port int
 	cmd := &cobra.Command{
 		Use:          "stop [generation-id]",
-		Short:        "Stop an observed llama-server generation or use legacy node/port flags",
+		Short:        "Stop an observed llama-server generation, unload an Ollama model, or use legacy node/port flags",
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
+			if strings.TrimSpace(ollamaModel) != "" {
+				if len(args) == 1 || port != 0 {
+					return fmt.Errorf("--ollama-model cannot be combined with a generation ID or --port")
+				}
+				if strings.TrimSpace(node) == "" {
+					return fmt.Errorf(`required flag(s) "node" not set`)
+				}
+				return runOllamaModelStop(ctx, cmd, node, ollamaModel, cacheAddr, format)
+			}
 			if len(args) == 1 {
 				if strings.TrimSpace(node) != "" || port != 0 {
 					return fmt.Errorf("generation ID cannot be combined with --node or --port")
@@ -154,8 +166,9 @@ func modelStopCmd() *cobra.Command {
 			return runModelStop(ctx, cmd, node, port, defaultModelRunner)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "Legacy cluster node name")
+	cmd.Flags().StringVar(&node, "node", "", "Legacy cluster node name, or the node whose Ollama server unloads --ollama-model")
 	cmd.Flags().IntVar(&port, "port", 0, "Legacy llama-server listen port")
+	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Unload this model from the Ollama server already listening on 127.0.0.1:11434")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
 	return cmd
@@ -649,6 +662,9 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if err != nil {
 		return err
 	}
+	if profile.Engine == models.EngineOllama {
+		return placeOllamaModel(ctx, cmd, nf, cfgNode, profile, source, snap, startedAt, format)
+	}
 
 	for _, res := range nf.ResidentModels {
 		if res.Port == profile.Port {
@@ -821,6 +837,9 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 	}
 	if instance.NodeStatus != models.StatusComplete {
 		return fmt.Errorf("model generation %s is on node %s with status %s; refusing lifecycle mutation", generationID, instance.Node, instance.NodeStatus)
+	}
+	if instance.Engine == models.EngineOllama {
+		return stopOllamaGeneration(ctx, cmd, snap, instance, format, startedAt)
 	}
 	if instance.Engine != "llama.cpp" {
 		return fmt.Errorf("model generation %s uses unsupported stop engine %q", generationID, instance.Engine)
@@ -1621,6 +1640,143 @@ func shellQuote(s string) string {
 func runOnNode(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, script string) error {
 	_, err := runOnNodeCapturing(ctx, node, cfgNode, script)
 	return err
+}
+
+// runNodeScript is the local-or-SSH curl seam for Ollama. Tests replace it.
+// llama-server start and stop keep calling runOnNodeCapturing directly.
+var runNodeScript = runOnNodeCapturing
+
+func placeOllamaModel(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, profile models.ModelRunProfile, source string, snap *models.ClusterSnapshot, startedAt time.Time, format string) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	script, err := modellife.OllamaLoadScript(profile.OllamaModel, profile.OllamaKeepAlive, profile.OllamaNumCtx)
+	if err != nil {
+		return err
+	}
+	out, runErr := runNodeScript(ctx, node, cfgNode, script)
+	receipt := models.ModelOperationReceipt{
+		Schema:      "axis.model-operation/v1",
+		ID:          models.GenerateID("mo"),
+		Action:      models.ModelOperationStart,
+		Status:      models.ModelOperationCompleted,
+		Disposition: "placed",
+		Node:        node.Name,
+		Engine:      models.EngineOllama,
+		Model:       profile.OllamaModel,
+		StartedAt:   startedAt,
+		CompletedAt: time.Now().UTC(),
+	}
+	if snap != nil {
+		receipt.SnapshotSource = source
+		receipt.SnapshotAt = snap.Timestamp
+		if snap.Publication != nil {
+			receipt.PublicationID = snap.Publication.ID
+		}
+	}
+	if runErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = runErr.Error()
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("ollama place failed: %w", runErr)
+	}
+	listed, parseErr := modellife.OllamaPSHasModel(out, profile.OllamaModel)
+	if parseErr != nil || !listed {
+		msg := "ollama /api/ps did not list the model"
+		if parseErr != nil {
+			msg = parseErr.Error()
+		}
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = msg
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("%s", msg)
+	}
+	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	cacheAddr, _ := cmd.Flags().GetString("cache-addr")
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, modelName, cacheAddr, format string) error {
+	live, _ := cmd.Flags().GetBool("live")
+	snap, _, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "stop", false)
+	if err != nil {
+		return err
+	}
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
+	if err != nil {
+		return err
+	}
+	if err := runOllamaUnload(ctx, nf, cfgNode, modelName); err != nil {
+		return err
+	}
+	receipt := models.ModelOperationReceipt{
+		Schema:      "axis.model-operation/v1",
+		ID:          models.GenerateID("mo"),
+		Action:      models.ModelOperationStop,
+		Status:      models.ModelOperationCompleted,
+		Disposition: "unloaded",
+		Node:        nf.Name,
+		Engine:      models.EngineOllama,
+		Model:       modelName,
+		StartedAt:   time.Now().UTC(),
+		CompletedAt: time.Now().UTC(),
+	}
+	return writeModelOperationReceipt(cmd, receipt, format)
+}
+
+func stopOllamaGeneration(ctx context.Context, cmd *cobra.Command, snap *models.ClusterSnapshot, instance *models.ModelInstance, format string, startedAt time.Time) error {
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, instance.Node)
+	if err != nil {
+		return err
+	}
+	unloadErr := runOllamaUnload(ctx, nf, cfgNode, instance.Model)
+	receipt := models.ModelOperationReceipt{
+		Schema:       "axis.model-operation/v1",
+		ID:           models.GenerateID("mo"),
+		Action:       models.ModelOperationStop,
+		Status:       models.ModelOperationCompleted,
+		Disposition:  "unloaded",
+		InstanceID:   instance.ID,
+		GenerationID: instance.GenerationID,
+		Node:         instance.Node,
+		Engine:       models.EngineOllama,
+		Model:        instance.Model,
+		StartedAt:    startedAt,
+		CompletedAt:  time.Now().UTC(),
+	}
+	if unloadErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = unloadErr.Error()
+	}
+	if writeErr := writeModelOperationReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	return unloadErr
+}
+
+func runOllamaUnload(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, modelName string) error {
+	script, err := modellife.OllamaUnloadScript(modelName)
+	if err != nil {
+		return err
+	}
+	out, err := runNodeScript(ctx, node, cfgNode, script)
+	if err != nil {
+		return fmt.Errorf("ollama unload failed: %w", err)
+	}
+	listed, err := modellife.OllamaPSHasModel(out, modelName)
+	if err != nil {
+		return err
+	}
+	if listed {
+		return fmt.Errorf("ollama /api/ps still lists %s", modelName)
+	}
+	return nil
 }
 
 // runOnNodeCapturing is runOnNode that also returns the command output, so

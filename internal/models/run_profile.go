@@ -23,12 +23,16 @@ const (
 	DeviceKindUnified = "unified"
 	// DeviceKindCPU is a node with no discrete or unified accelerator.
 	DeviceKindCPU = "cpu"
-	// EngineLlamaCpp is the only engine PR1 can launch.
+	// EngineLlamaCpp is the llama-server engine.
 	EngineLlamaCpp = "llama.cpp"
+	// EngineOllama places a model on an Ollama server that is already listening.
+	EngineOllama = "ollama"
 	// ToolLlamaServer is the observed tool name for llama.cpp.
 	ToolLlamaServer = "llama-server"
 	// ArtifactWeightsPath is a local weight file, not an Ollama model name.
 	ArtifactWeightsPath = "weights-path"
+	// ArtifactOllamaModelName is an Ollama model name, not a GGUF path.
+	ArtifactOllamaModelName = "ollama-model-name"
 	// IndexSourceNvidiaSMI is the only index source a llama-server pin may name.
 	IndexSourceNvidiaSMI = "nvidia-smi"
 )
@@ -332,7 +336,11 @@ func (p ModelRunProfile) Validate() error {
 	if p.Schema != ModelRunSchema {
 		return fmt.Errorf("expected axis.model-run/v1")
 	}
-	if p.Engine != EngineLlamaCpp {
+	switch p.Engine {
+	case EngineOllama:
+		return p.validateOllama()
+	case EngineLlamaCpp:
+	default:
 		return fmt.Errorf("engine %q is not supported", p.Engine)
 	}
 	if p.BindHost != "127.0.0.1" {
@@ -353,6 +361,37 @@ func (p ModelRunProfile) Validate() error {
 	}
 	if p.hasForeignEngineFields() {
 		return fmt.Errorf("only llama-server launch fields are supported")
+	}
+	return nil
+}
+
+func (p ModelRunProfile) validateOllama() error {
+	if strings.TrimSpace(p.OllamaModel) == "" {
+		return fmt.Errorf("ollama model is required")
+	}
+	if p.ArtifactKind != "" && p.ArtifactKind != ArtifactOllamaModelName {
+		return fmt.Errorf("ollama artifact must be %s", ArtifactOllamaModelName)
+	}
+	if strings.TrimSpace(p.WeightsPath) != "" && path.Clean(strings.TrimSpace(p.WeightsPath)) != "." {
+		return fmt.Errorf("--ollama-model and --weights are mutually exclusive")
+	}
+	if p.BindHost != "" && p.BindHost != "127.0.0.1" {
+		return fmt.Errorf("bind host must be 127.0.0.1")
+	}
+	if p.OllamaNumGPU != nil {
+		return fmt.Errorf("ollama num_gpu is not sent")
+	}
+	if p.DeviceIndex != nil || p.IndexSource != "" {
+		return fmt.Errorf("ollama main_gpu is not sent")
+	}
+	if p.MLXModel != "" || p.PrefillStepSize != nil || p.PromptCacheBytes != nil || p.KVBits != nil {
+		return fmt.Errorf("mlx fields are not supported")
+	}
+	if p.NGPULayers != nil || p.NGPULayersMode != "" || p.ContextTokens != nil || p.BatchSize != nil || p.UBatchSize != nil || p.Threads != nil {
+		return fmt.Errorf("only ollama launch fields are supported")
+	}
+	if p.OllamaNumCtx != nil && *p.OllamaNumCtx < 1 {
+		return fmt.Errorf("ollama num_ctx must be >= 1")
 	}
 	return nil
 }

@@ -15,6 +15,24 @@ func requireModelStartIdentity(cmd *cobra.Command) error {
 	if cmd.Flags().Changed("from-plan") {
 		return nil
 	}
+	ollamaSet := cmd.Flags().Changed("ollama-model")
+	weightsSet := cmd.Flags().Changed("weights")
+	if ollamaSet && weightsSet {
+		return fmt.Errorf("--ollama-model and --weights are mutually exclusive")
+	}
+	if ollamaSet {
+		if !cmd.Flags().Changed("node") {
+			return fmt.Errorf(`required flag(s) "node" not set`)
+		}
+		name, err := cmd.Flags().GetString("ollama-model")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("ollama model is required")
+		}
+		return nil
+	}
 	var missing []string
 	for _, name := range []string{"node", "weights", "port"} {
 		if !cmd.Flags().Changed(name) {
@@ -120,6 +138,35 @@ func applyChangedStartFlags(cmd *cobra.Command, profile *models.ModelRunProfile)
 		}
 		profile.DeviceIndex = &value
 		profile.IndexSource = models.IndexSourceNvidiaSMI
+	}
+	if cmd.Flags().Changed("ollama-model") {
+		value, err := cmd.Flags().GetString("ollama-model")
+		if err != nil {
+			return err
+		}
+		profile.OllamaModel = strings.TrimSpace(value)
+		profile.Engine = models.EngineOllama
+		profile.ArtifactKind = models.ArtifactOllamaModelName
+		profile.WeightsPath = ""
+		profile.Volume = ""
+		profile.ToolName = ""
+		if profile.BindHost == "" {
+			profile.BindHost = "127.0.0.1"
+		}
+	}
+	if cmd.Flags().Changed("ollama-num-ctx") {
+		value, err := cmd.Flags().GetInt("ollama-num-ctx")
+		if err != nil {
+			return err
+		}
+		profile.OllamaNumCtx = &value
+	}
+	if cmd.Flags().Changed("ollama-keep-alive") {
+		value, err := cmd.Flags().GetString("ollama-keep-alive")
+		if err != nil {
+			return err
+		}
+		profile.OllamaKeepAlive = value
 	}
 	return nil
 }
