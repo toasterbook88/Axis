@@ -8,6 +8,96 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+func TestPlanStartProfileEmitsMainGPUOnlyForObservedNvidiaIndex(t *testing.T) {
+	node := storageNode()
+	zero := 0
+	node.Resources.GPUs = []models.GPUInfo{{
+		Vendor: "nvidia", Model: "RTX 4090", Index: &zero, IndexSource: "nvidia-smi",
+		VRAMMB: 24576, VRAMFreeMB: 20000, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+	}}
+	profile := readyProfile(node)
+	pin := 0
+	profile.DeviceIndex = &pin
+	profile.IndexSource = models.IndexSourceNvidiaSMI
+	plan, err := PlanStartProfile(node, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/usr/local/bin/llama-server", "-m", "/mnt/models/a.gguf", "--port", "8081", "--host", "127.0.0.1",
+		"--main-gpu", "0",
+	}
+	if !reflect.DeepEqual(plan.Argv, want) {
+		t.Fatalf("argv=%#v", plan.Argv)
+	}
+	note := models.MainGPUPinNote(plan.Profile.DeviceIndex)
+	if !strings.Contains(note, "split-mode = none") || !strings.Contains(note, "split-mode = row") || !strings.Contains(note, "list-devices") {
+		t.Fatalf("note=%q", note)
+	}
+	if models.MainGPUPinNote(nil) != "" {
+		t.Fatal("omitted pin must not quote a default of 0")
+	}
+
+	plain, err := PlanStartProfile(node, readyProfile(node))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(plain.Argv, " "), "--main-gpu") {
+		t.Fatalf("omitted pin argv=%#v", plain.Argv)
+	}
+
+	ctx, ngl := 2048, 12
+	withFlags := readyProfile(node)
+	withFlags.ContextTokens = &ctx
+	withFlags.NGPULayers = &ngl
+	withFlags.DeviceIndex = &pin
+	withFlags.IndexSource = models.IndexSourceNvidiaSMI
+	plan, err = PlanStartProfile(node, withFlags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := plan.Argv[len(plan.Argv)-6:]
+	wantSuffix := []string{"-c", "2048", "-ngl", "12", "--main-gpu", "0"}
+	if !reflect.DeepEqual(suffix, wantSuffix) {
+		t.Fatalf("suffix=%#v", plan.Argv)
+	}
+}
+
+func TestPlanStartProfileRefusesMainGPUThatWasNotObserved(t *testing.T) {
+	node := storageNode()
+	one := 1
+	node.Resources.GPUs = []models.GPUInfo{{
+		Vendor: "nvidia", Model: "RTX 4090", Index: &one, IndexSource: "nvidia-smi",
+		VRAMMB: 24576, VRAMFreeMB: 20000, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+	}}
+	profile := readyProfile(node)
+	pin := 0
+	profile.DeviceIndex = &pin
+	profile.IndexSource = models.IndexSourceNvidiaSMI
+	if _, err := PlanStartProfile(node, profile); err == nil || !strings.Contains(err.Error(), "main-gpu") {
+		t.Fatalf("unobserved 0 err=%v", err)
+	}
+
+	legacy := storageNode()
+	legacy.Resources.GPUs = []models.GPUInfo{{
+		Vendor: "nvidia", Model: "RTX 4090", VRAMMB: 24576,
+		VRAMFreeMB: 20000, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+	}}
+	profile = readyProfile(legacy)
+	profile.DeviceIndex = &pin
+	profile.IndexSource = models.IndexSourceNvidiaSMI
+	if _, err := PlanStartProfile(legacy, profile); err == nil || !strings.Contains(err.Error(), "main-gpu") {
+		t.Fatalf("nil observed index err=%v", err)
+	}
+
+	profile = readyProfile(node)
+	profile.DeviceIndex = &one
+	profile.IndexSource = "hand"
+	if _, err := PlanStartProfile(node, profile); err == nil || !strings.Contains(err.Error(), "nvidia-smi") {
+		t.Fatalf("foreign source err=%v", err)
+	}
+}
+
 func TestPlanStartDefaultArgvIsExact(t *testing.T) {
 	plan, err := PlanStart(storageNode(), "/mnt/models/a.gguf", 8081)
 	if err != nil {

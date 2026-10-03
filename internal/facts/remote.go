@@ -323,10 +323,10 @@ func (c *RemoteCollector) remoteResources(ctx context.Context, osName, arch stri
 	// GPU (best-effort)
 	var gpuCmd string
 	if osName == "darwin" {
-		gpuCmd = `system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'`
+		gpuCmd = darwinGPUCollectCommand()
 	} else {
-		// Try nvidia-smi first, fall back to lspci
-		gpuCmd = `nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'`
+		// Try nvidia-smi first, fall back to lspci.
+		gpuCmd = linuxGPUCollectCommand()
 	}
 	if out, err := c.Exec.Run(ctx, gpuCmd); err == nil {
 		out = strings.TrimSpace(out)

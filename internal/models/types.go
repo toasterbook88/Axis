@@ -55,9 +55,13 @@ const (
 // --- Observed State ---
 
 // GPUInfo describes a single GPU with vendor, model, VRAM, and capabilities.
+// Index is set only when a collector parsed an nvidia-smi index. Nil means
+// the row had no index fact (legacy csv, Metal, or lspci).
 type GPUInfo struct {
 	Vendor           string   `json:"vendor" yaml:"vendor"`                                             // apple, nvidia, amd, intel, unknown
 	Model            string   `json:"model" yaml:"model"`                                               // e.g. "Apple M3 Pro", "NVIDIA GeForce RTX 4090"
+	Index            *int     `json:"index,omitempty" yaml:"index,omitempty"`                           // nvidia-smi index; nil when the collector did not record one
+	IndexSource      string   `json:"index_source,omitempty" yaml:"index_source,omitempty"`             // "nvidia-smi" when Index was parsed from that query
 	VRAMMB           int      `json:"vram_mb,omitempty" yaml:"vram_mb,omitempty"`                       // 0 means unknown or unified
 	VRAMFreeMB       int      `json:"vram_free_mb,omitempty" yaml:"vram_free_mb,omitempty"`             // measured free VRAM; valid when VRAMFreeMeasured is true or VRAMFreeMB > 0
 	VRAMFreeMeasured bool     `json:"vram_free_measured,omitempty" yaml:"vram_free_measured,omitempty"` // true when VRAMFreeMB was explicitly measured (even if 0 MB free)

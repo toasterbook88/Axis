@@ -113,6 +113,14 @@ func applyChangedStartFlags(cmd *cobra.Command, profile *models.ModelRunProfile)
 		}
 		profile.Threads = &value
 	}
+	if cmd.Flags().Changed("main-gpu") {
+		value, err := cmd.Flags().GetInt("main-gpu")
+		if err != nil {
+			return err
+		}
+		profile.DeviceIndex = &value
+		profile.IndexSource = models.IndexSourceNvidiaSMI
+	}
 	return nil
 }
 

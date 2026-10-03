@@ -29,7 +29,18 @@ const (
 	ToolLlamaServer = "llama-server"
 	// ArtifactWeightsPath is a local weight file, not an Ollama model name.
 	ArtifactWeightsPath = "weights-path"
+	// IndexSourceNvidiaSMI is the only index source a llama-server pin may name.
+	IndexSourceNvidiaSMI = "nvidia-smi"
 )
+
+// MainGPUPinNote quotes llama.cpp --main-gpu help when the operator pinned a
+// device. An omitted pin returns empty so Axis does not imply a default of 0.
+func MainGPUPinNote(index *int) string {
+	if index == nil {
+		return ""
+	}
+	return "main-gpu is the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with split-mode = row). Axis does not emit --device; those names come from llama-server --list-devices, which Axis does not collect."
+}
 
 // ModelRunProfile is the launch description shared by model plan and model start.
 // It does not exec. Argv is derived from it.
@@ -334,14 +345,30 @@ func (p ModelRunProfile) Validate() error {
 	if weights == "" || weights == "." {
 		return fmt.Errorf("weights path is required")
 	}
-	if p.DeviceIndex != nil || p.IndexSource != "" {
-		return fmt.Errorf("device index is not supported")
+	if err := p.validateDevicePin(); err != nil {
+		return err
 	}
 	if err := p.validateLaunchFields(); err != nil {
 		return err
 	}
 	if p.hasForeignEngineFields() {
 		return fmt.Errorf("only llama-server launch fields are supported")
+	}
+	return nil
+}
+
+func (p ModelRunProfile) validateDevicePin() error {
+	if p.DeviceIndex == nil && p.IndexSource == "" {
+		return nil
+	}
+	if p.DeviceIndex == nil || p.IndexSource == "" {
+		return fmt.Errorf("device index requires index source nvidia-smi")
+	}
+	if p.IndexSource != IndexSourceNvidiaSMI {
+		return fmt.Errorf("index source %q is not nvidia-smi", p.IndexSource)
+	}
+	if *p.DeviceIndex < 0 {
+		return fmt.Errorf("main-gpu must be >= 0")
 	}
 	return nil
 }

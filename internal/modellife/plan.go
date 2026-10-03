@@ -68,6 +68,9 @@ func PlanStartProfile(node models.NodeFacts, profile models.ModelRunProfile) (St
 			refusals = append(refusals, fmt.Sprintf("threads must be between 1 and %d observed cpu cores", cores))
 		}
 	}
+	if profile.DeviceIndex != nil && !observedNvidiaGPUIndex(node, *profile.DeviceIndex) {
+		refusals = append(refusals, fmt.Sprintf("main-gpu %d is not an observed nvidia-smi index", *profile.DeviceIndex))
+	}
 	if len(refusals) > 0 {
 		return StartPlan{}, fmt.Errorf("%s", strings.Join(refusals, "; "))
 	}
@@ -165,7 +168,25 @@ func ArgvFromProfile(profile models.ModelRunProfile) ([]string, error) {
 	if profile.Threads != nil {
 		argv = append(argv, "-t", strconv.Itoa(*profile.Threads))
 	}
+	if profile.DeviceIndex != nil {
+		if profile.IndexSource != models.IndexSourceNvidiaSMI {
+			return nil, fmt.Errorf("index source %q is not nvidia-smi", profile.IndexSource)
+		}
+		argv = append(argv, "--main-gpu", strconv.Itoa(*profile.DeviceIndex))
+	}
 	return argv, nil
+}
+
+func observedNvidiaGPUIndex(node models.NodeFacts, index int) bool {
+	if node.Resources == nil {
+		return false
+	}
+	for _, gpu := range node.Resources.GPUs {
+		if gpu.Index != nil && *gpu.Index == index && gpu.IndexSource == models.IndexSourceNvidiaSMI {
+			return true
+		}
+	}
+	return false
 }
 
 // ExecArgvMatchesProfile reports whether argv is exactly the profile projection.

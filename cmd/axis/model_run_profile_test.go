@@ -183,6 +183,56 @@ func TestModelPlanWriteProfileAndExplicitPort(t *testing.T) {
 	}
 }
 
+func TestModelStartMainGPUMatchesObservedIndex(t *testing.T) {
+	snap := testSnap()
+	zero := 0
+	snap.Nodes[0].Resources.GPUs = []models.GPUInfo{{
+		Vendor: "nvidia", Model: "RTX 4090", Index: &zero, IndexSource: models.IndexSourceNvidiaSMI,
+		VRAMMB: 24576, VRAMFreeMB: 20000, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+	}}
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	runner := &fakeModelRunner{}
+	prev := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prev })
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{
+		"--node", "storage", "--weights", "/mnt/models/a.gguf", "--port", "8081",
+		"--main-gpu", "0", "--format", "json",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/usr/local/bin/llama-server", "-m", "/mnt/models/a.gguf", "--port", "8081", "--host", "127.0.0.1",
+		"--main-gpu", "0",
+	}
+	if len(runner.started) != 1 || !reflect.DeepEqual(runner.started[0], want) {
+		t.Fatalf("argv=%#v", runner.started)
+	}
+	if !strings.Contains(buf.String(), "split-mode = none") || !strings.Contains(buf.String(), "split-mode = row") || !strings.Contains(buf.String(), "list-devices") {
+		t.Fatalf("receipt=%s", buf.String())
+	}
+
+	runner.started = nil
+	cmd = modelStartCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--node", "storage", "--weights", "/mnt/models/a.gguf", "--port", "8081",
+		"--main-gpu", "1", "--format", "text",
+	})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "main-gpu") {
+		t.Fatalf("missing index err=%v", err)
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("unobserved pin started=%v", runner.started)
+	}
+}
+
 func TestRunModelStartDefaultPathStillUsesFunctionArgs(t *testing.T) {
 	stubModelSnapshot(t, testSnap())
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})

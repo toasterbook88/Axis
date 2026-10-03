@@ -99,7 +99,7 @@ func modelPlanCmd() *cobra.Command {
 
 func modelStartCmd() *cobra.Command {
 	var node, weights, cacheAddr, format, fromPlan, nGPULayers string
-	var port, ctxSize, batchSize, ubatchSize, threads int
+	var port, ctxSize, batchSize, ubatchSize, threads, mainGPU int
 	var live bool
 	cmd := &cobra.Command{
 		Use:          "start",
@@ -126,6 +126,7 @@ func modelStartCmd() *cobra.Command {
 	cmd.Flags().IntVar(&batchSize, "batch-size", 0, "llama-server logical batch size (-b); omitted when unset")
 	cmd.Flags().IntVar(&ubatchSize, "ubatch-size", 0, "llama-server physical batch size (-ub); omitted when unset")
 	cmd.Flags().IntVar(&threads, "threads", 0, "llama-server threads (-t); must be within observed CPU cores")
+	cmd.Flags().IntVar(&mainGPU, "main-gpu", 0, "llama-server --main-gpu; omitted unless set; must match an observed nvidia-smi index")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Start operation receipt format: text, json, or yaml")
@@ -714,6 +715,7 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 		DeviceIndex:      plan.Profile.DeviceIndex,
 		VRAMFreeMeasured: plan.Profile.VRAMFreeMeasured,
 		PortSource:       plan.Profile.PortSource,
+		DeviceNote:       models.MainGPUPinNote(plan.Profile.DeviceIndex),
 	}
 	if snap.Publication != nil {
 		receipt.PublicationID = snap.Publication.ID
@@ -747,6 +749,10 @@ func writeModelStartReceipt(cmd *cobra.Command, receipt models.ModelOperationRec
 	if receipt.Status == models.ModelOperationCompleted {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
 			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID)
+		if err != nil || receipt.DeviceNote == "" {
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", receipt.DeviceNote)
 		return err
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d: %s operation %s\n",
