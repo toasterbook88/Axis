@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +22,9 @@ import (
 	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/modelplan"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
@@ -531,6 +534,11 @@ func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string,
 	if err != nil {
 		return err
 	}
+	st, err := state.Load()
+	if err != nil {
+		return err
+	}
+	applyLlamaServerPeakExclusions(&plan, snap, st)
 	plan.SnapshotSource = source
 	if cmd.Flags().Changed("port") && plan.Selected != nil {
 		plan.Selected.PortSource = models.PortSourceExplicit
@@ -749,6 +757,8 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 		receipt.Status = models.ModelOperationFailed
 		receipt.Disposition = "failed"
 		receipt.Error = startErr.Error()
+	} else if warning := recordLlamaServerObservation(ctx, cmd, nf, cfgNode, plan, startedAt); warning != "" {
+		receipt.Warnings = append(receipt.Warnings, warning)
 	}
 
 	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
@@ -772,13 +782,21 @@ func writeModelStartReceipt(cmd *cobra.Command, receipt models.ModelOperationRec
 		return printOutput(cmd.OutOrStdout(), receipt, format)
 	}
 	if receipt.Status == models.ModelOperationCompleted {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
-			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID)
-		if err != nil || receipt.DeviceNote == "" {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
+			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", receipt.DeviceNote)
-		return err
+		if receipt.DeviceNote != "" {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\n", receipt.DeviceNote); err != nil {
+				return err
+			}
+		}
+		for _, warning := range receipt.Warnings {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d: %s operation %s\n",
 		receipt.Disposition, receipt.Node, receipt.Port, receipt.Error, receipt.ID)
@@ -1652,6 +1670,52 @@ func shellMLXOwnerGuard(port int) string {
 	)
 }
 
+const (
+	llamaSampleRAMPrefix  = "axis-llama-sample:ram "
+	llamaSampleVRAMPrefix = "axis-llama-sample:vram "
+	llamaSampleRAMFailed  = "axis-llama-sample:ram-failed"
+)
+
+func shellLlamaServerSample(port int, deviceIndex *int) string {
+	script := shellListenerLookup(port) + shellLlamaServerOwnerGuard(port) +
+		`if test -z "$_axis_pids"; then echo '` + llamaSampleRAMFailed + `' >&2; exit 1; fi; ` +
+		`_axis_peak=0; _axis_any=0; ` +
+		`for _axis_pid in $_axis_pids; do ` +
+		`_axis_rss=$(ps -p "$_axis_pid" -o rss=) || { echo '` + llamaSampleRAMFailed + `' >&2; exit 1; }; ` +
+		`_axis_mib=$((_axis_rss / 1024)); ` +
+		`if test "$_axis_mib" -gt "$_axis_peak"; then _axis_peak=$_axis_mib; fi; ` +
+		`_axis_any=1; ` +
+		`done; ` +
+		`if test "$_axis_any" != 1; then echo '` + llamaSampleRAMFailed + `' >&2; exit 1; fi; ` +
+		`echo "` + llamaSampleRAMPrefix + `$_axis_peak"; `
+	if deviceIndex == nil {
+		return script
+	}
+	return script + fmt.Sprintf(`_axis_want=%d; `, *deviceIndex) +
+		`_axis_smi=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits 2>/dev/null) || _axis_smi=""; ` +
+		`_axis_used=$(printf '%s\n' "$_axis_smi" | awk -F, -v want="$_axis_want" '{ idx=$1; gsub(/ /, "", idx); used=$2; gsub(/ /, "", used); if (idx == want && used ~ /^[0-9]+$/) { print used; exit } }'); ` +
+		`if test -n "$_axis_used"; then echo "` + llamaSampleVRAMPrefix + `$_axis_used"; fi; `
+}
+
+func parseLlamaServerSample(out string) (ram int64, ramOK bool, vram int64, vramOK bool) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, llamaSampleRAMPrefix):
+			n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, llamaSampleRAMPrefix)), 10, 64)
+			if err == nil && n >= 0 {
+				ram, ramOK = n, true
+			}
+		case strings.HasPrefix(line, llamaSampleVRAMPrefix):
+			n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, llamaSampleVRAMPrefix)), 10, 64)
+			if err == nil && n >= 0 {
+				vram, vramOK = n, true
+			}
+		}
+	}
+	return ram, ramOK, vram, vramOK
+}
+
 func shellLlamaServerOwnerGuard(port int) string {
 	return fmt.Sprintf(
 		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; echo '"+modelStopMarker+"inspection_unavailable' >&2; exit 127; fi; "+
@@ -1690,6 +1754,134 @@ func runOnNode(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeC
 // runNodeScript is the local-or-SSH seam for Ollama and MLX. Tests replace it.
 // llama-server start and stop keep calling runOnNodeCapturing directly.
 var runNodeScript = runOnNodeCapturing
+
+// runLlamaServerSample is the post-probe RSS seam. Production calls
+// runOnNodeCapturing, so a remote node is sampled over its SSH session and a
+// local node is sampled with the local executor. Tests replace it.
+var runLlamaServerSample = runOnNodeCapturing
+
+func recordLlamaServerObservation(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan, startedAt time.Time) string {
+	modelName := llamaServerObservationModelName(plan.Weights)
+	obs := models.ExecutionObservation{
+		Scope: models.ObservationScope{
+			Node:      plan.Node,
+			Workload:  models.ClassLlamaServer,
+			Backend:   "llama.cpp",
+			Tool:      "llama-server",
+			ModelName: modelName,
+		},
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    observationWallMS(time.Since(startedAt)),
+		ModelName:     modelName,
+		ContextTokens: copyOptionalInt(plan.Profile.ContextTokens),
+		DeviceIndex:   copyOptionalInt(plan.Profile.DeviceIndex),
+	}
+	warning := ""
+	out, err := runLlamaServerSample(ctx, node, cfgNode, shellLlamaServerSample(plan.Port, plan.Profile.DeviceIndex))
+	if err != nil {
+		warning = "llama-server RSS sample failed"
+	} else {
+		ram, ramOK, vram, vramOK := parseLlamaServerSample(out)
+		if !ramOK {
+			warning = "llama-server RSS sample failed"
+		} else {
+			obs.PeakRAMMB = ram
+			if plan.Profile.DeviceIndex != nil && vramOK {
+				obs.PeakVRAMMB = vram
+			}
+		}
+	}
+	if err := state.Update(func(latest *state.ClusterState) error {
+		latest.RecordObservation(obs)
+		return nil
+	}); err != nil && cmd != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: execution observation persistence failed: %v\n", err)
+	}
+	return warning
+}
+
+func observationWallMS(elapsed time.Duration) int64 {
+	if elapsed <= 0 {
+		return 1
+	}
+	if ms := elapsed.Milliseconds(); ms > 0 {
+		return ms
+	}
+	return 1
+}
+
+func copyOptionalInt(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
+}
+
+func llamaServerObservationModelName(weights string) string {
+	weights = strings.TrimSpace(weights)
+	if weights == "" || weights == "." {
+		return ""
+	}
+	base := path.Base(weights)
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
+}
+
+func applyLlamaServerPeakExclusions(plan *modelplan.ModelPlacementPlan, snap *models.ClusterSnapshot, st *state.ClusterState) {
+	if plan == nil || snap == nil || st == nil {
+		return
+	}
+	modelName := llamaServerObservationModelName(plan.Spec.WeightsPath)
+	kept := make([]modelplan.ModelCandidateScore, 0, len(plan.Candidates))
+	for _, cand := range plan.Candidates {
+		node, ok := modelSnapshotNode(snap, cand.Node)
+		if ok {
+			if reason, blocked := placement.LlamaServerPeakExclusion(node, modelName, st); blocked {
+				plan.Excluded = append(plan.Excluded, modelplan.ModelExcludedCandidate{
+					Node:    cand.Node,
+					Reasons: []string{reason},
+				})
+				continue
+			}
+		}
+		kept = append(kept, cand)
+	}
+	plan.Candidates = kept
+	sort.Slice(plan.Excluded, func(i, j int) bool {
+		return plan.Excluded[i].Node < plan.Excluded[j].Node
+	})
+	if len(plan.Candidates) == 0 {
+		plan.BestCandidate = ""
+		plan.Selected = nil
+		return
+	}
+	plan.BestCandidate = plan.Candidates[0].Node
+	plan.Selected = nil
+	for i := range snap.Nodes {
+		if snap.Nodes[i].Name == plan.BestCandidate {
+			selected := models.NewPlanProfile(snap.Nodes[i], plan.Spec, plan.TargetPort, plan.PublicationID)
+			plan.Selected = &selected
+			return
+		}
+	}
+}
+
+func modelSnapshotNode(snap *models.ClusterSnapshot, name string) (models.NodeFacts, bool) {
+	if snap == nil {
+		return models.NodeFacts{}, false
+	}
+	for i := range snap.Nodes {
+		if snap.Nodes[i].Name == name {
+			return snap.Nodes[i], true
+		}
+	}
+	return models.NodeFacts{}, false
+}
 
 func mlxImportObserved(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig) (bool, error) {
 	for _, tool := range node.Tools {

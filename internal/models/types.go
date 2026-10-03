@@ -727,6 +727,12 @@ type ExecutionObservation struct {
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
 	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
 	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	// ContextTokens and DeviceIndex are optional facts from a llama-server
+	// start. They are not part of ObservationKey. A nil pointer on a later
+	// sample keeps the previous value; a non-nil pointer, including zero,
+	// replaces it.
+	ContextTokens *int `json:"context_tokens,omitempty" yaml:"context_tokens,omitempty"`
+	DeviceIndex   *int `json:"device_index,omitempty" yaml:"device_index,omitempty"`
 	// ModelName is the inference model name observed during execution
 	// (e.g. "llama3.2:latest", "qwen2.5-coder:7b"). Populated when a model
 	// name is extractable from the task command or description. Used by

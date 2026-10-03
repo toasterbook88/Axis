@@ -58,5 +58,6 @@ type ModelOperationReceipt struct {
 	VRAMFreeMeasured bool                 `json:"vram_free_measured,omitempty" yaml:"vram_free_measured,omitempty"`
 	PortSource       string               `json:"port_source,omitempty" yaml:"port_source,omitempty"`
 	DeviceNote       string               `json:"device_note,omitempty" yaml:"device_note,omitempty"`
+	Warnings         []string             `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 	Error            string               `json:"error,omitempty" yaml:"error,omitempty"`
 }
