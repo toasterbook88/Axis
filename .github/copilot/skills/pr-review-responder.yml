@@ -9,8 +9,9 @@ prompt: |
 
   1. Read the diff and the tests. A correctness finding is fixed only when the
      patch and a test that fails on the old behavior are on the branch.
-  2. Run `make ci-preflight` with `GOTOOLCHAIN` set to the `go` version in
-     `go.mod`. The pinned staticcheck release cannot decode a newer toolchain.
+  2. Run `make ci-preflight` with `GOTOOLCHAIN=go1.26.6` when `go.mod` says
+     `go 1.26.6`. The value is the word `go` plus the version. The pinned
+     staticcheck release cannot decode a newer toolchain.
   3. Query the live pull request. Required checks are whatever branch
      protection lists now. `mergeStateStatus` must be `CLEAN`, the head must
      contain the patch, and the branch must not be behind the base when
@@ -19,19 +20,11 @@ prompt: |
      operator has explicitly declined that finding. Reply with the commit,
      then resolve the thread.
   5. Merge only when the operator names that pull request:
-     `gh pr merge <number> --squash`. Omit `--admin` when the state is already
-     `CLEAN`. Do not enable auto-merge on a feature or fix pull request.
+     `gh pr merge <number> --squash`. Do not pass `--admin` unless the
+     operator gives a separate command that says to. Do not enable auto-merge
+     on any pull request.
   6. Leave `internal/buildinfo/version.go` unchanged. Do not install the
      binary and do not restart daemons in the merge step.
-
-  `axis version` prints `commit:` so a tip build is distinct from a GitHub
-  release with the same semver. `make build` and GoReleaser inject that commit
-  and the build time through ldflags. The Makefile sets `-buildvcs=false`, and
-  CI builds the same way. A plain `go build` fallback may print
-  `vcs.revision`. When `vcs.modified` is true, the printed revision shows that
-  the tree was dirty. `built:` is only the ldflag timestamp. `vcs.time` is the
-  revision time and is printed under its own label or omitted. Test that
-  fallback by passing settings into the parser.
 
   When one pull request merges, update another open branch by merging the new
   base into it. Do not force-push. Reset, cherry-pick, and force-push only
