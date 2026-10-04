@@ -62,7 +62,7 @@ var defaultModelRunner modelProcessRunner = liveModelRunner{}
 func modelCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "model",
-		Short: "Inspect resident models or manage llama-server on a named node",
+		Short: "Inspect resident models, plan a placement, or manage llama-server, Ollama, and MLX",
 	}
 	cmd.AddCommand(modelListCmd())
 	cmd.AddCommand(modelInspectCmd())
@@ -782,6 +782,11 @@ func writeModelStartReceipt(cmd *cobra.Command, receipt models.ModelOperationRec
 		return printOutput(cmd.OutOrStdout(), receipt, format)
 	}
 	if receipt.Status == models.ModelOperationCompleted {
+		if receipt.Engine == models.EngineOllama {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "placed ollama model %s on %s operation %s\n",
+				receipt.Model, receipt.Node, receipt.ID)
+			return err
+		}
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
 			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID); err != nil {
 			return err
@@ -866,7 +871,7 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 		return fmt.Errorf("model generation %s is on node %s with status %s; refusing lifecycle mutation", generationID, instance.Node, instance.NodeStatus)
 	}
 	if instance.Engine == models.EngineOllama {
-		return stopOllamaGeneration(ctx, cmd, snap, instance, format, startedAt)
+		return stopOllamaGeneration(ctx, cmd, snap, instance, cacheAddr, format, startedAt)
 	}
 	if instance.Engine != models.EngineLlamaCpp && instance.Engine != models.EngineMLX {
 		return fmt.Errorf("model generation %s uses unsupported stop engine %q", generationID, instance.Engine)
@@ -1996,6 +2001,9 @@ func placeOllamaModel(ctx context.Context, cmd *cobra.Command, node models.NodeF
 	if err := profile.Validate(); err != nil {
 		return err
 	}
+	if len(profile.Refusals) > 0 {
+		return fmt.Errorf("%s", strings.Join(profile.Refusals, "; "))
+	}
 	script, err := modellife.OllamaLoadScript(profile.OllamaModel, profile.OllamaKeepAlive, profile.OllamaNumCtx)
 	if err != nil {
 		return err
@@ -2072,10 +2080,14 @@ func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, model
 		StartedAt:   time.Now().UTC(),
 		CompletedAt: time.Now().UTC(),
 	}
-	return writeModelOperationReceipt(cmd, receipt, format)
+	if err := writeModelOperationReceipt(cmd, receipt, format); err != nil {
+		return err
+	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
 }
 
-func stopOllamaGeneration(ctx context.Context, cmd *cobra.Command, snap *models.ClusterSnapshot, instance *models.ModelInstance, format string, startedAt time.Time) error {
+func stopOllamaGeneration(ctx context.Context, cmd *cobra.Command, snap *models.ClusterSnapshot, instance *models.ModelInstance, cacheAddr, format string, startedAt time.Time) error {
 	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, instance.Node)
 	if err != nil {
 		return err
@@ -2103,7 +2115,11 @@ func stopOllamaGeneration(ctx context.Context, cmd *cobra.Command, snap *models.
 	if writeErr := writeModelOperationReceipt(cmd, receipt, format); writeErr != nil {
 		return writeErr
 	}
-	return unloadErr
+	if unloadErr != nil {
+		return unloadErr
+	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
 }
 
 func runOllamaUnload(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, modelName string) error {

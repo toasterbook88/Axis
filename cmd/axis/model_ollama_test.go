@@ -115,11 +115,22 @@ func TestOllamaStopUnloadsWithoutKillingTheServer(t *testing.T) {
 	}
 	t.Cleanup(func() { runNodeScript = prevScript })
 
+	var refreshes int
+	prevRefresh := signalModelDaemonRefresh
+	signalModelDaemonRefresh = func(context.Context, string, string) error {
+		refreshes++
+		return nil
+	}
+	t.Cleanup(func() { signalModelDaemonRefresh = prevRefresh })
+
 	cmd := modelStopCmd()
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetArgs([]string{"--node", "storage", "--ollama-model", "mistral"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
+	}
+	if refreshes != 1 {
+		t.Fatalf("daemon refreshes=%d", refreshes)
 	}
 	if len(runner.stopTargets) != 0 || len(runner.stopped) != 0 {
 		t.Fatalf("stop used the process killer: %#v", runner.stopTargets)
@@ -141,6 +152,9 @@ func TestOllamaStopUnloadsWithoutKillingTheServer(t *testing.T) {
 	cmd.SetArgs([]string{"--node", "storage", "--ollama-model", "mistral"})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "api/ps") {
 		t.Fatalf("still listed err=%v", err)
+	}
+	if refreshes != 1 {
+		t.Fatalf("failed unload refreshed the daemon: %d", refreshes)
 	}
 }
 
@@ -167,13 +181,85 @@ func TestOllamaGenerationStopDoesNotReachProcessKill(t *testing.T) {
 		return `{"models":[]}`, nil
 	}
 	t.Cleanup(func() { runNodeScript = prevScript })
+	var refreshes int
+	prevRefresh := signalModelDaemonRefresh
+	signalModelDaemonRefresh = func(context.Context, string, string) error {
+		refreshes++
+		return nil
+	}
+	t.Cleanup(func() { signalModelDaemonRefresh = prevRefresh })
 
 	cmd := modelStopCmd()
 	cmd.SetOut(&bytes.Buffer{})
 	if err := runModelStopGeneration(context.Background(), cmd, want.GenerationID, "test.sock", "text", runner); err != nil {
 		t.Fatal(err)
 	}
+	if refreshes != 1 {
+		t.Fatalf("daemon refreshes=%d", refreshes)
+	}
 	if len(runner.stopTargets) != 0 {
 		t.Fatalf("process kill targets=%#v", runner.stopTargets)
+	}
+}
+
+func TestOllamaStartTextNamesTheModel(t *testing.T) {
+	snap := testSnap()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	prevScript := runNodeScript
+	runNodeScript = func(context.Context, models.NodeFacts, *config.NodeConfig, string) (string, error) {
+		return `{"models":[{"name":"mistral:latest","model":"mistral:latest"}]}`, nil
+	}
+	t.Cleanup(func() { runNodeScript = prevScript })
+	prevRefresh := signalModelDaemonRefresh
+	signalModelDaemonRefresh = func(context.Context, string, string) error { return nil }
+	t.Cleanup(func() { signalModelDaemonRefresh = prevRefresh })
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--node", "storage", "--ollama-model", "mistral", "--format", "text"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "placed ollama model mistral on storage operation ") {
+		t.Fatalf("receipt=%q", got)
+	}
+	if strings.Contains(got, "started ") || strings.Contains(got, ":0") {
+		t.Fatalf("receipt used the llama-server line: %q", got)
+	}
+}
+
+func TestOllamaStartRefusesProfileRefusals(t *testing.T) {
+	stubModelSnapshot(t, testSnap())
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	path := writeProfile(t, models.ModelRunProfile{
+		Schema:       models.ModelRunSchema,
+		Node:         "storage",
+		Engine:       models.EngineOllama,
+		ArtifactKind: models.ArtifactOllamaModelName,
+		OllamaModel:  "mistral",
+		BindHost:     "127.0.0.1",
+		Refusals:     []string{"weights are not on a named local volume"},
+	})
+	var calls int
+	prevScript := runNodeScript
+	runNodeScript = func(context.Context, models.NodeFacts, *config.NodeConfig, string) (string, error) {
+		calls++
+		return `{"models":[{"name":"mistral"}]}`, nil
+	}
+	t.Cleanup(func() { runNodeScript = prevScript })
+
+	cmd := modelStartCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--from-plan", path, "--format", "text"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "named local volume") {
+		t.Fatalf("err=%v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("refusals still reached ollama: %d", calls)
 	}
 }

@@ -72,11 +72,31 @@ func OllamaPSHasModel(body, name string) (bool, error) {
 	}
 	name = strings.TrimSpace(name)
 	for _, model := range doc.Models {
-		if model.Name == name || model.Model == name {
+		if ollamaNameMatches(model.Name, name) || ollamaNameMatches(model.Model, name) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// ollamaNameMatches accepts an exact name, and the default tag when one side
+// is untagged. A different tag, such as q4, does not match.
+func ollamaNameMatches(listed, requested string) bool {
+	listed = strings.TrimSpace(listed)
+	requested = strings.TrimSpace(requested)
+	if listed == "" || requested == "" {
+		return false
+	}
+	if listed == requested {
+		return true
+	}
+	if !strings.Contains(requested, ":") && listed == requested+":latest" {
+		return true
+	}
+	if !strings.Contains(listed, ":") && requested == listed+":latest" {
+		return true
+	}
+	return false
 }
 
 func shellSingleQuote(s string) string {

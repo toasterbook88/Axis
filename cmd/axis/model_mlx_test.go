@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/modelinventory"
@@ -305,7 +306,17 @@ esac
 	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 8080, Engine: engine}))
 	cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin"}
 	out, err := cmd.CombinedOutput()
-	return string(out), processStillRunning(targetProc.Process.Pid), err
+	text := string(out)
+	alive := processStillRunning(targetProc.Process.Pid)
+	// kill(2) can return before /proc shows the victim as dead.
+	if strings.Contains(text, modelStopMarker+"stopped") {
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for alive && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			alive = processStillRunning(targetProc.Process.Pid)
+		}
+	}
+	return text, alive, err
 }
 
 func processStillRunning(pid int) bool {

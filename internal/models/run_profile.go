@@ -55,45 +55,45 @@ func MainGPUPinNote(index *int) string {
 // ModelRunProfile is the launch description shared by model plan and model start.
 // It does not exec. Argv is derived from it.
 type ModelRunProfile struct {
-	Schema                string         `json:"schema"`
-	Node                  string         `json:"node"`
-	Engine                string         `json:"engine"`
-	EngineBinary          string         `json:"engine_binary,omitempty"`
-	ToolName              string         `json:"tool_name,omitempty"`
-	SpecID                string         `json:"spec_id,omitempty"`
-	ArtifactKind          string         `json:"artifact_kind,omitempty"`
-	WeightsPath           string         `json:"weights_path,omitempty"`
-	OllamaModel           string         `json:"ollama_model,omitempty"`
-	Format                ModelFormat    `json:"format,omitempty"`
-	Quantization          string         `json:"quantization,omitempty"`
-	Volume                string         `json:"volume,omitempty"`
-	SpecSource            string         `json:"spec_source,omitempty"`
-	DeviceKind            string         `json:"device_kind,omitempty"`
-	DeviceIndex           *int           `json:"device_index,omitempty"`
-	IndexSource           string         `json:"index_source,omitempty"`
-	DeviceModel           string         `json:"device_model,omitempty"`
-	MemoryTopology        MemoryTopology `json:"memory_topology,omitempty"`
-	VRAMFreeMB            int64          `json:"vram_free_mb,omitempty"`
-	VRAMFreeMeasured      bool           `json:"vram_free_measured,omitempty"`
-	Accelerator           string         `json:"accelerator,omitempty"`
-	BindHost              string         `json:"bind_host"`
-	Port                  int            `json:"port"`
-	ContextTokens         *int           `json:"context_tokens,omitempty"`
-	NGPULayers            *int           `json:"n_gpu_layers,omitempty"`
-	NGPULayersMode        string         `json:"n_gpu_layers_mode,omitempty"`
-	BatchSize             *int           `json:"batch_size,omitempty"`
-	UBatchSize            *int           `json:"ubatch_size,omitempty"`
-	Threads               *int           `json:"threads,omitempty"`
-	OllamaNumCtx          *int           `json:"ollama_num_ctx,omitempty"`
-	OllamaKeepAlive       string         `json:"ollama_keep_alive,omitempty"`
-	OllamaNumGPU          *int           `json:"ollama_num_gpu,omitempty"`
-	MLXModel              string         `json:"mlx_model,omitempty"`
-	PrefillStepSize       *int           `json:"prefill_step_size,omitempty"`
-	PromptCacheBytes      *int64         `json:"prompt_cache_bytes,omitempty"`
-	KVBits                *int           `json:"kv_bits,omitempty"`
-	PortSource            string         `json:"port_source,omitempty"`
-	SnapshotPublicationID string         `json:"snapshot_publication_id,omitempty"`
-	Refusals              []string       `json:"refusals,omitempty"`
+	Schema                string         `json:"schema" yaml:"schema"`
+	Node                  string         `json:"node" yaml:"node"`
+	Engine                string         `json:"engine" yaml:"engine"`
+	EngineBinary          string         `json:"engine_binary,omitempty" yaml:"engine_binary,omitempty"`
+	ToolName              string         `json:"tool_name,omitempty" yaml:"tool_name,omitempty"`
+	SpecID                string         `json:"spec_id,omitempty" yaml:"spec_id,omitempty"`
+	ArtifactKind          string         `json:"artifact_kind,omitempty" yaml:"artifact_kind,omitempty"`
+	WeightsPath           string         `json:"weights_path,omitempty" yaml:"weights_path,omitempty"`
+	OllamaModel           string         `json:"ollama_model,omitempty" yaml:"ollama_model,omitempty"`
+	Format                ModelFormat    `json:"format,omitempty" yaml:"format,omitempty"`
+	Quantization          string         `json:"quantization,omitempty" yaml:"quantization,omitempty"`
+	Volume                string         `json:"volume,omitempty" yaml:"volume,omitempty"`
+	SpecSource            string         `json:"spec_source,omitempty" yaml:"spec_source,omitempty"`
+	DeviceKind            string         `json:"device_kind,omitempty" yaml:"device_kind,omitempty"`
+	DeviceIndex           *int           `json:"device_index,omitempty" yaml:"device_index,omitempty"`
+	IndexSource           string         `json:"index_source,omitempty" yaml:"index_source,omitempty"`
+	DeviceModel           string         `json:"device_model,omitempty" yaml:"device_model,omitempty"`
+	MemoryTopology        MemoryTopology `json:"memory_topology,omitempty" yaml:"memory_topology,omitempty"`
+	VRAMFreeMB            int64          `json:"vram_free_mb,omitempty" yaml:"vram_free_mb,omitempty"`
+	VRAMFreeMeasured      bool           `json:"vram_free_measured,omitempty" yaml:"vram_free_measured,omitempty"`
+	Accelerator           string         `json:"accelerator,omitempty" yaml:"accelerator,omitempty"`
+	BindHost              string         `json:"bind_host" yaml:"bind_host"`
+	Port                  int            `json:"port" yaml:"port"`
+	ContextTokens         *int           `json:"context_tokens,omitempty" yaml:"context_tokens,omitempty"`
+	NGPULayers            *int           `json:"n_gpu_layers,omitempty" yaml:"n_gpu_layers,omitempty"`
+	NGPULayersMode        string         `json:"n_gpu_layers_mode,omitempty" yaml:"n_gpu_layers_mode,omitempty"`
+	BatchSize             *int           `json:"batch_size,omitempty" yaml:"batch_size,omitempty"`
+	UBatchSize            *int           `json:"ubatch_size,omitempty" yaml:"ubatch_size,omitempty"`
+	Threads               *int           `json:"threads,omitempty" yaml:"threads,omitempty"`
+	OllamaNumCtx          *int           `json:"ollama_num_ctx,omitempty" yaml:"ollama_num_ctx,omitempty"`
+	OllamaKeepAlive       string         `json:"ollama_keep_alive,omitempty" yaml:"ollama_keep_alive,omitempty"`
+	OllamaNumGPU          *int           `json:"ollama_num_gpu,omitempty" yaml:"ollama_num_gpu,omitempty"`
+	MLXModel              string         `json:"mlx_model,omitempty" yaml:"mlx_model,omitempty"`
+	PrefillStepSize       *int           `json:"prefill_step_size,omitempty" yaml:"prefill_step_size,omitempty"`
+	PromptCacheBytes      *int64         `json:"prompt_cache_bytes,omitempty" yaml:"prompt_cache_bytes,omitempty"`
+	KVBits                *int           `json:"kv_bits,omitempty" yaml:"kv_bits,omitempty"`
+	PortSource            string         `json:"port_source,omitempty" yaml:"port_source,omitempty"`
+	SnapshotPublicationID string         `json:"snapshot_publication_id,omitempty" yaml:"snapshot_publication_id,omitempty"`
+	Refusals              []string       `json:"refusals,omitempty" yaml:"refusals,omitempty"`
 }
 
 // LaunchDevice is the one device a llama-server launch is allowed to name.
@@ -181,6 +181,33 @@ func ObserveLaunchDevice(node NodeFacts) LaunchDevice {
 		Accelerator:    "cpu",
 		MemoryTopology: node.Resources.MemoryTopology,
 	}
+}
+
+// LaunchDeviceForNvidiaIndex returns the discrete GPU with this nvidia-smi
+// index. It does not fall back to a different GPU.
+func LaunchDeviceForNvidiaIndex(node NodeFacts, index int) (LaunchDevice, bool) {
+	if node.Resources == nil {
+		return LaunchDevice{}, false
+	}
+	for _, gpu := range node.Resources.GPUs {
+		if gpu.Index == nil || *gpu.Index != index || gpu.IndexSource != IndexSourceNvidiaSMI {
+			continue
+		}
+		acc, ok := discreteAccelerator(gpu)
+		if !ok {
+			return LaunchDevice{}, false
+		}
+		free, measured := MeasuredFreeVRAM(gpu)
+		return LaunchDevice{
+			Kind:             DeviceKindDiscrete,
+			Model:            gpu.Model,
+			Accelerator:      acc,
+			MemoryTopology:   node.Resources.MemoryTopology,
+			VRAMFreeMB:       free,
+			VRAMFreeMeasured: measured,
+		}, true
+	}
+	return LaunchDevice{}, false
 }
 
 func unifiedLaunchDevice(res *Resources) LaunchDevice {

@@ -3,6 +3,8 @@ package models
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestNamedLocalVolumeSkipsNetworkAndKeepsLongestMount(t *testing.T) {
@@ -234,5 +236,40 @@ func TestValidateMLXRequiresDirectoryAndRefusesForeignFields(t *testing.T) {
 	profile.KVBits = &bits
 	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "kv-bits") {
 		t.Fatalf("kv err=%v", err)
+	}
+}
+
+func TestModelRunProfileYAMLKeepsSnakeCase(t *testing.T) {
+	zero := 0
+	profile := ModelRunProfile{
+		Schema:       ModelRunSchema,
+		Node:         "storage",
+		Engine:       EngineLlamaCpp,
+		EngineBinary: "/usr/local/bin/llama-server",
+		DeviceIndex:  &zero,
+		BindHost:     "127.0.0.1",
+		Port:         8080,
+	}
+	data, err := yaml.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, bad := range []string{"enginebinary:", "deviceindex:", "bindhost:", "spec_id:", "batch_size:"} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("yaml contains %s\n%s", bad, text)
+		}
+	}
+	for _, want := range []string{"engine_binary:", "device_index: 0", "bind_host:", "port: 8080"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("yaml missing %s\n%s", want, text)
+		}
+	}
+	var decoded ModelRunProfile
+	if err := yaml.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.EngineBinary != profile.EngineBinary || decoded.DeviceIndex == nil || *decoded.DeviceIndex != 0 {
+		t.Fatalf("decoded=%+v", decoded)
 	}
 }

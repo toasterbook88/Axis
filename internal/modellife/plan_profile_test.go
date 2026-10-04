@@ -199,6 +199,66 @@ func TestPlanStartProfileNGPULayersModeAndRefusals(t *testing.T) {
 	}
 }
 
+func TestPlanStartProfilePinUsesThatGPUsMeasuredVRAM(t *testing.T) {
+	node := storageNode()
+	zero, one := 0, 1
+	node.Resources.GPUs = []models.GPUInfo{
+		{
+			Vendor: "nvidia", Model: "GPU0", Index: &zero, IndexSource: models.IndexSourceNvidiaSMI,
+			VRAMMB: 24576, VRAMFreeMB: 20000, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+		},
+		{
+			Vendor: "nvidia", Model: "GPU1", Index: &one, IndexSource: models.IndexSourceNvidiaSMI,
+			VRAMMB: 8192, Capabilities: []string{"cuda"},
+		},
+	}
+	pinned := readyProfile(node)
+	pinned.NGPULayersMode = "auto"
+	pinned.DeviceIndex = &one
+	pinned.IndexSource = models.IndexSourceNvidiaSMI
+	if _, err := PlanStartProfile(node, pinned); err == nil || !strings.Contains(err.Error(), "measured free VRAM") {
+		t.Fatalf("unmeasured pin err=%v", err)
+	}
+
+	node.Resources.GPUs[1].VRAMFreeMB = 100
+	node.Resources.GPUs[1].VRAMFreeMeasured = true
+	pinned = readyProfile(node)
+	pinned.NGPULayersMode = "auto"
+	pinned.DeviceIndex = &one
+	pinned.IndexSource = models.IndexSourceNvidiaSMI
+	plan, err := PlanStartProfile(node, pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Profile.DeviceModel != "GPU1" || plan.Profile.VRAMFreeMB != 100 || !plan.Profile.VRAMFreeMeasured {
+		t.Fatalf("pinned device=%s free=%d measured=%v", plan.Profile.DeviceModel, plan.Profile.VRAMFreeMB, plan.Profile.VRAMFreeMeasured)
+	}
+	if !strings.Contains(strings.Join(plan.Argv, " "), "--main-gpu 1") {
+		t.Fatalf("argv=%v", plan.Argv)
+	}
+
+	unpinned := readyProfile(node)
+	unpinned.NGPULayersMode = "auto"
+	plan, err = PlanStartProfile(node, unpinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Profile.DeviceModel != "GPU0" || plan.Profile.VRAMFreeMB != 20000 {
+		t.Fatalf("unpinned device=%s free=%d", plan.Profile.DeviceModel, plan.Profile.VRAMFreeMB)
+	}
+
+	unified := storageNode()
+	unified.Resources.MemoryTopology = models.MemoryTopologyUnified
+	unified.Resources.GPUs = append([]models.GPUInfo(nil), node.Resources.GPUs...)
+	pinned = readyProfile(unified)
+	pinned.NGPULayersMode = "auto"
+	pinned.DeviceIndex = &zero
+	pinned.IndexSource = models.IndexSourceNvidiaSMI
+	if _, err := PlanStartProfile(unified, pinned); err == nil || !strings.Contains(err.Error(), "measured free VRAM") {
+		t.Fatalf("unified pin err=%v", err)
+	}
+}
+
 func TestPlanStartProfileCtxSizeDoesNotCheckVRAM(t *testing.T) {
 	node := storageNode()
 	ctx := 100000

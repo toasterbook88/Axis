@@ -93,6 +93,18 @@ func TestOllamaPSHasModelReadsAPIPs(t *testing.T) {
 	if _, err := OllamaPSHasModel("not-json", "mistral"); err == nil {
 		t.Fatal("expected json error")
 	}
+	ok, err = OllamaPSHasModel(`{"models":[{"name":"mistral:latest","model":"mistral:latest"}]}`, "mistral")
+	if err != nil || !ok {
+		t.Fatalf("untagged request latest listing ok=%v err=%v", ok, err)
+	}
+	ok, err = OllamaPSHasModel(`{"models":[{"name":"mistral","model":"mistral"}]}`, "mistral:latest")
+	if err != nil || !ok {
+		t.Fatalf("latest request untagged listing ok=%v err=%v", ok, err)
+	}
+	ok, err = OllamaPSHasModel(`{"models":[{"name":"mistral:q4","model":"mistral:q4"}]}`, "mistral")
+	if err != nil || ok {
+		t.Fatalf("other tag ok=%v err=%v", ok, err)
+	}
 }
 
 func ollamaJSONBody(t *testing.T, script string) map[string]any {

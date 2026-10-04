@@ -98,6 +98,11 @@ func normalizeStartProfile(node models.NodeFacts, profile models.ModelRunProfile
 		}
 	}
 	dev := models.ObserveLaunchDevice(node)
+	if profile.DeviceIndex != nil && dev.Kind == models.DeviceKindDiscrete {
+		if pinned, ok := models.LaunchDeviceForNvidiaIndex(node, *profile.DeviceIndex); ok {
+			dev = pinned
+		}
+	}
 	profile.DeviceKind = dev.Kind
 	profile.DeviceModel = dev.Model
 	profile.Accelerator = dev.Accelerator
