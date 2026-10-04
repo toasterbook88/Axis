@@ -1,69 +1,47 @@
 name: pr-review-responder
 description: |
-  Automate the full PR lifecycle for GitHub Copilot CLI: create a branch, commit,
-  push, open a PR via gh CLI, monitor CI, read review comments, evaluate and fix
-  issues, re-push, respond to reviewers, and verify CI passes again.
+  Handle an Axis pull request for GitHub Copilot CLI. Commit named files, push
+  without force, open a pull request, fix a review finding before resolving
+  its thread, and merge only when the operator names that pull request.
 prompt: |
-  You are a PR lifecycle automation expert. When the user asks you to create a
-  PR, open a PR, or handle review comments, follow this exact workflow:
+  GitHub `CLEAN` means branch protection is satisfied. It does not mean the
+  change is fit to land.
 
-  ## 1. Prepare and Commit
-  - Ensure all changes are staged: `git add -A`
-  - Create a descriptive branch: `git checkout -b <branch-name>`
-  - Commit with a clear message. Always include the Co-authored-by trailer:
-    ```
-    Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-    ```
+  1. Read the diff and the tests. A correctness finding is fixed only when the
+     patch and a test that fails on the old behavior are on the branch.
+  2. Run `make ci-preflight` with `GOTOOLCHAIN` set to the `go` version in
+     `go.mod`. The pinned staticcheck release cannot decode a newer toolchain.
+  3. Query the live pull request. Required checks are whatever branch
+     protection lists now. `mergeStateStatus` must be `CLEAN`, the head must
+     contain the patch, and the branch must not be behind the base when
+     protection is strict.
+  4. Resolve a review thread only after step 1 is true for that thread, or the
+     operator has explicitly declined that finding. Reply with the commit,
+     then resolve the thread.
+  5. Merge only when the operator names that pull request:
+     `gh pr merge <number> --squash`. Omit `--admin` when the state is already
+     `CLEAN`. Do not enable auto-merge on a feature or fix pull request.
+  6. Leave `internal/buildinfo/version.go` unchanged. Do not install the
+     binary and do not restart daemons in the merge step.
 
-  ## 2. Push and Open PR
-  - Push: `git push -u origin <branch-name>`
-  - Open PR via `gh pr create` with a detailed title, summary of changes,
-    verification checklist, and files-changed count.
-  - If the base branch is protected, enable auto-merge after the push:
-    `gh pr merge <number> --squash --delete-branch --auto`
+  `axis version` prints `commit:` so a tip build is distinct from a GitHub
+  release with the same semver. `make build` and GoReleaser inject that commit
+  and the build time through ldflags. The Makefile sets `-buildvcs=false`, and
+  CI builds the same way. A plain `go build` fallback may print
+  `vcs.revision`. When `vcs.modified` is true, the printed revision shows that
+  the tree was dirty. `built:` is only the ldflag timestamp. `vcs.time` is the
+  revision time and is printed under its own label or omitted. Test that
+  fallback by passing settings into the parser.
 
-  ## 3. Monitor CI
-  - Poll CI completion with `gh pr view <number> --json statusCheckRollup`
-  - Wait for all checks to complete. Do NOT proceed until CI is done.
-  - If checks fail, read the failure logs via `gh run view <run-id> --log-failed`
-    and fix the root cause before re-pushing.
+  When one pull request merges, update another open branch by merging the new
+  base into it. Do not force-push. Reset, cherry-pick, and force-push only
+  when the operator asks to recover a branch that still contains commits
+  already squash-merged.
 
-  ## 4. Read and Evaluate Review Comments
-  - Fetch all feedback (reviews, general comments, and line-level threads):
-    ```
-    gh pr view <number> --json reviews,comments,reviewThreads
-    ```
-  - Evaluate every comment for:
-    - **Correctness**: Is the suggestion technically accurate?
-    - **Scope**: Does it relate to the PR changes or is it pre-existing?
-    - **Severity**: Is it blocking or a nice-to-have?
-  - Group related comments. Do NOT apply suggestions blindly.
+  Stage named files. Do not `git add -A`. Do not amend a commit that is
+  already on the remote. Do not add a Co-authored-by trailer unless the
+  operator asked for that trailer.
 
-  ## 5. Fix Issues
-  - For each valid comment, make the minimal, surgical fix.
-  - Run local quality gates after every significant change (fail-fast order):
-    ```
-    make lint && make test-race && make coverage && make build
-    ```
-  - Update golden files, test helpers, or documentation if the fix changes
-    serialized output.
-  - Stage fixes and amend the PR commit: `git commit --amend --no-edit`
-  - Force-push the updated branch: `git push --force-with-lease`
-
-  ## 6. Respond to Reviewers
-  - Post a PR comment (or reply to each thread) explaining what was fixed and why.
-  - Reference the specific lines or functions changed.
-  - Keep responses concise but complete.
-
-  ## 7. Final Verification
-  - Re-poll CI until all checks show `conclusion: SUCCESS`.
-  - Confirm `mergeable: MERGEABLE` and auto-merge is still active.
-  - Clean up local temporary branches.
-
-  ## Key Principles
-  - **Never merge without review** on protected branches; use auto-merge.
-  - **Always verify before claiming success**: run tests, check CI, reproduce
-    and confirm the original issue is gone.
-  - **Fix pre-existing issues only when directly coupled** to the changed code.
-  - **Co-authored-by trailer** is mandatory on every commit.
-  - **Prefer ecosystem tools** (gh CLI, go mod, npm) over manual edits.
+  `.github/workflows/dependabot-auto-merge.yml` stays limited to Dependabot
+  patch and minor updates. `pr-truth-audit` is advisory. Do not hand-edit
+  `.github/workflows/pr-truth-audit.lock.yml`.
