@@ -20,8 +20,8 @@ import (
 
 func TestMLXHelpSaysHTTPAPIIsNotForProduction(t *testing.T) {
 	cmd := modelStartCmd()
-	if !strings.Contains(cmd.Short, "not for production") {
-		t.Fatalf("short=%q", cmd.Short)
+	if !strings.Contains(cmd.Long, "not for production") {
+		t.Fatalf("long=%q", cmd.Long)
 	}
 	flag := cmd.Flags().Lookup("mlx-model")
 	if flag == nil || !strings.Contains(flag.Usage, "not for production") {

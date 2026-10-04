@@ -24,6 +24,7 @@ func TestOllamaModelAndWeightsAreMutuallyExclusive(t *testing.T) {
 
 func TestOllamaStartPlacesOnExistingLoopbackServer(t *testing.T) {
 	snap := testSnap()
+	snap.Nodes[0].Status = models.StatusComplete
 	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Running: true, Listening: true}
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
@@ -101,6 +102,8 @@ func TestOllamaStartPlacesOnExistingLoopbackServer(t *testing.T) {
 
 func TestOllamaStopUnloadsWithoutKillingTheServer(t *testing.T) {
 	snap := testSnap()
+	snap.Nodes[0].Status = models.StatusComplete
+	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Listening: true}
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
 	runner := &fakeModelRunner{}
@@ -163,6 +166,7 @@ func TestOllamaGenerationStopDoesNotReachProcessKill(t *testing.T) {
 	snap.Nodes[0].ResidentModels[0].Runtime = "ollama"
 	snap.Nodes[0].ResidentModels[0].Name = "mistral"
 	snap.Nodes[0].ResidentModels[0].Port = 11434
+	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Listening: true}
 	want := modelinventory.FromSnapshot(snap, "daemon-cache").Instances[0]
 	if want.Engine != "ollama" {
 		t.Fatalf("engine=%s", want.Engine)
@@ -204,6 +208,8 @@ func TestOllamaGenerationStopDoesNotReachProcessKill(t *testing.T) {
 
 func TestOllamaStartTextNamesTheModel(t *testing.T) {
 	snap := testSnap()
+	snap.Nodes[0].Status = models.StatusComplete
+	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Listening: true}
 	stubModelSnapshot(t, snap)
 	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
 	prevScript := runNodeScript

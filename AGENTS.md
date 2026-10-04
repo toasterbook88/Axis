@@ -249,7 +249,7 @@ heavy inference.
 | `axis agent [--auto-approve] [--autonomy MODE] [--plain] [--console] [--live]` | Agentic tool-calling assistant; REPL slash commands `/plan /todo /diff /undo /compact /autonomy /export /fleet`; default cluster context is daemon/disk cache (`LoadCached`), `--live` is an explicit discovery sweep. On an interactive TTY the transcript console is the default; `--plain` selects the legacy line reader (takes precedence over `--console`); `--console` forces the console. Tool approvals use an overlay (`y` yes, `n` no; Enter does not approve; timeout and cancel deny) |
 | `axis llm` | Removed; prints `use axis ai route` |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
-| `axis model` | List/inspect resident instances, dry-run placement planning, start and stop llama-server or MLX, place or unload an Ollama model, await readiness, or query models |
+| `axis model` | List/inspect resident instances, dry-run placement planning, `start <model>` on the node that already has the runtime, or pin llama-server, Ollama, and MLX start/stop, await readiness, or query models |
 | `axis cluster` | Fleet snapshot: `status`, `summary` |
 | `axis node` | This machine: `facts` |
 | `axis cortex` | Distributed vector memory / event bus (resolves node via AXIS_CORTEX_NODE, role: cortex, or name cortex/foundry) |

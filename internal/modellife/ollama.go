@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 // OllamaLoadScript preloads a model on the Ollama server that is already
-// listening on 127.0.0.1:11434. It does not exec ollama serve. The last
-// command's stdout is GET /api/ps, which is the load fact.
+// listening on 127.0.0.1:11434. It does not exec ollama serve. The POST body
+// omits prompt. Current Ollama schedules the runner and, when prompt is empty,
+// returns done_reason load without calling Completion. The script accepts that
+// body only, then prints GET /api/ps, which is the load fact.
 func OllamaLoadScript(model, keepAlive string, numCtx *int) (string, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -36,7 +40,20 @@ func OllamaLoadScript(model, keepAlive string, numCtx *int) (string, error) {
 	}
 	probe := "curl -fsS --max-time 5 http://127.0.0.1:11434/api/ps"
 	post := "curl -fsS --max-time 30 -X POST http://127.0.0.1:11434/api/generate -H 'Content-Type: application/json' -d " + shellSingleQuote(string(raw))
-	return probe + " >/dev/null && " + post + " >/dev/null && " + probe, nil
+	loadOnly := `grep -q '"done_reason":"load"'`
+	return probe + " >/dev/null && " + post + " | " + loadOnly + " && " + probe, nil
+}
+
+// OllamaServerReady reports whether facts show a complete node whose Ollama
+// server is already listening. Placement and unload refuse before SSH otherwise.
+func OllamaServerReady(node models.NodeFacts) error {
+	if node.Status != models.StatusComplete {
+		return fmt.Errorf("node %s status is %q; refusing ollama ssh", node.Name, node.Status)
+	}
+	if node.Ollama == nil || !node.Ollama.Listening {
+		return fmt.Errorf("node %s has no listening ollama server; refusing ollama ssh", node.Name)
+	}
+	return nil
 }
 
 // OllamaUnloadScript asks the existing server to drop a model, then prints

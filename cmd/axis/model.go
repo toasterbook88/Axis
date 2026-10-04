@@ -106,18 +106,30 @@ func modelStartCmd() *cobra.Command {
 	var promptCacheBytes int64
 	var live bool
 	cmd := &cobra.Command{
-		Use:          "start",
-		Short:        "Start llama-server, place an Ollama model, or start mlx_lm.server (its HTTP API is not for production)",
+		Use:   "start [model]",
+		Short: "Place a model on the node that already has its runtime",
+		Long: `Daily path: axis model start <model>
+
+Read the snapshot, pick one complete node that already has the runtime, and print that choice. A resident model is reported and left running. An Ollama server that is already listening and lists the model is loaded on 127.0.0.1:11434.
+
+Explicit pin: --node with --weights and --port, --ollama-model, --mlx-model, or --from-plan. mlx_lm.server's HTTP API is not for production.`,
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateOutputFormat(&format, "text", "json", "yaml")(cmd, args); err != nil {
 				return err
+			}
+			if len(args) == 1 {
+				return requireDailyModelStart(cmd)
 			}
 			return requireModelStartIdentity(cmd)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
 			defer cancel()
+			if len(args) == 1 {
+				return runDailyModelStart(ctx, cmd, args[0])
+			}
 			return runModelStart(ctx, cmd, node, weights, port, defaultModelRunner)
 		},
 	}
@@ -2004,6 +2016,9 @@ func placeOllamaModel(ctx context.Context, cmd *cobra.Command, node models.NodeF
 	if len(profile.Refusals) > 0 {
 		return fmt.Errorf("%s", strings.Join(profile.Refusals, "; "))
 	}
+	if err := modellife.OllamaServerReady(node); err != nil {
+		return err
+	}
 	script, err := modellife.OllamaLoadScript(profile.OllamaModel, profile.OllamaKeepAlive, profile.OllamaNumCtx)
 	if err != nil {
 		return err
@@ -2123,6 +2138,9 @@ func stopOllamaGeneration(ctx context.Context, cmd *cobra.Command, snap *models.
 }
 
 func runOllamaUnload(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, modelName string) error {
+	if err := modellife.OllamaServerReady(node); err != nil {
+		return err
+	}
 	script, err := modellife.OllamaUnloadScript(modelName)
 	if err != nil {
 		return err

@@ -11,6 +11,24 @@ import (
 	"github.com/toasterbook88/axis/internal/models"
 )
 
+func requireDailyModelStart(cmd *cobra.Command) error {
+	var used []string
+	for _, name := range []string{
+		"node", "weights", "port", "from-plan", "n-gpu-layers", "ctx-size",
+		"batch-size", "ubatch-size", "threads", "main-gpu", "ollama-model",
+		"ollama-keep-alive", "ollama-num-ctx", "mlx-model", "prefill-step-size",
+		"prompt-cache-bytes", "kv-bits",
+	} {
+		if cmd.Flags().Changed(name) {
+			used = append(used, "--"+name)
+		}
+	}
+	if len(used) == 0 {
+		return nil
+	}
+	return fmt.Errorf("axis model start <model> picks the node; do not combine it with %s", strings.Join(used, ", "))
+}
+
 func requireModelStartIdentity(cmd *cobra.Command) error {
 	if cmd.Flags().Changed("from-plan") {
 		return nil

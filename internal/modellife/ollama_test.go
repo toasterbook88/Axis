@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 func TestOllamaLoadScriptIsLoopbackGenerateWithoutPrompt(t *testing.T) {
@@ -16,6 +18,9 @@ func TestOllamaLoadScriptIsLoopbackGenerateWithoutPrompt(t *testing.T) {
 	}
 	if !strings.Contains(script, "curl -fsS --max-time 30 -X POST http://127.0.0.1:11434/api/generate") {
 		t.Fatalf("post missing:\n%s", script)
+	}
+	if !strings.Contains(script, `grep -q '"done_reason":"load"'`) {
+		t.Fatalf("load must accept only the Ollama load response:\n%s", script)
 	}
 	if strings.Contains(script, "/v1/models") || strings.Contains(script, "ollama serve") || strings.Contains(script, "OLLAMA_HOST") || strings.Contains(script, "OLLAMA_KEEP_ALIVE") {
 		t.Fatalf("script widens or starts ollama:\n%s", script)
@@ -53,6 +58,20 @@ func TestOllamaLoadScriptAddsOnlyKeepAliveAndNumCtx(t *testing.T) {
 	options, ok := body["options"].(map[string]any)
 	if !ok || len(options) != 1 || options["num_ctx"] != float64(2048) {
 		t.Fatalf("options=%v", body["options"])
+	}
+}
+
+func TestOllamaServerReadyRefusesIncompleteOrSilentNodes(t *testing.T) {
+	err := OllamaServerReady(models.NodeFacts{Name: "storage", Status: models.StatusPartial, Ollama: &models.OllamaInfo{Listening: true}})
+	if err == nil || !strings.Contains(err.Error(), "refusing ollama ssh") {
+		t.Fatalf("partial err=%v", err)
+	}
+	err = OllamaServerReady(models.NodeFacts{Name: "storage", Status: models.StatusComplete})
+	if err == nil || !strings.Contains(err.Error(), "no listening ollama") {
+		t.Fatalf("silent err=%v", err)
+	}
+	if err := OllamaServerReady(models.NodeFacts{Name: "storage", Status: models.StatusComplete, Ollama: &models.OllamaInfo{Listening: true}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

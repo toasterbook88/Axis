@@ -195,6 +195,7 @@ func TestObservationPersistFailureDoesNotRollBackStart(t *testing.T) {
 
 func TestOllamaAndMLXStartsDoNotRecordLlamaObservation(t *testing.T) {
 	snap := testSnap()
+	snap.Nodes[0].Status = models.StatusComplete
 	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Running: true, Listening: true}
 	snap.Nodes[0].Resources.MemoryTopology = models.MemoryTopologyUnified
 	snap.Nodes[0].Tools = append(snap.Nodes[0].Tools, models.ToolInfo{Name: "mlx_lm.server", Path: "/usr/local/bin/mlx_lm.server"})
