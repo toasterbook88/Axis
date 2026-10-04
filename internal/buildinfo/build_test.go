@@ -23,6 +23,29 @@ func TestResolvedDatePrefersLdflags(t *testing.T) {
 	}
 }
 
+func TestResolvedCommitEmptyLdflagMatchesToolchainSettings(t *testing.T) {
+	old := Commit
+	t.Cleanup(func() { Commit = old })
+	Commit = ""
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info == nil {
+		t.Fatal("ReadBuildInfo unavailable")
+	}
+	want := commitFromSettings(info.Settings)
+	if got := ResolvedCommit(); got != want {
+		t.Fatalf("ResolvedCommit() = %q, want toolchain settings %q", got, want)
+	}
+}
+
+func TestResolvedDateEmptyLdflagStaysEmpty(t *testing.T) {
+	old := Date
+	t.Cleanup(func() { Date = old })
+	Date = ""
+	if got := ResolvedDate(); got != "" {
+		t.Fatalf("ResolvedDate() = %q, want empty ldflag", got)
+	}
+}
+
 func TestCommitFromSettingsMarksADirtyTree(t *testing.T) {
 	settings := []debug.BuildSetting{
 		{Key: "vcs.revision", Value: "abc1234"},
