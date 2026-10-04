@@ -41,6 +41,44 @@ type NodeConfig struct {
 	DialTimeoutSec    int            `json:"dial_timeout_sec,omitempty" yaml:"dial_timeout_sec,omitempty"`
 	CollectTimeoutSec int            `json:"collect_timeout_sec,omitempty" yaml:"collect_timeout_sec,omitempty"`
 	SystemReserveMB   int64          `json:"system_reserve_mb,omitempty" yaml:"system_reserve_mb,omitempty"`
+
+	// Labels are operator-declared capability tags (e.g. "egress=lan-only",
+	// "role=builder"). They are Assigned state — config truth, not observed
+	// facts — and ride the fact flow so placement can filter on them via
+	// TaskRequirements.RequiredLabels (conjunction semantics: ALL pairs
+	// must match, exact and case-sensitive).
+	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+}
+
+// ValidateLabels reports label pairs that violate the key/value charset.
+// Keys and values must be non-empty, printable ASCII without whitespace,
+// ':' or '=' (reserved separators), and at most 63 characters. Empty map is
+// valid; returns nil for valid input.
+func (n *NodeConfig) ValidateLabels() error {
+	for k, v := range n.Labels {
+		if err := validateLabelPart(k, "key"); err != nil {
+			return fmt.Errorf("node %q label %q: %w", n.Name, k, err)
+		}
+		if err := validateLabelPart(v, "value"); err != nil {
+			return fmt.Errorf("node %q label %q=%q: %w", n.Name, k, v, err)
+		}
+	}
+	return nil
+}
+
+func validateLabelPart(s, kind string) error {
+	if s == "" {
+		return fmt.Errorf("empty %s", kind)
+	}
+	if len(s) > 63 {
+		return fmt.Errorf("%s longer than 63 chars", kind)
+	}
+	for _, r := range s {
+		if r <= ' ' || r >= 0x7F || r == ':' || r == '=' {
+			return fmt.Errorf("invalid character %q in %s", r, kind)
+		}
+	}
+	return nil
 }
 
 // EffectiveSSHPort returns the SSH port, defaulting to 22.

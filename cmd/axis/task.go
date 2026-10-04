@@ -112,6 +112,7 @@ func taskPlaceCmd() *cobra.Command {
 	var cachedOnly bool
 	var live bool
 	var cacheAddr string
+	var requireLabels []string
 
 	cmd := &cobra.Command{
 		Use:   "place [description]",
@@ -125,12 +126,16 @@ func taskPlaceCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
+			labelReq, err := parseRequireLabels(requireLabels)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 			// --cached matches the default cache-first read and does not override --live.
 			_ = cached
 
-			decision, source, age, err := planTaskPlacement(
+			explanation, source, age, err := planTaskExplanation(
 				ctx,
 				desc,
 				!live,
@@ -139,6 +144,7 @@ func taskPlaceCmd() *cobra.Command {
 					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
 				loadTaskLiveSnapshot,
+				labelReq,
 			)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
@@ -146,6 +152,16 @@ func taskPlaceCmd() *cobra.Command {
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
 				return err
+			}
+			decision := explanation.Decision
+			// Surface deterministic per-node exclusion reasons in
+			// decision.Reasoning so JSON consumers see them too (the text
+			// path prints explanation.Excluded separately below).
+			if !decision.OK {
+				for _, excluded := range explanation.Excluded {
+					decision.Reasoning = append(decision.Reasoning,
+						excluded.Node+": "+strings.Join(excluded.Reasons, "; "))
+				}
 			}
 
 			if format == "json" {
@@ -164,6 +180,14 @@ func taskPlaceCmd() *cobra.Command {
 				fmt.Fprintf(w, "%s %s\n", ui.Red("✗"), "No suitable node found.")
 				for _, r := range decision.Reasoning {
 					fmt.Fprintf(w, "  %s %s\n", ui.Dim("-"), r)
+				}
+				// Deterministic per-node exclusion reasons (incl. required
+				// label failures) so operators can see why each node is out.
+				for _, excluded := range explanation.Excluded {
+					fmt.Fprintf(w, "%s %s\n", ui.Dim("·"), ui.Bold(excluded.Node))
+					for _, reason := range excluded.Reasons {
+						fmt.Fprintf(w, "    %s %s\n", ui.Dim("-"), reason)
+					}
 				}
 				if _, writeErr := fmt.Fprint(cmd.OutOrStdout(), rendered.String()); writeErr != nil {
 					return writeErr
@@ -198,7 +222,28 @@ func taskPlaceCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require a fresh daemon publication; fail instead of falling back to a live sweep")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	cmd.Flags().StringSliceVar(&requireLabels, "require-label", nil, "required node label k=v (repeatable; ALL must match — conjunction)")
 	return cmd
+}
+
+// parseRequireLabels converts k=v flag values into the conjunction map.
+// Errors on malformed pairs and duplicate keys with conflicting values.
+func parseRequireLabels(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || k == "" || v == "" {
+			return nil, fmt.Errorf("invalid --require-label %q: expected k=v", p)
+		}
+		if prev, dup := out[k]; dup && prev != v {
+			return nil, fmt.Errorf("conflicting --require-label values for key %q", k)
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 func planTaskPlacement(
@@ -208,8 +253,9 @@ func planTaskPlacement(
 	cachedOnly bool,
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+	requiredLabels map[string]string,
 ) (models.PlacementDecision, string, string, error) {
-	explanation, source, age, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader)
+	explanation, source, age, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader, requiredLabels)
 	if err != nil {
 		return models.PlacementDecision{}, "", "", err
 	}

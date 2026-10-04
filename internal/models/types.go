@@ -336,6 +336,10 @@ type NodeFacts struct {
 	// Assigned state (from config)
 	Name string `json:"name" yaml:"name"`
 	Role string `json:"role,omitempty" yaml:"role,omitempty"`
+	// Labels are operator-declared capability tags propagated from
+	// NodeConfig.Labels (assigned state, not observed). Placement filters
+	// eligibility on them via TaskRequirements.RequiredLabels.
+	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 
 	// Observed state
 	// Hostname is the machine's observed hostname (uname/os.Hostname), not the
@@ -565,6 +569,28 @@ type TaskRequirements struct {
 	ContextWindowTokens int                  `json:"context_window_tokens,omitempty" yaml:"context_window_tokens,omitempty"`
 	PrefersTurboQuant   bool                 `json:"prefers_turboquant,omitempty" yaml:"prefers_turboquant,omitempty"`
 	PreferredBackends   []string             `json:"preferred_backends,omitempty" yaml:"preferred_backends,omitempty"`
+
+	// RequiredLabels is a conjunction of label pairs a node must attest
+	// (ALL pairs must match exactly) to be placement-eligible. Semantics
+	// follow SAM's X-Sam-Required-Labels: one check, all predicates ANDed.
+	RequiredLabels map[string]string `json:"required_labels,omitempty" yaml:"required_labels,omitempty"`
+}
+
+// SatisfiesRequiredLabels reports whether node labels satisfy the
+// requirement conjunction: every required pair must be present with an
+// exactly equal (case-sensitive) value. Empty requirement is satisfied by
+// any node. Used by placement eligibility only — never by ranking.
+func (n NodeFacts) SatisfiesRequiredLabels(required map[string]string) (bool, []string) {
+	var missing []string
+	for k, v := range required {
+		have, ok := n.Labels[k]
+		if !ok {
+			missing = append(missing, fmt.Sprintf("missing required label: %s=%s", k, v))
+		} else if have != v {
+			missing = append(missing, fmt.Sprintf("required label mismatch: %s=%s (node has %s=%s)", k, v, k, have))
+		}
+	}
+	return len(missing) == 0, missing
 }
 
 // GetMemoryRequestMB returns MemoryRequestMB if > 0.

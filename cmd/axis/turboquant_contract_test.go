@@ -30,6 +30,7 @@ func TestTaskPlaceTurboQuantJSONGolden(t *testing.T) {
 	explanation, source, _, err := explainPlacementFromSnapshot(
 		context.Background(),
 		"run 128k ollama inference",
+		nil,
 		&models.ClusterSnapshot{Nodes: []models.NodeFacts{goldenTurboQuantNode()}},
 		"daemon-cache",
 		"",

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/facts"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -15,7 +16,19 @@ import (
 
 var currentHostname = os.Hostname
 var collectLocalFacts = func(ctx context.Context, hostname string) (*models.NodeFacts, error) {
-	return facts.NewLocalCollector(hostname, "").Collect(ctx)
+	// Labels are operator-assigned config: resolve the node's config entry by
+	// name or hostname and propagate its labels into the collected facts.
+	labels := map[string]string{}
+	cfgPath := os.Getenv("AXIS_CONFIG")
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	if cfg, err := config.Load(cfgPath); err == nil {
+		if nc, ok := cfg.FindNode(hostname); ok {
+			labels = nc.Labels
+		}
+	}
+	return facts.NewLocalCollector(hostname, "", labels).Collect(ctx)
 }
 
 func factsCmd() *cobra.Command {
