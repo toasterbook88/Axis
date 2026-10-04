@@ -2,8 +2,8 @@ package models
 
 import (
 	"reflect"
-	"testing"
 	"strings"
+	"testing"
 )
 
 func TestSatisfiesRequiredLabels_EmptyRequirement(t *testing.T) {
@@ -22,9 +22,9 @@ func TestSatisfiesRequiredLabels_Conjunction(t *testing.T) {
 	// SAM Sep 2026 semantics: required labels are a CONJUNCTION — ALL pairs
 	// must match exactly. One check, all predicates ANDed.
 	n := NodeFacts{Name: "a", Labels: map[string]string{
-		"os":       "linux",
-		"egress":   "lan-only",
-		"gpu":      "none",
+		"os":     "linux",
+		"egress": "lan-only",
+		"gpu":    "none",
 	}}
 
 	ok, reasons := n.SatisfiesRequiredLabels(map[string]string{"os": "linux"})
@@ -107,4 +107,3 @@ func TestSatisfiesRequiredLabels_DeterministicReasons(t *testing.T) {
 		t.Fatalf("reason order mismatch:\n got %v\nwant %v", reasons1, want)
 	}
 }
-

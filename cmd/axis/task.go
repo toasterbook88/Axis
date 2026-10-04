@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/events"
 	"github.com/toasterbook88/axis/internal/execution"
@@ -227,7 +228,8 @@ func taskPlaceCmd() *cobra.Command {
 }
 
 // parseRequireLabels converts k=v flag values into the conjunction map.
-// Errors on malformed pairs and duplicate keys with conflicting values.
+// Errors on malformed pairs, pairs outside the node-label charset, and
+// duplicate keys with conflicting values.
 func parseRequireLabels(pairs []string) (map[string]string, error) {
 	if len(pairs) == 0 {
 		return nil, nil
@@ -238,28 +240,18 @@ func parseRequireLabels(pairs []string) (map[string]string, error) {
 		if !ok || k == "" || v == "" {
 			return nil, fmt.Errorf("invalid --require-label %q: expected k=v", p)
 		}
+		// Same charset as node config labels. A pair the config would
+		// reject must be a CLI error, not a filter that matches nobody.
+		probe := config.NodeConfig{Name: "require-label", Labels: map[string]string{k: v}}
+		if err := probe.ValidateLabels(); err != nil {
+			return nil, fmt.Errorf("invalid --require-label %q: %w", p, err)
+		}
 		if prev, dup := out[k]; dup && prev != v {
 			return nil, fmt.Errorf("conflicting --require-label values for key %q", k)
 		}
 		out[k] = v
 	}
 	return out, nil
-}
-
-func planTaskPlacement(
-	ctx context.Context,
-	desc string,
-	cached bool,
-	cachedOnly bool,
-	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
-	requiredLabels map[string]string,
-) (models.PlacementDecision, string, string, error) {
-	explanation, source, age, err := planTaskExplanation(ctx, desc, cached, cachedOnly, cachedLoader, liveLoader, requiredLabels)
-	if err != nil {
-		return models.PlacementDecision{}, "", "", err
-	}
-	return explanation.Decision, source, age, nil
 }
 
 func appendWarningIfMissing(snap *models.ClusterSnapshot, warning models.Warning) {

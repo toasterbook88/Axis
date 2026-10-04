@@ -18,8 +18,8 @@ func TestRefuseOffBoxBearer(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{
-		"http://192.168.1.249:42425",
-		"192.168.1.249:42425",
+		"http://192.0.2.5:42425",
+		"192.0.2.5:42425",
 		"http://daemon.internal:42425",
 		"example.com:80",
 	} {
@@ -32,7 +32,7 @@ func TestRefuseOffBoxBearer(t *testing.T) {
 	}
 
 	t.Setenv(AllowOffBoxBearerEnv, "1")
-	if err := RefuseOffBoxBearer("http://192.168.1.249:42425"); err != nil {
+	if err := RefuseOffBoxBearer("http://192.0.2.5:42425"); err != nil {
 		t.Errorf("break-glass env must allow off-box, got %v", err)
 	}
 }

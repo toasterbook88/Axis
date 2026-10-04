@@ -1,8 +1,8 @@
 package config
 
 import (
-	"testing"
 	"strings"
+	"testing"
 )
 
 func TestValidateLabels_Valid(t *testing.T) {
@@ -60,13 +60,12 @@ func TestValidateLabels_RejectsTooLong(t *testing.T) {
 }
 
 func TestValidateLabels_ErrorMessageContext(t *testing.T) {
-	n := &NodeConfig{Name: "cranium", Labels: map[string]string{"bad key": "v"}}
+	n := &NodeConfig{Name: "node-a", Labels: map[string]string{"bad key": "v"}}
 	err := n.ValidateLabels()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "cranium") || !strings.Contains(err.Error(), "bad key") {
+	if !strings.Contains(err.Error(), "node-a") || !strings.Contains(err.Error(), "bad key") {
 		t.Fatalf("error must name the node and key, got: %v", err)
 	}
 }
-

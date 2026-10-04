@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,22 @@ func TestParseRequireLabels_Conjunction(t *testing.T) {
 
 func TestParseRequireLabels_Malformed(t *testing.T) {
 	for _, bad := range []string{"os", "os=", "=linux", ""} {
+		if _, err := parseRequireLabels([]string{bad}); err == nil {
+			t.Fatalf("%q must be rejected", bad)
+		}
+	}
+}
+
+func TestParseRequireLabels_RejectsIllegalCharset(t *testing.T) {
+	longKey := strings.Repeat("k", 64)
+	for _, bad := range []string{
+		"os=linux box",
+		"role:gpu=yes",
+		"egress=lan:only",
+		"a=b=c",
+		longKey + "=v",
+		"os=lin\u00fcx",
+	} {
 		if _, err := parseRequireLabels([]string{bad}); err == nil {
 			t.Fatalf("%q must be rejected", bad)
 		}
