@@ -32,6 +32,9 @@ func NormalizeAddr(addr string) string {
 }
 
 func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, string, error) {
+	if err := auth.RefuseOffBoxBearer(addr); err != nil {
+		return nil, "", err
+	}
 	token, err := auth.LoadOrGenerateToken()
 	if err != nil {
 		return nil, "", fmt.Errorf("loading api token: %w", err)
@@ -130,6 +133,10 @@ func staleCacheWarning(meta Metadata) models.Warning {
 }
 
 func FetchMeta(ctx context.Context, addr string) (Metadata, error) {
+	if err := auth.RefuseOffBoxBearer(addr); err != nil {
+		return Metadata{}, err
+	}
+
 	token, err := auth.LoadOrGenerateToken()
 	if err != nil {
 		return Metadata{}, fmt.Errorf("loading api token: %w", err)
@@ -148,6 +155,9 @@ func RunGuarded(ctx context.Context, addr string, req execution.GuardedExecution
 // RunGuardedStream executes a guarded request through the local AXIS HTTP /run
 // surface using the NDJSON streaming contract.
 func RunGuardedStream(ctx context.Context, addr string, req execution.GuardedExecutionRequest, origin models.ExecutionOrigin) (execution.GuardedExecutionResult, error) {
+	if err := auth.RefuseOffBoxBearer(addr); err != nil {
+		return execution.GuardedExecutionResult{}, err
+	}
 	token, err := auth.LoadOrGenerateToken()
 	if err != nil {
 		return execution.GuardedExecutionResult{}, fmt.Errorf("loading api token: %w", err)

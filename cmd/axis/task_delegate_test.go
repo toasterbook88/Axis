@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/a2a"
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -610,8 +611,8 @@ func TestAddrKeepsClusterBearer(t *testing.T) {
 		{"http://custom:1234", false},
 	}
 	for _, tc := range cases {
-		if got := addrKeepsClusterBearer(tc.addr); got != tc.keep {
-			t.Errorf("addrKeepsClusterBearer(%q) = %v, want %v", tc.addr, got, tc.keep)
+		if got := auth.AddrKeepsClusterBearer(tc.addr); got != tc.keep {
+			t.Errorf("AddrKeepsClusterBearer(%q) = %v, want %v", tc.addr, got, tc.keep)
 		}
 	}
 }
