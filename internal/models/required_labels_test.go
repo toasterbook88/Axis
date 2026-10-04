@@ -3,6 +3,7 @@ package models
 import (
 	"reflect"
 	"testing"
+	"strings"
 )
 
 func TestSatisfiesRequiredLabels_EmptyRequirement(t *testing.T) {
@@ -58,7 +59,7 @@ func TestSatisfiesRequiredLabels_Conjunction(t *testing.T) {
 	if ok {
 		t.Fatal("missing key must fail")
 	}
-	if len(reasons) != 1 || !wantPrefix(reasons[0], "missing required label: tenant=acme") {
+	if len(reasons) != 1 || !strings.HasPrefix(reasons[0], "missing required label: tenant=acme") {
 		t.Fatalf("wrong reason: %v", reasons)
 	}
 }
@@ -84,28 +85,26 @@ func TestSatisfiesRequiredLabels_CaseSensitive(t *testing.T) {
 }
 
 func TestSatisfiesRequiredLabels_DeterministicReasons(t *testing.T) {
-	// Reasons must be deterministic per (requirement, node) pair regardless of
-	// map iteration order — mirror of sorted output contract.
+	// Reasons are sorted by required key, so output ORDER is deterministic
+	// across map iteration orders (Go map range is unordered).
 	n := NodeFacts{Name: "a"}
 	_, reasons1 := n.SatisfiesRequiredLabels(map[string]string{"b": "1", "a": "1", "c": "1"})
 	_, reasons2 := n.SatisfiesRequiredLabels(map[string]string{"a": "1", "c": "1", "b": "1"})
 
-	set1 := map[string]bool{}
-	for _, r := range reasons1 {
-		set1[r] = true
-	}
-	set2 := map[string]bool{}
-	for _, r := range reasons2 {
-		set2[r] = true
-	}
-	if !reflect.DeepEqual(set1, set2) {
-		t.Fatalf("reason sets differ across map orderings: %v vs %v", reasons1, reasons2)
+	if !reflect.DeepEqual(reasons1, reasons2) {
+		t.Fatalf("reason order differs across map orderings:\n%v\n%v", reasons1, reasons2)
 	}
 	if len(reasons1) != 3 {
 		t.Fatalf("expected 3 missing reasons, got %d", len(reasons1))
 	}
+	// Explicit order contract: keys sorted a < b < c.
+	want := []string{
+		"missing required label: a=1",
+		"missing required label: b=1",
+		"missing required label: c=1",
+	}
+	if !reflect.DeepEqual(reasons1, want) {
+		t.Fatalf("reason order mismatch:\n got %v\nwant %v", reasons1, want)
+	}
 }
 
-func wantPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}

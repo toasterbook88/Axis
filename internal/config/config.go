@@ -52,8 +52,10 @@ type NodeConfig struct {
 
 // ValidateLabels reports label pairs that violate the key/value charset.
 // Keys and values must be non-empty, printable ASCII without whitespace,
-// ':' or '=' (reserved separators), and at most 63 characters. Empty map is
-// valid; returns nil for valid input.
+// ':' or '=' (reserved separators), and at most 63 characters — the same
+// per-component cap DNS labels use, long enough for any realistic tag
+// ("egress=lan-only" is 15) while keeping error messages readable.
+// Empty map is valid; returns nil for valid input.
 func (n *NodeConfig) ValidateLabels() error {
 	for k, v := range n.Labels {
 		if err := validateLabelPart(k, "key"); err != nil {
@@ -537,6 +539,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: node[%d] (%s) missing ssh_user", i, n.Name)
 		}
 		prefix := fmt.Sprintf("config: node[%d] (%s)", i, n.Name)
+		if err := n.ValidateLabels(); err != nil {
+			return fmt.Errorf("%s: %w", prefix, err)
+		}
 		if err := validateOptionalPort(prefix+" ssh_port", n.SSHPort); err != nil {
 			return err
 		}

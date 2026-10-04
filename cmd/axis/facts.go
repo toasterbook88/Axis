@@ -15,18 +15,34 @@ import (
 )
 
 var currentHostname = os.Hostname
-var collectLocalFacts = func(ctx context.Context, hostname string) (*models.NodeFacts, error) {
-	// Labels are operator-assigned config: resolve the node's config entry by
-	// name or hostname and propagate its labels into the collected facts.
-	labels := map[string]string{}
+
+// localNodeLabels resolves the local node's operator-assigned labels from
+// config. A missing config file yields empty labels (unconfigured machine is
+// normal for `axis facts`); a config that exists but fails to load is an
+// error — silently dropping labels would make the node lose eligibility
+// with no signal.
+var localNodeLabels = func(hostname string) (map[string]string, error) {
 	cfgPath := os.Getenv("AXIS_CONFIG")
 	if cfgPath == "" {
 		cfgPath = config.DefaultConfigPath()
 	}
-	if cfg, err := config.Load(cfgPath); err == nil {
-		if nc, ok := cfg.FindNode(hostname); ok {
-			labels = nc.Labels
-		}
+	if _, statErr := os.Stat(cfgPath); statErr != nil {
+		return map[string]string{}, nil // no config: fine, no labels
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading config for node labels: %w", err)
+	}
+	if nc, ok := cfg.FindNode(hostname); ok {
+		return nc.Labels, nil
+	}
+	return map[string]string{}, nil
+}
+
+var collectLocalFacts = func(ctx context.Context, hostname string) (*models.NodeFacts, error) {
+	labels, err := localNodeLabels(hostname)
+	if err != nil {
+		return nil, err
 	}
 	return facts.NewLocalCollector(hostname, "", labels).Collect(ctx)
 }

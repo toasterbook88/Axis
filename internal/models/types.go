@@ -4,6 +4,7 @@ package models
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -579,10 +580,19 @@ type TaskRequirements struct {
 // SatisfiesRequiredLabels reports whether node labels satisfy the
 // requirement conjunction: every required pair must be present with an
 // exactly equal (case-sensitive) value. Empty requirement is satisfied by
-// any node. Used by placement eligibility only — never by ranking.
+// any node. Reasons are sorted by required key so output order is
+// deterministic (Go map range order is not). Used by placement eligibility
+// only — never by ranking.
 func (n NodeFacts) SatisfiesRequiredLabels(required map[string]string) (bool, []string) {
+	keys := make([]string, 0, len(required))
+	for k := range required {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var missing []string
-	for k, v := range required {
+	for _, k := range keys {
+		v := required[k]
 		have, ok := n.Labels[k]
 		if !ok {
 			missing = append(missing, fmt.Sprintf("missing required label: %s=%s", k, v))
