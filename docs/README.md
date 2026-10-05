@@ -3,7 +3,7 @@
 ## Start Here
 
 - [Current State](current-state.md) — current orientation doc for the live repo, command surface, coverage snapshot, and known weak spots
-- [Agent Worklog](agent-worklog.md) — active coordination surface, file ownership, and current task tracking
+- [Agent Worklog](agent-worklog.md) — historical coordination log and file-ownership notes; not the current queue
 - [RAM Balancing Research](ram-balancing-research.md) — research-backed design note on how AXIS should model cluster RAM sharing and balancing
 
 ## Design Docs

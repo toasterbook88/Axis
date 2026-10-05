@@ -1,6 +1,6 @@
 # AXIS Agent Worklog
 
-This file is the canonical coordination surface for active AXIS work.
+Historical coordination log. The reviewed HEAD below is 2026-06-04. Live orientation is `docs/current-state.md`. The task tables are not the current queue.
 
 ## Coordination Contract
 
