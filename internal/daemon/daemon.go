@@ -84,10 +84,10 @@ type Metadata struct {
 	Freshness           *models.DiscoveryFreshness `json:"freshness,omitempty"`
 	RouteProbeStats     multipath.Stats            `json:"route_probe_stats"`
 	// Process identity for version/restart diagnostics
-	Commit      string    `json:"commit,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-	PID         int       `json:"pid,omitempty"`
-	Executable  string    `json:"executable,omitempty"`
+	Commit     string    `json:"commit,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	PID        int       `json:"pid,omitempty"`
+	Executable string    `json:"executable,omitempty"`
 }
 
 type daemonMetadata struct {
@@ -1100,7 +1100,7 @@ func (d *Daemon) Meta() Metadata {
 		Commit:             metaState.commit,
 		StartedAt:          metaState.startedAt,
 		PID:                metaState.pid,
-		Executable:        metaState.executable,
+		Executable:         metaState.executable,
 	}
 	mesh := d.mesh
 	if mesh != nil {

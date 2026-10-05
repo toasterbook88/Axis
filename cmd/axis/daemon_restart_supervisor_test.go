@@ -123,7 +123,7 @@ func TestDaemonRestartUsesLaunchctlKickstartWhenAgentLoaded(t *testing.T) {
 func TestDaemonRestartStandaloneStillSpawnsDetached(t *testing.T) {
 	// Set up a harness that simulates no supervisor and no daemon.
 	h := &restartHarness{
-		metas: []daemon.Metadata{{Version: "0.0.0-old", Ready: true}},
+		metas: []daemon.Metadata{{Version: "0.0.0-old", Ready: true}, serving()},
 		pid:   111,
 	}
 	h.install(t)

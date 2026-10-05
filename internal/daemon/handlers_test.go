@@ -45,10 +45,10 @@ func TestHealthPayloadWithMetaNoError(t *testing.T) {
 
 func TestHealthPayloadIncludesCommitStartedAtPID(t *testing.T) {
 	meta := &Metadata{
-		Ready:     true,
-		Commit:    "abc1234",
-		StartedAt: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC),
-		PID:       4242,
+		Ready:      true,
+		Commit:     "abc1234",
+		StartedAt:  time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC),
+		PID:        4242,
 		Executable: "/usr/local/bin/axis",
 	}
 	p := HealthPayload(meta)
