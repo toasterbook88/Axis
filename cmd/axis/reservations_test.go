@@ -505,6 +505,143 @@ func TestReservationsListText(t *testing.T) {
 	_ = stderr
 }
 
+func TestReservationsListAndInspectDeviceHold(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	ledger.SetNodeCapacity("node-a", 16384)
+	if _, err := ledger.Reserve(reservation.Entry{
+		ID:           "exec-1",
+		Node:         "node-a",
+		OwnerSurface: "guarded-exec",
+		RAMMB:        1024,
+		VRAMMB:       2048,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gpu := 0
+	if _, err := ledger.HoldDevice(reservation.DeviceHold{
+		ID:        "gpu-hold",
+		Node:      "node-a",
+		GPUIndex:  &gpu,
+		MiB:       1536,
+		Owner:     "operator",
+		ExpiresAt: time.Now().Add(time.Hour).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list := reservationsListCmd()
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		list.SetArgs(nil)
+		return list.Execute()
+	})
+	if err != nil {
+		t.Fatalf("list text: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "DEVICE HOLDS") {
+		t.Fatalf("missing device hold table:\n%s", stdout)
+	}
+	var holdCells []string
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.Contains(line, "gpu-hold") {
+			for _, cell := range strings.Split(line, "│") {
+				cell = strings.TrimSpace(cell)
+				if cell != "" {
+					holdCells = append(holdCells, cell)
+				}
+			}
+		}
+	}
+	if len(holdCells) < 4 || holdCells[2] != "0" || holdCells[3] != "1536" {
+		t.Fatalf("hold row = %#v, want GPU index 0 and MiB 1536\n%s", holdCells, stdout)
+	}
+
+	listJSON := reservationsListCmd()
+	jsonOut, _, err := captureProcessOutput(t, func() error {
+		listJSON.SetArgs([]string{"--format", "json"})
+		return listJSON.Execute()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []reservation.Entry
+	if err := json.Unmarshal([]byte(jsonOut), &entries); err != nil {
+		t.Fatalf("json list changed shape: %v\n%s", err, jsonOut)
+	}
+	if len(entries) != 1 || entries[0].ID != "exec-1" || strings.Contains(jsonOut, "gpu-hold") {
+		t.Fatalf("json list = %s", jsonOut)
+	}
+
+	inspectEntry := reservationsInspectCmd()
+	entryOut, _, err := captureProcessOutput(t, func() error {
+		inspectEntry.SetArgs([]string{"exec-1"})
+		return inspectEntry.Execute()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(entryOut, "VRAM MB:") || strings.Contains(entryOut, "GPU index") {
+		t.Fatalf("entry inspect relabeled VRAM:\n%s", entryOut)
+	}
+
+	inspectHold := reservationsInspectCmd()
+	holdOut, _, err := captureProcessOutput(t, func() error {
+		inspectHold.SetArgs([]string{"gpu-hold"})
+		return inspectHold.Execute()
+	})
+	if err != nil {
+		t.Fatalf("inspect hold: %v\n%s", err, holdOut)
+	}
+	if !strings.Contains(holdOut, "GPU index:") || !strings.Contains(holdOut, "1536") || strings.Contains(holdOut, "VRAM MB") {
+		t.Fatalf("hold inspect =\n%s", holdOut)
+	}
+
+	releaseHold := reservationsReleaseCmd()
+	_, _, err = captureProcessOutput(t, func() error {
+		releaseHold.SetArgs([]string{"gpu-hold"})
+		return releaseHold.Execute()
+	})
+	if err == nil || !strings.Contains(err.Error(), `reservation "gpu-hold" not found`) {
+		t.Fatalf("release hold error = %v", err)
+	}
+	reloaded := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	if err := reloaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	holds := reloaded.DeviceHolds()
+	if len(holds) != 1 || holds[0].ID != "gpu-hold" || holds[0].GPUIndex == nil || *holds[0].GPUIndex != 0 {
+		t.Fatalf("release of hold id changed holds: %+v", holds)
+	}
+	if len(reloaded.Entries()) != 1 {
+		t.Fatalf("hold release removed the entry: %+v", reloaded.Entries())
+	}
+}
+
+func TestReservationsListHoldOnlyPrintsSecondTable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	gpu := 0
+	if _, err := ledger.HoldDevice(reservation.DeviceHold{
+		ID: "gpu-hold", Node: "node-a", GPUIndex: &gpu, MiB: 64, Owner: "operator",
+		ExpiresAt: time.Now().Add(time.Hour).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := reservationsListCmd()
+	stdout, stderr, err := captureProcessOutput(t, func() error {
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("list hold-only: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "No active reservations") || !strings.Contains(stdout, "DEVICE HOLDS") || !strings.Contains(stdout, "gpu-hold") {
+		t.Fatalf("hold-only list =\n%s", stdout)
+	}
+}
+
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		d    time.Duration

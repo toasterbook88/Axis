@@ -27,6 +27,10 @@ func cloneGPUInfos(gpus []models.GPUInfo) []models.GPUInfo {
 	for i, gpu := range gpus {
 		gpuCopy := gpu
 		gpuCopy.Capabilities = append([]string(nil), gpu.Capabilities...)
+		if gpu.Index != nil {
+			index := *gpu.Index
+			gpuCopy.Index = &index
+		}
 		cloned[i] = gpuCopy
 	}
 	return cloned

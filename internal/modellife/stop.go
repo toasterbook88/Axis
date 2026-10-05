@@ -18,6 +18,9 @@ type StopTarget struct {
 	SupervisorType    string
 	SupervisorUnit    string
 	GPUIndices        []int
+	// Engine selects the process-owner check. Empty keeps the llama-server
+	// comm check, including port-only legacy stops.
+	Engine string
 }
 
 func (t StopTarget) IsGenerationBound() bool {

@@ -106,7 +106,11 @@ curl -s -H "Authorization: Bearer $T" --unix-socket "$S" \
   http://localhost/a2a/v1/tasks/pending          # -> {"tasks":[]}
 ```
 
-`axis version` prints `buildinfo.Commit` baked into the binary you just executed
-(`cmd/axis/main.go`, `internal/buildinfo`). It does not ask the running daemon who
-it is. **`axis update` replaces the binary but does not restart a supervised
-daemon** — check the process start time, or the API response, not `axis version`.
+`axis version` prints `commit:` from the ldflag `buildinfo.Commit` when that
+value is set (`cmd/axis/main.go`, `internal/buildinfo.ResolvedCommit`). A plain
+build whose commit ldflag is empty prints `vcs.revision` and appends `-dirty`
+when `vcs.modified` is true. `built:` is only the ldflag build time.
+`vcs.time` is the revision time and is not a build time. The command does not
+ask the running daemon who it is. **`axis update` replaces the binary but does
+not restart a supervised daemon** — check the process start time, or the API
+response, not `axis version`.

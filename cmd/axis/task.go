@@ -829,7 +829,7 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 
 Be precise. Use real node names and tools above. Placement is advisory:
 execute via `+"`axis task run --script/--exec`"+` (guarded, reserved, confirmed)
-or model lifecycle via `+"`axis model start --node <name> --weights <path> --port <p>`"+`.`,
+or model lifecycle via `+"`axis model start <model>`"+` (picks the node that already has the runtime).`,
 		sourceOrLive(source), best.Name, ramSummary, pressure,
 		gpuLine(gpuSummary), contextHint(reqs), toolsList(best),
 		clusterSummaryLine(snap), task, extraLines)

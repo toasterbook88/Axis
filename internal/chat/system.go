@@ -59,7 +59,7 @@ func BuildSystemPrompt(cluster *ClusterSummaryForPrompt, extra string) string {
 	b.WriteString("- You have first-class tools: axis_status, axis_facts, axis_place, axis_summary, axis_reservations. Prefer them over guessing — they read the live fact plane.\n")
 	b.WriteString("- For placement questions, call axis_place with the task description; report the chosen node and reasoning verbatim. Placement is advisory.\n")
 	b.WriteString("- Mutating actions (run_shell, run_on_node, axis_run_task, write_file, edit_file) go through safety checks and operator confirmation. Never assume approval.\n")
-	b.WriteString("- For models: axis model list shows what is resident where; axis model start/stop manage llama-server instances; axis model query prompts a resident model directly.\n")
+	b.WriteString("- For models: axis model list shows what is resident where; axis model start <model> picks the node that already has the runtime; explicit start/stop flags pin llama-server, Ollama, or MLX; axis model query prompts a resident model directly.\n")
 	b.WriteString("- CLI equivalents the user can run: axis facts, axis status, axis task place, axis task context, axis task run, axis doctor.\n")
 
 	if cluster != nil {

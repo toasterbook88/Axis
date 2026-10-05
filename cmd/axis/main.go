@@ -47,12 +47,12 @@ func newRootCmd() *cobra.Command {
   axis cluster status     every node (cache-first for 5 minutes; --live to sweep)
   axis node facts         this machine
   axis agent              ask questions (advisory)
-  axis model start        llama-server on a named node (--node --weights --port)
+  axis model start        one model name; pick the node that already has the runtime
   axis daemon status      local cache
 
 axis status, axis facts, axis summary, and axis doctor still work.
 axis chat and axis llm were removed; use axis agent and axis ai route.`,
-		Example: "  axis cluster status\n  axis node facts\n  axis agent\n  axis model start --node storage --weights /mnt/models/a.gguf --port 8081",
+		Example: "  axis cluster status\n  axis node facts\n  axis agent\n  axis model start mistral",
 
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			ui.Init(noColor)
@@ -223,11 +223,11 @@ func versionCmd() *cobra.Command {
 			ui.PrintLogo(out, Version)
 			fmt.Fprintln(out)
 			fmt.Fprintf(out, "axis %s\n", Version)
-			if buildinfo.Commit != "" {
-				fmt.Fprintf(out, "  commit:   %s\n", buildinfo.Commit)
+			if commit := buildinfo.ResolvedCommit(); commit != "" {
+				fmt.Fprintf(out, "  commit:   %s\n", commit)
 			}
-			if buildinfo.Date != "" {
-				fmt.Fprintf(out, "  built:    %s\n", buildinfo.Date)
+			if built := buildinfo.ResolvedDate(); built != "" {
+				fmt.Fprintf(out, "  built:    %s\n", built)
 			}
 			goVer := buildinfo.GoVersion
 			if goVer == "" {
