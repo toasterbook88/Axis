@@ -62,8 +62,7 @@ func TestAllowedUpdateHostsIncludesReleaseAssets(t *testing.T) {
 }
 
 func TestSafeGetFollowsRedirectToReleaseAssetsHost(t *testing.T) {
-	var srv *httptest.Server
-	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/start" {
 			// Redirect to the allowlisted CDN host; mappedHostTransport routes it
 			// back to this server.
