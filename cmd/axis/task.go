@@ -223,7 +223,7 @@ func taskPlaceCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require a fresh daemon publication; fail instead of falling back to a live sweep")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
-	cmd.Flags().StringSliceVar(&requireLabels, "require-label", nil, "required node label k=v (repeatable; ALL must match — conjunction)")
+	cmd.Flags().StringArrayVar(&requireLabels, "require-label", nil, "required node label k=v (repeatable; ALL must match — conjunction)")
 	return cmd
 }
 

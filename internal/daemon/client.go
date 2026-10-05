@@ -23,12 +23,7 @@ const daemonRequestTimeout = 5 * time.Second
 const staleWarningNodeLimit = 10
 
 func NormalizeAddr(addr string) string {
-	addr = strings.TrimSpace(addr)
-	addr = strings.TrimRight(addr, "/")
-	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
-		return addr
-	}
-	return "http://" + addr
+	return auth.RequestBaseURL(addr)
 }
 
 func FetchSnapshot(ctx context.Context, addr string) (*models.ClusterSnapshot, string, error) {

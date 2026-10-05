@@ -15,13 +15,28 @@ import (
 // arbitrary host is a credential disclosure, not a routing choice.
 const AllowOffBoxBearerEnv = "AXIS_ALLOW_OFFBOX_BEARER"
 
-// AddrKeepsClusterBearer reports whether addr is the local daemon: a unix
-// socket, or HTTP to a loopback host. Anything else is off-box.
+// RequestBaseURL is the URL the daemon client and the A2A client request.
+// Only a lowercase http or https prefix is kept. Every other value, including
+// an uppercase scheme or a custom scheme, gets an "http://" prefix, so the
+// original scheme text becomes the host. Callers that attach a bearer must
+// classify this URL, not the raw address.
+func RequestBaseURL(addr string) string {
+	addr = strings.TrimSpace(addr)
+	addr = strings.TrimRight(addr, "/")
+	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
+		addr = "http://" + addr
+	}
+	return addr
+}
+
+// AddrKeepsClusterBearer reports whether the request that would carry the
+// bearer stays on this machine. Unix sockets are local. Anything else is
+// judged by the host of RequestBaseURL, which is the URL the clients dial.
 func AddrKeepsClusterBearer(addr string) bool {
 	if IsUnixAddr(addr) {
 		return true
 	}
-	host := DialHost(addr)
+	host := DialHost(RequestBaseURL(addr))
 	if host == "localhost" {
 		return true
 	}

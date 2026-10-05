@@ -44,6 +44,27 @@ func TestParseRequireLabels_Malformed(t *testing.T) {
 	}
 }
 
+func TestRequireLabelFlagKeepsCommaInValue(t *testing.T) {
+	cmd := taskPlaceCmd()
+	if err := cmd.ParseFlags([]string{"--require-label", "capabilities=cpu,gpu"}); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := cmd.Flags().GetStringArray("require-label")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 1 || vals[0] != "capabilities=cpu,gpu" {
+		t.Fatalf("flag split the value: %#v", vals)
+	}
+	parsed, err := parseRequireLabels(vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed["capabilities"] != "cpu,gpu" {
+		t.Fatalf("parsed %#v", parsed)
+	}
+}
+
 func TestParseRequireLabels_RejectsIllegalCharset(t *testing.T) {
 	longKey := strings.Repeat("k", 64)
 	for _, bad := range []string{

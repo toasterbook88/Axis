@@ -27,11 +27,19 @@ var localNodeLabels = func(hostname string) (map[string]string, error) {
 		cfgPath = config.DefaultConfigPath()
 	}
 	if _, statErr := os.Stat(cfgPath); statErr != nil {
-		return map[string]string{}, nil // no config: fine, no labels
+		if os.IsNotExist(statErr) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("statting config for node labels: %w", statErr)
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading config for node labels: %w", err)
+	}
+	for i := range cfg.Nodes {
+		if cfg.Nodes[i].IsLocal() {
+			return cfg.Nodes[i].Labels, nil
+		}
 	}
 	if nc, ok := cfg.FindNode(hostname); ok {
 		return nc.Labels, nil

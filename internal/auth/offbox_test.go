@@ -44,7 +44,27 @@ func TestAddrKeepsClusterBearer_IPv6AndSchemeVariants(t *testing.T) {
 	if AddrKeepsClusterBearer("http://[fe80::1]:8080/x") {
 		t.Fatal("link-local must not count as loopback")
 	}
-	if !AddrKeepsClusterBearer("HTTP://LOCALHOST:1") {
-		t.Fatal("case-insensitive localhost must pass")
+	if AddrKeepsClusterBearer("HTTP://LOCALHOST:1") {
+		t.Fatal("uppercase scheme must be refused; the client dials the scheme text as the host")
+	}
+}
+
+func TestRefuseOffBoxBearer_ClassifiesRequestHost(t *testing.T) {
+	t.Setenv(AllowOffBoxBearerEnv, "")
+	cases := []string{
+		"HTTP://LOCALHOST:42425",
+		"offbox.example://localhost:42425",
+	}
+	for _, raw := range cases {
+		base := RequestBaseURL(raw)
+		if host := DialHost(base); host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			t.Fatalf("request host for %q is %q (base %q); want the off-box host the client dials", raw, host, base)
+		}
+		if err := RefuseOffBoxBearer(raw); err == nil {
+			t.Fatalf("%q must be refused; request base is %q", raw, base)
+		}
+	}
+	if host := DialHost(RequestBaseURL("http://127.0.0.1:42425")); host != "127.0.0.1" {
+		t.Fatalf("loopback request host = %q", host)
 	}
 }
