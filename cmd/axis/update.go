@@ -900,15 +900,6 @@ func downloadBytes(rawURL string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-func verifyChecksum(data []byte, archiveName, checksumURL string) error {
-	csData, err := downloadBytes(checksumURL)
-	if err != nil {
-		return fmt.Errorf("downloading checksums.txt: %w", err)
-	}
-	sum := sha256.Sum256(data)
-	return checkChecksumData(string(csData), hex.EncodeToString(sum[:]), archiveName)
-}
-
 func verifyChecksumData(data []byte, got, archiveName, checksumURL string) error {
 	csData, err := downloadBytes(checksumURL)
 	if err != nil {
