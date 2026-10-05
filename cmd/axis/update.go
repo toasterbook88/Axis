@@ -692,7 +692,7 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 	}
 
 	if checksumURL != "" {
-		if err := verifyChecksumData(archiveData, got, archiveName, checksumURL); err != nil {
+		if err := verifyChecksum(archiveData, archiveName, checksumURL); err != nil {
 			return nil, fmt.Errorf("checksum verification failed: %w", err)
 		}
 		verified = true
@@ -900,12 +900,13 @@ func downloadBytes(rawURL string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-func verifyChecksumData(data []byte, got, archiveName, checksumURL string) error {
+func verifyChecksum(data []byte, archiveName, checksumURL string) error {
 	csData, err := downloadBytes(checksumURL)
 	if err != nil {
 		return fmt.Errorf("downloading checksums.txt: %w", err)
 	}
-	return checkChecksumData(string(csData), got, archiveName)
+	sum := sha256.Sum256(data)
+	return checkChecksumData(string(csData), hex.EncodeToString(sum[:]), archiveName)
 }
 
 func checkChecksumData(csData, got, archiveName string) error {
