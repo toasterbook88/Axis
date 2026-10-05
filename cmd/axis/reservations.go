@@ -44,6 +44,10 @@ func reservationsCmd() *cobra.Command {
 }
 
 func runReservationsTable(cmd *cobra.Command, cacheAddr string) error {
+	if err := auth.RefuseOffBoxBearer(cacheAddr); err != nil {
+		return err
+	}
+
 	parent := cmd.Context()
 	if parent == nil {
 		parent = context.Background()
@@ -563,6 +567,9 @@ func reservationsDoctorCmd() *cobra.Command {
 }
 
 func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWindow time.Duration, cacheAddr string) error {
+	if err := auth.RefuseOffBoxBearer(cacheAddr); err != nil {
+		return err
+	}
 	if staleWindow <= 0 {
 		return fmt.Errorf("--stale-window must be greater than zero")
 	}

@@ -56,6 +56,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 					Backends:     []string{"metal"},
 					Capabilities: []string{"fp16"},
 				},
+				Labels: map[string]string{"os": "linux"},
 			},
 		},
 		Warnings:    []models.Warning{{Message: "low disk"}},
@@ -72,6 +73,7 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	clone.Nodes[0].Ollama.Models[0] = "MUTATED"
 	clone.Nodes[0].TurboQuant.Backends[0] = "MUTATED"
 	clone.Nodes[0].TurboQuant.Capabilities[0] = "MUTATED"
+	clone.Nodes[0].Labels["os"] = "MUTATED"
 	clone.Warnings[0].Message = "MUTATED"
 	clone.Publication.ID = "MUTATED"
 	clone.Vantage.NodeName = "MUTATED"
@@ -93,6 +95,9 @@ func TestCloneIsDeepCopy(t *testing.T) {
 	}
 	if orig.Nodes[0].TurboQuant.Capabilities[0] != "fp16" {
 		t.Error("Clone mutated original TurboQuant capabilities")
+	}
+	if orig.Nodes[0].Labels["os"] != "linux" {
+		t.Error("Clone mutated original Labels")
 	}
 	if orig.Warnings[0].Message != "low disk" {
 		t.Error("Clone mutated original Warnings slice")

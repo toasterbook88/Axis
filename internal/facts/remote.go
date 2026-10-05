@@ -22,6 +22,9 @@ type RemoteCollector struct {
 	Role     string
 	Hostname string
 	Exec     transport.Executor
+	// Labels carries operator-declared capability tags from NodeConfig;
+	// assigned state, propagated verbatim into NodeFacts.Labels.
+	Labels map[string]string
 }
 
 // NewRemoteCollector creates a remote fact collector.
@@ -50,6 +53,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		Status:      models.StatusComplete,
 		CollectedAt: time.Now().UTC(),
 	}
+	facts.Labels = c.Labels
 
 	// Wrap executor so every Run uses bash --noprofile --norc (bundle + legacy).
 	// Shared transport wrapper — the same fish-safe launcher the guarded

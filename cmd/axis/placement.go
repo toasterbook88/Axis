@@ -70,6 +70,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 					return fetchTaskSnapshot(ctx, cacheAddr)
 				},
 				loadTaskLiveSnapshot,
+				nil,
 			)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
@@ -112,6 +113,7 @@ func planTaskExplanation(
 	cachedOnly bool,
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
+	requiredLabels map[string]string,
 ) (models.PlacementExplanation, string, string, error) {
 	// cached/cachedOnly try the daemon publication first. Neither set means
 	// an explicit live sweep (--live, or the historical cached=false path).
@@ -119,14 +121,22 @@ func planTaskExplanation(
 	if err != nil {
 		return models.PlacementExplanation{}, "", "", err
 	}
-	return explainPlacementFromSnapshot(ctx, desc, read.snap, read.source, read.age)
+	return explainPlacementFromSnapshot(ctx, desc, requiredLabels, read.snap, read.source, read.age)
 }
 
-func explainPlacementFromSnapshot(ctx context.Context, desc string, snap *models.ClusterSnapshot, source, age string) (models.PlacementExplanation, string, string, error) {
+func explainPlacementFromSnapshot(ctx context.Context, desc string, requiredLabels map[string]string, snap *models.ClusterSnapshot, source, age string) (models.PlacementExplanation, string, string, error) {
 	if snap == nil {
 		return models.PlacementExplanation{}, "", "", fmt.Errorf("cluster snapshot is empty")
 	}
 	reqs := placementpkg.InferRequirements(desc)
+	// Operator-supplied label requirements are a conjunction override on top
+	// of inferred requirements (never relax them — only add). nil = none.
+	for k, v := range requiredLabels {
+		if reqs.RequiredLabels == nil {
+			reqs.RequiredLabels = map[string]string{}
+		}
+		reqs.RequiredLabels[k] = v
+	}
 	st, stateErr := loadPlacementState()
 	if stateErr != nil && st == nil {
 		return models.PlacementExplanation{}, "", "", stateErr

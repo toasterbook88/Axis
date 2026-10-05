@@ -16,8 +16,9 @@ import (
 
 // LocalCollector collects facts from the local machine.
 type LocalCollector struct {
-	Name string
-	Role string
+	Name   string
+	Role   string
+	Labels map[string]string
 }
 
 var runAppleFoundationModelsProbeFn = runAppleFoundationModelsProbe
@@ -48,8 +49,8 @@ var runDiskutilInfo = func(ctx context.Context, device string) (string, error) {
 
 // NewLocalCollector creates a collector for the local node.
 
-func NewLocalCollector(name, role string) *LocalCollector {
-	return &LocalCollector{Name: name, Role: role}
+func NewLocalCollector(name, role string, labels map[string]string) *LocalCollector {
+	return &LocalCollector{Name: name, Role: role, Labels: labels}
 }
 
 // Collect gathers all facts from the local machine.
@@ -59,6 +60,7 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	facts := &models.NodeFacts{
 		Name:        c.Name,
 		Role:        c.Role,
+		Labels:      c.Labels,
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		Status:      models.StatusComplete,

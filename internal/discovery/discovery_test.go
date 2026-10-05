@@ -152,7 +152,7 @@ func TestDiscoverCollectsLocalAndRemoteNodesInStableOrder(t *testing.T) {
 		return nc.Hostname == "localhost"
 	})
 	defer restoreMatch()
-	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string) facts.Collector {
+	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string, labels map[string]string) facts.Collector {
 		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
 			return &models.NodeFacts{Name: name, Role: role, Status: models.StatusComplete}, nil
 		})
@@ -189,7 +189,7 @@ func TestDiscoverWrapsCollectorFailuresAsErrorNodes(t *testing.T) {
 		return nc.Hostname == "localhost"
 	})
 	defer restoreMatch()
-	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string) facts.Collector {
+	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string, labels map[string]string) facts.Collector {
 		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
 			return nil, errors.New("local boom")
 		})
@@ -231,7 +231,7 @@ func TestDiscoverUsesStableIdentityAwareLocalMatcher(t *testing.T) {
 		return nc.StableID == "abc-123"
 	})
 	defer restoreMatch()
-	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string) facts.Collector {
+	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string, labels map[string]string) facts.Collector {
 		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
 			return &models.NodeFacts{Name: name, Hostname: "local-collected", Status: models.StatusComplete}, nil
 		})
@@ -745,7 +745,7 @@ func stubDiscoveryIsLocalConfig(t *testing.T, fn func(config.NodeConfig) bool) f
 	}
 }
 
-func stubLocalDiscoveryCollector(t *testing.T, fn func(string, string) facts.Collector) func() {
+func stubLocalDiscoveryCollector(t *testing.T, fn func(string, string, map[string]string) facts.Collector) func() {
 	t.Helper()
 	prev := newLocalDiscoveryCollector
 	newLocalDiscoveryCollector = fn

@@ -41,6 +41,14 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 		eval.ExclusionReasons = append(eval.ExclusionReasons, fmt.Sprintf("status: %s", n.Status))
 	}
 
+	// RequiredLabels: conjunction eligibility gate (SAM parity). ALL pairs
+	// must match exactly; labels gate eligibility, they never rank.
+	// NodeFacts.Labels is operator-assigned config truth — the check is
+	// deterministic so `axis task place` explanations explain each exclusion.
+	if ok, labelReasons := n.SatisfiesRequiredLabels(reqs.RequiredLabels); !ok {
+		eval.ExclusionReasons = append(eval.ExclusionReasons, labelReasons...)
+	}
+
 	if blocksForRuntimePressure(reqs, n) {
 		if n.Resources != nil && n.Resources.MemoryPSIFullAvg10 > 70.0 {
 			eval.ExclusionReasons = append(eval.ExclusionReasons,

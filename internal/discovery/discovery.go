@@ -28,14 +28,16 @@ var discoveryBeaconWait = waitForBeaconWindow
 var discoveryIsLocalConfig = func(nc config.NodeConfig) bool {
 	return nc.IsLocal()
 }
-var newLocalDiscoveryCollector = func(name, role string) facts.Collector {
-	return facts.NewLocalCollector(name, role)
+var newLocalDiscoveryCollector = func(name, role string, labels map[string]string) facts.Collector {
+	return facts.NewLocalCollector(name, role, labels)
 }
 var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
 	spec := nc.SSHDialSpec()
 	// SSHDialSpec.Host is PrimaryHostname() (endpoints first, else Hostname).
 	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
-	return facts.NewRemoteCollector(nc.Name, nc.Role, spec.Host, exec)
+	rc := facts.NewRemoteCollector(nc.Name, nc.Role, spec.Host, exec)
+	rc.Labels = nc.Labels
+	return rc
 }
 
 // Discover probes all configured nodes concurrently and returns their facts.
@@ -196,7 +198,7 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 
 			var collector facts.Collector
 			if discoveryIsLocalConfig(nc) {
-				collector = newLocalDiscoveryCollector(nc.Name, nc.Role)
+				collector = newLocalDiscoveryCollector(nc.Name, nc.Role, nc.Labels)
 			} else {
 				collector = newRemoteDiscoveryCollector(nc)
 			}
