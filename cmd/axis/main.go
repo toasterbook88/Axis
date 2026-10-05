@@ -223,11 +223,11 @@ func versionCmd() *cobra.Command {
 			ui.PrintLogo(out, Version)
 			fmt.Fprintln(out)
 			fmt.Fprintf(out, "axis %s\n", Version)
-			if buildinfo.Commit != "" {
-				fmt.Fprintf(out, "  commit:   %s\n", buildinfo.Commit)
+			if commit := buildinfo.ResolvedCommit(); commit != "" {
+				fmt.Fprintf(out, "  commit:   %s\n", commit)
 			}
-			if buildinfo.Date != "" {
-				fmt.Fprintf(out, "  built:    %s\n", buildinfo.Date)
+			if built := buildinfo.ResolvedDate(); built != "" {
+				fmt.Fprintf(out, "  built:    %s\n", built)
 			}
 			goVer := buildinfo.GoVersion
 			if goVer == "" {
