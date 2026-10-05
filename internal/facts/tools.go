@@ -342,6 +342,7 @@ func defaultToolDefs() []toolDef {
 		{name: "docker", class: models.ToolClassContainer, versionCmd: "docker --version"},
 		{name: "ollama", class: models.ToolClassAICLI, versionCmd: "ollama --version"},
 		{name: "mlx_lm", class: models.ToolClassAICLI, versionCmd: "mlx_lm --help"},
+		{name: "mlx_lm.server", class: models.ToolClassAICLI, versionCmd: "mlx_lm.server --help"},
 		{name: "llama-cli", class: models.ToolClassAICLI, versionCmd: "llama-cli --version"},
 		{name: "llama-server", class: models.ToolClassAICLI, versionCmd: "llama-server --version"},
 		{name: "node", class: models.ToolClassRuntime, versionCmd: "node --version"},

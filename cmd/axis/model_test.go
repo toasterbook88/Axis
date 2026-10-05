@@ -115,8 +115,19 @@ func (f *fakeModelRunner) Query(_ context.Context, _ models.NodeFacts, _ *config
 	}, nil
 }
 
+func isolateModelState(t *testing.T) {
+	t.Helper()
+	t.Setenv("AXIS_HOME", t.TempDir())
+	prev := runLlamaServerSample
+	runLlamaServerSample = func(context.Context, models.NodeFacts, *config.NodeConfig, string) (string, error) {
+		return "", errors.New("llama-server sample not stubbed")
+	}
+	t.Cleanup(func() { runLlamaServerSample = prev })
+}
+
 func stubModelSnapshot(t *testing.T, snap *models.ClusterSnapshot) {
 	t.Helper()
+	isolateModelState(t)
 	prevLive := loadModelSnapshot
 	loadModelSnapshot = func(context.Context) (*models.ClusterSnapshot, error) { return snap, nil }
 	prevFetch := fetchModelInventorySnapshot
@@ -131,6 +142,7 @@ func stubModelSnapshot(t *testing.T, snap *models.ClusterSnapshot) {
 
 func stubModelConfig(t *testing.T, cfg *config.Config) {
 	t.Helper()
+	isolateModelState(t)
 	prev := loadModelConfig
 	loadModelConfig = func() (*config.Config, error) { return cfg, nil }
 	t.Cleanup(func() { loadModelConfig = prev })

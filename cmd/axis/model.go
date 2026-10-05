@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +22,9 @@ import (
 	"github.com/toasterbook88/axis/internal/modellife"
 	"github.com/toasterbook88/axis/internal/modelplan"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
+	"github.com/toasterbook88/axis/internal/state"
 	"github.com/toasterbook88/axis/internal/transport"
 )
 
@@ -59,7 +62,7 @@ var defaultModelRunner modelProcessRunner = liveModelRunner{}
 func modelCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "model",
-		Short: "Inspect resident models or manage llama-server on a named node",
+		Short: "Inspect resident models, plan a placement, or manage llama-server, Ollama, and MLX",
 	}
 	cmd.AddCommand(modelListCmd())
 	cmd.AddCommand(modelInspectCmd())
@@ -74,7 +77,7 @@ func modelCmd() *cobra.Command {
 }
 
 func modelPlanCmd() *cobra.Command {
-	var cacheAddr, format string
+	var cacheAddr, format, writeProfile string
 	var port int
 	var live bool
 	cmd := &cobra.Command{
@@ -93,48 +96,87 @@ func modelPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
+	cmd.Flags().StringVar(&writeProfile, "write-profile", "", "Write the selected axis.model-run/v1 profile to this path")
 	return cmd
 }
 
 func modelStartCmd() *cobra.Command {
-	var node, weights, cacheAddr, format string
-	var port int
+	var node, weights, cacheAddr, format, fromPlan, nGPULayers, ollamaModel, ollamaKeepAlive, mlxModel string
+	var port, ctxSize, batchSize, ubatchSize, threads, mainGPU, ollamaNumCtx, prefillStepSize, kvBits int
+	var promptCacheBytes int64
 	var live bool
 	cmd := &cobra.Command{
-		Use:          "start",
-		Short:        "Start llama-server on a named node (explicit port and weights)",
+		Use:   "start [model]",
+		Short: "Place a model on the node that already has its runtime",
+		Long: `Daily path: axis model start <model>
+
+Read the snapshot, pick one complete node that already has the runtime, and print that choice. A resident model is reported and left running. An Ollama server that is already listening and lists the model is loaded on 127.0.0.1:11434.
+
+Explicit pin: --node with --weights and --port, --ollama-model, --mlx-model, or --from-plan. mlx_lm.server's HTTP API is not for production.`,
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
-		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateOutputFormat(&format, "text", "json", "yaml")(cmd, args); err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				return requireDailyModelStart(cmd)
+			}
+			return requireModelStartIdentity(cmd)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
 			defer cancel()
+			if len(args) == 1 {
+				return runDailyModelStart(ctx, cmd, args[0])
+			}
 			return runModelStart(ctx, cmd, node, weights, port, defaultModelRunner)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "Cluster node name (required)")
-	cmd.Flags().StringVar(&weights, "weights", "", "GGUF path on a named local volume (required)")
-	cmd.Flags().IntVar(&port, "port", 0, "Listen port (required; no default)")
+	cmd.Flags().StringVar(&node, "node", "", "Cluster node name (required unless --from-plan supplies it)")
+	cmd.Flags().StringVar(&weights, "weights", "", "GGUF path on a named local volume (required unless --from-plan supplies it)")
+	cmd.Flags().IntVar(&port, "port", 0, "Listen port (required unless --from-plan has an explicit port)")
+	cmd.Flags().StringVar(&fromPlan, "from-plan", "", "Read an axis.model-run/v1 profile JSON file")
+	cmd.Flags().StringVar(&nGPULayers, "n-gpu-layers", "", "llama-server -ngl value: an integer >= 1, auto, or all")
+	cmd.Flags().IntVar(&ctxSize, "ctx-size", 0, "llama-server context length (-c); omitted when unset")
+	cmd.Flags().IntVar(&batchSize, "batch-size", 0, "llama-server logical batch size (-b); omitted when unset")
+	cmd.Flags().IntVar(&ubatchSize, "ubatch-size", 0, "llama-server physical batch size (-ub); omitted when unset")
+	cmd.Flags().IntVar(&threads, "threads", 0, "llama-server threads (-t); must be within observed CPU cores")
+	cmd.Flags().IntVar(&mainGPU, "main-gpu", 0, "llama-server --main-gpu; omitted unless set; must match an observed nvidia-smi index")
+	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Ollama model name to load on 127.0.0.1:11434; replaces --weights")
+	cmd.Flags().StringVar(&ollamaKeepAlive, "ollama-keep-alive", "", "Ollama keep_alive for this load; omitted unless set")
+	cmd.Flags().IntVar(&ollamaNumCtx, "ollama-num-ctx", 0, "Ollama options.num_ctx; omitted unless set")
+	cmd.Flags().StringVar(&mlxModel, "mlx-model", "", "Local MLX weight directory on a named volume; replaces --weights. The MLX HTTP API is not for production")
+	cmd.Flags().IntVar(&prefillStepSize, "prefill-step-size", 0, "mlx_lm.server --prefill-step-size; omitted unless set")
+	cmd.Flags().Int64Var(&promptCacheBytes, "prompt-cache-bytes", 0, "mlx_lm.server --prompt-cache-bytes; omitted unless set")
+	cmd.Flags().IntVar(&kvBits, "kv-bits", 0, "mlx_lm.server --kv-bits; omitted unless set")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	cmd.Flags().StringVar(&format, "format", "text", "Start operation receipt format: text, json, or yaml")
-	_ = cmd.MarkFlagRequired("node")
-	_ = cmd.MarkFlagRequired("weights")
-	_ = cmd.MarkFlagRequired("port")
 	return cmd
 }
 
 func modelStopCmd() *cobra.Command {
-	var node, cacheAddr, format string
+	var node, cacheAddr, format, ollamaModel string
 	var port int
 	cmd := &cobra.Command{
 		Use:          "stop [generation-id]",
-		Short:        "Stop an observed llama-server generation or use legacy node/port flags",
+		Short:        "Stop an observed llama-server or MLX generation, unload an Ollama model, or use legacy node/port flags",
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE:      validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
+			if strings.TrimSpace(ollamaModel) != "" {
+				if len(args) == 1 || port != 0 {
+					return fmt.Errorf("--ollama-model cannot be combined with a generation ID or --port")
+				}
+				if strings.TrimSpace(node) == "" {
+					return fmt.Errorf(`required flag(s) "node" not set`)
+				}
+				return runOllamaModelStop(ctx, cmd, node, ollamaModel, cacheAddr, format)
+			}
 			if len(args) == 1 {
 				if strings.TrimSpace(node) != "" || port != 0 {
 					return fmt.Errorf("generation ID cannot be combined with --node or --port")
@@ -144,8 +186,9 @@ func modelStopCmd() *cobra.Command {
 			return runModelStop(ctx, cmd, node, port, defaultModelRunner)
 		},
 	}
-	cmd.Flags().StringVar(&node, "node", "", "Legacy cluster node name")
+	cmd.Flags().StringVar(&node, "node", "", "Legacy cluster node name, or the node whose Ollama server unloads --ollama-model")
 	cmd.Flags().IntVar(&port, "port", 0, "Legacy llama-server listen port")
+	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Unload this model from the Ollama server already listening on 127.0.0.1:11434")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
 	return cmd
@@ -503,7 +546,18 @@ func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string,
 	if err != nil {
 		return err
 	}
+	st, err := state.Load()
+	if err != nil {
+		return err
+	}
+	applyLlamaServerPeakExclusions(&plan, snap, st)
 	plan.SnapshotSource = source
+	if cmd.Flags().Changed("port") && plan.Selected != nil {
+		plan.Selected.PortSource = models.PortSourceExplicit
+	}
+	if err := writeSelectedRunProfile(cmd, plan.Selected); err != nil {
+		return err
+	}
 
 	if format == "json" || format == "yaml" {
 		if writeErr := printOutput(cmd.OutOrStdout(), plan, format); writeErr != nil {
@@ -617,18 +671,28 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	if format == "" {
 		format = "text"
 	}
+	profile, err := profileForModelStart(cmd, nodeName, weights, port)
+	if err != nil {
+		return err
+	}
 	snap, source, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "start", false)
 	if err != nil {
 		return err
 	}
+	if profile.SnapshotPublicationID == "" && snap.Publication != nil {
+		profile.SnapshotPublicationID = snap.Publication.ID
+	}
 
-	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, profile.Node)
 	if err != nil {
 		return err
 	}
+	if profile.Engine == models.EngineOllama {
+		return placeOllamaModel(ctx, cmd, nf, cfgNode, profile, source, snap, startedAt, format)
+	}
 
 	for _, res := range nf.ResidentModels {
-		if res.Port == port {
+		if res.Port == profile.Port {
 			receipt := models.ModelOperationReceipt{
 				Schema:         "axis.model-operation/v1",
 				ID:             models.GenerateID("mo"),
@@ -636,13 +700,13 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 				Status:         models.ModelOperationRejected,
 				Disposition:    "port_occupied",
 				Node:           nf.Name,
-				Engine:         "llama.cpp",
-				Port:           port,
+				Engine:         profile.Engine,
+				Port:           profile.Port,
 				SnapshotSource: source,
 				SnapshotAt:     snap.Timestamp,
 				StartedAt:      startedAt,
 				CompletedAt:    time.Now().UTC(),
-				Error:          fmt.Sprintf("port %d already occupied by resident model %q (%s)", port, res.Name, res.Runtime),
+				Error:          fmt.Sprintf("port %d already occupied by resident model %q (%s)", profile.Port, res.Name, res.Runtime),
 			}
 			if snap.Publication != nil {
 				receipt.PublicationID = snap.Publication.ID
@@ -650,12 +714,16 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 			_ = writeModelStartReceipt(cmd, receipt, format)
 			return ExitCodeError{
 				Code:    ExitErrCommandFail,
-				Message: fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, port, receipt.Error),
+				Message: fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, profile.Port, receipt.Error),
 			}
 		}
 	}
 
-	plan, err := modellife.PlanStart(nf, weights, port)
+	if profile.Engine == models.EngineMLX {
+		return placeMLXModel(ctx, cmd, nf, cfgNode, profile, source, snap, startedAt, format)
+	}
+
+	plan, err := modellife.PlanStartProfile(nf, profile)
 	if err != nil {
 		return err
 	}
@@ -671,22 +739,28 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 	}
 
 	receipt := models.ModelOperationReceipt{
-		Schema:         "axis.model-operation/v1",
-		ID:             models.GenerateID("mo"),
-		Action:         models.ModelOperationStart,
-		Status:         models.ModelOperationCompleted,
-		Disposition:    "started",
-		Node:           plan.Node,
-		Engine:         "llama.cpp",
-		Port:           plan.Port,
-		Model:          path.Base(plan.Weights),
-		Weights:        plan.Weights,
-		Volume:         plan.Volume,
-		Executable:     executable,
-		SnapshotSource: source,
-		SnapshotAt:     snap.Timestamp,
-		StartedAt:      startedAt,
-		CompletedAt:    time.Now().UTC(),
+		Schema:           "axis.model-operation/v1",
+		ID:               models.GenerateID("mo"),
+		Action:           models.ModelOperationStart,
+		Status:           models.ModelOperationCompleted,
+		Disposition:      "started",
+		Node:             plan.Node,
+		Engine:           plan.Profile.Engine,
+		Port:             plan.Port,
+		Model:            path.Base(plan.Weights),
+		Weights:          plan.Weights,
+		Volume:           plan.Volume,
+		Executable:       executable,
+		SnapshotSource:   source,
+		SnapshotAt:       snap.Timestamp,
+		StartedAt:        startedAt,
+		CompletedAt:      time.Now().UTC(),
+		SpecSource:       plan.Profile.SpecSource,
+		DeviceKind:       plan.Profile.DeviceKind,
+		DeviceIndex:      plan.Profile.DeviceIndex,
+		VRAMFreeMeasured: plan.Profile.VRAMFreeMeasured,
+		PortSource:       plan.Profile.PortSource,
+		DeviceNote:       models.MainGPUPinNote(plan.Profile.DeviceIndex),
 	}
 	if snap.Publication != nil {
 		receipt.PublicationID = snap.Publication.ID
@@ -695,6 +769,8 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 		receipt.Status = models.ModelOperationFailed
 		receipt.Disposition = "failed"
 		receipt.Error = startErr.Error()
+	} else if warning := recordLlamaServerObservation(ctx, cmd, nf, cfgNode, plan, startedAt); warning != "" {
+		receipt.Warnings = append(receipt.Warnings, warning)
 	}
 
 	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
@@ -718,9 +794,26 @@ func writeModelStartReceipt(cmd *cobra.Command, receipt models.ModelOperationRec
 		return printOutput(cmd.OutOrStdout(), receipt, format)
 	}
 	if receipt.Status == models.ModelOperationCompleted {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
-			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID)
-		return err
+		if receipt.Engine == models.EngineOllama {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "placed ollama model %s on %s operation %s\n",
+				receipt.Model, receipt.Node, receipt.ID)
+			return err
+		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "started %s on %s:%d volume %s operation %s\n",
+			receipt.Executable, receipt.Node, receipt.Port, receipt.Volume, receipt.ID); err != nil {
+			return err
+		}
+		if receipt.DeviceNote != "" {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\n", receipt.DeviceNote); err != nil {
+				return err
+			}
+		}
+		for _, warning := range receipt.Warnings {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s:%d: %s operation %s\n",
 		receipt.Disposition, receipt.Node, receipt.Port, receipt.Error, receipt.ID)
@@ -789,7 +882,10 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 	if instance.NodeStatus != models.StatusComplete {
 		return fmt.Errorf("model generation %s is on node %s with status %s; refusing lifecycle mutation", generationID, instance.Node, instance.NodeStatus)
 	}
-	if instance.Engine != "llama.cpp" {
+	if instance.Engine == models.EngineOllama {
+		return stopOllamaGeneration(ctx, cmd, snap, instance, cacheAddr, format, startedAt)
+	}
+	if instance.Engine != models.EngineLlamaCpp && instance.Engine != models.EngineMLX {
 		return fmt.Errorf("model generation %s uses unsupported stop engine %q", generationID, instance.Engine)
 	}
 	target := modellife.StopTarget{
@@ -802,6 +898,9 @@ func runModelStopGeneration(ctx context.Context, cmd *cobra.Command, generationI
 		SupervisorType:    instance.SupervisorType,
 		SupervisorUnit:    instance.SupervisorUnit,
 		GPUIndices:        append([]int(nil), instance.GPUIndices...),
+	}
+	if instance.Engine == models.EngineMLX {
+		target.Engine = models.EngineMLX
 	}
 	if err := target.Validate(); err != nil {
 		return fmt.Errorf("model generation %s has incomplete stop evidence: %w", generationID, err)
@@ -1363,6 +1462,9 @@ func resolveModelNodeFromSnapshot(snap *models.ClusterSnapshot, name string) (mo
 type liveModelRunner struct{}
 
 func (liveModelRunner) Start(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan) error {
+	if err := modellife.ExecArgvMatchesProfile(plan); err != nil {
+		return err
+	}
 	if len(plan.Argv) == 0 {
 		return fmt.Errorf("empty argv")
 	}
@@ -1486,15 +1588,19 @@ func shellQuery(port int, req modellife.QueryRequest) (string, error) {
 }
 
 func shellStart(argv []string, port int) string {
+	return shellStartLabeled("llama-server", argv, port)
+}
+
+func shellStartLabeled(label string, argv []string, port int) string {
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
 		quoted[i] = shellQuote(a)
 	}
 	return shellListenerLookup(port) + fmt.Sprintf(
 		"if test -n \"$_axis_pids\"; then "+
-			"echo \"refusing to start llama-server: port %d already has listener pid(s) $_axis_pids\" >&2; exit 1; fi; "+
+			"echo \"refusing to start %s: port %d already has listener pid(s) $_axis_pids\" >&2; exit 1; fi; "+
 			"nohup %s >/dev/null 2>&1 &",
-		port, strings.Join(quoted, " "),
+		label, port, strings.Join(quoted, " "),
 	)
 }
 
@@ -1513,9 +1619,13 @@ func shellStopTarget(target modellife.StopTarget) string {
 			supervisorCmd = fmt.Sprintf("systemctl stop %s 2>/dev/null || true; ", shellQuote(unit))
 		}
 	}
+	ownerGuard := shellLlamaServerOwnerGuard(port)
+	if target.Engine == models.EngineMLX {
+		ownerGuard = shellMLXOwnerGuard(port)
+	}
 	return shellListenerLookup(port) +
 		"if test -z \"$_axis_pids\"; then echo '" + modelStopMarker + "not_running'; exit 0; fi; " +
-		shellLlamaServerOwnerGuard(port) +
+		ownerGuard +
 		shellGenerationGuard(target) +
 		supervisorCmd +
 		killCmd +
@@ -1552,6 +1662,77 @@ func shellProbe(port int) string {
 	)
 }
 
+func shellMLXProbe(port int) string {
+	return shellListenerLookup(port) + fmt.Sprintf(
+		"if test -z \"$_axis_pids\"; then echo \"no listener on port %d\" >&2; exit 1; fi; ",
+		port,
+	) + shellMLXOwnerGuard(port) + fmt.Sprintf(
+		"curl -fsS --max-time 5 http://127.0.0.1:%d/v1/models >/dev/null",
+		port,
+	)
+}
+
+func shellMLXOwnerGuard(port int) string {
+	return fmt.Sprintf(
+		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; echo '"+modelStopMarker+"inspection_unavailable' >&2; exit 127; fi; "+
+			"for _axis_pid in $_axis_pids; do "+
+			"case \"$_axis_pid\" in ''|*[!0-9]*) echo \"refusing invalid listener pid $_axis_pid\" >&2; exit 1;; esac; "+
+			"_axis_comm=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_comm=${_axis_comm##*/}; "+
+			"if test \"$_axis_comm\" = mlx_lm.server; then continue; fi; "+
+			"_axis_args=$(ps -p \"$_axis_pid\" -o args=) || exit $?; "+
+			"if ! printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<NF;i++) if($i==\"-m\" && $(i+1)==\"mlx_lm.server\") ok=1} END{exit ok?0:1}'; then "+
+			"echo \"refusing port %d: pid $_axis_pid is $_axis_comm, not mlx_lm.server\" >&2; echo '"+modelStopMarker+"wrong_owner' >&2; exit 1; fi; "+
+			"done; ",
+		port,
+	)
+}
+
+const (
+	llamaSampleRAMPrefix  = "axis-llama-sample:ram "
+	llamaSampleVRAMPrefix = "axis-llama-sample:vram "
+	llamaSampleRAMFailed  = "axis-llama-sample:ram-failed"
+)
+
+func shellLlamaServerSample(port int, deviceIndex *int) string {
+	script := shellListenerLookup(port) + shellLlamaServerOwnerGuard(port) +
+		`if test -z "$_axis_pids"; then echo '` + llamaSampleRAMFailed + `' >&2; exit 1; fi; ` +
+		`_axis_peak=0; _axis_any=0; ` +
+		`for _axis_pid in $_axis_pids; do ` +
+		`_axis_rss=$(ps -p "$_axis_pid" -o rss=) || { echo '` + llamaSampleRAMFailed + `' >&2; exit 1; }; ` +
+		`_axis_mib=$((_axis_rss / 1024)); ` +
+		`if test "$_axis_mib" -gt "$_axis_peak"; then _axis_peak=$_axis_mib; fi; ` +
+		`_axis_any=1; ` +
+		`done; ` +
+		`if test "$_axis_any" != 1; then echo '` + llamaSampleRAMFailed + `' >&2; exit 1; fi; ` +
+		`echo "` + llamaSampleRAMPrefix + `$_axis_peak"; `
+	if deviceIndex == nil {
+		return script
+	}
+	return script + fmt.Sprintf(`_axis_want=%d; `, *deviceIndex) +
+		`_axis_smi=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits 2>/dev/null) || _axis_smi=""; ` +
+		`_axis_used=$(printf '%s\n' "$_axis_smi" | awk -F, -v want="$_axis_want" '{ idx=$1; gsub(/ /, "", idx); used=$2; gsub(/ /, "", used); if (idx == want && used ~ /^[0-9]+$/) { print used; exit } }'); ` +
+		`if test -n "$_axis_used"; then echo "` + llamaSampleVRAMPrefix + `$_axis_used"; fi; `
+}
+
+func parseLlamaServerSample(out string) (ram int64, ramOK bool, vram int64, vramOK bool) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, llamaSampleRAMPrefix):
+			n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, llamaSampleRAMPrefix)), 10, 64)
+			if err == nil && n >= 0 {
+				ram, ramOK = n, true
+			}
+		case strings.HasPrefix(line, llamaSampleVRAMPrefix):
+			n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, llamaSampleVRAMPrefix)), 10, 64)
+			if err == nil && n >= 0 {
+				vram, vramOK = n, true
+			}
+		}
+	}
+	return ram, ramOK, vram, vramOK
+}
+
 func shellLlamaServerOwnerGuard(port int) string {
 	return fmt.Sprintf(
 		"if ! command -v ps >/dev/null 2>&1; then echo 'axis model requires ps to verify process ownership' >&2; echo '"+modelStopMarker+"inspection_unavailable' >&2; exit 127; fi; "+
@@ -1585,6 +1766,397 @@ func shellQuote(s string) string {
 func runOnNode(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, script string) error {
 	_, err := runOnNodeCapturing(ctx, node, cfgNode, script)
 	return err
+}
+
+// runNodeScript is the local-or-SSH seam for Ollama and MLX. Tests replace it.
+// llama-server start and stop keep calling runOnNodeCapturing directly.
+var runNodeScript = runOnNodeCapturing
+
+// runLlamaServerSample is the post-probe RSS seam. Production calls
+// runOnNodeCapturing, so a remote node is sampled over its SSH session and a
+// local node is sampled with the local executor. Tests replace it.
+var runLlamaServerSample = runOnNodeCapturing
+
+func recordLlamaServerObservation(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, plan modellife.StartPlan, startedAt time.Time) string {
+	modelName := llamaServerObservationModelName(plan.Weights)
+	obs := models.ExecutionObservation{
+		Scope: models.ObservationScope{
+			Node:      plan.Node,
+			Workload:  models.ClassLlamaServer,
+			Backend:   "llama.cpp",
+			Tool:      "llama-server",
+			ModelName: modelName,
+		},
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    observationWallMS(time.Since(startedAt)),
+		ModelName:     modelName,
+		ContextTokens: copyOptionalInt(plan.Profile.ContextTokens),
+		DeviceIndex:   copyOptionalInt(plan.Profile.DeviceIndex),
+	}
+	warning := ""
+	out, err := runLlamaServerSample(ctx, node, cfgNode, shellLlamaServerSample(plan.Port, plan.Profile.DeviceIndex))
+	if err != nil {
+		warning = "llama-server RSS sample failed"
+	} else {
+		ram, ramOK, vram, vramOK := parseLlamaServerSample(out)
+		if !ramOK {
+			warning = "llama-server RSS sample failed"
+		} else {
+			obs.PeakRAMMB = ram
+			if plan.Profile.DeviceIndex != nil && vramOK {
+				obs.PeakVRAMMB = vram
+			}
+		}
+	}
+	if err := state.Update(func(latest *state.ClusterState) error {
+		latest.RecordObservation(obs)
+		return nil
+	}); err != nil && cmd != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: execution observation persistence failed: %v\n", err)
+	}
+	return warning
+}
+
+func observationWallMS(elapsed time.Duration) int64 {
+	if elapsed <= 0 {
+		return 1
+	}
+	if ms := elapsed.Milliseconds(); ms > 0 {
+		return ms
+	}
+	return 1
+}
+
+func copyOptionalInt(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
+}
+
+func llamaServerObservationModelName(weights string) string {
+	weights = strings.TrimSpace(weights)
+	if weights == "" || weights == "." {
+		return ""
+	}
+	base := path.Base(weights)
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
+}
+
+func applyLlamaServerPeakExclusions(plan *modelplan.ModelPlacementPlan, snap *models.ClusterSnapshot, st *state.ClusterState) {
+	if plan == nil || snap == nil || st == nil {
+		return
+	}
+	modelName := llamaServerObservationModelName(plan.Spec.WeightsPath)
+	kept := make([]modelplan.ModelCandidateScore, 0, len(plan.Candidates))
+	for _, cand := range plan.Candidates {
+		node, ok := modelSnapshotNode(snap, cand.Node)
+		if ok {
+			if reason, blocked := placement.LlamaServerPeakExclusion(node, modelName, st); blocked {
+				plan.Excluded = append(plan.Excluded, modelplan.ModelExcludedCandidate{
+					Node:    cand.Node,
+					Reasons: []string{reason},
+				})
+				continue
+			}
+		}
+		kept = append(kept, cand)
+	}
+	plan.Candidates = kept
+	sort.Slice(plan.Excluded, func(i, j int) bool {
+		return plan.Excluded[i].Node < plan.Excluded[j].Node
+	})
+	if len(plan.Candidates) == 0 {
+		plan.BestCandidate = ""
+		plan.Selected = nil
+		return
+	}
+	plan.BestCandidate = plan.Candidates[0].Node
+	plan.Selected = nil
+	for i := range snap.Nodes {
+		if snap.Nodes[i].Name == plan.BestCandidate {
+			selected := models.NewPlanProfile(snap.Nodes[i], plan.Spec, plan.TargetPort, plan.PublicationID)
+			plan.Selected = &selected
+			return
+		}
+	}
+}
+
+func modelSnapshotNode(snap *models.ClusterSnapshot, name string) (models.NodeFacts, bool) {
+	if snap == nil {
+		return models.NodeFacts{}, false
+	}
+	for i := range snap.Nodes {
+		if snap.Nodes[i].Name == name {
+			return snap.Nodes[i], true
+		}
+	}
+	return models.NodeFacts{}, false
+}
+
+func mlxImportObserved(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig) (bool, error) {
+	for _, tool := range node.Tools {
+		if strings.EqualFold(tool.Name, models.ToolMLXServer) {
+			return false, nil
+		}
+	}
+	python := ""
+	for _, tool := range node.Tools {
+		if strings.EqualFold(tool.Name, "python3") && strings.TrimSpace(tool.Path) != "" {
+			python = tool.Path
+			break
+		}
+	}
+	if python == "" {
+		return false, nil
+	}
+	script := shellQuote(python) + " -c " + shellQuote("import mlx_lm") + " >/dev/null 2>&1 && echo axis-mlx-import:ok || echo axis-mlx-import:missing"
+	out, err := runNodeScript(ctx, node, cfgNode, script)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(out, "axis-mlx-import:ok"), nil
+}
+
+func probeMLXServer(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, port int) error {
+	script := shellMLXProbe(port)
+	var last error
+	for i := 0; i < 10; i++ {
+		if _, err := runNodeScript(ctx, node, cfgNode, script); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if last == nil {
+		last = fmt.Errorf("probe failed")
+	}
+	return last
+}
+
+func placeMLXModel(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, profile models.ModelRunProfile, source string, snap *models.ClusterSnapshot, startedAt time.Time, format string) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	importOK, importErr := mlxImportObserved(ctx, node, cfgNode)
+	if importErr != nil {
+		return importErr
+	}
+	argv, err := modellife.MLXArgv(node, profile, importOK)
+	if err != nil {
+		return err
+	}
+	volume, _ := models.NamedLocalVolume(node, profile.MLXModel)
+	dev := models.ObserveLaunchDevice(node)
+	receipt := models.ModelOperationReceipt{
+		Schema:         "axis.model-operation/v1",
+		ID:             models.GenerateID("mo"),
+		Action:         models.ModelOperationStart,
+		Status:         models.ModelOperationCompleted,
+		Disposition:    "started",
+		Node:           node.Name,
+		Engine:         models.EngineMLX,
+		Port:           profile.Port,
+		Model:          path.Base(profile.MLXModel),
+		Weights:        profile.MLXModel,
+		Volume:         volume,
+		Executable:     argv[0],
+		SnapshotSource: source,
+		StartedAt:      startedAt,
+		CompletedAt:    time.Now().UTC(),
+		DeviceKind:     dev.Kind,
+		PortSource:     profile.PortSource,
+	}
+	if snap != nil {
+		receipt.SnapshotAt = snap.Timestamp
+		if snap.Publication != nil {
+			receipt.PublicationID = snap.Publication.ID
+		}
+	}
+	if _, startErr := runNodeScript(ctx, node, cfgNode, shellStartLabeled("mlx_lm.server", argv, profile.Port)); startErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = startErr.Error()
+		receipt.CompletedAt = time.Now().UTC()
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("mlx start failed: %w", startErr)
+	}
+	if probeErr := probeMLXServer(ctx, node, cfgNode, profile.Port); probeErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = probeErr.Error()
+		receipt.CompletedAt = time.Now().UTC()
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("started but probe failed: %w", probeErr)
+	}
+	receipt.CompletedAt = time.Now().UTC()
+	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	cacheAddr, _ := cmd.Flags().GetString("cache-addr")
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func placeOllamaModel(ctx context.Context, cmd *cobra.Command, node models.NodeFacts, cfgNode *config.NodeConfig, profile models.ModelRunProfile, source string, snap *models.ClusterSnapshot, startedAt time.Time, format string) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	if len(profile.Refusals) > 0 {
+		return fmt.Errorf("%s", strings.Join(profile.Refusals, "; "))
+	}
+	if err := modellife.OllamaServerReady(node); err != nil {
+		return err
+	}
+	script, err := modellife.OllamaLoadScript(profile.OllamaModel, profile.OllamaKeepAlive, profile.OllamaNumCtx)
+	if err != nil {
+		return err
+	}
+	out, runErr := runNodeScript(ctx, node, cfgNode, script)
+	receipt := models.ModelOperationReceipt{
+		Schema:      "axis.model-operation/v1",
+		ID:          models.GenerateID("mo"),
+		Action:      models.ModelOperationStart,
+		Status:      models.ModelOperationCompleted,
+		Disposition: "placed",
+		Node:        node.Name,
+		Engine:      models.EngineOllama,
+		Model:       profile.OllamaModel,
+		StartedAt:   startedAt,
+		CompletedAt: time.Now().UTC(),
+	}
+	if snap != nil {
+		receipt.SnapshotSource = source
+		receipt.SnapshotAt = snap.Timestamp
+		if snap.Publication != nil {
+			receipt.PublicationID = snap.Publication.ID
+		}
+	}
+	if runErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = runErr.Error()
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("ollama place failed: %w", runErr)
+	}
+	listed, parseErr := modellife.OllamaPSHasModel(out, profile.OllamaModel)
+	if parseErr != nil || !listed {
+		msg := "ollama /api/ps did not list the model"
+		if parseErr != nil {
+			msg = parseErr.Error()
+		}
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = msg
+		_ = writeModelStartReceipt(cmd, receipt, format)
+		return fmt.Errorf("%s", msg)
+	}
+	if writeErr := writeModelStartReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	cacheAddr, _ := cmd.Flags().GetString("cache-addr")
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, modelName, cacheAddr, format string) error {
+	live, _ := cmd.Flags().GetBool("live")
+	snap, _, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "stop", false)
+	if err != nil {
+		return err
+	}
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, nodeName)
+	if err != nil {
+		return err
+	}
+	if err := runOllamaUnload(ctx, nf, cfgNode, modelName); err != nil {
+		return err
+	}
+	receipt := models.ModelOperationReceipt{
+		Schema:      "axis.model-operation/v1",
+		ID:          models.GenerateID("mo"),
+		Action:      models.ModelOperationStop,
+		Status:      models.ModelOperationCompleted,
+		Disposition: "unloaded",
+		Node:        nf.Name,
+		Engine:      models.EngineOllama,
+		Model:       modelName,
+		StartedAt:   time.Now().UTC(),
+		CompletedAt: time.Now().UTC(),
+	}
+	if err := writeModelOperationReceipt(cmd, receipt, format); err != nil {
+		return err
+	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func stopOllamaGeneration(ctx context.Context, cmd *cobra.Command, snap *models.ClusterSnapshot, instance *models.ModelInstance, cacheAddr, format string, startedAt time.Time) error {
+	nf, cfgNode, err := resolveModelNodeFromSnapshot(snap, instance.Node)
+	if err != nil {
+		return err
+	}
+	unloadErr := runOllamaUnload(ctx, nf, cfgNode, instance.Model)
+	receipt := models.ModelOperationReceipt{
+		Schema:       "axis.model-operation/v1",
+		ID:           models.GenerateID("mo"),
+		Action:       models.ModelOperationStop,
+		Status:       models.ModelOperationCompleted,
+		Disposition:  "unloaded",
+		InstanceID:   instance.ID,
+		GenerationID: instance.GenerationID,
+		Node:         instance.Node,
+		Engine:       models.EngineOllama,
+		Model:        instance.Model,
+		StartedAt:    startedAt,
+		CompletedAt:  time.Now().UTC(),
+	}
+	if unloadErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = unloadErr.Error()
+	}
+	if writeErr := writeModelOperationReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	if unloadErr != nil {
+		return unloadErr
+	}
+	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
+	return nil
+}
+
+func runOllamaUnload(ctx context.Context, node models.NodeFacts, cfgNode *config.NodeConfig, modelName string) error {
+	if err := modellife.OllamaServerReady(node); err != nil {
+		return err
+	}
+	script, err := modellife.OllamaUnloadScript(modelName)
+	if err != nil {
+		return err
+	}
+	out, err := runNodeScript(ctx, node, cfgNode, script)
+	if err != nil {
+		return fmt.Errorf("ollama unload failed: %w", err)
+	}
+	listed, err := modellife.OllamaPSHasModel(out, modelName)
+	if err != nil {
+		return err
+	}
+	if listed {
+		return fmt.Errorf("ollama /api/ps still lists %s", modelName)
+	}
+	return nil
 }
 
 // runOnNodeCapturing is runOnNode that also returns the command output, so

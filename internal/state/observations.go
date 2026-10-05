@@ -59,7 +59,17 @@ func normalizeObservation(obs models.ExecutionObservation) models.ExecutionObser
 	if obs.PeakVRAMMB < 0 {
 		obs.PeakVRAMMB = 0
 	}
+	obs.ContextTokens = copyOptionalInt(obs.ContextTokens)
+	obs.DeviceIndex = copyOptionalInt(obs.DeviceIndex)
 	return obs
+}
+
+func copyOptionalInt(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
 }
 
 func weightedAverage(current int64, currentSamples int, next int64, nextSamples int) int64 {
@@ -99,6 +109,12 @@ func mergeObservation(existing, next models.ExecutionObservation) models.Executi
 	}
 	if next.ModelName != "" {
 		merged.ModelName = next.ModelName
+	}
+	if next.ContextTokens != nil {
+		merged.ContextTokens = copyOptionalInt(next.ContextTokens)
+	}
+	if next.DeviceIndex != nil {
+		merged.DeviceIndex = copyOptionalInt(next.DeviceIndex)
 	}
 	return merged
 }

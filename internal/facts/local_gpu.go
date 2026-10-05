@@ -102,8 +102,26 @@ func localGPUsLinux(ctx context.Context) []models.GPUInfo {
 	return gpus
 }
 
+// nvidiaSMIMemoryQuery is the memory probe used by the local collector, the
+// remote gpu command, and the remote fact bundle. The utilization probe and
+// the resident index,uuid probe do not use it.
+const nvidiaSMIMemoryQuery = "--query-gpu=index,name,memory.total,memory.free"
+
+func localNvidiaSMIMemoryArgs() []string {
+	return []string{"nvidia-smi", nvidiaSMIMemoryQuery, "--format=csv,noheader,nounits"}
+}
+
+func linuxGPUCollectCommand() string {
+	return "nvidia-smi " + nvidiaSMIMemoryQuery + " --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'"
+}
+
+func darwinGPUCollectCommand() string {
+	return `system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Chipset Model:|VRAM|Metal' | sed 's/^ *//'`
+}
+
 func localGPUsNvidiaSMI(ctx context.Context) []models.GPUInfo {
-	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits").Output()
+	args := localNvidiaSMIMemoryArgs()
+	out, err := exec.CommandContext(ctx, args[0], args[1:]...).Output()
 	if err != nil {
 		return nil
 	}
@@ -118,21 +136,32 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 			continue
 		}
 		parts := strings.Split(line, ", ")
-		name := strings.TrimSpace(parts[0])
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		// Four columns are index,name,memory.total,memory.free. A cell that
+		// does not parse drops the row. Wider rows are not this query.
+		if len(parts) >= 4 {
+			if gpu, ok := nvidiaSMIIndexedGPU(parts); ok {
+				gpus = append(gpus, gpu)
+			}
+			continue
+		}
+		name := parts[0]
 		gpu := models.GPUInfo{
 			Model:        name,
 			Vendor:       "nvidia",
 			Capabilities: []string{"cuda"},
 		}
 		if len(parts) >= 2 {
-			if vram, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+			if vram, err := strconv.Atoi(parts[1]); err == nil {
 				gpu.VRAMMB = vram
 			}
 		}
 		// memory.free is present only when the query requests it; older callers
 		// (and the two-column remote fallback) legitimately omit it.
 		if len(parts) >= 3 {
-			if free, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
+			if free, err := strconv.Atoi(parts[2]); err == nil {
 				gpu.VRAMFreeMB = free
 				gpu.VRAMFreeMeasured = true
 			}
@@ -140,6 +169,35 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 		gpus = append(gpus, gpu)
 	}
 	return gpus
+}
+
+func nvidiaSMIIndexedGPU(parts []string) (models.GPUInfo, bool) {
+	if len(parts) != 4 {
+		return models.GPUInfo{}, false
+	}
+	index, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return models.GPUInfo{}, false
+	}
+	total, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return models.GPUInfo{}, false
+	}
+	free, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return models.GPUInfo{}, false
+	}
+	idx := index
+	return models.GPUInfo{
+		Model:            parts[1],
+		Vendor:           "nvidia",
+		Index:            &idx,
+		IndexSource:      "nvidia-smi",
+		VRAMMB:           total,
+		VRAMFreeMB:       free,
+		VRAMFreeMeasured: true,
+		Capabilities:     []string{"cuda"},
+	}, true
 }
 
 func localGPUsLspci(ctx context.Context) []models.GPUInfo {

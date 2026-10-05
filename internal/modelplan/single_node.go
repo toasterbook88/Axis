@@ -56,6 +56,9 @@ type ModelPlacementPlan struct {
 	Candidates     []ModelCandidateScore    `json:"candidates" yaml:"candidates"`
 	Excluded       []ModelExcludedCandidate `json:"excluded" yaml:"excluded"`
 	BestCandidate  string                   `json:"best_candidate,omitempty" yaml:"best_candidate,omitempty"`
+	// Selected is the launch profile for BestCandidate. It is advisory.
+	// Non-empty Refusals mean start must not exec that profile as written.
+	Selected *models.ModelRunProfile `json:"selected,omitempty" yaml:"selected,omitempty"`
 }
 
 // PlanSingleNode performs a dry-run evaluation of cluster nodes against available
@@ -180,6 +183,13 @@ func PlanSingleNode(snapshot *models.ClusterSnapshot, spec models.ModelSpec, tar
 
 	if len(plan.Candidates) > 0 {
 		plan.BestCandidate = plan.Candidates[0].Node
+		for i := range snapshot.Nodes {
+			if snapshot.Nodes[i].Name == plan.BestCandidate {
+				selected := models.NewPlanProfile(snapshot.Nodes[i], spec, targetPort, plan.PublicationID)
+				plan.Selected = &selected
+				break
+			}
+		}
 	}
 
 	return plan, nil
@@ -223,14 +233,7 @@ type acceleratorFit struct {
 // 0 from an unknown 0. A positive free value is a measurement even when a
 // collector that predates #442 omitted the flag.
 func observedFreeVRAM(gpu models.GPUInfo) (freeMB int64, measured bool) {
-	total := int64(gpu.VRAMMB)
-	if gpu.VRAMFreeMB < 0 {
-		return total, false
-	}
-	if gpu.VRAMFreeMeasured || gpu.VRAMFreeMB > 0 {
-		return int64(gpu.VRAMFreeMB), true
-	}
-	return total, false
+	return models.MeasuredFreeVRAM(gpu)
 }
 
 // evaluateNodeAccelerator reports the best single compatible device on a node.

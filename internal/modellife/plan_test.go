@@ -1,11 +1,29 @@
 package modellife
 
 import (
+	"path"
 	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
 )
+
+// planStartDefault is the no-flag llama-server profile. Production start
+// builds that profile from flags and calls PlanStartProfile.
+func planStartDefault(node models.NodeFacts, weights string, port int) (StartPlan, error) {
+	weights = path.Clean(strings.TrimSpace(weights))
+	return PlanStartProfile(node, models.ModelRunProfile{
+		Schema:       models.ModelRunSchema,
+		Node:         node.Name,
+		Engine:       models.EngineLlamaCpp,
+		ToolName:     models.ToolLlamaServer,
+		ArtifactKind: models.ArtifactWeightsPath,
+		WeightsPath:  weights,
+		BindHost:     "127.0.0.1",
+		Port:         port,
+		PortSource:   models.PortSourceExplicit,
+	})
+}
 
 func storageNode() models.NodeFacts {
 	return models.NodeFacts{
@@ -26,28 +44,28 @@ func storageNode() models.NodeFacts {
 func TestPlanStartRequiresValidPortAndWeights(t *testing.T) {
 	n := storageNode()
 	for _, port := range []int{-1, 0, 65536} {
-		if _, err := PlanStart(n, "/mnt/models/a.gguf", port); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
+		if _, err := planStartDefault(n, "/mnt/models/a.gguf", port); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
 			t.Fatalf("port %d error = %v, want valid range error", port, err)
 		}
 	}
-	if _, err := PlanStart(n, "", 8081); err == nil {
+	if _, err := planStartDefault(n, "", 8081); err == nil {
 		t.Fatal("expected error for missing weights")
 	}
 }
 
 func TestPlanStartRequiresNamedLocalVolume(t *testing.T) {
 	n := storageNode()
-	if _, err := PlanStart(n, "/mnt/nas/a.gguf", 8081); err == nil || !strings.Contains(err.Error(), "named local volume") {
+	if _, err := planStartDefault(n, "/mnt/nas/a.gguf", 8081); err == nil || !strings.Contains(err.Error(), "named local volume") {
 		t.Fatalf("network path must be refused: %v", err)
 	}
-	if _, err := PlanStart(n, "/not-a-volume/a.gguf", 8081); err == nil || !strings.Contains(err.Error(), "named local volume") {
+	if _, err := planStartDefault(n, "/not-a-volume/a.gguf", 8081); err == nil || !strings.Contains(err.Error(), "named local volume") {
 		t.Fatalf("unknown path must be refused: %v", err)
 	}
 }
 
 func TestPlanStartBuildsLlamaServerArgv(t *testing.T) {
 	n := storageNode()
-	p, err := PlanStart(n, "/mnt/models/a.gguf", 8081)
+	p, err := planStartDefault(n, "/mnt/models/a.gguf", 8081)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +84,7 @@ func TestPlanStartBuildsLlamaServerArgv(t *testing.T) {
 func TestPlanStartRequiresLlamaServerTool(t *testing.T) {
 	n := storageNode()
 	n.Tools = nil
-	if _, err := PlanStart(n, "/mnt/models/a.gguf", 8081); err == nil || !strings.Contains(err.Error(), "llama-server") {
+	if _, err := planStartDefault(n, "/mnt/models/a.gguf", 8081); err == nil || !strings.Contains(err.Error(), "llama-server") {
 		t.Fatalf("expected missing tool error, got %v", err)
 	}
 }
