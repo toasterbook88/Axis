@@ -494,7 +494,10 @@ func writeSampleStub(t *testing.T, dir, name, body string) {
 
 func runSampleShell(dir, script string) (string, error) {
 	cmd := exec.Command("sh", "-c", script)
-	cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + dir}
+	// Fixture stubs stay first; the inherited tail supplies tools like awk
+	// that profile-based runners (NixOS) keep outside /usr/bin.
+	sep := string(os.PathListSeparator)
+	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH"), "HOME=" + dir}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
