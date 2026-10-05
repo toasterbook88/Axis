@@ -8,14 +8,51 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/facts"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
 var currentHostname = os.Hostname
+
+// localNodeLabels resolves the local node's operator-assigned labels from
+// config. A missing config file yields empty labels (unconfigured machine is
+// normal for `axis facts`); a config that exists but fails to load is an
+// error — silently dropping labels would make the node lose eligibility
+// with no signal.
+var localNodeLabels = func(hostname string) (map[string]string, error) {
+	cfgPath := os.Getenv("AXIS_CONFIG")
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	if _, statErr := os.Stat(cfgPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("statting config for node labels: %w", statErr)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading config for node labels: %w", err)
+	}
+	for i := range cfg.Nodes {
+		if cfg.Nodes[i].IsLocal() {
+			return cfg.Nodes[i].Labels, nil
+		}
+	}
+	if nc, ok := cfg.FindNode(hostname); ok {
+		return nc.Labels, nil
+	}
+	return map[string]string{}, nil
+}
+
 var collectLocalFacts = func(ctx context.Context, hostname string) (*models.NodeFacts, error) {
-	return facts.NewLocalCollector(hostname, "").Collect(ctx)
+	labels, err := localNodeLabels(hostname)
+	if err != nil {
+		return nil, err
+	}
+	return facts.NewLocalCollector(hostname, "", labels).Collect(ctx)
 }
 
 func factsCmd() *cobra.Command {

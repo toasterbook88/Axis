@@ -35,7 +35,7 @@ func TestTaskPlaceUsesCacheWhenAvailable(t *testing.T) {
 	if read.source != "daemon-cache" {
 		t.Fatalf("expected daemon-cache source, got %q", read.source)
 	}
-	explanation, _, _, err := explainPlacementFromSnapshot(context.Background(), "analyze a git repo", read.snap, read.source, read.age)
+	explanation, _, _, err := explainPlacementFromSnapshot(context.Background(), "analyze a git repo", nil, read.snap, read.source, read.age)
 	if err != nil {
 		t.Fatalf("explainPlacementFromSnapshot: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestTaskPlaceFallsBackToLiveWhenCacheFails(t *testing.T) {
 	if read.source != "live-fallback" {
 		t.Fatalf("expected live-fallback source, got %q", read.source)
 	}
-	explanation, _, _, err := explainPlacementFromSnapshot(context.Background(), "analyze a git repo", read.snap, read.source, read.age)
+	explanation, _, _, err := explainPlacementFromSnapshot(context.Background(), "analyze a git repo", nil, read.snap, read.source, read.age)
 	if err != nil {
 		t.Fatalf("explainPlacementFromSnapshot: %v", err)
 	}
@@ -125,6 +125,7 @@ func TestTaskPlaceUsesReservationOverlayFromLiveSnapshot(t *testing.T) {
 	explanation, source, _, err := explainPlacementFromSnapshot(
 		context.Background(),
 		"analyze a git repo",
+		nil,
 		&models.ClusterSnapshot{Nodes: []models.NodeFacts{alpha, beta}},
 		"live",
 		"",

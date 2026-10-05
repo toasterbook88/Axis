@@ -274,7 +274,7 @@ func collectNode(ctx context.Context, t *testing.T, target nodeTarget, g *Guard)
 	t.Helper()
 
 	if target.Local {
-		lc := facts.NewLocalCollector(target.Name, target.Role)
+		lc := facts.NewLocalCollector(target.Name, target.Role, nil)
 		f, err := lc.Collect(ctx)
 		return nodeResult{Target: target, Facts: f, Err: err}
 	}

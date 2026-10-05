@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/toasterbook88/axis/internal/auth"
 )
 
 // Client interacts with the A2A HTTP API on an Axis node.
@@ -23,11 +25,7 @@ type Client struct {
 
 // NewClient returns an initialized A2A Client.
 func NewClient(baseURL, token string, httpClient *http.Client) *Client {
-	baseURL = strings.TrimSpace(baseURL)
-	baseURL = strings.TrimRight(baseURL, "/")
-	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-		baseURL = "http://" + baseURL
-	}
+	baseURL = auth.RequestBaseURL(baseURL)
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}

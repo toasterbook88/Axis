@@ -175,6 +175,11 @@ func daemonStartCmd() *cobra.Command {
 }
 
 func newDaemonRequest(ctx context.Context, addr, method, path string, query url.Values) (*http.Request, *http.Client, error) {
+	// newDaemonRequest attaches the cluster bearer to the target; refuse
+	// off-box addresses unless the break-glass env is set (shared gate).
+	if err := auth.RefuseOffBoxBearer(addr); err != nil {
+		return nil, nil, err
+	}
 	client, baseURLAddr := daemon.HttpClientForAddr(addr)
 	baseURL := daemon.NormalizeAddr(baseURLAddr)
 	u := baseURL + path

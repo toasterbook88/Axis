@@ -8,6 +8,17 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func cloneGPUInfos(gpus []models.GPUInfo) []models.GPUInfo {
 	if gpus == nil {
 		return nil
@@ -60,6 +71,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		}
 		nodeCopy.ResidentModels = append([]models.ResidentModel(nil), node.ResidentModels...)
 		nodeCopy.DiskWeights = append([]models.DiskWeight(nil), node.DiskWeights...)
+		nodeCopy.Labels = cloneStringMap(node.Labels)
 		if node.TurboQuant != nil {
 			turbo := *node.TurboQuant
 			turbo.Backends = append([]string(nil), node.TurboQuant.Backends...)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -42,40 +41,9 @@ func formatHostPort(host, defaultPort string) string {
 	return fmt.Sprintf("%s:%s", host, defaultPort)
 }
 
-// allowOffboxBearerEnv is the break-glass switch for --addr aimed at a
-// non-loopback TCP host. Without it, resolveA2AClient refuses the dial so
-// the cluster token in ~/.axis/token cannot be attached to an unlisted host.
-const allowOffboxBearerEnv = "AXIS_ALLOW_OFFBOX_BEARER"
-
-// addrKeepsClusterBearer reports whether addr is the local daemon: a unix
-// socket, or HTTP to a loopback host. Anything else is off-box.
-func addrKeepsClusterBearer(addr string) bool {
-	if auth.IsUnixAddr(addr) {
-		return true
-	}
-	host := dialHost(addr)
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-func dialHost(addr string) string {
-	raw := strings.TrimSpace(addr)
-	if strings.Contains(raw, "://") {
-		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
-			return ""
-		}
-		raw = u.Host
-	}
-	host, _, err := net.SplitHostPort(raw)
-	if err != nil {
-		host = raw
-	}
-	return strings.Trim(strings.ToLower(host), "[]")
-}
+// allowOffboxBearerEnv aliases the shared break-glass switch (internal/auth):
+// off-box daemon addresses refuse the cluster bearer unless explicitly set.
+const allowOffboxBearerEnv = auth.AllowOffBoxBearerEnv
 
 func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2a.Client, error) {
 	nodeName = strings.TrimSpace(nodeName)
@@ -83,7 +51,7 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 
 	// Classify --addr before reading the token. LoadOrGenerateToken can create
 	// ~/.axis/token, and a refused dial must not touch that file or attach it.
-	if addrOverride != "" && !addrKeepsClusterBearer(addrOverride) && os.Getenv(allowOffboxBearerEnv) != "1" {
+	if addrOverride != "" && !auth.AddrKeepsClusterBearer(addrOverride) && os.Getenv(allowOffboxBearerEnv) != "1" {
 		return nil, fmt.Errorf("refusing off-box --addr %q: it would attach the cluster token (set %s=1 to allow)", addrOverride, allowOffboxBearerEnv)
 	}
 
