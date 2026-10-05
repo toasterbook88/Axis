@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/mattn/go-isatty"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/events"
@@ -214,7 +216,10 @@ axis chat and axis llm were removed; use axis agent and axis ai route.`,
 }
 
 func versionCmd() *cobra.Command {
-	return &cobra.Command{
+	var localOnly bool
+	var cacheAddr string
+
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print AXIS version and build info",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -235,10 +240,28 @@ func versionCmd() *cobra.Command {
 			}
 			fmt.Fprintf(out, "  go:       %s\n", goVer)
 			fmt.Fprintf(out, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+
+			if !localOnly {
+				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
+				defer cancel()
+				daemonVer, err := versionQueryDaemon(ctx, cacheAddr)
+				if err != nil {
+					fmt.Fprintf(out, "  daemon:   not responding on %s\n", cacheAddr)
+				} else {
+					fmt.Fprintf(out, "  daemon:   v%s on %s\n", daemonVer, cacheAddr)
+					if daemonVer != Version {
+						fmt.Fprintf(out, "  warning:  daemon version %s differs from CLI version %s\n", daemonVer, Version)
+					}
+				}
+			}
+
 			_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&localOnly, "local", false, "skip querying the running daemon")
+	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	return cmd
 }
 
 // printOutput marshals data to JSON or YAML and writes to out.
