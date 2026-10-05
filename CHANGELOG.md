@@ -1,3 +1,29 @@
+## v0.19.5 (2026-10-05)
+
+Seventeen commits (thirteen PRs) merged on `main` since `v0.19.4`. This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.
+
+### Features
+
+* **Cache-first status reads:** `axis status` and the agent role read the snapshot inside the bounded 5-minute publication window without re-probing nodes (#480).
+* **Agent reachability upgrades:** path resolution, multi-candidate placement, and startup auth for agent sessions (#481).
+* **Supervisor-aware emergency model eviction:** stopped-model fallback can freeze or terminate supervised llama/MLX residents with identity guards on pid + start time, plus a rotating JSONL eviction telemetry lane and an RFC proposal for durable emergency placement (#487).
+* **Model run profiling:** `axis model run-profile` records a daily model-start profile per backend so placement sees runtime history, with new resident-model GPU bundles (every nvidia-smi row preserved) (#489).
+* **Apple Foundation Model discovery:** remote AFM probe plus inventory/placement support on Apple nodes (#484), with a planning-only roadmap (#485).
+
+### Fixes
+
+* **Placement plan helpers back on the cache-first path** (#483).
+* **AFM probe no longer emits helper self-test stdout in remote discovery** (#486).
+* **`axis version` prints the toolchain VCS commit when ldflags are empty**, so manually-built binaries still report a revision (#488).
+* **Off-box bearer-token refusal widened:** the daemon refuses to attach the cluster bearer token to out-of-band addresses on every leaked surface (snapshot/meta/refresh, guarded-exec streams, mesh/meta/refresh/restart, reservations), extending the #468 A2A-only gate cluster-wide; Gate requires `AXIS_ALLOW_OFFBOX_BEARER=1` to opt back in (#491).
+* **Required node labels:** `axis task place --require-label k=v` is repeatable and must all match; labels ride discovery into the published snapshot and exclude nodes without changing rank (#491).
+
+### Docs & CI
+
+* Merge-readiness: judge a PR before declaring it review-clean (#490).
+* Unicode ANSI shadow wordmark in the CLI branding (#482).
+* Dependabot action-bump group for workflow dependencies (#492).
+
 ## v0.19.4 (2026-09-28)
 
 Ten pull requests merged on `main` since `v0.19.3`. This patch release ships the A2A agent-card and task plane (cards, authenticated observe send/get, approval queue for exec-shaped work, delegate CLI), honest placement ranking, and related docs/deps housekeeping.
