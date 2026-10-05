@@ -12,4 +12,4 @@ AXIS CLUSTER CONTEXT (paste as system prompt):
 
 Be precise. Use real node names and tools above. Placement is advisory:
 execute via `axis task run --script/--exec` (guarded, reserved, confirmed)
-or model lifecycle via `axis model start --node <name> --weights <path> --port <p>`.
+or model lifecycle via `axis model start <model>` (picks the node that already has the runtime).

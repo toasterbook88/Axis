@@ -1,6 +1,8 @@
 package state
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +207,118 @@ func TestNormalizeObservationSyncsScopeModelName(t *testing.T) {
 	}
 	if stored.ModelName != "llama3.2:latest" {
 		t.Errorf("ModelName = %q, want %q", stored.ModelName, "llama3.2:latest")
+	}
+}
+
+func TestMergeKeepsUnsetContextAndDeviceAndReplacesSetValues(t *testing.T) {
+	s := &ClusterState{}
+	scope := models.ObservationScope{
+		Node:      "storage",
+		Workload:  models.ClassLlamaServer,
+		Backend:   "llama.cpp",
+		Tool:      "llama-server",
+		ModelName: "a.gguf",
+	}
+	ctx := 2048
+	zero := 0
+	s.RecordObservation(models.ExecutionObservation{
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		LastSuccess:   true,
+		WallTimeMS:    10,
+		PeakRAMMB:     100,
+		ContextTokens: &ctx,
+		DeviceIndex:   &zero,
+	})
+	zero = 7
+	ctx = 1
+	s.RecordObservation(models.ExecutionObservation{
+		Scope:       scope,
+		ObservedAt:  time.Now().UTC(),
+		LastSuccess: true,
+		WallTimeMS:  10,
+		PeakRAMMB:   50,
+	})
+	obs, ok := s.Observation(scope)
+	if !ok || obs == nil || obs.ContextTokens == nil || *obs.ContextTokens != 2048 {
+		t.Fatalf("nil context sample cleared the previous value: %+v", obs)
+	}
+	if obs.DeviceIndex == nil || *obs.DeviceIndex != 0 {
+		t.Fatalf("nil device sample cleared index 0: %+v", obs)
+	}
+	if obs.PeakRAMMB != 100 {
+		t.Fatalf("peak = %d, want the previous max 100", obs.PeakRAMMB)
+	}
+
+	nextCtx := 4096
+	one := 1
+	s.RecordObservation(models.ExecutionObservation{
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		LastSuccess:   true,
+		WallTimeMS:    10,
+		ContextTokens: &nextCtx,
+		DeviceIndex:   &one,
+	})
+	one = 9
+	obs, ok = s.Observation(scope)
+	if !ok || obs.ContextTokens == nil || *obs.ContextTokens != 4096 || obs.DeviceIndex == nil || *obs.DeviceIndex != 1 {
+		t.Fatalf("set sample did not replace context and device: %+v", obs)
+	}
+	if len(s.Observations) != 1 {
+		t.Fatalf("optional fields changed the observation key: %d entries", len(s.Observations))
+	}
+
+	other := scope
+	if ObservationKey(other) != ObservationKey(obs.Scope) {
+		t.Fatal("context and device index changed ObservationKey")
+	}
+}
+
+func TestObservationOptionalFieldsRoundTripIndexZero(t *testing.T) {
+	t.Setenv("AXIS_HOME", t.TempDir())
+	s := &ClusterState{}
+	scope := models.ObservationScope{
+		Node:     "storage",
+		Workload: models.ClassLlamaServer,
+		Backend:  "llama.cpp",
+		Tool:     "llama-server",
+	}
+	zero := 0
+	ctx := 1024
+	s.RecordObservation(models.ExecutionObservation{
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		LastSuccess:   true,
+		WallTimeMS:    4,
+		ContextTokens: &ctx,
+		DeviceIndex:   &zero,
+	})
+	raw, err := json.Marshal(s.Observations[ObservationKey(scope)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"device_index":0`) {
+		t.Fatalf("index 0 was omitted: %s", raw)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, ok := loaded.Observation(scope)
+	if !ok || obs.DeviceIndex == nil || *obs.DeviceIndex != 0 || obs.ContextTokens == nil || *obs.ContextTokens != 1024 {
+		t.Fatalf("round trip = %+v", obs)
+	}
+	unset := models.ExecutionObservation{Scope: scope, ObservedAt: time.Now().UTC(), WallTimeMS: 1, LastSuccess: true}
+	raw, err = json.Marshal(normalizeObservation(unset))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "device_index") || strings.Contains(string(raw), "context_tokens") {
+		t.Fatalf("nil pointers were written as zero: %s", raw)
 	}
 }
 

@@ -47,12 +47,12 @@ func newRootCmd() *cobra.Command {
   axis cluster status     every node (cache-first for 5 minutes; --live to sweep)
   axis node facts         this machine
   axis agent              ask questions (advisory)
-  axis model start        llama-server on a named node (--node --weights --port)
+  axis model start        one model name; pick the node that already has the runtime
   axis daemon status      local cache
 
 axis status, axis facts, axis summary, and axis doctor still work.
 axis chat and axis llm were removed; use axis agent and axis ai route.`,
-		Example: "  axis cluster status\n  axis node facts\n  axis agent\n  axis model start --node storage --weights /mnt/models/a.gguf --port 8081",
+		Example: "  axis cluster status\n  axis node facts\n  axis agent\n  axis model start mistral",
 
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			ui.Init(noColor)

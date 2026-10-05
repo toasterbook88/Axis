@@ -46,7 +46,7 @@ case "$(printf '%s' "$OS" | tr '[:upper:]' '[:lower:]')" in
     printf 'meminfo_b64=%s\n' "$(grep -E 'MemTotal|MemAvailable|MemFree' /proc/meminfo 2>/dev/null | base64 | tr -d '\n')"
     printf 'loadavg=%s\n' "$(cat /proc/loadavg 2>/dev/null)"
     printf 'pressure_b64=%s\n' "$(cat /proc/pressure/memory 2>/dev/null | base64 | tr -d '\n')"
-    printf 'gpu_b64=%s\n' "$(nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //' | base64 | tr -d '\n')"
+    printf 'gpu_b64=%s\n' "$( { nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null || lspci 2>/dev/null | grep -iE 'vga|3d' | sed 's/.*: //'; } | base64 | tr -d '\n')"
     printf 'identity=%s\n' "$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null)"
     printf 'battery=%s\n' "$(cat /sys/class/power_supply/BAT0/capacity /sys/class/power_supply/BAT1/capacity /sys/class/power_supply/BATT/capacity 2>/dev/null | head -1)"
     printf 'power=%s\n' "$(for n in AC ADP0 ACAD Mains; do s=$(cat /sys/class/power_supply/$n/status 2>/dev/null); [ -n "$s" ] && echo "$s" && break; done)"
@@ -85,7 +85,7 @@ if command -v lsblk >/dev/null 2>&1; then
 fi
 
 # Tools: path + version (same tool set as defaultToolDefs)
-for t in go python3 git jq nix docker ollama mlx_lm llama-cli llama-server node swift cargo gcc; do
+for t in go python3 git jq nix docker ollama mlx_lm mlx_lm.server llama-cli llama-server node swift cargo gcc; do
   p=$(command -v "$t" 2>/dev/null)
   if [ -n "$p" ]; then
     printf 'tool_%s=%s\n' "$t" "$p"
@@ -97,7 +97,7 @@ for t in go python3 git jq nix docker ollama mlx_lm llama-cli llama-server node 
       nix) v=$("$p" --version 2>/dev/null | head -1) ;;
       docker) v=$("$p" --version 2>/dev/null | head -1) ;;
       ollama) v=$("$p" --version 2>/dev/null | head -1) ;;
-      mlx_lm) v=$("$p" --help 2>/dev/null | head -1) ;;
+      mlx_lm|mlx_lm.server) v=$("$p" --help 2>/dev/null | head -1) ;;
       llama-cli|llama-server) v=$("$p" --version 2>/dev/null | head -1) ;;
       node) v=$("$p" --version 2>/dev/null | head -1) ;;
       swift) v=$("$p" --version 2>/dev/null | head -1) ;;

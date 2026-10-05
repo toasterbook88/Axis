@@ -55,9 +55,13 @@ const (
 // --- Observed State ---
 
 // GPUInfo describes a single GPU with vendor, model, VRAM, and capabilities.
+// Index is set only when a collector parsed an nvidia-smi index. Nil means
+// the row had no index fact (legacy csv, Metal, or lspci).
 type GPUInfo struct {
 	Vendor           string   `json:"vendor" yaml:"vendor"`                                             // apple, nvidia, amd, intel, unknown
 	Model            string   `json:"model" yaml:"model"`                                               // e.g. "Apple M3 Pro", "NVIDIA GeForce RTX 4090"
+	Index            *int     `json:"index,omitempty" yaml:"index,omitempty"`                           // nvidia-smi index; nil when the collector did not record one
+	IndexSource      string   `json:"index_source,omitempty" yaml:"index_source,omitempty"`             // "nvidia-smi" when Index was parsed from that query
 	VRAMMB           int      `json:"vram_mb,omitempty" yaml:"vram_mb,omitempty"`                       // 0 means unknown or unified
 	VRAMFreeMB       int      `json:"vram_free_mb,omitempty" yaml:"vram_free_mb,omitempty"`             // measured free VRAM; valid when VRAMFreeMeasured is true or VRAMFreeMB > 0
 	VRAMFreeMeasured bool     `json:"vram_free_measured,omitempty" yaml:"vram_free_measured,omitempty"` // true when VRAMFreeMB was explicitly measured (even if 0 MB free)
@@ -723,6 +727,12 @@ type ExecutionObservation struct {
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
 	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
 	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	// ContextTokens and DeviceIndex are optional facts from a llama-server
+	// start. They are not part of ObservationKey. A nil pointer on a later
+	// sample keeps the previous value; a non-nil pointer, including zero,
+	// replaces it.
+	ContextTokens *int `json:"context_tokens,omitempty" yaml:"context_tokens,omitempty"`
+	DeviceIndex   *int `json:"device_index,omitempty" yaml:"device_index,omitempty"`
 	// ModelName is the inference model name observed during execution
 	// (e.g. "llama3.2:latest", "qwen2.5-coder:7b"). Populated when a model
 	// name is extractable from the task command or description. Used by

@@ -87,6 +87,34 @@ func TestCloneDeepCopiesResources(t *testing.T) {
 	}
 }
 
+func TestCloneDeepCopiesGPUIndex(t *testing.T) {
+	index := 1
+	orig := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{{
+			Name: "gpu-node",
+			Resources: &models.Resources{
+				GPUs: []models.GPUInfo{{
+					Model: "RTX 4090",
+					Index: &index,
+				}},
+			},
+		}},
+	}
+	clone := snapshotview.Clone(orig)
+	*clone.Nodes[0].Resources.GPUs[0].Index = 9
+	if *orig.Nodes[0].Resources.GPUs[0].Index != 1 {
+		t.Fatalf("clone index write changed original to %d", *orig.Nodes[0].Resources.GPUs[0].Index)
+	}
+	if clone.Nodes[0].Resources.GPUs[0].Index == orig.Nodes[0].Resources.GPUs[0].Index {
+		t.Fatal("clone shares the GPU index pointer")
+	}
+
+	// Resources pointer itself must be different.
+	if clone.Nodes[0].Resources == orig.Nodes[0].Resources {
+		t.Error("expected cloned Resources to be a new pointer")
+	}
+}
+
 func TestCloneDeepCopiesAddressesAndTools(t *testing.T) {
 	orig := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{

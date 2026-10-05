@@ -126,7 +126,7 @@ func TestBuildContextBlockNextActionNamesRealPaths(t *testing.T) {
 	out := buildContextBlock(snap, models.TaskRequirements{}, "run task", "live", nil, nil)
 	for _, want := range []string{
 		"axis task run --script/--exec",
-		"axis model start --node",
+		"axis model start <model>",
 		"axis mcp serve",
 	} {
 		if !strings.Contains(out, want) {
