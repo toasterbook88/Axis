@@ -754,15 +754,17 @@ type ObservationScope struct {
 }
 
 // ExecutionObservation records the latest empirical execution profile for an
-// exact scope. Unknown resource peaks remain unset.
+// exact scope. Unknown resource measurements remain unset.
 type ExecutionObservation struct {
 	Scope       ObservationScope `json:"scope" yaml:"scope"`
 	ObservedAt  time.Time        `json:"observed_at" yaml:"observed_at"`
 	SampleCount int              `json:"sample_count" yaml:"sample_count"`
 	LastSuccess bool             `json:"last_success" yaml:"last_success"`
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
-	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
-	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	// ObservedRSSMB is a single RSS sample (not a peak) from the process.
+	// ObservedVRAMMB is device-wide VRAM (not per-model) from nvidia-smi.
+	ObservedRSSMB  int64 `json:"observed_rss_mb,omitempty" yaml:"observed_rss_mb,omitempty"`
+	ObservedVRAMMB int64 `json:"observed_vram_mb,omitempty" yaml:"observed_vram_mb,omitempty"`
 	// ContextTokens and DeviceIndex are optional facts from a llama-server
 	// start. They are not part of ObservationKey. A nil pointer on a later
 	// sample keeps the previous value; a non-nil pointer, including zero,

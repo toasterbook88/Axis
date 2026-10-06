@@ -109,7 +109,7 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 		}
 	}
 
-	if reason, blocked := empiricalPeakRAMExclusionReason(n, reqs, st, nodeAllocatable, cachedModelName); blocked {
+	if reason, blocked := empiricalObservedRAMExclusionReason(n, reqs, st, nodeAllocatable, cachedModelName); blocked {
 		eval.ExclusionReasons = append(eval.ExclusionReasons, reason)
 	}
 
@@ -121,7 +121,7 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 	return eval
 }
 
-func empiricalPeakRAMExclusionReason(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, nodeAllocatableMB int64, modelName string) (string, bool) {
+func empiricalObservedRAMExclusionReason(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, nodeAllocatableMB int64, modelName string) (string, bool) {
 	tool := inferredToolForObservation(reqs, "")
 	obs, ok := freshObservationForScope(models.ObservationScope{
 		Node:      strings.TrimSpace(n.Name),
@@ -130,10 +130,10 @@ func empiricalPeakRAMExclusionReason(n models.NodeFacts, reqs models.TaskRequire
 		Tool:      tool,
 		ModelName: modelName,
 	}, st)
-	if !ok || obs.PeakRAMMB <= 0 || nodeAllocatableMB >= obs.PeakRAMMB {
+	if !ok || obs.ObservedRSSMB <= 0 || nodeAllocatableMB >= obs.ObservedRSSMB {
 		return "", false
 	}
-	return fmt.Sprintf("empirical peak RAM %dMB exceeds allocatable %dMB", obs.PeakRAMMB, nodeAllocatableMB), true
+	return fmt.Sprintf("observed RSS %dMB exceeds allocatable %dMB", obs.ObservedRSSMB, nodeAllocatableMB), true
 }
 
 func missingRequiredTools(n models.NodeFacts, requiredTools []string) ([]string, []string) {

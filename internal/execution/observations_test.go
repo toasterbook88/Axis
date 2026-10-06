@@ -11,7 +11,7 @@ import (
 	"github.com/toasterbook88/axis/internal/placement"
 )
 
-func TestRunGuardedPropagatesPeakRAMMBToObservation(t *testing.T) {
+func TestRunGuardedPropagatesObservedRSSMBToObservation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	node := models.NodeFacts{
@@ -64,8 +64,8 @@ func TestRunGuardedPropagatesPeakRAMMBToObservation(t *testing.T) {
 	if !ok || obs == nil {
 		t.Fatal("expected execution observation to be persisted")
 	}
-	if obs.PeakRAMMB != 512 {
-		t.Errorf("PeakRAMMB = %d, want 512", obs.PeakRAMMB)
+	if obs.ObservedRSSMB != 512 {
+		t.Errorf("ObservedRSSMB = %d, want 512", obs.ObservedRSSMB)
 	}
 }
 
@@ -133,8 +133,8 @@ func TestRunGuardedRecordsObservationAndClearsMatchingFailuresOnSuccess(t *testi
 	if obs.WallTimeMS <= 0 {
 		t.Fatalf("wall_time_ms = %d, want positive", obs.WallTimeMS)
 	}
-	if obs.PeakVRAMMB != 0 {
-		t.Fatalf("expected unknown vram peak to remain unset, got %d", obs.PeakVRAMMB)
+	if obs.ObservedVRAMMB != 0 {
+		t.Fatalf("expected unknown vram peak to remain unset, got %d", obs.ObservedVRAMMB)
 	}
 	if _, blocked := rt.State.Failures.NarrowestMatch(models.FailureScope{
 		Node:     "studio",

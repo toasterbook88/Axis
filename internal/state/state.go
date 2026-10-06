@@ -46,8 +46,8 @@ type TaskExecutionRecord struct {
 	Node        string    `json:"node"`
 	IsLocal     bool      `json:"is_local"`
 	ExitCode    int       `json:"exit_code"`
-	PeakRAMMB   int64     `json:"peak_ram_mb"`
-	PeakVRAMMB  int64     `json:"peak_vram_mb"`
+	ObservedRSSMB   int64     `json:"observed_rss_mb"`
+	ObservedVRAMMB  int64     `json:"observed_vram_mb"`
 	WallTimeMS  int64     `json:"wall_time_ms"`
 	Timestamp   time.Time `json:"timestamp"`
 	Error       string    `json:"error,omitempty"`

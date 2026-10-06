@@ -164,7 +164,7 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 		SampleCount: 1,
 		LastSuccess: runErr == nil,
 		WallTimeMS:  durationMilliseconds(elapsed),
-		PeakRAMMB:   peakRAMMB,
+		ObservedRSSMB:   peakRAMMB,
 		ModelName:   scope.ModelName,
 	}
 
@@ -175,8 +175,8 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 		Node:        resp.Node,
 		IsLocal:     resp.IsLocal,
 		ExitCode:    resp.ExitCode,
-		PeakRAMMB:   peakRAMMB,
-		PeakVRAMMB:  resp.PeakVRAMMB,
+		ObservedRSSMB:   peakRAMMB,
+		ObservedVRAMMB:  resp.ObservedVRAMMB,
 		WallTimeMS:  durationMilliseconds(elapsed),
 		Timestamp:   time.Now().UTC(),
 	}

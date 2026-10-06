@@ -366,7 +366,7 @@ func formatObservationRank(obs *models.ExecutionObservation) string {
 		return "none"
 	}
 	return fmt.Sprintf("success=%t,peak_ram=%dMB,peak_vram=%dMB,wall=%dms,samples=%d",
-		obs.LastSuccess, obs.PeakRAMMB, obs.PeakVRAMMB, obs.WallTimeMS, obs.SampleCount)
+		obs.LastSuccess, obs.ObservedRSSMB, obs.ObservedVRAMMB, obs.WallTimeMS, obs.SampleCount)
 }
 
 func hasTool(n models.NodeFacts, name string) bool {
@@ -791,7 +791,7 @@ func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts)
 }
 
 // blocksForEmpiricalPeakRAM hard-excludes a node when a fresh empirical
-// observation for this workload recorded a PeakRAMMB that exceeds the node's
+// observation for this workload recorded a ObservedRSSMB that exceeds the node's
 // current allocatable RAM. This prevents scheduling on nodes that are
 // empirically too small for the workload even if no explicit MinFreeRAMMB was
 // set by the caller.
@@ -801,7 +801,7 @@ func blocksForThermalOrBattery(reqs models.TaskRequirements, n models.NodeFacts)
 // node in the loop.
 //
 // The check is intentionally conservative: it only fires when both (a) a fresh
-// observation exists and (b) PeakRAMMB > 0. Absent or stale observations leave
+// observation exists and (b) ObservedRSSMB > 0. Absent or stale observations leave
 // the node eligible — we don't penalise nodes that haven't been observed yet.
 // Profile-based PeakRAMHint is used as a soft ranking signal only (see
 // RankCandidates), not a hard filter.

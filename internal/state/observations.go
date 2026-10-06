@@ -53,11 +53,11 @@ func normalizeObservation(obs models.ExecutionObservation) models.ExecutionObser
 	if obs.WallTimeMS <= 0 {
 		obs.WallTimeMS = 1
 	}
-	if obs.PeakRAMMB < 0 {
-		obs.PeakRAMMB = 0
+	if obs.ObservedRSSMB < 0 {
+		obs.ObservedRSSMB = 0
 	}
-	if obs.PeakVRAMMB < 0 {
-		obs.PeakVRAMMB = 0
+	if obs.ObservedVRAMMB < 0 {
+		obs.ObservedVRAMMB = 0
 	}
 	obs.ContextTokens = copyOptionalInt(obs.ContextTokens)
 	obs.DeviceIndex = copyOptionalInt(obs.DeviceIndex)
@@ -101,11 +101,11 @@ func mergeObservation(existing, next models.ExecutionObservation) models.Executi
 	merged.LastSuccess = next.LastSuccess
 	merged.SampleCount = existing.SampleCount + next.SampleCount
 	merged.WallTimeMS = weightedAverage(existing.WallTimeMS, existing.SampleCount, next.WallTimeMS, next.SampleCount)
-	if next.PeakRAMMB > merged.PeakRAMMB {
-		merged.PeakRAMMB = next.PeakRAMMB
+	if next.ObservedRSSMB > merged.ObservedRSSMB {
+		merged.ObservedRSSMB = next.ObservedRSSMB
 	}
-	if next.PeakVRAMMB > merged.PeakVRAMMB {
-		merged.PeakVRAMMB = next.PeakVRAMMB
+	if next.ObservedVRAMMB > merged.ObservedVRAMMB {
+		merged.ObservedVRAMMB = next.ObservedVRAMMB
 	}
 	if next.ModelName != "" {
 		merged.ModelName = next.ModelName

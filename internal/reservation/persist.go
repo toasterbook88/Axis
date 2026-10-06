@@ -20,8 +20,7 @@ func Path() string {
 
 // diskFormat represents the serialized ledger.
 type diskFormat struct {
-	Entries     []*Entry      `json:"entries"`
-	DeviceHolds []*DeviceHold `json:"device_holds,omitempty"`
+	Entries []*Entry `json:"entries"`
 }
 
 // LockFile acquires an exclusive lock on the ledger lockfile with a 500ms timeout.
@@ -124,23 +123,19 @@ func (l *Ledger) Load() error {
 		l.entries[e.ID] = e
 		l.totalReserved += e.RAMMB
 	}
-	l.replaceDeviceHoldsLocked(df.DeviceHolds)
-	droppedHolds := l.dropExpiredDeviceHoldsLocked()
 	// Startup reconciliation pass (in-memory only; persist after unlocking mu).
 	reclaimed, receipts := l.reclaimInMemoryLocked()
 	var snap []*Entry
-	var holds []*DeviceHold
-	if reclaimed > 0 || droppedHolds > 0 {
+	if reclaimed > 0 {
 		snap = l.snapshotEntriesLocked()
-		holds = l.snapshotDeviceHoldsLocked()
 	}
 	l.mu.Unlock()
 
-	if reclaimed > 0 || droppedHolds > 0 {
+	if reclaimed > 0 {
 		if reclaimed > 0 {
 			l.logger.Info("startup reconciliation complete", "reclaimed", reclaimed)
 		}
-		if err := l.writeSnapshot(snap, holds); err != nil {
+		if err := l.writeSnapshot(snap); err != nil {
 			l.logger.Error("failed to persist ledger during startup reconciliation", "error", err)
 		} else if reclaimed > 0 {
 			repairs.EmitAll(l.logger, receipts)
@@ -172,7 +167,6 @@ func (l *Ledger) LoadReadOnly() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			l.replaceEntries(nil)
-			l.replaceDeviceHolds(nil)
 			return nil
 		}
 		return err
@@ -183,7 +177,6 @@ func (l *Ledger) LoadReadOnly() error {
 		return fmt.Errorf("decode reservation ledger without recovery: %w", err)
 	}
 	l.replaceEntries(df.Entries)
-	l.replaceDeviceHolds(df.DeviceHolds)
 	return nil
 }
 
@@ -221,10 +214,9 @@ func (l *Ledger) Save() error {
 
 	l.mu.RLock()
 	snap := l.snapshotEntriesLocked()
-	holds := l.snapshotDeviceHoldsLocked()
 	l.mu.RUnlock()
 
-	return l.writeSnapshot(snap, holds)
+	return l.writeSnapshot(snap)
 }
 
 // snapshotEntriesLocked returns independent copies of every entry. The caller
@@ -239,17 +231,16 @@ func (l *Ledger) snapshotEntriesLocked() []*Entry {
 	return out
 }
 
-// writeSnapshot marshals entries and device holds and atomically writes them
-// to disk. It must be called with the file lock held (fileMu) but WITHOUT l.mu,
-// so the marshal and write never block in-memory readers. Every caller passes
-// the remaining holds so an entry write does not delete device_holds.
-func (l *Ledger) writeSnapshot(entries []*Entry, holds []*DeviceHold) error {
+// writeSnapshot marshals entries and atomically writes them to disk. It must
+// be called with the file lock held (fileMu) but WITHOUT l.mu, so the marshal
+// and write never block in-memory readers.
+func (l *Ledger) writeSnapshot(entries []*Entry) error {
 	path := Path()
 	if err := persist.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 
-	df := diskFormat{Entries: entries, DeviceHolds: holds}
+	df := diskFormat{Entries: entries}
 	data, err := json.MarshalIndent(df, "", "  ")
 	if err != nil {
 		return err
