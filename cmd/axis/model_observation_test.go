@@ -247,10 +247,10 @@ func TestRunModelPlanExcludesFreshLlamaPeak(t *testing.T) {
 				Tool:      "llama-server",
 				ModelName: "qwen2.5-7b.gguf",
 			},
-			ObservedAt:  time.Now().UTC(),
-			LastSuccess: true,
-			WallTimeMS:  30,
-			ObservedRSSMB:   8000,
+			ObservedAt:    time.Now().UTC(),
+			LastSuccess:   true,
+			WallTimeMS:    30,
+			ObservedRSSMB: 8000,
 		})
 		return nil
 	}); err != nil {

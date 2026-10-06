@@ -1520,12 +1520,12 @@ func TestFilter_NilStateSkipsFailureCheck(t *testing.T) {
 
 func freshInferenceObs(node string, reqs models.TaskRequirements, peakRAMMB int64) models.ExecutionObservation {
 	return models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements(node, reqs, ""),
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 3,
-		LastSuccess: true,
-		WallTimeMS:  45000,
-		ObservedRSSMB:   peakRAMMB,
+		Scope:         ObservationScopeForRequirements(node, reqs, ""),
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   3,
+		LastSuccess:   true,
+		WallTimeMS:    45000,
+		ObservedRSSMB: peakRAMMB,
 	}
 }
 
@@ -1589,12 +1589,12 @@ func TestFilterPassesNodeWhenEmpiricalPeakRAMIsZero(t *testing.T) {
 	}
 	st := &state.ClusterState{Observations: map[string]models.ExecutionObservation{}}
 	st.RecordObservation(models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements("node", reqs, ""),
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 1,
-		LastSuccess: true,
-		WallTimeMS:  10000,
-		ObservedRSSMB:   0, // not measured
+		Scope:         ObservationScopeForRequirements("node", reqs, ""),
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    10000,
+		ObservedRSSMB: 0, // not measured
 	})
 
 	result := FilterCandidates(reqs, []models.NodeFacts{n}, st)
@@ -1613,12 +1613,12 @@ func TestFilterIgnoresStaleEmpiricalPeakRAMObservation(t *testing.T) {
 	}
 	st := &state.ClusterState{Observations: map[string]models.ExecutionObservation{}}
 	st.RecordObservation(models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements("node", reqs, ""),
-		ObservedAt:  time.Now().UTC().Add(-(state.ObservationStaleAfter + time.Hour)),
-		SampleCount: 1,
-		LastSuccess: true,
-		WallTimeMS:  10000,
-		ObservedRSSMB:   99999, // huge but stale
+		Scope:         ObservationScopeForRequirements("node", reqs, ""),
+		ObservedAt:    time.Now().UTC().Add(-(state.ObservationStaleAfter + time.Hour)),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    10000,
+		ObservedRSSMB: 99999, // huge but stale
 	})
 
 	result := FilterCandidates(reqs, []models.NodeFacts{n}, st)
