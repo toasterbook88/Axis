@@ -26,8 +26,9 @@ func TestParseNvidiaSMIOutput_FourColumnsRecordIndex(t *testing.T) {
 }
 
 func TestParseNvidiaSMIOutput_NonIntegerIndexDropsRow(t *testing.T) {
-	// Row 1: non-integer index → dropped. Row 2: valid index but unparseable
-	// memory → kept with VRAMFreeMeasured=false (new behavior).
+	// Row 1: non-integer index → dropped. Row 2: valid index, unparseable
+	// memory.total but numeric memory.free → kept with VRAMMB=0 and
+	// VRAMFreeMeasured=true (only memory.free decides the flag).
 	input := "nope, NVIDIA GeForce RTX 4090, 24564, 20000\n0, NVIDIA GeForce RTX 3080, not-a-number, 10\n"
 	gpus := parseNvidiaSMIOutput(input)
 	if len(gpus) != 1 {
