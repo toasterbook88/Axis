@@ -626,15 +626,14 @@ func TestVerifyChecksum(t *testing.T) {
 	defer func() { updateGetFunc = prevGet }()
 	updateGetFunc = srv.Client().Get
 
-	sum := sha256.Sum256(data)
-	if err := verifyChecksumData(data, hex.EncodeToString(sum[:]), name, srv.URL+"/checksums.txt"); err != nil {
+	if err := verifyChecksum(data, name, srv.URL+"/checksums.txt"); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
 
 func TestVerifyChecksumMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "correcthash123  axis_1.0.0_linux_amd64.tar.gz")
+		fmt.Fprintln(w, "deadbeef  axis_1.0.0_linux_amd64.tar.gz")
 	}))
 	defer srv.Close()
 
@@ -642,7 +641,7 @@ func TestVerifyChecksumMismatch(t *testing.T) {
 	defer func() { updateGetFunc = prevGet }()
 	updateGetFunc = srv.Client().Get
 
-	err := verifyChecksumData([]byte("real data"), "wronghash456", "axis_1.0.0_linux_amd64.tar.gz", srv.URL+"/checksums.txt")
+	err := verifyChecksum([]byte("real data"), "axis_1.0.0_linux_amd64.tar.gz", srv.URL+"/checksums.txt")
 	if err == nil {
 		t.Fatal("expected checksum mismatch error")
 	}
