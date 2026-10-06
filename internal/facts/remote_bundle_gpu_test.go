@@ -19,7 +19,10 @@ func TestRemoteBundleKeepsEveryNvidiaSMIRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-c", remoteFactBundleScript)
-	cmd.Env = append(os.Environ(), "PATH="+dir+":/usr/bin:/bin")
+	// Reuse the package's sandboxed-PATH helper (see resident_models_test.go):
+	// stubs stay first and the Nix profile + /usr/bin fallbacks survive on
+	// profile-based runners.
+	cmd.Env = withSandboxedPATH(dir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("bundle: %v\n%s", err, out)
