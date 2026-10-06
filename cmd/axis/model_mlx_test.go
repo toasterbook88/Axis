@@ -309,7 +309,7 @@ esac
 	// outside /usr/bin (see withSandboxedPATH in internal/facts for the
 	// package-local precedent).
 	sep := string(os.PathListSeparator)
-	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH")}
+	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH") + sep + "/usr/bin" + sep + "/bin"}
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	alive := processStillRunning(targetProc.Process.Pid)

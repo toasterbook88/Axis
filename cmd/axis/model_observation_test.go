@@ -497,7 +497,7 @@ func runSampleShell(dir, script string) (string, error) {
 	// Fixture stubs stay first; the inherited tail supplies tools like awk
 	// that profile-based runners (NixOS) keep outside /usr/bin.
 	sep := string(os.PathListSeparator)
-	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH"), "HOME=" + dir}
+	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH") + sep + "/usr/bin" + sep + "/bin", "HOME=" + dir}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
