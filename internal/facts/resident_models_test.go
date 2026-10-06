@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -652,48 +653,82 @@ func TestMLXDiscoveryScriptReportsProcessGenerationEvidence(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
-	bin := t.TempDir()
-	writeStub := func(name, body string) {
-		t.Helper()
-		p := filepath.Join(bin, name)
-		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	// Each case runs the production MLXDiscoveryScript against the same stub
+	// fleet. "default port" omits --port, so the script must fall back to
+	// mlx_lm.server's 8080 both in the probe URL and the published JSON;
+	// "stopped" has no server process and must still emit valid JSON.
+	cases := []struct {
+		name     string
+		pgrep    string
+		args     string
+		wantPort float64
+		wantRun  bool
+	}{
+		{name: "explicit port", pgrep: "echo 4242", args: "/usr/local/bin/mlx_lm.server --model /mnt/models/qwen --port 8183", wantPort: 8183, wantRun: true},
+		{name: "default port", pgrep: "echo 4242", args: "/usr/local/bin/mlx_lm.server --model /mnt/models/qwen", wantPort: 8080, wantRun: true},
+		{name: "stopped", pgrep: "exit 1", wantPort: 8080},
 	}
-	writeStub("mlx_lm", `exit 0`)
-	writeStub("pgrep", `echo 4242`)
-	writeStub("ps", `
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			writeStub := func(name, body string) {
+				t.Helper()
+				p := filepath.Join(bin, name)
+				if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeStub("mlx_lm", `exit 0`)
+			writeStub("pgrep", tc.pgrep)
+			writeStub("ps", `
 case "$*" in
-  "-p 4242 -o args=") echo "/usr/local/bin/mlx_lm.server --model /mnt/models/qwen --port 8183" ;;
+  "-p 4242 -o args=") echo "`+tc.args+`" ;;
   "-p 4242 -o lstart=") echo "Thu Sep  3 09:00:00 2026" ;;
   "-o rss= -p 4242") echo 3145728 ;;
+  *) exit 1 ;;
 esac`)
-	writeStub("curl", `echo '{"data":[{"id":"org/mlx-model"}]}'`)
+			// The stub answers only on the port the script should probe, so a
+			// wrong or empty port yields no resident models.
+			wantURL := "http://localhost:" + strconv.Itoa(int(tc.wantPort)) + "/v1/models"
+			writeStub("curl", `case "$*" in *" `+wantURL+`"*) echo '{"data":[{"id":"org/mlx-model"}]}' ;; *) exit 7 ;; esac`)
 
-	cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
-	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("script: %v\n%s", err, out)
-	}
-	var payload struct {
-		ResidentModels []map[string]any `json:"resident_models"`
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
-		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
-	}
-	if len(payload.ResidentModels) != 1 {
-		t.Fatalf("resident_models = %#v, want one", payload.ResidentModels)
-	}
-	resident := payload.ResidentModels[0]
-	if got := resident["pid"]; got != float64(4242) {
-		t.Fatalf("pid = %#v, want 4242", got)
-	}
-	if got := resident["executable"]; got != "/usr/local/bin/mlx_lm.server" {
-		t.Fatalf("executable = %#v, want /usr/local/bin/mlx_lm.server", got)
-	}
-	if got := resident["process_start_token"]; got != "Thu Sep 3 09:00:00 2026" {
-		t.Fatalf("process_start_token = %#v, want 'Thu Sep  3 09:00:00 2026'", got)
+			cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
+			cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("script: %v\n%s", err, out)
+			}
+			var payload struct {
+				Running        bool             `json:"running"`
+				Port           float64          `json:"port"`
+				ResidentModels []map[string]any `json:"resident_models"`
+			}
+			if err := json.Unmarshal(out, &payload); err != nil {
+				t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+			}
+			if payload.Port != tc.wantPort || payload.Running != tc.wantRun {
+				t.Fatalf("port=%v running=%v, want port=%v running=%v (out=%s)", payload.Port, payload.Running, tc.wantPort, tc.wantRun, bytes.TrimSpace(out))
+			}
+			if !tc.wantRun {
+				if len(payload.ResidentModels) != 0 {
+					t.Fatalf("stopped server published residents: %#v", payload.ResidentModels)
+				}
+				return
+			}
+			if len(payload.ResidentModels) != 1 {
+				t.Fatalf("resident_models = %#v, want one", payload.ResidentModels)
+			}
+			resident := payload.ResidentModels[0]
+			if got := resident["pid"]; got != float64(4242) {
+				t.Fatalf("pid = %#v, want 4242", got)
+			}
+			if got := resident["executable"]; got != "/usr/local/bin/mlx_lm.server" {
+				t.Fatalf("executable = %#v, want /usr/local/bin/mlx_lm.server", got)
+			}
+			if got := resident["process_start_token"]; got != "Thu Sep 3 09:00:00 2026" {
+				t.Fatalf("process_start_token = %#v, want 'Thu Sep  3 09:00:00 2026'", got)
+			}
+		})
 	}
 }
 

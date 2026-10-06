@@ -1696,7 +1696,11 @@ func shellMLXOwnerGuard(port int) string {
 			"if test \"$_axis_comm\" = mlx_lm.server; then continue; fi; "+
 			"_axis_args=$(ps -p \"$_axis_pid\" -o args=) || exit $?; "+
 			"if printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<NF;i++) if($i==\"-m\" && $(i+1)==\"mlx_lm.server\") ok=1} END{exit ok?0:1}'; then continue; fi; "+
-			"if printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<=NF;i++) if($i ~ /mlx_lm\\.server$/) ok=1} END{exit ok?0:1}'; then continue; fi; "+
+			// Entry-point form: argv[0] is an mlx_lm.server script, or a Python
+			// interpreter (macOS framework builds report comm as Python) whose
+			// script argument is mlx_lm.server. Only those positions count; an
+			// unrelated argument that merely ends in mlx_lm.server does not.
+			"if printf '%%s\\n' \"$_axis_args\" | awk '{n=split($1,a,\"/\"); b=a[n]; if(b==\"mlx_lm.server\") exit 0; if(b ~ /^[Pp]ython[0-9.]*$/ && NF>=2){m=split($2,c,\"/\"); if(c[m]==\"mlx_lm.server\") exit 0} exit 1}'; then continue; fi; "+
 			"echo \"refusing port %d: pid $_axis_pid is $_axis_comm, not mlx_lm.server\" >&2; echo '"+modelStopMarker+"wrong_owner' >&2; exit 1; "+
 			"done; ",
 		port,

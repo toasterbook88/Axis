@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -255,6 +254,9 @@ func TestShellStopMLXGuardMatchesServerNotPythonOrConsole(t *testing.T) {
 		{name: "basename", comm: "/usr/local/bin/mlx_lm.server", args: "mlx_lm.server --model /mnt/models/qwen", allow: true},
 		{name: "module", comm: "python", args: "python -m mlx_lm.server --model /mnt/models/qwen", allow: true},
 		{name: "mac-path-segment", comm: "python", args: "/usr/local/bin/mlx_lm.server --model /mnt/models/qwen", allow: true},
+		{name: "mac-python-entry-point", comm: "Python", args: "/opt/homebrew/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/op/.venv/bin/mlx_lm.server --model /mnt/models/qwen", allow: true},
+		{name: "unrelated arg ending in mlx_lm.server", comm: "python", args: "python /srv/proxy.py --log /tmp/mlx_lm.server", wantOut: "wrong_owner"},
+		{name: "unrelated binary with mlx_lm.server operand", comm: "tail", args: "tail -f /var/log/mlx_lm.server", wantOut: "wrong_owner"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

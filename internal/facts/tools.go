@@ -284,6 +284,7 @@ const MLXDiscoveryScript = `set -o pipefail;
 		PGREP=$(pgrep -f "[m]lx_lm.server" 2>/dev/null | head -1 || pgrep -f "[m]lx_lm server" 2>/dev/null | head -1 || echo "")
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
+		PORT=8080
 		EXECUTABLE=""
 		PROCESS_START_TOKEN=""
 		if [ -n "$PGREP" ]; then
