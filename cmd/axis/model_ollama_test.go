@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/modelinventory"
@@ -267,5 +269,112 @@ func TestOllamaStartRefusesProfileRefusals(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("refusals still reached ollama: %d", calls)
+	}
+}
+
+func TestModelStopCmdDefinesLiveFlag(t *testing.T) {
+	cmd := modelStopCmd()
+	flag := cmd.Flags().Lookup("live")
+	if flag == nil {
+		t.Fatal("modelStopCmd does not define --live flag")
+	}
+	if flag.Value.Type() != "bool" {
+		t.Fatalf("--live flag type = %s, want bool", flag.Value.Type())
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--live flag default = %s, want false", flag.DefValue)
+	}
+}
+
+func TestOllamaStopFailedUnloadWritesReceipt(t *testing.T) {
+	snap := testSnap()
+	snap.Nodes[0].Status = models.StatusComplete
+	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Listening: true}
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prevRunner })
+
+	prevScript := runNodeScript
+	runNodeScript = func(context.Context, models.NodeFacts, *config.NodeConfig, string) (string, error) {
+		return "", fmt.Errorf("connection refused")
+	}
+	t.Cleanup(func() { runNodeScript = prevScript })
+
+	var refreshes int
+	prevRefresh := signalModelDaemonRefresh
+	signalModelDaemonRefresh = func(context.Context, string, string) error {
+		refreshes++
+		return nil
+	}
+	t.Cleanup(func() { signalModelDaemonRefresh = prevRefresh })
+
+	cmd := modelStopCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--node", "storage", "--ollama-model", "mistral", "--format", "json"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error from failed unload")
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("err=%v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `"status": "failed"`) {
+		t.Fatalf("receipt missing failed status: %s", out)
+	}
+	if !strings.Contains(out, `"disposition": "failed"`) {
+		t.Fatalf("receipt missing failed disposition: %s", out)
+	}
+	if !strings.Contains(out, `"error": "ollama unload failed: connection refused"`) {
+		t.Fatalf("receipt missing error: %s", out)
+	}
+	if refreshes != 0 {
+		t.Fatalf("failed unload refreshed daemon: %d", refreshes)
+	}
+}
+
+func TestOllamaStopStartedAtBeforeUnload(t *testing.T) {
+	snap := testSnap()
+	snap.Nodes[0].Status = models.StatusComplete
+	snap.Nodes[0].Ollama = &models.OllamaInfo{Installed: true, Listening: true}
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prevRunner })
+
+	var unloadTime time.Time
+	prevScript := runNodeScript
+	runNodeScript = func(_ context.Context, _ models.NodeFacts, _ *config.NodeConfig, script string) (string, error) {
+		unloadTime = time.Now().UTC()
+		return `{"models":[]}`, nil
+	}
+	t.Cleanup(func() { runNodeScript = prevScript })
+
+	prevRefresh := signalModelDaemonRefresh
+	signalModelDaemonRefresh = func(context.Context, string, string) error { return nil }
+	t.Cleanup(func() { signalModelDaemonRefresh = prevRefresh })
+
+	cmd := modelStopCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--node", "storage", "--ollama-model", "mistral", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `"started_at"`) {
+		t.Fatalf("receipt missing started_at: %s", out)
+	}
+	if !strings.Contains(out, `"completed_at"`) {
+		t.Fatalf("receipt missing completed_at: %s", out)
+	}
+	if unloadTime.IsZero() {
+		t.Fatal("unload was never called")
 	}
 }

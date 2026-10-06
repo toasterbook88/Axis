@@ -159,6 +159,7 @@ Explicit pin: --node with --weights and --port, --ollama-model, --mlx-model, or 
 func modelStopCmd() *cobra.Command {
 	var node, cacheAddr, format, ollamaModel string
 	var port int
+	var live bool
 	cmd := &cobra.Command{
 		Use:          "stop [generation-id]",
 		Short:        "Stop an observed llama-server or MLX generation, unload an Ollama model, or use legacy node/port flags",
@@ -175,7 +176,7 @@ func modelStopCmd() *cobra.Command {
 				if strings.TrimSpace(node) == "" {
 					return fmt.Errorf(`required flag(s) "node" not set`)
 				}
-				return runOllamaModelStop(ctx, cmd, node, ollamaModel, cacheAddr, format)
+				return runOllamaModelStop(ctx, cmd, node, ollamaModel, cacheAddr, format, live)
 			}
 			if len(args) == 1 {
 				if strings.TrimSpace(node) != "" || port != 0 {
@@ -191,6 +192,7 @@ func modelStopCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Unload this model from the Ollama server already listening on 127.0.0.1:11434")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
+	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
 	return cmd
 }
 
@@ -1949,6 +1951,9 @@ func placeMLXModel(ctx context.Context, cmd *cobra.Command, node models.NodeFact
 	if err := profile.Validate(); err != nil {
 		return err
 	}
+	if len(profile.Refusals) > 0 {
+		return fmt.Errorf("%s", strings.Join(profile.Refusals, "; "))
+	}
 	importOK, importErr := mlxImportObserved(ctx, node, cfgNode)
 	if importErr != nil {
 		return importErr
@@ -2070,8 +2075,8 @@ func placeOllamaModel(ctx context.Context, cmd *cobra.Command, node models.NodeF
 	return nil
 }
 
-func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, modelName, cacheAddr, format string) error {
-	live, _ := cmd.Flags().GetBool("live")
+func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, modelName, cacheAddr, format string, live bool) error {
+	startedAt := time.Now().UTC()
 	snap, _, err := loadModelCommandSnapshot(ctx, live, cacheAddr, "stop", false)
 	if err != nil {
 		return err
@@ -2080,9 +2085,7 @@ func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, model
 	if err != nil {
 		return err
 	}
-	if err := runOllamaUnload(ctx, nf, cfgNode, modelName); err != nil {
-		return err
-	}
+	unloadErr := runOllamaUnload(ctx, nf, cfgNode, modelName)
 	receipt := models.ModelOperationReceipt{
 		Schema:      "axis.model-operation/v1",
 		ID:          models.GenerateID("mo"),
@@ -2092,11 +2095,19 @@ func runOllamaModelStop(ctx context.Context, cmd *cobra.Command, nodeName, model
 		Node:        nf.Name,
 		Engine:      models.EngineOllama,
 		Model:       modelName,
-		StartedAt:   time.Now().UTC(),
+		StartedAt:   startedAt,
 		CompletedAt: time.Now().UTC(),
 	}
-	if err := writeModelOperationReceipt(cmd, receipt, format); err != nil {
-		return err
+	if unloadErr != nil {
+		receipt.Status = models.ModelOperationFailed
+		receipt.Disposition = "failed"
+		receipt.Error = unloadErr.Error()
+	}
+	if writeErr := writeModelOperationReceipt(cmd, receipt, format); writeErr != nil {
+		return writeErr
+	}
+	if unloadErr != nil {
+		return unloadErr
 	}
 	warnModelDaemonRefresh(cmd, cacheAddr, "manual")
 	return nil
