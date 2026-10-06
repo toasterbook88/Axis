@@ -139,8 +139,9 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 		for i := range parts {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
-		// Four columns are index,name,memory.total,memory.free. A cell that
-		// does not parse drops the row. Wider rows are not this query.
+		// Four columns are index,name,memory.total,memory.free. The index
+		// must parse; memory cells that are [N/A] or unparseable keep the
+		// row with VRAMFreeMeasured=false rather than dropping the GPU.
 		if len(parts) >= 4 {
 			if gpu, ok := nvidiaSMIIndexedGPU(parts); ok {
 				gpus = append(gpus, gpu)
@@ -179,25 +180,24 @@ func nvidiaSMIIndexedGPU(parts []string) (models.GPUInfo, bool) {
 	if err != nil {
 		return models.GPUInfo{}, false
 	}
-	total, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return models.GPUInfo{}, false
-	}
-	free, err := strconv.Atoi(parts[3])
-	if err != nil {
-		return models.GPUInfo{}, false
-	}
 	idx := index
-	return models.GPUInfo{
-		Model:            parts[1],
-		Vendor:           "nvidia",
-		Index:            &idx,
-		IndexSource:      "nvidia-smi",
-		VRAMMB:           total,
-		VRAMFreeMB:       free,
-		VRAMFreeMeasured: true,
-		Capabilities:     []string{"cuda"},
-	}, true
+	gpu := models.GPUInfo{
+		Model:        parts[1],
+		Vendor:       "nvidia",
+		Index:        &idx,
+		IndexSource:  "nvidia-smi",
+		Capabilities: []string{"cuda"},
+	}
+	// Memory cells may be [N/A] or unparseable; keep the row with
+	// VRAMFreeMeasured=false rather than dropping the GPU entirely.
+	if total, err := strconv.Atoi(parts[2]); err == nil {
+		gpu.VRAMMB = total
+	}
+	if free, err := strconv.Atoi(parts[3]); err == nil {
+		gpu.VRAMFreeMB = free
+		gpu.VRAMFreeMeasured = true
+	}
+	return gpu, true
 }
 
 func localGPUsLspci(ctx context.Context) []models.GPUInfo {
