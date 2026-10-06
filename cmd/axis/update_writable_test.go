@@ -84,7 +84,7 @@ func TestInstallReleaseFailsFastOnUnwritableTarget(t *testing.T) {
 	cmd.SetErr(&errOut)
 
 	rel := &ghRelease{TagName: "v1.0.0"}
-	err := installRelease(cmd, rel, "1.0.0", []string{target}, "", modeAll, &errOut, &out)
+	err := installRelease(cmd, rel, "1.0.0", []string{target}, "", modeAll, true, &errOut, &out)
 	if err == nil {
 		t.Fatalf("expected an error for an unwritable target\nout=%s\nerr=%s", out.String(), errOut.String())
 	}
