@@ -140,8 +140,9 @@ func parseNvidiaSMIOutput(out string) []models.GPUInfo {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
 		// Four columns are index,name,memory.total,memory.free. The index
-		// must parse; memory cells that are [N/A] or unparseable keep the
-		// row with VRAMFreeMeasured=false rather than dropping the GPU.
+		// must parse. Memory cells that are [N/A] or unparseable keep the
+		// row instead of dropping the GPU: an unparseable memory.total leaves
+		// VRAMMB=0, and VRAMFreeMeasured is true only when memory.free parses.
 		if len(parts) >= 4 {
 			if gpu, ok := nvidiaSMIIndexedGPU(parts); ok {
 				gpus = append(gpus, gpu)
@@ -188,8 +189,10 @@ func nvidiaSMIIndexedGPU(parts []string) (models.GPUInfo, bool) {
 		IndexSource:  "nvidia-smi",
 		Capabilities: []string{"cuda"},
 	}
-	// Memory cells may be [N/A] or unparseable; keep the row with
-	// VRAMFreeMeasured=false rather than dropping the GPU entirely.
+	// Memory cells may be [N/A] or unparseable; keep the row rather than
+	// dropping the GPU. The two cells are independent: an unparseable
+	// memory.total leaves VRAMMB=0, and VRAMFreeMeasured records only whether
+	// memory.free parsed.
 	if total, err := strconv.Atoi(parts[2]); err == nil {
 		gpu.VRAMMB = total
 	}
