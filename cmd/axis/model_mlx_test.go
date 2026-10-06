@@ -285,7 +285,7 @@ func TestShellStopMLXGuardMatchesServerNotPythonOrConsole(t *testing.T) {
 
 func runMLXStopScript(t *testing.T, comm, args, engine string) (string, bool, error) {
 	t.Helper()
-	targetProc := exec.Command("sleep", "30")
+	targetProc := stubFirstCommand("", "sleep", "30")
 	if err := targetProc.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -304,12 +304,7 @@ case "$*" in
 esac
 `, shellQuote(args), shellQuote(comm)))
 	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 8080, Engine: engine}))
-	// Keep the fixture stubs first but inherit the host PATH: the scripts
-	// under test call real awk/base64, which Nix-profile-only runners keep
-	// outside /usr/bin (see withSandboxedPATH in internal/facts for the
-	// package-local precedent).
-	sep := string(os.PathListSeparator)
-	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH") + sep + "/usr/bin" + sep + "/bin"}
+	cmd.Env = []string{stubFirstPATH(dir)}
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	alive := processStillRunning(targetProc.Process.Pid)
@@ -336,4 +331,48 @@ func processStillRunning(pid int) bool {
 	}
 	state := text[i+2]
 	return state != 'Z' && state != 'X'
+}
+
+func TestMLXPlaceRefusesProfileRefusals(t *testing.T) {
+	snap := testSnap()
+	snap.Nodes[0].Resources.MemoryTopology = models.MemoryTopologyUnified
+	snap.Nodes[0].Tools = append(snap.Nodes[0].Tools, models.ToolInfo{Name: "mlx_lm.server", Path: "/usr/local/bin/mlx_lm.server"})
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+
+	var scriptCalls int
+	prevScript := runNodeScript
+	runNodeScript = func(context.Context, models.NodeFacts, *config.NodeConfig, string) (string, error) {
+		scriptCalls++
+		return "", nil
+	}
+	t.Cleanup(func() { runNodeScript = prevScript })
+
+	profile := models.ModelRunProfile{
+		Schema:       models.ModelRunSchema,
+		Node:         "storage",
+		Engine:       models.EngineMLX,
+		ArtifactKind: models.ArtifactMLXModelDir,
+		MLXModel:     "/mnt/models/qwen",
+		BindHost:     "127.0.0.1",
+		Port:         8080,
+		Refusals:     []string{"weights are not on a named local volume"},
+	}
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	node := snap.Nodes[0]
+	cfgNode := &config.NodeConfig{Name: "storage"}
+	err := placeMLXModel(context.Background(), cmd, node, cfgNode, profile, "test", snap, time.Now().UTC(), "text")
+	if err == nil {
+		t.Fatal("placeMLXModel should refuse when profile.Refusals is non-empty")
+	}
+	if !strings.Contains(err.Error(), "named local volume") {
+		t.Fatalf("err=%v", err)
+	}
+	if scriptCalls != 0 {
+		t.Fatalf("refusals still reached mlx: %d", scriptCalls)
+	}
 }
