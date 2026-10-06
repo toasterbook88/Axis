@@ -216,7 +216,9 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 		homeDir: func() (string, error) { return home, nil },
 		uid:     func() int { return 1000 },
 		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			restartCalled = true
+			if name == "systemctl" && len(args) > 0 && args[0] == "--user" && len(args) > 1 && args[1] == "restart" {
+				restartCalled = true
+			}
 			return nil, nil
 		},
 	}
@@ -258,9 +260,18 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 		homeDir: func() (string, error) { return home, nil },
 		uid:     func() int { return 1000 },
 		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			restartCalled = true
+			if name == "systemctl" && len(args) > 0 && args[0] == "--user" && len(args) > 1 && args[1] == "restart" {
+				restartCalled = true
+			}
 			return nil, nil
 		},
+	}
+
+	// Mock restartFetchMeta to return current version so pollDaemonVersion succeeds.
+	prevFetch := restartFetchMeta
+	defer func() { restartFetchMeta = prevFetch }()
+	restartFetchMeta = func(context.Context, string) (daemon.Metadata, error) {
+		return serving(), nil
 	}
 
 	// Call with the matching path.
