@@ -31,7 +31,12 @@ func (t mappedHostTransport) RoundTrip(req *http.Request) (*http.Response, error
 		clone.URL.Host = t.destAddr
 	}
 	clone.Host = t.destAddr
-	return t.base.RoundTrip(clone)
+	resp, err := t.base.RoundTrip(clone)
+	if resp != nil {
+		// Report the logical (allowlisted) request, as a real transport would.
+		resp.Request = req
+	}
+	return resp, err
 }
 
 // mappedHostTLSClient returns a client that hits the TLS test server while the
@@ -74,13 +79,16 @@ func TestSafeGetFollowsRedirectToReleaseAssetsHost(t *testing.T) {
 	defer srv.Close()
 
 	c := mappedHostTLSClient(t, srv)
-	resp, err := c.Get("https://github.com/toasterbook88/axis/releases/download/v0.19.4/x.txt")
+	resp, err := c.Get("https://github.com/start")
 	if err != nil {
 		t.Fatalf("expected redirect to allowlisted host to succeed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Request.URL.Host; got != "release-assets.githubusercontent.com" {
+		t.Fatalf("redirect was not followed to the CDN host: final host = %q", got)
 	}
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(resp.Body)

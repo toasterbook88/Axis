@@ -80,8 +80,10 @@ func newUpdateHTTPClient(rt http.RoundTripper) *http.Client {
 // update HTTP client: HTTPS-only, allowlisted hosts only, capped hop count.
 func newUpdateRedirectPolicy() func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxUpdateRedirects {
-			return fmt.Errorf("stopped after %d redirects", len(via))
+		// via holds the original request plus every hop already followed, so
+		// len(via) == maxUpdateRedirects while deciding the last allowed hop.
+		if len(via) > maxUpdateRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxUpdateRedirects)
 		}
 		if req.URL.Scheme != "https" {
 			return fmt.Errorf("redirect to %q refused: only HTTPS downloads are permitted", req.URL.Scheme)
@@ -676,9 +678,11 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 		return nil, fmt.Errorf("downloading release: %w", err)
 	}
 
-	// Compute the archive's SHA256 once; both verification sources compare
-	// against it. The API digest and checksums.txt are independent sources,
-	// so when both exist they must both match.
+	// SHA256 of the archive for the API digest check. verifyChecksum hashes
+	// the same bytes itself (one extra in-memory pass) so the checksums.txt
+	// path proves its hash is derived from the archive rather than trusting a
+	// caller-supplied string. The API digest and checksums.txt are independent
+	// sources, so when both exist they must both match.
 	sum := sha256.Sum256(archiveData)
 	got := hex.EncodeToString(sum[:])
 
@@ -873,7 +877,7 @@ func orDefault(s, def string) string {
 func safeGet(rawURL string) (*http.Response, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
+		return nil, fmt.Errorf("invalid URL: %w", redactURLError(err))
 	}
 	if u.Scheme != "https" {
 		return nil, fmt.Errorf("only HTTPS downloads are permitted (got %q)", u.Scheme)
@@ -881,18 +885,42 @@ func safeGet(rawURL string) (*http.Response, error) {
 	if !isAllowedUpdateHost(u.Host) {
 		return nil, fmt.Errorf("host %q is not an allowed GitHub domain", u.Host)
 	}
-	return newUpdateHTTPClient(nil).Get(rawURL) //nolint:noctx
+	resp, err := newUpdateHTTPClient(nil).Get(rawURL) //nolint:noctx
+	if err != nil {
+		return nil, redactURLError(err)
+	}
+	return resp, nil
+}
+
+// redactURLError rebuilds a *url.Error with the host only. http.Client wraps
+// redirect-policy and transport failures in *url.Error, whose message carries
+// the full request URL, so a signed CDN query (?token=...) would otherwise reach
+// updater output. Nested *url.Error values are redacted too.
+func redactURLError(err error) error {
+	ue, ok := err.(*url.Error)
+	if !ok {
+		return err
+	}
+	host := "update server"
+	if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" {
+		host = u.Host
+	}
+	return &url.Error{Op: ue.Op, URL: host, Err: redactURLError(ue.Err)}
 }
 
 func downloadBytes(rawURL string) ([]byte, error) {
 	resp, err := updateGetFunc(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		host := rawURL
-		if u, perr := url.Parse(rawURL); perr == nil && u.Host != "" {
+		// Name the host that actually answered (after redirects), never the
+		// path or signed query.
+		host := "update server"
+		if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Host != "" {
+			host = resp.Request.URL.Host
+		} else if u, perr := url.Parse(rawURL); perr == nil && u.Host != "" {
 			host = u.Host
 		}
 		return nil, fmt.Errorf("download from %s returned HTTP %d", host, resp.StatusCode)
