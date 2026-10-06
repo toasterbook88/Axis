@@ -4,151 +4,284 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/daemon"
 )
 
-// updateRestartHarness provides fake supervisor detection and restart for
-// update-restart tests.
+// updateRestartHarness stubs only the lowest restart seams: supervisor
+// detection, the service-manager command runner (systemctl/launchctl) and the
+// daemon metadata fetch. restartAfterUpdate, restartSupervisedDaemon,
+// restartViaSupervisor, pollDaemonVersion and installRelease all run for real.
 type updateRestartHarness struct {
-	supervisor      supervisorType
-	serviceExecPath string
-	restartCalls    int32
-	restartErr      error
+	supervisor    supervisorType
+	service       supervisedService
+	managerErr    error  // returned by the service-manager restart command
+	daemonVersion string // version the daemon reports after restart ("" = current)
+
+	mu           sync.Mutex
+	managerCalls []string
+	polledAddrs  []string
 }
 
 func (h *updateRestartHarness) install(t *testing.T) {
 	t.Helper()
-	prevDetect := detectSupervisor
-	prevRestart := restartAfterUpdate
+	prevDetect, prevDeps, prevFetch := detectSupervisor, restartServiceDeps, restartFetchMeta
+	prevPoll, prevDeadline := restartPollInterval, restartReadyDeadline
 
-	detectSupervisor = func(deps daemonServiceDependencies) (supervisorType, string, error) {
-		return h.supervisor, h.serviceExecPath, nil
+	detectSupervisor = func(context.Context, daemonServiceDependencies) (supervisorType, supervisedService, error) {
+		return h.supervisor, h.service, nil
 	}
-	restartAfterUpdate = func(ctx context.Context, addr string, replacedPaths []string, out io.Writer) error {
-		atomic.AddInt32(&h.restartCalls, 1)
-		return h.restartErr
+	restartServiceDeps = func() daemonServiceDependencies {
+		return daemonServiceDependencies{
+			goos:    runtime.GOOS,
+			homeDir: func() (string, error) { return t.TempDir(), nil },
+			uid:     func() int { return 501 },
+			run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+				h.mu.Lock()
+				h.managerCalls = append(h.managerCalls, name+" "+strings.Join(args, " "))
+				h.mu.Unlock()
+				return nil, h.managerErr
+			},
+		}
 	}
+	restartFetchMeta = func(_ context.Context, addr string) (daemon.Metadata, error) {
+		h.mu.Lock()
+		h.polledAddrs = append(h.polledAddrs, addr)
+		h.mu.Unlock()
+		v := h.daemonVersion
+		if v == "" {
+			v = current()
+		}
+		return daemon.Metadata{Version: v, Ready: true}, nil
+	}
+	restartPollInterval = 2 * time.Millisecond
+	restartReadyDeadline = 60 * time.Millisecond
 
 	t.Cleanup(func() {
-		detectSupervisor = prevDetect
-		restartAfterUpdate = prevRestart
+		detectSupervisor, restartServiceDeps, restartFetchMeta = prevDetect, prevDeps, prevFetch
+		restartPollInterval, restartReadyDeadline = prevPoll, prevDeadline
 	})
 }
 
-// TestUpdateRestartsActiveSystemdUserUnitAfterReplace verifies that a
-// successful update with an active systemd user unit triggers a restart.
+func (h *updateRestartHarness) calls() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.managerCalls...)
+}
+
+func (h *updateRestartHarness) addrs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.polledAddrs...)
+}
+
+// runInstallRelease drives the real installRelease against a served release
+// whose checksums verify, with every target reported as an AXIS install at
+// installed. It returns stdout, stderr and the error.
+func runInstallRelease(t *testing.T, targets []string, installed, latest string, noRestart bool) (string, string, error) {
+	t.Helper()
+	prevInspect, prevGet := inspectBinary, updateGetFunc
+	t.Cleanup(func() { inspectBinary, updateGetFunc = prevInspect, prevGet })
+	inspectBinary = func(path string) (installInfo, error) {
+		abs := mustAbs(path)
+		return installInfo{Path: abs, Resolved: abs, IsAxis: true, Version: installed}, nil
+	}
+	archive := buildTestArchive(t, []byte("NEW-BINARY-"+latest))
+	name := fmt.Sprintf("axis_%s_%s_%s.tar.gz", latest, runtime.GOOS, runtime.GOARCH)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "checksums") {
+			fmt.Fprintln(w, checksumLine(archive, name))
+			return
+		}
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+	updateGetFunc = srv.Client().Get
+
+	rel := &ghRelease{TagName: "v" + latest}
+	rel.Assets = append(rel.Assets,
+		ghAsset{Name: name, BrowserDownloadURL: srv.URL + "/asset/" + name},
+		ghAsset{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+	)
+	cmd := updateCmd()
+	cmd.SetContext(context.Background())
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	err := installRelease(cmd, rel, latest, targets, "", modeAll, noRestart, &errOut, &out)
+	return out.String(), errOut.String(), err
+}
+
+type probeCtxKey struct{}
+
+func writeOldBinary(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestUpdateRestartsActiveSystemdUserUnitAfterReplace drives installRelease:
+// the service binary is replaced, systemctl restarts the unit, and readiness
+// is polled on the address the unit was installed with.
 func TestUpdateRestartsActiveSystemdUserUnitAfterReplace(t *testing.T) {
+	target := writeOldBinary(t, t.TempDir(), "axis")
 	h := &updateRestartHarness{
-		supervisor:      supervisorSystemd,
-		serviceExecPath: "/usr/local/bin/axis",
+		supervisor: supervisorSystemd,
+		service:    supervisedService{execPath: target, addr: "/tmp/custom-axis.sock"},
 	}
 	h.install(t)
 
-	// We can't easily run the full installRelease without a real binary, so
-	// we test the restart-after-update path directly by calling the
-	// restartAfterUpdate function with a fake supervisor.
-	var out bytes.Buffer
-	err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out)
+	out, errOut, err := runInstallRelease(t, []string{target}, "0.1.0", "1.0.0", false)
 	if err != nil {
-		t.Fatalf("restartAfterUpdate: %v", err)
+		t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out, errOut)
 	}
-	if h.restartCalls != 1 {
-		t.Fatalf("expected 1 restart call, got %d", h.restartCalls)
+	if got, _ := os.ReadFile(target); string(got) == "OLD" {
+		t.Fatal("target was not replaced")
+	}
+	if calls := h.calls(); len(calls) != 1 || calls[0] != "systemctl --user restart "+daemonSystemdUnit {
+		t.Fatalf("expected one systemctl restart, got %q", calls)
+	}
+	addrs := h.addrs()
+	if len(addrs) == 0 {
+		t.Fatal("readiness was never polled")
+	}
+	for _, a := range addrs {
+		if a != "/tmp/custom-axis.sock" {
+			t.Fatalf("polled %q; must poll the unit's --addr", a)
+		}
+	}
+	if !strings.Contains(out, "serving current version") {
+		t.Fatalf("expected ready message, got %q", out)
 	}
 }
 
-// TestUpdateKickstartsLoadedLaunchdAgentAfterReplace verifies that a
-// successful update with a loaded launchd agent triggers a restart.
+// TestUpdateKickstartsLoadedLaunchdAgentAfterReplace runs the real restart
+// path for a loaded launchd agent.
 func TestUpdateKickstartsLoadedLaunchdAgentAfterReplace(t *testing.T) {
 	h := &updateRestartHarness{
-		supervisor:      supervisorLaunchd,
-		serviceExecPath: "/opt/homebrew/bin/axis",
+		supervisor: supervisorLaunchd,
+		service:    supervisedService{execPath: "/opt/homebrew/bin/axis"},
 	}
 	h.install(t)
 
 	var out bytes.Buffer
-	err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/opt/homebrew/bin/axis"}, &out)
-	if err != nil {
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:7777", []string{"/opt/homebrew/bin/axis"}, &out); err != nil {
 		t.Fatalf("restartAfterUpdate: %v", err)
 	}
-	if h.restartCalls != 1 {
-		t.Fatalf("expected 1 restart call, got %d", h.restartCalls)
+	want := "launchctl kickstart -k gui/501/" + daemonLaunchdLabel
+	if calls := h.calls(); len(calls) != 1 || calls[0] != want {
+		t.Fatalf("expected %q, got %q", want, calls)
+	}
+	if addrs := h.addrs(); len(addrs) == 0 || addrs[0] != "127.0.0.1:7777" {
+		t.Fatalf("with no --addr in the plist, the caller address must be polled; got %q", addrs)
 	}
 }
 
-// TestUpdateRestartsStandaloneDaemonAfterReplace verifies that a successful
-// update with no supervisor falls back to the standalone restart path.
+// TestUpdateRestartsStandaloneDaemonAfterReplace: with no supervisor the real
+// standalone restart (terminate + spawn) runs.
 func TestUpdateRestartsStandaloneDaemonAfterReplace(t *testing.T) {
-	h := &updateRestartHarness{
-		supervisor: supervisorNone,
-	}
+	h := &updateRestartHarness{supervisor: supervisorNone}
 	h.install(t)
+	rh := &restartHarness{metas: []daemon.Metadata{{Version: "0.0.0-old", Ready: true}, serving()}, pid: 111}
+	rh.install(t)
 
-	// With no supervisor, restartAfterUpdate calls restartSupervisedDaemon
-	// which falls back to restartDaemon. We can't easily test the full
-	// restartDaemon without a real daemon, so we just verify the function
-	// is called without error when there's no daemon running.
 	var out bytes.Buffer
-	err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out)
-	// It's OK if this fails (no daemon running), we just want to verify
-	// the path is taken.
-	_ = err
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out); err != nil {
+		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
+	}
+	if rh.terminates != 1 || rh.spawns != 1 {
+		t.Fatalf("expected standalone terminate+spawn, got terminates=%d spawns=%d", rh.terminates, rh.spawns)
+	}
+	if calls := h.calls(); len(calls) != 0 {
+		t.Fatalf("no service manager may be invoked without a supervisor, got %q", calls)
+	}
 }
 
-// TestUpdateNoRestartFlagSkipsRestart verifies that --no-restart skips
-// the restart call.
+// TestUpdateNoRestartFlagSkipsRestart drives installRelease with --no-restart.
 func TestUpdateNoRestartFlagSkipsRestart(t *testing.T) {
-	h := &updateRestartHarness{
-		supervisor:      supervisorSystemd,
-		serviceExecPath: "/usr/local/bin/axis",
-	}
+	target := writeOldBinary(t, t.TempDir(), "axis")
+	h := &updateRestartHarness{supervisor: supervisorSystemd, service: supervisedService{execPath: target}}
 	h.install(t)
 
-	// Simulate --no-restart by not calling restartAfterUpdate at all.
-	// The flag is tested at the installRelease level; here we verify
-	// that the harness is set up correctly.
-	if h.supervisor != supervisorSystemd {
-		t.Fatalf("expected systemd supervisor")
+	out, errOut, err := runInstallRelease(t, []string{target}, "0.1.0", "1.0.0", true)
+	if err != nil {
+		t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out, errOut)
+	}
+	if got, _ := os.ReadFile(target); string(got) == "OLD" {
+		t.Fatal("target was not replaced")
+	}
+	if calls := h.calls(); len(calls) != 0 || strings.Contains(out, "Restarting daemon") {
+		t.Fatalf("--no-restart must not restart: calls=%q out=%q", calls, out)
 	}
 }
 
-// TestUpdateDoesNotRestartWhenNothingUpdated verifies that no restart
-// happens when updated == 0.
+// TestUpdateDoesNotRestartWhenNothingUpdated drives installRelease when the
+// install is already current.
 func TestUpdateDoesNotRestartWhenNothingUpdated(t *testing.T) {
-	h := &updateRestartHarness{
-		supervisor:      supervisorSystemd,
-		serviceExecPath: "/usr/local/bin/axis",
-	}
+	target := writeOldBinary(t, t.TempDir(), "axis")
+	h := &updateRestartHarness{supervisor: supervisorSystemd, service: supervisedService{execPath: target}}
 	h.install(t)
 
-	// When updated == 0, installRelease returns early before reaching
-	// the restart block. We verify the harness is set up correctly.
-	if h.restartCalls != 0 {
-		t.Fatalf("expected 0 restart calls, got %d", h.restartCalls)
+	out, errOut, err := runInstallRelease(t, []string{target}, "1.0.0", "1.0.0", false)
+	if err != nil {
+		t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "Nothing to update") {
+		t.Fatalf("expected nothing to update, got %q", out)
+	}
+	if calls := h.calls(); len(calls) != 0 {
+		t.Fatalf("no restart expected, got %q", calls)
 	}
 }
 
-// TestUpdateDoesNotRestartWhenReplaceFailed verifies that no restart
-// happens when all replacements fail.
+// TestUpdateDoesNotRestartWhenReplaceFailed drives installRelease with failing
+// replacements: all failing aborts with no restart, and a failed service
+// binary is never restarted even when another target succeeded.
 func TestUpdateDoesNotRestartWhenReplaceFailed(t *testing.T) {
-	h := &updateRestartHarness{
-		supervisor:      supervisorSystemd,
-		serviceExecPath: "/usr/local/bin/axis",
-	}
+	dir := t.TempDir()
+	service := writeOldBinary(t, dir, "axis-service")
+	other := writeOldBinary(t, dir, "axis-other")
+	h := &updateRestartHarness{supervisor: supervisorSystemd, service: supervisedService{execPath: service}}
 	h.install(t)
+	prevReplace := installReplaceExecutable
+	t.Cleanup(func() { installReplaceExecutable = prevReplace })
+	installReplaceExecutable = func(target string, data []byte) error {
+		if target == service {
+			return fmt.Errorf("simulated permission denied")
+		}
+		return prevReplace(target, data)
+	}
 
-	// When updated == 0 (all replacements failed), installRelease returns
-	// an error before reaching the restart block.
-	if h.restartCalls != 0 {
-		t.Fatalf("expected 0 restart calls, got %d", h.restartCalls)
+	// All targets fail: error, no restart.
+	if _, _, err := runInstallRelease(t, []string{service}, "0.1.0", "1.0.0", false); err == nil {
+		t.Fatal("expected failure when every replacement fails")
+	}
+	if calls := h.calls(); len(calls) != 0 {
+		t.Fatalf("no restart expected when nothing was replaced, got %q", calls)
+	}
+
+	// Service binary fails, other target succeeds: restart skipped.
+	out, errOut, err := runInstallRelease(t, []string{service, other}, "0.1.0", "1.0.0", false)
+	if err != nil {
+		t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out, errOut)
+	}
+	if calls := h.calls(); len(calls) != 0 {
+		t.Fatalf("failed service binary must not be restarted, got %q", calls)
+	}
+	if !strings.Contains(out, "was not updated; skipping daemon restart") {
+		t.Fatalf("expected skip warning, got %q", out)
 	}
 }
 
@@ -202,9 +335,9 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 // version mismatch after restart is reported as an error.
 func TestUpdateFailsWhenDaemonVersionMismatchAfterRestart(t *testing.T) {
 	h := &updateRestartHarness{
-		supervisor:      supervisorSystemd,
-		serviceExecPath: "/usr/local/bin/axis",
-		restartErr:      fmt.Errorf("daemon did not report expected version after restart"),
+		supervisor:    supervisorSystemd,
+		service:       supervisedService{execPath: "/usr/local/bin/axis"},
+		daemonVersion: "0.0.0-old",
 	}
 	h.install(t)
 
@@ -221,18 +354,23 @@ func TestUpdateFailsWhenDaemonVersionMismatchAfterRestart(t *testing.T) {
 // TestUpdateNoDaemonRunningIsNotAnError verifies that no daemon running
 // is not treated as an error.
 func TestUpdateNoDaemonRunningIsNotAnError(t *testing.T) {
-	h := &updateRestartHarness{
-		supervisor: supervisorNone,
-	}
+	h := &updateRestartHarness{supervisor: supervisorNone}
 	h.install(t)
+	// No daemon answers and no listener PID: the standalone path starts one.
+	rh := &restartHarness{
+		metas:    []daemon.Metadata{{}, serving()},
+		metaErrs: []error{fmt.Errorf("connection refused")},
+		pid:      0,
+	}
+	rh.install(t)
 
-	// With no supervisor and no daemon, restartAfterUpdate should
-	// not return an error (it's OK if there's no daemon to restart).
 	var out bytes.Buffer
-	_ = restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out)
-	// We don't assert on the error here because the behavior depends on
-	// whether a daemon is actually running. The test just verifies the
-	// code path doesn't panic.
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out); err != nil {
+		t.Fatalf("no running daemon must not fail the update: %v\n%s", err, out.String())
+	}
+	if rh.terminates != 0 || rh.spawns != 1 || !strings.Contains(out.String(), "No daemon responding") {
+		t.Fatalf("expected a fresh start only: terminates=%d spawns=%d out=%q", rh.terminates, rh.spawns, out.String())
+	}
 }
 
 // TestDetectSupervisorLinuxSystemd tests supervisor detection on Linux
@@ -255,21 +393,25 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 		goos:    "linux",
 		homeDir: func() (string, error) { return home, nil },
 		uid:     func() int { return 1000 },
-		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			// Simulate systemctl is-active succeeding.
+		run: func(probeCtx context.Context, name string, args ...string) ([]byte, error) {
+			// The probe must run under the caller's context, not Background.
+			if probeCtx.Value(probeCtxKey{}) != "caller" {
+				t.Fatalf("%s probe did not receive the caller context", name)
+			}
 			return []byte("active\n"), nil
 		},
 	}
+	ctx := context.WithValue(context.Background(), probeCtxKey{}, "caller")
 
-	sup, execPath, err := detectSupervisor(deps)
+	sup, svc, err := detectSupervisor(ctx, deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
 	if sup != supervisorSystemd {
 		t.Fatalf("expected systemd supervisor, got %v", sup)
 	}
-	if execPath != "/usr/local/bin/axis" {
-		t.Fatalf("expected exec path /usr/local/bin/axis, got %q", execPath)
+	if svc.execPath != "/usr/local/bin/axis" || svc.addr != "/tmp/axis.sock" {
+		t.Fatalf("expected /usr/local/bin/axis with --addr /tmp/axis.sock, got %+v", svc)
 	}
 }
 
@@ -286,7 +428,7 @@ func TestDetectSupervisorLinuxNoUnit(t *testing.T) {
 		},
 	}
 
-	sup, _, err := detectSupervisor(deps)
+	sup, _, err := detectSupervisor(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
@@ -321,7 +463,7 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 		},
 	}
 
-	sup, _, err := detectSupervisor(deps)
+	sup, _, err := detectSupervisor(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
@@ -360,21 +502,24 @@ func TestDetectSupervisorDarwinLaunchd(t *testing.T) {
 		goos:    "darwin",
 		homeDir: func() (string, error) { return home, nil },
 		uid:     func() int { return 501 },
-		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			// Simulate launchctl print succeeding.
+		run: func(probeCtx context.Context, name string, args ...string) ([]byte, error) {
+			if probeCtx.Value(probeCtxKey{}) != "caller" {
+				t.Fatalf("%s probe did not receive the caller context", name)
+			}
 			return []byte("loaded"), nil
 		},
 	}
+	ctx := context.WithValue(context.Background(), probeCtxKey{}, "caller")
 
-	sup, execPath, err := detectSupervisor(deps)
+	sup, svc, err := detectSupervisor(ctx, deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
 	if sup != supervisorLaunchd {
 		t.Fatalf("expected launchd supervisor, got %v", sup)
 	}
-	if execPath != "/opt/homebrew/bin/axis" {
-		t.Fatalf("expected exec path /opt/homebrew/bin/axis, got %q", execPath)
+	if svc.execPath != "/opt/homebrew/bin/axis" {
+		t.Fatalf("expected exec path /opt/homebrew/bin/axis, got %q", svc.execPath)
 	}
 }
 
@@ -391,7 +536,7 @@ func TestDetectSupervisorDarwinNoPlist(t *testing.T) {
 		},
 	}
 
-	sup, _, err := detectSupervisor(deps)
+	sup, _, err := detectSupervisor(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
@@ -400,33 +545,29 @@ func TestDetectSupervisorDarwinNoPlist(t *testing.T) {
 	}
 }
 
-// TestParseSystemdExecStart tests parsing ExecStart from a systemd unit.
+// TestParseSystemdExecStart round-trips a unit rendered by
+// renderDaemonService, including a quoted path and a custom --addr.
 func TestParseSystemdExecStart(t *testing.T) {
-	unit := `# Managed by AXIS.
-[Service]
-ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
-`
-	got := parseSystemdExecStart(unit)
-	if got != "/usr/local/bin/axis" {
-		t.Fatalf("expected /usr/local/bin/axis, got %q", got)
+	unit, err := renderDaemonService("linux", "/opt/my apps/axis", "127.0.0.1:9911", "1m", "/home/op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := serviceFromArgs(systemdExecStartArgs(string(unit)))
+	if svc.execPath != "/opt/my apps/axis" || svc.addr != "127.0.0.1:9911" {
+		t.Fatalf("got %+v from:\n%s", svc, unit)
 	}
 }
 
-// TestParseLaunchdProgramArguments tests parsing ProgramArguments from a plist.
+// TestParseLaunchdProgramArguments round-trips a plist rendered by
+// renderDaemonService, including XML escaping and a custom --addr.
 func TestParseLaunchdProgramArguments(t *testing.T) {
-	plist := `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/axis</string><string>daemon</string><string>start</string>
-  </array>
-</dict>
-</plist>
-`
-	got := parseLaunchdProgramArguments(plist)
-	if got != "/opt/homebrew/bin/axis" {
-		t.Fatalf("expected /opt/homebrew/bin/axis, got %q", got)
+	plist, err := renderDaemonService("darwin", "/Users/op/R&D/axis", "/Users/op/.axis/custom.sock", "1m", "/Users/op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := serviceFromArgs(launchdProgramArguments(string(plist)))
+	if svc.execPath != "/Users/op/R&D/axis" || svc.addr != "/Users/op/.axis/custom.sock" {
+		t.Fatalf("got %+v", svc)
 	}
 }
 

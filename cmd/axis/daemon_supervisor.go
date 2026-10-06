@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,18 +25,31 @@ const (
 	supervisorLaunchd
 )
 
+// supervisedService is what the AXIS-managed unit file or plist records about
+// the daemon it launches.
+type supervisedService struct {
+	// execPath is the binary the service manager starts.
+	execPath string
+	// addr is the --addr the service passes to "daemon start" ("" if absent).
+	addr string
+}
+
+// restartServiceDeps supplies the service-manager seams used by the restart
+// paths. It is a var so tests can stub systemctl/launchctl.
+var restartServiceDeps = defaultDaemonServiceDependencies
+
 // detectSupervisor determines which supervisor (if any) is managing the
-// daemon. It returns the supervisor type and the service exec path (the
-// binary path recorded in the unit file or plist).
+// daemon and what its unit file or plist records. The service-manager probe
+// runs under ctx so a stalled systemctl/launchctl cannot outlive the caller.
 // It is a var so tests can override it.
-var detectSupervisor = func(deps daemonServiceDependencies) (supervisorType, string, error) {
+var detectSupervisor = func(ctx context.Context, deps daemonServiceDependencies) (supervisorType, supervisedService, error) {
 	home, err := deps.homeDir()
 	if err != nil {
-		return supervisorNone, "", fmt.Errorf("resolve home directory: %w", err)
+		return supervisorNone, supervisedService{}, fmt.Errorf("resolve home directory: %w", err)
 	}
 	path, err := daemonServicePath(deps.goos, home)
 	if err != nil {
-		return supervisorNone, "", err
+		return supervisorNone, supervisedService{}, err
 	}
 
 	switch deps.goos {
@@ -42,91 +57,114 @@ var detectSupervisor = func(deps daemonServiceDependencies) (supervisorType, str
 		// Check that the unit file exists and is AXIS-managed.
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return supervisorNone, "", nil
+			return supervisorNone, supervisedService{}, nil
 		}
 		if !bytes.Contains(data, []byte(daemonServiceMarker)) {
-			return supervisorNone, "", nil
+			return supervisorNone, supervisedService{}, nil
 		}
 		// Check that the unit is active.
-		if _, runErr := deps.run(context.Background(), "systemctl", "--user", "is-active", "--quiet", daemonSystemdUnit); runErr != nil {
-			return supervisorNone, "", nil
+		if _, runErr := deps.run(ctx, "systemctl", "--user", "is-active", "--quiet", daemonSystemdUnit); runErr != nil {
+			return supervisorNone, supervisedService{}, nil
 		}
-		execPath := parseSystemdExecStart(string(data))
-		return supervisorSystemd, execPath, nil
+		return supervisorSystemd, serviceFromArgs(systemdExecStartArgs(string(data))), nil
 	case "darwin":
 		// Check that the plist exists and is AXIS-managed.
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return supervisorNone, "", nil
+			return supervisorNone, supervisedService{}, nil
 		}
 		if !bytes.Contains(data, []byte(daemonServiceMarker)) {
-			return supervisorNone, "", nil
+			return supervisorNone, supervisedService{}, nil
 		}
 		// Check that the agent is loaded.
 		domain := fmt.Sprintf("gui/%d", deps.uid())
-		if _, runErr := deps.run(context.Background(), "launchctl", "print", domain+"/"+daemonLaunchdLabel); runErr != nil {
-			return supervisorNone, "", nil
+		if _, runErr := deps.run(ctx, "launchctl", "print", domain+"/"+daemonLaunchdLabel); runErr != nil {
+			return supervisorNone, supervisedService{}, nil
 		}
-		execPath := parseLaunchdProgramArguments(string(data))
-		return supervisorLaunchd, execPath, nil
+		return supervisorLaunchd, serviceFromArgs(launchdProgramArguments(string(data))), nil
 	default:
-		return supervisorNone, "", nil
+		return supervisorNone, supervisedService{}, nil
 	}
 }
 
-// parseSystemdExecStart extracts the ExecStart binary path from a systemd
-// unit file. The ExecStart line looks like:
-//
-//	ExecStart=/path/to/axis daemon start --addr ... --refresh ...
-//
-// We return the first field (the binary path).
-func parseSystemdExecStart(unit string) string {
+// serviceFromArgs reads the binary and the --addr value from a service's
+// argv as written by renderDaemonService.
+func serviceFromArgs(args []string) supervisedService {
+	var svc supervisedService
+	if len(args) > 0 {
+		svc.execPath = args[0]
+	}
+	for i := 1; i+1 < len(args); i++ {
+		if args[i] == "--addr" {
+			svc.addr = args[i+1]
+			break
+		}
+	}
+	return svc
+}
+
+// systemdExecStartArgs splits the ExecStart line written by renderDaemonService
+// into argv, undoing systemdArgument's quoting and %-escaping.
+func systemdExecStartArgs(unit string) []string {
 	for _, line := range strings.Split(unit, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "ExecStart=") {
-			value := strings.TrimPrefix(line, "ExecStart=")
-			// systemd may quote the path; strip surrounding quotes.
-			value = strings.Trim(value, `"'`)
-			// The first field is the binary path.
-			fields := strings.Fields(value)
-			if len(fields) > 0 {
-				return fields[0]
+		if !strings.HasPrefix(line, "ExecStart=") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "ExecStart=")
+		var args []string
+		for {
+			rest = strings.TrimLeft(rest, " \t")
+			if rest == "" {
+				return args
 			}
+			var arg string
+			if rest[0] == '"' {
+				quoted, err := strconv.QuotedPrefix(rest)
+				if err != nil {
+					return args
+				}
+				arg, _ = strconv.Unquote(quoted)
+				rest = rest[len(quoted):]
+			} else if i := strings.IndexAny(rest, " \t"); i >= 0 {
+				arg, rest = rest[:i], rest[i:]
+			} else {
+				arg, rest = rest, ""
+			}
+			args = append(args, strings.ReplaceAll(arg, "%%", "%"))
 		}
 	}
-	return ""
+	return nil
 }
 
-// parseLaunchdProgramArguments extracts the binary path from a launchd plist.
-// The ProgramArguments array contains the binary path as the first string.
-func parseLaunchdProgramArguments(plist string) string {
-	// Find the ProgramArguments array and extract the first <string> value.
+// launchdProgramArguments returns the unescaped <string> values of the
+// plist's ProgramArguments array.
+func launchdProgramArguments(plist string) []string {
 	idx := strings.Index(plist, "<key>ProgramArguments</key>")
 	if idx < 0 {
-		return ""
+		return nil
 	}
 	rest := plist[idx:]
-	arrIdx := strings.Index(rest, "<array>")
-	if arrIdx < 0 {
-		return ""
+	start := strings.Index(rest, "<array>")
+	end := strings.Index(rest, "</array>")
+	if start < 0 || end < start {
+		return nil
 	}
-	rest = rest[arrIdx:]
-	endIdx := strings.Index(rest, "</array>")
-	if endIdx < 0 {
-		return ""
+	arr := rest[start:end]
+	var args []string
+	for {
+		i := strings.Index(arr, "<string>")
+		if i < 0 {
+			return args
+		}
+		arr = arr[i+len("<string>"):]
+		j := strings.Index(arr, "</string>")
+		if j < 0 {
+			return args
+		}
+		args = append(args, html.UnescapeString(arr[:j]))
+		arr = arr[j+len("</string>"):]
 	}
-	arr := rest[:endIdx]
-	// Find the first <string>...</string> inside the array.
-	strIdx := strings.Index(arr, "<string>")
-	if strIdx < 0 {
-		return ""
-	}
-	arr = arr[strIdx+len("<string>"):]
-	endStr := strings.Index(arr, "</string>")
-	if endStr < 0 {
-		return ""
-	}
-	return arr[:endStr]
 }
 
 // restartViaSupervisor restarts the daemon through the given supervisor.
@@ -168,10 +206,11 @@ func restartViaSupervisor(ctx context.Context, deps daemonServiceDependencies, s
 // warning. This prevents restarting a daemon that would bring back an old
 // binary.
 func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies, addr string, replacedPaths []string, out io.Writer) error {
-	sup, execPath, err := detectSupervisor(deps)
+	sup, svc, err := detectSupervisor(ctx, deps)
 	if err != nil {
 		return err
 	}
+	execPath := svc.execPath
 
 	switch sup {
 	case supervisorSystemd, supervisorLaunchd:
@@ -192,7 +231,11 @@ func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies
 		if err := restartViaSupervisor(ctx, deps, sup, out); err != nil {
 			return err
 		}
-		// Poll until the daemon is serving the expected version.
+		// Poll where the service actually listens: a unit installed with
+		// "daemon service install --addr" serves there, not on the default.
+		if svc.addr != "" {
+			addr = svc.addr
+		}
 		return pollDaemonVersion(ctx, addr, out)
 	default:
 		// Standalone: use the existing restart logic.
@@ -226,32 +269,35 @@ func pollDaemonVersion(ctx context.Context, addr string, out io.Writer) error {
 // then delegates to restartSupervisedDaemon.
 // It is a var so tests can override it.
 var restartAfterUpdate = func(ctx context.Context, addr string, replacedPaths []string, out io.Writer) error {
-	deps := defaultDaemonServiceDependencies()
-	return restartSupervisedDaemon(ctx, deps, addr, replacedPaths, out)
+	return restartSupervisedDaemon(ctx, restartServiceDeps(), addr, replacedPaths, out)
 }
 
-// versionQueryDaemon queries the daemon's /health endpoint and returns the
-// version string. It returns an error if the daemon is not responding.
-func versionQueryDaemon(ctx context.Context, addr string) (string, error) {
+// daemonIdentity is the build identity a running daemon reports on /health.
+type daemonIdentity struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
+// versionQueryDaemon queries the daemon's /health endpoint and returns its
+// version and commit. It returns an error if the daemon is not responding.
+func versionQueryDaemon(ctx context.Context, addr string) (daemonIdentity, error) {
 	client, baseURLAddr := daemon.HttpClientForAddr(addr)
 	baseURL := daemon.NormalizeAddr(baseURLAddr)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
 	if err != nil {
-		return "", err
+		return daemonIdentity{}, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return daemonIdentity{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("health check returned %s", resp.Status)
+		return daemonIdentity{}, fmt.Errorf("health check returned %s", resp.Status)
 	}
-	var payload struct {
-		Version string `json:"version"`
+	var id daemonIdentity
+	if err := json.NewDecoder(resp.Body).Decode(&id); err != nil {
+		return daemonIdentity{}, err
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	return payload.Version, nil
+	return id, nil
 }

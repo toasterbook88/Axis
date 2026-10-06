@@ -56,12 +56,10 @@ func HealthPayload(meta *Metadata) map[string]any {
 	if !meta.StartedAt.IsZero() {
 		payload["started_at"] = meta.StartedAt.Format(time.RFC3339)
 	}
-	if meta.PID > 0 {
-		payload["pid"] = meta.PID
-	}
-	if meta.Executable != "" {
-		payload["executable"] = meta.Executable
-	}
+	// PID and the absolute executable path stay off this payload: /health and
+	// /healthz are unauthenticated and may sit on a TCP listener. They are
+	// available on the authenticated metadata endpoint (Metadata.PID,
+	// Metadata.Executable).
 	return payload
 }
 

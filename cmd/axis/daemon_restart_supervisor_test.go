@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/daemon"
 )
 
@@ -41,7 +47,7 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 		},
 	}
 
-	sup, _, err := detectSupervisor(deps)
+	sup, _, err := detectSupervisor(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
@@ -99,7 +105,7 @@ func TestDaemonRestartUsesLaunchctlKickstartWhenAgentLoaded(t *testing.T) {
 		},
 	}
 
-	sup, _, err := detectSupervisor(deps)
+	sup, _, err := detectSupervisor(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("detectSupervisor: %v", err)
 	}
@@ -131,8 +137,8 @@ func TestDaemonRestartStandaloneStillSpawnsDetached(t *testing.T) {
 	// Override detectSupervisor to return none.
 	prevDetect := detectSupervisor
 	defer func() { detectSupervisor = prevDetect }()
-	detectSupervisor = func(deps daemonServiceDependencies) (supervisorType, string, error) {
-		return supervisorNone, "", nil
+	detectSupervisor = func(context.Context, daemonServiceDependencies) (supervisorType, supervisedService, error) {
+		return supervisorNone, supervisedService{}, nil
 	}
 
 	var out bytes.Buffer
@@ -145,34 +151,86 @@ func TestDaemonRestartStandaloneStillSpawnsDetached(t *testing.T) {
 	}
 }
 
-// TestVersionReportsRunningDaemonVersion verifies that versionCmd queries
-// the running daemon and reports its version.
-func TestVersionReportsRunningDaemonVersion(t *testing.T) {
-	// We can't easily test the full versionCmd without a real daemon,
-	// but we can test versionQueryDaemon with a mock HTTP server.
-	// For now, just verify the function exists and is callable.
-	// The full integration test would require a running daemon.
+// healthServer serves /health with the given daemon identity and counts hits.
+func healthServer(t *testing.T, version, commit string) (string, *int32) {
+	t.Helper()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&hits, 1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "version": version, "commit": commit})
+	}))
+	t.Cleanup(srv.Close)
+	return strings.TrimPrefix(srv.URL, "http://"), &hits
 }
 
-// TestVersionWarnsOnDaemonVersionMismatch verifies that a version mismatch
-// between CLI and daemon is reported.
+// runVersion executes the real version command and returns its output.
+func runVersion(t *testing.T, cliCommit string, args ...string) string {
+	t.Helper()
+	prev := buildinfo.Commit
+	t.Cleanup(func() { buildinfo.Commit = prev })
+	buildinfo.Commit = cliCommit
+	cmd := versionCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("version %v: %v", args, err)
+	}
+	return out.String()
+}
+
+// TestVersionReportsRunningDaemonVersion verifies that versionCmd queries
+// the running daemon and reports its version and commit.
+func TestVersionReportsRunningDaemonVersion(t *testing.T) {
+	addr, hits := healthServer(t, Version, "abc1234")
+	out := runVersion(t, "abc1234", "--cache-addr", addr)
+	want := fmt.Sprintf("daemon:   v%s (commit abc1234) on %s", Version, addr)
+	if !strings.Contains(out, want) {
+		t.Fatalf("missing %q in:\n%s", want, out)
+	}
+	if strings.Contains(out, "warning:") || atomic.LoadInt32(hits) != 1 {
+		t.Fatalf("expected one query and no warning (hits=%d):\n%s", atomic.LoadInt32(hits), out)
+	}
+}
+
+// TestVersionWarnsOnDaemonVersionMismatch verifies that a version mismatch,
+// or a commit mismatch at the same version, between CLI and daemon is reported.
 func TestVersionWarnsOnDaemonVersionMismatch(t *testing.T) {
-	// This would require a real daemon or mock HTTP server.
-	// The logic is tested in the versionCmd function itself.
+	addr, _ := healthServer(t, "0.0.0-old", "abc1234")
+	out := runVersion(t, "abc1234", "--cache-addr", addr)
+	if want := fmt.Sprintf("warning:  daemon version 0.0.0-old differs from CLI version %s", Version); !strings.Contains(out, want) {
+		t.Fatalf("missing %q in:\n%s", want, out)
+	}
+
+	addr, _ = healthServer(t, Version, "def5678")
+	out = runVersion(t, "abc1234", "--cache-addr", addr)
+	if want := fmt.Sprintf("warning:  daemon commit def5678 differs from CLI commit abc1234 (same version %s)", Version); !strings.Contains(out, want) {
+		t.Fatalf("missing %q in:\n%s", want, out)
+	}
 }
 
 // TestVersionReportsDaemonNotResponding verifies that a non-responding
 // daemon is reported.
 func TestVersionReportsDaemonNotResponding(t *testing.T) {
-	// This would require a real daemon or mock HTTP server.
-	// The logic is tested in the versionCmd function itself.
+	out := runVersion(t, "abc1234", "--cache-addr", "127.0.0.1:1")
+	if !strings.Contains(out, "daemon:   not responding on 127.0.0.1:1") {
+		t.Fatalf("expected not-responding line in:\n%s", out)
+	}
 }
 
 // TestVersionLocalFlagSkipsDaemonQuery verifies that --local skips the
 // daemon query.
 func TestVersionLocalFlagSkipsDaemonQuery(t *testing.T) {
-	// This would require a real daemon or mock HTTP server.
-	// The logic is tested in the versionCmd function itself.
+	addr, hits := healthServer(t, Version, "abc1234")
+	out := runVersion(t, "abc1234", "--local", "--cache-addr", addr)
+	if atomic.LoadInt32(hits) != 0 || strings.Contains(out, "daemon:") {
+		t.Fatalf("--local must not query the daemon (hits=%d):\n%s", atomic.LoadInt32(hits), out)
+	}
 }
 
 // TestVersionQueryDaemonNotResponding verifies that versionQueryDaemon
@@ -187,10 +245,16 @@ func TestVersionQueryDaemonNotResponding(t *testing.T) {
 }
 
 // TestVersionQueryDaemonSuccess verifies that versionQueryDaemon returns
-// the version when the daemon is responding.
+// the version and commit when the daemon is responding.
 func TestVersionQueryDaemonSuccess(t *testing.T) {
-	// This would require a real daemon or mock HTTP server.
-	// For now, just verify the function signature is correct.
+	addr, _ := healthServer(t, "9.9.9", "abc1234")
+	id, err := versionQueryDaemon(context.Background(), addr)
+	if err != nil {
+		t.Fatalf("versionQueryDaemon: %v", err)
+	}
+	if id.Version != "9.9.9" || id.Commit != "abc1234" {
+		t.Fatalf("got %+v", id)
+	}
 }
 
 // TestRestartSupervisedDaemonSkipsWhenServiceExecNotUpdated verifies that
@@ -270,7 +334,9 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 	// Mock restartFetchMeta to return current version so pollDaemonVersion succeeds.
 	prevFetch := restartFetchMeta
 	defer func() { restartFetchMeta = prevFetch }()
-	restartFetchMeta = func(context.Context, string) (daemon.Metadata, error) {
+	var polled []string
+	restartFetchMeta = func(_ context.Context, addr string) (daemon.Metadata, error) {
+		polled = append(polled, addr)
 		return serving(), nil
 	}
 
@@ -282,5 +348,10 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 	}
 	if !restartCalled {
 		t.Fatal("expected restart to proceed when service exec updated")
+	}
+	// The unit was installed with --addr /tmp/axis.sock; readiness must be
+	// polled there, not on the caller's default address.
+	if len(polled) == 0 || polled[0] != "/tmp/axis.sock" {
+		t.Fatalf("expected readiness poll on /tmp/axis.sock, got %q", polled)
 	}
 }

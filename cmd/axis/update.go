@@ -765,13 +765,15 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 	fmt.Fprintf(out, "Updating %d install(s)...\n", len(plan))
 	updated := 0
 	failed := 0
+	var replacedPaths []string
 	for _, p := range plan {
-		if err := replaceExecutable(p.replacePath, binary); err != nil {
+		if err := installReplaceExecutable(p.replacePath, binary); err != nil {
 			failed++
 			fmt.Fprintf(errOut, "warning: could not update %s: %v\n", p.label, err)
 			continue
 		}
 		updated++
+		replacedPaths = append(replacedPaths, p.replacePath)
 		from := p.version
 		if from == "" {
 			from = "unknown"
@@ -795,10 +797,8 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 	// Restart the daemon after a successful update, unless --no-restart.
 	if updated > 0 && !noRestart {
 		fmt.Fprintf(out, "Restarting daemon...\n")
-		replacedPaths := make([]string, 0, len(plan))
-		for _, p := range plan {
-			replacedPaths = append(replacedPaths, p.replacePath)
-		}
+		// Only paths that were actually replaced: a failed service binary
+		// must not be restarted as if it were new.
 		if err := restartAfterUpdate(cmd.Context(), api.DefaultAddr(), replacedPaths, out); err != nil {
 			return fmt.Errorf("update succeeded but daemon restart failed: %w", err)
 		}
@@ -917,6 +917,10 @@ func elevationHint(target string) string {
 	}
 	return fmt.Sprintf("sudo %s update --path %s", self, target)
 }
+
+// installReplaceExecutable is the per-target replace step used by
+// installRelease. It is a var so tests can fail one target.
+var installReplaceExecutable = replaceExecutable
 
 func replaceExecutable(target string, data []byte) error {
 	dir := filepath.Dir(target)

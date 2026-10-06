@@ -43,7 +43,7 @@ func TestHealthPayloadWithMetaNoError(t *testing.T) {
 	}
 }
 
-func TestHealthPayloadIncludesCommitStartedAtPID(t *testing.T) {
+func TestHealthPayloadIncludesCommitStartedAtButNotProcessIdentity(t *testing.T) {
 	meta := &Metadata{
 		Ready:      true,
 		Commit:     "abc1234",
@@ -58,11 +58,12 @@ func TestHealthPayloadIncludesCommitStartedAtPID(t *testing.T) {
 	if p["started_at"] != "2026-10-05T12:00:00Z" {
 		t.Errorf("expected started_at 2026-10-05T12:00:00Z, got %v", p["started_at"])
 	}
-	if p["pid"] != 4242 {
-		t.Errorf("expected pid 4242, got %v", p["pid"])
+	// /health is unauthenticated: PID and executable path must not leak.
+	if _, ok := p["pid"]; ok {
+		t.Errorf("pid must not be on the unauthenticated health payload, got %v", p["pid"])
 	}
-	if p["executable"] != "/usr/local/bin/axis" {
-		t.Errorf("expected executable /usr/local/bin/axis, got %v", p["executable"])
+	if _, ok := p["executable"]; ok {
+		t.Errorf("executable must not be on the unauthenticated health payload, got %v", p["executable"])
 	}
 }
 

@@ -244,13 +244,21 @@ func versionCmd() *cobra.Command {
 			if !localOnly {
 				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
 				defer cancel()
-				daemonVer, err := versionQueryDaemon(ctx, cacheAddr)
+				daemonID, err := versionQueryDaemon(ctx, cacheAddr)
 				if err != nil {
 					fmt.Fprintf(out, "  daemon:   not responding on %s\n", cacheAddr)
 				} else {
-					fmt.Fprintf(out, "  daemon:   v%s on %s\n", daemonVer, cacheAddr)
-					if daemonVer != Version {
-						fmt.Fprintf(out, "  warning:  daemon version %s differs from CLI version %s\n", daemonVer, Version)
+					commitNote := ""
+					if daemonID.Commit != "" {
+						commitNote = " (commit " + daemonID.Commit + ")"
+					}
+					fmt.Fprintf(out, "  daemon:   v%s%s on %s\n", daemonID.Version, commitNote, cacheAddr)
+					cliCommit := buildinfo.ResolvedCommit()
+					switch {
+					case daemonID.Version != Version:
+						fmt.Fprintf(out, "  warning:  daemon version %s differs from CLI version %s\n", daemonID.Version, Version)
+					case daemonID.Commit != "" && cliCommit != "" && daemonID.Commit != cliCommit:
+						fmt.Fprintf(out, "  warning:  daemon commit %s differs from CLI commit %s (same version %s)\n", daemonID.Commit, cliCommit, Version)
 					}
 				}
 			}
