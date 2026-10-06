@@ -332,3 +332,47 @@ func processStillRunning(pid int) bool {
 	state := text[i+2]
 	return state != 'Z' && state != 'X'
 }
+
+func TestMLXPlaceRefusesProfileRefusals(t *testing.T) {
+	snap := testSnap()
+	snap.Nodes[0].Resources.MemoryTopology = models.MemoryTopologyUnified
+	snap.Nodes[0].Tools = append(snap.Nodes[0].Tools, models.ToolInfo{Name: "mlx_lm.server", Path: "/usr/local/bin/mlx_lm.server"})
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+
+	var scriptCalls int
+	prevScript := runNodeScript
+	runNodeScript = func(context.Context, models.NodeFacts, *config.NodeConfig, string) (string, error) {
+		scriptCalls++
+		return "", nil
+	}
+	t.Cleanup(func() { runNodeScript = prevScript })
+
+	profile := models.ModelRunProfile{
+		Schema:       models.ModelRunSchema,
+		Node:         "storage",
+		Engine:       models.EngineMLX,
+		ArtifactKind: models.ArtifactMLXModelDir,
+		MLXModel:     "/mnt/models/qwen",
+		BindHost:     "127.0.0.1",
+		Port:         8080,
+		Refusals:     []string{"weights are not on a named local volume"},
+	}
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	node := snap.Nodes[0]
+	cfgNode := &config.NodeConfig{Name: "storage"}
+	err := placeMLXModel(context.Background(), cmd, node, cfgNode, profile, "test", snap, time.Now().UTC(), "text")
+	if err == nil {
+		t.Fatal("placeMLXModel should refuse when profile.Refusals is non-empty")
+	}
+	if !strings.Contains(err.Error(), "named local volume") {
+		t.Fatalf("err=%v", err)
+	}
+	if scriptCalls != 0 {
+		t.Fatalf("refusals still reached mlx: %d", scriptCalls)
+	}
+}

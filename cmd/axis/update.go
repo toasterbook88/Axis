@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	axisbuildinfo "github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/versioncmp"
 )
@@ -42,18 +43,64 @@ var (
 	inspectBinary = inspectAxisInstall
 )
 
-// allowedUpdateHosts is the set of HTTPS hosts the updater may contact.
+// allowedUpdateHosts is the set of HTTPS hosts the updater may contact,
+// including on every redirect hop. release-assets.githubusercontent.com is the
+// CDN host GitHub's release download redirects resolve to today.
 var allowedUpdateHosts = []string{
 	"api.github.com",
 	"github.com",
 	"objects.githubusercontent.com",
 	"releases.githubusercontent.com",
+	"release-assets.githubusercontent.com",
+}
+
+// maxUpdateRedirects caps how many redirects safeGet will follow.
+const maxUpdateRedirects = 5
+
+func isAllowedUpdateHost(host string) bool {
+	for _, h := range allowedUpdateHosts {
+		if host == h {
+			return true
+		}
+	}
+	return false
+}
+
+// newUpdateHTTPClient returns a client that refuses to follow a redirect to any
+// host outside allowedUpdateHosts or to a non-HTTPS scheme. Factorable so tests
+// can drive TLS test servers.
+func newUpdateHTTPClient(rt http.RoundTripper) *http.Client {
+	return &http.Client{
+		Timeout:       60 * time.Second,
+		Transport:     rt,
+		CheckRedirect: newUpdateRedirectPolicy(),
+	}
+}
+
+// newUpdateRedirectPolicy returns the CheckRedirect function shared by the
+// update HTTP client: HTTPS-only, allowlisted hosts only, capped hop count.
+func newUpdateRedirectPolicy() func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		// via holds the original request plus every hop already followed, so
+		// len(via) == maxUpdateRedirects while deciding the last allowed hop.
+		if len(via) > maxUpdateRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxUpdateRedirects)
+		}
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("redirect to %q refused: only HTTPS downloads are permitted", req.URL.Scheme)
+		}
+		if !isAllowedUpdateHost(req.URL.Host) {
+			return fmt.Errorf("redirect host %q is not an allowed GitHub domain", req.URL.Host)
+		}
+		return nil
+	}
 }
 
 func updateCmd() *cobra.Command {
 	var checkOnly bool
 	var updateAll bool
 	var targetPath string
+	var noRestart bool
 
 	cmd := &cobra.Command{
 		Use: "update",
@@ -70,14 +117,16 @@ func updateCmd() *cobra.Command {
 			"  • package-manager ownership (Homebrew/Nix/… paths are skipped)\n\n" +
 			"Use --check to report the running binary and any shadows without installing.\n" +
 			"Use --all to refresh every validated install that is older than the latest release.\n" +
-			"Use --path to update a single explicit path.",
+			"Use --path to update a single explicit path.\n" +
+			"Use --no-restart to skip restarting the daemon after a successful update.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(cmd, checkOnly, updateAll, targetPath)
+			return runUpdate(cmd, checkOnly, updateAll, targetPath, noRestart)
 		},
 	}
 	cmd.Flags().BoolVarP(&checkOnly, "check", "c", false, "report update status for the running binary and known shadows without installing")
 	cmd.Flags().BoolVar(&updateAll, "all", false, "update all validated older installs (PATH + common locations), not only the running binary")
 	cmd.Flags().StringVar(&targetPath, "path", "", "update a specific axis binary at this path")
+	cmd.Flags().BoolVar(&noRestart, "no-restart", false, "skip restarting the daemon after a successful update")
 	return cmd
 }
 
@@ -89,6 +138,8 @@ type ghRelease struct {
 type ghAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	// Digest is the GitHub API's "digest" field, e.g. "sha256:<hex>".
+	Digest string `json:"digest"`
 }
 
 // installInfo describes one on-disk candidate after identity inspection.
@@ -123,7 +174,7 @@ const (
 	modePath
 )
 
-func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string) error {
+func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string, noRestart bool) error {
 	out := cmd.OutOrStdout()
 	errOut := cmd.ErrOrStderr()
 	current := axisbuildinfo.Version
@@ -194,7 +245,7 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 		}
 	}
 
-	return installRelease(cmd, rel, latest, targets, selfPath, mode, errOut, out)
+	return installRelease(cmd, rel, latest, targets, selfPath, mode, noRestart, errOut, out)
 }
 
 // reportCheck reports the running binary's status plus every shadow install.
@@ -611,11 +662,12 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 	goarch := runtime.GOARCH
 	archiveName := fmt.Sprintf("axis_%s_%s_%s.tar.gz", version, goos, goarch)
 
-	var archiveURL, checksumURL string
+	var archiveURL, checksumURL, apiDigest string
 	for _, a := range rel.Assets {
 		switch a.Name {
 		case archiveName:
 			archiveURL = a.BrowserDownloadURL
+			apiDigest = a.Digest
 		case "checksums.txt":
 			checksumURL = a.BrowserDownloadURL
 		}
@@ -630,12 +682,38 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 		return nil, fmt.Errorf("downloading release: %w", err)
 	}
 
+	// SHA256 of the archive for the API digest check. verifyChecksum hashes
+	// the same bytes itself (one extra in-memory pass) so the checksums.txt
+	// path proves its hash is derived from the archive rather than trusting a
+	// caller-supplied string. The API digest and checksums.txt are independent
+	// sources, so when both exist they must both match.
+	sum := sha256.Sum256(archiveData)
+	got := hex.EncodeToString(sum[:])
+
+	verified := false
+
+	if api := strings.TrimPrefix(apiDigest, "sha256:"); api != "" && strings.HasPrefix(apiDigest, "sha256:") {
+		if api != got {
+			return nil, fmt.Errorf("GitHub API digest mismatch for %s: expected %s got %s", archiveName, api, got)
+		}
+		verified = true
+	}
+
 	if checksumURL != "" {
 		if err := verifyChecksum(archiveData, archiveName, checksumURL); err != nil {
 			return nil, fmt.Errorf("checksum verification failed: %w", err)
 		}
-		fmt.Fprintf(out, "Checksum verified.\n")
+		verified = true
 	}
+
+	if !verified {
+		// Fail closed: without checksums.txt and without a sha256 API digest
+		// there is nothing to verify against, so the update aborts before
+		// anything is replaced.
+		return nil, fmt.Errorf("no checksum available for %s: release has neither checksums.txt nor a sha256 API digest; refusing to install unverified binary", archiveName)
+	}
+
+	fmt.Fprintf(out, "Checksum verified.\n")
 
 	binary, err := extractBinary(archiveData, "axis")
 	if err != nil {
@@ -644,7 +722,7 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 	return binary, nil
 }
 
-func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets []string, selfPath string, mode updateMode, errOut, out io.Writer) error {
+func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets []string, selfPath string, mode updateMode, noRestart bool, errOut, out io.Writer) error {
 	// Validate every target before downloading.
 	type planned struct {
 		// replacePath is the regular file written by replaceExecutable.
@@ -761,13 +839,15 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 	fmt.Fprintf(out, "Updating %d install(s)...\n", len(plan))
 	updated := 0
 	failed := 0
+	var replacedPaths []string
 	for _, p := range plan {
-		if err := replaceExecutable(p.replacePath, binary); err != nil {
+		if err := installReplaceExecutable(p.replacePath, binary); err != nil {
 			failed++
 			fmt.Fprintf(errOut, "warning: could not update %s: %v\n", p.label, err)
 			continue
 		}
 		updated++
+		replacedPaths = append(replacedPaths, p.replacePath)
 		from := p.version
 		if from == "" {
 			from = "unknown"
@@ -787,6 +867,16 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 		}
 		fmt.Fprintf(errOut, "Re-run with elevated rights to update them:\n    %s\n", elevationHint(blocked[0]))
 	}
+
+	// Restart the daemon after a successful update, unless --no-restart.
+	if updated > 0 && !noRestart {
+		fmt.Fprintf(out, "Restarting daemon...\n")
+		// Only paths that were actually replaced: a failed service binary
+		// must not be restarted as if it were new.
+		if err := restartAfterUpdate(cmd.Context(), api.DefaultAddr(), replacedPaths, out); err != nil {
+			return fmt.Errorf("update succeeded but daemon restart failed: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -797,32 +887,59 @@ func orDefault(s, def string) string {
 	return s
 }
 
-// safeGet performs an HTTPS GET restricted to allowed GitHub domains.
+// safeGet performs an HTTPS GET restricted to allowed GitHub domains. Every
+// redirect hop is validated against the same allowlist by the client's
+// CheckRedirect; a redirect to any other host or a non-HTTPS scheme is refused.
 func safeGet(rawURL string) (*http.Response, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
+		return nil, fmt.Errorf("invalid URL: %w", redactURLError(err))
 	}
 	if u.Scheme != "https" {
 		return nil, fmt.Errorf("only HTTPS downloads are permitted (got %q)", u.Scheme)
 	}
-	for _, h := range allowedUpdateHosts {
-		if u.Host == h {
-			c := &http.Client{Timeout: 60 * time.Second}
-			return c.Get(rawURL) //nolint:noctx
-		}
+	if !isAllowedUpdateHost(u.Host) {
+		return nil, fmt.Errorf("host %q is not an allowed GitHub domain", u.Host)
 	}
-	return nil, fmt.Errorf("host %q is not an allowed GitHub domain", u.Host)
+	resp, err := newUpdateHTTPClient(nil).Get(rawURL) //nolint:noctx
+	if err != nil {
+		return nil, redactURLError(err)
+	}
+	return resp, nil
+}
+
+// redactURLError rebuilds a *url.Error with the host only. http.Client wraps
+// redirect-policy and transport failures in *url.Error, whose message carries
+// the full request URL, so a signed CDN query (?token=...) would otherwise reach
+// updater output. Nested *url.Error values are redacted too.
+func redactURLError(err error) error {
+	ue, ok := err.(*url.Error)
+	if !ok {
+		return err
+	}
+	host := "update server"
+	if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" {
+		host = u.Host
+	}
+	return &url.Error{Op: ue.Op, URL: host, Err: redactURLError(ue.Err)}
 }
 
 func downloadBytes(rawURL string) ([]byte, error) {
 	resp, err := updateGetFunc(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+		// Name the host that actually answered (after redirects), never the
+		// path or signed query.
+		host := "update server"
+		if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Host != "" {
+			host = resp.Request.URL.Host
+		} else if u, perr := url.Parse(rawURL); perr == nil && u.Host != "" {
+			host = u.Host
+		}
+		return nil, fmt.Errorf("download from %s returned HTTP %d", host, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
 }
@@ -833,8 +950,11 @@ func verifyChecksum(data []byte, archiveName, checksumURL string) error {
 		return fmt.Errorf("downloading checksums.txt: %w", err)
 	}
 	sum := sha256.Sum256(data)
-	got := hex.EncodeToString(sum[:])
-	for _, line := range strings.Split(string(csData), "\n") {
+	return checkChecksumData(string(csData), hex.EncodeToString(sum[:]), archiveName)
+}
+
+func checkChecksumData(csData, got, archiveName string) error {
+	for _, line := range strings.Split(csData, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[1] == archiveName {
 			if fields[0] != got {
@@ -901,6 +1021,10 @@ func elevationHint(target string) string {
 	}
 	return fmt.Sprintf("sudo %s update --path %s", self, target)
 }
+
+// installReplaceExecutable is the per-target replace step used by
+// installRelease. It is a var so tests can fail one target.
+var installReplaceExecutable = replaceExecutable
 
 func replaceExecutable(target string, data []byte) error {
 	dir := filepath.Dir(target)
