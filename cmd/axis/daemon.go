@@ -334,6 +334,16 @@ func doDaemonActionWithClient(client *http.Client, req *http.Request, prefix str
 }
 
 func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
+	// Check if a supervisor is active; if so, restart through it.
+	deps := restartServiceDeps()
+	sup, _, err := detectSupervisor(ctx, deps)
+	if err != nil {
+		return err
+	}
+	if sup != supervisorNone {
+		return restartSupervisedDaemon(ctx, deps, addr, nil, out)
+	}
+
 	listenAddr, err := daemonListenAddr(addr)
 	if err != nil {
 		return err

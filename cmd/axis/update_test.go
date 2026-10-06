@@ -429,7 +429,7 @@ func TestInstallReleaseSkipsNonAxisManagedNewerAndUpdatesStale(t *testing.T) {
 
 		err = installRelease(cmd, rel, "1.0.0",
 			[]string{nonAxis, managed, newer, stale},
-			"", modeAll, &errOut, &out)
+			"", modeAll, true, &errOut, &out)
 		if err != nil {
 			t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out.String(), errOut.String())
 		}
@@ -497,7 +497,7 @@ func TestInstallReleaseExplicitPathAllowsUnknownVersion(t *testing.T) {
 		}
 
 		// modeAll would refuse; modePath must accept.
-		if err := installRelease(cmd, rel, "1.2.3", []string{target}, "", modeAll, &errOut, &out); err != nil {
+		if err := installRelease(cmd, rel, "1.2.3", []string{target}, "", modeAll, true, &errOut, &out); err != nil {
 			t.Fatalf("modeAll: %v", err)
 		}
 		if got, _ := os.ReadFile(target); string(got) != "OLD" {
@@ -509,7 +509,7 @@ func TestInstallReleaseExplicitPathAllowsUnknownVersion(t *testing.T) {
 
 		out.Reset()
 		errOut.Reset()
-		if err := installRelease(cmd, rel, "1.2.3", []string{target}, "", modePath, &errOut, &out); err != nil {
+		if err := installRelease(cmd, rel, "1.2.3", []string{target}, "", modePath, true, &errOut, &out); err != nil {
 			t.Fatalf("modePath: %v\nout=%s\nerr=%s", err, out.String(), errOut.String())
 		}
 		got, err := os.ReadFile(target)
@@ -564,7 +564,7 @@ func TestInstallReleaseUpdatesSymlinkTargetNotLink(t *testing.T) {
 		defer resp.Body.Close()
 		_ = json.NewDecoder(resp.Body).Decode(rel)
 
-		if err := installRelease(cmd, rel, "2.0.0", []string{linkBin}, "", modePath, &errOut, &out); err != nil {
+		if err := installRelease(cmd, rel, "2.0.0", []string{linkBin}, "", modePath, true, &errOut, &out); err != nil {
 			t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out.String(), errOut.String())
 		}
 

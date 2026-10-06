@@ -365,7 +365,7 @@ func TestInstallReleaseDoesNotReplaceOnChecksumFailure(t *testing.T) {
 		ghAsset{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
 	)
 
-	if err := installRelease(cmd, rel, version, []string{target}, "", modePath, errOut, out); err == nil {
+	if err := installRelease(cmd, rel, version, []string{target}, "", modePath, true, errOut, out); err == nil {
 		t.Fatal("expected installRelease to fail on checksum mismatch")
 	}
 	got, err := os.ReadFile(target)

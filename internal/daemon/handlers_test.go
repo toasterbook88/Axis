@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
 )
@@ -39,6 +40,47 @@ func TestHealthPayloadWithMetaNoError(t *testing.T) {
 	p := HealthPayload(&Metadata{Ready: false})
 	if _, ok := p["cache_last_error"]; ok {
 		t.Error("expected cache_last_error absent when LastError is empty")
+	}
+}
+
+func TestHealthPayloadIncludesCommitStartedAtButNotProcessIdentity(t *testing.T) {
+	meta := &Metadata{
+		Ready:      true,
+		Commit:     "abc1234",
+		StartedAt:  time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC),
+		PID:        4242,
+		Executable: "/usr/local/bin/axis",
+	}
+	p := HealthPayload(meta)
+	if p["commit"] != "abc1234" {
+		t.Errorf("expected commit abc1234, got %v", p["commit"])
+	}
+	if p["started_at"] != "2026-10-05T12:00:00Z" {
+		t.Errorf("expected started_at 2026-10-05T12:00:00Z, got %v", p["started_at"])
+	}
+	// /health is unauthenticated: PID and executable path must not leak.
+	if _, ok := p["pid"]; ok {
+		t.Errorf("pid must not be on the unauthenticated health payload, got %v", p["pid"])
+	}
+	if _, ok := p["executable"]; ok {
+		t.Errorf("executable must not be on the unauthenticated health payload, got %v", p["executable"])
+	}
+}
+
+func TestHealthPayloadOmitsEmptyProcessIdentity(t *testing.T) {
+	meta := &Metadata{Ready: true}
+	p := HealthPayload(meta)
+	if _, ok := p["commit"]; ok {
+		t.Error("expected commit absent when empty")
+	}
+	if _, ok := p["started_at"]; ok {
+		t.Error("expected started_at absent when zero")
+	}
+	if _, ok := p["pid"]; ok {
+		t.Error("expected pid absent when zero")
+	}
+	if _, ok := p["executable"]; ok {
+		t.Error("expected executable absent when empty")
 	}
 }
 

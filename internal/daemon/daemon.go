@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/events"
@@ -82,6 +83,11 @@ type Metadata struct {
 	StaleNodes          []string                   `json:"stale_nodes,omitempty"`
 	Freshness           *models.DiscoveryFreshness `json:"freshness,omitempty"`
 	RouteProbeStats     multipath.Stats            `json:"route_probe_stats"`
+	// Process identity for version/restart diagnostics
+	Commit     string    `json:"commit,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	PID        int       `json:"pid,omitempty"`
+	Executable string    `json:"executable,omitempty"`
 }
 
 type daemonMetadata struct {
@@ -99,6 +105,10 @@ type daemonMetadata struct {
 	refreshCount        int64
 	lastRefreshDuration time.Duration
 	staleNodes          []string
+	commit              string
+	startedAt           time.Time
+	pid                 int
+	executable          string
 }
 
 type Daemon struct {
@@ -126,6 +136,12 @@ type Daemon struct {
 	refreshCount        int64
 	lastRefreshDuration time.Duration
 	staleNodes          []string // nodes that degraded in the last refresh
+
+	// Process identity for version/restart diagnostics
+	commit     string
+	startedAt  time.Time
+	pid        int
+	executable string
 
 	pendingMu          sync.Mutex
 	pendingTriggers    map[string]bool
@@ -296,7 +312,13 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		pendingRefresh:  make(chan string, 1),
 		pendingTriggers: make(map[string]bool),
 		snapshotHooks:   make(map[string]*snapshotHook),
+		startedAt:       time.Now(),
 	}
+	if exe, err := os.Executable(); err == nil {
+		d.executable = exe
+	}
+	d.pid = os.Getpid()
+	d.commit = buildinfo.ResolvedCommit()
 	if err := d.ledger.Load(); err != nil {
 		err = fmt.Errorf("load reservation ledger: %w", err)
 		d.lastError = err.Error()
@@ -1075,6 +1097,10 @@ func (d *Daemon) Meta() Metadata {
 		Stale:              stale,
 		StaleThresholdSec:  int(metaState.staleThreshold / time.Second),
 		RouteProbeStats:    routeProbeStats(),
+		Commit:             metaState.commit,
+		StartedAt:          metaState.startedAt,
+		PID:                metaState.pid,
+		Executable:         metaState.executable,
 	}
 	mesh := d.mesh
 	if mesh != nil {
@@ -1137,6 +1163,10 @@ func (d *Daemon) publishMetadataLocked() {
 		refreshCount:        d.refreshCount,
 		lastRefreshDuration: d.lastRefreshDuration,
 		staleNodes:          append([]string(nil), d.staleNodes...),
+		commit:              d.commit,
+		startedAt:           d.startedAt,
+		pid:                 d.pid,
+		executable:          d.executable,
 	})
 }
 
