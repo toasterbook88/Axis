@@ -285,7 +285,7 @@ func TestShellStopMLXGuardMatchesServerNotPythonOrConsole(t *testing.T) {
 
 func runMLXStopScript(t *testing.T, comm, args, engine string) (string, bool, error) {
 	t.Helper()
-	targetProc := exec.Command("sleep", "30")
+	targetProc := stubFirstCommand("", "sleep", "30")
 	if err := targetProc.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -304,12 +304,7 @@ case "$*" in
 esac
 `, shellQuote(args), shellQuote(comm)))
 	cmd := exec.Command("/bin/sh", "-c", shellStopTarget(modellife.StopTarget{Port: 8080, Engine: engine}))
-	// Keep the fixture stubs first but inherit the host PATH: the scripts
-	// under test call real awk/base64, which Nix-profile-only runners keep
-	// outside /usr/bin (see withSandboxedPATH in internal/facts for the
-	// package-local precedent).
-	sep := string(os.PathListSeparator)
-	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH") + sep + "/usr/bin" + sep + "/bin"}
+	cmd.Env = []string{stubFirstPATH(dir)}
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	alive := processStillRunning(targetProc.Process.Pid)
