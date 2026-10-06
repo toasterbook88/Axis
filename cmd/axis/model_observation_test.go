@@ -492,12 +492,49 @@ func writeSampleStub(t *testing.T, dir, name, body string) {
 	}
 }
 
+// stubFirstDirs is the search order for shell fixtures: stubs in dir (when
+// set), the inherited PATH (profile-based runners such as NixOS keep awk and
+// base64 outside /usr/bin), then the NixOS system profile and /usr/bin:/bin.
+// Empty elements are dropped so the current directory never leaks in, and an
+// empty or sanitized inherited PATH still reaches core tools.
+func stubFirstDirs(dir string) []string {
+	var dirs []string
+	if dir != "" {
+		dirs = append(dirs, dir)
+	}
+	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+		if d != "" {
+			dirs = append(dirs, d)
+		}
+	}
+	return append(dirs, "/run/current-system/sw/bin", "/usr/bin", "/bin")
+}
+
+// stubFirstPATH returns the PATH= entry built from stubFirstDirs.
+func stubFirstPATH(dir string) string {
+	return "PATH=" + strings.Join(stubFirstDirs(dir), string(os.PathListSeparator))
+}
+
+// stubFirstCommand resolves name from the same stubFirstDirs list the child's
+// PATH uses, so the fixture's own interpreter (sh, sleep) is found even when
+// the test process PATH is empty; exec.Command alone would resolve it from
+// the parent PATH before cmd.Env applies.
+func stubFirstCommand(dir, name string, args ...string) *exec.Cmd {
+	for _, d := range stubFirstDirs(dir) {
+		candidate := filepath.Join(d, name)
+		if fi, err := os.Stat(candidate); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+			name = candidate
+			break
+		}
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Env = []string{stubFirstPATH(dir)}
+	return cmd
+}
+
 func runSampleShell(dir, script string) (string, error) {
-	cmd := exec.Command("sh", "-c", script)
-	// Fixture stubs stay first; the inherited tail supplies tools like awk
-	// that profile-based runners (NixOS) keep outside /usr/bin.
-	sep := string(os.PathListSeparator)
-	cmd.Env = []string{"PATH=" + dir + sep + os.Getenv("PATH") + sep + "/usr/bin" + sep + "/bin", "HOME=" + dir}
+	cmd := stubFirstCommand(dir, "sh", "-c", script)
+	cmd.Env = append(cmd.Env, "HOME="+dir)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
