@@ -1,5 +1,7 @@
 package daemon
 
+import "time"
+
 type ToolDef struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -48,6 +50,16 @@ func HealthPayload(meta *Metadata) map[string]any {
 	if meta.Freshness != nil {
 		payload["discovery_freshness"] = meta.Freshness
 	}
+	if meta.Commit != "" {
+		payload["commit"] = meta.Commit
+	}
+	if !meta.StartedAt.IsZero() {
+		payload["started_at"] = meta.StartedAt.Format(time.RFC3339)
+	}
+	// PID and the absolute executable path stay off this payload: /health and
+	// /healthz are unauthenticated and may sit on a TCP listener. They are
+	// available on the authenticated metadata endpoint (Metadata.PID,
+	// Metadata.Executable).
 	return payload
 }
 

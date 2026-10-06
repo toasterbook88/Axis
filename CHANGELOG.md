@@ -1,3 +1,38 @@
+## v0.19.5 (2026-10-05)
+
+Twenty-three pull requests (#476–#493, #495, #497, #498, #500, #501; #496 and #499 shipped inside #495) merged on `main` since `v0.19.4`, plus this release-prep PR (#494). This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), a hardened self-updater (host allowlist on every redirect, fail-closed digest verification, daemon restart after update), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.
+
+### Features
+
+* **Cache-first status reads:** `axis status` and the agent role read the snapshot inside the bounded 5-minute publication window without re-probing nodes (#480).
+* **Agent reachability upgrades:** path resolution, multi-candidate placement, and startup auth for agent sessions (#481).
+* **Supervisor-aware emergency model eviction:** stopped-model fallback can freeze or terminate supervised llama/MLX residents with identity guards on pid + start time, plus a rotating JSONL eviction telemetry lane and an RFC proposal for durable emergency placement (#487).
+* **Model run profiling:** `axis model run-profile` records a daily model-start profile per backend so placement sees runtime history, with new resident-model GPU bundles (every nvidia-smi row preserved) (#489).
+* **Apple Foundation Model discovery:** remote AFM probe plus inventory/placement support on Apple nodes (#484), with a planning-only roadmap (#485).
+* **`axis update` restarts the daemon after a successful update:** a systemd/launchd-supervised daemon is restarted through its service manager and polled on the service's own `--addr`; `--no-restart` skips the restart. `axis version` reports the running daemon's version and commit (`--local` skips the query, `--cache-addr` targets another daemon) and warns when the daemon runs a different commit at the same version. Public `/health` adds `commit` and `started_at`; PID and executable path stay on the authenticated `/snapshot/meta` (#497).
+
+### Fixes
+
+* **Placement plan helpers back on the cache-first path** (#483).
+* **AFM probe no longer emits helper self-test stdout in remote discovery** (#486).
+* **`axis version` prints the toolchain VCS commit when ldflags are empty**, so manually-built binaries still report a revision (#488).
+* **Off-box bearer-token refusal widened:** the daemon refuses to attach the cluster bearer token to out-of-band addresses on every leaked surface (snapshot/meta/refresh, guarded-exec streams, mesh/meta/refresh/restart, reservations), extending the #468 A2A-only gate cluster-wide; Gate requires `AXIS_ALLOW_OFFBOX_BEARER=1` to opt back in (#491).
+* **Required node labels:** `axis task place --require-label k=v` is repeatable and must all match; labels ride discovery into the published snapshot and exclude nodes without changing rank (#491).
+* **Agent endpoint health probes attach the resolved `ai.yaml` bearer** (#478).
+* **Hardware-validation fixture shells keep stub binaries ahead of the inherited host `PATH`**, with `/usr/bin:/bin` appended as a fallback, so Nix-profile runners still find `awk`/`base64` (#493).
+* **Self-update download hardening:** every request and redirect hop must be HTTPS to an allowlisted GitHub host (`api.github.com`, `github.com`, `objects`/`releases`/`release-assets.githubusercontent.com`), capped at 5 redirects. The archive is verified against the GitHub API sha256 digest and `checksums.txt` (both must match when both exist), and the update fails closed before anything is replaced when neither is available. Download errors redact signed query strings and name the responding host (#495, including #496 and #499).
+* **`axis model stop --live`** is now a defined flag, honored on `--ollama-model` and `--node/--port` stops and refused with a clear error on generation-ID stops. A failed Ollama unload still writes a `failed` receipt with `started_at` captured before the unload attempt. MLX placement honors profile refusals (#500).
+* **nvidia-smi rows with `[N/A]` memory cells are kept** when the GPU index parses, so placement no longer under-counts devices. An unparseable `memory.total` leaves `VRAMMB=0`, and `VRAMFreeMeasured` is true only when `memory.free` parses (#501).
+* **Stub-first fixture `PATH` helper:** hardware-validation fixtures resolve `sh`/`sleep` from the same stub-first `PATH` list they hand the child, so the `/usr/bin:/bin` fallback works even with an empty inherited `PATH`; covered by `hack/e2e-fixture-empty-path.sh` (#498).
+
+### Docs & CI
+
+* Merge-readiness: judge a PR before declaring it review-clean (#490).
+* Unicode ANSI shadow wordmark in the CLI branding (#482).
+* Dependabot action-bump group for workflow dependencies (#492).
+* README branding, cropped banner, and pasteable quick start (#476, #479).
+* Runbook for the A2A off-box bearer gate (#477).
+
 ## v0.19.4 (2026-09-28)
 
 Ten pull requests merged on `main` since `v0.19.3`. This patch release ships the A2A agent-card and task plane (cards, authenticated observe send/get, approval queue for exec-shaped work, delegate CLI), honest placement ranking, and related docs/deps housekeeping.
