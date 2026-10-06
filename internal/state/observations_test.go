@@ -18,20 +18,20 @@ func TestRecordObservationMergesSamplesAndPeaks(t *testing.T) {
 	}
 
 	s.RecordObservation(models.ExecutionObservation{
-		Scope:       scope,
-		ObservedAt:  time.Now().UTC().Add(-2 * time.Minute),
-		SampleCount: 1,
-		LastSuccess: true,
-		WallTimeMS:  100,
-		ObservedRSSMB:   1024,
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC().Add(-2 * time.Minute),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    100,
+		ObservedRSSMB: 1024,
 	})
 	s.RecordObservation(models.ExecutionObservation{
-		Scope:       scope,
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 1,
-		LastSuccess: false,
-		WallTimeMS:  300,
-		ObservedRSSMB:   2048,
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   1,
+		LastSuccess:   false,
+		WallTimeMS:    300,
+		ObservedRSSMB: 2048,
 	})
 
 	obs, ok := s.Observation(scope)
@@ -226,18 +226,18 @@ func TestMergeKeepsUnsetContextAndDeviceAndReplacesSetValues(t *testing.T) {
 		ObservedAt:    time.Now().UTC(),
 		LastSuccess:   true,
 		WallTimeMS:    10,
-		ObservedRSSMB:     100,
+		ObservedRSSMB: 100,
 		ContextTokens: &ctx,
 		DeviceIndex:   &zero,
 	})
 	zero = 7
 	ctx = 1
 	s.RecordObservation(models.ExecutionObservation{
-		Scope:       scope,
-		ObservedAt:  time.Now().UTC(),
-		LastSuccess: true,
-		WallTimeMS:  10,
-		ObservedRSSMB:   50,
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		LastSuccess:   true,
+		WallTimeMS:    10,
+		ObservedRSSMB: 50,
 	})
 	obs, ok := s.Observation(scope)
 	if !ok || obs == nil || obs.ContextTokens == nil || *obs.ContextTokens != 2048 {

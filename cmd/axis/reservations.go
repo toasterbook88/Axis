@@ -227,26 +227,26 @@ func reservationsListCmd() *cobra.Command {
 				}
 				return nil
 			default:
-						if len(entries) == 0 {
-							_, err := fmt.Fprintln(cmd.OutOrStdout(), "No active reservations")
-							return err
-						}
-						var b strings.Builder
-						tbl := ui.NewTable("ID", "NODE", "RAM MB", "OWNER", "CREATED AT", "LAST HEARTBEAT")
-						for _, e := range entries {
-							tbl.AddRow(
-								truncateID(e.ID, 20),
-								e.Node,
-								fmt.Sprintf("%d", e.RAMMB),
-								truncateID(e.OwnerSurface, 15),
-								e.CreatedAt.Format(time.RFC3339),
-								e.LastHeartbeat.Format(time.RFC3339),
-							)
-						}
-						tbl.Render(&b)
-						_, err := io.WriteString(cmd.OutOrStdout(), b.String())
-						return err
-					}
+				if len(entries) == 0 {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "No active reservations")
+					return err
+				}
+				var b strings.Builder
+				tbl := ui.NewTable("ID", "NODE", "RAM MB", "OWNER", "CREATED AT", "LAST HEARTBEAT")
+				for _, e := range entries {
+					tbl.AddRow(
+						truncateID(e.ID, 20),
+						e.Node,
+						fmt.Sprintf("%d", e.RAMMB),
+						truncateID(e.OwnerSurface, 15),
+						e.CreatedAt.Format(time.RFC3339),
+						e.LastHeartbeat.Format(time.RFC3339),
+					)
+				}
+				tbl.Render(&b)
+				_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+				return err
+			}
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or ndjson")

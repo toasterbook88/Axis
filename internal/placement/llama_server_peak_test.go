@@ -25,10 +25,10 @@ func recordLlamaObserved(st *state.ClusterState, node, model string, observed in
 			Tool:      "llama-server",
 			ModelName: model,
 		},
-		ObservedAt:  observedAt,
-		LastSuccess: true,
-		WallTimeMS:  20,
-		ObservedRSSMB:   observed,
+		ObservedAt:    observedAt,
+		LastSuccess:   true,
+		WallTimeMS:    20,
+		ObservedRSSMB: observed,
 	})
 }
 
@@ -45,10 +45,10 @@ func TestLlamaServerObservedExclusionUsesRecordedObservation(t *testing.T) {
 			Tool:      "ollama",
 			ModelName: "a.gguf",
 		},
-		ObservedAt:  now,
-		LastSuccess: true,
-		WallTimeMS:  20,
-		ObservedRSSMB:   99999,
+		ObservedAt:    now,
+		LastSuccess:   true,
+		WallTimeMS:    20,
+		ObservedRSSMB: 99999,
 	})
 
 	reason, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "a.gguf", st)
@@ -76,10 +76,10 @@ func TestLlamaServerObservedExclusionUsesRecordedObservation(t *testing.T) {
 			Tool:      "ollama",
 			ModelName: "a.gguf",
 		},
-		ObservedAt:  now,
-		LastSuccess: true,
-		WallTimeMS:  20,
-		ObservedRSSMB:   99999,
+		ObservedAt:    now,
+		LastSuccess:   true,
+		WallTimeMS:    20,
+		ObservedRSSMB: 99999,
 	})
 	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "a.gguf", ollamaOnly); blocked {
 		t.Fatal("an ollama peak excluded a llama-server plan")
