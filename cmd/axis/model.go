@@ -182,6 +182,11 @@ func modelStopCmd() *cobra.Command {
 				if strings.TrimSpace(node) != "" || port != 0 {
 					return fmt.Errorf("generation ID cannot be combined with --node or --port")
 				}
+				if live {
+					// A generation stop acts only on daemon-published evidence for
+					// that exact generation; a live rediscovery cannot supply it.
+					return fmt.Errorf("--live cannot be combined with a generation ID: generation stops use the daemon's published evidence")
+				}
 				return runModelStopGeneration(ctx, cmd, args[0], cacheAddr, format, defaultModelRunner)
 			}
 			return runModelStop(ctx, cmd, node, port, defaultModelRunner)
@@ -192,7 +197,7 @@ func modelStopCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Unload this model from the Ollama server already listening on 127.0.0.1:11434")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS daemon cache")
 	cmd.Flags().StringVar(&format, "format", "text", "Generation-stop receipt format: text, json, or yaml")
-	cmd.Flags().BoolVar(&live, "live", false, "Bypass daemon cache and perform live fleet discovery")
+	cmd.Flags().BoolVar(&live, "live", false, "Resolve the node by live discovery instead of the daemon cache (--ollama-model and --node/--port stops)")
 	return cmd
 }
 
@@ -830,7 +835,8 @@ func runModelStop(ctx context.Context, cmd *cobra.Command, nodeName string, port
 	if cacheAddr == "" {
 		cacheAddr = api.DefaultAddr()
 	}
-	nf, cfgNode, err := resolveModelStopTargetNode(ctx, nodeName, cacheAddr)
+	live, _ := cmd.Flags().GetBool("live")
+	nf, cfgNode, err := resolveModelStopTargetNode(ctx, nodeName, cacheAddr, live)
 	if err != nil {
 		return err
 	}
@@ -1387,7 +1393,10 @@ func makeLocalNodeFacts(nodeName, role string) models.NodeFacts {
 	}
 }
 
-func resolveModelStopTargetNode(ctx context.Context, nodeName, cacheAddr string) (models.NodeFacts, *config.NodeConfig, error) {
+// resolveModelStopTargetNode finds the node for a legacy --node/--port stop.
+// The daemon cache is consulted first unless live is set; the fallback is live
+// (local facts, or a fresh cluster snapshot for a remote node).
+func resolveModelStopTargetNode(ctx context.Context, nodeName, cacheAddr string, live bool) (models.NodeFacts, *config.NodeConfig, error) {
 	nodeName = strings.TrimSpace(nodeName)
 	cfg, _ := loadModelConfig()
 
@@ -1404,8 +1413,10 @@ func resolveModelStopTargetNode(ctx context.Context, nodeName, cacheAddr string)
 		nodeName = targetCfg.Name
 	}
 
-	if nf, cfgNode, ok := resolveFromDaemonCache(ctx, cacheAddr, nodeName, targetCfg); ok {
-		return nf, cfgNode, nil
+	if !live {
+		if nf, cfgNode, ok := resolveFromDaemonCache(ctx, cacheAddr, nodeName, targetCfg); ok {
+			return nf, cfgNode, nil
+		}
 	}
 
 	isLocal := (targetCfg != nil && targetCfg.IsLocal()) ||
