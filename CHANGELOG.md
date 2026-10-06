@@ -1,6 +1,6 @@
 ## v0.19.5 (2026-10-05)
 
-Eighteen commits (eighteen PRs, #476–#493) merged on `main` since `v0.19.4`. This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.
+Twenty-three pull requests (#476–#493, #495, #497, #498, #500, #501; #496 and #499 shipped inside #495) merged on `main` since `v0.19.4`, plus this release-prep PR (#494). This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), a hardened self-updater (host allowlist on every redirect, fail-closed digest verification, daemon restart after update), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.
 
 ### Features
 
@@ -9,6 +9,7 @@ Eighteen commits (eighteen PRs, #476–#493) merged on `main` since `v0.19.4`. T
 * **Supervisor-aware emergency model eviction:** stopped-model fallback can freeze or terminate supervised llama/MLX residents with identity guards on pid + start time, plus a rotating JSONL eviction telemetry lane and an RFC proposal for durable emergency placement (#487).
 * **Model run profiling:** `axis model run-profile` records a daily model-start profile per backend so placement sees runtime history, with new resident-model GPU bundles (every nvidia-smi row preserved) (#489).
 * **Apple Foundation Model discovery:** remote AFM probe plus inventory/placement support on Apple nodes (#484), with a planning-only roadmap (#485).
+* **`axis update` restarts the daemon after a successful update:** a systemd/launchd-supervised daemon is restarted through its service manager and polled on the service's own `--addr`; `--no-restart` skips the restart. `axis version` reports the running daemon's version and commit (`--local` skips the query, `--cache-addr` targets another daemon) and warns when the daemon runs a different commit at the same version. Public `/health` adds `commit` and `started_at`; PID and executable path stay on the authenticated `/meta` (#497).
 
 ### Fixes
 
@@ -19,6 +20,10 @@ Eighteen commits (eighteen PRs, #476–#493) merged on `main` since `v0.19.4`. T
 * **Required node labels:** `axis task place --require-label k=v` is repeatable and must all match; labels ride discovery into the published snapshot and exclude nodes without changing rank (#491).
 * **Agent endpoint health probes attach the resolved `ai.yaml` bearer** (#478).
 * **Hardware-validation fixture shells keep stub binaries ahead of the inherited host `PATH`**, with `/usr/bin:/bin` appended as a fallback, so Nix-profile runners still find `awk`/`base64` (#493).
+* **Self-update download hardening:** every request and redirect hop must be HTTPS to an allowlisted GitHub host (`api.github.com`, `github.com`, `objects`/`releases`/`release-assets.githubusercontent.com`), capped at 5 redirects. The archive is verified against the GitHub API sha256 digest and `checksums.txt` (both must match when both exist), and the update fails closed before anything is replaced when neither is available. Download errors redact signed query strings and name the responding host (#495, including #496 and #499).
+* **`axis model stop --live`** is now a defined flag, honored on `--ollama-model` and `--node/--port` stops and refused with a clear error on generation-ID stops. A failed Ollama unload still writes a `failed` receipt with `started_at` captured before the unload attempt. MLX placement honors profile refusals (#500).
+* **nvidia-smi rows with `[N/A]` memory cells are kept** when the GPU index parses, so placement no longer under-counts devices. An unparseable `memory.total` leaves `VRAMMB=0`, and `VRAMFreeMeasured` is true only when `memory.free` parses (#501).
+* **Stub-first fixture `PATH` helper:** hardware-validation fixtures resolve `sh`/`sleep` from the same stub-first `PATH` list they hand the child, so the `/usr/bin:/bin` fallback works even with an empty inherited `PATH`; covered by `hack/e2e-fixture-empty-path.sh` (#498).
 
 ### Docs & CI
 
