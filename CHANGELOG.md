@@ -1,6 +1,6 @@
 ## v0.19.5 (2026-10-05)
 
-Twenty-three pull requests (#476–#493, #495, #497, #498, #500, #501; #496 and #499 shipped inside #495) merged on `main` since `v0.19.4`, plus this release-prep PR (#494). This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), a hardened self-updater (host allowlist on every redirect, fail-closed digest verification, daemon restart after update), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.
+Twenty-four pull requests (#476–#493, #495, #497, #498, #500, #501, #504; #496 and #499 shipped inside #495) merged on `main` since `v0.19.4`, plus this release-prep PR (#494). This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), a hardened self-updater (host allowlist on every redirect, fail-closed digest verification, daemon restart after update), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.
 
 ### Features
 
@@ -24,6 +24,7 @@ Twenty-three pull requests (#476–#493, #495, #497, #498, #500, #501; #496 and 
 * **`axis model stop --live`** is now a defined flag, honored on `--ollama-model` and `--node/--port` stops and refused with a clear error on generation-ID stops. A failed Ollama unload still writes a `failed` receipt with `started_at` captured before the unload attempt. MLX placement honors profile refusals (#500).
 * **nvidia-smi rows with `[N/A]` memory cells are kept** when the GPU index parses, so placement no longer under-counts devices. An unparseable `memory.total` leaves `VRAMMB=0`, and `VRAMFreeMeasured` is true only when `memory.free` parses (#501).
 * **Stub-first fixture `PATH` helper:** hardware-validation fixtures resolve `sh`/`sleep` from the same stub-first `PATH` list they hand the child, so the `/usr/bin:/bin` fallback works even with an empty inherited `PATH`; covered by `hack/e2e-fixture-empty-path.sh` (#498).
+* **MLX lifecycle:** MLX discovery publishes each resident's `pid`, `executable`, and `process_start_token`, so MLX residents get generation IDs and generation-bound stops like llama.cpp; a server without `--port` is still discovered on 8080. The stop/probe ownership guard also accepts the macOS entry-point form (`Python …/bin/mlx_lm.server`) and only that position, so an unrelated listener whose arguments merely end in `mlx_lm.server` is refused. `axis model start` help now states that MLX "started" means the server process answers `/v1/models`, not that weights are loaded (#504).
 
 ### Docs & CI
 
