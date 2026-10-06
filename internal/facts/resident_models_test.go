@@ -648,6 +648,55 @@ esac`)
 	}
 }
 
+func TestMLXDiscoveryScriptReportsProcessGenerationEvidence(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("mlx_lm", `exit 0`)
+	writeStub("pgrep", `echo 4242`)
+	writeStub("ps", `
+case "$*" in
+  "-p 4242 -o args=") echo "/usr/local/bin/mlx_lm.server --model /mnt/models/qwen --port 8183" ;;
+  "-p 4242 -o lstart=") echo "Thu Sep  3 09:00:00 2026" ;;
+  "-o rss= -p 4242") echo 3145728 ;;
+esac`)
+	writeStub("curl", `echo '{"data":[{"id":"org/mlx-model"}]}'`)
+
+	cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload struct {
+		ResidentModels []map[string]any `json:"resident_models"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if len(payload.ResidentModels) != 1 {
+		t.Fatalf("resident_models = %#v, want one", payload.ResidentModels)
+	}
+	resident := payload.ResidentModels[0]
+	if got := resident["pid"]; got != float64(4242) {
+		t.Fatalf("pid = %#v, want 4242", got)
+	}
+	if got := resident["executable"]; got != "/usr/local/bin/mlx_lm.server" {
+		t.Fatalf("executable = %#v, want /usr/local/bin/mlx_lm.server", got)
+	}
+	if got := resident["process_start_token"]; got != "Thu Sep 3 09:00:00 2026" {
+		t.Fatalf("process_start_token = %#v, want 'Thu Sep  3 09:00:00 2026'", got)
+	}
+}
+
 func TestLlamaServerDiscoveryScriptReportsProcessGenerationEvidence(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")

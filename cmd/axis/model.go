@@ -112,7 +112,9 @@ func modelStartCmd() *cobra.Command {
 
 Read the snapshot, pick one complete node that already has the runtime, and print that choice. A resident model is reported and left running. An Ollama server that is already listening and lists the model is loaded on 127.0.0.1:11434.
 
-Explicit pin: --node with --weights and --port, --ollama-model, --mlx-model, or --from-plan. mlx_lm.server's HTTP API is not for production.`,
+Explicit pin: --node with --weights and --port, --ollama-model, --mlx-model, or --from-plan. mlx_lm.server's HTTP API is not for production.
+
+For MLX, "started" means the mlx_lm.server process is running and its HTTP endpoint responds to /v1/models. Upstream mlx-lm loads weights on demand, so HTTP readiness does not guarantee that model weights are fully loaded into memory.`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
@@ -146,7 +148,7 @@ Explicit pin: --node with --weights and --port, --ollama-model, --mlx-model, or 
 	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "", "Ollama model name to load on 127.0.0.1:11434; replaces --weights")
 	cmd.Flags().StringVar(&ollamaKeepAlive, "ollama-keep-alive", "", "Ollama keep_alive for this load; omitted unless set")
 	cmd.Flags().IntVar(&ollamaNumCtx, "ollama-num-ctx", 0, "Ollama options.num_ctx; omitted unless set")
-	cmd.Flags().StringVar(&mlxModel, "mlx-model", "", "Local MLX weight directory on a named volume; replaces --weights. The MLX HTTP API is not for production")
+	cmd.Flags().StringVar(&mlxModel, "mlx-model", "", "Local MLX weight directory on a named volume; replaces --weights. The MLX HTTP API is not for production. 'Started' means the server process is running and /v1/models responds; weights may still be loading.")
 	cmd.Flags().IntVar(&prefillStepSize, "prefill-step-size", 0, "mlx_lm.server --prefill-step-size; omitted unless set")
 	cmd.Flags().Int64Var(&promptCacheBytes, "prompt-cache-bytes", 0, "mlx_lm.server --prompt-cache-bytes; omitted unless set")
 	cmd.Flags().IntVar(&kvBits, "kv-bits", 0, "mlx_lm.server --kv-bits; omitted unless set")
@@ -1680,8 +1682,9 @@ func shellMLXOwnerGuard(port int) string {
 			"_axis_comm=$(ps -p \"$_axis_pid\" -o comm=) || exit $?; _axis_comm=${_axis_comm##*/}; "+
 			"if test \"$_axis_comm\" = mlx_lm.server; then continue; fi; "+
 			"_axis_args=$(ps -p \"$_axis_pid\" -o args=) || exit $?; "+
-			"if ! printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<NF;i++) if($i==\"-m\" && $(i+1)==\"mlx_lm.server\") ok=1} END{exit ok?0:1}'; then "+
-			"echo \"refusing port %d: pid $_axis_pid is $_axis_comm, not mlx_lm.server\" >&2; echo '"+modelStopMarker+"wrong_owner' >&2; exit 1; fi; "+
+			"if printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<NF;i++) if($i==\"-m\" && $(i+1)==\"mlx_lm.server\") ok=1} END{exit ok?0:1}'; then continue; fi; "+
+			"if printf '%%s\\n' \"$_axis_args\" | awk 'BEGIN{ok=0} {for(i=1;i<=NF;i++) if($i ~ /mlx_lm\\.server$/) ok=1} END{exit ok?0:1}'; then continue; fi; "+
+			"echo \"refusing port %d: pid $_axis_pid is $_axis_comm, not mlx_lm.server\" >&2; echo '"+modelStopMarker+"wrong_owner' >&2; exit 1; "+
 			"done; ",
 		port,
 	)

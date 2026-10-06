@@ -284,9 +284,12 @@ const MLXDiscoveryScript = `set -o pipefail;
 		PGREP=$(pgrep -f "[m]lx_lm.server" 2>/dev/null | head -1 || pgrep -f "[m]lx_lm server" 2>/dev/null | head -1 || echo "")
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
-		PORT=8080
+		EXECUTABLE=""
+		PROCESS_START_TOKEN=""
 		if [ -n "$PGREP" ]; then
 			CMDLINE=$(ps -p "$PGREP" -o args= 2>/dev/null || tr '\0' ' ' < /proc/"$PGREP"/cmdline 2>/dev/null || echo "")
+			EXECUTABLE=$(echo "$CMDLINE" | awk '{print $1; exit}')
+			PROCESS_START_TOKEN=$(ps -p "$PGREP" -o lstart= 2>/dev/null | awk '{$1=$1; print}' || echo "")
 			PORT_ARG=$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--port"){print $(i+1);exit}if($i~/^--port=/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 			# Validate PORT_ARG is numeric before accepting it.
 			if printf '%s' "$PORT_ARG" | grep -qE '^[0-9]+$'; then PORT="$PORT_ARG"; fi
@@ -297,17 +300,20 @@ const MLXDiscoveryScript = `set -o pipefail;
 		if [ "$RUNNING" = "true" ] && command -v curl >/dev/null 2>&1; then
 			RESP=$(curl -s --max-time 2 "http://localhost:$PORT/v1/models" 2>/dev/null || echo "")
 			if [ -n "$RESP" ]; then
-				RESIDENT=$(echo "$RESP" | python3 -c "
-import sys, json
+				RESIDENT=$(echo "$RESP" | AXIS_MLX_PID="$PGREP" AXIS_MLX_EXECUTABLE="$EXECUTABLE" AXIS_MLX_START_TOKEN="$PROCESS_START_TOKEN" python3 -c "
+import sys, json, os
 try:
     d = json.load(sys.stdin)
     items = []
+    pid = int(os.environ.get('AXIS_MLX_PID', '0') or '0')
+    executable = os.environ.get('AXIS_MLX_EXECUTABLE', '')
+    start_token = os.environ.get('AXIS_MLX_START_TOKEN', '')
     for m in d.get('data', []):
         mid = m.get('id', '')
         if not mid:
             continue
         name = mid.split('/')[-1]
-        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'size_ram_mb': $SIZE_MB, 'source': 'mlx-lm-api'})
+        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'size_ram_mb': $SIZE_MB, 'source': 'mlx-lm-api', 'pid': pid, 'executable': executable, 'process_start_token': start_token})
     print(json.dumps(items))
 except Exception:
     print('[]')

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -253,6 +254,7 @@ func TestShellStopMLXGuardMatchesServerNotPythonOrConsole(t *testing.T) {
 		{name: "mlx console", comm: "mlx_lm", args: "mlx_lm server --port 8080", wantOut: "wrong_owner"},
 		{name: "basename", comm: "/usr/local/bin/mlx_lm.server", args: "mlx_lm.server --model /mnt/models/qwen", allow: true},
 		{name: "module", comm: "python", args: "python -m mlx_lm.server --model /mnt/models/qwen", allow: true},
+		{name: "mac-path-segment", comm: "python", args: "/usr/local/bin/mlx_lm.server --model /mnt/models/qwen", allow: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -325,15 +327,15 @@ esac
 }
 
 func processStillRunning(pid int) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return false
+	// Portable liveness check: reap any zombie children, then use signal 0
+	// to test for process existence. Works on Linux and macOS (unlike
+	// /proc/<pid>/stat). Zombies are reaped so they don't count as alive.
+	for {
+		var status syscall.WaitStatus
+		wpid, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+		if err != nil || wpid == 0 {
+			break
+		}
 	}
-	text := string(data)
-	i := strings.LastIndex(text, ")")
-	if i < 0 || i+2 >= len(text) {
-		return true
-	}
-	state := text[i+2]
-	return state != 'Z' && state != 'X'
+	return syscall.Kill(pid, 0) == nil
 }
