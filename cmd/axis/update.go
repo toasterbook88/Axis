@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/toasterbook88/axis/internal/api"
 	axisbuildinfo "github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/versioncmp"
 )
@@ -99,6 +100,7 @@ func updateCmd() *cobra.Command {
 	var checkOnly bool
 	var updateAll bool
 	var targetPath string
+	var noRestart bool
 
 	cmd := &cobra.Command{
 		Use: "update",
@@ -115,14 +117,16 @@ func updateCmd() *cobra.Command {
 			"  • package-manager ownership (Homebrew/Nix/… paths are skipped)\n\n" +
 			"Use --check to report the running binary and any shadows without installing.\n" +
 			"Use --all to refresh every validated install that is older than the latest release.\n" +
-			"Use --path to update a single explicit path.",
+			"Use --path to update a single explicit path.\n" +
+			"Use --no-restart to skip restarting the daemon after a successful update.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(cmd, checkOnly, updateAll, targetPath)
+			return runUpdate(cmd, checkOnly, updateAll, targetPath, noRestart)
 		},
 	}
 	cmd.Flags().BoolVarP(&checkOnly, "check", "c", false, "report update status for the running binary and known shadows without installing")
 	cmd.Flags().BoolVar(&updateAll, "all", false, "update all validated older installs (PATH + common locations), not only the running binary")
 	cmd.Flags().StringVar(&targetPath, "path", "", "update a specific axis binary at this path")
+	cmd.Flags().BoolVar(&noRestart, "no-restart", false, "skip restarting the daemon after a successful update")
 	return cmd
 }
 
@@ -170,7 +174,7 @@ const (
 	modePath
 )
 
-func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string) error {
+func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string, noRestart bool) error {
 	out := cmd.OutOrStdout()
 	errOut := cmd.ErrOrStderr()
 	current := axisbuildinfo.Version
@@ -241,7 +245,7 @@ func runUpdate(cmd *cobra.Command, checkOnly, updateAll bool, targetPath string)
 		}
 	}
 
-	return installRelease(cmd, rel, latest, targets, selfPath, mode, errOut, out)
+	return installRelease(cmd, rel, latest, targets, selfPath, mode, noRestart, errOut, out)
 }
 
 // reportCheck reports the running binary's status plus every shadow install.
@@ -718,7 +722,7 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 	return binary, nil
 }
 
-func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets []string, selfPath string, mode updateMode, errOut, out io.Writer) error {
+func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets []string, selfPath string, mode updateMode, noRestart bool, errOut, out io.Writer) error {
 	// Validate every target before downloading.
 	type planned struct {
 		// replacePath is the regular file written by replaceExecutable.
@@ -835,13 +839,15 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 	fmt.Fprintf(out, "Updating %d install(s)...\n", len(plan))
 	updated := 0
 	failed := 0
+	var replacedPaths []string
 	for _, p := range plan {
-		if err := replaceExecutable(p.replacePath, binary); err != nil {
+		if err := installReplaceExecutable(p.replacePath, binary); err != nil {
 			failed++
 			fmt.Fprintf(errOut, "warning: could not update %s: %v\n", p.label, err)
 			continue
 		}
 		updated++
+		replacedPaths = append(replacedPaths, p.replacePath)
 		from := p.version
 		if from == "" {
 			from = "unknown"
@@ -860,6 +866,16 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 			fmt.Fprintf(errOut, "    %s\n", b)
 		}
 		fmt.Fprintf(errOut, "Re-run with elevated rights to update them:\n    %s\n", elevationHint(blocked[0]))
+	}
+
+	// Restart the daemon after a successful update, unless --no-restart.
+	if updated > 0 && !noRestart {
+		fmt.Fprintf(out, "Restarting daemon...\n")
+		// Only paths that were actually replaced: a failed service binary
+		// must not be restarted as if it were new.
+		if err := restartAfterUpdate(cmd.Context(), api.DefaultAddr(), replacedPaths, out); err != nil {
+			return fmt.Errorf("update succeeded but daemon restart failed: %w", err)
+		}
 	}
 	return nil
 }
@@ -1005,6 +1021,10 @@ func elevationHint(target string) string {
 	}
 	return fmt.Sprintf("sudo %s update --path %s", self, target)
 }
+
+// installReplaceExecutable is the per-target replace step used by
+// installRelease. It is a var so tests can fail one target.
+var installReplaceExecutable = replaceExecutable
 
 func replaceExecutable(target string, data []byte) error {
 	dir := filepath.Dir(target)
