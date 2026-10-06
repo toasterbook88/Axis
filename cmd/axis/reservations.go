@@ -227,50 +227,26 @@ func reservationsListCmd() *cobra.Command {
 				}
 				return nil
 			default:
-				holds := ledger.DeviceHolds()
-				if len(entries) == 0 && len(holds) == 0 {
-					_, err := fmt.Fprintln(cmd.OutOrStdout(), "No active reservations")
-					return err
-				}
-				var b strings.Builder
-				if len(entries) == 0 {
-					fmt.Fprintln(&b, "No active reservations")
-				} else {
-					tbl := ui.NewTable("ID", "NODE", "RAM MB", "OWNER", "CREATED AT", "LAST HEARTBEAT")
-					for _, e := range entries {
-						tbl.AddRow(
-							truncateID(e.ID, 20),
-							e.Node,
-							fmt.Sprintf("%d", e.RAMMB),
-							truncateID(e.OwnerSurface, 15),
-							e.CreatedAt.Format(time.RFC3339),
-							e.LastHeartbeat.Format(time.RFC3339),
-						)
-					}
-					tbl.Render(&b)
-				}
-				if len(holds) > 0 {
-					fmt.Fprintln(&b, "DEVICE HOLDS")
-					ht := ui.NewTable("ID", "NODE", "GPU INDEX", "MIB", "OWNER", "EXPIRES AT")
-					for _, h := range holds {
-						gpu := ""
-						if h.GPUIndex != nil {
-							gpu = fmt.Sprintf("%d", *h.GPUIndex)
+						if len(entries) == 0 {
+							_, err := fmt.Fprintln(cmd.OutOrStdout(), "No active reservations")
+							return err
 						}
-						ht.AddRow(
-							truncateID(h.ID, 20),
-							h.Node,
-							gpu,
-							fmt.Sprintf("%d", h.MiB),
-							truncateID(h.Owner, 15),
-							h.ExpiresAt.Format(time.RFC3339),
-						)
+						var b strings.Builder
+						tbl := ui.NewTable("ID", "NODE", "RAM MB", "OWNER", "CREATED AT", "LAST HEARTBEAT")
+						for _, e := range entries {
+							tbl.AddRow(
+								truncateID(e.ID, 20),
+								e.Node,
+								fmt.Sprintf("%d", e.RAMMB),
+								truncateID(e.OwnerSurface, 15),
+								e.CreatedAt.Format(time.RFC3339),
+								e.LastHeartbeat.Format(time.RFC3339),
+							)
+						}
+						tbl.Render(&b)
+						_, err := io.WriteString(cmd.OutOrStdout(), b.String())
+						return err
 					}
-					ht.Render(&b)
-				}
-				_, err := io.WriteString(cmd.OutOrStdout(), b.String())
-				return err
-			}
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or ndjson")
@@ -302,11 +278,6 @@ func reservationsInspectCmd() *cobra.Command {
 			}
 
 			if found == nil {
-				for _, hold := range ledger.DeviceHolds() {
-					if hold.ID == id {
-						return writeDeviceHold(cmd.OutOrStdout(), format, hold)
-					}
-				}
 				return ExitCodeError{Code: ExitErrGeneric, Message: fmt.Sprintf("reservation %q not found", id)}
 			}
 
@@ -341,25 +312,6 @@ func reservationsInspectCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
-}
-
-func writeDeviceHold(w io.Writer, format string, hold reservation.DeviceHold) error {
-	switch format {
-	case "json":
-		return json.NewEncoder(w).Encode(hold)
-	default:
-		var b strings.Builder
-		fmt.Fprintf(&b, "ID:         %s\n", hold.ID)
-		fmt.Fprintf(&b, "Node:       %s\n", hold.Node)
-		if hold.GPUIndex != nil {
-			fmt.Fprintf(&b, "GPU index:  %d\n", *hold.GPUIndex)
-		}
-		fmt.Fprintf(&b, "MiB:        %d\n", hold.MiB)
-		fmt.Fprintf(&b, "Owner:      %s\n", hold.Owner)
-		fmt.Fprintf(&b, "Expires At: %s\n", hold.ExpiresAt.Format(time.RFC3339))
-		_, err := io.WriteString(w, b.String())
-		return err
-	}
 }
 
 func reservationsReleaseCmd() *cobra.Command {

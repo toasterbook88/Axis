@@ -558,11 +558,11 @@ func formatObservationSummary(resp execution.GuardedExecutionResult) string {
 		return ""
 	}
 	parts := []string{fmt.Sprintf("wall %dms", resp.WallTimeMS)}
-	if resp.PeakRAMMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak RAM %dMB", resp.PeakRAMMB))
+	if resp.ObservedRSSMB > 0 {
+		parts = append(parts, fmt.Sprintf("peak RAM %dMB", resp.ObservedRSSMB))
 	}
-	if resp.PeakVRAMMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak VRAM %dMB", resp.PeakVRAMMB))
+	if resp.ObservedVRAMMB > 0 {
+		parts = append(parts, fmt.Sprintf("peak VRAM %dMB", resp.ObservedVRAMMB))
 	}
 	if !resp.OK {
 		parts = append(parts, "unsuccessful")
@@ -969,8 +969,8 @@ func taskHistoryCmd() *cobra.Command {
 				}
 
 				ramStr := "—"
-				if rec.PeakRAMMB > 0 {
-					ramStr = fmt.Sprintf("%d MB", rec.PeakRAMMB)
+				if rec.ObservedRSSMB > 0 {
+					ramStr = fmt.Sprintf("%d MB", rec.ObservedRSSMB)
 				}
 
 				durationStr := fmt.Sprintf("%dms", rec.WallTimeMS)
