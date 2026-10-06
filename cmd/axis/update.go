@@ -678,9 +678,11 @@ func downloadReleaseBinary(cmd *cobra.Command, rel *ghRelease, version string) (
 		return nil, fmt.Errorf("downloading release: %w", err)
 	}
 
-	// Compute the archive's SHA256 once; both verification sources compare
-	// against it. The API digest and checksums.txt are independent sources,
-	// so when both exist they must both match.
+	// SHA256 of the archive for the API digest check. verifyChecksum hashes
+	// the same bytes itself (one extra in-memory pass) so the checksums.txt
+	// path proves its hash is derived from the archive rather than trusting a
+	// caller-supplied string. The API digest and checksums.txt are independent
+	// sources, so when both exist they must both match.
 	sum := sha256.Sum256(archiveData)
 	got := hex.EncodeToString(sum[:])
 
