@@ -140,6 +140,32 @@ func TestFromSnapshotDerivesGenerationIDOnlyFromCompleteProcessEvidence(t *testi
 	}
 }
 
+func TestFromSnapshotMLXGenerationIDNonEmpty(t *testing.T) {
+	snap := &models.ClusterSnapshot{
+		Nodes: []models.NodeFacts{{
+			Name:     "mac-node",
+			Hostname: "mac-node",
+			Identity: models.NewNodeIdentity("hw-id", "machine-id"),
+			ResidentModels: []models.ResidentModel{{
+				Name: "qwen", Runtime: "mlx", Port: 8080, Source: "mlx-lm-api",
+				PID: 4242, Executable: "/usr/local/bin/mlx_lm.server",
+				ProcessStartToken: "Thu Sep  3 09:00:00 2026",
+			}},
+		}},
+	}
+	inventory := FromSnapshot(snap, "live")
+	if len(inventory.Instances) != 1 {
+		t.Fatalf("instances = %#v, want 1", inventory.Instances)
+	}
+	inst := inventory.Instances[0]
+	if !strings.HasPrefix(inst.GenerationID, "mg-") {
+		t.Fatalf("generation id = %q, want mg-*", inst.GenerationID)
+	}
+	if inst.PID != 4242 || inst.Executable != "/usr/local/bin/mlx_lm.server" || inst.ProcessStartToken == "" {
+		t.Fatalf("process evidence not preserved: %+v", inst)
+	}
+}
+
 func TestFromSnapshotPreservesSupervisorAndGPUMetadata(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{{
