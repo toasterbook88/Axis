@@ -108,7 +108,7 @@ Top-level commands currently registered in the binary:
 | `axis agent` | Agentic tool-calling assistant | Cluster tools + Layer-4 guarded `run_shell` / `run_on_node` / `axis_run_task`; injects nearest `AGENTS.md` into the system prompt when present; `--auto-approve` for safe commands; `--system` appends to system prompt |
 | `axis llm` | Removed | Prints `use: axis ai route` |
 | `axis model list\|inspect` | Inspect resident model instances | Daemon cache by default; `--live` explicitly performs a fresh cluster collection; text, JSON, and YAML output |
-| `axis model start\|stop` | Manage llama-server, Ollama, and MLX | `axis model start <model>` picks one complete node that already has the runtime and prints that choice. Explicit llama-server start still requires a node, a port, and a weight path on an observed local volume. MLX start still requires a node, a port, and a local model directory. A pinned Ollama load or unload still requires a node and a model name |
+| `axis model start\|stop` | Manage llama-server, Ollama, and MLX | `axis model start <model>` picks one complete node that already has the runtime and prints that choice. Explicit llama-server start still requires a node, a port, and a weight path on an observed local volume. MLX start still requires a node, a port, and a local model directory. A pinned Ollama load or unload still requires a node and a model name. For MLX, "started" means the server process is running and `/v1/models` responds; upstream mlx-lm loads weights on demand, so HTTP readiness does not guarantee weights are fully loaded |
 | `axis cluster` | Fleet snapshot | `status` (cache-first for 5 minutes; `--live` sweeps), `summary` |
 | `axis node` | This machine | `facts` (localhost). Root `axis facts` still works |
 
