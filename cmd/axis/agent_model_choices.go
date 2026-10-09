@@ -56,14 +56,22 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 	}
 
 	var choices []ModelChoice
+	usedIDs := map[string]bool{}
 	for _, e := range modelinventory.Catalog(snap, "").Entries {
 		if embeddingOnly(e.Capabilities) {
 			continue
 		}
 		n := nodes[e.Node]
 		local := models.IsLocalNode(n)
+		// The pre-catalog ID, so saved defaults and /model <id> still match;
+		// a second entry for the same model on another port gains the port.
+		id := e.Node + ":" + e.Engine + ":" + e.Model
+		if usedIDs[id] {
+			id = fmt.Sprintf("%s:%d", id, e.Port)
+		}
+		usedIDs[id] = true
 		choice := ModelChoice{
-			ID:            e.Node + ":" + e.Engine + ":" + e.Model,
+			ID:            id,
 			Model:         e.Model,
 			Protocol:      agent.ProtocolOpenAI,
 			ProviderName:  e.Engine,

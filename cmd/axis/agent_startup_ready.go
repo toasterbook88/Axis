@@ -40,9 +40,11 @@ var (
 // resolveStartupModelTarget does, then routes it and asks it for one token.
 // An implicit default that fails fast is ruled out and the next candidate is
 // tried, with a notice saying why. A model the operator pinned (--model, or
-// an interactive pick) is kept and only warned about. Cloud targets are not
-// checked, since a check would be billed.
+// an interactive pick) is kept and only warned about. Cloud targets and
+// cloud-proxy models are not checked, since a check would be billed.
+// Cancelling parent stops the checks.
 func resolveReadyStartupModelTarget(
+	parent context.Context,
 	requestedModel, providerFlag, cloudModelFlag string,
 	explicit *ModelChoice,
 	rt *runtimectx.Context,
@@ -53,17 +55,23 @@ func resolveReadyStartupModelTarget(
 	if notes == nil {
 		notes = io.Discard
 	}
+	if parent == nil {
+		parent = context.Background()
+	}
 	choices = slices.Clone(choices)
 	var skipped []string
 	for attempt := 0; ; attempt++ {
 		target, opts, err := resolveStartupModelTarget(requestedModel, providerFlag, cloudModelFlag, explicit, rt, choices)
-		if err != nil || target.Protocol == agent.ProtocolCloud {
+		if err != nil || target.Protocol == agent.ProtocolCloud || target.CloudProxy {
+			return target, opts, err
+		}
+		if err := parent.Err(); err != nil {
 			return target, opts, err
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), startupReadyTimeout+5*time.Second)
+		ctx, cancel := context.WithTimeout(parent, startupReadyTimeout+5*time.Second)
 		verdict, reason := modelDown, ""
-		routed, routeErr := resolveModelRoute(ctx, rt, target)
+		routed, tunnel, routeErr := resolveModelRoute(ctx, rt, target)
 		if routeErr != nil {
 			reason = routeErr.Error()
 		} else {
@@ -72,6 +80,19 @@ func resolveReadyStartupModelTarget(
 		}
 		cancel()
 
+		keep := verdict == modelReady || verdict == modelCold ||
+			pinned || explicit != nil || attempt >= maxStartupFallbacks || !disableChoice(choices, target)
+		if !keep {
+			if tunnel != nil {
+				tunnel() // this attempt is being skipped
+			}
+			fmt.Fprintf(notes, "Default model %q is not answering (%s); choosing another.\n", target.Model, reason)
+			skipped = append(skipped, target.Model)
+			requestedModel = "" // the dead default must not be re-picked by name
+			continue
+		}
+
+		installModelTunnel(tunnel)
 		switch verdict {
 		case modelReady, modelCold:
 			if len(skipped) > 0 {
@@ -80,16 +101,10 @@ func resolveReadyStartupModelTarget(
 			if verdict == modelCold {
 				fmt.Fprintf(notes, "Note: model %q did not answer within %s; it may still be loading.\n", target.Model, startupReadyTimeout)
 			}
-			return target, opts, nil
-		}
-
-		if pinned || explicit != nil || attempt >= maxStartupFallbacks || !disableChoice(choices, target) {
+		default:
 			fmt.Fprintf(notes, "Warning: model %q is not answering (%s).\n", target.Model, reason)
-			return target, opts, nil
 		}
-		fmt.Fprintf(notes, "Default model %q is not answering (%s); choosing another.\n", target.Model, reason)
-		skipped = append(skipped, target.Model)
-		requestedModel = "" // the dead default must not be re-picked by name
+		return target, opts, nil
 	}
 }
 

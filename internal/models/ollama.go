@@ -40,3 +40,17 @@ type OllamaModelEntry struct {
 	Quantization  string   `json:"quantization,omitempty" yaml:"quantization,omitempty"`
 	SizeBytes     int64    `json:"size_bytes,omitempty" yaml:"size_bytes,omitempty"`
 }
+
+// CloneOllamaCatalog deep-copies a catalog, including each entry's
+// Capabilities, so a snapshot clone shares no slice with the original.
+func CloneOllamaCatalog(in []OllamaModelEntry) []OllamaModelEntry {
+	if in == nil {
+		return nil
+	}
+	out := make([]OllamaModelEntry, len(in))
+	for i, e := range in {
+		e.Capabilities = append([]string(nil), e.Capabilities...)
+		out[i] = e
+	}
+	return out
+}

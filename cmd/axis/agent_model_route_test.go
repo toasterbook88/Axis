@@ -41,7 +41,7 @@ func stubModelRoute(t *testing.T, reachable func(url string) bool, tr *tunnelRec
 	prevProbe, prevTunnel := routeProbeFn, openModelTunnelFn
 	t.Cleanup(func() {
 		routeProbeFn, openModelTunnelFn = prevProbe, prevTunnel
-		closeActiveModelTunnel()
+		installModelTunnel(nil)
 	})
 	routeProbeFn = reachable
 	openModelTunnelFn = func(_ context.Context, node config.NodeConfig, remotePort int) (int, func(), error) {
@@ -56,8 +56,8 @@ func stubModelRoute(t *testing.T, reachable func(url string) bool, tr *tunnelRec
 func TestResolveModelRouteKeepsReachableDirectEndpoint(t *testing.T) {
 	tr := &tunnelRecorder{port: 40001}
 	stubModelRoute(t, func(url string) bool { return strings.HasPrefix(url, "http://198.51.100.7:11434") }, tr)
-	got, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
-	if err != nil || got.Endpoint != "http://198.51.100.7:11434" || len(tr.opened) != 0 {
+	got, tunnel, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
+	if err != nil || got.Endpoint != "http://198.51.100.7:11434" || len(tr.opened) != 0 || tunnel != nil {
 		t.Fatalf("got %q err %v tunnels %v, want direct endpoint and no tunnel", got.Endpoint, err, tr.opened)
 	}
 }
@@ -65,7 +65,7 @@ func TestResolveModelRouteKeepsReachableDirectEndpoint(t *testing.T) {
 func TestResolveModelRouteFallsBackToNodeName(t *testing.T) {
 	tr := &tunnelRecorder{port: 40001}
 	stubModelRoute(t, func(url string) bool { return strings.HasPrefix(url, "http://worker:11434") }, tr)
-	got, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
+	got, _, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
 	if err != nil || got.Endpoint != "http://worker:11434" || len(tr.opened) != 0 {
 		t.Fatalf("got %q err %v tunnels %v, want node-name endpoint", got.Endpoint, err, tr.opened)
 	}
@@ -76,30 +76,43 @@ func TestResolveModelRouteFallsBackToNodeName(t *testing.T) {
 func TestResolveModelRouteTunnelsOverSSHWhenNoDirectRoute(t *testing.T) {
 	tr := &tunnelRecorder{port: 40001}
 	stubModelRoute(t, func(url string) bool { return strings.HasPrefix(url, "http://127.0.0.1:40001") }, tr)
-	got, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
+	got, tunnel, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Endpoint != "http://127.0.0.1:40001" || len(tr.opened) != 1 || tr.opened[0] != "worker" {
-		t.Fatalf("got %q tunnels %v, want SSH tunnel endpoint", got.Endpoint, tr.opened)
+	if got.Endpoint != "http://127.0.0.1:40001" || len(tr.opened) != 1 || tr.opened[0] != "worker" || tunnel == nil {
+		t.Fatalf("got %q tunnels %v, want SSH tunnel endpoint and its close func", got.Endpoint, tr.opened)
 	}
 	if got.SecurityClass != agent.BackendRemote || got.Node != "worker" {
 		t.Fatalf("tunnelled choice = %+v, must stay a remote choice on worker", got)
 	}
-
-	// Switching again replaces the tunnel instead of leaking it.
-	if _, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice()); err != nil {
-		t.Fatal(err)
+	// Resolving does not install or close anything; the caller decides
+	// after the switch succeeds.
+	if tr.closed != 0 {
+		t.Fatalf("closed = %d, want resolve to leave tunnels alone", tr.closed)
 	}
-	if tr.closed != 1 {
-		t.Fatalf("closed = %d, want the previous tunnel closed", tr.closed)
+}
+
+// Installing a route closes whatever tunnel the previous model used, even
+// when the new route needs no tunnel (local, cloud, direct).
+func TestInstallModelTunnelClosesPreviousOnEveryInstall(t *testing.T) {
+	t.Cleanup(func() { installModelTunnel(nil) })
+	closedA, closedB := 0, 0
+	installModelTunnel(func() { closedA++ })
+	installModelTunnel(func() { closedB++ })
+	if closedA != 1 || closedB != 0 {
+		t.Fatalf("after second tunnel: closedA=%d closedB=%d, want 1, 0", closedA, closedB)
+	}
+	installModelTunnel(nil) // switched to a model that needs no tunnel
+	if closedB != 1 {
+		t.Fatalf("closedB = %d, want the tunnel closed when switching to a direct model", closedB)
 	}
 }
 
 func TestResolveModelRouteReportsWhatWasTried(t *testing.T) {
 	tr := &tunnelRecorder{err: errors.New("ssh: unable to authenticate")}
 	stubModelRoute(t, func(string) bool { return false }, tr)
-	_, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
+	_, _, err := resolveModelRoute(context.Background(), routeTestRuntime(), remoteOllamaChoice())
 	if err == nil {
 		t.Fatal("want error when no route works")
 	}
@@ -119,7 +132,7 @@ func TestResolveModelRouteLeavesLocalAndCloudChoicesAlone(t *testing.T) {
 		{Model: "c", ProviderKind: "cloud", Protocol: agent.ProtocolCloud, Endpoint: "https://api.example.com"},
 		{Model: "role", ProviderKind: "local", ProviderName: "ai-backend:hub", Node: "worker", Endpoint: "http://127.0.0.1:4000/v1"},
 	} {
-		got, err := resolveModelRoute(context.Background(), routeTestRuntime(), c)
+		got, _, err := resolveModelRoute(context.Background(), routeTestRuntime(), c)
 		if err != nil || got.Endpoint != c.Endpoint {
 			t.Fatalf("choice %q changed: %q err %v", c.Model, got.Endpoint, err)
 		}

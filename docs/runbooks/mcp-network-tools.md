@@ -39,7 +39,7 @@ go run ./cmd/axis mcp serve
 - Tool: `triangle_release_lease`
 - Tool: `triangle_heartbeat_lease`
 
-Registrations live in `internal/mcp/server.go` (`registerTools`, 16), `internal/mcp/inference_route.go` (1), and `internal/mcp/triangle.go` (`registerTriangleTools`, 3).
+Registrations live in `internal/mcp/server.go` (`registerTools`, 16), `internal/mcp/inference_route.go` (1), `internal/mcp/model_catalog.go` (`registerModelTools`, 1 plus the inference route), and `internal/mcp/triangle.go` (`registerTriangleTools`, 3).
 
 ## Verify
 
@@ -51,6 +51,6 @@ go run ./cmd/axis mcp serve --transport stdio
 
 ## Safety
 
-- 17 of 20 tools are read-only; the 3 `triangle_*_lease` tools are advisory lease primitives that write to the local reservation ledger and are not marked read-only.
+- 18 of 21 tools are read-only; the 3 `triangle_*_lease` tools are advisory lease primitives that write to the local reservation ledger and are not marked read-only.
 - No secrets are exposed.
 - AXIS still uses the same discovery, snapshot, placement, and SSH transport code paths.

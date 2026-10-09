@@ -45,7 +45,7 @@ func readyRuntime() *runtimectx.Context {
 func TestStartupFallsBackWhenDefaultIsDown(t *testing.T) {
 	stubStartupReady(t, map[string]modelReadiness{"dead-default": modelDown})
 	var notes bytes.Buffer
-	got, _, err := resolveReadyStartupModelTarget("dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), false, &notes)
+	got, _, err := resolveReadyStartupModelTarget(context.Background(), "dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), false, &notes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestStartupFallsBackWhenDefaultIsDown(t *testing.T) {
 func TestStartupKeepsColdDefaultWithNote(t *testing.T) {
 	stubStartupReady(t, map[string]modelReadiness{"dead-default": modelCold})
 	var notes bytes.Buffer
-	got, _, err := resolveReadyStartupModelTarget("dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), false, &notes)
+	got, _, err := resolveReadyStartupModelTarget(context.Background(), "dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), false, &notes)
 	if err != nil || got.Model != "dead-default" {
 		t.Fatalf("model = %q err %v, want the cold default kept", got.Model, err)
 	}
@@ -76,7 +76,7 @@ func TestStartupKeepsColdDefaultWithNote(t *testing.T) {
 func TestStartupNeverSwapsOperatorPinnedModel(t *testing.T) {
 	stubStartupReady(t, map[string]modelReadiness{"dead-default": modelDown})
 	var notes bytes.Buffer
-	got, _, err := resolveReadyStartupModelTarget("dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), true, &notes)
+	got, _, err := resolveReadyStartupModelTarget(context.Background(), "dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), true, &notes)
 	if err != nil || got.Model != "dead-default" {
 		t.Fatalf("model = %q err %v, want pinned model kept", got.Model, err)
 	}
@@ -90,9 +90,47 @@ func TestStartupDoesNotCheckCloudTargets(t *testing.T) {
 	cloud := ModelChoice{ID: "cloud:groq:m", Model: "m", Protocol: agent.ProtocolCloud, ProviderKind: "cloud"}
 	// Credentials are not configured here, so resolution errors; what matters
 	// is that no request was sent to the provider either way.
-	_, _, _ = resolveReadyStartupModelTarget("", "auto", "", &cloud, readyRuntime(), nil, false, &bytes.Buffer{})
+	_, _, _ = resolveReadyStartupModelTarget(context.Background(), "", "auto", "", &cloud, readyRuntime(), nil, false, &bytes.Buffer{})
 	if len(*checked) != 0 {
 		t.Fatalf("checked %v, want no readiness request to a paid cloud provider", *checked)
+	}
+}
+
+// A cloud-proxy model on an Ollama node forwards to a paid service; a
+// readiness check would be a billed request.
+func TestStartupDoesNotCheckCloudProxyTargets(t *testing.T) {
+	checked := stubStartupReady(t, nil)
+	choices := []ModelChoice{{ID: "worker:ollama:big:cloud", Model: "big:cloud", Protocol: agent.ProtocolOllama, ProviderName: "ollama", ProviderKind: "local", CloudProxy: true, Endpoint: "http://localhost:11434"}}
+	got, _, err := resolveReadyStartupModelTarget(context.Background(), "big:cloud", "auto", "", nil, readyRuntime(), choices, false, &bytes.Buffer{})
+	if err != nil || got.Model != "big:cloud" {
+		t.Fatalf("model = %q err %v", got.Model, err)
+	}
+	if len(*checked) != 0 {
+		t.Fatalf("checked %v, want no readiness request through a cloud proxy", *checked)
+	}
+}
+
+// Cancelling startup stops the readiness check instead of running every
+// fallback attempt to completion.
+func TestStartupReadinessHonoursCancellation(t *testing.T) {
+	prev := startupReadyFn
+	t.Cleanup(func() { startupReadyFn = prev })
+	calls := 0
+	startupReadyFn = func(ctx context.Context, _ ModelChoice, _ agent.CloudBackendOptions) (modelReadiness, string) {
+		calls++
+		if ctx.Err() == nil {
+			t.Error("readiness check received a live context after cancellation")
+		}
+		return modelDown, "canceled"
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := resolveReadyStartupModelTarget(ctx, "dead-default", "auto", "", nil, readyRuntime(), readyTestChoices(), false, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("want the cancellation error")
+	}
+	if calls > 1 {
+		t.Fatalf("readiness checked %d times after cancellation, want at most 1", calls)
 	}
 }
 

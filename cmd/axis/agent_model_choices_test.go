@@ -199,6 +199,35 @@ func TestCollectModelChoicesSaysKeyedLocalServerNeedsKey(t *testing.T) {
 	}
 }
 
+// The same model served on two ports of one node is two choices; their IDs
+// must differ or selecting one picks the other.
+func TestCollectModelChoicesGivesSameModelOnTwoPortsDistinctIDs(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[1].ResidentModels = append(rt.Snapshot.Nodes[1].ResidentModels,
+		models.ResidentModel{Name: "twin.gguf", Runtime: "llama.cpp", Port: 8080},
+		models.ResidentModel{Name: "twin.gguf", Runtime: "llama.cpp", Port: 8081},
+	)
+	seen := map[string]bool{}
+	twins := 0
+	for _, c := range collectModelChoices(rt) {
+		if seen[c.ID] {
+			t.Fatalf("duplicate choice ID %q", c.ID)
+		}
+		seen[c.ID] = true
+		if c.Model == "twin.gguf" {
+			twins++
+		}
+	}
+	if twins != 2 {
+		t.Fatalf("twins = %d, want both ports listed", twins)
+	}
+	// The first keeps the pre-catalog ID; only the collision gains a port.
+	if !seen["worker:llama.cpp:twin.gguf"] || !seen["worker:llama.cpp:twin.gguf:8081"] {
+		t.Fatalf("ids = %v, want worker:llama.cpp:twin.gguf and ...:8081", seen)
+	}
+}
+
 // IDs keep the pre-catalog format so saved defaults and /model <id> still match.
 func TestCollectModelChoicesKeepsChoiceIDFormat(t *testing.T) {
 	stubNoAIConfigAndRecordProbes(t)
