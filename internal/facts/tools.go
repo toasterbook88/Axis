@@ -144,6 +144,10 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 		PIDS=""
 		for _pid in $RAW_PIDS; do
 			case "$_pid" in ''|*[!0-9]*) continue;; esac
+			# pgrep -f also matches any shell whose command line carries this
+			# script; only a process whose argv[0] is llama-server counts.
+			_argv0=$(ps -p "$_pid" -o args= 2>/dev/null | awk '{print $1; exit}')
+			case "${_argv0##*/}" in llama-server*) ;; *) continue;; esac
 			PIDS="$PIDS $_pid"
 		done
 		PIDS=$(echo "$PIDS" | awk '{$1=$1; print}')
@@ -281,7 +285,19 @@ const MLXDiscoveryScript = `set -o pipefail;
 		if [ "$MLX_OK" = "false" ]; then echo '{"installed":false}'; exit 0; fi
 		# Bracket trick: [m]lx_lm.server matches the process mlx_lm.server but not
 		# the pgrep command's own cmdline (which contains the literal "[m]lx_lm.server").
-		PGREP=$(pgrep -f "[m]lx_lm.server" 2>/dev/null | head -1 || pgrep -f "[m]lx_lm server" 2>/dev/null | head -1 || echo "")
+		# pgrep -f also matches any shell whose command line carries this
+		# script, so a candidate counts only when argv[0] is the mlx_lm.server
+		# entry point or a python interpreter whose arguments name it.
+		PGREP=""
+		for _pid in $(pgrep -f "[m]lx_lm.server" 2>/dev/null; pgrep -f "[m]lx_lm server" 2>/dev/null); do
+			case "$_pid" in ''|*[!0-9]*) continue;; esac
+			if ps -p "$_pid" -o args= 2>/dev/null | awk 'NR == 1 {
+				n = split($1, p, "/"); a0 = p[n]
+				if (a0 ~ /^mlx_lm\.server/) ok = 1
+				if (a0 == "mlx_lm" && $2 == "server") ok = 1
+				if (a0 ~ /^[Pp]ython/) for (i = 2; i <= NF; i++) if ($i == "mlx_lm.server" || ($i == "mlx_lm" && $(i+1) == "server")) ok = 1
+			} END { exit !ok }'; then PGREP="$_pid"; break; fi
+		done
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
 		PORT=8080

@@ -508,6 +508,44 @@ func TestLlamaServerDiscoveryScriptFindsRunningBinaryOutsidePATH(t *testing.T) {
 	}
 }
 
+// The pgrep -f fallback also matches the shell that is running this script,
+// because the script text contains "llama-server". Observed on a fleet node:
+// the payload claimed llama-server at /usr/bin/bash and published a resident
+// model named "null)". A process only counts when its argv[0] is llama-server.
+func TestLlamaServerDiscoveryScriptIgnoresWrapperShellMatch(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("pgrep", `case "$1" in -x) exit 1;; *) echo 5151;; esac`)
+	writeStub("ps", `echo "bash -c RAW_PIDS=\$(pgrep -x llama-server) --model (null)"`)
+	writeStub("readlink", `echo /usr/bin/bash`)
+	writeStub("lsof", `exit 1`)
+	writeStub("ss", `exit 1`)
+	writeStub("netstat", `exit 1`)
+
+	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload llamaServerDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if payload.Installed || payload.Running || len(payload.ResidentModels) != 0 {
+		t.Fatalf("payload = %+v, want not installed and no resident models", payload)
+	}
+}
+
 func TestLlamaServerDiscoveryScriptExtractsSupervisorUnitFromCgroup(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -646,6 +684,46 @@ esac`)
 	}
 	if _, exists := resident["size_vram_mb"]; exists {
 		t.Fatalf("resident model falsely reports process RSS as VRAM: %#v", resident)
+	}
+}
+
+// Same self-match as the llama-server script: pgrep -f finds the shell that is
+// running this script. Observed on a fleet Mac (running=true with no MLX
+// server). With a llama-server on the default port, the old script would also
+// have published that server's models as MLX residents.
+func TestMLXDiscoveryScriptIgnoresWrapperShellMatch(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	bin := t.TempDir()
+	writeStub := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeStub("mlx_lm", `exit 0`)
+	writeStub("pgrep", `echo 6161`)
+	writeStub("ps", `
+case "$*" in
+  "-p 6161 -o args=") echo "bash -c set -o pipefail; PGREP=\$(pgrep -f [m]lx_lm.server) mlx_lm.server" ;;
+  "-o rss= -p 6161") echo 2048 ;;
+esac`)
+	writeStub("curl", `echo '{"data":[{"id":"bitnet-2B"}]}'`)
+
+	cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
+	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload mlxDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	if payload.Running || len(payload.ResidentModels) != 0 {
+		t.Fatalf("payload = %+v, want not running and no resident models", payload)
 	}
 }
 
