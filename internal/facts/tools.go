@@ -333,12 +333,12 @@ type llamaServerDiscoveryPayload struct {
 	ResidentModels []models.ResidentModel `json:"resident_models,omitempty"`
 }
 
-// MLXDiscoveryScript detects a running mlx_lm.server process and queries its
-// OpenAI-compatible /v1/models endpoint to enumerate resident models.
-//
-// mlx_lm is a Python package (pip install mlx-lm), so python3 is used for JSON
-// parsing — it is always present on any node that can run MLX. The server
-// defaults to port 8080; the script respects an explicit --port argument.
+// MLXDiscoveryScript detects a running mlx_lm.server process and publishes the
+// model on its command line (--model / -m) as the one resident. Its
+// /v1/models lists the Hugging Face cache, so it is read only for liveness:
+// an answer is listed, silence is down. MLX gives no load signal.
+// The server defaults to port 8080; the script respects an explicit --port
+// argument.
 //
 // Note: llama-server also defaults to port 8080. On nodes running both, only
 // the first server to bind the port will be reachable; the other probe will
@@ -382,28 +382,21 @@ const MLXDiscoveryScript = `set -o pipefail;
 		RSS_KB=$(ps -o rss= -p "$PGREP" 2>/dev/null || echo 0)
 		SIZE_MB=$((RSS_KB / 1024))
 		RESIDENT="[]"
-		if [ "$RUNNING" = "true" ] && command -v curl >/dev/null 2>&1; then
-			RESP=$(curl -s --max-time 2 "http://localhost:$PORT/v1/models" 2>/dev/null || echo "")
-			if [ -n "$RESP" ]; then
-				RESIDENT=$(echo "$RESP" | AXIS_MLX_PID="$PGREP" AXIS_MLX_EXECUTABLE="$EXECUTABLE" AXIS_MLX_START_TOKEN="$PROCESS_START_TOKEN" python3 -c "
-import sys, json, os
-try:
-    d = json.load(sys.stdin)
-    items = []
-    pid = int(os.environ.get('AXIS_MLX_PID', '0') or '0')
-    executable = os.environ.get('AXIS_MLX_EXECUTABLE', '')
-    start_token = os.environ.get('AXIS_MLX_START_TOKEN', '')
-    for m in d.get('data', []):
-        mid = m.get('id', '')
-        if not mid:
-            continue
-        name = mid.split('/')[-1]
-        items.append({'name': name, 'runtime': 'mlx', 'processor': 'gpu', 'size_ram_mb': $SIZE_MB, 'source': 'mlx-lm-api', 'pid': pid, 'executable': executable, 'process_start_token': start_token})
-    print(json.dumps(items))
-except Exception:
-    print('[]')
-" 2>/dev/null || echo "[]")
+		axis_json_esc() { _v=${1//\\/\\\\}; printf '%s' "${_v//\"/\\\"}"; }
+		# /v1/models lists the Hugging Face cache, not the loaded model; the
+		# served model is the one on the command line. Never a load signal.
+		# Flags are read after the server token: "python -m mlx_lm.server"
+		# uses -m for the module.
+		MODEL_ARG=$(echo "$CMDLINE" | awk '{s=0; for(i=1;i<=NF;i++){n=split($i,p,"/"); if(p[n]~/^mlx_lm\.server/||(p[n]=="server"&&i>1&&$(i-1)~/(^|\/)mlx_lm$/)){s=i;break}} for(i=s+1;i<=NF;i++){if($i=="--model"||$i=="-m"){print $(i+1);exit}if($i~/^(--model=|-m=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+		if [ "$RUNNING" = "true" ] && [ -n "$MODEL_ARG" ]; then
+			MNAME="${MODEL_ARG%/}"; MNAME="${MNAME##*/}"
+			STATE_JSON=""
+			if command -v curl >/dev/null 2>&1; then
+				HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null || true)
+				case "$HTTP" in 2*) STATE="listed" ;; *) STATE="down"; HTTP="${HTTP:-000}" ;; esac
+				STATE_JSON=",\"state\":\"$STATE\",\"load_signal\":\"none\",\"provenance\":{\"name\":\"argv --model\",\"state\":\"GET /v1/models $HTTP\"}"
 			fi
+			RESIDENT="[{\"name\":\"$(axis_json_esc "$MNAME")\",\"runtime\":\"mlx\",\"processor\":\"gpu\",\"size_ram_mb\":$SIZE_MB,\"source\":\"mlx-argv\",\"pid\":$PGREP,\"executable\":\"$(axis_json_esc "$EXECUTABLE")\",\"process_start_token\":\"$(axis_json_esc "$PROCESS_START_TOKEN")\"$STATE_JSON}]"
 		fi
 		echo "{\"installed\":true,\"running\":$RUNNING,\"port\":$PORT,\"resident_models\":$RESIDENT}"
 	`
