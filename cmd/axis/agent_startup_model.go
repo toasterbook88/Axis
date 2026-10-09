@@ -10,7 +10,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -73,23 +72,11 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 		}
 		var selectOptions []ui.SelectOption
 		for _, choice := range choices {
-			detail := fmt.Sprintf("%s - %s", choice.ProviderName, choice.ProviderKind)
-			if choice.ProviderKind == "local" {
-				if choice.Node != "" {
-					detail = fmt.Sprintf("Remote node %s (%s) [%s]", choice.Node, choice.Endpoint, choice.Protocol)
-				} else {
-					detail = fmt.Sprintf("Local (%s) [%s]", choice.Endpoint, choice.Protocol)
-				}
-			}
-			disabled := choice.Disabled
-			if choice.DisabledReason != "" && disabled {
-				detail += " (" + choice.DisabledReason + ")"
-			}
 			selectOptions = append(selectOptions, ui.SelectOption{
 				ID:       choice.ID,
 				Label:    choice.Model,
-				Detail:   detail,
-				Disabled: disabled,
+				Detail:   modelChoiceDetail(choice),
+				Disabled: choice.Disabled,
 			})
 		}
 
@@ -232,7 +219,7 @@ func isPrivateLAN(ip netip.Addr) bool {
 	return b[0]&0xfe == 0xfc
 }
 
-func switchAgentToModelChoice(session *agentREPLSession, choice ModelChoice) error {
+func applyModelChoice(session *agentREPLSession, choice ModelChoice) error {
 	opts, err := cloudOptsForTarget(session.Runtime, &choice)
 	if err != nil {
 		return err
@@ -849,192 +836,4 @@ var probeEndpointFn = func(url string) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
-}
-
-func collectModelChoices(rt *runtimectx.Context) []ModelChoice {
-	var choices []ModelChoice
-	if rt == nil {
-		return choices
-	}
-
-	if rt.Snapshot != nil {
-		// Identify unique remote endpoints to probe concurrently
-		type probeResult struct {
-			endpoint string
-			ok       bool
-		}
-		endpointToNodes := make(map[string][]models.NodeFacts)
-		for _, n := range rt.Snapshot.Nodes {
-			// Probe Ollama instances
-			if n.Ollama != nil && n.Ollama.Installed && !models.IsLocalNode(n) {
-				endpoint, err := resolveNodeEndpoint(n, n.Ollama.Port)
-				if err == nil && endpoint != "" {
-					endpointToNodes[endpoint+"/api/tags"] = append(endpointToNodes[endpoint+"/api/tags"], n)
-				}
-			}
-			// Probe MLX/llama.cpp resident models on every node, including
-			// local. A hardcoded or stale port must not stay selectable.
-			for _, rm := range n.ResidentModels {
-				if (rm.Runtime == "mlx" || rm.Runtime == "llama.cpp") && rm.Port > 0 {
-					endpoint, err := resolveNodeEndpoint(n, rm.Port)
-					if err == nil && endpoint != "" {
-						endpointToNodes[endpoint+"/v1/models"] = append(endpointToNodes[endpoint+"/v1/models"], n)
-					}
-				}
-			}
-		}
-
-		ch := make(chan probeResult, len(endpointToNodes))
-		var wg sync.WaitGroup
-		for ep := range endpointToNodes {
-			wg.Add(1)
-			go func(endpoint string) {
-				defer wg.Done()
-				ok := probeEndpointFn(endpoint)
-				ch <- probeResult{endpoint: endpoint, ok: ok}
-			}(ep)
-		}
-
-		// Wait in background and close channel when done
-		go func() {
-			wg.Wait()
-			close(ch)
-		}()
-
-		probeMap := make(map[string]bool)
-		for res := range ch {
-			probeMap[res.endpoint] = res.ok
-		}
-
-		seen := make(map[string]bool)
-		for _, n := range rt.Snapshot.Nodes {
-			var nodeLabel string
-			if models.IsLocalNode(n) {
-				nodeLabel = ""
-			} else {
-				nodeLabel = n.Name
-			}
-
-			// Add Ollama models
-			if n.Ollama != nil && n.Ollama.Installed {
-				endpoint, err := resolveNodeEndpoint(n, n.Ollama.Port)
-				disabled := false
-				reason := ""
-				if err != nil {
-					disabled = true
-					reason = "no valid endpoint"
-					endpoint = ""
-				} else if !models.IsLocalNode(n) && !probeMap[endpoint+"/api/tags"] {
-					disabled = true
-					reason = "unreachable"
-				}
-				// Local security: process-local. Remote node HTTP is still cluster LAN.
-				sec := agent.BackendLocal
-				if !models.IsLocalNode(n) {
-					sec = agent.BackendRemote
-				}
-				for _, mName := range n.Ollama.Models {
-					key := n.Name + ":ollama:" + mName
-					if !seen[key] {
-						seen[key] = true
-						choices = append(choices, ModelChoice{
-							ID:             key,
-							Model:          mName,
-							Protocol:       agent.ProtocolOllama,
-							ProviderName:   "ollama",
-							ProviderKind:   "local",
-							Node:           nodeLabel,
-							Endpoint:       endpoint,
-							SecurityClass:  sec,
-							Disabled:       disabled,
-							DisabledReason: reason,
-						})
-					}
-				}
-			}
-
-			// Add Resident Models (llama.cpp / MLX / etc) — OpenAI-compatible protocol
-			for _, rm := range n.ResidentModels {
-				if rm.Runtime == "ollama" {
-					continue // already covered above
-				}
-				endpoint, err := resolveNodeEndpoint(n, rm.Port)
-				disabled := false
-				reason := ""
-				if err != nil || rm.Port <= 0 {
-					disabled = true
-					reason = "no valid endpoint"
-					endpoint = ""
-				} else if !probeMap[endpoint+"/v1/models"] {
-					disabled = true
-					reason = "unreachable"
-				}
-				sec := agent.BackendLocal
-				if !models.IsLocalNode(n) {
-					sec = agent.BackendRemote
-				}
-				key := n.Name + ":" + rm.Runtime + ":" + rm.Name
-				if !seen[key] {
-					seen[key] = true
-					choices = append(choices, ModelChoice{
-						ID:             key,
-						Model:          rm.Name,
-						Protocol:       agent.ProtocolOpenAI,
-						ProviderName:   rm.Runtime,
-						ProviderKind:   "local",
-						Node:           nodeLabel,
-						Endpoint:       endpoint,
-						SecurityClass:  sec,
-						Disabled:       disabled,
-						DisabledReason: reason,
-					})
-				}
-			}
-		}
-	}
-
-	if rt.Config != nil {
-		for pName, pCfg := range rt.Config.AIProviders {
-			if pCfg.Enabled && strings.EqualFold(pCfg.Type, "cloud") {
-				key, keyErr := secrets.ResolveOrEmpty(pCfg.APIKeyEnv, pCfg.APIKeyFile)
-				disabled := keyErr != nil || key == ""
-				reason := ""
-				if disabled {
-					reason = "API key not found"
-				}
-				for _, m := range pCfg.Models {
-					if m.Name == "" {
-						continue
-					}
-					choices = append(choices, ModelChoice{
-						ID:             fmt.Sprintf("cloud:%s:%s", pName, m.Name),
-						Model:          m.Name,
-						Protocol:       agent.ProtocolCloud,
-						ProviderName:   pName,
-						ProviderKind:   "cloud",
-						Node:           "",
-						Endpoint:       pCfg.Endpoint,
-						SecurityClass:  agent.BackendRemote,
-						Disabled:       disabled,
-						DisabledReason: reason,
-					})
-				}
-			}
-		}
-	}
-
-	// Inference roles from ~/.axis/ai.yaml (OpenAI-compatible / ollama backends).
-	choices = append(choices, modelChoicesFromAIConfig(rt.Config)...)
-
-	sort.Slice(choices, func(i, j int) bool {
-		if choices[i].ProviderKind != choices[j].ProviderKind {
-			return choices[i].ProviderKind < choices[j].ProviderKind
-		}
-		if choices[i].ProviderName != choices[j].ProviderName {
-			return choices[i].ProviderName < choices[j].ProviderName
-		}
-		return choices[i].Model < choices[j].Model
-	})
-
-	return choices
 }
