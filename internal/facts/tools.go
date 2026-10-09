@@ -264,6 +264,36 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 			[ -n "$GPU_LAYERS" ] && [ "$GPU_LAYERS" -gt 0 ] 2>/dev/null && PROC="gpu"
 			SIZE_BYTES=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
 			SIZE_MB=$((SIZE_BYTES / 1048576))
+			STATE_JSON=""
+			CTX_JSON=""
+			if command -v curl >/dev/null 2>&1; then
+				# /health and /v1/health are the only endpoints llama-server
+				# exempts from --api-key; 200 means the model finished loading.
+				HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$THIS_PORT/health" 2>/dev/null || true)
+				case "$HEALTH" in
+					200) STATE="loaded"; LOAD_SIGNAL="health-ok" ;;
+					503) STATE="loading"; LOAD_SIGNAL="health-loading" ;;
+					*) STATE="down"; LOAD_SIGNAL="health-silent"; HEALTH="${HEALTH:-000}" ;;
+				esac
+				PROV="\"state\":\"GET /health $HEALTH\""
+				if [ "$STATE" = "loaded" ]; then
+					N_CTX=$(curl -s --max-time 2 "http://127.0.0.1:$THIS_PORT/props" 2>/dev/null | grep -o '"n_ctx":[0-9]*' | head -1 | sed 's/.*://')
+					if printf '%s' "$N_CTX" | grep -qE '^[0-9]+$'; then
+						CTX_JSON=",\"context_window\":$N_CTX"
+						PROV="$PROV,\"context_window\":\"GET /props default_generation_settings.n_ctx\""
+					fi
+					SERVED=$(curl -s --max-time 2 "http://127.0.0.1:$THIS_PORT/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | sed 's/^"id":"//; s/"$//')
+					ALIAS=$(printf '%s\n' "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--alias"||$i=="-a"){print $(i+1);exit}if($i~/^(--alias=|-a=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
+					if [ -n "$SERVED" ] && [ "$SERVED" != "$ALIAS" ]; then
+						SERVED_NAME=$(basename "$SERVED" | sed 's/\.[^.]*$//')
+						if [ "$SERVED_NAME" != "$MNAME" ]; then
+							STATE="listed"; LOAD_SIGNAL="served-id-differs"; MNAME="$SERVED_NAME"
+							PROV="$PROV,\"name\":\"GET /v1/models data[0].id\""
+						fi
+					fi
+				fi
+				STATE_JSON=",\"state\":\"$STATE\",\"load_signal\":\"$LOAD_SIGNAL\",\"provenance\":{$PROV}"
+			fi
 			MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
 			LSBIN_ESC=$(echo "$LSBIN" | sed 's/\\/\\\\/g; s/"/\\"/g')
 			PROCESS_OWNER_ESC=$(echo "$PROCESS_OWNER" | sed 's/\\/\\\\/g; s/"/\\"/g')
@@ -274,7 +304,7 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 			GPU_IDX=$(axis_gpu_indices_for_pid "$PGREP" "$CMDLINE")
 			if [ -n "$GPU_IDX" ]; then GPU_JSON=",\"gpu_indices\":[$GPU_IDX]"; fi
 			if [ -z "$RESIDENT_ITEMS" ]; then PORT="$THIS_PORT"; fi
-			ITEM="{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"port\":$THIS_PORT,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"supervisor_type\":\"$SUPERVISOR_ESC\",\"supervisor_unit\":\"$SUPERVISOR_UNIT_ESC\",\"source\":\"llama-server-ps\"$GPU_JSON}"
+			ITEM="{\"name\":\"$MNAME_ESC\",\"runtime\":\"llama.cpp\",\"processor\":\"$PROC\",\"weight_size_mb\":$SIZE_MB,\"pid\":$PGREP,\"port\":$THIS_PORT,\"executable\":\"$LSBIN_ESC\",\"process_owner\":\"$PROCESS_OWNER_ESC\",\"process_start_token\":\"$PROCESS_START_TOKEN_ESC\",\"supervisor_type\":\"$SUPERVISOR_ESC\",\"supervisor_unit\":\"$SUPERVISOR_UNIT_ESC\",\"source\":\"llama-server-ps\"$STATE_JSON$CTX_JSON$GPU_JSON}"
 			if [ -n "$RESIDENT_ITEMS" ]; then
 				RESIDENT_ITEMS="$RESIDENT_ITEMS,$ITEM"
 			else
