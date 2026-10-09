@@ -106,7 +106,7 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 			Engine:   engine,
 			Locality: models.ModelLocalityOnNode,
 		})
-		e.State = models.ModelCatalogLoaded
+		e.State = residentState(engine)
 		e.Port = r.Port
 		e.InstanceID = instanceID(identity, r.Runtime, r.Name, r.Port)
 	}
@@ -120,6 +120,19 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 		out = append(out, e)
 	}
 	return out
+}
+
+// residentState is loaded only for runtimes whose resident facts carry a
+// load signal: Ollama (/api/ps) and llama.cpp (the -m argument of the
+// running process). Any other runtime's resident row, such as MLX from its
+// /v1/models listing, is listed.
+func residentState(engine string) models.ModelCatalogState {
+	switch engine {
+	case "ollama", "llama.cpp":
+		return models.ModelCatalogLoaded
+	default:
+		return models.ModelCatalogListed
+	}
 }
 
 // ollamaInstalled prefers the node's catalog and falls back to bare names

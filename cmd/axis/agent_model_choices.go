@@ -79,6 +79,7 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 			Node:          e.Node,
 			SecurityClass: agent.BackendRemote,
 			Loaded:        e.State == models.ModelCatalogLoaded,
+			Listed:        e.State == models.ModelCatalogListed,
 			CloudProxy:    e.Locality == models.ModelLocalityCloudProxy,
 			Capabilities:  append([]string(nil), e.Capabilities...),
 			Port:          e.Port,
@@ -121,6 +122,9 @@ func modelChoiceDetail(c ModelChoice) string {
 	}
 	if c.Loaded {
 		parts = append(parts, "loaded")
+	}
+	if c.Listed {
+		parts = append(parts, "listed, not verified loaded")
 	}
 	if c.CloudProxy {
 		parts = append(parts, "cloud proxy, leaves the cluster")

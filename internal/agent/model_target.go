@@ -31,7 +31,8 @@ type ModelTarget struct {
 	DisabledReason string
 	// Catalog facts for display; empty when the target did not come from
 	// the model catalog (cloud providers, ai.yaml roles).
-	Loaded       bool     // resident in its runtime, so the first reply is fast
+	Loaded       bool     // a load signal says it is resident, so the first reply is fast
+	Listed       bool     // a server named it without a load signal; not verified loaded
 	CloudProxy   bool     // the node forwards requests off the cluster
 	Capabilities []string // as the engine reported them; empty = unknown
 	Port         int      // runtime port on Node, for route resolution

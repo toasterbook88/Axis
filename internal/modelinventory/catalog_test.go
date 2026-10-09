@@ -122,6 +122,30 @@ func TestCatalogMergesLoadedAndInstalledPerNode(t *testing.T) {
 	}
 }
 
+// Only a load signal makes an entry loaded: Ollama /api/ps or a llama.cpp
+// process started with -m. An MLX resident comes from mlx_lm.server's
+// /v1/models listing, which does not mean the weights are loaded.
+func TestCatalogMarksMLXResidentListedNotLoaded(t *testing.T) {
+	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		Name: "mac", Status: models.StatusComplete,
+		ResidentModels: []models.ResidentModel{
+			{Name: "mlx-model", Runtime: "mlx", Port: 8090, Source: "mlx-lm-api"},
+			{Name: "gguf-model", Runtime: "llama.cpp", Port: 8080, Source: "llama-server-ps"},
+			{Name: "ollama-model", Runtime: "ollama", Port: 11434, Source: "ollama-ps"},
+		},
+	}}}
+	states := map[string]models.ModelCatalogState{}
+	for _, e := range Catalog(snap, "test").Entries {
+		states[e.Model] = e.State
+	}
+	if states["mlx-model"] != models.ModelCatalogListed {
+		t.Fatalf("mlx-model state = %q, want listed", states["mlx-model"])
+	}
+	if states["gguf-model"] != models.ModelCatalogLoaded || states["ollama-model"] != models.ModelCatalogLoaded {
+		t.Fatalf("states = %v, want llama.cpp and ollama residents loaded", states)
+	}
+}
+
 // The catalog is a pure function of the snapshot: same input, same bytes,
 // whichever node computes it.
 func TestCatalogIsDeterministic(t *testing.T) {

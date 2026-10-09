@@ -33,8 +33,10 @@ func modelCatalogCmd() *cobra.Command {
 		Long: `List every model the cluster snapshot observed, one row per model per node.
 
 Each node reports its own models, so the catalog does not depend on which node
-you run it from. STATE is loaded (resident in a runtime) or installed (on disk,
-not loaded). LOCALITY is on-node, or cloud-proxy when the node forwards requests
+you run it from. STATE is loaded only with a load signal (Ollama /api/ps, or a
+llama.cpp process started with -m), listed when a server names the model without
+a load signal (e.g. MLX), or installed (on disk, not loaded). LOCALITY is
+on-node, or cloud-proxy when the node forwards requests
 off the cluster. Empty CAPABILITIES means the engine did not report them.
 Nodes the snapshot could not observe are listed after the table.`,
 		Args:    cobra.NoArgs,

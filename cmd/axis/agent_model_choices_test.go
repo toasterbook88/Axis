@@ -124,6 +124,7 @@ func TestModelChoiceDetailSaysWhereAndWhat(t *testing.T) {
 		want   string
 	}{
 		{ModelChoice{ProviderKind: "local", ProviderName: "ollama", Node: "", Loaded: true}, "this node · ollama · loaded"},
+		{ModelChoice{ProviderKind: "local", ProviderName: "mlx", Node: "mac", Listed: true}, "node mac · mlx · listed, not verified loaded"},
 		{ModelChoice{ProviderKind: "local", ProviderName: "ollama", Node: "worker", CloudProxy: true}, "node worker · ollama · cloud proxy, leaves the cluster"},
 		{ModelChoice{ProviderKind: "local", ProviderName: "llama.cpp", Node: "worker", Disabled: true, DisabledReason: "unreachable"}, "node worker · llama.cpp (unreachable)"},
 		{ModelChoice{ProviderKind: "cloud", ProviderName: "groq"}, "cloud provider groq"},
@@ -225,6 +226,17 @@ func TestCollectModelChoicesGivesSameModelOnTwoPortsDistinctIDs(t *testing.T) {
 	// The first keeps the pre-catalog ID; only the collision gains a port.
 	if !seen["worker:llama.cpp:twin.gguf"] || !seen["worker:llama.cpp:twin.gguf:8081"] {
 		t.Fatalf("ids = %v, want worker:llama.cpp:twin.gguf and ...:8081", seen)
+	}
+}
+
+func TestCollectModelChoicesCarriesListedNotLoadedForMLX(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[1].ResidentModels = append(rt.Snapshot.Nodes[1].ResidentModels,
+		models.ResidentModel{Name: "mlx-model", Runtime: "mlx", Port: 8090})
+	mlx, ok := choiceByModel(t, collectModelChoices(rt), "mlx-model")
+	if !ok || mlx.Loaded || !mlx.Listed {
+		t.Fatalf("mlx = %+v, want listed and not loaded", mlx)
 	}
 }
 

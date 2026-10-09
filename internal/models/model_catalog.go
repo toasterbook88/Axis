@@ -2,13 +2,18 @@ package models
 
 import "time"
 
-// ModelCatalogState is how far a catalog entry is from serving. Loaded means
-// a runtime probe reported it resident; installed means the weights (or a
-// cloud-proxy stub) are present but not loaded.
+// ModelCatalogState is how far a catalog entry is from serving.
 type ModelCatalogState string
 
 const (
-	ModelCatalogLoaded    ModelCatalogState = "loaded"
+	// ModelCatalogLoaded requires a load signal: Ollama /api/ps, or a
+	// llama.cpp process whose -m names the model.
+	ModelCatalogLoaded ModelCatalogState = "loaded"
+	// ModelCatalogListed means a server named the model but gave no load
+	// signal (e.g. mlx_lm.server /v1/models). Never treated as loaded.
+	ModelCatalogListed ModelCatalogState = "listed"
+	// ModelCatalogInstalled means the weights (or a cloud-proxy stub) are
+	// present and the load signal says not loaded.
 	ModelCatalogInstalled ModelCatalogState = "installed"
 )
 
