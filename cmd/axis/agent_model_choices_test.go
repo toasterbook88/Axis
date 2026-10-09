@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
@@ -129,6 +131,54 @@ func TestModelChoiceDetailSaysWhereAndWhat(t *testing.T) {
 		if got := modelChoiceDetail(tc.choice); got != tc.want {
 			t.Errorf("modelChoiceDetail(%+v) = %q, want %q", tc.choice, got, tc.want)
 		}
+	}
+}
+
+// stubAIRole serves one ai.yaml role on a reachable backend whose live model
+// list is listed/listOK.
+func stubAIRole(t *testing.T, roleModel string, listed []string, listOK bool) {
+	t.Helper()
+	prevLoad, prevResolve, prevProbe, prevList := inferenceAILoadFn, inferenceResolveFn, inferenceProbeFn, inferenceListModelsFn
+	t.Cleanup(func() {
+		inferenceAILoadFn, inferenceResolveFn, inferenceProbeFn, inferenceListModelsFn = prevLoad, prevResolve, prevProbe, prevList
+	})
+	cfg := &config.AIConfig{
+		Backends: []config.AIBackendConfig{{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: "http://hub.example.com/v1"}},
+		Roles:    map[string]config.AIRoleConfig{"default": {Prefer: []string{"hub"}, Model: roleModel}},
+	}
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return cfg, nil }
+	inferenceResolveFn = func(_ context.Context, _ *config.AIConfig, _ llmrouter.ResolveRoleOptions) (llmrouter.RoleRouteDecision, error) {
+		return llmrouter.RoleRouteDecision{Role: "default", Backend: "hub", Model: roleModel, Endpoint: "http://hub.example.com/v1", Kind: config.AIBackendOpenAICompatible}, nil
+	}
+	inferenceProbeFn = func(string) bool { return true }
+	inferenceListModelsFn = func(context.Context, config.AIBackendConfig, *config.Config) ([]string, bool) { return listed, listOK }
+}
+
+// A role whose model the backend does not serve must not be selectable; the
+// hub answering is not evidence that this model exists behind it.
+func TestModelChoicesFromAIConfigDisablesModelNotServedByBackend(t *testing.T) {
+	stubAIRole(t, "qwythos", []string{"bonsai-2-27b", "qwen3-coder"}, true)
+	choices := modelChoicesFromAIConfig(nil)
+	if len(choices) != 1 || !choices[0].Disabled || choices[0].DisabledReason != "not served by hub" {
+		t.Fatalf("choices = %+v, want one disabled 'not served by hub'", choices)
+	}
+}
+
+func TestModelChoicesFromAIConfigKeepsServedModel(t *testing.T) {
+	stubAIRole(t, "qwen3-coder", []string{"bonsai-2-27b", "qwen3-coder"}, true)
+	choices := modelChoicesFromAIConfig(nil)
+	if len(choices) != 1 || choices[0].Disabled {
+		t.Fatalf("choices = %+v, want one enabled", choices)
+	}
+}
+
+// When the list cannot be read (auth, empty answer), absence is unknown, not
+// proven, so the role stays selectable.
+func TestModelChoicesFromAIConfigKeepsRoleWhenListUnavailable(t *testing.T) {
+	stubAIRole(t, "qwythos", nil, false)
+	choices := modelChoicesFromAIConfig(nil)
+	if len(choices) != 1 || choices[0].Disabled {
+		t.Fatalf("choices = %+v, want enabled when the list is unavailable", choices)
 	}
 }
 
