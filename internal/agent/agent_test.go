@@ -671,6 +671,105 @@ func TestToolGrepSearchLimitsMatches(t *testing.T) {
 	}
 }
 
+func TestToolGrepSearchRegexAndFiltering(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("func StartServer() error {\n\treturn nil\n}"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "app.py"), []byte("def start_server():\n    return None"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. Regex search
+	res, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"func\\s+[A-Z]\\w+","regex":true}`))
+	if err != nil {
+		t.Fatalf("regex search failed: %v", err)
+	}
+	if !strings.Contains(res, "app.go:1: func StartServer() error {") {
+		t.Errorf("expected regex match in app.go, got: %s", res)
+	}
+	if strings.Contains(res, "app.py") {
+		t.Errorf("regex should not have matched in app.py, got: %s", res)
+	}
+
+	// 2. Include glob filtering
+	res, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"server","include":"*.py"}`))
+	if err != nil {
+		t.Fatalf("include filter search failed: %v", err)
+	}
+	if !strings.Contains(res, "app.py:1: def start_server():") {
+		t.Errorf("expected match in app.py, got: %s", res)
+	}
+	if strings.Contains(res, "app.go") {
+		t.Errorf("include filter should have excluded app.go, got: %s", res)
+	}
+
+	// 3. Invalid regex error
+	_, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"[invalid(regex","regex":true}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid regular expression") {
+		t.Errorf("expected invalid regular expression error, got: %v", err)
+	}
+
+	// 4. Custom max_matches
+	res, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"server","max_matches":1}`))
+	if err != nil {
+		t.Fatalf("max_matches search failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(res), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 match with max_matches: 1, got %d", len(lines))
+	}
+}
+
+func TestToolListDirectoryDepthAndDirsOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	subDir := filepath.Join(tmpDir, "pkg", "sub")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create subdirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "root.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "nested.go"), []byte("package sub"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. DirsOnly
+	res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","dirs_only":true}`))
+	if err != nil {
+		t.Fatalf("dirs_only failed: %v", err)
+	}
+	if !strings.Contains(res, "pkg/") {
+		t.Errorf("expected pkg/ in dirs_only output: %s", res)
+	}
+	if strings.Contains(res, "root.txt") {
+		t.Errorf("dirs_only should not contain root.txt: %s", res)
+	}
+
+	// 2. Tree with Depth: 3
+	res, err = r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":3}`))
+	if err != nil {
+		t.Fatalf("depth: 3 failed: %v", err)
+	}
+	if !strings.Contains(res, "nested.go") || !strings.Contains(res, "pkg/") {
+		t.Errorf("expected nested tree in depth output, got: %s", res)
+	}
+}
+
 func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()

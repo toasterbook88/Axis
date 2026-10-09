@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -492,13 +493,15 @@ func (r *ToolRegistry) registerReadFile() {
 // --- Tool: list_directory ---
 
 type listDirArgs struct {
-	Path string `json:"path"`
+	Path     string `json:"path"`
+	Depth    int    `json:"depth,omitempty"`
+	DirsOnly bool   `json:"dirs_only,omitempty"`
 }
 
 func (r *ToolRegistry) registerListDirectory() {
 	r.add("list_directory",
 		"List files and directories at a given path. Returns a human-readable directory listing. Paths are restricted to the current working directory and its subdirectories for safety.",
-		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative or absolute directory path"}},"required":["path"]}`),
+		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative or absolute directory path (defaults to '.')"},"depth":{"type":"integer","description":"Depth limit for recursive tree listing (1 for flat listing, up to 3 for directory tree)"},"dirs_only":{"type":"boolean","description":"If true, only directories are included in the listing"}},"required":["path"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a listDirArgs
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -511,12 +514,90 @@ func (r *ToolRegistry) registerListDirectory() {
 			if err != nil {
 				return "", err
 			}
+
+			depth := a.Depth
+			if depth < 1 {
+				depth = 1
+			} else if depth > 3 {
+				depth = 3
+			}
+
+			// Recursive tree listing when depth > 1
+			if depth > 1 {
+				var b strings.Builder
+				fmt.Fprintf(&b, "Directory: %s (tree depth %d)\n", clean, depth)
+				count := 0
+				const maxTreeEntries = 150
+				var walk func(dirPath string, currentDepth int, prefix string) error
+				walk = func(dirPath string, currentDepth int, prefix string) error {
+					if currentDepth > depth || count >= maxTreeEntries {
+						return nil
+					}
+					subEntries, err := os.ReadDir(dirPath)
+					if err != nil {
+						return nil
+					}
+					for _, e := range subEntries {
+						if count >= maxTreeEntries {
+							break
+						}
+						name := e.Name()
+						if strings.HasPrefix(name, ".") {
+							continue
+						}
+						if a.DirsOnly && !e.IsDir() {
+							continue
+						}
+						count++
+						if e.IsDir() {
+							b.WriteString(prefix + name + "/\n")
+							if currentDepth < depth {
+								_ = walk(filepath.Join(dirPath, name), currentDepth+1, prefix+"  ")
+							}
+						} else {
+							b.WriteString(prefix + name + "\n")
+						}
+					}
+					return nil
+				}
+				_ = walk(clean, 1, "  ")
+				if count >= maxTreeEntries {
+					fmt.Fprintf(&b, "... (truncated at %d entries)\n", maxTreeEntries)
+				}
+				return b.String(), nil
+			}
+
+			// Flat listing (depth == 1)
 			entries, err := os.ReadDir(clean)
 			if err != nil {
 				return "", fmt.Errorf("cannot read directory %q: %w", clean, err)
 			}
 			var b strings.Builder
 			const maxDirEntries = 100
+
+			if a.DirsOnly {
+				dirCount := 0
+				for _, e := range entries {
+					if e.IsDir() {
+						dirCount++
+					}
+				}
+				fmt.Fprintf(&b, "Directory: %s (%d directories)\n", clean, dirCount)
+				listed := 0
+				for _, e := range entries {
+					if !e.IsDir() {
+						continue
+					}
+					if listed >= maxDirEntries {
+						fmt.Fprintf(&b, "... and %d more directories\n", dirCount-listed)
+						break
+					}
+					b.WriteString(e.Name() + "/\n")
+					listed++
+				}
+				return b.String(), nil
+			}
+
 			fmt.Fprintf(&b, "Directory: %s (%d entries)\n", clean, len(entries))
 			for i, e := range entries {
 				if i >= maxDirEntries {
@@ -993,8 +1074,11 @@ func (r *ToolRegistry) registerMultiEdit() {
 // --- Tool: grep_search ---
 
 type grepArgs struct {
-	Query string `json:"query"`
-	Path  string `json:"path,omitempty"`
+	Query      string `json:"query"`
+	Path       string `json:"path,omitempty"`
+	Regex      bool   `json:"regex,omitempty"`
+	Include    string `json:"include,omitempty"`
+	MaxMatches int    `json:"max_matches,omitempty"`
 }
 
 func (r *ToolRegistry) registerGrepSearch() {
@@ -1003,8 +1087,11 @@ func (r *ToolRegistry) registerGrepSearch() {
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
-				"query":{"type":"string","description":"The search term or pattern to look for"},
-				"path":{"type":"string","description":"Directory or file to search (defaults to '.')"}
+				"query":{"type":"string","description":"The search term or regular expression pattern to look for"},
+				"path":{"type":"string","description":"Directory or file to search (defaults to '.')"},
+				"regex":{"type":"boolean","description":"If true, query is evaluated as a regular expression"},
+				"include":{"type":"string","description":"File name or glob pattern to include (e.g. '*.go', '*.py')"},
+				"max_matches":{"type":"integer","description":"Maximum matches to return (default 50, maximum 200)"}
 			},
 			"required":["query"]
 		}`),
@@ -1025,8 +1112,25 @@ func (r *ToolRegistry) registerGrepSearch() {
 				return "", err
 			}
 
-			var matches []string
+			var matchRe *regexp.Regexp
+			if a.Regex {
+				re, err := regexp.Compile(a.Query)
+				if err != nil {
+					return "", fmt.Errorf("invalid regular expression %q: %w", a.Query, err)
+				}
+				matchRe = re
+			}
+
 			maxMatches := 50
+			if a.MaxMatches > 0 {
+				if a.MaxMatches > 200 {
+					maxMatches = 200
+				} else {
+					maxMatches = a.MaxMatches
+				}
+			}
+
+			var matches []string
 			limitErr := fmt.Errorf("match limit reached")
 			err = filepath.Walk(clean, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
@@ -1045,6 +1149,12 @@ func (r *ToolRegistry) registerGrepSearch() {
 				name := info.Name()
 				if strings.HasPrefix(name, ".") {
 					return nil
+				}
+				if a.Include != "" {
+					matched, err := filepath.Match(a.Include, name)
+					if err != nil || !matched {
+						return nil
+					}
 				}
 
 				f, err := os.Open(path)
@@ -1067,7 +1177,13 @@ func (r *ToolRegistry) registerGrepSearch() {
 				for scanner.Scan() {
 					lineNum++
 					line := scanner.Text()
-					if strings.Contains(line, a.Query) {
+					matched := false
+					if matchRe != nil {
+						matched = matchRe.MatchString(line)
+					} else {
+						matched = strings.Contains(line, a.Query)
+					}
+					if matched {
 						rel, _ := filepath.Rel(clean, path)
 						if rel == "" || rel == "." {
 							rel = filepath.Base(path)
