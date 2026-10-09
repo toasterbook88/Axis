@@ -12,13 +12,14 @@ go run ./cmd/axis mcp serve
 
 - Resource: `cluster://snapshot`
 
-**Read-only diagnostic tools (17, all carry `readOnlyHint: true`):**
+**Read-only diagnostic tools (18, all carry `readOnlyHint: true`):**
 
 - Tool: `cluster_snapshot`
 - Tool: `placement_decision`
 - Tool: `simulate_workload_plan`
 - Tool: `verify_execution_safety`
 - Tool: `inference_route_explain`
+- Tool: `model_catalog`: every observed model per node (loaded/installed, on-node/cloud-proxy, capabilities) plus the nodes that could not be observed; the same document as `axis model catalog` and `GET /v2/models`
 - Tool: `axis_health`
 - Tool: `axis_tools`
 - Tool: `ip_addr`

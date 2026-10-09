@@ -152,7 +152,7 @@ actions but never present generated output as cluster truth.
 |---------|----------|------|
 | `axis chat` | Removed | Prints `use: axis agent` |
 | `axis agent` | Tool-calling loop | Read-only tools + safety-gated shell |
-| `axis mcp serve` | MCP over stdio | 17 read-only diagnostics plus 3 advisory lease primitives for LLM clients |
+| `axis mcp serve` | MCP over stdio | 18 read-only diagnostics plus 3 advisory lease primitives for LLM clients |
 | `axis serve` | HTTP (Unix socket) | Programmatic API for integrations |
 | `cortex` | Internal | Distributed vector memory + event bus |
 | `llmrouter` | Internal | Model routing and selection |

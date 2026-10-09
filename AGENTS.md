@@ -158,7 +158,7 @@ internal/daemon/         Background snapshot refresh, in-memory cache
 internal/api/            Optional local HTTP API (axis serve)
 internal/a2a/            A2A agent-card surface (/.well-known/agent-card.json):
                          scope-derived skills advertised to the mesh
-internal/mcp/            MCP server (axis mcp serve): 20 tools (17 read-only
+internal/mcp/            MCP server (axis mcp serve): 21 tools (18 read-only
                          diagnostics + 3 advisory lease primitives); see
                          docs/runbooks/mcp-network-tools.md for the full list
 internal/chat/           Structured Ollama /api/chat client (subordinate to facts)
@@ -249,7 +249,7 @@ heavy inference.
 | `axis agent [--auto-approve] [--autonomy MODE] [--plain] [--console] [--live]` | Agentic tool-calling assistant; REPL slash commands `/plan /todo /diff /undo /compact /autonomy /export /fleet`; default cluster context is daemon/disk cache (`LoadCached`), `--live` is an explicit discovery sweep. On an interactive TTY the transcript console is the default; `--plain` selects the legacy line reader (takes precedence over `--console`); `--console` forces the console. Tool approvals use an overlay (`y` yes, `n` no; Enter does not approve; timeout and cancel deny) |
 | `axis llm` | Removed; prints `use axis ai route` |
 | `axis ai` | Inference backends, roles, dry-run route resolve |
-| `axis model` | List/inspect resident instances, dry-run placement planning, `start <model>` on the node that already has the runtime, or pin llama-server, Ollama, and MLX start/stop, await readiness, or query models |
+| `axis model` | `catalog` every observed model per node (also `GET /v2/models`, MCP `model_catalog`), list/inspect resident instances, dry-run placement planning, `start <model>` on the node that already has the runtime, or pin llama-server, Ollama, and MLX start/stop, await readiness, or query models |
 | `axis cluster` | Fleet snapshot: `status`, `summary` |
 | `axis node` | This machine: `facts` |
 | `axis cortex` | Distributed vector memory / event bus (resolves node via AXIS_CORTEX_NODE, role: cortex, or name cortex/foundry) |
