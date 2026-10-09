@@ -60,3 +60,7 @@ type ResidentModel struct {
 	// Provenance maps a field name to the probe that produced it.
 	Provenance map[string]string `json:"provenance,omitempty" yaml:"provenance,omitempty"`
 }
+
+// Down reports that the runtime process was seen but its endpoint did not
+// answer. Such a row is not serving and is not model locality.
+func (r ResidentModel) Down() bool { return r.State == ModelCatalogDown }

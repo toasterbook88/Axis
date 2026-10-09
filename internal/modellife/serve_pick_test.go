@@ -57,6 +57,18 @@ func TestPickServingNodeBreaksResidentTiesByWarmthThenName(t *testing.T) {
 	}
 }
 
+// A down server (process seen, endpoint silent) is not already serving.
+func TestPickServingNodeSkipsDownResident(t *testing.T) {
+	nodes := []models.NodeFacts{
+		{Name: "dead", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", WarmthScore: 0.9, State: models.ModelCatalogDown}}},
+		{Name: "live", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", State: models.ModelCatalogLoaded}}},
+	}
+	got, err := PickServingNode(nodes, "mistral")
+	if err != nil || got.Node != "live" || !got.Already {
+		t.Fatalf("pick=%#v err=%v, want live", got, err)
+	}
+}
+
 func TestPickServingNodeUsesListeningOllamaLibrary(t *testing.T) {
 	nodes := []models.NodeFacts{
 		{Name: "partial", Status: models.StatusPartial, Ollama: &models.OllamaInfo{Listening: true, Models: []string{"mistral"}}},

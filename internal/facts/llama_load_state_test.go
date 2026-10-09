@@ -118,6 +118,28 @@ esac`)
 	}
 }
 
+// --alias takes a comma-separated list; the served id is one of them.
+func TestLlamaServerServedIDInArgvAliasListIsLoaded(t *testing.T) {
+	got := runLlamaProbe(t, "--alias coder,helper", `case "$*" in
+  *"/health"*) printf 200 ;;
+  *"/v1/models"*) echo '{"data":[{"id":"helper"}]}' ;;
+esac`)
+	if got.State != models.ModelCatalogLoaded || got.Name != "served-model" {
+		t.Fatalf("row = %+v, want loaded under argv name", got)
+	}
+}
+
+// A served id with a backslash must still produce valid JSON.
+func TestLlamaServerServedIDWithBackslashIsEscaped(t *testing.T) {
+	got := runLlamaProbe(t, "", `case "$*" in
+  *"/health"*) printf 200 ;;
+  *"/v1/models"*) printf '%s\n' '{"data":[{"id":"C:\\models\\other.gguf"}]}' ;;
+esac`)
+	if got.State != models.ModelCatalogListed || got.Name == "" {
+		t.Fatalf("row = %+v, want listed under escaped served id", got)
+	}
+}
+
 // Without curl the collector cannot observe load state; it leaves state
 // empty and Catalog keeps the #507 mapping.
 func TestLlamaServerWithoutCurlLeavesStateEmpty(t *testing.T) {

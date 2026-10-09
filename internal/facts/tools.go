@@ -284,7 +284,7 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 					fi
 					SERVED=$(curl -s --max-time 2 "http://127.0.0.1:$THIS_PORT/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | sed 's/^"id":"//; s/"$//')
 					ALIAS=$(printf '%s\n' "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--alias"||$i=="-a"){print $(i+1);exit}if($i~/^(--alias=|-a=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
-					if [ -n "$SERVED" ] && [ "$SERVED" != "$ALIAS" ]; then
+					if [ -n "$SERVED" ] && ! case ",$ALIAS," in *",$SERVED,"*) true ;; *) false ;; esac; then
 						SERVED_NAME=$(basename "$SERVED" | sed 's/\.[^.]*$//')
 						if [ "$SERVED_NAME" != "$MNAME" ]; then
 							STATE="listed"; LOAD_SIGNAL="served-id-differs"; MNAME="$SERVED_NAME"
@@ -294,7 +294,7 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				fi
 				STATE_JSON=",\"state\":\"$STATE\",\"load_signal\":\"$LOAD_SIGNAL\",\"provenance\":{$PROV}"
 			fi
-			MNAME_ESC=$(echo "$MNAME" | sed 's/"/\\"/g')
+			MNAME_ESC=${MNAME//\\/\\\\}; MNAME_ESC=${MNAME_ESC//\"/\\\"}
 			LSBIN_ESC=$(echo "$LSBIN" | sed 's/\\/\\\\/g; s/"/\\"/g')
 			PROCESS_OWNER_ESC=$(echo "$PROCESS_OWNER" | sed 's/\\/\\\\/g; s/"/\\"/g')
 			PROCESS_START_TOKEN_ESC=$(echo "$PROCESS_START_TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')
