@@ -31,10 +31,7 @@ func FromSnapshot(snap *models.ClusterSnapshot, source string) models.ModelInven
 	}
 	byID := make(map[string]models.ModelInstance)
 	for _, node := range snap.Nodes {
-		nodeIdentity := strings.TrimSpace(node.Name)
-		if node.Identity != nil && models.NormalizeStableID(node.Identity.StableID) != "" {
-			nodeIdentity = models.NormalizeStableID(node.Identity.StableID)
-		}
+		nodeIdentity := nodeIdentityOf(node)
 		for _, resident := range node.ResidentModels {
 			instance := models.ModelInstance{
 				ID:                instanceID(nodeIdentity, resident.Runtime, resident.Name, resident.Port),
@@ -85,6 +82,17 @@ func FromSnapshot(snap *models.ClusterSnapshot, source string) models.ModelInven
 		return left.ID < right.ID
 	})
 	return inventory
+}
+
+// nodeIdentityOf prefers the observed stable machine ID over the config name,
+// so instance IDs survive a node rename.
+func nodeIdentityOf(node models.NodeFacts) string {
+	if node.Identity != nil {
+		if id := models.NormalizeStableID(node.Identity.StableID); id != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(node.Name)
 }
 
 func instanceID(nodeIdentity, engine, model string, port int) string {
