@@ -770,6 +770,108 @@ func TestToolListDirectoryDepthAndDirsOnly(t *testing.T) {
 	}
 }
 
+func TestToolListDirectoryTreeEdgeCases(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git", "objects"), 0755); err != nil {
+		t.Fatalf("failed to create dot dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// A file path is an error in tree mode, as in flat mode.
+	if _, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":"file.txt","depth":2}`)); err == nil {
+		t.Errorf("expected error listing a file in tree mode")
+	}
+
+	// Dot-entries are listed like the flat listing, but not descended into.
+	res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":3}`))
+	if err != nil {
+		t.Fatalf("tree listing failed: %v", err)
+	}
+	if !strings.Contains(res, ".git/") {
+		t.Errorf("expected .git/ in tree output: %s", res)
+	}
+	if strings.Contains(res, "objects/") {
+		t.Errorf("tree should not descend into dot directories: %s", res)
+	}
+
+	// path is optional and defaults to ".".
+	res, err = r.Execute(context.Background(), "list_directory", json.RawMessage(`{"depth":2}`))
+	if err != nil || !strings.Contains(res, "file.txt") {
+		t.Errorf("expected default path listing, got %q, err %v", res, err)
+	}
+}
+
+func TestToolListDirectoryTreeMarksUnreadableSubdir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode-000 directories")
+	}
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	locked := filepath.Join(tmpDir, "locked")
+	if err := os.Mkdir(locked, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatalf("chmod failed: %v", err)
+	}
+	defer os.Chmod(locked, 0755)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+	res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":2}`))
+	if err != nil {
+		t.Fatalf("tree listing failed: %v", err)
+	}
+	if !strings.Contains(res, "locked/\n    [unreadable]") {
+		t.Errorf("expected unreadable marker under locked/: %s", res)
+	}
+}
+
+func TestToolGrepSearchIncludeRelativePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "cmd"), 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "cmd", "main.go"), []byte("needle"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "lib.go"), []byte("needle"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	res, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"needle","include":"cmd/*.go"}`))
+	if err != nil {
+		t.Fatalf("include path search failed: %v", err)
+	}
+	if !strings.Contains(res, "main.go") || strings.Contains(res, "lib.go") {
+		t.Errorf("expected only cmd/main.go, got: %s", res)
+	}
+
+	_, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"needle","include":"[bad"}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid include pattern") {
+		t.Errorf("expected invalid include pattern error, got: %v", err)
+	}
+}
+
 func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()

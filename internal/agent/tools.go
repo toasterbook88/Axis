@@ -501,7 +501,7 @@ type listDirArgs struct {
 func (r *ToolRegistry) registerListDirectory() {
 	r.add("list_directory",
 		"List files and directories at a given path. Returns a human-readable directory listing. Paths are restricted to the current working directory and its subdirectories for safety.",
-		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative or absolute directory path (defaults to '.')"},"depth":{"type":"integer","description":"Depth limit for recursive tree listing (1 for flat listing, up to 3 for directory tree)"},"dirs_only":{"type":"boolean","description":"If true, only directories are included in the listing"}},"required":["path"]}`),
+		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative or absolute directory path (defaults to '.')"},"depth":{"type":"integer","description":"Depth limit for recursive tree listing (1 for flat listing, up to 3 for directory tree)"},"dirs_only":{"type":"boolean","description":"If true, only directories are included in the listing"}}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a listDirArgs
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -522,45 +522,45 @@ func (r *ToolRegistry) registerListDirectory() {
 				depth = 3
 			}
 
-			// Recursive tree listing when depth > 1
+			// Recursive tree listing when depth > 1. Dot-entries are listed, as in
+			// the flat listing, but never descended into (.git, caches).
 			if depth > 1 {
+				topEntries, err := os.ReadDir(clean)
+				if err != nil {
+					return "", fmt.Errorf("cannot read directory %q: %w", clean, err)
+				}
 				var b strings.Builder
 				fmt.Fprintf(&b, "Directory: %s (tree depth %d)\n", clean, depth)
 				count := 0
 				const maxTreeEntries = 150
-				var walk func(dirPath string, currentDepth int, prefix string) error
-				walk = func(dirPath string, currentDepth int, prefix string) error {
-					if currentDepth > depth || count >= maxTreeEntries {
-						return nil
-					}
-					subEntries, err := os.ReadDir(dirPath)
-					if err != nil {
-						return nil
-					}
-					for _, e := range subEntries {
+				var walk func(entries []os.DirEntry, dirPath string, currentDepth int, prefix string)
+				walk = func(entries []os.DirEntry, dirPath string, currentDepth int, prefix string) {
+					for _, e := range entries {
 						if count >= maxTreeEntries {
-							break
+							return
 						}
 						name := e.Name()
-						if strings.HasPrefix(name, ".") {
-							continue
-						}
 						if a.DirsOnly && !e.IsDir() {
 							continue
 						}
 						count++
-						if e.IsDir() {
-							b.WriteString(prefix + name + "/\n")
-							if currentDepth < depth {
-								_ = walk(filepath.Join(dirPath, name), currentDepth+1, prefix+"  ")
-							}
-						} else {
+						if !e.IsDir() {
 							b.WriteString(prefix + name + "\n")
+							continue
 						}
+						b.WriteString(prefix + name + "/\n")
+						if currentDepth >= depth || strings.HasPrefix(name, ".") {
+							continue
+						}
+						sub, err := os.ReadDir(filepath.Join(dirPath, name))
+						if err != nil {
+							b.WriteString(prefix + "  [unreadable]\n")
+							continue
+						}
+						walk(sub, filepath.Join(dirPath, name), currentDepth+1, prefix+"  ")
 					}
-					return nil
 				}
-				_ = walk(clean, 1, "  ")
+				walk(topEntries, clean, 1, "  ")
 				if count >= maxTreeEntries {
 					fmt.Fprintf(&b, "... (truncated at %d entries)\n", maxTreeEntries)
 				}
@@ -1090,7 +1090,7 @@ func (r *ToolRegistry) registerGrepSearch() {
 				"query":{"type":"string","description":"The search term or regular expression pattern to look for"},
 				"path":{"type":"string","description":"Directory or file to search (defaults to '.')"},
 				"regex":{"type":"boolean","description":"If true, query is evaluated as a regular expression"},
-				"include":{"type":"string","description":"File name or glob pattern to include (e.g. '*.go', '*.py')"},
+				"include":{"type":"string","description":"Glob to include. Without a slash it matches the file name ('*.go'); with a slash it matches the path relative to the search root ('cmd/*.go')"},
 				"max_matches":{"type":"integer","description":"Maximum matches to return (default 50, maximum 200)"}
 			},
 			"required":["query"]
@@ -1119,6 +1119,12 @@ func (r *ToolRegistry) registerGrepSearch() {
 					return "", fmt.Errorf("invalid regular expression %q: %w", a.Query, err)
 				}
 				matchRe = re
+			}
+
+			if a.Include != "" {
+				if _, err := filepath.Match(a.Include, ""); err != nil {
+					return "", fmt.Errorf("invalid include pattern %q: %w", a.Include, err)
+				}
 			}
 
 			maxMatches := 50
@@ -1151,8 +1157,14 @@ func (r *ToolRegistry) registerGrepSearch() {
 					return nil
 				}
 				if a.Include != "" {
-					matched, err := filepath.Match(a.Include, name)
-					if err != nil || !matched {
+					// A pattern with a slash matches the path relative to the
+					// search root (cmd/*.go); otherwise the base name (*.go).
+					target := name
+					if strings.Contains(a.Include, "/") {
+						rel, _ := filepath.Rel(clean, path)
+						target = filepath.ToSlash(rel)
+					}
+					if matched, _ := filepath.Match(a.Include, target); !matched {
 						return nil
 					}
 				}
