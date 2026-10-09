@@ -671,6 +671,239 @@ func TestToolGrepSearchLimitsMatches(t *testing.T) {
 	}
 }
 
+func TestToolGrepSearchRegexAndFiltering(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("func StartServer() error {\n\treturn nil\n}"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "app.py"), []byte("def start_server():\n    return None"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. Regex search
+	res, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"func\\s+[A-Z]\\w+","regex":true}`))
+	if err != nil {
+		t.Fatalf("regex search failed: %v", err)
+	}
+	if !strings.Contains(res, "app.go:1: func StartServer() error {") {
+		t.Errorf("expected regex match in app.go, got: %s", res)
+	}
+	if strings.Contains(res, "app.py") {
+		t.Errorf("regex should not have matched in app.py, got: %s", res)
+	}
+
+	// 2. Include glob filtering
+	res, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"server","include":"*.py"}`))
+	if err != nil {
+		t.Fatalf("include filter search failed: %v", err)
+	}
+	if !strings.Contains(res, "app.py:1: def start_server():") {
+		t.Errorf("expected match in app.py, got: %s", res)
+	}
+	if strings.Contains(res, "app.go") {
+		t.Errorf("include filter should have excluded app.go, got: %s", res)
+	}
+
+	// 3. Invalid regex error
+	_, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"[invalid(regex","regex":true}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid regular expression") {
+		t.Errorf("expected invalid regular expression error, got: %v", err)
+	}
+
+	// 4. Custom max_matches
+	res, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"server","max_matches":1}`))
+	if err != nil {
+		t.Fatalf("max_matches search failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(res), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 match with max_matches: 1, got %d", len(lines))
+	}
+}
+
+func TestToolListDirectoryDepthAndDirsOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	subDir := filepath.Join(tmpDir, "pkg", "sub")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create subdirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "root.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "nested.go"), []byte("package sub"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. DirsOnly
+	res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","dirs_only":true}`))
+	if err != nil {
+		t.Fatalf("dirs_only failed: %v", err)
+	}
+	if !strings.Contains(res, "pkg/") {
+		t.Errorf("expected pkg/ in dirs_only output: %s", res)
+	}
+	if strings.Contains(res, "root.txt") {
+		t.Errorf("dirs_only should not contain root.txt: %s", res)
+	}
+
+	// 2. Tree with Depth: 3
+	res, err = r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":3}`))
+	if err != nil {
+		t.Fatalf("depth: 3 failed: %v", err)
+	}
+	if !strings.Contains(res, "nested.go") || !strings.Contains(res, "pkg/") {
+		t.Errorf("expected nested tree in depth output, got: %s", res)
+	}
+}
+
+func TestToolListDirectoryTreeEdgeCases(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git", "objects"), 0755); err != nil {
+		t.Fatalf("failed to create dot dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// A file path is an error in tree mode, as in flat mode.
+	if _, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":"file.txt","depth":2}`)); err == nil {
+		t.Errorf("expected error listing a file in tree mode")
+	}
+
+	// Dot-entries are listed like the flat listing, but not descended into.
+	res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":3}`))
+	if err != nil {
+		t.Fatalf("tree listing failed: %v", err)
+	}
+	if !strings.Contains(res, ".git/") {
+		t.Errorf("expected .git/ in tree output: %s", res)
+	}
+	if strings.Contains(res, "objects/") {
+		t.Errorf("tree should not descend into dot directories: %s", res)
+	}
+
+	// path is optional and defaults to ".".
+	res, err = r.Execute(context.Background(), "list_directory", json.RawMessage(`{"depth":2}`))
+	if err != nil || !strings.Contains(res, "file.txt") {
+		t.Errorf("expected default path listing, got %q, err %v", res, err)
+	}
+}
+
+func TestToolListDirectoryTreeTruncationMarker(t *testing.T) {
+	for _, tc := range []struct {
+		files     int
+		truncated bool
+	}{
+		{files: 150, truncated: false},
+		{files: 151, truncated: true},
+	} {
+		t.Run(fmt.Sprintf("%d_entries", tc.files), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			origDir, _ := os.Getwd()
+			os.Chdir(tmpDir)
+			defer os.Chdir(origDir)
+
+			for i := 0; i < tc.files; i++ {
+				if err := os.WriteFile(filepath.Join(tmpDir, fmt.Sprintf("f%03d.txt", i)), nil, 0644); err != nil {
+					t.Fatalf("failed to write test file: %v", err)
+				}
+			}
+
+			r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+			res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":2}`))
+			if err != nil {
+				t.Fatalf("tree listing failed: %v", err)
+			}
+			if got := strings.Contains(res, "truncated at"); got != tc.truncated {
+				t.Errorf("truncation marker = %v, want %v:\n%s", got, tc.truncated, res)
+			}
+		})
+	}
+}
+
+func TestToolListDirectoryTreeMarksUnreadableSubdir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode-000 directories")
+	}
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	locked := filepath.Join(tmpDir, "locked")
+	if err := os.Mkdir(locked, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatalf("chmod failed: %v", err)
+	}
+	defer os.Chmod(locked, 0755)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+	res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":2}`))
+	if err != nil {
+		t.Fatalf("tree listing failed: %v", err)
+	}
+	if !strings.Contains(res, "locked/\n    [unreadable]") {
+		t.Errorf("expected unreadable marker under locked/: %s", res)
+	}
+}
+
+func TestToolGrepSearchIncludeRelativePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	tc := NewToolContext(&RuntimeView{}, nil)
+	r := NewToolRegistry(tc)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "cmd"), 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "cmd", "main.go"), []byte("needle"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "lib.go"), []byte("needle"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	res, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"needle","include":"cmd/*.go"}`))
+	if err != nil {
+		t.Fatalf("include path search failed: %v", err)
+	}
+	if !strings.Contains(res, "main.go") || strings.Contains(res, "lib.go") {
+		t.Errorf("expected only cmd/main.go, got: %s", res)
+	}
+
+	_, err = r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"needle","include":"[bad"}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid include pattern") {
+		t.Errorf("expected invalid include pattern error, got: %v", err)
+	}
+}
+
 func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
