@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -179,6 +180,22 @@ func TestModelChoicesFromAIConfigKeepsRoleWhenListUnavailable(t *testing.T) {
 	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 || choices[0].Disabled {
 		t.Fatalf("choices = %+v, want enabled when the list is unavailable", choices)
+	}
+}
+
+// A local server that answers 401 is up but keyed; "unreachable" would be false.
+func TestCollectModelChoicesSaysKeyedLocalServerNeedsKey(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	prevOK, prevStatus := probeEndpointFn, probeStatusFn
+	t.Cleanup(func() { probeEndpointFn, probeStatusFn = prevOK, prevStatus })
+	probeEndpointFn = func(string) bool { return false }
+	probeStatusFn = func(string) int { return http.StatusUnauthorized }
+
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[0].ResidentModels = []models.ResidentModel{{Name: "keyed-gguf", Runtime: "llama.cpp", Port: 8082}}
+	keyed, ok := choiceByModel(t, collectModelChoices(rt), "keyed-gguf")
+	if !ok || !keyed.Disabled || keyed.DisabledReason != "requires an API key" {
+		t.Fatalf("keyed = %+v, want disabled 'requires an API key'", keyed)
 	}
 }
 

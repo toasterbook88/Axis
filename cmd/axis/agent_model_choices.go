@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/config"
@@ -122,6 +124,18 @@ func modelChoiceDetail(c ModelChoice) string {
 	return detail
 }
 
+// probeStatusFn returns the HTTP status for url, or 0 when nothing answered.
+// It only explains a failed probe; it never enables a choice.
+var probeStatusFn = func(url string) int {
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 // embeddingOnly is true only when the engine reported capabilities and none
 // of them is text completion. Unknown capabilities are not excluded.
 func embeddingOnly(capabilities []string) bool {
@@ -148,10 +162,14 @@ func probeLocalResidentChoices(choices []ModelChoice, nodes map[string]models.No
 			if probeEndpointFn(url) {
 				return
 			}
+			reason := "unreachable"
+			if status := probeStatusFn(url); status == http.StatusUnauthorized || status == http.StatusForbidden {
+				reason = "requires an API key"
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			for _, i := range idxs {
-				choices[i].Disabled, choices[i].DisabledReason = true, "unreachable"
+				choices[i].Disabled, choices[i].DisabledReason = true, reason
 			}
 		}(url, idxs)
 	}
