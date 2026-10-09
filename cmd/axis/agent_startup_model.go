@@ -117,7 +117,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	}
 
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
-	activeTarget, cloudOpts, err := resolveStartupModelTarget(p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices)
+	activeTarget, cloudOpts, err := resolveReadyStartupModelTarget(p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
 	if err != nil {
 		return agentStartupBackendResult{}, ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
 	}
