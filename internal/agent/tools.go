@@ -532,16 +532,20 @@ func (r *ToolRegistry) registerListDirectory() {
 				var b strings.Builder
 				fmt.Fprintf(&b, "Directory: %s (tree depth %d)\n", clean, depth)
 				count := 0
+				truncated := false
 				const maxTreeEntries = 150
 				var walk func(entries []os.DirEntry, dirPath string, currentDepth int, prefix string)
 				walk = func(entries []os.DirEntry, dirPath string, currentDepth int, prefix string) {
 					for _, e := range entries {
-						if count >= maxTreeEntries {
-							return
-						}
 						name := e.Name()
 						if a.DirsOnly && !e.IsDir() {
 							continue
+						}
+						// Mark truncation only when an eligible entry is actually
+						// left out, so a listing of exactly the cap is complete.
+						if count >= maxTreeEntries {
+							truncated = true
+							return
 						}
 						count++
 						if !e.IsDir() {
@@ -561,7 +565,7 @@ func (r *ToolRegistry) registerListDirectory() {
 					}
 				}
 				walk(topEntries, clean, 1, "  ")
-				if count >= maxTreeEntries {
+				if truncated {
 					fmt.Fprintf(&b, "... (truncated at %d entries)\n", maxTreeEntries)
 				}
 				return b.String(), nil

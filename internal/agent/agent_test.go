@@ -810,6 +810,38 @@ func TestToolListDirectoryTreeEdgeCases(t *testing.T) {
 	}
 }
 
+func TestToolListDirectoryTreeTruncationMarker(t *testing.T) {
+	for _, tc := range []struct {
+		files     int
+		truncated bool
+	}{
+		{files: 150, truncated: false},
+		{files: 151, truncated: true},
+	} {
+		t.Run(fmt.Sprintf("%d_entries", tc.files), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			origDir, _ := os.Getwd()
+			os.Chdir(tmpDir)
+			defer os.Chdir(origDir)
+
+			for i := 0; i < tc.files; i++ {
+				if err := os.WriteFile(filepath.Join(tmpDir, fmt.Sprintf("f%03d.txt", i)), nil, 0644); err != nil {
+					t.Fatalf("failed to write test file: %v", err)
+				}
+			}
+
+			r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+			res, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":2}`))
+			if err != nil {
+				t.Fatalf("tree listing failed: %v", err)
+			}
+			if got := strings.Contains(res, "truncated at"); got != tc.truncated {
+				t.Errorf("truncation marker = %v, want %v:\n%s", got, tc.truncated, res)
+			}
+		})
+	}
+}
+
 func TestToolListDirectoryTreeMarksUnreadableSubdir(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can read mode-000 directories")
