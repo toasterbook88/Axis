@@ -149,6 +149,9 @@ func TestCloneDeepCopiesOllama(t *testing.T) {
 				Ollama: &models.OllamaInfo{
 					Installed: true,
 					Models:    []string{"llama3", "mistral"},
+					Catalog: []models.OllamaModelEntry{
+						{Name: "llama3", Capabilities: []string{"completion", "tools"}},
+					},
 				},
 			},
 		},
@@ -158,6 +161,11 @@ func TestCloneDeepCopiesOllama(t *testing.T) {
 	clone.Nodes[0].Ollama.Models[0] = "mutated"
 	if orig.Nodes[0].Ollama.Models[0] != "llama3" {
 		t.Error("mutating clone Ollama models changed original")
+	}
+	clone.Nodes[0].Ollama.Catalog[0].Name = "mutated"
+	clone.Nodes[0].Ollama.Catalog[0].Capabilities[0] = "mutated"
+	if got := orig.Nodes[0].Ollama.Catalog[0]; got.Name != "llama3" || got.Capabilities[0] != "completion" {
+		t.Errorf("mutating clone Ollama catalog changed original: %+v", got)
 	}
 	if clone.Nodes[0].Ollama == orig.Nodes[0].Ollama {
 		t.Error("expected cloned Ollama to be a new pointer")

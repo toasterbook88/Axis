@@ -67,6 +67,7 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 		if node.Ollama != nil {
 			ollama := *node.Ollama
 			ollama.Models = append([]string(nil), node.Ollama.Models...)
+			ollama.Catalog = models.CloneOllamaCatalog(node.Ollama.Catalog)
 			nodeCopy.Ollama = &ollama
 		}
 		nodeCopy.ResidentModels = append([]models.ResidentModel(nil), node.ResidentModels...)
