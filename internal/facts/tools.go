@@ -124,7 +124,45 @@ PYEOF
 		# the field) by emitting an empty string. Treat null and any
 		# failure to parse as empty.
 		KEEPALIVE=$(curl -s --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('default_keep_alive'); print('' if v is None else v)" 2>/dev/null || echo "")
-		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\"}"
+		# Installed-model catalog from this node's own Ollama API. Cloud
+		# proxies carry remote_host; /api/show capabilities separate
+		# embedding models from chat models. Bounded to 64 models and a 6s
+		# capability budget; entries past the budget keep no capabilities.
+		# interlinked-ignore: ubs_hardcoded_localhost — the node probes its own loopback Ollama API, same as KEEPALIVE above
+		OLLAMA_API=http://127.0.0.1:11434
+		CATALOG=$(curl -s --max-time 2 "$OLLAMA_API/api/tags" 2>/dev/null | AXIS_OLLAMA_API="$OLLAMA_API" python3 -c "
+import json, os, subprocess, sys, time
+api = os.environ.get('AXIS_OLLAMA_API', '')
+try:
+    tags = json.load(sys.stdin).get('models') or []
+except Exception:
+    sys.exit(0)
+deadline = time.monotonic() + 6
+out = []
+for m in tags[:64]:
+    name = m.get('name') or ''
+    if not name:
+        continue
+    d = m.get('details') or {}
+    e = {'name': name}
+    for k, v in (('remote_host', m.get('remote_host')), ('remote_model', m.get('remote_model')), ('family', d.get('family')), ('parameter_size', d.get('parameter_size')), ('quantization', d.get('quantization_level'))):
+        if isinstance(v, str) and v:
+            e[k] = v
+    if isinstance(m.get('size'), int) and m['size'] > 0:
+        e['size_bytes'] = m['size']
+    if api and time.monotonic() < deadline:
+        try:
+            r = subprocess.run(['curl', '-s', '--max-time', '2', '-d', json.dumps({'model': name}), api + '/api/show'], capture_output=True, timeout=3)
+            caps = json.loads(r.stdout or b'{}').get('capabilities')
+            if isinstance(caps, list):
+                e['capabilities'] = [c for c in caps if isinstance(c, str)]
+        except Exception:
+            pass
+    out.append(e)
+print(json.dumps(out))
+" 2>/dev/null || echo "")
+		[ -n "$CATALOG" ] || CATALOG="[]"
+		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\",\"catalog\":$CATALOG}"
 	`
 
 // LlamaServerDiscoveryScript is the bash script used to detect running
