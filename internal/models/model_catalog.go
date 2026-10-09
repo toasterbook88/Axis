@@ -50,6 +50,10 @@ type ModelCatalogEntry struct {
 	ParameterSize string   `json:"parameter_size,omitempty" yaml:"parameter_size,omitempty"`
 	Quantization  string   `json:"quantization,omitempty" yaml:"quantization,omitempty"`
 	SizeBytes     int64    `json:"size_bytes,omitempty" yaml:"size_bytes,omitempty"`
+	// ContextWindow is the served context the runtime stated; 0 = unknown.
+	ContextWindow int `json:"context_window,omitempty" yaml:"context_window,omitempty"`
+	// LoadSignal names the evidence behind State.
+	LoadSignal string `json:"load_signal,omitempty" yaml:"load_signal,omitempty"`
 	// Port and InstanceID are set for loaded entries; InstanceID matches
 	// ModelInventory so lifecycle commands can act on the entry.
 	Port       int       `json:"port,omitempty" yaml:"port,omitempty"`
