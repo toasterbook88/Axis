@@ -15,6 +15,12 @@ const (
 	// ModelCatalogInstalled means the weights (or a cloud-proxy stub) are
 	// present and the load signal says not loaded.
 	ModelCatalogInstalled ModelCatalogState = "installed"
+	// ModelCatalogLoading means the runtime reports it is still loading
+	// (llama.cpp /health 503).
+	ModelCatalogLoading ModelCatalogState = "loading"
+	// ModelCatalogDown means the process was seen but its endpoint did not
+	// answer.
+	ModelCatalogDown ModelCatalogState = "down"
 )
 
 // ModelLocality says where inference for an entry actually runs.
