@@ -15,7 +15,7 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
-func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
+func registerV2CoreRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	h := &v2Handlers{cache: cache}
 
 	mux.HandleFunc("/v2/cluster", withAuth(h.handleCluster, token))

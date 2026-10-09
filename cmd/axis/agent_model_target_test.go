@@ -600,7 +600,10 @@ func TestModelChoicesAdvertiseURLUnreachableIsDisabled(t *testing.T) {
 	prevLoad := inferenceAILoadFn
 	prevResolve := inferenceResolveFn
 	prevProbe := inferenceProbeFn
+	prevList := inferenceListModelsFn
+	inferenceListModelsFn = func(context.Context, config.AIBackendConfig, *config.Config) ([]string, bool) { return nil, false }
 	t.Cleanup(func() {
+		inferenceListModelsFn = prevList
 		inferenceAILoadFn = prevLoad
 		inferenceResolveFn = prevResolve
 		inferenceProbeFn = prevProbe
@@ -657,7 +660,10 @@ func TestModelChoicesAdvertiseURLReachableStaysEnabled(t *testing.T) {
 	prevLoad := inferenceAILoadFn
 	prevResolve := inferenceResolveFn
 	prevProbe := inferenceProbeFn
+	prevList := inferenceListModelsFn
+	inferenceListModelsFn = func(context.Context, config.AIBackendConfig, *config.Config) ([]string, bool) { return nil, false }
 	t.Cleanup(func() {
+		inferenceListModelsFn = prevList
 		inferenceAILoadFn = prevLoad
 		inferenceResolveFn = prevResolve
 		inferenceProbeFn = prevProbe
@@ -709,7 +715,10 @@ func TestModelChoicesLocalNodeBindingKeepsBaseURL(t *testing.T) {
 	prevLoad := inferenceAILoadFn
 	prevResolve := inferenceResolveFn
 	prevProbe := inferenceProbeFn
+	prevList := inferenceListModelsFn
+	inferenceListModelsFn = func(context.Context, config.AIBackendConfig, *config.Config) ([]string, bool) { return nil, false }
 	t.Cleanup(func() {
+		inferenceListModelsFn = prevList
 		inferenceAILoadFn = prevLoad
 		inferenceResolveFn = prevResolve
 		inferenceProbeFn = prevProbe

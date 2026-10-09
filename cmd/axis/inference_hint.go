@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,12 @@ var (
 	// Reuse agent probe seam when available; tests may override.
 	inferenceProbeFn = func(url string) bool {
 		return probeEndpointFn(url)
+	}
+	// inferenceListModelsFn reads a backend's live model list, with its API
+	// key, the same way `axis ai backends` does.
+	inferenceListModelsFn = func(ctx context.Context, b config.AIBackendConfig, nodeCfg *config.Config) ([]string, bool) {
+		p := llmrouter.ProbeBackendForNodes(ctx, b, &http.Client{Timeout: inferenceHintTimeout}, nodeCfg)
+		return p.Models, p.OK
 	}
 )
 
@@ -122,6 +129,27 @@ func modelChoicesFromAIConfig(nodeCfg *config.Config) []ModelChoice {
 	ctx, cancel := context.WithTimeout(context.Background(), inferenceHintTimeout)
 	defer cancel()
 
+	// listed returns a backend's live model list, read once per backend.
+	// known is false when the list could not be read or was empty, so an
+	// unreadable list never disables a role.
+	type modelList struct {
+		models []string
+		known  bool
+	}
+	lists := map[string]modelList{}
+	listed := func(backend string) ([]string, bool) {
+		if l, ok := lists[backend]; ok {
+			return l.models, l.known
+		}
+		var l modelList
+		if b, ok := cfg.FindBackend(backend); ok {
+			served, ok := inferenceListModelsFn(ctx, b, nodeCfg)
+			l = modelList{models: served, known: ok && len(served) > 0}
+		}
+		lists[backend] = l
+		return l.models, l.known
+	}
+
 	seen := map[string]bool{}
 	var out []ModelChoice
 	for _, name := range names {
@@ -158,6 +186,9 @@ func modelChoicesFromAIConfig(nodeCfg *config.Config) []ModelChoice {
 		if !probeAIEndpoint(dec.Kind, dec.Endpoint) {
 			disabled = true
 			reason = "unreachable"
+		} else if served, known := listed(dec.Backend); known && !llmrouter.ModelListed(served, dec.Model) {
+			disabled = true
+			reason = "not served by " + dec.Backend
 		}
 
 		// ProviderName encodes backend for API key lookup at BuildBackend time.
