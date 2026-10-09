@@ -352,7 +352,7 @@ func visibleToolsMessage(r *ToolRegistry) string {
 	for _, def := range defs {
 		names = append(names, def.Function.Name)
 	}
-	return VisibleToolPrompt(names)
+	return VisibleToolPrompt(names, r.scope)
 }
 
 func (a *Agent) refreshVisibleTools() {
