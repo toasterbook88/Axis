@@ -80,6 +80,7 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 			SecurityClass: agent.BackendRemote,
 			Loaded:        e.State == models.ModelCatalogLoaded,
 			Listed:        e.State == models.ModelCatalogListed,
+			Loading:       e.State == models.ModelCatalogLoading,
 			CloudProxy:    e.Locality == models.ModelLocalityCloudProxy,
 			Capabilities:  append([]string(nil), e.Capabilities...),
 			Port:          e.Port,
@@ -100,6 +101,12 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 		}
 		if e.Engine != "ollama" && choice.Port <= 0 {
 			choice.Disabled, choice.DisabledReason = true, "no valid endpoint"
+		}
+		switch {
+		case e.Engine == "apple-foundation-models":
+			choice.Disabled, choice.DisabledReason = true, "runs in-process; no HTTP endpoint"
+		case e.State == models.ModelCatalogDown:
+			choice.Disabled, choice.DisabledReason = true, "server not answering"
 		}
 		choices = append(choices, choice)
 	}
@@ -125,6 +132,9 @@ func modelChoiceDetail(c ModelChoice) string {
 	}
 	if c.Listed {
 		parts = append(parts, "listed, not verified loaded")
+	}
+	if c.Loading {
+		parts = append(parts, "loading")
 	}
 	if c.CloudProxy {
 		parts = append(parts, "cloud proxy, leaves the cluster")

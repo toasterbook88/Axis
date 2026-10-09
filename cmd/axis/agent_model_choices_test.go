@@ -240,6 +240,33 @@ func TestCollectModelChoicesCarriesListedNotLoadedForMLX(t *testing.T) {
 	}
 }
 
+func TestCollectModelChoicesLoadingDownAndApple(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[1].ResidentModels = append(rt.Snapshot.Nodes[1].ResidentModels,
+		models.ResidentModel{Name: "warming", Runtime: "llama.cpp", Port: 8090, State: models.ModelCatalogLoading},
+		models.ResidentModel{Name: "gone", Runtime: "llama.cpp", Port: 8091, State: models.ModelCatalogDown},
+	)
+	rt.Snapshot.Nodes[1].AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, State: models.AppleFMReady, Model: "AFM 3 Core"}
+	choices := collectModelChoices(rt)
+
+	warming, _ := choiceByModel(t, choices, "warming")
+	if !warming.Loading || warming.Loaded || warming.Disabled {
+		t.Fatalf("warming = %+v, want loading, selectable", warming)
+	}
+	if got := modelChoiceDetail(warming); !strings.Contains(got, "loading") {
+		t.Fatalf("detail %q, want loading", got)
+	}
+	gone, _ := choiceByModel(t, choices, "gone")
+	if !gone.Disabled || gone.DisabledReason != "server not answering" {
+		t.Fatalf("gone = %+v", gone)
+	}
+	afm, ok := choiceByModel(t, choices, "AFM 3 Core")
+	if !ok || !afm.Disabled || afm.DisabledReason != "runs in-process; no HTTP endpoint" {
+		t.Fatalf("afm = %+v", afm)
+	}
+}
+
 // IDs keep the pre-catalog format so saved defaults and /model <id> still match.
 func TestCollectModelChoicesKeepsChoiceIDFormat(t *testing.T) {
 	stubNoAIConfigAndRecordProbes(t)
