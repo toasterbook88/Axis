@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/transport"
 )
 
 func TestAppleFMFromProbeReady(t *testing.T) {
@@ -94,6 +95,35 @@ func TestAppleFMHelperEmbedsFactsFunction(t *testing.T) {
 func TestAppleFMDiscoveryScriptNeverGenerates(t *testing.T) {
 	if !strings.Contains(AppleFoundationModelsDiscoveryScript, "--facts </dev/null") || strings.Contains(AppleFoundationModelsDiscoveryScript, "--self-test") {
 		t.Fatal("discovery script must run --facts </dev/null and never --self-test")
+	}
+}
+
+// A disk scan that spends the node deadline must not starve the Apple probe:
+// on a fleet Mac the scan ran past the deadline and the probe, run after it,
+// reported a timeout. Apple facts are read right after the core bundle.
+func TestRemoteCollectorReadsAppleFactsBeforeDiskScan(t *testing.T) {
+	bundle := "__AXIS_BUNDLE_V1__\nos=Darwin\narch=arm64\nos_version=27.2\nhostname=mac\ntool_swift=/usr/bin/swift\n__AXIS_BUNDLE_END__\n"
+	exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{
+		remoteFactBundleScript:               {out: bundle},
+		AppleFoundationModelsDiscoveryScript: {out: `{"availability":"available","context_size":8192,"model":"AFM 3 Core"}`},
+		OllamaDiscoveryScript:                {out: `{"installed":false}`},
+		LlamaServerDiscoveryScript:           {out: `{"installed":false}`},
+		MLXDiscoveryScript:                   {out: `{"installed":false}`},
+		DiskWeightsDiscoveryScript:           {err: context.DeadlineExceeded},
+	}}
+	facts, err := NewRemoteCollector("mac", "worker", "mac.example.com", exec).Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.AppleFM == nil || facts.AppleFM.State != models.AppleFMReady || facts.AppleFM.ContextWindow != 8192 {
+		t.Fatalf("apple = %+v, want ready with context 8192", facts.AppleFM)
+	}
+	index := func(script string) int {
+		return slices.IndexFunc(exec.runs, func(cmd string) bool { return cmd == script || cmd == transport.WrapBash(script) })
+	}
+	apple, disk := index(AppleFoundationModelsDiscoveryScript), index(DiskWeightsDiscoveryScript)
+	if apple < 0 || disk < 0 || apple > disk {
+		t.Fatalf("apple probe at %d, disk scan at %d; want apple first", apple, disk)
 	}
 }
 
