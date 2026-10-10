@@ -3,6 +3,7 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -734,15 +735,23 @@ type ObservationScope struct {
 }
 
 // ExecutionObservation records the latest empirical execution profile for an
-// exact scope. Unknown resource peaks remain unset.
+// exact scope. Unknown resource measurements remain unset.
 type ExecutionObservation struct {
 	Scope       ObservationScope `json:"scope" yaml:"scope"`
 	ObservedAt  time.Time        `json:"observed_at" yaml:"observed_at"`
 	SampleCount int              `json:"sample_count" yaml:"sample_count"`
 	LastSuccess bool             `json:"last_success" yaml:"last_success"`
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
-	PeakRAMMB   int64            `json:"peak_ram_mb,omitempty" yaml:"peak_ram_mb,omitempty"`
-	PeakVRAMMB  int64            `json:"peak_vram_mb,omitempty" yaml:"peak_vram_mb,omitempty"`
+	// ObservedRSSMB and ObservedVRAMMB are what the producer measured, in MB.
+	// A guarded task run records the process max RSS (rusage) and the highest
+	// device-wide VRAM seen while sampling nvidia-smi; a llama-server start
+	// records one RSS sample and device-wide VRAM. VRAM is never per-model.
+	// The ledger aggregate keeps the largest value across recorded runs, so
+	// ObservedAt (the latest run) need not be when that value was measured.
+	// Older state files spell these peak_ram_mb / peak_vram_mb; decoding
+	// accepts both and encoding writes the observed_* keys.
+	ObservedRSSMB  int64 `json:"observed_rss_mb,omitempty" yaml:"observed_rss_mb,omitempty"`
+	ObservedVRAMMB int64 `json:"observed_vram_mb,omitempty" yaml:"observed_vram_mb,omitempty"`
 	// ContextTokens and DeviceIndex are optional facts from a llama-server
 	// start. They are not part of ObservationKey. A nil pointer on a later
 	// sample keeps the previous value; a non-nil pointer, including zero,
@@ -824,4 +833,26 @@ func inferGPUCapabilities(vendor string) []string {
 	default:
 		return nil
 	}
+}
+
+// UnmarshalJSON reads observed_rss_mb / observed_vram_mb and falls back to
+// the legacy peak_ram_mb / peak_vram_mb keys written before the rename, so
+// an existing state file keeps its measurements. Encoding writes observed_*.
+func (o *ExecutionObservation) UnmarshalJSON(data []byte) error {
+	type plain ExecutionObservation
+	aux := struct {
+		*plain
+		LegacyRSSMB  *int64 `json:"peak_ram_mb"`
+		LegacyVRAMMB *int64 `json:"peak_vram_mb"`
+	}{plain: (*plain)(o)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if o.ObservedRSSMB == 0 && aux.LegacyRSSMB != nil {
+		o.ObservedRSSMB = *aux.LegacyRSSMB
+	}
+	if o.ObservedVRAMMB == 0 && aux.LegacyVRAMMB != nil {
+		o.ObservedVRAMMB = *aux.LegacyVRAMMB
+	}
+	return nil
 }

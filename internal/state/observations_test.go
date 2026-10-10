@@ -18,20 +18,20 @@ func TestRecordObservationMergesSamplesAndPeaks(t *testing.T) {
 	}
 
 	s.RecordObservation(models.ExecutionObservation{
-		Scope:       scope,
-		ObservedAt:  time.Now().UTC().Add(-2 * time.Minute),
-		SampleCount: 1,
-		LastSuccess: true,
-		WallTimeMS:  100,
-		PeakRAMMB:   1024,
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC().Add(-2 * time.Minute),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    100,
+		ObservedRSSMB: 1024,
 	})
 	s.RecordObservation(models.ExecutionObservation{
-		Scope:       scope,
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 1,
-		LastSuccess: false,
-		WallTimeMS:  300,
-		PeakRAMMB:   2048,
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   1,
+		LastSuccess:   false,
+		WallTimeMS:    300,
+		ObservedRSSMB: 2048,
 	})
 
 	obs, ok := s.Observation(scope)
@@ -44,8 +44,8 @@ func TestRecordObservationMergesSamplesAndPeaks(t *testing.T) {
 	if obs.WallTimeMS != 200 {
 		t.Fatalf("wall_time_ms = %d, want 200", obs.WallTimeMS)
 	}
-	if obs.PeakRAMMB != 2048 {
-		t.Fatalf("peak_ram_mb = %d, want 2048", obs.PeakRAMMB)
+	if obs.ObservedRSSMB != 2048 {
+		t.Fatalf("observed_rss_mb = %d, want 2048", obs.ObservedRSSMB)
 	}
 	if obs.LastSuccess {
 		t.Fatal("expected last_success to track the latest sample")
@@ -226,18 +226,18 @@ func TestMergeKeepsUnsetContextAndDeviceAndReplacesSetValues(t *testing.T) {
 		ObservedAt:    time.Now().UTC(),
 		LastSuccess:   true,
 		WallTimeMS:    10,
-		PeakRAMMB:     100,
+		ObservedRSSMB: 100,
 		ContextTokens: &ctx,
 		DeviceIndex:   &zero,
 	})
 	zero = 7
 	ctx = 1
 	s.RecordObservation(models.ExecutionObservation{
-		Scope:       scope,
-		ObservedAt:  time.Now().UTC(),
-		LastSuccess: true,
-		WallTimeMS:  10,
-		PeakRAMMB:   50,
+		Scope:         scope,
+		ObservedAt:    time.Now().UTC(),
+		LastSuccess:   true,
+		WallTimeMS:    10,
+		ObservedRSSMB: 50,
 	})
 	obs, ok := s.Observation(scope)
 	if !ok || obs == nil || obs.ContextTokens == nil || *obs.ContextTokens != 2048 {
@@ -246,8 +246,8 @@ func TestMergeKeepsUnsetContextAndDeviceAndReplacesSetValues(t *testing.T) {
 	if obs.DeviceIndex == nil || *obs.DeviceIndex != 0 {
 		t.Fatalf("nil device sample cleared index 0: %+v", obs)
 	}
-	if obs.PeakRAMMB != 100 {
-		t.Fatalf("peak = %d, want the previous max 100", obs.PeakRAMMB)
+	if obs.ObservedRSSMB != 100 {
+		t.Fatalf("peak = %d, want the previous max 100", obs.ObservedRSSMB)
 	}
 
 	nextCtx := 4096

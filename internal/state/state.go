@@ -40,17 +40,39 @@ type ExecutionOwner struct {
 // TombstoneEntry records a task-node failure for the immune system.
 // Deprecated: Migrated to failures.Store.
 type TaskExecutionRecord struct {
-	ExecID      string    `json:"exec_id"`
-	Description string    `json:"description"`
-	Command     string    `json:"command"`
-	Node        string    `json:"node"`
-	IsLocal     bool      `json:"is_local"`
-	ExitCode    int       `json:"exit_code"`
-	PeakRAMMB   int64     `json:"peak_ram_mb"`
-	PeakVRAMMB  int64     `json:"peak_vram_mb"`
-	WallTimeMS  int64     `json:"wall_time_ms"`
-	Timestamp   time.Time `json:"timestamp"`
-	Error       string    `json:"error,omitempty"`
+	ExecID         string    `json:"exec_id"`
+	Description    string    `json:"description"`
+	Command        string    `json:"command"`
+	Node           string    `json:"node"`
+	IsLocal        bool      `json:"is_local"`
+	ExitCode       int       `json:"exit_code"`
+	ObservedRSSMB  int64     `json:"observed_rss_mb"`
+	ObservedVRAMMB int64     `json:"observed_vram_mb"`
+	WallTimeMS     int64     `json:"wall_time_ms"`
+	Timestamp      time.Time `json:"timestamp"`
+	Error          string    `json:"error,omitempty"`
+}
+
+// UnmarshalJSON reads observed_rss_mb / observed_vram_mb and falls back to
+// the legacy peak_ram_mb / peak_vram_mb keys written before the rename, so
+// an existing state file keeps its measurements. Encoding writes observed_*.
+func (r *TaskExecutionRecord) UnmarshalJSON(data []byte) error {
+	type plain TaskExecutionRecord
+	aux := struct {
+		*plain
+		LegacyRSSMB  *int64 `json:"peak_ram_mb"`
+		LegacyVRAMMB *int64 `json:"peak_vram_mb"`
+	}{plain: (*plain)(r)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if r.ObservedRSSMB == 0 && aux.LegacyRSSMB != nil {
+		r.ObservedRSSMB = *aux.LegacyRSSMB
+	}
+	if r.ObservedVRAMMB == 0 && aux.LegacyVRAMMB != nil {
+		r.ObservedVRAMMB = *aux.LegacyVRAMMB
+	}
+	return nil
 }
 
 type ClusterState struct {

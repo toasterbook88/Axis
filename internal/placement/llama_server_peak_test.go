@@ -16,7 +16,7 @@ func llamaPeakNode(name string, allocatable int64) models.NodeFacts {
 	}
 }
 
-func recordLlamaPeak(st *state.ClusterState, node, model string, peak int64, observedAt time.Time) {
+func recordLlamaObserved(st *state.ClusterState, node, model string, observed int64, observedAt time.Time) {
 	st.RecordObservation(models.ExecutionObservation{
 		Scope: models.ObservationScope{
 			Node:      node,
@@ -25,18 +25,18 @@ func recordLlamaPeak(st *state.ClusterState, node, model string, peak int64, obs
 			Tool:      "llama-server",
 			ModelName: model,
 		},
-		ObservedAt:  observedAt,
-		LastSuccess: true,
-		WallTimeMS:  20,
-		PeakRAMMB:   peak,
+		ObservedAt:    observedAt,
+		LastSuccess:   true,
+		WallTimeMS:    20,
+		ObservedRSSMB: observed,
 	})
 }
 
-func TestLlamaServerPeakExclusionUsesRecordedPeak(t *testing.T) {
+func TestLlamaServerObservedExclusionUsesRecordedObservation(t *testing.T) {
 	now := time.Now().UTC()
 	st := &state.ClusterState{}
-	recordLlamaPeak(st, "tight", "a.gguf", 5000, now)
-	recordLlamaPeak(st, "wide", "a.gguf", 5000, now)
+	recordLlamaObserved(st, "tight", "a.gguf", 5000, now)
+	recordLlamaObserved(st, "wide", "a.gguf", 5000, now)
 	st.RecordObservation(models.ExecutionObservation{
 		Scope: models.ObservationScope{
 			Node:      "tight",
@@ -45,26 +45,26 @@ func TestLlamaServerPeakExclusionUsesRecordedPeak(t *testing.T) {
 			Tool:      "ollama",
 			ModelName: "a.gguf",
 		},
-		ObservedAt:  now,
-		LastSuccess: true,
-		WallTimeMS:  20,
-		PeakRAMMB:   99999,
+		ObservedAt:    now,
+		LastSuccess:   true,
+		WallTimeMS:    20,
+		ObservedRSSMB: 99999,
 	})
 
-	reason, blocked := LlamaServerPeakExclusion(llamaPeakNode("tight", 1000), "a.gguf", st)
-	if !blocked || reason != "empirical peak RAM 5000MB exceeds allocatable 1000MB" {
+	reason, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "a.gguf", st)
+	if !blocked || reason != "observed RSS 5000MB exceeds allocatable 1000MB" {
 		t.Fatalf("exclusion = %q blocked=%v", reason, blocked)
 	}
-	if _, blocked := LlamaServerPeakExclusion(llamaPeakNode("wide", 8000), "a.gguf", st); blocked {
+	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("wide", 8000), "a.gguf", st); blocked {
 		t.Fatal("peak within allocatable RAM excluded the node")
 	}
-	if _, blocked := LlamaServerPeakExclusion(llamaPeakNode("tight", 1000), "other.gguf", st); blocked {
+	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "other.gguf", st); blocked {
 		t.Fatal("a different model name reused the llama-server peak")
 	}
-	if _, blocked := LlamaServerPeakExclusion(llamaPeakNode("missing", 1000), "a.gguf", st); blocked {
+	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("missing", 1000), "a.gguf", st); blocked {
 		t.Fatal("missing observation excluded the node")
 	}
-	if _, blocked := LlamaServerPeakExclusion(llamaPeakNode("tight", 1000), "a.gguf", nil); blocked {
+	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "a.gguf", nil); blocked {
 		t.Fatal("nil state excluded the node")
 	}
 	ollamaOnly := &state.ClusterState{}
@@ -76,18 +76,18 @@ func TestLlamaServerPeakExclusionUsesRecordedPeak(t *testing.T) {
 			Tool:      "ollama",
 			ModelName: "a.gguf",
 		},
-		ObservedAt:  now,
-		LastSuccess: true,
-		WallTimeMS:  20,
-		PeakRAMMB:   99999,
+		ObservedAt:    now,
+		LastSuccess:   true,
+		WallTimeMS:    20,
+		ObservedRSSMB: 99999,
 	})
-	if _, blocked := LlamaServerPeakExclusion(llamaPeakNode("tight", 1000), "a.gguf", ollamaOnly); blocked {
+	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "a.gguf", ollamaOnly); blocked {
 		t.Fatal("an ollama peak excluded a llama-server plan")
 	}
 
 	stale := &state.ClusterState{}
-	recordLlamaPeak(stale, "tight", "a.gguf", 5000, now.Add(-(state.ObservationStaleAfter + time.Hour)))
-	if _, blocked := LlamaServerPeakExclusion(llamaPeakNode("tight", 1000), "a.gguf", stale); blocked {
+	recordLlamaObserved(stale, "tight", "a.gguf", 5000, now.Add(-(state.ObservationStaleAfter + time.Hour)))
+	if _, blocked := LlamaServerObservedExclusion(llamaPeakNode("tight", 1000), "a.gguf", stale); blocked {
 		t.Fatal("stale peak excluded the node")
 	}
 }

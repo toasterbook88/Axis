@@ -65,7 +65,7 @@ func TestLlamaServerStartRecordsPeakAndContext(t *testing.T) {
 		t.Fatalf("warnings = %v", receipt.Warnings)
 	}
 	obs := loadedLlamaObservation(t, "storage", "a.gguf")
-	if obs.PeakRAMMB != 40 || obs.PeakVRAMMB != 7 || !obs.LastSuccess || obs.WallTimeMS < 1 {
+	if obs.ObservedRSSMB != 40 || obs.ObservedVRAMMB != 7 || !obs.LastSuccess || obs.WallTimeMS < 1 {
 		t.Fatalf("observation = %+v", obs)
 	}
 	if obs.Scope.Backend != "llama.cpp" || obs.Scope.Tool != "llama-server" || obs.Scope.Workload != models.ClassLlamaServer {
@@ -95,7 +95,7 @@ func TestLlamaServerStartWithoutDeviceSkipsVRAM(t *testing.T) {
 		t.Fatalf("unset device queried VRAM: %s", script)
 	}
 	obs := loadedLlamaObservation(t, "storage", "a.gguf")
-	if obs.PeakRAMMB != 11 || obs.PeakVRAMMB != 0 || obs.DeviceIndex != nil {
+	if obs.ObservedRSSMB != 11 || obs.ObservedVRAMMB != 0 || obs.DeviceIndex != nil {
 		t.Fatalf("observation = %+v", obs)
 	}
 }
@@ -118,7 +118,7 @@ func TestLlamaServerRSSFailureWarnsAndStillStarts(t *testing.T) {
 		t.Fatalf("output = %q", buf.String())
 	}
 	obs := loadedLlamaObservation(t, "storage", "a.gguf")
-	if obs.PeakRAMMB != 0 || obs.PeakVRAMMB != 0 || !obs.LastSuccess {
+	if obs.ObservedRSSMB != 0 || obs.ObservedVRAMMB != 0 || !obs.LastSuccess {
 		t.Fatalf("observation = %+v", obs)
 	}
 }
@@ -163,7 +163,7 @@ func TestWriterFailureStillRecordsLlamaObservation(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	obs := loadedLlamaObservation(t, "storage", "a.gguf")
-	if obs.PeakRAMMB != 12 {
+	if obs.ObservedRSSMB != 12 {
 		t.Fatalf("observation = %+v", obs)
 	}
 }
@@ -247,10 +247,10 @@ func TestRunModelPlanExcludesFreshLlamaPeak(t *testing.T) {
 				Tool:      "llama-server",
 				ModelName: "qwen2.5-7b.gguf",
 			},
-			ObservedAt:  time.Now().UTC(),
-			LastSuccess: true,
-			WallTimeMS:  30,
-			PeakRAMMB:   8000,
+			ObservedAt:    time.Now().UTC(),
+			LastSuccess:   true,
+			WallTimeMS:    30,
+			ObservedRSSMB: 8000,
 		})
 		return nil
 	}); err != nil {
@@ -270,7 +270,7 @@ func TestRunModelPlanExcludesFreshLlamaPeak(t *testing.T) {
 	for _, ex := range plan.Excluded {
 		if ex.Node == "tight" {
 			found = true
-			if len(ex.Reasons) != 1 || ex.Reasons[0] != "empirical peak RAM 8000MB exceeds allocatable 512MB" {
+			if len(ex.Reasons) != 1 || ex.Reasons[0] != "observed RSS 8000MB exceeds allocatable 512MB" {
 				t.Fatalf("reasons = %#v", ex.Reasons)
 			}
 		}
@@ -291,7 +291,7 @@ func TestRunModelPlanWithoutObservationStaysPut(t *testing.T) {
 	}
 }
 
-func TestRunModelPlanReturnsStateLoadError(t *testing.T) {
+func TestRunModelPlanWarnsAndSkipsExclusionsOnStateLoadError(t *testing.T) {
 	stubModelSnapshot(t, llamaPlanSnapshot())
 	notDir := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
@@ -299,14 +299,23 @@ func TestRunModelPlanReturnsStateLoadError(t *testing.T) {
 	}
 	t.Setenv("AXIS_HOME", notDir)
 	cmd := modelPlanCmd()
-	cmd.SetOut(&bytes.Buffer{})
+	var buf, errBuf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&errBuf)
 	cmd.SetArgs([]string{"qwen2.5-7b", "--format", "json"})
 	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected state load error")
+	if err != nil {
+		t.Fatalf("plan should not fail on state load error: %v", err)
 	}
-	if strings.Contains(err.Error(), "no eligible") {
-		t.Fatalf("load error treated as no peak: %v", err)
+	if !strings.Contains(errBuf.String(), "warning: skipping observation-based exclusions") {
+		t.Fatalf("expected warning on stderr, got: %q", errBuf.String())
+	}
+	var plan modelplan.ModelPlacementPlan
+	if err := json.Unmarshal(buf.Bytes(), &plan); err != nil {
+		t.Fatalf("plan json: %v\n%s", err, buf.String())
+	}
+	if plan.BestCandidate != "tight" || len(plan.Candidates) != 2 {
+		t.Fatalf("plan should include all candidates without exclusions: best=%q candidates=%+v", plan.BestCandidate, plan.Candidates)
 	}
 }
 
@@ -320,7 +329,7 @@ func TestRunModelPlanAllExcludedByPeakFails(t *testing.T) {
 				Node: "tight", Workload: models.ClassLlamaServer, Backend: "llama.cpp",
 				Tool: "llama-server", ModelName: "qwen2.5-7b.gguf",
 			},
-			ObservedAt: time.Now().UTC(), LastSuccess: true, WallTimeMS: 10, PeakRAMMB: 8000,
+			ObservedAt: time.Now().UTC(), LastSuccess: true, WallTimeMS: 10, ObservedRSSMB: 8000,
 		})
 		return nil
 	}); err != nil {
