@@ -73,7 +73,7 @@ func residentServingPick(node models.NodeFacts, model string) (ServingPick, bool
 	var found ServingPick
 	ok := false
 	for _, res := range node.ResidentModels {
-		if !knownServingRuntime(res.Runtime) || !servingNameMatches(res.Runtime, res.Name, model) {
+		if res.Down() || !knownServingRuntime(res.Runtime) || !servingNameMatches(res.Runtime, res.Name, model) {
 			continue
 		}
 		if ok && res.WarmthScore <= found.warmth {

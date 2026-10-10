@@ -456,3 +456,34 @@ func TestApplyReservationEntriesUsesFrozenLedgerRead(t *testing.T) {
 		t.Fatalf("frozen reservation view changed after live ledger mutation: got %d, want 512", got)
 	}
 }
+
+// A caller mutating a cloned snapshot must not change the published one:
+// Apple facts and resident provenance are pointers/maps, not values.
+func TestCloneIsolatesAppleFMAndResidentProvenance(t *testing.T) {
+	orig := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		Name: "mac",
+		AppleFM: &models.AppleFoundationModelsInfo{
+			State: models.AppleFMReady, Model: "AFM 3 Core",
+			Capabilities: []string{"toolCalling"},
+			Provenance:   map[string]string{"state": "SystemLanguageModel.availability"},
+		},
+		ResidentModels: []models.ResidentModel{{
+			Name: "a.gguf", Runtime: "llama.cpp", GPUIndices: []int{0},
+			Provenance: map[string]string{"state": "GET /health 200"},
+		}},
+	}}}
+	clone := snapshotview.Clone(orig)
+	clone.Nodes[0].AppleFM.Model = "changed"
+	clone.Nodes[0].AppleFM.Capabilities[0] = "changed"
+	clone.Nodes[0].AppleFM.Provenance["state"] = "changed"
+	clone.Nodes[0].ResidentModels[0].Provenance["state"] = "changed"
+	clone.Nodes[0].ResidentModels[0].GPUIndices[0] = 9
+
+	got := orig.Nodes[0]
+	if got.AppleFM.Model != "AFM 3 Core" || got.AppleFM.Capabilities[0] != "toolCalling" || got.AppleFM.Provenance["state"] != "SystemLanguageModel.availability" {
+		t.Fatalf("clone mutation reached published Apple facts: %+v", got.AppleFM)
+	}
+	if got.ResidentModels[0].Provenance["state"] != "GET /health 200" || got.ResidentModels[0].GPUIndices[0] != 0 {
+		t.Fatalf("clone mutation reached published resident: %+v", got.ResidentModels[0])
+	}
+}

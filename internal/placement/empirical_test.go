@@ -83,6 +83,19 @@ func TestRankCandidatesPrefersResidentModelLocality(t *testing.T) {
 	}
 }
 
+// A down server's row is not resident-model locality.
+func TestResidentModelRankIgnoresDownServer(t *testing.T) {
+	n := nodeComplete("n", 6000, "none", "llama-server")
+	n.ResidentModels = []models.ResidentModel{
+		{Name: "gone", Runtime: "llama.cpp", State: models.ModelCatalogDown},
+		{Name: "ok", Runtime: "llama.cpp", State: models.ModelCatalogLoaded},
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"llama-server"}, Workload: models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference}}
+	if got := residentModelRank(n, reqs); got != 1 {
+		t.Fatalf("rank = %d, want 1 (down row excluded)", got)
+	}
+}
+
 func TestSelectBestNodeReasoningMentionsEmpiricalAndResidentModelSignals(t *testing.T) {
 	alpha := nodeComplete("alpha", 6000, "none", "ollama")
 	alpha.Ollama = &models.OllamaInfo{Installed: true, Running: true}
