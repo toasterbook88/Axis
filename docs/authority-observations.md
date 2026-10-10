@@ -31,17 +31,17 @@ guarded execution (local or remote)
 No other package writes observations. Read-only consumers:
 - `internal/placement/ranker.go` — `RankCandidates` precomputes empirical observations for the sort comparator.
 - `internal/placement/selector.go` — `SelectBestNode` includes empirical history in decision reasoning.
-- `internal/placement/explain.go` — `empiricalPeakRAMExclusionReason` reads observations for filter eligibility.
+- `internal/placement/explain.go` — `empiricalObservedRAMExclusionReason` reads observations for filter eligibility.
 
 ## 3. Authoritative vs Advisory
 
 **Observations are advisory, not authoritative.**
 
 - They **do not** override snapshot facts (allocatable RAM, tool presence, pressure, GPU state).
-- They **do not** block execution directly; they only influence placement ranking and can trigger a soft filter exclusion when a fresh observation's `PeakRAMMB` exceeds current allocatable RAM.
+- They **do not** block execution directly; they only influence placement ranking and can trigger a soft filter exclusion when a fresh observation's `ObservedRSSMB` exceeds current allocatable RAM.
 - The freshness gate (`ObservationStaleAfter = 7 days`) means absent or stale observations are silently ignored.
 
-The only place observations affect hard eligibility is `empiricalPeakRAMExclusionReason` in `internal/placement/explain.go`, and even that is explicitly documented as conservative: it only fires when a **fresh** observation exists and `PeakRAMMB > 0`.
+The only place observations affect hard eligibility is `empiricalObservedRAMExclusionReason` in `internal/placement/explain.go`, and even that is explicitly documented as conservative: it only fires when a **fresh** observation exists and `ObservedRSSMB > 0`.
 
 ## 4. Does Placement Directly Use Observations vs Snapshot Facts?
 
@@ -49,8 +49,8 @@ The only place observations affect hard eligibility is `empiricalPeakRAMExclusio
 
 | Stage | Observation usage | Snapshot fact usage |
 |-------|-------------------|---------------------|
-| **Filter** (`FilterCandidates`) | `empiricalPeakRAMExclusionReason` may exclude a node if observed peak RAM > current allocatable | Status, tools, pressure, thermal, battery, MinFreeRAMMB |
-| **Rank** (`RankCandidates`) | `compareObservationPreference` ranks nodes by last success, lower peak RAM, lower wall time, higher sample count | Allocatable RAM, GPU score, backend rank, headroom, TurboQuant, unified memory, reservation ratio |
+| **Filter** (`FilterCandidates`) | `empiricalObservedRAMExclusionReason` may exclude a node if observed RSS > current allocatable | Status, tools, pressure, thermal, battery, MinFreeRAMMB |
+| **Rank** (`RankCandidates`) | `compareObservationPreference` ranks nodes by last success, lower observed RSS, lower wall time, higher sample count | Allocatable RAM, GPU score, backend rank, headroom, TurboQuant, unified memory, reservation ratio |
 | **Explain** (`buildSuccessDecision`) | `empiricalReason` adds diagnostic text | All snapshot-derived reasoning |
 
 Observations are **never** used to compute `allocatableRAM`, `gpuScore`, or any core resource metric. They are a tie-breaker and a guardrail, not a primary signal.
@@ -63,18 +63,21 @@ The observation pipeline silently normalizes and merges data in several ways:
 - `ObservedAt` defaults to `time.Now().UTC()` if zero.
 - `SampleCount` defaults to `1` if ≤ 0.
 - `WallTimeMS` defaults to `1` if ≤ 0 (prevents division by zero in weighted average).
-- `PeakRAMMB` and `PeakVRAMMB` clamped to `0` if negative.
+- `ObservedRSSMB` and `ObservedVRAMMB` clamped to `0` if negative.
 - `ModelName` synced from `Scope.ModelName` if empty.
 - All string fields trimmed and lower-cased for key generation.
 
 ### 5.2 Merge semantics (`mergeObservation`)
 - `SampleCount` is additive (`existing + next`).
 - `WallTimeMS` is a **weighted average** across total samples.
-- `PeakRAMMB` and `PeakVRAMMB` keep the **maximum** seen across runs (not average).
-- `ObservedAt` and `LastSuccess` are overwritten with the latest values.
+- `ObservedRSSMB` and `ObservedVRAMMB` keep the **maximum** seen across runs (not average). Each run contributes what its producer measured: a guarded task run records the process max RSS and the highest device-wide VRAM it sampled; a llama-server start records one RSS sample and device-wide VRAM. The aggregate is therefore the largest recorded measurement, not a proven process-lifetime peak, and VRAM is never per-model.
+- `ObservedAt` and `LastSuccess` are overwritten with the latest values, so `ObservedAt` is when the latest run was recorded, not necessarily when the retained maximum was measured.
 - `ModelName` is overwritten if the new observation carries one.
 
-### 5.3 Key scope
+### 5.3 Wire compatibility
+State files written by v0.19.5 and earlier store these fields as `peak_ram_mb` / `peak_vram_mb`. Loading accepts both spellings and the next save writes `observed_rss_mb` / `observed_vram_mb`, so no measurement is lost. A binary older than this change reads the new keys as zero; downgrading after a save loses those values in the older binary only.
+
+### 5.4 Key scope
 `ObservationKey` hashes `node + workload + backend + tool + model_name` (SHA-256, 12 hex chars). This means:
 - Observations are **scoped per node, per workload, per tool, per model**.
 - Two different model names on the same node get separate observation entries.

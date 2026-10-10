@@ -53,6 +53,28 @@ type TaskExecutionRecord struct {
 	Error          string    `json:"error,omitempty"`
 }
 
+// UnmarshalJSON reads observed_rss_mb / observed_vram_mb and falls back to
+// the legacy peak_ram_mb / peak_vram_mb keys written before the rename, so
+// an existing state file keeps its measurements. Encoding writes observed_*.
+func (r *TaskExecutionRecord) UnmarshalJSON(data []byte) error {
+	type plain TaskExecutionRecord
+	aux := struct {
+		*plain
+		LegacyRSSMB  *int64 `json:"peak_ram_mb"`
+		LegacyVRAMMB *int64 `json:"peak_vram_mb"`
+	}{plain: (*plain)(r)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if r.ObservedRSSMB == 0 && aux.LegacyRSSMB != nil {
+		r.ObservedRSSMB = *aux.LegacyRSSMB
+	}
+	if r.ObservedVRAMMB == 0 && aux.LegacyVRAMMB != nil {
+		r.ObservedVRAMMB = *aux.LegacyVRAMMB
+	}
+	return nil
+}
+
 type ClusterState struct {
 	Version      int                                    `json:"version,omitempty"`
 	Nodes        map[string]NodeState                   `json:"nodes"`

@@ -559,10 +559,10 @@ func formatObservationSummary(resp execution.GuardedExecutionResult) string {
 	}
 	parts := []string{fmt.Sprintf("wall %dms", resp.WallTimeMS)}
 	if resp.ObservedRSSMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak RAM %dMB", resp.ObservedRSSMB))
+		parts = append(parts, fmt.Sprintf("observed RSS %dMB", resp.ObservedRSSMB))
 	}
 	if resp.ObservedVRAMMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak VRAM %dMB", resp.ObservedVRAMMB))
+		parts = append(parts, fmt.Sprintf("observed VRAM %dMB", resp.ObservedVRAMMB))
 	}
 	if !resp.OK {
 		parts = append(parts, "unsuccessful")
@@ -954,7 +954,7 @@ func taskHistoryCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(out, ui.Bold("AXIS Task Execution History"))
-			tbl := ui.NewTable("EXEC ID", "TIMESTAMP", "NODE", "EXIT CODE", "PEAK RAM", "DURATION", "COMMAND")
+			tbl := ui.NewTable("EXEC ID", "TIMESTAMP", "NODE", "EXIT CODE", "OBS RSS", "DURATION", "COMMAND")
 			for i := len(st.TaskHistory) - 1; i >= 0; i-- {
 				rec := st.TaskHistory[i]
 				execIDShort := rec.ExecID

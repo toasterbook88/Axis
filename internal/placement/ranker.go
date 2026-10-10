@@ -365,7 +365,7 @@ func formatObservationRank(obs *models.ExecutionObservation) string {
 	if obs == nil {
 		return "none"
 	}
-	return fmt.Sprintf("success=%t,peak_ram=%dMB,peak_vram=%dMB,wall=%dms,samples=%d",
+	return fmt.Sprintf("success=%t,observed_rss=%dMB,observed_vram=%dMB,wall=%dms,samples=%d",
 		obs.LastSuccess, obs.ObservedRSSMB, obs.ObservedVRAMMB, obs.WallTimeMS, obs.SampleCount)
 }
 

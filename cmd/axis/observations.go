@@ -61,7 +61,7 @@ func renderObservationTable(entries []models.ExecutionObservation) string {
 	}
 
 	ui.WhiteColor.Fprintf(&b, "  %-15s %-12s %-12s %-12s %10s %10s %8s %8s\n",
-		"NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "PEAK RAM", "PEAK VRAM", "SAMPLES")
+		"NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "OBS RSS", "OBS VRAM", "SAMPLES")
 	b.WriteString("  ")
 	b.WriteString(sep)
 	b.WriteString("\n")
@@ -132,7 +132,7 @@ func observationsListCmd() *cobra.Command {
 					_, err := fmt.Fprintln(cmd.OutOrStdout(), "No observations tracked")
 					return err
 				}
-				tbl := ui.NewTable("KEY", "NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "PEAK RAM", "PEAK VRAM", "SAMPLES", "OBSERVED")
+				tbl := ui.NewTable("KEY", "NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "OBS RSS", "OBS VRAM", "SAMPLES", "OBSERVED")
 				for _, obs := range entries {
 					key := state.ObservationKey(obs.Scope)
 					peakVRAM := "-"
@@ -220,9 +220,9 @@ func observationsInspectCmd() *cobra.Command {
 					fmt.Fprintf(&b, "Model:       %s\n", found.Scope.ModelName)
 				}
 				fmt.Fprintf(&b, "Wall Time:   %d ms\n", found.WallTimeMS)
-				fmt.Fprintf(&b, "Peak RAM:    %d MB\n", found.ObservedRSSMB)
+				fmt.Fprintf(&b, "Observed RSS:  %d MB\n", found.ObservedRSSMB)
 				if found.ObservedVRAMMB > 0 {
-					fmt.Fprintf(&b, "Peak VRAM:   %d MB\n", found.ObservedVRAMMB)
+					fmt.Fprintf(&b, "Observed VRAM: %d MB\n", found.ObservedVRAMMB)
 				}
 				fmt.Fprintf(&b, "Samples:     %d\n", found.SampleCount)
 				fmt.Fprintf(&b, "Last Success:%v\n", found.LastSuccess)
