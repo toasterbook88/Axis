@@ -60,13 +60,11 @@ fi
 
 
 # Verify multiline renderers keep their record structure; never line-sort output.
-multiline_fixture="$(printf '%s\\n' "$fixture" | jq '.data.repository.pullRequest.reviews.nodes[0].body = "z-first\\na-second" | .data.repository.pullRequest.comments.nodes[0].body = "z-first\\na-second"')"
-multi_review="$(printf '%s\\n' "$multiline_fixture" | render_review_bodies)"
-[[ "$multi_review" == *
-z-first\\na-second'* ]]
-multi_comment="$(printf '%s\\n' "$multiline_fixture" | render_general_comments)"
-[[ "$multi_comment" == *
-z-first\\na-second'* ]]
+multiline_fixture="$(printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviews.nodes[0].body = "z-first\na-second" | .data.repository.pullRequest.comments.nodes[0].body = "z-first\na-second"')"
+multi_review="$(printf '%s\n' "$multiline_fixture" | render_review_bodies)"
+[[ "$multi_review" == *$'z-first\na-second'* ]]
+multi_comment="$(printf '%s\n' "$multiline_fixture" | render_general_comments)"
+[[ "$multi_comment" == *$'z-first\na-second'* ]]
 ! grep -F 'render_review_bodies | sort -u' "$repo_root/hack/pr-review-cycle.sh" >/dev/null
 ! grep -F 'render_general_comments | sort -u' "$repo_root/hack/pr-review-cycle.sh" >/dev/null
 
