@@ -220,7 +220,14 @@ echo "  This script will not merge."
 if [[ "$unresolved" != "0" ]]; then
   exit 2
 fi
-require_clean_merge_state "$(echo "$pr_json" | jq -r .mergeStateStatus)"
+# Re-read at enforcement: the bot wait and review collection take minutes,
+# and an earlier CLEAN must not pass a PR whose base or head has moved since.
+final_json="$(gh pr view "$PR" --json headRefOid,mergeStateStatus)"
+if [[ "$(echo "$final_json" | jq -r .headRefOid)" != "$head_oid" ]]; then
+  echo "error: head moved during review (was ${head_oid:0:7}); re-run" >&2
+  exit 1
+fi
+require_clean_merge_state "$(echo "$final_json" | jq -r .mergeStateStatus)"
 exit 0
 }
 
