@@ -102,10 +102,17 @@ base_branch="$(gh pr view "$PR" --json baseRefName --jq .baseRefName)"
 repo_owner="$(gh repo view --json owner --jq .owner.login)"
 repo_name="$(gh repo view --json name --jq .name)"
 
-mapfile -t REQUIRED_CHECKS < <(
-  gh api "repos/$repo_owner/$repo_name/branches/$base_branch/protection/required_status_checks" \
-    --jq '.contexts[]' 2>/dev/null || true
-)
+# Keep API errors and malformed responses distinct from a confirmed empty list.
+# Never treat a failed discovery request as "no required checks".
+if ! required_json="$(gh api "repos/$repo_owner/$repo_name/branches/$base_branch/protection/required_status_checks")"; then
+  echo "error: unable to discover required checks for $base_branch" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$required_json" | jq -e '.contexts | type == "array" and all(.[]; type == "string" and length > 0)' >/dev/null; then
+  echo "error: malformed required-check response for $base_branch" >&2
+  exit 1
+fi
+mapfile -t REQUIRED_CHECKS < <(printf '%s\n' "$required_json" | jq -r '.contexts[]')
 if [[ ${#REQUIRED_CHECKS[@]} -eq 0 ]]; then
   echo "warning: no required checks found for branch $base_branch; proceeding without checks verification" >&2
 fi
@@ -198,10 +205,10 @@ query(\$endCursor: String) {
 }")"
 
 echo "--- Review bodies ---"
-echo "$thread_json" | render_review_bodies | sort -u
+echo "$thread_json" | render_review_bodies
 
 echo "--- General PR comments ---"
-echo "$thread_json" | render_general_comments | sort -u
+echo "$thread_json" | render_general_comments
 
 echo "--- Inline threads ---"
 echo "$thread_json" | render_inline_threads "$head_oid"
