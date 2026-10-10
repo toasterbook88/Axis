@@ -85,8 +85,7 @@ case "$1 $2" in
   "pr view")
     case "$*" in
       *"baseRefName"*) echo main ;;
-      *"headRefOid,mergeStateStatus)"*) exit 51 ;;
-      *"headRefOid,mergeStateStatus"*)
+      *"--json headRefOid,mergeStateStatus"*)
         case "$GH_MOCK_CASE" in
           clean) echo '{"headRefOid":"abcdef1234567890","mergeStateStatus":"CLEAN"}' ;;
           dirty) echo '{"headRefOid":"abcdef1234567890","mergeStateStatus":"DIRTY"}' ;;
