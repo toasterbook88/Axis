@@ -842,16 +842,22 @@ func (o *ExecutionObservation) UnmarshalJSON(data []byte) error {
 	type plain ExecutionObservation
 	aux := struct {
 		*plain
-		LegacyRSSMB  *int64 `json:"peak_ram_mb"`
-		LegacyVRAMMB *int64 `json:"peak_vram_mb"`
+		ObservedRSSMB  *int64 `json:"observed_rss_mb"`
+		ObservedVRAMMB *int64 `json:"observed_vram_mb"`
+		LegacyRSSMB    *int64 `json:"peak_ram_mb"`
+		LegacyVRAMMB   *int64 `json:"peak_vram_mb"`
 	}{plain: (*plain)(o)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	if o.ObservedRSSMB == 0 && aux.LegacyRSSMB != nil {
+	if aux.ObservedRSSMB != nil {
+		o.ObservedRSSMB = *aux.ObservedRSSMB
+	} else if aux.LegacyRSSMB != nil {
 		o.ObservedRSSMB = *aux.LegacyRSSMB
 	}
-	if o.ObservedVRAMMB == 0 && aux.LegacyVRAMMB != nil {
+	if aux.ObservedVRAMMB != nil {
+		o.ObservedVRAMMB = *aux.ObservedVRAMMB
+	} else if aux.LegacyVRAMMB != nil {
 		o.ObservedVRAMMB = *aux.LegacyVRAMMB
 	}
 	return nil

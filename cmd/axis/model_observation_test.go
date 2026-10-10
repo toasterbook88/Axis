@@ -319,6 +319,43 @@ func TestRunModelPlanWarnsAndSkipsExclusionsOnStateLoadError(t *testing.T) {
 	}
 }
 
+func TestRunModelPlanWarnsAndDegradesOnCorruptState(t *testing.T) {
+	stubModelSnapshot(t, llamaPlanSnapshot())
+	axisHome := t.TempDir()
+	t.Setenv("AXIS_HOME", axisHome)
+	statePath := filepath.Join(axisHome, "state.json")
+	if err := os.WriteFile(statePath, []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := modelPlanCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"qwen2.5-7b", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("plan should degrade instead of failing on corrupt state: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "warning: skipping observation-based exclusions") ||
+		!strings.Contains(errOut.String(), "recovered local AXIS state") {
+		t.Fatalf("expected explicit corrupt-state degradation warning, got %q", errOut.String())
+	}
+	var plan modelplan.ModelPlacementPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("plan json: %v\n%s", err, out.String())
+	}
+	if plan.BestCandidate != "tight" || len(plan.Candidates) != 2 {
+		t.Fatalf("degraded plan should retain candidates without observation exclusions: best=%q candidates=%+v", plan.BestCandidate, plan.Candidates)
+	}
+	backups, err := filepath.Glob(statePath + ".corrupt-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("corrupt state backups = %v, want exactly one", backups)
+	}
+}
+
 func TestRunModelPlanAllExcludedByPeakFails(t *testing.T) {
 	snap := llamaPlanSnapshot()
 	snap.Nodes = snap.Nodes[:1]

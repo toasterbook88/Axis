@@ -210,7 +210,7 @@ Areas where the live repo has moved past the older docs/specs:
 - Facts and placement now carry additive unified-memory and runtime-pressure metadata instead of relying only on coarse free-RAM pressure guesses
 - Live and cached snapshot-bearing surfaces now expose the same typed discovery-freshness contract instead of relying only on free-form warnings
 - Placement now consumes fresh exact-scope empirical history and truth-backed resident-model locality as additive preferences instead of relying only on static heuristics
-- Empirical observation scopes are now keyed per model name so different models on the same node do not contaminate each other's peak RAM history
+- Empirical observation scopes are now keyed per model name so different models on the same node do not contaminate each other's observed RSS history
 - Placement hard-filters nodes before ranking when a fresh empirical `ObservedRSSMB` observation exceeds the node's current allocatable RAM, making the empirical arc load-bearing rather than advisory
 - Resident-model facts now include llama-server and MLX in addition to Ollama, making the resident-model view multiruntime
 - `axis status` now surfaces a live RESIDENT MODELS table so operators can see at a glance which models are running where and under which runtime

@@ -1635,6 +1635,48 @@ func TestRunTaskReturnsErrorWhenRuntimeFails(t *testing.T) {
 	}
 }
 
+func TestRunResponseUsesObservedMeasurementFields(t *testing.T) {
+	restoreRuntime := stubLiveRuntime(t, &runtimectx.Context{}, nil)
+	defer restoreRuntime()
+
+	previous := runLiveGuarded
+	t.Cleanup(func() { runLiveGuarded = previous })
+	runLiveGuarded = func(context.Context, *runtimectx.Context, execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
+		return execution.GuardedExecutionResult{
+			OK:             true,
+			Description:    "echo ok",
+			Mode:           "exec",
+			ObservedRSSMB:  1536,
+			ObservedVRAMMB: 768,
+		}, nil
+	}
+
+	mux := http.NewServeMux()
+	registerRoutes(mux, nil, "tok")
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"description":"echo ok","mode":"exec","confirm":"YES"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["observed_rss_mb"] != float64(1536) || payload["observed_vram_mb"] != float64(768) {
+		t.Fatalf("observed measurement fields missing from response: %s", rec.Body.String())
+	}
+	if _, exists := payload["peak_ram_mb"]; exists {
+		t.Fatalf("legacy peak_ram_mb leaked into response: %s", rec.Body.String())
+	}
+	if _, exists := payload["peak_vram_mb"]; exists {
+		t.Fatalf("legacy peak_vram_mb leaked into response: %s", rec.Body.String())
+	}
+}
+
 func TestRunTaskStreamReturnsFinalResultWhenRuntimeFails(t *testing.T) {
 	restore := stubLiveRuntime(t, nil, errors.New("node discovery failed"))
 	defer restore()

@@ -4,7 +4,7 @@
 
 | Layer | File | Role |
 |-------|------|------|
-| **Collection** | `internal/execution/guarded.go` | `recordExecutionOutcome()` gathers post-execution metrics (elapsed time, peak RAM, success/failure) from both local and remote runs. |
+| **Collection** | `internal/execution/guarded.go` | `recordExecutionOutcome()` gathers post-execution metrics (elapsed time, observed RSS, success/failure) from both local and remote runs. |
 | **Storage** | `internal/state/observations.go` | `ClusterState.RecordObservation()` persists observations into `ClusterState.Observations` map. |
 | **Schema** | `internal/models/types.go` | `ExecutionObservation` and `ObservationScope` define the data model. |
 

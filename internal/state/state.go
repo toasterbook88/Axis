@@ -60,16 +60,22 @@ func (r *TaskExecutionRecord) UnmarshalJSON(data []byte) error {
 	type plain TaskExecutionRecord
 	aux := struct {
 		*plain
-		LegacyRSSMB  *int64 `json:"peak_ram_mb"`
-		LegacyVRAMMB *int64 `json:"peak_vram_mb"`
+		ObservedRSSMB  *int64 `json:"observed_rss_mb"`
+		ObservedVRAMMB *int64 `json:"observed_vram_mb"`
+		LegacyRSSMB    *int64 `json:"peak_ram_mb"`
+		LegacyVRAMMB   *int64 `json:"peak_vram_mb"`
 	}{plain: (*plain)(r)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	if r.ObservedRSSMB == 0 && aux.LegacyRSSMB != nil {
+	if aux.ObservedRSSMB != nil {
+		r.ObservedRSSMB = *aux.ObservedRSSMB
+	} else if aux.LegacyRSSMB != nil {
 		r.ObservedRSSMB = *aux.LegacyRSSMB
 	}
-	if r.ObservedVRAMMB == 0 && aux.LegacyVRAMMB != nil {
+	if aux.ObservedVRAMMB != nil {
+		r.ObservedVRAMMB = *aux.ObservedVRAMMB
+	} else if aux.LegacyVRAMMB != nil {
 		r.ObservedVRAMMB = *aux.LegacyVRAMMB
 	}
 	return nil
