@@ -39,6 +39,7 @@ run go build -buildvcs=false ./...
 run make coverage
 run ./hack/verify-public-boundary.sh
 run ./hack/verify-deadcode-tests.sh
+run ./hack/pr-review-cycle-tests.sh
 run ./hack/verify-deadcode.sh
 run ./hack/verify-repo-truth.sh
 run ./hack/verify-doc-facts.sh
