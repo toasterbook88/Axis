@@ -64,7 +64,7 @@ func modelCmd() *cobra.Command {
 		Use:   "model",
 		Short: "Inspect resident models, plan a placement, or manage llama-server, Ollama, and MLX",
 	}
-	cmd.AddCommand(modelListCmd())
+	cmd.AddCommand(modelListCmd(), modelCatalogCmd())
 	cmd.AddCommand(modelInspectCmd())
 	cmd.AddCommand(modelPlanCmd())
 	cmd.AddCommand(modelStartCmd())

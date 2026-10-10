@@ -466,28 +466,11 @@ func slashModels(session *agentREPLSession, parts []string) (bool, bool, error) 
 
 	var selectOptions []ui.SelectOption
 	for _, choice := range choices {
-		detail := fmt.Sprintf("%s - %s", choice.ProviderName, choice.ProviderKind)
-		if choice.ProviderKind == "local" {
-			if choice.Node != "" {
-				detail = fmt.Sprintf("Remote node %s [%s] (%s)", choice.Node, choice.ProviderName, choice.Endpoint)
-			} else {
-				detail = fmt.Sprintf("Local node [%s] (%s)", choice.ProviderName, choice.Endpoint)
-			}
-		}
-
-		disabled := choice.Disabled
-		if choice.ProviderKind == "local" && choice.Node != "" && choice.Endpoint == "" {
-			disabled = true
-			detail += " (unsupported: no valid IP/hostname)"
-		} else if choice.ProviderKind == "local" && disabled {
-			detail += " (unreachable)"
-		}
-
 		selectOptions = append(selectOptions, ui.SelectOption{
 			ID:       choice.ID,
 			Label:    choice.Model,
-			Detail:   detail,
-			Disabled: disabled,
+			Detail:   modelChoiceDetail(choice),
+			Disabled: choice.Disabled,
 		})
 	}
 

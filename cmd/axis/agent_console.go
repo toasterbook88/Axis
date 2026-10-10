@@ -290,18 +290,7 @@ func (w *modelNoticeWriter) Write(p []byte) (int, error) {
 func pickerItems(choices []ModelChoice) []console.PickerItem {
 	items := make([]console.PickerItem, 0, len(choices))
 	for _, c := range choices {
-		detail := c.ProviderName + " - " + c.ProviderKind
-		if c.ProviderKind == "local" {
-			if c.Node != "" {
-				detail = fmt.Sprintf("Remote node %s [%s] (%s)", c.Node, c.ProviderName, c.Endpoint)
-			} else {
-				detail = fmt.Sprintf("Local node [%s] (%s)", c.ProviderName, c.Endpoint)
-			}
-		}
-		if c.Disabled && c.DisabledReason != "" {
-			detail = fmt.Sprintf("%s (%s)", detail, c.DisabledReason)
-		}
-		items = append(items, console.PickerItem{ID: c.ID, Label: c.Model, Detail: detail, Disabled: c.Disabled})
+		items = append(items, console.PickerItem{ID: c.ID, Label: c.Model, Detail: modelChoiceDetail(c), Disabled: c.Disabled})
 	}
 	return items
 }
