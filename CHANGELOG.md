@@ -28,6 +28,7 @@ Twenty-four pull requests (#476–#493, #495, #497, #498, #500, #501, #504; #496
 
 ### Docs & CI
 
+* **PR review gate:** repair review/comment rendering, regression-test the jq filters, and fail closed unless GitHub reports a `CLEAN` merge state.
 * Merge-readiness: judge a PR before declaring it review-clean (#490).
 * Unicode ANSI shadow wordmark in the CLI branding (#482).
 * Dependabot action-bump group for workflow dependencies (#492).
