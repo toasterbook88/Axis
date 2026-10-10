@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -179,11 +181,19 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 			return fmt.Errorf("ollama daemon at %s returned unhealthy status: %s", c.Endpoint, resp.Status)
 		}
 	} else {
+		// Starting a daemon here only helps when the endpoint is this
+		// machine's own Ollama; a remote node or an SSH tunnel would never be
+		// served by it. A cancelled request is not a down daemon.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !isDefaultLocalOllama(c.Endpoint) {
+			return fmt.Errorf("ollama at %s is not reachable: %w", c.Endpoint, err)
+		}
 		if w != nil {
 			fmt.Fprintf(w, "[AXIS] Auto-starting local Ollama daemon...\n")
 		}
-		cmd := exec.Command("ollama", "serve")
-		if err := cmd.Start(); err != nil {
+		if err := startLocalOllama(); err != nil {
 			return fmt.Errorf("could not start ollama serve: %w", err)
 		}
 		up := false
@@ -248,4 +258,22 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 	default:
 		return fmt.Errorf("model check for %q failed with status: %s", c.Model, checkResp.Status)
 	}
+}
+
+var startLocalOllama = func() error { return exec.Command("ollama", "serve").Start() }
+
+// isDefaultLocalOllama reports whether endpoint is this machine's own Ollama
+// on its default port, the only endpoint a locally started daemon can serve.
+func isDefaultLocalOllama(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Port() != "11434" {
+		return false
+	}
+	host := u.Hostname()
+	// interlinked-ignore: ubs_hardcoded_localhost — this check exists to recognise the loopback name
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

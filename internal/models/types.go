@@ -234,26 +234,6 @@ type ToolInfo struct {
 	Class   ToolClass `json:"class" yaml:"class"`
 }
 
-// OllamaInfo is collected in addition to the normal ToolInfo for "ollama".
-// This is what makes discovery actually useful for placement and task run.
-type OllamaInfo struct {
-	Installed  bool     `json:"installed" yaml:"installed"`
-	Path       string   `json:"path,omitempty" yaml:"path,omitempty"`
-	Version    string   `json:"version,omitempty" yaml:"version,omitempty"`
-	Running    bool     `json:"running" yaml:"running"`
-	Listening  bool     `json:"listening" yaml:"listening"`
-	Port       int      `json:"port,omitempty" yaml:"port,omitempty"`
-	Models     []string `json:"models,omitempty" yaml:"models,omitempty"`
-	GPUOffload string   `json:"gpu_offload,omitempty" yaml:"gpu_offload,omitempty"`
-	// DefaultKeepAlive is the process-level Ollama default keep-alive
-	// duration string (e.g. "5m", "1h"). Populated from /api/ps on
-	// Ollama 0.3.10+; empty when unknown or on older Ollama. The warmth
-	// computation in internal/facts/local.go (applyOllamaWarmth) parses
-	// this and falls back to 5m when empty.
-	DefaultKeepAlive string `json:"default_keep_alive,omitempty" yaml:"default_keep_alive,omitempty"`
-	Error            string `json:"error,omitempty" yaml:"error,omitempty"`
-}
-
 // DiskWeight is one on-disk weight artifact observed during fact collection.
 // It is inventory, not occupancy: the file exists; it may not be loaded.
 // Sharded safetensors collapse to one row (Path is the directory).

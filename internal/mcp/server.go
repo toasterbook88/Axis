@@ -218,7 +218,7 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 		},
 	)
 
-	registerInferenceRouteTool(s)
+	registerModelTools(s, cache)
 
 	s.AddTool(
 		mcpproto.NewTool(

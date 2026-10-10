@@ -124,7 +124,45 @@ PYEOF
 		# the field) by emitting an empty string. Treat null and any
 		# failure to parse as empty.
 		KEEPALIVE=$(curl -s --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('default_keep_alive'); print('' if v is None else v)" 2>/dev/null || echo "")
-		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\"}"
+		# Installed-model catalog from this node's own Ollama API. Cloud
+		# proxies carry remote_host; /api/show capabilities separate
+		# embedding models from chat models. Bounded to 64 models and a 6s
+		# capability budget; entries past the budget keep no capabilities.
+		# interlinked-ignore: ubs_hardcoded_localhost — the node probes its own loopback Ollama API, same as KEEPALIVE above
+		OLLAMA_API=http://127.0.0.1:11434
+		CATALOG=$(curl -s --max-time 2 "$OLLAMA_API/api/tags" 2>/dev/null | AXIS_OLLAMA_API="$OLLAMA_API" python3 -c "
+import json, os, subprocess, sys, time
+api = os.environ.get('AXIS_OLLAMA_API', '')
+try:
+    tags = json.load(sys.stdin).get('models') or []
+except Exception:
+    sys.exit(0)
+deadline = time.monotonic() + 6
+out = []
+for m in tags[:64]:
+    name = m.get('name') or ''
+    if not name:
+        continue
+    d = m.get('details') or {}
+    e = {'name': name}
+    for k, v in (('remote_host', m.get('remote_host')), ('remote_model', m.get('remote_model')), ('family', d.get('family')), ('parameter_size', d.get('parameter_size')), ('quantization', d.get('quantization_level'))):
+        if isinstance(v, str) and v:
+            e[k] = v
+    if isinstance(m.get('size'), int) and m['size'] > 0:
+        e['size_bytes'] = m['size']
+    if api and time.monotonic() < deadline:
+        try:
+            r = subprocess.run(['curl', '-s', '--max-time', '2', '-d', json.dumps({'model': name}), api + '/api/show'], capture_output=True, timeout=3)
+            caps = json.loads(r.stdout or b'{}').get('capabilities')
+            if isinstance(caps, list):
+                e['capabilities'] = [c for c in caps if isinstance(c, str)]
+        except Exception:
+            pass
+    out.append(e)
+print(json.dumps(out))
+" 2>/dev/null || echo "")
+		[ -n "$CATALOG" ] || CATALOG="[]"
+		echo "{\"installed\":true,\"path\":\"$OLLAMA_BIN\",\"version\":\"${VERSION:-unknown}\",\"running\":$RUNNING,\"listening\":$LISTENING,\"port\":11434,\"models\":$MODELS,\"resident_models\":$RESIDENT,\"gpu_offload\":\"${GPU:-none}\",\"default_keep_alive\":\"${KEEPALIVE}\",\"catalog\":$CATALOG}"
 	`
 
 // LlamaServerDiscoveryScript is the bash script used to detect running
@@ -144,6 +182,10 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 		PIDS=""
 		for _pid in $RAW_PIDS; do
 			case "$_pid" in ''|*[!0-9]*) continue;; esac
+			# pgrep -f also matches any shell whose command line carries this
+			# script; only a process whose argv[0] is llama-server counts.
+			_argv0=$(ps -p "$_pid" -o args= 2>/dev/null | awk '{print $1; exit}')
+			case "${_argv0##*/}" in llama-server*) ;; *) continue;; esac
 			PIDS="$PIDS $_pid"
 		done
 		PIDS=$(echo "$PIDS" | awk '{$1=$1; print}')
@@ -281,7 +323,19 @@ const MLXDiscoveryScript = `set -o pipefail;
 		if [ "$MLX_OK" = "false" ]; then echo '{"installed":false}'; exit 0; fi
 		# Bracket trick: [m]lx_lm.server matches the process mlx_lm.server but not
 		# the pgrep command's own cmdline (which contains the literal "[m]lx_lm.server").
-		PGREP=$(pgrep -f "[m]lx_lm.server" 2>/dev/null | head -1 || pgrep -f "[m]lx_lm server" 2>/dev/null | head -1 || echo "")
+		# pgrep -f also matches any shell whose command line carries this
+		# script, so a candidate counts only when argv[0] is the mlx_lm.server
+		# entry point or a python interpreter whose arguments name it.
+		PGREP=""
+		for _pid in $(pgrep -f "[m]lx_lm.server" 2>/dev/null; pgrep -f "[m]lx_lm server" 2>/dev/null); do
+			case "$_pid" in ''|*[!0-9]*) continue;; esac
+			if ps -p "$_pid" -o args= 2>/dev/null | awk 'NR == 1 {
+				n = split($1, p, "/"); a0 = p[n]
+				if (a0 ~ /^mlx_lm\.server/) ok = 1
+				if (a0 == "mlx_lm" && $2 == "server") ok = 1
+				if (a0 ~ /^[Pp]ython/) for (i = 2; i <= NF; i++) if ($i == "mlx_lm.server" || ($i == "mlx_lm" && $(i+1) == "server")) ok = 1
+			} END { exit !ok }'; then PGREP="$_pid"; break; fi
+		done
 		RUNNING=false
 		[ -n "$PGREP" ] && RUNNING=true
 		PORT=8080

@@ -21,24 +21,28 @@ var fetchModelInventorySnapshot = daemon.FetchSnapshot
 var loadModelInventory = readModelInventory
 
 func readModelInventory(ctx context.Context, live bool, cacheAddr string) (models.ModelInventory, error) {
-	var (
-		snap   *models.ClusterSnapshot
-		source string
-		err    error
-	)
-	if live {
-		snap, err = loadModelSnapshot(ctx)
-		source = "live"
-	} else {
-		snap, source, err = fetchModelInventorySnapshot(ctx, cacheAddr)
-	}
+	snap, source, err := readModelSnapshot(ctx, live, cacheAddr, "model inventory")
 	if err != nil {
-		if live {
-			return models.ModelInventory{}, fmt.Errorf("collect live model inventory: %w", err)
-		}
-		return models.ModelInventory{}, fmt.Errorf("load model inventory from daemon cache: %w (use --live for an explicit live collection)", err)
+		return models.ModelInventory{}, err
 	}
 	return modelinventory.FromSnapshot(snap, source), nil
+}
+
+// readModelSnapshot is the shared cache-first snapshot read for model views;
+// live collection happens only when the caller asked for it.
+func readModelSnapshot(ctx context.Context, live bool, cacheAddr, what string) (*models.ClusterSnapshot, string, error) {
+	if live {
+		snap, err := loadModelSnapshot(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("collect live %s: %w", what, err)
+		}
+		return snap, "live", nil
+	}
+	snap, source, err := fetchModelInventorySnapshot(ctx, cacheAddr)
+	if err != nil {
+		return nil, "", fmt.Errorf("load %s from daemon cache: %w (use --live for an explicit live collection)", what, err)
+	}
+	return snap, source, nil
 }
 
 func modelListCmd() *cobra.Command {

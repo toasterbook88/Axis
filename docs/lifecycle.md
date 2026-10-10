@@ -68,7 +68,7 @@ Classification is based on live code inspection (`internal/`), test coverage, op
 | `internal/git` | stable | Local git repository workspace querying; core to repo-aware context |
 | `internal/knowledge` | stable | Execution context builder; heavily covered; stable contract |
 | `internal/llmrouter` | experimental | Hybrid local/cloud routing; new surface |
-| `internal/mcp` | experimental | Optional MCP server with 17 read-only diagnostics and 3 advisory lease primitives |
+| `internal/mcp` | experimental | Optional MCP server with 18 read-only diagnostics and 3 advisory lease primitives |
 | `internal/mesh` | experimental | Live optional gossip discovery started by `axis serve`, with CLI and HTTP diagnostics; replay protection is still pending |
 | `internal/modelinventory` | internal-only | Deterministic projection from snapshot resident facts to the canonical model-instance read schema |
 | `internal/models` | internal-only | Core shared types; no public API surface |
