@@ -30,18 +30,29 @@ func appleFMFromProbe(version, out string, err error) *models.AppleFoundationMod
 	if err != nil && (errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded")) {
 		info.State = models.AppleFMUnknown
 		info.Error = "probe timed out; availability unknown"
+		info.Provenance = map[string]string{"state": "probe timeout"}
 		return info
 	}
 
 	if err == nil && strings.HasPrefix(trimmed, "{") {
 		var p appleFMFactsPayload
 		if json.Unmarshal([]byte(trimmed), &p) == nil && p.Availability != "" {
+			info.Provenance = map[string]string{"state": "SystemLanguageModel.default.availability"}
 			switch p.Availability {
 			case "available":
 				info.Available, info.Verified, info.State = true, true, models.AppleFMReady
 				info.ContextWindow = p.ContextSize
 				info.Model = p.Model
 				info.Capabilities = p.Capabilities
+				if p.ContextSize > 0 {
+					info.Provenance["context_window"] = "SystemLanguageModel.default.contextSize"
+				}
+				if p.Model != "" {
+					info.Provenance["model"] = "SystemLanguageModel.default.variant.displayName"
+				}
+				if p.Capabilities != nil {
+					info.Provenance["capabilities"] = "SystemLanguageModel.default.capabilities"
+				}
 			case "unavailable":
 				setAppleFMUnavailable(info, p.Reason)
 			default:
@@ -52,6 +63,9 @@ func appleFMFromProbe(version, out string, err error) *models.AppleFoundationMod
 		}
 	}
 
+	if trimmed != "" && !strings.Contains(trimmed, "\n") && !strings.HasPrefix(trimmed, "{") {
+		info.Provenance = map[string]string{"state": "probe marker " + trimmed}
+	}
 	switch {
 	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || trimmed == "OK\nOK"):
 		info.Available, info.Verified, info.State = true, true, models.AppleFMReady

@@ -166,10 +166,12 @@ func embeddingOnly(capabilities []string) bool {
 
 // probeLocalResidentChoices disables local llama.cpp/MLX choices whose port
 // does not answer on localhost. Probes run concurrently, one per endpoint.
+// A loading choice is skipped: its /health 503 already proved the server is
+// alive, and /v1/models fails until the model finishes loading.
 func probeLocalResidentChoices(choices []ModelChoice, nodes map[string]models.NodeFacts) {
 	targets := map[string][]int{}
 	for i, c := range choices {
-		if c.Disabled || c.Protocol != agent.ProtocolOpenAI || !models.IsLocalNode(nodes[c.Node]) {
+		if c.Disabled || c.Loading || c.Protocol != agent.ProtocolOpenAI || !models.IsLocalNode(nodes[c.Node]) {
 			continue
 		}
 		url := c.Endpoint + "/v1/models"

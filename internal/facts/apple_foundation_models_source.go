@@ -22,6 +22,11 @@ const appleFoundationModelsFactsSwift = `func appleFMFactsJSON() -> String {
 	if model.isAvailable {
 		out["context_size"] = model.contextSize
 		out["languages"] = model.supportedLanguages.count
+		// variant and capabilities exist only in the macOS 27 SDK
+		// (FoundationModels 2.x). #available is a runtime check and cannot
+		// hide unknown symbols from a macOS 26 SDK compiler, so gate on the
+		// SDK too; a 26 SDK build still reports availability and context.
+#if canImport(FoundationModels, _version: 2.0)
 		if #available(macOS 27.0, *) {
 			out["model"] = model.variant.displayName
 			var caps: [String] = []
@@ -29,6 +34,7 @@ const appleFoundationModelsFactsSwift = `func appleFMFactsJSON() -> String {
 			for (name, cap) in known where model.capabilities.contains(cap) { caps.append(name) }
 			out["capabilities"] = caps
 		}
+#endif
 	}
 	guard let data = try? JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]) else { return "{}" }
 	return String(decoding: data, as: UTF8.self)

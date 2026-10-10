@@ -21,6 +21,9 @@ type AppleFoundationModelsInfo struct {
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 	// Capabilities lists LanguageModelCapabilities present (macOS 27+).
 	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	// Provenance maps a field name to the API or probe that produced it,
+	// matching ResidentModel.Provenance.
+	Provenance map[string]string `json:"provenance,omitempty" yaml:"provenance,omitempty"`
 }
 
 const (

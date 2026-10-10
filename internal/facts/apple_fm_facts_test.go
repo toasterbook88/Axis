@@ -148,3 +148,31 @@ func TestRemoteCollectorAppleFactsReadyAndTimeout(t *testing.T) {
 		t.Fatalf("timeout = %+v tools %+v", timedOut.AppleFM, timedOut.Tools)
 	}
 }
+
+// Apple facts carry provenance like resident rows: each field names the
+// SystemLanguageModel API it came from, and the marker path says so.
+func TestAppleFMFromProbeRecordsProvenance(t *testing.T) {
+	got := appleFMFromProbe("27.2", `{"availability":"available","context_size":4096,"model":"AFM 3 Core","capabilities":["toolCalling"]}`, nil)
+	want := map[string]string{
+		"state":          "SystemLanguageModel.default.availability",
+		"context_window": "SystemLanguageModel.default.contextSize",
+		"model":          "SystemLanguageModel.default.variant.displayName",
+		"capabilities":   "SystemLanguageModel.default.capabilities",
+	}
+	for k, v := range want {
+		if got.Provenance[k] != v {
+			t.Fatalf("provenance[%q] = %q, want %q (all: %v)", k, got.Provenance[k], v, got.Provenance)
+		}
+	}
+	base := appleFMFromProbe("26.5", `{"availability":"available","context_size":4096}`, nil)
+	if _, ok := base.Provenance["model"]; ok || base.Provenance["context_window"] == "" {
+		t.Fatalf("26 SDK facts provenance = %v, want context only", base.Provenance)
+	}
+	cold := appleFMFromProbe("27.2", "UNAVAILABLE:modelNotReady", nil)
+	if cold.Provenance["state"] != "probe marker UNAVAILABLE:modelNotReady" {
+		t.Fatalf("marker provenance = %v", cold.Provenance)
+	}
+	if timeout := appleFMFromProbe("27.2", "", context.DeadlineExceeded); timeout.Provenance["state"] != "probe timeout" {
+		t.Fatalf("timeout provenance = %v", timeout.Provenance)
+	}
+}

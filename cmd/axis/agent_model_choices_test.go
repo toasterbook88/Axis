@@ -276,3 +276,29 @@ func TestCollectModelChoicesKeepsChoiceIDFormat(t *testing.T) {
 		t.Fatalf("ID = %q, want worker:ollama:coder:7b", coder.ID)
 	}
 }
+
+// A local llama.cpp server that is loading answers /health 503 and usually
+// fails /v1/models. The collector already proved it is alive, so the picker
+// keeps it selectable as loading, the same as a remote loading row.
+func TestCollectModelChoicesKeepsLocalLoadingSelectable(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	prevOK, prevStatus := probeEndpointFn, probeStatusFn
+	t.Cleanup(func() { probeEndpointFn, probeStatusFn = prevOK, prevStatus })
+	probeEndpointFn = func(string) bool { return false }
+	probeStatusFn = func(string) int { return http.StatusServiceUnavailable }
+
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[0].ResidentModels = []models.ResidentModel{
+		{Name: "warming-local", Runtime: "llama.cpp", Port: 8092, State: models.ModelCatalogLoading},
+		{Name: "silent-local", Runtime: "llama.cpp", Port: 8093},
+	}
+	choices := collectModelChoices(rt)
+	warming, ok := choiceByModel(t, choices, "warming-local")
+	if !ok || !warming.Loading || warming.Disabled {
+		t.Fatalf("local loading = %+v, want loading and selectable", warming)
+	}
+	silent, _ := choiceByModel(t, choices, "silent-local")
+	if !silent.Disabled || silent.DisabledReason != "unreachable" {
+		t.Fatalf("silent local = %+v, want disabled unreachable", silent)
+	}
+}

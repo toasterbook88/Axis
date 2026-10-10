@@ -71,6 +71,17 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 			nodeCopy.Ollama = &ollama
 		}
 		nodeCopy.ResidentModels = append([]models.ResidentModel(nil), node.ResidentModels...)
+		for j := range nodeCopy.ResidentModels {
+			r := &nodeCopy.ResidentModels[j]
+			r.GPUIndices = append([]int(nil), r.GPUIndices...)
+			r.Provenance = cloneStringMap(r.Provenance)
+		}
+		if node.AppleFM != nil {
+			apple := *node.AppleFM
+			apple.Capabilities = append([]string(nil), node.AppleFM.Capabilities...)
+			apple.Provenance = cloneStringMap(node.AppleFM.Provenance)
+			nodeCopy.AppleFM = &apple
+		}
 		nodeCopy.DiskWeights = append([]models.DiskWeight(nil), node.DiskWeights...)
 		nodeCopy.Labels = cloneStringMap(node.Labels)
 		if node.TurboQuant != nil {
