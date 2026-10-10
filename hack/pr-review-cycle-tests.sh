@@ -71,7 +71,7 @@ multi_comment="$(printf '%s\n' "$multiline_fixture" | render_general_comments)"
 # Exercise main() with a deterministic GitHub CLI shim. No network or writes.
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
-printf '%s\\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
+printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
 cat >"$tmpdir/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -125,7 +125,7 @@ run_case moved 1
 run_case failed_final 52
 run_case discovery_error 1
 run_case discovery_malformed 1
-printf '%s\\n' "$fixture" >"$tmpdir/fixture.json"
+printf '%s\n' "$fixture" >"$tmpdir/fixture.json"
 run_case dirty 2
 
 echo "pr-review-cycle tests passed"
