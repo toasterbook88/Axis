@@ -270,10 +270,10 @@ func empiricalReason(obs *models.ExecutionObservation) string {
 		fmt.Sprintf("empirical history: %d run(s), avg %dms", obs.SampleCount, obs.WallTimeMS),
 	}
 	if obs.ObservedRSSMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak RAM %dMB", obs.ObservedRSSMB))
+		parts = append(parts, fmt.Sprintf("observed RSS %dMB", obs.ObservedRSSMB))
 	}
 	if obs.ObservedVRAMMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak VRAM %dMB", obs.ObservedVRAMMB))
+		parts = append(parts, fmt.Sprintf("observed VRAM %dMB", obs.ObservedVRAMMB))
 	}
 	if obs.ModelName != "" {
 		parts = append(parts, fmt.Sprintf("model %s", obs.ModelName))
