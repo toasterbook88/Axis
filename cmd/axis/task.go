@@ -748,11 +748,11 @@ func buildContextBlock(snap *models.ClusterSnapshot, reqs models.TaskRequirement
 	}
 	// Disk weights tell the LLM what can be started locally without a
 	// download; distinct from resident (loaded) models.
-	if len(best.DiskWeights) > 0 {
+	if runnable := models.RunnableDiskWeights(best.DiskWeights); len(runnable) > 0 {
 		weights := make([]string, 0, 3)
-		for i, dw := range best.DiskWeights {
+		for i, dw := range runnable {
 			if i >= 3 {
-				weights = append(weights, fmt.Sprintf("+%d more", len(best.DiskWeights)-3))
+				weights = append(weights, fmt.Sprintf("+%d more", len(runnable)-3))
 				break
 			}
 			w := fmt.Sprintf("%s (%s)", dw.Name, dw.Format)
