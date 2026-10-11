@@ -83,6 +83,9 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 			nodeCopy.AppleFM = &apple
 		}
 		nodeCopy.DiskWeights = append([]models.DiskWeight(nil), node.DiskWeights...)
+		if node.LocalEndpoints != nil {
+			nodeCopy.LocalEndpoints = cloneLocalEndpoints(node.LocalEndpoints)
+		}
 		nodeCopy.Labels = cloneStringMap(node.Labels)
 		if node.TurboQuant != nil {
 			turbo := *node.TurboQuant
@@ -166,4 +169,16 @@ func ApplyReservationEntries(snap *models.ClusterSnapshot, st *state.ClusterStat
 	snap.Summary.TotalReservableMB = totalReservable
 	snap.Summary.TotalReservedMB = totalReserved
 	snap.Summary.TotalAllocatableMB = totalAllocatable
+}
+
+func cloneLocalEndpoints(le *models.LocalEndpoints) *models.LocalEndpoints {
+	out := *le
+	out.Candidates = append([]models.LocalEndpointCandidate(nil), le.Candidates...)
+	out.Confirmed = make([]models.LocalEndpoint, len(le.Confirmed))
+	for i, ep := range le.Confirmed {
+		ep.Models = append([]models.LocalEndpointModel(nil), ep.Models...)
+		ep.Provenance = cloneStringMap(ep.Provenance)
+		out.Confirmed[i] = ep
+	}
+	return &out
 }

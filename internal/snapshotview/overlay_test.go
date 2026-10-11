@@ -487,3 +487,17 @@ func TestCloneIsolatesAppleFMAndResidentProvenance(t *testing.T) {
 		t.Fatalf("clone mutation reached published resident: %+v", got.ResidentModels[0])
 	}
 }
+
+func TestCloneIsolatesLocalEndpoints(t *testing.T) {
+	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		LocalEndpoints: &models.LocalEndpoints{Confirmed: []models.LocalEndpoint{{
+			Port: 8000, Models: []models.LocalEndpointModel{{Name: "m"}}, Provenance: map[string]string{"models": "GET /v1/models 200"},
+		}}},
+	}}}
+	clone := snapshotview.Clone(snap)
+	ep := &clone.Nodes[0].LocalEndpoints.Confirmed[0]
+	ep.Port, ep.Models[0].Name, ep.Provenance["models"] = 1, "changed", "changed"
+	if got := snap.Nodes[0].LocalEndpoints.Confirmed[0]; got.Port != 8000 || got.Models[0].Name != "m" || got.Provenance["models"] != "GET /v1/models 200" {
+		t.Fatalf("clone mutated the source endpoint: %+v", got)
+	}
+}
