@@ -97,7 +97,8 @@ Live runs on the fleet changed these details:
 
 ### 3. Apple extras and disk kinds (PR 3)
 
-- **Private Cloud Compute (macOS 27+):** the `--facts` helper also reads `PrivateCloudComputeLanguageModel` `availability`, `contextSize` (async throws), `capabilities`, and `quotaUsage` (`isLimitReached`, `status`, `resetDate`). Catalog entry: engine `apple-pcc`, locality `cloud-proxy`. Never selected automatically; any use is an explicit operator policy. Whether an unsigned helper can generate through PCC without the managed entitlement is unverified and out of scope.
+- **Private Cloud Compute (macOS 27+), as built:** the facts JSON gains a `pcc` object, which lands on `apple_foundation_models.private_cloud_compute`. Its catalog entry is `apple-private-cloud-compute`: engine `apple-pcc`, `listed`, locality `cloud-proxy`, `down` with `load_signal: quota-limit-reached` when the quota is exhausted, and no entry when unavailable. `/models` shows it disabled. Live: three macOS 27.2 nodes report PCC available, `contextSize` 32768, quota below limit, and capabilities toolCalling, guidedGeneration, reasoning, and vision.
+- **Private Cloud Compute (macOS 27+), design:** the `--facts` helper also reads `PrivateCloudComputeLanguageModel` `availability`, `contextSize` (async throws), `capabilities`, and `quotaUsage` (`isLimitReached`, `status`, `resetDate`). Catalog entry: engine `apple-pcc`, locality `cloud-proxy`. Never selected automatically; any use is an explicit operator policy. Whether an unsigned helper can generate through PCC without the managed entitlement is unverified and out of scope.
 - **Disk kinds:** `DiskWeights` recognises Core AI export folders (`.aimodel` + tokenizer) as `format: aimodel`. Core ML bundles (`.mlpackage`, `.mlmodelc`) are not assumed to be language models; they are recorded only with `kind: unknown` unless metadata says otherwise. Disk facts never set a load state.
 
 ## Evidence
