@@ -77,9 +77,8 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		}
 	}
 
-	// Single remote bash script for core facts. Bundle failure falls back to
-	// the legacy multi-Run collector so the node still contributes partial
-	// field data (OS, RAM, tools, etc.) to placement decisions.
+	// Single remote bash script for core facts. Bundle failure falls back to the legacy
+	// multi-Run collector so the node still contributes partial field data to placement.
 	if !c.tryBundleCollect(ctx, facts) {
 		c.collectLegacy(ctx, facts)
 		facts.PartialReasons = append(facts.PartialReasons, models.PartialReason{
@@ -88,8 +87,7 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		})
 	}
 
-	// Best-effort AI discovery (same as before; runs under bash-forced executor).
-	// When the bundle path already found tools, merge rather than replace.
+	c.discoverAppleFoundationModels(ctx, facts) // AI discovery, bash-forced. Apple (~1s) first: a slow disk scan once starved it.
 	ollamaInfo, residentModels := c.discoverOllamaRobust(ctx)
 	if ollamaInfo.Installed {
 		facts.Ollama = &ollamaInfo
@@ -111,7 +109,6 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)
 	})
-	c.discoverAppleFoundationModels(ctx, facts)
 
 	if len(facts.PartialReasons) > 0 && facts.Status == models.StatusComplete {
 		facts.Status = models.StatusPartial
@@ -666,44 +663,7 @@ func (c *RemoteCollector) discoverAppleFoundationModels(ctx context.Context, fac
 	}
 
 	out, err := c.Exec.Run(ctx, AppleFoundationModelsDiscoveryScript)
-	trimmed := strings.TrimSpace(out)
-	lines := strings.Split(trimmed, "\n")
-	switch {
-	case err == nil && (trimmed == "OK" || trimmed == "AVAILABLE" || (len(lines) == 2 && strings.TrimSpace(lines[0]) == "OK" && strings.TrimSpace(lines[1]) == "OK")):
-		facts.AppleFM = &models.AppleFoundationModelsInfo{
-			Version:   facts.OSVersion,
-			Available: true,
-			Verified:  true,
-		}
-	case err == nil && strings.HasPrefix(trimmed, "UNAVAILABLE:"):
-		facts.AppleFM = &models.AppleFoundationModelsInfo{
-			Version:   facts.OSVersion,
-			Available: false,
-			Verified:  false,
-			Error:     trimmed,
-		}
-	case err == nil && trimmed == "UNVERIFIED":
-		facts.AppleFM = &models.AppleFoundationModelsInfo{
-			Version:   facts.OSVersion,
-			Available: false,
-			Verified:  false,
-			Error:     "foundation models framework imported but runtime availability unverified",
-		}
-	default:
-		info := &models.AppleFoundationModelsInfo{
-			Version:   facts.OSVersion,
-			Available: false,
-			Verified:  false,
-		}
-		if trimmed != "" {
-			info.Error = trimmed
-		} else if err != nil {
-			info.Error = err.Error()
-		} else {
-			info.Error = "apple foundation models probe failed"
-		}
-		facts.AppleFM = info
-	}
+	facts.AppleFM = appleFMFromProbe(facts.OSVersion, out, err)
 
 	if facts.AppleFM != nil && facts.AppleFM.Available && facts.AppleFM.Verified {
 		toolPath := "swift"
