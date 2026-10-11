@@ -2,7 +2,7 @@ package transport
 
 import "testing"
 
-// Documents the real constraint discovered live (2026-09-15, cachyos fish shell):
+// Documents the real constraint discovered live (2026-09-15, lab-2 fish shell):
 // MAX_ARG_STRLEN applies to the ENTIRE remote command string that ssh passes to the
 // remote shell as one argv element — not to individual printf segments inside it.
 // Chunking base64 inside one command does NOT dodge the limit. The fix must therefore

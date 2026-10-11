@@ -143,7 +143,7 @@ func TestQueryHTTP_ServerError(t *testing.T) {
 func TestParseQueryResponse(t *testing.T) {
 	raw := []byte(`{
 		"id": "chatcmpl-456",
-		"model": "qwen3.8-27b",
+		"model": "big-27b",
 		"choices": [
 			{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}
 		],

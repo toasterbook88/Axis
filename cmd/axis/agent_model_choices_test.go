@@ -159,7 +159,7 @@ func stubAIRole(t *testing.T, roleModel string, listed []string, listOK bool) {
 // A role whose model the backend does not serve must not be selectable; the
 // hub answering is not evidence that this model exists behind it.
 func TestModelChoicesFromAIConfigDisablesModelNotServedByBackend(t *testing.T) {
-	stubAIRole(t, "qwythos", []string{"bonsai-2-27b", "qwen3-coder"}, true)
+	stubAIRole(t, "chat-role", []string{"chat-27b", "qwen3-coder"}, true)
 	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 || !choices[0].Disabled || choices[0].DisabledReason != "not served by hub" {
 		t.Fatalf("choices = %+v, want one disabled 'not served by hub'", choices)
@@ -167,7 +167,7 @@ func TestModelChoicesFromAIConfigDisablesModelNotServedByBackend(t *testing.T) {
 }
 
 func TestModelChoicesFromAIConfigKeepsServedModel(t *testing.T) {
-	stubAIRole(t, "qwen3-coder", []string{"bonsai-2-27b", "qwen3-coder"}, true)
+	stubAIRole(t, "qwen3-coder", []string{"chat-27b", "qwen3-coder"}, true)
 	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 || choices[0].Disabled {
 		t.Fatalf("choices = %+v, want one enabled", choices)
@@ -177,7 +177,7 @@ func TestModelChoicesFromAIConfigKeepsServedModel(t *testing.T) {
 // When the list cannot be read (auth, empty answer), absence is unknown, not
 // proven, so the role stays selectable.
 func TestModelChoicesFromAIConfigKeepsRoleWhenListUnavailable(t *testing.T) {
-	stubAIRole(t, "qwythos", nil, false)
+	stubAIRole(t, "chat-role", nil, false)
 	choices := modelChoicesFromAIConfig(nil)
 	if len(choices) != 1 || choices[0].Disabled {
 		t.Fatalf("choices = %+v, want enabled when the list is unavailable", choices)

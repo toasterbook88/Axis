@@ -23,7 +23,7 @@ func BenchmarkLoadCachedWarm(b *testing.B) {
 		Timestamp: time.Now().UTC(),
 		Status:    models.SnapshotHealthy,
 		Nodes: []models.NodeFacts{
-			{Name: "cranium", Status: models.StatusComplete},
+			{Name: "lab-1", Status: models.StatusComplete},
 			{Name: "foundry", Status: models.StatusComplete},
 		},
 		Publication: &models.PublicationEnvelope{
@@ -67,7 +67,7 @@ func TestLoadCachedWarmLatencyUnder10ms(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 		Status:    models.SnapshotHealthy,
 		Nodes: []models.NodeFacts{
-			{Name: "cranium", Status: models.StatusComplete},
+			{Name: "lab-1", Status: models.StatusComplete},
 			{Name: "foundry", Status: models.StatusComplete},
 		},
 		Publication: &models.PublicationEnvelope{

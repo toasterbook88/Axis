@@ -85,15 +85,15 @@ func TestClusterContextSnippetPresent(t *testing.T) {
 		Status:  "healthy",
 		Summary: models.ClusterSummary{TotalNodes: 2, ReachableNodes: 2, TotalRAMMB: 16000, TotalFreeRAMMB: 8000},
 		Nodes: []models.NodeFacts{
-			{Name: "nixos", Status: "complete"},
+			{Name: "lab-5", Status: "complete"},
 			{Name: "foundry", Status: "complete"},
 		},
 	}
 	tc := NewToolContext(&RuntimeView{Snapshot: snap}, nil)
 	a := New(Config{Backend: noopChatBackend{}, ToolContext: tc, Output: discardWriter()})
 	s := a.clusterContextSnippet()
-	if s == "" || !strings.Contains(s, "live_cluster_context") || !strings.Contains(s, "nixos") {
-		t.Fatalf("expected cluster context with nixos, got %q", s)
+	if s == "" || !strings.Contains(s, "live_cluster_context") || !strings.Contains(s, "lab-5") {
+		t.Fatalf("expected cluster context with lab-5, got %q", s)
 	}
 }
 

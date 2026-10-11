@@ -195,10 +195,10 @@ func TestShellStopTargetIncludesSupervisorNeutralization(t *testing.T) {
 		Port:           8082,
 		PID:            4242,
 		SupervisorType: "systemd-user",
-		SupervisorUnit: "bonsai2-27b.service",
+		SupervisorUnit: "llama-27b.service",
 	}
 	scriptUser := shellStopTarget(targetUser)
-	if !strings.Contains(scriptUser, "systemctl --user stop 'bonsai2-27b.service'") {
+	if !strings.Contains(scriptUser, "systemctl --user stop 'llama-27b.service'") {
 		t.Fatalf("expected systemctl --user stop in script, got: %s", scriptUser)
 	}
 

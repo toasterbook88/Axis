@@ -47,7 +47,7 @@ func TestFetchDaemonMeshAgainstProductionServer(t *testing.T) {
 	t.Setenv("AXIS_API_TOKEN", token)
 
 	m := mesh.New(mesh.Peer{Name: "self"}, mesh.Config{}, nil)
-	m.AddSeed(mesh.Peer{Name: "samson", Hostname: "samson.local", StableID: "samson-1"})
+	m.AddSeed(mesh.Peer{Name: "lab-3", Hostname: "lab-3.local", StableID: "lab-3-1"})
 
 	cache := &meshOnlyCache{snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy}, mesh: m}
 
@@ -69,8 +69,8 @@ func TestFetchDaemonMeshAgainstProductionServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchDaemonMesh against production server: %v", err)
 	}
-	if len(peers) != 1 || peers[0].Name != "samson" {
-		t.Fatalf("peers = %+v, want one peer named samson", peers)
+	if len(peers) != 1 || peers[0].Name != "lab-3" {
+		t.Fatalf("peers = %+v, want one peer named lab-3", peers)
 	}
 
 	cancel()

@@ -7,7 +7,7 @@ import (
 )
 
 func TestBuildRemoteWriteCommandSmallPayloadSingleCommand(t *testing.T) {
-	cmd := BuildRemoteWriteCommand("/tmp/axis-knows.json", []byte(`{"best_node":"cachyos"}`))
+	cmd := BuildRemoteWriteCommand("/tmp/axis-knows.json", []byte(`{"best_node":"lab-2"}`))
 	if strings.Count(cmd, "base64 -d") != 1 || strings.Contains(cmd, ">>") {
 		t.Fatalf("small payload should stay a single write, got: %.120s", cmd)
 	}

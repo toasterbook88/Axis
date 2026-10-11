@@ -26,7 +26,7 @@ func queryTestSnapshot() *models.ClusterSnapshot {
 				Status:      models.StatusComplete,
 				CollectedAt: observed,
 				ResidentModels: []models.ResidentModel{{
-					Name:              "qwen3.8-27b",
+					Name:              "big-27b",
 					Runtime:           "llama.cpp",
 					Port:              8082,
 					Source:            "llama-server-ps",
@@ -42,7 +42,7 @@ func queryTestSnapshot() *models.ClusterSnapshot {
 				Status:      models.StatusComplete,
 				CollectedAt: observed,
 				ResidentModels: []models.ResidentModel{{
-					Name:              "qwen3.8-27b",
+					Name:              "big-27b",
 					Runtime:           "llama.cpp",
 					Port:              8085,
 					Source:            "llama-server-ps",
@@ -138,7 +138,7 @@ func TestRunModelQuery_FilterByNode(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 
-	err := runModelQuery(context.Background(), cmd, "qwen3.8-27b", "ping", "compute", 128, 0.5, false, "test.sock", "text", runner)
+	err := runModelQuery(context.Background(), cmd, "big-27b", "ping", "compute", 128, 0.5, false, "test.sock", "text", runner)
 	if err != nil {
 		t.Fatalf("runModelQuery with node filter failed: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestRunModelQuery_FilterByNode(t *testing.T) {
 
 func TestRunModelQuery_EmptyPromptFails(t *testing.T) {
 	cmd := modelQueryCmd()
-	err := runModelQuery(context.Background(), cmd, "qwen3.8-27b", "   ", "", 128, 0.5, false, "test.sock", "text", &fakeModelRunner{})
+	err := runModelQuery(context.Background(), cmd, "big-27b", "   ", "", 128, 0.5, false, "test.sock", "text", &fakeModelRunner{})
 	if err == nil {
 		t.Fatal("expected error on empty prompt, got nil")
 	}

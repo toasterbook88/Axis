@@ -20,22 +20,22 @@ func TestBuildEvictShellScriptGeneratesSupervisorCommands(t *testing.T) {
 			Port:           8082,
 			PID:            4242,
 			SupervisorType: "systemd-user",
-			SupervisorUnit: "bonsai2-27b.service",
+			SupervisorUnit: "llama-27b.service",
 		},
 		{
 			InstanceID:     "mi-test-2",
 			Port:           8081,
 			PID:            4243,
 			SupervisorType: "systemd-system",
-			SupervisorUnit: "coder7b.service",
+			SupervisorUnit: "llama-7b.service",
 		},
 	}
 
 	script := BuildEvictShellScript(targets, EvictModeStop)
-	if !strings.Contains(script, "systemctl --user stop 'bonsai2-27b.service'") {
+	if !strings.Contains(script, "systemctl --user stop 'llama-27b.service'") {
 		t.Errorf("expected systemctl --user stop, got: %s", script)
 	}
-	if !strings.Contains(script, "systemctl stop 'coder7b.service'") {
+	if !strings.Contains(script, "systemctl stop 'llama-7b.service'") {
 		t.Errorf("expected systemctl stop, got: %s", script)
 	}
 	if !strings.Contains(script, "kill -KILL 4242") || !strings.Contains(script, "kill -KILL 4243") {
@@ -56,12 +56,12 @@ func TestBuildEvictShellScriptFreezeMode(t *testing.T) {
 			Port:           8082,
 			PID:            4242,
 			SupervisorType: "systemd-user",
-			SupervisorUnit: "bonsai2-27b.service",
+			SupervisorUnit: "llama-27b.service",
 		},
 	}
 
 	script := BuildEvictShellScript(targets, EvictModeFreeze)
-	if !strings.Contains(script, "systemctl --user freeze 'bonsai2-27b.service'") {
+	if !strings.Contains(script, "systemctl --user freeze 'llama-27b.service'") {
 		t.Errorf("expected systemctl --user freeze, got: %s", script)
 	}
 	if strings.Contains(script, "kill -KILL") {
@@ -76,20 +76,20 @@ func TestBuildEvictShellScriptForceMasksRuntimeThenKills(t *testing.T) {
 			Port:           8082,
 			PID:            4242,
 			SupervisorType: "systemd-user",
-			SupervisorUnit: "bonsai2-27b.service",
+			SupervisorUnit: "llama-27b.service",
 		},
 		{
 			InstanceID:     "mi-test-2",
 			Port:           8081,
 			PID:            4243,
 			SupervisorType: "systemd-system",
-			SupervisorUnit: "coder7b.service",
+			SupervisorUnit: "llama-7b.service",
 		},
 	}
 
 	script := BuildEvictShellScript(targets, EvictModeForce)
-	userMask := "systemctl --user mask --runtime 'bonsai2-27b.service'"
-	systemMask := "systemctl mask --runtime 'coder7b.service'"
+	userMask := "systemctl --user mask --runtime 'llama-27b.service'"
+	systemMask := "systemctl mask --runtime 'llama-7b.service'"
 	if !strings.Contains(script, userMask) {
 		t.Errorf("expected user runtime mask, got: %s", script)
 	}
@@ -112,23 +112,23 @@ func TestBuildEvictShellScriptForceMasksRuntimeThenKills(t *testing.T) {
 	}
 
 	freezeScript := BuildEvictShellScript(targets[:1], EvictModeFreeze)
-	if !strings.Contains(freezeScript, "systemctl --user freeze 'bonsai2-27b.service'") || strings.Contains(freezeScript, "kill -KILL") {
+	if !strings.Contains(freezeScript, "systemctl --user freeze 'llama-27b.service'") || strings.Contains(freezeScript, "kill -KILL") {
 		t.Errorf("freeze mode changed, got: %s", freezeScript)
 	}
 
 	resume := BuildResumeShellScript(EvictionReceipt{
 		Mode: string(EvictModeForce),
 		EvictedInstances: []EvictedInstanceReceipt{
-			{SupervisorType: "systemd-user", SupervisorUnit: "bonsai2-27b.service"},
-			{SupervisorType: "systemd-system", SupervisorUnit: "coder7b.service"},
+			{SupervisorType: "systemd-user", SupervisorUnit: "llama-27b.service"},
+			{SupervisorType: "systemd-system", SupervisorUnit: "llama-7b.service"},
 		},
 	})
-	userUnmask := "systemctl --user unmask --runtime 'bonsai2-27b.service'"
-	systemUnmask := "systemctl unmask --runtime 'coder7b.service'"
-	if !strings.Contains(resume, userUnmask) || strings.Index(resume, userUnmask) > strings.Index(resume, "systemctl --user start 'bonsai2-27b.service'") {
+	userUnmask := "systemctl --user unmask --runtime 'llama-27b.service'"
+	systemUnmask := "systemctl unmask --runtime 'llama-7b.service'"
+	if !strings.Contains(resume, userUnmask) || strings.Index(resume, userUnmask) > strings.Index(resume, "systemctl --user start 'llama-27b.service'") {
 		t.Errorf("user unmask must precede start, got: %s", resume)
 	}
-	if !strings.Contains(resume, systemUnmask) || strings.Index(resume, systemUnmask) > strings.Index(resume, "systemctl start 'coder7b.service'") {
+	if !strings.Contains(resume, systemUnmask) || strings.Index(resume, systemUnmask) > strings.Index(resume, "systemctl start 'llama-7b.service'") {
 		t.Errorf("system unmask must precede start, got: %s", resume)
 	}
 }
@@ -136,17 +136,17 @@ func TestBuildEvictShellScriptForceMasksRuntimeThenKills(t *testing.T) {
 func TestBuildResumeShellScript(t *testing.T) {
 	receipt := EvictionReceipt{
 		ID:   "mo-test",
-		Node: "cranium",
+		Node: "lab-1",
 		EvictedInstances: []EvictedInstanceReceipt{
 			{
 				InstanceID:     "mi-test-1",
 				SupervisorType: "systemd-user",
-				SupervisorUnit: "bonsai2-27b.service",
+				SupervisorUnit: "llama-27b.service",
 			},
 		},
 	}
 	script := BuildResumeShellScript(receipt)
-	if !strings.Contains(script, "systemctl --user start 'bonsai2-27b.service'") {
+	if !strings.Contains(script, "systemctl --user start 'llama-27b.service'") {
 		t.Errorf("expected systemctl --user start, got: %s", script)
 	}
 	if !strings.Contains(script, EvictMarkerOk) {
@@ -157,7 +157,7 @@ func TestBuildResumeShellScript(t *testing.T) {
 func TestBuildEvictShellScriptNoPIDMarksUnmeasured(t *testing.T) {
 	script := BuildEvictShellScript([]EvictTarget{{
 		SupervisorType: "systemd-user",
-		SupervisorUnit: "bonsai2-27b.service",
+		SupervisorUnit: "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 systemctl() { echo "systemctl $*" >> "$log"; return 0; }
@@ -173,7 +173,7 @@ kill() { echo "kill $*" >> "$log"; return 0; }
 	if strings.Contains(log, "kill") {
 		t.Fatalf("pid-less evict must not kill, log=%q", log)
 	}
-	if !strings.Contains(log, "systemctl --user stop bonsai2-27b.service") {
+	if !strings.Contains(log, "systemctl --user stop llama-27b.service") {
 		t.Fatalf("pid-less evict must still stop the unit, log=%q", log)
 	}
 }
@@ -211,7 +211,7 @@ func TestSaveAndLoadEvictionReceipt(t *testing.T) {
 
 	receipt := EvictionReceipt{
 		ID:              "mo-test-receipt",
-		Node:            "cranium",
+		Node:            "lab-1",
 		Action:          "evict",
 		Status:          models.ModelOperationCompleted,
 		Disposition:     "evicted",
@@ -222,12 +222,12 @@ func TestSaveAndLoadEvictionReceipt(t *testing.T) {
 		EvictedInstances: []EvictedInstanceReceipt{
 			{
 				InstanceID:     "mi-test-1",
-				Model:          "bonsai2-27b",
+				Model:          "llama-27b",
 				Port:           8082,
 				PID:            4242,
 				GPUIndices:     []int{0},
 				SupervisorType: "systemd-user",
-				SupervisorUnit: "bonsai2-27b.service",
+				SupervisorUnit: "llama-27b.service",
 				VRAMFreedMB:    9842,
 			},
 		},
@@ -248,7 +248,7 @@ func TestSaveAndLoadEvictionReceipt(t *testing.T) {
 	if loaded.ID != receipt.ID || loaded.ReclaimedVRAMMB != 9842 {
 		t.Fatalf("loaded receipt mismatch: %+v", loaded)
 	}
-	if len(loaded.EvictedInstances) != 1 || loaded.EvictedInstances[0].SupervisorUnit != "bonsai2-27b.service" {
+	if len(loaded.EvictedInstances) != 1 || loaded.EvictedInstances[0].SupervisorUnit != "llama-27b.service" {
 		t.Fatalf("loaded evicted instances mismatch: %+v", loaded.EvictedInstances)
 	}
 }
@@ -283,7 +283,7 @@ func TestBuildEvictShellScriptRefusesMismatchedStartTokenBeforeKill(t *testing.T
 		PID:               4242,
 		ProcessStartToken: "Thu Sep  3 09:00:00 2026",
 		SupervisorType:    "systemd-user",
-		SupervisorUnit:    "bonsai2-27b.service",
+		SupervisorUnit:    "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 ps() {
@@ -312,7 +312,7 @@ func TestBuildEvictShellScriptRefusesWrongOwnerBeforeKill(t *testing.T) {
 	script := BuildEvictShellScript([]EvictTarget{{
 		PID:            4242,
 		SupervisorType: "systemd-user",
-		SupervisorUnit: "bonsai2-27b.service",
+		SupervisorUnit: "llama-27b.service",
 	}}, EvictModeForce)
 	stubs := `
 ps() {
@@ -341,7 +341,7 @@ func TestBuildEvictShellScriptAllowsAlreadyExitedPID(t *testing.T) {
 		PID:               4242,
 		ProcessStartToken: "Thu Sep  3 09:00:00 2026",
 		SupervisorType:    "systemd-user",
-		SupervisorUnit:    "bonsai2-27b.service",
+		SupervisorUnit:    "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 mkdir -p "${log}.bin"
@@ -380,7 +380,7 @@ func TestBuildEvictShellScriptWithholdsMarkerWhilePIDResident(t *testing.T) {
 		PID:               4242,
 		ProcessStartToken: "Thu Sep 3 09:00:00 2026",
 		SupervisorType:    "systemd-user",
-		SupervisorUnit:    "bonsai2-27b.service",
+		SupervisorUnit:    "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 ps() {
@@ -404,7 +404,7 @@ func TestBuildEvictShellScriptReportsMeasuredVRAMDelta(t *testing.T) {
 		PID:               4242,
 		ProcessStartToken: "Thu Sep 3 09:00:00 2026",
 		SupervisorType:    "systemd-user",
-		SupervisorUnit:    "bonsai2-27b.service",
+		SupervisorUnit:    "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 ps() {
@@ -451,7 +451,7 @@ func TestBuildEvictShellScriptFreezeMarksWithoutKilling(t *testing.T) {
 		PID:               4242,
 		ProcessStartToken: "Thu Sep 3 09:00:00 2026",
 		SupervisorType:    "systemd-user",
-		SupervisorUnit:    "bonsai2-27b.service",
+		SupervisorUnit:    "llama-27b.service",
 	}}, EvictModeFreeze)
 	stubs := `
 ps() {
@@ -474,7 +474,7 @@ nvidia-smi() { echo "nvidia-smi $*" >> "$log"; printf '9999\n'; }
 	if strings.Contains(log, "kill") || strings.Contains(log, "nvidia-smi") {
 		t.Fatalf("freeze must not kill or sample VRAM, log=%q", log)
 	}
-	if !strings.Contains(log, "systemctl --user freeze bonsai2-27b.service") {
+	if !strings.Contains(log, "systemctl --user freeze llama-27b.service") {
 		t.Fatalf("freeze must freeze the unit, log=%q", log)
 	}
 }
@@ -483,7 +483,7 @@ func TestBuildEvictShellScriptUnmeasuredWhenNvidiaSMIAbsent(t *testing.T) {
 	script := BuildEvictShellScript([]EvictTarget{{
 		PID:            4242,
 		SupervisorType: "systemd-user",
-		SupervisorUnit: "bonsai2-27b.service",
+		SupervisorUnit: "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 mkdir -p "${log}.bin"
@@ -518,7 +518,7 @@ func TestBuildEvictShellScriptUnmeasuredRefusesSurvivingPID(t *testing.T) {
 	script := BuildEvictShellScript([]EvictTarget{{
 		PID:            4242,
 		SupervisorType: "systemd-user",
-		SupervisorUnit: "bonsai2-27b.service",
+		SupervisorUnit: "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 mkdir -p "${log}.bin"
@@ -541,7 +541,7 @@ func TestBuildEvictShellScriptUnmeasuredRefusesPermissionDenied(t *testing.T) {
 	script := BuildEvictShellScript([]EvictTarget{{
 		PID:            4242,
 		SupervisorType: "systemd-user",
-		SupervisorUnit: "bonsai2-27b.service",
+		SupervisorUnit: "llama-27b.service",
 	}}, EvictModeStop)
 	stubs := `
 mkdir -p "${log}.bin"

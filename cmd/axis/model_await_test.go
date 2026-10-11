@@ -25,7 +25,7 @@ func awaitTestSnapshot() *models.ClusterSnapshot {
 			Status:      models.StatusComplete,
 			CollectedAt: observed,
 			ResidentModels: []models.ResidentModel{{
-				Name:              "qwen3.8-27b",
+				Name:              "big-27b",
 				Runtime:           "llama.cpp",
 				Port:              8082,
 				Source:            "llama-server-ps",
@@ -115,7 +115,7 @@ func TestRunModelAwait_MatchByModelName(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 
-	err := runModelAwait(context.Background(), cmd, "qwen3.8-27b", 5*time.Second, 100*time.Millisecond, false, "test.sock", "text", runner)
+	err := runModelAwait(context.Background(), cmd, "big-27b", 5*time.Second, 100*time.Millisecond, false, "test.sock", "text", runner)
 	if err != nil {
 		t.Fatalf("runModelAwait by model name failed: %v", err)
 	}

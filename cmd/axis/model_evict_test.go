@@ -34,29 +34,29 @@ func makeDualGPUSnapshot() *models.ClusterSnapshot {
 		Timestamp: now,
 		Nodes: []models.NodeFacts{
 			{
-				Name:   "cranium",
+				Name:   "lab-1",
 				Status: models.StatusComplete,
 				ResidentModels: []models.ResidentModel{
 					{
-						Name:           "bonsai2-27b",
+						Name:           "llama-27b",
 						Runtime:        "llama.cpp",
 						Port:           8082,
 						PID:            10101,
 						WeightSizeMB:   9842,
 						SizeVRAMMB:     9842,
 						SupervisorType: "systemd-user",
-						SupervisorUnit: "bonsai2-27b.service",
+						SupervisorUnit: "llama-27b.service",
 						GPUIndices:     []int{0},
 					},
 					{
-						Name:           "coder7b",
+						Name:           "llama-7b",
 						Runtime:        "llama.cpp",
 						Port:           8081,
 						PID:            10102,
 						WeightSizeMB:   7574,
 						SizeVRAMMB:     7574,
 						SupervisorType: "systemd-user",
-						SupervisorUnit: "coder7b.service",
+						SupervisorUnit: "llama-7b.service",
 						GPUIndices:     []int{1},
 					},
 				},
@@ -79,7 +79,7 @@ func TestModelEvictDefaultsToLiveSnapshot(t *testing.T) {
 		loadModelSnapshot = prevLive
 		fetchModelInventorySnapshot = prevFetch
 	})
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -98,7 +98,7 @@ func TestModelEvictDefaultsToLiveSnapshot(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -128,7 +128,7 @@ func TestModelEvictLiveFalseUsesDaemonCache(t *testing.T) {
 		loadModelSnapshot = prevLive
 		fetchModelInventorySnapshot = prevFetch
 	})
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -147,7 +147,7 @@ func TestModelEvictLiveFalseUsesDaemonCache(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--live=false"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--live=false"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -164,7 +164,7 @@ func TestModelEvictLiveFalseUsesDaemonCache(t *testing.T) {
 func TestModelEvictByModelName(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -180,7 +180,7 @@ func TestModelEvictByModelName(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -190,10 +190,10 @@ func TestModelEvictByModelName(t *testing.T) {
 		t.Fatalf("evicted targets count = %d, want 1", len(runner.evictedTargets))
 	}
 	target := runner.evictedTargets[0]
-	if target.Model != "bonsai2-27b" || target.SupervisorUnit != "bonsai2-27b.service" {
+	if target.Model != "llama-27b" || target.SupervisorUnit != "llama-27b.service" {
 		t.Errorf("unexpected target: %+v", target)
 	}
-	if !strings.Contains(buf.String(), "evicted bonsai2-27b on cranium") {
+	if !strings.Contains(buf.String(), "evicted llama-27b on lab-1") {
 		t.Errorf("output does not report eviction: %q", buf.String())
 	}
 }
@@ -201,7 +201,7 @@ func TestModelEvictByModelName(t *testing.T) {
 func TestModelEvictByGPUIndex(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -217,7 +217,7 @@ func TestModelEvictByGPUIndex(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"--node", "cranium", "--gpu", "1"})
+	cmd.SetArgs([]string{"--node", "lab-1", "--gpu", "1"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -226,15 +226,15 @@ func TestModelEvictByGPUIndex(t *testing.T) {
 	if len(runner.evictedTargets) != 1 {
 		t.Fatalf("evicted targets count = %d, want 1", len(runner.evictedTargets))
 	}
-	if runner.evictedTargets[0].Model != "coder7b" {
-		t.Errorf("expected coder7b for GPU 1, got %q", runner.evictedTargets[0].Model)
+	if runner.evictedTargets[0].Model != "llama-7b" {
+		t.Errorf("expected llama-7b for GPU 1, got %q", runner.evictedTargets[0].Model)
 	}
 }
 
 func TestModelEvictAll(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -250,7 +250,7 @@ func TestModelEvictAll(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"--node", "cranium", "--all"})
+	cmd.SetArgs([]string{"--node", "lab-1", "--all"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -267,7 +267,7 @@ func TestModelEvictAll(t *testing.T) {
 func TestModelEvictGPUIndexFiltersAll(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -283,7 +283,7 @@ func TestModelEvictGPUIndexFiltersAll(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"--node", "cranium", "--gpu", "1", "--all"})
+	cmd.SetArgs([]string{"--node", "lab-1", "--gpu", "1", "--all"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -291,8 +291,8 @@ func TestModelEvictGPUIndexFiltersAll(t *testing.T) {
 	if len(runner.evictedTargets) != 1 {
 		t.Fatalf("evicted targets count = %d, want 1 (GPU 1 only)", len(runner.evictedTargets))
 	}
-	if runner.evictedTargets[0].Model != "coder7b" {
-		t.Errorf("expected coder7b for --gpu 1 --all, got %q", runner.evictedTargets[0].Model)
+	if runner.evictedTargets[0].Model != "llama-7b" {
+		t.Errorf("expected llama-7b for --gpu 1 --all, got %q", runner.evictedTargets[0].Model)
 	}
 }
 
@@ -304,14 +304,14 @@ func TestModelEvictGPUIndexMissesEmptyIndices(t *testing.T) {
 		}
 	}
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	runner := &fakeModelRunner{}
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"--node", "cranium", "--gpu", "0"})
+	cmd.SetArgs([]string{"--node", "lab-1", "--gpu", "0"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -328,7 +328,7 @@ func TestModelEvictGPUIndexMissesEmptyIndices(t *testing.T) {
 func TestModelEvictForcePersistsMode(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -344,7 +344,7 @@ func TestModelEvictForcePersistsMode(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "force"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--mode", "force"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -354,7 +354,7 @@ func TestModelEvictForcePersistsMode(t *testing.T) {
 		t.Fatalf("receipt mode = %q, want force", loaded.Mode)
 	}
 	script := modellife.BuildResumeShellScript(*loaded)
-	if !strings.Contains(script, "systemctl --user unmask --runtime 'bonsai2-27b.service'") {
+	if !strings.Contains(script, "systemctl --user unmask --runtime 'llama-27b.service'") {
 		t.Fatalf("forced receipt resume script = %s", script)
 	}
 }
@@ -385,7 +385,7 @@ func loadOnlyEvictionReceipt(t *testing.T) *modellife.EvictionReceipt {
 func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -404,7 +404,7 @@ func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "freeze"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--mode", "freeze"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -427,7 +427,7 @@ func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
 func TestModelEvictStopUsesObservedVRAMDelta(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -448,7 +448,7 @@ func TestModelEvictStopUsesObservedVRAMDelta(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "stop"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--mode", "stop"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -471,7 +471,7 @@ func TestModelEvictStopUsesObservedVRAMDelta(t *testing.T) {
 func TestModelEvictAllKeepsObservedDeltaOnTheReceipt(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -492,7 +492,7 @@ func TestModelEvictAllKeepsObservedDeltaOnTheReceipt(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"--all", "--node", "cranium", "--mode", "stop"})
+	cmd.SetArgs([]string{"--all", "--node", "lab-1", "--mode", "stop"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -517,7 +517,7 @@ func TestModelEvictAllKeepsObservedDeltaOnTheReceipt(t *testing.T) {
 func TestModelEvictFreezeIgnoresMeasuredDelta(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -538,7 +538,7 @@ func TestModelEvictFreezeIgnoresMeasuredDelta(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "freeze"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--mode", "freeze"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -558,7 +558,7 @@ func TestModelEvictFreezeIgnoresMeasuredDelta(t *testing.T) {
 func TestModelEvictStopUnmeasuredDoesNotUseSnapshot(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -577,7 +577,7 @@ func TestModelEvictStopUnmeasuredDoesNotUseSnapshot(t *testing.T) {
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--mode", "stop"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--mode", "stop"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
@@ -600,7 +600,7 @@ func TestModelEvictStopUnmeasuredDoesNotUseSnapshot(t *testing.T) {
 func TestModelEvictReceiptSaveFailureIsNotSuccess(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -624,7 +624,7 @@ func TestModelEvictReceiptSaveFailureIsNotSuccess(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -641,14 +641,14 @@ func TestModelEvictReceiptSaveFailureIsNotSuccess(t *testing.T) {
 func TestModelEvictFailsWhenNoMatch(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	runner := &fakeModelRunner{}
 	cmd := modelEvictCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"unknown-model", "--node", "cranium"})
+	cmd.SetArgs([]string{"unknown-model", "--node", "lab-1"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -662,7 +662,7 @@ func TestModelEvictFailsWhenNoMatch(t *testing.T) {
 func TestModelResumeByReceiptID(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -672,16 +672,16 @@ func TestModelResumeByReceiptID(t *testing.T) {
 
 	receipt := modellife.EvictionReceipt{
 		ID:              "mo-test-receipt",
-		Node:            "cranium",
+		Node:            "lab-1",
 		Action:          "evict",
 		Status:          models.ModelOperationCompleted,
 		ReclaimedVRAMMB: 9842,
 		EvictedInstances: []modellife.EvictedInstanceReceipt{
 			{
-				InstanceID:     "mi-cranium-llama.cpp-8082",
-				Model:          "bonsai2-27b",
+				InstanceID:     "mi-lab-1-llama.cpp-8082",
+				Model:          "llama-27b",
 				SupervisorType: "systemd-user",
-				SupervisorUnit: "bonsai2-27b.service",
+				SupervisorUnit: "llama-27b.service",
 			},
 		},
 	}
@@ -709,7 +709,7 @@ func TestModelResumeByReceiptID(t *testing.T) {
 	if runner.resumedReceipts[0].ID != "mo-test-receipt" {
 		t.Errorf("resumed receipt ID = %q, want mo-test-receipt", runner.resumedReceipts[0].ID)
 	}
-	if !strings.Contains(buf.String(), "resumed on cranium") {
+	if !strings.Contains(buf.String(), "resumed on lab-1") {
 		t.Errorf("output does not report resume: %q", buf.String())
 	}
 }
@@ -717,7 +717,7 @@ func TestModelResumeByReceiptID(t *testing.T) {
 func TestModelResumeAwaitsReceiptPort(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -727,14 +727,14 @@ func TestModelResumeAwaitsReceiptPort(t *testing.T) {
 
 	receipt := modellife.EvictionReceipt{
 		ID:   "mo-await-port",
-		Node: "cranium",
+		Node: "lab-1",
 		EvictedInstances: []modellife.EvictedInstanceReceipt{
 			{
-				InstanceID:     "mi-cranium-llama.cpp-8082",
-				Model:          "bonsai2-27b",
+				InstanceID:     "mi-lab-1-llama.cpp-8082",
+				Model:          "llama-27b",
 				Port:           8082,
 				SupervisorType: "systemd-user",
-				SupervisorUnit: "bonsai2-27b.service",
+				SupervisorUnit: "llama-27b.service",
 			},
 		},
 	}
@@ -769,7 +769,7 @@ func TestModelResumeAwaitsReceiptPort(t *testing.T) {
 func TestModelResumeSystemUnitStartsOnSystemBus(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	tmpDir := t.TempDir()
 	drainModelEventsBeforeTempCleanup(t)
@@ -779,13 +779,13 @@ func TestModelResumeSystemUnitStartsOnSystemBus(t *testing.T) {
 
 	receipt := modellife.EvictionReceipt{
 		ID:   "mo-system-unit",
-		Node: "cranium",
+		Node: "lab-1",
 		EvictedInstances: []modellife.EvictedInstanceReceipt{
 			{
-				Model:          "coder7b",
+				Model:          "llama-7b",
 				Port:           8081,
 				SupervisorType: "systemd-system",
-				SupervisorUnit: "coder7b.service",
+				SupervisorUnit: "llama-7b.service",
 			},
 		},
 	}
@@ -812,7 +812,7 @@ func TestModelResumeSystemUnitStartsOnSystemBus(t *testing.T) {
 	if strings.Contains(script, "--user") {
 		t.Fatalf("system unit resume used the user bus: %s", script)
 	}
-	if !strings.Contains(script, "systemctl start 'coder7b.service'") {
+	if !strings.Contains(script, "systemctl start 'llama-7b.service'") {
 		t.Fatalf("system unit resume script = %s", script)
 	}
 }
@@ -820,7 +820,7 @@ func TestModelResumeSystemUnitStartsOnSystemBus(t *testing.T) {
 func TestModelResumeUnitNameRequiresKnownSupervisor(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 
 	runner := &fakeModelRunner{}
 	prevRunner := defaultModelRunner
@@ -831,7 +831,7 @@ func TestModelResumeUnitNameRequiresKnownSupervisor(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"missing-unit", "--node", "cranium"})
+	cmd.SetArgs([]string{"missing-unit", "--node", "lab-1"})
 
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "supervisor type unknown") {
@@ -845,7 +845,7 @@ func TestModelResumeUnitNameRequiresKnownSupervisor(t *testing.T) {
 func TestModelResumeUnitNameUsesSnapshotSupervisorAndPort(t *testing.T) {
 	snap := makeDualGPUSnapshot()
 	stubModelSnapshot(t, snap)
-	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "cranium"}}})
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "lab-1"}}})
 	drainModelEventsBeforeTempCleanup(t)
 
 	runner := &fakeModelRunner{}
@@ -856,7 +856,7 @@ func TestModelResumeUnitNameUsesSnapshotSupervisorAndPort(t *testing.T) {
 	cmd := modelResumeCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"bonsai2-27b", "--node", "cranium", "--timeout", "15s"})
+	cmd.SetArgs([]string{"llama-27b", "--node", "lab-1", "--timeout", "15s"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model resume failed: %v\n%s", err, buf.String())
@@ -872,7 +872,7 @@ func TestModelResumeUnitNameUsesSnapshotSupervisorAndPort(t *testing.T) {
 		t.Fatalf("awaited ports = %v, want [8082]", runner.awaitedPorts)
 	}
 	script := modellife.BuildResumeShellScript(runner.resumedReceipts[0])
-	if !strings.Contains(script, "systemctl --user start 'bonsai2-27b.service'") {
+	if !strings.Contains(script, "systemctl --user start 'llama-27b.service'") {
 		t.Fatalf("unit resume script = %s", script)
 	}
 }

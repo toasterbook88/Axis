@@ -790,8 +790,8 @@ func TestResolveStartupModelTargetLocalOpenAIThreadsAPIKey(t *testing.T) {
 
 	choices := []ModelChoice{
 		{
-			ID:           "ai-role:bonsai",
-			Model:        "bonsai-2-27b",
+			ID:           "ai-role:chat",
+			Model:        "chat-27b",
 			Protocol:     agent.ProtocolOpenAI,
 			ProviderName: "ai-backend:local-hub",
 			ProviderKind: "local",
@@ -801,12 +801,12 @@ func TestResolveStartupModelTargetLocalOpenAIThreadsAPIKey(t *testing.T) {
 
 	// When selecting a local OpenAI-compatible choice via resolveStartupModelTarget,
 	// the returned CloudBackendOptions must contain the resolved API key.
-	target, opts, err := resolveStartupModelTarget("bonsai-2-27b", "auto", "", nil, nil, choices)
+	target, opts, err := resolveStartupModelTarget("chat-27b", "auto", "", nil, nil, choices)
 	if err != nil {
 		t.Fatalf("resolveStartupModelTarget: %v", err)
 	}
-	if target.Model != "bonsai-2-27b" {
-		t.Fatalf("target.Model = %q, want bonsai-2-27b", target.Model)
+	if target.Model != "chat-27b" {
+		t.Fatalf("target.Model = %q, want chat-27b", target.Model)
 	}
 	if opts.APIKey != "secret-key-123" {
 		t.Fatalf("opts.APIKey = %q, want secret-key-123", opts.APIKey)

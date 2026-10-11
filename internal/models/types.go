@@ -288,7 +288,7 @@ type ResidentModel struct {
 	// SupervisorType is the process supervisor managing the instance ("systemd-user",
 	// "systemd-system", or "none" / empty when unmanaged).
 	SupervisorType string `json:"supervisor_type,omitempty" yaml:"supervisor_type,omitempty"`
-	// SupervisorUnit is the service unit name (e.g. "bonsai2-27b.service").
+	// SupervisorUnit is the service unit name (e.g. "llama-27b.service").
 	SupervisorUnit string `json:"supervisor_unit,omitempty" yaml:"supervisor_unit,omitempty"`
 	// GPUIndices records physical GPU device indices occupied by the model.
 	GPUIndices []int `json:"gpu_indices,omitempty" yaml:"gpu_indices,omitempty"`

@@ -568,7 +568,7 @@ func TestLlamaServerDiscoveryScriptExtractsSupervisorUnitFromCgroup(t *testing.T
 	writeStub("lsof", `exit 1`)
 	writeStub("ss", `exit 1`)
 	writeStub("netstat", `exit 1`)
-	writeStub("cat", `echo "0::/user.slice/user-1000.slice/user@1000.service/app.slice/bonsai2-27b.service"`)
+	writeStub("cat", `echo "0::/user.slice/user-1000.slice/user@1000.service/app.slice/llama-27b.service"`)
 
 	cmd := exec.Command("bash", "-c", LlamaServerDiscoveryScript)
 	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "basename", "sed", "stat")
@@ -587,8 +587,8 @@ func TestLlamaServerDiscoveryScriptExtractsSupervisorUnitFromCgroup(t *testing.T
 	if rm.SupervisorType != "systemd-user" {
 		t.Errorf("supervisor_type = %q, want systemd-user", rm.SupervisorType)
 	}
-	if rm.SupervisorUnit != "bonsai2-27b.service" {
-		t.Errorf("supervisor_unit = %q, want bonsai2-27b.service", rm.SupervisorUnit)
+	if rm.SupervisorUnit != "llama-27b.service" {
+		t.Errorf("supervisor_unit = %q, want llama-27b.service", rm.SupervisorUnit)
 	}
 }
 
@@ -995,7 +995,7 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 				AppleFoundationModelsDiscoveryScript: {out: "OK\n"},
 			},
 		}
-		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		c := NewRemoteCollector("lab-3", "worker", "lab-3.local", exec)
 		facts := &models.NodeFacts{
 			OS:        "darwin",
 			Arch:      "arm64",
@@ -1067,7 +1067,7 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 				AppleFoundationModelsDiscoveryScript: {out: "OK\nOK\n"},
 			},
 		}
-		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		c := NewRemoteCollector("lab-3", "worker", "lab-3.local", exec)
 		facts := &models.NodeFacts{
 			OS:        "darwin",
 			Arch:      "arm64",
@@ -1097,7 +1097,7 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 				AppleFoundationModelsDiscoveryScript: {out: "OK\nUNAVAILABLE:modelNotReady\nOK\n"},
 			},
 		}
-		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		c := NewRemoteCollector("lab-3", "worker", "lab-3.local", exec)
 		facts := &models.NodeFacts{
 			OS:        "darwin",
 			Arch:      "arm64",
@@ -1239,7 +1239,7 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 
 	t.Run("darwin arm64 missing swift returns toolchain error", func(t *testing.T) {
 		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
-		c := NewRemoteCollector("samson", "worker", "samson.local", exec)
+		c := NewRemoteCollector("lab-3", "worker", "lab-3.local", exec)
 		facts := &models.NodeFacts{
 			OS:        "darwin",
 			Arch:      "arm64",
@@ -1275,7 +1275,7 @@ func TestRemoteCollectorDiscoversAppleFoundationModelsOnDarwinArm64(t *testing.T
 
 	t.Run("linux returns nil", func(t *testing.T) {
 		exec := &fakeRemoteExecutor{exact: map[string]fakeRunResult{}}
-		c := NewRemoteCollector("cranium", "primary", "cranium.local", exec)
+		c := NewRemoteCollector("lab-1", "primary", "lab-1.local", exec)
 		facts := &models.NodeFacts{
 			OS:        "linux",
 			Arch:      "amd64",

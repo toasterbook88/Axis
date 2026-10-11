@@ -14,18 +14,18 @@ func TestPipedObserverBadges(t *testing.T) {
 	var buf bytes.Buffer
 	o := &pipedToolObserver{w: &buf}
 
-	o.ToolCalled("c1", "axis_facts", `{"node":"cranium"}`)
+	o.ToolCalled("c1", "axis_facts", `{"node":"lab-1"}`)
 	o.ToolSucceeded("c1", "axis_facts", "5 nodes ok", 1843, 124*time.Millisecond)
 	o.ToolFailed("c2", "remote_grep", errors.New("dial timeout"), 2*time.Second)
-	o.ShellExecuting("c3", "nixos", "", "uptime")
+	o.ShellExecuting("c3", "lab-5", "", "uptime")
 	o.ToolSkipped("c4", "bash", "dry-run")
 
 	got := buf.String()
 	for _, want := range []string{
-		"→ axis_facts {\"node\":\"cranium\"}",
+		"→ axis_facts {\"node\":\"lab-1\"}",
 		"✓ axis_facts (124ms, 1843 bytes)",
 		"✗ remote_grep (dial timeout, 2s elapsed)",
-		"  ▶ nixos: uptime",
+		"  ▶ lab-5: uptime",
 		"  [dry-run] bash skipped: dry-run",
 	} {
 		if !strings.Contains(got, want) {

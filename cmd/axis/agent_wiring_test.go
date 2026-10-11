@@ -59,13 +59,13 @@ func TestGuardedAgentCommandRunnerPinsRequestedNode(t *testing.T) {
 		Config: &config.Config{
 			Nodes: []config.NodeConfig{
 				{Name: "studio", Hostname: "localhost", SSHUser: "me"},
-				{Name: "nixos", Hostname: "192.168.1.10", SSHUser: "axis"},
+				{Name: "lab-5", Hostname: "192.168.1.10", SSHUser: "axis"},
 			},
 		},
 		Snapshot: &models.ClusterSnapshot{
 			Nodes: []models.NodeFacts{
 				{Name: "studio", Hostname: "localhost"},
-				{Name: "nixos", Hostname: "192.168.1.10"},
+				{Name: "lab-5", Hostname: "192.168.1.10"},
 			},
 		},
 	}
@@ -85,21 +85,21 @@ func TestGuardedAgentCommandRunnerPinsRequestedNode(t *testing.T) {
 		gotReq = req
 		return execution.GuardedExecutionResult{
 			OK:      true,
-			Node:    "nixos",
+			Node:    "lab-5",
 			Command: req.Description,
 			Output:  "ok",
 		}, nil
 	}
 
-	out, err := guardedAgentCommandRunner("qwen2.5", "nixos")(context.Background(), "echo remote")
+	out, err := guardedAgentCommandRunner("qwen2.5", "lab-5")(context.Background(), "echo remote")
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
-	if !strings.Contains(out, `"node":"nixos"`) {
+	if !strings.Contains(out, `"node":"lab-5"`) {
 		t.Fatalf("output = %q", out)
 	}
-	if gotReq.RequestedNode != "nixos" {
-		t.Fatalf("RequestedNode = %q, want nixos", gotReq.RequestedNode)
+	if gotReq.RequestedNode != "lab-5" {
+		t.Fatalf("RequestedNode = %q, want lab-5", gotReq.RequestedNode)
 	}
 	if gotReq.OwnerSurface != execution.OwnerSurfaceAgentRunOnNode {
 		t.Fatalf("OwnerSurface = %q, want %q", gotReq.OwnerSurface, execution.OwnerSurfaceAgentRunOnNode)
@@ -127,7 +127,7 @@ func TestBuildAgentSessionConfigRunOnNodeUsesGuardedSurface(t *testing.T) {
 	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
 		return &runtimectx.Context{
 			Snapshot: &models.ClusterSnapshot{
-				Nodes: []models.NodeFacts{{Name: "nixos", Hostname: "n"}},
+				Nodes: []models.NodeFacts{{Name: "lab-5", Hostname: "n"}},
 			},
 		}, nil
 	}
@@ -135,21 +135,21 @@ func TestBuildAgentSessionConfigRunOnNodeUsesGuardedSurface(t *testing.T) {
 		return daemon.Metadata{}, errors.New("no daemon")
 	}
 	runGuardedAgentShell = func(_ context.Context, _ *runtimectx.Context, req execution.GuardedExecutionRequest) (execution.GuardedExecutionResult, error) {
-		if req.RequestedNode != "nixos" {
+		if req.RequestedNode != "lab-5" {
 			t.Fatalf("RequestedNode = %q", req.RequestedNode)
 		}
 		if req.OwnerSurface != execution.OwnerSurfaceAgentRunOnNode {
 			t.Fatalf("surface = %q", req.OwnerSurface)
 		}
-		return execution.GuardedExecutionResult{OK: true, Node: "nixos", Output: "done"}, nil
+		return execution.GuardedExecutionResult{OK: true, Node: "lab-5", Output: "done"}, nil
 	}
 
 	cfg := buildAgentSessionConfig(agentSessionParams{Model: "m"})
-	out, err := cfg.RunOnNode(context.Background(), "nixos", "uname -a")
+	out, err := cfg.RunOnNode(context.Background(), "lab-5", "uname -a")
 	if err != nil {
 		t.Fatalf("RunOnNode: %v", err)
 	}
-	if !strings.Contains(out, "nixos") {
+	if !strings.Contains(out, "lab-5") {
 		t.Fatalf("out = %q", out)
 	}
 }
@@ -160,7 +160,7 @@ func TestGuardedAgentCommandRunnerNilRuntimeErrors(t *testing.T) {
 	loadAgentShellRuntime = func(context.Context) (*runtimectx.Context, error) {
 		return nil, nil
 	}
-	_, err := guardedAgentCommandRunner("m", "nixos")(context.Background(), "echo x")
+	_, err := guardedAgentCommandRunner("m", "lab-5")(context.Background(), "echo x")
 	if err == nil || !strings.Contains(err.Error(), "nil loader result") {
 		t.Fatalf("expected nil-runtime error, got %v", err)
 	}
