@@ -33,12 +33,15 @@ func modelCatalogCmd() *cobra.Command {
 		Long: `List every model the cluster snapshot observed, one row per model per node.
 
 Each node reports its own models, so the catalog does not depend on which node
-you run it from. STATE is loaded only with a load signal (Ollama /api/ps, or a
-llama.cpp process started with -m), listed when a server names the model without
-a load signal (e.g. MLX), or installed (on disk, not loaded). LOCALITY is
-on-node, or cloud-proxy when the node forwards requests
-off the cluster. Empty CAPABILITIES means the engine did not report them.
-Nodes the snapshot could not observe are listed after the table.`,
+you run it from. STATE is loaded with a runtime load signal (Ollama /api/ps,
+llama.cpp /health 200, or Apple availability), loading while llama.cpp reports
+503, listed when a server names the model without a load signal (e.g. MLX),
+down when a process is present but its endpoint is silent, or installed when
+weights are present but not loaded. Older Ollama and llama.cpp rows without the
+additive state field retain the prior process-based loaded mapping. LOCALITY is
+on-node, or cloud-proxy when the node forwards requests off the cluster. Empty
+CAPABILITIES means the engine did not report them. Nodes the snapshot could not
+observe are listed after the table.`,
 		Args:    cobra.NoArgs,
 		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
