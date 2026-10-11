@@ -338,7 +338,7 @@ func TestCollectModelChoicesUnknownLocalityIsNotLocal(t *testing.T) {
 	rt := catalogChoicesRuntime(t)
 	rt.Snapshot.Nodes[0].LocalEndpoints = &models.LocalEndpoints{Confirmed: []models.LocalEndpoint{
 		{Port: 4000, Bind: "loopback", Dialect: "openai", Engine: "openai-compatible", Models: []models.LocalEndpointModel{{Name: "router/auto"}}},
-		{Port: 8000, Bind: "loopback", Dialect: "openai", Engine: "vllm", Models: []models.LocalEndpointModel{{Name: "served-a"}}},
+		{Port: 8000, Bind: "loopback", Dialect: "openai", Engine: "vllm", Process: "vllm", Models: []models.LocalEndpointModel{{Name: "served-a"}}},
 	}}
 	choices := collectModelChoices(rt)
 	proxy, _ := choiceByModel(t, choices, "router/auto")

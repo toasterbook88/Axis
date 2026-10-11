@@ -133,7 +133,7 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 				switch {
 				case m.RemoteHost != "":
 					e.Locality = models.ModelLocalityCloudProxy
-				case ep.Engine != "ollama" && ep.Engine != "vllm":
+				case !processIsEngine(ep.Process, ep.Engine):
 					e.Locality = models.ModelLocalityUnknown
 				}
 				add(ep.Engine+"\x00"+m.Name+"\x00"+strconv.Itoa(ep.Port), e)
@@ -201,4 +201,18 @@ func ollamaInstalled(info *models.OllamaInfo) []models.OllamaModelEntry {
 		}
 	}
 	return out
+}
+
+// processIsEngine reports whether the listener's process name (from the
+// kernel, via ss or lsof) corroborates the engine the response claimed. A
+// proxy can answer /api/tags or claim owned_by vllm; only a matching process
+// earns on-node locality.
+func processIsEngine(process, engine string) bool {
+	p := strings.ToLower(process)
+	switch engine {
+	case "ollama", "vllm":
+		return strings.Contains(p, engine)
+	default:
+		return false
+	}
 }

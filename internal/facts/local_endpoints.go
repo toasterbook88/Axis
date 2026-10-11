@@ -22,16 +22,23 @@ import (
 const LocalEndpointDiscoveryScript = `# axis-local-endpoints-v1
 OWNED=" ${AXIS_OWNED_PORTS:-} "
 if ! command -v curl >/dev/null 2>&1; then echo '{"reason":"no-curl"}'; exit 0; fi
-# addr port process, one listener per line.
+# addr port process, one listener per line. A tool that is present but
+# prints nothing (an old ss without -H support, say) falls through.
+HAVE_TOOL=false
+LISTEN=""
 if command -v ss >/dev/null 2>&1; then
-	LISTEN=$(ss -ltnpH 2>/dev/null | awk '{a=$4; p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); pr="-"; if (match($0,/users:\(\("[^"]+"/)) pr=substr($0,RSTART+9,RLENGTH-10); print a, p, pr}')
-elif command -v lsof >/dev/null 2>&1; then
-	LISTEN=$(lsof +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {a=$9; p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); print a, p, $1}')
-elif command -v netstat >/dev/null 2>&1; then
-	LISTEN=$(netstat -an 2>/dev/null | awk '$1 ~ /^tcp/ && /LISTEN/ {a=$4; p=a; if (a ~ /:[0-9]+$/) {sub(/.*:/,"",p); sub(/:[^:]*$/,"",a)} else {sub(/.*\./,"",p); sub(/\.[^.]*$/,"",a)}; print a, p, "-"}')
-else
-	echo '{"reason":"no-listener-tool"}'; exit 0
+	HAVE_TOOL=true
+	LISTEN=$(ss -ltnp 2>/dev/null | awk '{a=$4; p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); pr="-"; if (match($0,/users:\(\("[^"]+"/)) pr=substr($0,RSTART+9,RLENGTH-10); print a, p, pr}')
 fi
+if [ -z "$LISTEN" ] && command -v lsof >/dev/null 2>&1; then
+	HAVE_TOOL=true
+	LISTEN=$(lsof -b +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {a=$(NF-1); p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); print a, p, $1}')
+fi
+if [ -z "$LISTEN" ] && command -v netstat >/dev/null 2>&1; then
+	HAVE_TOOL=true
+	LISTEN=$(netstat -an 2>/dev/null | awk '$1 ~ /^tcp/ && /LISTEN/ {a=$4; p=a; if (a ~ /:[0-9]+$/) {sub(/.*:/,"",p); sub(/:[^:]*$/,"",a)} else {sub(/.*\./,"",p); sub(/\.[^.]*$/,"",a)}; print a, p, "-"}')
+fi
+if [ "$HAVE_TOOL" = false ]; then echo '{"reason":"no-listener-tool"}'; exit 0; fi
 # Loopback or wildcard binds only; owned ports skipped. One "port bind
 # process" row per port; a wildcard bind on any family wins over loopback.
 PORTS=$(printf '%s\n' "$LISTEN" | awk -v owned="$OWNED" '{
@@ -46,30 +53,34 @@ PORTS=$(printf '%s\n' "$LISTEN" | awk -v owned="$OWNED" '{
 	# Usual model-server ports first, so the cap is not spent on system services.
 	n = split("1234 4000 5000 5001 7860 8000 8001 8002 8008 8080 8081 8082 8090 8888 9000 11434 11435 30000", w, " ")
 	for (i = 1; i <= n; i++) known[w[i]] = 1
-	for (p in bind) print (p in known) ? 0 : 1, p, bind[p], proc[p]
+	for (p in bind) { rank = 1; if (p in known) rank = 0; print rank, p, bind[p], proc[p] }
 }' | sort -n -k1,1 -k2,2 | cut -d' ' -f2-)
 TRUNC=false
 if [ "$(printf '%s\n' "$PORTS" | grep -c .)" -gt 32 ]; then TRUNC=true; PORTS=$(printf '%s\n' "$PORTS" | head -n 32); fi
-DATA=$(mktemp 2>/dev/null || echo "/tmp/axis-ep-$$")
-BODY=$(mktemp 2>/dev/null || echo "/tmp/axis-ep-body-$$")
+DATA=$(mktemp 2>/dev/null) || { echo '{"reason":"no-tempfile"}'; exit 0; }
+BODY=$(mktemp 2>/dev/null) || { rm -f "$DATA"; echo '{"reason":"no-tempfile"}'; exit 0; }
 trap 'rm -f "$DATA" "$BODY"' EXIT
 : > "$DATA"
+# Record lines start with a per-run token, so a response body cannot forge one.
+TOK="@@AXIS-$$-$RANDOM$RANDOM$RANDOM"
 START=$SECONDS
-# fetch PORT PATH: appends "@@AXIS port path code" and up to 256 KiB of body.
+# fetch PORT PATH: appends "TOK FETCH port path code" and up to 256 KiB of
+# body. -q skips ~/.curlrc; --noproxy keeps the dial on this host; head caps
+# the download while it streams. 7 s leaves a margin for SECONDS' whole-second
+# resolution inside the 8 s budget.
 fetch() {
-	REM=$((8 - (SECONDS - START)))
+	REM=$((7 - (SECONDS - START)))
 	if [ "$REM" -le 0 ]; then TRUNC=true; return 1; fi
 	[ "$REM" -gt 1 ] && REM=1
-	: > "$BODY"
-	CODE=$(curl -s --max-time "$REM" -o "$BODY" -w '%{http_code}' "http://127.0.0.1:$1$2" 2>/dev/null)
-	CODE=${CODE:-000}
-	printf '@@AXIS %s %s %s\n' "$1" "$2" "$CODE" >> "$DATA"
-	head -c 262144 "$BODY" >> "$DATA"
+	CODE=$( { curl -q -s --noproxy '*' --max-time "$REM" -o - -w '%{stderr}%{http_code}' "http://127.0.0.1:$1$2" | head -c 262144 > "$BODY"; } 2>&1 )
+	case "$CODE" in [0-9][0-9][0-9]) ;; *) CODE=000 ;; esac
+	printf '%s FETCH %s %s %s\n' "$TOK" "$1" "$2" "$CODE" >> "$DATA"
+	cat "$BODY" >> "$DATA"
 	printf '\n' >> "$DATA"
 }
 while read -r PORT BIND PROC; do
 	[ -n "$PORT" ] || continue
-	printf '@@PROC %s %s %s\n' "$PORT" "$BIND" "$PROC" >> "$DATA"
+	printf '%s PROC %s %s %s\n' "$TOK" "$PORT" "$BIND" "$PROC" >> "$DATA"
 	fetch "$PORT" /api/tags || break
 	# 000: not HTTP or not answering; a second request would only time out too.
 	if [ "$CODE" = 000 ] || { [ "$CODE" = 200 ] && grep -q '"models"' "$BODY"; }; then continue; fi
@@ -78,25 +89,27 @@ done <<EOF
 $PORTS
 EOF
 if command -v python3 >/dev/null 2>&1; then
-	AXIS_EP_TRUNC="$TRUNC" python3 - "$DATA" <<'PY'
+	AXIS_EP_TRUNC="$TRUNC" AXIS_EP_TOK="$TOK" python3 - "$DATA" <<'PY'
 import json, os, sys
 
 ENGINES = {"llamacpp": "llama.cpp", "vllm": "vllm"}
 MAX_MODELS = 256
-truncated = os.environ.get("AXIS_EP_TRUNC") == "true"
+MAX_CONTEXT = 1 << 31
+TOK = os.environ["AXIS_EP_TOK"] + " "
+state = {"truncated": os.environ.get("AXIS_EP_TRUNC") == "true"}
 ports = {}
 order = []
 cur = None
 with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
     for line in f.read().splitlines():
-        if line.startswith("@@PROC "):
-            parts = line.split(" ", 3)
+        if line.startswith(TOK + "PROC "):
+            parts = line[len(TOK):].split(" ", 3)
             p = int(parts[1])
             ports[p] = {"bind": parts[2], "process": parts[3] if len(parts) > 3 and parts[3] != "-" else "", "fetch": {}}
             order.append(p)
             cur = None
-        elif line.startswith("@@AXIS "):
-            _, p, path, code = line.split(" ", 3)
+        elif line.startswith(TOK + "FETCH "):
+            _, p, path, code = line[len(TOK):].split(" ", 3)
             cur = {"code": code, "body": []}
             ports[int(p)]["fetch"][path] = cur
         elif cur is not None:
@@ -105,16 +118,17 @@ with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
 def body(fetch):
     try:
         return json.loads(" ".join(fetch["body"]))
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 confirmed, candidates = [], []
-for p in order:
+
+def classify(p):
     info = ports[p]
     got = info["fetch"]
     codes = {path: f["code"] for path, f in got.items()}
     if not codes or all(c == "000" for c in codes.values()):
-        continue
+        return
     tags = got.get("/api/tags")
     doc = body(tags) if tags and tags["code"] == "200" else None
     if isinstance(doc, dict) and isinstance(doc.get("models"), list):
@@ -128,12 +142,12 @@ for p in order:
                 out.append(e)
         out.sort(key=lambda e: e["name"])
         if len(out) > MAX_MODELS:
-            truncated, out = True, out[:MAX_MODELS]
+            state["truncated"], out = True, out[:MAX_MODELS]
         if out:
             confirmed.append({"port": p, "bind": info["bind"], "dialect": "ollama", "engine": "ollama", "process": info["process"],
                               "models": out,
                               "provenance": {"models": "GET /api/tags 200"}})
-            continue
+            return
     listing = got.get("/v1/models")
     doc = body(listing) if listing and listing["code"] == "200" else None
     if isinstance(doc, dict) and isinstance(doc.get("data"), list):
@@ -144,35 +158,43 @@ for p in order:
             # A llama-server the llama.cpp probe did not match (router mode or
             # no -m): its listing is not argv-backed.
             candidates.append({"port": p, "process": info["process"], "reason": "llama.cpp-unmatched"})
-            continue
+            return
         if rows:
             out = []
             if len(rows) > MAX_MODELS:
-                truncated = True
+                state["truncated"] = True
             for m in sorted(rows, key=lambda m: m["id"])[:MAX_MODELS]:
                 e = {"name": m["id"]}
-                if isinstance(m.get("max_model_len"), int) and m["max_model_len"] > 0:
-                    e["context_window"] = m["max_model_len"]
+                n = m.get("max_model_len")
+                if type(n) is int and 0 < n < MAX_CONTEXT:
+                    e["context_window"] = n
                 out.append(e)
             prov = {"models": "GET /v1/models 200"}
             if owners:
                 prov["engine"] = "owned_by " + ",".join(owners)
             confirmed.append({"port": p, "bind": info["bind"], "dialect": "openai", "engine": engine, "process": info["process"],
                               "models": out, "provenance": prov})
-            continue
+            return
     if any(c in ("401", "403") for c in codes.values()):
         reason = "auth-required"
     else:
         reason = "no-model-listing"
     candidates.append({"port": p, "process": info["process"], "reason": reason})
 
-print(json.dumps({"confirmed": confirmed, "candidates": candidates, "truncated": truncated}))
+
+for p in order:
+    try:
+        classify(p)
+    except Exception:
+        candidates.append({"port": p, "process": ports[p]["process"], "reason": "parse-error"})
+
+print(json.dumps({"confirmed": confirmed, "candidates": candidates, "truncated": state["truncated"]}))
 PY
 else
 	# No parser: every port that answered HTTP stays a candidate.
-	awk -v trunc="$TRUNC" '
-		/^@@PROC / {port=$2; proc=($4=="-") ? "" : $4; next}
-		/^@@AXIS / {if ($4 != "000" && !done[port]++) {gsub(/["\\]/,"",proc); rows = rows (rows=="" ? "" : ",") "{\"port\":" port ",\"process\":\"" proc "\",\"reason\":\"parser-unavailable\"}"}}
+	awk -v trunc="$TRUNC" -v tok="$TOK" '
+		$1 == tok && $2 == "PROC" {port=$3; proc=($5=="-") ? "" : $5; next}
+		$1 == tok && $2 == "FETCH" {if ($5 != "000" && !done[port]++) {gsub(/["\\]/,"",proc); rows = rows (rows=="" ? "" : ",") "{\"port\":" port ",\"process\":\"" proc "\",\"reason\":\"parser-unavailable\"}"}}
 		END {printf "{\"candidates\":[%s],\"truncated\":%s}\n", rows, trunc}' "$DATA"
 fi
 `

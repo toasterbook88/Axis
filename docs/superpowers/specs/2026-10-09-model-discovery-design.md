@@ -88,11 +88,12 @@ New pushed script `LocalEndpointDiscoveryScript`, bash, same language and invoca
 Live runs on the fleet changed these details:
 
 - **Bind.** Each confirmed endpoint records `bind` (`loopback` or `any`). The catalog marks loopback-only entries, and `axis agent` `/models` disables them on other nodes ("bound to loopback on its node").
-- **Locality.** A generic OpenAI-compatible endpoint can be a cloud router: one node's local proxy listed about 200 cloud models. Its entries carry locality `unknown`, `/models` labels them "may proxy off the cluster", and only `on-node` entries get the local security class. Ollama-dialect endpoints are on-node unless an entry has `remote_host`; vLLM is on-node.
+- **Locality.** A generic OpenAI-compatible endpoint can be a cloud router: one node's local proxy listed about 200 cloud models. Its entries carry locality `unknown`, `/models` labels them "may proxy off the cluster", and only `on-node` entries get the local security class. Because `/api/tags` and `owned_by` are self-declared, Ollama and vLLM endpoints are on-node only when the listener's process name, as reported by `ss` or `lsof`, matches the engine, and the entry has no `remote_host`.
 - **Ollama app mirror.** The macOS Ollama app serves the daemon's list on a second loopback port. An Ollama-dialect endpoint whose list equals the node's own Ollama models is a candidate, `mirrors-ollama`.
 - **llama.cpp.** An endpoint whose models are all `owned_by: llamacpp` on a port the llama.cpp probe did not claim is a candidate, `llama.cpp-unmatched`. This follows the router-mode row of the state table.
 - **Budget.** Requests take at most 1 s each, and a port with no HTTP answer on `/api/tags` is not asked again. Usual model-server ports are probed first, so the 32-port cap is not spent on system services. Each endpoint lists at most 256 models, and hitting that cap sets `truncated`.
 - **Silent listeners.** A listener with no HTTP answer at all is neither confirmed nor a candidate.
+- **Hardening.** Record lines carry a per-run token, so a response body cannot forge one. A body that fails to parse turns its port into a `parse-error` candidate and the rest of the sweep continues. curl runs with `-q --noproxy '*'`, and its download is capped at 256 KiB while it streams. A listener tool that is present but prints nothing falls through to the next one.
 
 ### 3. Apple extras and disk kinds (PR 3)
 

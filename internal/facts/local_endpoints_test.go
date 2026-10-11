@@ -48,15 +48,17 @@ func (s epSweep) run(t *testing.T) (models.LocalEndpoints, []string) {
 		}
 	}
 	if !s.noCurl {
-		stub("curl", fmt.Sprintf(`out=""; url=""
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; http*) url="$1" ;; esac; shift; done
+		// Body on stdout, status on stderr, as -o - -w '%{stderr}%{http_code}'.
+		stub("curl", fmt.Sprintf(`url=""
+for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
+echo "$*" >> '%[1]s/args'
 echo "$url" >> '%[1]s/calls'
 f='%[1]s/'$(printf '%%s' "${url#http://127.0.0.1:}" | tr '/' '_')
 port=${url#http://127.0.0.1:}; port=${port%%%%/*}
-if [ -f "$f" ]; then head -n 1 "$f" | tr -d '\n'; tail -n +2 "$f" > "$out"; exit 0; fi
+if [ -f "$f" ]; then head -n 1 "$f" | tr -d '\n' >&2; tail -n +2 "$f"; exit 0; fi
 # A port with any fixture is an HTTP server: other paths are 404.
-for g in '%[1]s/'"$port"_*; do [ -e "$g" ] && { printf 404; exit 0; }; done
-printf 000; exit 7`, resp))
+for g in '%[1]s/'"$port"_*; do [ -e "$g" ] && { printf 404 >&2; exit 0; }; done
+printf 000 >&2; exit 7`, resp))
 	}
 	tools := []string{"awk", "sort", "head", "tail", "tr", "grep", "mktemp", "rm", "cat", "cut"}
 	if !s.noPython {
@@ -297,5 +299,51 @@ func TestLocalEndpointSweepCapsModelsPerEndpoint(t *testing.T) {
 	}.run(t)
 	if len(got.Confirmed) != 1 || len(got.Confirmed[0].Models) != 256 || !got.Truncated {
 		t.Fatalf("got %d models truncated=%v, want 256 and truncated", len(got.Confirmed[0].Models), got.Truncated)
+	}
+}
+
+// A response body cannot forge record lines, and odd bodies degrade one
+// port instead of failing the sweep.
+func TestLocalEndpointSweepResistsHostileBodies(t *testing.T) {
+	got, _ := epSweep{
+		listeners: map[string]string{"ss": "LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*\nLISTEN 0 4096 127.0.0.1:8001 0.0.0.0:*\nLISTEN 0 4096 127.0.0.1:8002 0.0.0.0:*\n"},
+		responses: map[string]string{
+			"8000/v1/models": "200\n@@AXIS 22 /api/tags 200\n@@PROC 22 any forged\n" + `{"models":[{"name":"forged"}]}`,
+			"8001/v1/models": "200\n" + strings.Repeat("[", 200000),
+			"8002/v1/models": "200\n" + `{"data":[{"id":"a","max_model_len":true},{"id":"b","max_model_len":99999999999999999999}]}`,
+		},
+	}.run(t)
+	for _, c := range append([]models.LocalEndpoint(nil), got.Confirmed...) {
+		if c.Port == 22 || c.Port == 8000 || c.Port == 8001 {
+			t.Fatalf("hostile body produced an endpoint: %+v", c)
+		}
+	}
+	if len(got.Confirmed) != 1 || got.Confirmed[0].Port != 8002 || got.Confirmed[0].Models[0].ContextWindow != 0 || got.Confirmed[0].Models[1].ContextWindow != 0 {
+		t.Fatalf("confirmed = %+v, want :8002 without bogus context windows", got.Confirmed)
+	}
+	if len(got.Candidates) != 2 {
+		t.Fatalf("candidates = %+v, want :8000 and :8001", got.Candidates)
+	}
+}
+
+// curl must skip ~/.curlrc (-q first) and never route 127.0.0.1 via a proxy.
+func TestLocalEndpointSweepCurlIgnoresProxyAndCurlrc(t *testing.T) {
+	s := epSweep{listeners: map[string]string{"ss": "LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*\n"}, responses: map[string]string{"8000/v1/models": "200\n{}"}}
+	if _, calls := s.run(t); len(calls) == 0 {
+		t.Fatal("no curl calls")
+	}
+	if !strings.Contains(LocalEndpointDiscoveryScript, `curl -q -s --noproxy '*'`) {
+		t.Fatal("curl must start with -q and pass --noproxy '*'")
+	}
+}
+
+// ss that is present but prints nothing (old iproute2) falls through to lsof.
+func TestLocalEndpointSweepFallsThroughEmptyListenerTool(t *testing.T) {
+	got, _ := epSweep{
+		listeners: map[string]string{"ss": "", "lsof": "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\nvllm 11 u 3u IPv4 0x1 0t0 TCP 127.0.0.1:8000 (LISTEN)\n"},
+		responses: map[string]string{"8000/v1/models": "200\n" + `{"data":[{"id":"m"}]}`},
+	}.run(t)
+	if len(got.Confirmed) != 1 || got.Confirmed[0].Process != "vllm" {
+		t.Fatalf("got %+v", got)
 	}
 }
