@@ -373,6 +373,7 @@ reason, or add heavy dependencies without strong justification.
 | `hack/hermetic-go-test-tests.sh` | Regression tests for the hermetic Go test runner |
 | `hack/verify-deadcode.sh` | Fail on unreachable symbols not in the deadcode allowlist |
 | `hack/verify-deadcode-tests.sh` | Regression tests for the deadcode gate's failure paths |
+| `hack/pr-review-cycle-tests.sh` | Regression tests for review rendering and fail-closed merge-state checks |
 | `hack/verify-public-boundary.sh` | Enforce RFC 2606 domain and IPv4 documentation boundaries across all tracked files |
 | `hack/verify-repo-truth.sh` | Enforce doc facts and release tag accuracy |
 | `hack/verify-doc-facts.sh` | Enforce code/doc agreement (exit codes, command count, MCP tools, package inventory, AGENTS.md 30KB budget, CHANGELOG) |

@@ -17,6 +17,45 @@
 # Bot comments are advisory; evaluate credibility before applying.
 set -euo pipefail
 
+render_review_bodies() {
+  jq -r '
+    .. | .reviews?.nodes[]?
+    | select((.body // "") != "")
+    | "### @\(.author.login) \(.state) commit=\(.commit.oid[0:7] // "?")\n\(.body)\n"
+  '
+}
+
+render_general_comments() {
+  jq -r '
+    .. | .comments?.nodes[]?
+    | select(.url == null) # Exclude inline comments
+    | "### @\(.author.login) @ \(.createdAt)\n\(.body)\n"
+  '
+}
+
+render_inline_threads() {
+  local head_oid="$1"
+  jq -r --arg head "$head_oid" '
+    .. | .reviewThreads?.nodes[]?
+    | . as $t
+    | ($t.comments.nodes[0] // {}) as $c
+    | "thread resolved=\($t.isResolved) outdated=\($t.isOutdated) path=\($t.path // "?")\n  @\($c.author.login // "?") head_match=\(($c.commit.oid // "") == $head)\n  \($c.body // "")\n  \($c.url // "")\n"
+  '
+}
+
+count_unresolved_threads() {
+  jq -r '[.. | .reviewThreads?.nodes[]? | select(.isResolved == false)] | length'
+}
+
+require_clean_merge_state() {
+  local merge_state="$1"
+  if [[ "$merge_state" != "CLEAN" ]]; then
+    echo "error: merge state is not CLEAN: $merge_state" >&2
+    return 1
+  fi
+}
+
+main() {
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <pr-number> [--wait-bots SEC]" >&2
   exit 1
@@ -63,17 +102,24 @@ base_branch="$(gh pr view "$PR" --json baseRefName --jq .baseRefName)"
 repo_owner="$(gh repo view --json owner --jq .owner.login)"
 repo_name="$(gh repo view --json name --jq .name)"
 
-mapfile -t REQUIRED_CHECKS < <(
-  gh api "repos/$repo_owner/$repo_name/branches/$base_branch/protection/required_status_checks" \
-    --jq '.contexts[]' 2>/dev/null || true
-)
+# Keep API errors and malformed responses distinct from a confirmed empty list.
+# Never treat a failed discovery request as "no required checks".
+if ! required_json="$(gh api "repos/$repo_owner/$repo_name/branches/$base_branch/protection/required_status_checks")"; then
+  echo "error: unable to discover required checks for $base_branch" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$required_json" | jq -e '.contexts | type == "array" and all(.[]; type == "string" and length > 0)' >/dev/null; then
+  echo "error: malformed required-check response for $base_branch" >&2
+  exit 1
+fi
+mapfile -t REQUIRED_CHECKS < <(printf '%s\n' "$required_json" | jq -r '.contexts[]')
 if [[ ${#REQUIRED_CHECKS[@]} -eq 0 ]]; then
   echo "warning: no required checks found for branch $base_branch; proceeding without checks verification" >&2
 fi
 
 echo "== PR #${PR} =="
-pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
-echo "$pr_json" | jq '{url,title,state,head: .headRefOid[0:7]}'
+pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,mergeStateStatus,statusCheckRollup)"
+echo "$pr_json" | jq '{url,title,state,mergeStateStatus,head: .headRefOid[0:7]}'
 
 if [[ ${#REQUIRED_CHECKS[@]} -gt 0 ]]; then
   echo "== Required checks (fail-closed) =="
@@ -85,7 +131,7 @@ if [[ ${#REQUIRED_CHECKS[@]} -gt 0 ]]; then
   fi
 
   # Re-fetch rollup after watch.
-  pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,statusCheckRollup)"
+  pr_json="$(gh pr view "$PR" --json url,title,state,headRefOid,mergeStateStatus,statusCheckRollup)"
   for name in "${REQUIRED_CHECKS[@]}"; do
     conclusion="$(echo "$pr_json" | jq -r --arg n "$name" '
       [
@@ -159,28 +205,15 @@ query(\$endCursor: String) {
 }")"
 
 echo "--- Review bodies ---"
-echo "$thread_json" | jq -r '
-  .. | .reviews?.nodes[]?
-  | select((.body // "") != "")
-  | "### @\(.author.login) \(.state) commit=\(.commit.oid[0:7] // \"?\")\n\(.body)\n"
-' | sort -u
+echo "$thread_json" | render_review_bodies
 
 echo "--- General PR comments ---"
-echo "$thread_json" | jq -r '
-  .. | .comments?.nodes[]?
-  | select(.url == null) # Exclude inline comments
-  | "### @\(.author.login) @ \(.createdAt)\n\(.body)\n"
-' | sort -u
+echo "$thread_json" | render_general_comments
 
 echo "--- Inline threads ---"
-echo "$thread_json" | jq -r --arg head "$head_oid" '
-  .. | .reviewThreads?.nodes[]?
-  | . as $t
-  | ($t.comments.nodes[0] // {}) as $c
-  | "thread resolved=\($t.isResolved) outdated=\($t.isOutdated) path=\($t.path // \"?\")\n  @\($c.author.login // \"?\") head_match=\(($c.commit.oid // \"\") == $head)\n  \($c.body // \"\")\n  \($c.url // \"\")\n"
-'
+echo "$thread_json" | render_inline_threads "$head_oid"
 
-unresolved="$(echo "$thread_json" | jq -r '[.. | .reviewThreads?.nodes[]? | select(.isResolved == false)] | length')"
+unresolved="$(echo "$thread_json" | count_unresolved_threads)"
 echo "unresolved_threads=${unresolved}"
 
 echo
@@ -194,4 +227,17 @@ echo "  This script will not merge."
 if [[ "$unresolved" != "0" ]]; then
   exit 2
 fi
+# Re-read at enforcement: the bot wait and review collection take minutes,
+# and an earlier CLEAN must not pass a PR whose base or head has moved since.
+final_json="$(gh pr view "$PR" --json headRefOid,mergeStateStatus)"
+if [[ "$(echo "$final_json" | jq -r .headRefOid)" != "$head_oid" ]]; then
+  echo "error: head moved during review (was ${head_oid:0:7}); re-run" >&2
+  exit 1
+fi
+require_clean_merge_state "$(echo "$final_json" | jq -r .mergeStateStatus)"
 exit 0
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
