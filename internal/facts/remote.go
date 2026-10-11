@@ -102,9 +102,8 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	if llamaResidents := c.discoverLlamaServerRobust(ctx); len(llamaResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
 	}
-	if mlxResidents := c.discoverMLXRobust(ctx); len(mlxResidents) > 0 {
-		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
-	}
+	facts.ResidentModels = append(facts.ResidentModels, c.discoverMLXRobust(ctx)...)
+	facts.LocalEndpoints = discoverLocalEndpoints(ctx, facts, c.Exec.Run) // after the engine probes: it skips their ports
 	c.discoverDiskWeights(ctx, facts)
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
 		return c.Exec.Run(ctx, cmd)

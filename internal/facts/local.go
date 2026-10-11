@@ -38,6 +38,10 @@ var runLlamaServerDiscoveryFn = func(ctx context.Context) ([]byte, error) {
 var runMLXDiscoveryFn = func(ctx context.Context) ([]byte, error) {
 	return exec.CommandContext(ctx, "bash", "-c", MLXDiscoveryScript).Output()
 }
+var runLocalEndpointsFn = func(ctx context.Context, cmd string) (string, error) {
+	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).Output()
+	return string(out), err
+}
 
 var runDiskutilInfo = func(ctx context.Context, device string) (string, error) {
 	out, err := exec.CommandContext(ctx, "diskutil", "info", device).Output()
@@ -129,6 +133,8 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	if mlxResidents := discoverMLXLocal(ctx); len(mlxResidents) > 0 {
 		facts.ResidentModels = append(facts.ResidentModels, mlxResidents...)
 	}
+	// Loopback servers the probes above do not own (vLLM, LM Studio, proxies).
+	facts.LocalEndpoints = discoverLocalEndpoints(ctx, facts, runLocalEndpointsFn)
 	applyLocalDiskWeights(ctx, facts)
 	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, runLocalTurboQuantProbe)
 	if fm := detectAppleFoundationModels(ctx, facts.OS, facts.Arch, facts.OSVersion, facts.Tools); fm != nil {

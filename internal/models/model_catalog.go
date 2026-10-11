@@ -32,6 +32,9 @@ const (
 	// ModelLocalityCloudProxy means the node forwards requests to RemoteHost;
 	// inference leaves the cluster.
 	ModelLocalityCloudProxy ModelLocality = "cloud-proxy"
+	// ModelLocalityUnknown means the server named the model but not where
+	// inference runs: a generic OpenAI-compatible endpoint may be a proxy.
+	ModelLocalityUnknown ModelLocality = "unknown"
 )
 
 // ModelCatalogEntry is one model on one node, as that node reported it.
@@ -56,9 +59,12 @@ type ModelCatalogEntry struct {
 	LoadSignal string `json:"load_signal,omitempty" yaml:"load_signal,omitempty"`
 	// Port and InstanceID are set for loaded entries; InstanceID matches
 	// ModelInventory so lifecycle commands can act on the entry.
-	Port       int       `json:"port,omitempty" yaml:"port,omitempty"`
-	InstanceID string    `json:"instance_id,omitempty" yaml:"instance_id,omitempty"`
-	ObservedAt time.Time `json:"observed_at,omitempty" yaml:"observed_at,omitempty"`
+	Port       int    `json:"port,omitempty" yaml:"port,omitempty"`
+	InstanceID string `json:"instance_id,omitempty" yaml:"instance_id,omitempty"`
+	// LoopbackOnly marks a server bound to loopback: only its own node can
+	// reach Port.
+	LoopbackOnly bool      `json:"loopback_only,omitempty" yaml:"loopback_only,omitempty"`
+	ObservedAt   time.Time `json:"observed_at,omitempty" yaml:"observed_at,omitempty"`
 }
 
 // UnobservedNode records a configured node whose models are unknown in this
