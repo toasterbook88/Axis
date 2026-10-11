@@ -32,14 +32,17 @@ allowed_ip() {
 
 # 1. Check for private cluster domain / hostname patterns across all tracked files
 domain_hits=()
-forbidden_domain_regex='(\.lan\.axismcp\.org|\.axismcp\.org|\.ts\.net|cranium\.lan|tail9ecf52)'
+# Patterns are generic on purpose: this file is public, so it must not name a
+# real host or tailnet to block it. Any *.lan host and any Tailscale tailnet
+# id (tail + hex) are rejected; use example.com or home.arpa (RFC 8375).
+forbidden_domain_regex='(\.axismcp\.org|\.ts\.net|\b[a-z0-9-]+\.lan\b|\btail[0-9a-f]{6,}\b)'
 
 while IFS= read -r -d '' f; do
   [[ -f "$f" ]] || continue
   [[ "$f" == "hack/verify-public-boundary.sh" ]] && continue
   while IFS= read -r line; do
     domain_hits+=("$f: $line")
-  done < <(rg -n -e "$forbidden_domain_regex" "$f" || true)
+  done < <(rg -n -i -e "$forbidden_domain_regex" "$f" || true)
 done < <(git ls-files -z)
 
 if (( ${#domain_hits[@]} > 0 )); then

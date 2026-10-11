@@ -850,7 +850,7 @@ func TestLoad_AllowedInternalHosts(t *testing.T) {
     hostname: node-a.local
     ssh_user: user
 allowed_internal_hosts:
-  - "axis.lan"
+  - "node-1.home.arpa"
   - "127.0.0.1"
   - "169.254.1.2"
 `), 0644); err != nil {
@@ -860,7 +860,7 @@ allowed_internal_hosts:
 	if err != nil {
 		t.Fatalf("load with allowed_internal_hosts: %v", err)
 	}
-	want := []string{"axis.lan", "127.0.0.1", "169.254.1.2"}
+	want := []string{"node-1.home.arpa", "127.0.0.1", "169.254.1.2"}
 	if len(cfg.AllowedInternalHosts) != len(want) {
 		t.Fatalf("expected %d allowed hosts, got %d", len(want), len(cfg.AllowedInternalHosts))
 	}

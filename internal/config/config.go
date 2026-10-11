@@ -350,7 +350,7 @@ type Config struct {
 
 	// AllowedInternalHosts opts specific hosts/IPs out of the outbound SSRF
 	// guard (loopback/private/link-local blocking) for legitimate self-hosted
-	// targets: LAN nodes (e.g. "axis.lan"), local MCP servers ("127.0.0.1"),
+	// targets: LAN nodes (e.g. "node-1.home.arpa"), local MCP servers ("127.0.0.1"),
 	// or direct Thunderbolt links ("169.254.1.2"). Each entry must match the
 	// host as it appears in the webhook/MCP URL.
 	AllowedInternalHosts []string `json:"allowed_internal_hosts,omitempty" yaml:"allowed_internal_hosts,omitempty"`

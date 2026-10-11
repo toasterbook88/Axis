@@ -24,9 +24,9 @@ func TestNewClient_Normalization(t *testing.T) {
 		t.Fatal("expected default HTTPClient")
 	}
 
-	c2 := NewClient("https://foundry.lan:8080", "tok2", &http.Client{Timeout: 5 * time.Second})
-	if c2.BaseURL != "https://foundry.lan:8080" {
-		t.Fatalf("expected https://foundry.lan:8080, got %s", c2.BaseURL)
+	c2 := NewClient("https://node-1.home.arpa:8080", "tok2", &http.Client{Timeout: 5 * time.Second})
+	if c2.BaseURL != "https://node-1.home.arpa:8080" {
+		t.Fatalf("expected https://node-1.home.arpa:8080, got %s", c2.BaseURL)
 	}
 }
 
