@@ -904,6 +904,93 @@ func TestToolGrepSearchIncludeRelativePath(t *testing.T) {
 	}
 }
 
+func TestToolRecursiveReadToolsConfineSymlinksAndHiddenEntries(t *testing.T) {
+	workspace := t.TempDir()
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(external, "secret.txt"), []byte("confined-token"), 0644); err != nil {
+		t.Fatalf("write external secret: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "visible.txt"), []byte("confined-token"), 0644); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace, ".hidden"), 0755); err != nil {
+		t.Fatalf("create hidden dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".hidden", "hidden.txt"), []byte("confined-token"), 0644); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".hidden-file"), []byte("confined-token"), 0644); err != nil {
+		t.Fatalf("write hidden root file: %v", err)
+	}
+	if err := os.Symlink(external, filepath.Join(workspace, "external-dir")); err != nil {
+		t.Fatalf("symlink external dir: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(external, "secret.txt"), filepath.Join(workspace, "external.txt")); err != nil {
+		t.Fatalf("symlink external file: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+	defer os.Chdir(origDir)
+	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+
+	listing, err := r.Execute(context.Background(), "list_directory", json.RawMessage(`{"path":".","depth":3}`))
+	if err != nil {
+		t.Fatalf("tree listing: %v", err)
+	}
+	for _, want := range []string{".hidden/", "external-dir", "external.txt", "visible.txt"} {
+		if !strings.Contains(listing, want) {
+			t.Errorf("tree listing missing %q: %s", want, listing)
+		}
+	}
+	if strings.Contains(listing, "hidden.txt") || strings.Contains(listing, "secret.txt") {
+		t.Errorf("tree listing descended into hidden directory or symlink: %s", listing)
+	}
+
+	result, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"confined-token"}`))
+	if err != nil {
+		t.Fatalf("grep search: %v", err)
+	}
+	if !strings.Contains(result, "visible.txt") {
+		t.Fatalf("grep omitted visible match: %s", result)
+	}
+	for _, forbidden := range []string{"external.txt", "hidden.txt", ".hidden-file", "secret.txt"} {
+		if strings.Contains(result, forbidden) {
+			t.Errorf("grep escaped confinement through %q: %s", forbidden, result)
+		}
+	}
+
+	if _, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"confined-token","path":"external-dir"}`)); err == nil || !strings.Contains(err.Error(), "escapes working directory") {
+		t.Fatalf("root symlink escape was not rejected: %v", err)
+	}
+}
+
+func TestToolGrepSearchCapsRequestedMatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	for i := 0; i < 205; i++ {
+		name := filepath.Join(tmpDir, fmt.Sprintf("match-%03d.txt", i))
+		if err := os.WriteFile(name, []byte("cap-token\n"), 0644); err != nil {
+			t.Fatalf("write match file: %v", err)
+		}
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir)
+	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
+	result, err := r.Execute(context.Background(), "grep_search", json.RawMessage(`{"query":"cap-token","max_matches":1000}`))
+	if err != nil {
+		t.Fatalf("grep search: %v", err)
+	}
+	if got := len(strings.Split(strings.TrimSpace(result), "\n")); got != 200 {
+		t.Fatalf("match count = %d, want hard cap 200", got)
+	}
+}
+
 func TestToolWriteFileConfirmationUsesNewFilePreview(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()

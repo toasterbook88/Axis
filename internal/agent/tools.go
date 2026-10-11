@@ -1149,6 +1149,11 @@ func (r *ToolRegistry) registerGrepSearch() {
 				if len(matches) >= maxMatches {
 					return limitErr
 				}
+				// Walk uses Lstat, so reject nested symlinks before os.Open can
+				// follow a file link outside the validated search root.
+				if info.Mode()&os.ModeSymlink != 0 {
+					return nil
+				}
 				if info.IsDir() {
 					name := info.Name()
 					if name != "." && name != ".." && strings.HasPrefix(name, ".") {
