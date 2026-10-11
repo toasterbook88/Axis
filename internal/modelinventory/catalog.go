@@ -106,9 +106,33 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 			Engine:   engine,
 			Locality: models.ModelLocalityOnNode,
 		})
-		e.State = residentState(engine)
+		e.State = residentState(r)
+		e.LoadSignal = r.LoadSignal
+		if r.ContextWindow > 0 {
+			e.ContextWindow = r.ContextWindow
+		}
 		e.Port = r.Port
 		e.InstanceID = instanceID(identity, r.Runtime, r.Name, r.Port)
+	}
+
+	if a := node.AppleFM; a != nil && (a.State == models.AppleFMReady || a.State == models.AppleFMCold) {
+		name := a.Model
+		if name == "" {
+			name = "apple-foundation-models"
+		}
+		state := models.ModelCatalogLoaded
+		if a.State == models.AppleFMCold {
+			state = models.ModelCatalogInstalled
+		}
+		add("apple-foundation-models\x00"+name, models.ModelCatalogEntry{
+			Model:         name,
+			Engine:        "apple-foundation-models",
+			State:         state,
+			Locality:      models.ModelLocalityOnNode,
+			Capabilities:  append([]string(nil), a.Capabilities...),
+			ContextWindow: a.ContextWindow,
+			LoadSignal:    "availability",
+		})
 	}
 
 	out := make([]models.ModelCatalogEntry, 0, len(order))
@@ -122,12 +146,15 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 	return out
 }
 
-// residentState is loaded only for runtimes whose resident facts carry a
-// load signal: Ollama (/api/ps) and llama.cpp (the -m argument of the
-// running process). Any other runtime's resident row, such as MLX from its
-// /v1/models listing, is listed.
-func residentState(engine string) models.ModelCatalogState {
-	switch engine {
+// residentState prefers the state the collector observed from a load
+// signal. Rows without one (older collectors, or curl absent on the node)
+// keep the #507 mapping: loaded only for ollama (/api/ps) and llama.cpp
+// (the -m argument of the running process); any other runtime is listed.
+func residentState(r models.ResidentModel) models.ModelCatalogState {
+	if r.State != "" {
+		return r.State
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Runtime)) {
 	case "ollama", "llama.cpp":
 		return models.ModelCatalogLoaded
 	default:

@@ -15,6 +15,12 @@ const (
 	// ModelCatalogInstalled means the weights (or a cloud-proxy stub) are
 	// present and the load signal says not loaded.
 	ModelCatalogInstalled ModelCatalogState = "installed"
+	// ModelCatalogLoading means the runtime reports it is still loading
+	// (llama.cpp /health 503).
+	ModelCatalogLoading ModelCatalogState = "loading"
+	// ModelCatalogDown means the process was seen but its endpoint did not
+	// answer.
+	ModelCatalogDown ModelCatalogState = "down"
 )
 
 // ModelLocality says where inference for an entry actually runs.
@@ -44,6 +50,10 @@ type ModelCatalogEntry struct {
 	ParameterSize string   `json:"parameter_size,omitempty" yaml:"parameter_size,omitempty"`
 	Quantization  string   `json:"quantization,omitempty" yaml:"quantization,omitempty"`
 	SizeBytes     int64    `json:"size_bytes,omitempty" yaml:"size_bytes,omitempty"`
+	// ContextWindow is the served context the runtime stated; 0 = unknown.
+	ContextWindow int `json:"context_window,omitempty" yaml:"context_window,omitempty"`
+	// LoadSignal names the evidence behind State.
+	LoadSignal string `json:"load_signal,omitempty" yaml:"load_signal,omitempty"`
 	// Port and InstanceID are set for loaded entries; InstanceID matches
 	// ModelInventory so lifecycle commands can act on the entry.
 	Port       int       `json:"port,omitempty" yaml:"port,omitempty"`
