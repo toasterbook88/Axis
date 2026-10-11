@@ -176,3 +176,29 @@ func TestAppleFMFromProbeRecordsProvenance(t *testing.T) {
 		t.Fatalf("timeout provenance = %v", timeout.Provenance)
 	}
 }
+
+func TestAppleFMFromProbeReadsPrivateCloudCompute(t *testing.T) {
+	got := appleFMFromProbe("27.2", `{"availability":"available","context_size":8192,"pcc":{"availability":"available","capabilities":["reasoning","vision"],"context_size":32768,"quota_approaching_limit":true,"quota_limit_reached":false,"quota_reset":"2026-10-11T00:00:00Z"}}`, nil)
+	p := got.PCC
+	if p == nil || p.State != models.AppleFMReady || p.ContextWindow != 32768 || !slices.Contains(p.Capabilities, "reasoning") ||
+		!p.QuotaApproachingLimit || p.QuotaLimitReached || p.QuotaReset != "2026-10-11T00:00:00Z" {
+		t.Fatalf("pcc = %+v", p)
+	}
+	got = appleFMFromProbe("27.2", `{"availability":"available","pcc":{"availability":"unavailable","reason":"systemNotReady"}}`, nil)
+	if got.PCC == nil || got.PCC.State != models.AppleFMUnavailable || got.PCC.Reason != "systemNotReady" || got.PCC.ContextWindow != 0 {
+		t.Fatalf("unavailable pcc = %+v", got.PCC)
+	}
+	if got := appleFMFromProbe("26.4", `{"availability":"available"}`, nil); got.PCC != nil {
+		t.Fatalf("no pcc key must leave PCC nil, got %+v", got.PCC)
+	}
+}
+
+// Sweeps never generate: the PCC read is availability, quota, capabilities,
+// and contextSize only.
+func TestAppleFMFactsSwiftNeverGenerates(t *testing.T) {
+	for _, banned := range []string{"respond(", "LanguageModelSession", "streamResponse", "prewarm"} {
+		if strings.Contains(appleFoundationModelsFactsSwift, banned) {
+			t.Fatalf("facts swift must not call %s", banned)
+		}
+	}
+}

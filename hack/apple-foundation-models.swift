@@ -6,7 +6,7 @@ struct CLIError: Error, CustomStringConvertible {
 	let description: String
 }
 
-func appleFMFactsJSON() -> String {
+func appleFMFactsJSON() async -> String {
 	let model = SystemLanguageModel.default
 	var out: [String: Any] = [:]
 	switch model.availability {
@@ -38,9 +38,44 @@ func appleFMFactsJSON() -> String {
 		}
 #endif
 	}
+#if canImport(FoundationModels, _version: 2.0)
+	if #available(macOS 27.0, *) {
+		out["pcc"] = await appleFMPCCFacts()
+	}
+#endif
 	guard let data = try? JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]) else { return "{}" }
 	return String(decoding: data, as: UTF8.self)
 }
+
+#if canImport(FoundationModels, _version: 2.0)
+@available(macOS 27.0, *)
+func appleFMPCCFacts() async -> [String: Any] {
+	let pcc = PrivateCloudComputeLanguageModel()
+	var out: [String: Any] = [:]
+	switch pcc.availability {
+	case .available:
+		out["availability"] = "available"
+	case .unavailable(let reason):
+		out["availability"] = "unavailable"
+		switch reason {
+		case .deviceNotEligible: out["reason"] = "deviceNotEligible"
+		case .systemNotReady: out["reason"] = "systemNotReady"
+		@unknown default: out["reason"] = "\(reason)"
+		}
+	}
+	guard pcc.isAvailable else { return out }
+	let quota = pcc.quotaUsage
+	out["quota_limit_reached"] = quota.isLimitReached
+	if case .belowLimit(let below) = quota.status { out["quota_approaching_limit"] = below.isApproachingLimit }
+	if let reset = quota.resetDate { out["quota_reset"] = ISO8601DateFormatter().string(from: reset) }
+	var caps: [String] = []
+	let known: [(String, LanguageModelCapabilities.Capability)] = [("toolCalling", .toolCalling), ("guidedGeneration", .guidedGeneration), ("reasoning", .reasoning), ("vision", .vision)]
+	for (name, cap) in known where pcc.capabilities.contains(cap) { caps.append(name) }
+	out["capabilities"] = caps
+	if let size = try? await pcc.contextSize { out["context_size"] = size }
+	return out
+}
+#endif
 
 func usage() -> String {
 	"""
@@ -99,7 +134,7 @@ func parseArguments() throws -> (prompt: String, json: Bool) {
 }
 
 if CommandLine.arguments.dropFirst().contains("--facts") {
-	print(appleFMFactsJSON())
+	print(await appleFMFactsJSON())
 	Darwin.exit(0)
 }
 

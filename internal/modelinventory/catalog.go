@@ -161,6 +161,25 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 		})
 	}
 
+	if a := node.AppleFM; a != nil && a.PCC != nil && a.PCC.State == models.AppleFMReady {
+		// Private Cloud Compute runs on Apple's servers: listed, cloud-proxy,
+		// and down while the account's quota is exhausted.
+		e := models.ModelCatalogEntry{
+			Model:         "apple-private-cloud-compute",
+			Engine:        "apple-pcc",
+			State:         models.ModelCatalogListed,
+			Locality:      models.ModelLocalityCloudProxy,
+			RemoteHost:    "apple-private-cloud-compute",
+			Capabilities:  append([]string(nil), a.PCC.Capabilities...),
+			ContextWindow: a.PCC.ContextWindow,
+			LoadSignal:    "availability",
+		}
+		if a.PCC.QuotaLimitReached {
+			e.State, e.LoadSignal = models.ModelCatalogDown, "quota-limit-reached"
+		}
+		add("apple-pcc\x00"+e.Model, e)
+	}
+
 	out := make([]models.ModelCatalogEntry, 0, len(order))
 	for _, key := range order {
 		e := *byKey[key]

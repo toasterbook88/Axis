@@ -104,7 +104,7 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 			choice.Disabled, choice.DisabledReason = true, "no valid endpoint"
 		}
 		switch {
-		case e.Engine == "apple-foundation-models":
+		case e.Engine == "apple-foundation-models" || e.Engine == "apple-pcc":
 			choice.Disabled, choice.DisabledReason = true, "runs in-process; no HTTP endpoint"
 		case e.State == models.ModelCatalogDown:
 			choice.Disabled, choice.DisabledReason = true, "server not answering"

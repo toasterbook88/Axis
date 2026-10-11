@@ -80,6 +80,11 @@ func Clone(snap *models.ClusterSnapshot) *models.ClusterSnapshot {
 			apple := *node.AppleFM
 			apple.Capabilities = append([]string(nil), node.AppleFM.Capabilities...)
 			apple.Provenance = cloneStringMap(node.AppleFM.Provenance)
+			if node.AppleFM.PCC != nil {
+				pcc := *node.AppleFM.PCC
+				pcc.Capabilities = append([]string(nil), node.AppleFM.PCC.Capabilities...)
+				apple.PCC = &pcc
+			}
 			nodeCopy.AppleFM = &apple
 		}
 		nodeCopy.DiskWeights = append([]models.DiskWeight(nil), node.DiskWeights...)

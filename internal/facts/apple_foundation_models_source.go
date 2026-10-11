@@ -1,10 +1,11 @@
 package facts
 
-// appleFoundationModelsFactsSwift reads SystemLanguageModel state without
-// creating a session or generating. It defines appleFMFactsJSON(). It holds
+// appleFoundationModelsFactsSwift reads SystemLanguageModel state, and on
+// macOS 27 PrivateCloudComputeLanguageModel state, without creating a session
+// or generating. It defines the async appleFMFactsJSON(). It holds
 // no single quotes, so it can also travel inside a single-quoted
 // xcrun swift -e argument.
-const appleFoundationModelsFactsSwift = `func appleFMFactsJSON() -> String {
+const appleFoundationModelsFactsSwift = `func appleFMFactsJSON() async -> String {
 	let model = SystemLanguageModel.default
 	var out: [String: Any] = [:]
 	switch model.availability {
@@ -36,9 +37,44 @@ const appleFoundationModelsFactsSwift = `func appleFMFactsJSON() -> String {
 		}
 #endif
 	}
+#if canImport(FoundationModels, _version: 2.0)
+	if #available(macOS 27.0, *) {
+		out["pcc"] = await appleFMPCCFacts()
+	}
+#endif
 	guard let data = try? JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]) else { return "{}" }
 	return String(decoding: data, as: UTF8.self)
 }
+
+#if canImport(FoundationModels, _version: 2.0)
+@available(macOS 27.0, *)
+func appleFMPCCFacts() async -> [String: Any] {
+	let pcc = PrivateCloudComputeLanguageModel()
+	var out: [String: Any] = [:]
+	switch pcc.availability {
+	case .available:
+		out["availability"] = "available"
+	case .unavailable(let reason):
+		out["availability"] = "unavailable"
+		switch reason {
+		case .deviceNotEligible: out["reason"] = "deviceNotEligible"
+		case .systemNotReady: out["reason"] = "systemNotReady"
+		@unknown default: out["reason"] = "\(reason)"
+		}
+	}
+	guard pcc.isAvailable else { return out }
+	let quota = pcc.quotaUsage
+	out["quota_limit_reached"] = quota.isLimitReached
+	if case .belowLimit(let below) = quota.status { out["quota_approaching_limit"] = below.isApproachingLimit }
+	if let reset = quota.resetDate { out["quota_reset"] = ISO8601DateFormatter().string(from: reset) }
+	var caps: [String] = []
+	let known: [(String, LanguageModelCapabilities.Capability)] = [("toolCalling", .toolCalling), ("guidedGeneration", .guidedGeneration), ("reasoning", .reasoning), ("vision", .vision)]
+	for (name, cap) in known where pcc.capabilities.contains(cap) { caps.append(name) }
+	out["capabilities"] = caps
+	if let size = try? await pcc.contextSize { out["context_size"] = size }
+	return out
+}
+#endif
 `
 
 const appleFoundationModelsHelperSource = `import Darwin
@@ -107,7 +143,7 @@ func parseArguments() throws -> (prompt: String, json: Bool) {
 }
 
 if CommandLine.arguments.dropFirst().contains("--facts") {
-	print(appleFMFactsJSON())
+	print(await appleFMFactsJSON())
 	Darwin.exit(0)
 }
 
@@ -153,7 +189,7 @@ for h in "$HOME/.axis/cache/apple-foundation-models-helper" "$HOME/Library/Cache
 done
 xcrun swift -e 'import Foundation
 import FoundationModels
-` + appleFoundationModelsFactsSwift + `print(appleFMFactsJSON())' 2>/dev/null && exit 0
+` + appleFoundationModelsFactsSwift + `print(await appleFMFactsJSON())' 2>/dev/null && exit 0
 xcrun swift -e 'import FoundationModels' 2>/dev/null && echo "UNVERIFIED" && exit 0
 exit 1
 `

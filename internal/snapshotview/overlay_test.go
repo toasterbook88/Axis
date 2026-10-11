@@ -501,3 +501,15 @@ func TestCloneIsolatesLocalEndpoints(t *testing.T) {
 		t.Fatalf("clone mutated the source endpoint: %+v", got)
 	}
 }
+
+func TestCloneIsolatesPrivateCloudCompute(t *testing.T) {
+	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		AppleFM: &models.AppleFoundationModelsInfo{PCC: &models.ApplePCCInfo{State: models.AppleFMReady, Capabilities: []string{"reasoning"}}},
+	}}}
+	clone := snapshotview.Clone(snap)
+	clone.Nodes[0].AppleFM.PCC.State = "changed"
+	clone.Nodes[0].AppleFM.PCC.Capabilities[0] = "changed"
+	if p := snap.Nodes[0].AppleFM.PCC; p.State != models.AppleFMReady || p.Capabilities[0] != "reasoning" {
+		t.Fatalf("clone mutated the source PCC: %+v", p)
+	}
+}

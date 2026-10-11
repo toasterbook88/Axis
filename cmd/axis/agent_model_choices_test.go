@@ -350,3 +350,15 @@ func TestCollectModelChoicesUnknownLocalityIsNotLocal(t *testing.T) {
 		t.Fatalf("vllm on this node = %+v, want local", vllm)
 	}
 }
+
+// Private Cloud Compute is listed for visibility but never selectable: it
+// runs in-process and leaves the cluster.
+func TestCollectModelChoicesPrivateCloudComputeDisabled(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[0].AppleFM = &models.AppleFoundationModelsInfo{State: models.AppleFMReady, PCC: &models.ApplePCCInfo{State: models.AppleFMReady}}
+	pcc, ok := choiceByModel(t, collectModelChoices(rt), "apple-private-cloud-compute")
+	if !ok || !pcc.Disabled || !pcc.CloudProxy || pcc.SecurityClass == agent.BackendLocal {
+		t.Fatalf("pcc = %+v", pcc)
+	}
+}
