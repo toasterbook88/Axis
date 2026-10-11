@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/agent"
@@ -55,7 +56,8 @@ func stubNoAIConfigAndRecordProbes(t *testing.T) map[string]bool {
 	t.Cleanup(func() { probeEndpointFn, inferenceAILoadFn = prevProbe, prevLoad })
 	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
 	probed := map[string]bool{}
-	probeEndpointFn = func(url string) bool { probed[url] = true; return true }
+	var mu sync.Mutex // local choices are probed concurrently
+	probeEndpointFn = func(url string) bool { mu.Lock(); defer mu.Unlock(); probed[url] = true; return true }
 	return probed
 }
 
