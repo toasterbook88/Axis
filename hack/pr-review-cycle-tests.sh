@@ -85,8 +85,9 @@ case "$1 $2" in
   "pr view")
     case "$*" in
       *"baseRefName"*) echo main ;;
-      *"headRefOid,mergeStateStatus)"*) exit 51 ;;
-      *"headRefOid,mergeStateStatus"*)
+      # Only the final re-check asks for exactly these two fields; the first
+      # view's longer --json list contains the same substring.
+      *"--json headRefOid,mergeStateStatus")
         case "$GH_MOCK_CASE" in
           clean) echo '{"headRefOid":"abcdef1234567890","mergeStateStatus":"CLEAN"}' ;;
           dirty) echo '{"headRefOid":"abcdef1234567890","mergeStateStatus":"DIRTY"}' ;;
