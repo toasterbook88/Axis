@@ -170,6 +170,21 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 			}
 		}
 
+		if le := nf.LocalEndpoints; le != nil && (len(le.Confirmed) > 0 || len(le.Candidates) > 0 || le.Truncated) {
+			fmt.Fprintln(out)
+			title := "Local endpoints"
+			if le.Truncated {
+				title += " (truncated)"
+			}
+			fmt.Fprintf(out, "  %s\n", ui.Bold(title))
+			for _, ep := range le.Confirmed {
+				fmt.Fprintf(out, "    %s :%d  %s  %s  %d model(s), listed\n", ui.Green("✓"), ep.Port, ep.Engine, ep.Bind, len(ep.Models))
+			}
+			for _, c := range le.Candidates {
+				fmt.Fprintf(out, "    %s :%d  %s  %s\n", ui.Yellow("?"), c.Port, c.Process, c.Reason)
+			}
+		}
+
 		kv("pressure:", formatPressure(r.Pressure))
 		if len(r.GPUs) > 0 {
 			fmt.Fprintln(out)

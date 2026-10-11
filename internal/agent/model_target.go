@@ -31,12 +31,14 @@ type ModelTarget struct {
 	DisabledReason string
 	// Catalog facts for display; empty when the target did not come from
 	// the model catalog (cloud providers, ai.yaml roles).
-	Loaded       bool     // a load signal says it is resident, so the first reply is fast
-	Listed       bool     // a server named it without a load signal; not verified loaded
-	Loading      bool     // the runtime reports it is still loading
-	CloudProxy   bool     // the node forwards requests off the cluster
-	Capabilities []string // as the engine reported them; empty = unknown
-	Port         int      // runtime port on Node, for route resolution
+	Loaded     bool // a load signal says it is resident, so the first reply is fast
+	Listed     bool // a server named it without a load signal; not verified loaded
+	Loading    bool // the runtime reports it is still loading
+	CloudProxy bool // the node forwards requests off the cluster
+	// UnknownLocality: the server did not say where inference runs.
+	UnknownLocality bool
+	Capabilities    []string // as the engine reported them; empty = unknown
+	Port            int      // runtime port on Node, for route resolution
 }
 
 // CloudBackendOptions supplies cloud-only credentials when ProtocolCloud.

@@ -1,6 +1,6 @@
 # Model discovery: probe-backed load state and local endpoint candidates
 
-**Status:** design, for review. Not implemented.
+**Status:** PR 1 in #509. PR 2 stacked on #509; see "PR 2 as built". PR 3 not started.
 **Base:** `main` at `ca76a46` (#507, model catalog as a fact).
 **Scope:** the node-local fact collector and the catalog projection over it. No new store, no new control surface.
 
@@ -82,6 +82,17 @@ New pushed script `LocalEndpointDiscoveryScript`, bash, same language and invoca
 - **Parsing:** `python3` where present, as the existing scripts do. Absent: the port stays a candidate with `reason: parser-unavailable`.
 - **Output** on `NodeFacts.local_endpoints`: `confirmed[]` (port, dialect, engine, models with state `listed`, provenance) and `candidates[]` (port, process name, reason). `401`/`403` or any answer that names no model is a candidate with its reason.
 - `Catalog` reads `confirmed` only.
+
+#### PR 2 as built
+
+Live runs on the fleet changed these details:
+
+- **Bind.** Each confirmed endpoint records `bind` (`loopback` or `any`). The catalog marks loopback-only entries, and `axis agent` `/models` disables them on other nodes ("bound to loopback on its node").
+- **Locality.** A generic OpenAI-compatible endpoint can be a cloud router: one node's local proxy listed about 200 cloud models. Its entries carry locality `unknown`, `/models` labels them "may proxy off the cluster", and only `on-node` entries get the local security class. Ollama-dialect endpoints are on-node unless an entry has `remote_host`; vLLM is on-node.
+- **Ollama app mirror.** The macOS Ollama app serves the daemon's list on a second loopback port. An Ollama-dialect endpoint whose list equals the node's own Ollama models is a candidate, `mirrors-ollama`.
+- **llama.cpp.** An endpoint whose models are all `owned_by: llamacpp` on a port the llama.cpp probe did not claim is a candidate, `llama.cpp-unmatched`. This follows the router-mode row of the state table.
+- **Budget.** Requests take at most 1 s each, and a port with no HTTP answer on `/api/tags` is not asked again. Usual model-server ports are probed first, so the 32-port cap is not spent on system services. Each endpoint lists at most 256 models, and hitting that cap sets `truncated`.
+- **Silent listeners.** A listener with no HTTP answer at all is neither confirmed nor a candidate.
 
 ### 3. Apple extras and disk kinds (PR 3)
 

@@ -115,6 +115,32 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 		e.InstanceID = instanceID(identity, r.Runtime, r.Name, r.Port)
 	}
 
+	if le := node.LocalEndpoints; le != nil {
+		// Confirmed loopback endpoints only; candidates named no model.
+		for _, ep := range le.Confirmed {
+			for _, m := range ep.Models {
+				e := models.ModelCatalogEntry{
+					Model:         m.Name,
+					Engine:        ep.Engine,
+					State:         models.ModelCatalogListed,
+					Locality:      models.ModelLocalityOnNode,
+					RemoteHost:    m.RemoteHost,
+					ContextWindow: m.ContextWindow,
+					LoadSignal:    "none",
+					Port:          ep.Port,
+					LoopbackOnly:  ep.Bind == "loopback",
+				}
+				switch {
+				case m.RemoteHost != "":
+					e.Locality = models.ModelLocalityCloudProxy
+				case ep.Engine != "ollama" && ep.Engine != "vllm":
+					e.Locality = models.ModelLocalityUnknown
+				}
+				add(ep.Engine+"\x00"+m.Name+"\x00"+strconv.Itoa(ep.Port), e)
+			}
+		}
+	}
+
 	if a := node.AppleFM; a != nil && (a.State == models.AppleFMReady || a.State == models.AppleFMCold) {
 		name := a.Model
 		if name == "" {
