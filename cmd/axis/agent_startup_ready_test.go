@@ -94,7 +94,7 @@ func TestStartupPinnedModelUnavailableFails(t *testing.T) {
 	ollamaHasModelFn = func(string) bool { return false }
 	choices := append(readyTestChoices(), ModelChoice{
 		ID: "here:llama.cpp:big", Model: "big", Protocol: agent.ProtocolOpenAI, ProviderName: "llama.cpp",
-		ProviderKind: "local", Endpoint: "http://localhost:8084", Disabled: true, DisabledReason: "requires an API key",
+		ProviderKind: "local", Endpoint: "http://localhost:8080", Disabled: true, DisabledReason: "requires an API key",
 	})
 	for name, want := range map[string]string{"big": "requires an API key", "missing": "not in the model catalog"} {
 		_, _, err := resolveReadyStartupModelTarget(context.Background(), name, "auto", "", nil, readyRuntime(), choices, true, nil)

@@ -288,8 +288,8 @@ func resolveBackendKey(b config.AIBackendConfig) string {
 
 // urlsRoughlyEqual reports whether two base URLs name the same server. Case
 // and trailing slashes are ignored, every loopback spelling is one host, and
-// a trailing /v1 is optional, so the catalog's http://localhost:8084 matches
-// an ai.yaml base_url of http://127.0.0.1:8084/v1.
+// a trailing /v1 is optional, so the catalog's http://localhost:8080 matches
+// an ai.yaml base_url of http://127.0.0.1:8080/v1.
 func urlsRoughlyEqual(a, b string) bool {
 	na := serverIdentity(a)
 	return na != "" && na == serverIdentity(b)
