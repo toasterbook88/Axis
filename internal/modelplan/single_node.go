@@ -300,6 +300,9 @@ func matchesAccelerator(acc string, requested []models.AcceleratorType) bool {
 func hasLocalWeights(node models.NodeFacts, spec models.ModelSpec) bool {
 	specName := strings.ToLower(strings.TrimSpace(spec.Name))
 	for _, dw := range node.DiskWeights {
+		if !dw.Runnable() {
+			continue
+		}
 		if strings.EqualFold(dw.Name, spec.Name) || strings.EqualFold(dw.Path, spec.WeightsPath) {
 			return true
 		}
