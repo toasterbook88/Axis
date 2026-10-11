@@ -330,7 +330,7 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		// Classification must use SSHTarget, not Hostname or Tailscale ifaces.
 		{
 			Name:                  "node-prod-hostname-overwrite",
-			Hostname:              "lab-5",              // observed machine hostname
+			Hostname:              "lab-5",         // observed machine hostname
 			SSHTarget:             "192.168.1.100", // configured dial IP
 			SSHHandshakeLatencyMs: 42,
 			Status:                models.StatusComplete,
