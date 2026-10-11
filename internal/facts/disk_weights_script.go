@@ -49,6 +49,26 @@ def dataless(path):
     except OSError:
         return False
 
+# Core AI / Core ML bundles: directories, recorded with kind unknown.
+BUNDLES = {".aimodel": "aimodel", ".mlpackage": "coreml", ".mlmodelc": "coreml"}
+
+def bundle_bytes(path):
+    total, entries = 0, 0
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if not dataless(os.path.join(root, d))]
+        for fn in files:
+            entries += 1
+            if entries > 2000:
+                return total
+            fp = os.path.join(root, fn)
+            if dataless(fp):
+                continue
+            try:
+                total += os.lstat(fp).st_size
+            except OSError:
+                pass
+    return total
+
 def is_lfs_pointer(path):
     try:
         with open(path, "rb") as f:
@@ -163,6 +183,16 @@ def walk_root(root, source):
             dirs[:] = []
             continue
         dirs[:] = [d for d in dirs if d not in SKIP and not dataless(os.path.join(dirpath, d))]
+        for d in [d for d in dirs if os.path.splitext(d)[1].lower() in BUNDLES]:
+            dirs.remove(d)
+            if hit_count >= MAX_FILES:
+                truncated = True
+                return
+            bp = os.path.join(dirpath, d)
+            sz = bundle_bytes(bp)
+            if sz >= MIN:
+                hits.append((sz, bp, source))
+                hit_count += 1
         for fn in files:
             if hit_count >= MAX_FILES or time.time() >= DEADLINE:
                 truncated = True
@@ -225,6 +255,11 @@ from collections import defaultdict
 ggufs = []
 st = defaultdict(list)
 for sz, fp, src in hits:
+    ext = os.path.splitext(fp)[1].lower()
+    if ext in BUNDLES:
+        add({"name": os.path.splitext(os.path.basename(fp))[0], "path": fp, "bytes": sz,
+             "format": BUNDLES[ext], "source": src, "kind": "unknown"})
+        continue
     if fp.lower().endswith(".gguf"):
         kind = "projector" if os.path.basename(fp).lower().startswith("mmproj") else "model"
         add({"name": os.path.splitext(os.path.basename(fp))[0], "path": fp, "bytes": sz,

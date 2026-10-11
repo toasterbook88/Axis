@@ -242,10 +242,10 @@ type DiskWeight struct {
 	Name   string `json:"name" yaml:"name"`
 	Path   string `json:"path" yaml:"path"`
 	Bytes  int64  `json:"bytes" yaml:"bytes"`
-	Format string `json:"format,omitempty" yaml:"format,omitempty"` // gguf, safetensors, ollama
+	Format string `json:"format,omitempty" yaml:"format,omitempty"` // gguf, safetensors, ollama, aimodel, coreml
 	Volume string `json:"volume,omitempty" yaml:"volume,omitempty"` // Axis volume mount
 	Source string `json:"source,omitempty" yaml:"source,omitempty"` // hf-hub, ollama-manifest, systemd, find
-	Kind   string `json:"kind,omitempty" yaml:"kind,omitempty"`     // model (default) or projector
+	Kind   string `json:"kind,omitempty" yaml:"kind,omitempty"`     // model (default), projector, or unknown
 }
 
 // ResidentModel is additive truth-plane metadata describing a model that is
