@@ -5,7 +5,7 @@ package facts
 // Python is best-effort: missing interpreter yields an empty scan, not a collect failure.
 const DiskWeightsDiscoveryScript = `python3 - <<'PY'
 # axis-disk-weights-v1
-import json, os, sys, time
+import json, os, sys, threading, time
 from pathlib import Path
 
 MIN = 20 * 1024 * 1024
@@ -39,6 +39,16 @@ def gguf_magic(path):
     except OSError:
         return False
 
+# macOS iCloud placeholders: reading one downloads it, and a readdir can block
+# for minutes. lstat flags are local, so check before any open or descend.
+SF_DATALESS = 0x40000000
+
+def dataless(path):
+    try:
+        return bool(getattr(os.lstat(path), "st_flags", 0) & SF_DATALESS)
+    except OSError:
+        return False
+
 def is_lfs_pointer(path):
     try:
         with open(path, "rb") as f:
@@ -60,7 +70,7 @@ if hub.is_dir():
             total = 0
             fmt = "safetensors"
             snap = e / "snapshots"
-            if not snap.is_dir():
+            if not snap.is_dir() or dataless(str(e)):
                 continue
             for root, dirs, files in os.walk(snap, topdown=True):
                 depth = root[len(str(e)):].count(os.sep)
@@ -152,7 +162,7 @@ def walk_root(root, source):
         if is_sys(dirpath):
             dirs[:] = []
             continue
-        dirs[:] = [d for d in dirs if d not in SKIP]
+        dirs[:] = [d for d in dirs if d not in SKIP and not dataless(os.path.join(dirpath, d))]
         for fn in files:
             if hit_count >= MAX_FILES or time.time() >= DEADLINE:
                 truncated = True
@@ -165,7 +175,7 @@ def walk_root(root, source):
                 sz = os.path.getsize(fp)
             except OSError:
                 continue
-            if sz < MIN:
+            if sz < MIN or dataless(fp):
                 continue
             if low.endswith(".gguf") and not gguf_magic(fp):
                 continue
@@ -174,12 +184,17 @@ def walk_root(root, source):
             hits.append((sz, fp, source))
             hit_count += 1
 
-for p in (os.path.join(home, "models"), os.path.join(home, "Storage"), "/opt/models", "/models"):
-    walk_root(p, "well-known")
+def walk_all():
+    for p in (os.path.join(home, "models"), os.path.join(home, "Storage"), "/opt/models", "/models"):
+        walk_root(p, "well-known")
+    walk_mounts()
 
-try:
+def walk_mounts():
     import subprocess
-    df = subprocess.check_output(["df", "-kPl"], text=True, timeout=3)
+    try:
+        df = subprocess.check_output(["df", "-kPl"], text=True, timeout=3)
+    except Exception:
+        return
     mounts = []
     for line in df.splitlines()[1:]:
         parts = line.split()
@@ -194,8 +209,16 @@ try:
         mounts.append(mnt)
     for mnt in mounts:
         walk_root(mnt, "find")
-except Exception:
-    pass
+
+# DEADLINE is only checked between entries; a blocked readdir never returns.
+# Walk in a daemon thread and stop waiting at HARD_LIMIT so the probe always ends.
+HARD_LIMIT = 12
+worker = threading.Thread(target=walk_all, daemon=True)
+worker.start()
+worker.join(HARD_LIMIT)
+if worker.is_alive():
+    truncated = True
+hits = list(hits)
 
 # group safetensors by directory
 from collections import defaultdict
@@ -222,4 +245,6 @@ for d, files in st.items():
 
 weights.sort(key=lambda w: w.get("path", ""))
 print(json.dumps({"weights": weights, "truncated": truncated}))
+sys.stdout.flush()
+os._exit(0)  # do not join a worker stuck in the kernel
 PY`

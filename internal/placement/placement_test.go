@@ -270,6 +270,21 @@ func TestFilterAppleFoundationModelsAllowsRemoteAndPrefersLocal(t *testing.T) {
 	}
 }
 
+func TestFilterAppleFoundationModelsRejectsExplicitNonReadyState(t *testing.T) {
+	reqs := models.TaskRequirements{
+		RequiredTools:     []string{"apple-foundation-models"},
+		PreferredBackends: []string{"apple-foundation-models"},
+	}
+	for _, state := range []string{models.AppleFMCold, models.AppleFMUnavailable, models.AppleFMUnknown} {
+		n := nodeComplete("mac-"+state, 8192, "none", "apple-foundation-models")
+		// Even inconsistent legacy booleans cannot override explicit state.
+		n.AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, State: state}
+		if got := FilterCandidates(reqs, []models.NodeFacts{n}, nil); len(got) != 0 {
+			t.Fatalf("state %q produced placement candidates %v", state, names(got))
+		}
+	}
+}
+
 // --- Rank Tests ---
 
 func TestRankByPressure(t *testing.T) {

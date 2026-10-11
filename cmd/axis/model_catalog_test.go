@@ -72,6 +72,18 @@ func TestModelCatalogLiveIsExplicit(t *testing.T) {
 	}
 }
 
+func TestModelCatalogHelpDescribesProbeBackedStatesAndCompatibility(t *testing.T) {
+	long := modelCatalogCmd().Long
+	for _, want := range []string{"llama.cpp /health 200", "loading", "listed", "down", "Older Ollama and llama.cpp rows"} {
+		if !strings.Contains(long, want) {
+			t.Fatalf("catalog help missing %q:\n%s", want, long)
+		}
+	}
+	if strings.Contains(long, "llama.cpp process started with -m") {
+		t.Fatalf("catalog help still claims argv alone is the current load signal:\n%s", long)
+	}
+}
+
 // The text view must say what each model is and where it runs, and must name
 // nodes it could not see instead of silently omitting them.
 func TestModelCatalogTextShowsStateLocalityAndUnobserved(t *testing.T) {

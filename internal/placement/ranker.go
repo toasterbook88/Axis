@@ -401,7 +401,12 @@ func requiresAppleFoundationModels(reqs models.TaskRequirements) bool {
 }
 
 func appleFoundationModelsReady(n models.NodeFacts) bool {
-	return n.AppleFM != nil && n.AppleFM.Available && n.AppleFM.Verified && hasTool(n, "apple-foundation-models")
+	if n.AppleFM == nil || !n.AppleFM.Available || !n.AppleFM.Verified || !hasTool(n, "apple-foundation-models") {
+		return false
+	}
+	// State is additive. Preserve older snapshots with no state, but never let
+	// legacy booleans override an explicit cold, unavailable, or unknown probe.
+	return n.AppleFM.State == "" || n.AppleFM.State == models.AppleFMReady
 }
 
 func allowsIncompleteNode(n models.NodeFacts, requiredTools []string) bool {
