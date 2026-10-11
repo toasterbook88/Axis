@@ -62,6 +62,10 @@ func resolveReadyStartupModelTarget(
 	var skipped []string
 	for attempt := 0; ; attempt++ {
 		target, opts, err := resolveStartupModelTarget(requestedModel, providerFlag, cloudModelFlag, explicit, rt, choices)
+		if err == nil && pinned && explicit == nil && requestedModel != "" && target.ProviderKind != "cloud" &&
+			!strings.EqualFold(target.Model, requestedModel) {
+			return ModelChoice{}, agent.CloudBackendOptions{}, pinnedModelUnavailable(requestedModel, choices)
+		}
 		if err != nil || target.Protocol == agent.ProtocolCloud || target.CloudProxy {
 			return target, opts, err
 		}
@@ -168,4 +172,15 @@ func checkModelReadiness(parent context.Context, c ModelChoice, opts agent.Cloud
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 160)) // best effort: the status alone is the verdict
 	return modelDown, strings.TrimSpace(fmt.Sprintf("HTTP %d %s", resp.StatusCode, bytes.TrimSpace(snippet)))
+}
+
+// pinnedModelUnavailable explains why a --model name cannot start: the reason
+// its catalog entry is disabled, or that nothing offers it.
+func pinnedModelUnavailable(name string, choices []ModelChoice) error {
+	for _, c := range choices {
+		if c.Disabled && strings.EqualFold(c.Model, name) {
+			return fmt.Errorf("model %q is not usable: %s; /models lists the choices", name, c.DisabledReason)
+		}
+	}
+	return fmt.Errorf("model %q is not in the model catalog or on local Ollama; /models lists the choices", name)
 }

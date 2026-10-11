@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -284,6 +286,28 @@ func resolveBackendKey(b config.AIBackendConfig) string {
 	return key
 }
 
+// urlsRoughlyEqual reports whether two base URLs name the same server. Case
+// and trailing slashes are ignored, every loopback spelling is one host, and
+// a trailing /v1 is optional, so the catalog's http://localhost:8080 matches
+// an ai.yaml base_url of http://127.0.0.1:8080/v1.
 func urlsRoughlyEqual(a, b string) bool {
-	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(a), "/"), strings.TrimRight(strings.TrimSpace(b), "/"))
+	na := serverIdentity(a)
+	return na != "" && na == serverIdentity(b)
+}
+
+func serverIdentity(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.ToLower(strings.TrimRight(raw, "/"))
+	}
+	scheme, host, port := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	if ip, err := netip.ParseAddr(host); host == "localhost" || (err == nil && ip.IsLoopback()) {
+		host = "loopback"
+	}
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443"}[scheme]
+	}
+	path := strings.TrimSuffix(strings.TrimRight(strings.ToLower(u.Path), "/"), "/v1")
+	return scheme + "://" + host + ":" + port + path
 }
