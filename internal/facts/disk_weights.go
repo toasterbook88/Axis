@@ -352,11 +352,11 @@ func walkWeightFiles(ctx context.Context, root string, vols []models.Volume, sou
 				if isSystemPath(path) {
 					return fs.SkipDir
 				}
-				if rootMount != "" {
-					m := volumeMountFor(path, vols)
-					if m != "" && m != rootMount {
-						return fs.SkipDir
-					}
+				if m := volumeMountFor(path, vols); rootMount != "" && m != "" && m != rootMount {
+					return fs.SkipDir
+				}
+				if bytes, ok := modelBundleBytes(path, name, minSize); ok {
+					return addBundleHit(&hits, fileHit{Path: path, Bytes: bytes, Source: source, Volume: volumeMountFor(path, vols)}, remaining)
 				}
 			}
 			return nil
@@ -414,14 +414,10 @@ func groupDiskWeights(hits []fileHit) []models.DiskWeight {
 	for _, h := range hits {
 		ext := strings.ToLower(filepath.Ext(h.Path))
 		base := strings.ToLower(filepath.Base(h.Path))
-		if ext == ".gguf" {
-			kind := "model"
-			if strings.HasPrefix(base, "mmproj") {
-				kind = "projector"
-			}
+		if format, kind, single := singleWeightFormat(ext, base); single {
 			singles = append(singles, models.DiskWeight{
 				Name: strings.TrimSuffix(filepath.Base(h.Path), filepath.Ext(h.Path)),
-				Path: h.Path, Bytes: h.Bytes, Format: "gguf",
+				Path: h.Path, Bytes: h.Bytes, Format: format,
 				Volume: h.Volume, Source: h.Source, Kind: kind,
 			})
 			continue
