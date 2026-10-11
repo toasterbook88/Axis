@@ -102,7 +102,7 @@ func TestCloudBackend_OpenAI_BareJSONToolCallPromoted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "mid-9b", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestCloudBackend_OpenAI_DeferredJSONFlushesAsContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "mid-9b", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestCloudBackend_OpenAI_NativeToolCallsAndDeferredJSONContent(t *testing.T)
 	}))
 	defer server.Close()
 
-	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "mid-9b", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestCloudBackend_OpenAI_HermesThoughtActionPromoted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "qwen3.8-9b", 0)
+	backend, err := NewCloudBackendWithKey("local-hub", "openai", server.URL, "mock-key", "mid-9b", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

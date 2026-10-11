@@ -1,7 +1,7 @@
 # AXIS Hybrid Multi-Agent Orchestration & Inference Specification
 **Status:** Proposal / Specification (Proposed for implementation)  
 **Target Version:** v0.11.x+  
-**Authors:** AI Pair Programming Session (Antigravity + Smithanator)  
+**Authors:** AI Pair Programming Session (Antigravity + operator)  
 
 ---
 

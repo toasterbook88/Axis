@@ -1213,7 +1213,7 @@ func TestDispatchRunOnNodeRequiresRunner(t *testing.T) {
 		Confirm: alwaysConfirm(),
 		Output:  &bytes.Buffer{},
 	})
-	args := json.RawMessage(mustJSON(t, map[string]any{"node": "nixos", "command": "uname"}))
+	args := json.RawMessage(mustJSON(t, map[string]any{"node": "lab-5", "command": "uname"}))
 	_, err := a.dispatchRunOnNode(context.Background(), args)
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("expected not-configured error, got %v", err)
@@ -1227,15 +1227,15 @@ func TestDispatchRunOnNodeUsesGuardedRunner(t *testing.T) {
 		Output:  &bytes.Buffer{},
 		RunOnNode: func(_ context.Context, node, command string) (string, error) {
 			sawNode, sawCmd = node, command
-			return `{"ok":true,"node":"nixos","output":"Linux"}`, nil
+			return `{"ok":true,"node":"lab-5","output":"Linux"}`, nil
 		},
 	})
-	args := json.RawMessage(mustJSON(t, map[string]any{"node": "nixos", "command": "uname -a"}))
+	args := json.RawMessage(mustJSON(t, map[string]any{"node": "lab-5", "command": "uname -a"}))
 	out, err := a.dispatchRunOnNode(context.Background(), args)
 	if err != nil {
 		t.Fatalf("dispatchRunOnNode: %v", err)
 	}
-	if sawNode != "nixos" || sawCmd != "uname -a" {
+	if sawNode != "lab-5" || sawCmd != "uname -a" {
 		t.Fatalf("runner saw node=%q cmd=%q", sawNode, sawCmd)
 	}
 	if !strings.Contains(out, "Linux") {

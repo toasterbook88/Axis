@@ -39,10 +39,10 @@ func TestTaskDelegateCmd_AgentCardProbe(t *testing.T) {
 			return
 		}
 		card := a2a.AgentCard{
-			Name:        "cachyos",
+			Name:        "lab-2",
 			Description: "AXIS compute node",
 			Version:     "0.19.4",
-			URL:         "http://cachyos:42425",
+			URL:         "http://lab-2:42425",
 			Skills: []a2a.Skill{
 				{ID: "axis-status", Name: "Status", Description: "Cluster status", Tags: []string{"observe"}},
 				{ID: "guarded-exec", Name: "Exec", Description: "Guarded execution", Tags: []string{"exec"}},
@@ -57,7 +57,7 @@ func TestTaskDelegateCmd_AgentCardProbe(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd := taskDelegateCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "--addr", ts.URL})
 
 	err := cmd.Execute()
 	if err != nil {
@@ -65,7 +65,7 @@ func TestTaskDelegateCmd_AgentCardProbe(t *testing.T) {
 	}
 
 	outStr := ui.StripANSIAndControls(outBuf.String())
-	if !strings.Contains(outStr, "Agent card for node cachyos") {
+	if !strings.Contains(outStr, "Agent card for node lab-2") {
 		t.Errorf("expected agent card header, got: %s", outStr)
 	}
 	if !strings.Contains(outStr, "axis-status") {
@@ -76,7 +76,7 @@ func TestTaskDelegateCmd_AgentCardProbe(t *testing.T) {
 	outBuf.Reset()
 	cmd = taskDelegateCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-2", "--addr", ts.URL, "--format", "json"})
 
 	err = cmd.Execute()
 	if err != nil {
@@ -87,8 +87,8 @@ func TestTaskDelegateCmd_AgentCardProbe(t *testing.T) {
 	if err := json.Unmarshal(outBuf.Bytes(), &cardResult); err != nil {
 		t.Fatalf("failed to unmarshal JSON card output: %v", err)
 	}
-	if cardResult.Name != "cachyos" {
-		t.Errorf("expected card name cachyos, got %s", cardResult.Name)
+	if cardResult.Name != "lab-2" {
+		t.Errorf("expected card name lab-2, got %s", cardResult.Name)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestTaskDelegateCmd_SendObserveSuccess(t *testing.T) {
 			Artifacts: []a2a.Artifact{
 				{
 					Name:  "axis-status",
-					Parts: []a2a.Part{{Type: "text", Text: `{"nodes": ["cranium", "cachyos"]}`}},
+					Parts: []a2a.Part{{Type: "text", Text: `{"nodes": ["lab-1", "lab-2"]}`}},
 				},
 			},
 		}
@@ -123,7 +123,7 @@ func TestTaskDelegateCmd_SendObserveSuccess(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd := taskDelegateCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "--skill", "axis-status", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "--skill", "axis-status", "--addr", ts.URL})
 
 	err := cmd.Execute()
 	if err != nil {
@@ -131,10 +131,10 @@ func TestTaskDelegateCmd_SendObserveSuccess(t *testing.T) {
 	}
 
 	outStr := ui.StripANSIAndControls(outBuf.String())
-	if !strings.Contains(outStr, "Task task-obs-1 on cachyos completed successfully") {
+	if !strings.Contains(outStr, "Task task-obs-1 on lab-2 completed successfully") {
 		t.Errorf("expected completion message, got: %s", outStr)
 	}
-	if !strings.Contains(outStr, "cranium") {
+	if !strings.Contains(outStr, "lab-1") {
 		t.Errorf("expected artifact text in output, got: %s", outStr)
 	}
 }
@@ -167,7 +167,7 @@ func TestTaskDelegateCmd_SendPendingApproval(t *testing.T) {
 	cmd := taskDelegateCmd()
 	cmd.SetOut(&outBuf)
 	// Omitting --skill with a prompt should default to guarded-exec
-	cmd.SetArgs([]string{"cachyos", "reboot system", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "reboot system", "--addr", ts.URL})
 
 	err := cmd.Execute()
 	if err != nil {
@@ -179,10 +179,10 @@ func TestTaskDelegateCmd_SendPendingApproval(t *testing.T) {
 	}
 
 	outStr := ui.StripANSIAndControls(outBuf.String())
-	if !strings.Contains(outStr, "Task task-pending-99 queued on cachyos (pending operator approval)") {
+	if !strings.Contains(outStr, "Task task-pending-99 queued on lab-2 (pending operator approval)") {
 		t.Errorf("expected pending message, got: %s", outStr)
 	}
-	if !strings.Contains(outStr, "axis task approve cachyos task-pending-99 --confirm YES") {
+	if !strings.Contains(outStr, "axis task approve lab-2 task-pending-99 --confirm YES") {
 		t.Errorf("expected approve hint in output, got: %s", outStr)
 	}
 }
@@ -211,7 +211,7 @@ func TestTaskDelegateCmd_SendRejectedAndFailed(t *testing.T) {
 	cmd := taskDelegateCmd()
 	var outBuf bytes.Buffer
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "bad command", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "bad command", "--addr", ts.URL})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -233,7 +233,7 @@ func TestTaskDelegateCmd_SendRejectedAndFailed(t *testing.T) {
 
 	cmd = taskDelegateCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "bad command", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "bad command", "--addr", ts.URL})
 
 	err = cmd.Execute()
 	if err == nil {
@@ -277,7 +277,7 @@ func TestTaskStatusCmd(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd := taskStatusCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"samson", "task-st-42", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-3", "task-st-42", "--addr", ts.URL})
 
 	err := cmd.Execute()
 	if err != nil {
@@ -299,7 +299,7 @@ func TestTaskStatusCmd(t *testing.T) {
 	outBuf.Reset()
 	cmd = taskStatusCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"samson", "task-st-42", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-3", "task-st-42", "--addr", ts.URL, "--format", "json"})
 
 	err = cmd.Execute()
 	if err != nil {
@@ -318,7 +318,7 @@ func TestTaskStatusCmd(t *testing.T) {
 	outBuf.Reset()
 	cmd = taskStatusCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"samson", "unknown-task", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-3", "unknown-task", "--addr", ts.URL})
 
 	err = cmd.Execute()
 	if err == nil {
@@ -354,7 +354,7 @@ func TestTaskApproveCmd(t *testing.T) {
 	// 1. Missing confirm - must fail before dialing server
 	serverCalled.Store(false)
 	cmd := taskApproveCmd()
-	cmd.SetArgs([]string{"cachyos", "task-app-1", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "task-app-1", "--addr", ts.URL})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when --confirm is missing, got nil")
@@ -369,7 +369,7 @@ func TestTaskApproveCmd(t *testing.T) {
 	// 2. Invalid mode - must fail before dialing server
 	serverCalled.Store(false)
 	cmd = taskApproveCmd()
-	cmd.SetArgs([]string{"cachyos", "task-app-1", "--confirm", "YES", "--mode", "invalid", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "task-app-1", "--confirm", "YES", "--mode", "invalid", "--addr", ts.URL})
 	err = cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when --mode is invalid, got nil")
@@ -386,7 +386,7 @@ func TestTaskApproveCmd(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd = taskApproveCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "task-app-1", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "task-app-1", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL})
 
 	err = cmd.Execute()
 	if err != nil {
@@ -426,7 +426,7 @@ func TestTaskApproveCmd(t *testing.T) {
 	outBuf.Reset()
 	cmd = taskApproveCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "task-app-rej", "--confirm", "YES", "--mode", "exec", "--addr", tsRej.URL})
+	cmd.SetArgs([]string{"lab-2", "task-app-rej", "--confirm", "YES", "--mode", "exec", "--addr", tsRej.URL})
 
 	err = cmd.Execute()
 	if err == nil {
@@ -469,7 +469,7 @@ func TestTaskRejectCmd(t *testing.T) {
 	// 1. Missing reason - must fail before dialing server
 	serverCalled.Store(false)
 	cmd := taskRejectCmd()
-	cmd.SetArgs([]string{"cachyos", "task-rej-1", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "task-rej-1", "--addr", ts.URL})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when --reason is missing, got nil")
@@ -486,7 +486,7 @@ func TestTaskRejectCmd(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd = taskRejectCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "task-rej-1", "--reason", "risk too high", "--addr", ts.URL})
+	cmd.SetArgs([]string{"lab-2", "task-rej-1", "--reason", "risk too high", "--addr", ts.URL})
 
 	err = cmd.Execute()
 	if err != nil {
@@ -641,7 +641,7 @@ func TestTaskDelegateCmd_SendRejectedAndFailed_JSON(t *testing.T) {
 	cmd := taskDelegateCmd()
 	var outBuf bytes.Buffer
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "bad command", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-2", "bad command", "--addr", ts.URL, "--format", "json"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -666,7 +666,7 @@ func TestTaskDelegateCmd_SendRejectedAndFailed_JSON(t *testing.T) {
 
 	cmd = taskDelegateCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "bad command", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-2", "bad command", "--addr", ts.URL, "--format", "json"})
 
 	err = cmd.Execute()
 	if err == nil {
@@ -704,7 +704,7 @@ func TestTaskStatusCmd_RejectedAndFailed_JSON(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd := taskStatusCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"samson", "task-st-bad", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-3", "task-st-bad", "--addr", ts.URL, "--format", "json"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -727,7 +727,7 @@ func TestTaskStatusCmd_RejectedAndFailed_JSON(t *testing.T) {
 	outBuf.Reset()
 	cmd = taskStatusCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"samson", "task-st-bad", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-3", "task-st-bad", "--addr", ts.URL, "--format", "json"})
 
 	err = cmd.Execute()
 	if err == nil {
@@ -768,7 +768,7 @@ func TestTaskApproveCmd_RejectedAndFailed_JSON(t *testing.T) {
 	var outBuf bytes.Buffer
 	cmd := taskApproveCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "task-app-fail", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-2", "task-app-fail", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL, "--format", "json"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -793,7 +793,7 @@ func TestTaskApproveCmd_RejectedAndFailed_JSON(t *testing.T) {
 
 	cmd = taskApproveCmd()
 	cmd.SetOut(&outBuf)
-	cmd.SetArgs([]string{"cachyos", "task-app-fail", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL, "--format", "json"})
+	cmd.SetArgs([]string{"lab-2", "task-app-fail", "--confirm", "YES", "--mode", "exec", "--addr", ts.URL, "--format", "json"})
 
 	err = cmd.Execute()
 	if err == nil {
@@ -824,14 +824,14 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 		return &config.Config{
 			Nodes: []config.NodeConfig{
 				{
-					Name:     "cachyos",
+					Name:     "lab-2",
 					Hostname: "192.0.2.50",
 					Endpoints: []config.NodeEndpoint{
 						{Name: "primary", Hostname: "192.0.2.5"},
 					},
 				},
 				{
-					Name:     "samson",
+					Name:     "lab-3",
 					Hostname: "192.0.2.60",
 				},
 				{
@@ -847,9 +847,9 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	}
 
 	// 1. PrimaryHostname from Endpoints takes precedence
-	c1, err := resolveA2AClient("cachyos", "", 5*time.Second)
+	c1, err := resolveA2AClient("lab-2", "", 5*time.Second)
 	if err != nil {
-		t.Fatalf("resolve cachyos failed: %v", err)
+		t.Fatalf("resolve lab-2 failed: %v", err)
 	}
 	if c1.BaseURL != "http://192.0.2.5:42425" {
 		t.Errorf("expected http://192.0.2.5:42425, got %s", c1.BaseURL)
@@ -859,9 +859,9 @@ func TestResolveA2AClient_RemoteNodeFromConfig(t *testing.T) {
 	}
 
 	// 2. PrimaryHostname fallback to Hostname when no endpoints
-	c2, err := resolveA2AClient("samson", "", 5*time.Second)
+	c2, err := resolveA2AClient("lab-3", "", 5*time.Second)
 	if err != nil {
-		t.Fatalf("resolve samson failed: %v", err)
+		t.Fatalf("resolve lab-3 failed: %v", err)
 	}
 	if c2.BaseURL != "http://192.0.2.60:42425" {
 		t.Errorf("expected http://192.0.2.60:42425, got %s", c2.BaseURL)
@@ -911,7 +911,7 @@ func TestResolveA2AClient_TokenError(t *testing.T) {
 		return "", errors.New("keystore locked")
 	}
 
-	_, err := resolveA2AClient("cachyos", "", 5*time.Second)
+	_, err := resolveA2AClient("lab-2", "", 5*time.Second)
 	if err == nil {
 		t.Fatal("expected error when token fails to load, got nil")
 	}
@@ -926,8 +926,8 @@ func TestFormatHostPort(t *testing.T) {
 		defaultPort string
 		expected    string
 	}{
-		{"cachyos", "42425", "cachyos:42425"},
-		{"cachyos:8080", "42425", "cachyos:8080"},
+		{"lab-2", "42425", "lab-2:42425"},
+		{"lab-2:8080", "42425", "lab-2:8080"},
 		{"192.0.2.5", "42425", "192.0.2.5:42425"},
 		{"192.0.2.5:8080", "42425", "192.0.2.5:8080"},
 		{"2001:db8::1", "42425", "[2001:db8::1]:42425"},

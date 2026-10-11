@@ -11,7 +11,7 @@ import (
 
 func newTestPicker(reply chan<- string) *ModelPickerOverlay {
 	return NewModelPickerOverlay("Select active model for task routing:", []PickerItem{
-		{ID: "local:qwen3.8:8082", Label: "qwen3.8-27b", Detail: "Local node [qwen3.8-27b] (http://127.0.0.1:8082)"},
+		{ID: "local:big:8082", Label: "big-27b", Detail: "Local node [big-27b] (http://127.0.0.1:8082)"},
 		{ID: "litellm:cloud-x", Label: "cloud-x", Detail: "Cloud [x]"},
 	}, reply)
 }
@@ -132,7 +132,7 @@ func TestModelPickerOverlayRender(t *testing.T) {
 	if n := strings.Count(plain, "▸"); n != 1 {
 		t.Fatalf("cursor glyph count %d, want 1\n%s", n, plain)
 	}
-	for _, want := range []string{"qwen3.8-27b", "cloud-x", "esc cancel"} {
+	for _, want := range []string{"big-27b", "cloud-x", "esc cancel"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("render missing %q\n%s", want, plain)
 		}
@@ -208,7 +208,7 @@ func TestModelPickerOverlayUpdateAfterDoneIgnoresKeys(t *testing.T) {
 	if updated != nil || cmd != nil {
 		t.Fatal("Update after resolution must be inert")
 	}
-	if got := <-reply; got != "local:qwen3.8:8082" {
+	if got := <-reply; got != "local:big:8082" {
 		t.Fatalf("first resolve %q", got)
 	}
 	select {

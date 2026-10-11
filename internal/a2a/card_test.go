@@ -9,8 +9,8 @@ import (
 )
 
 func TestCardObserveScopeSkills(t *testing.T) {
-	card := Card(CardOptions{Name: "cranium", Version: "0.19.3", URL: "http://192.0.2.10:8080", Scope: ScopeObserve})
-	if card.Name != "cranium" {
+	card := Card(CardOptions{Name: "lab-1", Version: "0.19.3", URL: "http://192.0.2.10:8080", Scope: ScopeObserve})
+	if card.Name != "lab-1" {
 		t.Fatalf("name = %q", card.Name)
 	}
 	ids := map[string]bool{}

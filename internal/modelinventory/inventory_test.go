@@ -172,11 +172,11 @@ func TestFromSnapshotPreservesSupervisorAndGPUMetadata(t *testing.T) {
 			Name:   "node-gpu",
 			Status: models.StatusComplete,
 			ResidentModels: []models.ResidentModel{{
-				Name:           "bonsai2-27b",
+				Name:           "llama-27b",
 				Runtime:        "llama.cpp",
 				Port:           8082,
 				SupervisorType: "systemd-user",
-				SupervisorUnit: "bonsai2-27b.service",
+				SupervisorUnit: "llama-27b.service",
 				GPUIndices:     []int{0},
 			}},
 		}},
@@ -189,8 +189,8 @@ func TestFromSnapshotPreservesSupervisorAndGPUMetadata(t *testing.T) {
 	if inst.SupervisorType != "systemd-user" {
 		t.Errorf("supervisor_type = %q, want systemd-user", inst.SupervisorType)
 	}
-	if inst.SupervisorUnit != "bonsai2-27b.service" {
-		t.Errorf("supervisor_unit = %q, want bonsai2-27b.service", inst.SupervisorUnit)
+	if inst.SupervisorUnit != "llama-27b.service" {
+		t.Errorf("supervisor_unit = %q, want llama-27b.service", inst.SupervisorUnit)
 	}
 	if len(inst.GPUIndices) != 1 || inst.GPUIndices[0] != 0 {
 		t.Errorf("gpu_indices = %#v, want [0]", inst.GPUIndices)

@@ -17,7 +17,7 @@ import (
 // fish before bash is ever reached — which is exactly the slow-shell case this
 // wrapper targets (observed live 2026-09-15: guarded-execution run commands
 // built by RemoteExecPrefix failed with fish "Unsupported use of '='" and
-// status 127 on cachyos).
+// status 127 on some Linux nodes).
 //
 // Therefore the outer form is a pure external invocation with no shell logic:
 //
