@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/agent"
@@ -55,7 +56,8 @@ func stubNoAIConfigAndRecordProbes(t *testing.T) map[string]bool {
 	t.Cleanup(func() { probeEndpointFn, inferenceAILoadFn = prevProbe, prevLoad })
 	inferenceAILoadFn = func(string) (*config.AIConfig, error) { return &config.AIConfig{}, nil }
 	probed := map[string]bool{}
-	probeEndpointFn = func(url string) bool { probed[url] = true; return true }
+	var mu sync.Mutex // local choices are probed concurrently
+	probeEndpointFn = func(url string) bool { mu.Lock(); defer mu.Unlock(); probed[url] = true; return true }
 	return probed
 }
 
@@ -300,5 +302,51 @@ func TestCollectModelChoicesKeepsLocalLoadingSelectable(t *testing.T) {
 	silent, _ := choiceByModel(t, choices, "silent-local")
 	if !silent.Disabled || silent.DisabledReason != "unreachable" {
 		t.Fatalf("silent local = %+v, want disabled unreachable", silent)
+	}
+}
+
+// Loopback endpoints are selectable only on their own node; a second Ollama
+// keeps its own port.
+func TestCollectModelChoicesLocalEndpoints(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	vllm := models.LocalEndpoint{Port: 8000, Bind: "loopback", Dialect: "openai", Engine: "vllm", Models: []models.LocalEndpointModel{{Name: "served-a"}}}
+	rt.Snapshot.Nodes[0].LocalEndpoints = &models.LocalEndpoints{Confirmed: []models.LocalEndpoint{vllm}}
+	vllm.Models = []models.LocalEndpointModel{{Name: "served-b"}}
+	rt.Snapshot.Nodes[1].LocalEndpoints = &models.LocalEndpoints{Confirmed: []models.LocalEndpoint{vllm,
+		{Port: 11500, Bind: "any", Dialect: "ollama", Engine: "ollama", Models: []models.LocalEndpointModel{{Name: "second:1b"}}}}}
+	choices := collectModelChoices(rt)
+
+	here, _ := choiceByModel(t, choices, "served-a")
+	if here.Disabled || !here.Listed || here.Port != 8000 {
+		t.Fatalf("local loopback endpoint = %+v, want selectable and listed", here)
+	}
+	remote, _ := choiceByModel(t, choices, "served-b")
+	if !remote.Disabled || remote.DisabledReason != "bound to loopback on its node" {
+		t.Fatalf("remote loopback endpoint = %+v", remote)
+	}
+	second, _ := choiceByModel(t, choices, "second:1b")
+	if second.Disabled || second.Port != 11500 || !strings.HasSuffix(second.Endpoint, ":11500") {
+		t.Fatalf("second ollama = %+v, want its own port", second)
+	}
+}
+
+// Only on-node entries get the local security class; a generic endpoint may
+// forward requests off the cluster.
+func TestCollectModelChoicesUnknownLocalityIsNotLocal(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[0].LocalEndpoints = &models.LocalEndpoints{Confirmed: []models.LocalEndpoint{
+		{Port: 4000, Bind: "loopback", Dialect: "openai", Engine: "openai-compatible", Models: []models.LocalEndpointModel{{Name: "router/auto"}}},
+		{Port: 8000, Bind: "loopback", Dialect: "openai", Engine: "vllm", Process: "vllm", Models: []models.LocalEndpointModel{{Name: "served-a"}}},
+	}}
+	choices := collectModelChoices(rt)
+	proxy, _ := choiceByModel(t, choices, "router/auto")
+	if proxy.SecurityClass == agent.BackendLocal || !proxy.UnknownLocality || !strings.Contains(modelChoiceDetail(proxy), "may proxy off the cluster") {
+		t.Fatalf("generic endpoint = %+v, detail %q", proxy, modelChoiceDetail(proxy))
+	}
+	vllm, _ := choiceByModel(t, choices, "served-a")
+	if vllm.SecurityClass != agent.BackendLocal {
+		t.Fatalf("vllm on this node = %+v, want local", vllm)
 	}
 }

@@ -71,27 +71,28 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 		}
 		usedIDs[id] = true
 		choice := ModelChoice{
-			ID:            id,
-			Model:         e.Model,
-			Protocol:      agent.ProtocolOpenAI,
-			ProviderName:  e.Engine,
-			ProviderKind:  "local",
-			Node:          e.Node,
-			SecurityClass: agent.BackendRemote,
-			Loaded:        e.State == models.ModelCatalogLoaded,
-			Listed:        e.State == models.ModelCatalogListed,
-			Loading:       e.State == models.ModelCatalogLoading,
-			CloudProxy:    e.Locality == models.ModelLocalityCloudProxy,
-			Capabilities:  append([]string(nil), e.Capabilities...),
-			Port:          e.Port,
+			ID:              id,
+			Model:           e.Model,
+			Protocol:        agent.ProtocolOpenAI,
+			ProviderName:    e.Engine,
+			ProviderKind:    "local",
+			Node:            e.Node,
+			SecurityClass:   agent.BackendRemote,
+			Loaded:          e.State == models.ModelCatalogLoaded,
+			Listed:          e.State == models.ModelCatalogListed,
+			Loading:         e.State == models.ModelCatalogLoading,
+			CloudProxy:      e.Locality == models.ModelLocalityCloudProxy,
+			UnknownLocality: e.Locality == models.ModelLocalityUnknown,
+			Capabilities:    append([]string(nil), e.Capabilities...),
+			Port:            e.Port,
 		}
 		if e.Engine == "ollama" {
 			choice.Protocol = agent.ProtocolOllama
-			if n.Ollama != nil {
+			if n.Ollama != nil && e.Port <= 0 { // a second Ollama carries its own port
 				choice.Port = n.Ollama.Port
 			}
 		}
-		if local && !choice.CloudProxy {
+		if local && e.Locality == models.ModelLocalityOnNode {
 			choice.SecurityClass = agent.BackendLocal
 		}
 		if endpoint, err := resolveNodeEndpoint(n, choice.Port); err == nil {
@@ -107,6 +108,8 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 			choice.Disabled, choice.DisabledReason = true, "runs in-process; no HTTP endpoint"
 		case e.State == models.ModelCatalogDown:
 			choice.Disabled, choice.DisabledReason = true, "server not answering"
+		case e.LoopbackOnly && !local:
+			choice.Disabled, choice.DisabledReason = true, "bound to loopback on its node"
 		}
 		choices = append(choices, choice)
 	}
@@ -138,6 +141,9 @@ func modelChoiceDetail(c ModelChoice) string {
 	}
 	if c.CloudProxy {
 		parts = append(parts, "cloud proxy, leaves the cluster")
+	}
+	if c.UnknownLocality {
+		parts = append(parts, "may proxy off the cluster")
 	}
 	detail := strings.Join(parts, " · ")
 	if c.Disabled && c.DisabledReason != "" {
