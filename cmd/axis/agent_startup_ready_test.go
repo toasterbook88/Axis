@@ -85,6 +85,28 @@ func TestStartupNeverSwapsOperatorPinnedModel(t *testing.T) {
 	}
 }
 
+// A pinned --model that no usable choice provides fails with the reason; it
+// must not quietly start some other model.
+func TestStartupPinnedModelUnavailableFails(t *testing.T) {
+	checked := stubStartupReady(t, nil)
+	prevHas := ollamaHasModelFn
+	t.Cleanup(func() { ollamaHasModelFn = prevHas })
+	ollamaHasModelFn = func(string) bool { return false }
+	choices := append(readyTestChoices(), ModelChoice{
+		ID: "here:llama.cpp:big", Model: "big", Protocol: agent.ProtocolOpenAI, ProviderName: "llama.cpp",
+		ProviderKind: "local", Endpoint: "http://localhost:8080", Disabled: true, DisabledReason: "requires an API key",
+	})
+	for name, want := range map[string]string{"big": "requires an API key", "missing": "not in the model catalog"} {
+		_, _, err := resolveReadyStartupModelTarget(context.Background(), name, "auto", "", nil, readyRuntime(), choices, true, nil)
+		if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("--model %s: err %v, want it to name the model and say %q", name, err, want)
+		}
+	}
+	if len(*checked) != 0 {
+		t.Fatalf("checked %v, want no other model started", *checked)
+	}
+}
+
 func TestStartupDoesNotCheckCloudTargets(t *testing.T) {
 	checked := stubStartupReady(t, nil)
 	cloud := ModelChoice{ID: "cloud:groq:m", Model: "m", Protocol: agent.ProtocolCloud, ProviderKind: "cloud"}
