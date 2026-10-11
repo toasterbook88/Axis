@@ -35,7 +35,7 @@ func TestToolCellCollapsesLongOutput(t *testing.T) {
 
 func TestPlacementCellIsAdvisory(t *testing.T) {
 	e := NewToolEntry(time.Unix(0, 0), "1", "axis_place", "9b")
-	e.Result = "node cachyos fit 80"
+	e.Result = "node lab-2 fit 80"
 	got := strings.Join(plain(e, 80), "\n")
 	if !strings.Contains(got, "advisory — not reserved") {
 		t.Fatalf("placement cell missing advisory line:\n%s", got)

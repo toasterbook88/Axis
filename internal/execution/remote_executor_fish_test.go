@@ -13,10 +13,10 @@ import (
 // begins with POSIX assignments — `export BEST_NODE=… ; _axis_ctx=…; trap …;
 // bash -lc …` — built by RemoteExecPrefix. sshd runs remote commands as
 // `$SHELL -c "<string>"`, and on nodes whose login shell is fish (observed:
-// cachyos) fish rejects the assignments with
+// lab-2) fish rejects the assignments with
 // "Unsupported use of '='. In fish, please use 'set …'" and exits 127 BEFORE
-// bash -lc ever starts. Live-reproduced 2026-09-15: pinned run_on_node cachyos
-// fails with status 127 while cranium (bash) succeeds.
+// bash -lc ever starts. Live-reproduced 2026-09-15: pinned run_on_node lab-2
+// fails with status 127 while lab-1 (bash) succeeds.
 // The execution path must wrap its executor in the same fish-safe bash
 // launcher the facts collector already uses (/usr/bin/env bash … -c '<cmd>'),
 // so every command — context write AND run command — is a pure external
@@ -80,7 +80,7 @@ func isBashForced(e RemoteExecutor) bool {
 func TestWrapBashNeutralizesPOSIXAssignmentsForFish(t *testing.T) {
 	// The exact command shape runRemote builds (RemoteExecPrefix + trap +
 	// bash -lc). Fish must never see it as shell syntax.
-	cmd := `export BEST_NODE="cachyos" AXIS_CONTEXT_FILE="/tmp/axis-knows-1.json" AXIS_EXECUTION_MODE=exec; ` +
+	cmd := `export BEST_NODE="lab-2" AXIS_CONTEXT_FILE="/tmp/axis-knows-1.json" AXIS_EXECUTION_MODE=exec; ` +
 		`_axis_ctx="/tmp/axis-knows-1.json"; trap 'rm -f "$_axis_ctx"' EXIT; bash -lc 'echo hi'`
 
 	wrapped := transport.WrapBash(cmd)

@@ -8,7 +8,7 @@ import (
 
 func TestStatusFooterResponsiveWidths(t *testing.T) {
 	cfg := StatusFooterConfig{
-		Model:      func() string { return "qwen3.8-9b" },
+		Model:      func() string { return "mid-9b" },
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		Mode:       func() string { return "default" },
@@ -22,7 +22,7 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines80))
 	}
 	text80 := lines80[0].Text
-	if !strings.Contains(text80, "model: qwen3.8-9b") ||
+	if !strings.Contains(text80, "model: mid-9b") ||
 		!strings.Contains(text80, "context: [") ||
 		!strings.Contains(text80, "mode: observe") ||
 		!strings.Contains(text80, "snap pub-1") ||
@@ -36,7 +36,7 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 	// Medium screen: 70 cols (mode dropped, compact context)
 	lines70 := footer.Render(70)
 	text70 := lines70[0].Text
-	if !strings.Contains(text70, "model: qwen3.8-9b") ||
+	if !strings.Contains(text70, "model: mid-9b") ||
 		!strings.Contains(text70, "snap pub-1") ||
 		strings.Contains(text70, "fleet:") ||
 		strings.Contains(text70, "mode: observe") {
@@ -49,7 +49,7 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 	// Narrow screen: 45 cols
 	lines45 := footer.Render(45)
 	text45 := lines45[0].Text
-	if !strings.Contains(text45, "model: qwen3.8-9b") ||
+	if !strings.Contains(text45, "model: mid-9b") ||
 		strings.Contains(text45, "fleet:") {
 		t.Fatalf("narrow footer unexpected segments: %s", text45)
 	}
@@ -63,7 +63,7 @@ func TestStatusFooterShowsRealUsageWithoutHijackingContextBar(t *testing.T) {
 	// different quantities. The bar stays on occupancy; in/out is a
 	// separate labeled segment when the backend reported at least one turn.
 	cfg := StatusFooterConfig{
-		Model:      func() string { return "qwen3.8-9b" },
+		Model:      func() string { return "mid-9b" },
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		UsageStats: func() (int, int, int) { return 1200, 340, 2 },
@@ -97,7 +97,7 @@ func TestStatusFooterShowsRealUsageWithoutHijackingContextBar(t *testing.T) {
 
 func TestStatusFooterOmitsUsageWhenBackendReportedNone(t *testing.T) {
 	cfg := StatusFooterConfig{
-		Model:      func() string { return "qwen3.8-9b" },
+		Model:      func() string { return "mid-9b" },
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		UsageStats: func() (int, int, int) { return 0, 0, 0 },
@@ -117,7 +117,7 @@ func TestStatusFooterOmitsUsageWhenBackendReportedNone(t *testing.T) {
 
 func TestStatusFooterHidesUsageOnMediumWidth(t *testing.T) {
 	cfg := StatusFooterConfig{
-		Model:      func() string { return "qwen3.8-9b" },
+		Model:      func() string { return "mid-9b" },
 		UsedTokens: func() int { return 9200 },
 		MaxTokens:  func() int { return 32768 },
 		UsageStats: func() (int, int, int) { return 1200, 340, 2 },

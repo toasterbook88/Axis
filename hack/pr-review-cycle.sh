@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PR review cycle helper for AXIS (Cranium / Bash 4+; not stock macOS bash 3.2).
+# PR review cycle helper for AXIS (Linux / Bash 4+; not stock macOS bash 3.2).
 #
 # Purpose: compress the solo-operator loop
 #   checks green → collect full review state → print for evaluation

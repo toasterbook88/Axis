@@ -13,8 +13,8 @@ import (
 // an idle one without any extra tool round-trip.
 func TestSummarizeSnapshotIncludesResidentModels(t *testing.T) {
 	node := models.NodeFacts{
-		Name:     "cachyos",
-		Hostname: "cachyos",
+		Name:     "lab-2",
+		Hostname: "lab-2",
 		Status:   models.StatusComplete,
 		ResidentModels: []models.ResidentModel{
 			{Name: "bitnet-2B", Runtime: "llama.cpp", Port: 8080, SizeRAMMB: 1132},

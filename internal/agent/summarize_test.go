@@ -54,7 +54,7 @@ func TestSummarizePlacementExplanationIncludesRunnerUpsAndExcluded(t *testing.T)
 	exp := models.PlacementExplanation{
 		Decision: models.PlacementDecision{
 			OK:       true,
-			Node:     "cranium",
+			Node:     "lab-1",
 			FitScore: 90,
 			IsLocal:  true,
 			Ranking: &models.PlacementRanking{
@@ -72,7 +72,7 @@ func TestSummarizePlacementExplanationIncludesRunnerUpsAndExcluded(t *testing.T)
 		},
 		Eligible: []models.PlacementCandidateExplanation{
 			{
-				Node:       "cranium",
+				Node:       "lab-1",
 				FitScore:   90,
 				IsLocal:    true,
 				HeadroomMB: 29398,
@@ -83,7 +83,7 @@ func TestSummarizePlacementExplanationIncludesRunnerUpsAndExcluded(t *testing.T)
 				},
 			},
 			{
-				Node:       "cachyos",
+				Node:       "lab-2",
 				FitScore:   95,
 				IsLocal:    false,
 				HeadroomMB: 146038,
@@ -96,7 +96,7 @@ func TestSummarizePlacementExplanationIncludesRunnerUpsAndExcluded(t *testing.T)
 		},
 		Excluded: []models.PlacementExclusion{
 			{
-				Node:    "axis5",
+				Node:    "lab-4",
 				Reasons: []string{"insufficient RAM: 3122 MB free < 16384 MB required"},
 			},
 		},
@@ -104,11 +104,11 @@ func TestSummarizePlacementExplanationIncludesRunnerUpsAndExcluded(t *testing.T)
 
 	got := summarizePlacementExplanation(exp)
 	for _, want := range []string{
-		"Placement: cranium (allocatable_ram = 29398MB",
+		"Placement: lab-1 (allocatable_ram = 29398MB",
 		"Runner-up candidates:",
-		"- cachyos: allocatable_ram = 146038MB",
+		"- lab-2: allocatable_ram = 146038MB",
 		"Excluded nodes:",
-		"- axis5: insufficient RAM",
+		"- lab-4: insufficient RAM",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q:\n%s", want, got)
@@ -123,11 +123,11 @@ func TestSummarizePlacementExplanationRendersExclusionsWhenNoNodeFits(t *testing
 		},
 		Excluded: []models.PlacementExclusion{
 			{
-				Node:    "axis5",
+				Node:    "lab-4",
 				Reasons: []string{"insufficient RAM: 3122 MB free < 16384 MB required"},
 			},
 			{
-				Node:    "nixos",
+				Node:    "lab-5",
 				Reasons: []string{"missing required tool: docker"},
 			},
 		},
@@ -137,8 +137,8 @@ func TestSummarizePlacementExplanationRendersExclusionsWhenNoNodeFits(t *testing
 	for _, want := range []string{
 		"Placement: no suitable node found for this task.",
 		"Excluded nodes:",
-		"- axis5: insufficient RAM",
-		"- nixos: missing required tool: docker",
+		"- lab-4: insufficient RAM",
+		"- lab-5: missing required tool: docker",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q:\n%s", want, got)
@@ -231,7 +231,7 @@ func TestSummarizeNodeFactsWithResidentAndOllama(t *testing.T) {
 		},
 		ResidentModels: []models.ResidentModel{
 			{
-				Name:       "bonsai-2-27b",
+				Name:       "chat-27b",
 				Runtime:    "llama.cpp",
 				Port:       8082,
 				SizeVRAMMB: 16384,
@@ -257,7 +257,7 @@ func TestSummarizeNodeFactsWithResidentAndOllama(t *testing.T) {
 		"RAM: 16384 MB total, 8192 MB free",
 		"GPU: RTX 5060 (NVIDIA, 8192 MB VRAM)",
 		"Resident models (1):",
-		"- bonsai-2-27b (llama.cpp, port 8082, 16384 MB VRAM)",
+		"- chat-27b (llama.cpp, port 8082, 16384 MB VRAM)",
 		"Ollama: 0.5.12 (1 models: llama3.2:latest)",
 		"Tools: docker, git",
 	} {

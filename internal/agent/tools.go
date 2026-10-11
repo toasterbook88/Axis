@@ -287,7 +287,7 @@ type factsArgs struct {
 func (r *ToolRegistry) registerFacts(tc *ToolContext) {
 	r.add("axis_facts",
 		"Return a detailed human-readable summary of hardware facts for a cluster node (CPU, RAM, disk, GPUs, installed tools, Ollama models, resident models). Defaults to the local node if 'node' is not specified.",
-		json.RawMessage(`{"type":"object","properties":{"node":{"type":"string","description":"Optional node name or hostname to inspect (e.g. 'cachyos', 'samson', 'cranium'). If omitted, defaults to the local node."}}}`),
+		json.RawMessage(`{"type":"object","properties":{"node":{"type":"string","description":"Optional node name or hostname to inspect (e.g. 'lab-2', 'lab-3', 'lab-1'). If omitted, defaults to the local node."}}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a factsArgs
 			if len(args) > 0 && string(args) != "{}" && string(args) != "null" {
@@ -327,7 +327,7 @@ type modelsArgs struct {
 func (r *ToolRegistry) registerModels(tc *ToolContext) {
 	r.add("axis_models",
 		"Discover AI models across the cluster: active resident model instances (in VRAM/RAM), local Ollama models on nodes, and configured inference roles and backends from ai.yaml. Optionally filter by node.",
-		json.RawMessage(`{"type":"object","properties":{"node":{"type":"string","description":"Optional node name to filter models by (e.g. 'cranium', 'samson')"}}}`),
+		json.RawMessage(`{"type":"object","properties":{"node":{"type":"string","description":"Optional node name to filter models by (e.g. 'lab-1', 'lab-3')"}}}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a modelsArgs
 			if len(args) > 0 && string(args) != "{}" && string(args) != "null" {

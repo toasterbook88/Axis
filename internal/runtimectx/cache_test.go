@@ -152,7 +152,7 @@ func TestLoadCachedFallbackToDiskSnapshot(t *testing.T) {
 			Source: "daemon-publication",
 		},
 		Vantage: &models.VantageInfo{
-			NodeName:   "cranium",
+			NodeName:   "lab-1",
 			ObservedAt: observedAt,
 		},
 	}
@@ -181,8 +181,8 @@ func TestLoadCachedFallbackToDiskSnapshot(t *testing.T) {
 	if rt.Snapshot == nil {
 		t.Fatal("expected non-nil snapshot")
 	}
-	if rt.Snapshot.Vantage == nil || rt.Snapshot.Vantage.NodeName != "cranium" {
-		t.Fatalf("expected vantage cranium, got %+v", rt.Snapshot.Vantage)
+	if rt.Snapshot.Vantage == nil || rt.Snapshot.Vantage.NodeName != "lab-1" {
+		t.Fatalf("expected vantage lab-1, got %+v", rt.Snapshot.Vantage)
 	}
 
 	foundWarning := false

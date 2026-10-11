@@ -17,7 +17,7 @@ func TestStartupModelStaleDefaultFallsBackToLiveCatalog(t *testing.T) {
 	origProbe := probeEndpointFn
 	origHas := ollamaHasModelFn
 	probeEndpointFn = func(string) bool { return true }
-	ollamaHasModelFn = func(name string) bool { return name == "qwen3.8-9b" }
+	ollamaHasModelFn = func(name string) bool { return name == "mid-9b" }
 	defer func() {
 		probeEndpointFn = origProbe
 		ollamaHasModelFn = origHas
@@ -26,19 +26,19 @@ func TestStartupModelStaleDefaultFallsBackToLiveCatalog(t *testing.T) {
 	rt := &runtimectx.Context{}
 	// Catalog holds one usable local model and no cloud fallbacks.
 	choices := []ModelChoice{{
-		ID:           "cranium:ollama:qwen3.8-9b",
-		Model:        "qwen3.8-9b",
+		ID:           "lab-1:ollama:mid-9b",
+		Model:        "mid-9b",
 		Protocol:     agent.ProtocolOllama,
 		ProviderName: "ollama",
 		ProviderKind: "local",
 	}}
 
-	got, _, err := resolveStartupModelTarget("swiftsmith-v8-phase6-q4:latest", "", "", nil, rt, choices)
+	got, _, err := resolveStartupModelTarget("tuned-model:latest", "", "", nil, rt, choices)
 	if err != nil {
 		t.Fatalf("resolveStartupModelTarget: %v", err)
 	}
-	if got.Model != "qwen3.8-9b" {
-		t.Fatalf("stale default_model %q was honored; want live-catalog fallback to qwen3.8-9b, got %q", "swiftsmith-v8-phase6-q4:latest", got.Model)
+	if got.Model != "mid-9b" {
+		t.Fatalf("stale default_model %q was honored; want live-catalog fallback to mid-9b, got %q", "tuned-model:latest", got.Model)
 	}
 }
 

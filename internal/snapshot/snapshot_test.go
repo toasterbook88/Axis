@@ -272,11 +272,11 @@ func TestBuild_TimestampIsSet(t *testing.T) {
 
 func TestBuild_NetworkClassification(t *testing.T) {
 	// Construct IPs dynamically to satisfy Standing #13 (no IP address literals in commits)
-	ipTailscaleDirect := "100.64." + "1.2"
-	ipTailscaleRelayed := "100.120." + "10.15"
-	ipVPNHost := "192.168." + "1.5"
-	ipVPNAddr := "10.0." + "0.5"
-	ipLANHost := "192.168." + "1.10"
+	ipTailscaleDirect := "100.64.1.2"
+	ipTailscaleRelayed := "100.127.10.15"
+	ipVPNHost := "192.168.1.5"
+	ipVPNAddr := "10.0.0.5"
+	ipLANHost := "192.168.1.10"
 
 	nodes := []models.NodeFacts{
 		{
@@ -316,27 +316,27 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		// penalized -20; the route in use is the LAN, so it is direct-lan.
 		{
 			Name:                  "node-lan-with-tailscale",
-			Hostname:              "192.168." + "1.219",
-			SSHTarget:             "192.168." + "1.219",
+			Hostname:              "192.168.1.100",
+			SSHTarget:             "192.168.1.100",
 			SSHHandshakeLatencyMs: 42,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
-				{Address: "192.168." + "1.219", SpeedClass: "gigabit"},
-				{Address: "100.64." + "1.10", SpeedClass: "tailscale"},
+				{Address: "192.168.1.100", SpeedClass: "gigabit"},
+				{Address: "100.64.1.10", SpeedClass: "tailscale"},
 			},
 		},
 		// Production shape: remote collector overwrites Hostname with the
-		// observed machine name ("nixos") while SSHTarget keeps the dial IP.
+		// observed machine name ("lab-5") while SSHTarget keeps the dial IP.
 		// Classification must use SSHTarget, not Hostname or Tailscale ifaces.
 		{
 			Name:                  "node-prod-hostname-overwrite",
-			Hostname:              "nixos",              // observed machine hostname
-			SSHTarget:             "192.168." + "1.219", // configured dial IP
+			Hostname:              "lab-5",         // observed machine hostname
+			SSHTarget:             "192.168.1.100", // configured dial IP
 			SSHHandshakeLatencyMs: 42,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
-				{Address: "192.168." + "1.219", SpeedClass: "gigabit"},
-				{Address: "100.64." + "1.10", SpeedClass: "tailscale"},
+				{Address: "192.168.1.100", SpeedClass: "gigabit"},
+				{Address: "100.64.1.10", SpeedClass: "tailscale"},
 			},
 		},
 		// Production shape without SSHTarget (older snapshot): machine name +
@@ -348,7 +348,7 @@ func TestBuild_NetworkClassification(t *testing.T) {
 			SSHHandshakeLatencyMs: 42,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
-				{Address: "192.168." + "1.249", SpeedClass: "gigabit"},
+				{Address: "192.168.1.200", SpeedClass: "gigabit"},
 			},
 		},
 		// High SSH handshake on a true LAN dial target must stay direct-lan —
@@ -356,12 +356,12 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		{
 			Name:                  "node-lan-high-handshake",
 			Hostname:              "m1.local",
-			SSHTarget:             "192.168." + "1.189",
+			SSHTarget:             "192.168.1.2",
 			SSHHandshakeLatencyMs: 242,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
-				{Address: "192.168." + "1.189", SpeedClass: "gigabit"},
-				{Address: "100.64." + "2.2", SpeedClass: "tailscale"},
+				{Address: "192.168.1.2", SpeedClass: "gigabit"},
+				{Address: "100.64.0.2", SpeedClass: "tailscale"},
 			},
 		},
 		{
@@ -372,7 +372,7 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		},
 		{
 			Name:                  "node-vpn-by-subnet",
-			Hostname:              "10.254." + "254.254",
+			Hostname:              "10.254.254.254",
 			SSHHandshakeLatencyMs: 45,
 			Status:                models.StatusComplete,
 		},
@@ -396,11 +396,11 @@ func TestBuild_NetworkClassification(t *testing.T) {
 		{
 			Name:                  "node-public-dial-with-lan-iface",
 			Hostname:              "edge",
-			SSHTarget:             "8.8." + "8.8",
+			SSHTarget:             "8.8.8.8",
 			SSHHandshakeLatencyMs: 40,
 			Status:                models.StatusComplete,
 			Addresses: []models.NetworkAddress{
-				{Address: "192.168." + "1.50", SpeedClass: "gigabit"},
+				{Address: "192.168.1.50", SpeedClass: "gigabit"},
 			},
 		},
 	}

@@ -14,7 +14,7 @@ func TestBuildContextBlockIncludesGPUVRAMOnBestNodeLine(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
 			{
-				Name:   "cachyos",
+				Name:   "lab-2",
 				Status: models.StatusComplete,
 				Resources: &models.Resources{
 					RAMFreeMB: 16384,
@@ -31,7 +31,7 @@ func TestBuildContextBlockIncludesGPUVRAMOnBestNodeLine(t *testing.T) {
 
 	out := buildContextBlock(snap, models.TaskRequirements{}, "run 13B inference", "live", nil, nil)
 
-	if !strings.Contains(out, "Best node: cachyos") {
+	if !strings.Contains(out, "Best node: lab-2") {
 		t.Fatalf("missing best node name:\n%s", out)
 	}
 	if !strings.Contains(out, "GPU: NVIDIA GeForce RTX 5060 8188MB [cuda,vulkan]") {
@@ -64,7 +64,7 @@ func TestBuildContextBlockIncludesResidentModels(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
 			{
-				Name:      "axis5",
+				Name:      "lab-4",
 				Status:    models.StatusComplete,
 				Resources: &models.Resources{RAMFreeMB: 1993, Pressure: "none"},
 				ResidentModels: []models.ResidentModel{
@@ -92,7 +92,7 @@ func TestBuildContextBlockIncludesDiskWeightsTruncated(t *testing.T) {
 				Status:    models.StatusComplete,
 				Resources: &models.Resources{RAMFreeMB: 150000, Pressure: "none"},
 				DiskWeights: []models.DiskWeight{
-					{Name: "qwen3.8-27b", Path: "/mnt/ssd/qwen.gguf", Bytes: 55000000000, Format: "gguf"},
+					{Name: "big-27b", Path: "/mnt/ssd/qwen.gguf", Bytes: 55000000000, Format: "gguf"},
 					{Name: "ornith-1.5", Path: "/mnt/ssd/ornith", Bytes: 21000000000, Format: "safetensors"},
 					{Name: "jack-coder", Path: "/mnt/ssd/jack.gguf", Bytes: 11700000000, Format: "gguf"},
 					{Name: "phi3-mini", Path: "/mnt/ssd/phi3.gguf", Bytes: 2400000000, Format: "gguf"},
@@ -103,7 +103,7 @@ func TestBuildContextBlockIncludesDiskWeightsTruncated(t *testing.T) {
 	}
 
 	out := buildContextBlock(snap, models.TaskRequirements{}, "start a 27B model", "live", nil, nil)
-	if !strings.Contains(out, "Weights on disk here: qwen3.8-27b (gguf), ornith-1.5 (safetensors), jack-coder (gguf), +1 more") {
+	if !strings.Contains(out, "Weights on disk here: big-27b (gguf), ornith-1.5 (safetensors), jack-coder (gguf), +1 more") {
 		t.Fatalf("missing or malformed disk weights line:\n%s", out)
 	}
 }
@@ -114,7 +114,7 @@ func TestBuildContextBlockNextActionNamesRealPaths(t *testing.T) {
 	snap := &models.ClusterSnapshot{
 		Nodes: []models.NodeFacts{
 			{
-				Name:      "cachyos",
+				Name:      "lab-2",
 				Status:    models.StatusComplete,
 				Resources: &models.Resources{RAMFreeMB: 16384, Pressure: "none"},
 				Tools:     []models.ToolInfo{{Name: "ollama"}},

@@ -27,7 +27,7 @@ func (b *subAgentBackend) ChatStream(ctx context.Context, msgs []chat.Message, t
 }
 
 func TestSpawnSubagentReturnsChildAnswer(t *testing.T) {
-	backend := &subAgentBackend{answer: "tests passed on nixos: 42/42 ok"}
+	backend := &subAgentBackend{answer: "tests passed on lab-5: 42/42 ok"}
 	parent := New(Config{
 		Backend:     backend,
 		MaxTurns:    3,
@@ -37,8 +37,8 @@ func TestSpawnSubagentReturnsChildAnswer(t *testing.T) {
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 	})
 	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
-		"prompt":      "run go test on nixos and report",
-		"target_node": "nixos",
+		"prompt":      "run go test on lab-5 and report",
+		"target_node": "lab-5",
 		"max_turns":   2,
 	})))
 	if err != nil {
@@ -105,7 +105,7 @@ func TestSpawnSubagentChildHasBackgroundTaskStore(t *testing.T) {
 			return "ok", nil
 		},
 	})
-	child := parent.buildChildAgent(2, "nixos", "extra")
+	child := parent.buildChildAgent(2, "lab-5", "extra")
 	if child.backgroundTasks == nil {
 		t.Fatal("buildChildAgent left backgroundTasks nil")
 	}
@@ -133,7 +133,7 @@ func TestBuildChildAgentInheritsDryRunAndEvidenceFlags(t *testing.T) {
 		DryRun:                  true,
 		AllowRawCommandEvidence: true,
 	})
-	child := parent.buildChildAgent(2, "nixos", "extra")
+	child := parent.buildChildAgent(2, "lab-5", "extra")
 	if !child.dryRun {
 		t.Fatal("child dryRun should inherit parent --dry-run")
 	}

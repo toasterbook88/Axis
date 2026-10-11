@@ -52,7 +52,7 @@ func TestRunBackgroundReturnsIDAndRunsCommand(t *testing.T) {
 
 func TestRunBackgroundRemoteRequiresRunOnNode(t *testing.T) {
 	a := newAsyncTestAgent(t) // no RunOnNode
-	_, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"echo x","node":"nixos"}`))
+	_, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"echo x","node":"lab-5"}`))
 	if err == nil || !strings.Contains(err.Error(), "Layer 4") {
 		t.Fatalf("expected Layer 4 contract error, got %v", err)
 	}
@@ -84,10 +84,10 @@ func TestRunBackgroundRemoteUsesRunOnNode(t *testing.T) {
 		ToolContext: NewToolContext(&RuntimeView{}, nil),
 		RunOnNode: func(_ context.Context, node, command string) (string, error) {
 			sawNode, sawCmd = node, command
-			return `{"ok":true,"node":"nixos","output":"remote-bg"}`, nil
+			return `{"ok":true,"node":"lab-5","output":"remote-bg"}`, nil
 		},
 	})
-	out, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"uname -a","node":"nixos"}`))
+	out, err := a.dispatchRunBackground(context.Background(), json.RawMessage(`{"command":"uname -a","node":"lab-5"}`))
 	if err != nil {
 		t.Fatalf("dispatchRunBackground: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRunBackgroundRemoteUsesRunOnNode(t *testing.T) {
 	for time.Now().Before(deadline) {
 		s, _ := a.dispatchCheckTask(context.Background(), json.RawMessage(`{"id":"bg-1"}`))
 		if strings.Contains(s, "completed") {
-			if sawNode != "nixos" || sawCmd != "uname -a" {
+			if sawNode != "lab-5" || sawCmd != "uname -a" {
 				t.Fatalf("RunOnNode saw node=%q cmd=%q", sawNode, sawCmd)
 			}
 			if !strings.Contains(s, "remote-bg") {

@@ -714,7 +714,7 @@ func apply(m Model, msgs ...tea.Msg) Model {
 func TestModelPendingToolCard(t *testing.T) {
 	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
 	m = startTurnFor(t, m)
-	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts", Args: `node="cranium"`})
+	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts", Args: `node="lab-1"`})
 
 	view := m.View()
 	if !strings.Contains(view, spinnerFrames[0]+" axis_facts") {

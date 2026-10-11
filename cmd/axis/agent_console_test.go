@@ -883,7 +883,7 @@ func pickerTestRuntime(hn string) *runtimectx.Context {
 				Hostname: hn,
 				Status:   models.StatusComplete,
 				ResidentModels: []models.ResidentModel{
-					{Name: "qwen3.8-27b", Runtime: "llama.cpp", Port: 8082},
+					{Name: "big-27b", Runtime: "llama.cpp", Port: 8082},
 				},
 			}},
 		},
@@ -948,7 +948,7 @@ func TestConsoleModelPickerInstallsOverlayAndSwitches(t *testing.T) {
 		t.Fatal("picker selection did not resolve the turn")
 	}
 
-	if a.Model() != "qwen3.8-27b" {
+	if a.Model() != "big-27b" {
 		t.Fatalf("model not switched, got %q", a.Model())
 	}
 	found := false

@@ -226,7 +226,7 @@ type ResidentModel struct {
 
     // Additive Supervisor & Hardware Provenance
     SupervisorType    string    `json:"supervisor_type,omitempty" yaml:"supervisor_type,omitempty"` // "systemd-user", "systemd-system", "none"
-    SupervisorUnit    string    `json:"supervisor_unit,omitempty" yaml:"supervisor_unit,omitempty"` // e.g. "bonsai2-27b.service"
+    SupervisorUnit    string    `json:"supervisor_unit,omitempty" yaml:"supervisor_unit,omitempty"` // e.g. "llama-27b.service"
     GPUIndices        []int     `json:"gpu_indices,omitempty" yaml:"gpu_indices,omitempty"`         // Physical GPU index allocations
 }
 ```
