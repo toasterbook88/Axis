@@ -198,7 +198,7 @@ func scanHFHub(ctx context.Context, home string, vols []models.Volume, minSize i
 		if ctx.Err() != nil {
 			return
 		}
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "models--") {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "models--") || entryDataless(e) {
 			continue
 		}
 		dir := filepath.Join(hub, e.Name())
@@ -346,7 +346,7 @@ func walkWeightFiles(ctx context.Context, root string, vols []models.Volume, sou
 		if d.IsDir() {
 			name := d.Name()
 			if path != root {
-				if _, skip := skipDirNames[name]; skip {
+				if _, skip := skipDirNames[name]; skip || entryDataless(d) {
 					return fs.SkipDir
 				}
 				if isSystemPath(path) {
@@ -370,7 +370,7 @@ func walkWeightFiles(ctx context.Context, root string, vols []models.Volume, sou
 			return nil
 		}
 		info, err := d.Info()
-		if err != nil || info.Size() < minSize {
+		if err != nil || info.Size() < minSize || isDataless(info) {
 			return nil
 		}
 		if ext == ".gguf" && !fileHasGGUFMagic(path) {
@@ -495,7 +495,7 @@ func sumWeightFiles(root string, maxDepth int, minSize int64) int64 {
 		}
 		if d.IsDir() {
 			if path != root {
-				if _, skip := skipDirNames[d.Name()]; skip {
+				if _, skip := skipDirNames[d.Name()]; skip || entryDataless(d) {
 					return fs.SkipDir
 				}
 			}
@@ -509,7 +509,7 @@ func sumWeightFiles(root string, maxDepth int, minSize int64) int64 {
 			return nil
 		}
 		info, err := d.Info()
-		if err != nil || info.Size() < minSize {
+		if err != nil || info.Size() < minSize || isDataless(info) {
 			return nil
 		}
 		if ext == ".safetensors" && fileIsLFSPointer(path) {
@@ -537,7 +537,7 @@ func hasExtUnder(root, ext string, maxDepth int) bool {
 			depth = strings.Count(rel, string(os.PathSeparator)) + 1
 		}
 		if d.IsDir() {
-			if depth > maxDepth {
+			if depth > maxDepth || entryDataless(d) {
 				return fs.SkipDir
 			}
 			return nil
@@ -570,7 +570,7 @@ func applyLocalDiskWeights(ctx context.Context, facts *models.NodeFacts) {
 	if facts.Resources != nil {
 		vols = facts.Resources.Volumes
 	}
-	res := scanDiskWeightsFn(ctx, DiskWeightScanConfig{Home: home, Volumes: vols})
+	res := scanDiskWeightsBounded(ctx, DiskWeightScanConfig{Home: home, Volumes: vols})
 	facts.DiskWeights = res.Weights
 	facts.DiskWeightsTruncated = res.Truncated
 }
