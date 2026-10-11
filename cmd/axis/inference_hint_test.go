@@ -239,6 +239,33 @@ func TestAPIKeyForAIBackend_NameAuthoritative(t *testing.T) {
 	}
 }
 
+// The catalog lists this machine's servers as http://localhost:<port>, while
+// ai.yaml usually says http://127.0.0.1:<port>/v1. Both name one server, so
+// the key is found either way; another port, host, scheme, or path is not.
+func TestAPIKeyForAIBackend_MatchesSameServer(t *testing.T) {
+	prevLoad := inferenceAILoadFn
+	t.Cleanup(func() { inferenceAILoadFn = prevLoad })
+	keyFile := t.TempDir() + "/k"
+	if err := writeKeyFile(keyFile, "server-key"); err != nil {
+		t.Fatal(err)
+	}
+	inferenceAILoadFn = func(string) (*config.AIConfig, error) {
+		return &config.AIConfig{Backends: []config.AIBackendConfig{
+			{Name: "local-llama", Kind: config.AIBackendOpenAICompatible, BaseURL: "http://127.0.0.1:8080/v1", APIKeyFile: keyFile},
+		}}, nil
+	}
+	for _, ep := range []string{"http://localhost:8080", "http://localhost:8080/v1/", "http://127.0.0.1:8080/v1", "HTTP://[::1]:8080/v1"} {
+		if got := apiKeyForAIBackend("", ep); got != "server-key" {
+			t.Errorf("%s: got %q, want the server key", ep, got)
+		}
+	}
+	for _, ep := range []string{"http://localhost:8081/v1", "http://node.example.com:8080/v1", "https://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v2"} {
+		if got := apiKeyForAIBackend("", ep); got != "" {
+			t.Errorf("%s: got a key, want none", ep)
+		}
+	}
+}
+
 func writeKeyFile(path, key string) error {
 	return os.WriteFile(path, []byte(key), 0o600)
 }
