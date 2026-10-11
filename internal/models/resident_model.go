@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ResidentModel is additive truth-plane metadata describing a model that is
 // currently resident in a node runtime according to a live probe.
@@ -64,3 +67,19 @@ type ResidentModel struct {
 // Down reports that the runtime process was seen but its endpoint did not
 // answer. Such a row is not serving and is not model locality.
 func (r ResidentModel) Down() bool { return r.State == ModelCatalogDown }
+
+// Serving reports whether this row is evidence that the named model is ready
+// to serve. Explicit collector state always wins. Empty-state Ollama and
+// llama.cpp rows retain compatibility with snapshots from older collectors;
+// other state-less runtimes are not promoted to serving.
+func (r ResidentModel) Serving() bool {
+	if r.State != "" {
+		return r.State == ModelCatalogLoaded
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Runtime)) {
+	case EngineOllama, EngineLlamaCpp:
+		return true
+	default:
+		return false
+	}
+}

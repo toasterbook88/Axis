@@ -199,7 +199,7 @@ func relevantResidentModels(n models.NodeFacts, reqs models.TaskRequirements) []
 	}
 	var relevant []models.ResidentModel
 	for _, model := range n.ResidentModels {
-		if strings.EqualFold(model.Runtime, runtime) && !model.Down() {
+		if strings.EqualFold(model.Runtime, runtime) && model.Serving() {
 			relevant = append(relevant, model)
 		}
 	}

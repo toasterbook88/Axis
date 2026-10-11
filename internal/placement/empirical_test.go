@@ -83,16 +83,18 @@ func TestRankCandidatesPrefersResidentModelLocality(t *testing.T) {
 	}
 }
 
-// A down server's row is not resident-model locality.
-func TestResidentModelRankIgnoresDownServer(t *testing.T) {
+// Explicit non-loaded rows are not resident-model locality.
+func TestResidentModelRankIgnoresNonServingStates(t *testing.T) {
 	n := nodeComplete("n", 6000, "none", "llama-server")
 	n.ResidentModels = []models.ResidentModel{
 		{Name: "gone", Runtime: "llama.cpp", State: models.ModelCatalogDown},
+		{Name: "warming", Runtime: "llama.cpp", State: models.ModelCatalogLoading},
+		{Name: "listed", Runtime: "llama.cpp", State: models.ModelCatalogListed},
 		{Name: "ok", Runtime: "llama.cpp", State: models.ModelCatalogLoaded},
 	}
 	reqs := models.TaskRequirements{RequiredTools: []string{"llama-server"}, Workload: models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference}}
 	if got := residentModelRank(n, reqs); got != 1 {
-		t.Fatalf("rank = %d, want 1 (down row excluded)", got)
+		t.Fatalf("rank = %d, want 1 (only loaded row included)", got)
 	}
 }
 
