@@ -38,7 +38,7 @@ func TestPickServingNodeBreaksResidentTiesByWarmthThenName(t *testing.T) {
 	nodes := []models.NodeFacts{
 		{Name: "b", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", WarmthScore: 0.9}}},
 		{Name: "a", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", WarmthScore: 0.1}}},
-		{Name: "c", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "mlx", WarmthScore: 0.9}}},
+		{Name: "c", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "mlx", WarmthScore: 0.9, State: models.ModelCatalogLoaded}}},
 	}
 	got, err := PickServingNode(nodes, "Mistral")
 	if err != nil {
@@ -54,6 +54,20 @@ func TestPickServingNodeBreaksResidentTiesByWarmthThenName(t *testing.T) {
 	}
 	if got.Node != "c" || got.Runtime != "mlx" {
 		t.Fatalf("equal warmth pick=%#v", got)
+	}
+}
+
+// Rows with an explicit non-loaded state are not already serving.
+func TestPickServingNodeSkipsNonServingResidentStates(t *testing.T) {
+	nodes := []models.NodeFacts{
+		{Name: "dead", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", WarmthScore: 0.9, State: models.ModelCatalogDown}}},
+		{Name: "warming", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", WarmthScore: 1, State: models.ModelCatalogLoading}}},
+		{Name: "listed", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "mlx", WarmthScore: 1, State: models.ModelCatalogListed}}},
+		{Name: "live", Status: models.StatusComplete, ResidentModels: []models.ResidentModel{{Name: "mistral", Runtime: "llama.cpp", State: models.ModelCatalogLoaded}}},
+	}
+	got, err := PickServingNode(nodes, "mistral")
+	if err != nil || got.Node != "live" || !got.Already {
+		t.Fatalf("pick=%#v err=%v, want live", got, err)
 	}
 }
 

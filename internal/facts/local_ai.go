@@ -151,21 +151,7 @@ func detectAppleFoundationModels(ctx context.Context, osName, arch, osVersion st
 	defer cancel()
 
 	out, err := runAppleFoundationModelsProbeFn(probeCtx)
-	trimmedOut := strings.TrimSpace(out)
-	info := &models.AppleFoundationModelsInfo{
-		Version:   osVersion,
-		Available: err == nil,
-		Verified:  err == nil && trimmedOut != "",
-	}
-	if err != nil {
-		info.Error = trimmedOut
-		if info.Error == "" {
-			info.Error = err.Error()
-		}
-	} else if trimmedOut == "" {
-		info.Error = "apple foundation models probe returned empty output"
-	}
-	return info
+	return appleFMFromProbe(osVersion, out, err)
 }
 
 func supportsAppleFoundationModelsOS(osVersion string) bool {
@@ -205,7 +191,7 @@ func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
 		if result.err != nil {
 			return "", result.err
 		}
-		out, err := appleFoundationModelsProbeCommandFn(ctx, result.path, "--self-test").CombinedOutput()
+		out, err := appleFoundationModelsProbeCommandFn(ctx, result.path, "--facts").Output()
 		return string(out), err
 	}
 }

@@ -6,10 +6,47 @@ struct CLIError: Error, CustomStringConvertible {
 	let description: String
 }
 
+func appleFMFactsJSON() -> String {
+	let model = SystemLanguageModel.default
+	var out: [String: Any] = [:]
+	switch model.availability {
+	case .available:
+		out["availability"] = "available"
+	case .unavailable(let reason):
+		out["availability"] = "unavailable"
+		switch reason {
+		case .appleIntelligenceNotEnabled: out["reason"] = "appleIntelligenceNotEnabled"
+		case .deviceNotEligible: out["reason"] = "deviceNotEligible"
+		case .modelNotReady: out["reason"] = "modelNotReady"
+		@unknown default: out["reason"] = "\(reason)"
+		}
+	}
+	if model.isAvailable {
+		out["context_size"] = model.contextSize
+		out["languages"] = model.supportedLanguages.count
+		// variant and capabilities exist only in the macOS 27 SDK
+		// (FoundationModels 2.x). #available is a runtime check and cannot
+		// hide unknown symbols from a macOS 26 SDK compiler, so gate on the
+		// SDK too; a 26 SDK build still reports availability and context.
+#if canImport(FoundationModels, _version: 2.0)
+		if #available(macOS 27.0, *) {
+			out["model"] = model.variant.displayName
+			var caps: [String] = []
+			let known: [(String, LanguageModelCapabilities.Capability)] = [("toolCalling", .toolCalling), ("guidedGeneration", .guidedGeneration), ("reasoning", .reasoning), ("vision", .vision)]
+			for (name, cap) in known where model.capabilities.contains(cap) { caps.append(name) }
+			out["capabilities"] = caps
+		}
+#endif
+	}
+	guard let data = try? JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]) else { return "{}" }
+	return String(decoding: data, as: UTF8.self)
+}
+
 func usage() -> String {
 	"""
 	usage: apple-foundation-models.swift --prompt <text> [--json]
 	       apple-foundation-models.swift --self-test
+	       apple-foundation-models.swift --facts
 
 	Examples:
 	  xcrun swift hack/apple-foundation-models.swift --prompt "Summarize this diff"
@@ -59,6 +96,11 @@ func parseArguments() throws -> (prompt: String, json: Bool) {
 	}
 
 	throw CLIError(description: usage())
+}
+
+if CommandLine.arguments.dropFirst().contains("--facts") {
+	print(appleFMFactsJSON())
+	Darwin.exit(0)
 }
 
 let parsed: (prompt: String, json: Bool)

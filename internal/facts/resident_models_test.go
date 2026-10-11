@@ -658,10 +658,10 @@ func TestMLXDiscoveryScriptReportsResidentRAMNotVRAM(t *testing.T) {
 	writeStub("pgrep", `echo 4242`)
 	writeStub("ps", `
 case "$*" in
-  "-p 4242 -o args=") echo "python -m mlx_lm.server --port 8183" ;;
+  "-p 4242 -o args=") echo "python -m mlx_lm.server --model org/mlx-model --port 8183" ;;
   "-o rss= -p 4242") echo 3145728 ;;
 esac`)
-	writeStub("curl", `echo '{"data":[{"id":"org/mlx-model"}]}'`)
+	writeStub("curl", `printf 200`)
 
 	cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
 	cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
@@ -766,9 +766,9 @@ case "$*" in
   *) exit 1 ;;
 esac`)
 			// The stub answers only on the port the script should probe, so a
-			// wrong or empty port yields no resident models.
-			wantURL := "http://localhost:" + strconv.Itoa(int(tc.wantPort)) + "/v1/models"
-			writeStub("curl", `case "$*" in *" `+wantURL+`"*) echo '{"data":[{"id":"org/mlx-model"}]}' ;; *) exit 7 ;; esac`)
+			// wrong or empty port makes the resident down instead of listed.
+			wantURL := "http://127.0.0.1:" + strconv.Itoa(int(tc.wantPort)) + "/v1/models"
+			writeStub("curl", `case "$*" in *" `+wantURL+`"*) printf 200 ;; *) printf 000; exit 7 ;; esac`)
 
 			cmd := exec.Command("bash", "-c", MLXDiscoveryScript)
 			cmd.Env = withExactToolPATH(t, bin, "head", "awk", "grep", "python3")
@@ -797,8 +797,8 @@ esac`)
 				t.Fatalf("resident_models = %#v, want one", payload.ResidentModels)
 			}
 			resident := payload.ResidentModels[0]
-			if got := resident["pid"]; got != float64(4242) {
-				t.Fatalf("pid = %#v, want 4242", got)
+			if got := resident["pid"]; got != float64(4242) || resident["state"] != "listed" {
+				t.Fatalf("pid = %#v state = %#v, want 4242 listed", got, resident["state"])
 			}
 			if got := resident["executable"]; got != "/usr/local/bin/mlx_lm.server" {
 				t.Fatalf("executable = %#v, want /usr/local/bin/mlx_lm.server", got)

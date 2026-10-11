@@ -83,6 +83,21 @@ func TestRankCandidatesPrefersResidentModelLocality(t *testing.T) {
 	}
 }
 
+// Explicit non-loaded rows are not resident-model locality.
+func TestResidentModelRankIgnoresNonServingStates(t *testing.T) {
+	n := nodeComplete("n", 6000, "none", "llama-server")
+	n.ResidentModels = []models.ResidentModel{
+		{Name: "gone", Runtime: "llama.cpp", State: models.ModelCatalogDown},
+		{Name: "warming", Runtime: "llama.cpp", State: models.ModelCatalogLoading},
+		{Name: "listed", Runtime: "llama.cpp", State: models.ModelCatalogListed},
+		{Name: "ok", Runtime: "llama.cpp", State: models.ModelCatalogLoaded},
+	}
+	reqs := models.TaskRequirements{RequiredTools: []string{"llama-server"}, Workload: models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference}}
+	if got := residentModelRank(n, reqs); got != 1 {
+		t.Fatalf("rank = %d, want 1 (only loaded row included)", got)
+	}
+}
+
 func TestSelectBestNodeReasoningMentionsEmpiricalAndResidentModelSignals(t *testing.T) {
 	alpha := nodeComplete("alpha", 6000, "none", "ollama")
 	alpha.Ollama = &models.OllamaInfo{Installed: true, Running: true}
