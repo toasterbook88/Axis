@@ -240,6 +240,33 @@ func TestCollectModelChoicesCarriesListedNotLoadedForMLX(t *testing.T) {
 	}
 }
 
+func TestCollectModelChoicesLoadingDownAndApple(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[1].ResidentModels = append(rt.Snapshot.Nodes[1].ResidentModels,
+		models.ResidentModel{Name: "warming", Runtime: "llama.cpp", Port: 8090, State: models.ModelCatalogLoading},
+		models.ResidentModel{Name: "gone", Runtime: "llama.cpp", Port: 8091, State: models.ModelCatalogDown},
+	)
+	rt.Snapshot.Nodes[1].AppleFM = &models.AppleFoundationModelsInfo{Available: true, Verified: true, State: models.AppleFMReady, Model: "AFM 3 Core"}
+	choices := collectModelChoices(rt)
+
+	warming, _ := choiceByModel(t, choices, "warming")
+	if !warming.Loading || warming.Loaded || warming.Disabled {
+		t.Fatalf("warming = %+v, want loading, selectable", warming)
+	}
+	if got := modelChoiceDetail(warming); !strings.Contains(got, "loading") {
+		t.Fatalf("detail %q, want loading", got)
+	}
+	gone, _ := choiceByModel(t, choices, "gone")
+	if !gone.Disabled || gone.DisabledReason != "server not answering" {
+		t.Fatalf("gone = %+v", gone)
+	}
+	afm, ok := choiceByModel(t, choices, "AFM 3 Core")
+	if !ok || !afm.Disabled || afm.DisabledReason != "runs in-process; no HTTP endpoint" {
+		t.Fatalf("afm = %+v", afm)
+	}
+}
+
 // IDs keep the pre-catalog format so saved defaults and /model <id> still match.
 func TestCollectModelChoicesKeepsChoiceIDFormat(t *testing.T) {
 	stubNoAIConfigAndRecordProbes(t)
@@ -247,5 +274,31 @@ func TestCollectModelChoicesKeepsChoiceIDFormat(t *testing.T) {
 	coder, _ := choiceByModel(t, choices, "coder:7b")
 	if coder.ID != "worker:ollama:coder:7b" {
 		t.Fatalf("ID = %q, want worker:ollama:coder:7b", coder.ID)
+	}
+}
+
+// A local llama.cpp server that is loading answers /health 503 and usually
+// fails /v1/models. The collector already proved it is alive, so the picker
+// keeps it selectable as loading, the same as a remote loading row.
+func TestCollectModelChoicesKeepsLocalLoadingSelectable(t *testing.T) {
+	stubNoAIConfigAndRecordProbes(t)
+	prevOK, prevStatus := probeEndpointFn, probeStatusFn
+	t.Cleanup(func() { probeEndpointFn, probeStatusFn = prevOK, prevStatus })
+	probeEndpointFn = func(string) bool { return false }
+	probeStatusFn = func(string) int { return http.StatusServiceUnavailable }
+
+	rt := catalogChoicesRuntime(t)
+	rt.Snapshot.Nodes[0].ResidentModels = []models.ResidentModel{
+		{Name: "warming-local", Runtime: "llama.cpp", Port: 8092, State: models.ModelCatalogLoading},
+		{Name: "silent-local", Runtime: "llama.cpp", Port: 8093},
+	}
+	choices := collectModelChoices(rt)
+	warming, ok := choiceByModel(t, choices, "warming-local")
+	if !ok || !warming.Loading || warming.Disabled {
+		t.Fatalf("local loading = %+v, want loading and selectable", warming)
+	}
+	silent, _ := choiceByModel(t, choices, "silent-local")
+	if !silent.Disabled || silent.DisabledReason != "unreachable" {
+		t.Fatalf("silent local = %+v, want disabled unreachable", silent)
 	}
 }

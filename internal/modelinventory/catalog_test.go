@@ -161,6 +161,57 @@ func TestCatalogIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestCatalogUsesCollectorStateWhenPresent(t *testing.T) {
+	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		Name: "n", Status: models.StatusComplete,
+		ResidentModels: []models.ResidentModel{
+			{Name: "warming", Runtime: "llama.cpp", Port: 8080, State: models.ModelCatalogLoading, LoadSignal: "health-loading"},
+			{Name: "gone", Runtime: "llama.cpp", Port: 8081, State: models.ModelCatalogDown, LoadSignal: "health-silent"},
+			{Name: "ok", Runtime: "llama.cpp", Port: 8082, State: models.ModelCatalogLoaded, LoadSignal: "health-ok", ContextWindow: 4096},
+			{Name: "legacy", Runtime: "llama.cpp", Port: 8083},
+		},
+	}}}
+	got := map[string]models.ModelCatalogEntry{}
+	for _, e := range Catalog(snap, "test").Entries {
+		got[e.Model] = e
+	}
+	if got["warming"].State != models.ModelCatalogLoading || got["gone"].State != models.ModelCatalogDown {
+		t.Fatalf("states = %v / %v", got["warming"].State, got["gone"].State)
+	}
+	if got["ok"].State != models.ModelCatalogLoaded || got["ok"].ContextWindow != 4096 || got["ok"].LoadSignal != "health-ok" {
+		t.Fatalf("ok = %+v", got["ok"])
+	}
+	if got["legacy"].State != models.ModelCatalogLoaded {
+		t.Fatalf("legacy row without state = %q, want #507 mapping loaded", got["legacy"].State)
+	}
+}
+
+func TestCatalogAddsAppleFoundationModelsEntry(t *testing.T) {
+	ready := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		Name: "mac", Status: models.StatusComplete,
+		AppleFM: &models.AppleFoundationModelsInfo{Available: true, Verified: true, State: models.AppleFMReady, ContextWindow: 8192, Model: "AFM 3 Core", Capabilities: []string{"toolCalling"}},
+	}}}
+	entries := Catalog(ready, "test").Entries
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	e := entries[0]
+	if e.Engine != "apple-foundation-models" || e.State != models.ModelCatalogLoaded || e.Model != "AFM 3 Core" || e.ContextWindow != 8192 || e.Locality != models.ModelLocalityOnNode || e.LoadSignal != "availability" || e.Port != 0 {
+		t.Fatalf("apple entry = %+v", e)
+	}
+
+	for state, want := range map[string]int{models.AppleFMCold: 1, models.AppleFMUnavailable: 0, models.AppleFMUnknown: 0, "": 0} {
+		snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{{Name: "mac", Status: models.StatusComplete, AppleFM: &models.AppleFoundationModelsInfo{State: state}}}}
+		got := Catalog(snap, "test").Entries
+		if len(got) != want {
+			t.Fatalf("state %q: entries = %+v, want %d", state, got, want)
+		}
+		if want == 1 && (got[0].State != models.ModelCatalogInstalled || got[0].Model != "apple-foundation-models") {
+			t.Fatalf("cold entry = %+v", got[0])
+		}
+	}
+}
+
 func TestCatalogNilSnapshot(t *testing.T) {
 	got := Catalog(nil, "none")
 	if got.Entries == nil || len(got.Entries) != 0 {
