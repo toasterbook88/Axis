@@ -21,6 +21,13 @@ const (
 	beaconWaitSlack       = 250 * time.Millisecond
 	minBeaconWait         = 1 * time.Second
 	maxBeaconWait         = 8 * time.Second
+
+	// DefaultDiscoveryCollectTimeout caps per-node collection so multiple waves
+	// of maxParallel concurrent probes complete inside runtimeRefreshTimeout (30s).
+	DefaultDiscoveryCollectTimeout = 12 * time.Second
+
+	// DefaultDiscoveryDialTimeoutSec caps the SSH handshake budget per dial attempt during discovery.
+	DefaultDiscoveryDialTimeoutSec = 5
 )
 
 var discoveryStartUDP = startUDP
@@ -33,11 +40,28 @@ var newLocalDiscoveryCollector = func(name, role string, labels map[string]strin
 }
 var newRemoteDiscoveryCollector = func(nc config.NodeConfig) facts.Collector {
 	spec := nc.SSHDialSpec()
+	dialTimeoutSec := spec.DialTimeoutSec
+	if nc.DialTimeoutSec > 0 {
+		dialTimeoutSec = nc.DialTimeoutSec
+	} else if dialTimeoutSec <= 0 || dialTimeoutSec > DefaultDiscoveryDialTimeoutSec {
+		dialTimeoutSec = DefaultDiscoveryDialTimeoutSec
+	}
 	// SSHDialSpec.Host is PrimaryHostname() (endpoints first, else Hostname).
-	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, spec.DialTimeoutSec, spec.Fallbacks)
+	exec := transport.NewSSHExecutorFromDial(spec.Host, spec.Port, spec.User, dialTimeoutSec, spec.Fallbacks)
 	rc := facts.NewRemoteCollector(nc.Name, nc.Role, spec.Host, exec)
 	rc.Labels = nc.Labels
 	return rc
+}
+
+func discoveryCollectTimeout(nc config.NodeConfig) time.Duration {
+	if nc.CollectTimeoutSec > 0 {
+		return time.Duration(nc.CollectTimeoutSec) * time.Second
+	}
+	sec := nc.EffectiveCollectTimeout()
+	if sec > 0 && time.Duration(sec)*time.Second < DefaultDiscoveryCollectTimeout {
+		return time.Duration(sec) * time.Second
+	}
+	return DefaultDiscoveryCollectTimeout
 }
 
 // Discover probes all configured nodes concurrently and returns their facts.
@@ -186,14 +210,31 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 	var wg sync.WaitGroup
 	for i, node := range finalNodes {
 		wg.Add(1)
-		sem <- struct{}{} // acquire semaphore slot
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Done()
+			results[i] = models.NodeFacts{
+				Name:        node.Name,
+				Role:        node.Role,
+				Status:      models.StatusUnreachable,
+				Error:       ctx.Err().Error(),
+				CollectedAt: time.Now().UTC(),
+				Epistemic: &models.EpistemicState{
+					Source:     models.SourceLiveProbe,
+					VerifiedBy: models.VerifiedByConfig,
+					Degraded:   true,
+				},
+			}
+			continue
+		}
 		go func(idx int, nc config.NodeConfig) {
 			defer wg.Done()
 			defer func() { <-sem }() // release slot
 
 			// Collect budget covers full remote fact gather (bundle or multi-probe).
 			// Dial timeout is applied inside the SSH executor handshake.
-			nodeCtx, cancel := context.WithTimeout(ctx, time.Duration(nc.EffectiveCollectTimeout())*time.Second)
+			nodeCtx, cancel := context.WithTimeout(ctx, discoveryCollectTimeout(nc))
 			defer cancel()
 
 			var collector facts.Collector
@@ -215,7 +256,14 @@ func discover(ctx context.Context, cfg *config.Config, seeded []config.NodeConfi
 				}
 			}
 
-			if nf != nil && nf.Status != models.StatusUnreachable && len(nf.Addresses) > 0 && !models.IsLocalNode(*nf) {
+			if nodeCtx.Err() != nil && nf != nil && nf.Status == models.StatusComplete {
+				nf.Status = models.StatusPartial
+				if nf.Error == "" {
+					nf.Error = nodeCtx.Err().Error()
+				}
+			}
+
+			if nf != nil && nf.Status != models.StatusUnreachable && len(nf.Addresses) > 0 && !models.IsLocalNode(*nf) && nodeCtx.Err() == nil {
 				decision := multipath.Probe(nodeCtx, nc.EffectiveSSHPort(), nf.Addresses, nf.SSHTarget, nf.ResolvedDialTarget)
 				if decision.SelectedTarget != "" {
 					nf.ResolvedDialTarget = decision.SelectedTarget

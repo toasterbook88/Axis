@@ -106,6 +106,32 @@ func TestRemoteCollectorMarksPartialOnCollectorFailures(t *testing.T) {
 	}
 }
 
+func TestRemoteCollectorSkipsLegacyWhenContextExpired(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	exec := &fakeRemoteExecutor{
+		contains: map[string]fakeRunResult{
+			"__AXIS_BUNDLE_V1__": {err: fmt.Errorf("bundle canceled")},
+		},
+	}
+	cancel()
+
+	collector := NewRemoteCollector("linux-node", "worker", "linux-node.local", exec)
+	facts, err := collector.Collect(ctx)
+	if err != nil {
+		t.Fatalf("collect timed out facts: %v", err)
+	}
+	if facts.Status != models.StatusUnreachable {
+		t.Fatalf("expected unreachable status on context cancellation, got %s", facts.Status)
+	}
+	if !strings.Contains(facts.Error, "timed out or canceled") {
+		t.Fatalf("expected timed out or canceled error message, got %q", facts.Error)
+	}
+	// Verify that only the single bundle script was run, and legacy probes were completely skipped.
+	if len(exec.runs) != 1 {
+		t.Fatalf("expected only 1 command (the bundle) to be executed, but got %d runs: %#v", len(exec.runs), exec.runs)
+	}
+}
+
 func TestDetectRemoteHostnameRejectsEmptyFallback(t *testing.T) {
 	exec := &fakeRemoteExecutor{
 		exact: map[string]fakeRunResult{
