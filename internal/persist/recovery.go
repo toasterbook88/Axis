@@ -58,7 +58,7 @@ var syncAtomicParentDir = func(path string) error {
 }
 
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), PrivateDirMode); err != nil {
 		return err
 	}
 
