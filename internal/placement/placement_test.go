@@ -1531,16 +1531,16 @@ func TestFilter_NilStateSkipsFailureCheck(t *testing.T) {
 	}
 }
 
-// --- PeakRAMMB empirical filter tests ---
+// --- ObservedRSSMB empirical filter tests ---
 
 func freshInferenceObs(node string, reqs models.TaskRequirements, peakRAMMB int64) models.ExecutionObservation {
 	return models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements(node, reqs, ""),
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 3,
-		LastSuccess: true,
-		WallTimeMS:  45000,
-		PeakRAMMB:   peakRAMMB,
+		Scope:         ObservationScopeForRequirements(node, reqs, ""),
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   3,
+		LastSuccess:   true,
+		WallTimeMS:    45000,
+		ObservedRSSMB: peakRAMMB,
 	}
 }
 
@@ -1557,7 +1557,7 @@ func TestFilterExcludesNodeWhenEmpiricalPeakRAMExceedsAllocatable(t *testing.T) 
 
 	result := FilterCandidates(reqs, []models.NodeFacts{small}, st)
 	if len(result) != 0 {
-		t.Errorf("expected node with empirical PeakRAMMB > allocatable to be excluded, got %v", names(result))
+		t.Errorf("expected node with empirical ObservedRSSMB > allocatable to be excluded, got %v", names(result))
 	}
 }
 
@@ -1590,12 +1590,12 @@ func TestFilterPassesNodeWhenNoPeakRAMObserved(t *testing.T) {
 
 	result := FilterCandidates(reqs, []models.NodeFacts{n}, st)
 	if len(result) != 1 {
-		t.Errorf("expected unobserved node to pass PeakRAMMB filter, got %v", names(result))
+		t.Errorf("expected unobserved node to pass ObservedRSSMB filter, got %v", names(result))
 	}
 }
 
 func TestFilterPassesNodeWhenEmpiricalPeakRAMIsZero(t *testing.T) {
-	// Observation exists but PeakRAMMB was not recorded (zero) — no block.
+	// Observation exists but ObservedRSSMB was not recorded (zero) — no block.
 	n := nodeComplete("node", 512, "none", "ollama")
 	n.Ollama = &models.OllamaInfo{Installed: true, Running: true}
 	reqs := models.TaskRequirements{
@@ -1604,22 +1604,22 @@ func TestFilterPassesNodeWhenEmpiricalPeakRAMIsZero(t *testing.T) {
 	}
 	st := &state.ClusterState{Observations: map[string]models.ExecutionObservation{}}
 	st.RecordObservation(models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements("node", reqs, ""),
-		ObservedAt:  time.Now().UTC(),
-		SampleCount: 1,
-		LastSuccess: true,
-		WallTimeMS:  10000,
-		PeakRAMMB:   0, // not measured
+		Scope:         ObservationScopeForRequirements("node", reqs, ""),
+		ObservedAt:    time.Now().UTC(),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    10000,
+		ObservedRSSMB: 0, // not measured
 	})
 
 	result := FilterCandidates(reqs, []models.NodeFacts{n}, st)
 	if len(result) != 1 {
-		t.Errorf("expected node with zero PeakRAMMB observation to pass filter, got %v", names(result))
+		t.Errorf("expected node with zero ObservedRSSMB observation to pass filter, got %v", names(result))
 	}
 }
 
 func TestFilterIgnoresStaleEmpiricalPeakRAMObservation(t *testing.T) {
-	// A stale (>7d) observation with huge PeakRAMMB should NOT block the node.
+	// A stale (>7d) observation with huge ObservedRSSMB should NOT block the node.
 	n := nodeComplete("node", 1000, "none", "ollama")
 	n.Ollama = &models.OllamaInfo{Installed: true, Running: true}
 	reqs := models.TaskRequirements{
@@ -1628,17 +1628,17 @@ func TestFilterIgnoresStaleEmpiricalPeakRAMObservation(t *testing.T) {
 	}
 	st := &state.ClusterState{Observations: map[string]models.ExecutionObservation{}}
 	st.RecordObservation(models.ExecutionObservation{
-		Scope:       ObservationScopeForRequirements("node", reqs, ""),
-		ObservedAt:  time.Now().UTC().Add(-(state.ObservationStaleAfter + time.Hour)),
-		SampleCount: 1,
-		LastSuccess: true,
-		WallTimeMS:  10000,
-		PeakRAMMB:   99999, // huge but stale
+		Scope:         ObservationScopeForRequirements("node", reqs, ""),
+		ObservedAt:    time.Now().UTC().Add(-(state.ObservationStaleAfter + time.Hour)),
+		SampleCount:   1,
+		LastSuccess:   true,
+		WallTimeMS:    10000,
+		ObservedRSSMB: 99999, // huge but stale
 	})
 
 	result := FilterCandidates(reqs, []models.NodeFacts{n}, st)
 	if len(result) != 1 {
-		t.Errorf("expected stale PeakRAMMB observation to be ignored, got %v", names(result))
+		t.Errorf("expected stale ObservedRSSMB observation to be ignored, got %v", names(result))
 	}
 }
 
@@ -1659,7 +1659,7 @@ func TestFilterEmpiricalPeakRAMSelectsBetterNodeFromTwo(t *testing.T) {
 
 	result := FilterCandidates(reqs, []models.NodeFacts{tiny, capable}, st)
 	if len(result) != 1 || result[0].Name != "capable" {
-		t.Errorf("expected only capable to survive PeakRAMMB filter, got %v", names(result))
+		t.Errorf("expected only capable to survive ObservedRSSMB filter, got %v", names(result))
 	}
 }
 
@@ -1754,7 +1754,7 @@ func TestExplainPlacementEmitsExcludedReasonsForCommonFilters(t *testing.T) {
 	if !contains(reasonsByNode["blocked"], "blocked by failure memory") {
 		t.Fatalf("expected failure-memory reason, got %q", reasonsByNode["blocked"])
 	}
-	if !contains(reasonsByNode["tiny"], "empirical peak RAM") {
+	if !contains(reasonsByNode["tiny"], "observed RSS") {
 		t.Fatalf("expected empirical peak RAM reason, got %q", reasonsByNode["tiny"])
 	}
 }

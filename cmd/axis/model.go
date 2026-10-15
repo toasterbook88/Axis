@@ -557,9 +557,10 @@ func runModelPlan(ctx context.Context, cmd *cobra.Command, specOrWeights string,
 	}
 	st, err := state.Load()
 	if err != nil {
-		return err
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping observation-based exclusions: %v\n", err)
+	} else {
+		applyLlamaServerObservedExclusions(&plan, snap, st)
 	}
-	applyLlamaServerPeakExclusions(&plan, snap, st)
 	plan.SnapshotSource = source
 	if cmd.Flags().Changed("port") && plan.Selected != nil {
 		plan.Selected.PortSource = models.PortSourceExplicit
@@ -1824,9 +1825,9 @@ func recordLlamaServerObservation(ctx context.Context, cmd *cobra.Command, node 
 		if !ramOK {
 			warning = "llama-server RSS sample failed"
 		} else {
-			obs.PeakRAMMB = ram
+			obs.ObservedRSSMB = ram
 			if plan.Profile.DeviceIndex != nil && vramOK {
-				obs.PeakVRAMMB = vram
+				obs.ObservedVRAMMB = vram
 			}
 		}
 	}
@@ -1869,7 +1870,7 @@ func llamaServerObservationModelName(weights string) string {
 	return base
 }
 
-func applyLlamaServerPeakExclusions(plan *modelplan.ModelPlacementPlan, snap *models.ClusterSnapshot, st *state.ClusterState) {
+func applyLlamaServerObservedExclusions(plan *modelplan.ModelPlacementPlan, snap *models.ClusterSnapshot, st *state.ClusterState) {
 	if plan == nil || snap == nil || st == nil {
 		return
 	}
@@ -1878,7 +1879,7 @@ func applyLlamaServerPeakExclusions(plan *modelplan.ModelPlacementPlan, snap *mo
 	for _, cand := range plan.Candidates {
 		node, ok := modelSnapshotNode(snap, cand.Node)
 		if ok {
-			if reason, blocked := placement.LlamaServerPeakExclusion(node, modelName, st); blocked {
+			if reason, blocked := placement.LlamaServerObservedExclusion(node, modelName, st); blocked {
 				plan.Excluded = append(plan.Excluded, modelplan.ModelExcludedCandidate{
 					Node:    cand.Node,
 					Reasons: []string{reason},

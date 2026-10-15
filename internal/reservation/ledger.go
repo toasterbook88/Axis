@@ -153,10 +153,6 @@ type Ledger struct {
 	// When zero or missing, falls back to limits.SystemReserveMB.
 	nodeReserve map[string]int64
 
-	// deviceHolds maps hold ID → one device's MiB. It is not part of entries
-	// and it is not added to VRAM totals.
-	deviceHolds map[string]*DeviceHold
-
 	// fileMu serializes disk persistence (file-lock bookkeeping + marshal +
 	// atomic write) across goroutines. It is always acquired before mu when
 	// both are needed. Holding it during I/O leaves mu free so concurrent
@@ -182,7 +178,6 @@ func NewLedger(limits Limits, logger *slog.Logger) *Ledger {
 		logger:      logger.With("component", "reservation-ledger"),
 		nodeRAM:     make(map[string]int64),
 		nodeReserve: make(map[string]int64),
-		deviceHolds: make(map[string]*DeviceHold),
 		now:         time.Now,
 	}
 }
@@ -232,7 +227,6 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	}
 
 	var snap []*Entry
-	var holds []*DeviceHold
 	result, err := func() (*Entry, error) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -256,10 +250,6 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		if _, exists := l.entries[req.ID]; exists {
 			return nil, fmt.Errorf("reservation: duplicate ID %q", req.ID)
 		}
-		if _, exists := l.deviceHolds[req.ID]; exists {
-			return nil, fmt.Errorf("reservation: duplicate ID %q", req.ID)
-		}
-
 		// Check per-node cap
 		nodeCount := 0
 		var nodeReserved int64
@@ -305,7 +295,6 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		l.entries[req.ID] = &req
 		l.totalReserved += req.RAMMB
 		snap = l.snapshotEntriesLocked()
-		holds = l.snapshotDeviceHoldsLocked()
 		return &req, nil
 	}()
 	if err != nil {
@@ -327,7 +316,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"owner":  req.OwnerSurface,
 	})
 
-	if err := l.writeSnapshot(snap, holds); err != nil {
+	if err := l.writeSnapshot(snap); err != nil {
 		l.logger.Error("failed to persist ledger", "error", err)
 	}
 	return result, nil
@@ -349,7 +338,6 @@ func (l *Ledger) Release(id string) error {
 	}
 
 	var snap []*Entry
-	var holds []*DeviceHold
 	var released Entry
 	err := func() error {
 		l.mu.Lock()
@@ -362,7 +350,6 @@ func (l *Ledger) Release(id string) error {
 		released = *e
 		delete(l.entries, id)
 		snap = l.snapshotEntriesLocked()
-		holds = l.snapshotDeviceHoldsLocked()
 		return nil
 	}()
 	if err != nil {
@@ -378,7 +365,7 @@ func (l *Ledger) Release(id string) error {
 		"ram_mb": released.RAMMB,
 	})
 
-	return l.writeSnapshot(snap, holds)
+	return l.writeSnapshot(snap)
 }
 
 // Heartbeat updates the liveness timestamp for a reservation.
@@ -397,7 +384,6 @@ func (l *Ledger) Heartbeat(id string) error {
 	}
 
 	var snap []*Entry
-	var holds []*DeviceHold
 	err := func() error {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -407,13 +393,12 @@ func (l *Ledger) Heartbeat(id string) error {
 		}
 		e.LastHeartbeat = l.now()
 		snap = l.snapshotEntriesLocked()
-		holds = l.snapshotDeviceHoldsLocked()
 		return nil
 	}()
 	if err != nil {
 		return err
 	}
-	return l.writeSnapshot(snap, holds)
+	return l.writeSnapshot(snap)
 }
 
 // Reclaim removes all stale and expired reservations. Returns count reclaimed.
@@ -436,15 +421,13 @@ func (l *Ledger) Reclaim() int {
 	l.mu.Lock()
 	reclaimed, receipts := l.reclaimInMemoryLocked()
 	var snap []*Entry
-	var holds []*DeviceHold
 	if reclaimed > 0 {
 		snap = l.snapshotEntriesLocked()
-		holds = l.snapshotDeviceHoldsLocked()
 	}
 	l.mu.Unlock()
 
 	if reclaimed > 0 {
-		if err := l.writeSnapshot(snap, holds); err != nil {
+		if err := l.writeSnapshot(snap); err != nil {
 			l.logger.Error("failed to persist ledger during reclaim", "error", err)
 		} else {
 			repairs.EmitAll(l.logger, receipts)
