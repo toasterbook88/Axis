@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 func discoverOllamaLocal(ctx context.Context) (models.OllamaInfo, []models.ResidentModel) {
@@ -198,7 +199,7 @@ func runAppleFoundationModelsProbe(ctx context.Context) (string, error) {
 
 func buildAppleFoundationModelsHelper(ctx context.Context) (string, error) {
 	cacheDir := appleFoundationModelsCacheDirFn()
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	if err := persist.EnsurePrivateDir(cacheDir); err != nil {
 		return "", fmt.Errorf("create apple foundation models cache directory: %w", err)
 	}
 
@@ -257,7 +258,7 @@ func ensureAppleFoundationModelsHelperSource(helperSource string) error {
 		return fmt.Errorf("read apple foundation models helper source: %w", err)
 	}
 
-	if err := appleFoundationModelsWriteFileFn(helperSource, []byte(appleFoundationModelsHelperSource), 0o644); err != nil {
+	if err := appleFoundationModelsWriteFileFn(helperSource, []byte(appleFoundationModelsHelperSource), persist.PrivateFileMode); err != nil {
 		return fmt.Errorf("write apple foundation models helper source: %w", err)
 	}
 	return nil

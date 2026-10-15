@@ -109,6 +109,19 @@ func TestWritePrivateFileAtomicKeepsParentAndFilePrivate(t *testing.T) {
 	assertMode(t, path, PrivateFileMode)
 }
 
+func TestWriteFileAtomicDirectoryModeIsPrivate(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "sub", "axis")
+	path := filepath.Join(nested, "state.json")
+
+	if err := WriteFileAtomic(path, []byte("content"), 0o600); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+
+	assertMode(t, nested, PrivateDirMode)
+	assertMode(t, path, 0o600)
+}
+
 func TestOpenPrivateFileTightensExistingFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "axis")
 	if err := os.Mkdir(dir, 0o755); err != nil {
