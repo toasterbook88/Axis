@@ -619,7 +619,7 @@ func resolveModelSpec(input string, snap *models.ClusterSnapshot) (models.ModelS
 	if snap != nil {
 		for _, n := range snap.Nodes {
 			for _, dw := range n.DiskWeights {
-				if strings.EqualFold(dw.Name, input) || strings.EqualFold(dw.Path, input) || strings.EqualFold(filepath.Base(dw.Path), filepath.Base(input)) {
+				if dw.Runnable() && (strings.EqualFold(dw.Name, input) || strings.EqualFold(dw.Path, input) || strings.EqualFold(filepath.Base(dw.Path), filepath.Base(input))) {
 					spec := models.ModelSpecFromDiskWeight(dw)
 					return spec, nil
 				}

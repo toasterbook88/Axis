@@ -24,6 +24,23 @@ type AppleFoundationModelsInfo struct {
 	// Provenance maps a field name to the API or probe that produced it,
 	// matching ResidentModel.Provenance.
 	Provenance map[string]string `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+	// PCC is Private Cloud Compute (macOS 27+), read without generating.
+	PCC *ApplePCCInfo `json:"private_cloud_compute,omitempty" yaml:"private_cloud_compute,omitempty"`
+}
+
+// ApplePCCInfo is PrivateCloudComputeLanguageModel state. Inference runs on
+// Apple's servers, so it leaves the cluster; nothing selects it automatically.
+type ApplePCCInfo struct {
+	// State is ready (availability .available) or unavailable.
+	State string `json:"state" yaml:"state"`
+	// Reason is Apple's UnavailableReason when State is unavailable.
+	Reason        string   `json:"reason,omitempty" yaml:"reason,omitempty"`
+	ContextWindow int      `json:"context_window,omitempty" yaml:"context_window,omitempty"`
+	Capabilities  []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	// Quota is the account's PCC quota as quotaUsage reported it.
+	QuotaLimitReached     bool   `json:"quota_limit_reached,omitempty" yaml:"quota_limit_reached,omitempty"`
+	QuotaApproachingLimit bool   `json:"quota_approaching_limit,omitempty" yaml:"quota_approaching_limit,omitempty"`
+	QuotaReset            string `json:"quota_reset,omitempty" yaml:"quota_reset,omitempty"`
 }
 
 const (

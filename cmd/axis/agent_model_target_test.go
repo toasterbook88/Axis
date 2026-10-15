@@ -790,7 +790,7 @@ func TestResolveStartupModelTargetLocalOpenAIThreadsAPIKey(t *testing.T) {
 
 	choices := []ModelChoice{
 		{
-			ID:           "ai-role:bonsai",
+			ID:           "ai-role:chat",
 			Model:        "chat-27b",
 			Protocol:     agent.ProtocolOpenAI,
 			ProviderName: "ai-backend:local-hub",

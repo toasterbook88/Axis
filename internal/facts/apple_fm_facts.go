@@ -15,6 +15,15 @@ type appleFMFactsPayload struct {
 	ContextSize  int      `json:"context_size"`
 	Model        string   `json:"model"`
 	Capabilities []string `json:"capabilities"`
+	PCC          *struct {
+		Availability          string   `json:"availability"`
+		Reason                string   `json:"reason"`
+		ContextSize           int      `json:"context_size"`
+		Capabilities          []string `json:"capabilities"`
+		QuotaLimitReached     bool     `json:"quota_limit_reached"`
+		QuotaApproachingLimit bool     `json:"quota_approaching_limit"`
+		QuotaReset            string   `json:"quota_reset"`
+	} `json:"pcc"`
 }
 
 // appleFMFromProbe turns the Apple helper's output into node facts. The
@@ -58,6 +67,16 @@ func appleFMFromProbe(version, out string, err error) *models.AppleFoundationMod
 			default:
 				info.State = models.AppleFMUnknown
 				info.Error = "unrecognised availability " + p.Availability
+			}
+			if c := p.PCC; c != nil && (c.Availability == "available" || c.Availability == "unavailable") {
+				info.PCC = &models.ApplePCCInfo{State: models.AppleFMUnavailable, Reason: c.Reason}
+				info.Provenance["private_cloud_compute"] = "PrivateCloudComputeLanguageModel availability, quotaUsage, capabilities, contextSize"
+				if c.Availability == "available" {
+					info.PCC = &models.ApplePCCInfo{
+						State: models.AppleFMReady, ContextWindow: c.ContextSize, Capabilities: c.Capabilities,
+						QuotaLimitReached: c.QuotaLimitReached, QuotaApproachingLimit: c.QuotaApproachingLimit, QuotaReset: c.QuotaReset,
+					}
+				}
 			}
 			return info
 		}

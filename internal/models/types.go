@@ -243,10 +243,10 @@ type DiskWeight struct {
 	Name   string `json:"name" yaml:"name"`
 	Path   string `json:"path" yaml:"path"`
 	Bytes  int64  `json:"bytes" yaml:"bytes"`
-	Format string `json:"format,omitempty" yaml:"format,omitempty"` // gguf, safetensors, ollama
+	Format string `json:"format,omitempty" yaml:"format,omitempty"` // gguf, safetensors, ollama, aimodel, coreml
 	Volume string `json:"volume,omitempty" yaml:"volume,omitempty"` // Axis volume mount
 	Source string `json:"source,omitempty" yaml:"source,omitempty"` // hf-hub, ollama-manifest, systemd, find
-	Kind   string `json:"kind,omitempty" yaml:"kind,omitempty"`     // model (default) or projector
+	Kind   string `json:"kind,omitempty" yaml:"kind,omitempty"`     // model (default), projector, or unknown
 }
 
 // TurboQuantInfo records whether a node appears able to run a TurboQuant-like
@@ -294,8 +294,8 @@ type NodeFacts struct {
 	Tools              []ToolInfo       `json:"tools,omitempty" yaml:"tools,omitempty"`
 	Ollama             *OllamaInfo      `json:"ollama,omitempty" yaml:"ollama,omitempty"`
 	ResidentModels     []ResidentModel  `json:"resident_models,omitempty" yaml:"resident_models,omitempty"`
-	// DiskWeights lists weight files/trees on local volumes. Distinct from
-	// ResidentModels (loaded). Truncated is true when the scan hit its budget.
+	LocalEndpoints     *LocalEndpoints  `json:"local_endpoints,omitempty" yaml:"local_endpoints,omitempty"`
+	// DiskWeights: weight files/trees on local volumes, not loaded. Truncated = the scan hit its budget.
 	DiskWeights          []DiskWeight               `json:"disk_weights,omitempty" yaml:"disk_weights,omitempty"`
 	DiskWeightsTruncated bool                       `json:"disk_weights_truncated,omitempty" yaml:"disk_weights_truncated,omitempty"`
 	TurboQuant           *TurboQuantInfo            `json:"turboquant,omitempty" yaml:"turboquant,omitempty"`

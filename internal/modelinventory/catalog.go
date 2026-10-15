@@ -115,6 +115,32 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 		e.InstanceID = instanceID(identity, r.Runtime, r.Name, r.Port)
 	}
 
+	if le := node.LocalEndpoints; le != nil {
+		// Confirmed loopback endpoints only; candidates named no model.
+		for _, ep := range le.Confirmed {
+			for _, m := range ep.Models {
+				e := models.ModelCatalogEntry{
+					Model:         m.Name,
+					Engine:        ep.Engine,
+					State:         models.ModelCatalogListed,
+					Locality:      models.ModelLocalityOnNode,
+					RemoteHost:    m.RemoteHost,
+					ContextWindow: m.ContextWindow,
+					LoadSignal:    "none",
+					Port:          ep.Port,
+					LoopbackOnly:  ep.Bind == "loopback",
+				}
+				switch {
+				case m.RemoteHost != "":
+					e.Locality = models.ModelLocalityCloudProxy
+				case !processIsEngine(ep.Process, ep.Engine):
+					e.Locality = models.ModelLocalityUnknown
+				}
+				add(ep.Engine+"\x00"+m.Name+"\x00"+strconv.Itoa(ep.Port), e)
+			}
+		}
+	}
+
 	if a := node.AppleFM; a != nil && (a.State == models.AppleFMReady || a.State == models.AppleFMCold) {
 		name := a.Model
 		if name == "" {
@@ -133,6 +159,25 @@ func nodeCatalogEntries(node models.NodeFacts) []models.ModelCatalogEntry {
 			ContextWindow: a.ContextWindow,
 			LoadSignal:    "availability",
 		})
+	}
+
+	if a := node.AppleFM; a != nil && a.PCC != nil && a.PCC.State == models.AppleFMReady {
+		// Private Cloud Compute runs on Apple's servers: listed, cloud-proxy,
+		// and down while the account's quota is exhausted.
+		e := models.ModelCatalogEntry{
+			Model:         "apple-private-cloud-compute",
+			Engine:        "apple-pcc",
+			State:         models.ModelCatalogListed,
+			Locality:      models.ModelLocalityCloudProxy,
+			RemoteHost:    "apple-private-cloud-compute",
+			Capabilities:  append([]string(nil), a.PCC.Capabilities...),
+			ContextWindow: a.PCC.ContextWindow,
+			LoadSignal:    "availability",
+		}
+		if a.PCC.QuotaLimitReached {
+			e.State, e.LoadSignal = models.ModelCatalogDown, "quota-limit-reached"
+		}
+		add("apple-pcc\x00"+e.Model, e)
 	}
 
 	out := make([]models.ModelCatalogEntry, 0, len(order))
@@ -175,4 +220,18 @@ func ollamaInstalled(info *models.OllamaInfo) []models.OllamaModelEntry {
 		}
 	}
 	return out
+}
+
+// processIsEngine reports whether the listener's process name (from the
+// kernel, via ss or lsof) corroborates the engine the response claimed. A
+// proxy can answer /api/tags or claim owned_by vllm; only a matching process
+// earns on-node locality.
+func processIsEngine(process, engine string) bool {
+	p := strings.ToLower(process)
+	switch engine {
+	case "ollama", "vllm":
+		return strings.Contains(p, engine)
+	default:
+		return false
+	}
 }
