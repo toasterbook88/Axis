@@ -123,6 +123,9 @@ func observationsListCmd() *cobra.Command {
 			sort.Slice(entries, func(i, j int) bool {
 				return entries[i].ObservedAt.After(entries[j].ObservedAt)
 			})
+			if entries == nil {
+				entries = []models.ExecutionObservation{}
+			}
 
 			switch format {
 			case "json":

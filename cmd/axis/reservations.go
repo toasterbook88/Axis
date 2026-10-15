@@ -210,6 +210,9 @@ func reservationsListCmd() *cobra.Command {
 			}
 
 			entries := ledger.Entries()
+			if entries == nil {
+				entries = []reservation.Entry{}
+			}
 
 			switch format {
 			case "json":
@@ -723,6 +726,9 @@ func runReservationsDoctor(cmd *cobra.Command, fix bool, format string, staleWin
 			Healthy  bool            `json:"healthy"`
 			Findings []DoctorFinding `json:"findings"`
 			Fixed    []DoctorFinding `json:"fixed,omitempty"`
+		}
+		if findings == nil {
+			findings = []DoctorFinding{}
 		}
 		res := JSONResult{
 			Healthy:  healthy,
