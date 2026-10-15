@@ -39,6 +39,7 @@ var prepareTaskGuarded = execution.PrepareGuardedExecution
 var runPreparedTaskGuarded = execution.RunPreparedExecution
 var taskRunStdinIsTerminal = ui.StdinIsTerminal
 var taskRunStdoutIsTerminal = ui.StdoutIsTerminal
+var taskRunLivenessProbe = execution.ProbeLocalInferenceEndpoint
 
 // rankingHeadlineLabel returns the ranking-metric name for the placement
 // headline, falling back to "ranking unavailable" when the structured ranking
@@ -376,6 +377,7 @@ func taskRunCmd() *cobra.Command {
 				Stderr:           os.Stderr,
 				Events:           events.GuardedExecutionSink{},
 				BuildContextJSON: knowledge.ExecutionContextJSON,
+				LivenessProbe:    taskRunLivenessProbe,
 				OnStateChange: func(_ context.Context, trigger string, _ execution.GuardedExecutionResult) {
 					scheduleTaskRunDaemonRefresh(trigger)
 				},

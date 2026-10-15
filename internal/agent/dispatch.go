@@ -630,6 +630,7 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 		OwnerLabel:       strings.TrimSpace(a.model),
 		Events:           events.GuardedExecutionSink{},
 		BuildContextJSON: knowledge.ExecutionContextJSON,
+		LivenessProbe:    execution.ProbeLocalInferenceEndpoint,
 	}
 
 	prepared, err := execution.PrepareGuardedExecution(ctx, rt, req)

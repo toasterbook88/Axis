@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2043,5 +2047,178 @@ func TestPrepareGuardedExecutionRequestedNode(t *testing.T) {
 	}
 	if !strings.Contains(errInvalid.Error(), "not found in snapshot") {
 		t.Fatalf("expected not found error, got: %v", errInvalid)
+	}
+}
+
+func TestPrepareGuardedExecutionReservationCapStaysOnPlacedNode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	nodeA := models.NodeFacts{
+		Name:             "node-a",
+		Hostname:         "remote-a.example",
+		Status:           models.StatusComplete,
+		RAMAllocatableMB: 25000,
+		RAMReservedMB:    29500,
+		Resources: &models.Resources{
+			RAMTotalMB: 32768,
+			RAMFreeMB:  30000,
+			Pressure:   "low",
+			CPUCores:   16,
+		},
+	}
+	nodeB := models.NodeFacts{
+		Name:             "node-b",
+		Hostname:         "remote-b.example",
+		Status:           models.StatusComplete,
+		RAMAllocatableMB: 14000,
+		Resources: &models.Resources{
+			RAMTotalMB: 16384,
+			RAMFreeMB:  14000,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+	}
+	rt := testGuardedRuntime(t, []models.NodeFacts{nodeA, nodeB})
+
+	prep, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi",
+		Mode:        ModeExec,
+		Confirm:     ConfirmWord,
+	})
+	if err == nil || !strings.Contains(err.Error(), "reservation cap exceeded") {
+		t.Fatalf("expected reservation cap exceeded, got %v", err)
+	}
+	if prep.Result.Node != "node-a" {
+		t.Fatalf("expected placed node-a, got %q", prep.Result.Node)
+	}
+}
+
+func TestPrepareGuardedExecutionLivenessProbeStaysOnPlacedNode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	nodeA := models.NodeFacts{
+		Name:     "node-a",
+		Hostname: "remote-a.example",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 32768,
+			RAMFreeMB:  30000,
+			Pressure:   "low",
+			CPUCores:   16,
+		},
+		Tools: []models.ToolInfo{{Name: "ollama", Version: "0.1.0"}},
+		Ollama: &models.OllamaInfo{
+			Installed: true,
+			Running:   true,
+			Listening: true,
+			Models:    []string{"llama3"},
+		},
+	}
+	nodeB := models.NodeFacts{
+		Name:     "node-b",
+		Hostname: "remote-b.example",
+		Status:   models.StatusComplete,
+		Resources: &models.Resources{
+			RAMTotalMB: 16384,
+			RAMFreeMB:  14000,
+			Pressure:   "low",
+			CPUCores:   8,
+		},
+		Tools: []models.ToolInfo{{Name: "ollama", Version: "0.1.0"}},
+		Ollama: &models.OllamaInfo{
+			Installed: true,
+			Running:   true,
+			Listening: true,
+			Models:    []string{"llama3"},
+		},
+	}
+	rt := testGuardedRuntime(t, []models.NodeFacts{nodeA, nodeB})
+
+	mockProbe := func(ctx context.Context, node models.NodeFacts, reqs models.TaskRequirements) error {
+		if node.Name == "node-a" {
+			return errors.New("endpoint connection refused: port 8082")
+		}
+		return nil
+	}
+
+	prep, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description:   "ollama run llama3",
+		Mode:          ModeExec,
+		Confirm:       ConfirmWord,
+		LivenessProbe: mockProbe,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pre-dispatch inference liveness failed on node \"node-a\"") {
+		t.Fatalf("expected liveness failure on node-a, got %v", err)
+	}
+	if prep.Result.Node != "node-a" {
+		t.Fatalf("expected placed node-a, got %q", prep.Result.Node)
+	}
+}
+
+func TestProbeLocalInferenceEndpoint(t *testing.T) {
+	// 1. Remote node is skipped
+	remoteNode := models.NodeFacts{
+		Name:     "remote-node",
+		Hostname: "remote.example",
+		Status:   models.StatusComplete,
+	}
+	reqsInference := models.TaskRequirements{
+		Workload: models.WorkloadProfileMatch{Class: models.ClassLocalLLMInference},
+	}
+	if err := ProbeLocalInferenceEndpoint(context.Background(), remoteNode, reqsInference); err != nil {
+		t.Fatalf("expected remote node to be skipped, got error: %v", err)
+	}
+
+	// 2. Local node with non-inference task is skipped
+	localNode := models.NodeFacts{
+		Name:     "local-node",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+	}
+	reqsNonInference := models.TaskRequirements{
+		Workload: models.WorkloadProfileMatch{Class: models.ClassBatchScript},
+	}
+	if err := ProbeLocalInferenceEndpoint(context.Background(), localNode, reqsNonInference); err != nil {
+		t.Fatalf("expected non-inference task to be skipped, got error: %v", err)
+	}
+
+	// 3. Local node with live HTTP listener on resident model port
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+	}))
+	defer srv.Close()
+
+	// Extract port from srv.URL
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	localNodeWithModel := models.NodeFacts{
+		Name:     "local-node",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+		ResidentModels: []models.ResidentModel{
+			{Name: "test-model", Runtime: "llama-server", Port: port},
+		},
+	}
+
+	if err := ProbeLocalInferenceEndpoint(context.Background(), localNodeWithModel, reqsInference); err != nil {
+		t.Fatalf("expected live resident model probe to succeed, got: %v", err)
+	}
+
+	// 4. Local node with dead resident model port
+	deadNodeWithModel := models.NodeFacts{
+		Name:     "local-node",
+		Hostname: "localhost",
+		Status:   models.StatusComplete,
+		ResidentModels: []models.ResidentModel{
+			{Name: "test-model", Runtime: "llama-server", Port: 65432}, // unused port
+		},
+	}
+	if err := ProbeLocalInferenceEndpoint(context.Background(), deadNodeWithModel, reqsInference); err == nil {
+		t.Fatalf("expected dead port to fail liveness probe, but succeeded")
 	}
 }
