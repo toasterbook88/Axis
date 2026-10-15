@@ -304,3 +304,33 @@ func TestExecScopeModelTurnRunsShell(t *testing.T) {
 		t.Fatalf("edit scope must reject run_shell, got %v", err)
 	}
 }
+
+func TestVisibleToolPromptScopeAware(t *testing.T) {
+	names := []string{"read_file", "todo"}
+
+	obsPrompt := VisibleToolPrompt(names, ScopeObserve)
+	if !strings.Contains(obsPrompt, "Current autonomy scope: observe") {
+		t.Errorf("observe prompt missing scope declaration: %s", obsPrompt)
+	}
+	if !strings.Contains(obsPrompt, "/autonomy edit") || !strings.Contains(obsPrompt, "/autonomy full") {
+		t.Errorf("observe prompt missing autonomy elevation hints: %s", obsPrompt)
+	}
+	for _, never := range []string{"spawn_subagent", "fleet_exec", "run_on_node"} {
+		if strings.Contains(obsPrompt, never) {
+			t.Errorf("observe prompt leaked never tool %q: %s", never, obsPrompt)
+		}
+	}
+
+	editPrompt := VisibleToolPrompt(names, ScopeEdit)
+	if !strings.Contains(editPrompt, "Current autonomy scope: edit") {
+		t.Errorf("edit prompt missing scope declaration: %s", editPrompt)
+	}
+	if !strings.Contains(editPrompt, "/autonomy full") {
+		t.Errorf("edit prompt missing full autonomy hint: %s", editPrompt)
+	}
+
+	execPrompt := VisibleToolPrompt(names, ScopeExec)
+	if !strings.Contains(execPrompt, "Current autonomy scope: exec") {
+		t.Errorf("exec prompt missing scope declaration: %s", execPrompt)
+	}
+}

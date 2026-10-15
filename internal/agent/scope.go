@@ -131,8 +131,9 @@ func toolVisible(name string, scope ToolScope) bool {
 }
 
 // VisibleToolPrompt is the system-prompt tool list for the defs the model
-// is being offered. It does not mention tools outside that list.
-func VisibleToolPrompt(names []string) string {
+// is being offered. It explains the active scope and autonomy escalation without
+// advertising prohibited names.
+func VisibleToolPrompt(names []string, optScope ...ToolScope) string {
 	if len(names) == 0 {
 		return "Tools you may call right now: none. Do not invent tool names. Footer status is chrome, not cluster inventory."
 	}
@@ -144,5 +145,20 @@ func VisibleToolPrompt(names []string) string {
 		b.WriteString("`\n")
 	}
 	b.WriteString("Do not call a tool that is not in this list. Footer status is chrome, not cluster inventory.\n")
+
+	currScope := ScopeObserve
+	if len(optScope) > 0 && optScope[0] != "" {
+		currScope = optScope[0]
+	}
+
+	switch currScope {
+	case ScopeObserve:
+		b.WriteString("Current autonomy scope: observe (read-only inspection). Workspace file modifications require 'edit' autonomy (/autonomy edit). Shell commands and task runs require 'full' autonomy (/autonomy full). When a user request requires making changes or executing commands, inform the operator to elevate autonomy.\n")
+	case ScopeEdit:
+		b.WriteString("Current autonomy scope: edit (workspace file modifications permitted). Shell commands and task runs require 'full' autonomy (/autonomy full).\n")
+	case ScopeExec:
+		b.WriteString("Current autonomy scope: exec (guarded shell execution and workspace modifications permitted).\n")
+	}
+
 	return b.String()
 }
