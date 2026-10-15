@@ -226,6 +226,129 @@ func TestDiscoverWrapsCollectorFailuresAsErrorNodes(t *testing.T) {
 	}
 }
 
+func TestDiscoverPreservesHealthyNodesWhenOneTimesOut(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(nc config.NodeConfig) bool {
+		return nc.Name == "local-healthy"
+	})
+	defer restoreMatch()
+
+	restoreLocal := stubLocalDiscoveryCollector(t, func(name, role string, labels map[string]string) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{
+				Name:        name,
+				Role:        role,
+				Hostname:    "healthy-host",
+				Status:      models.StatusComplete,
+				CollectedAt: time.Now().UTC(),
+				Resources:   &models.Resources{RAMTotalMB: 16384, RAMFreeMB: 8192},
+			}, nil
+		})
+	})
+	defer restoreLocal()
+
+	restoreRemote := stubRemoteDiscoveryCollector(t, func(nc config.NodeConfig) facts.Collector {
+		return collectorFunc(func(ctx context.Context) (*models.NodeFacts, error) {
+			if nc.Name == "remote-hung" {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return &models.NodeFacts{
+				Name:        nc.Name,
+				Role:        nc.Role,
+				Hostname:    nc.Hostname,
+				Status:      models.StatusComplete,
+				CollectedAt: time.Now().UTC(),
+			}, nil
+		})
+	})
+	defer restoreRemote()
+
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
+	defer restoreWait()
+
+	cfg := &config.Config{
+		Nodes: []config.NodeConfig{
+			{Name: "local-healthy", Hostname: "localhost", Role: "primary"},
+			{Name: "remote-hung", Hostname: "10.0.0.99", Role: "worker", CollectTimeoutSec: 1}, // 1s for fast test
+		},
+	}
+
+	res := DiscoverResult(context.Background(), cfg)
+	if len(res.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes returned, got %d", len(res.Nodes))
+	}
+
+	var healthy, hung *models.NodeFacts
+	for i := range res.Nodes {
+		if res.Nodes[i].Name == "local-healthy" {
+			healthy = &res.Nodes[i]
+		}
+		if res.Nodes[i].Name == "remote-hung" {
+			hung = &res.Nodes[i]
+		}
+	}
+
+	if healthy == nil || hung == nil {
+		t.Fatalf("expected both healthy and hung nodes present in results, got %#v", res.Nodes)
+	}
+
+	if healthy.Status != models.StatusComplete {
+		t.Errorf("expected healthy node StatusComplete, got %s", healthy.Status)
+	}
+	if healthy.Resources == nil || healthy.Resources.RAMTotalMB != 16384 {
+		t.Errorf("expected healthy node resources preserved, got %#v", healthy.Resources)
+	}
+	if healthy.Epistemic == nil || healthy.Epistemic.Degraded {
+		t.Errorf("expected healthy node not degraded, got %#v", healthy.Epistemic)
+	}
+
+	if hung.Status == models.StatusComplete {
+		t.Errorf("expected hung node not complete, got %s", hung.Status)
+	}
+	if hung.Epistemic == nil || !hung.Epistemic.Degraded {
+		t.Errorf("expected hung node degraded=true, got %#v", hung.Epistemic)
+	}
+}
+
+func TestDiscoveryCollectTimeoutHonorsExplicitOverrides(t *testing.T) {
+	// Explicit CollectTimeoutSec should be honored without being clamped to DefaultDiscoveryCollectTimeout (12s).
+	ncCustom := config.NodeConfig{CollectTimeoutSec: 25}
+	if got := discoveryCollectTimeout(ncCustom); got != 25*time.Second {
+		t.Fatalf("expected explicit CollectTimeoutSec 25s, got %v", got)
+	}
+
+	// Explicit shorter CollectTimeoutSec should also be honored.
+	ncShort := config.NodeConfig{CollectTimeoutSec: 3}
+	if got := discoveryCollectTimeout(ncShort); got != 3*time.Second {
+		t.Fatalf("expected explicit CollectTimeoutSec 3s, got %v", got)
+	}
+
+	// Unconfigured node should fall back to DefaultDiscoveryCollectTimeout (12s),
+	// bounding the legacy EffectiveCollectTimeout() default of 45s.
+	ncDefault := config.NodeConfig{}
+	if got := discoveryCollectTimeout(ncDefault); got != DefaultDiscoveryCollectTimeout {
+		t.Fatalf("expected unconfigured node to fall back to %v, got %v", DefaultDiscoveryCollectTimeout, got)
+	}
+}
+
+func TestNewRemoteDiscoveryCollectorHonorsExplicitDialTimeout(t *testing.T) {
+	nc := config.NodeConfig{
+		Name:           "custom-dial",
+		Hostname:       "10.0.0.5",
+		DialTimeoutSec: 15,
+	}
+	collector := newRemoteDiscoveryCollector(nc)
+	rc, ok := collector.(*facts.RemoteCollector)
+	if !ok {
+		t.Fatalf("expected *facts.RemoteCollector, got %T", collector)
+	}
+	if rc.Hostname != "10.0.0.5" || rc.NodeName != "custom-dial" {
+		t.Fatalf("unexpected collector fields: %#v", rc)
+	}
+}
+
 func TestDiscoverUsesStableIdentityAwareLocalMatcher(t *testing.T) {
 	restoreMatch := stubDiscoveryIsLocalConfig(t, func(nc config.NodeConfig) bool {
 		return nc.StableID == "abc-123"

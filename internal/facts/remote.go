@@ -78,8 +78,14 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 	}
 
 	// Single remote bash script for core facts. Bundle failure falls back to the legacy
-	// multi-Run collector so the node still contributes partial field data to placement.
+	// multi-Run collector so the node still contributes partial field data to placement,
+	// unless the context expired (timeout or cancellation), where running legacy probes would stall.
 	if !c.tryBundleCollect(ctx, facts) {
+		if ctx.Err() != nil {
+			facts.Status = models.StatusUnreachable
+			facts.Error = fmt.Sprintf("remote fact bundle timed out or canceled: %v", ctx.Err())
+			return facts, nil
+		}
 		c.collectLegacy(ctx, facts)
 		facts.PartialReasons = append(facts.PartialReasons, models.PartialReason{
 			Probe:   "fact_bundle",
@@ -87,27 +93,29 @@ func (c *RemoteCollector) Collect(ctx context.Context) (*models.NodeFacts, error
 		})
 	}
 
-	c.discoverAppleFoundationModels(ctx, facts) // AI discovery, bash-forced. Apple (~1s) first: a slow disk scan once starved it.
-	ollamaInfo, residentModels := c.discoverOllamaRobust(ctx)
-	if ollamaInfo.Installed {
-		facts.Ollama = &ollamaInfo
-		facts.ResidentModels = append(facts.ResidentModels[:0], residentModels...)
-		facts.Tools = appendToolUnique(facts.Tools, models.ToolInfo{
-			Name:    "ollama",
-			Path:    ollamaInfo.Path,
-			Version: ollamaInfo.Version,
-			Class:   models.ToolClassAICLI,
+	if ctx.Err() == nil {
+		c.discoverAppleFoundationModels(ctx, facts) // AI discovery, bash-forced. Apple (~1s) first: a slow disk scan once starved it.
+		ollamaInfo, residentModels := c.discoverOllamaRobust(ctx)
+		if ollamaInfo.Installed {
+			facts.Ollama = &ollamaInfo
+			facts.ResidentModels = append(facts.ResidentModels[:0], residentModels...)
+			facts.Tools = appendToolUnique(facts.Tools, models.ToolInfo{
+				Name:    "ollama",
+				Path:    ollamaInfo.Path,
+				Version: ollamaInfo.Version,
+				Class:   models.ToolClassAICLI,
+			})
+		}
+		if llamaResidents := c.discoverLlamaServerRobust(ctx); len(llamaResidents) > 0 {
+			facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
+		}
+		facts.ResidentModels = append(facts.ResidentModels, c.discoverMLXRobust(ctx)...)
+		facts.LocalEndpoints = discoverLocalEndpoints(ctx, facts, c.Exec.Run) // after the engine probes: it skips their ports
+		c.discoverDiskWeights(ctx, facts)
+		facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
+			return c.Exec.Run(ctx, cmd)
 		})
 	}
-	if llamaResidents := c.discoverLlamaServerRobust(ctx); len(llamaResidents) > 0 {
-		facts.ResidentModels = append(facts.ResidentModels, llamaResidents...)
-	}
-	facts.ResidentModels = append(facts.ResidentModels, c.discoverMLXRobust(ctx)...)
-	facts.LocalEndpoints = discoverLocalEndpoints(ctx, facts, c.Exec.Run) // after the engine probes: it skips their ports
-	c.discoverDiskWeights(ctx, facts)
-	facts.TurboQuant = detectTurboQuantSupport(ctx, facts.OS, facts.Arch, facts.Tools, facts.Resources, facts.Ollama, func(ctx context.Context, cmd string) (string, error) {
-		return c.Exec.Run(ctx, cmd)
-	})
 
 	if len(facts.PartialReasons) > 0 && facts.Status == models.StatusComplete {
 		facts.Status = models.StatusPartial
