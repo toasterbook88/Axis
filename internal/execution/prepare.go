@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,23 +44,24 @@ func openTaskLog(execID string) *os.File {
 }
 
 type GuardedExecutionRequest struct {
-	Description      string                                                `json:"description"`
-	Mode             string                                                `json:"mode,omitempty"`
-	Confirm          string                                                `json:"confirm,omitempty"`
-	ExposePorts      string                                                `json:"expose_ports,omitempty"`
-	MemoryRequestMB  int64                                                 `json:"memory_request_mb,omitempty"`
-	MemoryMaxMB      int64                                                 `json:"memory_max_mb,omitempty"`
-	RequestedNode    string                                                `json:"requested_node,omitempty"`
-	OwnerSurface     string                                                `json:"-"`
-	OwnerLabel       string                                                `json:"-"`
-	OriginOverride   models.ExecutionOrigin                                `json:"-"`
-	Stdout           io.Writer                                             `json:"-"`
-	Stderr           io.Writer                                             `json:"-"`
-	Stdin            io.Reader                                             `json:"-"`
-	OnReady          func(GuardedExecutionResult)                          `json:"-"`
-	OnStateChange    func(context.Context, string, GuardedExecutionResult) `json:"-"`
-	Events           ExecutionEventSink                                    `json:"-"`
-	BuildContextJSON ExecutionContextBuilder                               `json:"-"`
+	Description      string                                                                 `json:"description"`
+	Mode             string                                                                 `json:"mode,omitempty"`
+	Confirm          string                                                                 `json:"confirm,omitempty"`
+	ExposePorts      string                                                                 `json:"expose_ports,omitempty"`
+	MemoryRequestMB  int64                                                                  `json:"memory_request_mb,omitempty"`
+	MemoryMaxMB      int64                                                                  `json:"memory_max_mb,omitempty"`
+	RequestedNode    string                                                                 `json:"requested_node,omitempty"`
+	OwnerSurface     string                                                                 `json:"-"`
+	OwnerLabel       string                                                                 `json:"-"`
+	OriginOverride   models.ExecutionOrigin                                                 `json:"-"`
+	Stdout           io.Writer                                                              `json:"-"`
+	Stderr           io.Writer                                                              `json:"-"`
+	Stdin            io.Reader                                                              `json:"-"`
+	OnReady          func(GuardedExecutionResult)                                           `json:"-"`
+	OnStateChange    func(context.Context, string, GuardedExecutionResult)                  `json:"-"`
+	Events           ExecutionEventSink                                                     `json:"-"`
+	BuildContextJSON ExecutionContextBuilder                                                `json:"-"`
+	LivenessProbe    func(context.Context, models.NodeFacts, models.TaskRequirements) error `json:"-"`
 }
 
 type GuardedExecutionResult struct {
@@ -335,7 +337,8 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 
 	decision := placement.SelectBestNode(reqs, nodesToEvaluate, rt.State)
 
-	// Advisory placement decision event (post-decision)
+	// Advisory placement decision event (post-decision).
+	// Preflight failure stays on this node. A later ranked candidate is not selected.
 	if req.Events != nil {
 		req.Events.PlacementDecided(req.Description, decision.Node, decision.FitScore, decision.OK)
 	}
@@ -372,9 +375,9 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	var targetConfig config.NodeConfig
 	isLocal := models.IsLocalNode(targetNode)
 	if !isLocal {
-		var ok bool
-		targetConfig, ok = rt.Config.FindNode(decision.Node)
-		if !ok {
+		var found bool
+		targetConfig, found = rt.Config.FindNode(decision.Node)
+		if !found {
 			err := fmt.Errorf("node %q not found in config", decision.Node)
 			prepared.Result.Error = err.Error()
 			prepared.Err = err
@@ -406,6 +409,15 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		prepared.Result.Error = err.Error()
 		prepared.Err = err
 		return prepared, err
+	}
+
+	if req.LivenessProbe != nil {
+		if err := req.LivenessProbe(ctx, targetNode, reqs); err != nil {
+			err = fmt.Errorf("pre-dispatch inference liveness failed on node %q: %w", decision.Node, err)
+			prepared.Result.Error = err.Error()
+			prepared.Err = err
+			return prepared, err
+		}
 	}
 
 	turboPlan := turboexec.Prepare(targetNode, reqs, intent.Command)
@@ -542,6 +554,11 @@ func enforceLocalExecutionSafety(ctx context.Context, node models.NodeFacts, req
 }
 
 func isInferenceExecution(reqs models.TaskRequirements) bool {
+	if reqs.Workload.Class == models.ClassLocalLLMInference ||
+		reqs.Workload.Class == models.ClassLongContextInference ||
+		reqs.Workload.Class == models.ClassLlamaServer {
+		return true
+	}
 	if reqs.ContextWindowTokens > 0 || reqs.PrefersTurboQuant {
 		return true
 	}
@@ -557,6 +574,123 @@ func isInferenceExecution(reqs models.TaskRequirements) bool {
 	for _, backend := range reqs.PreferredBackends {
 		switch strings.ToLower(backend) {
 		case "llama.cpp", "mlx", "apple-foundation-models":
+			return true
+		}
+	}
+	return false
+}
+
+// ProbeLocalInferenceEndpoint checks inference liveness for a candidate node right before dispatch.
+// For remote candidates or non-inference executions, it returns nil immediately without probing.
+// For local candidates running an inference workload, it verifies that at least one relevant
+// inference endpoint (such as Ollama or llama-server) responds to a fast HTTP probe.
+func ProbeLocalInferenceEndpoint(ctx context.Context, node models.NodeFacts, reqs models.TaskRequirements) error {
+	if !models.IsLocalNode(node) || !isInferenceExecution(reqs) {
+		return nil
+	}
+
+	client := &http.Client{Timeout: 1 * time.Second}
+
+	// 1. Check any resident model ports
+	var probed bool
+	for _, rm := range node.ResidentModels {
+		port := rm.Port
+		if port <= 0 && strings.EqualFold(rm.Runtime, "ollama") {
+			port = 11434
+		}
+		if port > 0 {
+			probed = true
+			if err := probePortLiveness(ctx, client, rm.Runtime, port); err != nil {
+				return fmt.Errorf("local resident model %q (%s:%d) liveness check failed: %w", rm.Name, rm.Runtime, port, err)
+			}
+		}
+	}
+	if probed {
+		return nil
+	}
+
+	// 2. Check Ollama if required or installed
+	if hasRequiredTool(reqs.RequiredTools, "ollama") || (node.Ollama != nil && node.Ollama.Installed) {
+		if err := probePortLiveness(ctx, client, "ollama", 11434); err != nil {
+			return fmt.Errorf("local ollama liveness check failed: %w", err)
+		}
+		return nil
+	}
+
+	// 3. Check llama-server if required
+	if hasRequiredTool(reqs.RequiredTools, "llama-server") {
+		if err := probePortLiveness(ctx, client, "llama-server", 8080); err != nil {
+			return fmt.Errorf("local llama-server liveness check failed: %w", err)
+		}
+		return nil
+	}
+
+	return nil
+}
+
+func probePortLiveness(ctx context.Context, client *http.Client, runtime string, port int) error {
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	switch strings.ToLower(runtime) {
+	case "ollama":
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/ps", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			// Fallback to /api/tags
+			req2, err2 := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/tags", nil)
+			if err2 != nil {
+				return err
+			}
+			resp2, err2 := client.Do(req2)
+			if err2 != nil {
+				return err
+			}
+			defer resp2.Body.Close()
+			if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
+				return nil
+			}
+			return fmt.Errorf("HTTP status %d", resp2.StatusCode)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil
+		}
+		return fmt.Errorf("HTTP status %d", resp.StatusCode)
+	default:
+		reqHealth, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
+		if err == nil {
+			respHealth, errHealth := client.Do(reqHealth)
+			if errHealth == nil {
+				defer respHealth.Body.Close()
+				if respHealth.StatusCode == http.StatusOK {
+					return nil
+				}
+				if respHealth.StatusCode == http.StatusServiceUnavailable {
+					return fmt.Errorf("model loading (503 Service Unavailable)")
+				}
+			}
+		}
+		reqModels, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
+		if err != nil {
+			return err
+		}
+		respModels, err := client.Do(reqModels)
+		if err != nil {
+			return err
+		}
+		defer respModels.Body.Close()
+		if respModels.StatusCode >= 200 && respModels.StatusCode < 300 {
+			return nil
+		}
+		return fmt.Errorf("HTTP status %d", respModels.StatusCode)
+	}
+}
+
+func hasRequiredTool(tools []string, name string) bool {
+	for _, t := range tools {
+		if strings.EqualFold(t, name) {
 			return true
 		}
 	}
