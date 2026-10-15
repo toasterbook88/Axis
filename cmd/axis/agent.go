@@ -23,6 +23,7 @@ import (
 	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -852,12 +853,8 @@ func exportAgentWorklog(a *agent.Agent, customPath string) (string, error) {
 
 	exportPath := strings.TrimSpace(customPath)
 	if exportPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		dir := filepath.Join(home, ".axis", "worklogs")
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		dir := persist.AxisPath("worklogs")
+		if err := persist.EnsurePrivateDir(dir); err != nil {
 			return "", err
 		}
 		exportPath = filepath.Join(dir, fmt.Sprintf("session-%s.md", time.Now().Format("2006-01-02T150405")))
@@ -911,7 +908,7 @@ func exportAgentWorklog(a *agent.Agent, customPath string) (string, error) {
 		}
 	}
 
-	if err := os.WriteFile(exportPath, []byte(sb.String()), 0600); err != nil {
+	if err := persist.WriteFileAtomic(exportPath, []byte(sb.String()), 0600); err != nil {
 		return "", err
 	}
 	return exportPath, nil

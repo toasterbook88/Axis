@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/persist"
 )
 
 func requireDailyModelStart(cmd *cobra.Command) error {
@@ -261,5 +262,5 @@ func writeSelectedRunProfile(cmd *cobra.Command, selected *models.ModelRunProfil
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0644)
+	return persist.WriteFileAtomic(path, data, 0644)
 }

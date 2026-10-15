@@ -29,6 +29,14 @@ type machineOutput struct {
 	Warnings      []machineWarning `json:"warnings"`
 }
 
+func (m machineOutput) MarshalJSON() ([]byte, error) {
+	type Alias machineOutput
+	if m.Warnings == nil {
+		m.Warnings = []machineWarning{}
+	}
+	return json.Marshal((Alias)(m))
+}
+
 func writeMachineOutput(out io.Writer, command, status string, ok bool, data any, warnings []machineWarning) error {
 	if warnings == nil {
 		warnings = []machineWarning{}
