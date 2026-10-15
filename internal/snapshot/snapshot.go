@@ -153,7 +153,7 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 	// The dial target is the route actually in use. Prefer SSHTarget (configured
 	// dial address preserved through fact collection) over Hostname, which the
 	// remote collector overwrites with the observed machine hostname (e.g.
-	// "lab-5") after connect. Falling back to Hostname keeps older snapshots
+	// "node-1") after connect. Falling back to Hostname keeps older snapshots
 	// and tests that only set Hostname working.
 	target := dialTarget(n)
 
