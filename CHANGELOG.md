@@ -1,3 +1,30 @@
+## v0.19.6 (2026-10-15)
+
+Fifteen pull requests merged on `main` since `v0.19.5`. This patch release mainly retracts the versions whose tags moved during the 2026-10-12 history rewrite, and ships the model-discovery, reservation-cleanup and agent-ergonomics work.
+
+### Module retraction
+
+* **`retract [v0.9.0, v0.19.5]` in `go.mod`:** the 2026-10-12 history rewrite moved every tag from v0.9.0 through v0.19.5. Those versions now fail `go install` with `GOPROXY=direct` because their checksums no longer match sum.golang.org. `go list -m -u` and `go get` now steer users to v0.19.6. Tags v0.2.0 through v0.8.0 are unaffected and are not retracted.
+
+### Features
+
+* **Model catalog as a fact:** consistent, honest model lists in `axis agent` (#507).
+* **Probe-backed model load state** for llama.cpp, MLX and Apple Foundation Models (#509).
+* **Agent autonomy and tool ergonomics:** `axis agent` prompts are aware of the active autonomy tier, and the search/listing tools gain a tree cap, grep include handling and symlink confinement (#508).
+* **Model discovery:** a loopback endpoint sweep for servers the probes miss (#514); Core AI and Core ML bundles listed as unknown-kind disk weights (#516); Private Cloud Compute facts from the read-only Apple probe (#515).
+
+### Fixed
+
+* **Reservations:** the dead `HoldDevice` API and the `device_holds` ledger field are removed; peak observations are renamed `ObservedRSSMB`/`ObservedVRAMMB` (legacy `peak_*` state keys still load); `axis model plan` warns and skips observation-based exclusions when state fails to load instead of aborting (#506).
+* **Disk-weight scan** skips iCloud placeholders and always finishes (#513).
+* **Agent:** finds keys for this machine's model servers and never swaps a pinned `--model` (#517).
+* **PR review gate:** rendering repaired, and the gate fails closed unless CLEAN (#510, #511); private hostnames blocked by shape, not by name (#519).
+
+### Tests & housekeeping
+
+* Operator-specific names and addresses replaced in fixtures and comments (#518).
+* Go module minor/patch bumps (#520); GitHub Actions minor/patch bumps (#521).
+
 ## v0.19.5 (2026-10-05)
 
 Twenty-four pull requests (#476–#493, #495, #497, #498, #500, #501, #504; #496 and #499 shipped inside #495) merged on `main` since `v0.19.4`, plus this release-prep PR (#494). This patch release ships placement hardening (required operator labels on `axis task place`, off-box bearer-token refusal across daemon endpoints), a hardened self-updater (host allowlist on every redirect, fail-closed digest verification, daemon restart after update), supervisor-aware emergency model eviction/resume, daily model-start profiling, Apple Foundation Model discovery/placement groundwork, and honest release/version plumbing.

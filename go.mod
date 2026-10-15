@@ -48,3 +48,8 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
+
+// Git history was rewritten on 2026-10-12 and every tag from v0.9.0 through
+// v0.19.5 was moved. Those versions no longer match sum.golang.org and fail
+// to download with GOPROXY=direct. Use v0.19.6 or later.
+retract [v0.9.0, v0.19.5]
