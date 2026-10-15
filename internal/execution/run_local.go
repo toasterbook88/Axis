@@ -227,8 +227,8 @@ func runLocal(
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
 		recordExecutionOutcome(st, reqs, resp, runErr, elapsed, peakRAMMB)
-		resp.PeakRAMMB = peakRAMMB
-		resp.PeakVRAMMB = peakVRAMMB
+		resp.ObservedRSSMB = peakRAMMB
+		resp.ObservedVRAMMB = peakVRAMMB
 		resp.WallTimeMS = durationMilliseconds(elapsed)
 		return resp, runErr
 	}
@@ -237,8 +237,8 @@ func runLocal(
 	runtimeChanged = true
 	recordExecutionOutcome(st, reqs, resp, nil, elapsed, peakRAMMB)
 	resp.OK = true
-	resp.PeakRAMMB = peakRAMMB
-	resp.PeakVRAMMB = peakVRAMMB
+	resp.ObservedRSSMB = peakRAMMB
+	resp.ObservedVRAMMB = peakVRAMMB
 	resp.WallTimeMS = durationMilliseconds(elapsed)
 	return resp, nil
 }

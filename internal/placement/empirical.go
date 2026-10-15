@@ -146,10 +146,10 @@ func compareObservationPreference(a, b *models.ExecutionObservation) int {
 		}
 		return -1
 	}
-	if cmp := compareOptionalLower(a.PeakRAMMB, b.PeakRAMMB); cmp != 0 {
+	if cmp := compareOptionalLower(a.ObservedRSSMB, b.ObservedRSSMB); cmp != 0 {
 		return cmp
 	}
-	if cmp := compareOptionalLower(a.PeakVRAMMB, b.PeakVRAMMB); cmp != 0 {
+	if cmp := compareOptionalLower(a.ObservedVRAMMB, b.ObservedVRAMMB); cmp != 0 {
 		return cmp
 	}
 	if a.WallTimeMS != b.WallTimeMS {
@@ -269,11 +269,11 @@ func empiricalReason(obs *models.ExecutionObservation) string {
 	parts := []string{
 		fmt.Sprintf("empirical history: %d run(s), avg %dms", obs.SampleCount, obs.WallTimeMS),
 	}
-	if obs.PeakRAMMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak RAM %dMB", obs.PeakRAMMB))
+	if obs.ObservedRSSMB > 0 {
+		parts = append(parts, fmt.Sprintf("observed RSS %dMB", obs.ObservedRSSMB))
 	}
-	if obs.PeakVRAMMB > 0 {
-		parts = append(parts, fmt.Sprintf("peak VRAM %dMB", obs.PeakVRAMMB))
+	if obs.ObservedVRAMMB > 0 {
+		parts = append(parts, fmt.Sprintf("observed VRAM %dMB", obs.ObservedVRAMMB))
 	}
 	if obs.ModelName != "" {
 		parts = append(parts, fmt.Sprintf("model %s", obs.ModelName))

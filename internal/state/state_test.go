@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -70,6 +71,109 @@ func TestSaveAndLoadRoundTripCreatesDirectory(t *testing.T) {
 	}
 	if len(loaded.Decisions) != 1 || loaded.Decisions[0] != "alpha: build project" {
 		t.Fatalf("Decisions = %v, want single round-tripped decision", loaded.Decisions)
+	}
+}
+
+func TestLoadSavePreservesLegacyObservationMeasurements(t *testing.T) {
+	axisHome := t.TempDir()
+	t.Setenv("AXIS_HOME", axisHome)
+	legacy := []byte(`{
+		"version": 1,
+		"nodes": {},
+		"observations": {
+			"legacy-observation": {
+				"scope": {"node": "alpha", "workload": "llama-server"},
+				"observed_at": "2026-10-10T00:00:00Z",
+				"sample_count": 1,
+				"peak_ram_mb": 1536,
+				"peak_vram_mb": 768
+			}
+		},
+		"task_history": [{
+			"exec_id": "legacy-exec",
+			"node": "alpha",
+			"peak_ram_mb": 2048,
+			"peak_vram_mb": 1024,
+			"timestamp": "2026-10-10T00:00:00Z"
+		}],
+		"recent_decisions": [],
+		"updated_at": "2026-10-10T00:00:00Z"
+	}`)
+	if err := os.WriteFile(Path(), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load legacy state: %v", err)
+	}
+	obs := loaded.Observations["legacy-observation"]
+	if obs.ObservedRSSMB != 1536 || obs.ObservedVRAMMB != 768 {
+		t.Fatalf("legacy observation measurements = %d/%d, want 1536/768", obs.ObservedRSSMB, obs.ObservedVRAMMB)
+	}
+	if len(loaded.TaskHistory) != 1 || loaded.TaskHistory[0].ObservedRSSMB != 2048 || loaded.TaskHistory[0].ObservedVRAMMB != 1024 {
+		t.Fatalf("legacy task history = %+v, want preserved measurements", loaded.TaskHistory)
+	}
+
+	if err := loaded.Save(); err != nil {
+		t.Fatalf("Save migrated state: %v", err)
+	}
+	migrated, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(migrated, []byte(`"peak_ram_mb"`)) || bytes.Contains(migrated, []byte(`"peak_vram_mb"`)) {
+		t.Fatalf("migrated state retained legacy measurement keys: %s", migrated)
+	}
+	for _, want := range []string{`"observed_rss_mb": 1536`, `"observed_vram_mb": 768`, `"observed_rss_mb": 2048`, `"observed_vram_mb": 1024`} {
+		if !bytes.Contains(migrated, []byte(want)) {
+			t.Fatalf("migrated state missing %s: %s", want, migrated)
+		}
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("reload migrated state: %v", err)
+	}
+	if got := reloaded.Observations["legacy-observation"]; got.ObservedRSSMB != 1536 || got.ObservedVRAMMB != 768 {
+		t.Fatalf("reloaded observation = %+v", got)
+	}
+	if got := reloaded.TaskHistory[0]; got.ObservedRSSMB != 2048 || got.ObservedVRAMMB != 1024 {
+		t.Fatalf("reloaded task history = %+v", got)
+	}
+}
+
+func TestCanonicalObservationMeasurementsOverrideLegacyKeys(t *testing.T) {
+	data := []byte(`{
+		"version": 1,
+		"nodes": {},
+		"observations": {"mixed": {
+			"scope": {},
+			"observed_at": "2026-10-10T00:00:00Z",
+			"observed_rss_mb": 0,
+			"observed_vram_mb": 0,
+			"peak_ram_mb": 1536,
+			"peak_vram_mb": 768
+		}},
+		"task_history": [{
+			"observed_rss_mb": 0,
+			"observed_vram_mb": 0,
+			"peak_ram_mb": 2048,
+			"peak_vram_mb": 1024,
+			"timestamp": "2026-10-10T00:00:00Z"
+		}],
+		"recent_decisions": [],
+		"updated_at": "2026-10-10T00:00:00Z"
+	}`)
+	var got ClusterState
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if obs := got.Observations["mixed"]; obs.ObservedRSSMB != 0 || obs.ObservedVRAMMB != 0 {
+		t.Fatalf("canonical zero observation values did not win: %+v", obs)
+	}
+	if rec := got.TaskHistory[0]; rec.ObservedRSSMB != 0 || rec.ObservedVRAMMB != 0 {
+		t.Fatalf("canonical zero task values did not win: %+v", rec)
 	}
 }
 

@@ -61,7 +61,7 @@ func renderObservationTable(entries []models.ExecutionObservation) string {
 	}
 
 	ui.WhiteColor.Fprintf(&b, "  %-15s %-12s %-12s %-12s %10s %10s %8s %8s\n",
-		"NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "PEAK RAM", "PEAK VRAM", "SAMPLES")
+		"NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "OBS RSS", "OBS VRAM", "SAMPLES")
 	b.WriteString("  ")
 	b.WriteString(sep)
 	b.WriteString("\n")
@@ -75,8 +75,8 @@ func renderObservationTable(entries []models.ExecutionObservation) string {
 
 	for _, obs := range display {
 		peakVRAM := "-"
-		if obs.PeakVRAMMB > 0 {
-			peakVRAM = fmt.Sprintf("%d MB", obs.PeakVRAMMB)
+		if obs.ObservedVRAMMB > 0 {
+			peakVRAM = fmt.Sprintf("%d MB", obs.ObservedVRAMMB)
 		}
 		success := ""
 		if !obs.LastSuccess {
@@ -88,7 +88,7 @@ func renderObservationTable(entries []models.ExecutionObservation) string {
 			obs.Scope.Backend,
 			obs.Scope.Tool,
 			obs.WallTimeMS,
-			obs.PeakRAMMB,
+			obs.ObservedRSSMB,
 			peakVRAM,
 			obs.SampleCount,
 			success,
@@ -132,12 +132,12 @@ func observationsListCmd() *cobra.Command {
 					_, err := fmt.Fprintln(cmd.OutOrStdout(), "No observations tracked")
 					return err
 				}
-				tbl := ui.NewTable("KEY", "NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "PEAK RAM", "PEAK VRAM", "SAMPLES", "OBSERVED")
+				tbl := ui.NewTable("KEY", "NODE", "WORKLOAD", "BACKEND", "TOOL", "WALL MS", "OBS RSS", "OBS VRAM", "SAMPLES", "OBSERVED")
 				for _, obs := range entries {
 					key := state.ObservationKey(obs.Scope)
 					peakVRAM := "-"
-					if obs.PeakVRAMMB > 0 {
-						peakVRAM = fmt.Sprintf("%d MB", obs.PeakVRAMMB)
+					if obs.ObservedVRAMMB > 0 {
+						peakVRAM = fmt.Sprintf("%d MB", obs.ObservedVRAMMB)
 					}
 					tbl.AddRow(
 						truncateID(key, 12),
@@ -146,7 +146,7 @@ func observationsListCmd() *cobra.Command {
 						obs.Scope.Backend,
 						obs.Scope.Tool,
 						fmt.Sprintf("%d", obs.WallTimeMS),
-						fmt.Sprintf("%d MB", obs.PeakRAMMB),
+						fmt.Sprintf("%d MB", obs.ObservedRSSMB),
 						peakVRAM,
 						fmt.Sprintf("%d", obs.SampleCount),
 						obs.ObservedAt.Format(time.RFC3339),
@@ -220,9 +220,9 @@ func observationsInspectCmd() *cobra.Command {
 					fmt.Fprintf(&b, "Model:       %s\n", found.Scope.ModelName)
 				}
 				fmt.Fprintf(&b, "Wall Time:   %d ms\n", found.WallTimeMS)
-				fmt.Fprintf(&b, "Peak RAM:    %d MB\n", found.PeakRAMMB)
-				if found.PeakVRAMMB > 0 {
-					fmt.Fprintf(&b, "Peak VRAM:   %d MB\n", found.PeakVRAMMB)
+				fmt.Fprintf(&b, "Observed RSS:  %d MB\n", found.ObservedRSSMB)
+				if found.ObservedVRAMMB > 0 {
+					fmt.Fprintf(&b, "Observed VRAM: %d MB\n", found.ObservedVRAMMB)
 				}
 				fmt.Fprintf(&b, "Samples:     %d\n", found.SampleCount)
 				fmt.Fprintf(&b, "Last Success:%v\n", found.LastSuccess)
