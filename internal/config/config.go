@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -334,6 +335,17 @@ type MCPServerConfig struct {
 
 	// Headers are optional HTTP headers (for http transport).
 	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+
+	// AutoApproveTools lists this server's tools, by exact name as the server
+	// reports them, that axis agent may call without operator confirmation.
+	// Every other tool from the server asks first. Tool names, descriptions
+	// and annotations come from the server and are never trusted for this.
+	AutoApproveTools []string `json:"auto_approve_tools,omitempty" yaml:"auto_approve_tools,omitempty"`
+}
+
+// AutoApproves reports whether tool is listed in AutoApproveTools.
+func (c MCPServerConfig) AutoApproves(tool string) bool {
+	return slices.Contains(c.AutoApproveTools, tool)
 }
 
 // Config is the top-level AXIS configuration.

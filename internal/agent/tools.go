@@ -14,19 +14,12 @@ import (
 	"strings"
 	"time"
 
-	"sync/atomic"
-
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/knowledge"
-	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
-	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/safety"
-	"github.com/toasterbook88/axis/internal/skills"
-	"github.com/toasterbook88/axis/internal/state"
 )
 
 // ToolRegistry maps tool names to their definitions and executors.
@@ -43,73 +36,20 @@ type ToolRegistry struct {
 	// extraAllowed grants visibility to dynamically registered tool names
 	// (session-added tools, test probes) on top of the static scope lists.
 	extraAllowed map[string]bool
+	// mcpAutoApproved holds the mcp_<server>_<tool> names the operator listed
+	// in mcp_servers.<server>.auto_approve_tools. Only these external tools
+	// skip confirmation.
+	mcpAutoApproved map[string]bool
+}
+
+// mcpAutoApprovedTool reports whether name is an external MCP tool the
+// operator allowlisted for calls without confirmation.
+func (r *ToolRegistry) mcpAutoApprovedTool(name string) bool {
+	return r != nil && r.mcpAutoApproved[name]
 }
 
 // ToolExecutor runs a tool and returns its string result.
 type ToolExecutor func(ctx context.Context, args json.RawMessage) (string, error)
-
-type RuntimeView struct {
-	Config    *config.Config
-	Snapshot  *models.ClusterSnapshot
-	State     *state.ClusterState
-	Ledger    *reservation.Ledger
-	Skills    *skills.Store
-	Knowledge *knowledge.ClusterKnowledge
-}
-
-// ToolContext holds runtime state available to tool executors. The current
-// view is accessed atomically and reloaded on demand via the Reload callback.
-type ToolContext struct {
-	current atomic.Pointer[RuntimeView]
-	Reload  func(context.Context) (*RuntimeView, error)
-}
-
-// NewToolContext creates a new ToolContext with an initial view.
-func NewToolContext(initial *RuntimeView, reload func(context.Context) (*RuntimeView, error)) *ToolContext {
-	if initial == nil {
-		return nil
-	}
-	tc := &ToolContext{
-		Reload: reload,
-	}
-	tc.current.Store(initial)
-	return tc
-}
-
-// Current returns the current atomically replaceable RuntimeView.
-func (tc *ToolContext) Current() *RuntimeView {
-	if tc == nil {
-		return nil
-	}
-	return tc.current.Load()
-}
-
-// ReloadCurrent reloads the current view using the Reload callback.
-func (tc *ToolContext) ReloadCurrent(ctx context.Context) error {
-	if tc == nil {
-		return fmt.Errorf("nil tool context")
-	}
-	if tc.Reload == nil {
-		return fmt.Errorf("no reload function defined")
-	}
-	view, err := tc.Reload(ctx)
-	if err != nil {
-		return err
-	}
-	if view == nil {
-		return fmt.Errorf("reload returned nil view")
-	}
-	if view.Config == nil || view.Snapshot == nil || view.State == nil {
-		return fmt.Errorf("reload returned incomplete view (Config, Snapshot, or State is nil)")
-	}
-	tc.current.Store(view)
-	return nil
-}
-
-// GetView returns the current atomically replaceable RuntimeView.
-func (tc *ToolContext) GetView() *RuntimeView {
-	return tc.Current()
-}
 
 // ShellRunner executes an approved shell command and returns the tool-visible
 // output. CLI callers can route this through guarded AXIS execution.
@@ -1229,47 +1169,4 @@ func (r *ToolRegistry) registerGrepSearch() {
 			return strings.Join(matches, "\n"), nil
 		},
 	)
-}
-
-// RegisterMCPTools registers all tools from connected MCP servers.
-func (r *ToolRegistry) RegisterMCPTools(mcpRegistry *mcpclient.Registry) {
-	if mcpRegistry == nil {
-		return
-	}
-	for _, entry := range mcpRegistry.ListAllTools() {
-		server := entry.Server
-		toolName := entry.Tool.Name
-		agentToolName := fmt.Sprintf("mcp_%s_%s", server, toolName)
-
-		paramSchema, err := json.Marshal(entry.Tool.InputSchema)
-		if err != nil {
-			continue
-		}
-
-		r.add(agentToolName, entry.Tool.Description, json.RawMessage(paramSchema), func(ctx context.Context, args json.RawMessage) (string, error) {
-			var mcpArgs map[string]any
-			if len(args) > 0 {
-				if err := json.Unmarshal(args, &mcpArgs); err != nil {
-					return "", fmt.Errorf("invalid JSON arguments for MCP tool: %w", err)
-				}
-			}
-			res := mcpRegistry.CallTool(ctx, server, toolName, mcpArgs)
-			if res.Err != nil {
-				return "", res.Err
-			}
-
-			var parts []string
-			for _, content := range res.Result.Content {
-				if tc, ok := content.(mcp.TextContent); ok {
-					parts = append(parts, tc.Text)
-				} else if ic, ok := content.(mcp.ImageContent); ok {
-					parts = append(parts, fmt.Sprintf("[image: %s %d bytes]", ic.MIMEType, len(ic.Data)))
-				} else {
-					b, _ := json.MarshalIndent(content, "", "  ")
-					parts = append(parts, string(b))
-				}
-			}
-			return strings.Join(parts, "\n"), nil
-		})
-	}
 }

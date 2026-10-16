@@ -186,7 +186,7 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 	// Serialized across concurrent dispatches so operator prompts never interleave
 	// and the autoApproveAll/blockAll toggles are race-free. The expensive tool
 	// execution below runs unlocked so independent calls stay parallel.
-	if !isReadOnlyTool(name) {
+	if !a.ToolAutoApproved(name) {
 		a.dispatchMu.Lock()
 		approved := a.autoApproveAll
 		blocked := a.blockAll
