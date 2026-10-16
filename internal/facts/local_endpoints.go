@@ -17,46 +17,87 @@ import (
 // OpenAI-compatible /v1/models. A listing is never a load signal.
 // Marker axis-local-endpoints-v1 is the fake-executor contains key.
 //
-// The python heredoc avoids dollar signs, backticks, and backslashes: on a
+// It never dials the reserved non-HTTP service ports (sshd, Samba, databases:
+// a stray request is a log line there), nor the OS ephemeral range unless the
+// listener's process names a model server. A port that named no model is
+// cached on the swept node for 24 h, keyed by its socket (ss inode or lsof
+// device), so a restarted service is probed again; confirmed endpoints are
+// probed every run.
+//
+// The python heredocs avoid dollar signs, backticks, and backslashes: on a
 // fish login shell the quoted <<'PY' arrives unquoted and bash expands them.
 const LocalEndpointDiscoveryScript = `# axis-local-endpoints-v1
 OWNED=" ${AXIS_OWNED_PORTS:-} "
+RESERVED=" 22 25 53 111 139 445 2049 3306 5432 6379 11211 27017 "
 if ! command -v curl >/dev/null 2>&1; then echo '{"reason":"no-curl"}'; exit 0; fi
-# addr port process, one listener per line. A tool that is present but
-# prints nothing (an old ss without -H support, say) falls through.
+# addr port key process, one listener per line; key names the socket, or -.
+# A tool that is present but prints nothing (an old ss without -H support,
+# say) falls through.
 HAVE_TOOL=false
 LISTEN=""
 if command -v ss >/dev/null 2>&1; then
 	HAVE_TOOL=true
-	LISTEN=$(ss -ltnp 2>/dev/null | awk '{a=$4; p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); pr="-"; if (match($0,/users:\(\("[^"]+"/)) pr=substr($0,RSTART+9,RLENGTH-10); print a, p, pr}')
+	LISTEN=$(ss -ltnpe 2>/dev/null | awk '{a=$4; p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); pr="-"; k="-"; if (match($0,/users:\(\("[^"]+"/)) pr=substr($0,RSTART+9,RLENGTH-10); if (match($0,/ino:[1-9][0-9]*/)) k=substr($0,RSTART+4,RLENGTH-4); print a, p, k, pr}')
 fi
 if [ -z "$LISTEN" ] && command -v lsof >/dev/null 2>&1; then
 	HAVE_TOOL=true
-	LISTEN=$(lsof -b +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {a=$(NF-1); p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); print a, p, $1}')
+	LISTEN=$(lsof -b +c 0 -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {a=$(NF-1); p=a; sub(/.*:/,"",p); sub(/:[^:]*$/,"",a); print a, p, $6, $1}')
 fi
 if [ -z "$LISTEN" ] && command -v netstat >/dev/null 2>&1; then
 	HAVE_TOOL=true
-	LISTEN=$(netstat -an 2>/dev/null | awk '$1 ~ /^tcp/ && /LISTEN/ {a=$4; p=a; if (a ~ /:[0-9]+$/) {sub(/.*:/,"",p); sub(/:[^:]*$/,"",a)} else {sub(/.*\./,"",p); sub(/\.[^.]*$/,"",a)}; print a, p, "-"}')
+	LISTEN=$(netstat -an 2>/dev/null | awk '$1 ~ /^tcp/ && /LISTEN/ {a=$4; p=a; if (a ~ /:[0-9]+$/) {sub(/.*:/,"",p); sub(/:[^:]*$/,"",a)} else {sub(/.*\./,"",p); sub(/\.[^.]*$/,"",a)}; print a, p, "-", "-"}')
 fi
 if [ "$HAVE_TOOL" = false ]; then echo '{"reason":"no-listener-tool"}'; exit 0; fi
-# Loopback or wildcard binds only; owned ports skipped. One "port bind
+EPH=${AXIS_EPHEMERAL_PORTS:-}
+if [ -z "$EPH" ] && [ -r /proc/sys/net/ipv4/ip_local_port_range ]; then EPH=$(cat /proc/sys/net/ipv4/ip_local_port_range); fi
+if [ -z "$EPH" ] && command -v sysctl >/dev/null 2>&1; then EPH="$(sysctl -n net.inet.ip.portrange.first 2>/dev/null) $(sysctl -n net.inet.ip.portrange.last 2>/dev/null)"; fi
+# Loopback or wildcard binds only; owned ports skipped. One "port bind key
 # process" row per port; a wildcard bind on any family wins over loopback.
-PORTS=$(printf '%s\n' "$LISTEN" | awk -v owned="$OWNED" '{
+# Reserved ports become "port reserved" rows and the ephemeral skips one
+# "0 ephemeral count" row.
+PORTS=$(printf '%s\n' "$LISTEN" | awk -v owned="$OWNED" -v reserved="$RESERVED" -v eph="$EPH" 'BEGIN {
+	split(eph, r, " "); lo = r[1] + 0; hi = r[2] + 0
+	if (lo <= 0 || hi < lo) lo = hi = 0
+} {
 	a=$1; gsub(/\[|\]/,"",a); sub(/%.*/,"",a)
 	if (a ~ /^127\./ || a=="::1" || a=="localhost" || a=="::ffff:127.0.0.1") k="loopback"
 	else if (a=="*" || a=="0.0.0.0" || a=="::") k="any"
 	else next
 	if ($2 !~ /^[0-9]+$/ || index(owned, " " $2 " ")) next
-	if (!($2 in bind)) proc[$2]=$3
+	if (index(reserved, " " $2 " ")) { res[$2]=1; next }
+	if (lo && $2+0 >= lo && $2+0 <= hi && tolower($4) !~ /ollama|llama|vllm|lm.?studio|lms|litellm|mlx|kobold|tabby|sglang|lmdeploy|text-gen/) { ep[$2]=1; next }
+	if (!($2 in bind)) { proc[$2]=$4; key[$2]=$3 }
 	if (bind[$2] != "any") bind[$2]=k
 } END {
 	# Usual model-server ports first, so the cap is not spent on system services.
 	n = split("1234 4000 5000 5001 7860 8000 8001 8002 8008 8080 8081 8082 8090 8888 9000 11434 11435 30000", w, " ")
 	for (i = 1; i <= n; i++) known[w[i]] = 1
-	for (p in bind) { rank = 1; if (p in known) rank = 0; print rank, p, bind[p], proc[p] }
+	for (p in bind) { rank = 1; if (p in known) rank = 0; print rank, p, bind[p], key[p], proc[p] }
+	for (p in res) print 2, p, "reserved"
+	ne = 0; for (p in ep) if (!(p in bind)) ne++
+	if (ne) print 3, 0, "ephemeral", ne
 }' | sort -n -k1,1 -k2,2 | cut -d' ' -f2-)
 TRUNC=false
-if [ "$(printf '%s\n' "$PORTS" | grep -c .)" -gt 32 ]; then TRUNC=true; PORTS=$(printf '%s\n' "$PORTS" | head -n 32); fi
+# Cached "port key reason at" rows, from this node's own AXIS home.
+CACHE=""
+if [ -n "${AXIS_HOME:-}" ]; then CACHE="$AXIS_HOME/cache/local-endpoints-v1.json"; elif [ -n "${HOME:-}" ]; then CACHE="$HOME/.axis/cache/local-endpoints-v1.json"; fi
+HITS=""
+if [ -n "$CACHE" ] && [ -r "$CACHE" ] && command -v python3 >/dev/null 2>&1; then
+	HITS=$(python3 - "$CACHE" <<'PY'
+import json, sys, time
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        doc = json.load(f)
+    now = time.time()
+    for port, e in doc.get("ports", {}).items():
+        at = float(e.get("at", 0))
+        if 0 <= now - at < 86400 and str(e.get("key", "-")) != "-":
+            print(int(port), str(e["key"]), str(e.get("reason") or "-"), at)
+except Exception:
+    pass
+PY
+)
+fi
 DATA=$(mktemp 2>/dev/null) || { echo '{"reason":"no-tempfile"}'; exit 0; }
 BODY=$(mktemp 2>/dev/null) || { rm -f "$DATA"; echo '{"reason":"no-tempfile"}'; exit 0; }
 trap 'rm -f "$DATA" "$BODY"' EXIT
@@ -70,7 +111,7 @@ START=$SECONDS
 # resolution inside the 8 s budget.
 fetch() {
 	REM=$((7 - (SECONDS - START)))
-	if [ "$REM" -le 0 ]; then TRUNC=true; return 1; fi
+	if [ "$REM" -le 0 ]; then TRUNC=true; printf '%s PARTIAL %s\n' "$TOK" "$1" >> "$DATA"; return 1; fi
 	[ "$REM" -gt 1 ] && REM=1
 	CODE=$( { curl -q -s --noproxy '*' --max-time "$REM" -o - -w '%{stderr}%{http_code}' "http://127.0.0.1:$1$2" | head -c 262144 > "$BODY"; } 2>&1 )
 	case "$CODE" in [0-9][0-9][0-9]) ;; *) CODE=000 ;; esac
@@ -78,35 +119,68 @@ fetch() {
 	cat "$BODY" >> "$DATA"
 	printf '\n' >> "$DATA"
 }
-while read -r PORT BIND PROC; do
+PROBED=0
+STOP=false
+# After the cap or the budget, keep reading rows: cached ports still report.
+while read -r PORT BIND KEY PROC; do
 	[ -n "$PORT" ] || continue
-	printf '%s PROC %s %s %s\n' "$TOK" "$PORT" "$BIND" "$PROC" >> "$DATA"
-	fetch "$PORT" /api/tags || break
+	case "$BIND" in
+	reserved) printf '%s SKIP %s\n' "$TOK" "$PORT" >> "$DATA"; continue ;;
+	ephemeral) printf '%s EPHEMERAL %s\n' "$TOK" "$KEY" >> "$DATA"; continue ;;
+	esac
+	HIT=""
+	if [ "$KEY" != "-" ] && [ -n "$HITS" ]; then
+		HIT=$(printf '%s\n' "$HITS" | awk -v p="$PORT" -v k="$KEY" '$1 == p && $2 == k {print $3, $4; exit}')
+	fi
+	if [ -n "$HIT" ]; then
+		printf '%s CACHED %s %s %s %s %s\n' "$TOK" "$PORT" "$BIND" "$KEY" "$HIT" "$PROC" >> "$DATA"
+		continue
+	fi
+	[ "$STOP" = false ] || continue
+	PROBED=$((PROBED + 1))
+	if [ "$PROBED" -gt 32 ]; then TRUNC=true; STOP=true; continue; fi
+	printf '%s PROC %s %s %s %s\n' "$TOK" "$PORT" "$BIND" "$KEY" "$PROC" >> "$DATA"
+	fetch "$PORT" /api/tags || { STOP=true; continue; }
 	# 000: not HTTP or not answering; a second request would only time out too.
 	if [ "$CODE" = 000 ] || { [ "$CODE" = 200 ] && grep -q '"models"' "$BODY"; }; then continue; fi
-	fetch "$PORT" /v1/models || break
+	fetch "$PORT" /v1/models || STOP=true
 done <<EOF
 $PORTS
 EOF
 if command -v python3 >/dev/null 2>&1; then
-	AXIS_EP_TRUNC="$TRUNC" AXIS_EP_TOK="$TOK" python3 - "$DATA" <<'PY'
-import json, os, sys
+	AXIS_EP_TRUNC="$TRUNC" AXIS_EP_TOK="$TOK" AXIS_EP_CACHE="$CACHE" python3 - "$DATA" <<'PY'
+import json, os, sys, time
 
 ENGINES = {"llamacpp": "llama.cpp", "vllm": "vllm"}
 MAX_MODELS = 256
 MAX_CONTEXT = 1 << 31
 TOK = os.environ["AXIS_EP_TOK"] + " "
-state = {"truncated": os.environ.get("AXIS_EP_TRUNC") == "true"}
+state = {"truncated": os.environ.get("AXIS_EP_TRUNC") == "true", "ephemeral": 0}
 ports = {}
 order = []
+cached, skipped, partial, cacheable = {}, [], set(), {}
 cur = None
 with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
     for line in f.read().splitlines():
         if line.startswith(TOK + "PROC "):
-            parts = line[len(TOK):].split(" ", 3)
+            parts = line[len(TOK):].split(" ", 4)
             p = int(parts[1])
-            ports[p] = {"bind": parts[2], "process": parts[3] if len(parts) > 3 and parts[3] != "-" else "", "fetch": {}}
+            ports[p] = {"bind": parts[2], "key": parts[3], "process": parts[4] if len(parts) > 4 and parts[4] != "-" else "", "fetch": {}}
             order.append(p)
+            cur = None
+        elif line.startswith(TOK + "CACHED "):
+            parts = line[len(TOK):].split(" ", 6)
+            cached[int(parts[1])] = {"key": parts[3], "reason": parts[4], "at": float(parts[5]),
+                                     "process": parts[6] if len(parts) > 6 and parts[6] != "-" else ""}
+            cur = None
+        elif line.startswith(TOK + "SKIP "):
+            skipped.append(int(line[len(TOK):].split(" ")[1]))
+            cur = None
+        elif line.startswith(TOK + "EPHEMERAL "):
+            state["ephemeral"] = int(line[len(TOK):].split(" ")[1])
+            cur = None
+        elif line.startswith(TOK + "PARTIAL "):
+            partial.add(int(line[len(TOK):].split(" ")[1]))
             cur = None
         elif line.startswith(TOK + "FETCH "):
             _, p, path, code = line[len(TOK):].split(" ", 3)
@@ -127,7 +201,10 @@ def classify(p):
     info = ports[p]
     got = info["fetch"]
     codes = {path: f["code"] for path, f in got.items()}
-    if not codes or all(c == "000" for c in codes.values()):
+    if not codes:
+        return
+    if all(c == "000" for c in codes.values()):
+        cacheable[p] = "-"
         return
     tags = got.get("/api/tags")
     doc = body(tags) if tags and tags["code"] == "200" else None
@@ -179,21 +256,49 @@ def classify(p):
         reason = "auth-required"
     else:
         reason = "no-model-listing"
+    cacheable[p] = reason
     candidates.append({"port": p, "process": info["process"], "reason": reason})
+
+
+def save_cache(path):
+    keep = {str(p): {"key": c["key"], "reason": c["reason"], "at": c["at"]} for p, c in cached.items()}
+    now = time.time()
+    for p, reason in cacheable.items():
+        if ports[p]["key"] != "-" and p not in partial:
+            keep[str(p)] = {"key": ports[p]["key"], "reason": reason, "at": now}
+    os.umask(0o077)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp" + str(os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"v": 1, "ports": keep}, f)
+    os.replace(tmp, path)
 
 
 for p in order:
     try:
         classify(p)
     except Exception:
+        cacheable.pop(p, None)
         candidates.append({"port": p, "process": ports[p]["process"], "reason": "parse-error"})
-
-print(json.dumps({"confirmed": confirmed, "candidates": candidates, "truncated": state["truncated"]}))
+for p in sorted(cached):
+    if cached[p]["reason"] != "-":
+        candidates.append({"port": p, "process": cached[p]["process"], "reason": cached[p]["reason"], "cached": True})
+if os.environ.get("AXIS_EP_CACHE"):
+    try:
+        save_cache(os.environ["AXIS_EP_CACHE"])
+    except OSError:
+        pass
+out = {"confirmed": confirmed, "candidates": candidates, "truncated": state["truncated"]}
+if skipped:
+    out["skipped_reserved"] = sorted(skipped)
+if state["ephemeral"]:
+    out["skipped_ephemeral"] = state["ephemeral"]
+print(json.dumps(out))
 PY
 else
 	# No parser: every port that answered HTTP stays a candidate.
 	awk -v trunc="$TRUNC" -v tok="$TOK" '
-		$1 == tok && $2 == "PROC" {port=$3; proc=($5=="-") ? "" : $5; next}
+		$1 == tok && $2 == "PROC" {port=$3; proc=($6=="-") ? "" : $6; next}
 		$1 == tok && $2 == "FETCH" {if ($5 != "000" && !done[port]++) {gsub(/["\\]/,"",proc); rows = rows (rows=="" ? "" : ",") "{\"port\":" port ",\"process\":\"" proc "\",\"reason\":\"parser-unavailable\"}"}}
 		END {printf "{\"candidates\":[%s],\"truncated\":%s}\n", rows, trunc}' "$DATA"
 fi
