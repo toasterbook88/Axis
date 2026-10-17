@@ -432,6 +432,84 @@ func TestOllamaDiscoveryScriptRejectsNonNumericPgrepOutput(t *testing.T) {
 	}
 }
 
+// runOllamaProbeResidents runs the discovery script with a stub curl that
+// answers /api/ps with apiPS (empty string: the API is unreachable) and a stub
+// `ollama ps` that prints psText. It returns the resident models it reports.
+func runOllamaProbeResidents(t *testing.T, apiPS, psText string) []models.ResidentModel {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "api-ps.json"), []byte(apiPS), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "ps.txt"), []byte(psText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFactStub(t, bin, "ollama", `case "$1" in
+  ps) [ "$#" -eq 1 ] && cat "`+bin+`/ps.txt" || { echo "Error: unknown shorthand flag" >&2; exit 1; };;
+  --version) echo "ollama version 0.0.0-stub";;
+  *) echo "";;
+esac`)
+	writeFactStub(t, bin, "pgrep", `echo 4242`)
+	writeFactStub(t, bin, "lsof", "exit 1")
+	writeFactStub(t, bin, "ss", "exit 1")
+	writeFactStub(t, bin, "netstat", "exit 1")
+	writeFactStub(t, bin, "curl", `for a in "$@"; do
+  case "$a" in */api/ps) [ -s "`+bin+`/api-ps.json" ] && exec cat "`+bin+`/api-ps.json"; exit 7;; esac
+done
+exit 7`)
+	cmd := exec.Command("bash", "-c", OllamaDiscoveryScript)
+	cmd.Env = withSandboxedPATH(bin)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	var payload ollamaDiscoveryPayload
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("json %q: %v", bytes.TrimSpace(out), err)
+	}
+	return payload.ResidentModels
+}
+
+// TestOllamaDiscoveryScriptReadsResidentsFromAPI guards the resident-model
+// source. The ollama CLI has no JSON flag for ps, so the probe must read
+// /api/ps: it is the only source of expires_at, which drives warmth.
+func TestOllamaDiscoveryScriptReadsResidentsFromAPI(t *testing.T) {
+	apiPS := `{"models":[` +
+		`{"name":"example-a:1b","size":1000,"size_vram":1000,"expires_at":"2030-01-02T03:04:05Z"},` +
+		`{"name":"example-b:1b","size":1000,"size_vram":250,"expires_at":"2030-01-02T03:04:05Z"},` +
+		`{"name":"example-c:1b","size":1000,"size_vram":0,"expires_at":"2030-01-02T03:04:05Z"}]}`
+	got := runOllamaProbeResidents(t, apiPS, "")
+	want := map[string]string{"example-a:1b": "100% GPU", "example-b:1b": "75%/25% CPU/GPU", "example-c:1b": "100% CPU"}
+	if len(got) != len(want) {
+		t.Fatalf("residents = %+v; want %d", got, len(want))
+	}
+	for _, rm := range got {
+		if rm.Processor != want[rm.Name] {
+			t.Errorf("%s processor = %q; want %q", rm.Name, rm.Processor, want[rm.Name])
+		}
+		if rm.ExpiresAt.IsZero() {
+			t.Errorf("%s expires_at not carried through from /api/ps", rm.Name)
+		}
+	}
+}
+
+// TestOllamaDiscoveryScriptFallsBackToPsText covers an unreachable API: the
+// probe parses `ollama ps` text and reports no expiry.
+func TestOllamaDiscoveryScriptFallsBackToPsText(t *testing.T) {
+	psText := "NAME            ID              SIZE      PROCESSOR    CONTEXT    UNTIL\n" +
+		"example-a:1b    0123456789ab    1.0 GB    100% GPU     4096       4 minutes from now\n"
+	got := runOllamaProbeResidents(t, "", psText)
+	if len(got) != 1 || got[0].Name != "example-a:1b" || got[0].Processor != "100% GPU" {
+		t.Fatalf("residents = %+v; want example-a:1b on 100%% GPU", got)
+	}
+	if !got[0].ExpiresAt.IsZero() {
+		t.Errorf("expires_at = %v; the text fallback has no expiry", got[0].ExpiresAt)
+	}
+}
+
 // TestOllamaDiscoveryScriptHasNoSelfMatchingPattern is the static guard for the
 // bug class these tests exist for. The probe's own `bash -c` argv embeds this
 // script's text, so any literal the script searches for is also present in the
