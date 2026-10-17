@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,10 @@ type epSweep struct {
 	noCurl    bool
 	home      string // AXIS_HOME holding the sweep cache; default a fresh temp dir
 	ephemeral string // AXIS_EPHEMERAL_PORTS "lo hi"; default none
+	mode      string
+	exclude   string
+	include   string
+	ttl       string
 }
 
 // run executes the real sweep with stubbed listener tools and a curl that
@@ -66,6 +71,14 @@ printf 000 >&2; exit 7`, resp))
 	if !s.noPython {
 		tools = append(tools, "python3")
 	}
+	mode := s.mode
+	if mode == "" {
+		mode = "full"
+	} // preserve the historical broad-sweep fixture default
+	t.Setenv("AXIS_ENDPOINT_SWEEP", mode)
+	t.Setenv("AXIS_ENDPOINT_SWEEP_EXCLUDE", s.exclude)
+	t.Setenv("AXIS_ENDPOINT_SWEEP_INCLUDE", s.include)
+	t.Setenv("AXIS_ENDPOINT_SWEEP_TTL", s.ttl)
 	cmd := exec.Command("bash", "-c", localEndpointsCommand(s.owned))
 	if s.home == "" {
 		s.home = t.TempDir()
@@ -133,18 +146,16 @@ func TestLocalEndpointSweepConfirmsAndClassifies(t *testing.T) {
 
 func TestLocalEndpointSweepSecondOllamaAndNoModelListing(t *testing.T) {
 	got, _ := epSweep{
-		listeners: map[string]string{"ss": "LISTEN 0 4096 127.0.0.1:11500 0.0.0.0:*\nLISTEN 0 4096 *:3000 *:*\n"},
+		listeners: map[string]string{"ss": "LISTEN 0 4096 127.0.0.1:11500 0.0.0.0:* users:((\"ollama\",pid=1,fd=1))\nLISTEN 0 4096 *:3000 *:*\n"},
 		responses: map[string]string{
 			"11500/api/tags": "200\n" + `{"models":[{"name":"qwen3:8b"},{"name":"llama3.2:3b"}]}`,
-			"3000/api/tags":  "404\nnot found",
-			"3000/v1/models": "200\n<html>dashboard</html>",
 		},
 	}.run(t)
 	if len(got.Confirmed) != 1 || got.Confirmed[0].Dialect != "ollama" || got.Confirmed[0].Engine != "ollama" ||
 		len(got.Confirmed[0].Models) != 2 || got.Confirmed[0].Models[0].Name != "llama3.2:3b" {
 		t.Fatalf("confirmed = %+v", got.Confirmed)
 	}
-	if len(got.Candidates) != 1 || got.Candidates[0].Port != 3000 || got.Candidates[0].Reason != "no-model-listing" {
+	if len(got.Candidates) != 0 || !slices.Contains(got.SkippedExcluded, 3000) {
 		t.Fatalf("candidates = %+v", got.Candidates)
 	}
 }
@@ -234,7 +245,7 @@ func TestOwnedModelPortsAndDiscover(t *testing.T) {
 		cmd = c
 		return `{"confirmed":[{"port":8000,"dialect":"openai","engine":"vllm","models":[{"name":"m"}]}]}`, nil
 	})
-	if !strings.HasPrefix(cmd, "AXIS_OWNED_PORTS='8080 8181 11434'\n# axis-local-endpoints-v1") {
+	if !strings.HasPrefix(cmd, "AXIS_OWNED_PORTS='8080 8181 11434'\nAXIS_ENDPOINT_SWEEP='allowlist'\n") || !strings.Contains(cmd, "# axis-local-endpoints-v1") {
 		t.Fatalf("command prefix = %q", cmd[:60])
 	}
 	if res == nil || len(res.Confirmed) != 1 {
@@ -276,6 +287,28 @@ func TestLocalEndpointSweepProbesModelPortsFirst(t *testing.T) {
 	}
 	if !got.Truncated || len(got.Confirmed) != 1 {
 		t.Fatalf("got %+v, want :8000 confirmed despite the cap", got)
+	}
+}
+
+func TestLocalEndpointSweepAllowlistDefault(t *testing.T) {
+	got, calls := epSweep{
+		mode: "allowlist",
+		listeners: map[string]string{"ss": ssRow("127.0.0.1:8000", "vllm", "80") + ssRow("127.0.0.1:8080", "nginx", "81") +
+			ssRow("127.0.0.1:8081", "llama-server", "82") + ssRow("127.0.0.1:5601", "", "56") + ssRow("127.0.0.1:4000", "litellm", "40")},
+		responses: map[string]string{"8000/v1/models": "200\n" + `{"data":[{"id":"m"}]}`, "8081/v1/models": "200\n" + `{"data":[{"id":"llama"}]}`},
+	}.run(t)
+	for _, p := range []string{"8000", "4000", "8081"} {
+		if !dialedPort(calls, p) {
+			t.Fatalf("allowlisted/model process port %s not dialed: %v", p, calls)
+		}
+	}
+	for _, p := range []string{"8080", "5601"} {
+		if dialedPort(calls, p) {
+			t.Fatalf("unallowlisted port %s dialed: %v", p, calls)
+		}
+	}
+	if got.SkippedNotAllowlisted != 2 {
+		t.Fatalf("skipped_not_allowlisted = %d, want 2", got.SkippedNotAllowlisted)
 	}
 }
 
