@@ -93,11 +93,6 @@ func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 	}
 }
 
-// IsReadOnlyTool returns true for tools that only read cluster state.
-func IsReadOnlyTool(name string) bool {
-	return isReadOnlyTool(name)
-}
-
 // isReadOnlyTool returns true for tools that only read cluster state.
 func isReadOnlyTool(name string) bool {
 	switch name {
@@ -109,19 +104,10 @@ func isReadOnlyTool(name string) bool {
 		"branch_session", "rollback_session":
 		return true
 	}
-	if strings.HasPrefix(name, "mcp_") {
-		lower := strings.ToLower(name)
-		if strings.Contains(lower, "read") ||
-			strings.Contains(lower, "list") ||
-			strings.Contains(lower, "get") ||
-			strings.Contains(lower, "recall") ||
-			strings.Contains(lower, "status") ||
-			strings.Contains(lower, "health") ||
-			strings.Contains(lower, "search") ||
-			strings.Contains(lower, "show") {
-			return true
-		}
-	}
+	// External MCP tools are never read-only by name: a server can call a
+	// mutating tool anything. They skip confirmation only when the operator
+	// lists them in mcp_servers.<server>.auto_approve_tools (see
+	// ToolRegistry.mcpAutoApproved).
 	return false
 }
 

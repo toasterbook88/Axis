@@ -552,9 +552,9 @@ func slashMCPListTools(w io.Writer, sc *mcpclient.ServerConnection) {
 		name := sanitizeDiagnosticsText(t.Name)
 		desc := sanitizeDiagnosticsText(t.Description)
 
-		safety := ui.YellowColor.Sprint("Execute")
-		if agent.IsReadOnlyTool(name) || agent.IsReadOnlyTool("mcp_"+sc.Name+"_"+name) {
-			safety = ui.GreenColor.Sprint("Read-Only")
+		safety := ui.YellowColor.Sprint("Asks first")
+		if sc.Config.AutoApproves(t.Name) {
+			safety = ui.GreenColor.Sprint("Auto-approved")
 		}
 
 		tbl.AddRow(name, safety, desc)
@@ -716,8 +716,8 @@ func slashTools(session *agentREPLSession, _ []string) (bool, bool, error) {
 	tbl := ui.NewTable("TOOL NAME", "SAFETY", "DESCRIPTION")
 	for _, d := range defs {
 		safety := ui.YellowColor.Sprint("Execute")
-		if agent.IsReadOnlyTool(d.Function.Name) {
-			safety = ui.GreenColor.Sprint("Read-Only")
+		if session.Agent.ToolAutoApproved(d.Function.Name) {
+			safety = ui.GreenColor.Sprint("Auto-approved")
 		}
 		tbl.AddRow(d.Function.Name, safety, d.Function.Description)
 	}
