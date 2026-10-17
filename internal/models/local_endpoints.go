@@ -19,6 +19,12 @@ type LocalEndpoints struct {
 	// SkippedEphemeral counts OS ephemeral-range listeners left unprobed
 	// because no model-server process name was visible.
 	SkippedEphemeral int `json:"skipped_ephemeral,omitempty" yaml:"skipped_ephemeral,omitempty"`
+	// SkippedNotAllowlisted counts listeners omitted by the default scope.
+	SkippedNotAllowlisted int `json:"skipped_not_allowlisted,omitempty" yaml:"skipped_not_allowlisted,omitempty"`
+	// SkippedExcluded lists explicitly denied listener ports.
+	SkippedExcluded []int `json:"skipped_excluded,omitempty" yaml:"skipped_excluded,omitempty"`
+	// CachedSweep indicates that the whole result was reused without dialing.
+	CachedSweep bool `json:"cached_sweep,omitempty" yaml:"cached_sweep,omitempty"`
 }
 
 // LocalEndpoint is a loopback port that named its models.
