@@ -19,6 +19,8 @@ type epSweep struct {
 	responses map[string]string // "8000/v1/models" -> "code\nbody"
 	noPython  bool
 	noCurl    bool
+	home      string // AXIS_HOME holding the sweep cache; default a fresh temp dir
+	ephemeral string // AXIS_EPHEMERAL_PORTS "lo hi"; default none
 }
 
 // run executes the real sweep with stubbed listener tools and a curl that
@@ -65,7 +67,13 @@ printf 000 >&2; exit 7`, resp))
 		tools = append(tools, "python3")
 	}
 	cmd := exec.Command("bash", "-c", localEndpointsCommand(s.owned))
-	cmd.Env = withExactToolPATH(t, bin, tools...)
+	if s.home == "" {
+		s.home = t.TempDir()
+	}
+	if s.ephemeral == "" {
+		s.ephemeral = "1 0" // an empty range: hosts' own ranges must not shift results
+	}
+	cmd.Env = append(withExactToolPATH(t, bin, tools...), "AXIS_HOME="+s.home, "AXIS_EPHEMERAL_PORTS="+s.ephemeral)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("script: %v\n%s", err, out)

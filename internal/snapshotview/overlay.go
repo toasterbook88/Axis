@@ -179,6 +179,7 @@ func ApplyReservationEntries(snap *models.ClusterSnapshot, st *state.ClusterStat
 func cloneLocalEndpoints(le *models.LocalEndpoints) *models.LocalEndpoints {
 	out := *le
 	out.Candidates = append([]models.LocalEndpointCandidate(nil), le.Candidates...)
+	out.SkippedReserved = append([]int(nil), le.SkippedReserved...)
 	out.Confirmed = make([]models.LocalEndpoint, len(le.Confirmed))
 	for i, ep := range le.Confirmed {
 		ep.Models = append([]models.LocalEndpointModel(nil), ep.Models...)

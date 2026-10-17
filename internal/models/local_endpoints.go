@@ -13,6 +13,12 @@ type LocalEndpoints struct {
 	Truncated bool `json:"truncated,omitempty" yaml:"truncated,omitempty"`
 	// Reason explains an empty sweep, e.g. no-listener-tool or no-curl.
 	Reason string `json:"reason,omitempty" yaml:"reason,omitempty"`
+	// SkippedReserved lists listening ports the sweep never dials because
+	// they are known non-HTTP services (sshd, Samba, databases).
+	SkippedReserved []int `json:"skipped_reserved,omitempty" yaml:"skipped_reserved,omitempty"`
+	// SkippedEphemeral counts OS ephemeral-range listeners left unprobed
+	// because no model-server process name was visible.
+	SkippedEphemeral int `json:"skipped_ephemeral,omitempty" yaml:"skipped_ephemeral,omitempty"`
 }
 
 // LocalEndpoint is a loopback port that named its models.
@@ -46,4 +52,7 @@ type LocalEndpointCandidate struct {
 	Port    int    `json:"port" yaml:"port"`
 	Process string `json:"process,omitempty" yaml:"process,omitempty"`
 	Reason  string `json:"reason" yaml:"reason"`
+	// Cached is true when the result was reused from an earlier sweep of the
+	// same socket on this node (at most 24 h old) instead of probed this run.
+	Cached bool `json:"cached,omitempty" yaml:"cached,omitempty"`
 }
