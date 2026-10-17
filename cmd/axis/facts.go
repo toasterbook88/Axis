@@ -170,13 +170,26 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 			}
 		}
 
-		if le := nf.LocalEndpoints; le != nil && (len(le.Confirmed) > 0 || len(le.Candidates) > 0 || le.Truncated) {
+		if le := nf.LocalEndpoints; le != nil && (len(le.Confirmed) > 0 || len(le.Candidates) > 0 || le.Truncated || le.CachedSweep || le.SkippedNotAllowlisted > 0 || len(le.SkippedExcluded) > 0) {
 			fmt.Fprintln(out)
 			title := "Local endpoints"
 			if le.Truncated {
 				title += " (truncated)"
 			}
+			if le.CachedSweep {
+				title += " (cached sweep)"
+			}
 			fmt.Fprintf(out, "  %s\n", ui.Bold(title))
+			if le.SkippedNotAllowlisted > 0 {
+				fmt.Fprintf(out, "    %d listener(s) not allowlisted\n", le.SkippedNotAllowlisted)
+			}
+			if len(le.SkippedExcluded) > 0 {
+				ports := make([]string, 0, len(le.SkippedExcluded))
+				for _, port := range le.SkippedExcluded {
+					ports = append(ports, fmt.Sprintf("%d", port))
+				}
+				fmt.Fprintf(out, "    explicitly excluded port(s): %s\n", strings.Join(ports, ", "))
+			}
 			for _, ep := range le.Confirmed {
 				fmt.Fprintf(out, "    %s :%d  %s  %s  %d model(s), listed\n", ui.Green("✓"), ep.Port, ep.Engine, ep.Bind, len(ep.Models))
 			}
