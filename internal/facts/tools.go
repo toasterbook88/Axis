@@ -66,17 +66,17 @@ const OllamaDiscoveryScript = `set -o pipefail;
 			LISTENING=true
 		fi
 		GPU=$($OLLAMA_BIN ps 2>/dev/null | grep -o 'gpu:[^ ]*' | head -1)
-		# 'ollama ps -qq' (added in Ollama 0.3.10) emits JSON: each entry
-		# includes name, expires_at (RFC3339) and size_vram. Parse it
-		# with python3 (always present on nodes with ollama) and emit
-		# one JSON object per model. Falls back to the existing awk
-		# parser when the JSON is unavailable (older Ollama).
-		PS_JSON=$($OLLAMA_BIN ps -qq 2>/dev/null || echo "")
+		# /api/ps lists loaded models as JSON (name, size, size_vram,
+		# expires_at); the ollama CLI has no JSON flag for ps. The JSON
+		# goes in via the environment because the heredoc is python's
+		# stdin. Falls back to awk over 'ollama ps' text when unreachable.
+		# interlinked-ignore: ubs_hardcoded_localhost — the node probes its own loopback Ollama API
+		PS_JSON=$(curl -s --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null || echo "")
 		if [ -n "$PS_JSON" ]; then
-			RESIDENT=$(printf '%s' "$PS_JSON" | python3 - 2>/dev/null <<'PYEOF' || echo ""
-import json, sys
+			RESIDENT=$(AXIS_PS_JSON="$PS_JSON" python3 - 2>/dev/null <<'PYEOF' || echo ""
+import json, os, sys
 try:
-    data = json.loads(sys.stdin.read() or "[]")
+    data = json.loads(os.environ.get("AXIS_PS_JSON") or "[]")
     entries = data.get("models", data) if isinstance(data, dict) else data
     if not isinstance(entries, list):
         entries = []
@@ -87,15 +87,23 @@ try:
         name = e.get("name", "")
         if not name:
             continue
-        vram = e.get("size_vram")
         try:
-            vram_val = int(vram) if vram is not None else 0
+            vram_val = int(e.get("size_vram") or 0)
+            size_val = int(e.get("size") or 0)
         except (ValueError, TypeError):
-            vram_val = 0
+            vram_val, size_val = 0, 0
+        # Same wording as the PROCESSOR column of 'ollama ps'.
+        if size_val <= 0 or vram_val <= 0:
+            proc = "100% CPU"
+        elif vram_val >= size_val:
+            proc = "100% GPU"
+        else:
+            gpu = round(100 * vram_val / size_val)
+            proc = "%d%%/%d%% CPU/GPU" % (100 - gpu, gpu)
         out.append(json.dumps({
             "name": name,
             "runtime": "ollama",
-            "processor": e.get("processor", "gpu"),
+            "processor": proc,
             "size_vram_mb": vram_val // (1024*1024),
             "source": "ollama-ps",
             "expires_at": e.get("expires_at", ""),
@@ -109,7 +117,7 @@ PYEOF
 			RESIDENT=""
 		fi
 		if [ -z "$RESIDENT" ]; then
-			# Fallback: original awk parser (older Ollama, no 'ps -qq').
+			# Fallback: awk parser over 'ollama ps' text (API unreachable).
 			# No expires_at field is emitted by this path; the local
 			# parser will leave ExpiresAt zero and WarmthScore at 0.
 			RESIDENT=$($OLLAMA_BIN ps 2>/dev/null | awk 'NR>1 && NF { proc=""; size_mb=0; for(i=1;i<=NF;i++){if($i~/[0-9]+%/){proc=$i" "$(i+1)} if(($i=="GB"||$i=="GiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)*1024+0.5)} if(($i=="MB"||$i=="MiB")&&i>1&&($(i-1)+0)>0){size_mb=int($(i-1)+0.5)}} gsub(/"/, "\\\"", proc); printf "%s{\"name\":\"%s\",\"runtime\":\"ollama\",\"processor\":\"%s\",\"size_vram_mb\":%d,\"source\":\"ollama-ps\"}", (n++ ? "," : ""), $1, proc, size_mb }')
@@ -119,11 +127,12 @@ PYEOF
 		else
 			RESIDENT="[]"
 		fi
-		# Process-level default_keep_alive (added in Ollama 0.3.10). Read
-		# from /api/ps; tolerate older Ollama (or versions that omit
-		# the field) by emitting an empty string. Treat null and any
-		# failure to parse as empty.
-		KEEPALIVE=$(curl -s --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('default_keep_alive'); print('' if v is None else v)" 2>/dev/null || echo "")
+		# Ollama exposes no process-level keep-alive: /api/ps has no
+		# default_keep_alive field and OLLAMA_KEEP_ALIVE lives only in the
+		# server's environment. Emit empty so DefaultOllamaKeepAlive applies
+		# its documented default; per-model expires_at above is the real
+		# warmth signal.
+		KEEPALIVE=""
 		# Installed-model catalog from this node's own Ollama API. Cloud
 		# proxies carry remote_host; /api/show capabilities separate
 		# embedding models from chat models. Bounded to 64 models and a 6s
