@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -94,6 +95,7 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 	}
 	section := map[string]string{"SPHardwareDataType": "System", "SPMemoryDataType": "Memory", "SPDisplaysDataType": "GPU", "SPStorageDataType": "Storage", "SPNetworkDataType": "Network", "SPPowerDataType": "Sensors", "SPUSBDataType": "Devices", "SPPCIDataType": "Devices", "SPAudioDataType": "Devices"}
 	for _, typ := range macHardwareTypes {
+		nextID := 0
 		var walk func(map[string]any, string)
 		walk = func(n map[string]any, parent string) {
 			name, _ := n["_name"].(string)
@@ -107,7 +109,8 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 				name = model
 			}
 			s := hardwareSection(r, section[typ])
-			d := hardwareDevice(fmt.Sprintf("%s-%d", typ, len(s.Devices)), name)
+			d := hardwareDevice(fmt.Sprintf("%s-%d", typ, nextID), name)
+			nextID++
 			if id, ok := n["bsd_name"].(string); ok {
 				d.ID = id
 			}
@@ -129,19 +132,25 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 				}
 			}
 			if len(d.Specs) > 0 {
-				if parent != "" {
+				if parent != "" && parent != d.ID {
 					d.Specs = append(d.Specs, c.reading("parent", parent, "", "system_profiler "+typ))
 				}
-				s.Devices = append(s.Devices, d)
+				index := slices.IndexFunc(s.Devices, func(existing models.HardwareDevice) bool { return existing.ID == d.ID })
+				if index < 0 {
+					s.Devices = append(s.Devices, d)
+				} else {
+					s.Devices[index].Specs = append(s.Devices[index].Specs, d.Specs...)
+				}
+				parent = d.ID
 			}
 			for _, key := range slices.Sorted(maps.Keys(n)) {
 				switch x := n[key].(type) {
 				case map[string]any:
-					walk(x, d.ID)
+					walk(x, parent)
 				case []any:
 					for _, v := range x {
 						if child, ok := v.(map[string]any); ok {
-							walk(child, d.ID)
+							walk(child, parent)
 						}
 					}
 				}
@@ -157,16 +166,19 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 var macCPUUsage = regexp.MustCompile(`CPU usage:\s*([\d.]+)% user,\s*([\d.]+)% sys,\s*([\d.]+)% idle`)
 var macVMPageSize = regexp.MustCompile(`page size of (\d+) bytes`)
 
-func parseMacVM(raw string) map[string]float64 {
-	result := map[string]float64{}
+func parseMacVM(raw string) map[string]uint64 {
+	result := map[string]uint64{}
 	match := macVMPageSize.FindStringSubmatch(raw)
 	if len(match) != 2 {
 		return result
 	}
-	size, _ := strconv.ParseFloat(match[1], 64)
+	size, err := strconv.ParseUint(match[1], 10, 64)
+	if err != nil || size < 1024 || size&(size-1) != 0 {
+		return result
+	}
 	for key, v := range hardwareKeyValues(raw, ":") {
-		n, ok := hardwareNumber(strings.TrimSuffix(v, "."))
-		if ok {
+		n, err := strconv.ParseUint(strings.TrimSuffix(v, "."), 10, 64)
+		if err == nil && n <= math.MaxUint64/size {
 			result[key] = n * size
 		}
 	}
@@ -174,15 +186,32 @@ func parseMacVM(raw string) map[string]float64 {
 }
 
 func (c *HardwareCollector) macHardwareMetrics(ctx context.Context, r *models.HardwareReport) {
-	// top's first frame is not a one-second utilization sample; use only frame 2.
+	c.macCPUMetrics(ctx, r)
+	c.macMemoryMetrics(ctx, r)
+	c.macPowerMetrics(ctx, r)
+	c.hardwareVolumes(ctx, r)
+	c.macNetworkMetrics(ctx, r)
+	c.macGPUMetrics(ctx, r)
+}
+
+func (c *HardwareCollector) macCPUMetrics(ctx context.Context, r *models.HardwareReport) {
 	raw, err := c.run(ctx, "top", "-l", "2", "-s", "1", "-n", "0")
 	cpu := &hardwareSection(r, "CPU").Devices[0]
 	matches := macCPUUsage.FindAllStringSubmatch(string(raw), -1)
+	values := []float64{}
 	if err == nil && len(matches) >= 2 {
-		m := matches[len(matches)-1]
+		for _, text := range matches[len(matches)-1][1:] {
+			n, ok := hardwareNumber(text)
+			if !ok || n < 0 || n > 100 {
+				values = nil
+				break
+			}
+			values = append(values, n)
+		}
+	}
+	if len(values) == 3 && math.Abs(values[0]+values[1]+values[2]-100) <= 1 {
 		for i, key := range []string{"user", "system", "idle"} {
-			n, _ := strconv.ParseFloat(m[i+1], 64)
-			v := c.reading(key, n, "%", "top -l 2 -s 1 (second frame, 1s sample)")
+			v := c.reading(key, values[i], "%", "top -l 2 -s 1 (second frame, 1s sample)")
 			v.SampleSeconds = 1
 			cpu.Metrics = append(cpu.Metrics, v)
 		}
@@ -190,53 +219,76 @@ func (c *HardwareCollector) macHardwareMetrics(ctx context.Context, r *models.Ha
 		cpu.Metrics = append(cpu.Metrics, c.unavailable("CPU utilization", "top -l 2 -s 1", err))
 	}
 	cpu.Metrics = append(cpu.Metrics, c.unavailable("per-core utilization and current clocks", "macOS unprivileged interfaces", nil))
+}
+
+var macSwapUsage = regexp.MustCompile(`(total|used|free) =\s*([\d.]+)([KMGTP])`)
+
+func (c *HardwareCollector) macMemoryMetrics(ctx context.Context, r *models.HardwareReport) {
 	mem := &hardwareSection(r, "Memory").Devices[0]
-	raw, err = c.run(ctx, "vm_stat")
-	values := parseMacVM(string(raw))
-	if len(values) == 0 {
-		mem.Metrics = append(mem.Metrics, c.unavailable("memory usage", "vm_stat", err))
+	raw, err := c.run(ctx, "vm_stat")
+	values := map[string]uint64{}
+	if err == nil {
+		values = parseMacVM(string(raw))
 	}
 	for _, key := range []string{"Pages free", "Pages active", "Pages inactive", "Pages speculative", "Pages wired down", "Pages purgeable", "Pages occupied by compressor"} {
-		if v, ok := values[key]; ok {
-			mem.Metrics = append(mem.Metrics, c.reading(key, v, "bytes", "vm_stat"))
+		if value, ok := values[key]; ok {
+			mem.Metrics = append(mem.Metrics, c.reading(key, value, "bytes", "vm_stat"))
+		} else {
+			mem.Metrics = append(mem.Metrics, c.unavailable(key, "vm_stat", err))
 		}
 	}
 	raw, err = c.run(ctx, "sysctl", "vm.swapusage")
-	swap := regexp.MustCompile(`(total|used|free) =\s*([\d.]+)([MG])`).FindAllStringSubmatch(string(raw), -1)
-	if err == nil && len(swap) > 0 {
-		for _, m := range swap {
-			n, _ := strconv.ParseFloat(m[2], 64)
-			scale := float64(1 << 20)
-			if m[3] == "G" {
-				scale = 1 << 30
-			}
-			mem.Metrics = append(mem.Metrics, c.reading("swap "+m[1], n*scale, "bytes", "sysctl vm.swapusage"))
-		}
-	} else {
-		mem.Metrics = append(mem.Metrics, c.unavailable("swap", "sysctl vm.swapusage", err))
-	}
-	raw, err = c.run(ctx, "pmset", "-g", "batt")
-	power := hardwareDevice("power", "Power source")
+	swap := map[string]float64{}
 	if err == nil {
-		source := "unknown"
+		for _, m := range macSwapUsage.FindAllStringSubmatch(string(raw), -1) {
+			n, ok := hardwareNumber(m[2])
+			if !ok || n < 0 {
+				continue
+			}
+			power := strings.Index("KMGTP", m[3]) + 1
+			value := n * math.Pow(1024, float64(power))
+			if !math.IsInf(value, 0) {
+				swap[m[1]] = value
+			}
+		}
+	}
+	for _, key := range []string{"total", "used", "free"} {
+		if value, ok := swap[key]; ok {
+			mem.Metrics = append(mem.Metrics, c.reading("swap "+key, value, "bytes", "sysctl vm.swapusage"))
+		} else {
+			mem.Metrics = append(mem.Metrics, c.unavailable("swap "+key, "sysctl vm.swapusage", err))
+		}
+	}
+}
+
+var macBatteryPercent = regexp.MustCompile(`(\d+)%`)
+
+func (c *HardwareCollector) macPowerMetrics(ctx context.Context, r *models.HardwareReport) {
+	raw, err := c.run(ctx, "pmset", "-g", "batt")
+	power := hardwareDevice("power", "Power source")
+	source := ""
+	if err == nil {
 		if strings.Contains(string(raw), "'AC Power'") {
 			source = "AC"
 		}
 		if strings.Contains(string(raw), "'Battery Power'") {
 			source = "battery"
 		}
+	}
+	if source != "" {
 		power.Metrics = append(power.Metrics, c.reading("source", source, "", "pmset -g batt"))
-		if m := regexp.MustCompile(`(\d+)%`).FindStringSubmatch(string(raw)); len(m) == 2 {
-			n, _ := strconv.Atoi(m[1])
-			power.Metrics = append(power.Metrics, c.reading("charge", n, "%", "pmset -g batt"))
-		}
 	} else {
 		power.Metrics = append(power.Metrics, c.unavailable("power source", "pmset -g batt", err))
 	}
+	if match := macBatteryPercent.FindStringSubmatch(string(raw)); err == nil && len(match) == 2 {
+		value, e := strconv.ParseUint(match[1], 10, 64)
+		if e == nil && value <= 100 {
+			power.Metrics = append(power.Metrics, c.reading("charge", value, "%", "pmset -g batt"))
+		} else {
+			power.Metrics = append(power.Metrics, c.unavailable("charge", "pmset -g batt", hardwareIssue("invalid battery percentage")))
+		}
+	}
 	hardwareSection(r, "Sensors").Devices = append(hardwareSection(r, "Sensors").Devices, power)
-	c.hardwareVolumes(ctx, r)
-	c.macNetworkMetrics(ctx, r)
-	c.macGPUMetrics(ctx, r)
 }
 
 var macGPUCounter = regexp.MustCompile(`"(Device Utilization %|Renderer Utilization %|Tiler Utilization %|In use system memory|Alloc system memory)"=(\d+)`)
@@ -244,6 +296,9 @@ var macGPUCounter = regexp.MustCompile(`"(Device Utilization %|Renderer Utilizat
 func (c *HardwareCollector) macGPUMetrics(ctx context.Context, r *models.HardwareReport) {
 	raw, err := c.run(ctx, "ioreg", "-r", "-c", "IOAccelerator", "-d", "1", "-l", "-w", "0")
 	found := false
+	if err != nil {
+		raw = nil
+	}
 	for _, line := range strings.Split(string(raw), "\n") {
 		if !strings.Contains(line, `"PerformanceStatistics"`) {
 			continue
@@ -255,12 +310,16 @@ func (c *HardwareCollector) macGPUMetrics(ctx context.Context, r *models.Hardwar
 		found = true
 		d := hardwareDevice(fmt.Sprintf("accelerator-%d", len(hardwareSection(r, "GPU").Devices)), "GPU accelerator (driver counters)")
 		for _, m := range matches {
-			n, _ := strconv.ParseFloat(m[2], 64)
+			n, e := strconv.ParseUint(m[2], 10, 64)
 			unit := "bytes"
 			if strings.HasSuffix(m[1], "%") {
 				unit = "%"
 			}
-			d.Metrics = append(d.Metrics, c.reading(m[1], n, unit, "ioreg IOAccelerator PerformanceStatistics"))
+			if e == nil && (unit != "%" || n <= 100) {
+				d.Metrics = append(d.Metrics, c.reading(m[1], n, unit, "ioreg IOAccelerator PerformanceStatistics"))
+			} else {
+				d.Metrics = append(d.Metrics, c.unavailable(m[1], "ioreg IOAccelerator PerformanceStatistics", hardwareIssue("invalid GPU driver counter")))
+			}
 		}
 		d.Metrics = append(d.Metrics, c.unavailable("GPU clocks and power", "macOS unprivileged interfaces", nil))
 		hardwareSection(r, "GPU").Devices = append(hardwareSection(r, "GPU").Devices, d)

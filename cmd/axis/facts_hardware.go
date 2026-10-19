@@ -131,6 +131,9 @@ func printHardwareFacts(out io.Writer, r *models.HardwareReport) error {
 				for _, v := range group.values {
 					name := ui.StripANSIAndControls(v.Name)
 					source := ui.StripANSIAndControls(v.Source)
+					if v.SampleSeconds > 0 {
+						source = fmt.Sprintf("%s; sample %.3f s", source, v.SampleSeconds)
+					}
 					if v.Status != "observed" && v.Status != "derived" {
 						unavailable++
 						fmt.Fprintf(&b, "      %-28s unavailable (%s: %s) [%s]\n", name, v.Status, ui.StripANSIAndControls(v.Reason), source)

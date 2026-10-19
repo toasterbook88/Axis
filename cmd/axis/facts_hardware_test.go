@@ -197,3 +197,24 @@ func TestHardwareOutputFailureAndMissingReading(t *testing.T) {
 		t.Fatalf("JSON writer failure: %v", err)
 	}
 }
+
+func TestFactsOverviewDoesNotCallThreadsPhysicalCores(t *testing.T) {
+	nf := &models.NodeFacts{Name: "fixture", Resources: &models.Resources{CPUCores: 16, CPUModel: "Example CPU"}}
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := printFactsText(cmd, nf, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "16 logical CPUs") || strings.Contains(out.String(), "16 cores") {
+		t.Fatal(out.String())
+	}
+	nf.Resources.CPUCores = 0
+	out.Reset()
+	if err := printFactsText(cmd, nf, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "0 logical CPUs") || !strings.Contains(out.String(), "unavailable") {
+		t.Fatal(out.String())
+	}
+}

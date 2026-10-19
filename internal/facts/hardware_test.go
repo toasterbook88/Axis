@@ -40,8 +40,8 @@ func TestHardwareCounterSamplingAndReset(t *testing.T) {
 	c := testHardwareCollector()
 	r := testHardwareReport()
 	start := time.Now()
-	a := hardwareCounterSet{at: start, cpu: map[string][2]float64{"cpu": {100, 50}}, net: map[string]map[string]float64{"network": {"RX bytes": 10}}, disk: map[string]map[string]float64{"storage": {"read bytes": 1024, "read operations": 1, "read milliseconds": 2, "busy milliseconds": 5}}}
-	b := hardwareCounterSet{at: start.Add(2 * time.Second), cpu: map[string][2]float64{"cpu": {200, 75}}, net: map[string]map[string]float64{"network": {"RX bytes": 210}}, disk: map[string]map[string]float64{"storage": {"read bytes": 3072, "read operations": 3, "read milliseconds": 8, "busy milliseconds": 25}}}
+	a := hardwareCounterSet{at: start, cpu: map[string][2]uint64{"cpu": {100, 50}}, net: map[string]map[string]uint64{"network": {"RX bytes": 10}}, disk: map[string]map[string]uint64{"storage": {"read bytes": 1024, "read operations": 1, "read milliseconds": 2, "busy milliseconds": 5}}}
+	b := hardwareCounterSet{at: start.Add(2 * time.Second), cpu: map[string][2]uint64{"cpu": {200, 75}}, net: map[string]map[string]uint64{"network": {"RX bytes": 210}}, disk: map[string]map[string]uint64{"storage": {"read bytes": 3072, "read operations": 3, "read milliseconds": 8, "busy milliseconds": 25}}}
 	c.applyHardwareCounters(r, a, b)
 	for _, test := range []struct {
 		section, name string
@@ -63,7 +63,7 @@ func TestHardwareCounterSamplingAndReset(t *testing.T) {
 func TestHardwareNativeCounterParsers(t *testing.T) {
 	// Guest/guest_nice are already included in user/nice; never double count.
 	cpu := parseHardwareCPU("cpu 10 20 30 40 5 6 7 8 10 20\ncpu0 invalid\n")
-	if cpu["cpu"] != [2]float64{126, 45} || len(cpu) != 1 {
+	if cpu["cpu"] != [2]uint64{126, 45} || len(cpu) != 1 {
 		t.Fatalf("CPU ticks: %+v", cpu)
 	}
 	disks := parseHardwareDiskstats("8 0 sda 1 0 4 6 3 0 8 10 0 12 0\ninvalid")
@@ -246,7 +246,7 @@ func TestHardwareVendorGPUMetricsAndMemoryDomains(t *testing.T) {
 	}
 	c.macGPUMetrics(context.Background(), r)
 	accelerator := hardwareSection(r, "GPU").Devices[1]
-	if v := findHardwareReading(t, accelerator.Metrics, "In use system memory"); v.Value != float64(1024) || v.Unit != "bytes" {
+	if v := findHardwareReading(t, accelerator.Metrics, "In use system memory"); v.Value != uint64(1024) || v.Unit != "bytes" {
 		t.Fatal(v)
 	}
 }

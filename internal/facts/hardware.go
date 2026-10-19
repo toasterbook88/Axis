@@ -49,6 +49,9 @@ func runHardwareProbe(ctx context.Context, name string, args ...string) ([]byte,
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+	cmd.WaitDelay = 250 * time.Millisecond
+	var stderr hardwareStderr
+	cmd.Stderr = &stderr
 	var out hardwareOutput
 	cmd.Stdout = &out
 	// Do not retain stderr: optional tools can print identifiers or host details.
@@ -56,16 +59,52 @@ func runHardwareProbe(ctx context.Context, name string, args ...string) ([]byte,
 	if probeCtx.Err() != nil {
 		return nil, probeCtx.Err()
 	}
+	if err != nil {
+		message := strings.ToLower(string(stderr.data))
+		if hardwarePermissionDenied(message) {
+			return out.data, fs.ErrPermission
+		}
+	}
 	return out.data, err
 }
 
+func hardwarePermissionDenied(message string) bool {
+	text := strings.ToLower(message)
+	return strings.Contains(text, "permission denied") || strings.Contains(text, "operation not permitted")
+}
+
+// Retain only a small private prefix for classification, never in the report.
+type hardwareStderr struct{ data []byte }
+
+func (b *hardwareStderr) Write(p []byte) (int, error) {
+	if remaining := 4096 - len(b.data); remaining > 0 {
+		b.data = append(b.data, p[:min(len(p), remaining)]...)
+	}
+	return len(p), nil
+}
+
+// hardwareIssue contains fixed diagnostic text authored by the collector; raw
+// command errors and stderr are never promoted into operator output.
+type hardwareIssue string
+
+func (e hardwareIssue) Error() string { return string(e) }
+
 func (c *HardwareCollector) reading(name string, value any, unit, source string) models.HardwareReading {
+	switch value.(type) {
+	case string, bool, int, int64, uint64, float64:
+	default:
+		return c.unavailable(name, source, hardwareIssue("unsupported hardware value type"))
+	}
+	if n, ok := value.(float64); ok && (math.IsNaN(n) || math.IsInf(n, 0)) {
+		return c.unavailable(name, source, hardwareIssue("non-finite hardware value"))
+	}
 	return models.HardwareReading{Name: name, Value: value, Unit: unit, Source: source,
 		Status: "observed", ObservedAt: c.now().UTC()}
 }
 
 func (c *HardwareCollector) unavailable(name, source string, err error) models.HardwareReading {
 	status, reason := "unavailable", "not exposed by this device or operating system"
+	var issue hardwareIssue
 	switch {
 	case errors.Is(err, fs.ErrPermission):
 		status, reason = "permission_denied", "read permission denied; sudo is never invoked"
@@ -75,6 +114,8 @@ func (c *HardwareCollector) unavailable(name, source string, err error) models.H
 		status, reason = "timeout", "probe deadline exceeded"
 	case errors.Is(err, context.Canceled):
 		status, reason = "cancelled", "collection cancelled"
+	case errors.As(err, &issue):
+		reason = string(issue)
 	case err != nil:
 		reason = "probe failed or returned no usable reading"
 	}
@@ -144,7 +185,6 @@ func (c *HardwareCollector) Sample(ctx context.Context, interval time.Duration) 
 	}
 	r := cloneHardwareInventory(c.inventory)
 	start := c.hardwareCounters(ctx)
-	r.SampleStart = c.now().UTC()
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	select {
@@ -153,8 +193,6 @@ func (c *HardwareCollector) Sample(ctx context.Context, interval time.Duration) 
 	case <-timer.C:
 	}
 	end := c.hardwareCounters(ctx)
-	r.SampleEnd = c.now().UTC()
-	r.SampleSeconds = r.SampleEnd.Sub(r.SampleStart).Seconds()
 	c.applyHardwareCounters(r, start, end)
 	switch c.osName {
 	case "linux":
@@ -222,8 +260,8 @@ func (c *HardwareCollector) fileReading(name, path, unit string, scale float64) 
 		if !ok {
 			return c.unavailable(name, path, errors.New("invalid number"))
 		}
-		if n < 0 && (name == "link speed" || name == "current PCIe width") {
-			return c.unavailable(name, path, nil)
+		if n < 0 && unit != "C" && unit != "V" && unit != "A" && unit != "W" {
+			return c.unavailable(name, path, hardwareIssue("negative sentinel; no measurement available"))
 		}
 		return c.reading(name, n*scale, unit, path)
 	}

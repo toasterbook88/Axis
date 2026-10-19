@@ -117,12 +117,14 @@ func (c *LocalCollector) Collect(ctx context.Context) (*models.NodeFacts, error)
 	if ollamaInfo.Installed {
 		facts.Ollama = &ollamaInfo
 		facts.ResidentModels = residentModels
-		facts.Tools = append(facts.Tools, models.ToolInfo{
-			Name:    "ollama",
-			Path:    ollamaInfo.Path,
-			Version: ollamaInfo.Version,
-			Class:   models.ToolClassAICLI,
-		})
+		if _, found := findToolInfo(facts.Tools, "ollama"); !found {
+			facts.Tools = append(facts.Tools, models.ToolInfo{
+				Name:    "ollama",
+				Path:    ollamaInfo.Path,
+				Version: ollamaInfo.Version,
+				Class:   models.ToolClassAICLI,
+			})
+		}
 	}
 	// Merge llama-server resident models (runtime="llama.cpp") so empirical
 	// placement can prefer nodes with the right model already loaded.

@@ -8,6 +8,13 @@
 
 ### Fixes
 
+* Local facts label logical CPUs correctly and avoid duplicate Ollama tools.
+  Hardware collection rejects malformed/non-finite telemetry, retains counter
+  precision, records per-source sampling windows, refreshes live link fields,
+  reports missing devices and permission failures, validates Mac device parents,
+  and bounds subprocess output and inherited-pipe waits. Regression fixtures
+  and native-parser fuzz coverage guard these cases.
+
 * Placement excludes nodes that cannot cover guarded execution's reservation
   request before ranking. Placement and explanation output share exclusion
   reasons; execution retains its dispatch-time checks and ledger authority.

@@ -171,7 +171,11 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 	if nf.Resources != nil {
 		r := nf.Resources
 		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Resources"))
-		kv("cpu:", fmt.Sprintf("%d cores (%s)", r.CPUCores, r.CPUModel))
+		if r.CPUCores > 0 {
+			kv("cpu:", fmt.Sprintf("%d logical CPUs (%s)", r.CPUCores, r.CPUModel))
+		} else {
+			kv("cpu:", "unavailable")
+		}
 		kv("ram total:", fmt.Sprintf("%d MB", r.RAMTotalMB))
 		kv("ram free:", fmt.Sprintf("%d MB", r.RAMFreeMB))
 		if nf.RAMReservedMB > 0 {

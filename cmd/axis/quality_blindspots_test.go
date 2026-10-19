@@ -203,7 +203,7 @@ func TestCharPrintFactsTextBasic(t *testing.T) {
 	outStr := ui.StripANSIAndControls(out.String())
 	for _, want := range []string{
 		"NODE FACTS", "test-node", "test-host", "linux 24.04", "amd64",
-		"Resources", "cpu:", "8 cores (Test CPU)", "ram total:", "16000 MB",
+		"Resources", "cpu:", "8 logical CPUs (Test CPU)", "ram total:", "16000 MB",
 		"ram free:", "8000 MB", "disk:", "100 GB free / 500 GB total",
 		"load:", "1.50 / 1.20 / 0.90", "collected:",
 	} {

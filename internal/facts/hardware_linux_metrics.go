@@ -5,8 +5,10 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"maps"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -33,20 +35,32 @@ func (c *HardwareCollector) linuxHardwareMetrics(ctx context.Context, r *models.
 	}
 	c.linuxMemoryMetrics(r)
 	c.linuxPressureMetrics(r)
-	for i := range hardwareSection(r, "Network").Devices {
-		d := &hardwareSection(r, "Network").Devices[i]
-		d.Metrics = append(d.Metrics, c.fileReading("link state", "/sys/class/net/"+d.ID+"/operstate", "", 0))
-	}
+	c.linuxLinkMetrics(r)
 	c.linuxGPUMetrics(ctx, r)
 	c.linuxSensorMetrics(r)
 	c.linuxStorageHealth(ctx, r)
 	c.hardwareVolumes(ctx, r)
 }
 
+// PCI vendor identity determines whether NVIDIA telemetry is applicable.
+func hardwareNVIDIA(d models.HardwareDevice) bool {
+	for _, v := range d.Specs {
+		if v.Name == "vendor" {
+			return v.Value == "0x10de"
+		}
+	}
+	return true // inaccessible PCI inventory: let the vendor query discover it
+}
+
+var hardwarePCIBus = regexp.MustCompile(`(?i)^([0-9a-f]{4}|[0-9a-f]{8}):[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
+
 func (c *HardwareCollector) linuxGPUMetrics(ctx context.Context, r *models.HardwareReport) {
 	s := hardwareSection(r, "GPU")
 	for i := range s.Devices {
 		d := &s.Devices[i]
+		if !hardwarePCIBus.MatchString(d.ID) {
+			continue
+		}
 		base := "/sys/bus/pci/devices/" + d.ID + "/"
 		for _, f := range []struct {
 			name, file, unit string
@@ -55,62 +69,84 @@ func (c *HardwareCollector) linuxGPUMetrics(ctx context.Context, r *models.Hardw
 			d.Metrics = append(d.Metrics, c.fileReading(f.name, base+f.file, f.unit, f.scale))
 		}
 	}
+	if !slices.ContainsFunc(s.Devices, hardwareNVIDIA) {
+		return
+	}
 	fields := []string{"pci.bus_id", "name", "driver_version", "memory.total", "memory.used", "utilization.gpu", "utilization.memory", "temperature.gpu", "power.draw", "power.limit", "clocks.current.graphics", "clocks.current.memory", "fan.speed"}
 	raw, err := c.run(ctx, "nvidia-smi", "--query-gpu="+strings.Join(fields, ","), "--format=csv,noheader,nounits")
 	if err != nil {
-		for i := range s.Devices {
-			d := &s.Devices[i]
-			d.Metrics = append(d.Metrics, c.unavailable("NVIDIA telemetry", "nvidia-smi", err))
-		}
+		c.nvidiaUnavailable(s, err)
 		return
 	}
 	rows, err := csv.NewReader(strings.NewReader(string(raw))).ReadAll()
-	if err != nil {
+	if err != nil || len(rows) == 0 {
+		c.nvidiaUnavailable(s, hardwareIssue("NVIDIA probe returned no valid CSV rows"))
 		return
 	}
-	units := []string{"", "", "", "MiB", "MiB", "%", "%", "C", "W", "W", "MHz", "MHz", "%"}
+	seen := map[string]bool{}
 	for _, row := range rows {
-		if len(row) != len(fields) {
+		if len(row) != len(fields) || !hardwarePCIBus.MatchString(strings.TrimSpace(row[0])) {
 			continue
 		}
 		id := strings.ToLower(strings.TrimSpace(row[0]))
 		if len(id) > 12 {
 			id = id[len(id)-12:]
 		}
-		index := -1
-		for i := range s.Devices {
-			if strings.EqualFold(s.Devices[i].ID, id) {
-				index = i
-				break
-			}
+		if seen[id] {
+			continue
 		}
+		seen[id] = true
+		index := slices.IndexFunc(s.Devices, func(d models.HardwareDevice) bool { return strings.EqualFold(d.ID, id) })
 		if index < 0 {
 			s.Devices = append(s.Devices, hardwareDevice(id, strings.TrimSpace(row[1])))
 			index = len(s.Devices) - 1
 		}
-		d := &s.Devices[index]
-		d.Name = strings.TrimSpace(row[1])
-		// Vendor telemetry supersedes unavailable sysfs fallback fields.
-		d.Metrics = slices.DeleteFunc(d.Metrics, func(v models.HardwareReading) bool {
-			return v.Name == "GPU utilization" || v.Name == "VRAM capacity" || v.Name == "VRAM used"
-		})
-		for i := 1; i < len(fields); i++ {
-			text := strings.TrimSpace(row[i])
-			var v models.HardwareReading
-			if text == "N/A" || strings.Contains(text, "Not Supported") || text == "[N/A]" {
-				v = c.unavailable(fields[i], "nvidia-smi", nil)
-			} else if i <= 2 {
-				v = c.reading(fields[i], text, units[i], "nvidia-smi")
-			} else if n, ok := hardwareNumber(text); ok {
-				v = c.reading(fields[i], n, units[i], "nvidia-smi")
-			} else {
-				v = c.reading(fields[i], text, units[i], "nvidia-smi")
+		c.appendNVIDIATelemetry(&s.Devices[index], fields, row)
+	}
+	for i := range s.Devices {
+		d := &s.Devices[i]
+		if hardwareNVIDIA(*d) && !seen[d.ID] {
+			// An inaccessible-inventory placeholder is superseded by discovered GPUs.
+			if len(seen) > 0 && !hardwarePCIBus.MatchString(d.ID) {
+				continue
 			}
-			if i <= 3 {
-				d.Specs = append(d.Specs, v)
-			} else {
-				d.Metrics = append(d.Metrics, v)
+			d.Metrics = append(d.Metrics, c.unavailable("NVIDIA telemetry", "nvidia-smi", hardwareIssue("no valid NVIDIA row for this device")))
+		}
+	}
+}
+
+func (c *HardwareCollector) nvidiaUnavailable(s *models.HardwareSection, err error) {
+	for i := range s.Devices {
+		d := &s.Devices[i]
+		if hardwareNVIDIA(*d) {
+			d.Metrics = append(d.Metrics, c.unavailable("NVIDIA telemetry", "nvidia-smi", err))
+		}
+	}
+}
+
+func (c *HardwareCollector) appendNVIDIATelemetry(d *models.HardwareDevice, fields, row []string) {
+	d.Name = strings.TrimSpace(row[1])
+	units := []string{"", "", "", "MiB", "MiB", "%", "%", "C", "W", "W", "MHz", "MHz", "%"}
+	fallback := map[string]string{"memory.total": "VRAM capacity", "memory.used": "VRAM used", "utilization.gpu": "GPU utilization"}
+	for i := 1; i < len(fields); i++ {
+		text := strings.TrimSpace(row[i])
+		var v models.HardwareReading
+		if i <= 2 && text != "" && text != "N/A" && text != "[N/A]" && !strings.Contains(text, "Not Supported") {
+			v = c.reading(fields[i], text, units[i], "nvidia-smi")
+		} else if n, ok := hardwareNumber(text); i > 2 && ok && n >= 0 && (units[i] != "%" || n <= 100) {
+			v = c.reading(fields[i], n, units[i], "nvidia-smi")
+		} else {
+			v = c.unavailable(fields[i], "nvidia-smi", hardwareIssue("unsupported or invalid vendor reading"))
+		}
+		if v.Status == "observed" {
+			if name := fallback[fields[i]]; name != "" {
+				d.Metrics = slices.DeleteFunc(d.Metrics, func(existing models.HardwareReading) bool { return existing.Name == name })
 			}
+		}
+		if i <= 3 {
+			d.Specs = append(d.Specs, v)
+		} else {
+			d.Metrics = append(d.Metrics, v)
 		}
 	}
 }
@@ -131,7 +167,7 @@ func (c *HardwareCollector) linuxSensorMetrics(r *models.HardwareReport) {
 					if label, e := c.read(labelPath); e == nil && strings.TrimSpace(string(label)) != "" {
 						key = strings.TrimSpace(string(label)) + " (" + key + ")"
 					}
-					d.Metrics = append(d.Metrics, c.fileReading(key, p, kind.unit, kind.scale))
+					d.Metrics = append(d.Metrics, c.hardwareSensorReading(key, p, kind.unit, kind.scale))
 				}
 			}
 		} else if strings.HasPrefix(d.ID, "/sys/class/thermal/") {
@@ -140,7 +176,7 @@ func (c *HardwareCollector) linuxSensorMetrics(r *models.HardwareReport) {
 			for _, f := range []struct {
 				name, unit string
 				scale      float64
-			}{{"status", "", 0}, {"online", "", 1}, {"capacity", "%", 1}, {"cycle_count", "count", 1}, {"power_now", "W", 0.000001}, {"voltage_now", "V", 0.000001}, {"current_now", "A", 0.000001}, {"energy_now", "Wh", 0.000001}, {"temp", "C", 0.1}} {
+			}{{"status", "", 0}, {"online", "", 1}, {"capacity", "%", 1}, {"cycle_count", "count", 1}, {"power_now", "W", 0.000001}, {"voltage_now", "V", 0.000001}, {"current_now", "A", 0.000001}, {"energy_now", "Wh", 0.000001}, {"energy_full", "Wh", 0.000001}, {"charge_full", "Ah", 0.000001}, {"temp", "C", 0.1}} {
 				d.Metrics = append(d.Metrics, c.fileReading(f.name, d.ID+"/"+f.name, f.unit, f.scale))
 			}
 		}
@@ -171,14 +207,15 @@ func (c *HardwareCollector) linuxStorageHealth(ctx context.Context, r *models.Ha
 			d.Metrics = append(d.Metrics, c.unavailable("SMART health", "smartctl --json --all", err))
 			continue
 		}
-		found := false
+
+		err = hardwareSMARTError(v, err)
+		before := len(d.Metrics)
 		for _, key := range []string{"smart_status", "temperature", "power_on_time", "power_cycle_count", "nvme_smart_health_information_log"} {
 			if x, ok := v[key]; ok {
-				found = true
 				c.appendHardwareHealth(d, key, x)
 			}
 		}
-		if !found {
+		if len(d.Metrics) == before {
 			d.Metrics = append(d.Metrics, c.unavailable("SMART health", "smartctl --json --all", err))
 		}
 	}
@@ -212,6 +249,7 @@ func (c *HardwareCollector) hardwareVolumes(ctx context.Context, r *models.Hardw
 		hardwareSection(r, "Storage").Devices[0].Metrics = append(hardwareSection(r, "Storage").Devices[0].Metrics, c.unavailable("filesystem capacity", "df -kP", err))
 		return
 	}
+	found := false
 	for _, line := range strings.Split(string(raw), "\n")[1:] {
 		f := strings.Fields(line)
 		if len(f) < 6 || !strings.HasPrefix(f[0], "/dev/") {
@@ -222,13 +260,17 @@ func (c *HardwareCollector) hardwareVolumes(ctx context.Context, r *models.Hardw
 		d.Specs = append(d.Specs, c.reading("device", f[0], "", "df -kP"))
 		for i, key := range []string{"capacity", "used", "available"} {
 			n, ok := hardwareNumber(f[i+1])
-			if ok {
+			if ok && n >= 0 {
 				d.Metrics = append(d.Metrics, c.reading(key, n*1024, "bytes", "df -kP"))
 			} else {
 				d.Metrics = append(d.Metrics, c.unavailable(key, "df -kP", fmt.Errorf("invalid capacity")))
 			}
 		}
 		hardwareSection(r, "Storage").Devices = append(hardwareSection(r, "Storage").Devices, d)
+		found = true
+	}
+	if !found {
+		hardwareSection(r, "Storage").Devices[0].Metrics = append(hardwareSection(r, "Storage").Devices[0].Metrics, c.unavailable("filesystem capacity", "df -kP", hardwareIssue("no usable local filesystem rows")))
 	}
 }
 
@@ -246,13 +288,15 @@ func (c *HardwareCollector) linuxMemoryMetrics(r *models.HardwareReport) {
 				mem.Metrics = append(mem.Metrics, c.unavailable(key, "/proc/meminfo", nil))
 				continue
 			}
-			if n, ok := hardwareNumber(f[0]); ok {
+			if n, ok := hardwareNumber(f[0]); ok && n >= 0 {
 				unit := "count"
 				if len(f) > 1 && f[1] == "kB" {
 					n *= 1024
 					unit = "bytes"
 				}
 				mem.Metrics = append(mem.Metrics, c.reading(key, n, unit, "/proc/meminfo"))
+			} else {
+				mem.Metrics = append(mem.Metrics, c.unavailable(key, "/proc/meminfo", hardwareIssue("invalid memory counter")))
 			}
 		}
 	}
@@ -288,4 +332,55 @@ func (c *HardwareCollector) linuxPressureMetrics(r *models.HardwareReport) {
 			}
 		}
 	}
+}
+
+func (c *HardwareCollector) linuxLinkMetrics(r *models.HardwareReport) {
+	s := hardwareSection(r, "Network")
+	for i := range s.Devices {
+		d := &s.Devices[i]
+		base := "/sys/class/net/" + d.ID + "/"
+		for _, field := range []struct {
+			name, file, unit string
+			scale            float64
+		}{{"link state", "operstate", "", 0}, {"MTU", "mtu", "bytes", 1}, {"link speed", "speed", "Mbit/s", 1}, {"duplex", "duplex", "", 0}} {
+			d.Metrics = append(d.Metrics, c.fileReading(field.name, base+field.file, field.unit, field.scale))
+		}
+	}
+	devices := hardwareSection(r, "Devices")
+	for i := range devices.Devices {
+		d := &devices.Devices[i]
+		if hardwarePCIBus.MatchString(d.ID) {
+			continue
+		}
+		for _, v := range d.Specs {
+			if v.Source == "/sys/bus/usb/devices/"+d.ID+"/idVendor" {
+				d.Metrics = append(d.Metrics, c.fileReading("link speed", "/sys/bus/usb/devices/"+d.ID+"/speed", "Mbit/s", 1))
+				break
+			}
+		}
+	}
+}
+
+func (c *HardwareCollector) hardwareSensorReading(name, path, unit string, scale float64) models.HardwareReading {
+	stem := strings.TrimSuffix(strings.TrimSuffix(path, "_input"), "_average")
+	if flag, err := c.read(stem + "_fault"); err == nil && strings.TrimSpace(string(flag)) == "1" {
+		return c.unavailable(name, path, hardwareIssue("sensor reports a hardware fault"))
+	}
+	if flag, err := c.read(stem + "_enable"); err == nil && strings.TrimSpace(string(flag)) == "0" {
+		return c.unavailable(name, path, hardwareIssue("sensor is disabled"))
+	}
+	return c.fileReading(name, path, unit, scale)
+}
+
+func hardwareSMARTError(data map[string]any, err error) error {
+	smart, _ := data["smartctl"].(map[string]any)
+	messages, _ := smart["messages"].([]any)
+	for _, item := range messages {
+		message, _ := item.(map[string]any)
+		text, _ := message["string"].(string)
+		if hardwarePermissionDenied(text) {
+			return fs.ErrPermission
+		}
+	}
+	return err
 }

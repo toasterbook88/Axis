@@ -34,14 +34,16 @@ type HardwareDevice struct {
 
 // HardwareReading keeps unknown distinct from a measured zero. Value is a
 // string, number, or bool only when Status is observed or derived. Rate fields
-// use the report's sample window; point readings carry their own observation time.
+// carry their source's sample window; point readings carry their observation time.
 type HardwareReading struct {
-	Name          string    `json:"name" yaml:"name"`
-	Value         any       `json:"value,omitempty" yaml:"value,omitempty"`
-	Unit          string    `json:"unit,omitempty" yaml:"unit,omitempty"`
-	Source        string    `json:"source" yaml:"source"`
-	Status        string    `json:"status" yaml:"status"`
-	Reason        string    `json:"reason,omitempty" yaml:"reason,omitempty"`
-	SampleSeconds float64   `json:"sample_seconds,omitempty" yaml:"sample_seconds,omitempty"`
-	ObservedAt    time.Time `json:"observed_at" yaml:"observed_at"`
+	Name          string     `json:"name" yaml:"name"`
+	Value         any        `json:"value,omitempty" yaml:"value,omitempty"`
+	Unit          string     `json:"unit,omitempty" yaml:"unit,omitempty"`
+	Source        string     `json:"source" yaml:"source"`
+	Status        string     `json:"status" yaml:"status"`
+	Reason        string     `json:"reason,omitempty" yaml:"reason,omitempty"`
+	SampleStart   *time.Time `json:"sample_start,omitempty" yaml:"sample_start,omitempty"`
+	SampleEnd     *time.Time `json:"sample_end,omitempty" yaml:"sample_end,omitempty"`
+	SampleSeconds float64    `json:"sample_seconds,omitempty" yaml:"sample_seconds,omitempty"`
+	ObservedAt    time.Time  `json:"observed_at" yaml:"observed_at"`
 }

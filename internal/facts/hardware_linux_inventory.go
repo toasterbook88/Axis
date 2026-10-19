@@ -1,10 +1,13 @@
 package facts
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/models"
@@ -48,6 +51,11 @@ func (c *HardwareCollector) linuxCPUInventory(ctx context.Context, r *models.Har
 	}
 	// Per-logical-CPU clocks and package/core IDs are independently observable.
 	paths, _ := c.glob("/sys/devices/system/cpu/cpu[0-9]*")
+	slices.SortFunc(paths, func(a, b string) int {
+		ai, _ := strconv.Atoi(strings.TrimPrefix(filepath.Base(a), "cpu"))
+		bi, _ := strconv.Atoi(strings.TrimPrefix(filepath.Base(b), "cpu"))
+		return cmp.Compare(ai, bi)
+	})
 	for _, p := range paths {
 		core := hardwareDevice(filepath.Base(p), filepath.Base(p))
 		for _, f := range []struct{ name, file string }{{"package", "topology/physical_package_id"}, {"core", "topology/core_id"}, {"thread siblings", "topology/thread_siblings_list"}, {"minimum frequency", "cpufreq/cpuinfo_min_freq"}, {"maximum frequency", "cpufreq/cpuinfo_max_freq"}} {
@@ -127,7 +135,10 @@ func (c *HardwareCollector) linuxBlockInventory(ctx context.Context, r *models.H
 			}
 			d := hardwareDevice(id, fmt.Sprint(n["name"]))
 			for _, key := range []string{"type", "size", "model", "vendor", "rev", "tran", "rota", "rm", "log-sec", "phy-sec", "fstype", "mountpoint"} {
-				if v, ok := n[key]; ok && v != nil && v != "" {
+				if v, ok := n[key]; ok && v != nil {
+					if text, isString := v.(string); isString && text == "" {
+						continue
+					}
 					unit := ""
 					if key == "size" || key == "log-sec" || key == "phy-sec" {
 						unit = "bytes"
@@ -163,7 +174,7 @@ func (c *HardwareCollector) linuxNetworkInventory(r *models.HardwareReport) {
 		for _, f := range []struct {
 			name, file, unit string
 			scale            float64
-		}{{"MTU", "mtu", "bytes", 1}, {"link speed", "speed", "Mbit/s", 1}, {"duplex", "duplex", "", 0}, {"vendor ID", "device/vendor", "", 0}, {"device ID", "device/device", "", 0}} {
+		}{{"vendor ID", "device/vendor", "", 0}, {"device ID", "device/device", "", 0}} {
 			d.Specs = append(d.Specs, c.fileReading(f.name, p+"/"+f.file, f.unit, f.scale))
 		}
 		hardwareSection(r, "Network").Devices = append(hardwareSection(r, "Network").Devices, d)
@@ -203,7 +214,7 @@ func (c *HardwareCollector) linuxPCIInventory(r *models.HardwareReport) {
 		for _, f := range []string{"idProduct", "manufacturer", "product", "version", "speed"} {
 			unit, scale := "", 0.0
 			if f == "speed" {
-				unit, scale = "Mbit/s", 1
+				continue
 			}
 			d.Specs = append(d.Specs, c.fileReading(f, p+"/"+f, unit, scale))
 		}
@@ -228,7 +239,7 @@ func (c *HardwareCollector) linuxSensorInventory(r *models.HardwareReport) {
 	paths, _ = c.glob("/sys/class/power_supply/*")
 	for _, p := range paths {
 		d := hardwareDevice(p, "Power supply "+filepath.Base(p))
-		for _, f := range []string{"type", "manufacturer", "model_name", "technology", "energy_full_design", "energy_full", "charge_full_design", "charge_full"} {
+		for _, f := range []string{"type", "manufacturer", "model_name", "technology", "energy_full_design", "charge_full_design"} {
 			unit, scale := "", 0.0
 			if strings.HasPrefix(f, "energy_") {
 				unit, scale = "Wh", 0.000001
@@ -311,7 +322,7 @@ func (c *HardwareCollector) parseHardwareLscpu(raw []byte) ([]models.HardwareRea
 	walk = func(fields []hardwareCPUField) {
 		for _, v := range fields {
 			key := strings.TrimSuffix(v.Field, ":")
-			if strings.Contains(strings.ToLower(key), "vulnerabil") {
+			if strings.Contains(strings.ToLower(key), "vulnerabil") || key == "CPU(s) scaling MHz" {
 				continue
 			}
 			if text, ok := v.Data.(string); ok && text != "" {

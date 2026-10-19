@@ -150,8 +150,10 @@ axis facts --help
 
 Hardware reports group specifications and live measurements by CPU, memory,
 GPU, storage, network, system, sensors, and attached devices. Each reading carries
-its source, units, observation time, and availability status. Inventory is retained
-in watch mode; load is refreshed. `--interval` sets the counter sampling window
+its source, units, observation time, and availability status. Counter-derived
+readings also include source-specific sample start/end times and duration;
+large counters retain integer precision until subtraction. Inventory is retained
+in watch mode; load, negotiated link speed, duplex, and MTU are refreshed. `--interval` sets the counter sampling window
 (default 2s, range 100ms–1m); probe overhead adds to the time between reports.
 macOS CPU utilization uses a separate one-second `top` sample. JSON watch output
 is one report per line; YAML watch output uses document separators. Ctrl-C stops
