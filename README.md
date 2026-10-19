@@ -274,7 +274,8 @@ Full command notes: [`docs/current-state.md`](docs/current-state.md).
   ```
 
 - Allow UDP 42424 (beacons) and 42426 (gossip) only from your own network or VPN.
-- Keep the API on the Unix socket. If you pass `axis serve --addr`, bind to `127.0.0.1`. AXIS clients refuse to send the bearer token to a non-loopback TCP address unless `AXIS_ALLOW_OFFBOX_BEARER=1` is set.
+- Keep the API on the Unix socket. If you pass `axis serve --addr`, bind to `127.0.0.1`.
+- A2A task commands refuse non-loopback `--addr` targets unless `AXIS_ALLOW_OFFBOX_BEARER=1` is set. Configured remote-node names bypass that check and attach the local token. Until a cross-node auth model exists, use the target host's local Unix socket. See the [token boundaries](docs/authority-secrets.md).
 - `~/.axis/token` is the API credential. Don't commit or share it.
 
 Report vulnerabilities privately: see [`SECURITY.md`](SECURITY.md). Secret handling rules: [`docs/authority-secrets.md`](docs/authority-secrets.md).
