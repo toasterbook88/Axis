@@ -90,7 +90,7 @@ func TestFilterExcludesUnreachable(t *testing.T) {
 func TestFilterExcludesLowRAM(t *testing.T) {
 	nodes := []models.NodeFacts{
 		nodeComplete("a", 2000, "none"),
-		nodeComplete("b", 5000, "none"),
+		nodeComplete("b", 5120, "none"),
 	}
 	reqs := models.TaskRequirements{MinFreeRAMMB: 4096}
 	result := FilterCandidates(reqs, nodes, nil)
@@ -113,7 +113,7 @@ func TestFilterExcludesMissingTool(t *testing.T) {
 
 func TestFilterPassesAllQualified(t *testing.T) {
 	nodes := []models.NodeFacts{
-		nodeComplete("a", 5000, "none", "git"),
+		nodeComplete("a", 5120, "none", "git"),
 		nodeComplete("b", 6000, "none", "git"),
 	}
 	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 4096}
@@ -176,6 +176,7 @@ func TestFilterLongContextUsesTurboQuantAdjustedRAM(t *testing.T) {
 	reqs := models.TaskRequirements{
 		RequiredTools:       []string{"ollama"},
 		MinFreeRAMMB:        4096,
+		MemoryRequestMB:     1536,
 		ContextWindowTokens: 128000,
 		PrefersTurboQuant:   true,
 	}
@@ -668,8 +669,11 @@ func TestSelectSuccess_RankingHonestyB2B3(t *testing.T) {
 	}
 }
 
-func TestSelectSuccess_ZeroCapacityMetricRemainsPresent(t *testing.T) {
-	d := SelectBestNode(models.TaskRequirements{}, []models.NodeFacts{nodeComplete("zero", 0, "none")}, nil)
+func TestCapacityRankingZeroMetricRemainsPresent(t *testing.T) {
+	// Zero is still serialized as a measured value even though a node with
+	// no reservation capacity cannot be selected for execution.
+	node := nodeComplete("zero", 0, "none")
+	d := buildSuccessDecision(node, []models.NodeFacts{node}, nil, models.TaskRequirements{}, false, nil)
 	if !d.OK || d.Ranking == nil || d.Ranking.Metric.Value != 0 {
 		t.Fatalf("unexpected zero-capacity decision: %#v", d)
 	}
@@ -1092,7 +1096,7 @@ func TestCachedAllocatableRAMAffectsSelection(t *testing.T) {
 	beta.RAMReservedMB = 512
 	beta.RAMAllocatableMB = 3688
 
-	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000}
+	reqs := models.TaskRequirements{RequiredTools: []string{"git"}, MinFreeRAMMB: 3000, MemoryRequestMB: 3000}
 	d := SelectBestNode(reqs, []models.NodeFacts{alpha, beta}, nil)
 
 	if !d.OK || d.Node != "beta" {
@@ -1148,7 +1152,7 @@ func TestSuccessReasoningShowsClusterReservationShare(t *testing.T) {
 }
 
 func TestSuccessReasoningShowsTurboQuantAvailability(t *testing.T) {
-	n := nodeTurboQuant("mlx", 4096, "none", "mlx")
+	n := nodeTurboQuant("mlx", 5120, "none", "mlx")
 	reqs := models.TaskRequirements{
 		RequiredTools:       []string{"ollama"},
 		MinFreeRAMMB:        4096,
@@ -1172,7 +1176,7 @@ func TestSuccessReasoningShowsTurboQuantAvailability(t *testing.T) {
 }
 
 func TestSuccessReasoningShowsTurboQuantCapabilities(t *testing.T) {
-	n := nodeTurboQuant("mlx", 4096, "none", "mlx")
+	n := nodeTurboQuant("mlx", 5120, "none", "mlx")
 	n.TurboQuant.Capabilities = []string{"apple-silicon", "long-context"}
 	reqs := models.TaskRequirements{
 		RequiredTools:       []string{"ollama"},
@@ -1579,8 +1583,8 @@ func TestFilterPassesNodeWhenAllocatableExceedsEmpiricalPeakRAM(t *testing.T) {
 }
 
 func TestFilterPassesNodeWhenNoPeakRAMObserved(t *testing.T) {
-	// No prior observation — node is eligible regardless of size.
-	n := nodeComplete("node", 1000, "none", "ollama")
+	// No prior observation — the node has enough capacity for the default reservation.
+	n := nodeComplete("node", 1024, "none", "ollama")
 	n.Ollama = &models.OllamaInfo{Installed: true, Running: true}
 	reqs := models.TaskRequirements{
 		RequiredTools: []string{"ollama"},
@@ -1596,7 +1600,7 @@ func TestFilterPassesNodeWhenNoPeakRAMObserved(t *testing.T) {
 
 func TestFilterPassesNodeWhenEmpiricalPeakRAMIsZero(t *testing.T) {
 	// Observation exists but ObservedRSSMB was not recorded (zero) — no block.
-	n := nodeComplete("node", 512, "none", "ollama")
+	n := nodeComplete("node", 1024, "none", "ollama")
 	n.Ollama = &models.OllamaInfo{Installed: true, Running: true}
 	reqs := models.TaskRequirements{
 		RequiredTools: []string{"ollama"},
@@ -1620,7 +1624,7 @@ func TestFilterPassesNodeWhenEmpiricalPeakRAMIsZero(t *testing.T) {
 
 func TestFilterIgnoresStaleEmpiricalPeakRAMObservation(t *testing.T) {
 	// A stale (>7d) observation with huge ObservedRSSMB should NOT block the node.
-	n := nodeComplete("node", 1000, "none", "ollama")
+	n := nodeComplete("node", 1024, "none", "ollama")
 	n.Ollama = &models.OllamaInfo{Installed: true, Running: true}
 	reqs := models.TaskRequirements{
 		RequiredTools: []string{"ollama"},
@@ -1791,6 +1795,7 @@ func TestFilterCandidatesRespectsCustomSystemReserve(t *testing.T) {
 	}
 
 	reqs.MinFreeRAMMB = 4500
+	reqs.MemoryRequestMB = 4500
 	filtered = FilterCandidates(reqs, []models.NodeFacts{node}, nil)
 	if len(filtered) != 1 || filtered[0].Name != "nodeA" {
 		t.Fatalf("expected node to qualify, got %v", names(filtered))

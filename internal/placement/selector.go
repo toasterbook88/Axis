@@ -238,83 +238,9 @@ func buildFailureDecision(reqs models.TaskRequirements, nodes []models.NodeFacts
 		d.Reasoning = append(d.Reasoning, fmt.Sprintf("workload note: %s", note))
 	}
 
-	for _, n := range nodes {
-		if requiresAppleFoundationModels(reqs) {
-			if !appleFoundationModelsReady(n) {
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: excluded (apple foundation models not verified)", n.Name))
-				continue
-			}
-		}
-		if n.Status != models.StatusComplete {
-			d.Reasoning = append(d.Reasoning,
-				fmt.Sprintf("  %s: excluded (status: %s)", n.Name, n.Status))
-			continue
-		}
-		if blocksForRuntimePressure(reqs, n) {
-			if n.Resources != nil && n.Resources.PressureSource == "linux-psi" {
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: excluded (critical runtime memory pressure via linux-psi avg10=%.2f)", n.Name, n.Resources.PressureStall10))
-			} else if n.Resources != nil && n.Resources.PressureSource == "darwin-vm-pressure" {
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: excluded (critical runtime memory pressure via darwin vm pressure)", n.Name))
-			} else {
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: excluded (critical runtime memory pressure)", n.Name))
-			}
-			continue
-		}
-		if blocksForThermalOrBattery(reqs, n) {
-			if n.Resources != nil && n.Resources.BatteryPercent != nil && *n.Resources.BatteryPercent < 20 {
-				d.Reasoning = append(d.Reasoning, fmt.Sprintf("  %s: excluded (battery critically low: %d%%)", n.Name, *n.Resources.BatteryPercent))
-			} else {
-				d.Reasoning = append(d.Reasoning, fmt.Sprintf("  %s: excluded (thermal throttling state: %s)", n.Name, n.Resources.ThermalState))
-			}
-			continue
-		}
-		if st != nil && st.Failures != nil {
-			if rec, ok := st.Failures.NarrowestMatch(models.FailureScope{Node: n.Name, Workload: reqs.Workload.Class}); ok && isBlockingFailure(rec.Class) {
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: blocked (%s repeated %d time(s) for this scope)", n.Name, rec.Class, rec.Count))
-				continue
-			}
-		}
-		if reqs.MinFreeRAMMB > 0 {
-			minNeeded := effectiveMinFreeRAM(reqs, n)
-			actual := int64(0)
-			effective := int64(0)
-			if n.Resources != nil {
-				actual = n.Resources.RAMFreeMB
-				effective = freeRAMWithState(n)
-			}
-			if effective < minNeeded {
-				d.Reasoning = append(d.Reasoning,
-					fmt.Sprintf("  %s: need %dMB free RAM, have %dMB allocatable (free %dMB, short %dMB)",
-						n.Name, minNeeded, effective, actual, minNeeded-effective))
-				continue
-			}
-		}
-		if len(reqs.RequiredTools) > 0 && !satisfiesRequiredTools(n, reqs.RequiredTools) {
-			missing := make([]string, 0, len(reqs.RequiredTools))
-			for _, required := range reqs.RequiredTools {
-				if strings.EqualFold(required, "ollama") {
-					if !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
-						missing = append(missing, required)
-					}
-					continue
-				}
-				if !hasTool(n, required) {
-					missing = append(missing, required)
-				}
-			}
-			available := make([]string, 0, len(n.Tools))
-			for _, t := range n.Tools {
-				available = append(available, t.Name)
-			}
-			d.Reasoning = append(d.Reasoning,
-				fmt.Sprintf("  %s: missing required tools %v (has: %v)",
-					n.Name, missing, available))
-			continue
+	for _, eval := range evaluateCandidates(reqs, nodes, st) {
+		for _, reason := range eval.ExclusionReasons {
+			d.Reasoning = append(d.Reasoning, fmt.Sprintf("  %s: %s", eval.Node.Name, reason))
 		}
 	}
 

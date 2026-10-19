@@ -47,6 +47,12 @@ The live repo currently contains:
 - Per-run execution context files instead of shared temp-path injection
 - Stateful placement ranking with reservation subtraction, GPU capability scoring (VRAM/vendor/backend match), and full multi-tool enforcement
 - Live and cached read paths that both overlay reservations before placement/context generation
+- Placement and guarded execution share the reservation budget: an explicit
+  `memory_request_mb`, or minimum RAM plus 1024MB. Nodes whose observed
+  reservable pool cannot cover existing reservations plus the request are
+  excluded before ranking, with the same reasons in placement and explanation
+  output. This read-only check does not acquire a lease or replace execution's
+  live-memory, liveness, configuration, and ledger checks.
 - Observed stable node identity when the host exposes it (`machine-id` on Linux, platform UUID on macOS), with locality preferring explicit identity before hostname/address fallback
 - `axis init` automatically seeds that observed local stable identity into new configurations
 - Optional `nodes.yaml` `stable_id` seeds and identity-aware UDP beacon dedupe so configured nodes survive hostname/IP drift without overriding observed truth

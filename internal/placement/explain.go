@@ -30,6 +30,7 @@ func evaluateCandidates(reqs models.TaskRequirements, nodes []models.NodeFacts, 
 
 func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *state.ClusterState, cachedModelName string) candidateEvaluation {
 	eval := candidateEvaluation{Node: n}
+	eval.ExclusionReasons = append(eval.ExclusionReasons, reservationExclusionReasons(reqs, n)...)
 
 	if requiresAppleFoundationModels(reqs) {
 		if !appleFoundationModelsReady(n) {
@@ -104,7 +105,7 @@ func evaluateCandidate(reqs models.TaskRequirements, n models.NodeFacts, st *sta
 		}
 		if n.Resources == nil || nodeAllocatable < minNeeded {
 			eval.ExclusionReasons = append(eval.ExclusionReasons,
-				fmt.Sprintf("need %dMB free RAM, have %dMB effective (base %dMB, short %dMB)",
+				fmt.Sprintf("need %dMB free RAM, have %dMB allocatable (base %dMB, short %dMB)",
 					minNeeded, nodeAllocatable, actual, minNeeded-nodeAllocatable))
 		}
 	}

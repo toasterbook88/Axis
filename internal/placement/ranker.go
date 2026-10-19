@@ -413,20 +413,6 @@ func allowsIncompleteNode(n models.NodeFacts, requiredTools []string) bool {
 	return len(requiredTools) == 1 && requiresTool(requiredTools, "ollama") && isOllamaBootstrapPossible(n)
 }
 
-func satisfiesRequiredTools(n models.NodeFacts, requiredTools []string) bool {
-	for _, tool := range requiredTools {
-		switch {
-		case strings.EqualFold(tool, "ollama"):
-			if !ollamaIsReady(n) && !isOllamaBootstrapPossible(n) {
-				return false
-			}
-		case !hasTool(n, tool):
-			return false
-		}
-	}
-	return true
-}
-
 func pressureOf(n models.NodeFacts) string {
 	if n.Resources == nil {
 		return "high"
