@@ -1,3 +1,11 @@
+## Unreleased
+
+### Fixes
+
+* Placement excludes nodes that cannot cover guarded execution's reservation
+  request before ranking. Placement and explanation output share exclusion
+  reasons; execution retains its dispatch-time checks and ledger authority.
+
 ## v0.19.6 (2026-10-15)
 
 Fifteen pull requests merged on `main` since `v0.19.5`. This patch release mainly retracts the versions whose tags moved during the 2026-10-12 history rewrite, and ships the model-discovery, reservation-cleanup and agent-ergonomics work.

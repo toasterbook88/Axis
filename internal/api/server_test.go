@@ -1721,7 +1721,7 @@ func TestRunTaskStreamReturnsFinalResultWhenRuntimeFails(t *testing.T) {
 
 func TestRunReturnsErrorForUnconfiguredRemoteNode(t *testing.T) {
 	rt := testRuntimeContext(
-		[]models.NodeFacts{testNode("mac", "mac.local", 1024, 512, "critical")},
+		[]models.NodeFacts{testNode("mac", "mac.local", 8192, 4096, "low")},
 		nil, nil, &skills.Store{}, nil, nil,
 	)
 	restore := stubLiveRuntime(t, rt, nil)

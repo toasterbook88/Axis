@@ -225,14 +225,6 @@ func ResolveIntent(description, mode string, skillStore *skills.Store) (Intent, 
 	}
 }
 
-func ReservationMBForRequirements(reqs models.TaskRequirements) int64 {
-	reqMem := reqs.GetMemoryRequestMB()
-	if reqMem > 0 {
-		return reqMem
-	}
-	return reqs.MinFreeRAMMB + 1024
-}
-
 func CanReserve(snap *models.ClusterSnapshot, node string, mb int64) bool {
 	if mb <= 0 || snap == nil {
 		return true
@@ -240,7 +232,7 @@ func CanReserve(snap *models.ClusterSnapshot, node string, mb int64) bool {
 
 	for _, n := range snap.Nodes {
 		if n.Name == node {
-			return n.RAMReservedMB+mb <= n.ReservableRAM()
+			return placement.CanReserveRAM(n, mb)
 		}
 	}
 	return true
@@ -386,7 +378,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 		prepared.TargetConfig = targetConfig
 	}
 
-	reservationMB := ReservationMBForRequirements(reqs)
+	reservationMB := placement.ReservationMBForRequirements(reqs)
 	prepared.ReservationMB = reservationMB
 	if !CanReserve(rt.Snapshot, decision.Node, reservationMB) {
 		var err error

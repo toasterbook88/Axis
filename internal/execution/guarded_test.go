@@ -23,6 +23,7 @@ import (
 	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 	"github.com/toasterbook88/axis/internal/scripts"
@@ -996,7 +997,7 @@ func TestPrepareGuardedExecutionReservationCapExceeded(t *testing.T) {
 		})
 	}
 
-	_, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+	prep, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
 		Description: "echo hi",
 		Mode:        ModeExec,
 		Confirm:     ConfirmWord,
@@ -1004,7 +1005,7 @@ func TestPrepareGuardedExecutionReservationCapExceeded(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for reservation cap exceeded")
 	}
-	if !strings.Contains(err.Error(), "reservation cap exceeded") {
+	if !strings.Contains(strings.Join(prep.Result.Reasoning, "; "), "reservation cap exceeded") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -2050,7 +2051,7 @@ func TestPrepareGuardedExecutionRequestedNode(t *testing.T) {
 	}
 }
 
-func TestPrepareGuardedExecutionReservationCapStaysOnPlacedNode(t *testing.T) {
+func TestPrepareGuardedExecutionMatchesReservablePlacement(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	nodeA := models.NodeFacts{
@@ -2085,11 +2086,21 @@ func TestPrepareGuardedExecutionReservationCapStaysOnPlacedNode(t *testing.T) {
 		Mode:        ModeExec,
 		Confirm:     ConfirmWord,
 	})
-	if err == nil || !strings.Contains(err.Error(), "reservation cap exceeded") {
-		t.Fatalf("expected reservation cap exceeded, got %v", err)
+	if err != nil {
+		t.Fatalf("expected reservable candidate, got %v", err)
 	}
-	if prep.Result.Node != "node-a" {
-		t.Fatalf("expected placed node-a, got %q", prep.Result.Node)
+	decision := placement.SelectBestNode(prep.Requirements, rt.Snapshot.Nodes, rt.State)
+	if prep.Result.Node != "node-b" || prep.Result.Node != decision.Node {
+		t.Fatalf("placement/execution disagree: decision=%+v prepared=%+v", decision, prep.Result)
+	}
+	if len(rt.Ledger.Entries()) != 0 {
+		t.Fatal("preparation must not acquire a lease")
+	}
+	pinned, err := PrepareGuardedExecution(context.Background(), rt, GuardedExecutionRequest{
+		Description: "echo hi", Mode: ModeExec, Confirm: ConfirmWord, RequestedNode: "node-a",
+	})
+	if err == nil || !strings.Contains(err.Error(), "reservation cap exceeded") || pinned.Result.Node == "node-b" {
+		t.Fatalf("pinned node must fail with its exclusion, not select another node: result=%+v err=%v", pinned.Result, err)
 	}
 }
 

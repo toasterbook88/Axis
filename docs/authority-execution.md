@@ -1,5 +1,19 @@
 # AUTH-5: Execution State Authority
 
+Placement checks reservation feasibility from the snapshot before ranking.
+`internal/placement.ReservationMBForRequirements` defines the shared budget:
+an explicit memory request, or minimum RAM plus 1024MB. `CanReserveRAM` compares
+that request and the node's existing reservations against its reservable pool,
+including any configured system reserve. An allocatable-memory hint cannot
+override a reservation-cap failure. Placement and explanation output render
+the same candidate exclusion reasons.
+
+This check is observational: it does not reserve RAM or guarantee dispatch.
+Guarded execution retains its reservation-cap check, remote configuration
+lookup, live local memory preflight, and optional liveness probe. The ledger
+still owns lease acquisition, and a dispatch-time failure does not select a
+different node. An explicitly requested node must pass placement itself.
+
 ## 1. Who Tracks Running Execution State
 
 Execution state is tracked by **two independent systems** with overlapping concerns:
