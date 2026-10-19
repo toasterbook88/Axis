@@ -138,6 +138,37 @@ This shows:
 - Installed tools (Ollama, llama.cpp, etc.)
 - Thermal and battery status (if applicable)
 
+For a hardware-only report on Linux or macOS:
+
+```bash
+axis facts --hardware
+axis facts -hw
+axis node facts --hardware --format json
+axis facts --hardware --watch --interval 2s
+axis facts --help
+```
+
+Hardware reports group specifications and live measurements by CPU, memory,
+GPU, storage, network, system, sensors, and attached devices. Each reading carries
+its source, units, observation time, and availability status. Inventory is retained
+in watch mode; load is refreshed. `--interval` sets the counter sampling window
+(default 2s, range 100ms–1m); probe overhead adds to the time between reports.
+macOS CPU utilization uses a separate one-second `top` sample. JSON watch output
+is one report per line; YAML watch output uses document separators. Ctrl-C stops
+watch mode. Normal facts JSON/YAML keeps its existing node-facts schema;
+hardware reports use `axis.hardware/v1`.
+
+Hardware collection does not read cluster configuration, scan inference endpoints,
+or invoke sudo. Serial numbers, UUIDs, and MAC addresses are excluded. Linux
+uses `/proc`, `/sys`, and optional utilities (`lscpu`, `lsblk`, `dmidecode`,
+`smartctl`, `nvidia-smi`). macOS uses native `system_profiler`, `sysctl`, `top`,
+`vm_stat`, `netstat`, `ioreg`, and `pmset`. Missing tools, permissions, unsupported
+sensors, and failed probes are reported explicitly. Apple Silicon memory is
+identified as unified; GPU driver memory counters are not dedicated VRAM.
+macOS drive activity is scoped to I/O Registry storage drivers, rather than
+attributed to APFS volumes. Temperature, fan, frequency, and power coverage
+varies by platform and device; a missing reading never means zero load.
+
 ### View Full Cluster
 
 ```bash

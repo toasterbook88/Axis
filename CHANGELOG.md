@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Features
+
+* Organized local facts and detailed `axis facts --hardware` / `-hw` reports
+  for Linux and macOS, with source-backed specifications, sampled load, explicit
+  unavailable readings, text/JSON/YAML output, and optional live watch mode.
+
 ### Fixes
 
 * Placement excludes nodes that cannot cover guarded execution's reservation
