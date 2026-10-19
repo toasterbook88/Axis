@@ -97,6 +97,45 @@ esac`)
 	}
 }
 
+// curlLog returns a curl stub prefix that records every URL the probe asks for.
+func curlLog(t *testing.T) (string, func() string) {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "curl.log")
+	return `echo "$*" >> "` + log + `"
+`, func() string { b, _ := os.ReadFile(log); return string(b) }
+}
+
+// --api-key in argv means only /health answers without the key: the probe
+// must not send keyed requests that the server would log as rejected.
+func TestLlamaServerAPIKeyInArgvSkipsKeyedEndpoints(t *testing.T) {
+	prefix, calls := curlLog(t)
+	got := runLlamaProbe(t, "--api-key-file /run/key", prefix+`case "$*" in *"/health"*) printf 200 ;; esac`)
+	if got.State != models.ModelCatalogLoaded || got.Name != "served-model" || got.ContextWindow != 0 {
+		t.Fatalf("row = %+v, want loaded under argv name, no context", got)
+	}
+	if c := calls(); bytes.Contains([]byte(c), []byte("/props")) || bytes.Contains([]byte(c), []byte("/v1/models")) {
+		t.Fatalf("keyed endpoints requested:\n%s", c)
+	}
+	if got.Provenance["auth"] == "" {
+		t.Fatalf("provenance = %v, want auth reason", got.Provenance)
+	}
+}
+
+// A key set outside argv shows up as 401 on /props; /v1/models is then skipped.
+func TestLlamaServerProps401SkipsModelsListing(t *testing.T) {
+	prefix, calls := curlLog(t)
+	got := runLlamaProbe(t, "", prefix+`case "$*" in
+  *"/health"*) printf 200 ;;
+  *"/props"*) printf '{"error":{"code":401}}\n401' ;;
+esac`)
+	if got.State != models.ModelCatalogLoaded || got.ContextWindow != 0 || got.Provenance["auth"] == "" {
+		t.Fatalf("row = %+v, want loaded, no context, auth reason", got)
+	}
+	if c := calls(); bytes.Contains([]byte(c), []byte("/v1/models")) {
+		t.Fatalf("/v1/models requested after 401:\n%s", c)
+	}
+}
+
 func TestLlamaServerServedIDDifferentFromArgvIsListed(t *testing.T) {
 	got := runLlamaProbe(t, "", `case "$*" in
   *"/health"*) printf 200 ;;

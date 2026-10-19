@@ -286,12 +286,14 @@ const LlamaServerDiscoveryScript = `set -o pipefail;
 				esac
 				PROV="\"state\":\"GET /health $HEALTH\""
 				if [ "$STATE" = "loaded" ]; then
-					N_CTX=$(curl -s --max-time 2 "http://127.0.0.1:$THIS_PORT/props" 2>/dev/null | grep -o '"n_ctx":[0-9]*' | head -1 | sed 's/.*://')
+					AUTH=""; PROPS=""; case " $CMDLINE " in *" --api-key"*) AUTH="argv" ;; *) PROPS=$(curl -s --max-time 2 -w '\n%{http_code}' "http://127.0.0.1:$THIS_PORT/props" 2>/dev/null); case "${PROPS##*$'\n'}" in 401|403) AUTH="props-${PROPS##*$'\n'}" ;; esac ;; esac
+					[ -n "$AUTH" ] && PROV="$PROV,\"auth\":\"api key required ($AUTH); /props and /v1/models not read\""
+					N_CTX=$(printf '%s' "${PROPS%$'\n'*}" | grep -o '"n_ctx":[0-9]*' | head -1 | sed 's/.*://')
 					if printf '%s' "$N_CTX" | grep -qE '^[0-9]+$'; then
 						CTX_JSON=",\"context_window\":$N_CTX"
 						PROV="$PROV,\"context_window\":\"GET /props default_generation_settings.n_ctx\""
 					fi
-					SERVED=$(curl -s --max-time 2 "http://127.0.0.1:$THIS_PORT/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | sed 's/^"id":"//; s/"$//')
+					SERVED=$([ -z "$AUTH" ] && curl -s --max-time 2 "http://127.0.0.1:$THIS_PORT/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | sed 's/^"id":"//; s/"$//')
 					ALIAS=$(printf '%s\n' "$CMDLINE" | awk '{for(i=1;i<=NF;i++){if($i=="--alias"||$i=="-a"){print $(i+1);exit}if($i~/^(--alias=|-a=)/){sub(/^[^=]*=/,"",$i);print $i;exit}}}')
 					if [ -n "$SERVED" ] && ! case ",$ALIAS," in *",$SERVED,"*) true ;; *) false ;; esac; then
 						SERVED_NAME=$(basename "$SERVED" | sed 's/\.[^.]*$//')
