@@ -5,6 +5,11 @@
 * Placement excludes nodes that cannot cover guarded execution's reservation
   request before ranking. Placement and explanation output share exclusion
   reasons; execution retains its dispatch-time checks and ledger authority.
+* The llama.cpp probe no longer sends keyed requests to servers that require
+  an API key. A server started with `--api-key` or `--api-key-file`, or one
+  that answers `/props` with 401/403, is reported from `/health` alone, with
+  an `auth` provenance entry instead of a context window or served name.
+  Previously every fact sweep produced two rejected requests per keyed server.
 
 ## v0.19.6 (2026-10-15)
 
