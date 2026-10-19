@@ -176,11 +176,21 @@ func TestFilterLongContextUsesTurboQuantAdjustedRAM(t *testing.T) {
 	reqs := models.TaskRequirements{
 		RequiredTools:       []string{"ollama"},
 		MinFreeRAMMB:        4096,
-		MemoryRequestMB:     1536,
 		ContextWindowTokens: 128000,
 		PrefersTurboQuant:   true,
 	}
 
+	// TurboQuant's reduced fit floor does not reduce the implicit execution
+	// reservation (4096MB minimum + 1024MB overhead).
+	explanation := ExplainPlacement(reqs, []models.NodeFacts{node}, nil)
+	if explanation.Decision.OK || len(explanation.Excluded) != 1 ||
+		!strings.Contains(strings.Join(explanation.Excluded[0].Reasons, "; "), "reservation cap exceeded: need 5120MB") {
+		t.Fatalf("expected implicit reservation rejection, got %+v", explanation)
+	}
+
+	// An explicitly bounded request can fit both the reservation budget and
+	// the node-specific TurboQuant minimum.
+	reqs.MemoryRequestMB = 1536
 	result := FilterCandidates(reqs, []models.NodeFacts{node}, nil)
 	if len(result) != 1 || result[0].Name != "mlx-node" {
 		t.Fatalf("expected turboquant node to qualify after adjusted RAM threshold, got %v", names(result))
