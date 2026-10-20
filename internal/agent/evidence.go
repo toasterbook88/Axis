@@ -94,7 +94,7 @@ func (a *Agent) retrieveEvidence(userPrompt string) string {
 		}
 	}
 
-	if a.securityClass == BackendRemote {
+	if a.SecurityClass() == BackendRemote {
 		return a.remoteEvidence(matchedSkill, matched)
 	}
 	return a.localEvidence(recentDecisions, matchedSkill, matched)

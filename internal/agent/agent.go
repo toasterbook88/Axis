@@ -70,7 +70,14 @@ type Agent struct {
 	// read the field inside the agent's own serialized turn loop.)
 	modelMu                 sync.RWMutex
 	allowRawCommandEvidence bool
-	securityClass           BackendSecurityClass
+	// clientMu guards client and securityClass, which SetBackend swaps while
+	// the console startup goroutine finishes model resolution and other
+	// goroutines (slash commands, subagents, evidence) read them. Never hold
+	// it across ChatStream or any callback: read the backend into a local
+	// via Backend/backendAndClass and use the local. It is a leaf lock; no
+	// other Agent mutex is acquired while it is held.
+	clientMu      sync.RWMutex
+	securityClass BackendSecurityClass
 	// autoApproveAll is toggled when the operator selects "always" in confirmation.
 	autoApproveAll bool
 	// blockAll is toggled when the operator selects "never" in confirmation.
@@ -473,7 +480,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
-		resp, err := a.client.ChatStream(ctx, clonedMsgs, toolDefs, cw)
+		resp, err := a.Backend().ChatStream(ctx, clonedMsgs, toolDefs, cw)
 		cw.Close()
 		if err != nil {
 			if turn == 0 {
@@ -607,14 +614,35 @@ func (a *Agent) MCPRegistry() *mcpclient.Registry {
 }
 
 // SetBackend changes the active LLM backend and its trust classification.
+// Both fields change under one write lock so readers never observe a backend
+// paired with the previous backend's classification.
 func (a *Agent) SetBackend(client ChatBackend, securityClass BackendSecurityClass) {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
 	a.client = client
 	a.securityClass = securityClass
 }
 
 // Backend returns the active LLM backend.
 func (a *Agent) Backend() ChatBackend {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
 	return a.client
+}
+
+// SecurityClass returns the trust classification of the active backend.
+func (a *Agent) SecurityClass() BackendSecurityClass {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.securityClass
+}
+
+// backendAndClass returns the backend and its classification as one
+// consistent pair, for callers that need both (subagent construction).
+func (a *Agent) backendAndClass() (ChatBackend, BackendSecurityClass) {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.client, a.securityClass
 }
 
 // Model returns the current active model name.
@@ -723,7 +751,7 @@ func (a *Agent) UsageStats() (in, out, turns int) {
 
 // Stats returns the accumulated statistics from the underlying client, if supported.
 func (a *Agent) Stats() AgentStats {
-	if sp, ok := a.client.(interface {
+	if sp, ok := a.Backend().(interface {
 		Stats() (int, int, float64)
 	}); ok {
 		in, out, cost := sp.Stats()
