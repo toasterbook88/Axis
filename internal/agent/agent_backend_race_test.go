@@ -39,7 +39,7 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			_ = a.Backend()
-			_ = a.SecurityClass()
+			_ = securityClassOf(a)
 			_ = a.Stats()
 		}
 	}()
@@ -49,8 +49,15 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 			// Compaction path (ChatStream on the backend) and the
 			// evidence path (security-class check).
 			_, _ = a.summarizeViaBackend(context.Background(), a.Backend(), "p")
-			_ = a.retrieveEvidence("show nodes", a.SecurityClass())
+			_ = a.retrieveEvidence("show nodes", securityClassOf(a))
 		}
 	}()
 	wg.Wait()
+}
+
+// securityClassOf reads the active backend's classification through the
+// same consistent pair production code uses.
+func securityClassOf(a *Agent) BackendSecurityClass {
+	_, sc := a.backendAndClass()
+	return sc
 }
