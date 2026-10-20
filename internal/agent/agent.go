@@ -635,13 +635,6 @@ func (a *Agent) Backend() ChatBackend {
 	return a.client
 }
 
-// SecurityClass returns the trust classification of the active backend.
-func (a *Agent) SecurityClass() BackendSecurityClass {
-	a.clientMu.RLock()
-	defer a.clientMu.RUnlock()
-	return a.securityClass
-}
-
 // backendAndClass returns the backend and its classification as one
 // consistent pair, for callers that need both (subagent construction).
 func (a *Agent) backendAndClass() (ChatBackend, BackendSecurityClass) {
