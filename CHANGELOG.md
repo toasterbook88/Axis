@@ -8,6 +8,9 @@
 
 ### Fixes
 
+* Add the fuller recorded macOS storage fixture and a fail-first parent
+  relationship contract regression. Parser implementation is pending.
+
 * Hardware facts suppress SMART stub fields after permission or device-open
   failures, preserve distinct macOS devices with empty interface/BSD names,
   and restrict AMD-only GPU sysfs telemetry to AMD devices.

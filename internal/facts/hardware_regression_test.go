@@ -185,7 +185,7 @@ func TestHardwareNumericFileSentinelsAndOverflow(t *testing.T) {
 }
 
 func FuzzHardwareNativeParsers(f *testing.F) {
-	for _, fixture := range []string{"smart-permission.json", "mac-profiler.json", "pci-nvidia.json"} {
+	for _, fixture := range []string{"smart-permission.json", "mac-profiler.json", "mac-profiler-nesting.json", "pci-nvidia.json"} {
 		f.Add(string(hardwareReviewFixture(f, fixture)))
 	}
 	for _, seed := range []string{"\n", "Name\nx", "+-o ", "cpu NaN 0 0 0 0 0 0 0", "Mach Virtual Memory Statistics: (page size of 0 bytes)\nPages free: 12.",
