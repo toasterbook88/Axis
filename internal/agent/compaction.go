@@ -168,7 +168,7 @@ func (a *Agent) summarizeViaBackend(ctx context.Context, prompt string) (string,
 		{Role: chat.RoleSystem, Content: "You are a conversation summarizer. Output only the summary, no preamble."},
 		{Role: chat.RoleUser, Content: prompt},
 	}
-	resp, err := a.client.ChatStream(ctx, msgs, nil, io.Discard)
+	resp, err := a.Backend().ChatStream(ctx, msgs, nil, io.Discard)
 	if err != nil {
 		return "", err
 	}
