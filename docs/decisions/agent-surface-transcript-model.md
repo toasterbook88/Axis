@@ -286,9 +286,12 @@ state and is named as such.
 Truncation is layered and explicit, matching the footer's existing behavior:
 
 1. Below 100 columns, drop the provider prefix from the model label.
-2. Below 80, drop cache/cost usage parts; keep context percent and model.
-3. Below 60, the status line keeps `fleet` and `snap` and drops other keys.
-4. Below 40, the footer collapses to the model label alone.
+2. Below 72, drop cache/cost usage parts and the context bar; keep the compact
+   context percent, snapshot, and model.
+3. Below 44, the footer collapses to the model label alone.
+
+The footer line is always exactly `width-1` display columns (wide runes
+counted by their display width), so a full-width write never auto-wraps.
 
 Overlays take a `visible(width, height)` predicate evaluated per frame; the
 model picker drops the `TARGET` column before the `HEALTH` column.

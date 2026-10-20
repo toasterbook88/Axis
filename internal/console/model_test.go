@@ -343,7 +343,7 @@ func (s staticOverlay) Done() bool        { return s.done }
 // staticFooter is a fixed footer for tests.
 type staticFooter struct{ text string }
 
-func (s staticFooter) Render(int) []Line { return []Line{{Text: s.text}} }
+func (s staticFooter) Render(int, FooterState) []Line { return []Line{{Text: s.text}} }
 
 func TestCancelKeepsTurnBusyUntilAcknowledged(t *testing.T) {
 	// Escape requests cancellation; the turn is not finished until the
@@ -717,7 +717,7 @@ func TestModelPendingToolCard(t *testing.T) {
 	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts", Args: `node="lab-1"`})
 
 	view := m.View()
-	if !strings.Contains(view, spinnerFrames[0]+" axis_facts") {
+	if !strings.Contains(view, spinnerFrame(0, false)+" axis_facts") {
 		t.Fatalf("in-flight tool card missing from ephemeral view:\n%s", view)
 	}
 	if strings.Count(view, "axis_facts") != 1 {

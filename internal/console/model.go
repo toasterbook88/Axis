@@ -104,7 +104,14 @@ type SetOverlayMsg struct {
 
 // Footer renders the persistent status region below the input line.
 type Footer interface {
-	Render(width int) []Line
+	Render(width int, st FooterState) []Line
+}
+
+// FooterState is the live, console-owned state a footer cannot derive from its
+// own providers: the current spinner frame and the model's startup state.
+type FooterState struct {
+	Frame string
+	Model ModelState
 }
 
 // turnState tracks the lifecycle of the active turn. Without it, a cancel
@@ -192,6 +199,8 @@ type Model struct {
 	sessionStart time.Time
 
 	spinner    int
+	ticking    bool // a spinnerTick is in flight; see ensureTick
+	unicode    bool
 	interrupts int // consecutive ctrl+c presses on an empty editor
 	quitting   bool
 
@@ -231,6 +240,9 @@ type Options struct {
 	Submit SubmitFunc
 	Cancel CancelFunc
 	Footer Footer
+
+	// Unicode selects the Unicode spinner frames; false keeps ASCII.
+	Unicode bool
 
 	// History pre-seeds the command history ring.
 	History []string
@@ -287,6 +299,7 @@ func NewModel(opts Options) Model {
 		submit:        opts.Submit,
 		cancel:        opts.Cancel,
 		footer:        opts.Footer,
+		unicode:       opts.Unicode,
 		historySink:   opts.HistorySink,
 		atCandidates:  opts.AtCandidates,
 		stream:        &strings.Builder{},
@@ -313,9 +326,6 @@ func (m Model) modeLabel() string {
 		return "observe"
 	}
 }
-
-// spinnerFrames is the busy indicator. ASCII so it survives any terminal.
-var spinnerFrames = []string{"-", "\\", "|", "/"}
 
 const spinnerInterval = 120 * time.Millisecond
 
@@ -454,11 +464,13 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		)
 
 	case spinnerTickMsg:
-		if m.state == turnIdle {
+		// This tick has fired, so the chain is over until ensureTick restarts it.
+		m.ticking = false
+		if !m.animating() {
 			return m, nil
 		}
-		m.spinner = (m.spinner + 1) % len(spinnerFrames)
-		return m, spinnerTick()
+		m.spinner = (m.spinner + 1) % 4
+		return m, m.ensureTick()
 	}
 	return m, nil
 }
@@ -906,7 +918,7 @@ func (m Model) startTurn(text string) (Model, tea.Cmd) {
 	m.spinner = 0
 	m.stream.Reset()
 
-	cmds = append(cmds, m.submit(m.turn, text), spinnerTick())
+	cmds = append(cmds, m.submit(m.turn, text), m.ensureTick())
 	return m, tea.Batch(cmds...)
 }
 
@@ -979,7 +991,7 @@ func (m Model) View() string {
 	if text := m.stream.String(); text != "" {
 		_, answer, inThought := parseStreamThought(text)
 		if inThought {
-			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " thinking...", Style: StyleMuted})
+			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " thinking...", Style: StyleMuted})
 		} else if answer != "" {
 			for _, l := range wrap(answer, effectiveWidth(m.width)) {
 				lines = append(lines, Line{Text: l})
@@ -988,7 +1000,7 @@ func (m Model) View() string {
 	}
 
 	for _, pt := range m.pendingTools {
-		row := spinnerFrames[m.spinner] + " " + pt.name
+		row := spinnerFrame(m.spinner, m.unicode) + " " + pt.name
 		if pt.args != "" {
 			row += " " + pt.args
 		}
@@ -998,9 +1010,9 @@ func (m Model) View() string {
 	if m.overlay == nil {
 		switch m.state {
 		case turnRunning:
-			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " working", Style: StyleMuted})
+			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " working", Style: StyleMuted})
 		case turnCancelling:
-			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " cancelling", Style: StyleMuted})
+			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " cancelling", Style: StyleMuted})
 		}
 	}
 
@@ -1021,7 +1033,7 @@ func (m Model) View() string {
 	})
 
 	if m.footer != nil {
-		lines = append(lines, m.footer.Render(m.width)...)
+		lines = append(lines, m.footer.Render(m.width, FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: ModelReady})...)
 	}
 
 	return PaintAll(lines)
