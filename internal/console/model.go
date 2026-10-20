@@ -7,6 +7,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // The console runs on the main screen, never the alternate screen. Committed
@@ -212,6 +214,14 @@ type Model struct {
 	// atCandidates supplies completion candidates for the text after the
 	// leading '@'. Nil disables @ completion entirely.
 	atCandidates func() []string
+
+	// Start-screen state; see startup.go. start == nil disables all of it.
+	start          StartScreen
+	startDismissed bool
+	startVersion   string
+	startDepth     ui.ColorDepth
+	headerModel    func() string
+	status         []StatusLine
 }
 
 // atCompletionState tracks one active @ completion. Token is the text
@@ -272,11 +282,26 @@ type Options struct {
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
+
+	// Start renders the splash shown until the first submit. Nil disables the
+	// start screen and the prompt rule, keeping the console as it always was.
+	Start         StartScreen
+	Version       string
+	Depth         ui.ColorDepth
+	InitialStatus []StatusLine
+	// HeaderModel names the active model for the scrollback header written
+	// when the splash is dismissed. Nil or "" reads as no model.
+	HeaderModel func() string
 }
 
-// Init starts the console.
+// Init starts the console. NewModel already marked the tick chain started
+// (Init has a value receiver, so it cannot record that itself).
 func (m Model) Init() tea.Cmd {
-	return tea.SetWindowTitle("axis agent · " + m.modeLabel())
+	title := tea.SetWindowTitle("axis agent · " + m.modeLabel())
+	if m.ticking {
+		return tea.Batch(title, spinnerTick())
+	}
+	return title
 }
 
 // NewModel builds a console model.
@@ -293,7 +318,7 @@ func NewModel(opts Options) Model {
 	if len(opts.History) > 0 {
 		ed.SetHistory(opts.History)
 	}
-	return Model{
+	m := Model{
 		width:         80,
 		editor:        ed,
 		submit:        opts.Submit,
@@ -310,6 +335,8 @@ func NewModel(opts Options) Model {
 		cancelGrace:   grace,
 		now:           now,
 	}
+	m.initStart(opts)
+	return m
 }
 
 func (m Model) modeLabel() string {
@@ -390,6 +417,9 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case StartupStatusMsg:
+		return m.applyStatus(msg.Line)
 
 	case EntryMsg:
 		if m.stale(msg.Turn) {
@@ -879,7 +909,18 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	m, startCmd := m.dismissStart()
+	updated, cmd := m.submitText(text)
+	if startCmd == nil {
+		return updated, cmd
+	}
+	// Sequence, not Batch: the header must reach scrollback before the turn's
+	// own lines.
+	return updated, tea.Sequence(startCmd, cmd)
+}
 
+// submitText handles one non-empty submitted line.
+func (m Model) submitText(text string) (tea.Model, tea.Cmd) {
 	// Console-local commands intercept before persistence and turns: they
 	// touch model-retained state, never become turns, and stay out of
 	// history.jsonl (they are commands, not prompts).
@@ -984,7 +1025,7 @@ func (m Model) View() string {
 		return ""
 	}
 
-	var lines []Line
+	lines := m.startLines()
 
 	// An in-progress response lives here until the turn ends, so scrollback
 	// never receives a partial line.
@@ -1023,8 +1064,9 @@ func (m Model) View() string {
 	m.syncEditor()
 	inputText := m.editor.Text()
 	ghost := m.atGhost()
+	lines = append(lines, m.promptRule()...)
 	lines = append(lines, Line{
-		Gutter:     "> ",
+		Gutter:     m.inputGutter(),
 		Text:       inputText + ghost,
 		HasCursor:  true,
 		CursorPos:  m.editor.Cursor(),

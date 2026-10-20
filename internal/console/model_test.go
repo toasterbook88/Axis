@@ -28,6 +28,14 @@ func drain(cmd tea.Cmd) []tea.Msg {
 		}
 		return out
 	}
+	// tea.Sequence yields an unexported []tea.Cmd type; flatten it in order.
+	if v := reflect.ValueOf(msg); v.IsValid() && v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(cmd) {
+		var out []tea.Msg
+		for i := 0; i < v.Len(); i++ {
+			out = append(out, drain(v.Index(i).Interface().(tea.Cmd))...)
+		}
+		return out
+	}
 	return []tea.Msg{msg}
 }
 

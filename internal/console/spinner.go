@@ -25,7 +25,7 @@ func spinnerFrame(i int, unicode bool) string {
 // animating reports whether anything on screen needs the spinner to advance.
 // The tick chain stops as soon as this is false so an idle console is silent.
 func (m Model) animating() bool {
-	return m.state != turnIdle
+	return m.state != turnIdle || m.startRunning()
 }
 
 // ensureTick starts the spinner tick chain unless one is already in flight.
