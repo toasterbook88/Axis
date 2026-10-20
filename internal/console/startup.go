@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,6 +37,7 @@ type StartupStatusMsg struct{ Line StatusLine }
 // Init has a value receiver and cannot record it, and without the mark a later
 // ensureTick would start a second chain.
 func (m *Model) initStart(opts Options) {
+	m.modelState = opts.InitialModelState
 	m.start = opts.Start
 	if m.start == nil {
 		return
@@ -169,7 +171,7 @@ func (m Model) headerLine() string {
 	if m.headerModel != nil {
 		model = m.headerModel()
 	}
-	if model == "" {
+	if model == "" || m.modelState == ModelNone {
 		model = "no model"
 	}
 	line := "▲ AXIS agent · v" + m.startVersion + " · " + model
@@ -195,4 +197,125 @@ func (m Model) dismissStart() (Model, tea.Cmd) {
 	}
 	m.status = nil
 	return m, tea.Sequence(cmds...)
+}
+
+// noModelNotice is shown whenever a prompt cannot be sent for want of a model.
+const noModelNotice = "no model available — start one with axis model start <name>, or configure ~/.axis/ai.yaml"
+
+// ModelStateMsg reports that model resolution changed state.
+type ModelStateMsg struct{ State ModelState }
+
+// RunCommandMsg submits Text as if the operator typed it and pressed Enter.
+// It is how a launch flag opens a console command such as /model at startup.
+type RunCommandMsg struct{ Text string }
+
+// isCommand reports whether text bypasses the model wait: slash commands and
+// shell escapes are handled without the model.
+func isCommand(text string) bool {
+	return strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!")
+}
+
+// waitingForModel reports whether prompts are held for a pending model, which
+// is what keeps the "waiting for model" line spinning.
+func (m Model) waitingForModel() bool {
+	return m.modelState == ModelPending && len(m.held) > 0
+}
+
+// footerWidth is the width the footer lays out at. With the start path a 0x0
+// size report must not collapse the footer while the splash draws at 80.
+func (m Model) footerWidth() int {
+	if m.start != nil {
+		return m.layoutWidth()
+	}
+	return m.width
+}
+
+// heldLines is the waiting indicator drawn above the input while prompts wait.
+func (m Model) heldLines() []Line {
+	if len(m.held) == 0 {
+		return nil
+	}
+	return []Line{{Text: spinnerFrame(m.spinner, m.unicode) + " waiting for model…", Style: StyleMuted}}
+}
+
+// submitDismissing retires the splash, then submits text. Sequence, not Batch:
+// the header must reach scrollback before the turn's own lines.
+func (m Model) submitDismissing(text string) (tea.Model, tea.Cmd) {
+	m, startCmd := m.dismissStart()
+	updated, cmd := m.submitText(text)
+	if startCmd == nil {
+		return updated, cmd
+	}
+	return updated, tea.Sequence(startCmd, cmd)
+}
+
+// runCommand handles RunCommandMsg through the normal submit path.
+func (m Model) runCommand(text string) (Model, tea.Cmd) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return m, nil
+	}
+	updated, cmd := m.submitDismissing(text)
+	return updated.(Model), cmd
+}
+
+// gatePrompt decides a non-command prompt while no model is ready. It reports
+// handled=true when the prompt was held or refused, so the caller must not
+// send it. The user entry is committed here, once; a held prompt is later sent
+// with beginTurn so it is never committed twice. cmds carries persistence work
+// the caller already built.
+func (m Model) gatePrompt(text string, cmds []tea.Cmd) (Model, tea.Cmd, bool) {
+	if isCommand(text) || m.modelState == ModelReady {
+		return m, nil, false
+	}
+	cmds = append(cmds, m.commit(NewUserEntry(m.now(), text)))
+	if m.modelState == ModelNone {
+		cmds = append(cmds, m.commit(NewNoticeEntry(m.now(), noModelNotice)))
+		return m, tea.Sequence(cmds...), true
+	}
+	// Copy so a Model value copied earlier never sees this write.
+	m.held = append(append([]string(nil), m.held...), text)
+	cmds = append(cmds, m.ensureTick()) // the waiting line spins
+	return m, tea.Sequence(cmds...), true
+}
+
+// applyModelState records a model state change and acts on held prompts.
+func (m Model) applyModelState(s ModelState) (Model, tea.Cmd) {
+	m.modelState = s
+	switch s {
+	case ModelReady:
+		return m.releaseHeld()
+	case ModelNone:
+		if len(m.held) == 0 {
+			return m, nil
+		}
+		// Say it once and drop the prompts: they can never be sent.
+		m.held = nil
+		return m, m.commit(NewNoticeEntry(m.now(), noModelNotice))
+	}
+	return m, nil
+}
+
+// releaseHeld sends the oldest held prompt when the model is ready and no turn
+// is running. One at a time: the next goes at the next turn boundary.
+func (m Model) releaseHeld() (Model, tea.Cmd) {
+	if m.modelState != ModelReady || m.state != turnIdle || len(m.held) == 0 {
+		return m, nil
+	}
+	next := m.held[0]
+	m.held = append([]string(nil), m.held[1:]...)
+	return m.beginTurn(next)
+}
+
+// cancelHeld drops every held prompt on an idle cancel gesture. ok is false
+// when there is nothing to cancel, so the gesture keeps its usual meaning; a
+// cancel that does something never counts toward the quit gesture.
+func (m Model) cancelHeld() (Model, tea.Cmd, bool) {
+	if m.state != turnIdle || len(m.held) == 0 {
+		return m, nil, false
+	}
+	n := len(m.held)
+	m.held = nil
+	m.interrupts = 0
+	return m, m.commit(NewNoticeEntry(m.now(), fmt.Sprintf("cancelled: %d waiting prompt(s)", n))), true
 }

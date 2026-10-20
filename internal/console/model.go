@@ -222,6 +222,10 @@ type Model struct {
 	startDepth     ui.ColorDepth
 	headerModel    func() string
 	status         []StatusLine
+
+	// Model readiness and prompts held for it; see startup.go.
+	modelState ModelState
+	held       []string
 }
 
 // atCompletionState tracks one active @ completion. Token is the text
@@ -292,6 +296,9 @@ type Options struct {
 	// HeaderModel names the active model for the scrollback header written
 	// when the splash is dismissed. Nil or "" reads as no model.
 	HeaderModel func() string
+	// InitialModelState is the model's state at launch. The zero value,
+	// ModelReady, keeps the console behaving as it always did.
+	InitialModelState ModelState
 }
 
 // Init starts the console. NewModel already marked the tick chain started
@@ -420,6 +427,12 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 
 	case StartupStatusMsg:
 		return m.applyStatus(msg.Line)
+
+	case ModelStateMsg:
+		return m.applyModelState(msg.State)
+
+	case RunCommandMsg:
+		return m.runCommand(msg.Text)
 
 	case EntryMsg:
 		if m.stale(msg.Turn) {
@@ -647,6 +660,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.atCompletion = atCompletionState{}
 			return m, nil
 		}
+		if next, cmd, ok := m.cancelHeld(); ok {
+			return next, cmd
+		}
 		m.interrupts++
 		if m.interrupts >= 2 {
 			m.quitting = true
@@ -664,6 +680,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.state != turnIdle {
 			return m.requestCancel()
+		}
+		if next, cmd, ok := m.cancelHeld(); ok {
+			return next, cmd
 		}
 		// agy-style esc esc: the first press arms the gesture, the second
 		// clears the draft. Clearing a draft on a single accidental Esc was
@@ -909,14 +928,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
-	m, startCmd := m.dismissStart()
-	updated, cmd := m.submitText(text)
-	if startCmd == nil {
-		return updated, cmd
-	}
-	// Sequence, not Batch: the header must reach scrollback before the turn's
-	// own lines.
-	return updated, tea.Sequence(startCmd, cmd)
+	return m.submitDismissing(text)
 }
 
 // submitText handles one non-empty submitted line.
@@ -935,11 +947,15 @@ func (m Model) submitText(text string) (tea.Model, tea.Cmd) {
 	if m.historySink != nil {
 		cmds = append([]tea.Cmd{}, m.historySink(text))
 	}
-	if m.state != turnIdle {
+	// A prompt waiting for the model is held, never steering, even mid-turn.
+	if m.state != turnIdle && (isCommand(text) || m.modelState == ModelReady) {
 		m.queued = append(m.queued, text)
 		// Queued prompts persist too: batch the persistence command with
 		// the queue notice so neither is dropped.
 		return m, tea.Batch(append(cmds, m.commit(NewNoticeEntry(m.now(), "queued: "+text)))...)
+	}
+	if next, cmd, held := m.gatePrompt(text, cmds); held {
+		return next, cmd
 	}
 	updated, startCmd := m.startTurn(text)
 	return updated, tea.Batch(append(cmds, startCmd)...)
@@ -947,8 +963,15 @@ func (m Model) submitText(text string) (tea.Model, tea.Cmd) {
 
 // startTurn commits the operator's line and hands the prompt to the agent.
 func (m Model) startTurn(text string) (Model, tea.Cmd) {
-	cmds := []tea.Cmd{m.commit(NewUserEntry(m.now(), text))}
+	entry := m.commit(NewUserEntry(m.now(), text))
+	next, cmd := m.beginTurn(text)
+	return next, tea.Batch(entry, cmd)
+}
 
+// beginTurn hands an already-committed prompt to the agent. Held prompts were
+// committed when typed, so releasing them must not commit again.
+func (m Model) beginTurn(text string) (Model, tea.Cmd) {
+	var cmds []tea.Cmd
 	if m.submit == nil {
 		cmds = append(cmds, m.commit(NewErrorEntry(m.now(), "no agent backend attached")))
 		return m, tea.Batch(cmds...)
@@ -1008,6 +1031,11 @@ func (m Model) finishTurn(err error) (Model, tea.Cmd) {
 		updated, cmd := m.startTurn(next)
 		m = updated
 		cmds = append(cmds, cmd)
+	} else {
+		// Held prompts go only when no steering message took the turn.
+		updated, cmd := m.releaseHeld()
+		m = updated
+		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -1064,6 +1092,7 @@ func (m Model) View() string {
 	m.syncEditor()
 	inputText := m.editor.Text()
 	ghost := m.atGhost()
+	lines = append(lines, m.heldLines()...)
 	lines = append(lines, m.promptRule()...)
 	lines = append(lines, Line{
 		Gutter:     m.inputGutter(),
@@ -1075,7 +1104,7 @@ func (m Model) View() string {
 	})
 
 	if m.footer != nil {
-		lines = append(lines, m.footer.Render(m.width, FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: ModelReady})...)
+		lines = append(lines, m.footer.Render(m.footerWidth(), FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: m.modelState})...)
 	}
 
 	return PaintAll(lines)
