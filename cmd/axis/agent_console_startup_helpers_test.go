@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -172,13 +173,13 @@ func newConsoleStartupHarness(t *testing.T, loader func(context.Context) (*runti
 
 	prevLoad, prevProg := loadAgentShellRuntime, newConsoleProgramFn
 	prevConnect, prevClose := consoleConnectMCPFn, consoleCloseMCPFn
-	prevSetup := consoleSetupBackendFn
+	prevSetup, prevBranch := consoleSetupBackendFn, consoleGitBranchFn
 	prevRTWait, prevShutdown := consoleRuntimeLoadWait, consoleStartupShutdownWaitFor
 	t.Cleanup(func() {
 		h.prog.exit()
 		loadAgentShellRuntime, newConsoleProgramFn = prevLoad, prevProg
 		consoleConnectMCPFn, consoleCloseMCPFn = prevConnect, prevClose
-		consoleSetupBackendFn = prevSetup
+		consoleSetupBackendFn, consoleGitBranchFn = prevSetup, prevBranch
 		consoleRuntimeLoadWait, consoleStartupShutdownWaitFor = prevRTWait, prevShutdown
 	})
 	if loader == nil {
@@ -194,6 +195,7 @@ func newConsoleStartupHarness(t *testing.T, loader func(context.Context) (*runti
 	}
 	consoleConnectMCPFn = func(context.Context, *mcpclient.Registry, *config.Config) {}
 	consoleCloseMCPFn = func(*mcpclient.Registry) { h.mcpClosed.Store(true) }
+	consoleGitBranchFn = func(context.Context) (string, error) { return "", errors.New("not a repository") }
 	return h
 }
 

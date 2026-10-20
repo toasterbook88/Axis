@@ -71,13 +71,30 @@ func (l *consoleLauncher) headerModel() string {
 	return ""
 }
 
-// notReady answers a submit that arrived before the agent was bound.
+// notReady answers a submit that arrived before the agent was bound: still
+// starting, or, once startup has failed, why and what to do about it.
 func (l *consoleLauncher) notReady(turn console.TurnID) tea.Cmd {
+	l.mu.Lock()
+	text := consoleNotReady
+	if l.startErr != nil {
+		text = fmt.Sprintf("agent failed to start: %v — restart axis agent", l.startErr)
+	}
+	l.mu.Unlock()
 	return func() tea.Msg {
 		if l.prog != nil {
-			l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), consoleNotReady)})
+			l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), text)})
 		}
 		return console.TurnDoneMsg{Turn: turn}
+	}
+}
+
+// failStart records that startup failed before bind. It is a no-op once an
+// agent is bound: a later failure leaves a working agent in place.
+func (l *consoleLauncher) failStart(err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.pending && l.startErr == nil {
+		l.startErr = err
 	}
 }
 

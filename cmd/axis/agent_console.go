@@ -81,6 +81,9 @@ type consoleLauncher struct {
 	// are written by bind under mu and read through bound().
 	pending bool
 	agent   *agent.Agent
+	// startErr is why startup failed before bind; pending stays true for
+	// good and every submit reports this instead of "still starting".
+	startErr error
 
 	// modelMu serializes model changes; modelGen counts operator /model
 	// switches so a slower startup resolution can tell it was overtaken.

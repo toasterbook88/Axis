@@ -33,6 +33,8 @@ const (
 	consoleRuntimeLoadTimeout  = 5 * time.Second
 	consoleMCPConnectTimeout   = 10 * time.Second
 	consoleStartupShutdownWait = 3 * time.Second
+	// consoleGitBranchTimeout bounds the cwd line's branch lookup.
+	consoleGitBranchTimeout = 2 * time.Second
 )
 
 // Exact operator-facing copy for the startup path.
@@ -61,6 +63,7 @@ var (
 		reg.ConnectAll(ctx, cfg)
 	}
 	consoleCloseMCPFn             = (*mcpclient.Registry).Close
+	consoleGitBranchFn            = gitCurrentBranch
 	consoleRuntimeLoadWait        = consoleRuntimeLoadTimeout
 	consoleMCPConnectWait         = consoleMCPConnectTimeout
 	consoleStartupShutdownWaitFor = consoleStartupShutdownWait
@@ -210,6 +213,7 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 		setup:        consoleSetupBackendFn,
 		connectMCP:   consoleConnectMCPFn,
 		closeMCP:     consoleCloseMCPFn,
+		branch:       consoleGitBranchFn,
 		runtimeWait:  consoleRuntimeLoadWait,
 		mcpWait:      consoleMCPConnectWait,
 		historyPath:  chat.PersistPath("agent"),

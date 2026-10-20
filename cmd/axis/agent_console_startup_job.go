@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/console"
-	"github.com/toasterbook88/axis/internal/git"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
@@ -29,6 +29,7 @@ type consoleStartupJob struct {
 	setup       func(agentStartupBackendParams) (agentStartupBackendResult, error)
 	connectMCP  func(context.Context, *mcpclient.Registry, *config.Config)
 	closeMCP    func(*mcpclient.Registry)
+	branch      func(context.Context) (string, error)
 	runtimeWait time.Duration
 	mcpWait     time.Duration
 	historyPath string
@@ -95,12 +96,14 @@ func (j *consoleStartupJob) settleNoModel() {
 // cancels on return), so no step can wedge on a closed program.
 func (j *consoleStartupJob) run(ctx context.Context) {
 	var reg *mcpclient.Registry
+	branchDone := j.startBranchLookup(ctx)
 	defer func() {
 		// The registry serves the agent's MCP tools for the whole session,
 		// so it closes only once the program has exited. By then there is
 		// no screen to report a close failure on, and a panic here must not
 		// take down a process that is already shutting down cleanly.
 		<-ctx.Done()
+		<-branchDone // bounded: the lookup runs under ctx, now cancelled
 		if reg != nil {
 			defer func() { _ = recover() }()
 			j.closeMCP(reg)
@@ -108,7 +111,6 @@ func (j *consoleStartupJob) run(ctx context.Context) {
 	}()
 	defer j.recoverPanic()
 
-	j.sendBranch()
 	rt := j.loadRuntime(ctx)
 	if j.stopped(ctx) {
 		return
@@ -139,7 +141,9 @@ func (j *consoleStartupJob) recoverPanic() {
 	if r == nil {
 		return
 	}
-	j.status(console.StatusLine{Key: "startup", State: console.StatusFailed, Text: fmt.Sprintf("startup failed: %v", r), Persist: true})
+	err := fmt.Errorf("%v", r)
+	j.launcher.failStart(err)
+	j.status(console.StatusLine{Key: "startup", State: console.StatusFailed, Text: "startup failed: " + err.Error(), Persist: true})
 	j.settleNoModel()
 }
 
@@ -153,17 +157,42 @@ func (j *consoleStartupJob) stopped(ctx context.Context) bool {
 	return true
 }
 
-// sendBranch adds the git branch to the cwd line. It runs in the job, not
-// before paint, because the repository probe shells out to git.
-func (j *consoleStartupJob) sendBranch() {
-	if j.cwd == "" {
-		return
+// startBranchLookup adds the git branch to the cwd line from its own
+// goroutine, off the startup critical path: a slow repository must not delay
+// the agent. The goroutine is owned by the job, bounded by
+// consoleGitBranchTimeout and ctx, and the returned channel closes when it
+// exits. Every failure (no git, not a repository, detached HEAD, timeout) is
+// silent by design: the cwd line simply stays without a branch.
+func (j *consoleStartupJob) startBranchLookup(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	if j.cwd == "" || j.branch == nil {
+		close(done)
+		return done
 	}
-	state, err := git.GetRepoState(".")
-	if err != nil || !state.IsRepo || state.Branch == "" {
-		return
+	go func() {
+		defer close(done)
+		defer func() { _ = recover() }() // a decoration must never crash startup
+		bctx, cancel := context.WithTimeout(ctx, consoleGitBranchTimeout)
+		defer cancel()
+		branch, err := j.branch(bctx)
+		if err != nil || branch == "" || ctx.Err() != nil {
+			return
+		}
+		j.status(console.StatusLine{Key: "cwd", State: console.StatusInfo, Text: j.cwd + " (" + branch + ")"})
+	}()
+	return done
+}
+
+// gitCurrentBranch is one cancellable `git branch --show-current` in the
+// working directory. Output (and stderr) never reaches the terminal.
+func gitCurrentBranch(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "branch", "--show-current")
+	cmd.WaitDelay = 100 * time.Millisecond
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
 	}
-	j.status(console.StatusLine{Key: "cwd", State: console.StatusInfo, Text: j.cwd + " (" + state.Branch + ")"})
+	return strings.TrimSpace(string(out)), nil
 }
 
 // loadRuntime is step 1: cluster context, bounded, priming the fleet snapshot.
