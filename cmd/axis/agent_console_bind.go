@@ -196,12 +196,15 @@ func (l *consoleLauncher) guardModelSlash(base func(string) (string, error)) fun
 // across routing on purpose: it is never taken by the UI loop, only by model
 // switches and the startup job, and serializing those is the point.
 func (l *consoleLauncher) commitOperatorModel(apply func() error) error {
-	l.modelMu.Lock()
-	err := apply()
-	if err == nil {
-		l.modelGen++
-	}
-	l.modelMu.Unlock()
+	err := func() error {
+		l.modelMu.Lock()
+		defer l.modelMu.Unlock() // released even if apply panics
+		err := apply()
+		if err == nil {
+			l.modelGen++
+		}
+		return err
+	}()
 	if err == nil && l.prog != nil {
 		l.prog.Send(console.ModelStateMsg{State: console.ModelReady})
 	}
@@ -215,19 +218,16 @@ func (l *consoleLauncher) currentModelGen() uint64 {
 	return l.modelGen
 }
 
-// applyStartupModel runs apply only while no operator switch has landed since
-// gen was read. The check and apply are one critical section with
-// commitOperatorModel, so the later writer always wins.
-func (l *consoleLauncher) applyStartupModel(gen uint64, apply func() error) (applied bool, err error) {
+// finishStartupModel runs finish under l.modelMu with current reporting
+// whether no operator switch has landed since gen was read. Deciding, binding,
+// and sending the settle message in one critical section with
+// commitOperatorModel means the later writer always wins and a startup "no
+// model" can never arrive after an operator's Ready. finish may Send to the
+// program: the UI loop never takes modelMu, so this cannot deadlock.
+func (l *consoleLauncher) finishStartupModel(gen uint64, finish func(current bool)) {
 	l.modelMu.Lock()
 	defer l.modelMu.Unlock()
-	if gen != l.modelGen {
-		return false, nil
-	}
-	if err := apply(); err != nil {
-		return false, err
-	}
-	return true, nil
+	finish(gen == l.modelGen)
 }
 
 // startupTunnelInstall is the tunnel installer the background resolver uses.

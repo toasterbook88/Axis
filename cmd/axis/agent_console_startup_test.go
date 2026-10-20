@@ -360,8 +360,8 @@ func TestConsoleStartup_ExplicitModelResolvedBeforePaint(t *testing.T) {
 		t.Fatalf("errW had %d bytes before paint: %q", n, h.errW.String())
 	}
 	opts := h.prog.opts
-	if opts.InitialModelState != console.ModelReady {
-		t.Fatalf("InitialModelState = %v, want ModelReady for a pre-resolved model", opts.InitialModelState)
+	if opts.InitialModelState != console.ModelPending {
+		t.Fatalf("InitialModelState = %v, want ModelPending until the agent is bound", opts.InitialModelState)
 	}
 	var note bool
 	for _, l := range opts.InitialStatus {

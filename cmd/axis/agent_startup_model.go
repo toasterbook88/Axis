@@ -47,6 +47,8 @@ type agentStartupBackendResult struct {
 	ActiveTarget ModelChoice
 	Backend      agent.ChatBackend
 	Choices      []ModelChoice
+	// Readiness is the startup probe's verdict on ActiveTarget.
+	Readiness modelReadiness
 }
 
 // setupAgentStartupBackend handles interactive model selection (if requested or needed),
@@ -117,7 +119,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	}
 
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
-	activeTarget, cloudOpts, err := resolveReadyStartupModelTarget(p.Ctx, p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
+	activeTarget, cloudOpts, readiness, err := resolveReadyStartupModelTarget(p.Ctx, p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
 	if err != nil {
 		return agentStartupBackendResult{}, ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
 	}
@@ -151,6 +153,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 		ActiveTarget: activeTarget,
 		Backend:      backend,
 		Choices:      choices,
+		Readiness:    readiness,
 	}, nil
 }
 

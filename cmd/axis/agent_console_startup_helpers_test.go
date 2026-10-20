@@ -146,6 +146,7 @@ func readyResult(model string, b agent.ChatBackend) agentStartupBackendResult {
 	return agentStartupBackendResult{
 		ActiveTarget: ModelChoice{ID: model, Model: model, Protocol: agent.ProtocolOllama, Endpoint: "http://localhost:11434"},
 		Backend:      b,
+		Readiness:    modelReady,
 	}
 }
 

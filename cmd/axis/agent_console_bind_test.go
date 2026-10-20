@@ -73,18 +73,19 @@ func TestLauncher_BindIsRaceFree(t *testing.T) {
 	}
 }
 
-func TestLauncher_ApplyStartupModelGeneration(t *testing.T) {
+func TestLauncher_FinishStartupModelGeneration(t *testing.T) {
 	l := newStartupConsoleLauncher(time.Minute, consoleClock)
 	rec := &capture{}
 	l.prog = rec
 
-	gen := l.currentModelGen()
-	applied, err := l.applyStartupModel(gen, func() error { return nil })
-	if !applied || err != nil {
-		t.Fatalf("matching generation: applied=%v err=%v", applied, err)
+	current := func(gen uint64) bool {
+		var got bool
+		l.finishStartupModel(gen, func(c bool) { got = c })
+		return got
 	}
-	if _, err := l.applyStartupModel(gen, func() error { return errors.New("build failed") }); err == nil {
-		t.Fatal("apply error was swallowed")
+	gen := l.currentModelGen()
+	if !current(gen) {
+		t.Fatal("matching generation must be current")
 	}
 
 	if err := l.commitOperatorModel(func() error { return nil }); err != nil {
@@ -93,10 +94,8 @@ func TestLauncher_ApplyStartupModelGeneration(t *testing.T) {
 	if !rec.has(modelStateIs(console.ModelReady)) {
 		t.Fatal("operator switch did not mark the model ready")
 	}
-	called := false
-	applied, err = l.applyStartupModel(gen, func() error { called = true; return nil })
-	if applied || err != nil || called {
-		t.Fatalf("stale generation must be discarded: applied=%v err=%v called=%v", applied, err, called)
+	if current(gen) {
+		t.Fatal("stale generation must not be current")
 	}
 
 	// A failed operator switch changes nothing, so startup may still apply.
@@ -104,8 +103,21 @@ func TestLauncher_ApplyStartupModelGeneration(t *testing.T) {
 	if err := l.commitOperatorModel(func() error { return errors.New("unreachable") }); err == nil {
 		t.Fatal("operator switch error was swallowed")
 	}
-	if applied, _ := l.applyStartupModel(gen, func() error { return nil }); !applied {
+	if !current(gen) {
 		t.Fatal("a failed operator switch must not retire the startup result")
+	}
+
+	// A panicking switch must not leave modelMu held.
+	func() {
+		defer func() { _ = recover() }()
+		_ = l.commitOperatorModel(func() error { panic("switch exploded") })
+	}()
+	done := make(chan struct{})
+	go func() { defer close(done); l.currentModelGen() }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("modelMu still held after a panicking operator switch")
 	}
 }
 

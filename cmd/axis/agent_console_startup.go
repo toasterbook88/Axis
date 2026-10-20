@@ -252,9 +252,10 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	opts.Depth = consoleColorDepth()
 	opts.HeaderModel = l.headerModel
 	opts.InitialStatus = job.initialStatus()
-	if job.modelPending {
-		opts.InitialModelState = console.ModelPending
-	}
+	// Pending even when the model was resolved before paint: the agent is
+	// bound in the background, and a prompt typed before that must be held,
+	// not refused. The job settles Ready right after bind.
+	opts.InitialModelState = console.ModelPending
 
 	prog := newConsoleProgramFn(ctx, opts)
 	l.prog = prog
@@ -263,11 +264,7 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	// The job owns jobCtx; it is cancelled as soon as the program exits.
 	jobCtx, cancelJob := context.WithCancel(ctx)
 	defer cancelJob()
-	jobDone := make(chan struct{})
-	go func() {
-		defer close(jobDone)
-		job.run(jobCtx)
-	}()
+	jobDone := job.launch(jobCtx)
 
 	// Restore the terminal whatever happens, including a panic in a view.
 	defer prog.Kill()

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,6 +47,12 @@ type consoleStartupJob struct {
 
 	modelSettled bool
 	noteSeq      int
+
+	// regReady carries the MCP registry (or nil) to the closer once connect
+	// has returned, so the closer never races a connect that is still
+	// adding servers. Buffered; sent exactly once via sendReg.
+	regReady chan *mcpclient.Registry
+	regOnce  sync.Once
 }
 
 // initialStatus is the start screen's first frame of status lines.
@@ -91,34 +98,74 @@ func (j *consoleStartupJob) settleNoModel() {
 	j.settleModel(console.ModelNone, console.StatusLine{Key: "model", State: console.StatusFailed, Text: consoleNoModel})
 }
 
+// launch starts the job, the branch lookup, and the MCP closer. The returned
+// channel closes once the steps and the MCP close have both finished.
+func (j *consoleStartupJob) launch(ctx context.Context) <-chan struct{} {
+	j.regReady = make(chan *mcpclient.Registry, 1)
+	branchDone := j.startBranchLookup(ctx)
+	closed := j.closeMCPWhenDone(ctx, branchDone)
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		j.run(ctx)
+	}()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-runDone
+		<-closed
+	}()
+	return done
+}
+
+// closeMCPWhenDone closes the MCP registry exactly once, as soon as ctx is
+// done and connect has returned. It does not wait for model resolution: a
+// quit during a slow probe must not leave stdio servers running after axis
+// exits. The registry serves the agent's MCP tools for the whole session, so
+// it closes only once the program has exited; by then there is no screen to
+// report a close failure on, and a panic here must not take down a process
+// that is already shutting down cleanly.
+func (j *consoleStartupJob) closeMCPWhenDone(ctx context.Context, branchDone <-chan struct{}) <-chan struct{} {
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		<-ctx.Done()
+		<-branchDone // bounded: the lookup runs under ctx, now cancelled
+		reg := <-j.regReady
+		if reg == nil {
+			return
+		}
+		defer func() { _ = recover() }()
+		j.closeMCP(reg)
+	}()
+	return closed
+}
+
+// sendReg hands the registry (or nil) to the closer, once.
+func (j *consoleStartupJob) sendReg(reg *mcpclient.Registry) {
+	j.regOnce.Do(func() { j.regReady <- reg })
+}
+
 // run performs the startup steps in order. Sends after the program exits
 // return at once (bubbletea's Send selects on the program context, which Run
 // cancels on return), so no step can wedge on a closed program.
 func (j *consoleStartupJob) run(ctx context.Context) {
-	var reg *mcpclient.Registry
-	branchDone := j.startBranchLookup(ctx)
-	defer func() {
-		// The registry serves the agent's MCP tools for the whole session,
-		// so it closes only once the program has exited. By then there is
-		// no screen to report a close failure on, and a panic here must not
-		// take down a process that is already shutting down cleanly.
-		<-ctx.Done()
-		<-branchDone // bounded: the lookup runs under ctx, now cancelled
-		if reg != nil {
-			defer func() { _ = recover() }()
-			j.closeMCP(reg)
-		}
-	}()
+	defer j.sendReg(nil) // no-op once startMCP handed over a registry
 	defer j.recoverPanic()
 
 	rt := j.loadRuntime(ctx)
 	if j.stopped(ctx) {
 		return
 	}
-	reg = j.startMCP(ctx, rt)
+	reg := j.startMCP(ctx, rt)
+	j.sendReg(reg)
 	if j.stopped(ctx) {
 		return
 	}
+	// The startup generation is read before bind: bind enables /model, and
+	// an operator switch landing between bind and resolution must retire
+	// this resolution, not be captured by it.
+	gen := j.launcher.currentModelGen()
 	a := j.buildAgent(ctx, rt, reg)
 	if j.stopped(ctx) {
 		return
@@ -127,11 +174,11 @@ func (j *consoleStartupJob) run(ctx context.Context) {
 		j.prog.Send(console.RunCommandMsg{Text: "/model"})
 	}
 	if j.prelude != nil {
-		target := j.prelude.result.ActiveTarget
-		j.settleModel(console.ModelReady, console.StatusLine{Key: "model", State: console.StatusDone, Text: modelLabel(target) + " ready"})
+		r := j.prelude.result
+		j.settleModel(console.ModelReady, startupModelLine(r.ActiveTarget, r.Readiness))
 		return
 	}
-	j.resolveModel(ctx, a, rt)
+	j.resolveModel(ctx, a, rt, gen)
 }
 
 // recoverPanic turns a startup panic into a visible failure. Held prompts are
@@ -238,6 +285,9 @@ func (j *consoleStartupJob) startMCP(ctx context.Context, rt *runtimectx.Context
 	}
 	j.status(console.StatusLine{Key: "mcp", State: console.StatusRunning, Text: "connecting MCP…"})
 	mctx, cancel := context.WithTimeout(ctx, j.mcpWait)
+	// Deferred so a connect that panics after spawning a server still hands
+	// the registry to the closer.
+	defer j.sendReg(reg)
 	j.connectMCP(mctx, reg, rt.Config)
 	cancel()
 	j.status(mcpStatus(reg, rt.Config))
@@ -314,10 +364,10 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 }
 
 // resolveModel is step 4: find a model the way startup always has, minus the
-// stdin picker, and apply it unless the operator already chose one.
-func (j *consoleStartupJob) resolveModel(ctx context.Context, a *agent.Agent, rt *runtimectx.Context) {
+// stdin picker, and apply it unless the operator already chose one. gen is
+// the model generation read before bind.
+func (j *consoleStartupJob) resolveModel(ctx context.Context, a *agent.Agent, rt *runtimectx.Context, gen uint64) {
 	j.status(console.StatusLine{Key: "model", State: console.StatusRunning, Text: "finding a model…"})
-	gen := j.launcher.currentModelGen()
 
 	var notes bytes.Buffer
 	requested := effectiveStartupRequestedModel("", rt)
@@ -339,33 +389,34 @@ func (j *consoleStartupJob) resolveModel(ctx context.Context, a *agent.Agent, rt
 		Out:                   &notes,
 		ErrOut:                &notes,
 	})
-	for _, n := range noteLines(notes.String()) {
-		j.note(console.StatusInfo, n)
+	if j.stopped(ctx) {
+		return // the program exited during resolution: bind nothing
 	}
 	if err == nil && res.Backend == nil {
 		err = errors.New("model resolution returned no backend")
 	}
+	// This path has no explicit model flags, so a model that is not
+	// answering is a fallback nobody chose: it is not bound.
+	down := err == nil && res.Readiness == modelDown
+	j.startupNotes(notes.String(), down, res.ActiveTarget)
 
-	applied := false
-	if err == nil {
-		applied, err = j.launcher.applyStartupModel(gen, func() error {
+	// Decide and report under modelMu, so an operator switch is either
+	// fully before this (and wins) or fully after (and its Ready follows).
+	j.launcher.finishStartupModel(gen, func(current bool) {
+		switch {
+		case !current:
+			// The operator chose a model meanwhile; theirs stands.
+			j.settleModel(console.ModelReady, console.StatusLine{Key: "model", State: console.StatusInfo, Text: consoleKeptModel})
+		case err != nil:
+			j.note(console.StatusFailed, err.Error())
+			j.settleNoModel()
+		case down:
+			j.settleNoModel()
+		default:
 			bindAgentModelChoice(a, res.ActiveTarget, res.Backend, j.loader)
-			return nil
-		})
-	}
-	switch {
-	case applied:
-		j.settleModel(console.ModelReady, console.StatusLine{Key: "model", State: console.StatusDone, Text: modelLabel(res.ActiveTarget) + " ready"})
-	case j.launcher.currentModelGen() != gen:
-		// The operator chose a model meanwhile; theirs stands.
-		j.settleModel(console.ModelReady, console.StatusLine{Key: "model", State: console.StatusInfo, Text: consoleKeptModel})
-	default:
-		if err == nil {
-			err = errors.New("model was not applied")
+			j.settleModel(console.ModelReady, startupModelLine(res.ActiveTarget, res.Readiness))
 		}
-		j.note(console.StatusFailed, err.Error())
-		j.settleNoModel()
-	}
+	})
 }
 
 // modelLabel names a model target for status lines.
