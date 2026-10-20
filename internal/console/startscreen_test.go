@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 func joinText(lines []Line) string { return strings.Join(PlainAll(lines), "\n") }
 
 func TestPickTier(t *testing.T) {
+	short := func(startTier) int { return 10 }
 	cases := []struct {
 		w, h int
 		want startTier
@@ -19,8 +21,40 @@ func TestPickTier(t *testing.T) {
 		{80, 0, tierFull}, {30, 0, tierCompact}, {0, 0, tierCompact},
 	}
 	for _, c := range cases {
-		if got := pickTier(c.w, c.h); got != c.want {
+		if got := pickTier(c.w, c.h, short); got != c.want {
 			t.Errorf("pickTier(%d,%d)=%v want %v", c.w, c.h, got, c.want)
+		}
+	}
+	// A tier taller than the terminal falls to the next one down.
+	rows := func(tier startTier) int { return map[startTier]int{tierFull: 20, tierMedium: 17, tierCompact: 3}[tier] }
+	for _, c := range []struct {
+		w, h int
+		want startTier
+	}{
+		{120, 20, tierFull}, {120, 19, tierMedium}, {120, 17, tierMedium}, {120, 16, tierCompact},
+		{60, 17, tierMedium}, {60, 16, tierCompact}, {120, 0, tierFull},
+	} {
+		if got := pickTier(c.w, c.h, rows); got != c.want {
+			t.Errorf("pickTier(%d,%d) with tall tiers=%v want %v", c.w, c.h, got, c.want)
+		}
+	}
+}
+
+// The splash never needs more rows than the terminal has, except the compact
+// floor, which is as small as the screen gets.
+func TestHeroScreen_FitsHeight(t *testing.T) {
+	var status []StatusLine
+	for i := 0; i < 6; i++ {
+		status = append(status, StatusLine{Key: fmt.Sprint(i), State: StatusInfo, Text: "status"})
+	}
+	for _, unicode := range []bool{true, false} {
+		for _, w := range []int{50, 100} {
+			for h := 1; h <= 40; h++ {
+				lines := HeroScreen{}.Render(w, h, StartState{Version: "0.19.6", Unicode: unicode, Status: status})
+				if len(lines) > h && len(lines) > 3 {
+					t.Errorf("unicode=%v %dx%d: splash is %d rows", unicode, w, h, len(lines))
+				}
+			}
 		}
 	}
 }

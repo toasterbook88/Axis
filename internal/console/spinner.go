@@ -25,7 +25,13 @@ func spinnerFrame(i int, unicode bool) string {
 // animating reports whether anything on screen needs the spinner to advance.
 // The tick chain stops as soon as this is false so an idle console is silent.
 func (m Model) animating() bool {
-	return m.state != turnIdle || m.startRunning() || m.waitingForModel()
+	return m.state != turnIdle || m.startRunning() || m.waitingForModel() || m.footerPending()
+}
+
+// footerPending reports whether the footer draws the pending-model frame,
+// which must keep turning after the splash is dismissed.
+func (m Model) footerPending() bool {
+	return m.modelState == ModelPending && m.footer != nil
 }
 
 // ensureTick starts the spinner tick chain unless one is already in flight.

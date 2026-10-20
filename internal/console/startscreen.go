@@ -58,18 +58,25 @@ const (
 )
 
 // pickTier chooses a layout. Height 0 means "unknown" and counts as tall, so a
-// terminal that cannot report its size still gets the full splash.
-func pickTier(width, height int) startTier {
+// terminal that cannot report its size still gets the full splash. A known
+// height must also hold the tier's rendered rows (rows reports them): a
+// splash taller than the terminal would scroll its own logo away, so it falls
+// to the next tier down instead.
+func pickTier(width, height int, rows func(startTier) int) startTier {
 	tall := height == 0 || height >= minTallHeight
+	tier := tierCompact
 	switch {
 	case !tall:
 		return tierCompact
 	case width >= fullMinWidth:
-		return tierFull
+		tier = tierFull
 	case width >= mediumMinWidth:
-		return tierMedium
+		tier = tierMedium
 	}
-	return tierCompact
+	for height > 0 && tier > tierCompact && rows(tier) > height {
+		tier--
+	}
+	return tier
 }
 
 var asciiReplacer = strings.NewReplacer(
@@ -129,7 +136,13 @@ func build(max int, style Style, segs ...seg) Line {
 }
 
 // Render lays out the splash for the given terminal size.
-func (HeroScreen) Render(width, height int, s StartState) []Line {
+func (h HeroScreen) Render(width, height int, s StartState) []Line {
+	tier := pickTier(width, height, func(t startTier) int { return len(h.renderTier(t, width, s)) })
+	return h.renderTier(tier, width, s)
+}
+
+// renderTier lays out the splash in one tier.
+func (HeroScreen) renderTier(tier startTier, width int, s StartState) []Line {
 	max := width - 1
 	if max < 0 {
 		max = 0
@@ -153,7 +166,7 @@ func (HeroScreen) Render(width, height int, s StartState) []Line {
 	add := func(l Line) { out = append(out, l) }
 	blank := func() { add(Line{}) }
 
-	switch pickTier(width, height) {
+	switch tier {
 	case tierCompact:
 		head := "▲ AXIS"
 		if s.Version != "" {

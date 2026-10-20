@@ -126,13 +126,15 @@ func (m Model) inputGutter() string {
 }
 
 // applyStatus upserts a status line. Once the splash is gone there is nowhere
-// to show progress, so only Persist lines are kept, as scrollback notices.
+// to show progress, so only Persist lines and failures are kept, as
+// scrollback entries: a failure (such as an MCP server that did not connect)
+// must reach the operator even if they started typing first.
 func (m Model) applyStatus(l StatusLine) (Model, tea.Cmd) {
 	if m.start == nil {
 		return m, nil
 	}
 	if m.startDismissed {
-		if !l.Persist {
+		if !l.Persist && l.State != StatusFailed {
 			return m, nil
 		}
 		return m, m.commitStatus(l)
@@ -171,7 +173,12 @@ func (m Model) headerLine() string {
 	if m.headerModel != nil {
 		model = m.headerModel()
 	}
-	if model == "" || m.modelState == ModelNone {
+	switch {
+	case m.modelState == ModelPending:
+		// Still resolving: a name here would be the placeholder, and "no
+		// model" would be a verdict that has not been reached.
+		model = "finding a model…"
+	case model == "" || m.modelState == ModelNone:
 		model = "no model"
 	}
 	line := "▲ AXIS agent · v" + m.startVersion + " · " + model
@@ -235,11 +242,15 @@ func (m Model) heldLines() []Line {
 	if !m.waitingForModel() {
 		return nil
 	}
+	n := m.layoutWidth() - 1
+	if n < 1 {
+		return nil
+	}
 	text := spinnerFrame(m.spinner, m.unicode) + " waiting for model…"
 	if !m.unicode {
 		text = asciiFallback(text)
 	}
-	return []Line{{Text: text, Style: StyleMuted}}
+	return []Line{{Text: clipWidth(text, n), Style: StyleMuted}}
 }
 
 // submitDismissing retires the splash, then submits text. Sequence, not Batch:
@@ -275,7 +286,8 @@ func (m Model) gatePrompt(text string, cmds []tea.Cmd) (Model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	cmds = append(cmds, m.commit(NewUserEntry(m.now(), text)))
-	if m.modelState == ModelNone && len(m.held) == 0 {
+	// ModelNone never has held prompts: applyModelState drops them on entry.
+	if m.modelState == ModelNone {
 		cmds = append(cmds, m.commit(NewNoticeEntry(m.now(), noModelNotice)))
 		return m, tea.Sequence(cmds...), true
 	}
@@ -321,6 +333,7 @@ func (m Model) cancelHeld() (Model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	m.interrupts = 0
+	m.escPending = false // the gesture was consumed; the next Esc starts over
 	next, cmd := m.dropHeld()
 	return next, cmd, true
 }
