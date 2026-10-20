@@ -180,10 +180,17 @@ func (f *StatusFooter) Render(width int, st FooterState) []Line {
 		segments = append(segments, modelSeg)
 	}
 
-	content := "── " + strings.Join(segments, " ── ") + " ──"
+	// Drop whole trailing segments (snap first, then the rest, keeping the
+	// model) until the line fits, so we never show a fragment like "no sn".
+	join := func(segs []string) string { return "── " + strings.Join(segs, " ── ") + " ──" }
+	content := join(segments)
+	for len(segments) > 1 && visibleWidth(content) > limit {
+		segments = segments[:len(segments)-1]
+		content = join(segments)
+	}
 
-	// Measure by display width, not runes: wide runes in a model name take two
-	// columns and would otherwise overflow the line.
+	// Only a model segment that alone overflows is clipped. Measure by display
+	// width, not runes: wide runes take two columns.
 	content = clipWidth(content, limit)
 	content += strings.Repeat("─", limit-visibleWidth(content))
 

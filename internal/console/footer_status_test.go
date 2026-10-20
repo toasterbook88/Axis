@@ -211,3 +211,36 @@ func TestStatusFooter_WideRunesNeverOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusFooter_MediumTierSnapAtBoundary(t *testing.T) {
+	// A short model and explicit snapshot make the medium tier's snap segment
+	// observable at its lower bound (44).
+	f := NewStatusFooter(StatusFooterConfig{
+		Model:      func() string { return "m" },
+		UsedTokens: func() int { return 9200 },
+		MaxTokens:  func() int { return 32768 },
+		Snapshot:   func() string { return "snap 1" },
+	})
+	text := f.Render(44, FooterState{})[0].Text
+	if !strings.Contains(text, "snap 1") || visibleWidth(text) != 43 {
+		t.Fatalf("width 44: want whole snap segment at width 43: %q", text)
+	}
+}
+
+func TestStatusFooter_DropsWholeSegments(t *testing.T) {
+	f := tierFooter("example-model")
+	// Content "── model: example-model ── context: 28% ── no snapshot ──" is 56
+	// columns; width 50 cannot hold snap whole but can hold model + context.
+	text := f.Render(50, FooterState{})[0].Text
+	if strings.Contains(text, "no sn") || strings.Contains(text, "snap") || !strings.Contains(text, "context: 28%") {
+		t.Errorf("width 50: want snap dropped whole, context kept: %q", text)
+	}
+	if visibleWidth(text) != 49 {
+		t.Errorf("width 50: visible width %d want 49", visibleWidth(text))
+	}
+	// Width 40 cannot hold context either.
+	text = f.Render(40, FooterState{})[0].Text
+	if strings.Contains(text, "cont") || !strings.Contains(text, "model: example-model") || visibleWidth(text) != 39 {
+		t.Errorf("width 40: want model only at 39 cols: %q", text)
+	}
+}
