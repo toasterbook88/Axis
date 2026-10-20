@@ -48,8 +48,8 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 		for i := 0; i < iterations; i++ {
 			// Compaction path (ChatStream on the backend) and the
 			// evidence path (security-class check).
-			_, _ = a.summarizeViaBackend(context.Background(), "p")
-			_ = a.retrieveEvidence("show nodes")
+			_, _ = a.summarizeViaBackend(context.Background(), a.Backend(), "p")
+			_ = a.retrieveEvidence("show nodes", a.SecurityClass())
 		}
 	}()
 	wg.Wait()
