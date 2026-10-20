@@ -409,9 +409,14 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 		if a.verbose {
 			a.emitTurnStarted(turn+1, a.maxTurns)
 		}
+		// Snapshot backend and trust class once so compaction, evidence
+		// selection and the stream all use the same pair even if SetBackend
+		// swaps mid-turn. Re-reading would let local-only evidence (chosen for
+		// a local class) be streamed to a newly installed remote backend.
+		backend, class := a.backendAndClass()
 		// Proactively compress older conversation turns before sending context
 		// to the model, so long sessions stay within the token budget.
-		if err := a.compactContext(ctx); err != nil && a.verbose {
+		if err := a.compactContext(ctx, backend); err != nil && a.verbose {
 			a.emitCompactionSkipped(err)
 		}
 		msgs := a.conv.Messages()
@@ -421,7 +426,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 		clonedMsgs := make([]chat.Message, len(msgs))
 		copy(clonedMsgs, msgs)
 
-		evidence := a.retrieveEvidence(userPrompt)
+		evidence := a.retrieveEvidence(userPrompt, class)
 		if evidence != "" {
 			systemMsgIdx := -1
 			for i, m := range clonedMsgs {
@@ -480,7 +485,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
-		resp, err := a.Backend().ChatStream(ctx, clonedMsgs, toolDefs, cw)
+		resp, err := backend.ChatStream(ctx, clonedMsgs, toolDefs, cw)
 		cw.Close()
 		if err != nil {
 			if turn == 0 {

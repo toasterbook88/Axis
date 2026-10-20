@@ -66,7 +66,7 @@ func (a *Agent) clusterContextSnippet() string {
 	return "<live_cluster_context>\n" + summary + "\n</live_cluster_context>"
 }
 
-func (a *Agent) retrieveEvidence(userPrompt string) string {
+func (a *Agent) retrieveEvidence(userPrompt string, class BackendSecurityClass) string {
 	var recentDecisions []string
 	if a.toolContext != nil {
 		view := a.toolContext.GetView()
@@ -94,7 +94,7 @@ func (a *Agent) retrieveEvidence(userPrompt string) string {
 		}
 	}
 
-	if a.SecurityClass() == BackendRemote {
+	if class == BackendRemote {
 		return a.remoteEvidence(matchedSkill, matched)
 	}
 	return a.localEvidence(recentDecisions, matchedSkill, matched)

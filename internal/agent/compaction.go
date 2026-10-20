@@ -37,7 +37,7 @@ const maxSummarizeContentChars = 2000
 // calling (notably Qwen Jinja templates via LiteLLM) reject payloads with no
 // user-role message ("No user query found in messages"). A user-role summary
 // keeps the wire invariant intact regardless of what was compacted.
-func (a *Agent) compactContext(ctx context.Context) error {
+func (a *Agent) compactContext(ctx context.Context, backend ChatBackend) error {
 	if a.maxTokens <= 0 {
 		return nil
 	}
@@ -51,7 +51,7 @@ func (a *Agent) compactContext(ctx context.Context) error {
 	}
 
 	prompt := buildSummarizationPrompt(candidates)
-	summary, err := a.summarizeViaBackend(ctx, prompt)
+	summary, err := a.summarizeViaBackend(ctx, backend, prompt)
 	if err != nil || strings.TrimSpace(summary) == "" {
 		// Fallback: let chat.Conversation's built-in truncation handle it.
 		return nil
@@ -123,7 +123,7 @@ func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens 
 	}
 
 	prompt := buildSummarizationPrompt(candidates)
-	summary, err := a.summarizeViaBackend(ctx, prompt)
+	summary, err := a.summarizeViaBackend(ctx, a.Backend(), prompt)
 	if err != nil {
 		return beforeTokens, beforeTokens, 0, fmt.Errorf("compaction summarization failed: %w", err)
 	}
@@ -163,12 +163,12 @@ func hasUserRole(msgs []chat.Message) bool {
 // summarizeViaBackend runs a single no-tools, non-streamed exchange against the
 // active backend to produce a summary. Output is discarded from the user's
 // stream so compaction is invisible.
-func (a *Agent) summarizeViaBackend(ctx context.Context, prompt string) (string, error) {
+func (a *Agent) summarizeViaBackend(ctx context.Context, backend ChatBackend, prompt string) (string, error) {
 	msgs := []chat.Message{
 		{Role: chat.RoleSystem, Content: "You are a conversation summarizer. Output only the summary, no preamble."},
 		{Role: chat.RoleUser, Content: prompt},
 	}
-	resp, err := a.Backend().ChatStream(ctx, msgs, nil, io.Discard)
+	resp, err := backend.ChatStream(ctx, msgs, nil, io.Discard)
 	if err != nil {
 		return "", err
 	}
