@@ -261,3 +261,74 @@ func TestFooterGetsModelStateAndLayoutWidth(t *testing.T) {
 type footerFunc func(int, FooterState) []Line
 
 func (f footerFunc) Render(w int, st FooterState) []Line { return f(w, st) }
+
+func TestHeldPrompts_LaterPromptCannotOvertake(t *testing.T) {
+	h := newHeld(ModelPending)
+	h.enter("first")
+	h.enter("second")
+	h.send(ModelStateMsg{State: ModelReady})
+	h.enter("third")
+	if len(h.m.Queued()) != 0 {
+		t.Fatalf("third queued as steering: %v", h.m.Queued())
+	}
+	h.send(TurnDoneMsg{Turn: h.m.Turn()})
+	h.send(TurnDoneMsg{Turn: h.m.Turn()})
+	h.send(TurnDoneMsg{Turn: h.m.Turn()})
+	if got := strings.Join(h.calls, ","); got != "first,second,third" {
+		t.Fatalf("calls = %s", got)
+	}
+	if h.count("third") != 1 || h.count("second") != 1 {
+		t.Fatalf("entries = %q", h.output)
+	}
+}
+
+func TestHeldPrompts_WaitLineOnlyWhilePending(t *testing.T) {
+	h := newHeld(ModelPending)
+	h.enter("first")
+	h.enter("second")
+	h.send(ModelStateMsg{State: ModelReady})
+	if strings.Contains(h.m.View(), "waiting for model") {
+		t.Fatalf("wait line shown while ready:\n%s", h.m.View())
+	}
+}
+
+func TestHeldPrompts_WaitLineASCII(t *testing.T) {
+	m := NewModel(Options{Now: fixedNow, InitialModelState: ModelPending, Submit: noopSubmit})
+	m = typeText(m, "hi")
+	m, _ = press(m, tea.KeyEnter)
+	v := m.View()
+	if !strings.Contains(v, "waiting for model...") || strings.Contains(v, "…") {
+		t.Fatalf("view:\n%s", v)
+	}
+}
+
+func TestHeldPrompts_BusyEscClears(t *testing.T) {
+	h := newHeld(ModelPending)
+	h.enter("/status")
+	h.enter("one")
+	h.enter("two")
+	h.send(ModelStateMsg{State: ModelReady})
+	h.send(tea.KeyMsg{Type: tea.KeyEsc})
+	if h.count("cancelled: 2 waiting prompt(s)") != 1 || len(h.m.held) != 0 {
+		t.Fatalf("output = %q held = %v", h.output, h.m.held)
+	}
+	h.send(TurnDoneMsg{Turn: h.m.Turn()})
+	h.send(cancelTimeoutMsg{Turn: h.m.Turn()})
+	if len(h.calls) != 1 {
+		t.Fatalf("auto-started after cancel: %v", h.calls)
+	}
+}
+
+func TestHeldPrompts_BusyCtrlCClearsAndStillQuits(t *testing.T) {
+	h := newHeld(ModelPending)
+	h.enter("/status")
+	h.enter("one")
+	h.send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if h.count("cancelled: 1 waiting prompt(s)") != 1 || h.m.quitting {
+		t.Fatalf("output = %q quitting = %v", h.output, h.m.quitting)
+	}
+	h.send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !h.m.quitting {
+		t.Fatal("second busy ctrl+c did not quit")
+	}
+}

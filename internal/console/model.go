@@ -663,12 +663,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if next, cmd, ok := m.cancelHeld(); ok {
 			return next, cmd
 		}
+		// A busy ctrl+c drops held prompts too, but still counts toward quit.
+		var heldCmd tea.Cmd
+		m, heldCmd = m.dropHeld()
 		m.interrupts++
 		if m.interrupts >= 2 {
 			m.quitting = true
 			return m, tea.Quit
 		}
-		return m, nil
+		return m, heldCmd
 
 	case "esc":
 		// An active completion consumes Esc before esc-esc arming: the
@@ -679,7 +682,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.state != turnIdle {
-			return m.requestCancel()
+			// Nothing may auto-start after a cancelled turn retires.
+			dropped, heldCmd := m.dropHeld()
+			next, cmd := dropped.requestCancel()
+			return next, tea.Batch(heldCmd, cmd)
 		}
 		if next, cmd, ok := m.cancelHeld(); ok {
 			return next, cmd
@@ -947,15 +953,16 @@ func (m Model) submitText(text string) (tea.Model, tea.Cmd) {
 	if m.historySink != nil {
 		cmds = append([]tea.Cmd{}, m.historySink(text))
 	}
-	// A prompt waiting for the model is held, never steering, even mid-turn.
-	if m.state != turnIdle && (isCommand(text) || m.modelState == ModelReady) {
+	// Held prompts and the model wait come before steering, so a prompt
+	// waiting for the model is never overtaken and never becomes steering.
+	if next, cmd, held := m.gatePrompt(text, cmds); held {
+		return next, cmd
+	}
+	if m.state != turnIdle {
 		m.queued = append(m.queued, text)
 		// Queued prompts persist too: batch the persistence command with
 		// the queue notice so neither is dropped.
 		return m, tea.Batch(append(cmds, m.commit(NewNoticeEntry(m.now(), "queued: "+text)))...)
-	}
-	if next, cmd, held := m.gatePrompt(text, cmds); held {
-		return next, cmd
 	}
 	updated, startCmd := m.startTurn(text)
 	return updated, tea.Batch(append(cmds, startCmd)...)

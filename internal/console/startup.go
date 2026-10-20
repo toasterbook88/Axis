@@ -232,10 +232,14 @@ func (m Model) footerWidth() int {
 
 // heldLines is the waiting indicator drawn above the input while prompts wait.
 func (m Model) heldLines() []Line {
-	if len(m.held) == 0 {
+	if !m.waitingForModel() {
 		return nil
 	}
-	return []Line{{Text: spinnerFrame(m.spinner, m.unicode) + " waiting for model…", Style: StyleMuted}}
+	text := spinnerFrame(m.spinner, m.unicode) + " waiting for model…"
+	if !m.unicode {
+		text = asciiFallback(text)
+	}
+	return []Line{{Text: text, Style: StyleMuted}}
 }
 
 // submitDismissing retires the splash, then submits text. Sequence, not Batch:
@@ -265,11 +269,13 @@ func (m Model) runCommand(text string) (Model, tea.Cmd) {
 // with beginTurn so it is never committed twice. cmds carries persistence work
 // the caller already built.
 func (m Model) gatePrompt(text string, cmds []tea.Cmd) (Model, tea.Cmd, bool) {
-	if isCommand(text) || m.modelState == ModelReady {
+	// Held prompts keep typed order: while any wait, a new prompt joins the
+	// tail even if the model is now ready, so nothing overtakes them.
+	if isCommand(text) || (m.modelState == ModelReady && len(m.held) == 0) {
 		return m, nil, false
 	}
 	cmds = append(cmds, m.commit(NewUserEntry(m.now(), text)))
-	if m.modelState == ModelNone {
+	if m.modelState == ModelNone && len(m.held) == 0 {
 		cmds = append(cmds, m.commit(NewNoticeEntry(m.now(), noModelNotice)))
 		return m, tea.Sequence(cmds...), true
 	}
@@ -314,8 +320,17 @@ func (m Model) cancelHeld() (Model, tea.Cmd, bool) {
 	if m.state != turnIdle || len(m.held) == 0 {
 		return m, nil, false
 	}
-	n := len(m.held)
-	m.held = nil
 	m.interrupts = 0
-	return m, m.commit(NewNoticeEntry(m.now(), fmt.Sprintf("cancelled: %d waiting prompt(s)", n))), true
+	next, cmd := m.dropHeld()
+	return next, cmd, true
+}
+
+// dropHeld discards held prompts with a notice; a no-op when none are held.
+func (m Model) dropHeld() (Model, tea.Cmd) {
+	n := len(m.held)
+	if n == 0 {
+		return m, nil
+	}
+	m.held = nil
+	return m, m.commit(NewNoticeEntry(m.now(), fmt.Sprintf("cancelled: %d waiting prompt(s)", n)))
 }
