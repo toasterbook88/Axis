@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -62,10 +63,14 @@ func (c *HardwareCollector) linuxGPUMetrics(ctx context.Context, r *models.Hardw
 			continue
 		}
 		base := "/sys/bus/pci/devices/" + d.ID + "/"
+		amd := slices.ContainsFunc(d.Specs, func(v models.HardwareReading) bool { return v.Name == "vendor" && v.Value == "0x1002" })
 		for _, f := range []struct {
 			name, file, unit string
 			scale            float64
 		}{{"GPU utilization", "gpu_busy_percent", "%", 1}, {"VRAM capacity", "mem_info_vram_total", "bytes", 1}, {"VRAM used", "mem_info_vram_used", "bytes", 1}, {"current PCIe speed", "current_link_speed", "", 0}, {"current PCIe width", "current_link_width", "lanes", 1}} {
+			if !amd && (f.file == "gpu_busy_percent" || strings.HasPrefix(f.file, "mem_info_vram_")) {
+				continue
+			}
 			d.Metrics = append(d.Metrics, c.fileReading(f.name, base+f.file, f.unit, f.scale))
 		}
 	}
@@ -209,6 +214,18 @@ func (c *HardwareCollector) linuxStorageHealth(ctx context.Context, r *models.Ha
 		}
 
 		err = hardwareSMARTError(v, err)
+		smart, _ := v["smartctl"].(map[string]any)
+		exitStatus, _ := smart["exit_status"].(float64)
+		// Bits 0/1 mean command/device-open failure; higher bits can describe
+		// real failing health. Failed-open output may still contain stub fields.
+		failedOpen := exitStatus >= 1 && exitStatus <= 255 && int(exitStatus)&3 != 0
+		if failedOpen || errors.Is(err, fs.ErrPermission) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if err == nil {
+				err = hardwareIssue("SMART command failed before health could be read")
+			}
+			d.Metrics = append(d.Metrics, c.unavailable("SMART health", "smartctl --json --all", err))
+			continue
+		}
 		before := len(d.Metrics)
 		for _, key := range []string{"smart_status", "temperature", "power_on_time", "power_cycle_count", "nvme_smart_health_information_log"} {
 			if x, ok := v[key]; ok {

@@ -1,0 +1,48 @@
+{
+  "SPNetworkDataType": [
+    {
+      "_name": "USB 10/100/1G/2.5G LAN",
+      "hardware": "Ethernet",
+      "interface": "en9",
+      "type": "Ethernet"
+    },
+    {
+      "_name": "Wi-Fi",
+      "hardware": "AirPort",
+      "interface": "en0",
+      "type": "AirPort"
+    },
+    {
+      "_name": "Thunderbolt Bridge",
+      "hardware": "Ethernet",
+      "interface": "bridge0",
+      "type": "Ethernet"
+    },
+    {
+      "_name": "Tailscale",
+      "type": "VPN (io.tailscale.ipn.macsys)"
+    }
+  ],
+  "SPStorageDataType": [
+    {
+      "_name": "Macintosh HD - Data",
+      "bsd_name": "disk3s1",
+      "file_system": "APFS"
+    },
+    {
+      "_name": "Macintosh HD",
+      "bsd_name": "disk3s3",
+      "file_system": "APFS"
+    },
+    {
+      "_name": "iOS 27.0 Simulator",
+      "bsd_name": "disk5s1",
+      "file_system": "APFS"
+    },
+    {
+      "_name": "Macintosh HD",
+      "bsd_name": "disk3s3s1",
+      "file_system": "APFS"
+    }
+  ]
+}

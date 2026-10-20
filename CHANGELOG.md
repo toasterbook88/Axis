@@ -8,6 +8,10 @@
 
 ### Fixes
 
+* Hardware facts suppress SMART stub fields after permission or device-open
+  failures, preserve distinct macOS devices with empty interface/BSD names,
+  and restrict AMD-only GPU sysfs telemetry to AMD devices.
+
 * Local facts label logical CPUs correctly and avoid duplicate Ollama tools.
   Hardware collection rejects malformed/non-finite telemetry, retains counter
   precision, records per-source sampling windows, refreshes live link fields,

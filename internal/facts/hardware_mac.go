@@ -111,12 +111,12 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 			s := hardwareSection(r, section[typ])
 			d := hardwareDevice(fmt.Sprintf("%s-%d", typ, nextID), name)
 			nextID++
-			if id, ok := n["bsd_name"].(string); ok {
-				d.ID = id
+			if id, ok := n["bsd_name"].(string); ok && strings.TrimSpace(id) != "" {
+				d.ID = strings.TrimSpace(id)
 			}
 			// Network metrics join by the local interface name, not service order.
-			if id, ok := n["interface"].(string); ok {
-				d.ID = id
+			if id, ok := n["interface"].(string); ok && strings.TrimSpace(id) != "" {
+				d.ID = strings.TrimSpace(id)
 			}
 			for _, key := range slices.Sorted(maps.Keys(n)) {
 				value := n[key]

@@ -185,10 +185,27 @@ func TestHardwareNumericFileSentinelsAndOverflow(t *testing.T) {
 }
 
 func FuzzHardwareNativeParsers(f *testing.F) {
-	for _, seed := range []string{"\n", "Name\nx", "+-o ", "cpu NaN 0 0 0 0 0 0 0", "Mach Virtual Memory Statistics: (page size of 0 bytes)\nPages free: 12."} {
+	for _, fixture := range []string{"smart-permission.json", "mac-profiler.json", "pci-nvidia.json"} {
+		f.Add(string(hardwareReviewFixture(f, fixture)))
+	}
+	for _, seed := range []string{"\n", "Name\nx", "+-o ", "cpu NaN 0 0 0 0 0 0 0", "Mach Virtual Memory Statistics: (page size of 0 bytes)\nPages free: 12.",
+		`{"smartctl":{"exit_status":2},"smart_status":{"passed":false}}`,
+		`{"SPNetworkDataType":[{"_name":"VPN1","interface":""},{"_name":"VPN2","interface":""}]}`} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, raw string) {
+		c, report := testHardwareCollector(), testHardwareReport()
+		_ = c.parseMacHardwareInventory([]byte(raw), report)
+		c.run = func(context.Context, string, ...string) ([]byte, error) { return []byte(raw), fs.ErrPermission }
+		d := hardwareDevice("sda", "disk")
+		d.Specs = append(d.Specs, c.reading("type", "disk", "", "fixture"))
+		hardwareSection(report, "Storage").Devices = []models.HardwareDevice{d}
+		c.linuxStorageHealth(context.Background(), report)
+		for _, v := range hardwareSection(report, "Storage").Devices[0].Metrics {
+			if v.Status == "observed" {
+				t.Fatalf("permission-denied probe emitted an observed reading: %+v", v)
+			}
+		}
 		values := []any{parseHardwareCPU(raw), parseHardwareDiskstats(raw), parseHardwareNetdev(raw), parseMacHardwareNetwork(raw), parseMacHardwareDisk(raw), parseMacVM(raw)}
 		for _, v := range values {
 			if _, err := json.Marshal(v); err != nil {
