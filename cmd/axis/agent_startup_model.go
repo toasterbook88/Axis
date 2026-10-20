@@ -228,14 +228,9 @@ func applyModelChoice(session *agentREPLSession, choice ModelChoice) error {
 	if err != nil {
 		return err
 	}
-	session.Agent.SetBackend(backend, choice.SecurityClass)
-	session.Agent.SetModel(choice.Model)
-	// Refresh guarded runners so OwnerLabel provenance tracks the live model
-	// after /model (Layer 4 contract — not the startup-captured name).
-	session.Agent.SetRunShell(guardedAgentShellRunner(choice.Model, session.Runtime))
-	session.Agent.SetRunOnNode(func(ctx context.Context, node, command string) (string, error) {
-		return guardedAgentCommandRunner(choice.Model, node, session.Runtime)(ctx, command)
-	})
+	// Also refreshes guarded runners so OwnerLabel provenance tracks the live
+	// model after /model (Layer 4 contract — not the startup-captured name).
+	bindAgentModelChoice(session.Agent, choice, backend, session.Runtime)
 	session.ActiveTarget = choice
 	errW := session.ErrOut
 	switch choice.Protocol {

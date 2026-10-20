@@ -96,7 +96,7 @@ func resolveReadyStartupModelTarget(
 			continue
 		}
 
-		installModelTunnel(tunnel)
+		startupTunnelInstaller(parent)(tunnel)
 		switch verdict {
 		case modelReady, modelCold:
 			if len(skipped) > 0 {
@@ -110,6 +110,26 @@ func resolveReadyStartupModelTarget(
 		}
 		return target, opts, nil
 	}
+}
+
+// startupTunnelKey carries a tunnel installer to the startup resolver.
+type startupTunnelKey struct{}
+
+// withStartupTunnelInstaller lets the console's background resolution decide
+// whether a tunnel it found is still wanted (the operator may have switched
+// models meanwhile). It travels in the context because the resolver is shared
+// with the synchronous path, which keeps installModelTunnel.
+func withStartupTunnelInstaller(ctx context.Context, install func(func())) context.Context {
+	return context.WithValue(ctx, startupTunnelKey{}, install)
+}
+
+// startupTunnelInstaller returns the installer carried by ctx, or
+// installModelTunnel.
+func startupTunnelInstaller(ctx context.Context) func(func()) {
+	if install, ok := ctx.Value(startupTunnelKey{}).(func(func())); ok && install != nil {
+		return install
+	}
+	return installModelTunnel
 }
 
 // disableChoice marks the catalog entry for target as unusable. It reports
