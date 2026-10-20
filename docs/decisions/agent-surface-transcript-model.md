@@ -296,7 +296,8 @@ counted by their display width), so a full-width write never auto-wraps.
 Overlays take a `visible(width, height)` predicate evaluated per frame; the
 model picker drops the `TARGET` column before the `HEALTH` column.
 
-Non-TTY continues to error, as `runTUI` already does.
+Non-TTY continues to error, as `runTUI` already does. Bare `axis` on an
+interactive terminal opens `axis agent`; piped or scripted, it prints help.
 
 ## 11. Data-source contract
 

@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Features
+
+* Bare `axis` on a terminal now opens `axis agent` with a new start screen
+  (responsive logo, tips, live startup status); startup no longer blocks on
+  model probes or MCP connections and opens even with no model available.
+  `axis tui` still opens the dashboard.
+
 ### Fixes
 
 * Placement excludes nodes that cannot cover guarded execution's reservation
