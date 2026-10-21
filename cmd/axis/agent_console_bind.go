@@ -254,6 +254,7 @@ func (l *consoleLauncher) startupTunnelInstall(gen uint64) func(func()) {
 func bindAgentModelChoice(a *agent.Agent, choice ModelChoice, backend agent.ChatBackend, loader func(context.Context) (*runtimectx.Context, error)) {
 	a.SetBackend(backend, choice.SecurityClass)
 	a.SetModel(choice.Model)
+	a.SetSessionLogTarget(choice)
 	a.SetRunShell(guardedAgentShellRunner(choice.Model, loader))
 	a.SetRunOnNode(func(ctx context.Context, node, command string) (string, error) {
 		return guardedAgentCommandRunner(choice.Model, node, loader)(ctx, command)

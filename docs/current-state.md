@@ -20,6 +20,7 @@ AXIS is no longer just a read-only Phase 1 fact collector.
 
 The live repo currently contains:
 
+- Private bounded `axis agent` session logs: prompts, answers, tool trajectories, reported token usage and outcomes remain local with credential masking, 30-day/1 GiB retention and explicit truncation/omission evidence (`docs/runbooks/agent-session-logs.md`).
 - Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models; Core AI (`.aimodel`) and Core ML (`.mlpackage`, `.mlmodelc`) bundles are recorded whole with kind `unknown` and are never treated as runnable weights by model planning, model resolution, or task context
 - Cluster snapshot assembly and advisory placement
 - A full-screen `axis tui` dashboard whose placement wizard uses the exact displayed snapshot, exposes source/freshness, inferred requirements, deterministic rank order, and an explicit advisory/no-execution boundary; missing snapshots render operator-controlled setup and retry steps

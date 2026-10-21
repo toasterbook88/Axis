@@ -337,6 +337,9 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 	if endpoint == "" {
 		endpoint = chat.DefaultEndpoint
 	}
+	sessionLog := openAgentSessionLog(target, j.in.resume, func(msg string) {
+		j.note(console.StatusFailed, msg)
+	})
 	a := agent.New(buildAgentSessionConfig(agentSessionParams{
 		Endpoint:                endpoint,
 		Model:                   target.Model,
@@ -356,6 +359,7 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 		Output:                  j.out,
 		MCPRegistry:             reg,
 		RuntimeLoader:           j.loader,
+		SessionLog:              sessionLog,
 	}))
 	if j.in.resume {
 		if err := a.Conversation().LoadFromFile(j.historyPath); err != nil {
