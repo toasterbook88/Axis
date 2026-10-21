@@ -6,6 +6,11 @@
   with credential masking, bounded records, 30-day/1 GiB retention, process-safe
   rotation and explicit omission warnings. No transcript is published to Cortex
   or lifecycle events. See `docs/runbooks/agent-session-logs.md`.
+* Bare `axis` on a terminal now opens `axis agent` with a new start screen
+  (responsive logo, tips, live startup status); with default flags, startup
+  no longer blocks on model probes or MCP connections and opens even with no
+  model available.
+  `axis tui` still opens the dashboard.
 
 ### Fixes
 

@@ -101,3 +101,8 @@ counts, credential masking, directory/file modes, symlink refusal, log failure
 recovery, cancellation, observer preservation, nonduplicated trajectories after
 conversation removal, model switching and CLI config wiring. Runtime logs and
 receipts belong outside the public repository.
+
+The console opens its logger in the background startup job after the first paint.
+The same model-binding helper refreshes attribution for startup resolution and `/model`.
+A permanent console regression records turns before and after a model switch;
+plain and one-shot modes use the same private log policy.
