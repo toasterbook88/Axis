@@ -8,6 +8,8 @@
 
 ### Fixes
 
+* Builds use Go 1.26.10, which fixes the `crypto/x509` standard-library
+  vulnerability GO-2026-6809 reported by govulncheck on Go 1.26.9.
 * macOS storage inventory now labels nested profiler containment separately
   from backing relationships, names provider descriptions from captured fields,
   and reports unknown backing when no explicit device identity is present.
