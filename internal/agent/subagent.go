@@ -182,7 +182,7 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 		verbose:                 a.verbose,
 		dryRun:                  a.dryRun, // cascade --dry-run so children do not execute for real
 		toolContext:             tc,
-		model:                   a.model,
+		model:                   a.Model(),
 		allowRawCommandEvidence: a.allowRawCommandEvidence,
 		securityClass:           parentClass,
 		mcpRegistry:             a.mcpRegistry,
