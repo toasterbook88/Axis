@@ -26,9 +26,10 @@ Thumbs.db
 /dist/
 /bin/
 
-# AI assistant instruction files
-CLAUDE.md
-GEMINI.md
+# AI assistant instruction files: CLAUDE.md and GEMINI.md are tracked pointers to
+# AGENTS.md; personal / machine-specific overrides stay local.
+CLAUDE.local.md
+AGENTS.override.md
 
 # AI agent config directories (auto-generated, contain only Render deploy skills)
 .adal/
