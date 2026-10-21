@@ -230,6 +230,7 @@ func applyModelChoice(session *agentREPLSession, choice ModelChoice) error {
 	}
 	session.Agent.SetBackend(backend, choice.SecurityClass)
 	session.Agent.SetModel(choice.Model)
+	session.Agent.SetSessionLogTarget(choice)
 	// Refresh guarded runners so OwnerLabel provenance tracks the live model
 	// after /model (Layer 4 contract — not the startup-captured name).
 	session.Agent.SetRunShell(guardedAgentShellRunner(choice.Model, session.Runtime))

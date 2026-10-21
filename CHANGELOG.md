@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Features
+
+* `axis agent` records private local session trajectories for development analysis,
+  with credential masking, bounded records, 30-day/1 GiB retention, process-safe
+  rotation and explicit omission warnings. No transcript is published to Cortex
+  or lifecycle events. See `docs/runbooks/agent-session-logs.md`.
+
 ### Fixes
 
 * Placement excludes nodes that cannot cover guarded execution's reservation

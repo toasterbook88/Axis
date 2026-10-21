@@ -49,6 +49,7 @@ type Agent struct {
 	safety      ShellSafetyGate
 	output      io.Writer
 	observer    Observer
+	sessionLog  *DailySessionLog
 	runMu       sync.Mutex
 	maxTurns    int
 	maxTokens   int
@@ -134,6 +135,11 @@ type Config struct {
 	// Output. Surfaces that render their own transcript set this; the plain
 	// CLI leaves it nil. See observer.go.
 	Observer Observer
+
+	// SessionLog, when non-nil, appends a private daily JSONL record for
+	// each Run. The CLI sets this. Nil leaves tests and other callers
+	// quiet. The logger is not an Observer and does not replace one.
+	SessionLog *DailySessionLog
 
 	// Confirm is the confirmation function. If nil, StdinConfirm() is used.
 	Confirm ConfirmFunc
@@ -268,6 +274,7 @@ func New(cfg Config) *Agent {
 		backgroundTasks:         newBackgroundTaskStore(),
 		autonomy:                cfg.Autonomy,
 		observer:                cfg.Observer,
+		sessionLog:              cfg.SessionLog,
 	}
 }
 
@@ -394,9 +401,16 @@ func (a *Agent) RunWithSinks(ctx context.Context, userPrompt string, obs Observe
 	return a.runLocked(ctx, userPrompt)
 }
 
-func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
+func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 	userMsgIdx := a.conv.Len()
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
+	startIn, startOut, _ := a.UsageStats()
+	if a.sessionLog != nil {
+		a.sessionLog.beginTurn(a, userPrompt)
+		defer func() {
+			a.sessionLog.finishTurn(a, userPrompt, err, startIn, startOut)
+		}()
+	}
 
 	for turn := 0; turn < a.maxTurns; turn++ {
 		if a.verbose {
@@ -482,6 +496,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 			return fmt.Errorf("chat stream (turn %d): %w", turn, err)
 		}
 
+		a.sessionLog.noteResponse(resp)
 		a.accumulateUsage(resp.UsageTokensIn, resp.UsageTokensOut)
 		a.conv.Append(resp)
 
@@ -531,6 +546,9 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 					start := time.Now()
 					result, err := a.dispatchToolCall(ctx, tc)
 					elapsed := time.Since(start)
+					if err == nil {
+						a.sessionLog.noteToolOutput(tc.ID, tc.Function.Name, result)
+					}
 					outMu.Lock()
 					if err != nil {
 						a.emitToolFailed(tc.ID, tc.Function.Name, err, elapsed)
