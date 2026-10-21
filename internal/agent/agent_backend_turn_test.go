@@ -54,7 +54,8 @@ func (h *hookBackend) sawText(s string) bool {
 // one while the turn is already running (inside the compaction call). The
 // turn must finish on the backend and trust class it started with: local-only
 // evidence must never reach the remote backend, and the new backend only
-// takes effect on the next turn.
+// takes effect on the next model round (the next iteration of Run's loop,
+// which can be inside the same operator prompt).
 func TestTurnUsesOneBackendWhenSwappedMidTurn(t *testing.T) {
 	remote := &hookBackend{}
 	local := &hookBackend{}
