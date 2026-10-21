@@ -20,6 +20,7 @@ AXIS is no longer just a read-only Phase 1 fact collector.
 
 The live repo currently contains:
 
+- Private bounded `axis agent` session logs: prompts, answers, tool trajectories, reported token usage and outcomes remain local with credential masking, 30-day/1 GiB retention and explicit truncation/omission evidence (`docs/runbooks/agent-session-logs.md`).
 - Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models; Core AI (`.aimodel`) and Core ML (`.mlpackage`, `.mlmodelc`) bundles are recorded whole with kind `unknown` and are never treated as runnable weights by model planning, model resolution, or task context
 - Local hardware reports through `axis facts --hardware` (shortcut `-hw`, also under `axis node facts`) on Linux and macOS: component specifications, sampled CPU/disk/network activity, memory and sensor readings, source/time/unit metadata, and explicit unavailable readings. `--watch` retains inventory and refreshes load; JSON emits one report per line and YAML emits separate documents. Hardware collection skips cluster configuration and inference discovery, excludes unique device identifiers, and never invokes sudo. Linux uses procfs/sysfs plus optional hardware utilities; macOS uses native profiler, sysctl, top, and I/O Registry sources. Coverage depends on permissions and device support
 - Cluster snapshot assembly and advisory placement
