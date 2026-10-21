@@ -14,6 +14,7 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/knowledge"
+	"github.com/toasterbook88/axis/internal/publication"
 	"github.com/toasterbook88/axis/internal/runtimectx"
 )
 
@@ -89,6 +90,37 @@ func (f *consoleFleet) fillLocked(rt *runtimectx.Context, err error) {
 	f.nodes = nodes
 }
 
+// refreshLocked applies a background refresh. Refreshes read the cached
+// snapshot, so a --live prime is kept unless the refresh brings a newer,
+// non-bootstrap snapshot: a failed read or the bootstrap skeleton would leave
+// the footer contradicting the live startup status line. Either label names
+// its own publication, so keeping the live one is never a stale claim.
+func (f *consoleFleet) refreshLocked(rt *runtimectx.Context, err error) {
+	if f.source == publication.SourceLiveRuntime && !usableNewerSnapshot(rt, err, f.assembled) {
+		f.checkedAt = time.Now()
+		return
+	}
+	f.fillLocked(rt, err)
+}
+
+// usableNewerSnapshot reports whether rt holds a real (non-bootstrap)
+// snapshot assembled after since.
+func usableNewerSnapshot(rt *runtimectx.Context, err error, since time.Time) bool {
+	if err != nil || rt == nil || rt.Snapshot == nil {
+		return false
+	}
+	at := rt.Snapshot.Timestamp
+	if pub := rt.Snapshot.Publication; pub != nil {
+		if pub.Source == "bootstrap" {
+			return false
+		}
+		if !pub.AssembledAt.IsZero() {
+			at = pub.AssembledAt
+		}
+	}
+	return at.After(since)
+}
+
 // footerLabel is the footer's snapshot segment. Empty until primed, so the
 // footer never claims a snapshot state before one was read.
 func (f *consoleFleet) footerLabel() string {
@@ -106,7 +138,7 @@ func (f *consoleFleet) footerLabel() string {
 			defer f.mu.Unlock()
 			f.refreshing = false
 			if f.ctx.Err() == nil {
-				f.fillLocked(rt, err)
+				f.refreshLocked(rt, err)
 			}
 		}()
 	}
@@ -144,12 +176,33 @@ func (f *consoleFleet) evidence(name string) (string, string) {
 // prompts, then the persisted prompt history, consecutive duplicates
 // collapsed (a resumed conversation and the file overlap).
 func consoleInitialHistory(a *agent.Agent) []string {
-	var seeded []string
+	var msgs []chat.Message
 	if a != nil && a.Conversation() != nil {
-		for _, msg := range a.Conversation().Messages() {
-			if msg.Role == chat.RoleUser && strings.TrimSpace(msg.Content) != "" {
-				seeded = append(seeded, msg.Content)
-			}
+		msgs = a.Conversation().Messages()
+	}
+	return consoleHistoryFrom(msgs)
+}
+
+// consoleResumeHistory seeds the ring before the agent exists: with resume it
+// reads the saved conversation directly, because one-shot and plain-REPL
+// prompts live only there. A read failure seeds nothing extra; the startup
+// job reports it when it resumes for real.
+func consoleResumeHistory(resume bool, path string, maxTokens int) []string {
+	var msgs []chat.Message
+	if resume && path != "" {
+		conv := chat.NewConversation(maxTokens)
+		if conv.LoadFromFile(path) == nil {
+			msgs = conv.Messages()
+		}
+	}
+	return consoleHistoryFrom(msgs)
+}
+
+func consoleHistoryFrom(msgs []chat.Message) []string {
+	var seeded []string
+	for _, msg := range msgs {
+		if msg.Role == chat.RoleUser && strings.TrimSpace(msg.Content) != "" {
+			seeded = append(seeded, msg.Content)
 		}
 	}
 	seeded = append(seeded, loadConsoleHistory(consoleHistoryPath(), 100)...)

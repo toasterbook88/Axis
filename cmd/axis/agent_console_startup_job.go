@@ -175,7 +175,15 @@ func (j *consoleStartupJob) run(ctx context.Context) {
 	}
 	if j.prelude != nil {
 		r := j.prelude.result
-		j.settleModel(console.ModelReady, startupModelLine(r.ActiveTarget, r.Readiness))
+		// Same rule as the background path: an operator /model that landed
+		// after bind wins, and the splash must not call the prelude ready.
+		j.launcher.finishStartupModel(gen, func(current bool) {
+			if !current {
+				j.settleModel(console.ModelReady, console.StatusLine{Key: "model", State: console.StatusInfo, Text: consoleKeptModel})
+				return
+			}
+			j.settleModel(console.ModelReady, startupModelLine(r.ActiveTarget, r.Readiness))
+		})
 		return
 	}
 	j.resolveModel(ctx, a, rt, gen)
@@ -409,9 +417,13 @@ func (j *consoleStartupJob) resolveModel(ctx context.Context, a *agent.Agent, rt
 			// The operator chose a model meanwhile; theirs stands.
 			j.settleModel(console.ModelReady, console.StatusLine{Key: "model", State: console.StatusInfo, Text: consoleKeptModel})
 		case err != nil:
+			installModelTunnel(nil) // close any tunnel the failed resolution opened
 			j.note(console.StatusFailed, err.Error())
 			j.settleNoModel()
 		case down:
+			// Its readiness check may have installed a tunnel; nothing will
+			// use it. Still the startup generation, so it is not the operator's.
+			installModelTunnel(nil)
 			j.settleNoModel()
 		default:
 			bindAgentModelChoice(a, res.ActiveTarget, res.Backend, j.loader)

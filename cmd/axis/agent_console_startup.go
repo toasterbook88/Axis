@@ -262,7 +262,7 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	fleet := newConsoleFleet(ctx, loadAgentShellRuntime)
 	job.launcher, job.fleet = l, fleet
 
-	opts := consoleBaseOptions(ctx, l, fleet, consoleInitialHistory(nil))
+	opts := consoleBaseOptions(ctx, l, fleet, consoleResumeHistory(in.resume, job.historyPath, in.maxTokens))
 	opts.Start = console.HeroScreen{}
 	opts.Version = buildinfo.Version
 	opts.Unicode = ui.UnicodeSupported(os.Getenv)
