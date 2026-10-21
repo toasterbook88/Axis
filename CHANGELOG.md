@@ -49,6 +49,16 @@
   parent contract regression against wrong names, dropped provider metadata,
   and parent-label changes outside Storage. The parser now satisfies this contract.
 
+### Performance
+
+* `axis agent` keeps its system prompt and tool definitions byte-identical
+  across turns and runs. Prompt evidence and the live cluster snapshot, which
+  change every turn, now go at the start of the newest user message instead of
+  inside the system prompt. Local servers with a prompt cache (llama.cpp)
+  reuse the unchanged prefix instead of re-reading the whole prompt each turn.
+  Measured with a 27B local model: a later turn re-read about 2k tokens instead
+  of about 13k, and a two-tool run took 32 s instead of 64 s.
+
 ## v0.19.6 (2026-10-15)
 
 Fifteen pull requests merged on `main` since `v0.19.5`. This patch release mainly retracts the versions whose tags moved during the 2026-10-12 history rewrite, and ships the model-discovery, reservation-cleanup and agent-ergonomics work.
