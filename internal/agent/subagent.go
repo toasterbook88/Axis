@@ -163,8 +163,12 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 	parentOnNode := a.runOnNode
 	a.runnerMu.RUnlock()
 
+	// One read lock for the pair so a concurrent SetBackend cannot hand the
+	// child a backend with the previous backend's trust classification.
+	parentClient, parentClass := a.backendAndClass()
+
 	child := &Agent{
-		client:                  a.client,
+		client:                  parentClient,
 		conv:                    chat.NewConversation(a.maxTokens),
 		tools:                   childTools,
 		confirm:                 confirm,
@@ -178,9 +182,9 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 		verbose:                 a.verbose,
 		dryRun:                  a.dryRun, // cascade --dry-run so children do not execute for real
 		toolContext:             tc,
-		model:                   a.model,
+		model:                   a.Model(),
 		allowRawCommandEvidence: a.allowRawCommandEvidence,
-		securityClass:           a.securityClass,
+		securityClass:           parentClass,
 		mcpRegistry:             a.mcpRegistry,
 		autoApproveAll:          a.autoApproveAll,
 		subAgentDepth:           a.subAgentDepth + 1,
