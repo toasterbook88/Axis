@@ -28,6 +28,14 @@ func drain(cmd tea.Cmd) []tea.Msg {
 		}
 		return out
 	}
+	// tea.Sequence yields an unexported []tea.Cmd type; flatten it in order.
+	if v := reflect.ValueOf(msg); v.IsValid() && v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(cmd) {
+		var out []tea.Msg
+		for i := 0; i < v.Len(); i++ {
+			out = append(out, drain(v.Index(i).Interface().(tea.Cmd))...)
+		}
+		return out
+	}
 	return []tea.Msg{msg}
 }
 
@@ -343,7 +351,7 @@ func (s staticOverlay) Done() bool        { return s.done }
 // staticFooter is a fixed footer for tests.
 type staticFooter struct{ text string }
 
-func (s staticFooter) Render(int) []Line { return []Line{{Text: s.text}} }
+func (s staticFooter) Render(int, FooterState) []Line { return []Line{{Text: s.text}} }
 
 func TestCancelKeepsTurnBusyUntilAcknowledged(t *testing.T) {
 	// Escape requests cancellation; the turn is not finished until the
@@ -717,7 +725,7 @@ func TestModelPendingToolCard(t *testing.T) {
 	m = apply(m, ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts", Args: `node="lab-1"`})
 
 	view := m.View()
-	if !strings.Contains(view, spinnerFrames[0]+" axis_facts") {
+	if !strings.Contains(view, spinnerFrame(0, false)+" axis_facts") {
 		t.Fatalf("in-flight tool card missing from ephemeral view:\n%s", view)
 	}
 	if strings.Count(view, "axis_facts") != 1 {

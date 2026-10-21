@@ -101,7 +101,7 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 | Platforms | macOS and Linux, amd64 and arm64. **Windows is not supported.** |
 | Installer | `bash`, `curl`, and `sha256sum` or `shasum` |
 | Cluster | Key-based SSH from this machine to every node in `nodes.yaml` |
-| Source builds | Go 1.26.9 or newer and `make`. Go 1.21+ downloads 1.26.9 itself unless `GOTOOLCHAIN=local` is set. |
+| Source builds | Go 1.26.10 or newer and `make`. Go 1.21+ downloads 1.26.10 itself unless `GOTOOLCHAIN=local` is set. |
 
 ## Install
 
@@ -239,8 +239,10 @@ axis daemon status
 | `axis daemon` | `status`, `refresh`, `invalidate`, `restart`, `service install\|status\|uninstall` |
 | `axis serve` | Local HTTP API (foreground; Unix socket by default) |
 | `axis mesh` | Gossip mesh diagnostics: `status`, `peers` |
-| `axis tui` | Full-screen cluster dashboard (also bare `axis` on a TTY) |
+| `axis tui` | Full-screen cluster dashboard |
 | `axis update` | Self-update from GitHub Releases |
+
+On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, it prints help.
 
 </details>
 

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -25,36 +26,62 @@ const (
 	logoEndR, logoEndG, logoEndB       = 185.0, 30.0, 255.0
 )
 
-// PrintLogo prints a styled 24-bit ANSI color gradient logo of AXIS followed by
-// a centered version label. When color is disabled the letterforms are printed
-// plainly (they render in any UTF-8 terminal).
-func PrintLogo(w io.Writer, version string) {
-	rows := len(axisLogo)
-	width := 0
-	for _, l := range axisLogo {
-		if r := len([]rune(l)); r > width {
-			width = r
+// asciiLogo is the 5-row '#' fallback for terminals that cannot render the
+// block and box-drawing glyphs (LC_ALL=C, Linux console). Letters A X I S are
+// joined by one space.
+var asciiLogo = []string{
+	` ###  #   # #####  ####`,
+	`#   #  # #    #   #    `,
+	`#####   #     #    ### `,
+	`#   #  # #    #       #`,
+	`#   # #   # ##### #### `,
+}
+
+// maxRunes returns the widest row, in runes. Gradient columns are mapped
+// against this so every row shares the same horizontal color position.
+func maxRunes(rows []string) int {
+	w := 0
+	for _, l := range rows {
+		if r := len([]rune(l)); r > w {
+			w = r
 		}
 	}
+	return w
+}
 
-	for row := range rows {
-		line := axisLogo[row]
-		if !Enabled() {
-			fmt.Fprintln(w, strings.TrimRight(line, " "))
-			continue
-		}
-		runes := []rune(line)
-		rowFrac := float64(row) / float64(rows-1)
-		for col := range runes {
-			ch := runes[col]
+// LogoWidth is the display width of the Unicode logo.
+func LogoWidth() int { return maxRunes(axisLogo) }
+
+// ASCIILogoWidth is the display width of the ASCII logo.
+func ASCIILogoWidth() int { return maxRunes(asciiLogo) }
+
+// LogoLines returns the Unicode logo rows painted at depth d. ColorNone yields
+// the plain rows; otherwise every row ends with a reset so a caller can place
+// rows anywhere without color bleeding into neighboring text.
+func LogoLines(d ColorDepth) []string { return paintLogo(axisLogo, d) }
+
+// ASCIILogoLines returns the plain 5-row '#' logo. It is unpainted; callers
+// that want a gradient apply it themselves per depth.
+func ASCIILogoLines() []string { return append([]string(nil), asciiLogo...) }
+
+// paintLogo applies the diagonal gradient (t = 0.75*col + 0.25*row) from cyan
+// to magenta, emitting color through FgRGB so it degrades per depth. Spaces
+// and '_' stay uncolored so letterforms pop against the background.
+func paintLogo(rows []string, d ColorDepth) []string {
+	out := make([]string, len(rows))
+	if d == ColorNone {
+		copy(out, rows)
+		return out
+	}
+	width := maxRunes(rows)
+	for row, line := range rows {
+		var sb strings.Builder
+		rowFrac := float64(row) / float64(len(rows)-1)
+		for col, ch := range []rune(line) {
 			if ch == ' ' || ch == '_' {
-				// Keep the dotted ground line and inter-glyph spacing uncolored
-				// so the letterforms pop against the terminal background.
-				fmt.Fprint(w, string(ch))
+				sb.WriteRune(ch)
 				continue
 			}
-			// 2D diagonal gradient: dominant horizontal sweep (cyan→magenta)
-			// with a subtle vertical accent for depth.
 			colFrac := float64(col) / float64(width-1)
 			t := 0.75*colFrac + 0.25*rowFrac
 			if t > 1 {
@@ -63,17 +90,40 @@ func PrintLogo(w io.Writer, version string) {
 			r := logoStartR + t*(logoEndR-logoStartR)
 			g := logoStartG + t*(logoEndG-logoStartG)
 			b := logoStartB + t*(logoEndB-logoStartB)
-			fmt.Fprintf(w, "\033[38;2;%d;%d;%dm%c", int(r), int(g), int(b), ch)
+			sb.WriteString(FgRGB(uint8(r), uint8(g), uint8(b), d))
+			sb.WriteRune(ch)
 		}
-		fmt.Fprint(w, "\033[0m\n")
+		sb.WriteString("\033[0m")
+		out[row] = sb.String()
+	}
+	return out
+}
+
+// PrintLogo prints the AXIS logo followed by a centered version label. Color
+// depth and glyph set follow the environment: the gradient degrades to 256 or
+// 16 colors, and terminals without Unicode get the ASCII logo. When color is
+// disabled the letterforms are printed plainly.
+func PrintLogo(w io.Writer, version string) {
+	depth := ColorNone
+	if Enabled() {
+		depth = DetectColorDepth(os.Getenv)
+	}
+	rows, width := axisLogo, LogoWidth()
+	if !UnicodeSupported(os.Getenv) {
+		rows, width = asciiLogo, ASCIILogoWidth()
+	}
+
+	for _, line := range paintLogo(rows, depth) {
+		if depth == ColorNone {
+			fmt.Fprintln(w, strings.TrimRight(line, " "))
+		} else {
+			fmt.Fprintln(w, line)
+		}
 	}
 
 	// Centered version label beneath the logo.
 	plain := "v" + version
-	pad := (width - len([]rune(plain))) / 2
-	if pad < 0 {
-		pad = 0
-	}
+	pad := max((width-len([]rune(plain)))/2, 0)
 	if Enabled() {
 		fmt.Fprintf(w, "%s%s\n", strings.Repeat(" ", pad), Dim(plain))
 	} else {
