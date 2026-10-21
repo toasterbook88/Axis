@@ -2,8 +2,10 @@
 
 Status: implemented in the macOS hardware parser. The test-first contract was
 introduced before the parser change; `bbfbb4d` violates the regression below.
-Native Apple Silicon and Intel macOS verification remains a release-readiness
-requirement; recorded fixture replay does not establish native execution.
+Native Linux, Apple Silicon and Intel macOS smoke checks passed for candidate
+`156a326`; see [PR #541](https://github.com/toasterbook88/Axis/pull/541) for the
+generic verification receipt. Recorded fixture replay remains distinct from
+native execution.
 
 ## Two different relationships
 
@@ -91,8 +93,8 @@ Run the fixture characterization and the implemented contract separately:
 ./hack/hermetic-go-test.sh ./internal/facts -run '^TestMacStorageParentContract$' -count=1 -v
 ```
 
-Both commands must pass without reducing the captured fixture. Before declaring
-native verification complete, execute Apple Silicon and Intel macOS checks and
+Both commands must pass without reducing the captured fixture. When parser
+behavior changes, repeat native Linux, Apple Silicon and Intel macOS checks and
 retain their results. Run the repository's required gates before opening a
 reviewable PR, and document any remaining native verification gap. Merge and
 installation remain separate actions.

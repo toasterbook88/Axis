@@ -36,7 +36,7 @@
 
 * Add the fuller recorded macOS storage fixture and harden the fail-first
   parent contract regression against wrong names, dropped provider metadata,
-  and parent-label changes outside Storage. Parser implementation is pending.
+  and parent-label changes outside Storage. The parser now satisfies this contract.
 
 ## v0.19.6 (2026-10-15)
 
