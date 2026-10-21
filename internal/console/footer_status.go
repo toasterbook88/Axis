@@ -192,7 +192,9 @@ func (f *StatusFooter) Render(width int, st FooterState) []Line {
 	// Only a model segment that alone overflows is clipped. Measure by display
 	// width, not runes: wide runes take two columns.
 	content = clipWidth(content, limit)
-	content += strings.Repeat("─", limit-visibleWidth(content))
+	if pad := limit - visibleWidth(content); pad > 0 {
+		content += strings.Repeat("─", pad)
+	}
 
 	return []Line{{
 		Text:  content,
