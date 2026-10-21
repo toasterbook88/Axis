@@ -3,7 +3,6 @@ package console
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 )
 
 // StatusFooterConfig configures the dynamic data providers for the statusline footer.
@@ -88,9 +87,37 @@ func FormatContextBar(used, max, barWidth int) (bar string, percent int) {
 	return bar, percent
 }
 
-// Render draws the 1-line responsive footer.
-func (f *StatusFooter) Render(width int) []Line {
-	width = effectiveWidth(width)
+// Footer width tiers. Below footerMediumMin only the model segment fits; from
+// there up the context and snapshot segments join; at footerFullMin the full
+// content appears.
+const (
+	footerFullMin   = 72
+	footerMediumMin = 44
+)
+
+// noModelSegment is shown when model resolution finished empty-handed.
+const noModelSegment = "no model · /model or axis model start"
+
+// modelSegment renders the model slot for the startup state.
+func modelSegment(st FooterState, name string) string {
+	switch st.Model {
+	case ModelPending:
+		return "model: " + st.Frame
+	case ModelNone:
+		return noModelSegment
+	default:
+		return "model: " + name
+	}
+}
+
+// Render draws the 1-line responsive footer. The line is exactly width-1
+// display columns: the last column stays empty so a full-width write cannot
+// trigger a terminal auto-wrap.
+func (f *StatusFooter) Render(width int, st FooterState) []Line {
+	limit := width - 1
+	if limit < 0 {
+		limit = 0
+	}
 
 	model := "default"
 	if f.cfg.Model != nil {
@@ -98,6 +125,7 @@ func (f *StatusFooter) Render(width int) []Line {
 			model = m
 		}
 	}
+	modelSeg := modelSegment(st, model)
 
 	used := 0
 	if f.cfg.UsedTokens != nil {
@@ -130,13 +158,12 @@ func (f *StatusFooter) Render(width int) []Line {
 
 	bar, pct := FormatContextBar(used, max, 10)
 	ctxFull := fmt.Sprintf("context: [%s] %d%% (%s/%s)", bar, pct, FormatTokens(used), FormatTokens(max))
-	ctxMedium := fmt.Sprintf("context: [%s] %d%%", bar, pct)
 	ctxCompact := fmt.Sprintf("context: %d%%", pct)
 
 	var segments []string
 
-	if width >= 80 {
-		segments = append(segments, "model: "+model, ctxFull)
+	if width >= footerFullMin {
+		segments = append(segments, modelSeg, ctxFull)
 		if hasUsage {
 			// Real spend is not occupancy: keep the context bar on UsedTokens
 			// and surface in/out separately. Mode rides the same segment so
@@ -147,24 +174,26 @@ func (f *StatusFooter) Render(width int) []Line {
 			segments = append(segments, "mode: "+mode)
 		}
 		segments = append(segments, snap)
-	} else if width >= 60 {
-		segments = append(segments, "model: "+model, ctxMedium, snap)
-	} else if width >= 40 {
-		segments = append(segments, "model: "+model, ctxCompact)
+	} else if width >= footerMediumMin {
+		segments = append(segments, modelSeg, ctxCompact, snap)
 	} else {
-		segments = append(segments, "model: "+model)
+		segments = append(segments, modelSeg)
 	}
 
-	content := "── " + strings.Join(segments, " ── ") + " ──"
+	// Drop whole trailing segments (snap first, then the rest, keeping the
+	// model) until the line fits, so we never show a fragment like "no sn".
+	join := func(segs []string) string { return "── " + strings.Join(segs, " ── ") + " ──" }
+	content := join(segments)
+	for len(segments) > 1 && visibleWidth(content) > limit {
+		segments = segments[:len(segments)-1]
+		content = join(segments)
+	}
 
-	// Fill trailing space with dashes if room allows
-	contentRunes := utf8.RuneCountInString(content)
-	if contentRunes < width {
-		content += strings.Repeat("─", width-contentRunes)
-	} else if contentRunes > width {
-		// Truncate cleanly to width
-		runes := []rune(content)
-		content = string(runes[:width])
+	// Only a model segment that alone overflows is clipped. Measure by display
+	// width, not runes: wide runes take two columns.
+	content = clipWidth(content, limit)
+	if pad := limit - visibleWidth(content); pad > 0 {
+		content += strings.Repeat("─", pad)
 	}
 
 	return []Line{{

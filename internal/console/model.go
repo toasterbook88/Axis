@@ -7,6 +7,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/toasterbook88/axis/internal/ui"
 )
 
 // The console runs on the main screen, never the alternate screen. Committed
@@ -104,7 +106,14 @@ type SetOverlayMsg struct {
 
 // Footer renders the persistent status region below the input line.
 type Footer interface {
-	Render(width int) []Line
+	Render(width int, st FooterState) []Line
+}
+
+// FooterState is the live, console-owned state a footer cannot derive from its
+// own providers: the current spinner frame and the model's startup state.
+type FooterState struct {
+	Frame string
+	Model ModelState
 }
 
 // turnState tracks the lifecycle of the active turn. Without it, a cancel
@@ -192,6 +201,8 @@ type Model struct {
 	sessionStart time.Time
 
 	spinner    int
+	ticking    bool // a spinnerTick is in flight; see ensureTick
+	unicode    bool
 	interrupts int // consecutive ctrl+c presses on an empty editor
 	quitting   bool
 
@@ -203,6 +214,18 @@ type Model struct {
 	// atCandidates supplies completion candidates for the text after the
 	// leading '@'. Nil disables @ completion entirely.
 	atCandidates func() []string
+
+	// Start-screen state; see startup.go. start == nil disables all of it.
+	start          StartScreen
+	startDismissed bool
+	startVersion   string
+	startDepth     ui.ColorDepth
+	headerModel    func() string
+	status         []StatusLine
+
+	// Model readiness and prompts held for it; see startup.go.
+	modelState ModelState
+	held       []string
 }
 
 // atCompletionState tracks one active @ completion. Token is the text
@@ -232,6 +255,9 @@ type Options struct {
 	Cancel CancelFunc
 	Footer Footer
 
+	// Unicode selects the Unicode spinner frames; false keeps ASCII.
+	Unicode bool
+
 	// History pre-seeds the command history ring.
 	History []string
 
@@ -260,11 +286,29 @@ type Options struct {
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
 	// before the console returns to idle anyway. Zero uses the default.
 	CancelGrace time.Duration
+
+	// Start renders the splash shown until the first submit. Nil disables the
+	// start screen and the prompt rule, keeping the console as it always was.
+	Start         StartScreen
+	Version       string
+	Depth         ui.ColorDepth
+	InitialStatus []StatusLine
+	// HeaderModel names the active model for the scrollback header written
+	// when the splash is dismissed. Nil or "" reads as no model.
+	HeaderModel func() string
+	// InitialModelState is the model's state at launch. The zero value,
+	// ModelReady, keeps the console behaving as it always did.
+	InitialModelState ModelState
 }
 
-// Init starts the console.
+// Init starts the console. NewModel already marked the tick chain started
+// (Init has a value receiver, so it cannot record that itself).
 func (m Model) Init() tea.Cmd {
-	return tea.SetWindowTitle("axis agent · " + m.modeLabel())
+	title := tea.SetWindowTitle("axis agent · " + m.modeLabel())
+	if m.ticking {
+		return tea.Batch(title, spinnerTick())
+	}
+	return title
 }
 
 // NewModel builds a console model.
@@ -281,12 +325,13 @@ func NewModel(opts Options) Model {
 	if len(opts.History) > 0 {
 		ed.SetHistory(opts.History)
 	}
-	return Model{
+	m := Model{
 		width:         80,
 		editor:        ed,
 		submit:        opts.Submit,
 		cancel:        opts.Cancel,
 		footer:        opts.Footer,
+		unicode:       opts.Unicode,
 		historySink:   opts.HistorySink,
 		atCandidates:  opts.AtCandidates,
 		stream:        &strings.Builder{},
@@ -297,6 +342,8 @@ func NewModel(opts Options) Model {
 		cancelGrace:   grace,
 		now:           now,
 	}
+	m.initStart(opts)
+	return m
 }
 
 func (m Model) modeLabel() string {
@@ -313,9 +360,6 @@ func (m Model) modeLabel() string {
 		return "observe"
 	}
 }
-
-// spinnerFrames is the busy indicator. ASCII so it survives any terminal.
-var spinnerFrames = []string{"-", "\\", "|", "/"}
 
 const spinnerInterval = 120 * time.Millisecond
 
@@ -380,6 +424,15 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case StartupStatusMsg:
+		return m.applyStatus(msg.Line)
+
+	case ModelStateMsg:
+		return m.applyModelState(msg.State)
+
+	case RunCommandMsg:
+		return m.runCommand(msg.Text)
 
 	case EntryMsg:
 		if m.stale(msg.Turn) {
@@ -454,11 +507,13 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 		)
 
 	case spinnerTickMsg:
-		if m.state == turnIdle {
+		// This tick has fired, so the chain is over until ensureTick restarts it.
+		m.ticking = false
+		if !m.animating() {
 			return m, nil
 		}
-		m.spinner = (m.spinner + 1) % len(spinnerFrames)
-		return m, spinnerTick()
+		m.spinner = (m.spinner + 1) % 4
+		return m, m.ensureTick()
 	}
 	return m, nil
 }
@@ -605,12 +660,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.atCompletion = atCompletionState{}
 			return m, nil
 		}
+		if next, cmd, ok := m.cancelHeld(); ok {
+			return next, cmd
+		}
+		// A busy ctrl+c drops held prompts too, but still counts toward quit.
+		var heldCmd tea.Cmd
+		m, heldCmd = m.dropHeld()
 		m.interrupts++
 		if m.interrupts >= 2 {
 			m.quitting = true
 			return m, tea.Quit
 		}
-		return m, nil
+		return m, heldCmd
 
 	case "esc":
 		// An active completion consumes Esc before esc-esc arming: the
@@ -621,7 +682,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.state != turnIdle {
-			return m.requestCancel()
+			// Nothing may auto-start after a cancelled turn retires.
+			dropped, heldCmd := m.dropHeld()
+			next, cmd := dropped.requestCancel()
+			return next, tea.Batch(heldCmd, cmd)
+		}
+		if next, cmd, ok := m.cancelHeld(); ok {
+			return next, cmd
 		}
 		// agy-style esc esc: the first press arms the gesture, the second
 		// clears the draft. Clearing a draft on a single accidental Esc was
@@ -867,7 +934,11 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	return m.submitDismissing(text)
+}
 
+// submitText handles one non-empty submitted line.
+func (m Model) submitText(text string) (tea.Model, tea.Cmd) {
 	// Console-local commands intercept before persistence and turns: they
 	// touch model-retained state, never become turns, and stay out of
 	// history.jsonl (they are commands, not prompts).
@@ -882,6 +953,11 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	if m.historySink != nil {
 		cmds = append([]tea.Cmd{}, m.historySink(text))
 	}
+	// Held prompts and the model wait come before steering, so a prompt
+	// waiting for the model is never overtaken and never becomes steering.
+	if next, cmd, held := m.gatePrompt(text, cmds); held {
+		return next, cmd
+	}
 	if m.state != turnIdle {
 		m.queued = append(m.queued, text)
 		// Queued prompts persist too: batch the persistence command with
@@ -894,8 +970,15 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 
 // startTurn commits the operator's line and hands the prompt to the agent.
 func (m Model) startTurn(text string) (Model, tea.Cmd) {
-	cmds := []tea.Cmd{m.commit(NewUserEntry(m.now(), text))}
+	entry := m.commit(NewUserEntry(m.now(), text))
+	next, cmd := m.beginTurn(text)
+	return next, tea.Batch(entry, cmd)
+}
 
+// beginTurn hands an already-committed prompt to the agent. Held prompts were
+// committed when typed, so releasing them must not commit again.
+func (m Model) beginTurn(text string) (Model, tea.Cmd) {
+	var cmds []tea.Cmd
 	if m.submit == nil {
 		cmds = append(cmds, m.commit(NewErrorEntry(m.now(), "no agent backend attached")))
 		return m, tea.Batch(cmds...)
@@ -906,7 +989,7 @@ func (m Model) startTurn(text string) (Model, tea.Cmd) {
 	m.spinner = 0
 	m.stream.Reset()
 
-	cmds = append(cmds, m.submit(m.turn, text), spinnerTick())
+	cmds = append(cmds, m.submit(m.turn, text), m.ensureTick())
 	return m, tea.Batch(cmds...)
 }
 
@@ -955,6 +1038,11 @@ func (m Model) finishTurn(err error) (Model, tea.Cmd) {
 		updated, cmd := m.startTurn(next)
 		m = updated
 		cmds = append(cmds, cmd)
+	} else {
+		// Held prompts go only when no steering message took the turn.
+		updated, cmd := m.releaseHeld()
+		m = updated
+		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -979,7 +1067,7 @@ func (m Model) View() string {
 	if text := m.stream.String(); text != "" {
 		_, answer, inThought := parseStreamThought(text)
 		if inThought {
-			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " thinking...", Style: StyleMuted})
+			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " thinking...", Style: StyleMuted})
 		} else if answer != "" {
 			for _, l := range wrap(answer, effectiveWidth(m.width)) {
 				lines = append(lines, Line{Text: l})
@@ -988,7 +1076,7 @@ func (m Model) View() string {
 	}
 
 	for _, pt := range m.pendingTools {
-		row := spinnerFrames[m.spinner] + " " + pt.name
+		row := spinnerFrame(m.spinner, m.unicode) + " " + pt.name
 		if pt.args != "" {
 			row += " " + pt.args
 		}
@@ -998,9 +1086,9 @@ func (m Model) View() string {
 	if m.overlay == nil {
 		switch m.state {
 		case turnRunning:
-			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " working", Style: StyleMuted})
+			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " working", Style: StyleMuted})
 		case turnCancelling:
-			lines = append(lines, Line{Text: spinnerFrames[m.spinner] + " cancelling", Style: StyleMuted})
+			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " cancelling", Style: StyleMuted})
 		}
 	}
 
@@ -1011,8 +1099,10 @@ func (m Model) View() string {
 	m.syncEditor()
 	inputText := m.editor.Text()
 	ghost := m.atGhost()
+	lines = append(lines, m.heldLines()...)
+	lines = append(lines, m.promptRule()...)
 	lines = append(lines, Line{
-		Gutter:     "> ",
+		Gutter:     m.inputGutter(),
 		Text:       inputText + ghost,
 		HasCursor:  true,
 		CursorPos:  m.editor.Cursor(),
@@ -1021,10 +1111,10 @@ func (m Model) View() string {
 	})
 
 	if m.footer != nil {
-		lines = append(lines, m.footer.Render(m.width)...)
+		lines = append(lines, m.footer.Render(m.footerWidth(), FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: m.modelState})...)
 	}
 
-	return PaintAll(lines)
+	return PaintAll(append(m.startLines(len(lines)), lines...))
 }
 
 // Busy reports whether a turn is running or cancelling.

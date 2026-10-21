@@ -2,6 +2,11 @@
 
 ### Features
 
+* Bare `axis` on a terminal now opens `axis agent` with a new start screen
+  (responsive logo, tips, live startup status); with default flags, startup
+  no longer blocks on model probes or MCP connections and opens even with no
+  model available.
+  `axis tui` still opens the dashboard.
 * Organized local facts and detailed `axis facts --hardware` / `-hw` reports
   for Linux and macOS, with source-backed specifications, sampled load, explicit
   unavailable readings, text/JSON/YAML output, and optional live watch mode.

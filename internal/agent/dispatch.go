@@ -627,7 +627,7 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 		MemoryMaxMB:      rArgs.MemoryMaxMB,
 		ExposePorts:      rArgs.ExposePorts,
 		OwnerSurface:     execution.OwnerSurfaceAgentRunTask,
-		OwnerLabel:       strings.TrimSpace(a.model),
+		OwnerLabel:       strings.TrimSpace(a.Model()),
 		Events:           events.GuardedExecutionSink{},
 		BuildContextJSON: knowledge.ExecutionContextJSON,
 		LivenessProbe:    execution.ProbeLocalInferenceEndpoint,
