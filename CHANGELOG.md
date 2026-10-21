@@ -9,6 +9,8 @@
 
 ### Fixes
 
+* Builds use Go 1.26.10, which fixes the `crypto/x509` standard-library
+  vulnerability GO-2026-6809 reported by govulncheck on Go 1.26.9.
 * Placement excludes nodes that cannot cover guarded execution's reservation
   request before ranking. Placement and explanation output share exclusion
   reasons; execution retains its dispatch-time checks and ledger authority.

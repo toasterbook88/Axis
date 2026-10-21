@@ -68,7 +68,7 @@ func TestRemoteEvidenceAllowlist(t *testing.T) {
 		Output: io.Discard,
 	})
 
-	evidence := a.retrieveEvidence("benchmark")
+	evidence := a.retrieveEvidence("benchmark", securityClassOf(a))
 	if evidence == "" {
 		t.Fatal("expected evidence for remote backend when skill matched")
 	}
@@ -103,7 +103,7 @@ func TestRemoteEvidenceEmptyWithoutSkillMatch(t *testing.T) {
 		}, nil),
 		Output: io.Discard,
 	})
-	if a.retrieveEvidence("unmatched query") != "" {
+	if a.retrieveEvidence("unmatched query", securityClassOf(a)) != "" {
 		t.Error("remote evidence should be empty when no skill matches")
 	}
 }
@@ -133,7 +133,7 @@ func TestLocalEvidenceIncludesDescriptionsAndRedactsCommands(t *testing.T) {
 		Output: io.Discard,
 	})
 
-	evidence := a.retrieveEvidence("benchmark")
+	evidence := a.retrieveEvidence("benchmark", securityClassOf(a))
 	if !strings.Contains(evidence, "run a benchmark") {
 		t.Error("local evidence should include skill description")
 	}
@@ -170,7 +170,7 @@ func TestLocalEvidenceAllowsRawCommandsWhenEnabled(t *testing.T) {
 		Output: io.Discard,
 	})
 
-	evidence := a.retrieveEvidence("benchmark")
+	evidence := a.retrieveEvidence("benchmark", securityClassOf(a))
 	if !strings.Contains(evidence, "sysbench cpu run") {
 		t.Error("local evidence should include raw commands when explicitly allowed")
 	}
