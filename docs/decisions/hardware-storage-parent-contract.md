@@ -1,8 +1,9 @@
 # Hardware storage parents and profiler containment
 
-Status: accepted target contract; not implemented by the parser in this
-test-first change. The parser at `bbfbb4d` violates the regression below.
-This document does not describe shipped topology behavior.
+Status: implemented in the macOS hardware parser. The test-first contract was
+introduced before the parser change; `bbfbb4d` violates the regression below.
+Native Apple Silicon and Intel macOS verification remains a release-readiness
+requirement; recorded fixture replay does not establish native execution.
 
 ## Two different relationships
 
@@ -83,14 +84,15 @@ The earlier reduced `mac-profiler.json` omits all four nested maps, so it cannot
 cover this regression. Keep the fuller capture alongside it. These are recorded
 observations, not current machine inventory or native execution of a new parser.
 
-Run the characterization and the currently failing contract separately:
+Run the fixture characterization and the implemented contract separately:
 
 ```bash
 ./hack/hermetic-go-test.sh ./internal/facts -run '^TestMacStorageNestingFixture$' -count=1 -v
 ./hack/hermetic-go-test.sh ./internal/facts -run '^TestMacStorageParentContract$' -count=1 -v
 ```
 
-The next implementation change must make the second command pass without
-weakening the first. Before opening a reviewable PR, update this implementation
-status, execute native Apple Silicon and Intel macOS verification, and run the
-repository's required gates. Merge and installation remain separate actions.
+Both commands must pass without reducing the captured fixture. Before declaring
+native verification complete, execute Apple Silicon and Intel macOS checks and
+retain their results. Run the repository's required gates before opening a
+reviewable PR, and document any remaining native verification gap. Merge and
+installation remain separate actions.
