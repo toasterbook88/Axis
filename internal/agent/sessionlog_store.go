@@ -374,7 +374,7 @@ func redactSessionJSON(value any, depth int, budget *int, changed *bool) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, child := range typed {
-			if sessionCredentialKey.MatchString(key) {
+			if sessionCredentialKey.MatchString(key) || sessionSecretAssignment.MatchString(key+"=x") {
 				typed[key] = "[REDACTED]"
 				*changed = true
 				continue

@@ -117,3 +117,19 @@ func TestDailySessionLogStructuredRedactionBoundsAndPreservesJSON(t *testing.T) 
 		}
 	}
 }
+
+func TestDailySessionLogStructuredCredentialKeyVariants(t *testing.T) {
+	for _, key := range []string{"clientSecret", "accessToken", "AWS_ACCESS_KEY_ID", "aws_secret_access_key", "apiKey", "discovery.secret"} {
+		t.Run(key, func(t *testing.T) {
+			inner, _ := json.Marshal(map[string]string{key: "credential-marker-value"})
+			outer, _ := json.Marshal(map[string]string{"content": string(inner)})
+			raw, err := encodeSessionRecord(sessionRecord{Kind: "tool", Tool: &sessionTool{Args: string(outer)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "credential-marker-value") {
+				t.Fatalf("credential key variant survived nested decoding: %s", raw)
+			}
+		})
+	}
+}
