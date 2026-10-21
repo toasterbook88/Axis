@@ -91,11 +91,19 @@ func (m Model) startState() StartState {
 }
 
 // startLines returns the splash rows to prepend to the ephemeral region.
-func (m Model) startLines() []Line {
+// below is how many rows View draws under the splash. The splash gets only
+// the height left above them; otherwise the terminal scrolls the top of the
+// logo away. Height 0 stays "unknown, treat as tall". A known height with no
+// room left still passes 1, so the splash falls to its compact tier.
+func (m Model) startLines(below int) []Line {
 	if !m.startVisible() {
 		return nil
 	}
-	return m.start.Render(m.layoutWidth(), m.height, m.startState())
+	avail := m.height
+	if avail > 0 {
+		avail = max(m.height-below, 1)
+	}
+	return m.start.Render(m.layoutWidth(), avail, m.startState())
 }
 
 // promptRule is the muted rule drawn above the input on every frame once the

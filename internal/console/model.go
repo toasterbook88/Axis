@@ -1060,7 +1060,7 @@ func (m Model) View() string {
 		return ""
 	}
 
-	lines := m.startLines()
+	var lines []Line
 
 	// An in-progress response lives here until the turn ends, so scrollback
 	// never receives a partial line.
@@ -1114,7 +1114,7 @@ func (m Model) View() string {
 		lines = append(lines, m.footer.Render(m.footerWidth(), FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: m.modelState})...)
 	}
 
-	return PaintAll(lines)
+	return PaintAll(append(m.startLines(len(lines)), lines...))
 }
 
 // Busy reports whether a turn is running or cancelling.
