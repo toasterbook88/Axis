@@ -96,8 +96,8 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 	section := map[string]string{"SPHardwareDataType": "System", "SPMemoryDataType": "Memory", "SPDisplaysDataType": "GPU", "SPStorageDataType": "Storage", "SPNetworkDataType": "Network", "SPPowerDataType": "Sensors", "SPUSBDataType": "Devices", "SPPCIDataType": "Devices", "SPAudioDataType": "Devices"}
 	for _, typ := range macHardwareTypes {
 		nextID := 0
-		var walk func(map[string]any, string)
-		walk = func(n map[string]any, parent string) {
+		var walk func(map[string]any, string, string)
+		walk = func(n map[string]any, parent, recordKey string) {
 			name, _ := n["_name"].(string)
 			if name == "" {
 				name = typ
@@ -108,6 +108,18 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 			if model, ok := n["machine_name"].(string); ok && model != "" {
 				name = model
 			}
+			storageDescription := typ == "SPStorageDataType" && recordKey == "physical_drive"
+			if storageDescription {
+				name, _ = n["device_name"].(string)
+				name = strings.TrimSpace(name)
+				if name == "" {
+					name, _ = n["media_name"].(string)
+					name = strings.TrimSpace(name)
+				}
+				if name == "" {
+					name = "Unidentified backing device"
+				}
+			}
 			s := hardwareSection(r, section[typ])
 			d := hardwareDevice(fmt.Sprintf("%s-%d", typ, nextID), name)
 			nextID++
@@ -117,6 +129,11 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 			// Network metrics join by the local interface name, not service order.
 			if id, ok := n["interface"].(string); ok && strings.TrimSpace(id) != "" {
 				d.ID = strings.TrimSpace(id)
+			}
+			if storageDescription && parent != "" && d.ID == parent {
+				// A nested identity equal to its containing volume cannot establish
+				// a parent edge or safely reuse the volume's report record.
+				d.ID = fmt.Sprintf("%s-%d", typ, nextID-1)
 			}
 			for _, key := range slices.Sorted(maps.Keys(n)) {
 				value := n[key]
@@ -131,9 +148,20 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 					}
 				}
 			}
-			if len(d.Specs) > 0 {
+			if len(d.Specs) > 0 || storageDescription {
 				if parent != "" && parent != d.ID {
-					d.Specs = append(d.Specs, c.reading("parent", parent, "", "system_profiler "+typ))
+					parentName := "parent"
+					if typ == "SPStorageDataType" {
+						parentName = "profiler parent"
+					}
+					d.Specs = append(d.Specs, c.reading(parentName, parent, "", "system_profiler "+typ))
+				} else if typ == "SPStorageDataType" && parent == "" {
+					backingID, ok := macStorageBackingBSDName(n)
+					if ok && backingID != d.ID {
+						d.Specs = append(d.Specs, c.reading("parent", backingID, "", "system_profiler "+typ))
+					} else {
+						d.Specs = append(d.Specs, c.unavailable("parent", "system_profiler "+typ, hardwareIssue("backing device not identified by system_profiler")))
+					}
 				}
 				index := slices.IndexFunc(s.Devices, func(existing models.HardwareDevice) bool { return existing.ID == d.ID })
 				if index < 0 {
@@ -146,21 +174,33 @@ func (c *HardwareCollector) parseMacHardwareInventory(raw []byte, r *models.Hard
 			for _, key := range slices.Sorted(maps.Keys(n)) {
 				switch x := n[key].(type) {
 				case map[string]any:
-					walk(x, parent)
+					walk(x, parent, key)
 				case []any:
 					for _, v := range x {
 						if child, ok := v.(map[string]any); ok {
-							walk(child, parent)
+							walk(child, parent, key)
 						}
 					}
 				}
 			}
 		}
 		for _, n := range tree[typ] {
-			walk(n, "")
+			walk(n, "", "")
 		}
 	}
 	return nil
+}
+
+// macStorageBackingBSDName accepts only a device identity attached directly to
+// the nested physical_drive record. Model and media descriptions are not IDs.
+func macStorageBackingBSDName(volume map[string]any) (string, bool) {
+	drive, ok := volume["physical_drive"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	id, ok := drive["bsd_name"].(string)
+	id = strings.TrimSpace(id)
+	return id, ok && id != ""
 }
 
 var macCPUUsage = regexp.MustCompile(`CPU usage:\s*([\d.]+)% user,\s*([\d.]+)% sys,\s*([\d.]+)% idle`)

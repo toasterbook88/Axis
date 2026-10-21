@@ -30,9 +30,11 @@ When a profiler volume lacks an identifiable backing component, emit:
 ```
 
 The value must be absent/null. This does not mean the volume has no backing
-device; it means this observation cannot identify it. A subsequent collector
-may establish a link only from explicit observed device identity and a backing
-reference. No such reference exists in this capture.
+device; it means this observation cannot identify it. On macOS, this parser
+treats a nonempty `physical_drive.bsd_name` as explicit backing identity; a
+missing, blank, or self-referencing value remains unavailable. Descriptive
+`device_name` and `media_name` values never establish the link. The recorded
+capture has no `physical_drive.bsd_name`.
 
 ## Drive descriptions are not device identity
 
@@ -46,6 +48,10 @@ model descriptions do not establish a shared physical device. Conversely, a
 separate report ID for each description does not establish distinct hardware.
 A `Disk Image` description remains a virtual backing description; the provider's
 field name must not turn it into a physical-disk claim.
+
+The explicit `physical_drive.bsd_name` case is synthetic regression input: it
+defines parser behavior if an observation supplies that identity; it is not a
+claim that the recorded machine supplied one.
 
 All emitted parent IDs must exist in the same section and must not reference
 the record itself. Do not reverse an unproven edge and call it a repair.

@@ -8,6 +8,10 @@
 
 ### Fixes
 
+* macOS storage inventory now labels nested profiler containment separately
+  from backing relationships, names provider descriptions from captured fields,
+  and reports unknown backing when no explicit device identity is present.
+
 * Hardware facts suppress SMART stub fields after permission or device-open
   failures, preserve distinct macOS devices with empty interface/BSD names,
   and restrict AMD-only GPU sysfs telemetry to AMD devices.

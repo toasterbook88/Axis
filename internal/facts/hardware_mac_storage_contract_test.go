@@ -200,3 +200,90 @@ func TestMacStorageParentContract(t *testing.T) {
 		})
 	}
 }
+
+func TestMacStorageBackingParentRequiresExplicitIdentity(t *testing.T) {
+	tests := []struct {
+		name, physicalDrive, wantName, nameReading, wantBackingID, wantParentStatus string
+	}{
+		{
+			name:          "model name is descriptive only",
+			physicalDrive: `"device_name":"Friendly NVMe","protocol":"Test Protocol"`,
+			wantName:      "Friendly NVMe", nameReading: "device", wantParentStatus: "unavailable",
+		},
+		{
+			name:          "media name fallback",
+			physicalDrive: `"media_name":"Fallback Media","protocol":"Test Protocol"`,
+			wantName:      "Fallback Media", nameReading: "media", wantParentStatus: "unavailable",
+		},
+		{
+			name:          "missing names get explicit fallback",
+			physicalDrive: `"protocol":"Test Protocol"`,
+			wantName:      "Unidentified backing device", wantParentStatus: "unavailable",
+		},
+		{
+			name:          "blank backing identity remains unknown",
+			physicalDrive: `"bsd_name":"  ","device_name":"Friendly NVMe","protocol":"Test Protocol"`,
+			wantName:      "Friendly NVMe", nameReading: "device", wantParentStatus: "unavailable",
+		},
+		{
+			name:          "nested BSD identity supports a backing link",
+			physicalDrive: `"bsd_name":"disk0","device_name":"Friendly NVMe","protocol":"Test Protocol"`,
+			wantName:      "Friendly NVMe", nameReading: "device", wantBackingID: "disk0", wantParentStatus: "observed",
+		},
+		{
+			name:          "self identity remains unknown",
+			physicalDrive: `"bsd_name":"disk1","device_name":"Friendly NVMe","protocol":"Test Protocol"`,
+			wantName:      "Friendly NVMe", nameReading: "device", wantParentStatus: "unavailable",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte(`{"SPStorageDataType":[{"_name":"Test Volume","bsd_name":"disk1","file_system":"APFS","physical_drive":{` + tt.physicalDrive + `}}]}`)
+			c, report := testHardwareCollector(), testHardwareReport()
+			for i := range report.Sections {
+				report.Sections[i].Devices = nil
+			}
+			if err := c.parseMacHardwareInventory(raw, report); err != nil {
+				t.Fatal(err)
+			}
+			devices := hardwareSection(report, "Storage").Devices
+			var volume, description *models.HardwareDevice
+			for i := range devices {
+				if devices[i].ID == "disk1" {
+					volume = &devices[i]
+				} else if len(macHardwareReadingsNamed(devices[i].Specs, "protocol")) == 1 {
+					description = &devices[i]
+				}
+			}
+			if volume == nil || description == nil {
+				t.Fatalf("missing volume or nested description: %+v", devices)
+			}
+			if description.Name != tt.wantName {
+				t.Errorf("description name = %q, want %q", description.Name, tt.wantName)
+			}
+			if tt.nameReading != "" {
+				assertMacHardwareReading(t, description.Specs, tt.nameReading, tt.wantName)
+			}
+			parents := macHardwareReadingsNamed(volume.Specs, "parent")
+			if len(parents) != 1 {
+				t.Fatalf("want exactly one volume backing-parent reading, got %d: %+v", len(parents), parents)
+			}
+			parent := parents[0]
+			if parent.Status != tt.wantParentStatus || parent.Source != "system_profiler SPStorageDataType" {
+				t.Errorf("unexpected volume backing-parent reading: %+v", parent)
+			}
+			if tt.wantBackingID == "" {
+				if parent.Value != nil || parent.Reason != "backing device not identified by system_profiler" {
+					t.Errorf("descriptive fields must not imply a backing link: %+v", parent)
+				}
+			} else if parent.Value != tt.wantBackingID {
+				t.Errorf("backing parent = %v, want explicit BSD identity %q", parent.Value, tt.wantBackingID)
+			}
+			assertMacHardwareReading(t, description.Specs, "protocol", "Test Protocol")
+			profilerParent := macHardwareReadingsNamed(description.Specs, "profiler parent")
+			if len(profilerParent) != 1 || profilerParent[0].Value != "disk1" || profilerParent[0].Status != "observed" {
+				t.Errorf("nested description lost profiler containment: %+v", profilerParent)
+			}
+		})
+	}
+}
