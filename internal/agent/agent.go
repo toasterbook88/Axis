@@ -546,8 +546,8 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 					start := time.Now()
 					result, err := a.dispatchToolCall(ctx, tc)
 					elapsed := time.Since(start)
-					if err == nil {
-						a.sessionLog.noteToolOutput(tc.ID, tc.Function.Name, result)
+					if result != "" {
+						a.sessionLog.noteToolOutput(tc.ID, tc.Function.Name, result, err == nil)
 					}
 					outMu.Lock()
 					if err != nil {

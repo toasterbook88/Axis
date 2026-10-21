@@ -138,12 +138,24 @@ type sessionSegment struct {
 }
 
 func privateSessionFile(root *os.Root, name string, flags int) (*os.File, error) {
+	return privateSessionFileWithOpen(root, name, flags, root.OpenFile)
+}
+func privateSessionFileWithOpen(root *os.Root, name string, flags int, open func(string, int, os.FileMode) (*os.File, error)) (*os.File, error) {
 	if st, err := root.Lstat(name); err == nil && (!st.Mode().IsRegular() || st.Mode()&os.ModeSymlink != 0) {
 		return nil, fmt.Errorf("refusing nonregular session log file")
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	f, err := root.OpenFile(name, flags, 0600)
+	f, err := open(name, flags, 0600)
+	// Darwin can report ENOENT when concurrent O_CREATE calls first establish
+	// the lock. Retry only that recognized race: a regular lock must now exist,
+	// and the single retry opens it WITHOUT creation. Never retry absent paths,
+	// nonregular files, other errors, or segment writes.
+	if errors.Is(err, os.ErrNotExist) && name == ".agent-session.lock" && flags&os.O_CREATE != 0 {
+		if info, statErr := root.Lstat(name); statErr == nil && info.Mode().IsRegular() {
+			f, err = open(name, flags&^os.O_CREATE, 0600)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +175,23 @@ func (l *DailySessionLog) storeRecord(payload []byte, now time.Time) error {
 	if int64(len(payload)) > l.policy.segmentBytes || int64(len(payload)) > l.policy.totalBytes {
 		return fmt.Errorf("record exceeds storage budget")
 	}
+	// The directory may have been replaced after construction. Pin its identity
+	// so reopening a same-user replacement/symlink cannot redirect any mutation.
+	if info, err := os.Lstat(l.dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("session log directory replaced")
+	}
 	root, err := os.OpenRoot(l.dir)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
+	info, err := root.Stat(".")
+	if err != nil {
+		return err
+	}
+	if l.dirInfo == nil || !os.SameFile(l.dirInfo, info) {
+		return fmt.Errorf("session log directory identity changed")
+	}
 	lockFile, err := privateSessionFile(root, ".agent-session.lock", os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return err
@@ -300,7 +324,78 @@ var sessionAuthorization = regexp.MustCompile(`(?im)((?:authorization|proxy-auth
 var sessionPrivateKey = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`)
 var sessionURLCredentials = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+:[^/@\s]+@`)
 
+// Decode structured arguments before masking: nested file contents may be
+// JSON-escaped strings, for which matching raw outer bytes misses secrets.
+// Limit work and redact an overcomplex subtree instead of copying it unsafely.
+var sessionCredentialKey = regexp.MustCompile(`(?i)(?:^|[_.-])(?:secrets?|password|passwd|passphrase|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|credentials?|key|api[_-]?key|access[_-]?key|private[_-]?key|authorization|proxy-authorization|cookie|set-cookie)$`)
+
+const sessionStructuredCap = 1 << 20
+
 func redactSessionText(s string) string {
+	budget := 10000
+	return redactSessionValue(s, 0, &budget)
+}
+func redactSessionValue(s string, depth int, budget *int) string {
+	trimmed := strings.TrimSpace(s)
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[' || trimmed[0] == '"') {
+		if depth >= 8 || len(s) > sessionStructuredCap {
+			return "[REDACTED STRUCTURED PAYLOAD: LIMIT]"
+		}
+		decoder := json.NewDecoder(strings.NewReader(s))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err == nil {
+			// Require exactly one JSON document; preserve non-JSON prose otherwise.
+			var trailing any
+			if err = decoder.Decode(&trailing); errors.Is(err, io.EOF) {
+				changed := false
+				value = redactSessionJSON(value, depth, budget, &changed)
+				if changed {
+					if encoded, err := json.Marshal(value); err == nil {
+						return string(encoded)
+					}
+				}
+				return s
+			} else if trimmed[0] == '{' || trimmed[0] == '[' {
+				return "[REDACTED MALFORMED STRUCTURED PAYLOAD]"
+			}
+		} else if trimmed[0] == '{' || trimmed[0] == '[' {
+			return "[REDACTED MALFORMED STRUCTURED PAYLOAD]"
+		}
+	}
+	return redactSessionPlainText(s)
+}
+func redactSessionJSON(value any, depth int, budget *int, changed *bool) any {
+	*budget = *budget - 1
+	if depth >= 8 || *budget < 0 {
+		*changed = true
+		return "[REDACTED STRUCTURED PAYLOAD: LIMIT]"
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if sessionCredentialKey.MatchString(key) {
+				typed[key] = "[REDACTED]"
+				*changed = true
+				continue
+			}
+			typed[key] = redactSessionJSON(child, depth+1, budget, changed)
+		}
+	case []any:
+		for i, child := range typed {
+			typed[i] = redactSessionJSON(child, depth+1, budget, changed)
+		}
+	case string:
+		clean := redactSessionValue(typed, depth+1, budget)
+		if clean != typed {
+			*changed = true
+		}
+		return clean
+	}
+	return value
+}
+
+func redactSessionPlainText(s string) string {
 	s = sessionPrivateKey.ReplaceAllString(s, "[REDACTED PRIVATE KEY]")
 	s = sessionURLCredentials.ReplaceAllString(s, "${1}[REDACTED]@")
 	s = sessionSecretAssignment.ReplaceAllString(s, `${1}"[REDACTED]"`)

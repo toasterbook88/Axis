@@ -263,6 +263,7 @@ func TestDailySessionLogConcurrentProcesses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		l.SetWarn(func(message string) { t.Log("child log warning:", message) })
 		l.policy = sessionLogPolicy{totalBytes: 1 << 20, segmentBytes: 2048, days: 30}
 		for i := 0; i < 25; i++ {
 			l.append(sessionRecord{Kind: "child", Prompt: fmt.Sprintf("%d %d", os.Getpid(), i)})
@@ -317,7 +318,7 @@ func TestDailySessionLogTrajectorySurvivesConversationRemoval(t *testing.T) {
 	l.beginTurn(a, "one-copy-prompt")
 	l.noteCalled("call-1", "example", `{"ordinary":"argument"}`)
 	l.noteResponse(chat.Message{Role: chat.RoleAssistant, Content: "intermediate explanation", ToolCalls: []chat.ToolCall{toolCall("call-1", "example", `{}`)}})
-	l.noteToolOutput("call-1", "example", "one-copy-tool-output")
+	l.noteToolOutput("call-1", "example", "one-copy-tool-output", true)
 	// Compaction or the backend error rollback can remove every original message.
 	a.conv.ReplaceRange(0, a.conv.Len(), nil)
 	l.noteResponse(chat.Message{Role: chat.RoleAssistant, Content: "one-copy-answer"})
@@ -434,7 +435,7 @@ func TestDailySessionLogRotationNeverReusesPrunedSuffix(t *testing.T) {
 }
 
 func FuzzDailySessionLogEncoder(f *testing.F) {
-	for _, seed := range []string{"ordinary prompt", "discovery.secret=example-secret", `{"nested":{"token":"example-secret"}}`, "partial {\"api_key\":", strings.Repeat("界", 100)} {
+	for _, seed := range []string{"ordinary prompt", "discovery.secret=example-secret", `{"nested":{"token":"example-secret"}}`, `{"content":"{\"api_key\":\"example-secret\"}"}`, "partial {\"api_key\":", strings.Repeat("界", 100)} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, text string) {
@@ -449,4 +450,54 @@ func FuzzDailySessionLogEncoder(f *testing.F) {
 			t.Fatal("invalid or unbounded record")
 		}
 	})
+}
+
+func TestDailySessionLogRetriesOnlyCompetingLockCreation(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	calls := 0
+	open := func(name string, flags int, mode os.FileMode) (*os.File, error) {
+		calls++
+		if calls == 1 {
+			winner, e := root.OpenFile(name, os.O_CREATE|os.O_RDWR, mode)
+			if e != nil {
+				t.Fatal(e)
+			}
+			_ = winner.Close()
+			return nil, &os.PathError{Op: "openat", Path: name, Err: os.ErrNotExist}
+		}
+		if flags&os.O_CREATE != 0 {
+			t.Fatal("retry retained creation flag")
+		}
+		return root.OpenFile(name, flags, mode)
+	}
+	f, err := privateSessionFileWithOpen(root, ".agent-session.lock", os.O_CREATE|os.O_RDWR, open)
+	if err != nil || calls != 2 {
+		t.Fatalf("recognized Darwin create race: calls=%d err=%v", calls, err)
+	}
+	if f != nil {
+		_ = f.Close()
+	}
+	for _, tc := range []struct {
+		name    string
+		failure error
+	}{{"absent.jsonl", os.ErrNotExist}, {".agent-session.lock", os.ErrPermission}} {
+		calls = 0
+		_, err = privateSessionFileWithOpen(root, tc.name, os.O_CREATE|os.O_RDWR, func(name string, flags int, mode os.FileMode) (*os.File, error) { calls++; return nil, tc.failure })
+		if !errors.Is(err, tc.failure) || calls != 1 {
+			t.Fatalf("unrecognized error retried: %s %v %d", tc.name, err, calls)
+		}
+	}
+	// ENOENT while the lock really is absent must remain a visible failure.
+	if err = root.Remove(".agent-session.lock"); err != nil {
+		t.Fatal(err)
+	}
+	calls = 0
+	_, err = privateSessionFileWithOpen(root, ".agent-session.lock", os.O_CREATE|os.O_RDWR, func(string, int, os.FileMode) (*os.File, error) { calls++; return nil, os.ErrNotExist })
+	if !errors.Is(err, os.ErrNotExist) || calls != 1 {
+		t.Fatal("absent lock error swallowed")
+	}
 }

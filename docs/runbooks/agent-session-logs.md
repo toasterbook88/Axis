@@ -6,7 +6,8 @@ is explicitly supplied. Logging never publishes to Cortex, lifecycle events,
 HTTP or MCP. Existing interactive resume/history behavior is unchanged.
 
 Directories are owner-only (`0700`) and segment/lock files are owner-only
-(`0600`). Symlinked log directory leaves and nonregular segment/lock files
+(`0600`). Directory identity is pinned at construction and verified before each write;
+a later replacement cannot redirect output. Symlinked log directory leaves and nonregular segment/lock files
 are rejected; parent aliases (including macOS `/var` and `/tmp`) are resolved,
 and filesystem access stays inside an `os.Root`. This is access
 control, not encryption. The account owner and privileged local users can read
@@ -29,6 +30,7 @@ its per-request resolved model through this logger.
 * `assistant`: intermediate assistant text accompanying tool calls.
 * `tool`: calls/arguments, approval skips, shell commands, success/failure,
   result size, timing, and a separate `output` event with result content.
+  Nonempty partial output is retained with `ok: false` when a tool returns an error.
 * `turn.finished`: the final answer once, elapsed time, token deltas from backend
   usage reports, and `answer`, `max_turns`, `error`, `canceled` or `timeout` outcome.
 
@@ -39,8 +41,11 @@ zero cost. Stream failures record the error/outcome; the current backend
 interface does not return partially streamed answer text on failure.
 
 Credential-shaped assignments (including dotted/underscored names and nested
-JSON string fields), authorization/API-key/cookie headers, URL userinfo and PEM
-private keys are masked before truncation/serialization. Existing egress
+JSON string fields, decoded recursively before masking), authorization/API-key/cookie headers, URL userinfo and PEM
+private keys are masked before truncation/serialization. Structured decoding
+is limited to 1 MiB, eight nesting levels and 10,000 values; oversized, malformed
+or overcomplex structured payloads/subtrees use explicit redaction markers.
+Existing egress
 redaction is also applied. Pattern masking cannot identify an arbitrary secret
 with no credential context. Logs therefore remain private even after masking;
 never commit runtime transcripts or share them by default.

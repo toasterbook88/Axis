@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ const sessionLogToolCap = 16 << 10
 // outputs and usage at turn.finished. It never publishes to events or Cortex.
 // Logging is best effort and never changes a Run result. See docs/runbooks/agent-session-logs.md.
 type DailySessionLog struct {
+	dirInfo   os.FileInfo
 	answer    string
 	dir       string
 	sessionID string
@@ -53,8 +55,13 @@ func OpenDailySessionLog(dir string) (*DailySessionLog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session log dir: %w", err)
 	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("session log directory identity: %w", err)
+	}
 	return &DailySessionLog{
 		dir:       resolved,
+		dirInfo:   info,
 		sessionID: newSessionID(),
 		policy:    defaultSessionLogPolicy(),
 	}, nil
@@ -311,8 +318,8 @@ func (l *DailySessionLog) noteResponse(m chat.Message) {
 	}
 }
 
-func (l *DailySessionLog) noteToolOutput(id, name, output string) {
-	l.noteLive(sessionTool{ID: id, Name: name, Event: "output", Output: output, ResultBytes: len(output), OK: true})
+func (l *DailySessionLog) noteToolOutput(id, name, output string, ok bool) {
+	l.noteLive(sessionTool{ID: id, Name: name, Event: "output", Output: output, ResultBytes: len(output), OK: ok})
 }
 
 func clipSessionText(s string, max int) (string, bool) {
