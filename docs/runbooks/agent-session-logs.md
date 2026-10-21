@@ -7,8 +7,8 @@ HTTP or MCP. Existing interactive resume/history behavior is unchanged.
 
 Directories are owner-only (`0700`) and segment/lock files are owner-only
 (`0600`). Directory identity is pinned at construction and verified before each write;
-a later replacement cannot redirect output. Symlinked log directory leaves and nonregular segment/lock files
-are rejected; parent aliases (including macOS `/var` and `/tmp`) are resolved,
+a later replacement cannot redirect output. Symlinked log directory leaves, nonregular segment/lock files and
+hard-linked segment/lock files are rejected; parent aliases (including macOS `/var` and `/tmp`) are resolved,
 and filesystem access stays inside an `os.Root`. This is access
 control, not encryption. The account owner and privileged local users can read
 logs. Keep the state directory on a suitably protected volume.
@@ -19,7 +19,8 @@ Every record has a random process session ID, turn number, timestamp, the local
 start day of the turn, configured model, autonomy, platform, AXIS version,
 build commit/date when available, and local context. The context includes the
 working directory, hostname, project HEAD and dirty status if bounded git
-probes succeed, and the selected provider/protocol/node/model. `captured_at`
+probes succeed (run with `core.fsmonitor` disabled, so no repository-configured
+command runs), and the selected provider/protocol/node/model. `captured_at`
 identifies when project context was measured at session startup; later file or
 Git changes do not rewrite it. A resolved `/model` choice updates target
 attribution. Missing fields mean unknown. Provider selection is configured

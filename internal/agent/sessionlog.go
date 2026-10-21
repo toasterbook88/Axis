@@ -17,8 +17,8 @@ import (
 )
 
 // sessionLogToolCap bounds a tool result copied into the daily log.
-// User and assistant text are kept whole. Tool output is capped because a
-// single read can be larger than the conversation it came from.
+// Tool output is capped because a single read can be larger than the
+// conversation it came from. Prompt and answer text have their own larger cap.
 const sessionLogToolCap = 16 << 10
 
 // DailySessionLog writes private, bounded local JSONL segments. Prompts are
@@ -248,7 +248,8 @@ func (l *DailySessionLog) writeLocked(rec sessionRecord) {
 	now := l.clock()
 	rec.SessionID = l.sessionID
 	rec.TS = now.Format(time.RFC3339)
-	// A turn that crosses midnight stays in the file it started in.
+	// A turn that crosses midnight keeps its start day in the record; the
+	// segment file is still chosen from the write time.
 	if l.day != "" {
 		rec.Day = l.day
 	} else {

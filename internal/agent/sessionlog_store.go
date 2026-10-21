@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/lockutil"
@@ -56,7 +57,9 @@ func CaptureSessionLogProvenance(target ModelTarget) SessionLogProvenance {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	git := func(args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, "git", args...)
+		// Ignore core.fsmonitor so starting the agent never runs a
+		// repository-configured command.
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
 		cmd.WaitDelay = 50 * time.Millisecond
 		// Discard large status output: a dirty boolean needs only the first byte.
 		var out boundedSessionBuffer
@@ -163,6 +166,12 @@ func privateSessionFileWithOpen(root *os.Root, name string, flags int, open func
 	if err != nil || !st.Mode().IsRegular() {
 		_ = f.Close()
 		return nil, fmt.Errorf("session log is not a regular file")
+	}
+	// A hard link is a regular file, so the checks above pass it. Appending
+	// through one would write outside the log directory.
+	if sessionLogLinkCount(st) > 1 {
+		_ = f.Close()
+		return nil, fmt.Errorf("refusing hard-linked session log file")
 	}
 	if err = f.Chmod(0600); err != nil {
 		_ = f.Close()
@@ -483,4 +492,12 @@ func (a *Agent) SetSessionLogTarget(target ModelTarget) {
 	l.provenance.Protocol = target.Protocol
 	l.provenance.Node = target.Node
 	l.provenance.TargetModel = target.Model
+}
+
+// sessionLogLinkCount reports the file's hard-link count, or 1 when unknown.
+func sessionLogLinkCount(info os.FileInfo) uint64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return uint64(st.Nlink)
+	}
+	return 1
 }

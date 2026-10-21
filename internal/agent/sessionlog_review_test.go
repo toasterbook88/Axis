@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
 )
@@ -131,5 +133,64 @@ func TestDailySessionLogStructuredCredentialKeyVariants(t *testing.T) {
 				t.Fatalf("credential key variant survived nested decoding: %s", raw)
 			}
 		})
+	}
+}
+
+func TestReviewHardlinkedSegmentRejected(t *testing.T) {
+	dir := t.TempDir()
+	l, err := OpenDailySessionLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetWarn(func(string) {})
+	outside := t.TempDir() + "/outside.txt"
+	if err = os.WriteFile(outside, []byte("OUT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	segment := dir + "/agent-" + time.Now().Format("2006-01-02") + ".jsonl"
+	if err = os.Link(outside, segment); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	l.append(sessionRecord{Kind: "review"})
+	got, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "OUT" {
+		t.Fatalf("append followed a hard link out of the log directory: %q", got)
+	}
+}
+
+func TestReviewProvenanceGitProbesSkipRepoFSMonitor(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	marker := t.TempDir() + "/fsmonitor-ran"
+	hook := t.TempDir() + "/fsmonitor.sh"
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"config", "core.fsmonitor", hook},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(repo+"/tracked", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	p := CaptureSessionLogProvenance(ModelTarget{})
+	if p.ProjectCommit == "" {
+		t.Fatal("git probe did not run")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("startup git probe executed the repository's core.fsmonitor command")
 	}
 }
