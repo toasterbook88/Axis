@@ -26,6 +26,7 @@ const Version = buildinfo.Version
 
 func main() {
 	root := newRootCmd()
+	root.SetArgs(normalizeHardwareArgs(os.Args[1:]))
 	err := root.Execute()
 	_ = events.FlushEvents(1 * time.Second)
 	if err != nil {

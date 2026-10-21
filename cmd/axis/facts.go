@@ -55,15 +55,47 @@ var collectLocalFacts = func(ctx context.Context, hostname string) (*models.Node
 	return facts.NewLocalCollector(hostname, "", labels).Collect(ctx)
 }
 
+const factsHelpText = `Collect and display local facts in organized sections.
+
+By default, show machine, resources, storage, network, tools, and inference facts.
+Use --hardware (also -hw) for detailed hardware specifications and live load.
+Hardware reports cover CPU, memory, GPUs, storage, network adapters, system
+firmware, sensors, and attached devices on macOS and Linux.
+
+Hardware detail depends on device support, available tools, and permissions.
+Unavailable readings include a reason. Rates use a reported sampling interval.
+Hardware collection is read-only, excludes unique device identifiers, and never
+invokes sudo. Watch mode retains inventory and refreshes live measurements.
+JSON watch output is one report per line; YAML watch output uses document separators.`
+
 func factsCmd() *cobra.Command {
 	var format string
 	var verbose bool
+	var hardware, watch bool
+	var interval time.Duration
 
 	cmd := &cobra.Command{
 		Use:     "facts",
-		Short:   "Collect and display local node facts",
-		PreRunE: validateOutputFormat(&format, "text", "json", "yaml"),
+		Short:   "Collect and display facts about this computer",
+		Long:    factsHelpText,
+		Example: "  axis facts\n  axis facts --hardware\n  axis facts -hw\n  axis facts --hardware --format json\n  axis facts --hardware --watch --interval 2s",
+		Args:    cobra.NoArgs,
+		// Local facts have no need for advisory Cortex/webhook initialization.
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			noColor, _ := cmd.Flags().GetBool("no-color")
+			ui.Init(noColor)
+			return nil
+		},
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateOutputFormat(&format, "text", "json", "yaml")(cmd, args); err != nil {
+				return err
+			}
+			return validateHardwareFactsFlags(cmd, hardware, watch, interval)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if hardware {
+				return runHardwareFacts(cmd, format, watch, interval)
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
@@ -90,9 +122,26 @@ func factsCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&hardware, "hardware", false, "Show detailed hardware specifications and live load (also -hw)")
+	cmd.Flags().BoolVar(&watch, "watch", false, "Refresh hardware measurements; requires --hardware")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Hardware sampling interval (100ms to 1m)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or yaml")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show all network addresses (default hides local IPv6 and temporary addresses)")
 	return cmd
+}
+
+func validateHardwareFactsFlags(cmd *cobra.Command, hardware, watch bool, interval time.Duration) error {
+
+	if watch && !hardware {
+		return fmt.Errorf("--watch requires --hardware")
+	}
+	if cmd.Flags().Changed("interval") && !hardware {
+		return fmt.Errorf("--interval requires --hardware")
+	}
+	if interval < 100*time.Millisecond || interval > time.Minute {
+		return fmt.Errorf("--interval must be between 100ms and 1m")
+	}
+	return nil
 }
 
 func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) error {
@@ -105,6 +154,8 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 		fmt.Fprintf(out, "  %s  %s\n", ui.Dim(fmt.Sprintf("%-14s", key)), val)
 	}
 
+	fmt.Fprintf(out, "  %s\n", ui.Bold("Machine"))
+	kv("collected:", nf.CollectedAt.Format(time.RFC3339))
 	kv("hostname:", nf.Hostname)
 	if nf.Identity != nil && nf.Identity.StableID != "" {
 		val := nf.Identity.StableID
@@ -119,9 +170,12 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 
 	if nf.Resources != nil {
 		r := nf.Resources
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s\n", ui.Bold("Resources"))
-		kv("cpu:", fmt.Sprintf("%d cores (%s)", r.CPUCores, r.CPUModel))
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Resources"))
+		if r.CPUCores > 0 {
+			kv("cpu:", fmt.Sprintf("%d logical CPUs (%s)", r.CPUCores, r.CPUModel))
+		} else {
+			kv("cpu:", "unavailable")
+		}
 		kv("ram total:", fmt.Sprintf("%d MB", r.RAMTotalMB))
 		kv("ram free:", fmt.Sprintf("%d MB", r.RAMFreeMB))
 		if nf.RAMReservedMB > 0 {
@@ -130,13 +184,13 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 		if nf.RAMAllocatableMB > 0 {
 			kv("ram alloc:", fmt.Sprintf("%d MB", nf.RAMAllocatableMB))
 		}
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Storage"))
 		kv("disk:", fmt.Sprintf("%d GB free / %d GB total", r.DiskFreeGB, r.DiskTotalGB))
 		if r.StorageClass != "" {
 			kv("storage:", r.StorageClass)
 		}
 		if len(r.Volumes) > 0 {
-			fmt.Fprintln(out)
-			fmt.Fprintf(out, "  %s\n", ui.Bold("Volumes"))
+			fmt.Fprintf(out, "\n  %s\n", ui.Bold("Volumes"))
 			for _, v := range r.Volumes {
 				line := fmt.Sprintf("    %s %s  %d GB free / %d GB  %s %s %s",
 					ui.Green("✓"), v.Mount, v.FreeGB, v.TotalGB, v.Kind, v.Bus, v.Role)
@@ -157,62 +211,8 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 
 		}
 
-		if len(nf.DiskWeights) > 0 || nf.DiskWeightsTruncated {
-			fmt.Fprintln(out)
-			title := "Disk weights"
-			if nf.DiskWeightsTruncated {
-				title += " (truncated)"
-			}
-			fmt.Fprintf(out, "  %s\n", ui.Bold(title))
-			for _, w := range nf.DiskWeights {
-				fmt.Fprintf(out, "    %s %s  %s  %s  %s\n",
-					ui.Green("✓"), w.Name, formatDiskWeightBytes(w.Bytes), w.Format, w.Path)
-			}
-		}
-
-		if le := nf.LocalEndpoints; le != nil && (len(le.Confirmed) > 0 || len(le.Candidates) > 0 || le.Truncated || le.CachedSweep || le.SkippedNotAllowlisted > 0 || len(le.SkippedExcluded) > 0) {
-			fmt.Fprintln(out)
-			title := "Local endpoints"
-			if le.Truncated {
-				title += " (truncated)"
-			}
-			if le.CachedSweep {
-				title += " (cached sweep)"
-			}
-			fmt.Fprintf(out, "  %s\n", ui.Bold(title))
-			if le.SkippedNotAllowlisted > 0 {
-				fmt.Fprintf(out, "    %d listener(s) not allowlisted\n", le.SkippedNotAllowlisted)
-			}
-			if len(le.SkippedExcluded) > 0 {
-				ports := make([]string, 0, len(le.SkippedExcluded))
-				for _, port := range le.SkippedExcluded {
-					ports = append(ports, fmt.Sprintf("%d", port))
-				}
-				fmt.Fprintf(out, "    explicitly excluded port(s): %s\n", strings.Join(ports, ", "))
-			}
-			for _, ep := range le.Confirmed {
-				fmt.Fprintf(out, "    %s :%d  %s  %s  %d model(s), listed\n", ui.Green("✓"), ep.Port, ep.Engine, ep.Bind, len(ep.Models))
-			}
-			for _, c := range le.Candidates {
-				fmt.Fprintf(out, "    %s :%d  %s  %s\n", ui.Yellow("?"), c.Port, c.Process, c.Reason)
-			}
-		}
-
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Live load"))
 		kv("pressure:", formatPressure(r.Pressure))
-		if len(r.GPUs) > 0 {
-			fmt.Fprintln(out)
-			fmt.Fprintf(out, "  %s\n", ui.Bold("GPUs"))
-			for _, g := range r.GPUs {
-				detail := formatGPUBaseName(g)
-				if g.VRAMMB > 0 {
-					detail = fmt.Sprintf("%s — %d MB VRAM", detail, g.VRAMMB)
-				}
-				if len(g.Capabilities) > 0 {
-					detail = fmt.Sprintf("%s [%s]", detail, strings.Join(g.Capabilities, ", "))
-				}
-				fmt.Fprintf(out, "    %s %s\n", ui.Green("✓"), detail)
-			}
-		}
 		if r.ThermalState != "" {
 			kv("thermal:", formatThermal(r.ThermalState))
 		}
@@ -228,9 +228,22 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 		}
 	}
 
+	if nf.Resources != nil && len(nf.Resources.GPUs) > 0 {
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("GPUs"))
+		for _, g := range nf.Resources.GPUs {
+			detail := formatGPUBaseName(g)
+			if g.VRAMMB > 0 {
+				detail = fmt.Sprintf("%s — %d MB VRAM", detail, g.VRAMMB)
+			}
+			if len(g.Capabilities) > 0 {
+				detail = fmt.Sprintf("%s [%s]", detail, strings.Join(g.Capabilities, ", "))
+			}
+			fmt.Fprintf(out, "    %s %s\n", ui.Green("✓"), detail)
+		}
+	}
+
 	if len(nf.Tools) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s\n", ui.Bold("Tools"))
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Tools"))
 		for _, t := range nf.Tools {
 			ver := ""
 			if t.Version != "" {
@@ -240,9 +253,53 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 		}
 	}
 
-	if nf.Ollama != nil && nf.Ollama.Installed {
+	if len(nf.DiskWeights) > 0 || nf.DiskWeightsTruncated || nf.LocalEndpoints != nil || nf.Ollama != nil {
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Inference"))
+	}
+
+	if len(nf.DiskWeights) > 0 || nf.DiskWeightsTruncated {
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s\n", ui.Bold("Ollama"))
+		title := "Disk weights"
+		if nf.DiskWeightsTruncated {
+			title += " (truncated)"
+		}
+		fmt.Fprintf(out, "  %s\n", ui.Bold(title))
+		for _, w := range nf.DiskWeights {
+			fmt.Fprintf(out, "    %s %s  %s  %s  %s\n",
+				ui.Green("✓"), w.Name, formatDiskWeightBytes(w.Bytes), w.Format, w.Path)
+		}
+	}
+
+	if le := nf.LocalEndpoints; le != nil && (len(le.Confirmed) > 0 || len(le.Candidates) > 0 || le.Truncated || le.CachedSweep || le.SkippedNotAllowlisted > 0 || len(le.SkippedExcluded) > 0) {
+		fmt.Fprintln(out)
+		title := "Local endpoints"
+		if le.Truncated {
+			title += " (truncated)"
+		}
+		if le.CachedSweep {
+			title += " (cached sweep)"
+		}
+		fmt.Fprintf(out, "  %s\n", ui.Bold(title))
+		if le.SkippedNotAllowlisted > 0 {
+			fmt.Fprintf(out, "    %d listener(s) not allowlisted\n", le.SkippedNotAllowlisted)
+		}
+		if len(le.SkippedExcluded) > 0 {
+			ports := make([]string, 0, len(le.SkippedExcluded))
+			for _, port := range le.SkippedExcluded {
+				ports = append(ports, fmt.Sprintf("%d", port))
+			}
+			fmt.Fprintf(out, "    explicitly excluded port(s): %s\n", strings.Join(ports, ", "))
+		}
+		for _, ep := range le.Confirmed {
+			fmt.Fprintf(out, "    %s :%d  %s  %s  %d model(s), listed\n", ui.Green("✓"), ep.Port, ep.Engine, ep.Bind, len(ep.Models))
+		}
+		for _, c := range le.Candidates {
+			fmt.Fprintf(out, "    %s :%d  %s  %s\n", ui.Yellow("?"), c.Port, c.Process, c.Reason)
+		}
+	}
+
+	if nf.Ollama != nil && nf.Ollama.Installed {
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Ollama"))
 		kv("running:", fmt.Sprintf("%v", nf.Ollama.Running))
 		if len(nf.Ollama.Models) > 0 {
 			kv("models:", strings.Join(nf.Ollama.Models, ", "))
@@ -250,8 +307,7 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 	}
 
 	if len(nf.Addresses) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s\n", ui.Bold("Addresses"))
+		fmt.Fprintf(out, "\n  %s\n", ui.Bold("Network addresses"))
 		hiddenCount := 0
 		for _, a := range nf.Addresses {
 			show := verbose || a.Kind == "ipv4" || (a.Kind == "ipv6" && a.Scope != "link-local") || a.SpeedClass == "tailscale" || a.SpeedClass == "wireguard" || a.SpeedClass == "thunderbolt"
@@ -273,7 +329,9 @@ func printFactsText(cmd *cobra.Command, nf *models.NodeFacts, verbose bool) erro
 		}
 	}
 
-	fmt.Fprintf(out, "\n  %s %s\n", ui.Dim("collected:"), nf.CollectedAt.Format(time.RFC3339))
+	if nf.Error != "" {
+		kv("error:", nf.Error)
+	}
 	_, err := fmt.Fprint(cmd.OutOrStdout(), rendered.String())
 	return err
 }

@@ -103,7 +103,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | --- | --- |
 | `axis update` | Self-update from GitHub Releases, SHA-256 verified |
 | `axis version` | Version, commit, date, go, platform |
-| `axis facts` | Local node facts (alias of `axis node facts`) |
+| `axis facts` | Local node facts (alias of `axis node facts`); `--hardware` / `-hw` adds detailed hardware specifications and live load |
 | `axis status` | Cluster snapshot; cache-first, prints source and age; `--live`, `--cached-only` |
 | `axis task` | `place`, `context`, `run` |
 | `axis placement explain` | Per-node placement breakdown |

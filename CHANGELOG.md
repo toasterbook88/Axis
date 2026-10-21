@@ -11,11 +11,29 @@
   no longer blocks on model probes or MCP connections and opens even with no
   model available.
   `axis tui` still opens the dashboard.
+* Organized local facts and detailed `axis facts --hardware` / `-hw` reports
+  for Linux and macOS, with source-backed specifications, sampled load, explicit
+  unavailable readings, text/JSON/YAML output, and optional live watch mode.
 
 ### Fixes
 
 * Builds use Go 1.26.10, which fixes the `crypto/x509` standard-library
   vulnerability GO-2026-6809 reported by govulncheck on Go 1.26.9.
+* macOS storage inventory now labels nested profiler containment separately
+  from backing relationships, names provider descriptions from captured fields,
+  and reports unknown backing when no explicit device identity is present.
+
+* Hardware facts suppress SMART stub fields after permission or device-open
+  failures, preserve distinct macOS devices with empty interface/BSD names,
+  and restrict AMD-only GPU sysfs telemetry to AMD devices.
+
+* Local facts label logical CPUs correctly and avoid duplicate Ollama tools.
+  Hardware collection rejects malformed/non-finite telemetry, retains counter
+  precision, records per-source sampling windows, refreshes live link fields,
+  reports missing devices and permission failures, validates Mac device parents,
+  and bounds subprocess output and inherited-pipe waits. Regression fixtures
+  and native-parser fuzz coverage guard these cases.
+
 * Placement excludes nodes that cannot cover guarded execution's reservation
   request before ranking. Placement and explanation output share exclusion
   reasons; execution retains its dispatch-time checks and ledger authority.
@@ -24,6 +42,12 @@
   that answers `/props` with 401/403, is reported from `/health` alone, with
   an `auth` provenance entry instead of a context window or served name.
   Previously every fact sweep produced two rejected requests per keyed server.
+
+### Tests & housekeeping
+
+* Add the fuller recorded macOS storage fixture and harden the fail-first
+  parent contract regression against wrong names, dropped provider metadata,
+  and parent-label changes outside Storage. The parser now satisfies this contract.
 
 ## v0.19.6 (2026-10-15)
 
