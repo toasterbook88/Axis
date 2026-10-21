@@ -412,8 +412,9 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) error {
 		// Snapshot backend and trust class once per model round so
 		// compaction, evidence selection and the stream all use the same
 		// pair even if SetBackend swaps mid-round. A swap applies from the
-		// next round, which may be inside the same operator prompt. Re-reading would let local-only evidence (chosen for
-		// a local class) be streamed to a newly installed remote backend.
+		// next round, which may be inside the same operator prompt. Re-reading
+		// would let local-only evidence (chosen for a local class) be streamed
+		// to a newly installed remote backend.
 		backend, class := a.backendAndClass()
 		// Proactively compress older conversation turns before sending context
 		// to the model, so long sessions stay within the token budget.
