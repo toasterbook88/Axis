@@ -40,6 +40,10 @@ type agentStartupBackendParams struct {
 	In                    *os.File
 	Out                   io.Writer
 	ErrOut                io.Writer
+	// HideRoutingTrace keeps per-call routing traces off ErrOut. The console
+	// reads ErrOut once at startup, so a session-long trace writer there would
+	// be a buffer nobody reads, written by concurrent subagent calls.
+	HideRoutingTrace bool
 }
 
 // agentStartupBackendResult returns the resolved active target, backend, and choices catalog.
@@ -137,7 +141,11 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 			if berr == nil {
 				rb := agent.NewRoutingBackend(backend, cheapBackend, nil)
 				if p.Verbose {
-					rb.SetVerbose(p.ErrOut)
+					if p.HideRoutingTrace {
+						fmt.Fprintln(p.ErrOut, "Routing traces are not shown in the console; use --plain to see them.")
+					} else {
+						rb.SetVerbose(p.ErrOut)
+					}
 					fmt.Fprintf(p.ErrOut, "Multi-model routing: primary=%q cheap=%q\n", activeTarget.Model, cheapTarget.Model)
 				}
 				backend = rb

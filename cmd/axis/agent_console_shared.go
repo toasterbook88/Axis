@@ -264,8 +264,10 @@ func agentToolRuntime(rt *runtimectx.Context, loader func(context.Context) (*run
 
 // loadRuntimeBounded runs loader under a deadline. The loader runs in its own
 // goroutine so a loader that ignores its context still cannot hold the caller
-// past wait; that goroutine exits when the loader returns (the result channel
-// is buffered), and a loader panic becomes an error.
+// past wait plus consoleRuntimePartialGrace; that goroutine exits when the
+// loader returns (the result channel is buffered), and a loader panic becomes
+// an error. A loader that honours its context (LoadLive returns the nodes it
+// reached) gets the grace to hand back that partial result instead of nothing.
 func loadRuntimeBounded(ctx context.Context, loader func(context.Context) (*runtimectx.Context, error), wait time.Duration) (*runtimectx.Context, error) {
 	if loader == nil {
 		return nil, errors.New("no runtime loader")
@@ -291,6 +293,17 @@ func loadRuntimeBounded(ctx context.Context, loader func(context.Context) (*runt
 		return r.rt, r.err
 	case <-lctx.Done():
 		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		grace := time.NewTimer(consoleRuntimePartialGrace)
+		defer grace.Stop()
+		select {
+		case r := <-ch:
+			if r.rt != nil {
+				return r.rt, r.err
+			}
+		case <-grace.C:
+		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("timed out after %s", wait)

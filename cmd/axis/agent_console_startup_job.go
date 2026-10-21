@@ -388,6 +388,7 @@ func (j *consoleStartupJob) resolveModel(ctx context.Context, a *agent.Agent, rt
 		Ctx:                   withStartupTunnelInstaller(ctx, j.launcher.startupTunnelInstall(gen)),
 		Out:                   &notes,
 		ErrOut:                &notes,
+		HideRoutingTrace:      true,
 	})
 	if j.stopped(ctx) {
 		return // the program exited during resolution: bind nothing

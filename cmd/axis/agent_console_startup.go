@@ -30,9 +30,12 @@ import (
 
 // Startup bounds. Model resolution keeps its own internal timeouts.
 const (
-	consoleRuntimeLoadTimeout  = 5 * time.Second
-	consoleMCPConnectTimeout   = 10 * time.Second
-	consoleStartupShutdownWait = 3 * time.Second
+	consoleRuntimeLoadTimeout = 5 * time.Second
+	// consoleLiveRuntimeLoadTimeout bounds the --live SSH sweep. Nodes are
+	// probed in parallel, each under its own timeout_sec (default 10s).
+	consoleLiveRuntimeLoadTimeout = 30 * time.Second
+	consoleMCPConnectTimeout      = 10 * time.Second
+	consoleStartupShutdownWait    = 3 * time.Second
 	// consoleGitBranchTimeout bounds the cwd line's branch lookup.
 	consoleGitBranchTimeout = 2 * time.Second
 )
@@ -62,9 +65,13 @@ var (
 	consoleConnectMCPFn = func(ctx context.Context, reg *mcpclient.Registry, cfg *config.Config) {
 		reg.ConnectAll(ctx, cfg)
 	}
-	consoleCloseMCPFn             = (*mcpclient.Registry).Close
-	consoleGitBranchFn            = gitCurrentBranch
-	consoleRuntimeLoadWait        = consoleRuntimeLoadTimeout
+	consoleCloseMCPFn          = (*mcpclient.Registry).Close
+	consoleGitBranchFn         = gitCurrentBranch
+	consoleRuntimeLoadWait     = consoleRuntimeLoadTimeout
+	consoleLiveRuntimeLoadWait = consoleLiveRuntimeLoadTimeout
+	// consoleRuntimePartialGrace is how long a timed-out loader may still
+	// take to hand back what it gathered before the deadline.
+	consoleRuntimePartialGrace    = time.Second
 	consoleMCPConnectWait         = consoleMCPConnectTimeout
 	consoleStartupShutdownWaitFor = consoleStartupShutdownWait
 )
@@ -117,9 +124,9 @@ type consolePrelude struct {
 // choices, with its output captured instead of printed and the stdin picker
 // disabled (-s opens the in-console picker instead). On error the captured
 // lines are returned with the unchanged error, so exit codes stay as today.
-func consoleExplicitPrelude(ctx context.Context, in *agentStartupInputs, loader func(context.Context) (*runtimectx.Context, error), setup func(agentStartupBackendParams) (agentStartupBackendResult, error)) (consolePrelude, error) {
+func consoleExplicitPrelude(ctx context.Context, in *agentStartupInputs, loader func(context.Context) (*runtimectx.Context, error), wait time.Duration, setup func(agentStartupBackendParams) (agentStartupBackendResult, error)) (consolePrelude, error) {
 	var notes bytes.Buffer
-	rt, rtErr := loadRuntimeBounded(ctx, loader, consoleRuntimeLoadWait)
+	rt, rtErr := loadRuntimeBounded(ctx, loader, wait)
 	if rtErr != nil {
 		fmt.Fprintf(&notes, "Could not load cluster context: %v\n", rtErr)
 	}
@@ -155,6 +162,7 @@ func consoleExplicitPrelude(ctx context.Context, in *agentStartupInputs, loader 
 		Ctx:                   ctx,
 		Out:                   &notes,
 		ErrOut:                &notes,
+		HideRoutingTrace:      true,
 	})
 	if err != nil {
 		return fail(err)
@@ -198,15 +206,21 @@ func consoleCwd() string {
 	return cwd
 }
 
+// consoleRuntimeSource picks the cluster-context loader and its bound: the
+// cached snapshot is quick, a --live sweep gets the longer live bound.
+func consoleRuntimeSource(live bool) (func(context.Context) (*runtimectx.Context, error), time.Duration) {
+	if live {
+		return runtimectx.LoadLive, consoleLiveRuntimeLoadWait
+	}
+	return loadAgentShellRuntime, consoleRuntimeLoadWait
+}
+
 // runAgentConsoleStartup runs the console path of `axis agent`: it paints the
 // start screen first and finishes startup in a background job. It returns the
 // bound agent (nil if startup never got that far) so the caller's session
 // summary still works. Nothing is written to errW before the program runs.
 func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.Writer) (*agent.Agent, error) {
-	loader := loadAgentShellRuntime
-	if in.live {
-		loader = runtimectx.LoadLive
-	}
+	loader, runtimeWait := consoleRuntimeSource(in.live)
 	job := &consoleStartupJob{
 		in:           in,
 		loader:       loader,
@@ -214,7 +228,7 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 		connectMCP:   consoleConnectMCPFn,
 		closeMCP:     consoleCloseMCPFn,
 		branch:       consoleGitBranchFn,
-		runtimeWait:  consoleRuntimeLoadWait,
+		runtimeWait:  runtimeWait,
 		mcpWait:      consoleMCPConnectWait,
 		historyPath:  chat.PersistPath("agent"),
 		cwd:          consoleCwd(),
@@ -227,7 +241,7 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	}
 
 	if hasExplicitModelFlags(in) {
-		p, err := consoleExplicitPrelude(ctx, &job.in, loader, job.setup)
+		p, err := consoleExplicitPrelude(ctx, &job.in, loader, runtimeWait, job.setup)
 		if err != nil {
 			// No program was started: the captured lines go where they
 			// always went, ahead of the unchanged error.
@@ -243,6 +257,7 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	l := newStartupConsoleLauncher(in.timeout, time.Now)
 	l.loader = loader
 	fleet := newConsoleFleet(ctx, loader)
+	fleet.wait = runtimeWait
 	job.launcher, job.fleet = l, fleet
 
 	opts := consoleBaseOptions(ctx, l, fleet, consoleInitialHistory(nil))
@@ -283,7 +298,9 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	if runErr != nil {
 		return a, fmt.Errorf("console: %w", runErr)
 	}
-	if a != nil && job.historyPath != "" {
+	// An unused session must not overwrite the saved history with an empty
+	// one; the plain REPL has the same guard.
+	if a != nil && job.historyPath != "" && a.Conversation().HistoryCount() > 0 {
 		_ = saveAgentConversation(a.Conversation(), job.historyPath, errW)
 	}
 	return a, nil
