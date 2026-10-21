@@ -438,50 +438,15 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		msgs := a.conv.Messages()
 		toolDefs := a.tools.Defs()
 
-		// Clone msgs list and dynamically merge evidence into the first system message.
 		clonedMsgs := make([]chat.Message, len(msgs))
 		copy(clonedMsgs, msgs)
 
-		evidence := a.retrieveEvidence(userPrompt, class)
-		if evidence != "" {
-			systemMsgIdx := -1
-			for i, m := range clonedMsgs {
-				if m.Role == chat.RoleSystem {
-					systemMsgIdx = i
-					break
-				}
-			}
-			if systemMsgIdx >= 0 {
-				if clonedMsgs[systemMsgIdx].Content != "" {
-					clonedMsgs[systemMsgIdx].Content += "\n\n" + evidence
-				} else {
-					clonedMsgs[systemMsgIdx].Content = evidence
-				}
-			} else {
-				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: evidence}}, clonedMsgs...)
-			}
-		}
-		// Inject a live cluster snapshot so the agent continuously knows node
-		// health, free memory, and resident models — and can adapt placement
-		// mid-task (e.g. reroute when a node hits memory pressure).
-		if clusterCtx := a.clusterContextSnippet(); clusterCtx != "" {
-			systemMsgIdx := -1
-			for i, m := range clonedMsgs {
-				if m.Role == chat.RoleSystem {
-					systemMsgIdx = i
-					break
-				}
-			}
-			if systemMsgIdx >= 0 {
-				if clonedMsgs[systemMsgIdx].Content != "" {
-					clonedMsgs[systemMsgIdx].Content += "\n\n" + clusterCtx
-				} else {
-					clonedMsgs[systemMsgIdx].Content = clusterCtx
-				}
-			} else {
-				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: clusterCtx}}, clonedMsgs...)
-			}
-		}
+		// Per-turn context: prompt evidence and a live cluster snapshot (node
+		// health, free memory, resident models) so the agent can adapt
+		// placement mid-task. Both change between runs, so they are placed
+		// with the newest user message, not in the system prompt. See
+		// turn_context.go for why.
+		turnContext := []string{a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
 
 		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
 
@@ -498,6 +463,8 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 			}
 			clonedMsgs = append(clonedMsgs[:insert], append([]chat.Message{{Role: chat.RoleUser, Content: userPrompt}}, clonedMsgs[insert:]...)...)
 		}
+
+		clonedMsgs = injectTurnContext(clonedMsgs, turnContext...)
 
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
