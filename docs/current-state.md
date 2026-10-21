@@ -97,6 +97,7 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
+| `axis` (no arguments) | Open the agent on an interactive terminal | Uses the start screen and bounded background startup with default flags; piped and non-TTY invocations print help. `axis tui` opens the dashboard |
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
 | `axis status` | Collect cluster snapshot | Cache-first inside the 5-minute daemon publication window; prints source and age; `--live` sweeps; `--format json\|yaml` includes source and age; `--cached-only` fails closed when missing or stale |

@@ -239,8 +239,10 @@ axis daemon status
 | `axis daemon` | `status`, `refresh`, `invalidate`, `restart`, `service install\|status\|uninstall` |
 | `axis serve` | Local HTTP API (foreground; Unix socket by default) |
 | `axis mesh` | Gossip mesh diagnostics: `status`, `peers` |
-| `axis tui` | Full-screen cluster dashboard (also bare `axis` on a TTY) |
+| `axis tui` | Full-screen cluster dashboard |
 | `axis update` | Self-update from GitHub Releases |
+
+On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, it prints help.
 
 </details>
 

@@ -16,7 +16,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/agent"
-	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/console"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 	"github.com/toasterbook88/axis/internal/persist"
@@ -77,6 +76,20 @@ type consoleLauncher struct {
 	cancels  map[console.TurnID]context.CancelFunc
 	inFlight int
 
+	// pending is true on the startup path until bind attaches the agent;
+	// agent is the bound agent. Both, and every agent-derived field above,
+	// are written by bind under mu and read through bound().
+	pending bool
+	agent   *agent.Agent
+	// startErr is why startup failed before bind; pending stays true for
+	// good and every submit reports this instead of "still starting".
+	startErr error
+
+	// modelMu serializes model changes; modelGen counts operator /model
+	// switches so a slower startup resolution can tell it was overtaken.
+	modelMu  sync.Mutex
+	modelGen uint64
+
 	// prog is the running program. Set before the first turn is submitted.
 	prog interface{ Send(tea.Msg) }
 
@@ -101,23 +114,27 @@ func newConsoleLauncher(run consoleRunner, timeout time.Duration, now func() tim
 // to its own bridge and writer and can never be misattributed.
 func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 	return func(turn console.TurnID, prompt string) tea.Cmd {
+		b, ok := l.bound()
+		if !ok {
+			return l.notReady(turn)
+		}
 		if prompt == "/model" || prompt == "/models" {
-			return l.runModelPicker(parent, turn)
+			return l.runModelPicker(parent, turn, b)
 		}
 		if prompt == "/skills" {
-			return l.runSkillPicker(parent, turn)
+			return l.runSkillPicker(parent, turn, b)
 		}
 		if prompt == "/mcp" {
-			return l.runMCPPicker(parent, turn)
+			return l.runMCPPicker(parent, turn, b)
 		}
 		if strings.HasPrefix(prompt, "/") {
-			return l.runSlash(turn, prompt)
+			return l.runSlash(turn, prompt, b)
 		}
 		if prompt == "?" {
-			return l.runSlash(turn, "/help")
+			return l.runSlash(turn, "/help", b)
 		}
 		if strings.HasPrefix(prompt, "!") {
-			return l.runShell(parent, turn, strings.TrimPrefix(prompt, "!"))
+			return l.runShell(parent, turn, strings.TrimPrefix(prompt, "!"), b)
 		}
 
 		ctx, cancel := context.WithTimeout(parent, l.timeout)
@@ -151,7 +168,7 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 			bridge.SetEvidence(l.evidence)
 			defer writer.Close()
 
-			err := l.run(ctx, prompt, bridge, writer)
+			err := b.run(ctx, prompt, bridge, writer)
 
 			// Flush the tail before the completion lands so no streamed text
 			// arrives after the turn is reported done.
@@ -163,12 +180,12 @@ func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 
 // runSlash routes a slash command through the existing REPL handler. The
 // console does not parse commands itself.
-func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
+func (l *consoleLauncher) runSlash(turn console.TurnID, line string, b launcherBound) tea.Cmd {
 	return func() tea.Msg {
-		if l.slash == nil {
+		if b.slash == nil {
 			return console.TurnDoneMsg{Turn: turn, Err: errors.New("slash commands are not available in this console")}
 		}
-		out, err := l.slash(line)
+		out, err := b.slash(line)
 		if l.prog != nil {
 			if out != "" {
 				l.prog.Send(console.EntryMsg{Turn: turn, Entry: console.NewNoticeEntry(l.now(), strings.TrimSpace(out))})
@@ -202,7 +219,7 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string) tea.Cmd {
 // turn is. Captured output is capped to agent.MaxShellOutputRunes like every
 // other shell execution surface, so a verbose command cannot flood the
 // transcript.
-func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string) tea.Cmd {
+func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, cmdLine string, b launcherBound) tea.Cmd {
 	cmdLine = strings.TrimSpace(cmdLine)
 	ctx, cancel := context.WithTimeout(parent, l.timeout)
 
@@ -224,7 +241,7 @@ func (l *consoleLauncher) runShell(parent context.Context, turn console.TurnID, 
 			return console.TurnDoneMsg{Turn: turn, Err: errors.New("empty shell command")}
 		}
 
-		gate := l.safety
+		gate := b.safety
 		if gate == nil {
 			gate = agent.DefaultSafetyGate(nil)
 		}
@@ -348,7 +365,7 @@ func consoleFooterUsage(a *agent.Agent) (in, out, turns int) {
 // switches inference targets, it executes nothing. Unlike approvals there is
 // no timeout — the picker is operator-initiated, owns the keyboard while
 // open, and Esc dismisses without a switch.
-func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.TurnID, b launcherBound) tea.Cmd {
 	// Child context registered exactly like every other turn (runShell): an
 	// Esc during the keyboard-free catalog window must reach this Cmd, and
 	// the deferred cleanup clears the registration. On cancellation the
@@ -424,11 +441,11 @@ func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.Tu
 		if err != nil {
 			return console.TurnDoneMsg{Turn: turn, Err: err}
 		}
-		if l.modelSwitch == nil {
+		if b.modelSwitch == nil {
 			return console.TurnDoneMsg{Turn: turn, Err: errors.New("model switching is not available in this console")}
 		}
 		nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
-		if err := l.modelSwitch(chosen, nw); err != nil {
+		if err := b.modelSwitch(chosen, nw); err != nil {
 			return console.TurnDoneMsg{Turn: turn, Err: err}
 		}
 		return console.TurnDoneMsg{Turn: turn, Err: nil}
@@ -438,7 +455,7 @@ func (l *consoleLauncher) runModelPicker(parent context.Context, turn console.Tu
 // runSkillPicker opens the learned-skill picker for arg-less /skills.
 // The selection runs the skill's command as the next agent prompt through
 // skillEffect — the same effect the REPL selector produces.
-func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.TurnID, b launcherBound) tea.Cmd {
 	// Child context registered exactly like every other turn (runShell,
 	// runModelPicker): an Esc during the keyboard-free catalog window must
 	// reach this Cmd, and the deferred cleanup clears the registration.
@@ -470,7 +487,7 @@ func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.Tu
 			})
 			return console.TurnDoneMsg{Turn: turn, Err: nil}
 		}
-		if l.skillEffect == nil {
+		if b.skillEffect == nil {
 			return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("skill execution is not available in this console")}
 		}
 
@@ -513,7 +530,7 @@ func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.Tu
 		}
 		nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
 		fmt.Fprintf(nw, "Running skill command: %s\n", command)
-		if err := l.skillEffect(ctx, turn, command, nw); err != nil {
+		if err := b.skillEffect(ctx, turn, command, nw); err != nil {
 			return console.TurnDoneMsg{Turn: turn, Err: err}
 		}
 		return console.TurnDoneMsg{Turn: turn, Err: nil}
@@ -522,7 +539,7 @@ func (l *consoleLauncher) runSkillPicker(parent context.Context, turn console.Tu
 
 // runMCPPicker drives the staged /mcp explorer: server menu → action menu →
 // committed listing → action menu again ("Back" returns to the server menu).
-func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.TurnID) tea.Cmd {
+func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.TurnID, b launcherBound) tea.Cmd {
 	// Child context registered exactly like every other turn: an Esc during
 	// the keyboard-free menu window must reach this Cmd.
 	ctx, cancel := context.WithCancel(parent)
@@ -542,11 +559,11 @@ func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.Turn
 		}()
 
 		for {
-			if l.mcpRegistry == nil || l.mcpAction == nil {
+			if b.mcpRegistry == nil || b.mcpAction == nil {
 				return console.TurnDoneMsg{Turn: turn, Err: fmt.Errorf("MCP picker is not available in this console")}
 			}
 
-			servers := mcpServerChoices(l.mcpRegistry())
+			servers := mcpServerChoices(b.mcpRegistry())
 			if len(servers) == 0 {
 				l.prog.Send(console.EntryMsg{
 					Turn:  turn,
@@ -578,7 +595,7 @@ func (l *consoleLauncher) runMCPPicker(parent context.Context, turn console.Turn
 					break
 				}
 				nw := &modelNoticeWriter{prog: l.prog, turn: turn, now: l.now}
-				l.mcpAction(serverID, actionID, nw)
+				b.mcpAction(serverID, actionID, nw)
 			}
 		}
 	}
@@ -842,219 +859,15 @@ func runAgentConsole(
 	if len(optionalLoader) > 0 && optionalLoader[0] != nil {
 		loader = optionalLoader[0]
 	}
-	launcher := newConsoleLauncher(a.RunWithSinks, timeout, time.Now)
-	launcher.slash = consoleSlashRunner(a, mcpReg, target, loader)
-	if a != nil {
-		launcher.safety = a.SafetyGate()
-	}
+	launcher := newConsoleLauncher(nil, timeout, time.Now)
 	launcher.loader = loader
-	launcher.activeTarget = target
-	launcher.modelSwitch = consoleModelSwitch(a, loader, target)
-	launcher.skillEffect = func(ctx context.Context, turn console.TurnID, command string, out io.Writer) error {
-		if a == nil {
-			return fmt.Errorf("agent is not available in this console")
-		}
-		ctx2, cancel := agentRequestContext(ctx, timeout)
-		defer cancel()
-		return a.RunWithSinks(ctx2, command, nil, out)
-	}
-	if mcpReg != nil {
-		launcher.mcpRegistry = func() *mcpclient.Registry { return mcpReg }
-		launcher.mcpAction = func(server, action string, out io.Writer) {
-			sc := mcpReg.Get(server)
-			if sc == nil {
-				fmt.Fprintf(out, "Server %q is no longer connected.\n", server)
-				return
-			}
-			switch action {
-			case "tools":
-				slashMCPListTools(out, sc)
-			case "resources":
-				slashMCPListResources(out, sc)
-			case "diagnostics":
-				slashMCPDiagnostics(out, sc)
-			default:
-				fmt.Fprintf(out, "Unknown MCP action %q.\n", action)
-			}
-		}
-	}
+	launcher.bind(a, mcpReg, target)
 
-	var initialHistory []string
-	if a != nil && a.Conversation() != nil {
-		for _, msg := range a.Conversation().Messages() {
-			if msg.Role == chat.RoleUser && strings.TrimSpace(msg.Content) != "" {
-				initialHistory = append(initialHistory, msg.Content)
-			}
-		}
-	}
-	// Persisted prompt history follows the conversation seed, in file
-	// order. Consecutive duplicates collapse (a resumed conversation and
-	// the file overlap; a cancelled queue restore that gets resubmitted
-	// also re-lands), matching the editor ring's own dedupe at submit.
-	seeded := append(initialHistory, loadConsoleHistory(consoleHistoryPath(), 100)...)
-	initialHistory = initialHistory[:0]
-	for _, h := range seeded {
-		if len(initialHistory) > 0 && initialHistory[len(initialHistory)-1] == h {
-			continue
-		}
-		initialHistory = append(initialHistory, h)
-	}
-	trimConsoleHistory(consoleHistoryPath(), 500)
-
-	// One shared, mutex-guarded fleet snapshot feeds both the footer's
-	// gauge and the @ completion candidates. The snapshot is primed once
-	// at console start (so @ completion is not empty before the first
-	// footer tick) and refreshed from the footer's Fleet closure ≤5s;
-	// AtCandidates is lock-and-copy only — no I/O on a keystroke.
-	type fleetSnapshot struct {
-		checkedAt time.Time
-		summary   string
-		nodes     []string
-		pubID     string
-		source    string
-		assembled time.Time
-	}
-	var fleet fleetSnapshot
-	var fleetMu sync.Mutex
-
-	// refreshFleetLocked loads the runtime snapshot and fills summary+nodes.
-	// Caller must hold fleetMu.
-	refreshFleetLocked := func() {
-		fleet.checkedAt = time.Now()
-		rctx, err := loader(ctx)
-		if err == nil && rctx != nil && rctx.Snapshot != nil {
-			if rctx.Snapshot.Publication != nil {
-				fleet.pubID = rctx.Snapshot.Publication.ID
-				fleet.source = rctx.Snapshot.Publication.Source
-				fleet.assembled = rctx.Snapshot.Publication.AssembledAt
-			}
-			if fleet.assembled.IsZero() {
-				fleet.assembled = rctx.Snapshot.Timestamp
-			}
-			s := rctx.Snapshot.Summary
-			if s.TotalNodes > 0 {
-				if s.ReachableNodes == s.TotalNodes {
-					fleet.summary = fmt.Sprintf("%d/%d ok", s.ReachableNodes, s.TotalNodes)
-				} else {
-					fleet.summary = fmt.Sprintf("%d/%d ok (%d unreach)", s.ReachableNodes, s.TotalNodes, s.TotalNodes-s.ReachableNodes)
-				}
-			} else {
-				fleet.summary = "local"
-			}
-			nodes := make([]string, 0, len(rctx.Snapshot.Nodes))
-			for _, n := range rctx.Snapshot.Nodes {
-				if n.Name != "" {
-					nodes = append(nodes, n.Name)
-				}
-			}
-			fleet.nodes = nodes
-		} else {
-			fleet.summary = "unknown"
-			fleet.pubID = ""
-			fleet.source = ""
-			fleet.assembled = time.Time{}
-		}
-	}
-
-	// Prime at start so AtCandidates is populated before the first footer refresh.
-	fleetMu.Lock()
-	refreshFleetLocked()
-	fleetMu.Unlock()
-	launcher.evidence = func(name string) (string, string) {
-		switch name {
-		case "axis_status", "axis_facts", "axis_place":
-		default:
-			return "", ""
-		}
-		fleetMu.Lock()
-		defer fleetMu.Unlock()
-		intent := map[string]string{
-			"axis_status": "cluster status",
-			"axis_facts":  "local facts",
-			"axis_place":  "placement",
-		}[name]
-		return toolEvidenceBadge(fleet.source, fleet.pubID), intent
-	}
-
-	footer := console.NewStatusFooter(console.StatusFooterConfig{
-		Model: func() string { return consoleFooterModel(a, target) },
-		UsedTokens: func() int {
-			if a != nil {
-				return a.ContextTokens()
-			}
-			return 0
-		},
-		MaxTokens: func() int {
-			if a != nil {
-				return a.MaxTokens()
-			}
-			return 32768
-		},
-		// Same source /usage prefers: real in/out when the backend reported
-		// at least one turn; omitted from the footer otherwise.
-		UsageStats: func() (int, int, int) {
-			return consoleFooterUsage(a)
-		},
-		Mode: func() string {
-			if a != nil {
-				return agent.DisplayScope(a.Autonomy())
-			}
-			return "default"
-		},
-		Snapshot: func() string {
-			fleetMu.Lock()
-			defer fleetMu.Unlock()
-			if time.Since(fleet.checkedAt) >= 5*time.Second {
-				refreshFleetLocked()
-			}
-			if fleet.pubID != "" {
-				return "snap " + fleet.pubID
-			}
-			if !fleet.assembled.IsZero() {
-				return "snap " + fleet.assembled.UTC().Format("15:04Z")
-			}
-			return "no snapshot"
-		},
-	})
-
-	promptHistoryPath := consoleHistoryPath()
-	model := console.NewModel(console.Options{
-		Submit: launcher.submit(ctx),
-		Cancel: launcher.cancel,
-		Footer: footer,
-		Mode: func() string {
-			if a != nil {
-				return agent.DisplayScope(a.Autonomy())
-			}
-			return "default"
-		},
-		History: initialHistory,
-		// Same source the footer's context gauge reads (a.ContextTokens).
-		TokenEstimate: func() int {
-			if a != nil {
-				return a.ContextTokens()
-			}
-			return 0
-		},
-		// /usage prefers the backend-reported per-turn totals.
-		UsageStats: func() (int, int, int) {
-			if a == nil {
-				return 0, 0, 0
-			}
-			return a.UsageStats()
-		},
-		HistorySink: func(text string) tea.Cmd {
-			return appendConsoleHistory(promptHistoryPath, text)
-		},
-		// @ completion candidates: node names from the shared fleet
-		// snapshot (primed at start, refreshed from footer ≤5s). Pure
-		// lock-and-copy — never runs the loader on a keystroke.
-		AtCandidates: func() []string {
-			fleetMu.Lock()
-			defer fleetMu.Unlock()
-			return append([]string(nil), fleet.nodes...)
-		},
-	})
+	// This path already loaded the runtime before the console, so the fleet
+	// snapshot is primed now: @ completion is populated from the first key.
+	fleet := newConsoleFleet(ctx, loader)
+	fleet.refresh()
+	model := console.NewModel(consoleBaseOptions(ctx, launcher, fleet, consoleInitialHistory(a)))
 
 	prog := tea.NewProgram(model, consoleOptions(ctx).teaOptions()...)
 	launcher.prog = prog

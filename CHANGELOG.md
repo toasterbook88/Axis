@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Features
+
+* Bare `axis` on a terminal now opens `axis agent` with a new start screen
+  (responsive logo, tips, live startup status); with default flags, startup
+  no longer blocks on model probes or MCP connections and opens even with no
+  model available.
+  `axis tui` still opens the dashboard.
+
 ### Fixes
 
 * Builds use Go 1.26.10, which fixes the `crypto/x509` standard-library
