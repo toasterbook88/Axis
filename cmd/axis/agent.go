@@ -220,6 +220,10 @@ func agentCmd() *cobra.Command {
 				endpoint = chat.DefaultEndpoint
 			}
 
+			sessionLog := openAgentSessionLog(activeTarget, resume, func(msg string) {
+				fmt.Fprintf(errW, "warning: %s\n", msg)
+			})
+
 			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
 				Model:                   activeTarget.Model,
@@ -241,6 +245,7 @@ func agentCmd() *cobra.Command {
 				Output:                  w,
 				MCPRegistry:             mcpReg,
 				RuntimeLoader:           loader,
+				SessionLog:              sessionLog,
 			})
 
 			a = agent.New(cfg)
@@ -522,6 +527,7 @@ type agentSessionParams struct {
 	Confirm                 agent.ConfirmFunc
 	MCPRegistry             *mcpclient.Registry
 	RuntimeLoader           func(context.Context) (*runtimectx.Context, error)
+	SessionLog              *agent.DailySessionLog
 }
 
 // buildAgentSessionConfig assembles agent.Config for axis agent sessions.
@@ -557,6 +563,7 @@ func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 		},
 		RunTask:     guardedAgentTaskRunner(),
 		MCPRegistry: p.MCPRegistry,
+		SessionLog:  p.SessionLog,
 	}
 }
 
