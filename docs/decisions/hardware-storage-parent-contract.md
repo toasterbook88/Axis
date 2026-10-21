@@ -67,8 +67,11 @@ these directly observed containment relationships:
 The old parser emits four generic `SPStorageDataType` records and labels those
 volume IDs as their `parent`. The fixture regression locks the four input
 records and volume associations; it must not permanently require that incorrect
-parser output. The contract regression instead requires meaningful names,
-`profiler parent` containment, and unavailable volume `parent` readings.
+parser output. The contract regression ties each parsed name and retained
+provider field back to its expected containing volume, requires
+`profiler parent` containment, and checks unavailable volume `parent` readings.
+A separate nested Sensors case requires the existing non-storage `parent`
+label, so the storage vocabulary stays scoped to Storage.
 
 The earlier reduced `mac-profiler.json` omits all four nested maps, so it cannot
 cover this regression. Keep the fuller capture alongside it. These are recorded

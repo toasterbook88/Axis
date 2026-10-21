@@ -8,9 +8,6 @@
 
 ### Fixes
 
-* Add the fuller recorded macOS storage fixture and a fail-first parent
-  relationship contract regression. Parser implementation is pending.
-
 * Hardware facts suppress SMART stub fields after permission or device-open
   failures, preserve distinct macOS devices with empty interface/BSD names,
   and restrict AMD-only GPU sysfs telemetry to AMD devices.
@@ -25,6 +22,12 @@
 * Placement excludes nodes that cannot cover guarded execution's reservation
   request before ranking. Placement and explanation output share exclusion
   reasons; execution retains its dispatch-time checks and ledger authority.
+
+### Tests & housekeeping
+
+* Add the fuller recorded macOS storage fixture and harden the fail-first
+  parent contract regression against wrong names, dropped provider metadata,
+  and parent-label changes outside Storage. Parser implementation is pending.
 
 ## v0.19.6 (2026-10-15)
 

@@ -56,7 +56,7 @@ func TestHardwareLargeCountersPreserveSingleByteDelta(t *testing.T) {
 func TestMacHardwareInventoryParentsExistAndNeverSelfReference(t *testing.T) {
 	c := testHardwareCollector()
 	r := testHardwareReport()
-	err := c.parseMacHardwareInventory([]byte(`{"SPPowerDataType":[{"_name":"container","health":{"sppower_battery_health":"Good"},"model":{"manufacturer":"Example"}}],"SPMemoryDataType":[{"_items":[{"_name":"DIMM0","dimm_size":"8 GB"}]}]}`), r)
+	err := c.parseMacHardwareInventory([]byte(`{"SPPowerDataType":[{"_name":"Battery","sppower_battery_cycle_count":"5","health":{"sppower_battery_health":"Good"}}],"SPMemoryDataType":[{"_items":[{"_name":"DIMM0","dimm_size":"8 GB"}]}]}`), r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +77,35 @@ func TestMacHardwareInventoryParentsExistAndNeverSelfReference(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	// Storage gets the new profiler-parent vocabulary; nested records in other
+	// sections retain the established parent reading.
+	sensors := hardwareSection(r, "Sensors").Devices
+	devicesByID := make(map[string]models.HardwareDevice, len(sensors))
+	for _, device := range sensors {
+		devicesByID[device.ID] = device
+	}
+	if _, ok := devicesByID["SPPowerDataType-0"]; !ok {
+		t.Fatalf("battery container missing: %+v", sensors)
+	}
+	var health *models.HardwareDevice
+	for i := range sensors {
+		for _, reading := range sensors[i].Specs {
+			if reading.Name == "battery condition" {
+				health = &sensors[i]
+			}
+		}
+	}
+	if health == nil {
+		t.Fatalf("nested battery health record missing: %+v", sensors)
+	}
+	parent := findHardwareReading(t, health.Specs, "parent")
+	if parent.Value != "SPPowerDataType-0" || parent.Status != "observed" || parent.Source != "system_profiler SPPowerDataType" {
+		t.Fatalf("non-storage containment contract changed: %+v", parent)
+	}
+	if got := macHardwareReadingsNamed(health.Specs, "profiler parent"); len(got) != 0 {
+		t.Fatalf("storage-only label leaked into Sensors: %+v", got)
 	}
 }
 
