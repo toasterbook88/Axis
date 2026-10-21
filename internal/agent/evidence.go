@@ -49,7 +49,7 @@ func sanitizeAndRedactEvidence(payload string) string {
 }
 
 // clusterContextSnippet returns a compact live cluster snapshot for injection
-// into the system prompt each turn, so the agent stays aware of node health,
+// into the newest user message each round, so the agent stays aware of node health,
 // free memory, and resident models and can adapt placement mid-task.
 func (a *Agent) clusterContextSnippet() string {
 	if a.toolContext == nil {
