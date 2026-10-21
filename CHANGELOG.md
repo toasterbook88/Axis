@@ -17,6 +17,8 @@
 
 ### Fixes
 
+* Console `/exit` and `/quit` now close the session, including while startup
+  is pending, instead of silently leaving the console open.
 * Builds use Go 1.26.10, which fixes the `crypto/x509` standard-library
   vulnerability GO-2026-6809 reported by govulncheck on Go 1.26.9.
 * macOS storage inventory now labels nested profiler containment separately
