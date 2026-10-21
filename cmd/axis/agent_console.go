@@ -114,6 +114,13 @@ func newConsoleLauncher(run consoleRunner, timeout time.Duration, now func() tim
 // to its own bridge and writer and can never be misattributed.
 func (l *consoleLauncher) submit(parent context.Context) console.SubmitFunc {
 	return func(turn console.TurnID, prompt string) tea.Cmd {
+		// Session exits must work while startup is pending too. The REPL
+		// adapter returns text/errors only, so its shouldExit result cannot
+		// reach Bubble Tea; route these session commands to Quit directly.
+		fields := strings.Fields(prompt)
+		if len(fields) > 0 && (strings.EqualFold(fields[0], "/exit") || strings.EqualFold(fields[0], "/quit")) {
+			return tea.Quit
+		}
 		b, ok := l.bound()
 		if !ok {
 			return l.notReady(turn)
