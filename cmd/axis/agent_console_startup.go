@@ -256,8 +256,10 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 
 	l := newStartupConsoleLauncher(in.timeout, time.Now)
 	l.loader = loader
-	fleet := newConsoleFleet(ctx, loader)
-	fleet.wait = runtimeWait
+	// The footer refreshes every few seconds, so it always reads the cached
+	// snapshot: with --live, re-running the SSH sweep each time would load
+	// every node for a status label. Startup's live result still primes it.
+	fleet := newConsoleFleet(ctx, loadAgentShellRuntime)
 	job.launcher, job.fleet = l, fleet
 
 	opts := consoleBaseOptions(ctx, l, fleet, consoleInitialHistory(nil))
