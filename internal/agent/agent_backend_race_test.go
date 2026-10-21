@@ -15,11 +15,12 @@ import (
 // security class is reported as a data race.
 func TestSetBackendConcurrentWithReads(t *testing.T) {
 	a := New(Config{
-		Backend:     noopChatBackend{},
-		MaxTurns:    1,
-		MaxTokens:   200,
-		Output:      io.Discard,
-		ToolContext: NewToolContext(&RuntimeView{}, nil),
+		Backend:              noopChatBackend{},
+		BackendSecurityClass: BackendLocal,
+		MaxTurns:             1,
+		MaxTokens:            200,
+		Output:               io.Discard,
+		ToolContext:          NewToolContext(&RuntimeView{}, nil),
 	})
 	backends := []ChatBackend{noopChatBackend{}, &scriptedBackend{
 		responses: []chat.Message{{Role: chat.RoleAssistant, Content: "summary"}},
@@ -39,7 +40,11 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			_ = a.Backend()
-			_ = securityClassOf(a)
+			backend, class := a.backendAndClass()
+			if backend == backends[0] && class != BackendLocal || backend == backends[1] && class != BackendRemote {
+				t.Error("backend and trust class were read from different swaps")
+				return
+			}
 			_ = a.Stats()
 		}
 	}()
