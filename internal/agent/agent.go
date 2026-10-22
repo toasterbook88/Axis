@@ -60,6 +60,9 @@ type Agent struct {
 	// sessionSummary is the cluster summary taken when the agent was built.
 	// It is sent with each user message, not in the system prompt.
 	sessionSummary string
+	// now returns the local time for the per-turn date line. Nil means
+	// time.Now; tests set it.
+	now func() time.Time
 	// usageMu guards the session usage accumulator. Responses report real
 	// token counts on the returned Message (Ollama final chunk, cloud usage
 	// block); accumulateUsage totals them. Stats() reads it from the tea
@@ -82,12 +85,14 @@ type Agent struct {
 	// other Agent mutex is acquired while it is held.
 	clientMu      sync.RWMutex
 	securityClass BackendSecurityClass
-	// autoApproveAll is toggled when the operator selects "always" in confirmation.
-	autoApproveAll bool
+	// sessionApproved lists the tools the operator approved for the rest of
+	// the session ("always"). It is per tool: approving one tool, such as a
+	// read-only MCP query, must not approve shell commands or MCP writes.
+	sessionApproved map[string]bool
 	// blockAll is toggled when the operator selects "never" in confirmation.
 	blockAll    bool
 	mcpRegistry *mcpclient.Registry
-	// dispatchMu guards autoApproveAll, blockAll, and the confirm func.
+	// dispatchMu guards sessionApproved, blockAll, and the confirm func.
 	// It must not be held across a blocking confirm: the console footer
 	// calls Autonomy() on the UI goroutine, and that takes this lock.
 	// Holding it while the UI paints deadlocks the approval overlay, so
@@ -316,7 +321,7 @@ func (a *Agent) SetConfirm(fn ConfirmFunc) {
 
 // askConfirm runs the operator prompt without holding dispatchMu.
 // confirmGate keeps concurrent prompts from drawing on top of each other.
-func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
+func (a *Agent) askConfirm(ctx context.Context, tool, desc string, score int) ConfirmResult {
 	a.dispatchMu.Lock()
 	fn := a.confirm
 	a.dispatchMu.Unlock()
@@ -325,7 +330,9 @@ func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
 	}
 	a.confirmGate.Lock()
 	defer a.confirmGate.Unlock()
-	return fn(tool, desc, score)
+	result := fn(tool, desc, score)
+	a.sessionLog.noteApproval(toolCallIDFrom(ctx), tool, result)
+	return result
 }
 
 // wrapConfirm applies the active autonomy policy to a base confirm.
@@ -448,12 +455,12 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		clonedMsgs := make([]chat.Message, len(msgs))
 		copy(clonedMsgs, msgs)
 
-		// Per-turn context: prompt evidence and a live cluster snapshot (node
-		// health, free memory, resident models) so the agent can adapt
-		// placement mid-task. Both change between runs, so they are placed
-		// with the newest user message, not in the system prompt. See
-		// turn_context.go for why.
-		turnContext := []string{a.sessionSummary, a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
+		// Per-turn context: the session-start cluster summary, today's date,
+		// prompt evidence and a live cluster snapshot (node health, free
+		// memory, resident models) so the agent can adapt placement mid-task.
+		// All of them change between runs, so they are placed with the newest
+		// user message, not in the system prompt. See turn_context.go for why.
+		turnContext := []string{a.sessionSummary, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
 
 		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
 
@@ -472,6 +479,10 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		}
 
 		clonedMsgs = injectTurnContext(clonedMsgs, turnContext...)
+		// Some servers (LiteLLM) reject a request with any empty non-assistant
+		// message. Fill them on the way out so a history that already holds
+		// one (an older session, a resumed file) still works.
+		clonedMsgs = fillEmptyContent(clonedMsgs)
 
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
@@ -563,7 +574,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 				a.conv.Append(chat.Message{
 					Role:       chat.RoleTool,
 					ToolCallID: tc.ID,
-					Content:    results[i].result,
+					Content:    toolResultContent(results[i].result),
 				})
 			}
 		}

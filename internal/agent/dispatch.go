@@ -97,6 +97,9 @@ func formatToolResultSummary(toolName, result string) string {
 	return fmt.Sprintf("%s returned %d chars", toolName, len(result))
 }
 
+// unratedMCPWhy is the approval reason shown for external MCP tools.
+const unratedMCPWhy = "external MCP tool, not rated by AXIS; it may change shared state"
+
 func withSafetyWhy(reason, desc string) string {
 	reason = strings.TrimSpace(reason)
 	if reason == "" || strings.Contains(desc, "safety why:") {
@@ -107,6 +110,9 @@ func withSafetyWhy(reason, desc string) string {
 
 // dispatchToolCall handles a single tool call with safety gating and confirmation.
 func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string, error) {
+	// Carry the call ID to the confirmation paths so each approval record
+	// names the call it decided, even when calls to one tool run in parallel.
+	ctx = withToolCallID(ctx, tc.ID)
 	name := tc.Function.Name
 	args := tc.Function.Arguments
 
@@ -184,20 +190,20 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 
 	// 3.5. Confirmation for mutating tools (e.g. write_file, edit_file, or mutating MCP tools).
 	// Serialized across concurrent dispatches so operator prompts never interleave
-	// and the autoApproveAll/blockAll toggles are race-free. The expensive tool
+	// and the sessionApproved/blockAll state are race-free. The expensive tool
 	// execution below runs unlocked so independent calls stay parallel.
 	if !a.ToolAutoApproved(name) {
 		a.dispatchMu.Lock()
-		approved := a.autoApproveAll
+		approved := a.sessionApproved[name]
 		blocked := a.blockAll
 		a.dispatchMu.Unlock()
+		// "Never" blocks the session even for a tool approved "always"
+		// earlier. Check it before the per-tool approval, as the shell, node
+		// and fleet paths do.
+		if blocked {
+			return "", fmt.Errorf("operator has blocked all tool execution for this session")
+		}
 		if !approved {
-			a.dispatchMu.Lock()
-			if blocked || a.blockAll {
-				a.dispatchMu.Unlock()
-				return "", fmt.Errorf("operator has blocked all tool execution for this session")
-			}
-			a.dispatchMu.Unlock()
 
 			description := fmt.Sprintf("Execute tool %s with arguments: %s", name, string(args))
 			if name == "write_file" {
@@ -241,14 +247,20 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 				}
 			}
 
-			decision := a.askConfirm(name, description, 0)
+			if strings.HasPrefix(name, "mcp_") {
+				// AXIS cannot rate an external tool. Say so, rather than let a
+				// zero score read as low risk for a tool that may change shared
+				// state (claim a task, write memory).
+				description = withSafetyWhy(unratedMCPWhy, description)
+			}
+			decision := a.askConfirm(ctx, name, description, 0)
 			a.dispatchMu.Lock()
 			switch decision {
 			case ConfirmNo:
 				a.dispatchMu.Unlock()
 				return "", fmt.Errorf("operator declined to execute tool: %s", name)
 			case ConfirmAlways:
-				a.autoApproveAll = true
+				a.approveForSession(name)
 				a.dispatchMu.Unlock()
 			case ConfirmNever:
 				a.blockAll = true
@@ -295,7 +307,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	// Confirmation (unless auto-approved or session-level always, and not safety-blocked).
 	// Serialized across concurrent dispatches.
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["run_shell"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		promptDesc := sa.Command
@@ -305,7 +317,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
-		decision := a.askConfirm("run_shell", withSafetyWhy(reason, promptDesc), safetyScore)
+		decision := a.askConfirm(ctx, "run_shell", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -316,7 +328,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 			return "", fmt.Errorf("operator declined to execute: %s", sa.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("run_shell")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:
@@ -388,14 +400,14 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 	}
 
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["run_on_node"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		promptDesc := fmt.Sprintf("[on %s] %s", a0.Node, a0.Command)
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
-		decision := a.askConfirm("run_on_node", withSafetyWhy(reason, promptDesc), safetyScore)
+		decision := a.askConfirm(ctx, "run_on_node", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -406,7 +418,7 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 			return "", fmt.Errorf("operator declined to execute on %s: %s", a0.Node, a0.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("run_on_node")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:
@@ -489,14 +501,14 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 	}
 
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["fleet_exec"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		promptDesc := fmt.Sprintf("[on %d nodes: %s] %s", len(targetNodes), strings.Join(targetNodes, ", "), a0.Command)
 		if forceConfirm {
 			promptDesc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, promptDesc)
 		}
-		decision := a.askConfirm("fleet_exec", withSafetyWhy(reason, promptDesc), safetyScore)
+		decision := a.askConfirm(ctx, "fleet_exec", withSafetyWhy(reason, promptDesc), safetyScore)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -507,7 +519,7 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 			return "", fmt.Errorf("operator declined fleet execution: %s", a0.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("fleet_exec")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:
@@ -665,7 +677,7 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 	// Confirm without holding dispatchMu: the operator overlay is the only thing
 	// this turn must wait on, and Autonomy() needs the lock to paint/mutate
 	// itself while the prompt is open. Same pattern as dispatchShell.
-	decision := a.askConfirm("axis_run_task", withSafetyWhy(prepared.Result.BlockReason, promptDesc), prepared.Result.DumbScore)
+	decision := a.askConfirm(ctx, "axis_run_task", withSafetyWhy(prepared.Result.BlockReason, promptDesc), prepared.Result.DumbScore)
 	a.dispatchMu.Lock()
 	switch decision {
 	case ConfirmNo:

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,7 @@ type ConfirmResult int
 const (
 	ConfirmYes    ConfirmResult = iota // Execute this one time
 	ConfirmNo                          // Skip this tool call
-	ConfirmAlways                      // Auto-approve all future calls this session
+	ConfirmAlways                      // Auto-approve future calls of this tool this session
 	ConfirmNever                       // Block all future calls this session
 )
 
@@ -114,4 +115,47 @@ func isReadOnlyTool(name string) bool {
 // StdinConfirm is a convenience for the common case of prompting on stdout/stdin.
 func StdinConfirm() ConfirmFunc {
 	return DefaultConfirm(os.Stdin, os.Stderr)
+}
+
+// approveForSession records an "always" answer for one tool. The caller holds
+// dispatchMu.
+func (a *Agent) approveForSession(tool string) {
+	if a.sessionApproved == nil {
+		a.sessionApproved = make(map[string]bool)
+	}
+	a.sessionApproved[tool] = true
+}
+
+// approvalSnapshot returns the confirm func, a copy of the per-tool session
+// approvals and the session block, for a sub-agent.
+func (a *Agent) approvalSnapshot() (ConfirmFunc, map[string]bool, bool) {
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+	var out map[string]bool
+	if len(a.sessionApproved) > 0 {
+		out = make(map[string]bool, len(a.sessionApproved))
+		for k, v := range a.sessionApproved {
+			out[k] = v
+		}
+	}
+	return a.confirm, out, a.blockAll
+}
+
+type toolCallIDKey struct{}
+
+// withToolCallID tags ctx with the tool call being dispatched.
+func withToolCallID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolCallIDKey{}, id)
+}
+
+// toolCallIDFrom returns the tool call ID set by withToolCallID, or "".
+func toolCallIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(toolCallIDKey{}).(string)
+	return id
 }
