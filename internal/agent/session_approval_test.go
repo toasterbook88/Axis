@@ -243,3 +243,39 @@ func TestApprovalRecordsCarryToolCallID(t *testing.T) {
 		t.Fatalf("approval records by call ID = %v", got)
 	}
 }
+
+// After "never", a sub-agent must not run tools the parent approved "always"
+// earlier. The child used to start with the parent's approvals but without
+// its block. spawn_subagent is hidden from the model today (neverTool), so
+// this guards the sub-agent path directly in case that changes.
+func TestNeverBlocksSubAgents(t *testing.T) {
+	a := newApprovalAgent(t, &recordingConfirm{})
+	a.SetConfirm(func(tool, _ string, _ int) ConfirmResult {
+		if tool == "run_shell" {
+			return ConfirmAlways
+		}
+		return ConfirmNever
+	})
+	dispatch(t, a, "run_shell", `{"command":"echo approved"}`)
+	if _, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: "mcp_srv_claim_task", Arguments: json.RawMessage(`{}`)},
+	}); err == nil {
+		t.Fatal("never answer did not refuse the tool")
+	}
+
+	_, err := a.dispatchSubagent(context.Background(), json.RawMessage(`{"prompt":"run echo"}`))
+	if err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("spawn_subagent after never: err=%v, want blocked", err)
+	}
+
+	child := a.buildChildAgent(1, "", "")
+	if !child.blockAll {
+		t.Fatal("child did not inherit the session block")
+	}
+	child.tools.SetScope(ScopeExec)
+	if _, err := child.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: "run_shell", Arguments: json.RawMessage(`{"command":"echo child"}`)},
+	}); err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("child ran a parent-approved shell command after never: err=%v", err)
+	}
+}

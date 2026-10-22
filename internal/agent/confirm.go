@@ -126,19 +126,19 @@ func (a *Agent) approveForSession(tool string) {
 	a.sessionApproved[tool] = true
 }
 
-// sessionApprovalsCopy returns a copy of the per-tool session approvals for a
-// sub-agent.
-func (a *Agent) sessionApprovalsCopy() map[string]bool {
+// approvalSnapshot returns the confirm func, a copy of the per-tool session
+// approvals and the session block, for a sub-agent.
+func (a *Agent) approvalSnapshot() (ConfirmFunc, map[string]bool, bool) {
 	a.dispatchMu.Lock()
 	defer a.dispatchMu.Unlock()
-	if len(a.sessionApproved) == 0 {
-		return nil
+	var out map[string]bool
+	if len(a.sessionApproved) > 0 {
+		out = make(map[string]bool, len(a.sessionApproved))
+		for k, v := range a.sessionApproved {
+			out[k] = v
+		}
 	}
-	out := make(map[string]bool, len(a.sessionApproved))
-	for k, v := range a.sessionApproved {
-		out[k] = v
-	}
-	return out
+	return a.confirm, out, a.blockAll
 }
 
 type toolCallIDKey struct{}
