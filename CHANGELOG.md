@@ -1,65 +1,102 @@
 ## Unreleased
 
+## v0.20.0 (2026-10-22)
+
+Twenty-one feature, fix, documentation and dependency PRs merged since v0.19.6,
+plus release preparation. See [upgrade notes](docs/release-notes.md#v0200-upgrade-guide)
+for the changed terminal entry point, private session logging and JSON contracts.
+
 ### Features
 
-* `axis agent` records private local session trajectories for development analysis,
-  with credential masking, bounded records, 30-day/1 GiB retention, process-safe
-  rotation and explicit omission warnings. No transcript is published to Cortex
-  or lifecycle events. See `docs/runbooks/agent-session-logs.md`.
-* Bare `axis` on a terminal now opens `axis agent` with a new start screen
-  (responsive logo, tips, live startup status); with default flags, startup
-  no longer blocks on model probes or MCP connections and opens even with no
-  model available.
-  `axis tui` still opens the dashboard.
-* Organized local facts and detailed `axis facts --hardware` / `-hw` reports
-  for Linux and macOS, with source-backed specifications, sampled load, explicit
-  unavailable readings, text/JSON/YAML output, and optional live watch mode.
+* **Agent front door and responsive start screen:** bare `axis` on an interactive
+  terminal opens the agent console with a responsive logo, tips and startup
+  status. With default flags, model probes and MCP connections run after first
+  paint; the console can open with no model available. `axis tui` explicitly
+  opens the dashboard; non-TTY bare invocations still print help (#537).
+* **Private bounded session trajectories:** `axis agent` records prompts,
+  assistant answers, tool calls/results, outcomes, reported usage and build/model
+  attribution locally. Owner-only files, credential masking, bounded records,
+  8 MiB rotation, 30-day/1 GiB retention and explicit omission warnings protect
+  the corpus. No transcript is published to Cortex or lifecycle events. See
+  [logging policy and limits](docs/runbooks/agent-session-logs.md) (#544).
+* **Organized hardware facts:** `axis facts --hardware` / `-hw` and
+  `axis node facts --hardware` report Linux/macOS component specifications and
+  sampled load with source, time, units and explicit unavailable reasons.
+  Text, JSON and YAML output and `--watch --interval` are supported; `-h` and
+  `--help` remain help. The collector is read-only, never invokes sudo and
+  excludes unique device identifiers (#541).
 
 ### Fixes
 
-* Console `/exit` and `/quit` now close the session, including while startup
-  is pending, instead of silently leaving the console open.
-* Builds use Go 1.26.10, which fixes the `crypto/x509` standard-library
-  vulnerability GO-2026-6809 reported by govulncheck on Go 1.26.9.
-* macOS storage inventory now labels nested profiler containment separately
-  from backing relationships, names provider descriptions from captured fields,
-  and reports unknown backing when no explicit device identity is present.
-
-* Hardware facts suppress SMART stub fields after permission or device-open
-  failures, preserve distinct macOS devices with empty interface/BSD names,
-  and restrict AMD-only GPU sysfs telemetry to AMD devices.
-
-* Local facts label logical CPUs correctly and avoid duplicate Ollama tools.
-  Hardware collection rejects malformed/non-finite telemetry, retains counter
-  precision, records per-source sampling windows, refreshes live link fields,
-  reports missing devices and permission failures, validates Mac device parents,
-  and bounds subprocess output and inherited-pipe waits. Regression fixtures
-  and native-parser fuzz coverage guard these cases.
-
-* Placement excludes nodes that cannot cover guarded execution's reservation
-  request before ranking. Placement and explanation output share exclusion
-  reasons; execution retains its dispatch-time checks and ledger authority.
-* The llama.cpp probe no longer sends keyed requests to servers that require
-  an API key. A server started with `--api-key` or `--api-key-file`, or one
-  that answers `/props` with 401/403, is reported from `/health` alone, with
-  an `auth` provenance entry instead of a context window or served name.
-  Previously every fact sweep produced two rejected requests per keyed server.
-
-### Tests & housekeeping
-
-* Add the fuller recorded macOS storage fixture and harden the fail-first
-  parent contract regression against wrong names, dropped provider metadata,
-  and parent-label changes outside Storage. The parser now satisfies this contract.
+* **Console exit:** `/exit` and `/quit` close the session both before startup
+  finishes and after readiness, rather than leaving the console open (#545).
+* **Backend switching:** a model round snapshots the backend and its security
+  class together, keeping evidence selection, compaction and streaming consistent
+  during concurrent model changes (#540).
+* **External MCP approval:** external tools require confirmation unless explicitly
+  allowlisted by exact name; provider read-only annotations do not grant approval
+  (#527).
+* **Owner-only persistence:** AXIS-created runtime directories use `0700` and
+  files use `0600`; reused legacy append/lock files and replaced atomic stores
+  have permissions tightened (#526).
+* **Guarded execution:** an unavailable, unconfigured or no-longer-live placed
+  node fails closed instead of silently dispatching elsewhere. Local Ollama and
+  llama.cpp inference endpoints receive a bounded pre-dispatch liveness check
+  (#523).
+* **Reservable placement:** nodes unable to cover the guarded reservation request
+  are excluded before ranking; placement/explanation share reasons and execution
+  retains its live checks and ledger authority (#532).
+* **Bounded discovery:** per-node collection has a default 12-second budget and
+  SSH dialing a default 5-second budget, with explicit configured overrides;
+  canceled work stops queued and follow-up probes and cannot claim completeness
+  (#524).
+* **Endpoint sweep safety and cost:** reserved non-HTTP ports are skipped;
+  default discovery is scoped to model-related listeners/configured ports, with
+  whole-sweep caching and explicit broad/disabled modes. Candidate and cached
+  evidence stay distinct from a confirmed loaded model (#528, #529).
+* **Resident model truth:** Ollama residents come from `/api/ps`, including
+  runtime-reported processor/memory/context fields, rather than parsing the
+  human-oriented CLI table (#530).
+* **Keyed llama.cpp probes:** an explicit API-key argument or `/props` 401/403
+  suppresses keyed metadata requests; public health and auth provenance remain,
+  without inventing a served name or context window (#535).
+* **Hardware truth and robustness:** SMART permission/device-open stub JSON cannot
+  become observed failing health; AMD-only sysfs probes run only for AMD GPUs;
+  empty macOS BSD/interface names retain distinct IDs. Malformed/non-finite
+  telemetry is rejected, counter precision and sampling windows retained,
+  live links refreshed, missing devices/permission failures surfaced, and
+  subprocess output/inherited-pipe waits bounded. Logical CPU labeling and
+  duplicate Ollama tool output are corrected (#541).
+* **macOS storage relationships:** captured provider descriptions retain selected
+  metadata and meaningful names. `profiler parent` describes JSON containment;
+  a volume's `parent` is unavailable unless an explicit backing identity supports
+  it. Profiler nesting alone cannot establish a physical drive relationship;
+  non-storage parent behavior is unchanged (#541).
+* **Empty JSON collections:** list-valued CLI results serialize as `[]` instead
+  of `null` (#525).
 
 ### Performance
 
-* `axis agent` keeps its system prompt and tool definitions byte-identical
-  across turns and runs. Prompt evidence and the live cluster snapshot, which
-  change every turn, now go at the start of the newest user message instead of
-  inside the system prompt. Local servers with a prompt cache (llama.cpp)
-  reuse the unchanged prefix instead of re-reading the whole prompt each turn.
-  Measured with a 27B local model: a later turn re-read about 2k tokens instead
-  of about 13k, and a two-tool run took 32 s instead of 64 s.
+* **Prompt-cache reuse:** per-turn evidence and snapshot context are injected
+  into the newest outgoing user message rather than changing the system prompt.
+  The unchanged system/tool prefix is eligible for backend cache reuse while
+  request context refreshes. This does not force a live discovery sweep, guarantee
+  cache residency or promise a fixed speedup (#539).
+
+### Documentation, dependencies and release tooling
+
+* README onboarding and theme-aware banners refreshed (#531); `AGENTS.md` is the
+  canonical repository instruction file with a thin Copilot entry point (#536).
+* AXIS builds use Go **1.26.10**, fixing `crypto/x509` GO-2026-6809 (#538).
+  Local release preflight runs only the pinned GoReleaser validator with its
+  separate Go 1.27.0 toolchain; application gates and vulnerability analysis keep
+  the caller's AXIS compiler. Regression tests cover isolation and failure stops.
+* `mcp-go` updated from 1.2.1 to 1.3.0 (#533); pinned GitHub Actions updated for
+  Claude Code, agent-workflow setup and GoReleaser (#534).
+* Hardware regressions include the fuller sanitized macOS storage capture,
+  empty/colliding device IDs, partial SMART output and native-parser fuzz seeds.
+  Session-log tests cover concurrency, retention, masking, permissions and
+  failure recovery; console tests cover startup, switching, cancellation and exit.
 
 ## v0.19.6 (2026-10-15)
 

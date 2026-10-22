@@ -67,6 +67,7 @@ install-user: build
 test:
 	@./hack/hermetic-go-test.sh ./... -count=1 -timeout 180s
 	./hack/hermetic-go-test-tests.sh
+	./hack/release-preflight-tests.sh
 	python3 -B -m unittest discover -s docs/superpowers/tools -p '*_test.py'
 
 test-race:

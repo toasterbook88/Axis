@@ -106,6 +106,9 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 ## Install
 
 > [!IMPORTANT]
+For the next release candidate's terminal entry point, private logging policy and
+compatibility changes, see the [v0.20.0 upgrade guide](docs/release-notes.md#v0200-upgrade-guide).
+
 > Use v0.19.6 or later. Git history was rewritten on 2026-10-12, and v0.9.0 through v0.19.5 are retracted in `go.mod`.
 
 The [Quick start](#quick-start) command is the recommended install. Other options:
