@@ -13,6 +13,16 @@
   "no gate finding" for a tool that may change shared state.
 * Approval decisions are written to the private session log (`approval`
   events with the tool-call ID), so a review can tell what was approved.
+* `axis agent` no longer gets stuck after a tool returns no output. An empty
+  tool result was sent as an empty message; servers that reject those (LiteLLM:
+  "All non-assistant messages must contain 'content'") failed the request, the
+  empty message stayed in history, and every later prompt failed. Empty tool
+  results are now stored as `(tool returned no output)`, and empty tool or user
+  messages already in history (including resumed sessions) are filled when a
+  request is built.
+* `axis agent` sends today's local date with each prompt, so the model does not
+  guess dates for date arguments. It goes with the user message, not the system
+  prompt, so prompt-cache reuse is unchanged.
 
 ### Performance
 
