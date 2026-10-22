@@ -10,9 +10,8 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ## v0.20.0 upgrade guide
 
-This section describes the v0.20.0 release candidate. Publication is a separate
-step; [GitHub Releases](https://github.com/toasterbook88/axis/releases) is the
-authority for available downloads. The [versioned changelog](../CHANGELOG.md#v0200-2026-10-22)
+[v0.20.0](https://github.com/toasterbook88/axis/releases/tag/v0.20.0) was published
+from commit `951550e`. GitHub Releases is the authority for available downloads. The [versioned changelog](../CHANGELOG.md#v0200-2026-10-22)
 lists every change group since v0.19.6. There is no required configuration migration.
 
 ### Terminal entry point and agent functions
@@ -115,7 +114,7 @@ The release playbook requires a clean release preflight and the nonpublishing
 cross-platform workflow on the exact merged SHA before tagging. Native macOS
 console checks complement cross-compilation; they are separate evidence.
 
-Once v0.20.0 is published, use the normal verified installer or updater. Verify
+Use the normal verified installer or updater for v0.20.0. Verify
 `axis version --local` and check `axis doctor` for shadowed copies. Upgrading a
 running daemon and approving an installation remain separate operational steps;
 this guide does not claim either has happened. `axis update` can restart a managed
