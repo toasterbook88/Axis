@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/toasterbook88/axis/internal/chat"
+	"github.com/toasterbook88/axis/internal/git"
 )
 
 // injectTurnContext puts per-turn context (prompt evidence, the live cluster
@@ -60,4 +62,18 @@ func injectTurnContext(msgs []chat.Message, blocks ...string) []chat.Message {
 		}
 	}
 	return append([]chat.Message{{Role: chat.RoleSystem, Content: ctx}}, msgs...)
+}
+
+// formatGitContext renders the session-start git block that used to sit in
+// the system prompt. A commit or one edited file changed it, so a local prompt
+// cache could not reuse the system prompt between runs.
+func formatGitContext(st git.RepoState) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Git repository context (at session start):\n- Branch: %s\n- HEAD Commit: %s (Subject: %s)\n", st.Branch, st.Commit, st.Subject)
+	if st.IsDirty {
+		fmt.Fprintf(&b, "- Status: Dirty (%d files changed)\n", st.DirtyCount)
+	} else {
+		b.WriteString("- Status: Clean\n")
+	}
+	return b.String()
 }

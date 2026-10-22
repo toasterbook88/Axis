@@ -7,6 +7,10 @@
   every session, so the stable prefix from #539 still missed the cache between
   separate runs. Measured with a 27B local model: a short run after the first
   took 3.6 s instead of 20 s (about 1.1k prompt tokens re-read instead of 12.4k).
+* `axis agent` also sends the session-start git context (branch, HEAD commit,
+  clean or dirty file count) with the user message instead of in the system
+  prompt. Editing one file or committing between runs changed it, so the
+  system prompt still missed the cache while working in a repository.
 
 ## v0.20.0 (2026-10-22)
 
