@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixes
+
+* `axis agent` asks OpenAI-style servers for token usage in streamed replies
+  (`stream_options.include_usage`). Without it, OpenAI and LiteLLM send no
+  usage, so session stats and the private session log had no token counts. A
+  server that rejects the option is retried once without it, and the backend
+  stops sending it.
+
 ### Performance
 
 * `axis agent` sends the session-start cluster summary (node count, free RAM)
