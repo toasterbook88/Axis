@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
@@ -30,6 +31,11 @@ type CloudBackend struct {
 	tokensIn  int
 	tokensOut int
 	totalCost float64
+
+	// noStreamUsage is set once a server rejects stream_options, so later
+	// requests skip it. Without stream_options.include_usage, OpenAI-style
+	// servers (LiteLLM, OpenAI) send no usage in a streamed reply.
+	noStreamUsage atomic.Bool
 }
 
 // NewCloudBackendWithKey creates a new CloudBackend with a pre-resolved API key.
@@ -136,30 +142,55 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		reqBody["tools"] = tools
 	}
 
-	reqBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return chat.Message{}, fmt.Errorf("marshal request: %w", err)
+	send := func(includeUsage bool) (*http.Response, error) {
+		if includeUsage {
+			reqBody["stream_options"] = map[string]any{"include_usage": true}
+		} else {
+			delete(reqBody, "stream_options")
+		}
+		reqBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.endpoint+"/chat/completions", bytes.NewReader(reqBytes))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if strings.TrimSpace(b.apiKey) != "" {
+			req.Header.Set("Authorization", "Bearer "+b.apiKey)
+		}
+		resp, err := b.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("http request: %w", err)
+		}
+		return resp, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.endpoint+"/chat/completions", bytes.NewReader(reqBytes))
+	includeUsage := !b.noStreamUsage.Load()
+	resp, err := send(includeUsage)
 	if err != nil {
-		return chat.Message{}, fmt.Errorf("create request: %w", err)
+		return chat.Message{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(b.apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+b.apiKey)
-	}
-
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return chat.Message{}, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return chat.Message{}, fmt.Errorf("http status %d: %s", resp.StatusCode, string(respBytes))
+		resp.Body.Close()
+		// A server that does not know stream_options rejects the request.
+		// Retry once without it and stop asking for this backend.
+		if !includeUsage || !rejectsStreamOptions(resp.StatusCode, respBytes) {
+			return chat.Message{}, fmt.Errorf("http status %d: %s", resp.StatusCode, string(respBytes))
+		}
+		b.noStreamUsage.Store(true)
+		if resp, err = send(false); err != nil {
+			return chat.Message{}, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			return chat.Message{}, fmt.Errorf("http status %d: %s", resp.StatusCode, string(respBytes))
+		}
 	}
+	defer resp.Body.Close()
 
 	// 3. Process SSE stream.
 	var result chat.Message
@@ -587,6 +618,12 @@ type openAIToolCall struct {
 type openAIFunctionCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// rejectsStreamOptions reports whether an error reply is a server refusing
+// the stream_options field (4xx naming it), not some other failure.
+func rejectsStreamOptions(status int, body []byte) bool {
+	return status >= 400 && status < 500 && strings.Contains(strings.ToLower(string(body)), "stream_options")
 }
 
 type openAIChunk struct {

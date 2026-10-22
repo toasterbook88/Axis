@@ -1,5 +1,34 @@
 ## Unreleased
 
+### Fixes
+
+* `axis agent` asks OpenAI-style servers for token usage in streamed replies
+  (`stream_options.include_usage`). Without it, OpenAI and LiteLLM send no
+  usage, so session stats and the private session log had no token counts. A
+  server that rejects the option is retried once without it, and the backend
+  stops sending it.
+* `axis agent` "always" approval now covers only the tool it was given for.
+  It used to approve every tool for the rest of the session, so approving one
+  read-only MCP query also let later MCP writes and shell, node, fleet and
+  background commands run without asking (safety-blocked commands still asked).
+  Sub-agents inherit the same per-tool approvals. "Never" still blocks every
+  tool, including ones approved "always" earlier.
+* The console approval prompt marks external MCP tools `[NOT RATED]` and says
+  AXIS cannot rate them, instead of a green `[LOW RISK]` badge with
+  "no gate finding" for a tool that may change shared state.
+* Approval decisions are written to the private session log (`approval`
+  events with the tool-call ID), so a review can tell what was approved.
+* `axis agent` no longer gets stuck after a tool returns no output. An empty
+  tool result was sent as an empty message; servers that reject those (LiteLLM:
+  "All non-assistant messages must contain 'content'") failed the request, the
+  empty message stayed in history, and every later prompt failed. Empty tool
+  results are now stored as `(tool returned no output)`, and empty tool or user
+  messages already in history (including resumed sessions) are filled when a
+  request is built.
+* `axis agent` sends today's local date with each prompt, so the model does not
+  guess dates for date arguments. It goes with the user message, not the system
+  prompt, so prompt-cache reuse is unchanged.
+
 ### Performance
 
 * `axis agent` sends the session-start cluster summary (node count, free RAM)

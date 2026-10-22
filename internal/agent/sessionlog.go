@@ -165,6 +165,19 @@ func (l *DailySessionLog) noteCalled(id, name, args string) {
 	l.noteLive(sessionTool{ID: id, Name: name, Event: "called", Args: args})
 }
 
+func (l *DailySessionLog) noteApproval(id, name string, result ConfirmResult) {
+	decision := "denied"
+	switch result {
+	case ConfirmYes:
+		decision = "approved"
+	case ConfirmAlways:
+		decision = "approved_for_session"
+	case ConfirmNever:
+		decision = "blocked"
+	}
+	l.noteLive(sessionTool{ID: id, Name: name, Event: "approval", OK: result == ConfirmYes || result == ConfirmAlways, Decision: decision})
+}
+
 func (l *DailySessionLog) noteSkipped(id, name, reason string) {
 	l.noteLive(sessionTool{ID: id, Name: name, Event: "skipped", Error: reason})
 }
@@ -375,4 +388,8 @@ type sessionTool struct {
 	Summary     string `json:"summary,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Args        string `json:"args,omitempty"`
+	// Decision is set on "approval" events: approved, approved_for_session,
+	// denied or blocked. It records the confirm result, which may come from an
+	// autonomy policy rather than the operator.
+	Decision string `json:"decision,omitempty"`
 }

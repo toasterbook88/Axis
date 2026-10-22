@@ -298,7 +298,7 @@ func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage)
 		}
 	}
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["run_background"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		desc := a0.Command
@@ -308,7 +308,7 @@ func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage)
 		if forceConfirm {
 			desc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, desc)
 		}
-		decision := a.askConfirm("run_background", desc, score)
+		decision := a.askConfirm(ctx, "run_background", desc, score)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:
@@ -316,7 +316,7 @@ func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage)
 			return "", fmt.Errorf("operator declined to run background: %s", a0.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("run_background")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:

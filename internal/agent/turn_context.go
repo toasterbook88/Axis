@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/git"
@@ -76,4 +77,58 @@ func formatGitContext(st git.RepoState) string {
 		b.WriteString("- Status: Clean\n")
 	}
 	return b.String()
+}
+
+// emptyToolResult replaces a tool result with no text. An empty tool message
+// is rejected by some servers (LiteLLM: "All non-assistant messages must
+// contain 'content'"), and once stored it broke every later request.
+const emptyToolResult = "(tool returned no output)"
+
+// emptyUserMessage replaces a user message with no text for the same reason.
+const emptyUserMessage = "(empty message)"
+
+func toolResultContent(result string) string {
+	if strings.TrimSpace(result) == "" {
+		return emptyToolResult
+	}
+	return result
+}
+
+// fillEmptyContent returns msgs with every empty tool or user message given
+// placeholder text. Assistant messages may be empty (tool calls only) and are
+// left alone. msgs is not modified.
+func fillEmptyContent(msgs []chat.Message) []chat.Message {
+	var out []chat.Message
+	for i, m := range msgs {
+		if m.Content != "" || (m.Role != chat.RoleTool && m.Role != chat.RoleUser) {
+			continue
+		}
+		if out == nil {
+			out = make([]chat.Message, len(msgs))
+			copy(out, msgs)
+		}
+		if m.Role == chat.RoleTool {
+			out[i].Content = emptyToolResult
+		} else {
+			out[i].Content = emptyUserMessage
+		}
+	}
+	if out == nil {
+		return msgs
+	}
+	return out
+}
+
+// currentDateLine tells the model today's local date. Without it, a model
+// guessed a date six days ahead for a "since" argument, got no results, and
+// reasoned from that.
+func currentDateLine(now time.Time) string {
+	return "Today's date (local): " + now.Format("2006-01-02 (Monday), MST -0700") + ". Use it for any date or time argument."
+}
+
+func (a *Agent) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
