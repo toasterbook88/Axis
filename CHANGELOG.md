@@ -1,5 +1,18 @@
 ## Unreleased
 
+### Fixes
+
+* `axis agent` no longer gets stuck after a tool returns no output. An empty
+  tool result was sent as an empty message; servers that reject those (LiteLLM:
+  "All non-assistant messages must contain 'content'") failed the request, the
+  empty message stayed in history, and every later prompt failed. Empty tool
+  results are now stored as `(tool returned no output)`, and empty tool or user
+  messages already in history (including resumed sessions) are filled when a
+  request is built.
+* `axis agent` sends today's local date with each prompt, so the model does not
+  guess dates for date arguments. It goes with the user message, not the system
+  prompt, so prompt-cache reuse is unchanged.
+
 ### Performance
 
 * `axis agent` sends the session-start cluster summary (node count, free RAM)
