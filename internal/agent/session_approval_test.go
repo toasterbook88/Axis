@@ -169,3 +169,77 @@ func TestMCPApprovalPromptSaysNotRated(t *testing.T) {
 		t.Fatalf("MCP approval description = %q", gotDesc)
 	}
 }
+
+// "Never" blocks the whole session, including a tool approved "always"
+// earlier. The generic path used to check the block only for tools that were
+// not yet approved, so an approved MCP write kept running.
+func TestNeverBlocksToolApprovedForSession(t *testing.T) {
+	a := newApprovalAgent(t, &recordingConfirm{})
+	a.SetConfirm(func(tool, _ string, _ int) ConfirmResult {
+		if tool == "mcp_srv_query" {
+			return ConfirmAlways
+		}
+		return ConfirmNever
+	})
+	dispatch(t, a, "mcp_srv_query", `{}`)
+	if _, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: "mcp_srv_claim_task", Arguments: json.RawMessage(`{}`)},
+	}); err == nil {
+		t.Fatal("never answer did not refuse the tool")
+	}
+	_, err := a.dispatchToolCall(context.Background(), chat.ToolCall{
+		Function: chat.ToolCallFunction{Name: "mcp_srv_query", Arguments: json.RawMessage(`{}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("tool approved for the session still ran after never: err=%v", err)
+	}
+}
+
+// Calls to one tool run in parallel and can reach confirmation in any order.
+// Each approval record carries its tool-call ID, so it can be matched to the
+// arguments the operator saw.
+func TestApprovalRecordsCarryToolCallID(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenDailySessionLog(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	day := time.Date(2026, 10, 22, 15, 0, 0, 0, time.FixedZone("UTC-4", -4*3600))
+	log.now = func() time.Time { return day }
+	a := New(Config{
+		Backend: &scriptedBackend{responses: []chat.Message{{
+			Role: chat.RoleAssistant,
+			ToolCalls: []chat.ToolCall{
+				toolCall("c-allow", "mcp_srv_claim_task", `{"task":"allow"}`),
+				toolCall("c-deny", "mcp_srv_claim_task", `{"task":"deny"}`),
+			},
+		}, {Role: chat.RoleAssistant, Content: "done"}}},
+		MaxTurns: 3, MaxTokens: 100000, Output: io.Discard, ToolContext: &ToolContext{}, SessionLog: log,
+		Confirm: func(_, desc string, _ int) ConfirmResult {
+			if strings.Contains(desc, "deny") {
+				return ConfirmNo
+			}
+			return ConfirmYes
+		},
+	})
+	a.tools.allowExtra("mcp_srv_claim_task")
+	a.tools.add("mcp_srv_claim_task", "test MCP tool", json.RawMessage(`{"type":"object"}`), func(context.Context, json.RawMessage) (string, error) {
+		return "claimed", nil
+	})
+	if err := a.Run(context.Background(), "claim both"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "agent-2026-10-22.jsonl"))
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	got := map[string]string{}
+	for _, rec := range allSessionRecords(t, raw) {
+		if rec.Tool != nil && rec.Tool.Event == "approval" {
+			got[rec.Tool.ID] = rec.Tool.Decision
+		}
+	}
+	if got["c-allow"] != "approved" || got["c-deny"] != "denied" || len(got) != 2 {
+		t.Fatalf("approval records by call ID = %v", got)
+	}
+}

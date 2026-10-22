@@ -318,7 +318,7 @@ func (a *Agent) SetConfirm(fn ConfirmFunc) {
 
 // askConfirm runs the operator prompt without holding dispatchMu.
 // confirmGate keeps concurrent prompts from drawing on top of each other.
-func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
+func (a *Agent) askConfirm(ctx context.Context, tool, desc string, score int) ConfirmResult {
 	a.dispatchMu.Lock()
 	fn := a.confirm
 	a.dispatchMu.Unlock()
@@ -328,7 +328,7 @@ func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
 	a.confirmGate.Lock()
 	defer a.confirmGate.Unlock()
 	result := fn(tool, desc, score)
-	a.sessionLog.noteApproval(tool, result)
+	a.sessionLog.noteApproval(toolCallIDFrom(ctx), tool, result)
 	return result
 }
 

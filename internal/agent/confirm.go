@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -138,4 +139,23 @@ func (a *Agent) sessionApprovalsCopy() map[string]bool {
 		out[k] = v
 	}
 	return out
+}
+
+type toolCallIDKey struct{}
+
+// withToolCallID tags ctx with the tool call being dispatched.
+func withToolCallID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolCallIDKey{}, id)
+}
+
+// toolCallIDFrom returns the tool call ID set by withToolCallID, or "".
+func toolCallIDFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(toolCallIDKey{}).(string)
+	return id
 }

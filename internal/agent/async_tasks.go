@@ -308,7 +308,7 @@ func (a *Agent) dispatchRunBackground(ctx context.Context, args json.RawMessage)
 		if forceConfirm {
 			desc = fmt.Sprintf("[OVERRIDE SAFETY - BLOCKED REASON: %s] %s", reason, desc)
 		}
-		decision := a.askConfirm("run_background", desc, score)
+		decision := a.askConfirm(ctx, "run_background", desc, score)
 		a.dispatchMu.Lock()
 		switch decision {
 		case ConfirmNo:

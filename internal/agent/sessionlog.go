@@ -165,7 +165,7 @@ func (l *DailySessionLog) noteCalled(id, name, args string) {
 	l.noteLive(sessionTool{ID: id, Name: name, Event: "called", Args: args})
 }
 
-func (l *DailySessionLog) noteApproval(name string, result ConfirmResult) {
+func (l *DailySessionLog) noteApproval(id, name string, result ConfirmResult) {
 	decision := "denied"
 	switch result {
 	case ConfirmYes:
@@ -175,7 +175,7 @@ func (l *DailySessionLog) noteApproval(name string, result ConfirmResult) {
 	case ConfirmNever:
 		decision = "blocked"
 	}
-	l.noteLive(sessionTool{Name: name, Event: "approval", OK: result == ConfirmYes || result == ConfirmAlways, Decision: decision})
+	l.noteLive(sessionTool{ID: id, Name: name, Event: "approval", OK: result == ConfirmYes || result == ConfirmAlways, Decision: decision})
 }
 
 func (l *DailySessionLog) noteSkipped(id, name, reason string) {

@@ -29,8 +29,8 @@ its per-request resolved model through this logger.
 
 * `turn.started`: the prompt, stored once before inference.
 * `assistant`: intermediate assistant text accompanying tool calls.
-* `tool`: calls/arguments, approval decisions (`event: approval` with
-  `decision` approved, approved_for_session, denied or blocked; the result may
+* `tool`: calls/arguments, approval decisions (`event: approval` with the
+  tool-call `id` and `decision` approved, approved_for_session, denied or blocked; the result may
   come from an autonomy policy rather than the operator), approval skips, shell commands, success/failure,
   result size, timing, and a separate `output` event with result content.
   Nonempty partial output is retained with `ok: false` when a tool returns an error.
