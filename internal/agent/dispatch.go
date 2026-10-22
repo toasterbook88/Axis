@@ -97,6 +97,9 @@ func formatToolResultSummary(toolName, result string) string {
 	return fmt.Sprintf("%s returned %d chars", toolName, len(result))
 }
 
+// unratedMCPWhy is the approval reason shown for external MCP tools.
+const unratedMCPWhy = "external MCP tool, not rated by AXIS; it may change shared state"
+
 func withSafetyWhy(reason, desc string) string {
 	reason = strings.TrimSpace(reason)
 	if reason == "" || strings.Contains(desc, "safety why:") {
@@ -184,11 +187,11 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 
 	// 3.5. Confirmation for mutating tools (e.g. write_file, edit_file, or mutating MCP tools).
 	// Serialized across concurrent dispatches so operator prompts never interleave
-	// and the autoApproveAll/blockAll toggles are race-free. The expensive tool
+	// and the sessionApproved/blockAll state are race-free. The expensive tool
 	// execution below runs unlocked so independent calls stay parallel.
 	if !a.ToolAutoApproved(name) {
 		a.dispatchMu.Lock()
-		approved := a.autoApproveAll
+		approved := a.sessionApproved[name]
 		blocked := a.blockAll
 		a.dispatchMu.Unlock()
 		if !approved {
@@ -241,6 +244,12 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 				}
 			}
 
+			if strings.HasPrefix(name, "mcp_") {
+				// AXIS cannot rate an external tool. Say so, rather than let a
+				// zero score read as low risk for a tool that may change shared
+				// state (claim a task, write memory).
+				description = withSafetyWhy(unratedMCPWhy, description)
+			}
 			decision := a.askConfirm(name, description, 0)
 			a.dispatchMu.Lock()
 			switch decision {
@@ -248,7 +257,7 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 				a.dispatchMu.Unlock()
 				return "", fmt.Errorf("operator declined to execute tool: %s", name)
 			case ConfirmAlways:
-				a.autoApproveAll = true
+				a.approveForSession(name)
 				a.dispatchMu.Unlock()
 			case ConfirmNever:
 				a.blockAll = true
@@ -295,7 +304,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	// Confirmation (unless auto-approved or session-level always, and not safety-blocked).
 	// Serialized across concurrent dispatches.
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["run_shell"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		promptDesc := sa.Command
@@ -316,7 +325,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 			return "", fmt.Errorf("operator declined to execute: %s", sa.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("run_shell")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:
@@ -388,7 +397,7 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 	}
 
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["run_on_node"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		promptDesc := fmt.Sprintf("[on %s] %s", a0.Node, a0.Command)
@@ -406,7 +415,7 @@ func (a *Agent) dispatchRunOnNode(ctx context.Context, args json.RawMessage) (st
 			return "", fmt.Errorf("operator declined to execute on %s: %s", a0.Node, a0.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("run_on_node")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:
@@ -489,7 +498,7 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 	}
 
 	a.dispatchMu.Lock()
-	needsConfirm := !a.autoApproveAll || forceConfirm
+	needsConfirm := !a.sessionApproved["fleet_exec"] || forceConfirm
 	a.dispatchMu.Unlock()
 	if needsConfirm {
 		promptDesc := fmt.Sprintf("[on %d nodes: %s] %s", len(targetNodes), strings.Join(targetNodes, ", "), a0.Command)
@@ -507,7 +516,7 @@ func (a *Agent) dispatchFleetExec(ctx context.Context, args json.RawMessage) (st
 			return "", fmt.Errorf("operator declined fleet execution: %s", a0.Command)
 		case ConfirmAlways:
 			if !forceConfirm {
-				a.autoApproveAll = true
+				a.approveForSession("fleet_exec")
 			}
 			a.dispatchMu.Unlock()
 		case ConfirmNever:

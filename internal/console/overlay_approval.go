@@ -188,6 +188,10 @@ func (o *ApprovalOverlay) Render(width int) []Line {
 	if o.score >= 70 {
 		riskStyle = StyleBad
 		riskBadge = "[HIGH RISK]"
+	} else if o.score == 0 && strings.HasPrefix(o.tool, "mcp_") {
+		// External MCP tools are never scored; zero is "unknown", not "safe".
+		riskStyle = StyleAccent
+		riskBadge = "[NOT RATED]"
 	} else if o.score >= 40 {
 		riskStyle = StyleBad
 		riskBadge = "[CAUTION]"

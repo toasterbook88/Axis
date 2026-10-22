@@ -82,12 +82,14 @@ type Agent struct {
 	// other Agent mutex is acquired while it is held.
 	clientMu      sync.RWMutex
 	securityClass BackendSecurityClass
-	// autoApproveAll is toggled when the operator selects "always" in confirmation.
-	autoApproveAll bool
+	// sessionApproved lists the tools the operator approved for the rest of
+	// the session ("always"). It is per tool: approving one tool, such as a
+	// read-only MCP query, must not approve shell commands or MCP writes.
+	sessionApproved map[string]bool
 	// blockAll is toggled when the operator selects "never" in confirmation.
 	blockAll    bool
 	mcpRegistry *mcpclient.Registry
-	// dispatchMu guards autoApproveAll, blockAll, and the confirm func.
+	// dispatchMu guards sessionApproved, blockAll, and the confirm func.
 	// It must not be held across a blocking confirm: the console footer
 	// calls Autonomy() on the UI goroutine, and that takes this lock.
 	// Holding it while the UI paints deadlocks the approval overlay, so
@@ -325,7 +327,9 @@ func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
 	}
 	a.confirmGate.Lock()
 	defer a.confirmGate.Unlock()
-	return fn(tool, desc, score)
+	result := fn(tool, desc, score)
+	a.sessionLog.noteApproval(tool, result)
+	return result
 }
 
 // wrapConfirm applies the active autonomy policy to a base confirm.

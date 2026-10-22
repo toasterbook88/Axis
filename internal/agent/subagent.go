@@ -151,10 +151,9 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 	}
 	childTools := NewToolRegistry(tc)
 
+	// The child inherits the parent's per-tool session approvals (copied
+	// below), not a blanket yes.
 	confirm := a.confirm
-	if a.autoApproveAll {
-		confirm = func(toolName, description string, score int) ConfirmResult { return ConfirmYes }
-	}
 
 	// Snapshot parent runners under lock so child construction does not race
 	// with a concurrent /model runner refresh on the parent.
@@ -186,7 +185,7 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 		allowRawCommandEvidence: a.allowRawCommandEvidence,
 		securityClass:           parentClass,
 		mcpRegistry:             a.mcpRegistry,
-		autoApproveAll:          a.autoApproveAll,
+		sessionApproved:         a.sessionApprovalsCopy(),
 		subAgentDepth:           a.subAgentDepth + 1,
 		// Own store: child registry exposes run_background/check_task/list_*.
 		// Sharing the parent's store would mix IDs across agent scopes.

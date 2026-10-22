@@ -16,7 +16,7 @@ type ConfirmResult int
 const (
 	ConfirmYes    ConfirmResult = iota // Execute this one time
 	ConfirmNo                          // Skip this tool call
-	ConfirmAlways                      // Auto-approve all future calls this session
+	ConfirmAlways                      // Auto-approve future calls of this tool this session
 	ConfirmNever                       // Block all future calls this session
 )
 
@@ -114,4 +114,28 @@ func isReadOnlyTool(name string) bool {
 // StdinConfirm is a convenience for the common case of prompting on stdout/stdin.
 func StdinConfirm() ConfirmFunc {
 	return DefaultConfirm(os.Stdin, os.Stderr)
+}
+
+// approveForSession records an "always" answer for one tool. The caller holds
+// dispatchMu.
+func (a *Agent) approveForSession(tool string) {
+	if a.sessionApproved == nil {
+		a.sessionApproved = make(map[string]bool)
+	}
+	a.sessionApproved[tool] = true
+}
+
+// sessionApprovalsCopy returns a copy of the per-tool session approvals for a
+// sub-agent.
+func (a *Agent) sessionApprovalsCopy() map[string]bool {
+	a.dispatchMu.Lock()
+	defer a.dispatchMu.Unlock()
+	if len(a.sessionApproved) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(a.sessionApproved))
+	for k, v := range a.sessionApproved {
+		out[k] = v
+	}
+	return out
 }

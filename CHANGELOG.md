@@ -1,5 +1,18 @@
 ## Unreleased
 
+### Fixes
+
+* `axis agent` "always" approval now covers only the tool it was given for.
+  It used to approve every tool for the rest of the session, so approving one
+  read-only MCP query also let later MCP writes and shell, node, fleet and
+  background commands run without asking (safety-blocked commands still asked).
+  Sub-agents inherit the same per-tool approvals.
+* The console approval prompt marks external MCP tools `[NOT RATED]` and says
+  AXIS cannot rate them, instead of a green `[LOW RISK]` badge with
+  "no gate finding" for a tool that may change shared state.
+* Approval decisions are written to the private session log (`approval`
+  events), so a review can tell what was approved.
+
 ### Performance
 
 * `axis agent` sends the session-start cluster summary (node count, free RAM)
