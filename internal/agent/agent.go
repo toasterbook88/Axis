@@ -60,6 +60,9 @@ type Agent struct {
 	// sessionSummary is the cluster summary taken when the agent was built.
 	// It is sent with each user message, not in the system prompt.
 	sessionSummary string
+	// sessionGit is the git repository context taken when the agent was
+	// built. Like sessionSummary, it is sent with each user message.
+	sessionGit string
 	// now returns the local time for the per-turn date line. Nil means
 	// time.Now; tests set it.
 	now func() time.Time
@@ -204,14 +207,11 @@ func New(cfg Config) *Agent {
 	// system prompt. See turn_context.go.
 	sysPrompt := chat.BuildSystemPrompt(nil, cfg.SystemExtra)
 
-	// Inject Git context if available
+	// Git context (HEAD, dirty count) changes whenever the operator commits
+	// or edits a file between runs, so it goes with the user message too.
+	gitContext := ""
 	if repoState, err := git.GetRepoState("."); err == nil && repoState.IsRepo {
-		sysPrompt += fmt.Sprintf("\n\nGit Repository Context:\n- Branch: %s\n- HEAD Commit: %s (Subject: %s)\n", repoState.Branch, repoState.Commit, repoState.Subject)
-		if repoState.IsDirty {
-			sysPrompt += fmt.Sprintf("- Status: Dirty (%d files changed)\n", repoState.DirtyCount)
-		} else {
-			sysPrompt += "- Status: Clean\n"
-		}
+		gitContext = formatGitContext(repoState)
 	}
 
 	// Inject nearest AGENTS.md (project rules) when present — truthful workspace
@@ -271,6 +271,7 @@ func New(cfg Config) *Agent {
 
 	return &Agent{
 		sessionSummary:          chat.FormatClusterSummary(cfg.Cluster),
+		sessionGit:              gitContext,
 		client:                  client,
 		conv:                    conv,
 		tools:                   tools,
@@ -455,12 +456,13 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		clonedMsgs := make([]chat.Message, len(msgs))
 		copy(clonedMsgs, msgs)
 
-		// Per-turn context: the session-start cluster summary, today's date,
-		// prompt evidence and a live cluster snapshot (node health, free
-		// memory, resident models) so the agent can adapt placement mid-task.
-		// All of them change between runs, so they are placed with the newest
-		// user message, not in the system prompt. See turn_context.go for why.
-		turnContext := []string{a.sessionSummary, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
+		// Per-turn context: the session-start cluster summary, the session-start
+		// git context, today's date, prompt evidence and a live cluster
+		// snapshot (node health, free memory, resident models) so the agent
+		// can adapt placement mid-task. All of them change between runs, so
+		// they are placed with the newest user message, not in the system
+		// prompt. See turn_context.go for why.
+		turnContext := []string{a.sessionSummary, a.sessionGit, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
 
 		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
 
