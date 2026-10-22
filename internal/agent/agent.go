@@ -57,6 +57,9 @@ type Agent struct {
 	dryRun      bool
 	toolContext *ToolContext
 	model       string
+	// sessionSummary is the cluster summary taken when the agent was built.
+	// It is sent with each user message, not in the system prompt.
+	sessionSummary string
 	// usageMu guards the session usage accumulator. Responses report real
 	// token counts on the returned Message (Ollama final chunk, cloud usage
 	// block); accumulateUsage totals them. Stats() reads it from the tea
@@ -191,7 +194,10 @@ func New(cfg Config) *Agent {
 	conv := chat.NewConversation(cfg.MaxTokens)
 
 	// Build system prompt.
-	sysPrompt := chat.BuildSystemPrompt(cfg.Cluster, cfg.SystemExtra)
+	// The session-start cluster summary (free RAM changes every session) goes
+	// with the user message, not here, so separate runs share one cacheable
+	// system prompt. See turn_context.go.
+	sysPrompt := chat.BuildSystemPrompt(nil, cfg.SystemExtra)
 
 	// Inject Git context if available
 	if repoState, err := git.GetRepoState("."); err == nil && repoState.IsRepo {
@@ -259,6 +265,7 @@ func New(cfg Config) *Agent {
 	}
 
 	return &Agent{
+		sessionSummary:          chat.FormatClusterSummary(cfg.Cluster),
 		client:                  client,
 		conv:                    conv,
 		tools:                   tools,
@@ -446,7 +453,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		// placement mid-task. Both change between runs, so they are placed
 		// with the newest user message, not in the system prompt. See
 		// turn_context.go for why.
-		turnContext := []string{a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
+		turnContext := []string{a.sessionSummary, a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
 
 		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
 

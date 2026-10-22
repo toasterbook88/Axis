@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -150,5 +151,43 @@ func TestInjectTurnContextFallsBackWithoutUserMessage(t *testing.T) {
 	none := injectTurnContext(nil, "ctx")
 	if len(none) != 1 || none[0].Role != chat.RoleSystem || none[0].Content != "ctx" {
 		t.Fatalf("fallback to new system message: %+v", none)
+	}
+}
+
+// Separate runs start separate agents, each with its own session-start
+// cluster summary. Free RAM differs every time, so the summary must not sit in
+// the system prompt, or a local prompt cache can never reuse it across runs.
+func TestSessionClusterSummaryStaysOutOfSystemPrompt(t *testing.T) {
+	var systems [][]chat.Message
+	for _, free := range []int64{1111, 2222} {
+		backend := &hookBackend{}
+		a := New(Config{
+			Backend: backend, MaxTurns: 1, MaxTokens: 100000, Output: io.Discard,
+			Cluster: &chat.ClusterSummaryForPrompt{NodeCount: 3, ReachableCount: 3, TotalRAMMB: 9000, FreeRAMMB: free, Status: "healthy"},
+		})
+		if err := a.Run(context.Background(), "show nodes"); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if len(backend.calls) != 1 {
+			t.Fatalf("model calls = %d, want 1", len(backend.calls))
+		}
+		var system []chat.Message
+		latestUser := ""
+		for _, msg := range backend.calls[0] {
+			switch msg.Role {
+			case chat.RoleSystem:
+				system = append(system, msg)
+			case chat.RoleUser:
+				latestUser = msg.Content
+			}
+		}
+		systems = append(systems, system)
+		want := fmt.Sprintf("%d MB free", free)
+		if !strings.Contains(latestUser, "Current cluster summary") || !strings.Contains(latestUser, want) || !strings.HasSuffix(latestUser, "show nodes") {
+			t.Fatalf("session summary missing from the user message: %q", latestUser)
+		}
+	}
+	if !reflect.DeepEqual(systems[0], systems[1]) {
+		t.Fatal("system prompt differs between runs with different free RAM")
 	}
 }
