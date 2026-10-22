@@ -218,3 +218,23 @@ func TestApprovalOverlayRenderUTF8ValidityAndAlignment(t *testing.T) {
 		}
 	}
 }
+
+// External MCP tools are never scored. A zero score must not render as a green
+// "[LOW RISK]" badge, which is how a shared-queue write was presented.
+func TestApprovalOverlayMarksUnscoredMCPToolNotRated(t *testing.T) {
+	text := func(o *ApprovalOverlay) string {
+		var b strings.Builder
+		for _, l := range o.Render(100) {
+			b.WriteString(l.Text + "\n")
+		}
+		return b.String()
+	}
+	mcp := text(NewApprovalOverlay("mcp_srv_claim_task", "Execute tool mcp_srv_claim_task", 0, nil))
+	if !strings.Contains(mcp, "[NOT RATED]") || strings.Contains(mcp, "[LOW RISK]") {
+		t.Fatalf("MCP tool badge:\n%s", mcp)
+	}
+	shell := text(NewApprovalOverlay("run_shell", "echo hi", 10, nil))
+	if !strings.Contains(shell, "[LOW RISK]") {
+		t.Fatalf("scored low-risk command lost its badge:\n%s", shell)
+	}
+}
