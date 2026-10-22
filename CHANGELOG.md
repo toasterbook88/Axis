@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Performance
+
+* `axis agent` sends the session-start cluster summary (node count, free RAM)
+  with the newest user message instead of in the system prompt. Free RAM differs
+  every session, so the stable prefix from #539 still missed the cache between
+  separate runs. Measured with a 27B local model: a short run after the first
+  took 3.6 s instead of 20 s (about 1.1k prompt tokens re-read instead of 12.4k).
+
 ## v0.20.0 (2026-10-22)
 
 Twenty-one feature, fix, documentation and dependency PRs merged since v0.19.6,

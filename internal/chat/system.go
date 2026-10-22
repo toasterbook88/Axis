@@ -63,14 +63,8 @@ func BuildSystemPrompt(cluster *ClusterSummaryForPrompt, extra string) string {
 	b.WriteString("- CLI equivalents the user can run: axis facts, axis status, axis task place, axis task context, axis task run, axis doctor.\n")
 
 	if cluster != nil {
-		b.WriteString("\nCurrent cluster summary (snapshot at session start):\n")
-		fmt.Fprintf(&b, "- Nodes: %d total, %d reachable\n", cluster.NodeCount, cluster.ReachableCount)
-		fmt.Fprintf(&b, "- RAM: %d MB total, %d MB free\n", cluster.TotalRAMMB, cluster.FreeRAMMB)
-		fmt.Fprintf(&b, "- Status: %s\n", cluster.Status)
-		if len(cluster.Tools) > 0 {
-			fmt.Fprintf(&b, "- Tools available: %s\n", strings.Join(cluster.Tools, ", "))
-		}
-		b.WriteString("Note: this summary may become stale during a long session. Use tools or tell the user to run `axis status` for fresh data.\n")
+		b.WriteString("\n")
+		b.WriteString(FormatClusterSummary(cluster))
 	}
 
 	if extra != "" {
@@ -79,5 +73,24 @@ func BuildSystemPrompt(cluster *ClusterSummaryForPrompt, extra string) string {
 		b.WriteString("\n")
 	}
 
+	return b.String()
+}
+
+// FormatClusterSummary renders the session-start cluster summary block, or ""
+// for nil. Free RAM changes between sessions, so callers that want a stable,
+// cacheable system prompt (axis agent) send this with the user message instead.
+func FormatClusterSummary(cluster *ClusterSummaryForPrompt) string {
+	if cluster == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Current cluster summary (snapshot at session start):\n")
+	fmt.Fprintf(&b, "- Nodes: %d total, %d reachable\n", cluster.NodeCount, cluster.ReachableCount)
+	fmt.Fprintf(&b, "- RAM: %d MB total, %d MB free\n", cluster.TotalRAMMB, cluster.FreeRAMMB)
+	fmt.Fprintf(&b, "- Status: %s\n", cluster.Status)
+	if len(cluster.Tools) > 0 {
+		fmt.Fprintf(&b, "- Tools available: %s\n", strings.Join(cluster.Tools, ", "))
+	}
+	b.WriteString("Note: this summary may become stale during a long session. Use tools or tell the user to run `axis status` for fresh data.\n")
 	return b.String()
 }
