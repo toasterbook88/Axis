@@ -36,8 +36,10 @@ its per-request resolved model through this logger.
   Nonempty partial output is retained with `ok: false` when a tool returns an error.
 * `turn.finished`: the final answer once, elapsed time, token deltas from backend
   usage reports, and `answer`, `max_turns`, `error`, `canceled` or `timeout` outcome.
-  `usage_reported` is always present on this record: `false` means the backend
-  reported no usage for the turn, so absent token counts are unknown, not zero.
+  `usage_reported` is always present on this record: `false` means no nonzero
+  usage was reported for the turn, so absent token counts are unknown, not zero.
+  Backends carry usage as counts where zero means "not reported", so an explicit
+  0/0 report is also recorded as `false`.
 
 Tool results are recorded before conversation compaction can remove them. The
 logger never recopies the entire conversation or system prompt. Token counts

@@ -375,8 +375,10 @@ type sessionRecord struct {
 	Error     string `json:"error,omitempty"`
 	TokensIn  int    `json:"tokens_in,omitempty"`
 	TokensOut int    `json:"tokens_out,omitempty"`
-	// Usage is set only on turn.finished: false means the backend reported no
-	// usage for the turn (unknown), which is not the same as zero tokens.
+	// Usage is set only on turn.finished: false means no nonzero usage was
+	// reported for the turn, so token counts are unknown rather than zero.
+	// chat.Message carries usage as plain ints where zero means "not
+	// reported", so an explicit 0/0 report is also recorded as false.
 	Usage   *bool        `json:"usage_reported,omitempty"`
 	Prompt  string       `json:"prompt,omitempty"`
 	Answer  string       `json:"answer,omitempty"`

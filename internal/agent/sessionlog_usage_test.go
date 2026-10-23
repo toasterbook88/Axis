@@ -69,3 +69,28 @@ func TestDailySessionLogDistinguishesMissingUsageFromReported(t *testing.T) {
 		t.Fatalf("second finished line lacks explicit usage_reported:false: %q", finishedLines)
 	}
 }
+
+// An explicit 0/0 usage report cannot be told apart from an absent one at the
+// chat.Message level (zero means "not reported"), so it is recorded as false.
+func TestDailySessionLogZeroUsageReportIsRecordedAsNotReported(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenDailySessionLog(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	log.now = func() time.Time { return time.Date(2026, 10, 23, 2, 0, 0, 0, time.UTC) }
+	a := newSessionLogAgent(t, log, &sessionLogObserver{}, &scriptedBackend{responses: []chat.Message{
+		{Role: chat.RoleAssistant, Content: "zero usage", UsageTokensIn: 0, UsageTokensOut: 0},
+	}})
+	if err := a.Run(context.Background(), "q"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "agent-2026-10-23.jsonl"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	finished := finishedRecords(t, raw)
+	if len(finished) != 1 || finished[0].Usage == nil || *finished[0].Usage {
+		t.Fatalf("usage_reported = %v, want explicit false for a 0/0 report", finished)
+	}
+}
