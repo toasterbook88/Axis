@@ -1,5 +1,31 @@
 ## Unreleased
 
+## v0.21.0 (2026-10-23)
+
+Explicit Cortex service addressing, tighter agent approvals, more complete
+streaming usage reports and cache-friendly request context. See the
+[upgrade guide](docs/release-notes.md#v0210-upgrade-guide) for configuration
+and log-reader compatibility. Publication and available downloads are tracked
+on GitHub Releases.
+
+### Features
+
+* `axis cortex` accepts `AXIS_CORTEX_URL` to address an HTTP(S) MCP service
+  independently of the node's SSH identity. A URL with no path gets `/mcp`;
+  invalid nonempty overrides fail instead of falling back. Embedded credentials,
+  query strings and fragments are rejected. Existing authentication, TLS trust,
+  timeouts and cancellation still apply (#554).
+* Optional `AXIS_CORTEX_QDRANT_URL` provides a REST base URL for memory counts
+  with an explicit MCP endpoint. Status prints the probed endpoint and reports
+  `memories_unknown: true` when a count cannot be observed, including failure
+  on the legacy node-derived path. A missing or null count is no longer
+  presented as a measured zero (#554).
+* Private `turn.finished` session-log records explicitly include
+  `usage_reported`. False means no nonzero usage reached the agent; absent
+  counters are unknown cost. An explicit zero/zero report also maps to false
+  through the current count-based interface; older records omit the field
+  (#555).
+
 ### Fixes
 
 * `axis agent` asks OpenAI-style servers for token usage in streamed replies
@@ -46,6 +72,17 @@
   clean or dirty file count) with the user message instead of in the system
   prompt. Editing one file or committing between runs changed it, so the
   system prompt still missed the cache while working in a repository.
+  These measurements describe a particular backend and workload; this release
+  does not guarantee cache reuse or a fixed speedup. The cluster and Git fields
+  are captured at session startup, rather than refreshed by these changes.
+
+### Maintenance
+
+* The model-eviction freeze regression asserts the exact `800 MiB` rendering,
+  preventing an unrelated `800` in the output from hiding a failure (#556).
+* Installation and support documentation were aligned with the published
+  v0.20.0 baseline; a source version bump does not make new downloads available
+  before publication (#548).
 
 ## v0.20.0 (2026-10-22)
 
