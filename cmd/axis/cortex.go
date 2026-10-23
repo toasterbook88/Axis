@@ -26,8 +26,11 @@ func cortexCmd() *cobra.Command {
 		Long: "Cortex is an optional coordination layer.\n" +
 			"It provides distributed vector memory (Qdrant), a CI/CD event bus,\n" +
 			"and cross-agent locking.\n\n" +
-			"Target node is resolved from AXIS_CORTEX_NODE, role: cortex in nodes.yaml,\n" +
-			"or a node named cortex (or foundry for backward compatibility).\n" +
+			"Set AXIS_CORTEX_URL to an explicit MCP service URL (http or https;\n" +
+			"a URL with no path gets /mcp). Optional AXIS_CORTEX_QDRANT_URL adds the memory count.\n" +
+			"Without AXIS_CORTEX_URL the target node is resolved from AXIS_CORTEX_NODE,\n" +
+			"role: cortex in nodes.yaml, or a node named cortex (or foundry for backward\n" +
+			"compatibility), using http://<hostname>:8200/mcp.\n" +
 			"Auth token: AXIS_CORTEX_SECRET env var or ~/.axis/cortex.token file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
@@ -73,7 +76,14 @@ func resolveCortexNode(cfg *config.Config) (config.NodeConfig, bool) {
 // buildCortexClient resolves the Cortex target node from nodes.yaml and the auth token from
 // secrets, then returns a ready-to-use cortex.Client with the given HTTP timeout.
 // It returns an actionable error if no Cortex node is configured.
+//
+// AXIS_CORTEX_URL, when set, takes precedence and needs no nodes.yaml. An
+// invalid value is an error rather than a silent fallback to node selection.
 func buildCortexClient(timeout time.Duration) (*cortex.Client, error) {
+	if raw := strings.TrimSpace(os.Getenv("AXIS_CORTEX_URL")); raw != "" {
+		return buildCortexEndpointClient(raw, timeout)
+	}
+
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("cortex: load config: %w", err)
@@ -96,6 +106,24 @@ func buildCortexClient(timeout time.Duration) (*cortex.Client, error) {
 	return cortex.NewClientWithTimeout(node.PrimaryHostname(), token, timeout), nil
 }
 
+func buildCortexEndpointClient(rawURL string, timeout time.Duration) (*cortex.Client, error) {
+	mcpURL, err := cortex.ParseServiceEndpoint(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("cortex: AXIS_CORTEX_URL: %w", err)
+	}
+	qdrantURL := ""
+	if rawQ := strings.TrimSpace(os.Getenv("AXIS_CORTEX_QDRANT_URL")); rawQ != "" {
+		if qdrantURL, err = cortex.ParseQdrantEndpoint(rawQ); err != nil {
+			return nil, fmt.Errorf("cortex: AXIS_CORTEX_QDRANT_URL: %w", err)
+		}
+	}
+	token, err := secrets.ResolveOrEmpty("AXIS_CORTEX_SECRET", "~/.axis/cortex.token")
+	if err != nil {
+		return nil, fmt.Errorf("cortex: resolve auth token: %w", err)
+	}
+	return cortex.NewClientForEndpoint(mcpURL, qdrantURL, token, timeout), nil
+}
+
 func cortexStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
@@ -113,6 +141,7 @@ func cortexStatusCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("cortex unreachable: %w", err)
 			}
+			status.Endpoint = client.MCPEndpoint()
 
 			return printCortexStatus(cmd.OutOrStdout(), status)
 		},
@@ -178,8 +207,15 @@ func printCortexStatus(w io.Writer, status *cortex.HealthResponse) error {
 	var out strings.Builder
 	fmt.Fprintf(&out, "\n  %s\n\n", ui.Bold("CORTEX BRAIN STATUS"))
 	fmt.Fprintf(&out, "  %-16s %s\n", "Status:", ui.Green(status.Status))
+	if status.Endpoint != "" {
+		fmt.Fprintf(&out, "  %-16s %s\n", "Endpoint:", status.Endpoint)
+	}
 	fmt.Fprintf(&out, "  %-16s %d\n", "MCP Tools:", status.MCPTools)
-	fmt.Fprintf(&out, "  %-16s %d (Qdrant points)\n", "Memories:", status.Memories)
+	if status.MemoriesUnknown {
+		fmt.Fprintf(&out, "  %-16s %s\n", "Memories:", ui.Dim("unknown (Qdrant count unavailable)"))
+	} else {
+		fmt.Fprintf(&out, "  %-16s %d (Qdrant points)\n", "Memories:", status.Memories)
+	}
 	fmt.Fprintln(&out)
 	_, err := fmt.Fprint(w, out.String())
 	return err
