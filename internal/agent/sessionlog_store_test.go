@@ -64,7 +64,7 @@ func TestDailySessionLogQuotaRotationAgeAndMidnight(t *testing.T) {
 	a := newSessionLogAgent(t, l, nil, &scriptedBackend{})
 	l.beginTurn(a, "cross-midnight")
 	now = now.Add(2 * time.Minute)
-	l.finishTurn(a, "cross-midnight", nil, 0, 0)
+	l.finishTurn(a, "cross-midnight", nil, 0, 0, 0)
 	records, _, _ := readSessionSegments(t, dir)
 	finished := finishedRecords(t, records)
 	if len(finished) != 1 || finished[0].Day != "2026-10-21" {
@@ -322,7 +322,7 @@ func TestDailySessionLogTrajectorySurvivesConversationRemoval(t *testing.T) {
 	// Compaction or the backend error rollback can remove every original message.
 	a.conv.ReplaceRange(0, a.conv.Len(), nil)
 	l.noteResponse(chat.Message{Role: chat.RoleAssistant, Content: "one-copy-answer"})
-	l.finishTurn(a, "one-copy-prompt", nil, 0, 0)
+	l.finishTurn(a, "one-copy-prompt", nil, 0, 0, 0)
 	raw, _, _ := readSessionSegments(t, l.dir)
 	for _, s := range []string{"one-copy-prompt", "one-copy-tool-output", "one-copy-answer", "intermediate explanation"} {
 		if count := bytes.Count(raw, []byte(s)); count != 1 {

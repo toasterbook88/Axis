@@ -426,11 +426,11 @@ func (a *Agent) RunWithSinks(ctx context.Context, userPrompt string, obs Observe
 func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 	userMsgIdx := a.conv.Len()
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
-	startIn, startOut, _ := a.UsageStats()
+	startIn, startOut, startUsageTurns := a.UsageStats()
 	if a.sessionLog != nil {
 		a.sessionLog.beginTurn(a, userPrompt)
 		defer func() {
-			a.sessionLog.finishTurn(a, userPrompt, err, startIn, startOut)
+			a.sessionLog.finishTurn(a, userPrompt, err, startIn, startOut, startUsageTurns)
 		}()
 	}
 
