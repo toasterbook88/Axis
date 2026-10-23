@@ -108,3 +108,63 @@ func TestCloudBackendDoesNotRetryOtherErrors(t *testing.T) {
 		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
+
+// streamChunks serves a fixed SSE body.
+func streamChunks(t *testing.T, chunks ...string) *CloudBackend {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+	b, err := NewCloudBackendWithKey("test-backend", "openai", server.URL, "mock-key", "test-model", 0)
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	return b
+}
+
+// The local hub sends usage on a chunk that still has a choice
+// (choices [{"index":0,"delta":{}}]), not with the spec's empty list. That
+// usage was dropped, so live sessions logged no token counts.
+func TestCloudBackendReadsUsageOnChunkWithChoice(t *testing.T) {
+	b := streamChunks(t,
+		`{"choices":[{"index":0,"delta":{"content":"hi"}}]}`,
+		`{"choices":[{"finish_reason":"stop","index":0,"delta":{}}]}`,
+		`{"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":14,"completion_tokens":8}}`,
+	)
+	resp, err := b.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.UsageTokensIn != 14 || resp.UsageTokensOut != 8 {
+		t.Fatalf("usage = (%d, %d), want (14, 8)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
+	if in, out, _ := b.Stats(); in != 14 || out != 8 {
+		t.Fatalf("backend stats = (%d, %d), want (14, 8)", in, out)
+	}
+	if resp.Content != "hi" {
+		t.Fatalf("content = %q, want %q", resp.Content, "hi")
+	}
+}
+
+// A server that repeats its usage report must be counted once.
+func TestCloudBackendCountsRepeatedUsageOnce(t *testing.T) {
+	b := streamChunks(t,
+		`{"choices":[{"index":0,"delta":{"content":"ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":1}}`,
+		`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}`,
+	)
+	resp, err := b.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.UsageTokensIn != 10 || resp.UsageTokensOut != 3 {
+		t.Fatalf("usage = (%d, %d), want (10, 3)", resp.UsageTokensIn, resp.UsageTokensOut)
+	}
+	if in, out, _ := b.Stats(); in != 10 || out != 3 {
+		t.Fatalf("backend stats = (%d, %d), want (10, 3)", in, out)
+	}
+}
