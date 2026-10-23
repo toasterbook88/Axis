@@ -12,18 +12,33 @@ func foreignOllama(c ModelChoice) bool {
 	return !c.Disabled && c.ProviderKind == "local" && c.Protocol == agent.ProtocolOllama && strings.TrimSpace(c.Node) != ""
 }
 
-// foreignOllamaBorrow reports that startup kept another node's Ollama even
-// though the operator did not ask for that model by name.
-func foreignOllamaBorrow(target ModelChoice, originalRequest string) bool {
-	return foreignOllama(target) && !strings.EqualFold(target.Model, strings.TrimSpace(originalRequest))
+// sameNodeOllama reports a usable Ollama choice on this machine.
+func sameNodeOllama(c ModelChoice) bool {
+	return !c.Disabled && c.Model != "" && c.ProviderKind == "local" &&
+		c.Protocol == agent.ProtocolOllama && strings.TrimSpace(c.Node) == ""
 }
 
-// hubInsteadOfForeignOllama substitutes an enabled hub role for another node's
-// Ollama. A same-node Ollama pick is left alone. When several hub choices
-// probed clean, the configured default role wins if it is one of them.
+// foreignOllamaBorrow reports that startup kept another node's Ollama even
+// though the operator did not ask for that model by name or explicit pick.
+func foreignOllamaBorrow(target ModelChoice, explicit *ModelChoice, requestedModel string) bool {
+	if explicit != nil {
+		return false
+	}
+	return foreignOllama(target) && !strings.EqualFold(target.Model, strings.TrimSpace(requestedModel))
+}
+
+// hubInsteadOfForeignOllama substitutes a usable same-node Ollama or an enabled
+// hub role for another node's Ollama. A same-node Ollama pick always wins over
+// the hub even when a foreign Ollama sorted earlier by model name. When several
+// hub choices probed clean, the configured default role wins if it is one of them.
 func hubInsteadOfForeignOllama(choices []ModelChoice, picked ModelChoice) (ModelChoice, bool) {
 	if !foreignOllama(picked) {
 		return ModelChoice{}, false
+	}
+	for _, c := range choices {
+		if sameNodeOllama(c) {
+			return c, true
+		}
 	}
 	var hubs []ModelChoice
 	for _, c := range choices {
@@ -49,7 +64,7 @@ func hubInsteadOfForeignOllama(choices []ModelChoice, picked ModelChoice) (Model
 }
 
 // pickLocalStartup keeps a same-node catalog pick and refuses another node's
-// Ollama when an enabled hub role already probed clean.
+// Ollama when a same-node Ollama or an enabled hub role is usable.
 func pickLocalStartup(choices []ModelChoice, t ModelChoice, optsFor func(ModelChoice) (agent.CloudBackendOptions, error)) (ModelChoice, agent.CloudBackendOptions, error) {
 	if alt, ok := hubInsteadOfForeignOllama(choices, t); ok {
 		t = alt

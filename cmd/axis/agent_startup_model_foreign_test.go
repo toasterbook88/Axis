@@ -69,19 +69,28 @@ func TestStartupDoesNotBorrowForeignOllamaWhenHubRoleProbedClean(t *testing.T) {
 	}
 }
 
-// Same-node Ollama stays ahead of the hub. The guard is only the foreign borrow.
+// Same-node Ollama stays ahead of the hub even when a foreign Ollama sorts
+// earlier by model name. The guard is only the foreign borrow.
 func TestStartupSameNodeOllamaStillPrecedesHub(t *testing.T) {
 	stubForeignStartup(t, "served-9b")
+	foreignAlpha := foreignOllamaChoice()
+	foreignAlpha.ID = "peer:ollama:alpha:7b"
+	foreignAlpha.Model = "alpha:7b"
 	local := ModelChoice{
-		ID: "here:ollama:mid-9b", Model: "mid-9b", Protocol: agent.ProtocolOllama,
-		ProviderName: "ollama", ProviderKind: "local", Endpoint: "http://127.0.0.1:11434",
+		ID:           "here:ollama:mid-9b",
+		Model:        "mid-9b",
+		Protocol:     agent.ProtocolOllama,
+		ProviderName: "ollama",
+		ProviderKind: "local",
+		Endpoint:     "http://127.0.0.1:11434",
 	}
-	got, _, err := resolveStartupModelTarget("Weight-File-Q4", "", "", nil, &runtimectx.Context{}, []ModelChoice{local, hubChoice("served-9b", false)})
+	got, _, err := resolveStartupModelTarget("Weight-File-Q4", "", "", nil, &runtimectx.Context{},
+		[]ModelChoice{foreignAlpha, local, hubChoice("served-9b", false)})
 	if err != nil {
 		t.Fatalf("resolveStartupModelTarget: %v", err)
 	}
-	if got.Model != "mid-9b" {
-		t.Fatalf("got %q, want same-node Ollama mid-9b", got.Model)
+	if got.Model != "mid-9b" || got.Node != "" {
+		t.Fatalf("got model %q node %q, want same-node Ollama mid-9b", got.Model, got.Node)
 	}
 }
 
@@ -125,5 +134,59 @@ func TestStartupForeignOllamaBorrowNamesTheBorrow(t *testing.T) {
 	}
 	if strings.Contains(text, "Using model") {
 		t.Fatalf("notice %q describes the borrow as a casual substitution", text)
+	}
+}
+
+// An explicit interactive pick of another node's Ollama is operator intent, not a borrow.
+func TestStartupExplicitForeignOllamaDoesNotWarnAsBorrow(t *testing.T) {
+	stubForeignStartup(t, "")
+	prevReady := startupReadyFn
+	startupReadyFn = func(context.Context, ModelChoice, agent.CloudBackendOptions) (modelReadiness, string) {
+		return modelReady, ""
+	}
+	t.Cleanup(func() { startupReadyFn = prevReady })
+
+	explicit := foreignOllamaChoice()
+	var notes bytes.Buffer
+	got, _, _, err := resolveReadyStartupModelTarget(
+		context.Background(), "", "local", "", &explicit, readyRuntime(),
+		[]ModelChoice{explicit},
+		false, &notes,
+	)
+	if err != nil {
+		t.Fatalf("resolveReadyStartupModelTarget: %v", err)
+	}
+	if got.Model != "sentinel:latest" || got.Node != "peer" {
+		t.Fatalf("got model %q node %q, want explicit foreign Ollama", got.Model, got.Node)
+	}
+	if notes.Len() != 0 {
+		t.Fatalf("notice %q, want no borrow warning for explicit choice", notes.String())
+	}
+}
+
+// When a catalog default fails its readiness probe and falls back to foreign Ollama,
+// the notice must not claim the dead default was absent from the catalog.
+func TestStartupForeignOllamaAfterFailedProbeDoesNotClaimCatalogMiss(t *testing.T) {
+	stubForeignStartup(t, "served-9b")
+	stubStartupReady(t, map[string]modelReadiness{"served-9b": modelDown})
+
+	var notes bytes.Buffer
+	got, _, _, err := resolveReadyStartupModelTarget(
+		context.Background(), "served-9b", "auto", "", nil, readyRuntime(),
+		[]ModelChoice{foreignOllamaChoice(), hubChoice("served-9b", false)},
+		false, &notes,
+	)
+	if err != nil {
+		t.Fatalf("resolveReadyStartupModelTarget: %v", err)
+	}
+	if got.Model != "sentinel:latest" || got.Node != "peer" {
+		t.Fatalf("got model %q node %q, want foreign Ollama after hub probe failed", got.Model, got.Node)
+	}
+	text := notes.String()
+	if !strings.Contains(text, `Default model "served-9b" is not answering`) || !strings.Contains(text, "another node's Ollama") {
+		t.Fatalf("notice %q, want dead-default probe message and foreign borrow warning", text)
+	}
+	if strings.Contains(text, "not a usable catalog choice") || strings.Contains(text, "Using model") {
+		t.Fatalf("notice %q falsely claims catalog miss or casual substitution", text)
 	}
 }
