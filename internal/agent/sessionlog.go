@@ -112,7 +112,7 @@ func (l *DailySessionLog) beginTurn(a *Agent, prompt string) {
 	})
 }
 
-func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, startIn, startOut int) {
+func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, startIn, startOut, startUsageTurns int) {
 	if l == nil || a == nil {
 		return
 	}
@@ -138,8 +138,11 @@ func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, star
 	} else if hitMax {
 		stop = "max_turns"
 	}
-	in, out, _ := a.UsageStats()
+	in, out, usageTurns := a.UsageStats()
 	dIn, dOut := in-startIn, out-startOut
+	// Missing usage and zero usage both leave tokens_* absent (omitempty), so
+	// record explicitly whether the backend reported usage during this turn.
+	usageReported := usageTurns > startUsageTurns
 	if dIn < 0 {
 		dIn = 0
 	}
@@ -156,6 +159,7 @@ func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, star
 		Error:     errText,
 		TokensIn:  dIn,
 		TokensOut: dOut,
+		Usage:     &usageReported,
 		Answer:    answer,
 		Resumed:   resumed,
 	})
@@ -358,23 +362,26 @@ type sessionRecord struct {
 	Dropped        int                   `json:"previous_records_omitted,omitempty"`
 	TruncatedBytes map[string]int        `json:"truncated_bytes,omitempty"`
 
-	Kind      string       `json:"kind"`
-	SessionID string       `json:"session_id"`
-	Turn      int          `json:"turn,omitempty"`
-	TS        string       `json:"ts"`
-	Day       string       `json:"day"`
-	Version   string       `json:"version,omitempty"`
-	Model     string       `json:"model,omitempty"`
-	Autonomy  string       `json:"autonomy,omitempty"`
-	ElapsedMS int64        `json:"elapsed_ms,omitempty"`
-	Stop      string       `json:"stop,omitempty"`
-	Error     string       `json:"error,omitempty"`
-	TokensIn  int          `json:"tokens_in,omitempty"`
-	TokensOut int          `json:"tokens_out,omitempty"`
-	Prompt    string       `json:"prompt,omitempty"`
-	Answer    string       `json:"answer,omitempty"`
-	Resumed   bool         `json:"resumed"`
-	Tool      *sessionTool `json:"tool,omitempty"`
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	Turn      int    `json:"turn,omitempty"`
+	TS        string `json:"ts"`
+	Day       string `json:"day"`
+	Version   string `json:"version,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Autonomy  string `json:"autonomy,omitempty"`
+	ElapsedMS int64  `json:"elapsed_ms,omitempty"`
+	Stop      string `json:"stop,omitempty"`
+	Error     string `json:"error,omitempty"`
+	TokensIn  int    `json:"tokens_in,omitempty"`
+	TokensOut int    `json:"tokens_out,omitempty"`
+	// Usage is set only on turn.finished: false means the backend reported no
+	// usage for the turn (unknown), which is not the same as zero tokens.
+	Usage   *bool        `json:"usage_reported,omitempty"`
+	Prompt  string       `json:"prompt,omitempty"`
+	Answer  string       `json:"answer,omitempty"`
+	Resumed bool         `json:"resumed"`
+	Tool    *sessionTool `json:"tool,omitempty"`
 }
 
 type sessionTool struct {
