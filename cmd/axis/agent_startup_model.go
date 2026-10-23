@@ -678,8 +678,8 @@ func findModelTargetByRef(choices []ModelChoice, ref string) (ModelChoice, error
 // requestedModel should be the effective operator request (explicit --model,
 // chat.default_model, or warm preferred) — not only the raw flag.
 //
-// Policy for provider=auto: prefer reachable local/remote ollama (or openai-local)
-// over cloud; cloud only when no usable local target exists. Explicit --provider
+// Policy for provider=auto: prefer usable local targets in catalog order
+// over cloud, regardless of protocol. Explicit --provider
 // local/cloud and interactive selection are never overridden by auto-cloud.
 // Explicit --cloud-model always requires a credentialed configured match (no silent fallback).
 func resolveStartupModelTarget(
@@ -702,11 +702,6 @@ func resolveStartupModelTarget(
 	usable := func(c ModelChoice) bool { return !c.Disabled && c.Model != "" }
 	firstLocal := func() (ModelChoice, bool) {
 		for _, c := range choices {
-			if usable(c) && c.ProviderKind == "local" && c.Protocol == agent.ProtocolOllama {
-				return c, true
-			}
-		}
-		for _, c := range choices {
 			if usable(c) && c.ProviderKind == "local" {
 				return c, true
 			}
@@ -720,16 +715,7 @@ func resolveStartupModelTarget(
 				matches = append(matches, c)
 			}
 		}
-		if len(matches) == 1 {
-			return matches[0], true
-		}
-		if len(matches) > 1 {
-			// Prefer local node ollama
-			for _, c := range matches {
-				if c.Node == "" && c.Protocol == agent.ProtocolOllama {
-					return c, true
-				}
-			}
+		if len(matches) > 0 {
 			return matches[0], true
 		}
 		return ModelChoice{}, false
