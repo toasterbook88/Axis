@@ -227,12 +227,15 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 			continue
 		}
 
+		// Usage can ride on a chunk that still has a choice: the local hub
+		// sends it with choices [{"delta":{}}], not the spec's empty list.
+		// Keep the last report and count it once after the stream, so a
+		// server that repeats usage is not counted twice.
+		if chunk.Usage != nil {
+			reportedIn, reportedOut = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
+			usageReported = true
+		}
 		if len(chunk.Choices) == 0 {
-			if chunk.Usage != nil {
-				b.accumulateTokens(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
-				reportedIn, reportedOut = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
-				usageReported = true
-			}
 			continue
 		}
 
@@ -316,6 +319,9 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 	// totals real numbers; estimated counts stay in the backend only.
 	result.UsageTokensIn = reportedIn
 	result.UsageTokensOut = reportedOut
+	if usageReported {
+		b.accumulateTokens(reportedIn, reportedOut)
+	}
 	// If token usage wasn't reported in the stream, estimate it.
 	if !usageReported {
 		pLen := 0

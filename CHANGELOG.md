@@ -7,6 +7,12 @@
   usage, so session stats and the private session log had no token counts. A
   server that rejects the option is retried once without it, and the backend
   stops sending it.
+* `axis agent` also reads token usage sent on a stream chunk that still
+  carries a choice (`choices: [{"delta": {}}]`), as some OpenAI-compatible
+  servers do, instead of only on a chunk with an empty `choices` list. That
+  usage was dropped, so the session log still had no token counts and the
+  session summary showed an estimate. Usage is now counted once per reply,
+  from the last report.
 * `axis agent` "always" approval now covers only the tool it was given for.
   It used to approve every tool for the rest of the session, so approving one
   read-only MCP query also let later MCP writes and shell, node, fleet and
