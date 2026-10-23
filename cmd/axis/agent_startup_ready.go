@@ -67,6 +67,7 @@ func resolveReadyStartupModelTarget(
 	}
 	choices = slices.Clone(choices)
 	var skipped []string
+	originalRequest := strings.TrimSpace(requestedModel)
 	for attempt := 0; ; attempt++ {
 		target, opts, err := resolveStartupModelTarget(requestedModel, providerFlag, cloudModelFlag, explicit, rt, choices)
 		if err == nil && pinned && explicit == nil && requestedModel != "" && target.ProviderKind != "cloud" &&
@@ -112,6 +113,21 @@ func resolveReadyStartupModelTarget(
 		}
 
 		startupTunnelInstaller(parent)(tunnel)
+		// A borrow of another node's Ollama is not a casual substitution.
+		// Name the startup model that missed and the model that was borrowed.
+		if foreignOllamaBorrow(target, originalRequest) {
+			if originalRequest == "" {
+				fmt.Fprintf(notes, "Warning: no startup model was a usable catalog choice; borrowed %q from another node's Ollama. No enabled hub role answered.\n", target.Model)
+			} else {
+				fmt.Fprintf(notes, "Warning: startup model %q is not a usable catalog choice; borrowed %q from another node's Ollama. No enabled hub role answered.\n", originalRequest, target.Model)
+			}
+			if verdict == modelCold {
+				fmt.Fprintf(notes, "Note: model %q did not answer within %s; it may still be loading.\n", target.Model, startupReadyTimeout)
+			} else if verdict != modelReady {
+				fmt.Fprintf(notes, "Warning: model %q is not answering (%s).\n", target.Model, reason)
+			}
+			return target, opts, verdict, nil
+		}
 		switch verdict {
 		case modelReady, modelCold:
 			if len(skipped) > 0 {
