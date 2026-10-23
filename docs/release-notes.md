@@ -8,6 +8,111 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.21.0 upgrade guide
+
+This section describes the v0.21.0 source candidate. Consult
+[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
+and downloads; a versioned changelog is not proof of publication. Changes since
+v0.20.0 are listed in the [changelog](../CHANGELOG.md#v0210-2026-10-23).
+There is no required YAML migration.
+
+### Cortex: select the service independently of SSH
+
+`AXIS_CORTEX_URL` overrides node-derived Cortex addressing for `status`, `recall`
+and `events`, without requiring `nodes.yaml`. For example:
+
+```sh
+AXIS_CORTEX_URL=https://cortex.example.test/mcp axis cortex status
+AXIS_CORTEX_URL=https://cortex.example.test/mcp axis cortex recall "release procedure"
+```
+
+These are documentation endpoints; substitute the service you administer. A URL
+with no path, or only `/`, gets `/mcp`. Only HTTP(S) is accepted. Invalid nonempty
+values, including whitespace-only values, fail rather than silently choosing a
+node. Credentials, query strings and fragments are rejected in the URL; keep
+using `AXIS_CORTEX_SECRET` or `~/.axis/cortex.token` for authentication. HTTPS
+uses the system trust store, and existing timeouts and cancellation still bound
+requests. An unset or empty override preserves node selection and its legacy
+`http://<hostname>:8200/mcp` address.
+
+Installing the executable does not set this environment variable for a shell,
+agent process or daemon service. Set it in each intended execution context and
+verify that context. Do not change a node's SSH identity to repair a service URL.
+A successful tools listing proves MCP reachability, not recall quality or the
+health of every operation; check native `axis cortex status` and a representative
+read-only `axis cortex recall` separately.
+
+With an explicit MCP endpoint, the optional `AXIS_CORTEX_QDRANT_URL` supplies a
+Qdrant REST base URL for counting `cortex_memories` points. If it is unset, the
+count is unknown. Failed requests and missing/null `points_count` also produce
+`memories_unknown: true`, on both explicit and legacy paths; text shows unknown.
+JSON retains `memories: 0` in that case, which must not be interpreted as an
+observed empty store. A successfully observed numeric zero remains known.
+The additive JSON fields are `endpoint` and `memories_unknown` (the latter is
+omitted when false). A healthy MCP status can coexist with an unknown count.
+
+### Agent safety and conversation recovery
+
+Choosing **always** in a tool approval now approves that tool for the session,
+including inherited sub-agent approvals. Other tools still follow their own
+approval policy; **never** blocks previously approved tools too. Safety-blocked
+commands continue to require confirmation. External MCP tools display
+**NOT RATED** with an explanation, because their annotations are not a risk
+assessment or authorization. Private `approval` events include the call ID and
+decision; the decision can come from an autonomy policy, not only a human click.
+
+Empty tool output is stored as `(tool returned no output)`. Empty user/tool
+messages in existing or resumed history receive placeholders when requests are
+built, preventing empty-content rejection from breaking every later turn.
+Assistant messages containing only tool calls retain their valid representation.
+
+The session-start cluster summary and Git context travel with the newest user
+message instead of changing the stable system prefix. They remain session-start
+observations; this change performs no fresh fleet or Git collection. Today's
+local date is refreshed on each request. Cache reuse and latency depend on the
+backend and workload; measure server-reported reuse before claiming a speedup.
+
+### Streaming usage and private log readers
+
+OpenAI-style streamed requests ask for `stream_options.include_usage`. A 4xx
+rejection naming that option is retried once without it, and that backend stops
+sending the option. Other errors retain their failure behavior. Usage is read
+from chunks with choices as well as empty-choice chunks; the final usage report
+is counted once per reply rather than added repeatedly.
+
+Each new private `turn.finished` record has `usage_reported`. True means nonzero
+reported usage reached the agent. False means absent counters are unknown cost;
+the current integer interface also maps an explicit zero/zero report to false.
+Older log records lack the field, so consumers must treat absence as unknown.
+Backend-internal estimates do not become observed log usage.
+
+Private session logging and the bare `axis` terminal entry point were introduced
+in v0.20.0 and remain in effect: bare `axis` on a TTY opens the agent console,
+`axis tui` opens the dashboard, `axis agent --plain` selects the line reader,
+and a non-TTY bare invocation prints help. Logs remain local and unencrypted,
+with owner-only directories/files, credential-pattern masking and bounded
+retention (8 MiB segments, current day plus 29 preceding days, 1 GiB per log
+directory). Masking cannot recognize every secret. Keep logs private and inspect
+truncation and omission markers; see the [logging runbook](runbooks/agent-session-logs.md).
+Hardware facts and macOS storage representation are unchanged in this release.
+
+### Installation and verification boundary
+
+AXIS source builds remain on **Go 1.26.10**. The pinned GoReleaser validator uses
+its separate compatible toolchain; it does not change the AXIS build compiler.
+Before tagging, release preparation must be merged, and both the clean release
+preflight and the nonpublishing cross-platform workflow must pass on that exact
+merged SHA. Native macOS console acceptance is separate from cross-compilation.
+
+When a download is published and installation is approved, verify the executable
+path and `axis version --local`, inspect shadows with `axis doctor`, then compare
+the daemon commit and readiness in its actual service context. Installation and
+service restart are separate actions; `axis update --no-restart` avoids its
+automatic daemon restart. Preserve the replaced binary and metadata for rollback.
+A binary rollback does not rewind configuration, history or logs.
+
+---
+
 ## v0.20.0 upgrade guide
 
 [v0.20.0](https://github.com/toasterbook88/axis/releases/tag/v0.20.0) was published

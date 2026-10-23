@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Repo version: `0.20.0`
+- Repo version: `0.21.0`
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -19,6 +19,11 @@ Refresh this section with `./hack/refresh-current-state.sh`.
 AXIS is no longer just a read-only Phase 1 fact collector.
 
 The live repo currently contains:
+
+- Explicit Cortex service addressing through `AXIS_CORTEX_URL`, independent of SSH node identity, with optional `AXIS_CORTEX_QDRANT_URL` for counts. Status exposes the probed endpoint and marks unobserved memory counts with `memories_unknown`; invalid nonempty overrides fail closed. An unset override preserves legacy node-derived addressing
+- Session-scoped per-tool agent approvals, inherited by sub-agents; external MCP tools display NOT RATED. Private approval events carry the tool-call ID and decision, which can come from the configured autonomy policy
+- Streamed OpenAI-style usage requests with a compatibility retry for rejected stream options; usage on choice-bearing chunks is retained and counted once per reply. Private `turn.finished` records include `usage_reported`, with absent counts remaining unknown
+- Cache-friendly agent request context: session-start cluster/Git observations accompany the newest user message, today's local date is refreshed per request, and empty user/tool content is normalized for servers that reject it. These changes neither refresh the session-start observations nor guarantee backend cache reuse
 
 - Private bounded `axis agent` session logs: prompts, answers, tool trajectories, reported token usage and outcomes remain local with credential masking, 30-day/1 GiB retention and explicit truncation/omission evidence (`docs/runbooks/agent-session-logs.md`).
 - Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models; Core AI (`.aimodel`) and Core ML (`.mlpackage`, `.mlmodelc`) bundles are recorded whole with kind `unknown` and are never treated as runnable weights by model planning, model resolution, or task context
