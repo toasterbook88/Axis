@@ -111,3 +111,13 @@ func TestPrintCortexStatus_ShowsProbedEndpoint(t *testing.T) {
 		t.Fatalf("status output = %q, want the probed endpoint", buf.String())
 	}
 }
+
+func TestBuildCortexClient_WhitespaceServiceURLFailsInsteadOfFallingBack(t *testing.T) {
+	writeCortexNodesYAML(t, "nodes:\n  - name: foundry\n    hostname: foundry-ssh-alias\n    ssh_user: axis\n")
+	t.Setenv("AXIS_CORTEX_URL", "   ")
+
+	_, err := buildCortexClient(time.Second)
+	if err == nil || !strings.Contains(err.Error(), "AXIS_CORTEX_URL") {
+		t.Fatalf("err = %v, want a whitespace-only AXIS_CORTEX_URL rejected, not a node fallback", err)
+	}
+}

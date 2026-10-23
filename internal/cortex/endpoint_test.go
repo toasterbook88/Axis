@@ -154,3 +154,34 @@ func TestEndpointClient_ContextCancellationBoundsHungServer(t *testing.T) {
 		t.Fatalf("server saw %d calls, want 1", calls.Load())
 	}
 }
+
+func TestStatus_QdrantMissingOrNullCountIsUnknownButZeroIsKnown(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		wantUnknown bool
+	}{
+		{"null count", `{"result":{"points_count":null}}`, true},
+		{"missing count", `{"result":{}}`, true},
+		{"zero count", `{"result":{"points_count":0}}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mcpSrv := httptest.NewServer(mcpHandler("tools/list", map[string]any{"tools": []map[string]any{}}))
+			defer mcpSrv.Close()
+			qSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer qSrv.Close()
+
+			status, err := NewClientForEndpoint(mcpSrv.URL+"/mcp", qSrv.URL, "", 2*time.Second).Status(context.Background())
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if status.MemoriesUnknown != tc.wantUnknown || status.Memories != 0 {
+				t.Fatalf("memories=%d unknown=%v, want unknown=%v", status.Memories, status.MemoriesUnknown, tc.wantUnknown)
+			}
+		})
+	}
+}

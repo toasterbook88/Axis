@@ -80,7 +80,9 @@ func resolveCortexNode(cfg *config.Config) (config.NodeConfig, bool) {
 // AXIS_CORTEX_URL, when set, takes precedence and needs no nodes.yaml. An
 // invalid value is an error rather than a silent fallback to node selection.
 func buildCortexClient(timeout time.Duration) (*cortex.Client, error) {
-	if raw := strings.TrimSpace(os.Getenv("AXIS_CORTEX_URL")); raw != "" {
+	// Any non-empty value is an explicit choice: a whitespace-only value is
+	// rejected by the parser instead of silently falling back to a node.
+	if raw := os.Getenv("AXIS_CORTEX_URL"); raw != "" {
 		return buildCortexEndpointClient(raw, timeout)
 	}
 
@@ -112,7 +114,7 @@ func buildCortexEndpointClient(rawURL string, timeout time.Duration) (*cortex.Cl
 		return nil, fmt.Errorf("cortex: AXIS_CORTEX_URL: %w", err)
 	}
 	qdrantURL := ""
-	if rawQ := strings.TrimSpace(os.Getenv("AXIS_CORTEX_QDRANT_URL")); rawQ != "" {
+	if rawQ := os.Getenv("AXIS_CORTEX_QDRANT_URL"); rawQ != "" {
 		if qdrantURL, err = cortex.ParseQdrantEndpoint(rawQ); err != nil {
 			return nil, fmt.Errorf("cortex: AXIS_CORTEX_QDRANT_URL: %w", err)
 		}

@@ -360,11 +360,15 @@ func (c *Client) qdrantPointCount(ctx context.Context) (int, error) {
 
 	var data struct {
 		Result struct {
-			PointsCount int `json:"points_count"`
+			PointsCount *int `json:"points_count"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return 0, err
 	}
-	return data.Result.PointsCount, nil
+	// A missing or null count is unknown, not zero.
+	if data.Result.PointsCount == nil {
+		return 0, fmt.Errorf("qdrant response has no points_count")
+	}
+	return *data.Result.PointsCount, nil
 }
