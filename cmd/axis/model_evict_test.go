@@ -543,7 +543,7 @@ func TestModelEvictFreezeIgnoresMeasuredDelta(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("model evict failed: %v\n%s", err, buf.String())
 	}
-	if !strings.Contains(buf.String(), "reclaimed 0 MiB") || strings.Contains(buf.String(), "800 MiB") {
+	if !evictLineAcceptsOutput(buf.String()) {
 		t.Fatalf("output = %q, want reclaimed 0 MiB", buf.String())
 	}
 	loaded := loadOnlyEvictionReceipt(t)
