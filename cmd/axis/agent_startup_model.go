@@ -748,8 +748,7 @@ func resolveStartupModelTarget(
 			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 		}
 		if t, ok := firstLocal(); ok {
-			opts, err := optsForChoice(t)
-			return t, opts, err
+			return pickLocalStartup(choices, t, optsForChoice)
 		}
 		// Fallback local default name
 		name := resolveAgentModel("", rt)
@@ -773,10 +772,9 @@ func resolveStartupModelTarget(
 				return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 			}
 		}
-		// Prefer any usable local target from the catalog
+		// Prefer a usable local target. A probed hub role beats foreign Ollama.
 		if t, ok := firstLocal(); ok {
-			opts, err := optsForChoice(t)
-			return t, opts, err
+			return pickLocalStartup(choices, t, optsForChoice)
 		}
 		// Explicit default explicitly absent from disk AND catalog: keep the
 		// legacy last-resort behavior so the operator sees the real error.

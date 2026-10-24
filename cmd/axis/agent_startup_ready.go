@@ -112,6 +112,25 @@ func resolveReadyStartupModelTarget(
 		}
 
 		startupTunnelInstaller(parent)(tunnel)
+		// A borrow of another node's Ollama is not a casual substitution.
+		// Name the startup model that missed and the model that was borrowed.
+		req := strings.TrimSpace(requestedModel)
+		if foreignOllamaBorrow(target, explicit, req) {
+			switch {
+			case len(skipped) > 0:
+				fmt.Fprintf(notes, "Warning: borrowed %q from another node's Ollama. No enabled hub role answered.\n", target.Model)
+			case req == "":
+				fmt.Fprintf(notes, "Warning: no startup model was a usable catalog choice; borrowed %q from another node's Ollama. No enabled hub role answered.\n", target.Model)
+			default:
+				fmt.Fprintf(notes, "Warning: startup model %q is not a usable catalog choice; borrowed %q from another node's Ollama. No enabled hub role answered.\n", req, target.Model)
+			}
+			if verdict == modelCold {
+				fmt.Fprintf(notes, "Note: model %q did not answer within %s; it may still be loading.\n", target.Model, startupReadyTimeout)
+			} else if verdict != modelReady {
+				fmt.Fprintf(notes, "Warning: model %q is not answering (%s).\n", target.Model, reason)
+			}
+			return target, opts, verdict, nil
+		}
 		switch verdict {
 		case modelReady, modelCold:
 			if len(skipped) > 0 {
