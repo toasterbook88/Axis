@@ -23,7 +23,9 @@ func processTreeFromProc(procRoot string, root int) map[int]bool {
 			if err != nil {
 				continue
 			}
-			stat, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "stat"))
+			// Rebuild the path from the parsed PID so no raw entry name reaches
+			// the read.
+			stat, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))
 			if err != nil {
 				continue
 			}
