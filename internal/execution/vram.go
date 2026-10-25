@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -56,34 +55,33 @@ func (s *localPIDSink) PID() int {
 // The caller starts the sampler before launching the workload and calls
 // stop() once it has finished.
 func sampleTaskVRAM(ctx context.Context, interval time.Duration, rootPID func() int) (stop func() int64) {
-	var mu sync.Mutex
-	peak := int64(0)
-	done := make(chan struct{})
+	// The sampler owns its context so stop() can kill an in-flight
+	// nvidia-smi instead of waiting on a wedged one.
+	sampleCtx, cancel := context.WithCancel(ctx)
+	var peak int64
+	exited := make(chan struct{})
 
 	go func() {
+		defer close(exited)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-done:
-				return
-			case <-ctx.Done():
+			case <-sampleCtx.Done():
 				return
 			case <-ticker.C:
-				used := taskVRAMUsed(ctx, rootPID())
-				mu.Lock()
-				if used > peak {
+				if used := taskVRAMUsed(sampleCtx, rootPID()); used > peak {
 					peak = used
 				}
-				mu.Unlock()
 			}
 		}
 	}()
 
+	// stop returns only after the sampler has exited, so no sample runs
+	// after the task is recorded.
 	return func() int64 {
-		close(done)
-		mu.Lock()
-		defer mu.Unlock()
+		cancel()
+		<-exited
 		return peak
 	}
 }

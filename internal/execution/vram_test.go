@@ -129,3 +129,34 @@ func TestRunLocalShellReportsPID(t *testing.T) {
 		t.Fatalf("reported PID %s, shell printed %q", got, out)
 	}
 }
+
+// stop cancels an in-flight nvidia-smi query and waits for the sampler to
+// exit, so a wedged binary cannot hold up task completion and no sample runs
+// after stop returns.
+func TestSampleTaskVRAMStopCancelsInFlightQuery(t *testing.T) {
+	entered := make(chan struct{})
+	prevApps, prevTree := queryComputeAppsVRAM, taskProcessTree
+	queryComputeAppsVRAM = func(ctx context.Context) (map[int]int64, bool) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, false
+	}
+	taskProcessTree = func(root int) map[int]bool { return map[int]bool{root: true} }
+	defer func() { queryComputeAppsVRAM, taskProcessTree = prevApps, prevTree }()
+
+	stop := sampleTaskVRAM(context.Background(), time.Millisecond, func() int { return 500 })
+	<-entered
+	done := make(chan int64)
+	go func() { done <- stop() }()
+	select {
+	case peak := <-done:
+		if peak != 0 {
+			t.Fatalf("cancelled query must not count, peak = %d", peak)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop() blocked on an in-flight nvidia-smi query")
+	}
+}
