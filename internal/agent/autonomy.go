@@ -16,8 +16,9 @@ const (
 	// you trust the edits but want to vet commands.
 	AutonomyEdit AutonomyMode = "edit"
 	// AutonomyFull auto-approves everything except safety-gate-blocked commands
-	// (score >= 80). The Structured Safety Engine is the only barrier. Use for
-	// unattended / long-running autonomous work.
+	// (score >= 80) and external MCP tools missing from the exact
+	// auto_approve_tools allowlist. Use for unattended / long-running
+	// autonomous work.
 	AutonomyFull AutonomyMode = "full"
 )
 
@@ -60,6 +61,12 @@ func autonomyConfirm(mode AutonomyMode, fallback ConfirmFunc) ConfirmFunc {
 		// Read-only tools never need confirmation, regardless of mode.
 		if isReadOnlyTool(toolName) {
 			return ConfirmYes
+		}
+		// External MCP tools reach this policy only when they are not on the
+		// exact auto_approve_tools allowlist. They carry no AXIS safety
+		// score, so no mode may auto-approve them.
+		if isExternalMCPTool(toolName) {
+			return fallback(toolName, description, safetyScore)
 		}
 		switch mode {
 		case AutonomyFull:
