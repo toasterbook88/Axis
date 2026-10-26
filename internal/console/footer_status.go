@@ -22,7 +22,7 @@ type StatusFooterConfig struct {
 	// is omitted rather than fabricating zeros.
 	UsageStats func() (in, out, turns int)
 
-	// Mode returns the autonomy mode (e.g. "default", "edit", "full").
+	// Mode returns the autonomy mode (e.g. "cluster", "default", "edit", "full").
 	// The footer prints observe, edit, or exec. It never prints a fleet fraction.
 	Mode func() string
 
@@ -33,8 +33,8 @@ type StatusFooterConfig struct {
 
 func chromeMode(mode string) string {
 	switch mode {
-	case "edit":
-		return "edit"
+	case "edit", "cluster":
+		return mode
 	case "full", "exec":
 		return "exec"
 	default:

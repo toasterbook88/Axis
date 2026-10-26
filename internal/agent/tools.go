@@ -144,7 +144,7 @@ func (r *ToolRegistry) visible(name string) bool {
 	if execTool(name) && r.scope != ScopeExec {
 		return false
 	}
-	if r.extraVisible(name) {
+	if r.scope != ScopeCluster && r.extraVisible(name) {
 		return true
 	}
 	return toolVisible(name, r.scope)

@@ -128,7 +128,7 @@ type Config struct {
 	MaxTurns                int                  // Maximum agent loop iterations (default: 10)
 	MaxTokens               int                  // Conversation token budget (default: 4096)
 	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
-	Autonomy                AutonomyMode         // Autonomy mode: default, edit, or full (controls auto-approval breadth)
+	Autonomy                AutonomyMode         // Autonomy mode: cluster, default, edit, or full (controls tool scope and auto-approval)
 	SystemExtra             string               // Extra text appended to system prompt
 	Verbose                 bool                 // Emit trace output for tool calls and turns
 	DryRun                  bool                 // Plan tool calls without executing them
