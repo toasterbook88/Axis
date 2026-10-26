@@ -70,7 +70,7 @@ The observation pipeline silently normalizes and merges data in several ways:
 ### 5.2 Merge semantics (`mergeObservation`)
 - `SampleCount` is additive (`existing + next`).
 - `WallTimeMS` is a **weighted average** across total samples.
-- `ObservedRSSMB` and `ObservedVRAMMB` keep the **maximum** seen across runs (not average). Each run contributes what its producer measured: a guarded task run records the process max RSS and the highest device-wide VRAM it sampled; a llama-server start records one RSS sample and device-wide VRAM. The aggregate is therefore the largest recorded measurement, not a proven process-lifetime peak, and VRAM is never per-model.
+- `ObservedRSSMB` and `ObservedVRAMMB` keep the **maximum** seen across runs (not average). Each run contributes what its producer measured: a guarded local task run records the process max RSS and the highest VRAM held by its own process tree in nvidia-smi per-process accounting (0, not observed, without that accounting or off NVIDIA); a llama-server start records one RSS sample and device-wide VRAM. The aggregate is therefore the largest recorded measurement, not a proven process-lifetime peak, and VRAM is never per-model.
 - `ObservedAt` and `LastSuccess` are overwritten with the latest values, so `ObservedAt` is when the latest run was recorded, not necessarily when the retained maximum was measured.
 - `ModelName` is overwritten if the new observation carries one.
 

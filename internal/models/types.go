@@ -697,8 +697,9 @@ type ExecutionObservation struct {
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
 	// ObservedRSSMB and ObservedVRAMMB are what the producer measured, in MB.
 	// A guarded task run records the process max RSS (rusage) and the highest
-	// device-wide VRAM seen while sampling nvidia-smi; a llama-server start
-	// records one RSS sample and device-wide VRAM. VRAM is never per-model.
+	// VRAM attributed to its process tree by nvidia-smi per-process accounting;
+	// an unrelated GPU process is not task VRAM. A llama-server start records
+	// one RSS sample and device-wide VRAM, which is not per-model attribution.
 	// The ledger aggregate keeps the largest value across recorded runs, so
 	// ObservedAt (the latest run) need not be when that value was measured.
 	// Older state files spell these peak_ram_mb / peak_vram_mb; decoding

@@ -95,7 +95,7 @@ The live repo currently contains:
 - `internal/api/v2.go` serves active read, reservation, and mesh routes alongside explicit 501 stubs for endpoints that remain unimplemented
 - `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
 - Unified MCP client (`axis mcp client`) with per-server connection caching, retry, batch execution, interactive REPL, placement-aware auto-routing, and progress notifications
-- `axis agent` asks before every external MCP tool call unless `nodes.yaml` lists that tool by exact name under `mcp_servers.<server>.auto_approve_tools`; a server's tool names, descriptions and annotations never grant auto-approval
+- `axis agent` asks before every external MCP tool call, in every autonomy mode and with `--auto-approve`, unless `nodes.yaml` lists that tool by exact name under `mcp_servers.<server>.auto_approve_tools`; a server's tool names, descriptions and annotations never grant auto-approval
 
 The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 

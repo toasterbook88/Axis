@@ -139,7 +139,7 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 		registerPprofRoutes(mux, token)
 	}
 
-	srv := newHTTPServer(mux)
+	srv := newHTTPServer(withRequestID(mux))
 
 	srvErr := make(chan error, 1)
 

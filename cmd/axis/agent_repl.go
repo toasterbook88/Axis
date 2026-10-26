@@ -90,7 +90,7 @@ func agentREPLCompleter(choices []ModelChoice) *readline.PrefixCompleter {
 		readline.PcItem("/diff"),
 		readline.PcItem("/undo"),
 		readline.PcItem("/compact"),
-		readline.PcItem("/autonomy", readline.PcItem("default"), readline.PcItem("edit"), readline.PcItem("full")),
+		readline.PcItem("/autonomy", readline.PcItem("cluster"), readline.PcItem("default"), readline.PcItem("edit"), readline.PcItem("full")),
 		readline.PcItem("/export"),
 		readline.PcItem("/fleet"),
 		readline.PcItem("/facts"),
