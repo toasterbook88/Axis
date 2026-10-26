@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/daemon"
+	"github.com/toasterbook88/axis/internal/failures"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/runtimectx"
@@ -23,9 +24,14 @@ func batchNode(name string, freeMB int64) models.NodeFacts {
 
 func runBatchPlace(t *testing.T, snap *models.ClusterSnapshot, body string) []V2BatchPlaceResult {
 	t.Helper()
+	return runBatchPlaceWithState(t, snap, &state.ClusterState{}, body)
+}
+
+func runBatchPlaceWithState(t *testing.T, snap *models.ClusterSnapshot, st *state.ClusterState, body string) []V2BatchPlaceResult {
+	t.Helper()
 	prev := loadLiveRuntime
 	loadLiveRuntime = func(context.Context) (*runtimectx.Context, error) {
-		return &runtimectx.Context{State: &state.ClusterState{}}, nil
+		return &runtimectx.Context{State: st}, nil
 	}
 	t.Cleanup(func() { loadLiveRuntime = prev })
 	mux := http.NewServeMux()
@@ -98,5 +104,16 @@ func TestV2BatchPlaceCapacitySeesOverlayAllocatable(t *testing.T) {
 	got := runBatchPlace(t, snap, `{"tasks":[{"id":"1","description":"small task"},{"id":"2","description":"small task"}]}`)
 	if len(got) != 2 || got[0].Decision.Node != "node-a" || got[1].Decision.Node != "node-b" {
 		t.Fatalf("want node-a then node-b (node-a allocatable drops below node-b), got %+v", got)
+	}
+}
+
+func TestV2BatchPlaceHonorsRecordedFailures(t *testing.T) {
+	snap := &models.ClusterSnapshot{Status: models.SnapshotHealthy,
+		Nodes: []models.NodeFacts{batchNode("node-a", 8000), batchNode("node-b", 8000)}}
+	st := &state.ClusterState{Nodes: map[string]state.NodeState{}, Failures: failures.NewStore()}
+	st.Failures.Record(models.FailureExecCrash, models.FailureScope{Node: "node-a"}, "crashed repeatedly", nil)
+	got := runBatchPlaceWithState(t, snap, st, `{"tasks":[{"id":"1","description":"small task"}]}`)
+	if len(got) != 1 || !got[0].Decision.OK || got[0].Decision.Node != "node-b" {
+		t.Fatalf("batch ignored node-a's recorded failure: %+v", got)
 	}
 }

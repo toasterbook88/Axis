@@ -459,7 +459,10 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 	results := make([]V2BatchPlaceResult, 0, len(req.Tasks))
 
 	workingState := &state.ClusterState{Nodes: make(map[string]state.NodeState)}
-	if rc.State != nil && rc.State.Nodes != nil {
+	if rc.State != nil {
+		// Ranking reads failure penalties and empirical observations; only Nodes is mutated per batch.
+		workingState.Failures = rc.State.Failures
+		workingState.Observations = rc.State.Observations
 		for k, v := range rc.State.Nodes {
 			workingState.Nodes[k] = v
 		}
