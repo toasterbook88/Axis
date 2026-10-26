@@ -88,3 +88,15 @@ func TestV2BatchPlaceDoesNotMutateCachedSnapshot(t *testing.T) {
 		t.Fatalf("cached snapshot mutated:\nbefore %+v\nafter  %+v", before, snap.Nodes)
 	}
 }
+
+// Overlay-shaped nodes: snapshotview sets top-level RAMAllocatableMB (reservable
+// minus reserved), which ranking reads; Resources.RAMAllocatableMB is capacity.
+func TestV2BatchPlaceCapacitySeesOverlayAllocatable(t *testing.T) {
+	a, b := batchNode("node-a", 8000), batchNode("node-b", 8000)
+	a.RAMAllocatableMB, b.RAMAllocatableMB = 8000, 7500
+	snap := &models.ClusterSnapshot{Status: models.SnapshotHealthy, Nodes: []models.NodeFacts{a, b}}
+	got := runBatchPlace(t, snap, `{"tasks":[{"id":"1","description":"small task"},{"id":"2","description":"small task"}]}`)
+	if len(got) != 2 || got[0].Decision.Node != "node-a" || got[1].Decision.Node != "node-b" {
+		t.Fatalf("want node-a then node-b (node-a allocatable drops below node-b), got %+v", got)
+	}
+}

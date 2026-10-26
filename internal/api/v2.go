@@ -659,11 +659,11 @@ func applyBatchReservation(nodes []models.NodeFacts, st *state.ClusterState, nam
 		if nodes[i].Name != name {
 			continue
 		}
+		// Mirror snapshotview's overlay: top-level allocatable = reservable - reserved.
+		// Resources (shared with the cache) is capacity and stays untouched.
 		nodes[i].RAMReservedMB += mb
-		if nodes[i].Resources != nil {
-			res := *nodes[i].Resources
-			res.RAMAllocatableMB = max(res.RAMAllocatableMB-mb, 0)
-			nodes[i].Resources = &res
+		if nodes[i].RAMAllocatableMB > 0 {
+			nodes[i].RAMAllocatableMB = max(nodes[i].RAMAllocatableMB-mb, 0)
 		}
 	}
 	ns := st.Nodes[name]
