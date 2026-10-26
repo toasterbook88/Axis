@@ -803,6 +803,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		d.lastError = err.Error()
 		d.publishMetadataLocked()
 		d.mu.Unlock()
+		slog.Warn("daemon: refresh failed", "trigger", trigger, "duration_ms", time.Since(start).Milliseconds(), "error", err)
 		return err
 	}
 
@@ -885,6 +886,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	d.mu.Unlock()
 
 	// Emit advisory post-refresh event for external observers (MCP agents, hooks, etc.)
+	slog.Debug("daemon: refresh ok", "trigger", trigger, "duration_ms", time.Since(start).Milliseconds(), "nodes", len(snapCopy.Nodes))
 	events.EmitToBuffer(events.NoopEmitter{}, events.EventDaemonRefreshPost, map[string]any{
 		events.PayloadKeyTrigger: trigger,
 		"nodes":                  len(snapCopy.Nodes),
