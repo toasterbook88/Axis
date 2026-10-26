@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -756,6 +757,7 @@ func (e *SSHExecutor) resolveSSHConfig(ctx context.Context) resolvedSSHConfig {
 func (e *SSHExecutor) resolveSSHConfigForHost(ctx context.Context, host string) resolvedSSHConfig {
 	output, err := runSSHConfigCommand(ctx, host, e.Port, e.User)
 	if err != nil {
+		slog.Warn("transport: ssh -G failed; using built-in defaults", "host", host, "error", err)
 		return resolvedSSHConfig{}
 	}
 	return parseSSHConfigDump(output)
