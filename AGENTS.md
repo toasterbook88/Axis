@@ -92,8 +92,9 @@ ranking, diagnostic FitScore), `NodeStatus` = `complete | partial | unreachable 
 
 **Placement** first filters (`FilterCandidates`, `internal/placement/explain.go`): ineligible nodes drop out
 before ranking — e.g. `RequiredLabels` (all pairs must match) and the reservation budget (`CanReserveRAM`).
-It then ranks by capacity; headline metric `allocatable_ram` (MB, derived). FitScore (0–100) is
-diagnostic only, never the sort key (`docs/decisions/placement-selection-contract.md`). Order:
+Default objective is `capacity` (headline `allocatable_ram`, MB, derived); explicit `--objective spread`
+ranks by resulting cluster reservation-share stddev (`reservation_skew`, lower wins). FitScore (0–100) is
+diagnostic only, never the sort key (`docs/decisions/placement-selection-contract.md`). Capacity order:
 allocatable RAM → empirical observation → resident model locality → preferred backend → GPU score →
 effective headroom → TurboQuant → unified memory → pressure → model warmth → reservation ratio/share → node name.
 

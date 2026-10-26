@@ -27,11 +27,12 @@ func SelectBestNode(reqs models.TaskRequirements, nodes []models.NodeFacts, st *
 	return decision
 }
 
-func buildCapacityRanking(best models.NodeFacts, ranked []models.NodeFacts, rankedKeys []rankKey, reqs models.TaskRequirements) *models.PlacementRanking {
+func buildPlacementRanking(best models.NodeFacts, ranked []models.NodeFacts, rankedKeys []rankKey, reqs models.TaskRequirements) *models.PlacementRanking {
+	obj, source := ResolveObjective(reqs)
 	ranking := &models.PlacementRanking{
-		Objective:  models.PlacementObjectiveCapacity,
-		Source:     models.ObjectiveSourceDefault,
-		Metric:     CapacityMetric(best),
+		Objective:  obj,
+		Source:     source,
+		Metric:     rankingMetricFor(obj, best, ranked, rankedKeys, reqs),
 		DecisiveBy: models.RankingCriterionOnlyCandidate,
 	}
 	if len(ranked) > 1 && len(rankedKeys) > 1 {
@@ -40,23 +41,52 @@ func buildCapacityRanking(best models.NodeFacts, ranked []models.NodeFacts, rank
 	return ranking
 }
 
+func rankingMetricFor(obj models.PlacementObjective, best models.NodeFacts, ranked []models.NodeFacts, rankedKeys []rankKey, reqs models.TaskRequirements) models.RankingMetric {
+	if obj == models.PlacementObjectiveSpread {
+		if len(rankedKeys) > 0 {
+			return models.RankingMetric{
+				Name:       RankingMetricReservationSkew,
+				Value:      rankedKeys[0].reservationSkew,
+				Unit:       RankingMetricUnitStddev,
+				Provenance: models.MetricProvenanceDerived,
+			}
+		}
+		return SpreadMetric(best, ranked, reqs)
+	}
+	return CapacityMetric(best)
+}
+
+// FormatRankingMetricValue renders the ranking metric with units. Capacity uses
+// whole MB; spread uses fractional stddev so the displayed number matches the
+// sort key (placement-selection-contract P2).
+func FormatRankingMetricValue(m models.RankingMetric) string {
+	if m.Unit == RankingMetricUnitStddev {
+		return fmt.Sprintf("%.6f%s", m.Value, m.Unit)
+	}
+	return fmt.Sprintf("%.0f%s", m.Value, m.Unit)
+}
+
 func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, rankedKeys []rankKey, reqs models.TaskRequirements, local bool, st *state.ClusterState) models.PlacementDecision {
 	decision := models.PlacementDecision{
 		Node:     best.Name,
 		OK:       true,
 		FitScore: ComputeTaskFitScore(best, local, st, reqs), // diagnostic only
 		IsLocal:  local,
-		Ranking:  buildCapacityRanking(best, ranked, rankedKeys, reqs),
+		Ranking:  buildPlacementRanking(best, ranked, rankedKeys, reqs),
 	}
 
 	// Structured ranking is authoritative; prose is rendered from it.
 	decision.Reasoning = append(decision.Reasoning,
 		fmt.Sprintf("ranking objective: %s (%s)", decision.Ranking.Objective, decision.Ranking.Source),
-		fmt.Sprintf("ranking metric: %s = %.0f%s (%s)", decision.Ranking.Metric.Name, decision.Ranking.Metric.Value, decision.Ranking.Metric.Unit, decision.Ranking.Metric.Provenance),
+		fmt.Sprintf("ranking metric: %s = %s (%s)", decision.Ranking.Metric.Name, FormatRankingMetricValue(decision.Ranking.Metric), decision.Ranking.Metric.Provenance),
 		fmt.Sprintf("decisive criterion: %s", decision.Ranking.DecisiveBy))
 	if tie := decision.Ranking.TieBreak; tie != nil {
+		tieLabel := "headline tied"
+		if decision.Ranking.Objective == models.PlacementObjectiveCapacity {
+			tieLabel = "capacity tied"
+		}
 		decision.Reasoning = append(decision.Reasoning,
-			fmt.Sprintf("capacity tied; %s winner=%s runner-up=%s", tie.Criterion, tie.WinnerValue, tie.RunnerValue))
+			fmt.Sprintf("%s; %s winner=%s runner-up=%s", tieLabel, tie.Criterion, tie.WinnerValue, tie.RunnerValue))
 	}
 
 	if reqs.Workload.Class != "" && reqs.Workload.Class != models.ClassUnknown {
@@ -179,7 +209,20 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, rank
 	// Runner-up comparison under the same headline metric, never FitScore.
 	if len(ranked) > 1 {
 		runnerUp := ranked[1]
-		ruMetric := CapacityMetric(runnerUp)
+		obj, _ := ResolveObjective(reqs)
+		var ruMetric models.RankingMetric
+		if obj == models.PlacementObjectiveSpread && len(rankedKeys) > 1 {
+			ruMetric = models.RankingMetric{
+				Name:       RankingMetricReservationSkew,
+				Value:      rankedKeys[1].reservationSkew,
+				Unit:       RankingMetricUnitStddev,
+				Provenance: models.MetricProvenanceDerived,
+			}
+		} else if obj == models.PlacementObjectiveSpread {
+			ruMetric = SpreadMetric(runnerUp, ranked, reqs)
+		} else {
+			ruMetric = CapacityMetric(runnerUp)
+		}
 		bestShare := clusterReservationShare(best, ranked)
 		runnerShare := clusterReservationShare(runnerUp, ranked)
 		runnerObservation := empiricalObservation(runnerUp, reqs, st)
@@ -198,7 +241,7 @@ func buildSuccessDecision(best models.NodeFacts, ranked []models.NodeFacts, rank
 				fmt.Sprintf("lower cluster reservation share favored: %.0f%% vs runner-up %.0f%%", bestShare*100, runnerShare*100))
 		}
 		decision.Reasoning = append(decision.Reasoning,
-			fmt.Sprintf("runner-up %q ranking metric: %s = %.0f%s (%s)", runnerUp.Name, ruMetric.Name, ruMetric.Value, ruMetric.Unit, ruMetric.Provenance))
+			fmt.Sprintf("runner-up %q ranking metric: %s = %s (%s)", runnerUp.Name, ruMetric.Name, FormatRankingMetricValue(ruMetric), ruMetric.Provenance))
 	}
 
 	// Soft failure memory penalty reasoning

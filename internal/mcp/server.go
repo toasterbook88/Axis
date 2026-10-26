@@ -172,6 +172,10 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 				mcpproto.Required(),
 				mcpproto.Description("Task description to evaluate"),
 			),
+			mcpproto.WithString(
+				"objective",
+				mcpproto.Description("Placement ranking objective: capacity (default) or spread"),
+			),
 		),
 		func(ctx context.Context, req mcpproto.CallToolRequest) (*mcpproto.CallToolResult, error) {
 			return placementDecisionTool(ctx, req, cache)
@@ -207,6 +211,10 @@ func registerTools(s *mcpserver.MCPServer, cache *SessionCache) {
 				"task_description",
 				mcpproto.Required(),
 				mcpproto.Description("Task description to rank nodes against"),
+			),
+			mcpproto.WithString(
+				"objective",
+				mcpproto.Description("Placement ranking objective: capacity (default) or spread"),
 			),
 			mcpproto.WithBoolean(
 				"cached",
@@ -409,6 +417,10 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, ca
 	if err != nil {
 		return mcpproto.NewToolResultError(err.Error()), nil
 	}
+	obj, err := placement.ParseObjective(req.GetString("objective", ""))
+	if err != nil {
+		return mcpproto.NewToolResultError(err.Error()), nil
+	}
 
 	snap, st, err := cache.GetPlacementInputs(ctx, GetSessionID(ctx))
 	if err != nil {
@@ -418,7 +430,9 @@ func placementDecisionTool(ctx context.Context, req mcpproto.CallToolRequest, ca
 	snapCopy := daemon.CloneSnapshot(snap)
 
 	snapshotview.ApplyReservationView(snapCopy, st, nil)
-	decision := placement.SelectBestNode(placement.InferRequirements(desc), snapCopy.Nodes, st)
+	reqs := placement.InferRequirements(desc)
+	reqs.Objective = obj
+	decision := placement.SelectBestNode(reqs, snapCopy.Nodes, st)
 	decision.Reasoning = runtimectx.PrependWarningReasoning(decision.Reasoning, snapCopy.Warnings)
 	return mcpproto.NewToolResultJSON(decision)
 }
@@ -476,20 +490,29 @@ func simulateWorkloadPlanTool(ctx context.Context, req mcpproto.CallToolRequest,
 	snapCopy := daemon.CloneSnapshot(snap)
 	snapshotview.ApplyReservationView(snapCopy, st, nil)
 
+	obj, objErr := placement.ParseObjective(req.GetString("objective", ""))
+	if objErr != nil {
+		return mcpproto.NewToolResultError(objErr.Error()), nil
+	}
 	reqs := placement.InferRequirements(desc)
+	reqs.Objective = obj
 	best := placement.SelectBestNode(reqs, snapCopy.Nodes, st)
 
-	// Build the ranked candidate list with fit scores, mirroring what the
 	// Build the ranked candidate list under the same ranking metric as
 	// SelectBestNode. fit_score remains diagnostic only (placement-selection-
 	// contract); the ranking metric is the authoritative ordering key.
 	candidates := placement.FilterCandidates(reqs, snapCopy.Nodes, st)
 	ranked := placement.RankCandidates(candidates, reqs, st)
+	objResolved, _ := placement.ResolveObjective(reqs)
 	explained := make([]map[string]any, 0, len(ranked))
 	for _, n := range ranked {
+		metric := placement.CapacityMetric(n)
+		if objResolved == models.PlacementObjectiveSpread {
+			metric = placement.SpreadMetric(n, ranked, reqs)
+		}
 		explained = append(explained, map[string]any{
 			"node":           n.Name,
-			"ranking_metric": placement.CapacityMetric(n),
+			"ranking_metric": metric,
 			"fit_score":      placement.ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs), // diagnostic
 			"is_local":       models.IsLocalNode(n),
 			"alloc_mb":       n.RAMAllocatableMB,
