@@ -42,9 +42,16 @@ func TestMain(m *testing.M) {
 	loadAPIToken = func() (string, error) {
 		return "test-token", nil
 	}
+	// Restart counters come from the build host's systemd; stub globally so
+	// doctor output does not depend on what happens to be looping there.
+	prevLoops := doctorProbeRestartLoops
+	doctorProbeRestartLoops = func(context.Context) ([]unitRestarts, error) {
+		return nil, errOwnershipProbeUnsupported
+	}
 
 	code := m.Run()
 
+	doctorProbeRestartLoops = prevLoops
 	loadAPIToken = prevToken
 	doctorProbeMLX = prevMLX
 	doctorProbeLlamaServer = prevLlama

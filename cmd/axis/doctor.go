@@ -463,6 +463,11 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		}
 	}
 
+	// 5. Services stuck in a restart loop are "activating", never "failed",
+	// so only their restart counters show them.
+	loops, loopErr := doctorProbeRestartLoops(cmd.Context())
+	checks = append(checks, restartLoopCheck(loops, loopErr)...)
+
 	// Print visual report using RenderDoctorReport. The report is the diagnostic
 	// payload: if it cannot be emitted, that write error outranks the health
 	// disposition below, because the caller has no report to act on.
