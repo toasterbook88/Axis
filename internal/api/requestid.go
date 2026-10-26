@@ -18,12 +18,6 @@ var validRequestID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 type requestIDKey struct{}
 
-// RequestIDFromContext returns the request id set by withRequestID, or "".
-func RequestIDFromContext(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDKey{}).(string)
-	return id
-}
-
 func newRequestID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

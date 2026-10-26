@@ -23,7 +23,7 @@ func TestWithRequestIDGeneratesWhenMissing(t *testing.T) {
 	captureLogs(t)
 	var seen string
 	h := withRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = RequestIDFromContext(r.Context())
+		seen = r.Context().Value(requestIDKey{}).(string)
 	}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
