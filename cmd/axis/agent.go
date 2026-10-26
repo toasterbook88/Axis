@@ -774,16 +774,7 @@ func sanitizeDiagnosticsText(s string) string {
 }
 
 func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool, autonomy string, mcpCount int, maxTurns int) {
-	safetyStr := "Strict Operator Approval"
-	if autoApprove {
-		safetyStr = "Auto-Approve safe (<70)"
-	}
-	switch agent.AutonomyMode(autonomy) {
-	case agent.AutonomyEdit:
-		safetyStr = "Autonomy: edit (auto-approve edits)"
-	case agent.AutonomyFull:
-		safetyStr = "Autonomy: full (auto-approve all but safety-blocked and unlisted MCP)"
-	}
+	safetyStr := agentSafetyLabel(autoApprove, autonomy)
 	mcpStr := "None connected"
 	if mcpCount > 0 {
 		mcpStr = fmt.Sprintf("%d connected", mcpCount)
