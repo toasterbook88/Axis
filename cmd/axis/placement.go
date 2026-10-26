@@ -43,6 +43,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 	var cachedOnly bool
 	var live bool
 	var cacheAddr string
+	var objective string
 
 	cmd := &cobra.Command{
 		Use:   use,
@@ -56,6 +57,10 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
+			obj, err := placementpkg.ParseObjective(objective)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 			// --cached matches the default cache-first read and does not override --live.
@@ -71,6 +76,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 				},
 				loadTaskLiveSnapshot,
 				nil,
+				obj,
 			)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
@@ -103,6 +109,7 @@ func newPlacementExplainCommand(use, short string) *cobra.Command {
 	cmd.Flags().BoolVar(&cachedOnly, "cached-only", false, "Require a fresh daemon publication; fail instead of falling back to a live sweep")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
+	cmd.Flags().StringVar(&objective, "objective", "", "Placement ranking objective: capacity (default) or spread")
 	return cmd
 }
 
@@ -114,6 +121,7 @@ func planTaskExplanation(
 	cachedLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	liveLoader func(context.Context) (*models.ClusterSnapshot, string, error),
 	requiredLabels map[string]string,
+	objective models.PlacementObjective,
 ) (models.PlacementExplanation, string, string, error) {
 	// cached/cachedOnly try the daemon publication first. Neither set means
 	// an explicit live sweep (--live, or the historical cached=false path).
@@ -121,14 +129,15 @@ func planTaskExplanation(
 	if err != nil {
 		return models.PlacementExplanation{}, "", "", err
 	}
-	return explainPlacementFromSnapshot(ctx, desc, requiredLabels, read.snap, read.source, read.age)
+	return explainPlacementFromSnapshot(ctx, desc, requiredLabels, objective, read.snap, read.source, read.age)
 }
 
-func explainPlacementFromSnapshot(ctx context.Context, desc string, requiredLabels map[string]string, snap *models.ClusterSnapshot, source, age string) (models.PlacementExplanation, string, string, error) {
+func explainPlacementFromSnapshot(ctx context.Context, desc string, requiredLabels map[string]string, objective models.PlacementObjective, snap *models.ClusterSnapshot, source, age string) (models.PlacementExplanation, string, string, error) {
 	if snap == nil {
 		return models.PlacementExplanation{}, "", "", fmt.Errorf("cluster snapshot is empty")
 	}
 	reqs := placementpkg.InferRequirements(desc)
+	reqs.Objective = objective
 	// Operator-supplied label requirements are a conjunction override on top
 	// of inferred requirements (never relax them — only add). nil = none.
 	for k, v := range requiredLabels {
@@ -207,7 +216,7 @@ func printPlacementExplanationText(destination io.Writer, explanation models.Pla
 				ui.Bold(candidate.Node),
 				locality,
 				candidate.Metric.Name,
-				ui.Cyan(fmt.Sprintf("%.0f%s", candidate.Metric.Value, candidate.Metric.Unit)),
+				ui.Cyan(placementpkg.FormatRankingMetricValue(candidate.Metric)),
 				ui.Cyan(fmt.Sprintf("%dMB", candidate.HeadroomMB)))
 			for _, reason := range candidate.Reasoning {
 				fmt.Fprintf(out, "   %s %s\n", ui.Dim("-"), reason)
