@@ -9,6 +9,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/placement"
+	"github.com/toasterbook88/axis/internal/state"
 )
 
 func stubTaskVRAMSampler(peak int64) func() {
@@ -82,6 +83,17 @@ func TestRunGuardedPersistsObservedVRAM(t *testing.T) {
 			}
 			if obs.ObservedVRAMMB != 2048 {
 				t.Errorf("observation ObservedVRAMMB = %d, want 2048", obs.ObservedVRAMMB)
+			}
+			loaded, err := state.Load()
+			if err != nil {
+				t.Fatalf("reload state.json: %v", err)
+			}
+			if len(loaded.TaskHistory) != 1 || loaded.TaskHistory[0].ObservedVRAMMB != 2048 {
+				t.Errorf("reloaded task history = %+v, want one entry with 2048 MiB", loaded.TaskHistory)
+			}
+			persisted, ok := loaded.Observation(scope)
+			if !ok || persisted.ObservedVRAMMB != 2048 || persisted.LastSuccess != (tc.runErr == nil) {
+				t.Errorf("reloaded observation = %+v, want 2048 MiB with last_success=%v", persisted, tc.runErr == nil)
 			}
 		})
 	}
