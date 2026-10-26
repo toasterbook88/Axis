@@ -17,6 +17,13 @@ func (a *Agent) ToolAutoApproved(name string) bool {
 	return isReadOnlyTool(name) || a.tools.mcpAutoApprovedTool(name)
 }
 
+// isExternalMCPTool reports whether name is a tool registered from an
+// external MCP server. AXIS cannot rate these, so confirm policies must not
+// treat their zero safety score as low risk.
+func isExternalMCPTool(name string) bool {
+	return strings.HasPrefix(name, "mcp_")
+}
+
 // RegisterMCPTools registers all tools from connected MCP servers. A tool
 // skips confirmation only when its server's auto_approve_tools lists its
 // exact name; the server's own name, description and annotations never
