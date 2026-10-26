@@ -1,5 +1,22 @@
 ## Unreleased
 
+### Fixes
+
+* `sudo axis update` restarts the invoking user's AXIS-managed service (systemd
+  user unit or launchd agent) instead of spawning `axis serve` as root on
+  root's socket. That root daemon was unsupervised, outlived the update and
+  contended with the user's daemon for the mesh gossip port. With no active
+  service for the invoking user, the update now prints how to restart as that
+  user and never starts a root daemon. Readiness is read from `/health`, since
+  root does not hold the owner's API token.
+* `axis doctor` counts every axis daemon on the host for the mesh UDP port
+  check, not only those on the configured socket, and lists each daemon's pid
+  and address when more than one is running.
+* `axis doctor` and `axis daemon service install` warn about system units that
+  start an axis daemon outside the AXIS-managed user service. At boot such a
+  unit races the user service for the socket and mesh port, and the loser
+  restarts forever.
+
 ## v0.21.0 (2026-10-23)
 
 Explicit Cortex service addressing, tighter agent approvals, more complete
