@@ -81,6 +81,11 @@ func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 		if toolName == "axis_run_task" {
 			return fallback(toolName, description, safetyScore)
 		}
+		// Unlisted external MCP tools are unrated; their zero score is not
+		// low risk.
+		if isExternalMCPTool(toolName) {
+			return fallback(toolName, description, safetyScore)
+		}
 		// Read-only AXIS tools never need confirmation.
 		if isReadOnlyTool(toolName) {
 			return ConfirmYes

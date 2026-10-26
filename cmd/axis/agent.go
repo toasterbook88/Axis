@@ -315,7 +315,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 32768, "Conversation token budget")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 25, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
-	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but safety-blocked)")
+	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: cluster (AXIS cluster reads only), default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but safety-blocked and unlisted MCP tools)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Emit trace output for tool calls and turns")
@@ -774,16 +774,7 @@ func sanitizeDiagnosticsText(s string) string {
 }
 
 func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool, autonomy string, mcpCount int, maxTurns int) {
-	safetyStr := "Strict Operator Approval"
-	if autoApprove {
-		safetyStr = "Auto-Approve safe (<70)"
-	}
-	switch agent.AutonomyMode(autonomy) {
-	case agent.AutonomyEdit:
-		safetyStr = "Autonomy: edit (auto-approve edits)"
-	case agent.AutonomyFull:
-		safetyStr = "Autonomy: full (auto-approve all but safety-blocked)"
-	}
+	safetyStr := agentSafetyLabel(autoApprove, autonomy)
 	mcpStr := "None connected"
 	if mcpCount > 0 {
 		mcpStr = fmt.Sprintf("%d connected", mcpCount)

@@ -16,9 +16,14 @@ const (
 	// you trust the edits but want to vet commands.
 	AutonomyEdit AutonomyMode = "edit"
 	// AutonomyFull auto-approves everything except safety-gate-blocked commands
-	// (score >= 80). The Structured Safety Engine is the only barrier. Use for
-	// unattended / long-running autonomous work.
+	// (score >= 80) and external MCP tools missing from the exact
+	// auto_approve_tools allowlist. Use for unattended / long-running
+	// autonomous work.
 	AutonomyFull AutonomyMode = "full"
+	// AutonomyCluster is narrower than default: the model sees only the AXIS
+	// cluster read tools, not workspace files, git, or MCP servers. Use it to
+	// answer questions about the cluster from an untrusted working directory.
+	AutonomyCluster AutonomyMode = "cluster"
 )
 
 // autonomySafetyThreshold is the score at and above which a command is
@@ -43,12 +48,12 @@ func isFileEditTool(name string) bool {
 // unknown values.
 func ParseAutonomyMode(s string) (AutonomyMode, error) {
 	switch AutonomyMode(s) {
-	case AutonomyDefault, AutonomyEdit, AutonomyFull:
+	case AutonomyDefault, AutonomyEdit, AutonomyFull, AutonomyCluster:
 		return AutonomyMode(s), nil
 	case "":
 		return AutonomyDefault, nil
 	}
-	return AutonomyDefault, fmt.Errorf("unknown autonomy mode %q (want default, edit, or full)", s)
+	return AutonomyDefault, fmt.Errorf("unknown autonomy mode %q (want cluster, default, edit, or full)", s)
 }
 
 // autonomyConfirm returns a ConfirmFunc implementing the given autonomy mode.
@@ -60,6 +65,12 @@ func autonomyConfirm(mode AutonomyMode, fallback ConfirmFunc) ConfirmFunc {
 		// Read-only tools never need confirmation, regardless of mode.
 		if isReadOnlyTool(toolName) {
 			return ConfirmYes
+		}
+		// External MCP tools reach this policy only when they are not on the
+		// exact auto_approve_tools allowlist. They carry no AXIS safety
+		// score, so no mode may auto-approve them.
+		if isExternalMCPTool(toolName) {
+			return fallback(toolName, description, safetyScore)
 		}
 		switch mode {
 		case AutonomyFull:
