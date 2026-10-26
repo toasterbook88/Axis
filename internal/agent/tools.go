@@ -646,7 +646,7 @@ func DefaultSafetyGate(tc *ToolContext) ShellSafetyGate {
 
 func (r *ToolRegistry) registerShell() {
 	r.add("run_shell",
-		"Execute a shell command through the agent execution gate. CLI callers may route this through guarded AXIS execution with placement and reservation protection; destructive commands will still be blocked.",
+		"Execute a shell command through the agent execution gate. CLI callers may route this through guarded AXIS execution with placement and reservation protection. A rule-based safety check denies a few destructive patterns, which the operator must then explicitly override, and misses many others (for example find -delete, writes to ~/.ssh/authorized_keys, curl -T uploads). Once the operator approves run_shell for the session, every command the check does not deny runs without a prompt. Do not rely on the check: avoid destructive or data-exfiltrating commands unless the user asked for them.",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
