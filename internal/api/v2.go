@@ -465,6 +465,8 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Per-batch copy so later tasks see earlier placements without mutating the cache.
+	batchNodes := append([]models.NodeFacts(nil), snap.Nodes...)
 	for _, task := range req.Tasks {
 		desc := strings.TrimSpace(task.Description)
 		if desc == "" {
@@ -495,12 +497,9 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		reqs.Objective = obj
-		decision := placement.SelectBestNode(reqs, snap.Nodes, workingState)
-
+		decision := placement.SelectBestNode(reqs, batchNodes, workingState)
 		if decision.OK && decision.Node != "" {
-			ns := workingState.Nodes[decision.Node]
-			ns.ReservedMB += reqs.MemoryRequestMB
-			workingState.Nodes[decision.Node] = ns
+			applyBatchReservation(batchNodes, workingState, decision.Node, placement.ReservationMBForRequirements(reqs))
 		}
 
 		results = append(results, V2BatchPlaceResult{
@@ -651,4 +650,23 @@ func (h *v2Handlers) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		"checks":     checks,
 		"checked_at": time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// applyBatchReservation records an in-batch placement on the working copies
+// (node facts and state) so the next SelectBestNode call sees it.
+func applyBatchReservation(nodes []models.NodeFacts, st *state.ClusterState, name string, mb int64) {
+	for i := range nodes {
+		if nodes[i].Name != name {
+			continue
+		}
+		nodes[i].RAMReservedMB += mb
+		if nodes[i].Resources != nil {
+			res := *nodes[i].Resources
+			res.RAMAllocatableMB = max(res.RAMAllocatableMB-mb, 0)
+			nodes[i].Resources = &res
+		}
+	}
+	ns := st.Nodes[name]
+	ns.ReservedMB += mb
+	st.Nodes[name] = ns
 }

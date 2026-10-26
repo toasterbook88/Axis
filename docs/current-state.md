@@ -256,7 +256,8 @@ In practical terms:
   current cluster reservation pool
 - explicit placement objective `spread` ranks feasible nodes by resulting
   cluster reservation-share stddev (`reservation_skew`); default remains
-  `capacity` (`allocatable_ram`)
+  `capacity` (`allocatable_ram`); spread deliberately ignores locality, model
+  warmth and pressure ranking; `/v2/batch/place` reserves each placement before the next
 - placement should use those soft claims to spread memory pressure across the
   cluster instead of repeatedly selecting the same node
 
