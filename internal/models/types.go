@@ -505,6 +505,12 @@ type TaskRequirements struct {
 	// (ALL pairs must match exactly) to be placement-eligible. Semantics
 	// follow SAM's X-Sam-Required-Labels: one check, all predicates ANDed.
 	RequiredLabels map[string]string `json:"required_labels,omitempty" yaml:"required_labels,omitempty"`
+
+	// Objective is the operator-selected ranking policy for feasible nodes.
+	// Empty means the default capacity objective (placement-selection-contract).
+	// This is a placement-request preference carried with requirements through
+	// the existing pipeline; it is not a property of the task workload itself.
+	Objective PlacementObjective `json:"objective,omitempty" yaml:"objective,omitempty"`
 }
 
 // SatisfiesRequiredLabels reports whether node labels satisfy the
@@ -542,6 +548,7 @@ type PlacementObjective string
 
 const (
 	PlacementObjectiveCapacity PlacementObjective = "capacity"
+	PlacementObjectiveSpread   PlacementObjective = "spread"
 )
 
 type ObjectiveSource string
@@ -576,6 +583,7 @@ const (
 	RankingCriterionModelWarmth             RankingCriterion = "model_warmth"
 	RankingCriterionReservationRatio        RankingCriterion = "reservation_ratio"
 	RankingCriterionClusterReservationShare RankingCriterion = "cluster_reservation_share"
+	RankingCriterionReservationSkew         RankingCriterion = "reservation_skew"
 	RankingCriterionNodeName                RankingCriterion = "node_name"
 )
 

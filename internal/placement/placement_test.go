@@ -368,6 +368,124 @@ func TestRankPrefersLowerReservationRatioWhenAllocatableTied(t *testing.T) {
 	}
 }
 
+// TestSelectSpreadPrefersLowerSkewWhenAllocatableTied locks the spread
+// objective: with tied allocatable RAM, explicit spread ranks by resulting
+// cluster reservation skew (lower wins). Default capacity keeps today's
+// GPU-preferring winner on the same fixture.
+func TestSelectSpreadPrefersLowerSkewWhenAllocatableTied(t *testing.T) {
+	alpha := nodeComplete("alpha", 5000, "none")
+	alpha.Resources.RAMTotalMB = 16384
+	alpha.RAMReservedMB = 1000 // allocatable 4000; lower current share
+
+	beta := nodeComplete("beta", 7000, "none")
+	beta.Resources.RAMTotalMB = 16384
+	beta.RAMReservedMB = 3000 // allocatable 4000; higher current share
+	beta.Resources.GPUs = []models.GPUInfo{{
+		Model:        "Test GPU",
+		Vendor:       "nvidia",
+		VRAMMB:       8192,
+		Capabilities: []string{"cuda"},
+	}}
+
+	if gotA, gotB := allocatableRAM(alpha), allocatableRAM(beta); gotA != gotB {
+		t.Fatalf("test setup requires tied allocatable RAM, got alpha=%d beta=%d", gotA, gotB)
+	}
+	nodes := []models.NodeFacts{beta, alpha}
+	if shareA, shareB := clusterReservationShare(alpha, nodes), clusterReservationShare(beta, nodes); shareA >= shareB {
+		t.Fatalf("test setup requires alpha lower reservation share, got alpha=%f beta=%f", shareA, shareB)
+	}
+
+	base := models.TaskRequirements{
+		PreferredBackends: []string{"cuda"},
+		MemoryRequestMB:   512,
+	}
+
+	capacityDecision := SelectBestNode(base, nodes, nil)
+	if !capacityDecision.OK || capacityDecision.Node != "beta" {
+		t.Fatalf("default capacity should preserve GPU-favored beta, got OK=%v node=%s ranking=%#v", capacityDecision.OK, capacityDecision.Node, capacityDecision.Ranking)
+	}
+	if capacityDecision.Ranking == nil || capacityDecision.Ranking.Objective != models.PlacementObjectiveCapacity {
+		t.Fatalf("capacity ranking objective = %#v", capacityDecision.Ranking)
+	}
+	if capacityDecision.Ranking.Source != models.ObjectiveSourceDefault {
+		t.Fatalf("empty objective must remain default capacity, got source=%q", capacityDecision.Ranking.Source)
+	}
+	if capacityDecision.Ranking.Metric.Name != RankingMetricAllocRAM {
+		t.Fatalf("capacity metric name = %q, want %q", capacityDecision.Ranking.Metric.Name, RankingMetricAllocRAM)
+	}
+
+	spreadReqs := base
+	spreadReqs.Objective = models.PlacementObjectiveSpread
+	spreadDecision := SelectBestNode(spreadReqs, nodes, nil)
+	if !spreadDecision.OK || spreadDecision.Node != "alpha" {
+		t.Fatalf("spread should select lower-skew alpha, got OK=%v node=%s ranking=%#v reasoning=%v", spreadDecision.OK, spreadDecision.Node, spreadDecision.Ranking, spreadDecision.Reasoning)
+	}
+	if spreadDecision.Ranking == nil {
+		t.Fatal("spread decision must include structured ranking")
+	}
+	if spreadDecision.Ranking.Objective != models.PlacementObjectiveSpread {
+		t.Fatalf("spread objective = %q", spreadDecision.Ranking.Objective)
+	}
+	if spreadDecision.Ranking.Source != models.ObjectiveSourceExplicit {
+		t.Fatalf("spread source = %q, want explicit", spreadDecision.Ranking.Source)
+	}
+	if spreadDecision.Ranking.Metric.Name != RankingMetricReservationSkew || spreadDecision.Ranking.Metric.Unit != RankingMetricUnitStddev {
+		t.Fatalf("spread metric = %#v", spreadDecision.Ranking.Metric)
+	}
+	if spreadDecision.Ranking.Metric.Provenance != models.MetricProvenanceDerived {
+		t.Fatalf("spread metric provenance = %q", spreadDecision.Ranking.Metric.Provenance)
+	}
+	if spreadDecision.Ranking.DecisiveBy != models.RankingCriterionReservationSkew {
+		t.Fatalf("spread decisive_by = %q, want %q", spreadDecision.Ranking.DecisiveBy, models.RankingCriterionReservationSkew)
+	}
+
+	ranked := RankCandidates(FilterCandidates(spreadReqs, nodes, nil), spreadReqs, nil)
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 ranked candidates, got %d", len(ranked))
+	}
+	winnerMetric := SpreadMetric(ranked[0], ranked, spreadReqs)
+	runnerMetric := SpreadMetric(ranked[1], ranked, spreadReqs)
+	if spreadDecision.Ranking.Metric.Value != winnerMetric.Value {
+		t.Fatalf("decision metric value %v != sort-key metric %v", spreadDecision.Ranking.Metric.Value, winnerMetric.Value)
+	}
+	if winnerMetric.Value > runnerMetric.Value {
+		t.Fatalf("spread rank order violates lower-skew sort key: winner=%v runner-up=%v", winnerMetric.Value, runnerMetric.Value)
+	}
+
+	var hasObjective, hasMetric, hasRunnerMetric bool
+	for _, r := range spreadDecision.Reasoning {
+		if contains(r, "ranking objective: spread") {
+			hasObjective = true
+		}
+		if contains(r, "ranking metric: reservation_skew") {
+			hasMetric = true
+		}
+		if contains(r, "runner-up") && contains(r, "ranking metric:") && contains(r, "reservation_skew") {
+			hasRunnerMetric = true
+		}
+	}
+	if !hasObjective {
+		t.Errorf("missing spread ranking objective line: %v", spreadDecision.Reasoning)
+	}
+	if !hasMetric {
+		t.Errorf("missing spread ranking metric line: %v", spreadDecision.Reasoning)
+	}
+	if !hasRunnerMetric {
+		t.Errorf("missing runner-up reservation_skew line: %v", spreadDecision.Reasoning)
+	}
+
+	explanation := ExplainPlacement(spreadReqs, nodes, nil)
+	if len(explanation.Eligible) < 2 {
+		t.Fatalf("expected eligible explanations, got %#v", explanation.Eligible)
+	}
+	if explanation.Eligible[0].Metric.Name != RankingMetricReservationSkew {
+		t.Fatalf("eligible[0] metric = %#v, want reservation_skew", explanation.Eligible[0].Metric)
+	}
+	if explanation.Decision.Node != "alpha" {
+		t.Fatalf("explain decision node = %q", explanation.Decision.Node)
+	}
+}
+
 func TestRankPrefersLowerClusterReservationShareWhenReservationRatioTied(t *testing.T) {
 	// To tie allocatable RAM and reservation ratio but differ on reservation total,
 	// allocatable RAM must be clamped at 0.

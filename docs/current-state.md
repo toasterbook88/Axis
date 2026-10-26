@@ -109,8 +109,8 @@ Top-level commands currently registered in the binary:
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
 | `axis status` | Collect cluster snapshot | Cache-first inside the 5-minute daemon publication window; prints source and age; `--live` sweeps; `--format json\|yaml` includes source and age; `--cached-only` fails closed when missing or stale |
-| `axis task place` | Advisory placement | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; flat `PlacementDecision` JSON includes source and age |
-| `axis placement explain` | Detailed placement breakdown | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; JSON wraps in `explanation` and includes source and age |
+| `axis task place` | Advisory placement | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; `--objective capacity\|spread` (default capacity); flat `PlacementDecision` JSON includes source and age |
+| `axis placement explain` | Detailed placement breakdown | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; `--objective capacity\|spread` (default capacity); JSON wraps in `explanation` and includes source and age |
 | `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
@@ -157,7 +157,7 @@ Top-level commands currently registered in the binary:
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, trigger-aware refresh metadata, and cached discovery-freshness exposure for config/state/skills, execution events, and long-lived discovery beacons |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
 | `internal/modelinventory` | Canonical resident-model inventory projection | Internal-only deterministic projection of snapshot resident facts; preserves authority metadata and makes no process-ownership or endpoint claims |
-| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences (keyed per model name), hard `ObservedRSSMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and verified Apple Foundation Models qualification across local and remote nodes (with local node preference) are now live |
+| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; default `capacity` ranking (allocatable-RAM-first) plus explicit `spread` objective (resulting reservation-share stddev), fresh exact-scope empirical preferences (keyed per model name), hard `ObservedRSSMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and verified Apple Foundation Models qualification across local and remote nodes (with local node preference) are now live |
 | `internal/state` | Persist placement memory | Explicit acquire/release is live and tested; state now also stores exact-scope execution observations separately from failure memory |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
@@ -254,6 +254,9 @@ In practical terms:
   the shared cluster memory pool
 - late placement ties now break toward the node holding a smaller share of the
   current cluster reservation pool
+- explicit placement objective `spread` ranks feasible nodes by resulting
+  cluster reservation-share stddev (`reservation_skew`); default remains
+  `capacity` (`allocatable_ram`)
 - placement should use those soft claims to spread memory pressure across the
   cluster instead of repeatedly selecting the same node
 
@@ -290,7 +293,7 @@ V1 hardening is now mostly about durability, not feature growth:
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
 3. Finish the remaining truth-integrity containment: correct Ollama running-state detection (A1/C4), then stop reporting confidence for unknown classifications (C2). Pairwise topology rendering (C1) is replaced by vantage-labeled reachability.
 4. Darwin CIDR collection (A2) is unblocked now that subnet equality is not rendered as an edge; it remains an independent fact-plane correctness fix.
-5. Implement the placement feasibility/objective contract (B2/B3/B4) before expanding workload taxonomy.
+5. Continue the placement feasibility/objective contract (B2/B3/B4): `spread` is live; remaining work includes OS/Arch feasibility filters and further objectives (`headroom`, `fastest`, `local`, `preserve`) before expanding workload taxonomy.
 6. Push resident-model VRAM peak probes where truth-backed process metrics are available; the multi-runtime resident-model view (Ollama + llama-server + MLX) is now live.
 7. Refine reservation accounting into a clearer cluster RAM balancing model.
 8. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.

@@ -359,6 +359,7 @@ func (h *v2Handlers) handleMesh(w http.ResponseWriter, r *http.Request) {
 
 type V2DryRunRequest struct {
 	Description string `json:"description"`
+	Objective   string `json:"objective,omitempty"`
 }
 
 func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
@@ -367,16 +368,27 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	desc := r.URL.Query().Get("description")
-	if desc == "" && r.Method == http.MethodPost {
+	objectiveRaw := r.URL.Query().Get("objective")
+	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 		var req V2DryRunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
-			desc = req.Description
+			if desc == "" {
+				desc = req.Description
+			}
+			if objectiveRaw == "" {
+				objectiveRaw = req.Objective
+			}
 		}
 	}
 	desc = strings.TrimSpace(desc)
 	if desc == "" {
 		writeError(w, http.StatusBadRequest, "description required")
+		return
+	}
+	obj, err := placement.ParseObjective(objectiveRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireCache(w) {
@@ -394,6 +406,7 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reqs := placement.InferRequirements(desc)
+	reqs.Objective = obj
 	decision := placement.SelectBestNode(reqs, snap.Nodes, rc.State)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -404,9 +417,11 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 }
 
 type V2BatchPlaceRequest struct {
-	Tasks []struct {
+	Objective string `json:"objective,omitempty"`
+	Tasks     []struct {
 		ID          string `json:"id"`
 		Description string `json:"description"`
+		Objective   string `json:"objective,omitempty"`
 	} `json:"tasks"`
 }
 
@@ -464,6 +479,22 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 		}
 
 		reqs := placement.InferRequirements(desc)
+		taskObjective := task.Objective
+		if taskObjective == "" {
+			taskObjective = req.Objective
+		}
+		obj, objErr := placement.ParseObjective(taskObjective)
+		if objErr != nil {
+			results = append(results, V2BatchPlaceResult{
+				ID: task.ID,
+				Decision: models.PlacementDecision{
+					OK:        false,
+					Reasoning: []string{objErr.Error()},
+				},
+			})
+			continue
+		}
+		reqs.Objective = obj
 		decision := placement.SelectBestNode(reqs, snap.Nodes, workingState)
 
 		if decision.OK && decision.Node != "" {

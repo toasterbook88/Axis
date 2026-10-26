@@ -293,12 +293,13 @@ type placeArgs struct {
 	RequiredTools []string `json:"required_tools,omitempty"`
 	RequireGPU    bool     `json:"require_gpu,omitempty"`
 	PreferLocal   bool     `json:"prefer_local,omitempty"`
+	Objective     string   `json:"objective,omitempty"`
 }
 
 func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 	r.add("axis_place",
-		"Select the best node for a task description and optional explicit constraints (min_ram_mb, required_tools, require_gpu, prefer_local). Returns a human-readable placement decision with winning node, fit score, decisive criteria, runner-up candidate nodes, and excluded node reasons.",
-		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"},"min_ram_mb":{"type":"integer","description":"Optional minimum free RAM in MB required for the task"},"required_tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names required on the node (e.g. ['docker', 'go'])"},"require_gpu":{"type":"boolean","description":"Optional requirement that the node must have a dedicated GPU"},"prefer_local":{"type":"boolean","description":"Optional preference to keep execution on the local node if eligible"}},"required":["description"]}`),
+		"Select the best node for a task description and optional explicit constraints (min_ram_mb, required_tools, require_gpu, prefer_local, objective). Returns a human-readable placement decision with winning node, fit score, decisive criteria, runner-up candidate nodes, and excluded node reasons. objective is capacity (default) or spread.",
+		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"},"min_ram_mb":{"type":"integer","description":"Optional minimum free RAM in MB required for the task"},"required_tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names required on the node (e.g. ['docker', 'go'])"},"require_gpu":{"type":"boolean","description":"Optional requirement that the node must have a dedicated GPU"},"prefer_local":{"type":"boolean","description":"Optional preference to keep execution on the local node if eligible"},"objective":{"type":"string","description":"Placement ranking objective: capacity (default) or spread"}},"required":["description"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a placeArgs
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -311,7 +312,12 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 			if view == nil || view.Snapshot == nil || len(view.Snapshot.Nodes) == 0 {
 				return "Placement: no nodes available in snapshot.", nil
 			}
+			obj, err := placement.ParseObjective(a.Objective)
+			if err != nil {
+				return "", err
+			}
 			reqs := placement.InferRequirements(a.Description)
+			reqs.Objective = obj
 			if a.MinRAMMB > 0 {
 				reqs.MinFreeRAMMB = a.MinRAMMB
 			}
