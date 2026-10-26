@@ -51,8 +51,15 @@ var RunLocalShell = func(ctx context.Context, command string, env []string) ([]b
 	// codeql[go/command-injection]
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	return out, peakRAMFromProcessState(cmd.ProcessState), err
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Start()
+	if err == nil {
+		reportLocalPID(ctx, cmd.Process.Pid)
+		err = cmd.Wait()
+	}
+	return out.Bytes(), peakRAMFromProcessState(cmd.ProcessState), err
 }
 
 // StreamLocalShell executes command in a login bash shell, streaming output to
@@ -67,7 +74,11 @@ var StreamLocalShell = func(ctx context.Context, command string, env []string, s
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		reportLocalPID(ctx, cmd.Process.Pid)
+		err = cmd.Wait()
+	}
 	return peakRAMFromProcessState(cmd.ProcessState), err
 }
 
