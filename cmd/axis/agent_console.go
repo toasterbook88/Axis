@@ -218,8 +218,8 @@ func (l *consoleLauncher) runSlash(turn console.TurnID, line string, b launcherB
 //
 // However, to protect against accidental destructive inputs (e.g. bad clipboard paste),
 // runShell enforces Layer 4 Safety Evaluation (safety.Check / DefaultSafetyGate), blocking
-// destructive commands (score >= 80) before subprocess creation, and reports non-zero exit
-// codes faithfully via TurnDoneMsg.
+// commands the rule list denies (score >= 80) before subprocess creation, and reports non-zero
+// exit codes faithfully via TurnDoneMsg. The rule list does not catch every destructive command.
 //
 // The escape shares the agent turn's per-request timeout (--timeout, default
 // 5m), so long-lived diagnostics such as `tail -f` are bounded the same way a

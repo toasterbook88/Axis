@@ -280,7 +280,7 @@ type Options struct {
 	// back to the TokenEstimate.
 	UsageStats func() (in, out, turns int)
 
-	// Mode returns default, edit, or full for the terminal title.
+	// Mode returns cluster, default, edit, or full for the terminal title.
 	Mode func() string
 
 	// CancelGrace bounds how long a cancelled turn may take to acknowledge
@@ -352,8 +352,8 @@ func (m Model) modeLabel() string {
 		raw = m.mode()
 	}
 	switch raw {
-	case "edit":
-		return "edit"
+	case "edit", "cluster":
+		return raw
 	case "full", "exec":
 		return "exec"
 	default:
