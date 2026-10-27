@@ -40,9 +40,14 @@ type Agent struct {
 	tools   *ToolRegistry
 	confirm ConfirmFunc
 	// baseConfirm is the surface-installed confirm without autonomy
-	// wrapping. SetAutonomy re-wraps this instead of StdinConfirm so a
-	// raw-mode surface's confirm survives mode changes.
+	// wrapping. It still carries --auto-approve when that flag was set:
+	// SetConfirm re-applies the flag, and SetAutonomy re-wraps this instead
+	// of StdinConfirm so a raw-mode surface's confirm survives mode changes.
 	baseConfirm ConfirmFunc
+	// autoApprove is the construction-time --auto-approve flag. It has to
+	// live on the agent because the console replaces the surface callback
+	// via SetConfirm after New.
+	autoApprove bool
 	runShell    ShellRunner
 	runOnNode   NodeShellRunner
 	runTask     TaskRunner
@@ -277,6 +282,7 @@ func New(cfg Config) *Agent {
 		tools:                   tools,
 		confirm:                 confirm,
 		baseConfirm:             baseConfirm,
+		autoApprove:             cfg.AutoApprove,
 		runShell:                runShell,
 		runOnNode:               cfg.RunOnNode,
 		runTask:                 cfg.RunTask,
@@ -311,6 +317,12 @@ func New(cfg Config) *Agent {
 func (a *Agent) SetConfirm(fn ConfirmFunc) {
 	if fn == nil {
 		return
+	}
+	// Re-apply --auto-approve before storing the surface callback. New
+	// wraps it once; the console calls SetConfirm afterwards and must not
+	// discard that wrap. Autonomy stays outside, applied by wrapConfirm.
+	if a.autoApprove {
+		fn = AutoApproveConfirm(70, fn)
 	}
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
@@ -369,7 +381,9 @@ func (a *Agent) SetAutonomy(mode AutonomyMode) {
 	if base == nil {
 		base = StdinConfirm()
 	}
-	a.confirm = autonomyConfirm(mode, base)
+	// Same composition as New: default mode is the surface callback
+	// (including --auto-approve); every other mode wraps it.
+	a.confirm = a.wrapConfirm(base)
 }
 
 func visibleToolsMessage(r *ToolRegistry) string {
