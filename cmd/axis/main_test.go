@@ -44,6 +44,13 @@ func TestMain(m *testing.M) {
 	loadAPIToken = func() (string, error) {
 		return "test-token", nil
 	}
+	// Restart counters come from the build host's systemd; stub globally so
+	// doctor output does not depend on what happens to be looping there.
+	prevLoops := doctorProbeRestartLoops
+	doctorProbeRestartLoops = func(context.Context) ([]unitRestarts, error) {
+		return nil, errOwnershipProbeUnsupported
+	}
+
 	// Restart paths detect the daemon's supervisor by reading the unit or
 	// plist under HOME and asking systemctl/launchctl, which reach the real
 	// user manager whatever HOME is. Run under a developer's HOME, a restart
@@ -59,6 +66,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	doctorProbeRestartLoops = prevLoops
 	restartServiceDeps = prevServiceDeps
 	_ = os.RemoveAll(serviceHome)
 	loadAPIToken = prevToken
