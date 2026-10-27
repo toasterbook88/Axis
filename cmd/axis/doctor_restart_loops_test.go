@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseRestartCounters(t *testing.T) {
 	out := "Id=legacy-worker.service\nNRestarts=32751\nActiveState=activating\nSubState=auto-restart\n\n" +
 		"Id=sshd.service\nNRestarts=0\nActiveState=active\nSubState=running\n\n" +
 		"Id=no-counter.service\nActiveState=inactive\nSubState=dead\n"
-	got := parseRestartCounters("system", out)
+	got := parseRestartCountersAt("system", out, -1)
 	want := []unitRestarts{
-		{Scope: "system", Unit: "legacy-worker.service", Restarts: 32751, Active: "activating", Sub: "auto-restart"},
-		{Scope: "system", Unit: "sshd.service", Restarts: 0, Active: "active", Sub: "running"},
-		{Scope: "system", Unit: "no-counter.service", Restarts: 0, Active: "inactive", Sub: "dead"},
+		{Scope: "system", Unit: "legacy-worker.service", Restarts: 32751, Active: "activating", Sub: "auto-restart", ActiveFor: -1},
+		{Scope: "system", Unit: "sshd.service", Restarts: 0, Active: "active", Sub: "running", ActiveFor: -1},
+		{Scope: "system", Unit: "no-counter.service", Restarts: 0, Active: "inactive", Sub: "dead", ActiveFor: -1},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
@@ -48,7 +49,7 @@ func TestRestartLoopCheckBelowThresholdPasses(t *testing.T) {
 func TestRestartLoopCheckReportsWorstFirstWithJournalHint(t *testing.T) {
 	units := []unitRestarts{
 		{Scope: "system", Unit: "sshd.service", Restarts: 0, Active: "active", Sub: "running"},
-		{Scope: "user", Unit: "tunnel.service", Restarts: 640, Active: "active", Sub: "running"},
+		{Scope: "user", Unit: "tunnel.service", Restarts: 640, Active: "active", Sub: "running", ActiveFor: restartLoopRecentWindow / 2},
 		{Scope: "user", Unit: "worker.service", Restarts: 198412, Active: "activating", Sub: "auto-restart"},
 		{Scope: "system", Unit: "legacy-daemon.service", Restarts: 28909, Active: "activating", Sub: "auto-restart"},
 	}
@@ -80,5 +81,46 @@ func TestRestartLoopCheckBoundsTheList(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Fix, "journalctl -u u7.service") {
 		t.Fatalf("system scope fix should use the system journal, got %q", got[0].Fix)
+	}
+}
+
+// Only units looping now are flagged: a high lifetime count on a unit that
+// has stayed up past restartLoopRecentWindow is history, not a loop.
+func TestRestartLoopCheckFlagsOnlyCurrentLoops(t *testing.T) {
+	old := restartLoopRecentWindow + time.Hour
+	recent := restartLoopRecentWindow / 2
+	cases := []struct {
+		name string
+		u    unitRestarts
+		flag bool
+	}{
+		{"healthy with high old count", unitRestarts{Restarts: 640, Active: "active", Sub: "running", ActiveFor: old}, false},
+		{"healthy with unknown activation time", unitRestarts{Restarts: 640, Active: "active", Sub: "running", ActiveFor: -1}, false},
+		{"currently auto-restarting", unitRestarts{Restarts: 198412, Active: "activating", Sub: "auto-restart", ActiveFor: -1}, true},
+		{"failed after restarts", unitRestarts{Restarts: 50, Active: "failed", Sub: "failed", ActiveFor: -1}, true},
+		{"recently re-activated", unitRestarts{Restarts: 640, Active: "active", Sub: "running", ActiveFor: recent}, true},
+		{"below threshold auto-restarting", unitRestarts{Restarts: restartLoopThreshold, Active: "activating", Sub: "auto-restart", ActiveFor: -1}, false},
+		{"below threshold recently active", unitRestarts{Restarts: 3, Active: "active", Sub: "running", ActiveFor: recent}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.u.Scope, tc.u.Unit = "system", "x.service"
+			got := restartLoopCheck([]unitRestarts{tc.u}, nil)
+			if flagged := got[0].Status == "warn"; flagged != tc.flag {
+				t.Fatalf("flagged=%v want %v (%+v)", flagged, tc.flag, got)
+			}
+		})
+	}
+}
+
+func TestParseRestartCountersActiveFor(t *testing.T) {
+	out := "Id=a.service\nNRestarts=30\nActiveState=active\nSubState=running\nActiveEnterTimestampMonotonic=1000000\n\n" +
+		"Id=b.service\nNRestarts=30\nActiveState=activating\nSubState=auto-restart\nActiveEnterTimestampMonotonic=0\n"
+	got := parseRestartCountersAt("system", out, 61*time.Second)
+	if got[0].ActiveFor != 60*time.Second {
+		t.Fatalf("a.service ActiveFor = %v, want 60s", got[0].ActiveFor)
+	}
+	if got[1].ActiveFor != -1 {
+		t.Fatalf("b.service never entered active, want -1, got %v", got[1].ActiveFor)
 	}
 }
