@@ -417,6 +417,7 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		doctorProbeSocket(daemonAddr),
 		doctorProbeMeshPort(cfg),
 	)...)
+	checks = append(checks, systemDaemonUnitCheck(doctorProbeSystemUnits())...)
 
 	// 4. Local AI backend health
 	for _, b := range []struct {

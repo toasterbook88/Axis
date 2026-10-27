@@ -551,10 +551,13 @@ func stubDoctorOwnershipHealthy(t *testing.T) func() {
 	doctorProbeMeshPort = func(*config.Config) doctorMeshPortState {
 		return doctorMeshPortState{Port: 42426, Enabled: true, Bound: true}
 	}
+	prevUnits := doctorProbeSystemUnits
+	doctorProbeSystemUnits = func() ([]string, bool) { return nil, false }
 	return func() {
 		restoreProcs()
 		doctorProbeSocket = prevSocket
 		doctorProbeMeshPort = prevMesh
+		doctorProbeSystemUnits = prevUnits
 	}
 }
 
