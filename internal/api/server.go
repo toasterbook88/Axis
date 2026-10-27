@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -130,6 +131,12 @@ func newHTTPServer(handler http.Handler) *http.Server {
 // (/.well-known/agent-card.json) is served alongside the API routes.
 // Authenticated A2A task send/get routes are always registered in registerRoutes.
 func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string, pprof bool, cardFn func() a2a.AgentCard) error {
+	// F9: withAuth passes requests through when token is empty. That is only
+	// acceptable on a Unix socket, whose file mode is the access control; a
+	// TCP listener without a token would serve every route unauthenticated.
+	if token == "" && !auth.IsUnixAddr(addr) {
+		return fmt.Errorf("refusing to listen on TCP address %q without an api token", addr)
+	}
 	mux := http.NewServeMux()
 	registerRoutes(mux, cache, token)
 	if cardFn != nil {
@@ -183,8 +190,8 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 
 // withAuth enforces the shared API bearer token (same policy as /run).
 // F9: when token == "", this is a no-op and the next handler runs unauthenticated —
-// identical to /run. Production TCP listeners should use a non-empty token; the
-// A2A slice-2 E2E harness requires a non-empty token for that reason.
+// identical to /run. ServeWithContext only allows that on a Unix socket and
+// refuses a TCP listener without a token.
 func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {
