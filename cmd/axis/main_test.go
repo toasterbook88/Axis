@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
@@ -49,9 +51,24 @@ func TestMain(m *testing.M) {
 		return nil, errOwnershipProbeUnsupported
 	}
 
+	// Restart paths detect the daemon's supervisor by reading the unit or
+	// plist under HOME and asking systemctl/launchctl, which reach the real
+	// user manager whatever HOME is. Run under a developer's HOME, a restart
+	// test would restart their real daemon. Detect against an empty home and
+	// refuse service-manager commands; tests that exercise a supervisor
+	// install their own deps.
+	serviceHome, err := os.MkdirTemp("", "axis-test-service-home-")
+	if err != nil {
+		panic(err)
+	}
+	prevServiceDeps := restartServiceDeps
+	restartServiceDeps = inertServiceDeps(serviceHome)
+
 	code := m.Run()
 
 	doctorProbeRestartLoops = prevLoops
+	restartServiceDeps = prevServiceDeps
+	_ = os.RemoveAll(serviceHome)
 	loadAPIToken = prevToken
 	doctorProbeMLX = prevMLX
 	doctorProbeLlamaServer = prevLlama
@@ -60,4 +77,17 @@ func TestMain(m *testing.M) {
 	doctorProbeRemoteShell = prevShell
 	getGitRepoState = prevGit
 	os.Exit(code)
+}
+
+// inertServiceDeps returns service-manager seams that find no supervisor and
+// cannot run systemctl or launchctl.
+func inertServiceDeps(home string) func() daemonServiceDependencies {
+	return func() daemonServiceDependencies {
+		deps := defaultDaemonServiceDependencies()
+		deps.homeDir = func() (string, error) { return home, nil }
+		deps.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+			return nil, fmt.Errorf("%s %s is disabled in tests", name, strings.Join(args, " "))
+		}
+		return deps
+	}
 }

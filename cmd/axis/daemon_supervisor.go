@@ -210,42 +210,59 @@ func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies
 	if err != nil {
 		return err
 	}
-	execPath := svc.execPath
-
-	switch sup {
-	case supervisorSystemd, supervisorLaunchd:
-		// For update: verify the service exec path was among the replaced paths.
-		if len(replacedPaths) > 0 && execPath != "" {
-			found := false
-			for _, p := range replacedPaths {
-				if sameFile(p, execPath) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				fmt.Fprintf(out, "Warning: service exec path %s was not updated; skipping daemon restart\n", execPath)
-				return nil
-			}
-		}
-		if err := restartViaSupervisor(ctx, deps, sup, out); err != nil {
-			return err
-		}
-		// Poll where the service actually listens: a unit installed with
-		// "daemon service install --addr" serves there, not on the default.
-		if svc.addr != "" {
-			addr = svc.addr
-		}
-		return pollDaemonVersion(ctx, addr, out)
-	default:
-		// Standalone: use the existing restart logic.
+	if sup == supervisorNone {
 		return restartDaemon(ctx, addr, out)
 	}
+	return restartThroughSupervisor(ctx, deps, sup, svc, addr, replacedPaths, pollDaemonVersion, out)
+}
+
+// restartThroughSupervisor restarts a detected supervised daemon and waits
+// for it to report the current version through poll.
+func restartThroughSupervisor(ctx context.Context, deps daemonServiceDependencies, sup supervisorType, svc supervisedService, addr string, replacedPaths []string, poll func(context.Context, string, io.Writer) error, out io.Writer) error {
+	// For update: verify the service exec path was among the replaced paths.
+	if len(replacedPaths) > 0 && svc.execPath != "" {
+		found := false
+		for _, p := range replacedPaths {
+			if sameFile(p, svc.execPath) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(out, "Warning: service exec path %s was not updated; skipping daemon restart\n", svc.execPath)
+			return nil
+		}
+	}
+	if err := restartViaSupervisor(ctx, deps, sup, out); err != nil {
+		return err
+	}
+	// Poll where the service actually listens: a unit installed with
+	// "daemon service install --addr" serves there, not on the default.
+	if svc.addr != "" {
+		addr = svc.addr
+	}
+	return poll(ctx, addr, out)
 }
 
 // pollDaemonVersion polls daemon.FetchMeta until the daemon reports the
 // expected version, the deadline expires, or ctx is cancelled.
 func pollDaemonVersion(ctx context.Context, addr string, out io.Writer) error {
+	return pollForDaemonVersion(ctx, addr, out, func(ctx context.Context, addr string) (string, error) {
+		meta, err := restartFetchMeta(ctx, addr)
+		return meta.Version, err
+	})
+}
+
+// pollDaemonHealthVersion is pollDaemonVersion over the unauthenticated
+// /health endpoint, for callers that do not hold the daemon owner's API token.
+func pollDaemonHealthVersion(ctx context.Context, addr string, out io.Writer) error {
+	return pollForDaemonVersion(ctx, addr, out, func(ctx context.Context, addr string) (string, error) {
+		id, err := restartFetchHealth(ctx, addr)
+		return id.Version, err
+	})
+}
+
+func pollForDaemonVersion(ctx context.Context, addr string, out io.Writer, fetchVersion func(context.Context, string) (string, error)) error {
 	deadline := time.Now().Add(restartReadyDeadline)
 	for time.Now().Before(deadline) {
 		select {
@@ -253,9 +270,9 @@ func pollDaemonVersion(ctx context.Context, addr string, out io.Writer) error {
 			return ctx.Err()
 		case <-time.After(restartPollInterval):
 			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			meta, err := restartFetchMeta(pollCtx, addr)
+			version, err := fetchVersion(pollCtx, addr)
 			cancel()
-			if err == nil && meta.Version == daemon.Version {
+			if err == nil && version == daemon.Version {
 				fmt.Fprintln(out, "AXIS daemon restarted and serving current version")
 				return nil
 			}
@@ -266,10 +283,20 @@ func pollDaemonVersion(ctx context.Context, addr string, out io.Writer) error {
 
 // restartAfterUpdate restarts the daemon after a successful update.
 // It checks that the service exec path was among the replaced paths,
-// then delegates to restartSupervisedDaemon.
+// then delegates to restartSupervisedDaemon. Under sudo it restarts the
+// invoking user's service instead of root's.
 // It is a var so tests can override it.
 var restartAfterUpdate = func(ctx context.Context, addr string, replacedPaths []string, out io.Writer) error {
-	return restartSupervisedDaemon(ctx, restartServiceDeps(), addr, replacedPaths, out)
+	deps := restartServiceDeps()
+	inv, underSudo, err := lookupSudoInvoker()
+	if err != nil {
+		fmt.Fprintf(out, "Warning: %v; not starting a daemon as root. Restart it as the daemon's user: axis daemon restart\n", err)
+		return nil
+	}
+	if !underSudo {
+		return restartSupervisedDaemon(ctx, deps, addr, replacedPaths, out)
+	}
+	return restartSudoInvokerDaemon(ctx, deps, inv, replacedPaths, out)
 }
 
 // daemonIdentity is the build identity a running daemon reports on /health.

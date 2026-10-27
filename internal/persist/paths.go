@@ -34,6 +34,14 @@ func AxisDir() string {
 		return root
 	}
 	home, _ := os.UserHomeDir()
+	return AxisDirIn(home)
+}
+
+// AxisDirIn returns the default AXIS home directory for the account whose
+// home directory is home. It ignores $AXIS_HOME, which describes the current
+// process, so it is only for addressing another account's AXIS state (for
+// example, the invoking user's daemon from a sudo process).
+func AxisDirIn(home string) string {
 	return filepath.Join(home, axisDirName)
 }
 
