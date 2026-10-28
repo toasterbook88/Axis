@@ -4,8 +4,11 @@ DATE     := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GOVERSION := $(shell go version | awk '{print $$3}')
 PREFIX   ?= $(HOME)/.local
 # Pinned: an unpinned @latest would let an upstream release break CI without a
-# repository change. Bump deliberately.
-STATICCHECK_VERSION ?= 2025.1.1
+# repository change. Bump deliberately. It must read the export data of the
+# newest Go that runs the gates: Go 1.27.2 writes a format that 2026.2.2 is the
+# first release to read, so older versions fail locally even when CI (go.mod's
+# Go) passes.
+STATICCHECK_VERSION ?= 2026.2.2
 
 # Go's implicit VCS probe can fail in valid linked worktrees. Axis release
 # metadata is injected explicitly below, so Makefile gates and builds do not
