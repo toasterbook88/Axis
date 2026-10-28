@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Repo version: `0.21.0`
+- Repo version: `0.22.0`
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -20,6 +20,11 @@ AXIS is no longer just a read-only Phase 1 fact collector.
 
 The live repo currently contains:
 
+- A `cluster` agent autonomy mode (`--autonomy cluster`, `/autonomy cluster`) that exposes only `axis_status`, `axis_facts`, `axis_models`, `axis_place` and `axis_reservations`; workspace, git, MCP, `todo` and granted extra tools are hidden and refused at dispatch
+- `axis ai route` / MCP `inference_route_explain` upstream checks: for a LiteLLM-style hub on this machine, a listed model must also have an upstream (`/model/info` `api_base`) that answers `GET <api_base>/models` within 2 s, or the hub is skipped; checks are reported in `upstreams`, and peer hubs or hubs without `/model/info` are reported as not checked
+- `axis doctor` Linux service restart-loop check (read-only `systemctl show`, more than 20 restarts and looping now), host-wide daemon counting for the mesh port check, and warnings for system units that start an axis daemon outside the user service; `sudo axis update` restarts the invoking user's service and never starts a root daemon
+- Task-attributed VRAM in task history and execution observations (GPU processes in the task's process tree only; 0 means not observed)
+- HTTP API request IDs (`X-Request-ID`, accepted or generated, echoed and logged per request), daemon refresh-failure warnings, and a warning when `ssh -G` fails; the API refuses a TCP listener without a token
 - Explicit Cortex service addressing through `AXIS_CORTEX_URL`, independent of SSH node identity, with optional `AXIS_CORTEX_QDRANT_URL` for counts. Status exposes the probed endpoint and marks unobserved memory counts with `memories_unknown`; invalid nonempty overrides fail closed. An unset override preserves legacy node-derived addressing
 - Session-scoped per-tool agent approvals, inherited by sub-agents; external MCP tools display NOT RATED. Private approval events carry the tool-call ID and decision, which can come from the configured autonomy policy
 - Streamed OpenAI-style usage requests with a compatibility retry for rejected stream options; usage on choice-bearing chunks is retained and counted once per reply. Private `turn.finished` records include `usage_reported`, with absent counts remaining unknown
@@ -190,10 +195,10 @@ Refresh this section with `./hack/refresh-current-state.sh`.
   - Coverage gates:
     - `./hack/coverage-check.sh`
     - `coverage gate passed: internal/knowledge 100.0% >= 90.0%`
-    - `coverage gate passed: internal/api 71.6% >= 65.0%`
-    - `coverage gate passed: internal/mcp 86.2% >= 70.0%`
-    - `coverage gate passed: internal/ui 90.1% >= 80.0%`
-    - `coverage gate passed: total 73.9% >= 65.0%`
+    - `coverage gate passed: internal/api 72.8% >= 65.0%`
+    - `coverage gate passed: internal/mcp 85.9% >= 70.0%`
+    - `coverage gate passed: internal/ui 91.5% >= 80.0%`
+    - `coverage gate passed: total 76.4% >= 65.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix

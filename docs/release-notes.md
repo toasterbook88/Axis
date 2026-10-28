@@ -8,6 +8,73 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.22.0 upgrade guide
+
+This section describes the v0.22.0 source candidate. Consult
+[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
+and downloads; a versioned changelog is not proof of publication. Changes since
+v0.21.0 are listed in the [changelog](../CHANGELOG.md#v0220-2026-10-28).
+There is no required YAML migration. These changes can alter what an existing
+setup sees.
+
+### External MCP tools ask in every mode
+
+An MCP tool that is not listed by exact name under
+`mcp_servers.<server>.auto_approve_tools` in `nodes.yaml` now prompts in
+`edit`, `full` and with `--auto-approve`, as it already did in default mode.
+To keep a tool running without a prompt, list it there. `full` mode is now
+"all but safety-blocked and unlisted MCP".
+
+### `--auto-approve` works in the console again
+
+The console dropped `--auto-approve` at startup, so default mode asked about
+every tool. Built-in tools that score below 70 now run without a prompt again
+when the flag is set.
+
+### `axis ai route` can now refuse a listed model
+
+For a LiteLLM-style hub on the same machine, a route now also needs the server
+behind the model to answer. A model whose upstream is down is skipped; with no
+other backend, `axis ai route` exits 7 (`ExitErrModelUnlisted`) with
+"(listed, but no upstream answers)" where it used to report the model healthy.
+Scripts that read the exit code or JSON see this as "not available", which is
+what a request to that model would have found. The `upstreams` field lists
+each check. Hubs on another node and hubs without `/model/info` behave as
+before and say "upstream not checked".
+
+### The HTTP API needs a token on TCP
+
+`ServeWithContext` refuses a TCP address when the API token is empty.
+`axis serve` always loads or generates a token, so normal installs are not
+affected; only code that served TCP with an empty token is.
+
+### New, opt-in
+
+- `axis agent --autonomy cluster` (or `/autonomy cluster`) answers cluster
+  questions with only the AXIS cluster tools; workspace, git and MCP tools are
+  hidden.
+- `--objective spread` on `axis task place` and `axis placement explain` (and
+  the matching HTTP, MCP and agent fields) ranks by reservation balance.
+  `capacity` stays the default.
+
+### New warnings
+
+- `axis doctor` on Linux warns about services in a restart loop now. Its fix
+  line names the unit's journal.
+- `axis doctor` counts every axis daemon on the host for the mesh port check
+  and warns about system units that start an axis daemon outside the user
+  service. A root daemon left by an earlier `sudo axis update` shows up here;
+  stop it by hand. `sudo axis update` no longer starts one.
+
+### VRAM observations
+
+Task history and execution observations now record only GPU memory used by the
+task's own processes. Earlier records hold 0 (an ordering bug meant VRAM was
+never stored), and 0 still means "not observed" when per-process accounting is
+unavailable.
+
+---
+
 ## v0.21.0 upgrade guide
 
 This section describes the v0.21.0 source candidate. Consult
