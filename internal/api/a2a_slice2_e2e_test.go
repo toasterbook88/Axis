@@ -244,15 +244,21 @@ func TestA2ASlice2E2E(t *testing.T) {
 	}
 
 	name := fmt.Sprintf("a2a-slice2-e2e-%s.json", stamp)
-	repoRoot, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("git rev-parse: %v", err)
-	}
-	root := strings.TrimSpace(string(repoRoot))
-	targets := []string{
-		filepath.Join(root, "artifacts", name),
-		filepath.Join(root, "artifacts", "a2a-slice2-e2e-latest.json"),
-		filepath.Join("/workspace/axis-eval", name),
+	// A normal test run writes only to a temp dir. Rewriting the tracked
+	// artifacts/ files on every make test dirtied the tree before each commit
+	// and release; hack/a2a-slice2-e2e.sh opts in to the published copies.
+	targets := []string{filepath.Join(t.TempDir(), name)}
+	if os.Getenv("AXIS_A2A_E2E_ARTIFACTS") == "1" {
+		repoRoot, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+		if err != nil {
+			t.Fatalf("git rev-parse: %v", err)
+		}
+		root := strings.TrimSpace(string(repoRoot))
+		targets = append(targets,
+			filepath.Join(root, "artifacts", name),
+			filepath.Join(root, "artifacts", "a2a-slice2-e2e-latest.json"),
+			filepath.Join("/workspace/axis-eval", name),
+		)
 	}
 	written := make([]string, 0, len(targets))
 	for _, p := range targets {
