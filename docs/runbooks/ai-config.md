@@ -45,7 +45,10 @@ inference_probe=skipped
 ```
 
 These do **not** override the selected node. They tell operators which backend
-to call after placement. Use `axis ai route` when you want a live probe.
+to call after placement. Use `axis ai route` when you want a live probe. For a
+LiteLLM hub on the same machine, the route also checks the server behind the
+listed model and skips the hub when that server does not answer
+(`docs/decisions/inference-route-strict-and-mcp.md`, item 5).
 
 ## Operator pattern (private grids)
 
