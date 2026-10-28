@@ -1,21 +1,107 @@
 ## Unreleased
 
+## v0.22.0 (2026-10-28)
+
+A cluster-only agent mode, an explicit spread placement objective, model
+routing that checks the server behind a listed model, restart-loop reporting in
+`axis doctor`, and approval fixes for external MCP tools. See the
+[upgrade guide](docs/release-notes.md#v0220-upgrade-guide) for behavior that
+changes for existing setups. Publication and available downloads are tracked
+on GitHub Releases.
+
+### Features
+
+* `axis agent --autonomy cluster` (and `/autonomy cluster`) limits the agent to
+  the AXIS cluster tools: `axis_status`, `axis_facts`, `axis_models`,
+  `axis_place` and `axis_reservations`. Workspace, git, MCP and `todo` tools,
+  and dynamically granted extras, are hidden and refused if called. It uses the
+  existing scope path; there is no new flag or second gate (#566). The session
+  banner names the mode (#570).
+* Placement accepts an explicit `spread` objective: `axis task place` and
+  `axis placement explain` take `--objective capacity|spread`, HTTP
+  `/v2/placement/dry-run` and `/v2/batch/place` take an `objective` field, and
+  the MCP `placement_decision` / `simulate_workload_plan` tools and agent
+  `axis_place` take an optional `objective`. Spread ranks feasible nodes by the
+  resulting cluster reservation-share spread (`reservation_skew`, lower wins).
+  The default `capacity` objective is unchanged (#567).
+* `axis doctor` adds a Linux **Service restart loops** check. It reads restart
+  counters for every loaded system and user service (read-only, 5 s per scope)
+  and warns about units with more than 20 restarts that are looping now:
+  restarting, failed, or active for less than five minutes. Such units are never
+  `failed`, so other checks miss them. A unit that looped once and has run
+  cleanly since is not flagged (#573, #575).
+
 ### Fixes
 
+* `axis ai route` (and the MCP `inference_route_explain` tool) no longer calls a
+  model healthy only because the hub lists it. For a LiteLLM-style hub on the
+  same machine, it reads the model's upstream servers from the hub's
+  `/model/info` and asks each for its model list (2 s, no prompt). When none
+  answers, the hub is skipped like an unhealthy backend, the reasoning names the
+  upstream and its error, and strict mode fails with
+  "(listed, but no upstream answers)". Checks appear in the new `upstreams`
+  field. Hubs on another node, or without `/model/info`, are not checked and
+  say so (#577).
+* External MCP tools that are not on `mcp_servers.<server>.auto_approve_tools`
+  ask the operator in every autonomy mode. AXIS cannot rate them, and a score of
+  zero let them run without a prompt under `edit`, `full` and `--auto-approve`
+  (#560).
+* `--auto-approve` stays in effect after the console installs its approval
+  prompt. It was dropped at startup, so default mode asked about every tool
+  (#574).
+* The `run_shell` tool description no longer tells the model that destructive
+  commands are blocked; it states what the safety gate does and names its known
+  gaps. Wording only; the gate is unchanged (#565).
+* The HTTP API refuses to start on a TCP address without an API token. A Unix
+  socket is unchanged, and `axis serve` always has a token (#576).
+* Task history and execution observations record task-attributed VRAM: only GPU
+  memory used by processes in the task's process tree, from
+  `nvidia-smi --query-compute-apps`. VRAM was stored as 0 because of an ordering
+  bug, and device-wide memory would have charged resident models to every task.
+  With no per-process accounting the value stays 0, meaning not observed (#561).
+* `axis agent` startup keeps a probed hub role instead of taking another node's
+  Ollama model when the startup model name is not a usable catalog choice; a
+  notice names any remaining borrow (#558). Unnamed local startup takes the
+  first usable local catalog row, in catalog order (#559).
 * `sudo axis update` restarts the invoking user's AXIS-managed service (systemd
   user unit or launchd agent) instead of spawning `axis serve` as root on
   root's socket. That root daemon was unsupervised, outlived the update and
   contended with the user's daemon for the mesh gossip port. With no active
   service for the invoking user, the update now prints how to restart as that
   user and never starts a root daemon. Readiness is read from `/health`, since
-  root does not hold the owner's API token.
+  root does not hold the owner's API token (#571).
 * `axis doctor` counts every axis daemon on the host for the mesh UDP port
   check, not only those on the configured socket, and lists each daemon's pid
-  and address when more than one is running.
+  and address when more than one is running (#571).
 * `axis doctor` and `axis daemon service install` warn about system units that
   start an axis daemon outside the AXIS-managed user service. At boot such a
   unit races the user service for the socket and mesh port, and the loser
-  restarts forever.
+  restarts forever (#571).
+
+### Observability
+
+* The daemon logs a warning with the trigger, duration and error when a
+  snapshot refresh fails; success is logged at debug level (#562).
+* The HTTP API accepts or generates an `X-Request-ID`, echoes it on every
+  response and logs one line per request (method, path without query, status,
+  duration); 5xx responses log at warning level (#563).
+* Fact collection logs a warning when `ssh -G` fails and built-in SSH defaults
+  are used (#564).
+
+### Dependencies and CI
+
+* `github.com/mark3labs/mcp-go` 1.4.0 (#568); GitHub Actions minor updates
+  (#569). Restart-path tests no longer reach the real service manager (#572).
+* `make lint` pins staticcheck 2026.2.2, the first release that reads the
+  export data Go 1.27.2 writes. With 2025.1.1, lint failed on any machine with
+  Go 1.27.2 while CI, on go.mod's Go 1.26.10, passed (#578).
+* `TestA2ASlice2E2E` writes its artifact to a temporary directory; the tracked
+  `artifacts/` copies are written only with `AXIS_A2A_E2E_ARTIFACTS=1`, which
+  `hack/a2a-slice2-e2e.sh` sets. Running the tests no longer dirties the tree
+  (#579).
+* govulncheck is pinned at v1.9.0 in CI, the release workflow and
+  `hack/release-preflight.sh`. v1.1.4 crashed parsing Go 1.27 source on any
+  machine whose local Go is newer than go.mod's (#580).
 
 ## v0.21.0 (2026-10-23)
 
