@@ -38,7 +38,7 @@ run_preflight || fail 'successful validation failed'
 cat >"$test_root/expected" <<'EXPECTED'
 ci|go1.26.10|--require-clean
 go|go1.27.0|run github.com/goreleaser/goreleaser/v2@v2.18.0 check
-go|go1.26.10|run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+go|go1.26.10|run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 EXPECTED
 diff -u "$test_root/expected" "$AXIS_TEST_LOG" || fail 'validator compiler leaked into application gates or scan'
 
