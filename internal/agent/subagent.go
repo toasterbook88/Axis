@@ -116,7 +116,7 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 				task.appendOutput([]byte(answer))
 			}
 			if err != nil {
-				task.appendOutput([]byte(fmt.Sprintf("\n[subagent error: %s]\n", err.Error())))
+				task.appendOutput(fmt.Appendf(nil, "\n[subagent error: %s]\n", err.Error()))
 			}
 			task.mu.Lock()
 			task.done = true
