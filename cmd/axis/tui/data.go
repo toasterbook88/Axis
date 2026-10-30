@@ -29,6 +29,7 @@ func loadSnapshotCmd() tea.Cmd {
 			return snapshotLoadedMsg{
 				Snapshot:  snap,
 				Timestamp: formatFreshness(snap.Timestamp),
+				Observed:  snap.Timestamp,
 				Source:    source,
 			}
 		}
@@ -42,6 +43,7 @@ func loadSnapshotCmd() tea.Cmd {
 		return snapshotLoadedMsg{
 			Snapshot:  snapshot,
 			Timestamp: formatFreshness(freshness),
+			Observed:  freshness,
 			Source:    "file",
 		}
 	}

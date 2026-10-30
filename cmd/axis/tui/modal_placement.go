@@ -296,10 +296,3 @@ func placeTaskCmd(prompt string, snapshot *models.ClusterSnapshot) tea.Cmd {
 		return placementScoredMsg{Requirements: requirements, Explanation: &explanation}
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
