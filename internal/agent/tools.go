@@ -495,16 +495,21 @@ func (r *ToolRegistry) registerListDirectory() {
 						}
 						count++
 						if !e.IsDir() {
-							b.WriteString(prefix + name + "\n")
+							b.WriteString(prefix)
+							b.WriteString(name)
+							b.WriteString("\n")
 							continue
 						}
-						b.WriteString(prefix + name + "/\n")
+						b.WriteString(prefix)
+						b.WriteString(name)
+						b.WriteString("/\n")
 						if currentDepth >= depth || strings.HasPrefix(name, ".") {
 							continue
 						}
 						sub, err := os.ReadDir(filepath.Join(dirPath, name))
 						if err != nil {
-							b.WriteString(prefix + "  [unreadable]\n")
+							b.WriteString(prefix)
+							b.WriteString("  [unreadable]\n")
 							continue
 						}
 						walk(sub, filepath.Join(dirPath, name), currentDepth+1, prefix+"  ")
@@ -542,7 +547,8 @@ func (r *ToolRegistry) registerListDirectory() {
 						fmt.Fprintf(&b, "... and %d more directories\n", dirCount-listed)
 						break
 					}
-					b.WriteString(e.Name() + "/\n")
+					b.WriteString(e.Name())
+					b.WriteString("/\n")
 					listed++
 				}
 				return b.String(), nil
@@ -805,10 +811,12 @@ func diffFragment(oldContent, newContent string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d removed, %d added", len(removed), len(added))
 	if len(removed) > 0 {
-		b.WriteString("\n- " + clipRunesForTool(removed[0], 60))
+		b.WriteString("\n- ")
+		b.WriteString(clipRunesForTool(removed[0], 60))
 	}
 	if len(added) > 0 {
-		b.WriteString("\n+ " + clipRunesForTool(added[0], 60))
+		b.WriteString("\n+ ")
+		b.WriteString(clipRunesForTool(added[0], 60))
 	}
 	return b.String()
 }

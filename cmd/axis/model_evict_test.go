@@ -412,7 +412,7 @@ func TestModelEvictFreezeReportsNoReclaimedVRAM(t *testing.T) {
 	if !strings.Contains(buf.String(), "reclaimed 0 MiB") {
 		t.Fatalf("output = %q, want reclaimed 0 MiB", buf.String())
 	}
-	if strings.Contains(buf.String(), "9842") {
+	if reportsWeightAsReclaimed(buf.String()) {
 		t.Fatalf("freeze reported weight size as reclaimed VRAM: %q", buf.String())
 	}
 	loaded := loadOnlyEvictionReceipt(t)
@@ -456,7 +456,7 @@ func TestModelEvictStopUsesObservedVRAMDelta(t *testing.T) {
 	if !strings.Contains(buf.String(), "reclaimed 800 MiB observed") {
 		t.Fatalf("output = %q, want observed delta", buf.String())
 	}
-	if strings.Contains(buf.String(), "9842") || strings.Contains(buf.String(), "estimated") {
+	if reportsWeightAsReclaimed(buf.String()) || strings.Contains(buf.String(), "estimated") {
 		t.Fatalf("output used the snapshot estimate: %q", buf.String())
 	}
 	loaded := loadOnlyEvictionReceipt(t)
@@ -585,7 +585,7 @@ func TestModelEvictStopUnmeasuredDoesNotUseSnapshot(t *testing.T) {
 	if !strings.Contains(buf.String(), "VRAM unmeasured") {
 		t.Fatalf("output = %q, want VRAM unmeasured", buf.String())
 	}
-	if strings.Contains(buf.String(), "9842") || strings.Contains(buf.String(), "estimated") {
+	if reportsWeightAsReclaimed(buf.String()) || strings.Contains(buf.String(), "estimated") {
 		t.Fatalf("unmeasured evict reused the snapshot size: %q", buf.String())
 	}
 	loaded := loadOnlyEvictionReceipt(t)
@@ -874,5 +874,24 @@ func TestModelResumeUnitNameUsesSnapshotSupervisorAndPort(t *testing.T) {
 	script := modellife.BuildResumeShellScript(runner.resumedReceipts[0])
 	if !strings.Contains(script, "systemctl --user start 'llama-27b.service'") {
 		t.Fatalf("unit resume script = %s", script)
+	}
+}
+
+// reportsWeightAsReclaimed reports whether evict output presents the
+// snapshot's 9842 MiB weight size as a VRAM figure. It matches the figure
+// with its unit: the output also carries a random hex receipt ID, and a bare
+// "9842" check failed whenever that ID happened to contain those digits.
+func reportsWeightAsReclaimed(out string) bool {
+	return strings.Contains(out, "9842 MiB")
+}
+
+func TestReportsWeightAsReclaimedIgnoresReceiptID(t *testing.T) {
+	// Exact output from a CI run where the bare-digit check misfired.
+	ok := "evicted llama-27b on lab-1 (reclaimed 0 MiB in 0ms) receipt mo-17e169a409842246\n"
+	if reportsWeightAsReclaimed(ok) {
+		t.Fatal("receipt ID digits mistaken for the weight size")
+	}
+	if !reportsWeightAsReclaimed("evicted llama-27b on lab-1 (reclaimed 9842 MiB in 3ms) receipt mo-1\n") {
+		t.Fatal("weight size reported as reclaimed VRAM not detected")
 	}
 }
