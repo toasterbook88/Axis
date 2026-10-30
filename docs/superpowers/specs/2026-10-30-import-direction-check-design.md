@@ -199,5 +199,17 @@ directories, so an upward import routed through a package there passed. Reproduc
 (0 edges, exit 0), then fixed by listing with `-deps`; two fixture cases (`testdata/helper` and
 `_hidden`) failed before the fix and pass after.
 
+Replay review (fresh-context agent with the standard prompt in `docs/superpowers/review-prompt.md` (added by #586),
+same vendor family, base 1493da2, head 14f3034c, 2026-10-30): approve-with-changes. It did not find
+the `-deps` blind spot above.
+
+1. Minor, partial: the tier-block search was not bounded to §4; with no block under §4 the gate read
+   a later section's block and passed. Fixed: the search stops at the next `## ` heading; a fixture
+   with the block under §5 failed before the fix and passes after.
+2. Minor, partial: `releaseTargets` is hardcoded rather than read from `.goreleaser.yml`. Fixed by
+   assertion: the tests script fails when `.goreleaser.yml` ships a different platform set.
+
+Decision record: `docs/decisions/import-tier-layout.md`.
+
 Decision: the maintainer chose B on 2026-10-30 (`knowledge` to Layer 5; `reservation` and `skills`
 to Layer 2; seed allowlist of 3). Every finding is resolved, so code may start.

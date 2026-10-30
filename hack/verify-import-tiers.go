@@ -126,13 +126,15 @@ func run() error {
 	return nil
 }
 
-// parseTiers reads the first fenced text block after the "## 4." heading.
+// parseTiers reads the first fenced text block in §4, from the "## 4."
+// heading to the next "## " heading.
 func parseTiers(doc string) (map[string]tier, error) {
 	_, after, ok := strings.Cut(doc, "\n## 4.")
 	if !ok {
 		return nil, errors.New(`no "## 4." heading`)
 	}
-	_, block, ok := strings.Cut(after, "```text\n")
+	section, _, _ := strings.Cut(after, "\n## ")
+	_, block, ok := strings.Cut(section, "```text\n")
 	if !ok {
 		return nil, errors.New("no ```text block after the §4 heading")
 	}

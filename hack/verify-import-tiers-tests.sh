@@ -203,6 +203,12 @@ base_packages
 printf '# AGENTS.md\n\nNo architecture section.\n' >"$CASE/AGENTS.md"
 expect_fail 'missing section 4 heading' 'no "## 4." heading'
 
+new_case "$default_block"
+base_packages
+# shellcheck disable=SC2016 # the backticks are a literal markdown fence
+printf '# AGENTS.md\n\n## 4. Architecture\n\nNo block.\n\n## 5. Other\n\n```text\n%s\n```\n' "$default_block" >"$CASE/AGENTS.md"
+expect_fail 'tier block under a later section is not read' 'no ```text block after the §4 heading'
+
 new_case "$default_block
 Bogus line"
 base_packages
@@ -234,6 +240,16 @@ printf 'go 1.21\n\nuse (\n\t.\n\t./other\n)\n' >"$CASE/go.work"
 extra_env=("GOWORK=$CASE/go.work")
 expect_fail 'multi-module go.work does not hide imports' 'internal/s -> internal/b: Support may not import'
 extra_env=()
+
+# The gate hardcodes the release platforms; fail when .goreleaser.yml ships a different set.
+goreleaser_platforms="$(awk '
+  /^[[:space:]]*goos:/ { key = "os"; next }
+  /^[[:space:]]*goarch:/ { key = "arch"; next }
+  key != "" && /^[[:space:]]*- / { sub(/^[[:space:]]*- /, ""); list[key] = list[key] " " $0; next }
+  { key = "" }
+  END { print list["os"] "|" list["arch"] }' .goreleaser.yml)"
+[[ "$goreleaser_platforms" == " darwin linux| amd64 arm64" ]] \
+  || fail ".goreleaser.yml ships '$goreleaser_platforms'; update releaseTargets in hack/verify-import-tiers.go to match"
 
 for target in hack/ci-preflight.sh .github/workflows/ci.yml .github/workflows/release.yml; do
   grep -qF 'go run hack/verify-import-tiers.go' "$target" \
