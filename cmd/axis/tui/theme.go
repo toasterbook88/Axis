@@ -81,6 +81,8 @@ type glyphSet struct {
 	refreshing             string
 	warning                string
 	dash                   string
+	bullet                 string
+	ge                     string // greater-or-equal
 	navKeys, tabKeys       string // footer legend
 	helpNav, helpTab       string // help overlay legend
 	border                 lipgloss.Border
@@ -97,6 +99,8 @@ var unicodeGlyphs = glyphSet{
 	refreshing: "↻",
 	warning:    "⚠",
 	dash:       "—",
+	bullet:     "•",
+	ge:         "≥",
 	navKeys:    "↑↓", tabKeys: "←→",
 	helpNav: "↑ k  ↓ j", helpTab: "← h  → l",
 	border: lipgloss.RoundedBorder(),
@@ -112,6 +116,8 @@ var asciiGlyphs = glyphSet{
 	refreshing: "~",
 	warning:    "!",
 	dash:       "-",
+	bullet:     "-",
+	ge:         ">=",
 	navKeys:    "j/k", tabKeys: "h/l",
 	helpNav: "j  k", helpTab: "h  l",
 	border: lipgloss.Border{

@@ -160,7 +160,7 @@ func TestModelsTab(t *testing.T) {
 		},
 	}
 	out := joinPlain(modelsTab(node, unicodeGlyphs))
-	for _, want := range []string{"running 0.1.0", "port 11434", "model-a", "Loaded in memory", "model-b", "4.0 GB VRAM"} {
+	for _, want := range []string{"running 0.1.0", "port 11434", "model-a", "Runtime models", "model-b", "4.0 GB VRAM"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("models tab missing %q in:\n%s", want, out)
 		}

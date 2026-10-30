@@ -225,19 +225,26 @@ func renderFooter(m Model, width int) string {
 	for _, h := range footerHints(m.glyphs) {
 		hints = append(hints, styleKey.Render(h.key)+" "+styleMuted.Render(h.desc))
 	}
-	left := " " + joinFit(hints, "  ", max(width-2, 0))
+	isErr := strings.HasPrefix(m.statusMsg, "Error") || strings.HasPrefix(m.statusMsg, "Refresh failed")
+	hintRoom := max(width-2, 0)
+	if isErr {
+		// A failure outranks the key legend: give it the space first and
+		// let the hints take what is left.
+		hintRoom = max(width-lipgloss.Width(m.statusMsg)-5, 0)
+	}
+	left := " " + joinFit(hints, "  ", hintRoom)
 	if m.statusMsg == "" {
 		return left
 	}
 	room := width - lipgloss.Width(left) - 4
-	if room < 12 {
+	if room < 12 && !isErr {
 		return left
 	}
 	s := styleMuted
-	if strings.HasPrefix(m.statusMsg, "Error") || strings.HasPrefix(m.statusMsg, "Refresh failed") {
+	if isErr {
 		s = styleBad
 	}
-	status := s.Render(truncPlain(m.statusMsg, room, m.glyphs.ellipsis))
+	status := s.Render(truncPlain(m.statusMsg, max(room, 1), m.glyphs.ellipsis))
 	return left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(status)-1) + status + " "
 }
 

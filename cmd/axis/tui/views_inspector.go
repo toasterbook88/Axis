@@ -156,9 +156,9 @@ func overviewTab(m Model, node models.NodeFacts, width int) []string {
 			barW := min(16, max(width/5, 6))
 			mem := bar(frac, barW, g, lipgloss.NewStyle()) + " " +
 				styleText.Render(fmt.Sprintf("%d%%  %s / %s used", int(frac*100+0.5), gb(r.RAMTotalMB-r.RAMFreeMB), gb(r.RAMTotalMB)))
-			if r.RAMAllocatableMB > 0 {
-				mem += styleMuted.Render(g.sep + gb(r.RAMAllocatableMB) + " allocatable")
-			}
+			// The node-level figure carries the reservation overlay; the
+			// Resources copy is the pre-reservation derivation. Zero is real.
+			mem += styleMuted.Render(g.sep + gb(node.RAMAllocatableMB) + " allocatable")
 			lines = append(lines, kv("Memory", mem))
 		} else {
 			lines = append(lines, kv("Memory", notObserved()))
@@ -207,13 +207,41 @@ func overviewTab(m Model, node models.NodeFacts, width int) []string {
 	}
 
 	if m.snapshot != nil {
+		// This node's warnings, then cluster-scoped ones (no Node: stale or
+		// degraded cache, discovery), which belong to every view.
 		for _, w := range m.snapshot.Warnings {
 			if w.Node == node.Name {
 				lines = append(lines, styleWarn.Render(g.warning+" "+w.Kind+": ")+styleText.Render(w.Message))
 			}
 		}
+		for _, w := range m.snapshot.Warnings {
+			if w.Node == "" {
+				lines = append(lines, styleWarn.Render(g.warning+" cluster "+w.Kind+": ")+styleText.Render(w.Message))
+			}
+		}
 	}
 	return lines
+}
+
+// residentState is a resident row's observed state, glyph and style. A row
+// without a collector state falls back to Serving(), which promotes only
+// legacy Ollama and llama.cpp rows.
+func residentState(rm models.ResidentModel, g glyphSet) (string, string, lipgloss.Style) {
+	switch rm.State {
+	case models.ModelCatalogLoaded:
+		return g.ok, "loaded", styleOK
+	case models.ModelCatalogLoading:
+		return g.warn, "loading", styleWarn
+	case models.ModelCatalogDown:
+		return g.bad, "down", styleBad
+	case "":
+		if rm.Serving() {
+			return g.ok, "serving", styleOK
+		}
+		return g.unknown, "state not observed", styleFaint
+	default:
+		return g.unknown, string(rm.State), styleMuted
+	}
 }
 
 func modelsTab(node models.NodeFacts, g glyphSet) []string {
@@ -243,9 +271,10 @@ func modelsTab(node models.NodeFacts, g glyphSet) []string {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, styleColHdr.Render("Loaded in memory"))
+		lines = append(lines, styleColHdr.Render("Runtime models"))
 		for _, rm := range node.ResidentModels {
-			s := styleOK.Render(g.ok) + " " + styleBold.Render(rm.Name)
+			glyph, state, st := residentState(rm, g)
+			s := st.Render(glyph) + " " + styleBold.Render(rm.Name) + " " + st.Render(state)
 			var meta []string
 			if rm.Runtime != "" {
 				meta = append(meta, rm.Runtime)
@@ -314,12 +343,10 @@ func reservationsTab(m Model, node models.NodeFacts) []string {
 	} else {
 		lines = append(lines, kv("Reserved", styleMuted.Render("no RAM reservations recorded for this node in the snapshot")))
 	}
-	alloc := node.RAMAllocatableMB
-	if alloc == 0 && node.Resources != nil {
-		alloc = node.Resources.RAMAllocatableMB
-	}
-	if alloc > 0 {
-		lines = append(lines, kv("Allocatable", styleText.Render(gb(alloc))))
+	// Node-level allocatable already has the reservation overlay applied;
+	// with resources observed, zero means exhausted, not missing.
+	if node.Resources != nil {
+		lines = append(lines, kv("Allocatable", styleText.Render(gb(node.RAMAllocatableMB))))
 	}
 	if m.snapshot != nil && m.snapshot.Summary.TotalReservedMB > 0 {
 		s := m.snapshot.Summary

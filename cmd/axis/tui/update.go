@@ -164,6 +164,7 @@ func handleKey(m Model, key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.modal = NewPlacementModal(m.snapshot, m.source, m.lastRefresh)
+		m.modal.glyphs = m.glyphs
 		m.modalActive = true
 		initCmd := m.modal.Init()
 		if m.width > 0 {
