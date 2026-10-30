@@ -8,4 +8,5 @@ Non-negotiables, repeated here because some Copilot surfaces load only this file
 - **Public repo:** no real hostnames, IPs, inventories or secrets anywhere (RFC 2606 / documentation ranges only).
 - **Surgical changes**, tests first for bugs, and run `make ci-preflight` before proposing a PR.
 - **Never merge** a PR unless the maintainer explicitly asks to merge that PR.
-- **New features need a reviewed spec** before code: see `AGENTS.md` §8.
+- **New features need a reviewed spec** before code and a fresh-context review of the finished diff;
+  on every PR, resolve and list every review and bot finding before merge. See `AGENTS.md` §8.

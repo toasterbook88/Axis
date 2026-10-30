@@ -1,7 +1,7 @@
 # Fresh-context review prompt
 
-The standard prompt for every review AGENTS.md §8 requires: the spec review before code, and the
-review of the finished diff. Paste it into a new session or subagent, fill in the four inputs, and
+The standard prompt for the reviews AGENTS.md §8 requires: the spec review before code, and the
+review of the finished diff. Paste it into a new session or subagent, fill in the five inputs, and
 give it nothing else: not the drafting conversation, not earlier reviews, not your own concerns.
 
 ```text
@@ -58,6 +58,39 @@ QUESTIONS:
 
 ## Recording the result
 
-Copy the reviewer's VERDICT, REVIEWED and FINDINGS into the spec's `## Review` block. For every
-finding, record its resolution: `fixed in <commit>` or `declined: <reason>, <the command or test
-run that supports declining>`. A decline without a run is not a resolution.
+Add one block to the spec's `## Review` section per review (AGENTS.md §8, step 3):
+
+```text
+Kind: spec | diff
+Reviewer: fresh-context subagent | new session (and the harness)
+Model: <vendor family>
+Base: <sha from REVIEWED>
+Head: <sha from REVIEWED>
+Date: <YYYY-MM-DD>
+Verdict: approve | approve-with-changes | revise
+```
+
+Then list each finding with its resolution, `fixed in <commit>` or `declined: <reason>, <the command
+or test run that supports declining>`, and each question as `became F<n>` or `open: <why not
+probed>`. A decline without a run is not a resolution. Copy declines and open questions into the PR
+body.
+
+## Why this prompt
+
+- A fresh look is the lever, more than a different model. In a preregistered replay of 183 reviews,
+  a fresh same-model session caught as many escaped defects as another model family at every
+  checkpoint; a second look after a whole feature was built found real missed bugs in 19 of 30
+  features (fresh same model) and 16 of 30 (other family), with largely disjoint findings
+  ([Stephens 2026](https://stephens.page/blog/fresh-eyes-beat-a-second-family/paper/fresh-eyes-beat-a-second-family.pdf)).
+- Pairing models still adds coverage: one fresh same-model review plus one cross-model review matched
+  56.7% of planted errors against 42.7% for two same-model reviews, and cross-model review did best
+  on documents such as specs; a third reviewer added 1.3 points
+  ([arXiv:2610.01471](https://arxiv.org/abs/2610.01471)).
+- Findings must be acted on. Two of the six bugs that escaped in Stephens' study had been raised by
+  the original review and declined by the author. On this repo, the Copilot review of #577 arrived
+  after the merge and was never read; one of its findings (tag-less model matching in
+  `ModelListed`) still holds on main.
+- Evidence keeps findings honest. Replaying this prompt on #582 found 4 of the 5 issues later
+  confirmed there, raised the fifth as a question, added one new verified issue, and reported no
+  wrong findings; on #585 it found 2 new verified issues but missed one that Copilot caught. Two
+  replays are a direction, not a measurement.

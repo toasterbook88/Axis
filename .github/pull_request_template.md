@@ -11,9 +11,10 @@ Spec:
 
 ## Review findings
 
-<!-- Every finding from the spec and diff reviews and from review bots, with its resolution:
-"fixed in <commit>" or "declined: <reason>, <the run that supports it>". List declines first.
-Do not merge while a requested review is pending or a finding has no resolution. -->
+<!-- Every PR. Each finding from the spec and diff reviews and from review bots, with its
+resolution: "fixed in <commit>" or "declined: <reason>, <the run that supports it>". Each reviewer
+question: "became F<n>" or "open: <why not probed>". List declines and open questions first.
+Do not merge while a requested review is pending (gh pr view <PR> --json reviewRequests). -->
 
 ## Testing
 
