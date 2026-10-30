@@ -9,7 +9,7 @@
 │ ● node-a                                                          1 Overview   2 Models   3 Storage   4 Reservations │
 │ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
 │ Reserved    8.0 GB RAM held by active reservations                                                                   │
-│ Allocatable 25 GB                                                                                                    │
+│ Allocatable 0.0 GB                                                                                                   │
 │ Cluster     8.0 GB reserved of 32 GB allocatable                                                                     │
 │                                                                                                                      │
 │ Per-reservation detail: axis reservations list                                                                       │

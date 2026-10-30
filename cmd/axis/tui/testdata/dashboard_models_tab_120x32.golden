@@ -12,8 +12,8 @@
 │ Available   model-a:7b                                                                                               │
 │             model-b:14b                                                                                              │
 │                                                                                                                      │
-│ Loaded in memory                                                                                                     │
-│ ● model-a:7b  ollama · port 11434 · 5.1 GB VRAM                                                                      │
+│ Runtime models                                                                                                       │
+│ ● model-a:7b serving  ollama · port 11434 · 5.1 GB VRAM                                                              │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

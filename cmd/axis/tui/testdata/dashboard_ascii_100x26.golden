@@ -11,7 +11,7 @@
 | Status      ok                                                                                   |
 | System      linux 6.1.0 | amd64                                                                  |
 | CPU         Example CPU | 16 cores | load 3.20 (20%)                                             |
-| Memory      =========------- 54%  35 GB / 64 GB used | 25 GB allocatable                         |
+| Memory      =========------- 54%  35 GB / 64 GB used | 0.0 GB allocatable                        |
 | GPU         Example GPU | 24 GB VRAM                                                             |
 | Link        lan | ssh handshake 4 ms                                                             |
 |                                                                                                  |

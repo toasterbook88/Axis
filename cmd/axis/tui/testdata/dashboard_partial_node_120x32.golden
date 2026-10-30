@@ -11,7 +11,7 @@
 │ Status      partial — gpu: probe timed out                                                                           │
 │ System      darwin 26.4 · arm64                                                                                      │
 │ CPU         Example SoC · 12 cores · load 9.50 (79%)                                                                 │
-│ Memory      ━━━━━━━━━━━━━━━━ 84%  30 GB / 36 GB used · 2.9 GB allocatable                                            │
+│ Memory      ━━━━━━━━━━━━━━━━ 84%  30 GB / 36 GB used · 0.0 GB allocatable                                            │
 │ Pressure    medium                                                                                                   │
 │ Power       battery 72% · battery                                                                                    │
 │ Link        tailnet · ssh handshake 38 ms                                                                            │

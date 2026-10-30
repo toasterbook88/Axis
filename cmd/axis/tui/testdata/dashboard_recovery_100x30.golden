@@ -27,4 +27,4 @@
 
 
 
- ↑↓ select  ←→ tab  p place  r refresh  ? help  q quit   Error: no daemon cache (connection refuse…
+ ↑↓ select  ←→ tab     Error: no daemon cache (connection refused) and no snapshot file (not found)
