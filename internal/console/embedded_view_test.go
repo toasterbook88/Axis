@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +122,84 @@ func TestEmbeddedFrameShorterThanLiveRegion(t *testing.T) {
 	m = feed(t, m, EntryMsg{Entry: NewNoticeEntry(m.now(), "x")})
 	if got := len(strings.Split(m.View(), "\n")); got != 1 {
 		t.Fatalf("1-line pane drew %d lines", got)
+	}
+}
+
+// Review #582: while scrolled up, new output must not move the text being
+// read; the "below" count grows instead.
+func TestEmbeddedScrollStaysAnchoredWhileOutputArrives(t *testing.T) {
+	m := embeddedModel(t, 60, 8)
+	for i := 0; i < 30; i++ {
+		m = feed(t, m, EntryMsg{Entry: NewNoticeEntry(m.now(), fmt.Sprintf("old-%02d", i))})
+	}
+	m = feed(t, m, tea.KeyMsg{Type: tea.KeyPgUp}, tea.KeyMsg{Type: tea.KeyPgUp})
+	before := m.View()
+	beforeScroll := m.log.scroll
+	for i := 0; i < 3; i++ {
+		m = feed(t, m, EntryMsg{Entry: NewNoticeEntry(m.now(), fmt.Sprintf("new-%02d", i))})
+	}
+	after := m.View()
+	if firstLine(after) != firstLine(before) {
+		t.Fatalf("view moved while scrolled up:\nbefore %q\nafter  %q", firstLine(before), firstLine(after))
+	}
+	if m.log.scroll <= beforeScroll {
+		t.Fatalf("scroll offset did not grow with new output: %d -> %d", beforeScroll, m.log.scroll)
+	}
+	// Following the bottom (scroll 0) still shows new output immediately.
+	m = feed(t, m, tea.KeyMsg{Type: tea.KeyPgDown}, tea.KeyMsg{Type: tea.KeyPgDown}, tea.KeyMsg{Type: tea.KeyPgDown}, tea.KeyMsg{Type: tea.KeyPgDown})
+	m = feed(t, m, EntryMsg{Entry: NewNoticeEntry(m.now(), "newest")})
+	if !strings.Contains(m.View(), "newest") {
+		t.Fatal("bottom-following view missed new output")
+	}
+}
+
+func firstLine(s string) string { return strings.SplitN(s, "\n", 2)[0] }
+
+// Review #582: transcript rows and the scroll marker must fit panes
+// narrower than the entry renderer's minimum width.
+func TestEmbeddedNarrowPaneRowsFit(t *testing.T) {
+	for _, w := range []int{8, 12, 20, 24} {
+		m := embeddedModel(t, w, 6)
+		for i := 0; i < 12; i++ {
+			m = feed(t, m, EntryMsg{Entry: NewUserEntry(m.now(), "a prompt long enough to wrap several times over")})
+		}
+		for _, scrolled := range []bool{false, true} {
+			if scrolled {
+				m = feed(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
+			}
+			lines := strings.Split(m.View(), "\n")
+			// The last line is the input row, owned by the live region.
+			for i, l := range lines[:len(lines)-1] {
+				if vw := visibleWidth(l); vw > w {
+					t.Errorf("width %d scrolled=%v: row %d is %d wide: %q", w, scrolled, i, vw, l)
+				}
+			}
+		}
+	}
+}
+
+// Review #582: help or palette text committed while the splash is up must
+// be visible, not retained offscreen.
+func TestEmbeddedSplashGivesWayToCommittedEntries(t *testing.T) {
+	m := NewModel(Options{Embedded: true, Start: HeroScreen{}, Version: "0.0.0"})
+	m = feed(t, m, tea.WindowSizeMsg{Width: 80, Height: 24}, EntryMsg{Entry: NewNoticeEntry(time.Time{}, "keymap text here")})
+	if !strings.Contains(m.View(), "keymap text here") {
+		t.Fatalf("entry committed under the splash is invisible:\n%s", m.View())
+	}
+}
+
+// Review #582: the splash path must clip to a pane shorter than the splash,
+// keeping the input row.
+func TestEmbeddedStartScreenClipsToShortPane(t *testing.T) {
+	for _, h := range []int{1, 2, 3} {
+		m := NewModel(Options{Embedded: true, Start: HeroScreen{}, Version: "0.0.0", Unicode: true})
+		m = feed(t, m, tea.WindowSizeMsg{Width: 80, Height: h})
+		lines := strings.Split(m.View(), "\n")
+		if len(lines) != h {
+			t.Fatalf("height %d: splash frame has %d lines", h, len(lines))
+		}
+		if !strings.Contains(lines[len(lines)-1], "❯") {
+			t.Fatalf("height %d: input row lost: %q", h, lines[len(lines)-1])
+		}
 	}
 }
