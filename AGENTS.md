@@ -47,11 +47,13 @@ make install-user          # ~/.local/bin (workstation development)
 - Go: `go.mod` is authoritative (currently `go 1.26.10`); a newer local Go still runs the gates. If
   staticcheck fails with an export-data error, bump `STATICCHECK_VERSION` (Makefile) to a release that
   reads that Go's export data; `GOTOOLCHAIN=go1.26.10` reproduces CI's toolchain meanwhile.
-- CI also runs: coverage gates (`hack/coverage-check.sh`), deadcode gate, public boundary,
+- CI also runs: coverage gates (`hack/coverage-check.sh`), deadcode gate, import tiers, public boundary,
   repo truth, doc facts, actionlint, workflow action pins, install tests,
   `hack/lifecycle-check.go` and `hack/claude-workflow-tests.py`.
 - `./hack/verify-doc-facts.sh` checks this file against the code (exit codes, command count,
-  MCP tool count, package inventory, 30 KB budget) — update both together.
+  MCP tool count, 30 KB budget) — update both together.
+- `go run hack/verify-import-tiers.go` checks the §4 tier layout against every `internal/` import and
+  the package inventory; exceptions go in `hack/import-tiers-allowlist.txt`, each with a rationale.
 - PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN).
 - Bare `go test` outside `make` can touch real `~/.axis` state; prefer `make test` or `hack/hermetic-go-test.sh`.
 - `axis version` must print `commit:`; it distinguishes tip-of-main from a release with the same semver.
@@ -64,17 +66,17 @@ Five trust tiers. Higher tiers consume lower-tier authority; advisory surfaces n
 
 ```text
 Layer 5  Advisory    internal/chat internal/agent internal/console internal/mcp internal/api
-                     internal/cortex internal/mcpclient internal/a2a
-Layer 4  Execution   internal/execution internal/safety internal/reservation internal/scripts
-                     internal/skills internal/modellife internal/modelinventory
+                     internal/cortex internal/mcpclient internal/a2a internal/knowledge
+Layer 4  Execution   internal/execution internal/safety internal/scripts internal/modellife
+                     internal/modelinventory
 Layer 3  Placement   internal/placement internal/workload internal/modelplan internal/llmrouter
 Layer 2  Snapshot    internal/snapshot internal/daemon internal/snapshotview internal/runtimectx
-                     internal/publication
+                     internal/publication internal/reservation internal/skills
 Layer 1  Fact Plane  internal/facts internal/discovery internal/mesh internal/transport internal/multipath
 Support              internal/config internal/models internal/buildinfo internal/ui internal/persist
                      internal/repairs internal/turboexec internal/auth internal/failures internal/fleettest
                      internal/git internal/lockutil internal/netutil internal/secrets internal/versioncmp
-                     internal/state internal/knowledge internal/events
+                     internal/state internal/events
 ```
 
 `cmd/axis/` — Cobra CLI, one file per subcommand (29 commands).

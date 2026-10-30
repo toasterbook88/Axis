@@ -41,6 +41,8 @@ run ./hack/verify-public-boundary.sh
 run ./hack/verify-deadcode-tests.sh
 run ./hack/pr-review-cycle-tests.sh
 run ./hack/verify-deadcode.sh
+run ./hack/verify-import-tiers-tests.sh
+run go run hack/verify-import-tiers.go
 run ./hack/verify-repo-truth.sh
 run ./hack/verify-doc-facts.sh
 run python3 hack/claude-workflow-tests.py

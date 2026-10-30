@@ -1,5 +1,15 @@
 ## Unreleased
 
+### Dependencies and CI
+
+* `go run hack/verify-import-tiers.go` fails CI when an `internal/` package
+  imports a package in a higher tier of the `AGENTS.md` §4 layout. The layout
+  is read from `AGENTS.md` itself, so it has one home; exceptions need a
+  rationale in `hack/import-tiers-allowlist.txt`, and stale ones fail. The
+  layout now matches the code: `knowledge` is Layer 5, `reservation` and
+  `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
+  package-inventory check in `verify-doc-facts.sh`.
+
 ## v0.22.0 (2026-10-28)
 
 A cluster-only agent mode, an explicit spread placement objective, model
