@@ -114,7 +114,7 @@ func (w Workspace) updatePalette(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return w, nil
 }
 
-func (p *palette) render(g glyphSet, width int) string {
+func (p *palette) render(g glyphSet, width, height int) string {
 	boxW := min(56, max(width-6, 20))
 	inner := boxW - 4
 	prompt := styleAccent.Render(g.cursor+" ") + styleText.Render(p.query) + styleAccent.Render("_")
@@ -126,7 +126,20 @@ func (p *palette) render(g glyphSet, width int) string {
 	if len(m) == 0 {
 		lines = append(lines, styleMuted.Render("no matching command"))
 	}
-	for i, a := range m {
+	// Border takes two rows and the three header lines above take the rest
+	// of the chrome. Keep a window that includes the cursor so Enter cannot
+	// run a command the frame has clipped off.
+	visible := max(height-5, 1)
+	start := 0
+	if p.cursor+1 > visible {
+		start = p.cursor + 1 - visible
+	}
+	end := min(start+visible, len(m))
+	if start > end {
+		start = end
+	}
+	for i, a := range m[start:end] {
+		i += start
 		hint := "ctrl+x " + a.key
 		title := padPlain(a.title, inner-len(hint)-1, g.ellipsis)
 		if i == p.cursor {

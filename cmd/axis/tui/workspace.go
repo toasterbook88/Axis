@@ -92,7 +92,9 @@ func (w Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w.width, w.height = msg.Width, msg.Height
 		var dcmd tea.Cmd
 		var next tea.Model
-		next, dcmd = w.dash.Update(msg)
+		// The workspace status bar owns the last row. Size the dashboard to
+		// the rows above it so its footer survives Workspace.View.
+		next, dcmd = w.dash.Update(tea.WindowSizeMsg{Width: msg.Width, Height: max(msg.Height-1, 1)})
 		w.dash = next.(Model)
 		var ccmd tea.Cmd
 		w, ccmd = w.resizeChat()
@@ -256,7 +258,7 @@ func (w Workspace) View() string {
 
 	switch {
 	case w.palette != nil:
-		body = overlay(body, w.palette.render(w.dash.glyphs, w.width), w.width)
+		body = overlay(body, w.palette.render(w.dash.glyphs, w.width, len(body)), w.width)
 	case w.showHelp:
 		body = overlay(body, renderWorkspaceHelp(w.dash.glyphs), w.width)
 	}

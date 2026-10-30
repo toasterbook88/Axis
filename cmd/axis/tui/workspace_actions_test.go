@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,42 @@ func TestWorkspaceHelpClosesOnAnyKey(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("ctrl+c in help did not quit")
+	}
+}
+
+// The workspace status bar owns the last row. The hosted dashboard must be
+// sized to the rows above it, or its footer — the only place a failed
+// refresh is announced — is clipped away.
+func TestHostedDashboardKeepsRefreshFailure(t *testing.T) {
+	ws, _ := newTestWorkspace(t, 80, 24)
+	if ws.dash.height != 23 {
+		t.Fatalf("dashboard height = %d, want 23 so the status row stays", ws.dash.height)
+	}
+	ws = wsKeys(t, ws, keyF2)
+	next, _ := ws.Update(loadErrMsg{Err: errors.New("connection refused")})
+	out := stripANSI(next.(Workspace).View())
+	if !strings.Contains(out, "Refresh failed; showing previous snapshot") {
+		t.Fatalf("refresh failure not on screen:\n%s", out)
+	}
+}
+
+// On a short terminal the palette must scroll so the selected command stays
+// inside the frame. Enter runs whatever the cursor points at.
+func TestPaletteSelectionStaysOnScreen(t *testing.T) {
+	ws, _ := newTestWorkspace(t, 50, 15)
+	ws = wsKeys(t, ws, keyCtrlO)
+	for range workspaceActions {
+		ws = wsKeys(t, ws, keyDown)
+	}
+	if ws.palette == nil || ws.palette.cursor != len(workspaceActions)-1 {
+		t.Fatalf("cursor = %v, want last command", ws.palette)
+	}
+	out := stripANSI(ws.View())
+	if !strings.Contains(out, "Quit") {
+		t.Fatalf("selected Quit command is off screen:\n%s", out)
+	}
+	if strings.Contains(out, "Cluster dashboard") {
+		t.Fatalf("palette did not scroll; first command still shown:\n%s", out)
 	}
 }
 

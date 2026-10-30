@@ -25,6 +25,6 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ↑↓ select  ←→ tab  p place  r refresh  ? help                                                 Snapshot loaded: 4 nodes
  AXIS dashboard                   a ask about node  esc back  ctrl+o commands  ctrl+x leader  f2 dashboard  ctrl+c quit
