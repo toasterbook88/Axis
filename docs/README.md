@@ -19,6 +19,7 @@
 
 - [Local Assist](runbooks/local-assist.md) — operator verification guide for the local assist surface
 - [MCP Network Tools](runbooks/mcp-network-tools.md) — diagnostics and operator notes for MCP network tooling
+- [Terminal Workspace](runbooks/tui.md) — `axis tui`: agent conversation, cluster sidebar, dashboard, keys, and what each view claims
 
 ## Source Of Truth
 

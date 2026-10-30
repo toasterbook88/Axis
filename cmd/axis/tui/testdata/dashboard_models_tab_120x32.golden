@@ -1,0 +1,32 @@
+ AXIS  cluster                                                        ▲ 3/4 reachable · 2m ago · daemon-cache · vX.Y.Z
+ memory ━━━━━━━━━━━━ 63%  68 GB / 108 GB used · 32 GB allocatable · 8.0 GB reserved                        ⚠ 2 warnings
+    NODE        ROLE     STATE        LOAD            RAM             GPU                             LINK
+▌ ● node-a      primary  ok           ━━━━━━━━━  20%  ━━━━━━━━━  54%  Example GPU 24 GB               lan 4ms
+  ▲ node-b      worker   partial      ━━━━━━━━━  79%  ━━━━━━━━━  84%  —                               tailnet 38ms
+  ✖ node-c      worker   unreachable  ssh: connect timed out
+  ● node-d      worker   ok           ━━━━━━━━━  10%  ━━━━━━━━━  39%  —                               not observed
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ● node-a                                                          1 Overview   2 Models   3 Storage   4 Reservations │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ Ollama      ● running 0.0.1 · port 11434                                                                             │
+│ Available   model-a:7b                                                                                               │
+│             model-b:14b                                                                                              │
+│                                                                                                                      │
+│ Loaded in memory                                                                                                     │
+│ ● model-a:7b  ollama · port 11434 · 5.1 GB VRAM                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ↑↓ select  ←→ tab  p place  r refresh  ? help  q quit                                         Snapshot loaded: 4 nodes

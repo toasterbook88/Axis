@@ -1,0 +1,30 @@
+ AXIS  cluster                                                        ▲ 3/4 reachable · 2m ago · daemon-cache · vX.Y.Z
+ memory ━━━━━━━━━━━━ 63%  68 GB / 108 GB used · 32 GB allocatable · 8.0 GB reserved                        ⚠ 2 warnings
+    NODE        ROLE     STATE        LOAD            RAM             GPU                             LINK
+▌ ● node-a      primary  ok           ━━━━━━━━━  20%  ━━━━━━━━━  54%  Example GPU 24 GB               lan 4ms
+  ▲ node-b      worker   partial      ━━━━━━━━━  79%  ━━━━━━━━━  84%  —                               tailnet 38ms
+  ✖ node-c      worker   unreachable  ssh: connect timed out
+  ● node-d      worker   ok           ━━━━━━━━━  10%  ━━━━━━━━━  39%  —                               not observed
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ● node-a                                                          1 Overview   2 Models   3 Storage   4 Reservations │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ Status      ok                                                                                                       │
+│ System      linux 6.1.0 · amd64                                                                                      │
+│ CPU         Example CPU · 16 cores · load 3.20 (20%)                                                                 │
+│ Memory      ━━━━━━━━━━━━━━━━ 54%  35 GB / 64 GB used · 25 GB allocatable                                             │
+│ GPU         Example GPU · 24 GB VRAM                                                                                 │
+│ Link        lan · ssh handshake 4 ms                                                                                 │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ AXIS dashboard                   a ask about node  esc back  ctrl+o commands  ctrl+x leader  f2 dashboard  ctrl+c quit

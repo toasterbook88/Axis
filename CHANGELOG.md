@@ -14,6 +14,9 @@
   quit). `F2` toggles the dashboard; `a` there returns to the conversation
   with `@node` prefilled. `--model` and `--autonomy` pass through to the
   agent; `axis tui --dashboard` opens only the dashboard.
+  User guide: `docs/runbooks/tui.md`; design record:
+  `docs/decisions/tui-agent-workspace.md` (supersedes the "`axis tui` stays
+  observational" part of `agent-surface-transcript-model.md`).
 * `axis tui` dashboard redesign. Every frame fits the terminal exactly at any size: the
   node table drops low-priority columns on narrow terminals and scrolls when
   there are more nodes than rows, and the inspector fills the remaining height.

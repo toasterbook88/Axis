@@ -1,0 +1,20 @@
+ AXIS  cluster      ▲ 3/4 reachable · 2m ago · daemon-cache
+ memory ━━━━━━━━━━━━ 63%  68 GB / 108 GB used  ⚠ 2 warnings
+    NODE        STATE        LOAD            RAM
+▌ ● node-a      ok           ━━━━━━━━━  20%  ━━━━━━━━━  54%
+  ▲ node-b      partial      ━━━━━━━━━  79%  ━━━━━━━━━  84%
+  ✖ node-c      unreachable  ssh: connect timed out
+  ● node-d      ok           ━━━━━━━━━  10%  ━━━━━━━━━  39%
+╭──────────────────────────────────────────────────────────╮
+│ ● node-a      Overview   Models   Storage   Reservations │
+│ ──────────────────────────────────────────────────────── │
+│ Status      ok                                           │
+│ System      linux 6.1.0 · amd64                          │
+│ CPU         Example CPU · 16 cores · load 3.20 (20%)     │
+│ Memory      ━━━━━━━━━━━ 54%  35 GB / 64 GB used · 25 GB  │
+│ GPU         Example GPU · 24 GB VRAM                     │
+│ Link        lan · ssh handshake 4 ms                     │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+ ↑↓ select  ←→ tab  p place  r refresh  ? help  q quit

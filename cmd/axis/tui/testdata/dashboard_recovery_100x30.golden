@@ -1,0 +1,30 @@
+ AXIS  cluster                                                    ○ no snapshot · unknown · vX.Y.Z
+
+
+
+
+
+            ╭─────────────────────────────────────────────────────────────────────────╮
+            │                                                                         │
+            │  Snapshot unavailable                                                   │
+            │  no daemon cache (connection refused) and no snapshot file (not found)  │
+            │                                                                         │
+            │  AXIS needs observed cluster state before it can show or place work.    │
+            │                                                                         │
+            │  First-time setup                                                       │
+            │    1. axis init                                                         │
+            │    2. axis daemon service install                                       │
+            │                                                                         │
+            │  Already configured                                                     │
+            │    ● axis daemon start in another terminal                              │
+            │    ● Press r here to retry immediately                                  │
+            │                                                                         │
+            │  The TUI starts nothing until you run one of these commands.            │
+            │                                                                         │
+            ╰─────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+ ↑↓ select  ←→ tab  p place  r refresh  ? help  q quit   Error: no daemon cache (connection refuse…
