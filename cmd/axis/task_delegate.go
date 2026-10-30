@@ -433,7 +433,8 @@ func taskApproveCmd() *cobra.Command {
 			}
 
 			var b strings.Builder
-			if task.Status.State == a2a.TaskStateCompleted {
+			switch task.Status.State {
+			case a2a.TaskStateCompleted:
 				fmt.Fprintf(&b, "%s Task %s approved and completed successfully\n", ui.Green("✓"), ui.Bold(taskID))
 				if task.Status.Message != nil {
 					msgText := a2a.TextFromMessage(*task.Status.Message)
@@ -441,7 +442,7 @@ func taskApproveCmd() *cobra.Command {
 						fmt.Fprintf(&b, "%s\n", msgText)
 					}
 				}
-			} else if task.Status.State == a2a.TaskStateFailed {
+			case a2a.TaskStateFailed:
 				errText := ""
 				if task.Status.Message != nil {
 					errText = a2a.TextFromMessage(*task.Status.Message)
@@ -449,7 +450,7 @@ func taskApproveCmd() *cobra.Command {
 				fmt.Fprintf(&b, "%s Task %s execution failed: %s\n", ui.Red("✗"), ui.Bold(taskID), errText)
 				_, _ = fmt.Fprint(cmd.OutOrStdout(), b.String())
 				return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s execution failed: %s", taskID, errText)}
-			} else if task.Status.State == a2a.TaskStateRejected {
+			case a2a.TaskStateRejected:
 				reason := ""
 				if task.Status.Message != nil {
 					reason = a2a.TextFromMessage(*task.Status.Message)
@@ -457,7 +458,7 @@ func taskApproveCmd() *cobra.Command {
 				fmt.Fprintf(&b, "%s Task %s was rejected: %s\n", ui.Red("✗"), ui.Bold(taskID), reason)
 				_, _ = fmt.Fprint(cmd.OutOrStdout(), b.String())
 				return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("task %s was rejected: %s", taskID, reason)}
-			} else {
+			default:
 				fmt.Fprintf(&b, "%s Task %s approved: %s\n", ui.Cyan("•"), ui.Bold(taskID), task.Status.State)
 			}
 
