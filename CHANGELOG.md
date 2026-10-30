@@ -8,7 +8,7 @@
   rationale in `hack/import-tiers-allowlist.txt`, and stale ones fail. The
   layout now matches the code: `knowledge` is Layer 5, `reservation` and
   `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
-  package-inventory check in `verify-doc-facts.sh`.
+  package-inventory check in `verify-doc-facts.sh` (#585).
 
 ## v0.22.0 (2026-10-28)
 
