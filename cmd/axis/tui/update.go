@@ -94,6 +94,18 @@ func UpdateWithRefresh(m Model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// Bubble Tea delivers fast typing as one message carrying several runes
+	// ("jjG"). Every dashboard binding is a single key, so replay them one
+	// at a time.
+	if split := splitRunes(key); split != nil {
+		var cmds []tea.Cmd
+		for _, k := range split {
+			next, cmd := UpdateWithRefresh(m, k)
+			m = next.(Model)
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
 	if m.showHelp {
 		switch key.String() {
 		case "?", "esc", "q", "enter":
@@ -197,4 +209,17 @@ func (m *Model) keepCursorVisible() {
 	if m.tableOffset < 0 {
 		m.tableOffset = 0
 	}
+}
+
+// splitRunes breaks a multi-rune key message into single-rune messages. It
+// returns nil for anything else, including bracketed paste.
+func splitRunes(key tea.KeyMsg) []tea.KeyMsg {
+	if key.Type != tea.KeyRunes || len(key.Runes) < 2 || key.Paste {
+		return nil
+	}
+	out := make([]tea.KeyMsg, len(key.Runes))
+	for i, r := range key.Runes {
+		out[i] = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: key.Alt}
+	}
+	return out
 }

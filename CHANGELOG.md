@@ -2,7 +2,19 @@
 
 ### Features
 
-* `axis tui` redesign. Every frame fits the terminal exactly at any size: the
+* `axis tui` is now a full-screen workspace in the style of OpenCode: the
+  `axis agent` conversation fills the main pane and a sidebar shows cluster
+  health, every node's RAM use and the snapshot's alerts. The conversation is
+  the same in-process agent and startup path as `axis agent` (streaming, tool
+  cards, approvals, `/model`, `/skills`, `/mcp`, `@node` completion), hosted
+  by a new embedded console mode that draws the transcript in-frame
+  (`pgup`/`pgdown` scroll; colored bars mark operator, tool, reasoning,
+  approval and error entries). `ctrl+o` opens a command palette and `ctrl+x`
+  is a leader key (`d` dashboard, `p` place, `m` model, `b` sidebar, `q`
+  quit). `F2` toggles the dashboard; `a` there returns to the conversation
+  with `@node` prefilled. `--model` and `--autonomy` pass through to the
+  agent; `axis tui --dashboard` opens only the dashboard.
+* `axis tui` dashboard redesign. Every frame fits the terminal exactly at any size: the
   node table drops low-priority columns on narrow terminals and scrolls when
   there are more nodes than rows, and the inspector fills the remaining height.
   The header shows reachable/total nodes, the snapshot's age (colored as it
@@ -23,6 +35,8 @@
   node they concern.
 * `axis tui` no longer starts an extra 30 s refresh timer each time `r` is
   pressed. Refresh ticks from a superseded cycle are dropped.
+* `axis tui` keys typed quickly (delivered as one multi-rune message, such as
+  `jjG`) now each act as their own key instead of being ignored.
 
 ## v0.22.0 (2026-10-28)
 
