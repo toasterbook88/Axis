@@ -124,6 +124,7 @@ private vulnerability reporting instead of a public issue.
 ## Pull Requests
 
 - Keep PRs small and focused on a single concern
+- New features need a spec reviewed before code is written; see `AGENTS.md` §8
 - Include test coverage for new behavior where practical
 - Reference the relevant issue if one exists
 - All existing tests must pass (`go test ./...`)

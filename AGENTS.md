@@ -155,3 +155,22 @@ Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrC
   (15 direct dependencies; `go.mod` is authoritative).
 - When wiring changes, update `docs/current-state.md` and pass `verify-repo-truth.sh` / `verify-doc-facts.sh`.
 - Say "suspect" until a test or probe confirms a cause.
+
+## 8. New features need a reviewed spec
+
+A feature is any new command, subcommand, flag, MCP tool, HTTP route, config key, state file or
+output-schema change, or any change to documented behavior. Bug fixes that restore documented
+behavior, refactors, tests, dependency bumps and docs are exempt. If unsure, treat it as a feature.
+Only the maintainer can waive this, in writing on the PR.
+
+1. Before feature code, commit `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`: problem,
+   non-goals, design, alternatives, and `## Research` (prior art with links; the optimization chosen
+   and its measurement, or why none applies). Size it to the change: one flag can be 20 lines.
+   Throwaway spikes for measurement are fine; do not merge them.
+2. Get it reviewed by a fresh-context agent: a new session or subagent whose prompt holds only the
+   spec path, the base commit and the review ask. Use a different model family when one is available.
+3. Append `## Review` with `Reviewer:`, `Model:` (vendor family, not a cluster model), `Base:`,
+   `Date:` and `Verdict:` (`approve`, `approve-with-changes` or `revise`) lines, then each finding
+   and its resolution. Code starts after `approve`, or `approve-with-changes` with every finding
+   resolved. A substantial spec change needs a new review.
+4. Link the spec in the PR body. If the code departs from the spec, update the spec in that PR.
