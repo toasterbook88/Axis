@@ -183,10 +183,7 @@ func ramUsedFrac(r *models.Resources) (float64, bool) {
 	if r == nil || r.RAMTotalMB <= 0 {
 		return 0, false
 	}
-	used := r.RAMTotalMB - r.RAMFreeMB
-	if used < 0 {
-		used = 0
-	}
+	used := max(r.RAMTotalMB-r.RAMFreeMB, 0)
 	return float64(used) / float64(r.RAMTotalMB), true
 }
 

@@ -144,7 +144,9 @@ func renderNodeRow(node models.NodeFacts, cols []column, selected bool, width in
 		b.WriteString(" ")
 	}
 	glyph, lvl := statusGlyph(node.Status, g)
-	b.WriteString(bg.Render(" ") + on(lvl.style()).Render(glyph) + bg.Render(" "))
+	b.WriteString(bg.Render(" "))
+	b.WriteString(on(lvl.style()).Render(glyph))
+	b.WriteString(bg.Render(" "))
 
 	down := node.Status == models.StatusUnreachable || node.Status == models.StatusError
 	for i, c := range cols {

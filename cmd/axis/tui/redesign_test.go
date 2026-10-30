@@ -142,7 +142,7 @@ func TestReservationsTabShowsSnapshotReservedRAM(t *testing.T) {
 func TestUnreachableRowShowsErrorNotEmptyGauges(t *testing.T) {
 	out := stripANSI(loadedModel(t, 120, 40).View())
 	var row string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "node-c") {
 			row = line
 			break
@@ -268,7 +268,7 @@ func TestNarrowTableDropsLowPriorityColumns(t *testing.T) {
 		t.Fatalf("wide table missing GPU/LINK columns:\n%s", wide)
 	}
 	narrow := stripANSI(loadedModel(t, 60, 24).View())
-	for _, line := range strings.Split(narrow, "\n") {
+	for line := range strings.SplitSeq(narrow, "\n") {
 		if strings.Contains(line, "NODE") && (strings.Contains(line, "GPU") || strings.Contains(line, "LINK")) {
 			t.Fatalf("60-col table header still has GPU/LINK: %q", line)
 		}
