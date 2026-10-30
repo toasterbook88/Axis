@@ -167,10 +167,17 @@ Only the maintainer can waive this, in writing on the PR.
    non-goals, design, alternatives, and `## Research` (prior art with links; the optimization chosen
    and its measurement, or why none applies). Size it to the change: one flag can be 20 lines.
    Throwaway spikes for measurement are fine; do not merge them.
-2. Get it reviewed by a fresh-context agent: a new session or subagent whose prompt holds only the
-   spec path, the base commit and the review ask. Use a different model family when one is available.
+2. Get it reviewed by a fresh-context agent using `docs/superpowers/review-prompt.md`: a new session
+   or subagent whose prompt holds only the spec path, the base commit and the review ask. A
+   different model family is optional; freshness is what finds defects.
 3. Append `## Review` with `Reviewer:`, `Model:` (vendor family, not a cluster model), `Base:`,
    `Date:` and `Verdict:` (`approve`, `approve-with-changes` or `revise`) lines, then each finding
    and its resolution. Code starts after `approve`, or `approve-with-changes` with every finding
    resolved. A substantial spec change needs a new review.
-4. Link the spec in the PR body. If the code departs from the spec, update the spec in that PR.
+4. When the code is done, review the full diff against the spec the same way. A larger feature (at
+   least 150 changed lines in non-test `.go` files, or changes in 3 or more of `cmd/axis` and the
+   `internal/<pkg>` directories) gets two independent diff reviews.
+5. Resolve every finding, from these reviews and from PR review bots, as `fixed in <commit>` or
+   `declined: <reason>, <the run that supports it>`, and list the declines in the PR body. Do not
+   merge while a requested review is pending or a finding has no resolution.
+6. Link the spec in the PR body. If the code departs from the spec, update the spec in that PR.
