@@ -222,10 +222,12 @@ type listedPackage struct {
 }
 
 // importEdges returns the cross-package production import edges between
-// top-level internal/ packages for one platform.
+// top-level internal/ packages for one platform. -deps is required: the
+// ./internal/... pattern skips testdata and _- or .-prefixed directories, but
+// production code can still import packages there, and their edges count.
 func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
 	platform := goos + "/" + goarch
-	out, err := goOutput([]string{"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0"}, "list", "-e", "-json", "./internal/...")
+	out, err := goOutput([]string{"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0"}, "list", "-e", "-deps", "-json", "./internal/...")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -241,16 +243,16 @@ func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
 		} else if err != nil {
 			return nil, nil, fmt.Errorf("decode go list output (%s): %w", platform, err)
 		}
+		src := topLevel(p.ImportPath, prefix)
+		if src == "" {
+			continue // standard library or another module, pulled in by -deps
+		}
 		listed++
 		if p.Error != nil {
 			problems = append(problems, fmt.Sprintf("%s: %s failed to load: %s", platform, p.ImportPath, p.Error.Err))
 		}
 		for _, de := range p.DepsErrors {
 			problems = append(problems, fmt.Sprintf("%s: %s has a dependency error: %s", platform, p.ImportPath, de.Err))
-		}
-		src := topLevel(p.ImportPath, prefix)
-		if src == "" {
-			return nil, nil, fmt.Errorf("%s: go list returned %s, which is not under %s; run from the module root", platform, p.ImportPath, prefix)
 		}
 		for _, imp := range p.Imports {
 			if dst := topLevel(imp, prefix); dst != "" && dst != src {
@@ -259,7 +261,7 @@ func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
 		}
 	}
 	if listed == 0 {
-		return nil, nil, fmt.Errorf("%s: go list found no packages under ./internal/...", platform)
+		return nil, nil, fmt.Errorf("%s: go list found no packages under %s; run from the module root", platform, prefix)
 	}
 	return edges, problems, nil
 }

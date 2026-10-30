@@ -38,15 +38,16 @@ new_case() {
 # pkg <dir under internal/> [imported dirs under internal/...]: one package
 # whose only content is blank imports of the given fixture packages.
 pkg() {
-  local dir="$1"
+  local dir="$1" base
   shift
+  base="$(basename "$dir")"
   mkdir -p "$CASE/internal/$dir"
   {
-    printf 'package %s\n\n' "$(basename "$dir")"
+    printf 'package %s\n\n' "$base"
     for imp in "$@"; do
       printf 'import _ "example.com/fixture/internal/%s"\n' "$imp"
     done
-  } >"$CASE/internal/$dir/$(basename "$dir").go"
+  } >"$CASE/internal/$dir/${base#_}.go" # Go ignores files whose names start with _
 }
 
 allow() {
@@ -118,6 +119,14 @@ base_packages
 pkg a/sub s
 pkg b a/sub
 expect_fail 'import of a nested package counts as its parent' 'internal/b -> internal/a:'
+
+for hidden in testdata/helper _hidden; do
+  new_case "$default_block"
+  base_packages
+  pkg "b/$hidden" a
+  pkg b "b/$hidden" s
+  expect_fail "upward import through internal/b/$hidden" 'internal/b -> internal/a:'
+done
 
 new_case "$default_block"
 base_packages

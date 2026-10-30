@@ -81,7 +81,9 @@ missing from the block fails: "internal/foo is not in the AGENTS.md tier layout"
 `verify-doc-facts.sh` §4b, which the same PR retires.
 
 **Rule.** `internal/<pkg>/...` inherits `<pkg>`'s tier, and imports within the same top-level
-directory are skipped. For every production import (`Imports`) of another top-level package: allowed
+directory are skipped. `go list` runs with `-deps`, keeping only packages under `<module>/internal/`,
+because the `./internal/...` pattern skips `testdata` and `_`- or `.`-prefixed directories that
+production code can still import. For every production import (`Imports`) of another top-level package: allowed
 when `tier(dst) <= tier(src)`. Support (0) is importable by everyone and may import only Support.
 
 **Allowlist.** `hack/import-tiers-allowlist.txt`. `#` comment lines and blank lines are ignored.
@@ -191,6 +193,11 @@ Implementation review (second fresh-context agent, code reviewer, same vendor fa
    follow-up so this change stays scoped.
 5. Minor: test gaps versus the spec. Resolved: missing heading, stray line, early continuation,
    `p.Error` load failure, darwin-only and arm64-only imports.
+
+PR review (Copilot, on #585): `./internal/...` skips `testdata` and `_`- or `.`-prefixed
+directories, so an upward import routed through a package there passed. Reproduced in a fixture
+(0 edges, exit 0), then fixed by listing with `-deps`; two fixture cases (`testdata/helper` and
+`_hidden`) failed before the fix and pass after.
 
 Decision: the maintainer chose B on 2026-10-30 (`knowledge` to Layer 5; `reservation` and `skills`
 to Layer 2; seed allowlist of 3). Every finding is resolved, so code may start.
