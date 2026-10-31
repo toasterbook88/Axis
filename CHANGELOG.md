@@ -40,6 +40,20 @@
   pressed. Refresh ticks from a superseded cycle are dropped.
 * `axis tui` keys typed quickly (delivered as one multi-rune message, such as
   `jjG`) now each act as their own key instead of being ignored.
+* `hack/verify-public-boundary.sh` no longer passes when it cannot list
+  tracked files. Run outside a git work tree (for example in a `git archive`
+  extract) it scanned nothing and printed "passed"; it now fails, as it does
+  when git tracks no files. Regression tests cover both.
+
+### Dependencies and CI
+
+* `go run hack/verify-import-tiers.go` fails CI when an `internal/` package
+  imports a package in a higher tier of the `AGENTS.md` §4 layout. The layout
+  is read from `AGENTS.md` itself, so it has one home; exceptions need a
+  rationale in `hack/import-tiers-allowlist.txt`, and stale ones fail. The
+  layout now matches the code: `knowledge` is Layer 5, `reservation` and
+  `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
+  package-inventory check in `verify-doc-facts.sh` (#585).
 
 ## v0.22.0 (2026-10-28)
 
