@@ -1,6 +1,7 @@
 package reservation
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -165,6 +166,55 @@ func TestReleaseOfLeaseAlreadyRemovedElsewhereSucceeds(t *testing.T) {
 	}
 	if err := a.Release("mine"); err != nil {
 		t.Fatalf("Release of a lease already removed elsewhere = %v, want nil", err)
+	}
+	if err := a.Release("never-held"); err == nil {
+		t.Fatal("Release of an unknown ID succeeded")
+	}
+}
+
+// A lease whose write failed must not be reported as granted: the next reload
+// would forget it while its task runs, and admit another task in its place.
+func TestReserveFailsAndRollsBackWhenTheWriteFails(t *testing.T) {
+	a, _ := sharedLedgers(t)
+	if _, err := a.Reserve(lease("kept", 1000)); err != nil {
+		t.Fatalf("lease kept: %v", err)
+	}
+	prevWrite := writeLedgerFile
+	writeLedgerFile = func(string, []byte) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeLedgerFile = prevWrite })
+
+	if _, err := a.Reserve(lease("unsaved", 1000)); err == nil {
+		t.Fatal("Reserve succeeded although its lease was not written")
+	}
+	for _, e := range a.Entries() {
+		if e.ID == "unsaved" {
+			t.Fatal("the unsaved lease is still in memory")
+		}
+	}
+	writeLedgerFile = prevWrite
+	if got := onDisk(t); !got["kept"] || got["unsaved"] {
+		t.Fatalf("ledger file holds %v, want only kept", got)
+	}
+}
+
+// A heartbeat in between reloads the ledger and drops the removed lease from
+// memory; the ledger must still remember it granted that lease.
+func TestReleaseAfterHeartbeatOfLeaseRemovedElsewhereSucceeds(t *testing.T) {
+	a, b := sharedLedgers(t)
+	if _, err := a.Reserve(lease("mine", 1000)); err != nil {
+		t.Fatalf("lease mine: %v", err)
+	}
+	if err := b.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := b.Release("mine"); err != nil {
+		t.Fatalf("Release by b: %v", err)
+	}
+	if err := a.Heartbeat("mine"); err == nil {
+		t.Fatal("Heartbeat of a lease removed elsewhere succeeded; the task should learn its lease is gone")
+	}
+	if err := a.Release("mine"); err != nil {
+		t.Fatalf("Release after the heartbeat = %v, want nil", err)
 	}
 	if err := a.Release("never-held"); err == nil {
 		t.Fatal("Release of an unknown ID succeeded")

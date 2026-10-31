@@ -37,7 +37,9 @@
   process's lease or bring back one it had released. `Reserve`, `Release`,
   `Heartbeat` and `Reclaim` now re-read the ledger file under the file lock
   before changing it. Releasing a lease that another process already removed
-  is no longer an error.
+  is no longer an error, even after a heartbeat in between. A lease whose
+  write to disk fails is now refused and rolled back instead of being
+  reported as granted.
 * Leases granted outside the daemon now respect each node's
   `system_reserve_mb`. `axis task run`, the agent's execution path and the MCP
   lease tool built their reservation ledgers with node capacities only, so they

@@ -149,6 +149,11 @@ type Ledger struct {
 	// nodeRAM maps node name → total RAM in MB (populated from snapshots).
 	nodeRAM map[string]int64
 
+	// granted holds the IDs this ledger reserved and has not released. A reload
+	// can drop one that another process removed; Release then treats it as
+	// already released rather than unknown.
+	granted map[string]bool
+
 	// nodeReserve maps node name → system reserve in MB (per-node override).
 	// When zero or missing, falls back to limits.SystemReserveMB.
 	nodeReserve map[string]int64
@@ -178,6 +183,7 @@ func NewLedger(limits Limits, logger *slog.Logger) *Ledger {
 		logger:      logger.With("component", "reservation-ledger"),
 		nodeRAM:     make(map[string]int64),
 		nodeReserve: make(map[string]int64),
+		granted:     make(map[string]bool),
 		now:         time.Now,
 	}
 }
@@ -316,6 +322,20 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		return nil, err
 	}
 
+	// An unwritten lease would vanish at the next reload while its task runs.
+	if err := l.writeSnapshot(snap); err != nil {
+		l.mu.Lock()
+		delete(l.entries, req.ID)
+		l.totalReserved -= req.RAMMB
+		l.reserveFailures++
+		l.mu.Unlock()
+		l.logger.Error("failed to persist ledger; reservation not granted", "id", req.ID, "error", err)
+		return nil, fmt.Errorf("reservation: persist ledger: %w", err)
+	}
+	l.mu.Lock()
+	l.granted[req.ID] = true
+	l.mu.Unlock()
+
 	l.logger.Info("reservation created",
 		"id", req.ID,
 		"node", req.Node,
@@ -330,10 +350,6 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"ram_mb": req.RAMMB,
 		"owner":  req.OwnerSurface,
 	})
-
-	if err := l.writeSnapshot(snap); err != nil {
-		l.logger.Error("failed to persist ledger", "error", err)
-	}
 	return result, nil
 }
 
@@ -343,7 +359,8 @@ func (l *Ledger) Release(id string) error {
 	defer l.fileMu.Unlock()
 
 	l.mu.RLock()
-	_, heldBefore := l.entries[id]
+	_, inMemory := l.entries[id]
+	heldBefore := inMemory || l.granted[id]
 	l.mu.RUnlock()
 
 	wasLocked := l.lockFile != nil
@@ -368,6 +385,7 @@ func (l *Ledger) Release(id string) error {
 		e, ok := l.entries[id]
 		if !ok && heldBefore {
 			alreadyGone = true
+			delete(l.granted, id)
 			return nil
 		}
 		if !ok {
@@ -376,6 +394,7 @@ func (l *Ledger) Release(id string) error {
 		l.totalReleased += e.RAMMB
 		released = *e
 		delete(l.entries, id)
+		delete(l.granted, id)
 		snap = l.snapshotEntriesLocked()
 		return nil
 	}()
