@@ -18,6 +18,7 @@ var (
 	loadAIConfigForMCP = config.LoadAIOrEmpty
 	aiConfigPathForMCP = config.DefaultAIConfigPath
 	resolveRoleForMCP  = llmrouter.ResolveRole
+	loadNodesForMCP    = func() (*config.Config, error) { return config.Load(config.DefaultConfigPath()) }
 )
 
 func registerInferenceRouteTool(s *mcpserver.MCPServer) {
@@ -82,11 +83,13 @@ func inferenceRouteExplainTool(ctx context.Context, req mcpproto.CallToolRequest
 		defer cancel()
 	}
 
+	nodeCfg, _ := loadNodesForMCP()
 	dec, err := resolveRoleForMCP(ctx, cfg, llmrouter.ResolveRoleOptions{
 		Role:               role,
 		Model:              model,
 		SkipProbe:          skipProbe,
 		RequireModelListed: requireListed,
+		NodeConfig:         nodeCfg,
 	})
 	if err != nil {
 		// Return structured partial decision when available, with isError.

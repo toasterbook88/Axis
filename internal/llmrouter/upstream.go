@@ -3,13 +3,16 @@ package llmrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/models"
 )
 
 // upstreamTimeout bounds each request this file makes (the hub's /model/info
@@ -31,7 +34,9 @@ type UpstreamCheck struct {
 // It needs a LiteLLM-style GET /model/info (model_name and
 // litellm_params.api_base per entry). It runs only when the hub is on this
 // machine, because those addresses are relative to the hub's machine. No
-// prompt is sent: each upstream gets GET <api_base>/models only.
+// prompt is sent: each upstream gets a model-list GET only, at
+// <api_base>/models when api_base ends in /v1, else <api_base>/v1/models and,
+// on a 404, <api_base>/models.
 //
 // checked is false when no verdict exists; note then says why. When checked
 // is true, the model is served if any returned check is OK.
@@ -39,7 +44,7 @@ func checkModelUpstreams(ctx context.Context, b config.AIBackendConfig, client *
 	if b.Kind != config.AIBackendOpenAICompatible {
 		return nil, false, ""
 	}
-	if !BackendIsLocal(b, nodes) {
+	if !hubOnThisMachine(b, nodes) {
 		return nil, false, "upstream not checked: hub is on another node"
 	}
 	if ctx == nil {
@@ -54,7 +59,7 @@ func checkModelUpstreams(ctx context.Context, b config.AIBackendConfig, client *
 	if err != nil {
 		return nil, false, "upstream not checked: hub /model/info unavailable (" + err.Error() + ")"
 	}
-	apiBases, err := modelAPIBases(body, model)
+	apiBases, unset, err := modelAPIBases(body, model)
 	if err != nil {
 		return nil, false, "upstream not checked: hub /model/info unreadable (" + err.Error() + ")"
 	}
@@ -64,14 +69,21 @@ func checkModelUpstreams(ctx context.Context, b config.AIBackendConfig, client *
 
 	for _, apiBase := range apiBases {
 		c := UpstreamCheck{Backend: b.Name, APIBase: apiBase}
-		listURL := strings.TrimRight(apiBase, "/")
-		if strings.HasSuffix(listURL, "/v1") {
-			listURL += "/models"
-		} else {
-			listURL += "/v1/models"
-		}
+		listBase := strings.TrimRight(apiBase, "/")
 		// The hub's own key is not sent: it belongs to the hub, not to the upstream.
-		if _, err := upstreamGet(ctx, client, listURL, ""); err != nil && !isAuthRefusal(err) {
+		var err error
+		if strings.HasSuffix(listBase, "/v1") {
+			_, err = upstreamGet(ctx, client, listBase+"/models", "")
+		} else {
+			// A server root (Ollama's form) lists at /v1/models; a base that
+			// already carries another API prefix lists at /models.
+			_, err = upstreamGet(ctx, client, listBase+"/v1/models", "")
+			var se statusError
+			if errors.As(err, &se) && se.code == http.StatusNotFound {
+				_, err = upstreamGet(ctx, client, listBase+"/models", "")
+			}
+		}
+		if err != nil && !isAuthRefusal(err) {
 			c.Message = err.Error()
 		} else {
 			c.OK = true
@@ -79,7 +91,24 @@ func checkModelUpstreams(ctx context.Context, b config.AIBackendConfig, client *
 		}
 		checks = append(checks, c)
 	}
+	if unset > 0 && !anyUpstreamOK(checks) {
+		return checks, false, fmt.Sprintf("upstream not checked: %d deployment(s) of %q use the provider's default endpoint", unset, model)
+	}
 	return checks, true, ""
+}
+
+// hubOnThisMachine reports whether b's hub runs here. A bound backend uses its
+// nodes.yaml binding; an unbound one needs a BaseURL host that names this
+// machine, since a private address can be another machine on the LAN.
+func hubOnThisMachine(b config.AIBackendConfig, nodes *config.Config) bool {
+	if strings.TrimSpace(b.Node) != "" {
+		return BackendIsLocal(b, nodes)
+	}
+	u, err := url.Parse(strings.TrimSpace(b.BaseURL))
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	return models.IsLocalConfig("", u.Hostname(), "")
 }
 
 // statusError is a non-2xx HTTP answer.
@@ -120,8 +149,9 @@ func upstreamGet(ctx context.Context, client *http.Client, url, key string) ([]b
 }
 
 // modelAPIBases returns the distinct api_base values for model in a
-// /model/info body, in order of first appearance.
-func modelAPIBases(body []byte, model string) ([]string, error) {
+// /model/info body, in order of first appearance, and how many of model's
+// entries have no api_base.
+func modelAPIBases(body []byte, model string) (bases []string, unset int, err error) {
 	var payload struct {
 		Data []struct {
 			ModelName     string `json:"model_name"`
@@ -131,19 +161,25 @@ func modelAPIBases(body []byte, model string) ([]string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	var out []string
 	seen := map[string]bool{}
 	for _, d := range payload.Data {
+		if !ModelListed([]string{d.ModelName}, model) {
+			continue
+		}
 		apiBase := strings.TrimSpace(d.LiteLLMParams.APIBase)
-		if apiBase == "" || seen[apiBase] || !ModelListed([]string{d.ModelName}, model) {
+		if apiBase == "" {
+			unset++
+			continue
+		}
+		if seen[apiBase] {
 			continue
 		}
 		seen[apiBase] = true
-		out = append(out, apiBase)
+		bases = append(bases, apiBase)
 	}
-	return out, nil
+	return bases, unset, nil
 }
 
 func anyUpstreamOK(checks []UpstreamCheck) bool {
