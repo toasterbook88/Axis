@@ -111,6 +111,9 @@ jobs:
       - name: Lifecycle lint
         run: go run hack/lifecycle-check.go
 
+      - name: Import tiers gate
+        run: go run hack/verify-import-tiers.go
+
   validate-version:
     name: Validate Version and Main Ancestry
     runs-on: ubuntu-latest

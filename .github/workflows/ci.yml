@@ -58,6 +58,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep
 
+      - name: Public boundary gate regression tests
+        run: ./hack/verify-public-boundary-tests.sh
+
       - name: Public boundary guardrails
         run: ./hack/verify-public-boundary.sh
 
@@ -66,6 +69,12 @@ jobs:
 
       - name: Deadcode gate
         run: ./hack/verify-deadcode.sh
+
+      - name: Import tiers gate regression tests
+        run: ./hack/verify-import-tiers-tests.sh
+
+      - name: Import tiers gate
+        run: go run hack/verify-import-tiers.go
 
       - name: Repo truth guardrails
         env:
