@@ -285,3 +285,57 @@ func stubRuntimeDeps(
 		loadSkills = prevLoadSkills
 	}
 }
+
+// reserveTwice asks the ledger for two 6000 MB leases on a 16384 MB node whose
+// nodes.yaml reserve leaves a 10416 MB ceiling: the second must be refused.
+func reserveTwice(t *testing.T, ledger *reservation.Ledger) {
+	t.Helper()
+	if ledger == nil {
+		t.Fatal("no ledger in the runtime context")
+	}
+	for i, id := range []string{"first", "second"} {
+		_, err := ledger.Reserve(reservation.Entry{ID: id, Node: "node-a", RAMMB: 6000, OwnerExecID: id, OwnerSurface: "test"})
+		if i == 0 && err != nil {
+			t.Fatalf("first 6000 MB lease refused: %v", err)
+		}
+		if i == 1 && err == nil {
+			t.Fatal("second 6000 MB lease granted: the ledger ignored the node's system_reserve_mb")
+		}
+	}
+}
+
+// The execution ledger must apply each node's system_reserve_mb, as the daemon
+// does, so leases granted outside the daemon respect the same ceiling.
+func TestLoadLiveLedgerHonorsNodeSystemReserve(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	nodes := []models.NodeFacts{{
+		Name:            "node-a",
+		Status:          models.StatusComplete,
+		Resources:       &models.Resources{RAMTotalMB: 16384, RAMFreeMB: 14000},
+		SystemReserveMB: 5968,
+	}}
+	restore := stubRuntimeDeps(t,
+		func(string) (*config.Config, error) {
+			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.internal", SSHUser: "me", SystemReserveMB: 5968}}}, nil
+		},
+		func(context.Context, *config.Config) discovery.Result { return discovery.Result{Nodes: nodes} },
+		func(n []models.NodeFacts) *models.ClusterSnapshot {
+			return &models.ClusterSnapshot{Status: models.SnapshotHealthy, Nodes: append([]models.NodeFacts(nil), n...)}
+		},
+		func() (*state.ClusterState, error) { return &state.ClusterState{Version: 1}, nil },
+		func(*models.ClusterSnapshot, *state.ClusterState, *reservation.Ledger) {},
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	defer restore()
+	prevLedger := loadLedger
+	loadLedger = func() (*reservation.Ledger, error) {
+		return reservation.NewLedger(reservation.DefaultLimits(), nil), nil
+	}
+	defer func() { loadLedger = prevLedger }()
+
+	rt, err := LoadLive(context.Background())
+	if err != nil {
+		t.Fatalf("LoadLive: %v", err)
+	}
+	reserveTwice(t, rt.Ledger)
+}

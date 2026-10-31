@@ -11,6 +11,7 @@ import (
 
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/reservation"
 )
 
 func TestTriangleTools(t *testing.T) {
@@ -256,5 +257,23 @@ func TestTriangleTools_Locking(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatal("expected tool error due to lock timeout")
+	}
+}
+
+// The MCP lease tools build their own ledger; it must apply each node's
+// system_reserve_mb, as the daemon's does.
+func TestPopulateLedgerCapacityAppliesNodeSystemReserve(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ledger := reservation.NewLedger(reservation.DefaultLimits(), nil)
+	populateLedgerCapacity(ledger, &models.ClusterSnapshot{Nodes: []models.NodeFacts{{
+		Name:            "node-a",
+		Resources:       &models.Resources{RAMTotalMB: 16384, RAMFreeMB: 14000},
+		SystemReserveMB: 5968,
+	}}})
+	if _, err := ledger.Reserve(reservation.Entry{ID: "first", Node: "node-a", RAMMB: 6000, OwnerExecID: "first", OwnerSurface: "test"}); err != nil {
+		t.Fatalf("first 6000 MB lease refused: %v", err)
+	}
+	if _, err := ledger.Reserve(reservation.Entry{ID: "second", Node: "node-a", RAMMB: 6000, OwnerExecID: "second", OwnerSurface: "test"}); err == nil {
+		t.Fatal("second 6000 MB lease granted: the ledger ignored the node's system_reserve_mb")
 	}
 }

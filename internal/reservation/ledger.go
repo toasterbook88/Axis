@@ -202,6 +202,18 @@ func (l *Ledger) SetNodeReserve(node string, reserveMB int64) {
 	l.nodeReserve[node] = reserveMB
 }
 
+// SetNodeLimits applies each node's total RAM and nodes.yaml system reserve
+// from a snapshot. Every ledger that grants leases must use it, so the
+// daemon and in-process callers enforce the same ceiling.
+func (l *Ledger) SetNodeLimits(nodes []models.NodeFacts) {
+	for _, n := range nodes {
+		if n.Resources != nil {
+			l.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
+		}
+		l.SetNodeReserve(n.Name, n.SystemReserveMB)
+	}
+}
+
 func (l *Ledger) systemReserveFor(node string) int64 {
 	if r, ok := l.nodeReserve[node]; ok && r > 0 {
 		return r

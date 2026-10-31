@@ -91,11 +91,7 @@ func registerTriangleTools(s *mcpserver.MCPServer, useCache bool, cacheAddr stri
 }
 
 func populateLedgerCapacity(ledger *reservation.Ledger, snap *models.ClusterSnapshot) {
-	for _, n := range snap.Nodes {
-		if n.Resources != nil {
-			ledger.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
-		}
-	}
+	ledger.SetNodeLimits(snap.Nodes)
 }
 
 func triangleRequestLeaseTool(ctx context.Context, req mcpproto.CallToolRequest, useCache bool, cacheAddr string) (*mcpproto.CallToolResult, error) {

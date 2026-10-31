@@ -69,11 +69,7 @@ func LoadLive(ctx context.Context) (*Context, error) {
 		return nil, fmt.Errorf("load reservation ledger: %w", ledgerErr)
 	}
 	if ledger != nil {
-		for _, n := range snap.Nodes {
-			if n.Resources != nil {
-				ledger.SetNodeCapacity(n.Name, n.Resources.RAMTotalMB)
-			}
-		}
+		ledger.SetNodeLimits(snap.Nodes)
 	}
 
 	var ledgerEntries []reservation.Entry

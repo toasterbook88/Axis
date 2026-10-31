@@ -29,6 +29,13 @@
 
 ### Fixes
 
+* Leases granted outside the daemon now respect each node's
+  `system_reserve_mb`. `axis task run`, the agent's execution path and the MCP
+  lease tool built their reservation ledgers with node capacities only, so they
+  held back the default 1024 MB instead of the configured reserve and could
+  grant leases over the node's ceiling; only the daemon's ledger applied it.
+  All four now share `Ledger.SetNodeLimits`. Found by Copilot's review of the
+  resident memory services runbook.
 * The dead-upstream check behind a LiteLLM hub (`axis ai route`, MCP
   `inference_route_explain`) no longer misjudges four shapes:
   * MCP now resolves a backend's `node:` through `nodes.yaml` as the CLI does,
@@ -62,6 +69,17 @@
   by a hub that lists only `coder:large`. A name without a tag still matches
   any tag of that name, and a registry port is not a tag. Found by the Copilot
   review of #577 after it merged (#590).
+
+### Documentation
+
+* `docs/runbooks/resident-memory-services.md` explains how to keep a resident
+  cache or scratch store's RAM cap out of placement with a node's
+  `system_reserve_mb`, which was undocumented. The reserve is a ceiling on
+  AXIS's reservations, so it must cover all non-AXIS use at its peak (other use
+  plus the service's cap plus a margin), not only OS headroom. New tests pin
+  that the largest accepted task leaves room for the cap, that the reserve is
+  not subtracted from free RAM, that ranking ignores the reported eviction
+  floor, and that `nodes.yaml`'s value reaches the facts.
 
 ### Dependencies and CI
 
