@@ -156,3 +156,34 @@ Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrC
   (15 direct dependencies; `go.mod` is authoritative).
 - When wiring changes, update `docs/current-state.md` and pass `verify-repo-truth.sh` / `verify-doc-facts.sh`.
 - Say "suspect" until a test or probe confirms a cause.
+
+## 8. New features need a reviewed spec
+
+A feature is any new command, subcommand, flag, MCP tool, HTTP route, config key, state file or
+output-schema change, or any change to documented behavior. Bug fixes that restore documented
+behavior, refactors, tests, dependency bumps and docs are exempt. If unsure, treat it as a feature.
+Only the maintainer can waive this, in writing on the PR.
+
+1. Before feature code, commit `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`: problem,
+   non-goals, design, alternatives, and `## Research` (prior art with links; the optimization chosen
+   and its measurement, or why none applies). Size it to the change: one flag can be 20 lines.
+   Throwaway spikes for measurement are fine; do not merge them.
+2. Review the spec with a fresh-context agent: a new session or subagent given only
+   `docs/superpowers/review-prompt.md` and its five inputs (repo, base, head, spec path, ask). A
+   different model family is optional; that file cites the evidence.
+3. Record each review in the spec's `## Review` section as a block of `Kind:` (`spec` or `diff`),
+   `Reviewer:`, `Model:` (vendor family, not a cluster model), `Base:`, `Head:`, `Date:` and
+   `Verdict:` (`approve`, `approve-with-changes` or `revise`) lines, then its findings and questions.
+   Code starts after a spec review that approves, or approves with changes and every finding
+   resolved. A substantial spec change needs a new spec review.
+4. When the code is done, review the full diff against the spec the same way (`Kind: diff`). A larger
+   feature (at least 150 changed lines in non-test `.go` files, or changes in 3 or more of `cmd/axis`
+   and the `internal/<pkg>` directories) gets two independent diff reviews. Merge only when every
+   diff review approves, or approves with changes and every finding is resolved.
+5. Link the spec in the PR body. If the code departs from the spec, update the spec in that PR.
+
+Every PR, feature or exempt: resolve each review finding, review-bot findings included, as `fixed in
+<commit>` or `declined: <reason>, <the run that supports it>`; close each reviewer question as a
+finding or as `open: <why not probed>`; list declines and open questions in the PR body. Do not merge
+while a requested review is pending. `hack/pr-review-cycle.sh` does not check pending review requests
+yet, so confirm with `gh pr view <PR> --json reviewRequests`.
