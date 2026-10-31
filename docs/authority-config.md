@@ -50,7 +50,7 @@ Changing these fields alters cluster identity and can orphan reservations or dec
 | `ai_providers[].*` | Used on the next inference routing decision. |
 | `inference.*` | Used on the next inference routing decision. |
 | `nodes[].timeout_sec` | Used for the next SSH probe only. |
-| `nodes[].system_reserve_mb` | Used at the next snapshot build: AXIS reserves at most total RAM minus this value on the node. See `docs/runbooks/resident-memory-services.md`. |
+| `nodes[].system_reserve_mb` | Used at the next snapshot build: placement and each lease check cap the node's reservations at total RAM minus this value (see the runbook for the concurrent-admission limit). See `docs/runbooks/resident-memory-services.md`. |
 
 ### Runtime-Derived (not in config)
 

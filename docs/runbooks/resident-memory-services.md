@@ -25,10 +25,15 @@ eligible when the RAM AXIS has already reserved there plus the task's request fi
 `reservation cap exceeded: need …MB, have …MB reserved of …MB reservable`.
 
 Placement checks a snapshot, so two tasks placed at the same moment can both pass it. The ceiling
-is enforced when a task acquires its lease: the reservation ledger refuses a lease that would take
-the node's reservations over `ram_total_mb - system_reserve_mb`, and leases are granted one at a
-time under a file lock shared by every AXIS process on the machine. The ledger counts reservations
-against that ceiling; it does not look at free RAM.
+is checked again when a task acquires its lease: the reservation ledger refuses a lease that would
+take the node's reservations over `ram_total_mb - system_reserve_mb`. It counts reservations
+against that ceiling, not free RAM.
+
+That second check is only as current as the ledger the process last loaded. The MCP lease tool
+reloads the ledger under its file lock before each lease. `axis task run`, the agent and the
+daemon's HTTP API admit against the copy they loaded earlier (at start, or at the daemon's last
+refresh), so two of them admitting at the same moment can together exceed the ceiling. Treat the
+ceiling as reliable for one admitting process at a time.
 
 Ranking uses the same budget minus AXIS's reservations. The `resources.ram_eviction_reserved_mb`
 and `resources.ram_allocatable_mb` fields in `axis status` JSON also subtract an eviction floor of
@@ -61,9 +66,9 @@ nodes:
     system_reserve_mb: 5968   # 2384 other use + 3072 cache cap + 512 margin
 ```
 
-AXIS then reserves at most 10416 MB on the node. With the largest task it accepts, the cache at
-its cap and other use unchanged, the node holds 2384 + 10416 + 3072 = 15872 MB, under its
-16384 MB.
+AXIS then admits at most 10416 MB of reservations on the node, subject to the concurrency limit
+above. With the largest task it accepts, the cache at its cap and other use unchanged, the node
+holds 2384 + 10416 + 3072 = 15872 MB, under its 16384 MB.
 
 Reserving only 1024 MB of OS headroom plus the cap (4096 MB) is not enough here: AXIS would accept
 a 12288 MB task, and with the cache full the node would need 17744 MB.
