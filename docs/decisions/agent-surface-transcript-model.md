@@ -2,6 +2,10 @@
 
 **Date:** 2026-08-24
 **Scope:** `cmd/axis/tui`, `cmd/axis/agent.go`, `internal/agent`, `internal/llmrouter`, docs
+**Superseded in part (2026-10-30):** §2.1's "`axis tui` stays observational"
+is replaced by [`tui-agent-workspace.md`](tui-agent-workspace.md): `axis tui`
+now hosts this console beside a cluster sidebar; the observational dashboard
+is `axis tui --dashboard`. The agent surface below is unchanged.
 **Decision:** Two surfaces. `axis tui` stays observational (panes, alt-screen).
 The agent command center is transcript-first with dim footer chrome and
 transient overlays. Both render over the same fact plane; neither becomes a

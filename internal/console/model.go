@@ -226,6 +226,10 @@ type Model struct {
 	// Model readiness and prompts held for it; see startup.go.
 	modelState ModelState
 	held       []string
+
+	// log is the in-frame transcript in embedded mode (see embedded.go);
+	// nil on the standalone console, which commits to scrollback.
+	log *transcriptLog
 }
 
 // atCompletionState tracks one active @ completion. Token is the text
@@ -299,6 +303,10 @@ type Options struct {
 	// InitialModelState is the model's state at launch. The zero value,
 	// ModelReady, keeps the console behaving as it always did.
 	InitialModelState ModelState
+
+	// Embedded draws committed entries in-frame instead of printing them to
+	// terminal scrollback, for hosting inside a full-screen program.
+	Embedded bool
 }
 
 // Init starts the console. NewModel already marked the tick chain started
@@ -342,6 +350,9 @@ func NewModel(opts Options) Model {
 		cancelGrace:   grace,
 		now:           now,
 	}
+	if opts.Embedded {
+		m.log = &transcriptLog{}
+	}
 	m.initStart(opts)
 	return m
 }
@@ -367,9 +378,14 @@ func spinnerTick() tea.Cmd {
 	return tea.Tick(spinnerInterval, func(time.Time) tea.Msg { return spinnerTickMsg{} })
 }
 
-// commit prints an entry above the program, into terminal scrollback. This is
-// the only path by which transcript content leaves the console.
+// commit prints an entry above the program, into terminal scrollback, or in
+// embedded mode appends it to the in-frame transcript. This is the only path
+// by which transcript content leaves the console.
 func (m Model) commit(e Entry) tea.Cmd {
+	if m.log != nil {
+		m.log.add(e)
+		return nil
+	}
 	lines := e.Render(m.width)
 	if len(lines) == 0 {
 		return nil
@@ -433,6 +449,9 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 
 	case RunCommandMsg:
 		return m.runCommand(msg.Text)
+
+	case SetInputMsg:
+		return m.setInput(msg.Text), nil
 
 	case EntryMsg:
 		if m.stale(msg.Turn) {
@@ -645,6 +664,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if key != "esc" {
 		m.escPending = false
+	}
+
+	if m.embeddedScrollKey(key) {
+		return m, nil
 	}
 
 	switch key {
@@ -1114,6 +1137,9 @@ func (m Model) View() string {
 		lines = append(lines, m.footer.Render(m.footerWidth(), FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: m.modelState})...)
 	}
 
+	if m.log != nil {
+		return m.embeddedView(lines)
+	}
 	return PaintAll(append(m.startLines(len(lines)), lines...))
 }
 

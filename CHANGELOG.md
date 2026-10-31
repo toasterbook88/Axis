@@ -1,5 +1,46 @@
 ## Unreleased
 
+### Features
+
+* `axis tui` is now a full-screen workspace in the style of OpenCode: the
+  `axis agent` conversation fills the main pane and a sidebar shows cluster
+  health, every node's RAM use and the snapshot's alerts. The conversation is
+  the same in-process agent and startup path as `axis agent` (streaming, tool
+  cards, approvals, `/model`, `/skills`, `/mcp`, `@node` completion), hosted
+  by a new embedded console mode that draws the transcript in-frame
+  (`pgup`/`pgdown` scroll; colored bars mark operator, tool, reasoning,
+  approval and error entries). `ctrl+o` opens a command palette and `ctrl+x`
+  is a leader key (`d` dashboard, `p` place, `m` model, `b` sidebar, `q`
+  quit). `F2` toggles the dashboard; `a` there returns to the conversation
+  with `@node` prefilled. `--model` and `--autonomy` pass through to the
+  agent; `axis tui --dashboard` opens only the dashboard.
+  User guide: `docs/runbooks/tui.md`; design record:
+  `docs/decisions/tui-agent-workspace.md` (supersedes the "`axis tui` stays
+  observational" part of `agent-surface-transcript-model.md`).
+* `axis tui` dashboard redesign. Every frame fits the terminal exactly at any size: the
+  node table drops low-priority columns on narrow terminals and scrolls when
+  there are more nodes than rows, and the inspector fills the remaining height.
+  The header shows reachable/total nodes, the snapshot's age (colored as it
+  goes stale), its source and the version. A summary strip shows cluster
+  memory and the warning count. Gauges show percentages. `?` opens a help
+  overlay. `g`/`G`, `tab`/`shift+tab` and page keys move faster. The placement
+  wizard is centered. Terminals without Unicode (`TERM=linux`, a C locale) get
+  a pure-ASCII frame.
+
+### Fixes
+
+* `axis tui` no longer shows cluster state the snapshot does not contain. The
+  link column names the observed network class (`relayed`, `vpn`, `unknown`,
+  `not observed`) instead of calling every non-Tailscale path `LAN`. The
+  Reservations tab shows the snapshot's reserved RAM instead of a hard-coded
+  "No active reservations". Unreachable nodes show their error instead of
+  empty gauges, and snapshot warnings and partial-probe reasons appear on the
+  node they concern.
+* `axis tui` no longer starts an extra 30 s refresh timer each time `r` is
+  pressed. Refresh ticks from a superseded cycle are dropped.
+* `axis tui` keys typed quickly (delivered as one multi-rune message, such as
+  `jjG`) now each act as their own key instead of being ignored.
+
 ## v0.22.0 (2026-10-28)
 
 A cluster-only agent mode, an explicit spread placement objective, model

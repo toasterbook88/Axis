@@ -17,11 +17,13 @@ func TestRenderInspectorZeroWidthDoesNotPanic(t *testing.T) {
 	m.width = 0
 	m.height = 0
 
-	out := renderInspector(m)
-	if out == "" {
-		t.Fatal("renderInspector returned empty string at zero width")
+	// Zero size means no WindowSizeMsg yet; the inspector renders at the
+	// default frame size and must not panic on any degenerate size.
+	for _, sz := range [][2]int{{0, 0}, {1, 1}, {7, 2}, {8, 3}} {
+		_ = renderInspector(m, sz[0], sz[1])
 	}
-	if !strings.Contains(out, "Details") {
+	out := ViewWithLogo(m)
+	if !strings.Contains(out, "Overview") {
 		t.Fatalf("inspector missing tab bar at zero width: %q", out)
 	}
 }
@@ -43,13 +45,13 @@ func TestViewWithLogoZeroWidthDoesNotPanic(t *testing.T) {
 func TestHeaderBadgesSnapshotSource(t *testing.T) {
 	m := modelWithNodes(1)
 	m.source = "daemon-cache"
-	out := renderHeaderWithLogo(m)
+	out := renderHeader(m, 120)
 	if !strings.Contains(out, "daemon-cache") {
 		t.Fatalf("header missing daemon-cache badge: %q", out)
 	}
 
 	emptySource := modelWithNodes(1)
-	outUnknown := renderHeaderWithLogo(emptySource)
+	outUnknown := renderHeader(emptySource, 120)
 	if !strings.Contains(outUnknown, "unknown") {
 		t.Fatalf("header missing unknown badge when source unset: %q", outUnknown)
 	}
@@ -87,17 +89,15 @@ func TestFooterKeepsKeybindingsVisibleAfterSnapshotLoad(t *testing.T) {
 	})
 	m = next.(Model)
 
-	out := stripANSI(renderFooter(m))
+	out := stripANSI(renderFooter(m, 120))
 	for _, want := range []string{
 		"Snapshot loaded: 1 nodes",
-		"[j/k] Navigate",
-		"[h/l] Tabs",
-		"[1-4] Jump",
-		"[Enter] Select",
-		"[p] Place",
-		"[r] Refresh",
-		"[?] Help",
-		"[q] Quit",
+		"select",
+		"tab",
+		"p place",
+		"r refresh",
+		"? help",
+		"q quit",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("post-load footer missing %q in %q", want, out)

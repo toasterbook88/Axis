@@ -29,22 +29,35 @@ func loadSnapshotCmd() tea.Cmd {
 			return snapshotLoadedMsg{
 				Snapshot:  snap,
 				Timestamp: formatFreshness(snap.Timestamp),
+				Observed:  snap.Timestamp,
 				Source:    source,
 			}
 		}
 
-		snapshot, freshness, fileErr := loadDaemonSnapshot()
+		msg, fileErr := loadFileSnapshotMsg()
 		if fileErr != nil {
 			return loadErrMsg{
 				Err: fmt.Errorf("no daemon cache (%v) and no snapshot file (%v); run: axis daemon start", err, fileErr),
 			}
 		}
-		return snapshotLoadedMsg{
-			Snapshot:  snapshot,
-			Timestamp: formatFreshness(freshness),
-			Source:    "file",
-		}
+		return msg
 	}
+}
+
+// loadFileSnapshotMsg is the on-disk fallback. Observed is the snapshot's own
+// collection time only: a file written without one has an unknown age, and
+// the file's mtime (which a copy or touch resets) must not pass for it.
+func loadFileSnapshotMsg() (snapshotLoadedMsg, error) {
+	snapshot, freshness, err := loadDaemonSnapshot()
+	if err != nil {
+		return snapshotLoadedMsg{}, err
+	}
+	return snapshotLoadedMsg{
+		Snapshot:  snapshot,
+		Timestamp: formatFreshness(freshness),
+		Observed:  snapshot.Timestamp,
+		Source:    "file",
+	}, nil
 }
 
 // formatFreshness renders a snapshot timestamp for the header. A zero

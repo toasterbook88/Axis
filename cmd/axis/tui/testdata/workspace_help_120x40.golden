@@ -1,0 +1,40 @@
+CHAT-PANE                                                                             │ AXIS  vX.Y.Z
+                                                                                      │
+                                                                                      │ CLUSTER
+                                                                                      │ ▲ 3/4 reachable
+                                                                                      │ 2m ago · daemon-cache
+                                                                                      │ mem ━━━━━━━━━━━━━━━━━━━━━━  63%
+                              ╭─────────────────────────────────────────────────────────╮
+                              │                                                         │
+                              │   Conversation                                          │
+                              │   enter           send                                  │
+                              │   esc             cancel a running turn                 │
+                              │   pgup  pgdown    scroll the conversation               │
+                              │   @node           complete a node name                  │
+                              │   /  !            slash command  ·  shell command       │
+                              │   ctrl+c ctrl+c   quit                                  │
+                              │                                                         │
+                              │   Workspace                                             │
+                              │   ctrl+o          command palette                       │
+                              │   ctrl+x d  f2    cluster dashboard                     │
+                              │   ctrl+x b        toggle sidebar                        │
+                              │   ctrl+x p        placement preview                     │
+                              │   ctrl+x m        switch model                          │
+                              │   ctrl+x q        quit                                  │
+                              │                                                         │
+                              │   Dashboard                                             │
+                              │   ↑↓  ←→          select node  ·  tab                   │
+                              │   a  enter        ask the agent about the node          │
+                              │   esc             back to the conversation              │
+                              │                                                         │
+                              │   Agent output is advisory; the sidebar and dashboard   │
+                              │   show only what the cached snapshot observed.          │
+                              │                                                         │
+                              ╰─────────────────────────────────────────────────────────╯
+                                                                                      │
+                                                                                      │
+                                                                                      │ KEYS
+                                                                                      │ ctrl+o commands
+                                                                                      │ ctrl+x d dashboard
+                                                                                      │ ctrl+x h help
+ AXIS agent                                                   ctrl+o commands  ctrl+x leader  f2 dashboard  ctrl+c quit
