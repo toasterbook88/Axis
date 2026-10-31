@@ -180,7 +180,7 @@ Questions:
 - No escape hatch for a reviewer that never answers. Became Design 7.
 - `--paginate` and the timeline in one query. Became Design 1: a separate, unpaginated query.
 - `reviews(first: 50)` returns the oldest reviews. Became Design 6: `reviews(last: 1)`.
-- p90 6.0 vs 7.9 min: different windows. Problem now uses latency from CI completion, which both
+- p90 6.0 vs 7.9 min: different windows. Became the Problem rewrite: it now uses latency from CI completion, which both
   windows agree on for the case that matters (#577 is the only late one).
 
 Kind: spec
@@ -257,10 +257,17 @@ Verdict: approve-with-changes (six inline findings)
 
 Every fix has a test that fails when the fix is reverted.
 
-Second Copilot review (head ca75e81e), two findings, both fixed:
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #588, second review)
+Model: other vendor family than the author
+Base: 4b846e44
+Head: ca75e81e
+Date: 2026-10-31
+Verdict: approve-with-changes (two inline findings)
+
 1. The settling thread read could replace a valid snapshot with a malformed response (`{}`) that
-   counts as zero unresolved threads. Every thread read is now shape-checked and fails closed;
-   tests for a malformed first and settling read.
+   counts as zero unresolved threads. Fixed in d6d2773f: every thread read is shape-checked and
+   fails closed; tests for a malformed first and settling read.
 2. A review submitted between the thread read and the final re-read was never shown or counted.
-   The final re-read compares the newest submitted review with the newest the thread read saw
-   and exits 1 asking for a re-run when a newer one exists; test.
+   Fixed in d6d2773f: the final re-read compares the newest submitted review with the newest the
+   thread read saw and exits 1 asking for a re-run when a newer one exists; test.
