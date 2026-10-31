@@ -56,6 +56,16 @@ QUESTIONS:
 - <concern you could not establish, and what would establish it>
 ```
 
+## Choosing the reviewer
+
+- **Spec reviews:** Claude Opus 5.5 as the second-family reviewer (maintainer's choice, 2026-10-30).
+  Use the highest effort the harness offers; in Cursor subagents the available setting is
+  `claude-opus-5-5-medium`. If the spec's author is itself a Claude model, the review is still a
+  fresh top-tier session, not a cross-family one; say so in `Model:`.
+- **Diff reviews:** a fresh session of the authoring model, plus a second independent one for a
+  larger feature (AGENTS.md §8, step 4).
+- Do not use a lightweight model as the second reviewer; it scored below a fresh same-model review.
+
 ## Recording the result
 
 Add one block to the spec's `## Review` section per review (AGENTS.md §8, step 3):
