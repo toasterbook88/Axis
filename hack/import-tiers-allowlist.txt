@@ -1,0 +1,8 @@
+# Upward imports allowed by hack/verify-import-tiers.go.
+# Format: <pkg> -> <pkg>  # <rationale>
+# Every entry needs a rationale; stale entries fail the check. Shrink this list, do not grow it.
+# Design: docs/superpowers/specs/2026-10-30-import-direction-check-design.md
+
+events -> cortex  # publishes lifecycle events through a package-level *cortex.Client; follow-up spec: a sink interface wired from cmd/axis
+events -> reservation  # reservation_sink.go registers the event emitter with the ledger; follow-up with the events sink spec
+daemon -> execution  # the daemon hosts guarded execution and is the composition root; follow-up spec: decide whether daemon is exempt from tiering

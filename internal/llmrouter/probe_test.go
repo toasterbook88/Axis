@@ -185,3 +185,33 @@ func TestProbeBackend_Unreachable(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 }
+
+func TestModelListedTags(t *testing.T) {
+	cases := []struct {
+		listed []string
+		model  string
+		want   bool
+	}{
+		{[]string{"coder:latest"}, "coder", true},
+		{[]string{"coder"}, "coder:latest", true},
+		{[]string{"coder:small"}, "coder:small", true},
+		// Two different explicit tags are different models (#577 review).
+		{[]string{"coder:large"}, "coder:small", false},
+		{[]string{"coder:large", "coder:small"}, "coder:small", true},
+		// A name without a tag still matches the same name with any tag.
+		{[]string{"coder:7b"}, "coder", true},
+		{[]string{"coder"}, "coder:7b", true},
+		{[]string{"other:latest"}, "coder", false},
+		// A registry port is not a tag: only the last path segment carries one.
+		{[]string{"registry.example:5000/team/coder:latest"}, "registry.example:5000/team/coder", true},
+		{[]string{"registry.example:5000/team/coder"}, "registry.example:5000/team/coder:latest", true},
+		{[]string{"registry.example:5000/team/coder:large"}, "registry.example:5000/team/coder:small", false},
+		{[]string{"registry.example:5000/team/other"}, "registry.example:5000/team/coder", false},
+		{[]string{"coder:latest"}, "", false},
+	}
+	for _, c := range cases {
+		if got := llmrouter.ModelListed(c.listed, c.model); got != c.want {
+			t.Errorf("ModelListed(%q, %q) = %v, want %v", c.listed, c.model, got, c.want)
+		}
+	}
+}

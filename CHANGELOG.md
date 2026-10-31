@@ -44,6 +44,21 @@
   tracked files. Run outside a git work tree (for example in a `git archive`
   extract) it scanned nothing and printed "passed"; it now fails, as it does
   when git tracks no files. Regression tests cover both.
+* Model matching in routing no longer treats two different tags of one model
+  as the same model: a role asking for `coder:small` is no longer satisfied
+  by a hub that lists only `coder:large`. A name without a tag still matches
+  any tag of that name, and a registry port is not a tag. Found by the Copilot
+  review of #577 after it merged (#590).
+
+### Dependencies and CI
+
+* `go run hack/verify-import-tiers.go` fails CI when an `internal/` package
+  imports a package in a higher tier of the `AGENTS.md` §4 layout. The layout
+  is read from `AGENTS.md` itself, so it has one home; exceptions need a
+  rationale in `hack/import-tiers-allowlist.txt`, and stale ones fail. The
+  layout now matches the code: `knowledge` is Layer 5, `reservation` and
+  `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
+  package-inventory check in `verify-doc-facts.sh` (#585).
 
 ## v0.22.0 (2026-10-28)
 
