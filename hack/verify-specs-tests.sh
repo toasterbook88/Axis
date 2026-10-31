@@ -313,6 +313,10 @@ fence_case info-string-does-not-close '```text
 Kind: spec
 ```text
 ```'
+fence_case inline-span-is-not-a-fence '```example``` is an inline code span, not a fence.'
+fence_case tilde-info-may-hold-backticks '~~~ `text`
+Kind: spec
+~~~'
 
 # --- Lines that belong to no item
 

@@ -200,8 +200,9 @@ func (c *checker) blankFences(lines []string) ([]string, []int) {
 }
 
 // fence reports a CommonMark code fence line: up to three spaces, then three
-// or more backticks or tildes. A fence closes only on the same character, at
-// least as many of it, and nothing after.
+// or more backticks or tildes. A backtick fence's info string has no
+// backticks (```x``` is an inline span). A fence closes only on the same
+// character, at least as many of it, and nothing after.
 func fence(l string) (ch byte, n int, rest string) {
 	t := strings.TrimLeft(l, " ")
 	if len(l)-len(t) > 3 || len(t) < 3 || (t[0] != '`' && t[0] != '~') {
@@ -210,7 +211,7 @@ func fence(l string) (ch byte, n int, rest string) {
 	for n < len(t) && t[n] == t[0] {
 		n++
 	}
-	if n < 3 {
+	if n < 3 || t[0] == '`' && strings.Contains(t[n:], "`") {
 		return 0, 0, ""
 	}
 	return t[0], n, t[n:]

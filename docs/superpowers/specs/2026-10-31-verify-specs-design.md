@@ -122,7 +122,8 @@ review: a line glued under `Verdict:`, an `F<n>` line anywhere in a header, an i
 `Questions:`, an item after a `Note:`, a fence inside `## Review`, an impossible date and an empty
 field fail; `Fixedness` and an `open:` inside a clause are not statuses. From Copilot: fences pair
 as CommonMark does (a longer fence holds a shorter one, `~~~` holds backticks, a line with an info
-string does not close); a fixture for each.
+string does not close, a backtick line whose info string holds a backtick is an inline span, not
+a fence); a fixture for each.
 
 ## Alternatives
 
@@ -315,3 +316,15 @@ Verdict: approve-with-changes (two inline findings)
    the fresh diff review: `F<n>` fails anywhere in a header; fixture.
 
 Note: each fence fixture fails when its part of the pairing rule is removed.
+
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #593, second review)
+Model: other vendor family than the author
+Base: f71c239d
+Head: 909f998b
+Date: 2026-10-31
+Verdict: approve-with-changes (one inline finding)
+
+1. A column-0 inline span such as three backticks, a word and three backticks opened a fence and
+   hid `## Review`. Fixed: a backtick fence's info string may not hold a backtick, as CommonMark
+   says, while a tilde fence's may; a fixture for each, each failing when its rule is removed.
