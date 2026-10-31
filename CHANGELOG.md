@@ -49,7 +49,7 @@
   with the pending list if one still is. A reviewer counts as pending while it
   is requested or its latest request has no later review. A failed or
   malformed read fails closed. `--allow-pending LOGIN` waives a reviewer that
-  will not answer. On #577 Copilot's review arrived 6.7 minutes after CI and 9
+  will not answer (#588). On #577 Copilot's review arrived 6.7 minutes after CI and 9
   seconds after the merge.
 
 ## v0.22.0 (2026-10-28)
