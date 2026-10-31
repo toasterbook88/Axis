@@ -256,12 +256,12 @@ func ModelListed(models []string, model string) bool {
 	if model == "" || len(models) == 0 {
 		return false
 	}
-	name, tag, tagged := strings.Cut(model, ":")
+	name, tag, tagged := splitModelTag(model)
 	for _, m := range models {
 		if m == model {
 			return true
 		}
-		mName, mTag, mTagged := strings.Cut(m, ":")
+		mName, mTag, mTagged := splitModelTag(m)
 		if mName != name {
 			continue
 		}
@@ -270,4 +270,15 @@ func ModelListed(models []string, model string) bool {
 		}
 	}
 	return false
+}
+
+// splitModelTag splits "name:tag". Only the last path segment can carry a tag, so the port in
+// "registry.example:5000/team/coder" is part of the name.
+func splitModelTag(model string) (name, tag string, tagged bool) {
+	slash := strings.LastIndex(model, "/")
+	colon := strings.LastIndex(model, ":")
+	if colon <= slash {
+		return model, "", false
+	}
+	return model[:colon], model[colon+1:], true
 }

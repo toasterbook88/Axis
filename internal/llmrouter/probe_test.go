@@ -202,6 +202,11 @@ func TestModelListedTags(t *testing.T) {
 		{[]string{"coder:7b"}, "coder", true},
 		{[]string{"coder"}, "coder:7b", true},
 		{[]string{"other:latest"}, "coder", false},
+		// A registry port is not a tag: only the last path segment carries one.
+		{[]string{"registry.example:5000/team/coder:latest"}, "registry.example:5000/team/coder", true},
+		{[]string{"registry.example:5000/team/coder"}, "registry.example:5000/team/coder:latest", true},
+		{[]string{"registry.example:5000/team/coder:large"}, "registry.example:5000/team/coder:small", false},
+		{[]string{"registry.example:5000/team/other"}, "registry.example:5000/team/coder", false},
 		{[]string{"coder:latest"}, "", false},
 	}
 	for _, c := range cases {
