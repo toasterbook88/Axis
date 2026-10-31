@@ -58,7 +58,7 @@ QUESTIONS:
 
 ## Choosing the reviewer
 
-- **Spec reviews:** Claude Opus 5.5 as the second-family reviewer (maintainer's choice, 2026-10-30).
+- **Spec reviews:** Claude Opus 5.5 as the second-family reviewer (maintainer's choice, 2026-10-31).
   Use the highest effort the harness offers; in Cursor subagents the available setting is
   `claude-opus-5-5-medium`. If the spec's author is itself a Claude model, the review is still a
   fresh top-tier session, not a cross-family one; say so in `Model:`.
