@@ -22,6 +22,21 @@ func Path() string {
 // fail persistence while the file stays readable.
 var writeLedgerFile = persist.WritePrivateFileAtomic
 
+// decodeEntries parses a ledger file. A null entry decodes without error, and
+// every reader dereferences entries while holding l.mu, so it is rejected here.
+func decodeEntries(data []byte) ([]*Entry, error) {
+	var df diskFormat
+	if err := json.Unmarshal(data, &df); err != nil {
+		return nil, err
+	}
+	for i, e := range df.Entries {
+		if e == nil {
+			return nil, fmt.Errorf("entry %d is null", i)
+		}
+	}
+	return df.Entries, nil
+}
+
 // diskFormat represents the serialized ledger.
 type diskFormat struct {
 	Entries []*Entry `json:"entries"`
@@ -115,15 +130,15 @@ func (l *Ledger) Load() error {
 		return err
 	}
 
-	var df diskFormat
-	if err := json.Unmarshal(data, &df); err != nil {
+	entries, err := decodeEntries(data)
+	if err != nil {
 		return fmt.Errorf("decode reservation ledger %s: %w", path, err)
 	}
 
 	l.mu.Lock()
 	l.entries = make(map[string]*Entry)
 	l.totalReserved = 0
-	for _, e := range df.Entries {
+	for _, e := range entries {
 		l.entries[e.ID] = e
 		l.totalReserved += e.RAMMB
 	}
@@ -162,16 +177,24 @@ func (l *Ledger) reloadLocked() error {
 		}
 		return err
 	}
-	var df diskFormat
-	if err := json.Unmarshal(data, &df); err != nil {
+	entries, err := decodeEntries(data)
+	if err != nil {
 		return fmt.Errorf("decode reservation ledger %s: %w", path, err)
 	}
 	l.mu.Lock()
-	l.entries = make(map[string]*Entry, len(df.Entries))
-	for _, e := range df.Entries {
+	defer l.mu.Unlock()
+	l.entries = make(map[string]*Entry, len(entries))
+	for _, e := range entries {
 		l.entries[e.ID] = e
 	}
-	l.mu.Unlock()
+	now := l.now()
+	for id, seen := range l.granted {
+		if _, ok := l.entries[id]; ok {
+			l.granted[id] = now
+		} else if now.Sub(seen) > grantedRetention {
+			delete(l.granted, id)
+		}
+	}
 	return nil
 }
 
@@ -202,11 +225,11 @@ func (l *Ledger) LoadReadOnly() error {
 		return err
 	}
 
-	var df diskFormat
-	if err := json.Unmarshal(data, &df); err != nil {
+	entries, err := decodeEntries(data)
+	if err != nil {
 		return fmt.Errorf("decode reservation ledger without recovery: %w", err)
 	}
-	l.replaceEntries(df.Entries)
+	l.replaceEntries(entries)
 	return nil
 }
 

@@ -2,6 +2,7 @@ package reservation
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -218,5 +219,78 @@ func TestReleaseAfterHeartbeatOfLeaseRemovedElsewhereSucceeds(t *testing.T) {
 	}
 	if err := a.Release("never-held"); err == nil {
 		t.Fatal("Release of an unknown ID succeeded")
+	}
+}
+
+// A ledger file with a null entry decodes, so every reader must reject it
+// before touching memory: a nil dereference under l.mu would leave the mutex
+// locked or crash the daemon.
+func TestNullEntryInLedgerFileFailsClosed(t *testing.T) {
+	a, _ := sharedLedgers(t)
+	if _, err := a.Reserve(lease("kept", 1000)); err != nil {
+		t.Fatalf("lease kept: %v", err)
+	}
+	if err := os.WriteFile(Path(), []byte(`{"entries":[null]}`), 0o600); err != nil {
+		t.Fatalf("write ledger: %v", err)
+	}
+
+	if _, err := a.Reserve(lease("next", 1000)); err == nil {
+		t.Error("Reserve accepted a ledger with a null entry")
+	}
+	if err := a.Heartbeat("kept"); err == nil {
+		t.Error("Heartbeat accepted a ledger with a null entry")
+	}
+	if got := a.Reclaim(); got != 0 {
+		t.Errorf("Reclaim() = %d on a ledger with a null entry, want 0", got)
+	}
+	if err := a.Load(); err == nil {
+		t.Error("Load accepted a ledger with a null entry")
+	}
+	if err := a.LoadReadOnly(); err == nil {
+		t.Error("LoadReadOnly accepted a ledger with a null entry")
+	}
+
+	done := make(chan []Entry, 1)
+	go func() { done <- a.Entries() }()
+	select {
+	case entries := <-done:
+		if len(entries) != 1 || entries[0].ID != "kept" {
+			t.Fatalf("in-memory entries = %v, want the earlier lease unchanged", entries)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the ledger mutex was left locked")
+	}
+}
+
+// The granted set must not grow with lifetime traffic: an ID missing from the
+// file for longer than grantedRetention is forgotten.
+func TestGrantedIDsRetireAfterAnHourMissing(t *testing.T) {
+	a, b := sharedLedgers(t)
+	now := time.Now()
+	a.now = func() time.Time { return now }
+	if _, err := a.Reserve(lease("old", 1000)); err != nil {
+		t.Fatalf("lease old: %v", err)
+	}
+	if err := b.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := b.Release("old"); err != nil {
+		t.Fatalf("Release by b: %v", err)
+	}
+	if _, err := a.Reserve(lease("seen-missing", 1000)); err != nil {
+		t.Fatalf("lease seen-missing: %v", err)
+	}
+	if _, ok := a.granted["old"]; !ok {
+		t.Fatalf("granted = %v, want old kept within the retention window", a.granted)
+	}
+	now = now.Add(grantedRetention + time.Minute)
+	if _, err := a.Reserve(lease("later", 1000)); err != nil {
+		t.Fatalf("lease later: %v", err)
+	}
+	if _, ok := a.granted["old"]; ok {
+		t.Fatalf("granted still holds old after %s missing: %v", grantedRetention, a.granted)
+	}
+	if _, ok := a.granted["seen-missing"]; !ok {
+		t.Fatalf("granted dropped a lease still in the file: %v", a.granted)
 	}
 }

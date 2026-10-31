@@ -138,6 +138,11 @@ func DefaultLimits() Limits {
 	}
 }
 
+// grantedRetention is how long a ledger remembers a lease it granted after the
+// lease leaves the ledger file, so a late Release of a lease another process
+// removed still succeeds.
+const grantedRetention = time.Hour
+
 // Ledger is the central reservation accounting system.
 type Ledger struct {
 	mu      sync.RWMutex
@@ -152,7 +157,7 @@ type Ledger struct {
 	// granted holds the IDs this ledger reserved and has not released. A reload
 	// can drop one that another process removed; Release then treats it as
 	// already released rather than unknown.
-	granted map[string]bool
+	granted map[string]time.Time
 
 	// nodeReserve maps node name → system reserve in MB (per-node override).
 	// When zero or missing, falls back to limits.SystemReserveMB.
@@ -183,7 +188,7 @@ func NewLedger(limits Limits, logger *slog.Logger) *Ledger {
 		logger:      logger.With("component", "reservation-ledger"),
 		nodeRAM:     make(map[string]int64),
 		nodeReserve: make(map[string]int64),
-		granted:     make(map[string]bool),
+		granted:     make(map[string]time.Time),
 		now:         time.Now,
 	}
 }
@@ -333,7 +338,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		return nil, fmt.Errorf("reservation: persist ledger: %w", err)
 	}
 	l.mu.Lock()
-	l.granted[req.ID] = true
+	l.granted[req.ID] = l.now()
 	l.mu.Unlock()
 
 	l.logger.Info("reservation created",
@@ -360,7 +365,8 @@ func (l *Ledger) Release(id string) error {
 
 	l.mu.RLock()
 	_, inMemory := l.entries[id]
-	heldBefore := inMemory || l.granted[id]
+	_, wasGranted := l.granted[id]
+	heldBefore := inMemory || wasGranted
 	l.mu.RUnlock()
 
 	wasLocked := l.lockFile != nil
@@ -516,6 +522,7 @@ func (l *Ledger) reclaimInMemoryLocked() (int, []repairs.RepairEvent) {
 		if liveness == LivenessExpired || liveness == LivenessStale {
 			l.totalReclaimed += e.RAMMB
 			delete(l.entries, id)
+			delete(l.granted, id)
 			reclaimed++
 			l.logger.Info("reservation reclaimed",
 				"id", id,

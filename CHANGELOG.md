@@ -39,7 +39,8 @@
   before changing it. Releasing a lease that another process already removed
   is no longer an error, even after a heartbeat in between. A lease whose
   write to disk fails is now refused and rolled back instead of being
-  reported as granted.
+  reported as granted. A ledger file with a null entry is rejected by every
+  reader instead of panicking with the ledger locked.
 * Leases granted outside the daemon now respect each node's
   `system_reserve_mb`. `axis task run`, the agent's execution path and the MCP
   lease tool built their reservation ledgers with node capacities only, so they
