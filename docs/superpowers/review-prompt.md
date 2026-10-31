@@ -16,9 +16,11 @@ Inputs (nothing else is in scope):
   Ask:    <"spec review" | "diff review against the spec" | one line from the author>
 
 Read with `git -C <Repo> show <Head>:<path>` and `git -C <Repo> diff <Base> <Head>`. To run code,
-extract Head into a new temp directory (`git -C <Repo> archive <Head> | tar -x -C "$(mktemp -d)"`)
-and work there. Do not edit, commit or push in <Repo>, and do not touch shared services or real
-cluster state.
+clone into a new temp directory and check out Head there
+(`d="$(mktemp -d)" && git clone -q <Repo> "$d" && git -C "$d" checkout -q <Head>`), and work in it.
+Use a clone, not `git archive`: the repo's gates list files with git and read tags, and without
+git metadata some report success after checking nothing. Do not edit, commit or push in <Repo>,
+and do not touch shared services or real cluster state.
 
 What to check:
 - Spec review: is the problem real (verify it in the code at Base), are the non-goals honest, does
