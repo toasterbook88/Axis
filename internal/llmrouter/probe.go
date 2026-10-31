@@ -248,20 +248,37 @@ func parseModelList(kind string, body []byte) ([]string, error) {
 	}
 }
 
-// ModelListed reports whether model appears in probe models (exact or prefix match for :latest tags).
+// ModelListed reports whether model appears in probe models: an exact match, or the same name
+// when one side carries no tag ("coder" matches "coder:latest" and "coder:7b"). Two different
+// explicit tags never match: "coder:small" is not "coder:large".
 func ModelListed(models []string, model string) bool {
 	model = strings.TrimSpace(model)
 	if model == "" || len(models) == 0 {
 		return false
 	}
+	name, tag, tagged := splitModelTag(model)
 	for _, m := range models {
 		if m == model {
 			return true
 		}
-		// Accept tag-less equality: "coder" matches "coder:latest".
-		if strings.Split(m, ":")[0] == strings.Split(model, ":")[0] {
+		mName, mTag, mTagged := splitModelTag(m)
+		if mName != name {
+			continue
+		}
+		if !tagged || !mTagged || mTag == tag {
 			return true
 		}
 	}
 	return false
+}
+
+// splitModelTag splits "name:tag". Only the last path segment can carry a tag, so the port in
+// "registry.example:5000/team/coder" is part of the name.
+func splitModelTag(model string) (name, tag string, tagged bool) {
+	slash := strings.LastIndex(model, "/")
+	colon := strings.LastIndex(model, ":")
+	if colon <= slash {
+		return model, "", false
+	}
+	return model[:colon], model[colon+1:], true
 }

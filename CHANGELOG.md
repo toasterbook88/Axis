@@ -44,6 +44,11 @@
   tracked files. Run outside a git work tree (for example in a `git archive`
   extract) it scanned nothing and printed "passed"; it now fails, as it does
   when git tracks no files. Regression tests cover both.
+* Model matching in routing no longer treats two different tags of one model
+  as the same model: a role asking for `coder:small` is no longer satisfied
+  by a hub that lists only `coder:large`. A name without a tag still matches
+  any tag of that name, and a registry port is not a tag. Found by the Copilot
+  review of #577 after it merged (#590).
 
 ## v0.22.0 (2026-10-28)
 
