@@ -49,7 +49,8 @@ make install-user          # ~/.local/bin (workstation development)
   reads that Go's export data; `GOTOOLCHAIN=go1.26.10` reproduces CI's toolchain meanwhile.
 - CI also runs: coverage gates (`hack/coverage-check.sh`), deadcode gate, import tiers, public boundary,
   repo truth, doc facts, actionlint, workflow action pins, install tests,
-  `hack/lifecycle-check.go` and `hack/claude-workflow-tests.py`.
+  `hack/lifecycle-check.go`, `hack/verify-specs.go` (spec review records, §8) and
+  `hack/claude-workflow-tests.py`.
 - `./hack/verify-doc-facts.sh` checks this file against the code (exit codes, command count,
   MCP tool count, 30 KB budget) — update both together.
 - `go run hack/verify-import-tiers.go` checks the §4 tier layout against every `internal/` import and
@@ -186,6 +187,6 @@ Only the maintainer can waive this, in writing on the PR.
 
 Every PR, feature or exempt: resolve each review finding, review-bot findings included, as `fixed in
 <commit>` or `declined: <reason>, <the run that supports it>`; close each reviewer question as a
-finding or as `open: <why not probed>`; list declines and open questions in the PR body. Do not merge
-while a requested review is pending: `hack/pr-review-cycle.sh` waits for requested reviews and exits 3
-while one is still pending. An empty `reviewRequests` list alone is not proof.
+finding, `verified: <how>` or `open: <why not probed>`; list declines and open questions in the PR
+body. Do not merge while a requested review is pending: `hack/pr-review-cycle.sh` waits for requested
+reviews and exits 3 while one is still pending. An empty `reviewRequests` list alone is not proof.

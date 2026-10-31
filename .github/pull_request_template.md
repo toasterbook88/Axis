@@ -13,9 +13,9 @@ Spec:
 
 <!-- Every PR. Each finding from the spec and diff reviews and from review bots, with its
 resolution: "fixed in <commit>" or "declined: <reason>, <the run that supports it>". Each reviewer
-question: "became F<n>" or "open: <why not probed>". List declines and open questions first.
-Do not merge while a requested review is pending: run hack/pr-review-cycle.sh <PR>, which exits 3
-while one is. -->
+question: "became F<n>", "verified: <how>" or "open: <why not probed>". List declines and open
+questions first. Do not merge while a requested review is pending: run hack/pr-review-cycle.sh <PR>,
+which exits 3 while one is. -->
 
 ## Testing
 
