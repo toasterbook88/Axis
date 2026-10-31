@@ -256,3 +256,11 @@ Verdict: approve-with-changes (six inline findings)
 6. A waiver first seen at the final re-read was not printed. Fixed; test.
 
 Every fix has a test that fails when the fix is reverted.
+
+Second Copilot review (head ca75e81e), two findings, both fixed:
+1. The settling thread read could replace a valid snapshot with a malformed response (`{}`) that
+   counts as zero unresolved threads. Every thread read is now shape-checked and fails closed;
+   tests for a malformed first and settling read.
+2. A review submitted between the thread read and the final re-read was never shown or counted.
+   The final re-read compares the newest submitted review with the newest the thread read saw
+   and exits 1 asking for a re-run when a newer one exists; test.

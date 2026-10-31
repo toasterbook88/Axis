@@ -134,6 +134,7 @@ query {
 read_pending() {
   local json all login at
   json="$(fetch_pending_json)" || { echo "error: unable to read requested reviews for PR #${PR}" >&2; return 1; }
+  printf '%s\n' "$json" >"$waiver_log.pending-json"
   all="$(printf '%s\n' "$json" | pending_reviewers)" \
     || { echo "error: malformed requested-review response for PR #${PR}" >&2; return 1; }
   local waived allowed
@@ -207,6 +208,22 @@ query(\$endCursor: String) {
 }"
 }
 
+# read_threads fetches review threads and fails closed on a response of the wrong shape: a
+# missing connection would otherwise render as no threads and count as zero unresolved.
+read_threads() {
+  local json
+  json="$(fetch_thread_json)" || { echo "error: unable to read review threads for PR #${PR}" >&2; return 1; }
+  printf '%s\n' "$json" | jq -se 'length > 0 and all(.[]; (.data.repository.pullRequest.reviewThreads.nodes | type == "array")
+    and (.data.repository.pullRequest.reviews.nodes | type == "array"))' >/dev/null 2>&1 \
+    || { echo "error: malformed review-thread response for PR #${PR}" >&2; return 1; }
+  printf '%s\n' "$json"
+}
+
+# newest_review_at prints the newest submitted review time seen in a thread or pending read.
+newest_review_at() {
+  jq -rs '[.[] | .. | objects | select(has("submittedAt")) | .submittedAt | select(. != null)] | max // ""'
+}
+
 # review_is_fresh succeeds when the newest review was submitted under 60 s ago: its inline
 # comments may not have reached reviewThreads yet.
 review_is_fresh() {
@@ -261,7 +278,7 @@ if ! [[ "$WAIT_BOTS" =~ ^[0-9]+$ && "$WAIT_REVIEWS" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 waiver_log="$(mktemp)"
-trap 'rm -f "$waiver_log" "$waiver_log.printed"' EXIT
+trap 'rm -f "$waiver_log" "$waiver_log.printed" "$waiver_log.pending-json"' EXIT
 
 for dep in gh jq; do
   if ! command -v "$dep" >/dev/null 2>&1; then
@@ -352,12 +369,13 @@ head_oid="$(echo "$pr_json" | jq -r .headRefOid)"
 echo "== Review state (head ${head_oid:0:7}) =="
 
 # Review thread state via GraphQL with pagination support (up to 100 items/page).
-thread_json="$(fetch_thread_json)"
+thread_json="$(read_threads)" || exit 1
 if printf '%s\n' "$thread_json" | review_is_fresh; then
   # Inline comments can reach reviewThreads after their review; read once more.
   sleep 10
-  thread_json="$(fetch_thread_json)" || exit 1
+  thread_json="$(read_threads)" || exit 1
 fi
+threads_seen_through="$(printf '%s\n' "$thread_json" | newest_review_at)"
 
 echo "--- Review bodies ---"
 echo "$thread_json" | render_review_bodies
@@ -391,6 +409,11 @@ fi
 # that gained a review request, since.
 pending="$(read_pending)" || exit 1
 print_new_waivers
+newest_now="$(newest_review_at <"$waiver_log.pending-json")"
+if [[ -n "$newest_now" && "$newest_now" > "$threads_seen_through" ]]; then
+  echo "error: a review was submitted during this run (at $newest_now); its threads were not read; re-run" >&2
+  exit 1
+fi
 if [[ -n "$pending" ]]; then
   printf '%s\n' "$pending" | while IFS=$'\t' read -r login at; do echo "pending: $login (requested $at)"; done
   echo "error: requested review still pending at the final re-read; do not merge" >&2

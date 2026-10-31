@@ -109,13 +109,15 @@ case "$1 $2" in
         echo "$n" >"$GH_MOCK_PENDING_DIR/count"
         [[ "${GH_MOCK_PENDING_FAIL:-}" == "$n" ]] && exit 56
         f="$GH_MOCK_PENDING_DIR/$n.json"
-        [[ -f "$f" ]] || f="$(ls "$GH_MOCK_PENDING_DIR"/*.json | sort -V | tail -1)"
+        [[ -f "$f" ]] || f="$(ls "$GH_MOCK_PENDING_DIR"/[0-9]*.json | sort -V | tail -1)"
         cat "$f" ;;
       *)
         echo x >>"$GH_MOCK_PENDING_DIR/thread-reads"
         echo threads >>"$GH_MOCK_PENDING_DIR/events"
         printf '%s\n' "$*" >"$GH_MOCK_PENDING_DIR/thread-query"
-        cat "$GH_MOCK_FIXTURE" ;;
+        # Thread reads: serve thread-<n>.json when the test provides one, else the fixture.
+        tn=$(wc -l <"$GH_MOCK_PENDING_DIR/thread-reads")
+        if [[ -f "$GH_MOCK_PENDING_DIR/thread-$tn.json" ]]; then cat "$GH_MOCK_PENDING_DIR/thread-$tn.json"; else cat "$GH_MOCK_FIXTURE"; fi ;;
     esac ;;
   *) echo "unexpected mock gh call: $*" >&2; exit 55 ;;
 esac
@@ -289,6 +291,23 @@ run_case clean 1
 set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
 run_case clean 0 --wait-reviews 0 --allow-pending copilot-pull-request-reviewer
 assert_out 'waived pending review: copilot-pull-request-reviewer'
+
+# A malformed thread read fails closed, first read or settling read.
+set_pending "$no_pending"
+printf '{}\n' >"$tmpdir/pending/thread-1.json"
+run_case clean 1
+assert_out 'malformed review-thread response'
+printf '%s\n' "$fixture" | jq --arg t "$recent" '.data.repository.pullRequest.reviewThreads.nodes = [] | .data.repository.pullRequest.latest = {nodes: [{submittedAt: $t}]}' >"$tmpdir/fixture.json"
+set_pending "$no_pending"
+printf '{}\n' >"$tmpdir/pending/thread-2.json"
+run_case clean 1
+assert_out 'malformed review-thread response'
+printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
+
+# A review submitted after the threads were read: its threads were never seen, so re-run.
+set_pending "$no_pending" "$(pending_fixture '[]' "[$copilot_ev, $(review_by 2026-10-31T18:00:00Z copilot-pull-request-reviewer)]")"
+run_case clean 1
+assert_out 'a review was submitted during this run'
 
 set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
 run_case clean 0 --wait-reviews 0 --allow-pending 'copilot-pull-request-reviewer[bot]'
