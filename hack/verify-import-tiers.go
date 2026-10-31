@@ -243,12 +243,12 @@ type listedPackage struct {
 }
 
 // importEdges returns the cross-package production import edges between
-// top-level internal/ packages for one platform. -deps is required: the
-// ./internal/... pattern skips testdata and _- or .-prefixed directories, but
-// production code can still import packages there, and their edges count.
+// top-level internal/ packages for one platform. It lists ./... with -deps:
+// patterns skip testdata and _- or .-prefixed directories, but production code
+// can still import packages there, including from cmd/, and their edges count.
 func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
 	platform := goos + "/" + goarch
-	out, err := goOutput([]string{"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0"}, "list", "-e", "-deps", "-json", "./internal/...")
+	out, err := goOutput([]string{"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0"}, "list", "-e", "-deps", "-json", "./...")
 	if err != nil {
 		return nil, nil, err
 	}

@@ -127,6 +127,14 @@ pkg testdata/helper a
 pkg b testdata/helper s
 expect_fail 'import through a top-level hidden package' 'internal/testdata is imported by internal/b but is not in the AGENTS.md tier layout'
 
+# A hidden helper reachable only from cmd/ is still checked: cmd/tool -> b/testdata/helper -> a.
+new_case "$default_block"
+base_packages
+pkg b/testdata/helper a
+mkdir -p "$CASE/cmd/tool"
+printf 'package main\n\nimport _ "example.com/fixture/internal/b/testdata/helper"\n\nfunc main() {}\n' >"$CASE/cmd/tool/main.go"
+expect_fail 'hidden helper imported only from cmd/' 'internal/b -> internal/a:'
+
 for hidden in testdata/helper _hidden; do
   new_case "$default_block"
   base_packages

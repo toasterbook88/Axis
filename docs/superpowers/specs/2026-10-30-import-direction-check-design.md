@@ -81,9 +81,9 @@ missing from the block fails: "internal/foo is not in the AGENTS.md tier layout"
 `verify-doc-facts.sh` §4b, which the same PR retires.
 
 **Rule.** `internal/<pkg>/...` inherits `<pkg>`'s tier, and imports within the same top-level
-directory are skipped. `go list` runs with `-deps`, keeping only packages under `<module>/internal/`,
-because the `./internal/...` pattern skips `testdata` and `_`- or `.`-prefixed directories that
-production code can still import. For every production import (`Imports`) of another top-level package: allowed
+directory are skipped. `go list ./...` runs with `-deps`, keeping only packages under
+`<module>/internal/`, because patterns skip `testdata` and `_`- or `.`-prefixed directories that
+production code, including `cmd/`, can still import. For every production import (`Imports`) of another top-level package: allowed
 when `tier(dst) <= tier(src)`. Support (0) is importable by everyone and may import only Support.
 
 **Allowlist.** `hack/import-tiers-allowlist.txt`. `#` comment lines and blank lines are ignored.
@@ -213,6 +213,11 @@ Second Copilot review (head 468e2002): an import through a top-level hidden pack
 (`internal/testdata/...`, `internal/_x`) had no tier on either side of the edge, so the gate skipped
 it. Fixed: an edge with an untiered endpoint fails, naming the package and its importer; a fixture
 with `internal/b -> internal/testdata/helper -> internal/a` failed before the fix and passes after.
+
+Third Copilot review (head 6422ed8a): `-deps` followed only the `./internal/...` roots, so a hidden
+helper imported solely from `cmd/` (`cmd/axis -> internal/b/testdata/helper -> internal/a`) was never
+listed. Fixed: the listing starts from `./...`; a fixture with a `cmd/tool` importing such a helper
+failed before the fix and passes after. The gate now takes 0.77 s.
 
 Decision record: `docs/decisions/import-tier-layout.md`.
 
