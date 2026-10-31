@@ -81,14 +81,17 @@ pending_reviewers() {
     .data.repository.pullRequest as $pr
     | $pr.timelineItems.nodes as $ev
     | ([$pr.reviewRequests.nodes[].requestedReviewer
-        | if .__typename == "Team" then {login: ("@" + .name), at: "requested"}
+        | if . == null then {login: "?unknown", at: "requested"}
+          elif .__typename == "Team" then {login: ("@" + (.name // "team")), at: "requested"}
+          elif (.login // null) == null then {login: ("?" + (.__typename // "unknown")), at: "requested"}
           else {login: (.login | norm), at: "requested"} end]
       + [range(0; $ev | length) as $i
         | $ev[$i]
         | select(.__typename == "ReviewRequestedEvent" and (.requestedReviewer.login // null) != null)
         | (.requestedReviewer.login | norm) as $l
         | select([$ev[$i + 1:][]
-            | select((.__typename == "PullRequestReview" and ((.author.login // "") | norm) == $l)
+            | select((.__typename == "PullRequestReview" and .submittedAt != null
+                and ((.author.login // "") | norm) == $l)
               or (.__typename == "ReviewRequestRemovedEvent"
                 and ((.requestedReviewer.login // "") | norm) == $l))] | length == 0)
         | {login: $l, at: .createdAt}])
@@ -211,7 +214,7 @@ while (($# > 0)); do
       shift 2
       ;;
     --allow-pending)
-      ALLOW_PENDING+=("$2")
+      ALLOW_PENDING+=("${2%\[bot\]}")
       shift 2
       ;;
     --merge)
@@ -332,7 +335,7 @@ thread_json="$(fetch_thread_json)"
 if printf '%s\n' "$thread_json" | review_is_fresh; then
   # Inline comments can reach reviewThreads after their review; read once more.
   sleep 10
-  thread_json="$(fetch_thread_json)"
+  thread_json="$(fetch_thread_json)" || exit 1
 fi
 
 echo "--- Review bodies ---"

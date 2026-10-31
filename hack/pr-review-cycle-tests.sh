@@ -113,6 +113,7 @@ case "$1 $2" in
         cat "$f" ;;
       *)
         echo x >>"$GH_MOCK_PENDING_DIR/thread-reads"
+        echo threads >>"$GH_MOCK_PENDING_DIR/events"
         cat "$GH_MOCK_FIXTURE" ;;
     esac ;;
   *) echo "unexpected mock gh call: $*" >&2; exit 55 ;;
@@ -124,6 +125,7 @@ chmod +x "$tmpdir/gh"
 cat >"$tmpdir/sleep" <<'MOCK_SLEEP'
 #!/usr/bin/env bash
 echo "$1" >>"$GH_MOCK_PENDING_DIR/sleeps"
+echo "sleep $1" >>"$GH_MOCK_PENDING_DIR/events"
 echo "$(($(cat "$GH_MOCK_CLOCK") + ${1%.*}))" >"$GH_MOCK_CLOCK"
 MOCK_SLEEP
 cat >"$tmpdir/date" <<'MOCK_DATE'
@@ -200,6 +202,12 @@ expect_pending re-requested-after-review 'copilot-pull-request-reviewer' \
   "$(pending_fixture '[]' "[$copilot_ev, $(review_by 2026-10-28T19:20:00Z copilot-pull-request-reviewer), $copilot_ev]")"
 expect_pending re-requested-after-removal 'copilot-pull-request-reviewer' "$(pending_fixture '[]' "[$copilot_ev, $removed_ev, $copilot_ev]")"
 expect_pending team-requested '@core' "$(pending_fixture "[$team_req]" '[]')"
+team_ev='{"__typename":"ReviewRequestedEvent","createdAt":"2026-10-28T19:11:23Z","requestedReviewer":{"__typename":"Team","name":"core"}}'
+expect_pending team-no-longer-requested '' "$(pending_fixture '[]' "[$team_ev]")"
+expect_pending null-reviewer '?unknown' "$(pending_fixture '[{"requestedReviewer":null}]' '[]')"
+expect_pending mannequin-reviewer '?Mannequin' "$(pending_fixture '[{"requestedReviewer":{"__typename":"Mannequin"}}]' '[]')"
+draft_review='{"__typename":"PullRequestReview","submittedAt":null,"author":{"login":"copilot-pull-request-reviewer"}}'
+expect_pending unsubmitted-draft-review 'copilot-pull-request-reviewer' "$(pending_fixture '[]' "[$copilot_ev, $draft_review]")"
 # #577 as it stood at its merge (19:22:23Z): requested 19:11:23Z, only toasterbook88 had reviewed.
 expect_pending pr577-at-merge 'copilot-pull-request-reviewer' \
   "$(pending_fixture "[$copilot_req]" "[$copilot_ev, $(review_by 2026-10-28T19:12:09Z toasterbook88)]")"
@@ -237,6 +245,13 @@ assert_out 'requested review still pending'
 set_pending "$no_pending"
 run_case clean 0 --wait-bots 7
 [[ "$(head -1 "$tmpdir/last/sleeps")" == 7 ]] || { echo "floor sleep of 7 s not recorded first" >&2; exit 1; }
+[[ "$(grep -m1 -n 'sleep 7' "$tmpdir/last/events" | cut -d: -f1)" -lt "$(grep -m1 -n threads "$tmpdir/last/events" | cut -d: -f1)" ]] \
+  || { echo "floor sleep did not come before the first thread read" >&2; exit 1; }
+
+# The deadline counts from checks green, so the floor uses up part of it: 20 s floor + one 15 s poll.
+set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
+run_case clean 3 --wait-bots 20 --wait-reviews 30
+[[ "$(grep -cx 15 "$tmpdir/last/sleeps")" == 1 ]] || { echo "deadline not counted from checks green: $(tr '\n' ' ' <"$tmpdir/last/sleeps")" >&2; exit 1; }
 
 recent="$(jq -rn --argjson now "$clock_start" '$now - 20 | todate')"
 printf '%s\n' "$fixture" | jq --arg t "$recent" '.data.repository.pullRequest.reviewThreads.nodes = [] | .data.repository.pullRequest.latest = {nodes: [{submittedAt: $t}]}' >"$tmpdir/fixture.json"
@@ -259,5 +274,13 @@ run_case clean 1
 set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
 run_case clean 0 --wait-reviews 0 --allow-pending copilot-pull-request-reviewer
 assert_out 'waived pending review: copilot-pull-request-reviewer'
+
+set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
+run_case clean 0 --wait-reviews 0 --allow-pending 'copilot-pull-request-reviewer[bot]'
+assert_out 'waived pending review: copilot-pull-request-reviewer'
+
+set_pending "$(pending_fixture '[{"requestedReviewer":null}]' '[]')"
+run_case clean 3 --wait-reviews 0
+assert_out 'pending: ?unknown'
 
 echo "pr-review-cycle tests passed"

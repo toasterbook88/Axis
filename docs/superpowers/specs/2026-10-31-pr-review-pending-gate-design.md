@@ -63,6 +63,10 @@ Measured over the 120 most recent merged PRs (GitHub GraphQL, 2026-10-31):
    with its request time and exit 3: "requested review still pending". The new code paths map every
    gh and jq failure to 1, so 3 is only ever returned with that list printed. Codes 0, 1 and 2 keep
    their meanings, and the existing pass-through of `gh` exit codes in the final re-read is unchanged.
+   Exit 3 returns before the head-moved and CLEAN checks: a run that exits 3 has to be re-run anyway.
+   A requested reviewer the API returns as `null` or as a type without a login (a deleted account, a
+   `Mannequin`) is pending under the name `?unknown` or `?<type>`, so it fails as exit 3 and can be
+   waived, rather than failing every run as exit 1. A review counts as an answer only once submitted.
 5. **Re-check at enforcement.** The final re-read (head moved, merge state CLEAN) also re-reads the
    pending set, so a review requested during the run is not missed. On exit 3 the script still
    prints the review bodies and threads it can see, so a timed-out run shows the same state a run
@@ -207,3 +211,26 @@ Questions:
 - Copilot failing instead of reviewing. Open: not observed in 46 requests; `--allow-pending` covers it.
 
 Code starts: every finding is resolved.
+
+Kind: diff
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (one diff review: no non-test `.go` lines changed, below the
+§8 larger-feature threshold)
+Base: 4b846e44
+Head: c3b2541d
+Date: 2026-10-31
+Verdict: approve-with-changes
+
+1. Minor: three rules had no failing test (floor before the thread read, deadline counted from checks
+   green, a team request only in the timeline). Fixed: an ordering assertion on a shared event log; a
+   `--wait-bots 20 --wait-reviews 30` case that expects exactly one poll; a team timeline fixture. The
+   reviewer's three surviving mutations now each fail the suite.
+2. Minor: a `null` or login-less requested reviewer made every run exit 1 with no waiver. Fixed: it
+   is pending as `?unknown` or `?<type>` (exit 3, waivable); unit and end-to-end tests.
+3. Minor: `--allow-pending` did not strip `[bot]`. Fixed when parsed; test with the suffixed login.
+
+Questions:
+- Does the timeline include an unsubmitted draft review? Became a fix: a review answers a request
+  only when `submittedAt` is set; unit test.
+- The second thread read passed gh's exit code through. Became a fix: it exits 1 on failure.
+- Exit 3 skips the final head and CLEAN checks. Became a note in Design 4.
