@@ -203,7 +203,7 @@ Questions:
 - Clock for the 60 s check and the deadline. Became the `now_epoch` seam with shared `sleep` and
   `date` shims.
 - Output on exit 3. Became Design 5: review bodies and threads are still printed.
-- Is 16.4 min the longest request-to-review time? Verified by the author over the 46 requests
+- Is 16.4 min the longest request-to-review time? Verified: by the author over the 46 requests
   (max 16.4, median 2.4).
 - Do inline comments reach `reviewThreads` after the review? Open: not observed here (on #577 the
   comments' timestamps precede the review's); Design 6 is kept as a cheap guard on the strength of
