@@ -296,6 +296,24 @@ new_case
 printf '%s\n```text\nKind: spec\n\n## Review\n\n%s\n' "$sections" "$good_review" >"$CASE/docs/superpowers/specs/$name"
 reject unclosed-fence 'code fence opened here is never closed'
 
+# fence_case <label> <fence lines placed in ## Design>: CommonMark pairing, so a conforming spec passes.
+fence_case() {
+  new_case
+  printf '%s\n%s\n\n## Review\n\n%s\n' "$sections" "$2" "$good_review" >"$CASE/docs/superpowers/specs/$name"
+  pass "$1"
+}
+fence_case longer-fence-holds-shorter '````md
+```
+Kind: spec
+````'
+fence_case tilde-fence-holds-backticks '~~~text
+```
+~~~'
+fence_case info-string-does-not-close '```text
+Kind: spec
+```text
+```'
+
 # --- Lines that belong to no item
 
 review_case glued-prose-in-header 'line after Verdict: in the block header' "$(header spec approve)

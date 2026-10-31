@@ -176,16 +176,18 @@ func (c *checker) check(lines []string) {
 func (c *checker) blankFences(lines []string) ([]string, []int) {
 	out := make([]string, len(lines))
 	var fences []int
-	open := -1
+	open, openChar, openLen := -1, byte(0), 0
 	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimLeft(l, " "), "```") {
-			if open < 0 {
-				open = i
+		if ch, n, rest := fence(l); n > 0 {
+			switch {
+			case open < 0:
+				open, openChar, openLen = i, ch, n
 				fences = append(fences, i)
-			} else {
+				continue
+			case ch == openChar && n >= openLen && strings.TrimSpace(rest) == "":
 				open = -1
+				continue
 			}
-			continue
 		}
 		if open < 0 {
 			out[i] = l
@@ -195,6 +197,23 @@ func (c *checker) blankFences(lines []string) ([]string, []int) {
 		c.fail(open+1, "fence", "code fence opened here is never closed")
 	}
 	return out, fences
+}
+
+// fence reports a CommonMark code fence line: up to three spaces, then three
+// or more backticks or tildes. A fence closes only on the same character, at
+// least as many of it, and nothing after.
+func fence(l string) (ch byte, n int, rest string) {
+	t := strings.TrimLeft(l, " ")
+	if len(l)-len(t) > 3 || len(t) < 3 || (t[0] != '`' && t[0] != '~') {
+		return 0, 0, ""
+	}
+	for n < len(t) && t[n] == t[0] {
+		n++
+	}
+	if n < 3 {
+		return 0, 0, ""
+	}
+	return t[0], n, t[n:]
 }
 
 func (c *checker) parseReview(lines []string, start, end int) []block {

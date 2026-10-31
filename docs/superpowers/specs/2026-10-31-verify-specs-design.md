@@ -41,10 +41,10 @@ Each is checked unless it is on a fixed grandfather list in the script:
 `2026-10-30-import-direction-check-design.md`. A date cutoff would let a backdated name escape.
 
 A feature spec fails until its first approving spec review is recorded; that is intended, since §8
-lets code start only then. Lines inside fenced code blocks are ignored, so a spec can show an
-example record outside `## Review`; a fence inside `## Review` fails, since it would hide records
-there, and a fence left open at the end of the file fails, naming its opening line. Rule 1 applies
-to the whole file; rules 2 to 4 apply within `## Review`:
+lets code start only then. Lines inside fenced code blocks (paired as CommonMark pairs them) are
+ignored, so a spec can show an example record outside `## Review`; a fence inside `## Review`
+fails, since it would hide records there, and a fence left open at the end of the file fails,
+naming its opening line. Rule 1 applies to the whole file; rules 2 to 4 apply within `## Review`:
 
 1. **Sections.** `## Problem`, `## Non-goals`, `## Design`, `## Alternatives`, `## Research` and
    `## Review` headings are present, `## Review` exactly once; it runs to the next `## ` heading.
@@ -120,7 +120,9 @@ but no `Kind:`) before a conforming block fails; an unindented prose line glued 
 fails; an unindented `6.7 min` line is not an item; a second `## Review` fails. From the diff
 review: a line glued under `Verdict:`, an `F<n>` line anywhere in a header, an indented line under
 `Questions:`, an item after a `Note:`, a fence inside `## Review`, an impossible date and an empty
-field fail; `Fixedness` and an `open:` inside a clause are not statuses.
+field fail; `Fixedness` and an `open:` inside a clause are not statuses. From Copilot: fences pair
+as CommonMark does (a longer fence holds a shorter one, `~~~` holds backticks, a line with an info
+string does not close); a fixture for each.
 
 ## Alternatives
 
@@ -297,3 +299,19 @@ Questions:
   and passed at 5c5c117a.
 
 Note: every fix has a test that fails when the fix is removed.
+
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #593)
+Model: other vendor family than the author
+Base: f71c239d
+Head: 14bcb726
+Date: 2026-10-31
+Verdict: approve-with-changes (two inline findings)
+
+1. Any triple-backtick line toggled a fence, so a four-backtick fence around an example, a tilde
+   fence, or a line with an info string paired wrongly and could hide `## Review`. Fixed: fences
+   pair by character and length, and a closing fence has nothing after it; three fixtures.
+2. A raw `F<n>` line glued under `Verdict:` was dropped as a header line. Fixed in 770d920b, from
+   the fresh diff review: `F<n>` fails anywhere in a header; fixture.
+
+Note: each fence fixture fails when its part of the pairing rule is removed.
