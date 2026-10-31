@@ -60,6 +60,17 @@
   `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
   package-inventory check in `verify-doc-facts.sh` (#585).
 
+### Dependencies and CI
+
+* `hack/pr-review-cycle.sh` waits for requested reviews instead of only
+  sleeping a fixed 2 minutes: after the 120 s floor it polls until no requested
+  reviewer is pending, up to `--wait-reviews` (default 20 minutes), and exits 3
+  with the pending list if one still is. A reviewer counts as pending while it
+  is requested or its latest request has no later review. A failed or
+  malformed read fails closed. `--allow-pending LOGIN` waives a reviewer that
+  will not answer (#588). On #577 Copilot's review arrived 6.7 minutes after CI and 9
+  seconds after the merge.
+
 ## v0.22.0 (2026-10-28)
 
 A cluster-only agent mode, an explicit spread placement objective, model

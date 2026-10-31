@@ -54,7 +54,8 @@ make install-user          # ~/.local/bin (workstation development)
   MCP tool count, 30 KB budget) — update both together.
 - `go run hack/verify-import-tiers.go` checks the §4 tier layout against every `internal/` import and
   the package inventory; exceptions go in `hack/import-tiers-allowlist.txt`, each with a rationale.
-- PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN).
+- PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN;
+  waits for requested reviews and exits 3 while one is still pending).
 - Bare `go test` outside `make` can touch real `~/.axis` state; prefer `make test` or `hack/hermetic-go-test.sh`.
 - `axis version` must print `commit:`; it distinguishes tip-of-main from a release with the same semver.
 - NixOS: `/usr/local/bin` is not on PATH by default (use `environment.sessionVariables.PATH`);
@@ -186,5 +187,5 @@ Only the maintainer can waive this, in writing on the PR.
 Every PR, feature or exempt: resolve each review finding, review-bot findings included, as `fixed in
 <commit>` or `declined: <reason>, <the run that supports it>`; close each reviewer question as a
 finding or as `open: <why not probed>`; list declines and open questions in the PR body. Do not merge
-while a requested review is pending. `hack/pr-review-cycle.sh` does not check pending review requests
-yet, so confirm with `gh pr view <PR> --json reviewRequests`.
+while a requested review is pending: `hack/pr-review-cycle.sh` waits for requested reviews and exits 3
+while one is still pending. An empty `reviewRequests` list alone is not proof.
