@@ -75,6 +75,7 @@ Measured over the 120 most recent merged PRs (GitHub GraphQL, 2026-10-31):
 6. **Settle threads after a late review.** Threads are read after the pending set empties. If the
    newest review (`reviews(last: 1)`) was submitted less than 60 s before that read, read the threads
    once more after 10 s, because inline comments can reach `reviewThreads` after the review itself.
+   If that second read lists a submitted review the first did not, exit 1 and ask for a re-run.
 7. **Escape hatch.** `--allow-pending LOGIN` (repeatable) excludes a named reviewer that will not
    answer (quota, outage) and prints `waived pending review: LOGIN`. Under the every-PR rule in #586,
    the waiver and its reason go in the PR body.
@@ -290,3 +291,21 @@ Verdict: approve-with-changes (two inline findings)
    already-read review sharing a timestamp.
 
 Note: the ID test fails on the old code; the directory test fails on a world-readable directory.
+
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #588, fourth review)
+Model: other vendor family than the author
+Base: 4b846e44
+Head: 65fe916b
+Date: 2026-10-31
+Verdict: approve-with-changes (two inline findings)
+
+1. Saving the pending read was unchecked inside a `||` context, where `set -e` does not apply, so a
+   failed write left an empty or stale file for the final ID comparison. Fixed: saving either read
+   and recording a waiver are checked and fail closed (a failed note of a printed waiver can only
+   print it twice); test with an unwritable save path.
+2. A review submitted during the settling sleep appeared in the second thread read before its
+   threads did, and counted as read. Fixed: the IDs of submitted reviews must match across the two
+   reads, else exit 1 asking for a re-run; test adds a review on the second read.
+
+Note: each test fails when its fix is removed.

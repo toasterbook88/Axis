@@ -140,7 +140,14 @@ cat >"$tmpdir/date" <<'MOCK_DATE'
 [[ "$1" == "+%s" ]] && { cat "$GH_MOCK_CLOCK"; exit 0; }
 exec /usr/bin/date "$@"
 MOCK_DATE
-chmod +x "$tmpdir/sleep" "$tmpdir/date"
+# mktemp shim: GH_MOCK_BLOCK_SAVE makes the saved pending read unwritable.
+cat >"$tmpdir/mktemp" <<'MOCK_MKTEMP'
+#!/usr/bin/env bash
+d="$(PATH=/usr/bin:/bin mktemp "$@")"
+[[ -n "${GH_MOCK_BLOCK_SAVE:-}" ]] && mkdir "$d/pending-json"
+echo "$d"
+MOCK_MKTEMP
+chmod +x "$tmpdir/sleep" "$tmpdir/date" "$tmpdir/mktemp"
 clock_start=1793000000
 
 # pending_fixture <requests-json> <timeline-json>: one pending-review read.
@@ -283,6 +290,23 @@ run_case clean 0
 grep -qE 'latest: reviews\(last: ([2-9]|[1-9][0-9]+)\)' "$tmpdir/last/thread-query" \
   || { echo "thread query asks for a single latest review, which may be an unsubmitted draft" >&2; exit 1; }
 printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
+
+# A review submitted during the settling sleep is in the second thread read before its threads are.
+printf '%s\n' "$fixture" | jq --arg t "$recent" '.data.repository.pullRequest.reviewThreads.nodes = []
+  | .data.repository.pullRequest.latest = {nodes: [{id: "R1", submittedAt: $t}]}' >"$tmpdir/fixture.json"
+set_pending "$no_pending"
+jq --arg t "$recent" '.data.repository.pullRequest.latest.nodes += [{id: "R2", submittedAt: $t}]' \
+  "$tmpdir/fixture.json" >"$tmpdir/pending/thread-2.json"
+run_case clean 1
+assert_out 'a review was submitted during this run'
+printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
+
+# A pending read that cannot be saved fails closed, with its own message.
+set_pending "$no_pending"
+GH_MOCK_BLOCK_SAVE=1 run_case clean 1
+assert_out 'unable to save the requested-review response'
+# The planted directory keeps the script from removing its scratch directory; remove both here.
+rmdir "$tmpdir"/tmp/*/pending-json && rmdir "$tmpdir"/tmp/*
 
 # A failed read fails closed both in the wait (read 1) and at the final re-read (read 2).
 set_pending "$no_pending"

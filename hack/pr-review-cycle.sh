@@ -134,7 +134,8 @@ query {
 read_pending() {
   local json all login at
   json="$(fetch_pending_json)" || { echo "error: unable to read requested reviews for PR #${PR}" >&2; return 1; }
-  printf '%s\n' "$json" >"$scratch/pending-json"
+  printf '%s\n' "$json" >"$scratch/pending-json" \
+    || { echo "error: unable to save the requested-review response for PR #${PR}" >&2; return 1; }
   all="$(printf '%s\n' "$json" | pending_reviewers)" \
     || { echo "error: malformed requested-review response for PR #${PR}" >&2; return 1; }
   local waived allowed
@@ -145,7 +146,7 @@ read_pending() {
       [[ "$allowed" == "$login" ]] && waived=1
     done
     if ((waived)); then
-      printf '%s\n' "$login" >>"$scratch/waivers"
+      printf '%s\n' "$login" >>"$scratch/waivers" || return 1
     else
       printf '%s\t%s\n' "$login" "$at"
     fi
@@ -223,6 +224,11 @@ read_threads() {
 # newest_review_at prints the newest submitted review time seen in a thread read.
 newest_review_at() {
   jq -rs '[.[] | .. | objects | select(has("submittedAt")) | .submittedAt | select(. != null)] | max // ""'
+}
+
+# submitted_review_ids prints the sorted IDs of submitted reviews in a thread read.
+submitted_review_ids() {
+  jq -rs '[.[] | .. | objects | select(has("submittedAt") and .submittedAt != null) | .id] | unique | .[]'
 }
 
 # unseen_reviews <since> <thread-json-file> <pending-json-file> prints the IDs of submitted reviews
@@ -385,11 +391,18 @@ echo "== Review state (head ${head_oid:0:7}) =="
 thread_json="$(read_threads)" || exit 1
 if printf '%s\n' "$thread_json" | review_is_fresh; then
   # Inline comments can reach reviewThreads after their review; read once more.
+  ids_before="$(printf '%s\n' "$thread_json" | submitted_review_ids)" || exit 1
   sleep 10
   thread_json="$(read_threads)" || exit 1
+  ids_after="$(printf '%s\n' "$thread_json" | submitted_review_ids)" || exit 1
+  if [[ "$ids_after" != "$ids_before" ]]; then
+    echo "error: a review was submitted during this run (while its threads settled); re-run" >&2
+    exit 1
+  fi
 fi
 threads_seen_through="$(printf '%s\n' "$thread_json" | newest_review_at)"
-printf '%s\n' "$thread_json" >"$scratch/thread-json"
+printf '%s\n' "$thread_json" >"$scratch/thread-json" \
+  || { echo "error: unable to save the review-thread response for PR #${PR}" >&2; exit 1; }
 
 echo "--- Review bodies ---"
 echo "$thread_json" | render_review_bodies
