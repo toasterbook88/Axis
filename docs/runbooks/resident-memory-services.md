@@ -24,6 +24,12 @@ eligible when the RAM AXIS has already reserved there plus the task's request fi
 `reservable`; otherwise `axis placement explain` excludes the node with
 `reservation cap exceeded: need …MB, have …MB reserved of …MB reservable`.
 
+Placement checks a snapshot, so two tasks placed at the same moment can both pass it. The ceiling
+is enforced when a task acquires its lease: the reservation ledger refuses a lease that would take
+the node's reservations over `ram_total_mb - system_reserve_mb`, and leases are granted one at a
+time under a file lock shared by every AXIS process on the machine. The ledger counts reservations
+against that ceiling; it does not look at free RAM.
+
 Ranking uses the same budget minus AXIS's reservations. The `resources.ram_eviction_reserved_mb`
 and `resources.ram_allocatable_mb` fields in `axis status` JSON also subtract an eviction floor of
 512 MB or 5 % of total RAM; they are reported figures, and placement does not apply that floor.
@@ -104,3 +110,6 @@ Tests:
   `internal/snapshotview/overlay_test.go`: the ranking figure.
 - `TestDiscoverCopiesSystemReserveIntoFacts` in `internal/discovery/discovery_test.go`: `nodes.yaml`
   to facts.
+- `TestLoadLiveLedgerHonorsNodeSystemReserve`, `TestLoadCachedLedgerHonorsNodeSystemReserve` and
+  `TestPopulateLedgerCapacityAppliesNodeSystemReserve`: a second 6000 MB lease over the ceiling is
+  refused on the in-process and MCP ledgers, not only the daemon's.

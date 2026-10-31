@@ -583,3 +583,38 @@ func TestLoadCachedReadsSocketDaemonWithUnixScheme(t *testing.T) {
 		t.Fatalf("request URL = %q, want http://localhost/snapshot", reqURL)
 	}
 }
+
+func TestLoadCachedLedgerHonorsNodeSystemReserve(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	daemonSnap := &models.ClusterSnapshot{
+		Timestamp: time.Now().UTC(),
+		Status:    models.SnapshotHealthy,
+		Nodes: []models.NodeFacts{{
+			Name:            "node-a",
+			Status:          models.StatusComplete,
+			Resources:       &models.Resources{RAMTotalMB: 16384, RAMFreeMB: 14000},
+			SystemReserveMB: 5968,
+		}},
+		Publication: &models.PublicationEnvelope{ID: "pub-reserve", Source: "daemon-publication"},
+	}
+	restore := stubCacheDeps(t,
+		func(string) (*config.Config, error) {
+			return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "node-a.example.com"}}}, nil
+		},
+		func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+			return daemonSnap, "daemon-cache", nil
+		},
+		func() (*models.ClusterSnapshot, error) { return nil, nil },
+		func() (*state.ClusterState, error) {
+			return &state.ClusterState{Version: 1, Nodes: map[string]state.NodeState{}}, nil
+		},
+		func() (*skills.Store, error) { return &skills.Store{}, nil },
+	)
+	defer restore()
+
+	rt, err := LoadCached(context.Background())
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	reserveTwice(t, rt.Ledger)
+}

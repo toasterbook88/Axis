@@ -29,6 +29,13 @@
 
 ### Fixes
 
+* Leases granted outside the daemon now respect each node's
+  `system_reserve_mb`. `axis task run`, the agent's execution path and the MCP
+  lease tool built their reservation ledgers with node capacities only, so they
+  held back the default 1024 MB instead of the configured reserve and could
+  grant leases over the node's ceiling; only the daemon's ledger applied it.
+  All four now share `Ledger.SetNodeLimits`. Found by Copilot's review of the
+  resident memory services runbook.
 * The dead-upstream check behind a LiteLLM hub (`axis ai route`, MCP
   `inference_route_explain`) no longer misjudges four shapes:
   * MCP now resolves a backend's `node:` through `nodes.yaml` as the CLI does,
