@@ -37,6 +37,7 @@ run make test-race
 run make test-install
 run go build -buildvcs=false ./...
 run make coverage
+run ./hack/verify-public-boundary-tests.sh
 run ./hack/verify-public-boundary.sh
 run ./hack/verify-deadcode-tests.sh
 run ./hack/pr-review-cycle-tests.sh
