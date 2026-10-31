@@ -209,6 +209,11 @@ the `-deps` blind spot above.
 2. Minor, partial: `releaseTargets` is hardcoded rather than read from `.goreleaser.yml`. Fixed by
    assertion: the tests script fails when `.goreleaser.yml` ships a different platform set.
 
+Second Copilot review (head 468e2002): an import through a top-level hidden package
+(`internal/testdata/...`, `internal/_x`) had no tier on either side of the edge, so the gate skipped
+it. Fixed: an edge with an untiered endpoint fails, naming the package and its importer; a fixture
+with `internal/b -> internal/testdata/helper -> internal/a` failed before the fix and passes after.
+
 Decision record: `docs/decisions/import-tier-layout.md`.
 
 Decision: the maintainer chose B on 2026-10-30 (`knowledge` to Layer 5; `reservation` and `skills`

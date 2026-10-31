@@ -97,12 +97,31 @@ func run() error {
 	}
 
 	upward := map[edge]bool{}
-	for e := range edges {
+	untiered := map[string]string{} // package -> one importer, for the message
+	for _, e := range sortedEdges(edges) {
 		ts, okS := tiers[e.src]
 		td, okD := tiers[e.dst]
-		if okS && okD && td.level > ts.level {
+		switch {
+		case !okD:
+			// A hidden top-level directory (testdata, _x, .x) has no tier, so an
+			// import through it would otherwise skip the check entirely.
+			if _, seen := untiered[e.dst]; !seen {
+				untiered[e.dst] = e.src
+			}
+		case !okS:
+			if _, seen := untiered[e.src]; !seen {
+				untiered[e.src] = ""
+			}
+		case td.level > ts.level:
 			upward[e] = true
 		}
+	}
+	for pkg, importer := range untiered {
+		if importer == "" {
+			problems = append(problems, fmt.Sprintf("internal/%s imports other internal/ packages but is not in the %s tier layout", pkg, agentsFile))
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("internal/%s is imported by internal/%s but is not in the %s tier layout (add it to §4 or move it under a tiered package)", pkg, importer, agentsFile))
 	}
 
 	allowed, allowProblems := readAllowlist(tiers, upward)

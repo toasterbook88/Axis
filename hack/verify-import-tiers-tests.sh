@@ -120,6 +120,13 @@ pkg a/sub s
 pkg b a/sub
 expect_fail 'import of a nested package counts as its parent' 'internal/b -> internal/a:'
 
+# A top-level hidden package has no tier of its own, so an import through it must fail, not vanish.
+new_case "$default_block"
+base_packages
+pkg testdata/helper a
+pkg b testdata/helper s
+expect_fail 'import through a top-level hidden package' 'internal/testdata is imported by internal/b but is not in the AGENTS.md tier layout'
+
 for hidden in testdata/helper _hidden; do
   new_case "$default_block"
   base_packages
