@@ -40,6 +40,10 @@
   pressed. Refresh ticks from a superseded cycle are dropped.
 * `axis tui` keys typed quickly (delivered as one multi-rune message, such as
   `jjG`) now each act as their own key instead of being ignored.
+* `hack/verify-public-boundary.sh` no longer passes when it cannot list
+  tracked files. Run outside a git work tree (for example in a `git archive`
+  extract) it scanned nothing and printed "passed"; it now fails, as it does
+  when git tracks no files. Regression tests cover both.
 
 ## v0.22.0 (2026-10-28)
 
