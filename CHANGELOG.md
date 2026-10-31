@@ -29,6 +29,19 @@
 
 ### Fixes
 
+* The dead-upstream check behind a LiteLLM hub (`axis ai route`, MCP
+  `inference_route_explain`) no longer misjudges four shapes:
+  * MCP now resolves a backend's `node:` through `nodes.yaml` as the CLI does,
+    so a hub bound by its logical name is checked instead of reported healthy.
+  * A hub without `node:` at a private address is no longer assumed to be on
+    this machine; its upstreams are left unchecked unless the URL names this
+    machine (loopback, a local address, or the exact hostname: a qualified
+    name sharing only a first label does not count).
+  * An `api_base` with an API prefix other than `/v1` (such as `/api`) is
+    listed at `<api_base>/models` after a 404 at `/v1/models`.
+  * A model with a deployment that has no `api_base` (a provider default) is
+    no longer rejected because its custom deployment is down; the check
+    reports "not checked" instead.
 * `axis tui` no longer shows cluster state the snapshot does not contain. The
   link column names the observed network class (`relayed`, `vpn`, `unknown`,
   `not observed`) instead of calling every non-Tailscale path `LAN`. The
