@@ -1,7 +1,7 @@
 # `hack/verify-specs.go`: check that specs carry their reviews
 
-Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after three `revise` spec reviews;
-awaiting a fourth. Merges after #588.
+Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after four `revise` spec reviews;
+awaiting a fifth. Merges after #588.
 
 ## Problem
 
@@ -26,6 +26,8 @@ A record a script cannot read cannot be held to the rule, and drift starts with 
   larger-feature threshold (that needs the PR's diff).
 - Commit references: a bare `Fixed` is accepted, not only `fixed in <commit>`. The content of a
   decline (the run that supports it) is not checked either.
+- Meaning: a later clause that opens with a marker word counts as a status, so `Became flaky under
+  load.` passes. The check catches a missing status, not a misleading one.
 
 ## Design
 
@@ -46,28 +48,33 @@ apply within `## Review`:
 1. **Sections.** `## Problem`, `## Non-goals`, `## Design`, `## Alternatives`, `## Research` and
    `## Review` headings are present.
 2. **Blocks.** A block starts at a `Kind:` line and runs to the next `Kind:` line or the end of the
-   section. Its header is the lines before its first item; it must contain exactly one each of
-   `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each 7 to 40 hex
-   characters, first word), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`,
-   `approve-with-changes` or `revise`, first word). Other header lines, such as continuations of
-   `Model:`, are allowed, but a header line starting `- ` fails (a question needs `Questions:`).
-   Findings in a block are numbered 1, 2, 3 ... without a restart: a second `1.` means a new review
-   written without its own `Kind:` block, and fails. An unindented line starting `F<n>` (the raw
-   reviewer format) fails: findings are copied into `N.` items. After a block's first item, every
-   non-blank line must be part of an item, a `Questions:` line (matched case-insensitively, so a
-   copied `QUESTIONS:` works) or a closing note starting `Note:`; any other line, such as a prose
-   review appended after the block, fails.
+   section. Its header is the run of lines from `Kind:` to the first blank line; it must contain
+   exactly one each of `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each
+   7 to 40 hex characters), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`,
+   `approve-with-changes` or `revise`). `Base`, `Head` and `Verdict` are checked on their first
+   word, so `Verdict: approve-with-changes (six inline findings)` passes. Other header lines, such
+   as continuations of `Model:`, are allowed, but a header line starting `- ` fails (a question
+   needs `Questions:`). Below the header, each paragraph (a run of non-blank lines) must start with
+   an item, a `Questions:` line (matched case-insensitively, so a copied `QUESTIONS:` works) or a
+   closing note starting `Note:`; any other paragraph, such as a prose review appended after the
+   block, fails, whether or not the block has findings. Items start at column 0; indented lines
+   continue the line above. Findings in a block are numbered 1, 2, 3 ... without a restart: a
+   second `1.` means a new review written without its own `Kind:` block, and fails. An unindented
+   line starting `F<n>` (the raw reviewer format) fails: findings are copied into `N.` items.
 3. **Order.** At least one `spec` block. A later block of a kind supersedes earlier ones (a `revise`
    is followed by a re-review), so the last `spec` block and the last `diff` block, if any, do not
    have `Verdict: revise`.
 4. **Items.** A finding is a line starting `N.` in a block; a question is a line starting `- ` after a
-   `Questions:` line in the block. Each item runs until a blank line, the next item, `Questions:`
-   or `Kind:`, so a resolution on a continuation line counts. A leading severity word (`Blocker:`,
-   `Major:`, `Minor:`) is removed first. A status is a marker at the start of the remaining text or
-   of a clause (after `.`, `;`, `:` or `?`), matched case-insensitively, so a
-   finding that merely mentions a "fixed timeout" does not count: every finding has `fixed` or
-   `declined:`; every question has `became`, `open:` or `verified:`, the statuses AGENTS.md §8 and
-   `review-prompt.md` define (this PR adds `verified:` to both and to the PR template).
+   `Questions:` line in the block. Each item runs until a blank line, the next item, a `Questions:`,
+   `Note:` or `Kind:` line, so a resolution on a continuation line counts but a note never does.
+   A leading severity word (`Blocker:`, `Major:`, `Minor:`) is removed, and the rest is split into
+   clauses at `.`, `;`, `:` or `?` followed by a space or the end of the item. The first clause is
+   the description; a status is a marker word that starts a later clause, matched
+   case-insensitively and followed by a non-letter. So `1. Minor: fixed timeouts are too short.`
+   has no status, while `Fixed:`, `Fixed;`, `Fixed in d6d2773f:` and `Fixed when parsed;` after the
+   description do. Every finding has `fixed` or `declined:`; every question has `became`, `open:`
+   or `verified:`, the statuses AGENTS.md §8 and `review-prompt.md` define (this PR adds
+   `verified:` to both and to the PR template).
 5. **Output.** Each problem names the file, line and rule; the exit code is 1 when any exist, else
    the script prints `specs passed: N checked, M grandfathered`.
 
@@ -92,7 +99,12 @@ after a block fails; a `Note:` line after items passes; a `- ` question with no 
 fails; a copied `QUESTIONS:` line works; an `F1 [major]` line fails, but an indented continuation
 starting `F2` passes; a finding whose text only mentions "fixed" in passing fails, including
 `1. Minor: fixed timeouts are too short.`; a question that only mentions "verified" fails; a
-subdirectory in the specs directory fails; and its own CI wiring.
+subdirectory in the specs directory fails; and its own CI wiring. From the #588 record:
+`Verdict: approve-with-changes (six inline findings)` and a `Head:` with trailing text pass, as do
+`Fixed in <sha>:`, `Fixed;` and `Fixed when parsed;` after a description. A block with no
+findings followed by a prose paragraph fails, and so does one followed by `Fifth review:` and
+`1. ... Fixed:` items; a `Note: fixed later.` line directly after a finding with no status does
+not resolve it; an indented line starting `6.7 min` continues its item.
 
 ## Alternatives
 
@@ -197,3 +209,25 @@ Questions:
 - `F<n>` before or after trimming indentation? Became Design 2: unindented lines only; fixture.
 - Is `Questions:` case-insensitive? Became Design 2: yes; fixture with `QUESTIONS:`.
 - Are subdirectories scanned? Became Design: a subdirectory fails; fixture.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 5c9975b5
+Head: bf11867d
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: removing the severity word put "fixed" at the start of the text, so the spec's own
+   failing fixture passed. Fixed: the first clause is the description and a status must start a
+   later clause (Design 4); fixtures for the #588 forms; a misleading marker became a non-goal.
+2. Major: a prose paragraph after a block with no findings counted as header. Fixed: the header
+   ends at the first blank line and every later paragraph must start with an item, `Questions:` or
+   `Note:` (Design 2); fixtures with and without numbered items.
+3. Minor: no test pinned the first-word rule #588's `Verdict:` relies on. Fixed: fixtures for a
+   `Verdict:` and a `Head:` with trailing text.
+
+Questions:
+- Can a `Note:` line right after an item resolve it? Became Design 4: an item ends at `Note:`;
+  fixture.
+- Is an indented `N.` an item? Became Design 2: items start at column 0; fixture.
