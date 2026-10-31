@@ -125,7 +125,22 @@ new_case "$default_block"
 base_packages
 pkg testdata/helper a
 pkg b testdata/helper s
-expect_fail 'import through a top-level hidden package' 'internal/testdata is imported by internal/b but is not in the AGENTS.md tier layout'
+expect_fail 'import through a top-level hidden package' 'internal/testdata is loaded but is not in the AGENTS.md tier layout (imported by internal/b)'
+
+# A top-level hidden package with no internal imports still needs a tier once production code loads it.
+new_case "$default_block"
+base_packages
+pkg testdata/helper
+mkdir -p "$CASE/cmd/tool"
+printf 'package main\n\nimport _ "example.com/fixture/internal/testdata/helper"\n\nfunc main() {}\n' >"$CASE/cmd/tool/main.go"
+expect_fail 'loaded hidden package with no internal imports' 'internal/testdata is loaded but is not in the AGENTS.md tier layout'
+
+# A load error outside internal/ fails the gate too.
+new_case "$default_block"
+base_packages
+mkdir -p "$CASE/cmd/tool"
+printf 'package main\n\nimport _ "example.com/fixture/internal/missing"\n\nfunc main() {}\n' >"$CASE/cmd/tool/main.go"
+expect_fail 'load error in a package outside internal/' 'example.com/fixture/cmd/tool has a dependency error' load
 
 # A hidden helper reachable only from cmd/ is still checked: cmd/tool -> b/testdata/helper -> a.
 new_case "$default_block"

@@ -85,8 +85,9 @@ func run() error {
 	mod = strings.TrimSpace(mod)
 
 	edges := map[edge]bool{}
+	loaded := map[string]bool{}
 	for _, t := range releaseTargets {
-		pkgEdges, loadProblems, err := importEdges(mod, t.goos, t.goarch)
+		pkgEdges, pkgLoaded, loadProblems, err := importEdges(mod, t.goos, t.goarch)
 		if err != nil {
 			return err
 		}
@@ -94,34 +95,38 @@ func run() error {
 		for e := range pkgEdges {
 			edges[e] = true
 		}
+		for pkg := range pkgLoaded {
+			loaded[pkg] = true
+		}
+	}
+
+	// Every loaded internal package needs a tier, whether or not it imports or is
+	// imported by another internal package. A hidden top-level directory
+	// (testdata, _x, .x) is absent from the inventory but can still be loaded.
+	importer := map[string]string{}
+	for _, e := range sortedEdges(edges) {
+		if _, seen := importer[e.dst]; !seen {
+			importer[e.dst] = e.src
+		}
+	}
+	for _, pkg := range sortedKeys(loaded) {
+		if _, ok := tiers[pkg]; ok {
+			continue
+		}
+		msg := fmt.Sprintf("internal/%s is loaded but is not in the %s tier layout", pkg, agentsFile)
+		if by, ok := importer[pkg]; ok {
+			msg += fmt.Sprintf(" (imported by internal/%s)", by)
+		}
+		problems = append(problems, msg+"; add it to §4 or move it under a tiered package")
 	}
 
 	upward := map[edge]bool{}
-	untiered := map[string]string{} // package -> one importer, for the message
-	for _, e := range sortedEdges(edges) {
+	for e := range edges {
 		ts, okS := tiers[e.src]
 		td, okD := tiers[e.dst]
-		switch {
-		case !okD:
-			// A hidden top-level directory (testdata, _x, .x) has no tier, so an
-			// import through it would otherwise skip the check entirely.
-			if _, seen := untiered[e.dst]; !seen {
-				untiered[e.dst] = e.src
-			}
-		case !okS:
-			if _, seen := untiered[e.src]; !seen {
-				untiered[e.src] = ""
-			}
-		case td.level > ts.level:
+		if okS && okD && td.level > ts.level {
 			upward[e] = true
 		}
-	}
-	for pkg, importer := range untiered {
-		if importer == "" {
-			problems = append(problems, fmt.Sprintf("internal/%s imports other internal/ packages but is not in the %s tier layout", pkg, agentsFile))
-			continue
-		}
-		problems = append(problems, fmt.Sprintf("internal/%s is imported by internal/%s but is not in the %s tier layout (add it to §4 or move it under a tiered package)", pkg, importer, agentsFile))
 	}
 
 	allowed, allowProblems := readAllowlist(tiers, upward)
@@ -246,14 +251,15 @@ type listedPackage struct {
 // top-level internal/ packages for one platform. It lists ./... with -deps:
 // patterns skip testdata and _- or .-prefixed directories, but production code
 // can still import packages there, including from cmd/, and their edges count.
-func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
+func importEdges(mod, goos, goarch string) (map[edge]bool, map[string]bool, []string, error) {
 	platform := goos + "/" + goarch
 	out, err := goOutput([]string{"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0"}, "list", "-e", "-deps", "-json", "./...")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	prefix := mod + "/internal/"
 	edges := map[edge]bool{}
+	loaded := map[string]bool{}
 	var problems []string
 	listed := 0
 	dec := json.NewDecoder(strings.NewReader(out))
@@ -262,19 +268,22 @@ func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
 		if err := dec.Decode(&p); err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, nil, fmt.Errorf("decode go list output (%s): %w", platform, err)
+			return nil, nil, nil, fmt.Errorf("decode go list output (%s): %w", platform, err)
 		}
-		src := topLevel(p.ImportPath, prefix)
-		if src == "" {
-			continue // standard library or another module, pulled in by -deps
-		}
-		listed++
+		// Load errors count for every listed package, cmd/ included, before the
+		// internal-only filter below.
 		if p.Error != nil {
 			problems = append(problems, fmt.Sprintf("%s: %s failed to load: %s", platform, p.ImportPath, p.Error.Err))
 		}
 		for _, de := range p.DepsErrors {
 			problems = append(problems, fmt.Sprintf("%s: %s has a dependency error: %s", platform, p.ImportPath, de.Err))
 		}
+		src := topLevel(p.ImportPath, prefix)
+		if src == "" {
+			continue // cmd/, the standard library or another module, pulled in by -deps
+		}
+		listed++
+		loaded[src] = true
 		for _, imp := range p.Imports {
 			if dst := topLevel(imp, prefix); dst != "" && dst != src {
 				edges[edge{src, dst}] = true
@@ -282,9 +291,9 @@ func importEdges(mod, goos, goarch string) (map[edge]bool, []string, error) {
 		}
 	}
 	if listed == 0 {
-		return nil, nil, fmt.Errorf("%s: go list found no packages under %s; run from the module root", platform, prefix)
+		return nil, nil, nil, fmt.Errorf("%s: go list found no packages under %s; run from the module root", platform, prefix)
 	}
-	return edges, problems, nil
+	return edges, loaded, problems, nil
 }
 
 func topLevel(importPath, prefix string) string {
@@ -343,6 +352,15 @@ func readAllowlist(tiers map[string]tier, upward map[edge]bool) (map[edge]bool, 
 		problems = append(problems, fmt.Sprintf("read %s: %v", allowlistFile, err))
 	}
 	return allowed, problems
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sortedEdges(set map[edge]bool) []edge {

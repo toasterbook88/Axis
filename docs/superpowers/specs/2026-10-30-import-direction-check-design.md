@@ -219,6 +219,13 @@ helper imported solely from `cmd/` (`cmd/axis -> internal/b/testdata/helper -> i
 listed. Fixed: the listing starts from `./...`; a fixture with a `cmd/tool` importing such a helper
 failed before the fix and passes after. The gate now takes 0.77 s.
 
+Fourth Copilot review (head ef7df0e5), two findings, both fixed:
+1. A loaded hidden top-level package with no internal imports was never checked against the
+   layout. Now every loaded internal package needs a tier, edges or not; fixture with
+   `cmd/tool -> internal/testdata/helper` importing only the standard library.
+2. Load errors in packages outside `internal/` were dropped before the internal filter. They are now
+   reported for every listed package; fixture with a `cmd/tool` importing a missing package.
+
 Decision record: `docs/decisions/import-tier-layout.md`.
 
 Decision: the maintainer chose B on 2026-10-30 (`knowledge` to Layer 5; `reservation` and `skills`
