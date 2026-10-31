@@ -68,9 +68,10 @@ Measured over the 120 most recent merged PRs (GitHub GraphQL, 2026-10-31):
    `Mannequin`) is pending under the name `?unknown` or `?<type>`, so it fails as exit 3 and can be
    waived, rather than failing every run as exit 1. A review counts as an answer only once submitted.
 5. **Re-check at enforcement.** The final re-read (head moved, merge state CLEAN) also re-reads the
-   pending set, so a review requested during the run is not missed. On exit 3 the script still
-   prints the review bodies and threads it can see, so a timed-out run shows the same state a run
-   at Base shows after 120 s.
+   pending set, so a review requested during the run is not missed, and exits 1 asking for a re-run
+   when it lists a submitted review, by ID, that the thread read did not include. On exit 3 the
+   script still prints the review bodies and threads it can see, so a timed-out run shows the same
+   state a run at Base shows after 120 s.
 6. **Settle threads after a late review.** Threads are read after the pending set empties. If the
    newest review (`reviews(last: 1)`) was submitted less than 60 s before that read, read the threads
    once more after 10 s, because inline comments can reach `reviewThreads` after the review itself.
@@ -271,3 +272,21 @@ Verdict: approve-with-changes (two inline findings)
 2. A review submitted between the thread read and the final re-read was never shown or counted.
    Fixed in d6d2773f: the final re-read compares the newest submitted review with the newest the
    thread read saw and exits 1 asking for a re-run when a newer one exists; test.
+
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #588, third review)
+Model: other vendor family than the author
+Base: 4b846e44
+Head: d6d2773f
+Date: 2026-10-31
+Verdict: approve-with-changes (two inline findings)
+
+1. The waiver, printed-waiver and pending-read files were predictable siblings of the `mktemp`
+   file, so another user could plant symlinks there on a shared host. Fixed: all scratch files
+   live in one `mktemp -d` directory, removed on exit; a test records `TMPDIR` during the run and
+   fails on anything but one `drwx------` directory or on leftovers.
+2. A new review with the same `submittedAt` as the newest one the thread read saw was not noticed.
+   Fixed: the final re-read compares review IDs at or after that time; tests for a new and an
+   already-read review sharing a timestamp.
+
+Note: the ID test fails on the old code; the directory test fails on a world-readable directory.

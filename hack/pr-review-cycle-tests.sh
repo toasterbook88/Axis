@@ -107,6 +107,10 @@ case "$1 $2" in
         # Pending-review reads: serve pending/1.json, 2.json, ... and repeat the last.
         n=$(($(cat "$GH_MOCK_PENDING_DIR/count" 2>/dev/null || echo 0) + 1))
         echo "$n" >"$GH_MOCK_PENDING_DIR/count"
+        for e in "$TMPDIR"/*; do
+          [[ -e "$e" ]] || continue
+          if [[ -d "$e" ]]; then ls -ld "$e" | cut -c1-10; else echo "file $e"; fi
+        done >>"$GH_MOCK_PENDING_DIR/tmp-entries"
         [[ "${GH_MOCK_PENDING_FAIL:-}" == "$n" ]] && exit 56
         f="$GH_MOCK_PENDING_DIR/$n.json"
         [[ -f "$f" ]] || f="$(ls "$GH_MOCK_PENDING_DIR"/[0-9]*.json | sort -V | tail -1)"
@@ -161,7 +165,8 @@ run_case() {
   local scenario="$1" expected="$2" actual=0
   shift 2
   [[ -d "$tmpdir/pending" ]] || set_pending "$no_pending"
-  GH_MOCK_CASE="$scenario" GH_MOCK_FIXTURE="$tmpdir/fixture.json" \
+  mkdir -p "$tmpdir/tmp"
+  TMPDIR="$tmpdir/tmp" GH_MOCK_CASE="$scenario" GH_MOCK_FIXTURE="$tmpdir/fixture.json" \
     GH_MOCK_PENDING_DIR="$tmpdir/pending" GH_MOCK_CLOCK="$tmpdir/clock" \
     PATH="$tmpdir:$PATH" timeout "${GH_MOCK_TIMEOUT:-300}" "$repo_root/hack/pr-review-cycle.sh" 510 --wait-bots 0 "$@" \
     >"$tmpdir/$scenario.out" 2>&1 || actual=$?
@@ -193,7 +198,9 @@ expect_pending() { # expect_pending <name> <expected logins, space-separated> <j
     || { echo "pending_reviewers failed on $name" >&2; exit 1; }
   [[ "$got" == "$want" ]] || { echo "pending $name: want '$want', got '$got'" >&2; exit 1; }
 }
-review_by() { printf '{"__typename":"PullRequestReview","submittedAt":"%s","author":{"login":"%s"}}' "$1" "$2"; }
+review_by() { # review_by <submittedAt> <login> [id]
+  printf '{"__typename":"PullRequestReview","id":"%s","submittedAt":"%s","author":{"login":"%s"}}' "${3:-R-$2-$1}" "$1" "$2"
+}
 removed_ev='{"__typename":"ReviewRequestRemovedEvent","createdAt":"2026-10-28T19:13:00Z","requestedReviewer":{"__typename":"Bot","login":"copilot-pull-request-reviewer"}}'
 team_req='{"requestedReviewer":{"__typename":"Team","name":"core"}}'
 
@@ -308,6 +315,28 @@ printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes 
 set_pending "$no_pending" "$(pending_fixture '[]' "[$copilot_ev, $(review_by 2026-10-31T18:00:00Z copilot-pull-request-reviewer)]")"
 run_case clean 1
 assert_out 'a review was submitted during this run'
+
+# A new review with the same submittedAt as the newest one the thread read saw is still unseen.
+seen_at=2026-10-20T00:00:00Z
+printf '%s\n' "$fixture" | jq --arg t "$seen_at" '.data.repository.pullRequest.reviewThreads.nodes = []
+  | .data.repository.pullRequest.reviews.nodes[0] += {id: "R1", submittedAt: $t}
+  | .data.repository.pullRequest.latest = {nodes: [{id: "R1", submittedAt: $t}]}' >"$tmpdir/fixture.json"
+set_pending "$no_pending" "$(pending_fixture '[]' "[$copilot_ev, $(review_by "$seen_at" toasterbook88 R1), $(review_by "$seen_at" copilot-pull-request-reviewer R2)]")"
+run_case clean 1
+assert_out 'a review was submitted during this run'
+set_pending "$no_pending" "$(pending_fixture '[]' "[$copilot_ev, $(review_by "$seen_at" copilot-pull-request-reviewer R1)]")"
+run_case clean 0
+printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
+
+# Scratch files live in one private directory, never as predictable names in a shared TMPDIR.
+set_pending "$no_pending" "$no_pending"
+run_case clean 0
+[[ -s "$tmpdir/last/tmp-entries" ]] || { echo "no TMPDIR entries recorded during the run" >&2; exit 1; }
+if grep -vqx 'drwx------' "$tmpdir/last/tmp-entries"; then
+  echo "scratch files outside a private directory: $(sort -u "$tmpdir/last/tmp-entries" | tr '\n' ' ')" >&2
+  exit 1
+fi
+[[ -z "$(ls -A "$tmpdir/tmp")" ]] || { echo "scratch directory left behind: $(ls -A "$tmpdir/tmp")" >&2; exit 1; }
 
 set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
 run_case clean 0 --wait-reviews 0 --allow-pending 'copilot-pull-request-reviewer[bot]'

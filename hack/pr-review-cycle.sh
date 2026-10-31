@@ -121,7 +121,7 @@ query {
           __typename
           ... on ReviewRequestedEvent { createdAt $reviewer }
           ... on ReviewRequestRemovedEvent { createdAt $reviewer }
-          ... on PullRequestReview { submittedAt author { login } }
+          ... on PullRequestReview { id submittedAt author { login } }
         }
       }
     }
@@ -134,7 +134,7 @@ query {
 read_pending() {
   local json all login at
   json="$(fetch_pending_json)" || { echo "error: unable to read requested reviews for PR #${PR}" >&2; return 1; }
-  printf '%s\n' "$json" >"$waiver_log.pending-json"
+  printf '%s\n' "$json" >"$scratch/pending-json"
   all="$(printf '%s\n' "$json" | pending_reviewers)" \
     || { echo "error: malformed requested-review response for PR #${PR}" >&2; return 1; }
   local waived allowed
@@ -145,7 +145,7 @@ read_pending() {
       [[ "$allowed" == "$login" ]] && waived=1
     done
     if ((waived)); then
-      printf '%s\n' "$login" >>"$waiver_log"
+      printf '%s\n' "$login" >>"$scratch/waivers"
     else
       printf '%s\t%s\n' "$login" "$at"
     fi
@@ -155,10 +155,10 @@ read_pending() {
 # print_new_waivers prints each waived reviewer once, however many reads recorded it.
 print_new_waivers() {
   local login
-  sort -u "$waiver_log" | while read -r login; do
-    grep -qxF -- "$login" "$waiver_log.printed" 2>/dev/null && continue
+  sort -u "$scratch/waivers" | while read -r login; do
+    grep -qxF -- "$login" "$scratch/printed" 2>/dev/null && continue
     echo "waived pending review: $login"
-    printf '%s\n' "$login" >>"$waiver_log.printed"
+    printf '%s\n' "$login" >>"$scratch/printed"
   done
 }
 
@@ -188,6 +188,7 @@ query(\$endCursor: String) {
       }
       reviews(first: 50) {
         nodes {
+          id
           author { login }
           state
           body
@@ -195,7 +196,7 @@ query(\$endCursor: String) {
           commit { oid }
         }
       }
-      latest: reviews(last: 5) { nodes { submittedAt } }
+      latest: reviews(last: 5) { nodes { id submittedAt } }
       comments(first: 50) {
         nodes {
           author { login }
@@ -219,9 +220,20 @@ read_threads() {
   printf '%s\n' "$json"
 }
 
-# newest_review_at prints the newest submitted review time seen in a thread or pending read.
+# newest_review_at prints the newest submitted review time seen in a thread read.
 newest_review_at() {
   jq -rs '[.[] | .. | objects | select(has("submittedAt")) | .submittedAt | select(. != null)] | max // ""'
+}
+
+# unseen_reviews <since> <thread-json-file> <pending-json-file> prints the IDs of submitted reviews
+# in the pending read, at or after <since>, that the thread read did not include. Reviews can share
+# a submittedAt, so a timestamp alone cannot tell a new review from one already read.
+unseen_reviews() {
+  jq -rn --arg since "$1" --slurpfile threads "$2" --slurpfile pending "$3" '
+    [$threads[] | .. | objects | select(has("submittedAt") and .submittedAt != null) | .id] as $seen
+    | $pending[].data.repository.pullRequest.timelineItems.nodes[]
+    | select(.__typename == "PullRequestReview" and .submittedAt != null and .submittedAt >= $since)
+    | .id as $id | select($seen | any(. == $id) | not) | $id // "?"'
 }
 
 # review_is_fresh succeeds when the newest review was submitted under 60 s ago: its inline
@@ -277,8 +289,9 @@ if ! [[ "$WAIT_BOTS" =~ ^[0-9]+$ && "$WAIT_REVIEWS" =~ ^[0-9]+$ ]]; then
   echo "error: --wait-bots and --wait-reviews take whole seconds" >&2
   exit 1
 fi
-waiver_log="$(mktemp)"
-trap 'rm -f "$waiver_log" "$waiver_log.printed" "$waiver_log.pending-json"' EXIT
+scratch="$(mktemp -d)"
+trap 'rm -f "$scratch/waivers" "$scratch/printed" "$scratch/pending-json" "$scratch/thread-json"; rmdir "$scratch"' EXIT
+: >"$scratch/waivers"
 
 for dep in gh jq; do
   if ! command -v "$dep" >/dev/null 2>&1; then
@@ -376,6 +389,7 @@ if printf '%s\n' "$thread_json" | review_is_fresh; then
   thread_json="$(read_threads)" || exit 1
 fi
 threads_seen_through="$(printf '%s\n' "$thread_json" | newest_review_at)"
+printf '%s\n' "$thread_json" >"$scratch/thread-json"
 
 echo "--- Review bodies ---"
 echo "$thread_json" | render_review_bodies
@@ -409,9 +423,10 @@ fi
 # that gained a review request, since.
 pending="$(read_pending)" || exit 1
 print_new_waivers
-newest_now="$(newest_review_at <"$waiver_log.pending-json")"
-if [[ -n "$newest_now" && "$newest_now" > "$threads_seen_through" ]]; then
-  echo "error: a review was submitted during this run (at $newest_now); its threads were not read; re-run" >&2
+unseen="$(unseen_reviews "$threads_seen_through" "$scratch/thread-json" "$scratch/pending-json")" \
+  || { echo "error: unable to compare reviews with the thread read for PR #${PR}" >&2; exit 1; }
+if [[ -n "$unseen" ]]; then
+  echo "error: a review was submitted during this run ($(printf '%s' "$unseen" | tr '\n' ' ')); its threads were not read; re-run" >&2
   exit 1
 fi
 if [[ -n "$pending" ]]; then
