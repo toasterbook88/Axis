@@ -1,0 +1,30 @@
+ AXIS  cluster                                    ▲ 3/4 reachable · 2m ago · daemon-cache · vX.Y.Z
+ memory ━━━━━━━━━━━━ 63%  68 GB / 108 GB used · 32 GB allocatable · 8.0 GB reserved    ⚠ 2 warnings
+
+
+
+                      ╭─────────────────────────────────────────────────────╮
+                      │                                                     │
+                      │   Keys                                              │
+                      │   ↑ k  ↓ j      select node                         │
+                      │   g  G          first / last node                   │
+                      │   ← h  → l      previous / next tab                 │
+                      │   tab  1-4      cycle / jump to tab                 │
+                      │   p             placement preview                   │
+                      │   r             refresh now                         │
+                      │   ?  esc        close this help                     │
+                      │   q             quit                                │
+                      │                                                     │
+                      │   Status                                            │
+                      │   ● ok   ▲ partial   ✖ unreachable / error          │
+                      │                                                     │
+                      │   Data                                              │
+                      │   Read-only view of the daemon-cache snapshot.      │
+                      │   Placement is advisory; nothing here runs tasks.   │
+                      │                                                     │
+                      ╰─────────────────────────────────────────────────────╯
+
+
+
+
+ ↑↓ select  ←→ tab  p place  r refresh  ? help  q quit                     Snapshot loaded: 4 nodes

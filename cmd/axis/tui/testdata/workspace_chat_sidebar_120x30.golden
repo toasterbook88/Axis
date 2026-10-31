@@ -1,0 +1,30 @@
+CHAT-PANE                                                                             │ AXIS  vX.Y.Z
+                                                                                      │
+                                                                                      │ CLUSTER
+                                                                                      │ ▲ 3/4 reachable
+                                                                                      │ 2m ago · daemon-cache
+                                                                                      │ mem ━━━━━━━━━━━━━━━━━━━━━━  63%
+                                                                                      │
+                                                                                      │ NODES
+                                                                                      │ ● node-a                    54%
+                                                                                      │ ▲ node-b                    84%
+                                                                                      │ ✖ node-c                   down
+                                                                                      │ ● node-d                    39%
+                                                                                      │
+                                                                                      │ ALERTS 2
+                                                                                      │ ⚠ node-c unreachable
+                                                                                      │ ⚠ node-b ram_pressure
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │
+                                                                                      │ KEYS
+                                                                                      │ ctrl+o commands
+                                                                                      │ ctrl+x d dashboard
+                                                                                      │ ctrl+x h help
+ AXIS agent                                                   ctrl+o commands  ctrl+x leader  f2 dashboard  ctrl+c quit

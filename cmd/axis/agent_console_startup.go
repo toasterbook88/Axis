@@ -96,6 +96,11 @@ type agentStartupInputs struct {
 
 	// out is the agent's default output writer; nil discards.
 	out io.Writer
+
+	// program builds the program that hosts the console. Nil uses
+	// newConsoleProgramFn (the standalone console); axis tui supplies the
+	// full-screen workspace.
+	program func(context.Context, console.Options) consoleProgram
 }
 
 // hasExplicitModelFlags reports whether the operator pinned the model. Pinned
@@ -274,7 +279,11 @@ func runAgentConsoleStartup(ctx context.Context, in agentStartupInputs, errW io.
 	// not refused. The job settles Ready right after bind.
 	opts.InitialModelState = console.ModelPending
 
-	prog := newConsoleProgramFn(ctx, opts)
+	newProgram := newConsoleProgramFn
+	if in.program != nil {
+		newProgram = in.program
+	}
+	prog := newProgram(ctx, opts)
 	l.prog = prog
 	job.prog = prog
 
