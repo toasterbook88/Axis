@@ -52,7 +52,8 @@ make install-user          # ~/.local/bin (workstation development)
   `hack/lifecycle-check.go` and `hack/claude-workflow-tests.py`.
 - `./hack/verify-doc-facts.sh` checks this file against the code (exit codes, command count,
   MCP tool count, package inventory, 30 KB budget) — update both together.
-- PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN).
+- PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN;
+  waits for requested reviews and exits 3 while one is still pending).
 - Bare `go test` outside `make` can touch real `~/.axis` state; prefer `make test` or `hack/hermetic-go-test.sh`.
 - `axis version` must print `commit:`; it distinguishes tip-of-main from a release with the same semver.
 - NixOS: `/usr/local/bin` is not on PATH by default (use `environment.sessionVariables.PATH`);
