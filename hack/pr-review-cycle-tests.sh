@@ -245,7 +245,7 @@ assert_out 'requested review still pending'
 set_pending "$no_pending"
 run_case clean 0 --wait-bots 7
 [[ "$(head -1 "$tmpdir/last/sleeps")" == 7 ]] || { echo "floor sleep of 7 s not recorded first" >&2; exit 1; }
-[[ "$(grep -m1 -n 'sleep 7' "$tmpdir/last/events" | cut -d: -f1)" -lt "$(grep -m1 -n threads "$tmpdir/last/events" | cut -d: -f1)" ]] \
+[[ "$(grep --max-count=1 -n 'sleep 7' "$tmpdir/last/events" | cut -d: -f1)" -lt "$(grep --max-count=1 -n threads "$tmpdir/last/events" | cut -d: -f1)" ]] \
   || { echo "floor sleep did not come before the first thread read" >&2; exit 1; }
 
 # The deadline counts from checks green, so the floor uses up part of it: 20 s floor + one 15 s poll.
