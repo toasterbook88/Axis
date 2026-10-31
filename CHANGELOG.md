@@ -35,7 +35,8 @@
     so a hub bound by its logical name is checked instead of reported healthy.
   * A hub without `node:` at a private address is no longer assumed to be on
     this machine; its upstreams are left unchecked unless the URL names this
-    machine.
+    machine (loopback, a local address, or the exact hostname: a qualified
+    name sharing only a first label does not count).
   * An `api_base` with an API prefix other than `/v1` (such as `/api`) is
     listed at `<api_base>/models` after a 404 at `/v1/models`.
   * A model with a deployment that has no `api_base` (a provider default) is

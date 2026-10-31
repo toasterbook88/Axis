@@ -108,7 +108,7 @@ func hubOnThisMachine(b config.AIBackendConfig, nodes *config.Config) bool {
 	if err != nil || u.Hostname() == "" {
 		return false
 	}
-	return models.IsLocalConfig("", u.Hostname(), "")
+	return models.IsLocalHost(u.Hostname())
 }
 
 // statusError is a non-2xx HTTP answer.
