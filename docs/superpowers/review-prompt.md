@@ -83,8 +83,8 @@ Verdict: approve | approve-with-changes | revise
 ```
 
 Then list each finding with its resolution, `fixed in <commit>` or `declined: <reason>, <the command
-or test run that supports declining>`, and each question as `became F<n>` or `open: <why not
-probed>`. A decline without a run is not a resolution. Copy declines and open questions into the PR
+or test run that supports declining>`, and each question as `became F<n>`, `verified: <how>` or
+`open: <why not probed>`. A decline without a run is not a resolution. Copy declines and open questions into the PR
 body.
 
 ## Why this prompt

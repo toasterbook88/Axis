@@ -183,6 +183,6 @@ Only the maintainer can waive this, in writing on the PR.
 
 Every PR, feature or exempt: resolve each review finding, review-bot findings included, as `fixed in
 <commit>` or `declined: <reason>, <the run that supports it>`; close each reviewer question as a
-finding or as `open: <why not probed>`; list declines and open questions in the PR body. Do not merge
+finding, `verified: <how>` or `open: <why not probed>`; list declines and open questions in the PR body. Do not merge
 while a requested review is pending. `hack/pr-review-cycle.sh` does not check pending review requests
 yet, so confirm with `gh pr view <PR> --json reviewRequests`.

@@ -1,7 +1,7 @@
 # `hack/verify-specs.go`: check that specs carry their reviews
 
-Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after a `revise` spec review;
-awaiting a second spec review. Merges after #588.
+Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after two `revise` spec reviews;
+awaiting a third. Merges after #588.
 
 ## Problem
 
@@ -22,7 +22,8 @@ A record a script cannot read cannot be held to the rule, and drift starts with 
 - The three specs that predate the format, by name (see Design): the two on `main` at Base and #585's.
 - Linking PRs to specs, deciding whether a PR is a feature, or counting diff reviews against the §8
   larger-feature threshold (that needs the PR's diff).
-- Commit references: a bare `Fixed` is accepted, not only `fixed in <commit>`.
+- Commit references: a bare `Fixed` is accepted, not only `fixed in <commit>`. The content of a
+  decline (the run that supports it) is not checked either.
 
 ## Design
 
@@ -34,23 +35,30 @@ Each is checked unless it is on a fixed grandfather list in the script:
 `2026-10-09-model-discovery-design.md`, `2026-10-19-axis-start-screen-design.md` and
 `2026-10-30-import-direction-check-design.md`. A date cutoff would let a backdated name escape.
 
-Lines inside fenced code blocks are ignored, so a spec can show an example record. Within
-`## Review`:
+Lines inside fenced code blocks are ignored, so a spec can show an example record; a fence left open
+at the end of the file fails, naming its opening line. Rule 1 applies to the whole file; rules 2 to 4
+apply within `## Review`:
 
 1. **Sections.** `## Problem`, `## Non-goals`, `## Design`, `## Alternatives`, `## Research` and
    `## Review` headings are present.
 2. **Blocks.** A block starts at a `Kind:` line and runs to the next `Kind:` line or the end of the
    section. Its header is the lines before its first item; it must contain exactly one each of
-   `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (7 to 40 hex characters,
-   first word), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`, `approve-with-changes` or
-   `revise`, first word). Other header lines, such as continuations of `Model:`, are allowed.
-3. **Order.** At least one `spec` block. The last `spec` block and the last `diff` block, if any, do
-   not have `Verdict: revise`.
+   `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each 7 to 40 hex
+   characters, first word), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`,
+   `approve-with-changes` or `revise`, first word). Other header lines, such as continuations of
+   `Model:`, are allowed. Findings in a block are numbered 1, 2, 3 ... without a restart: a second
+   `1.` means a new review written without its own `Kind:` block, and fails. A line starting
+   `F<n>` (the raw reviewer format) fails: findings are copied into `N.` items.
+3. **Order.** At least one `spec` block. A later block of a kind supersedes earlier ones (a `revise`
+   is followed by a re-review), so the last `spec` block and the last `diff` block, if any, do not
+   have `Verdict: revise`.
 4. **Items.** A finding is a line starting `N.` in a block; a question is a line starting `- ` after a
    `Questions:` line in the block. Each item runs until a blank line, the next item, `Questions:`
-   or `Kind:`, so a resolution on a continuation line counts. Matching is case-insensitive: every
-   finding contains `fixed` or `declined:`; every question contains `became`, `open:` or
-   `verified`, the words AGENTS.md §8 and `review-prompt.md` use.
+   or `Kind:`, so a resolution on a continuation line counts. A status is a marker at the start of
+   the item text or of a clause (after `.`, `;`, `:` or `?`), matched case-insensitively, so a
+   finding that merely mentions a "fixed timeout" does not count: every finding has `fixed` or
+   `declined:`; every question has `became`, `open:` or `verified:`, the statuses AGENTS.md §8 and
+   `review-prompt.md` define (this PR adds `verified:` to both).
 5. **Output.** Each problem names the file, line and rule; the exit code is 1 when any exist, else
    the script prints `specs passed: N checked, M grandfathered`.
 
@@ -68,8 +76,11 @@ failure has a case: a missing section, a block missing each field, a bad `Kind`,
 or `Head`, a duplicate field, no spec block, the last spec block `revise`, the last diff block
 `revise`, a finding without a resolution, a question without a status. Plus: a resolution on a
 continuation line passes; an unindented `Model:` continuation passes; lowercase `open:` and
-`declined:` and capitalised `Fixed` pass; a `Kind:` line inside a fenced example is ignored; and
-its own CI wiring.
+`declined:` and capitalised `Fixed` pass; a `Kind:` line inside a fenced example is ignored; an
+unclosed fence fails; a bad `Base` fails; a restarted `1.` after a block's findings (prose review
+appended) fails even when its items say "Fixed"; an `F1 [major]` line fails; a finding whose text
+only mentions "fixed" in passing fails; a question that only mentions "verified" fails; and its own
+CI wiring.
 
 ## Alternatives
 
@@ -122,3 +133,27 @@ Questions:
   both; Research reworded.
 - `Kind:` inside a fenced example. Became Design: fenced lines are ignored; test.
 - Two diff reviews for a larger feature. Became a non-goal: it needs the PR's diff.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 5c9975b5
+Head: 238d889e
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: a prose review appended after a block, or findings in the `F1` format, passed unchecked.
+   Fixed: findings are numbered without a restart and `F<n>` lines fail (Design 2); tests with the
+   real d6d2773f shape (items saying "Fixed") and an `F1` block.
+2. Major: a status keyword anywhere in an item counted. Fixed: a status is a marker at the start of
+   the item or a clause (Design 4); failing fixtures with "fixed" and "verified" used in passing.
+3. Minor: an unclosed fence hid everything after it. Fixed: it fails, naming its opening line; test.
+4. Minor: `verified` was not a status AGENTS.md §8 or the prompt defines. Fixed: this PR adds
+   `verified: <how>` to both.
+5. Minor: `Base:` had no format check. Fixed: same rule as `Head:`; test.
+
+Questions:
+- Does "last diff block" stand for every current diff review? Became Design 3: a later block of a
+  kind supersedes earlier ones; counting two diff reviews stays a non-goal.
+- A bare `declined:` passes. Became a non-goal: the content of a decline is not checked.
+- Rule 1's scope was worded under "Within `## Review`". Became Design wording: rule 1 is file-wide.
