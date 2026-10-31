@@ -6,12 +6,19 @@
 # without fail-open check parsing and without auto-merge.
 #
 # Usage:
-#   ./hack/pr-review-cycle.sh <pr-number> [--wait-bots SEC]
+#   ./hack/pr-review-cycle.sh <pr-number> [--wait-bots SEC] [--wait-reviews SEC]
+#                             [--allow-pending LOGIN]...
+#
+#   --wait-bots SEC      minimum wait after checks go green, for bots nobody requested (default 120)
+#   --wait-reviews SEC   how long to wait for requested reviews, counted from when checks go green
+#                        (default 1200); 0 checks once
+#   --allow-pending LOGIN  do not wait for this reviewer (it will not answer); printed as a waiver
 #
 # Exit codes:
-#   0  required checks green; no unresolved threads (operator may still evaluate)
+#   0  required checks green; no pending requested review; no unresolved threads
 #   1  tool failure, timeout, or required checks not green
 #   2  checks green but unresolved review threads remain (judgment needed)
+#   3  a requested review is still pending (the list is printed); do not merge
 #
 # Does NOT: auto-patch, auto-reply, auto-resolve, or merge.
 # Bot comments are advisory; evaluate credibility before applying.
@@ -55,19 +62,217 @@ require_clean_merge_state() {
   fi
 }
 
+now_epoch() { date +%s; }
+
+# pending_reviewers reads one requested-review GraphQL response on stdin and prints
+# "login<TAB>requested-at" for each requested reviewer that has not answered: one still in
+# reviewRequests, or one whose latest request has no later review or removal (a reviewer can leave
+# reviewRequests when it starts, before it submits). It fails on a response of the wrong shape, so
+# an API error never reads as "nothing pending".
+pending_reviewers() {
+  local json
+  json="$(cat)" || return 1
+  printf '%s\n' "$json" | jq -e '
+    (.data.repository.pullRequest.reviewRequests.nodes | type == "array")
+    and (.data.repository.pullRequest.timelineItems.nodes | type == "array")' >/dev/null 2>&1 \
+    || return 1
+  if printf '%s\n' "$json" | jq -e '.data.repository.pullRequest.timelineItems.pageInfo.hasPreviousPage == true' \
+    >/dev/null 2>&1; then
+    echo "error: more than 100 review timeline events; cannot verify pending reviews" >&2
+    return 1
+  fi
+  printf '%s\n' "$json" | jq -r '
+    def norm: sub("\\[bot\\]$"; "");
+    .data.repository.pullRequest as $pr
+    | $pr.timelineItems.nodes as $ev
+    | ([$pr.reviewRequests.nodes[].requestedReviewer
+        | if . == null then {login: "?unknown", at: "requested"}
+          elif .__typename == "Team" then {login: ("@" + (.name // "team")), at: "requested"}
+          elif (.login // null) == null then {login: ("?" + (.__typename // "unknown")), at: "requested"}
+          else {login: (.login | norm), at: "requested"} end]
+      + [range(0; $ev | length) as $i
+        | $ev[$i]
+        | select(.__typename == "ReviewRequestedEvent" and .requestedReviewer.__typename != "Team")
+        | (if .requestedReviewer == null then "?unknown"
+           elif (.requestedReviewer.login // null) == null then "?" + (.requestedReviewer.__typename // "unknown")
+           else .requestedReviewer.login | norm end) as $l
+        | select([$ev[$i + 1:][]
+            | select((.__typename == "PullRequestReview" and .submittedAt != null
+                and ((.author.login // "") | norm) == $l)
+              or (.__typename == "ReviewRequestRemovedEvent"
+                and ((.requestedReviewer.login // "") | norm) == $l))] | length == 0)
+        | {login: $l, at: .createdAt}])
+    | group_by(.login)
+    | map({login: .[0].login, at: ([.[].at | select(. != "requested")] | first // "requested")})
+    | .[]
+    | "\(.login)\t\(.at)"' || return 1
+}
+
+fetch_pending_json() {
+  local reviewer='requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { name } }'
+  gh api graphql -f query="
+query {
+  repository(owner: \"$repo_owner\", name: \"$repo_name\") {
+    pullRequest(number: ${PR}) {
+      reviewRequests(first: 100) { nodes { $reviewer } }
+      timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, PULL_REQUEST_REVIEW]) {
+        pageInfo { hasPreviousPage }
+        nodes {
+          __typename
+          ... on ReviewRequestedEvent { createdAt $reviewer }
+          ... on ReviewRequestRemovedEvent { createdAt $reviewer }
+          ... on PullRequestReview { id submittedAt author { login } }
+        }
+      }
+    }
+  }
+}"
+}
+
+# read_pending prints the pending reviewers not waived with --allow-pending and records waivers.
+# Every step checks its own status: set -e does not apply inside a caller's || or $(...).
+read_pending() {
+  local json all login at
+  json="$(fetch_pending_json)" || { echo "error: unable to read requested reviews for PR #${PR}" >&2; return 1; }
+  printf '%s\n' "$json" >"$scratch/pending-json" \
+    || { echo "error: unable to save the requested-review response for PR #${PR}" >&2; return 1; }
+  all="$(printf '%s\n' "$json" | pending_reviewers)" \
+    || { echo "error: malformed requested-review response for PR #${PR}" >&2; return 1; }
+  local waived allowed
+  while IFS=$'\t' read -r login at; do
+    [[ -n "$login" ]] || continue
+    waived=0
+    for allowed in "${ALLOW_PENDING[@]}"; do
+      [[ "$allowed" == "$login" ]] && waived=1
+    done
+    if ((waived)); then
+      printf '%s\n' "$login" >>"$scratch/waivers" || return 1
+    else
+      printf '%s\t%s\n' "$login" "$at"
+    fi
+  done <<<"$all"
+}
+
+# print_new_waivers prints each waived reviewer once, however many reads recorded it.
+print_new_waivers() {
+  local login
+  sort -u "$scratch/waivers" | while read -r login; do
+    grep -qxF -- "$login" "$scratch/printed" 2>/dev/null && continue
+    echo "waived pending review: $login"
+    printf '%s\n' "$login" >>"$scratch/printed"
+  done
+}
+
+fetch_thread_json() {
+  gh api graphql --paginate -f query="
+query(\$endCursor: String) {
+  repository(owner: \"$repo_owner\", name: \"$repo_name\") {
+    pullRequest(number: ${PR}) {
+      reviewThreads(first: 100, after: \$endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          isResolved
+          isOutdated
+          path
+          comments(first: 50) {
+            nodes {
+              author { login }
+              body
+              createdAt
+              outdated
+              url
+              originalCommit { oid }
+              commit { oid }
+            }
+          }
+        }
+      }
+      reviews(first: 50) {
+        nodes {
+          id
+          author { login }
+          state
+          body
+          submittedAt
+          commit { oid }
+        }
+      }
+      latest: reviews(last: 5) { nodes { id submittedAt } }
+      comments(first: 50) {
+        nodes {
+          author { login }
+          body
+          createdAt
+        }
+      }
+    }
+  }
+}"
+}
+
+# read_threads fetches review threads and fails closed on a response of the wrong shape: a
+# missing connection would otherwise render as no threads and count as zero unresolved.
+read_threads() {
+  local json
+  json="$(fetch_thread_json)" || { echo "error: unable to read review threads for PR #${PR}" >&2; return 1; }
+  printf '%s\n' "$json" | jq -se 'length > 0 and all(.[]; (.data.repository.pullRequest.reviewThreads.nodes | type == "array")
+    and (.data.repository.pullRequest.reviews.nodes | type == "array"))' >/dev/null 2>&1 \
+    || { echo "error: malformed review-thread response for PR #${PR}" >&2; return 1; }
+  printf '%s\n' "$json"
+}
+
+# newest_review_at prints the newest submitted review time seen in a thread read.
+newest_review_at() {
+  jq -rs '[.[] | .. | objects | select(has("submittedAt")) | .submittedAt | select(. != null)] | max // ""'
+}
+
+# submitted_review_ids prints the sorted IDs of submitted reviews in a thread read.
+submitted_review_ids() {
+  jq -rs '[.[] | .. | objects | select(has("submittedAt") and .submittedAt != null) | .id] | unique | .[]'
+}
+
+# unseen_reviews <since> <thread-json-file> <pending-json-file> prints the IDs of submitted reviews
+# in the pending read, at or after <since>, that the thread read did not include. Reviews can share
+# a submittedAt, so a timestamp alone cannot tell a new review from one already read.
+unseen_reviews() {
+  jq -rn --arg since "$1" --slurpfile threads "$2" --slurpfile pending "$3" '
+    [$threads[] | .. | objects | select(has("submittedAt") and .submittedAt != null) | .id] as $seen
+    | $pending[].data.repository.pullRequest.timelineItems.nodes[]
+    | select(.__typename == "PullRequestReview" and .submittedAt != null and .submittedAt >= $since)
+    | .id as $id | select($seen | any(. == $id) | not) | $id // "?"'
+}
+
+# review_is_fresh succeeds when the newest review was submitted under 60 s ago: its inline
+# comments may not have reached reviewThreads yet.
+review_is_fresh() {
+  jq -e --argjson now "$(now_epoch)" '
+    [.. | .latest?.nodes[]?.submittedAt | select(. != null)] | last
+    | . != null and ($now - fromdateiso8601) < 60' >/dev/null 2>&1
+}
+
 main() {
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <pr-number> [--wait-bots SEC]" >&2
+  echo "Usage: $0 <pr-number> [--wait-bots SEC] [--wait-reviews SEC] [--allow-pending LOGIN]..." >&2
   exit 1
 fi
 
 PR="$1"
 shift
 WAIT_BOTS=120
+WAIT_REVIEWS=1200
+ALLOW_PENDING=()
 while (($# > 0)); do
   case "$1" in
     --wait-bots)
       WAIT_BOTS="$2"
+      shift 2
+      ;;
+    --wait-reviews)
+      WAIT_REVIEWS="$2"
+      shift 2
+      ;;
+    --allow-pending)
+      ALLOW_PENDING+=("${2%\[bot\]}")
       shift 2
       ;;
     --merge)
@@ -86,6 +291,13 @@ if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
   echo "error: PR number must be an integer, got: $PR" >&2
   exit 1
 fi
+if ! [[ "$WAIT_BOTS" =~ ^[0-9]+$ && "$WAIT_REVIEWS" =~ ^[0-9]+$ ]]; then
+  echo "error: --wait-bots and --wait-reviews take whole seconds" >&2
+  exit 1
+fi
+scratch="$(mktemp -d)"
+trap 'rm -f "$scratch/waivers" "$scratch/printed" "$scratch/pending-json" "$scratch/thread-json"; rmdir "$scratch"' EXIT
+: >"$scratch/waivers"
 
 for dep in gh jq; do
   if ! command -v "$dep" >/dev/null 2>&1; then
@@ -154,55 +366,43 @@ if [[ ${#REQUIRED_CHECKS[@]} -gt 0 ]]; then
   echo "required checks: green"
 fi
 
-echo "== Bot SLA wait (${WAIT_BOTS}s; not a quality gate) =="
+checks_green_at="$(now_epoch)"
+echo "== Bot floor wait (${WAIT_BOTS}s, for bots nobody requested; not a quality gate) =="
 sleep "$WAIT_BOTS"
+
+echo "== Requested reviews (wait up to ${WAIT_REVIEWS}s from checks green) =="
+while :; do
+  pending="$(read_pending)" || exit 1
+  [[ -z "$pending" ]] && break
+  (( $(now_epoch) - checks_green_at >= 10#$WAIT_REVIEWS )) && break
+  sleep 15
+done
+print_new_waivers
+if [[ -n "$pending" ]]; then
+  printf '%s\n' "$pending" | while IFS=$'\t' read -r login at; do echo "pending: $login (requested $at)"; done
+else
+  echo "requested reviews: none pending"
+fi
 
 head_oid="$(echo "$pr_json" | jq -r .headRefOid)"
 echo "== Review state (head ${head_oid:0:7}) =="
 
 # Review thread state via GraphQL with pagination support (up to 100 items/page).
-thread_json="$(gh api graphql --paginate -f query="
-query(\$endCursor: String) {
-  repository(owner: \"$repo_owner\", name: \"$repo_name\") {
-    pullRequest(number: ${PR}) {
-      reviewThreads(first: 100, after: \$endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          isResolved
-          isOutdated
-          path
-          comments(first: 50) {
-            nodes {
-              author { login }
-              body
-              createdAt
-              outdated
-              url
-              originalCommit { oid }
-              commit { oid }
-            }
-          }
-        }
-      }
-      reviews(first: 50) {
-        nodes {
-          author { login }
-          state
-          body
-          submittedAt
-          commit { oid }
-        }
-      }
-      comments(first: 50) {
-        nodes {
-          author { login }
-          body
-          createdAt
-        }
-      }
-    }
-  }
-}")"
+thread_json="$(read_threads)" || exit 1
+if printf '%s\n' "$thread_json" | review_is_fresh; then
+  # Inline comments can reach reviewThreads after their review; read once more.
+  ids_before="$(printf '%s\n' "$thread_json" | submitted_review_ids)" || exit 1
+  sleep 10
+  thread_json="$(read_threads)" || exit 1
+  ids_after="$(printf '%s\n' "$thread_json" | submitted_review_ids)" || exit 1
+  if [[ "$ids_after" != "$ids_before" ]]; then
+    echo "error: a review was submitted during this run (while its threads settled); re-run" >&2
+    exit 1
+  fi
+fi
+threads_seen_through="$(printf '%s\n' "$thread_json" | newest_review_at)"
+printf '%s\n' "$thread_json" >"$scratch/thread-json" \
+  || { echo "error: unable to save the review-thread response for PR #${PR}" >&2; exit 1; }
 
 echo "--- Review bodies ---"
 echo "$thread_json" | render_review_bodies
@@ -224,11 +424,29 @@ echo "  3. Reply on threads; resolve only after handling."
 echo "  4. Merge manually when green: gh pr merge ${PR} --squash"
 echo "  This script will not merge."
 
+if [[ -n "$pending" ]]; then
+  echo "error: requested review still pending after ${WAIT_REVIEWS}s; do not merge (re-run later, or --allow-pending LOGIN)" >&2
+  exit 3
+fi
 if [[ "$unresolved" != "0" ]]; then
   exit 2
 fi
 # Re-read at enforcement: the bot wait and review collection take minutes,
-# and an earlier CLEAN must not pass a PR whose base or head has moved since.
+# and an earlier CLEAN must not pass a PR whose base or head has moved, or
+# that gained a review request, since.
+pending="$(read_pending)" || exit 1
+print_new_waivers
+unseen="$(unseen_reviews "$threads_seen_through" "$scratch/thread-json" "$scratch/pending-json")" \
+  || { echo "error: unable to compare reviews with the thread read for PR #${PR}" >&2; exit 1; }
+if [[ -n "$unseen" ]]; then
+  echo "error: a review was submitted during this run ($(printf '%s' "$unseen" | tr '\n' ' ')); its threads were not read; re-run" >&2
+  exit 1
+fi
+if [[ -n "$pending" ]]; then
+  printf '%s\n' "$pending" | while IFS=$'\t' read -r login at; do echo "pending: $login (requested $at)"; done
+  echo "error: requested review still pending at the final re-read; do not merge" >&2
+  exit 3
+fi
 final_json="$(gh pr view "$PR" --json headRefOid,mergeStateStatus)"
 if [[ "$(echo "$final_json" | jq -r .headRefOid)" != "$head_oid" ]]; then
   echo "error: head moved during review (was ${head_oid:0:7}); re-run" >&2
