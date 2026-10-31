@@ -76,6 +76,12 @@ jobs:
       - name: Import tiers gate
         run: go run hack/verify-import-tiers.go
 
+      - name: Spec review records gate regression tests
+        run: ./hack/verify-specs-tests.sh
+
+      - name: Spec review records gate
+        run: go run hack/verify-specs.go
+
       - name: Repo truth guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

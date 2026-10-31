@@ -55,7 +55,7 @@ apply within `## Review`:
    `approve-with-changes` or `revise`). `Base`, `Head` and `Verdict` are checked on their first
    word, so `Verdict: approve-with-changes (six inline findings)` passes. Other header lines, such
    as continuations of `Model:`, are allowed, but a header line starting `- ` fails (a question
-   needs `Questions:`). Below the header, each paragraph (a run of non-blank lines) must start with
+   needs `Questions:`), and so does an item there (leave a blank line after the header). Below the header, each paragraph (a run of non-blank lines) must start with
    an item, a `Questions:` line (matched case-insensitively, so a copied `QUESTIONS:` works) or a
    closing note starting `Note:`; any other paragraph, such as a prose review appended after the
    block, fails, whether or not the block has findings. Items start at column 0 with `N. ` (digits, a

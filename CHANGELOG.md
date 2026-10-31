@@ -59,6 +59,14 @@
   layout now matches the code: `knowledge` is Layer 5, `reservation` and
   `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
   package-inventory check in `verify-doc-facts.sh` (#585).
+* `go run hack/verify-specs.go` fails CI when a feature spec in
+  `docs/superpowers/specs/` does not record its reviews as `AGENTS.md` §8
+  requires: required sections, one `Kind:` block per review with every field,
+  findings numbered without a restart, a status on every finding and question,
+  and no `revise` as the last spec or diff review. Prose reviews outside a block
+  fail. Three specs written before the format are named exceptions.
+  `verified: <how>` is now a question status in §8, the review prompt and the
+  PR template.
 
 ## v0.22.0 (2026-10-28)
 
