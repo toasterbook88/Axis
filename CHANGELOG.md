@@ -67,9 +67,12 @@
 
 * `docs/runbooks/resident-memory-services.md` explains how to keep a resident
   cache or scratch store's RAM cap out of placement with a node's
-  `system_reserve_mb`, which was undocumented. New tests pin the behaviour it
-  relies on: the cap is held out while the service is idle, its memory is not
-  counted twice once it fills, and `nodes.yaml`'s value reaches the facts.
+  `system_reserve_mb`, which was undocumented. The reserve is a ceiling on
+  AXIS's reservations, so it must cover all non-AXIS use at its peak (other use
+  plus the service's cap plus a margin), not only OS headroom. New tests pin
+  that the largest accepted task leaves room for the cap, that the reserve is
+  not subtracted from free RAM, that ranking ignores the reported eviction
+  floor, and that `nodes.yaml`'s value reaches the facts.
 
 ### Dependencies and CI
 

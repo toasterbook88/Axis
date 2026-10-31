@@ -18,35 +18,52 @@ For each node, placement computes a reservable budget:
 reservable = min(ram_free_mb, ram_total_mb - system_reserve_mb)
 ```
 
-A task is eligible on the node when the RAM already reserved by AXIS tasks plus the task's request
-fits in `reservable`; otherwise `axis placement explain` excludes the node with
+`ram_total_mb - system_reserve_mb` is a ceiling on everything AXIS reserves on the node. It is not
+subtracted from free RAM: when free RAM is below the ceiling, the budget is free RAM. A task is
+eligible when the RAM AXIS has already reserved there plus the task's request fits in
+`reservable`; otherwise `axis placement explain` excludes the node with
 `reservation cap exceeded: need …MB, have …MB reserved of …MB reservable`.
 
+Ranking uses the same budget minus AXIS's reservations. The `resources.ram_eviction_reserved_mb`
+and `resources.ram_allocatable_mb` fields in `axis status` JSON also subtract an eviction floor of
+512 MB or 5 % of total RAM; they are reported figures, and placement does not apply that floor.
+
 `system_reserve_mb` comes from the node's entry in `~/.axis/nodes.yaml`. When it is unset or 0,
-AXIS keeps 1024 MB back (`models.MinimumSystemReserveMB`). The ranking metric `allocatable_ram`
-also subtracts the system reserve, plus an eviction floor of 512 MB or 5 % of total RAM,
-whichever is larger.
+AXIS keeps 1024 MB back (`models.MinimumSystemReserveMB`). On Linux, `ram_free_mb` is
+`MemAvailable`.
 
 ## Hold the cap out
 
-Set the node's `system_reserve_mb` to the headroom you want for the operating system plus the
-service's cap:
+Because the reserve is a ceiling on AXIS's share, it has to cover everything that is not an AXIS
+task at its peak, not only operating-system headroom. Measure with no AXIS tasks running:
+
+```text
+system_reserve_mb = (ram_total_mb - ram_free_mb)   # everything in use now
+                  - service_now_mb                 # the service's current size
+                  + service_cap_mb                 # the size it may grow to
+                  + margin_mb                      # growth of everything else
+```
+
+For a 16384 MB node with 14000 MB free while a cache with a 3072 MB cap is empty, other use is
+2384 MB. With a 512 MB margin the reserve is 5968 MB:
 
 ```yaml
 nodes:
   - name: node-a
     hostname: node-a.example.com
     ssh_user: user
-    # 1024 MB for the OS + a 3072 MB cache cap
-    system_reserve_mb: 4096
+    system_reserve_mb: 5968   # 2384 other use + 3072 cache cap + 512 margin
 ```
 
-On a 16384 MB node with 14000 MB free, the reservable budget drops from 14000 MB to
-12288 MB, so the cache's cap is never promised to a task.
+AXIS then reserves at most 10416 MB on the node. With the largest task it accepts, the cache at
+its cap and other use unchanged, the node holds 2384 + 10416 + 3072 = 15872 MB, under its
+16384 MB.
 
-The reserve does not count the service twice. When the cache fills its cap, that memory is no
-longer free, and `min` picks the lower free figure: with 10928 MB free, the budget is 10928 MB,
-not 10928 MB minus the cap again.
+Reserving only 1024 MB of OS headroom plus the cap (4096 MB) is not enough here: AXIS would accept
+a 12288 MB task, and with the cache full the node would need 17744 MB.
+
+Re-measure when the node's other workload changes. The margin covers its normal variation, not a
+new service.
 
 The change takes effect at the next snapshot: `axis status --live` reads `nodes.yaml` directly, and
 the daemon reloads it on every refresh, so it needs no restart.
@@ -59,16 +76,19 @@ reserve is wrong and the node can still run out of memory. Enforce the cap in th
 under systemd also with `MemoryMax=` (a hard limit) and `MemoryHigh=` (a throttling point) on its
 unit, set at or a little above the cap you reserved.
 
+The reserve also bounds what AXIS reserves, not what a task uses: a task that uses more than its
+request can still crowd the service.
+
 ## Check it
 
 ```bash
 axis status --live --format json \
-  | jq '.snapshot.nodes[] | {name, reserve: .resources.ram_system_reserved_mb, free: .resources.ram_free_mb}'
+  | jq '.snapshot.nodes[] | {name, reserve: .resources.ram_system_reserved_mb, free: .resources.ram_free_mb, budget: .ram_allocatable_mb}'
 axis placement explain "<task intent>" --live
 ```
 
-The first shows the reserve AXIS applied to each node. The second lists excluded nodes with the
-reservable figure they were judged against.
+The first shows the reserve AXIS applied to each node and the remaining budget placement ranks
+on. The second lists excluded nodes with the reservable figure they were judged against.
 
 ## What AXIS does and does not know
 
@@ -76,6 +96,11 @@ AXIS knows only the number you configure. It does not observe the service, its c
 use, so if the cap changes, update `nodes.yaml`. What the service stores is not cluster truth:
 AXIS does not read it, and nothing in it can override `axis facts` or `axis status`.
 
-Tests: `internal/placement/resident_service_test.go` (held-out cap, no double count, reservation
-budget) and `TestDiscoverCopiesSystemReserveIntoFacts` in `internal/discovery/discovery_test.go`
-(`nodes.yaml` to facts).
+Tests:
+- `internal/placement/resident_service_test.go`: the largest accepted task leaves room for the cap;
+  a reserve without other use overflows; the reserve is a ceiling, not a deduction; reservations
+  share the ceiling.
+- `TestApplyReservationEntriesRankingFigureIgnoresEvictionFloor` in
+  `internal/snapshotview/overlay_test.go`: the ranking figure.
+- `TestDiscoverCopiesSystemReserveIntoFacts` in `internal/discovery/discovery_test.go`: `nodes.yaml`
+  to facts.
