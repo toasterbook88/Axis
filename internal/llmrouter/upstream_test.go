@@ -207,3 +207,134 @@ func TestResolveRole_PeerHubIsNotChecked(t *testing.T) {
 		t.Fatalf("want a not-checked note: %v", dec.Reasoning)
 	}
 }
+
+// fakeHubInfo is a LiteLLM hub that lists model "m" and returns entries as
+// its /model/info data, for deployment shapes fakeHub cannot express.
+func fakeHubInfo(t *testing.T, entries ...map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+		case "/model/info":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": entries})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func deployment(apiBase string) map[string]any {
+	params := map[string]any{"model": "openai/m"}
+	if apiBase != "" {
+		params["api_base"] = apiBase
+	}
+	return map[string]any{"model_name": "m", "litellm_params": params}
+}
+
+// redirectTransport sends requests for host to target, so a test hub can
+// stand in for one on another machine.
+type redirectTransport struct{ host, target string }
+
+func (rt redirectTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Host == rt.host {
+		r = r.Clone(r.Context())
+		r.URL.Host = rt.target
+		r.Host = rt.target
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// An unbound hub at a private address can be another machine on the LAN. Its
+// api_base values are relative to that machine, so they are not dialed from here.
+func TestResolveRole_UnboundLANHubIsNotChecked(t *testing.T) {
+	hub := fakeHubInfo(t, deployment(deadUpstream(t)))
+	const lanHost = "10.254.0.7:4000"
+	cfg := hubConfig([]string{"hub"},
+		config.AIBackendConfig{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: "http://" + lanHost + "/v1"},
+	)
+	client := &http.Client{Transport: redirectTransport{host: lanHost, target: strings.TrimPrefix(hub.URL, "http://")}}
+	dec, err := llmrouter.ResolveRole(context.Background(), cfg, llmrouter.ResolveRoleOptions{
+		Role: "fast", HTTPClient: client, RequireModelListed: true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveRole: %v; reasoning=%v", err, dec.Reasoning)
+	}
+	if !dec.Healthy || len(dec.Upstreams) != 0 {
+		t.Fatalf("LAN hub's upstreams were dialed from here: %+v", dec)
+	}
+	if !strings.Contains(strings.Join(dec.Reasoning, " "), "upstream not checked") {
+		t.Fatalf("want a not-checked note: %v", dec.Reasoning)
+	}
+}
+
+// An api_base with a non-/v1 API prefix lists models at <api_base>/models.
+func TestResolveRole_UpstreamWithNonV1PrefixIsChecked(t *testing.T) {
+	prefixed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	t.Cleanup(prefixed.Close)
+	hub := fakeHubInfo(t, deployment(prefixed.URL+"/api"))
+	cfg := hubConfig([]string{"hub"},
+		config.AIBackendConfig{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: hub.URL + "/v1"},
+	)
+	dec, err := resolveFast(t, cfg, true)
+	if err != nil {
+		t.Fatalf("ResolveRole: %v; reasoning=%v", err, dec.Reasoning)
+	}
+	if len(dec.Upstreams) != 1 || !dec.Upstreams[0].OK {
+		t.Fatalf("upstreams=%+v want one passed check", dec.Upstreams)
+	}
+}
+
+// An Ollama-style root api_base (LiteLLM's documented form) serves /v1/models
+// only, so the /v1 form stays the first request.
+func TestResolveRole_RootUpstreamUsesV1Models(t *testing.T) {
+	var paths []string
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	t.Cleanup(ollama.Close)
+	hub := fakeHubInfo(t, deployment(ollama.URL))
+	cfg := hubConfig([]string{"hub"},
+		config.AIBackendConfig{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: hub.URL + "/v1"},
+	)
+	dec, err := resolveFast(t, cfg, true)
+	if err != nil {
+		t.Fatalf("ResolveRole: %v; reasoning=%v", err, dec.Reasoning)
+	}
+	if len(dec.Upstreams) != 1 || !dec.Upstreams[0].OK || len(paths) != 1 {
+		t.Fatalf("upstreams=%+v paths=%v want one passed check at /v1/models", dec.Upstreams, paths)
+	}
+}
+
+// A deployment without api_base uses its provider's default endpoint, which
+// this check cannot see, so a dead custom deployment beside it is not a verdict.
+func TestResolveRole_DeploymentWithoutAPIBaseMakesCheckInconclusive(t *testing.T) {
+	hub := fakeHubInfo(t, deployment(deadUpstream(t)), deployment(""))
+	cfg := hubConfig([]string{"hub"},
+		config.AIBackendConfig{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: hub.URL + "/v1"},
+	)
+	dec, err := resolveFast(t, cfg, true)
+	if err != nil {
+		t.Fatalf("ResolveRole: %v; reasoning=%v", err, dec.Reasoning)
+	}
+	if !dec.Healthy {
+		t.Fatalf("hub rejected though one deployment was not checked: %+v", dec)
+	}
+	reasoning := strings.Join(dec.Reasoning, " ")
+	if !strings.Contains(reasoning, "upstream not checked") || !strings.Contains(reasoning, "1 deployment") {
+		t.Fatalf("want a not-checked note naming the unchecked deployment: %v", dec.Reasoning)
+	}
+}
