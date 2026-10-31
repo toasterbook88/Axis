@@ -29,6 +29,18 @@
 
 ### Fixes
 
+* Two AXIS processes granting or releasing leases at the same time no longer
+  lose or overcount each other's reservations. Each ledger admitted against
+  the entries it had loaded earlier (`axis task run` at start, the daemon at
+  its last refresh) and then wrote its whole copy back, so a concurrent lease
+  could be admitted over the node's ceiling, and a write could erase another
+  process's lease or bring back one it had released. `Reserve`, `Release`,
+  `Heartbeat` and `Reclaim` now re-read the ledger file under the file lock
+  before changing it. Releasing a lease that another process already removed
+  is no longer an error, even after a heartbeat in between. A lease whose
+  write to disk fails is now refused and rolled back instead of being
+  reported as granted. A ledger file with a null entry is rejected by every
+  reader instead of panicking with the ledger locked.
 * Leases granted outside the daemon now respect each node's
   `system_reserve_mb`. `axis task run`, the agent's execution path and the MCP
   lease tool built their reservation ledgers with node capacities only, so they

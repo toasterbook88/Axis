@@ -138,6 +138,11 @@ func DefaultLimits() Limits {
 	}
 }
 
+// grantedRetention is how long a ledger remembers a lease it granted after the
+// lease leaves the ledger file, so a late Release of a lease another process
+// removed still succeeds.
+const grantedRetention = time.Hour
+
 // Ledger is the central reservation accounting system.
 type Ledger struct {
 	mu      sync.RWMutex
@@ -148,6 +153,11 @@ type Ledger struct {
 
 	// nodeRAM maps node name → total RAM in MB (populated from snapshots).
 	nodeRAM map[string]int64
+
+	// granted holds the IDs this ledger reserved and has not released. A reload
+	// can drop one that another process removed; Release then treats it as
+	// already released rather than unknown.
+	granted map[string]time.Time
 
 	// nodeReserve maps node name → system reserve in MB (per-node override).
 	// When zero or missing, falls back to limits.SystemReserveMB.
@@ -178,6 +188,7 @@ func NewLedger(limits Limits, logger *slog.Logger) *Ledger {
 		logger:      logger.With("component", "reservation-ledger"),
 		nodeRAM:     make(map[string]int64),
 		nodeReserve: make(map[string]int64),
+		granted:     make(map[string]time.Time),
 		now:         time.Now,
 	}
 }
@@ -236,6 +247,9 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 			return nil, err
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			return nil, err
+		}
 	}
 
 	var snap []*Entry
@@ -313,6 +327,20 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		return nil, err
 	}
 
+	// An unwritten lease would vanish at the next reload while its task runs.
+	if err := l.writeSnapshot(snap); err != nil {
+		l.mu.Lock()
+		delete(l.entries, req.ID)
+		l.totalReserved -= req.RAMMB
+		l.reserveFailures++
+		l.mu.Unlock()
+		l.logger.Error("failed to persist ledger; reservation not granted", "id", req.ID, "error", err)
+		return nil, fmt.Errorf("reservation: persist ledger: %w", err)
+	}
+	l.mu.Lock()
+	l.granted[req.ID] = l.now()
+	l.mu.Unlock()
+
 	l.logger.Info("reservation created",
 		"id", req.ID,
 		"node", req.Node,
@@ -327,10 +355,6 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		"ram_mb": req.RAMMB,
 		"owner":  req.OwnerSurface,
 	})
-
-	if err := l.writeSnapshot(snap); err != nil {
-		l.logger.Error("failed to persist ledger", "error", err)
-	}
 	return result, nil
 }
 
@@ -338,6 +362,12 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 func (l *Ledger) Release(id string) error {
 	l.fileMu.Lock()
 	defer l.fileMu.Unlock()
+
+	l.mu.RLock()
+	_, inMemory := l.entries[id]
+	_, wasGranted := l.granted[id]
+	heldBefore := inMemory || wasGranted
+	l.mu.RUnlock()
 
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
@@ -347,25 +377,39 @@ func (l *Ledger) Release(id string) error {
 			return err
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			return err
+		}
 	}
 
 	var snap []*Entry
 	var released Entry
+	alreadyGone := false
 	err := func() error {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		e, ok := l.entries[id]
+		if !ok && heldBefore {
+			alreadyGone = true
+			delete(l.granted, id)
+			return nil
+		}
 		if !ok {
 			return fmt.Errorf("reservation: unknown entry %q", id)
 		}
 		l.totalReleased += e.RAMMB
 		released = *e
 		delete(l.entries, id)
+		delete(l.granted, id)
 		snap = l.snapshotEntriesLocked()
 		return nil
 	}()
 	if err != nil {
 		return err
+	}
+	if alreadyGone {
+		l.logger.Info("reservation already removed by another process", "id", id)
+		return nil
 	}
 
 	l.logger.Info("reservation released", "id", id, "node", released.Node, "ram_mb", released.RAMMB)
@@ -393,6 +437,9 @@ func (l *Ledger) Heartbeat(id string) error {
 			return err
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			return err
+		}
 	}
 
 	var snap []*Entry
@@ -428,6 +475,10 @@ func (l *Ledger) Reclaim() int {
 			return 0
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			l.logger.Error("failed to reload ledger for reclaim", "error", err)
+			return 0
+		}
 	}
 
 	l.mu.Lock()
@@ -471,6 +522,7 @@ func (l *Ledger) reclaimInMemoryLocked() (int, []repairs.RepairEvent) {
 		if liveness == LivenessExpired || liveness == LivenessStale {
 			l.totalReclaimed += e.RAMMB
 			delete(l.entries, id)
+			delete(l.granted, id)
 			reclaimed++
 			l.logger.Info("reservation reclaimed",
 				"id", id,

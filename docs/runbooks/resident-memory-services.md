@@ -29,11 +29,9 @@ is checked again when a task acquires its lease: the reservation ledger refuses 
 take the node's reservations over `ram_total_mb - system_reserve_mb`. It counts reservations
 against that ceiling, not free RAM.
 
-That second check is only as current as the ledger the process last loaded. The MCP lease tool
-reloads the ledger under its file lock before each lease. `axis task run`, the agent and the
-daemon's HTTP API admit against the copy they loaded earlier (at start, or at the daemon's last
-refresh), so two of them admitting at the same moment can together exceed the ceiling. Treat the
-ceiling as reliable for one admitting process at a time.
+Leases are granted one at a time under a file lock shared by every AXIS process on the machine,
+and each lease re-reads the ledger file under that lock, so a lease granted by the daemon, a CLI
+run or the MCP tool a moment earlier counts against the ceiling.
 
 Ranking uses the same budget minus AXIS's reservations. The `resources.ram_eviction_reserved_mb`
 and `resources.ram_allocatable_mb` fields in `axis status` JSON also subtract an eviction floor of
@@ -66,8 +64,7 @@ nodes:
     system_reserve_mb: 5968   # 2384 other use + 3072 cache cap + 512 margin
 ```
 
-AXIS then admits at most 10416 MB of reservations on the node, subject to the concurrency limit
-above. With the largest task it accepts, the cache at its cap and other use unchanged, the node
+AXIS then admits at most 10416 MB of reservations on the node. With the largest task it accepts, the cache at its cap and other use unchanged, the node
 holds 2384 + 10416 + 3072 = 15872 MB, under its 16384 MB.
 
 Reserving only 1024 MB of OS headroom plus the cap (4096 MB) is not enough here: AXIS would accept
@@ -118,3 +115,5 @@ Tests:
 - `TestLoadLiveLedgerHonorsNodeSystemReserve`, `TestLoadCachedLedgerHonorsNodeSystemReserve` and
   `TestPopulateLedgerCapacityAppliesNodeSystemReserve`: a second 6000 MB lease over the ceiling is
   refused on the in-process and MCP ledgers, not only the daemon's.
+- `internal/reservation/ledger_shared_test.go`: two ledgers on one file, standing in for two
+  processes, see and keep each other's leases.
