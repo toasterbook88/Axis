@@ -95,7 +95,7 @@ func TestPlaceTaskCmdRejectsMissingDisplayedSnapshot(t *testing.T) {
 
 func TestPlacementModalRendersAuthorityRequirementsAndRankOrder(t *testing.T) {
 	snapshot := &models.ClusterSnapshot{Nodes: []models.NodeFacts{
-		{Name: "node-a", ResidentModels: []models.ResidentModel{{Name: "model"}}, Resources: &models.Resources{GPUs: []models.GPUInfo{{Model: "GPU"}}}},
+		{Name: "node-a", ResidentModels: []models.ResidentModel{{Name: "model", State: models.ModelCatalogLoaded}}, Resources: &models.Resources{GPUs: []models.GPUInfo{{Model: "GPU"}}}},
 		{Name: "node-b"},
 	}}
 	modal := NewPlacementModal(snapshot, "daemon-cache", "9:41AM")
@@ -171,7 +171,7 @@ func TestPlaceTaskCmdPrependsSnapshotWarnings(t *testing.T) {
 		t.Fatalf("second reasoning = %q, want discovery warning second", reasoning[1])
 	}
 	// The 4-reason truncation in renderPlacementDecision must not drop the warnings.
-	out := stripANSI(renderPlacementDecision(PlacementModal{explanation: result.Explanation}, "", "", "", ""))
+	out := stripANSI(renderPlacementDecision(PlacementModal{explanation: result.Explanation}, "", "", "", "", 0))
 	if !strings.Contains(out, "cached snapshot is stale") || !strings.Contains(out, "node-b unreachable") {
 		t.Fatalf("rendered decision dropped warnings:\n%s", out)
 	}

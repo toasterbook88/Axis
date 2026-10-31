@@ -1,5 +1,29 @@
 ## Unreleased
 
+### Features
+
+* `axis tui` redesign. Every frame fits the terminal exactly at any size: the
+  node table drops low-priority columns on narrow terminals and scrolls when
+  there are more nodes than rows, and the inspector fills the remaining height.
+  The header shows reachable/total nodes, the snapshot's age (colored as it
+  goes stale), its source and the version. A summary strip shows cluster
+  memory and the warning count. Gauges show percentages. `?` opens a help
+  overlay. `g`/`G`, `tab`/`shift+tab` and page keys move faster. The placement
+  wizard is centered. Terminals without Unicode (`TERM=linux`, a C locale) get
+  a pure-ASCII frame.
+
+### Fixes
+
+* `axis tui` no longer shows cluster state the snapshot does not contain. The
+  link column names the observed network class (`relayed`, `vpn`, `unknown`,
+  `not observed`) instead of calling every non-Tailscale path `LAN`. The
+  Reservations tab shows the snapshot's reserved RAM instead of a hard-coded
+  "No active reservations". Unreachable nodes show their error instead of
+  empty gauges, and snapshot warnings and partial-probe reasons appear on the
+  node they concern.
+* `axis tui` no longer starts an extra 30 s refresh timer each time `r` is
+  pressed. Refresh ticks from a superseded cycle are dropped.
+
 ### Dependencies and CI
 
 * `go run hack/verify-import-tiers.go` fails CI when an `internal/` package
