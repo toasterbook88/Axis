@@ -1,7 +1,7 @@
 # `hack/verify-specs.go`: check that specs carry their reviews
 
-Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after two `revise` spec reviews;
-awaiting a third. Merges after #588.
+Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after three `revise` spec reviews;
+awaiting a fourth. Merges after #588.
 
 ## Problem
 
@@ -9,8 +9,8 @@ awaiting a third. Merges after #588.
 finding with its resolution. Nothing checks it. The first two specs written under §8 already drifted:
 
 - `2026-10-30-import-direction-check-design.md` (#585) records its first review without `Kind:` or
-  `Head:` and its six later reviews as prose paragraphs; it predates the block format (#586,
-  2026-10-31).
+  `Head:` and its six later reviews as prose paragraphs. Its reviews predate the block format
+  (#586, merged 2026-10-31), though #585 merged after it.
 - `2026-10-31-pr-review-pending-gate-design.md` (#588) recorded four reviews as blocks, then its
   fifth as prose, and left one question without a status. #588 has since fixed its own record.
 
@@ -19,7 +19,9 @@ A record a script cannot read cannot be held to the rule, and drift starts with 
 ## Non-goals
 
 - Judging review quality, or whether a fix is real. The check reads the record only.
-- The three specs that predate the format, by name (see Design): the two on `main` at Base and #585's.
+- Three specs, by name (see Design): the two on `main` at Base, which predate §8, and #585's, under a
+  §8 waiver the maintainer granted on 2026-10-31: its reviews were recorded before the block format
+  existed and some have no Head commit that could be filled in truthfully.
 - Linking PRs to specs, deciding whether a PR is a feature, or counting diff reviews against the §8
   larger-feature threshold (that needs the PR's diff).
 - Commit references: a bare `Fixed` is accepted, not only `fixed in <commit>`. The content of a
@@ -30,12 +32,14 @@ A record a script cannot read cannot be held to the rule, and drift starts with 
 `hack/verify-specs.go`, `//go:build ignore`, standard library only, run as `go run
 hack/verify-specs.go` from the module root, like `hack/lifecycle-check.go` and
 `hack/verify-import-tiers.go`. Every file in `docs/superpowers/specs/` must be named
-`YYYY-MM-DD-<topic>-design.md`; any other file fails, so a spec cannot escape the check by its name.
+`YYYY-MM-DD-<topic>-design.md`; any other file or a subdirectory fails, so a spec cannot escape the
+check by its name or location.
 Each is checked unless it is on a fixed grandfather list in the script:
 `2026-10-09-model-discovery-design.md`, `2026-10-19-axis-start-screen-design.md` and
 `2026-10-30-import-direction-check-design.md`. A date cutoff would let a backdated name escape.
 
-Lines inside fenced code blocks are ignored, so a spec can show an example record; a fence left open
+A feature spec fails until its first approving spec review is recorded; that is intended, since
+§8 lets code start only then. Lines inside fenced code blocks are ignored, so a spec can show an example record; a fence left open
 at the end of the file fails, naming its opening line. Rule 1 applies to the whole file; rules 2 to 4
 apply within `## Review`:
 
@@ -46,19 +50,24 @@ apply within `## Review`:
    `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each 7 to 40 hex
    characters, first word), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`,
    `approve-with-changes` or `revise`, first word). Other header lines, such as continuations of
-   `Model:`, are allowed. Findings in a block are numbered 1, 2, 3 ... without a restart: a second
-   `1.` means a new review written without its own `Kind:` block, and fails. A line starting
-   `F<n>` (the raw reviewer format) fails: findings are copied into `N.` items.
+   `Model:`, are allowed, but a header line starting `- ` fails (a question needs `Questions:`).
+   Findings in a block are numbered 1, 2, 3 ... without a restart: a second `1.` means a new review
+   written without its own `Kind:` block, and fails. An unindented line starting `F<n>` (the raw
+   reviewer format) fails: findings are copied into `N.` items. After a block's first item, every
+   non-blank line must be part of an item, a `Questions:` line (matched case-insensitively, so a
+   copied `QUESTIONS:` works) or a closing note starting `Note:`; any other line, such as a prose
+   review appended after the block, fails.
 3. **Order.** At least one `spec` block. A later block of a kind supersedes earlier ones (a `revise`
    is followed by a re-review), so the last `spec` block and the last `diff` block, if any, do not
    have `Verdict: revise`.
 4. **Items.** A finding is a line starting `N.` in a block; a question is a line starting `- ` after a
    `Questions:` line in the block. Each item runs until a blank line, the next item, `Questions:`
-   or `Kind:`, so a resolution on a continuation line counts. A status is a marker at the start of
-   the item text or of a clause (after `.`, `;`, `:` or `?`), matched case-insensitively, so a
+   or `Kind:`, so a resolution on a continuation line counts. A leading severity word (`Blocker:`,
+   `Major:`, `Minor:`) is removed first. A status is a marker at the start of the remaining text or
+   of a clause (after `.`, `;`, `:` or `?`), matched case-insensitively, so a
    finding that merely mentions a "fixed timeout" does not count: every finding has `fixed` or
    `declined:`; every question has `became`, `open:` or `verified:`, the statuses AGENTS.md §8 and
-   `review-prompt.md` define (this PR adds `verified:` to both).
+   `review-prompt.md` define (this PR adds `verified:` to both and to the PR template).
 5. **Output.** Each problem names the file, line and rule; the exit code is 1 when any exist, else
    the script prints `specs passed: N checked, M grandfathered`.
 
@@ -78,9 +87,12 @@ or `Head`, a duplicate field, no spec block, the last spec block `revise`, the l
 continuation line passes; an unindented `Model:` continuation passes; lowercase `open:` and
 `declined:` and capitalised `Fixed` pass; a `Kind:` line inside a fenced example is ignored; an
 unclosed fence fails; a bad `Base` fails; a restarted `1.` after a block's findings (prose review
-appended) fails even when its items say "Fixed"; an `F1 [major]` line fails; a finding whose text
-only mentions "fixed" in passing fails; a question that only mentions "verified" fails; and its own
-CI wiring.
+appended) fails even when its items say "Fixed"; a prose review with no numbered items appended
+after a block fails; a `Note:` line after items passes; a `- ` question with no `Questions:` line
+fails; a copied `QUESTIONS:` line works; an `F1 [major]` line fails, but an indented continuation
+starting `F2` passes; a finding whose text only mentions "fixed" in passing fails, including
+`1. Minor: fixed timeouts are too short.`; a question that only mentions "verified" fails; a
+subdirectory in the specs directory fails; and its own CI wiring.
 
 ## Alternatives
 
@@ -93,9 +105,11 @@ CI wiring.
 
 ## Research
 
-- Kubernetes KEPs keep required metadata in a `kep.yaml` per proposal and validate it in CI, which is
-  what makes their status fields trustworthy
-  (<https://github.com/kubernetes/enhancements/blob/master/keps/sig-architecture/0000-kep-process/README.md>).
+- Kubernetes KEPs keep required metadata in a `kep.yaml` per proposal
+  (<https://github.com/kubernetes/enhancements/blob/master/keps/sig-architecture/0000-kep-process/README.md>)
+  and validate it in CI with `hack/verify-kep-metadata.sh`
+  (<https://github.com/kubernetes/enhancements/blob/master/hack/verify-kep-metadata.sh>), which is what
+  makes their status fields trustworthy.
 - GitHub Spec Kit's `analyze` command checks spec artifacts for missing sections and inconsistency, as
   an agent step (<https://github.com/github/spec-kit/blob/main/templates/commands/analyze.md>).
 - The Stephens replay study found that two of six escaped bugs had been raised in review and declined
@@ -129,7 +143,7 @@ Verdict: revise
 
 Questions:
 - Is a bare `Fixed` intended? Became a non-goal: commit references are not checked.
-- Was "declined without evidence" accurate? Verified against the paper: the authoring agent declined
+- Was "declined without evidence" accurate? Verified: against the paper, the authoring agent declined
   both; Research reworded.
 - `Kind:` inside a fenced example. Became Design: fenced lines are ignored; test.
 - Two diff reviews for a larger feature. Became a non-goal: it needs the PR's diff.
@@ -157,3 +171,29 @@ Questions:
   kind supersedes earlier ones; counting two diff reviews stays a non-goal.
 - A bare `declined:` passes. Became a non-goal: the content of a decline is not checked.
 - Rule 1's scope was worded under "Within `## Review`". Became Design wording: rule 1 is file-wide.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 5c9975b5
+Head: 2db69509
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: a prose review with no numbered items, or questions without `Questions:`, still passed.
+   Fixed: after a block's first item only items, `Questions:` and `Note:` lines are allowed, and a
+   header line starting `- ` fails (Design 2); #588's two closing notes now start `Note:`; fixtures.
+2. Minor: this spec failed its own rule 4 (a question began "Verified against"). Fixed: reworded.
+3. Minor: the severity prefix made "fixed" in a description count as a status. Fixed: a leading
+   severity word is removed before matching (Design 4); fixture.
+4. Minor: the PR template did not list `verified:`. Fixed: added in this PR.
+5. Minor: grandfathering #585 was presented as a date fact although it merged after the format.
+   Fixed: recorded as the maintainer's §8 waiver (Non-goals).
+6. Minor: the KEP link did not support "validated in CI". Fixed: Research cites
+   `hack/verify-kep-metadata.sh`.
+
+Questions:
+- Does every new spec fail CI until its first approving review? Became Design: yes, intended.
+- `F<n>` before or after trimming indentation? Became Design 2: unindented lines only; fixture.
+- Is `Questions:` case-insensitive? Became Design 2: yes; fixture with `QUESTIONS:`.
+- Are subdirectories scanned? Became Design: a subdirectory fails; fixture.
