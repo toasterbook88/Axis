@@ -210,7 +210,7 @@ Questions:
   the external report.
 - Copilot failing instead of reviewing. Open: not observed in 46 requests; `--allow-pending` covers it.
 
-Code starts: every finding is resolved.
+Note: code starts; every finding is resolved.
 
 Kind: diff
 Reviewer: fresh-context subagent (Cursor)
@@ -255,7 +255,7 @@ Verdict: approve-with-changes (six inline findings)
    timeout.
 6. A waiver first seen at the final re-read was not printed. Fixed; test.
 
-Every fix has a test that fails when the fix is reverted.
+Note: every fix has a test that fails when the fix is reverted.
 
 Kind: diff
 Reviewer: GitHub Copilot code review (PR #588, second review)
