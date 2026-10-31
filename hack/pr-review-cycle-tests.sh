@@ -114,6 +114,7 @@ case "$1 $2" in
       *)
         echo x >>"$GH_MOCK_PENDING_DIR/thread-reads"
         echo threads >>"$GH_MOCK_PENDING_DIR/events"
+        printf '%s\n' "$*" >"$GH_MOCK_PENDING_DIR/thread-query"
         cat "$GH_MOCK_FIXTURE" ;;
     esac ;;
   *) echo "unexpected mock gh call: $*" >&2; exit 55 ;;
@@ -160,7 +161,7 @@ run_case() {
   [[ -d "$tmpdir/pending" ]] || set_pending "$no_pending"
   GH_MOCK_CASE="$scenario" GH_MOCK_FIXTURE="$tmpdir/fixture.json" \
     GH_MOCK_PENDING_DIR="$tmpdir/pending" GH_MOCK_CLOCK="$tmpdir/clock" \
-    PATH="$tmpdir:$PATH" "$repo_root/hack/pr-review-cycle.sh" 510 --wait-bots 0 "$@" \
+    PATH="$tmpdir:$PATH" timeout "${GH_MOCK_TIMEOUT:-300}" "$repo_root/hack/pr-review-cycle.sh" 510 --wait-bots 0 "$@" \
     >"$tmpdir/$scenario.out" 2>&1 || actual=$?
   if [[ "$actual" != "$expected" ]]; then
     echo "scenario $scenario: expected exit $expected, got $actual" >&2
@@ -207,10 +208,17 @@ expect_pending team-no-longer-requested '' "$(pending_fixture '[]' "[$team_ev]")
 expect_pending null-reviewer '?unknown' "$(pending_fixture '[{"requestedReviewer":null}]' '[]')"
 expect_pending mannequin-reviewer '?Mannequin' "$(pending_fixture '[{"requestedReviewer":{"__typename":"Mannequin"}}]' '[]')"
 draft_review='{"__typename":"PullRequestReview","submittedAt":null,"author":{"login":"copilot-pull-request-reviewer"}}'
+expect_pending timeline-null-reviewer '?unknown' "$(pending_fixture '[]' '[{"__typename":"ReviewRequestedEvent","createdAt":"2026-10-28T19:11:23Z","requestedReviewer":null}]')"
+expect_pending timeline-mannequin '?Mannequin' "$(pending_fixture '[]' '[{"__typename":"ReviewRequestedEvent","createdAt":"2026-10-28T19:11:23Z","requestedReviewer":{"__typename":"Mannequin"}}]')"
 expect_pending unsubmitted-draft-review 'copilot-pull-request-reviewer' "$(pending_fixture '[]' "[$copilot_ev, $draft_review]")"
 # #577 as it stood at its merge (19:22:23Z): requested 19:11:23Z, only toasterbook88 had reviewed.
 expect_pending pr577-at-merge 'copilot-pull-request-reviewer' \
   "$(pending_fixture "[$copilot_req]" "[$copilot_ev, $(review_by 2026-10-28T19:12:09Z toasterbook88)]")"
+truncated="$(pending_fixture '[]' '[]' | jq '.data.repository.pullRequest.timelineItems.pageInfo = {hasPreviousPage: true}')"
+if printf '%s\n' "$truncated" | pending_reviewers >/dev/null 2>&1; then
+  echo "pending_reviewers accepted a timeline with earlier pages it did not read" >&2
+  exit 1
+fi
 for bad in '{}' '{"data":null}' '{"data":{"repository":{"pullRequest":null}}}' \
   '{"data":{"repository":{"pullRequest":{"timelineItems":{"nodes":[]}}}}}' 'not json'; do
   if printf '%s\n' "$bad" | pending_reviewers >/dev/null 2>&1; then
@@ -258,6 +266,13 @@ printf '%s\n' "$fixture" | jq --arg t "$recent" '.data.repository.pullRequest.re
 set_pending "$no_pending"
 run_case clean 0
 [[ "$(wc -l <"$tmpdir/last/thread-reads")" -ge 2 ]] || { echo "threads not re-read after a review under 60 s old" >&2; exit 1; }
+printf '%s\n' "$fixture" | jq --arg t "$recent" '.data.repository.pullRequest.reviewThreads.nodes = [] | .data.repository.pullRequest.latest = {nodes: [{submittedAt: $t}, {submittedAt: null}]}' >"$tmpdir/fixture.json"
+set_pending "$no_pending"
+run_case clean 0
+[[ "$(wc -l <"$tmpdir/last/thread-reads")" -ge 2 ]] || { echo "a draft review hid a review under 60 s old" >&2; exit 1; }
+# A trailing draft can only be skipped if the query asks for more than one recent review.
+grep -qE 'latest: reviews\(last: ([2-9]|[1-9][0-9]+)\)' "$tmpdir/last/thread-query" \
+  || { echo "thread query asks for a single latest review, which may be an unsubmitted draft" >&2; exit 1; }
 printf '%s\n' "$fixture" | jq '.data.repository.pullRequest.reviewThreads.nodes = []' >"$tmpdir/fixture.json"
 
 # A failed read fails closed both in the wait (read 1) and at the final re-read (read 2).
@@ -282,5 +297,19 @@ assert_out 'waived pending review: copilot-pull-request-reviewer'
 set_pending "$(pending_fixture '[{"requestedReviewer":null}]' '[]')"
 run_case clean 3 --wait-reviews 0
 assert_out 'pending: ?unknown'
+
+# A waiver matches one whole reviewer name, never part of another (team names can contain spaces).
+set_pending "$(pending_fixture '[{"requestedReviewer":{"__typename":"Team","name":"Platform alice"}},{"requestedReviewer":{"__typename":"User","login":"alice"}}]' '[]')"
+run_case clean 3 --wait-reviews 0 --allow-pending '@Platform alice'
+assert_out 'pending: alice'
+
+# A waiver first seen at the final re-read is still printed.
+set_pending "$no_pending" "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
+run_case clean 0 --wait-reviews 0 --allow-pending copilot-pull-request-reviewer
+assert_out 'waived pending review: copilot-pull-request-reviewer'
+
+# Seconds with a leading zero are decimal, not octal: 08 behaves as 8 (one 15 s poll, then exit 3).
+set_pending "$(pending_fixture "[$copilot_req]" "[$copilot_ev]")"
+GH_MOCK_TIMEOUT=30 run_case clean 3 --wait-reviews 08
 
 echo "pr-review-cycle tests passed"

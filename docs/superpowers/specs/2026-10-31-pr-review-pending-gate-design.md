@@ -234,3 +234,25 @@ Questions:
   only when `submittedAt` is set; unit test.
 - The second thread read passed gh's exit code through. Became a fix: it exits 1 on failure.
 - Exit 3 skips the final head and CLEAN checks. Became a note in Design 4.
+
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #588)
+Model: other vendor family than the author
+Base: 4b846e44
+Head: 321da763
+Date: 2026-10-31
+Verdict: approve-with-changes (six inline findings)
+
+1. A `null` or login-less request seen only in the timeline was dropped. Fixed: pending as `?unknown`
+   or `?<type>`, teams still excluded; unit tests.
+2. The timeline read stopped at 100 events without saying so. Fixed: `pageInfo.hasPreviousPage`
+   makes the read fail closed with a message; unit test.
+3. Waivers matched by substring of a space-joined list, so a team name with a space could waive
+   another login. Fixed: each waiver is compared whole; test with `@Platform alice` and `alice`.
+4. `reviews(last: 1)` could pick an unsubmitted draft and hide a fresh review. Fixed: `last: 5`,
+   newest submitted one; fixture test plus a check that the query asks for more than one review.
+5. `--wait-reviews 08` was read as octal and looped forever. Fixed: decimal arithmetic; test under a
+   timeout.
+6. A waiver first seen at the final re-read was not printed. Fixed; test.
+
+Every fix has a test that fails when the fix is reverted.

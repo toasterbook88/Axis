@@ -76,6 +76,11 @@ pending_reviewers() {
     (.data.repository.pullRequest.reviewRequests.nodes | type == "array")
     and (.data.repository.pullRequest.timelineItems.nodes | type == "array")' >/dev/null 2>&1 \
     || return 1
+  if printf '%s\n' "$json" | jq -e '.data.repository.pullRequest.timelineItems.pageInfo.hasPreviousPage == true' \
+    >/dev/null 2>&1; then
+    echo "error: more than 100 review timeline events; cannot verify pending reviews" >&2
+    return 1
+  fi
   printf '%s\n' "$json" | jq -r '
     def norm: sub("\\[bot\\]$"; "");
     .data.repository.pullRequest as $pr
@@ -87,8 +92,10 @@ pending_reviewers() {
           else {login: (.login | norm), at: "requested"} end]
       + [range(0; $ev | length) as $i
         | $ev[$i]
-        | select(.__typename == "ReviewRequestedEvent" and (.requestedReviewer.login // null) != null)
-        | (.requestedReviewer.login | norm) as $l
+        | select(.__typename == "ReviewRequestedEvent" and .requestedReviewer.__typename != "Team")
+        | (if .requestedReviewer == null then "?unknown"
+           elif (.requestedReviewer.login // null) == null then "?" + (.requestedReviewer.__typename // "unknown")
+           else .requestedReviewer.login | norm end) as $l
         | select([$ev[$i + 1:][]
             | select((.__typename == "PullRequestReview" and .submittedAt != null
                 and ((.author.login // "") | norm) == $l)
@@ -109,6 +116,7 @@ query {
     pullRequest(number: ${PR}) {
       reviewRequests(first: 100) { nodes { $reviewer } }
       timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, PULL_REQUEST_REVIEW]) {
+        pageInfo { hasPreviousPage }
         nodes {
           __typename
           ... on ReviewRequestedEvent { createdAt $reviewer }
@@ -128,14 +136,29 @@ read_pending() {
   json="$(fetch_pending_json)" || { echo "error: unable to read requested reviews for PR #${PR}" >&2; return 1; }
   all="$(printf '%s\n' "$json" | pending_reviewers)" \
     || { echo "error: malformed requested-review response for PR #${PR}" >&2; return 1; }
+  local waived allowed
   while IFS=$'\t' read -r login at; do
     [[ -n "$login" ]] || continue
-    if [[ " ${ALLOW_PENDING[*]-} " == *" ${login} "* ]]; then
+    waived=0
+    for allowed in "${ALLOW_PENDING[@]}"; do
+      [[ "$allowed" == "$login" ]] && waived=1
+    done
+    if ((waived)); then
       printf '%s\n' "$login" >>"$waiver_log"
     else
       printf '%s\t%s\n' "$login" "$at"
     fi
   done <<<"$all"
+}
+
+# print_new_waivers prints each waived reviewer once, however many reads recorded it.
+print_new_waivers() {
+  local login
+  sort -u "$waiver_log" | while read -r login; do
+    grep -qxF -- "$login" "$waiver_log.printed" 2>/dev/null && continue
+    echo "waived pending review: $login"
+    printf '%s\n' "$login" >>"$waiver_log.printed"
+  done
 }
 
 fetch_thread_json() {
@@ -171,7 +194,7 @@ query(\$endCursor: String) {
           commit { oid }
         }
       }
-      latest: reviews(last: 1) { nodes { submittedAt } }
+      latest: reviews(last: 5) { nodes { submittedAt } }
       comments(first: 50) {
         nodes {
           author { login }
@@ -188,7 +211,7 @@ query(\$endCursor: String) {
 # comments may not have reached reviewThreads yet.
 review_is_fresh() {
   jq -e --argjson now "$(now_epoch)" '
-    [.. | .latest?.nodes[]?.submittedAt // empty] | last
+    [.. | .latest?.nodes[]?.submittedAt | select(. != null)] | last
     | . != null and ($now - fromdateiso8601) < 60' >/dev/null 2>&1
 }
 
@@ -238,7 +261,7 @@ if ! [[ "$WAIT_BOTS" =~ ^[0-9]+$ && "$WAIT_REVIEWS" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 waiver_log="$(mktemp)"
-trap 'rm -f "$waiver_log"' EXIT
+trap 'rm -f "$waiver_log" "$waiver_log.printed"' EXIT
 
 for dep in gh jq; do
   if ! command -v "$dep" >/dev/null 2>&1; then
@@ -315,12 +338,10 @@ echo "== Requested reviews (wait up to ${WAIT_REVIEWS}s from checks green) =="
 while :; do
   pending="$(read_pending)" || exit 1
   [[ -z "$pending" ]] && break
-  (( $(now_epoch) - checks_green_at >= WAIT_REVIEWS )) && break
+  (( $(now_epoch) - checks_green_at >= 10#$WAIT_REVIEWS )) && break
   sleep 15
 done
-if [[ -s "$waiver_log" ]]; then
-  sort -u "$waiver_log" | while read -r login; do echo "waived pending review: $login"; done
-fi
+print_new_waivers
 if [[ -n "$pending" ]]; then
   printf '%s\n' "$pending" | while IFS=$'\t' read -r login at; do echo "pending: $login (requested $at)"; done
 else
@@ -369,6 +390,7 @@ fi
 # and an earlier CLEAN must not pass a PR whose base or head has moved, or
 # that gained a review request, since.
 pending="$(read_pending)" || exit 1
+print_new_waivers
 if [[ -n "$pending" ]]; then
   printf '%s\n' "$pending" | while IFS=$'\t' read -r login at; do echo "pending: $login (requested $at)"; done
   echo "error: requested review still pending at the final re-read; do not merge" >&2
