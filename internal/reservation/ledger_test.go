@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -244,10 +245,6 @@ func TestLoadEmitsReceiptAfterStartupReconciliation(t *testing.T) {
 
 func TestReclaimDoesNotEmitSuccessReceiptWhenPersistenceFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := os.MkdirAll(Path(), 0o700); err != nil {
-		t.Fatalf("create directory at ledger path: %v", err)
-	}
-
 	var logs bytes.Buffer
 	l := NewLedger(DefaultLimits(), slog.New(slog.NewJSONHandler(&logs, nil)))
 	l.mu.Lock()
@@ -260,6 +257,13 @@ func TestReclaimDoesNotEmitSuccessReceiptWhenPersistenceFails(t *testing.T) {
 		ExpiresAt:     time.Now().Add(-time.Minute),
 	}
 	l.mu.Unlock()
+	if err := l.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// The ledger file stays readable; only writing a new one fails.
+	prevWrite := writeLedgerFile
+	writeLedgerFile = func(string, []byte) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeLedgerFile = prevWrite })
 
 	if reclaimed := l.Reclaim(); reclaimed != 1 {
 		t.Fatalf("Reclaim() = %d, want 1 in-memory candidate", reclaimed)
@@ -268,6 +272,31 @@ func TestReclaimDoesNotEmitSuccessReceiptWhenPersistenceFails(t *testing.T) {
 		t.Fatalf("success receipt emitted despite persistence failure:\n%s", got)
 	} else if !strings.Contains(got, "failed to persist ledger during reclaim") {
 		t.Fatalf("persistence failure log missing:\n%s", got)
+	}
+}
+
+// A ledger file that cannot be read stops Reclaim before it changes anything:
+// reclaiming against a stale copy and writing it back could drop live leases.
+func TestReclaimDoesNothingWhenTheLedgerCannotBeRead(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(Path(), 0o700); err != nil {
+		t.Fatalf("create directory at ledger path: %v", err)
+	}
+	var logs bytes.Buffer
+	l := NewLedger(DefaultLimits(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	l.mu.Lock()
+	l.entries["exec-expired"] = &Entry{ID: "exec-expired", Node: "node-a", RAMMB: 512,
+		CreatedAt: time.Now().Add(-time.Hour), LastHeartbeat: time.Now(), ExpiresAt: time.Now().Add(-time.Minute)}
+	l.mu.Unlock()
+
+	if reclaimed := l.Reclaim(); reclaimed != 0 {
+		t.Fatalf("Reclaim() = %d on an unreadable ledger, want 0", reclaimed)
+	}
+	if got := logs.String(); !strings.Contains(got, "failed to reload ledger for reclaim") {
+		t.Fatalf("reload failure log missing:\n%s", got)
+	}
+	if len(l.Entries()) != 1 {
+		t.Fatalf("in-memory entries changed: %v", l.Entries())
 	}
 }
 

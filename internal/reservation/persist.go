@@ -18,6 +18,10 @@ func Path() string {
 	return persist.AxisPath("ledger.json")
 }
 
+// writeLedgerFile is the atomic write of the ledger file; tests replace it to
+// fail persistence while the file stays readable.
+var writeLedgerFile = persist.WritePrivateFileAtomic
+
 // diskFormat represents the serialized ledger.
 type diskFormat struct {
 	Entries []*Entry `json:"entries"`
@@ -145,6 +149,32 @@ func (l *Ledger) Load() error {
 	return nil
 }
 
+// reloadLocked replaces the in-memory entries with the ledger file. The
+// caller must hold fileMu and the file lock. Another process may have written
+// since this ledger last read; writing a stale copy would drop its leases or
+// bring back ones it released. A missing file leaves memory as it is.
+func (l *Ledger) reloadLocked() error {
+	path := Path()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var df diskFormat
+	if err := json.Unmarshal(data, &df); err != nil {
+		return fmt.Errorf("decode reservation ledger %s: %w", path, err)
+	}
+	l.mu.Lock()
+	l.entries = make(map[string]*Entry, len(df.Entries))
+	for _, e := range df.Entries {
+		l.entries[e.ID] = e
+	}
+	l.mu.Unlock()
+	return nil
+}
+
 // LoadReadOnly reads the ledger without reclaiming entries, quarantining a
 // corrupt file, or writing any reconciliation result. It exists for
 // destructive-operation preflights that must observe the exact ledger state
@@ -245,5 +275,5 @@ func (l *Ledger) writeSnapshot(entries []*Entry) error {
 	if err != nil {
 		return err
 	}
-	return persist.WritePrivateFileAtomic(path, data)
+	return writeLedgerFile(path, data)
 }

@@ -236,6 +236,9 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 			return nil, err
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			return nil, err
+		}
 	}
 
 	var snap []*Entry
@@ -339,6 +342,10 @@ func (l *Ledger) Release(id string) error {
 	l.fileMu.Lock()
 	defer l.fileMu.Unlock()
 
+	l.mu.RLock()
+	_, heldBefore := l.entries[id]
+	l.mu.RUnlock()
+
 	wasLocked := l.lockFile != nil
 	if !wasLocked {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -347,14 +354,22 @@ func (l *Ledger) Release(id string) error {
 			return err
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			return err
+		}
 	}
 
 	var snap []*Entry
 	var released Entry
+	alreadyGone := false
 	err := func() error {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		e, ok := l.entries[id]
+		if !ok && heldBefore {
+			alreadyGone = true
+			return nil
+		}
 		if !ok {
 			return fmt.Errorf("reservation: unknown entry %q", id)
 		}
@@ -366,6 +381,10 @@ func (l *Ledger) Release(id string) error {
 	}()
 	if err != nil {
 		return err
+	}
+	if alreadyGone {
+		l.logger.Info("reservation already removed by another process", "id", id)
+		return nil
 	}
 
 	l.logger.Info("reservation released", "id", id, "node", released.Node, "ram_mb", released.RAMMB)
@@ -393,6 +412,9 @@ func (l *Ledger) Heartbeat(id string) error {
 			return err
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			return err
+		}
 	}
 
 	var snap []*Entry
@@ -428,6 +450,10 @@ func (l *Ledger) Reclaim() int {
 			return 0
 		}
 		defer l.unlockFileLocked()
+		if err := l.reloadLocked(); err != nil {
+			l.logger.Error("failed to reload ledger for reclaim", "error", err)
+			return 0
+		}
 	}
 
 	l.mu.Lock()
