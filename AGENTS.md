@@ -133,7 +133,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | `axis init` | Configuration wizard |
 | `axis mesh` | `status`, `peers` |
 | `axis observations` | Execution observations |
-| `axis tui` | Full-screen dashboard |
+| `axis tui` | Full-screen workspace: embedded agent console, cluster sidebar, dashboard (`--dashboard` alone) |
 
 Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrConfigLoad` ·
 3 `ExitErrNoNodesFit` · 4 `ExitErrCommandFail` · 5 `ExitErrContextWrite` · 6 `ExitErrIO` · 7 `ExitErrModelUnlisted`.

@@ -207,7 +207,16 @@ func renderSummary(m Model, width int) string {
 
 type keyHint struct{ key, desc string }
 
-func footerHints(g glyphSet) []keyHint {
+func footerHints(g glyphSet, hosted bool) []keyHint {
+	if hosted {
+		return []keyHint{
+			{g.navKeys, "select"},
+			{g.tabKeys, "tab"},
+			{"p", "place"},
+			{"r", "refresh"},
+			{"?", "help"},
+		}
+	}
 	return []keyHint{
 		{g.navKeys, "select"},
 		{g.tabKeys, "tab"},
@@ -222,7 +231,7 @@ func footerHints(g glyphSet) []keyHint {
 // the right, so a status message never hides the interaction path.
 func renderFooter(m Model, width int) string {
 	var hints []string
-	for _, h := range footerHints(m.glyphs) {
+	for _, h := range footerHints(m.glyphs, m.hosted) {
 		hints = append(hints, styleKey.Render(h.key)+" "+styleMuted.Render(h.desc))
 	}
 	isErr := strings.HasPrefix(m.statusMsg, "Error") || strings.HasPrefix(m.statusMsg, "Refresh failed")

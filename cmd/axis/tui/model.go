@@ -43,6 +43,10 @@ type Model struct {
 	modal       PlacementModal
 	modalActive bool
 
+	// hosted is true inside the workspace, where q and esc return to the
+	// conversation instead of quitting.
+	hosted bool
+
 	// Rendering environment
 	glyphs     glyphSet
 	colorDepth ui.ColorDepth
@@ -103,4 +107,12 @@ type clockMsg struct{}
 
 func clockCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return clockMsg{} })
+}
+
+// selectedNode is the node under the cursor, if any.
+func (m Model) selectedNode() (models.NodeFacts, bool) {
+	if m.snapshot == nil || m.cursor < 0 || m.cursor >= len(m.snapshot.Nodes) {
+		return models.NodeFacts{}, false
+	}
+	return m.snapshot.Nodes[m.cursor], true
 }

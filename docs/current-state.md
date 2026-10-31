@@ -35,7 +35,8 @@ The live repo currently contains:
 - Local hardware reports through `axis facts --hardware` (shortcut `-hw`, also under `axis node facts`) on Linux and macOS: component specifications, sampled CPU/disk/network activity, memory and sensor readings, source/time/unit metadata, and explicit unavailable readings. `--watch` retains inventory and refreshes load; JSON emits one report per line and YAML emits separate documents. Hardware collection skips cluster configuration and inference discovery, excludes unique device identifiers, and never invokes sudo. Linux uses procfs/sysfs plus optional hardware utilities; macOS uses native profiler, sysctl, top, and I/O Registry sources. Coverage depends on permissions and device support
 - macOS hardware storage reports distinguish `profiler parent` containment from a volume's backing `parent`; backing remains unavailable without explicit captured device identity, and nested provider descriptions keep meaningful names and selected metadata
 - Cluster snapshot assembly and advisory placement
-- A full-screen `axis tui` dashboard that fits any terminal size (responsive columns, scrolling table, help overlay, ASCII fallback), badges snapshot source and age, shows only observed values (link class, reserved RAM, warnings, partial-probe reasons, node errors), and whose placement wizard uses the exact displayed snapshot, exposes source/freshness, inferred requirements, deterministic rank order, and an explicit advisory/no-execution boundary; missing snapshots render operator-controlled setup and retry steps
+- A full-screen `axis tui` workspace that hosts the `axis agent` console in embedded mode (same in-process agent, startup path, approvals and slash commands; transcript drawn in-frame and scrollable) beside a cluster sidebar read from the cached snapshot, with a `ctrl+o` command palette and `ctrl+x` leader keys; `axis tui --dashboard` opens only the dashboard
+- The `axis tui` dashboard fits any terminal size (responsive columns, scrolling table, help overlay, ASCII fallback), badges snapshot source and age, shows only observed values (link class, reserved RAM, warnings, partial-probe reasons, node errors), and whose placement wizard uses the exact displayed snapshot, exposes source/freshness, inferred requirements, deterministic rank order, and an explicit advisory/no-execution boundary; missing snapshots render operator-controlled setup and retry steps
 - An agentic tool-calling assistant (`axis agent`) that consumes the fact plane (`axis chat` was removed). Default cluster context is the local daemon/disk cache (`LoadCached`); `--live` is an explicit discovery sweep. Cache reads are badged (age, stale, vantage). The transcript console is the default interactive surface on a TTY (approval overlay: `y` yes, `n` no; Enter does not approve); use `--plain` for the legacy line reader, or `--console` to force the console
 - A local HTTP API with task execution
 - A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
@@ -110,7 +111,7 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
-| `axis` (no arguments) | Open the agent on an interactive terminal | Uses the start screen and bounded background startup with default flags; piped and non-TTY invocations print help. `axis tui` opens the dashboard |
+| `axis` (no arguments) | Open the agent on an interactive terminal | Uses the start screen and bounded background startup with default flags; piped and non-TTY invocations print help. `axis tui` opens the full-screen workspace |
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
 | `axis status` | Collect cluster snapshot | Cache-first inside the 5-minute daemon publication window; prints source and age; `--live` sweeps; `--format json\|yaml` includes source and age; `--cached-only` fails closed when missing or stale |
@@ -119,7 +120,7 @@ Top-level commands currently registered in the binary:
 | `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
-| `axis tui` | Interactive cluster dashboard | Daemon-cache-first snapshot with source and age badges; values the snapshot lacks render as "not observed"; placement preview scores the displayed snapshot and remains advisory |
+| `axis tui` | Full-screen agent workspace and cluster dashboard | Agent is the `axis agent` console embedded (advisory); sidebar and dashboard read the daemon-cache-first snapshot with source and age badges; values the snapshot lacks render as "not observed"; placement preview scores the displayed snapshot and remains advisory |
 | `axis daemon start` | Start daemon HTTP API | Alias for `axis serve`; `--addr` and `--refresh` flags |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
