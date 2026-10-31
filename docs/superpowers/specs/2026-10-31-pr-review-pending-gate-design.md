@@ -1,7 +1,7 @@
 # `pr-review-cycle.sh` waits for requested reviews and fails while one is pending
 
-Date: 2026-10-31. Base: `origin/main` 4b846e4. Status: revised after a `revise` spec review; awaiting
-a second spec review.
+Date: 2026-10-31. Base: `origin/main` 4b846e4. Status: spec reviewed twice (revise, then
+approve-with-changes with every finding resolved); implementation in this PR.
 
 ## Problem
 
@@ -53,15 +53,20 @@ Measured over the 120 most recent merged PRs (GitHub GraphQL, 2026-10-31):
    the pending set every 15 s until it is empty or `--wait-reviews SEC` has elapsed since the checks
    went green (default 1200, a margin over the 6.7 min worst case and the 16.4 min longest
    request-to-review time seen). `--wait-reviews 0` checks once.
-3. **Fail closed on reads.** Every pending-set read is an assignment checked with `|| exit 1`, never a
-   loop or `[[ ]]` condition, so a gh or GraphQL error, a rate limit or malformed JSON exits 1 instead
-   of reading as "nothing pending".
+3. **Fail closed on reads.** `set -e` does not fire inside a `||` context or a loop condition, so the
+   read checks each step itself: `json="$(gh api graphql ...)" || return 1`, then
+   `jq -e '.data.repository.pullRequest.reviewRequests.nodes | type == "array"'` and the same for
+   `timelineItems.nodes` before extracting anything. A gh or GraphQL error, a rate limit, unparseable
+   JSON or a well-formed response of the wrong shape (`pullRequest: null`, a missing connection) exits
+   1 instead of reading as "nothing pending".
 4. **Exit 3 means one thing.** If reviewers are still pending when the wait ends, print each login
    with its request time and exit 3: "requested review still pending". The new code paths map every
    gh and jq failure to 1, so 3 is only ever returned with that list printed. Codes 0, 1 and 2 keep
    their meanings, and the existing pass-through of `gh` exit codes in the final re-read is unchanged.
 5. **Re-check at enforcement.** The final re-read (head moved, merge state CLEAN) also re-reads the
-   pending set, so a review requested during the run is not missed.
+   pending set, so a review requested during the run is not missed. On exit 3 the script still
+   prints the review bodies and threads it can see, so a timed-out run shows the same state a run
+   at Base shows after 120 s.
 6. **Settle threads after a late review.** Threads are read after the pending set empties. If the
    newest review (`reviews(last: 1)`) was submitted less than 60 s before that read, read the threads
    once more after 10 s, because inline comments can reach `reviewThreads` after the review itself.
@@ -75,9 +80,11 @@ Measured over the 120 most recent merged PRs (GitHub GraphQL, 2026-10-31):
 
 ## Tests
 
-`hack/pr-review-cycle-tests.sh` keeps its `gh` shim and adds two things: a per-call fixture counter,
-so successive GraphQL reads can differ, and a `sleep` shim on `PATH` that records calls instead of
-sleeping. New scenarios:
+`hack/pr-review-cycle-tests.sh` keeps its `gh` shim and adds: a per-call fixture counter, so
+successive GraphQL reads can differ; and a fake clock. The script reads time only through one
+function, `now_epoch` (`date +%s`); the tests put `sleep` and `date` shims on `PATH` that share a
+clock file, so `sleep N` advances the clock by N without waiting and fixture timestamps can be set
+relative to it. New scenarios:
 
 - request in `reviewRequests`, `--wait-reviews 0` → exit 3, output names the reviewer;
 - timeline request with no later review and not in `reviewRequests` → exit 3;
@@ -90,14 +97,16 @@ sleeping. New scenarios:
 - pending set empty, then a request at the final re-read → exit 3;
 - newest review under 60 s old → a second thread read is observed;
 - pending read fails (`gh` exits non-zero) → exit 1; pending read returns malformed JSON → exit 1,
-  never 3;
+  never 3; well-formed response with `pullRequest: null` or no `reviewRequests` → exit 1;
+- request, review, then a new request by the same login → exit 3; request, removal, then a new
+  request → exit 3;
+- empty pending set with `--wait-bots 7` → the `sleep` shim records 7 before the first thread read;
 - `--allow-pending copilot-pull-request-reviewer` with Copilot pending → passes and prints the waiver;
 - #577's real timeline as a fixture, evaluated at its merge time → Copilot pending;
 - the existing clean, dirty, moved, failed_final, discovery and unresolved-thread cases keep their
   codes.
 
-Plus unit checks of the pending-set function on fixture JSON, in the style of the existing
-`count_unresolved_threads` check.
+Plus unit checks of the pending-set function on fixture JSON, including the wrong-shape inputs above.
 
 ## Alternatives
 
@@ -169,3 +178,32 @@ Questions:
 - `reviews(first: 50)` returns the oldest reviews. Became Design 6: `reviews(last: 1)`.
 - p90 6.0 vs 7.9 min: different windows. Problem now uses latency from CI completion, which both
   windows agree on for the case that matters (#577 is the only late one).
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (second family still unavailable)
+Base: 4b846e44
+Head: 9e1a5da9
+Date: 2026-10-31
+Verdict: approve-with-changes
+
+1. Minor: `pending="$(read)" || exit 1` does not fail closed, since `set -e` is off inside `||`, and
+   wrong-shape JSON read as empty. Fixed: Design 3 checks each gh call and validates shape with
+   `jq -e`; tests for `pullRequest: null` and a missing connection.
+2. Minor: no test pinned the "later than" ordering. Fixed: re-request after a review and after a
+   removal, both exit 3.
+3. Minor: no test asserted the floor. Fixed: `--wait-bots 7` with an empty pending set records a
+   7 s sleep before the first thread read.
+
+Questions:
+- Clock for the 60 s check and the deadline. Became the `now_epoch` seam with shared `sleep` and
+  `date` shims.
+- Output on exit 3. Became Design 5: review bodies and threads are still printed.
+- Is 16.4 min the longest request-to-review time? Verified by the author over the 46 requests
+  (max 16.4, median 2.4).
+- Do inline comments reach `reviewThreads` after the review? Open: not observed here (on #577 the
+  comments' timestamps precede the review's); Design 6 is kept as a cheap guard on the strength of
+  the external report.
+- Copilot failing instead of reviewing. Open: not observed in 46 requests; `--allow-pending` covers it.
+
+Code starts: every finding is resolved.
