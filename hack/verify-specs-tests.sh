@@ -144,10 +144,9 @@ review_case bad-verdict 'Verdict: "approved"' "$(header spec approved)"
 review_case bad-date 'Date: "Oct 31"' "$(header spec approve | sed 's/^Date: .*/Date: Oct 31/')"
 review_case bad-head 'Head: "HEAD"' "$(header spec approve | sed 's/^Head: .*/Head: HEAD/')"
 review_case bad-base 'Base: "main"' "$(header spec approve | sed 's/^Base: .*/Base: main/')"
-review_case duplicate-field 'block has 2 Reviewer: lines' "$(header spec approve)
-Reviewer: someone else"
 h="$(header spec approve)"
 nl=$'\n'
+review_case duplicate-field 'block has 2 Reviewer: lines' "${h/Model:/Reviewer: someone else${nl}Model:}"
 review_case model-continuation pass "${h/Model: same family/Model: same family. The second family${nl}was out of weekly usage.}"
 review_case verdict-trailing-text pass "$(header spec approve | sed 's/^Verdict: .*/Verdict: approve-with-changes (six inline findings)/')"
 review_case head-trailing-text pass "$(header spec approve | sed 's/^Head: .*/Head: 272fe232 (after the merge)/')"
@@ -280,16 +279,51 @@ review_case note-does-not-resolve 'finding has no status' "$(header spec approve
 
 1. A gap.
 Note: fixed later."
-review_case fenced-example pass "$good_review
+review_case fence-in-review 'code fence in ## Review' "$good_review
 
 \`\`\`text
+$(header spec revise)
+
+1. An unresolved finding.
+\`\`\`"
+new_case
+printf '%s\n%s\n\n## Review\n\n%s\n' "$sections" '```text
 Kind: spec
 1. An example finding without a status.
-\`\`\`"
-review_case unclosed-fence 'code fence opened here is never closed' "$good_review
+```' "$good_review" >"$CASE/docs/superpowers/specs/$name"
+pass fenced-example-outside-review
+new_case
+printf '%s\n```text\nKind: spec\n\n## Review\n\n%s\n' "$sections" "$good_review" >"$CASE/docs/superpowers/specs/$name"
+reject unclosed-fence 'code fence opened here is never closed'
 
-\`\`\`text
-Kind: spec"
+# --- Lines that belong to no item
+
+review_case glued-prose-in-header 'line after Verdict: in the block header' "$(header spec approve)
+Sixth review (Copilot): one race, not addressed."
+review_case glued-raw-finding-in-header 'raw reviewer finding' "$(header spec approve | sed 's/^Model: .*/Model: same family/')
+F1 [major] [defect] race in the cache, not addressed"
+review_case raw-finding-before-verdict 'raw reviewer finding' "$(header spec approve | sed 's/^Date: .*/Date: 2026-10-31\
+F1 [major] race, not addressed/')"
+review_case indented-under-questions 'indented line under Questions:' "$(header spec approve)
+
+Questions:
+  Is the cache racy? Nobody answered."
+review_case note-mid-block 'after the closing Note:' "$(header spec approve)
+
+1. A gap. Fixed.
+
+Note: second review by Copilot found a race, not addressed.
+
+2. Another gap. Fixed."
+review_case impossible-date 'Date: "2026-13-45"' "$(header spec approve | sed 's/^Date: .*/Date: 2026-13-45/')"
+review_case empty-verdict 'Verdict: is empty' "$(header spec approve | sed 's/^Verdict: .*/Verdict:/')"
+review_case marker-word-prefix 'finding has no status' "$(header spec approve)
+
+1. A gap. Fixedness matters."
+review_case colon-marker-mid-clause 'question has no status' "$(header spec approve)
+
+Questions:
+- Should the doc say open: here?"
 
 # --- The repo itself
 

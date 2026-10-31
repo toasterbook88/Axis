@@ -1,7 +1,7 @@
 # `hack/verify-specs.go`: check that specs carry their reviews
 
-Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: fifth spec review approved with changes,
-applied; code starts. Merges after #588.
+Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: implemented; the fresh diff review approved
+with changes, applied. #588 has merged.
 
 ## Problem
 
@@ -40,43 +40,49 @@ Each is checked unless it is on a fixed grandfather list in the script:
 `2026-10-09-model-discovery-design.md`, `2026-10-19-axis-start-screen-design.md` and
 `2026-10-30-import-direction-check-design.md`. A date cutoff would let a backdated name escape.
 
-A feature spec fails until its first approving spec review is recorded; that is intended, since
-§8 lets code start only then. Lines inside fenced code blocks are ignored, so a spec can show an example record; a fence left open
-at the end of the file fails, naming its opening line. Rule 1 applies to the whole file; rules 2 to 4
-apply within `## Review`:
+A feature spec fails until its first approving spec review is recorded; that is intended, since §8
+lets code start only then. Lines inside fenced code blocks are ignored, so a spec can show an
+example record outside `## Review`; a fence inside `## Review` fails, since it would hide records
+there, and a fence left open at the end of the file fails, naming its opening line. Rule 1 applies
+to the whole file; rules 2 to 4 apply within `## Review`:
 
 1. **Sections.** `## Problem`, `## Non-goals`, `## Design`, `## Alternatives`, `## Research` and
    `## Review` headings are present, `## Review` exactly once; it runs to the next `## ` heading.
 2. **Blocks.** A block starts at a `Kind:` line and runs to the next `Kind:` line or the end of the
    section. Any non-blank line in `## Review` before the first `Kind:` fails, so a review recorded
-   without `Kind:` (as #585's first one was) cannot sit ahead of the blocks. Its header is the run of lines from `Kind:` to the first blank line; it must contain
-   exactly one each of `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each
-   7 to 40 hex characters), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`,
+   without `Kind:` (as #585's first one was) cannot sit ahead of the blocks. Its header is the run
+   of lines from `Kind:` to the first blank line; it must contain exactly one each of `Kind:`
+   (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each 7 to 40 lowercase hex
+   characters, as git prints them), `Date:` (a real `YYYY-MM-DD` date) and `Verdict:` (`approve`,
    `approve-with-changes` or `revise`). `Base`, `Head` and `Verdict` are checked on their first
    word, so `Verdict: approve-with-changes (six inline findings)` passes. Other header lines, such
    as continuations of `Model:`, are allowed, but a header line starting `- ` fails (a question
-   needs `Questions:`), and so does an item there (leave a blank line after the header). Below the header, each paragraph (a run of non-blank lines) must start with
-   an item, a `Questions:` line (matched case-insensitively, so a copied `QUESTIONS:` works) or a
-   closing note starting `Note:`; any other paragraph, such as a prose review appended after the
-   block, fails, whether or not the block has findings. Items start at column 0 with `N. ` (digits, a
-   dot and a space, so `6.7 min` is not one) or `- `; indented lines continue the line above. An
-   unindented line that starts none of these, directly under an item, fails rather than joining it. Findings in a block are numbered 1, 2, 3 ... without a restart: a
-   second `1.` means a new review written without its own `Kind:` block, and fails. An unindented
-   line starting `F<n>` (the raw reviewer format) fails: findings are copied into `N.` items.
+   needs `Questions:`), and so does an item or an `F<n>` line there. `Verdict:` is the last header
+   line: a line glued under it fails (leave a blank line after the header). Below the header, each
+   paragraph (a run of non-blank lines) must start with an item, a `Questions:` line (matched
+   case-insensitively, so a copied `QUESTIONS:` works) or a closing note starting `Note:`; any other
+   paragraph, such as a prose review appended after the block, fails, whether or not the block has
+   findings. Notes close a block: an item or `Questions:` after a `Note:` fails, and so does an
+   indented line directly under `Questions:`. Items start at column 0 with `N. ` (digits, a dot and
+   a space, so `6.7 min` is not one) or `- `; indented lines continue the line above. An unindented
+   line that starts none of these, directly under an item, fails rather than joining it. Findings in
+   a block are numbered 1, 2, 3 ... without a restart: a second `1.` means a new review written
+   without its own `Kind:` block, and fails. An unindented line starting `F<n>` (the raw reviewer
+   format) fails: findings are copied into `N.` items.
 3. **Order.** At least one `spec` block. A later block of a kind supersedes earlier ones (a `revise`
    is followed by a re-review), so the last `spec` block and the last `diff` block, if any, do not
    have `Verdict: revise`.
-4. **Items.** A finding is a line starting `N.` in a block; a question is a line starting `- ` after a
-   `Questions:` line in the block. Each item runs until a blank line, the next item, a `Questions:`,
-   `Note:` or `Kind:` line, so a resolution on a continuation line counts but a note never does.
-   A leading severity word (`Blocker:`, `Major:`, `Minor:`) is removed. A clause starts after `.`,
-   `;`, `:` or `?` followed by a space; the text before the first such break is the description. A
-   status is a marker at the start of a later clause, matched case-insensitively: `fixed` or
-   `became` followed by a non-letter, or `declined:`, `open:` or `verified:` with their colon. So `1. Minor: fixed timeouts are too short.`
-   has no status, while `Fixed:`, `Fixed;`, `Fixed in d6d2773f:` and `Fixed when parsed;` after the
-   description do. Every finding has `fixed` or `declined:`; every question has `became`, `open:`
-   or `verified:`, the statuses AGENTS.md §8 and `review-prompt.md` define (this PR adds
-   `verified:` to both and to the PR template).
+4. **Items.** A finding is a line starting `N.` in a block; a question is a line starting `- ` after
+   a `Questions:` line in the block. Each item runs until a blank line, the next item, a
+   `Questions:`, `Note:` or `Kind:` line, so a resolution on a continuation line counts but a note
+   never does. A leading severity word (`Blocker:`, `Major:`, `Minor:`) is removed. A clause starts
+   after `.`, `;`, `:` or `?` followed by a space; the text before the first such break is the
+   description. A status is a marker at the start of a later clause, matched case-insensitively:
+   `fixed` or `became` followed by a non-letter, or `declined:`, `open:` or `verified:` with their
+   colon. So `1. Minor: fixed timeouts are too short.` has no status, while `Fixed:`, `Fixed;`,
+   `Fixed in d6d2773f:` and `Fixed when parsed;` after the description do. Every finding has `fixed`
+   or `declined:`; every question has `became`, `open:` or `verified:`, the statuses AGENTS.md §8
+   and `review-prompt.md` define (this PR adds `verified:` to both and to the PR template).
 5. **Output.** Each problem names the file, line and rule; the exit code is 1 when any exist, else
    the script prints `specs passed: N checked, M grandfathered`.
 
@@ -111,7 +117,10 @@ findings followed by a prose paragraph fails, and so does one followed by `Fifth
 `1. ... Fixed:` items; a `Note: fixed later.` line directly after a finding with no status does
 not resolve it; an indented line starting `6.7 min` continues its item. A #585-style review (fields
 but no `Kind:`) before a conforming block fails; an unindented prose line glued under the last item
-fails; an unindented `6.7 min` line is not an item; a second `## Review` fails.
+fails; an unindented `6.7 min` line is not an item; a second `## Review` fails. From the diff
+review: a line glued under `Verdict:`, an `F<n>` line anywhere in a header, an indented line under
+`Questions:`, an item after a `Note:`, a fence inside `## Review`, an impossible date and an empty
+field fail; `Fixedness` and an `open:` inside a clause are not statuses.
 
 ## Alternatives
 
@@ -261,3 +270,30 @@ Questions:
 - Is a second `## Review` checked? Became Design 1: exactly one; fixture.
 
 Note: code starts; every finding is resolved.
+
+Kind: diff
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (the second diff review is Copilot's, on the PR)
+Base: f71c239d
+Head: 5c5c117a
+Date: 2026-10-31
+Verdict: approve-with-changes
+
+1. Minor: lines that joined no item passed unchecked: prose or an `F<n>` line glued under a header,
+   and an indented line under `Questions:`. Fixed: `Verdict:` ends the header and later glued
+   lines fail, `F<n>` fails in a header, and an indented line under `Questions:` fails; fixtures.
+2. Minor: `Note:` was accepted between items. Fixed: a note closes its block; fixture.
+3. Minor: `Date:` accepted impossible dates. Fixed: parsed as a date; fixture.
+4. Minor: three rules had no failing test (the non-letter guard, colon markers only at a clause
+   start, an empty field). Fixed: a fixture for each; the reviewer's three surviving mutants now
+   fail the suite.
+
+Questions:
+- A fence inside `## Review` hid a `revise` block. Became Design: a fence there fails; fixture.
+- Uppercase hex is rejected. Became Design 2 wording: lowercase, as git prints commits.
+- Does the merged §8 still list `verified:`? Verified: the #588 merge (3f5884c1) keeps
+  `verified: <how>` in AGENTS.md §8 and the PR template; the tests script asserts it.
+- staticcheck and actionlint were not run by the reviewer. Verified: `make ci-preflight` ran both
+  and passed at 5c5c117a.
+
+Note: every fix has a test that fails when the fix is removed.

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const specsDir = "docs/superpowers/specs"
@@ -124,7 +125,7 @@ func main() {
 
 // check runs every rule on one spec. lines[i] is line i+1 of the file.
 func (c *checker) check(lines []string) {
-	lines = c.blankFences(lines)
+	lines, fences := c.blankFences(lines)
 
 	review := -1
 	present := map[string]bool{}
@@ -155,6 +156,11 @@ func (c *checker) check(lines []string) {
 			break
 		}
 	}
+	for _, f := range fences {
+		if f > review && f < end {
+			c.fail(f+1, "rule 2", "code fence in ## Review; show example records in another section")
+		}
+	}
 	blocks := c.parseReview(lines, review+1, end)
 	c.checkOrder(blocks, review+1)
 	for _, b := range blocks {
@@ -165,14 +171,17 @@ func (c *checker) check(lines []string) {
 }
 
 // blankFences returns lines with fenced code blocks blanked, so an example
-// record inside a fence is not read as a record.
-func (c *checker) blankFences(lines []string) []string {
+// record inside a fence is not read as a record, and the index of each
+// opening fence line.
+func (c *checker) blankFences(lines []string) ([]string, []int) {
 	out := make([]string, len(lines))
+	var fences []int
 	open := -1
 	for i, l := range lines {
 		if strings.HasPrefix(strings.TrimLeft(l, " "), "```") {
 			if open < 0 {
 				open = i
+				fences = append(fences, i)
 			} else {
 				open = -1
 			}
@@ -185,7 +194,7 @@ func (c *checker) blankFences(lines []string) []string {
 	if open >= 0 {
 		c.fail(open+1, "fence", "code fence opened here is never closed")
 	}
-	return out
+	return out, fences
 }
 
 func (c *checker) parseReview(lines []string, start, end int) []block {
@@ -209,6 +218,7 @@ func (c *checker) parseReview(lines []string, start, end int) []block {
 func (c *checker) parseBlock(lines []string, start, end int) (block, int) {
 	b := block{line: start + 1}
 	fields := map[string][]string{}
+	sawVerdict := false
 	i := start
 	for ; i < end && strings.TrimSpace(lines[i]) != ""; i++ {
 		l := lines[i]
@@ -220,9 +230,14 @@ func (c *checker) parseBlock(lines []string, start, end int) (block, int) {
 			c.fail(i+1, "rule 2", "a header line starting \"- \"; a question goes after a Questions: line")
 		case findingLine.MatchString(l):
 			c.fail(i+1, "rule 2", "an item in the block header; leave a blank line after the header")
+		case rawFinding.MatchString(l):
+			c.fail(i+1, "rule 2", "raw reviewer finding; copy findings into numbered items")
+		case sawVerdict:
+			c.fail(i+1, "rule 2", "line after Verdict: in the block header; Verdict: is the last header line")
 		default:
 			if m := fieldLine.FindStringSubmatch(l); m != nil {
 				fields[m[1]] = append(fields[m[1]], strings.TrimSpace(m[2]))
+				sawVerdict = m[1] == "Verdict"
 			}
 		}
 	}
@@ -253,8 +268,10 @@ func (c *checker) parseBlock(lines []string, start, end int) (block, int) {
 			c.fail(b.line, "rule 2", "%s: %q is not a 7 to 40 character hex commit", f, v)
 		}
 	}
-	if v := fields["Date"]; len(v) == 1 && v[0] != "" && !isoDate.MatchString(v[0]) {
-		c.fail(b.line, "rule 2", "Date: %q, want YYYY-MM-DD", v[0])
+	if v := fields["Date"]; len(v) == 1 && v[0] != "" {
+		if _, err := time.Parse("2006-01-02", v[0]); err != nil || !isoDate.MatchString(v[0]) {
+			c.fail(b.line, "rule 2", "Date: %q, want a real YYYY-MM-DD date", v[0])
+		}
 	}
 	if v := first("Verdict"); v != "" {
 		b.verdict = v
@@ -265,6 +282,7 @@ func (c *checker) parseBlock(lines []string, start, end int) (block, int) {
 
 	var cur *item
 	inQuestions, paragraphStart, next := false, true, 1
+	underQuestions, noted := false, false
 	for ; i < end && !strings.HasPrefix(lines[i], "Kind:"); i++ {
 		l := lines[i]
 		if strings.TrimSpace(l) == "" {
@@ -272,10 +290,17 @@ func (c *checker) parseBlock(lines []string, start, end int) (block, int) {
 			continue
 		}
 		indented := l[0] == ' ' || l[0] == '\t'
+		if noted && !indented && !strings.HasPrefix(l, "Note:") {
+			c.fail(i+1, "rule 2", "line after the closing Note:; notes end a block")
+		}
+		wasUnderQuestions := underQuestions
+		underQuestions = false
 		switch {
 		case indented && paragraphStart:
 			c.fail(i+1, "rule 2", "paragraph does not start with an item, Questions: or Note:")
 			cur = nil
+		case indented && wasUnderQuestions:
+			c.fail(i+1, "rule 2", "indented line under Questions:; a question starts with \"- \"")
 		case indented:
 			if cur != nil {
 				cur.text += " " + strings.TrimSpace(l)
@@ -295,9 +320,9 @@ func (c *checker) parseBlock(lines []string, start, end int) (block, int) {
 			b.items = append(b.items, item{line: i + 1, question: true, text: strings.TrimPrefix(l, "- ")})
 			cur = &b.items[len(b.items)-1]
 		case strings.HasPrefix(strings.ToLower(l), "questions:"):
-			inQuestions, cur = true, nil
+			inQuestions, cur, underQuestions = true, nil, true
 		case strings.HasPrefix(l, "Note:"):
-			cur = nil
+			cur, noted = nil, true
 		case rawFinding.MatchString(l):
 			c.fail(i+1, "rule 2", "raw reviewer finding; copy findings into numbered items")
 			cur = nil
