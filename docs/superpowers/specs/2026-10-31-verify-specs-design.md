@@ -1,7 +1,7 @@
 # `hack/verify-specs.go`: check that specs carry their reviews
 
-Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: revised after four `revise` spec reviews;
-awaiting a fifth. Merges after #588.
+Date: 2026-10-31. Base: `origin/main` 5c9975b. Status: fifth spec review approved with changes,
+applied; code starts. Merges after #588.
 
 ## Problem
 
@@ -46,9 +46,10 @@ at the end of the file fails, naming its opening line. Rule 1 applies to the who
 apply within `## Review`:
 
 1. **Sections.** `## Problem`, `## Non-goals`, `## Design`, `## Alternatives`, `## Research` and
-   `## Review` headings are present.
+   `## Review` headings are present, `## Review` exactly once; it runs to the next `## ` heading.
 2. **Blocks.** A block starts at a `Kind:` line and runs to the next `Kind:` line or the end of the
-   section. Its header is the run of lines from `Kind:` to the first blank line; it must contain
+   section. Any non-blank line in `## Review` before the first `Kind:` fails, so a review recorded
+   without `Kind:` (as #585's first one was) cannot sit ahead of the blocks. Its header is the run of lines from `Kind:` to the first blank line; it must contain
    exactly one each of `Kind:` (`spec` or `diff`), `Reviewer:`, `Model:`, `Base:` and `Head:` (each
    7 to 40 hex characters), `Date:` (`YYYY-MM-DD`) and `Verdict:` (`approve`,
    `approve-with-changes` or `revise`). `Base`, `Head` and `Verdict` are checked on their first
@@ -57,8 +58,9 @@ apply within `## Review`:
    needs `Questions:`). Below the header, each paragraph (a run of non-blank lines) must start with
    an item, a `Questions:` line (matched case-insensitively, so a copied `QUESTIONS:` works) or a
    closing note starting `Note:`; any other paragraph, such as a prose review appended after the
-   block, fails, whether or not the block has findings. Items start at column 0; indented lines
-   continue the line above. Findings in a block are numbered 1, 2, 3 ... without a restart: a
+   block, fails, whether or not the block has findings. Items start at column 0 with `N. ` (digits, a
+   dot and a space, so `6.7 min` is not one) or `- `; indented lines continue the line above. An
+   unindented line that starts none of these, directly under an item, fails rather than joining it. Findings in a block are numbered 1, 2, 3 ... without a restart: a
    second `1.` means a new review written without its own `Kind:` block, and fails. An unindented
    line starting `F<n>` (the raw reviewer format) fails: findings are copied into `N.` items.
 3. **Order.** At least one `spec` block. A later block of a kind supersedes earlier ones (a `revise`
@@ -67,10 +69,10 @@ apply within `## Review`:
 4. **Items.** A finding is a line starting `N.` in a block; a question is a line starting `- ` after a
    `Questions:` line in the block. Each item runs until a blank line, the next item, a `Questions:`,
    `Note:` or `Kind:` line, so a resolution on a continuation line counts but a note never does.
-   A leading severity word (`Blocker:`, `Major:`, `Minor:`) is removed, and the rest is split into
-   clauses at `.`, `;`, `:` or `?` followed by a space or the end of the item. The first clause is
-   the description; a status is a marker word that starts a later clause, matched
-   case-insensitively and followed by a non-letter. So `1. Minor: fixed timeouts are too short.`
+   A leading severity word (`Blocker:`, `Major:`, `Minor:`) is removed. A clause starts after `.`,
+   `;`, `:` or `?` followed by a space; the text before the first such break is the description. A
+   status is a marker at the start of a later clause, matched case-insensitively: `fixed` or
+   `became` followed by a non-letter, or `declined:`, `open:` or `verified:` with their colon. So `1. Minor: fixed timeouts are too short.`
    has no status, while `Fixed:`, `Fixed;`, `Fixed in d6d2773f:` and `Fixed when parsed;` after the
    description do. Every finding has `fixed` or `declined:`; every question has `became`, `open:`
    or `verified:`, the statuses AGENTS.md §8 and `review-prompt.md` define (this PR adds
@@ -82,7 +84,10 @@ Wiring: `hack/ci-preflight.sh` and `.github/workflows/ci.yml` run the check and 
 `AGENTS.md` §3's "CI also runs" line names it.
 
 Merge order: after #585 (merged) and #588. #588 converts its own record, so that every spec on this
-PR's base passes when it merges; before merging, the checker runs against main.
+PR's base passes when it merges; before merging, the checker runs against main. #588 rewrites the
+same AGENTS.md §8 and PR-template paragraphs this PR adds `verified:` to; the merge keeps both
+edits, and the tests script asserts that AGENTS.md, `review-prompt.md` and the PR template each
+still define `verified:`.
 
 ## Tests
 
@@ -104,7 +109,9 @@ subdirectory in the specs directory fails; and its own CI wiring. From the #588 
 `Fixed in <sha>:`, `Fixed;` and `Fixed when parsed;` after a description. A block with no
 findings followed by a prose paragraph fails, and so does one followed by `Fifth review:` and
 `1. ... Fixed:` items; a `Note: fixed later.` line directly after a finding with no status does
-not resolve it; an indented line starting `6.7 min` continues its item.
+not resolve it; an indented line starting `6.7 min` continues its item. A #585-style review (fields
+but no `Kind:`) before a conforming block fails; an unindented prose line glued under the last item
+fails; an unindented `6.7 min` line is not an item; a second `## Review` fails.
 
 ## Alternatives
 
@@ -231,3 +238,26 @@ Questions:
 - Can a `Note:` line right after an item resolve it? Became Design 4: an item ends at `Note:`;
   fixture.
 - Is an indented `N.` an item? Became Design 2: items start at column 0; fixture.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 5c9975b5
+Head: 272fe232
+Date: 2026-10-31
+Verdict: approve-with-changes
+
+1. Major: text before the first `Kind:` belonged to no block, and an unindented line glued under an
+   item joined it, so a review without `Kind:` or an appended review passed. Fixed: both fail
+   (Design 2); fixtures for each.
+2. Minor: the merge plan did not say #588 rewrites the paragraphs this PR adds `verified:` to.
+   Fixed: Merge order says the merge keeps both; the tests script asserts `verified:` survives.
+
+Questions:
+- Is an unindented `6.7 min` line an item? Became Design 2: an item needs `N. ` with a space;
+  fixture.
+- Does the colon stay with `open:` after the clause split? Became Design 4: markers are matched
+  at the clause start with their colon.
+- Is a second `## Review` checked? Became Design 1: exactly one; fixture.
+
+Note: code starts; every finding is resolved.
