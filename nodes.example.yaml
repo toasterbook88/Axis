@@ -17,6 +17,8 @@ nodes:
     role: worker
     # ssh_port: 22           # default: 22
     # timeout_sec: 10        # per-node collection timeout in seconds; default: 10
+    # system_reserve_mb: 1024  # RAM placement never offers; add a resident cache's cap
+    #                          # (docs/runbooks/resident-memory-services.md); default: 1024
 
 # Optional experimental UDP discovery settings.
 # Discovery suggestions still require manual review before use.

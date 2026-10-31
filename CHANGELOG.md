@@ -63,6 +63,14 @@
   any tag of that name, and a registry port is not a tag. Found by the Copilot
   review of #577 after it merged (#590).
 
+### Documentation
+
+* `docs/runbooks/resident-memory-services.md` explains how to keep a resident
+  cache or scratch store's RAM cap out of placement with a node's
+  `system_reserve_mb`, which was undocumented. New tests pin the behaviour it
+  relies on: the cap is held out while the service is idle, its memory is not
+  counted twice once it fills, and `nodes.yaml`'s value reaches the facts.
+
 ### Dependencies and CI
 
 * `go run hack/verify-import-tiers.go` fails CI when an `internal/` package
