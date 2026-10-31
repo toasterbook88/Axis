@@ -40,6 +40,10 @@
   pressed. Refresh ticks from a superseded cycle are dropped.
 * `axis tui` keys typed quickly (delivered as one multi-rune message, such as
   `jjG`) now each act as their own key instead of being ignored.
+* Model matching in routing no longer treats two different tags of one model
+  as the same model: a role asking for `coder:small` is no longer satisfied
+  by a hub that lists only `coder:large`. A name without a tag still matches
+  any tag of that name. Found by the Copilot review of #577 after it merged.
 
 ## v0.22.0 (2026-10-28)
 

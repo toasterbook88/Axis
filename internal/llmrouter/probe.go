@@ -248,18 +248,24 @@ func parseModelList(kind string, body []byte) ([]string, error) {
 	}
 }
 
-// ModelListed reports whether model appears in probe models (exact or prefix match for :latest tags).
+// ModelListed reports whether model appears in probe models: an exact match, or the same name
+// when one side carries no tag ("coder" matches "coder:latest" and "coder:7b"). Two different
+// explicit tags never match: "coder:small" is not "coder:large".
 func ModelListed(models []string, model string) bool {
 	model = strings.TrimSpace(model)
 	if model == "" || len(models) == 0 {
 		return false
 	}
+	name, tag, tagged := strings.Cut(model, ":")
 	for _, m := range models {
 		if m == model {
 			return true
 		}
-		// Accept tag-less equality: "coder" matches "coder:latest".
-		if strings.Split(m, ":")[0] == strings.Split(model, ":")[0] {
+		mName, mTag, mTagged := strings.Cut(m, ":")
+		if mName != name {
+			continue
+		}
+		if !tagged || !mTagged || mTag == tag {
 			return true
 		}
 	}
