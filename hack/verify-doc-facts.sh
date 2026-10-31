@@ -260,14 +260,8 @@ ram_writers="$(grep -rn 'RAMReservedMB\s*=' internal/ --include='*.go' | grep -v
 [[ -z "$ram_writers" ]] \
   || fail "RAMReservedMB assigned outside internal/snapshotview (derived view must stay read-only): $ram_writers"
 
-# --- 4b. internal/ package inventory -----------------------------------------
-# AGENTS.md documents the package tier layout; verify no package exists that
-# AGENTS.md does not name, and none named has disappeared.
-pkg_code="$(find internal -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-for pkg in $(find internal -mindepth 1 -maxdepth 1 -type d | xargs -n1 basename); do
-  grep -qE "internal/$pkg([ /)]|$)" AGENTS.md \
-    || fail "AGENTS.md does not mention internal/$pkg (add it to the tier layout or delete the package)"
-done
+# The internal/ package inventory against the AGENTS.md tier layout is checked
+# by hack/verify-import-tiers.go, which also enforces import direction.
 
 # --- 4c. AGENTS.md context budget --------------------------------------------
 # axis agent injects the nearest AGENTS.md into the system prompt with a 32KB
