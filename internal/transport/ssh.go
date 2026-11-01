@@ -918,7 +918,8 @@ func unlessNone(value string) string {
 // Port as User, and checks known_hosts under HostKeyAlias when it is set. It
 // refuses a host whose config sets ProxyJump or ProxyCommand
 // (UnsupportedSSHDirectiveError); they are reported so callers can tell when
-// the operator's ssh would reach a different machine.
+// the operator's ssh would reach a different machine. Like transport, it skips
+// the system-wide ssh_config when ~/.ssh/config exists.
 type SSHTarget struct {
 	Hostname     string
 	Port         int
@@ -950,6 +951,8 @@ func ResolveSSHTarget(ctx context.Context, host string, port int, user string) (
 // UnsupportedSSHDirectiveError reports that the operator's SSH config routes
 // Host through a directive the in-process client does not implement. Connect
 // returns it without dialing, so the node is never reached around that route.
+// Only directives ssh -G reports are seen; runSSHConfigCommand passes
+// -F ~/.ssh/config when it exists, which skips the system-wide ssh_config.
 type UnsupportedSSHDirectiveError struct {
 	Host      string
 	Directive string

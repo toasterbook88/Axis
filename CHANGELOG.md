@@ -47,7 +47,8 @@
   `Host *` with `ProxyJump`) worked by accident and now fails until those
   hosts get `ProxyJump none` or `ProxyCommand none` in a more specific `Host`
   block. `axis doctor` gives that remediation, and `axis init --generate` flags
-  such proposals `...; Axis transport refuses it`. Design:
+  such proposals `...; Axis transport refuses it`. A directive set only in the
+  system-wide `ssh_config` is not seen while `~/.ssh/config` exists. Design:
   `docs/superpowers/specs/2026-11-01-ssh-proxy-directives-design.md`.
 
 * `axis init`'s "Scan AXIS beacons" now listens with the discovery secret and

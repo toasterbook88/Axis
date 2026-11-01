@@ -22,6 +22,11 @@ key-trust hole. The fast path (`ResolvedDialTarget`) dials the same way.
   resolution, then a tunnel). That is a larger feature with its own spec if a topology needs it.
 - Supporting `ProxyCommand`. It runs a shell command taken from SSH config; Axis will not execute it.
 - Changing `nodes.yaml` generation logic, matching or proposals in `axis init --generate`.
+- Directives in the system-wide `ssh_config`: transport runs `ssh -G -F ~/.ssh/config` whenever
+  that file exists (since `120d84ad`), which skips `/etc/ssh/ssh_config` and its includes, so a
+  proxy directive set only there is not observed and the host is still dialed directly. Changing
+  `-F` alters every resolved field and is a separate change; the error type, `SSHTarget` comment
+  and CHANGELOG state the limit.
 - Changing behaviour when `ssh -G` itself fails: transport keeps its built-in defaults and dials, as
   today, because no directive was observed.
 
@@ -145,3 +150,26 @@ Questions:
   does; Design 4 says so and a test pins it.
 - Is "no configured node uses a jump" true fleet-wide? Open: only this workstation's 18 hostnames
   and endpoints were probed; the claim is narrowed to that, and the design does not depend on it.
+
+Kind: diff
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (one diff review: about 55 non-test `.go` lines in
+`cmd/axis` and `internal/transport`, below the §8 larger-feature threshold)
+Base: e82447db
+Head: 529d4f9c
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: keeping the last refusal instead of the first survived the suite. Fixed: a test with two
+   refused candidates asserts the primary's host and directive.
+2. Minor: `-F ~/.ssh/config` skips the system-wide `ssh_config`, so a directive set only there is
+   still bypassed. Fixed as documentation: stated as a non-goal and in the error type, `SSHTarget`
+   comment and CHANGELOG; changing `-F` is left to a separate change because it affects every
+   resolved field.
+
+Questions:
+- In the mixed case doctor shows only the directive `Fix`. Verified: the `Message` carries both
+  errors, dial error first (`TestConnectDialFailureSurvivesALaterRefusal`); the `Fix` covers the
+  refusal, which no other fix resolves, as Design 3 specifies.
+- The 0-of-18 workstation count was not rechecked. Open: it needs real `nodes.yaml` and SSH config,
+  and the design does not depend on it.

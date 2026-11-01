@@ -223,3 +223,12 @@ func TestConnectKeepsTheMostRecentDialError(t *testing.T) {
 		t.Fatalf("want only the most recent dial error (port 3): %q", msg)
 	}
 }
+
+func TestConnectReportsTheFirstRefusal(t *testing.T) {
+	stubSSHConfigPerHost(t, t.TempDir(), map[string]string{
+		"jumped-a": "hostname 127.0.0.1\nproxyjump jump.example.com\n",
+		"jumped-b": "hostname 127.0.0.1\nproxycommand nc %h %p\n",
+	})
+	exec := NewSSHExecutorFromDial("jumped-a", 22, "axis", 1, []string{"jumped-b"})
+	wantDirectiveError(t, exec.Connect(context.Background()), "jumped-a", "ProxyJump")
+}
