@@ -51,7 +51,7 @@ type initDependencies struct {
 	saveConfig        func(string, *config.Config) (config.SaveResult, error)
 	verifySSH         func(context.Context, string, int, string, int, io.Writer) bool
 	discoverTailscale func(context.Context) ([]config.NodeConfig, error)
-	discoverMesh      func(context.Context) ([]config.NodeConfig, error)
+	discoverMesh      func(context.Context, *config.Config) ([]config.NodeConfig, error)
 }
 
 func defaultInitDependencies() initDependencies {
@@ -323,7 +323,7 @@ func remoteNodeMenu(ctx context.Context, prompt *initPrompter, cfg *config.Confi
 			}
 		case "mesh":
 			fmt.Fprintln(prompt.out, "Listening for AXIS beacons for 3 seconds...")
-			candidates, err := deps.discoverMesh(ctx)
+			candidates, err := deps.discoverMesh(ctx, cfg)
 			if err != nil {
 				fmt.Fprintf(prompt.out, "%s %v\n", ui.Red("Beacon scan unavailable:"), err)
 				continue
@@ -955,11 +955,26 @@ func discoverTailscalePeers(ctx context.Context) ([]config.NodeConfig, error) {
 
 var discoverMeshPeersFn = discoverMeshPeers
 
-func discoverMeshPeers(ctx context.Context) ([]config.NodeConfig, error) {
+var watchBeaconChangesFn = discovery.WatchBeaconChanges
+
+// discoverMeshPeers listens for beacons with the discovery settings being
+// edited: without the secret, signed beacons are rejected (open mode accepts
+// only unsigned ones). The scan runs even when discovery is disabled.
+func discoverMeshPeers(ctx context.Context, cfg *config.Config) ([]config.NodeConfig, error) {
 	scanCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	scan := config.DiscoveryConfig{UDPPort: 42424}
+	if cfg != nil && cfg.Discovery != nil {
+		scan = *cfg.Discovery
+		if scan.UDPPort <= 0 {
+			scan.UDPPort = 42424
+		}
+	}
+	scan.Enabled = true
 	registry := discovery.NewBeaconRegistry()
-	discovery.WatchBeaconChanges(scanCtx, &config.Config{Discovery: &config.DiscoveryConfig{Enabled: true, UDPPort: 42424}}, registry, nil)
+	if err := watchBeaconChangesFn(scanCtx, &config.Config{Discovery: &scan}, registry, nil); err != nil {
+		return nil, fmt.Errorf("beacon listener did not start: %w", err)
+	}
 	<-scanCtx.Done()
 	if err := ctx.Err(); err != nil {
 		return nil, err

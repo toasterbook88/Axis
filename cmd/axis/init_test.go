@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/discovery"
 	"github.com/toasterbook88/axis/internal/models"
 )
 
@@ -407,7 +409,7 @@ func testInitDeps() initDependencies {
 		discoverTailscale: func(context.Context) ([]config.NodeConfig, error) {
 			return nil, nil
 		},
-		discoverMesh: func(context.Context) ([]config.NodeConfig, error) {
+		discoverMesh: func(context.Context, *config.Config) ([]config.NodeConfig, error) {
 			return nil, nil
 		},
 	}
@@ -420,5 +422,53 @@ func twoNodeConfig() *config.Config {
 			{Name: "remote", Hostname: "10.0.0.2", SSHUser: "operator", Role: "worker", SSHPort: 22, TimeoutSec: 10},
 		},
 		Discovery: &config.DiscoveryConfig{Enabled: false},
+	}
+}
+
+// stubWatchBeacons records the discovery config the wizard's scan passes.
+func stubWatchBeacons(t *testing.T, err error) *config.DiscoveryConfig {
+	t.Helper()
+	got := &config.DiscoveryConfig{}
+	prev := watchBeaconChangesFn
+	watchBeaconChangesFn = func(_ context.Context, cfg *config.Config, _ *discovery.BeaconRegistry, _ func()) error {
+		if cfg != nil && cfg.Discovery != nil {
+			*got = *cfg.Discovery
+		}
+		return err
+	}
+	t.Cleanup(func() { watchBeaconChangesFn = prev })
+	return got
+}
+
+// The scan must use the configured secret and port: with no secret it accepts
+// only unsigned beacons, so in a cluster the wizard secured it would find nothing.
+func TestDiscoverMeshPeersUsesConfiguredSecretAndPort(t *testing.T) {
+	got := stubWatchBeacons(t, nil)
+	cfg := &config.Config{Discovery: &config.DiscoveryConfig{Enabled: true, UDPPort: 42500, Secret: "s3cret-for-test"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = discoverMeshPeers(ctx, cfg)
+	if got.Secret != "s3cret-for-test" || got.UDPPort != 42500 || !got.Enabled {
+		t.Fatalf("scan used discovery %+v, want the configured secret and port, enabled", *got)
+	}
+}
+
+// With discovery disabled or absent, the scan still listens on the default port in open mode.
+func TestDiscoverMeshPeersDefaultsWithoutDiscoveryConfig(t *testing.T) {
+	got := stubWatchBeacons(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = discoverMeshPeers(ctx, &config.Config{})
+	if got.Secret != "" || got.UDPPort != 42424 || !got.Enabled {
+		t.Fatalf("scan used discovery %+v, want open mode on 42424", *got)
+	}
+}
+
+// A listener that did not start is an error, not "no peers".
+func TestDiscoverMeshPeersReturnsListenerError(t *testing.T) {
+	stubWatchBeacons(t, errors.New("bind: address already in use"))
+	peers, err := discoverMeshPeers(context.Background(), &config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "address already in use") {
+		t.Fatalf("discoverMeshPeers = %v, %v; want the listener error", peers, err)
 	}
 }
