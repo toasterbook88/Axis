@@ -83,7 +83,7 @@ func usePasswdFile(t *testing.T, contents string) {
 
 func TestPasswdHome(t *testing.T) {
 	uid := os.Getuid()
-	usePasswdFile(t, fmt.Sprintf("root:x:0:0::/root:/bin/sh\naxis:x:%d:%d::/home/operator:/bin/sh\n", uid, uid))
+	usePasswdFile(t, fmt.Sprintf("other:x:%d:%d::/other:/bin/sh\naxis:x:%d:%d::/home/operator:/bin/sh\n", uid+2, uid+2, uid, uid))
 	if got, err := passwdHome(uid); err != nil || got != "/home/operator" {
 		t.Fatalf("passwdHome = %q, %v; want /home/operator", got, err)
 	}
