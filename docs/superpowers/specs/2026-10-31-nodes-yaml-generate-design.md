@@ -1,7 +1,7 @@
 # `axis init --generate`: propose `nodes.yaml` additions from Tailscale
 
-Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after five `revise` spec
-reviews; narrowed to Tailscale for v1; awaiting a sixth review.
+Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after six `revise` spec
+reviews; narrowed to Tailscale for v1; awaiting a seventh review.
 
 ## Problem
 
@@ -27,6 +27,8 @@ The pieces to automate it exist but are only reachable interactively:
   generator only appends.
 - Drift detection (a configured node now at another address). Without a `stable_id` from the
   source there is no identity to compare across addresses; v1 reports only "not seen".
+- Host-key comparison. A peer's `sshHostKeys` is known only for some peers and would need parsing
+  `known_hosts` entries; v1 matches by addresses, including the peer's LAN endpoints (Design 3).
 - AXIS beacons as a source in v1. A CLI scan shares the beacon port with the daemon through
   `SO_REUSEPORT`, which spreads datagrams across sockets (`internal/discovery/udp.go:170-178`), so
   a scan beside a running daemon can miss peers; and a beacon's address is the sender's first
@@ -60,12 +62,15 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    - The tailnet suffix is `CurrentTailnet.MagicDNSSuffix`, else the deprecated top-level
      `MagicDNSSuffix`. When both are empty (older daemons, some self-hosted control servers), no
      peer is skipped for its suffix and names are never judged by suffix; only the IP ranges count.
-   - For every `Peer`, online or offline, keep `HostName`, `DNSName` (trailing dot removed) and
-     every entry of `TailscaleIPs`.
+   - For every `Peer`, online or offline, keep `HostName`, `DNSName` (trailing dot removed), every
+     entry of `TailscaleIPs`, and the IPs of its direct endpoints (`Addrs` and `CurAddr`, which are
+     `ip:port` strings), which are usually its LAN addresses.
    - Some peers are never proposed, and are listed as skipped with the reason: `ShareeNode` peers
-     (owned by a user this tailnet shared a node to, who may connect to us), and peers with a
-     non-empty `DNSName` outside the tailnet suffix (machines shared in from another tailnet, whose
-     names are under that tailnet's suffix, and Mullvad exit nodes). Skipped peers still take part
+     (owned by a user this tailnet shared a node to, who may connect to us); peers with a non-zero
+     `AltSharerUserID` (shared into this tailnet by another user); peers whose `DNSName` is under
+     Mullvad's exit-node suffix (the constant `mullvadTCD` that the CLI filters on in
+     `cmd/tailscale/cli/status.go`); and peers with a non-empty `DNSName` outside the tailnet
+     suffix. Skipped peers still take part
      in matching (Design 3), so a configured node at a skipped peer's address is seen.
    - A peer with no `TailscaleIPs` is skipped too ("no tailnet address"), and still takes part in
      matching by its `DNSName`.
@@ -80,11 +85,13 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    fails leaves just the names. Resolution runs at most 8 at a time within a 10-second overall
    budget; a name not resolved by then keeps just its names and is reported as unresolved.
 3. **Match.** Every parsed peer, skipped or not, is matched. A peer matches a configured node when
-   its `DNSName` or one of its tailnet IPs is in the node's address set, compared
-   case-insensitively. A configured short MagicDNS name matches through its DNS lookup, not by
-   comparing labels. A candidate's unknown port is
-   compatible with any configured port. Names never match on their own: two machines can share an
-   OS hostname, and a LAN alias can share a first label with an unrelated tailnet peer.
+   its `DNSName`, one of its tailnet IPs or one of its endpoint IPs is in the node's address set,
+   compared case-insensitively. A configured short MagicDNS name matches through its DNS lookup,
+   not by comparing labels. A candidate's unknown port is compatible with any configured port.
+   Names never match on their own: two machines can share an OS hostname, and a LAN alias can
+   share a first label with an unrelated tailnet peer. Endpoint
+   IPs make a node configured by its LAN address or by an alias for it match its own peer, so it
+   is not proposed a second time.
 4. **Report what was not seen.** A configured node is judged only if its address set contains a
    tailnet address: an IP in the ranges `isTailscaleAddr` in `internal/snapshot` already tests
    (Tailscale's IPv4 CGNAT range and its own IPv6 /48, not all of IPv6 ULA; the function is
@@ -96,12 +103,14 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    loopback or a local interface address). `NodeConfig.IsLocal()` is not used for this: it accepts
    any name whose first label is this machine's short hostname (`internal/models/locality.go`),
    which would hide a remote `hub.<suffix>` on a machine called `hub`.
-5. **Propose.** Each online, unmatched peer becomes a proposed entry:
-   - `name`: `normalizeSuggestedName` of `HostName`, else of the `DNSName`'s first label, else
-     the first tailnet IP with its separators replaced by `-` (`normalizeSuggestedName` cuts at the
-     first dot, so an IP must not reach it unchanged); on a case-insensitive collision with a
-     configured or proposed name, or with the local entry a new file gets (Design 8), suffixed
-     `-2`, `-3` ..., and flagged "possible duplicate of <name>";
+5. **Propose.** Each online, unmatched peer becomes a proposed entry. Peers are handled in order
+   of their first tailnet IP, so names and suffixes are the same on every run:
+   - `name`: the `DNSName`'s first label, which Tailscale keeps unique within the tailnet, else
+     `normalizeSuggestedName` of `HostName`, else the first tailnet IP with its separators
+     replaced by `-` (`normalizeSuggestedName` cuts at the first dot, so an IP must not reach it
+     unchanged); on a case-insensitive collision with a configured or proposed name, or with the
+     local entry a new file gets (Design 8), suffixed `-2`, `-3` ... and flagged "possible
+     duplicate of <name>";
    - `hostname`: the `DNSName` when present, `CurrentTailnet.MagicDNSEnabled` is true (the suffix
      is reported even with MagicDNS off), and the name resolves from this machine within 2 seconds
      (it does not with `--accept-dns=false`); else the first tailnet IP. Also the first tailnet IP
@@ -115,7 +124,11 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    Offline peers are listed for information and never proposed.
 6. **Verify (optional).** With `--verify-ssh`, each proposed entry is checked through the
    `verifySSH` seam, changed to return a reason: `unknown-host-key`, `host-key-mismatch`, `auth`,
-   `network`, `local-ssh-config`. Transport gains sentinel errors, wrapped with `%w`, for the
+   `network`, `local-ssh-config`. The classifier maps a `*knownhosts.KeyError` with no `Want` to
+   `unknown-host-key` and with a `Want` to `host-key-mismatch`; the sentinels below as stated;
+   an error containing "unable to authenticate" to `auth` (x/crypto returns it untyped, at
+   `ssh/client_auth.go`; the string is pinned by a test against the vendored version); anything
+   else to `network`. Transport gains sentinel errors, wrapped with `%w`, for the
    local cases it reports today as plain text: `ErrKnownHostsMissing` (no `known_hosts` file,
    `internal/transport/ssh.go:847`), `ErrKnownHostsUnreadable` (`:734`) and `ErrNoSigners` (no keys
    or agent, `:715`). `ErrKnownHostsMissing` is `unknown-host-key`; the other two are
@@ -127,9 +140,10 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
 7. **Report.** Text output lists proposed entries (with verification and duplicate flags), offline
    peers, and the not-seen and not-observable nodes, then a unified diff of the file for the
    entries `--write` would add. `--format json` gives the same data for agents. Nothing is written.
-8. **Write.** `--write` requires `--only NAME,...` (proposed names) or `--all`, so devices on the
-   tailnet that are not cluster nodes are never added by accident. With `--verify-ssh`, entries
-   that failed verification are not written even under `--all`.
+8. **Write.** `--write` requires `--only NAME,...` (proposed names, or their tailnet IPs) or
+   `--all`, so devices on the tailnet that are not cluster nodes are never added by accident.
+   `--all` leaves out entries that failed `--verify-ssh` and entries flagged "possible duplicate";
+   those need `--only`.
    - Existing bytes are never re-encoded. The chosen entries alone are encoded with yaml.v3 at
      the indent the file's `nodes:` items use (the column of their `-`, zero included), each
      preceded by a comment naming the source and date.
@@ -139,8 +153,10 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
      belong to what follows. yaml.v3 gives the line where a value starts, not where it ends (a
      block scalar or a multi-line flow collection continues past it), so the last item's own lines
      are never used.
-   - A flow-style `nodes: [...]` list has no `-` column; the command refuses to write and points to
-     the wizard.
+   - A flow-style `nodes: [...]` list has no `-` column, and a document-end marker (`...`) leaves
+     no place to append; in both cases the command refuses to write and points to the wizard. When
+     the last item ends in a keep-chomped block scalar (`|+`, `>+`), the blank lines before the next
+     key belong to that scalar; the meaning check rejects the splice and the write is refused.
    - The file's newline style (LF or CRLF) is kept, and a final newline is added only where the
      file lacked one before the insertion point.
    - Meaning check: the result is decoded, and the write is refused unless it equals the original
@@ -152,8 +168,12 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
      file and replace it atomically with mode 0600 and a directory fsync, as `SaveAtomic` does. It
      returns typed errors: `ErrInvalidConfig`, `ErrConfigChanged`, and anything else as an I/O
      error. `SaveAtomic` keeps its behaviour and shares those helpers.
-   - With no `nodes.yaml` (`original` nil), the result is a new file. Like the wizard, it lists this
-     machine first (`hostname: localhost`, named from the OS hostname) and then the chosen entries.
+   - With no `nodes.yaml` (`original` nil), the result is a new file shaped like the wizard's: this
+     machine first (`hostname: localhost`, named from the OS hostname, `role: primary`, its
+     `stable_id`, `ssh_user` by the Design 5 rule), then the chosen entries, then
+     `discovery: {enabled: false}`. Without that block, a config with no `discovery` turns the
+     gossip mesh on with no secret (`internal/config/config.go:446-450`), which the wizard never
+     writes.
      It is created with an exclusive create, so a file that appears mid-run is not overwritten, and
      without a backup. With nothing chosen, nothing is written.
    - Between the byte comparison and the rename a short window remains. It is accepted:
@@ -201,8 +221,15 @@ using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only
 - a `DNSName` that does not resolve from this machine is not used as `hostname`;
 - with both suffix fields empty, no peer is skipped for its suffix;
 - a peer with no `TailscaleIPs` is skipped, and `--write --all` still writes the rest;
-- a configured LAN alias `web1` and a peer `web1.<suffix>` at a different IP: the peer is proposed
-  (suffixed, flagged), not matched;
+- a configured LAN alias `web1` and a peer `web1.<suffix>` at a different IP and different
+  endpoints: the peer is proposed (suffixed, flagged), not matched;
+- a node configured by its LAN IP, under another name, matches its peer through the peer's
+  endpoint IPs and is not proposed again;
+- three unmatched peers with the same `HostName` and no `DNSName`: two runs give the same
+  name-to-IP mapping, and `--only` by tailnet IP selects the reviewed machine;
+- a peer with a non-zero `AltSharerUserID` and a peer under Mullvad's suffix (with the suffix
+  fields empty too) are skipped;
+- `--write --all` leaves out an entry flagged "possible duplicate";
 - a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an
   empty `DNSName` (not skipped) from its IP;
 - `ssh_user` precedence: `--ssh-user`, then the first configured node's user, then the current user;
@@ -216,24 +243,27 @@ using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only
 - with `--write --only`, on fixtures whose last item ends in a block scalar (`>-`, `|`) and in a
   multi-line flow mapping, the new entry lands after the whole value and the meaning check passes;
   a splice placed inside the value (an injected offset) is refused by the meaning check;
-- a flow-style `nodes: [...]` file is refused with exit 1;
+- a flow-style `nodes: [...]` file, a file ending in `...`, and a last item ending in a `|+` scalar
+  followed by blank lines are each refused with exit 1 and left unchanged;
 - exit 2 for an existing file that fails to load; exit 6 for an injected write failure;
 - with `--write --only`, on fixtures with 0-, 2- and 4-space item indent, blank lines between
   entries, aligned inline comments, a comment block above a following top-level key, CRLF line
   endings, and no final newline: every original byte is preserved, the new entries follow the last
   item at the file's indent, the following key keeps its comment, a backup exists, and
   `config.Load` accepts the result;
-- with no file, `--write --all` creates one that lists this machine first, without a backup; a
+- with no file, `--write --all` creates one that lists this machine first with the wizard's local
+  fields and ends with `discovery: {enabled: false}`, without a backup; a
   peer with this machine's OS hostname is suffixed rather than failing the write; a file created
   between the read and the write is not overwritten;
-- the splice and meaning check hold for new entries with nested `labels` and `endpoints`, and for
-  a last item ending in a `|+` keep-chomp scalar followed by blank lines;
+- the splice and meaning check hold for new entries with nested `labels` and `endpoints`;
 - resolution of many unresolvable names finishes within the overall budget;
 - a proposal that would fail `Validate` is not written and the file is unchanged;
 - `--format json` carries the same lists.
 
 `internal/transport`: the exported resolver returns the alias's HostName and Port from a stubbed
 `ssh -G`; a missing `known_hosts`, an unreadable one and no signers return their sentinel errors.
+The reason classifier is table-tested with real errors (a wrapped `*knownhosts.KeyError` with and
+without `Want`, each sentinel, x/crypto's authentication error, a dial error), not stubbed.
 `internal/config`: `SaveBytesAtomic` rejects unknown keys and invalid configs without touching the
 file, and on success leaves mode 0600 and a backup.
 
@@ -275,7 +305,10 @@ file, and on success leaves mode 0600 and a backup.
 
 Optimization chosen: one source in v1, reuse the wizard's Tailscale parsing, naming, user default
 and validation and transport's resolution, and write by splicing bytes, so the new code is the
-matcher, the report and the byte writer.
+matcher, the report and the byte writer. The command runs on demand, so the only cost that
+matters is name resolution. Measured on a 13-node `nodes.yaml`: `ssh -G` for all names took 51 ms;
+`ssh -G` plus a lookup each, one after another, took 2.1 s, about one 2-second timeout. Hence the
+2-second lookup, 8 at a time, and a 10-second overall budget.
 
 ## Review
 
@@ -455,3 +488,39 @@ Questions:
 - Is resolution bounded? Became Design 2: 8 at a time within 10 seconds; fixture.
 - Is the compare-then-rename window accepted? Became Design 8: yes, stated.
 - What does `--format` do without `--generate`? Became Design 9: exit 1.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 8cf9d74b
+Head: 081d98de
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: a machine configured by its LAN address or an alias was proposed again, usually
+   unflagged. Fixed: the peer's endpoint IPs (`Addrs`, `CurAddr`) take part in matching, and
+   `--all` leaves out flagged entries (Design 1, 3 and 8); fixtures.
+2. Major: suffix order followed Go map order, so `--only` could pick another machine. Fixed:
+   peers are named in tailnet-IP order, preferring the unique `DNSName` label, and `--only`
+   accepts a tailnet IP (Design 5 and 8); fixture with three same-named peers run twice.
+3. Minor: the `|+` test contradicted the splice rule. Fixed: that case, a document-end marker and
+   a flow list are refused (Design 8); fixtures assert exit 1 and no change.
+4. Minor: the reason classifier had no real test and `auth` no typed source. Fixed: the mapping
+   is stated and table-tested with real errors (Design 6, Tests).
+5. Minor: a new file had no `discovery:` block, so gossip would start without a secret. Fixed: it
+   ends with `discovery: {enabled: false}` and has the wizard's local fields (Design 8); fixture.
+6. Minor: the spec-review gate fails while the last review is `revise`. Fixed: this record; a
+   further review follows before code.
+7. Minor: the optimization had no measurement. Fixed: resolution timed on a 13-node file
+   (Research).
+
+Questions:
+- Are shared-in machines always under the sharer's suffix? Became Design 1: a non-zero
+  `AltSharerUserID` is skipped as well as the suffix rule.
+- Is `sshHostKeys` populated for peers without Tailscale SSH? Became a non-goal: v1 does not use
+  host keys.
+- Does yaml.v3 agree on keep-chomp semantics? Became Design 8: the case is refused, so either
+  reading fails closed.
+- Can Mullvad exit nodes be proposed when the suffix is empty? Became Design 1: Mullvad's suffix
+  is skipped regardless of the tailnet suffix; fixture.
+- A file ending in `...`? Became Design 8: refused with a pointer to the wizard; fixture.
