@@ -38,6 +38,18 @@
 
 ### Fixes
 
+* **Behaviour change:** SSH transport refuses a host whose SSH config sets
+  `ProxyJump` or `ProxyCommand`, instead of silently dialing its `HostName`
+  directly. `Connect` returns `transport.UnsupportedSSHDirectiveError`, naming
+  the directive and the host, before any TCP dial, and moves on to the next
+  dial fallback; a fallback with no directive still connects. A setup that
+  applies a proxy directive to hosts AXIS could reach directly (for example
+  `Host *` with `ProxyJump`) worked by accident and now fails until those
+  hosts get `ProxyJump none` or `ProxyCommand none` in a more specific `Host`
+  block. `axis doctor` gives that remediation, and `axis init --generate` flags
+  such proposals `...; Axis transport refuses it`. Design:
+  `docs/superpowers/specs/2026-11-01-ssh-proxy-directives-design.md`.
+
 * `axis init`'s "Scan AXIS beacons" now listens with the discovery secret and
   UDP port of the configuration being edited. It used no secret and port 42424,
   so in a cluster where discovery is secured (the wizard always generates a

@@ -578,10 +578,10 @@ func checkProposalHostname(ctx context.Context, deps generateDependencies, cand 
 	check.sshCause = true
 	switch {
 	case t.ProxyJump != "":
-		check.reason = "redirected by SSH config (ProxyJump)"
+		check.reason = "redirected by SSH config (ProxyJump); Axis transport refuses it"
 		return check
 	case t.ProxyCommand != "":
-		check.reason = "redirected by SSH config (ProxyCommand)"
+		check.reason = "redirected by SSH config (ProxyCommand); Axis transport refuses it"
 		return check
 	case t.User != "" && t.User != user:
 		check.reason = "redirected by SSH config (User)"

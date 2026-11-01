@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/transport"
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -632,5 +634,32 @@ func TestDoctorSkipsSSHForLocalNode(t *testing.T) {
 		if strings.Contains(out, "fail") && strings.Contains(out, "SSH: n") && strings.Contains(out, "unreachable") {
 			t.Fatalf("local node should not fail SSH, got:\n%s", out)
 		}
+	}
+}
+
+func TestDoctorRefusedProxyDirectiveGetsItsOwnFix(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
+	defer stubDoctorConfigPath(t, func() string { return tmpFile })()
+	defer stubDoctorOwnershipHealthy(t)()
+	defer stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{Nodes: []config.NodeConfig{{Name: "gamma", Hostname: "10.0.0.3", SSHUser: "axis"}}}, nil
+	})()
+	defer stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error {
+		return fmt.Errorf("connect: %w", &transport.UnsupportedSSHDirectiveError{Host: "10.0.0.3", Directive: "ProxyJump"})
+	})()
+	defer stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", errors.New("daemon unavailable")
+	})()
+
+	stdout, _, _ := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	stdout = stripANSI(stdout)
+	if !strings.Contains(stdout, "ProxyJump none") || strings.Contains(stdout, "verify pubkey auth, known_hosts") {
+		t.Fatalf("refused node should get the directive fix, not the known_hosts hint:\n%s", stdout)
 	}
 }

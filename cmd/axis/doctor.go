@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -340,11 +341,17 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 			sshErr := doctorCheckNodeSSH(sshCtx, n)
 			cancel()
 			if sshErr != nil {
+				fix := "verify pubkey auth, known_hosts, and dial address (LAN vs Tailscale)"
+				var directiveErr *transport.UnsupportedSSHDirectiveError
+				if errors.As(sshErr, &directiveErr) {
+					fix = fmt.Sprintf("Axis does not use %[1]s: point hostname or an endpoint at an address Axis can reach directly, "+
+						"or add \"%[1]s none\" in a more specific Host block before the wildcard that sets it", directiveErr.Directive)
+				}
 				checks = append(checks, DoctorCheck{
 					Name:    fmt.Sprintf("SSH: %s", n.Name),
 					Status:  "fail",
 					Message: fmt.Sprintf("unreachable (%s): %v", addr, sshErr),
-					Fix:     "verify pubkey auth, known_hosts, and dial address (LAN vs Tailscale)",
+					Fix:     fix,
 				})
 				continue
 			}

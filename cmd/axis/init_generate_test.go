@@ -448,6 +448,12 @@ func TestGenerateRedirects(t *testing.T) {
 	if p.Hostname != "100.64.0.10" || p.Unsafe || !hasFlag(p, "hostname-withheld: DNSName redirected by SSH config (HostName)") || p.YAML == "" {
 		t.Fatalf("redirect 1: %+v", p)
 	}
+	f = base()
+	f.ssh = map[string]transport.SSHTarget{"alpha." + genSuffix: {Hostname: "alpha." + genSuffix, ProxyJump: "jump.example.com"}}
+	p = proposal(t, run(t, f, nil), "alpha")
+	if p.Hostname != "100.64.0.10" || p.Unsafe || !hasFlag(p, "hostname-withheld: DNSName redirected by SSH config (ProxyJump); Axis transport refuses it") {
+		t.Fatalf("redirect 1 (ProxyJump): %+v", p)
+	}
 	for field, target := range map[string]transport.SSHTarget{
 		"HostName":     {Hostname: "elsewhere.example.com"},
 		"ProxyJump":    {Hostname: "100.64.0.10", ProxyJump: "jump.example.com"},
@@ -458,7 +464,11 @@ func TestGenerateRedirects(t *testing.T) {
 		f := base()
 		f.ssh = map[string]transport.SSHTarget{"alpha." + genSuffix: target, "100.64.0.10": target}
 		p := proposal(t, run(t, f, nil), "alpha")
-		if p.Hostname != "" || !p.Unsafe || p.YAML != "" || !hasFlag(p, "unsafe: redirected by SSH config ("+field+")") {
+		want := "unsafe: redirected by SSH config (" + field + ")"
+		if target.ProxyJump != "" || target.ProxyCommand != "" {
+			want += "; Axis transport refuses it"
+		}
+		if p.Hostname != "" || !p.Unsafe || p.YAML != "" || !hasFlag(p, want) {
 			t.Fatalf("redirect 2 (%s): %+v", field, p)
 		}
 	}
