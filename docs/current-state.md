@@ -69,6 +69,7 @@ The live repo currently contains:
   live-memory, liveness, configuration, and ledger checks.
 - Observed stable node identity when the host exposes it (`machine-id` on Linux, platform UUID on macOS), with locality preferring explicit identity before hostname/address fallback
 - `axis init` automatically seeds that observed local stable identity into new configurations
+- `axis init --generate`: a read-only report that proposes `nodes.yaml` additions from `tailscale status --json` (ready-to-paste YAML, offline, skipped and not-seen lists; proposed hostnames checked through `ssh -G` and DNS); it never writes `nodes.yaml` (`docs/superpowers/specs/2026-10-31-nodes-yaml-generate-design.md`)
 - Optional `nodes.yaml` `stable_id` seeds and identity-aware UDP beacon dedupe so configured nodes survive hostname/IP drift without overriding observed truth
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints

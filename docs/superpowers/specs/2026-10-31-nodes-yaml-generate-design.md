@@ -703,3 +703,42 @@ Verdict: approve-with-changes
    mapped resolver answer.
 
 Note: raised in the review summary as needing a closer look, with no inline thread.
+
+Kind: diff
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (first of two diff reviews: 846 non-test `.go` lines, above
+the §8 larger-feature threshold)
+Base: 39f9d5da
+Head: 8eb70dc8
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: a candidate that failed without an SSH cause (the name does not resolve, or resolves to
+   another peer's address) followed by a timed-out candidate was reported unsafe, though nothing
+   redirected it. Fixed: only SSH-config failures make a proposal unsafe; other completed failures
+   plus a timeout leave it unresolved (Design 5); fixture with an unresolvable `DNSName` and a
+   hanging IP check.
+2. Minor: this machine's own LAN addresses produced "possible duplicate of <local node> (by LAN
+   endpoint)" on remote peers. Fixed: local nodes are excluded from endpoint flags; fixture.
+3. Minor: no command-level test for text output, `ssh_user` precedence, the not-observed exit code
+   or a missing config. Fixed: tests through `runInitGenerate` for each.
+4. Minor: the wizard's peer discovery kept its own `tailscale status` exec and parser. Fixed: it
+   reads through the same seam and status type, with unchanged behaviour (online peers with an IP,
+   first IP as hostname, sorted by name); stubbed test.
+
+Kind: diff
+Reviewer: GitHub Copilot code review (PR #598)
+Model: other vendor family than the author
+Base: 39f9d5da
+Head: 8eb70dc8
+Date: 2026-11-01
+Verdict: approve-with-changes (three inline findings)
+
+1. An `ssh -G` error was ignored and the candidate checked as if no SSH config applied. Fixed: the
+   hostname is withheld with "SSH config could not be checked" (Design 5); test.
+2. A configured `localhost.` or `<self>.` with a trailing dot was not recognised as this machine.
+   Fixed: names are normalized before the local-host check, and the test stub no longer normalizes
+   on its own; test.
+3. An observed SSH redirect was lost when a later candidate's lookup timed out, so the proposal was
+   reported unresolved instead of unsafe. Fixed: redirect fields are checked before the timeout
+   short-circuit; test.

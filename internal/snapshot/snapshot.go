@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 // Build assembles a ClusterSnapshot from node facts.
@@ -164,7 +165,7 @@ func classifyNetwork(n *models.NodeFacts) models.NetworkClass {
 	// Order matters: Tailscale IPv6 (fd7a:115c:a1e0::/48) is ULA and would look
 	// "private" to isPrivateLAN — check overlay first.
 	if hostIP, err := netip.ParseAddr(target); err == nil {
-		if isTailscaleAddr(hostIP) {
+		if netutil.IsTailscaleAddr(hostIP) {
 			if n.SSHHandshakeLatencyMs >= 150 {
 				return models.NetworkClassRelayed
 			}
@@ -233,18 +234,6 @@ func dialTarget(n *models.NodeFacts) string {
 	return n.Hostname
 }
 
-func isTailscaleAddr(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if ip.Is4() {
-		b := ip.As4()
-		// Tailscale IPv4 CGNAT: 100.64.0.0/10
-		return b[0] == 100 && b[1] >= 64 && b[1] <= 127
-	}
-	// Tailscale IPv6: fd7a:115c:a1e0::/48
-	b := ip.As16()
-	return b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 && b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
-}
-
 func isVPNAddr(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if !ip.Is4() {
@@ -276,7 +265,7 @@ func classifyOverlayFromTargetAndInventory(n *models.NodeFacts, target string) (
 			isVPN = true
 		}
 		if ip, err := netip.ParseAddr(addr.Address); err == nil {
-			if isTailscaleAddr(ip) {
+			if netutil.IsTailscaleAddr(ip) {
 				isTailscale = true
 			}
 			if isVPNAddr(ip) {

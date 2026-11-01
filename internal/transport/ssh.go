@@ -60,6 +60,8 @@ type resolvedSSHConfig struct {
 	HostKeyAlias         string
 	HostKeyAlgorithms    []string
 	Port                 int
+	ProxyJump            string
+	ProxyCommand         string
 }
 
 // sshConfigLease owns the short-lived resources needed to authenticate one
@@ -786,6 +788,10 @@ func parseSSHConfigDump(output string) resolvedSSHConfig {
 			}
 		case "hostkeyalias":
 			resolved.HostKeyAlias = values[0]
+		case "proxyjump":
+			resolved.ProxyJump = unlessNone(strings.Join(values, " "))
+		case "proxycommand":
+			resolved.ProxyCommand = unlessNone(strings.Join(values, " "))
 		case "hostkeyalgorithms":
 			resolved.HostKeyAlgorithms = appendAlgorithmValues(resolved.HostKeyAlgorithms, values...)
 		case "identityfile":
@@ -885,6 +891,45 @@ func appendAlgorithmValues(existing []string, values ...string) []string {
 		}
 	}
 	return existing
+}
+
+func unlessNone(value string) string {
+	if strings.EqualFold(value, "none") {
+		return ""
+	}
+	return value
+}
+
+// SSHTarget is what `ssh -G` resolves a host to. Transport dials Hostname and
+// Port as User, and checks known_hosts under HostKeyAlias when it is set. It
+// does not honor ProxyJump or ProxyCommand; they are reported so callers can
+// tell when the operator's ssh would reach a different machine.
+type SSHTarget struct {
+	Hostname     string
+	Port         int
+	User         string
+	HostKeyAlias string
+	ProxyJump    string
+	ProxyCommand string
+}
+
+// ResolveSSHTarget runs `ssh -G` for host with port and user, as transport does
+// before dialing. Unlike transport, it returns the command's error instead of
+// falling back to defaults.
+func ResolveSSHTarget(ctx context.Context, host string, port int, user string) (SSHTarget, error) {
+	output, err := runSSHConfigCommand(ctx, host, port, user)
+	if err != nil {
+		return SSHTarget{}, err
+	}
+	resolved := parseSSHConfigDump(output)
+	return SSHTarget{
+		Hostname:     resolved.Hostname,
+		Port:         resolved.Port,
+		User:         resolved.User,
+		HostKeyAlias: resolved.HostKeyAlias,
+		ProxyJump:    resolved.ProxyJump,
+		ProxyCommand: resolved.ProxyCommand,
+	}, nil
 }
 
 func resolvedDialHost(resolved resolvedSSHConfig, fallback string) string {

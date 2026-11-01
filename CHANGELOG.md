@@ -2,6 +2,15 @@
 
 ### Features
 
+* `axis init --generate` reports `nodes.yaml` additions from Tailscale without
+  writing anything. It proposes tailnet machines that are not configured, each
+  with a YAML block to paste under `nodes:`, and lists offline and skipped peers
+  and configured nodes this machine does not see. Matching uses the addresses
+  AXIS would dial (`ssh -G`, then DNS), never names or LAN endpoints alone; a
+  proposed hostname that SSH config would redirect is withheld or flagged
+  unsafe; a stopped or disconnected Tailscale exits 1 without calling any node
+  missing. `--format json` gives the same report for agents. Design:
+  `docs/superpowers/specs/2026-10-31-nodes-yaml-generate-design.md`.
 * `axis tui` is now a full-screen workspace in the style of OpenCode: the
   `axis agent` conversation fills the main pane and a sidebar shows cluster
   health, every node's RAM use and the snapshot's alerts. The conversation is
