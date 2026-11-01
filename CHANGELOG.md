@@ -29,6 +29,12 @@
 
 ### Fixes
 
+* `axis init`'s "Scan AXIS beacons" now listens with the discovery secret and
+  UDP port of the configuration being edited. It used no secret and port 42424,
+  so in a cluster where discovery is secured (the wizard always generates a
+  secret) every signed beacon was rejected and the scan found nothing. A
+  listener that cannot bind is now reported as "Beacon scan unavailable"
+  instead of an empty result.
 * Two AXIS processes granting or releasing leases at the same time no longer
   lose or overcount each other's reservations. Each ledger admitted against
   the entries it had loaded earlier (`axis task run` at start, the daemon at
