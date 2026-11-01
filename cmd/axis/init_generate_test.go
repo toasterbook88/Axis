@@ -226,10 +226,10 @@ func TestGenerateLANAliasSharingALabelIsNotAMatch(t *testing.T) {
 
 func TestGenerateLANEndpointFlagsButDoesNotMatch(t *testing.T) {
 	peer := fakePeer{HostName: "gpu", DNSName: "gpu." + genSuffix, IPs: []string{"100.64.0.30"}, Online: true,
-		Addrs: []string{"192.168.1.50:41641", "203.0.113.9:41641"}}
+		Addrs: []string{"10.0.0.50:41641", "203.0.113.9:41641"}}
 	f := fixture(onlineTailnet(peer))
 	f.dns = map[string][]string{"gpu." + genSuffix: {"100.64.0.30"}}
-	r := run(t, f, genCfg(node("workstation", "192.168.1.50")))
+	r := run(t, f, genCfg(node("workstation", "10.0.0.50")))
 	p := proposal(t, r, "gpu")
 	if !hasFlag(p, "possible duplicate of workstation (by LAN endpoint)") {
 		t.Fatalf("proposal %+v, want the LAN-endpoint flag", p)

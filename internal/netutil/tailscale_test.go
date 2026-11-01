@@ -20,7 +20,7 @@ func TestIsTailscaleAddr(t *testing.T) {
 		{netip.MustParseAddr("100.63.0.1"), false},
 		{netip.MustParseAddr("100.128.0.1"), false},
 		{netip.MustParseAddr("::ffff:100.64.0.1"), true},
-		{netip.MustParseAddr("192.168.1.1"), false},
+		{netip.MustParseAddr("10.0.0.1"), false},
 		{netip.Addr{}, false},
 	} {
 		if got := IsTailscaleAddr(tt.addr); got != tt.want {
