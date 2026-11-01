@@ -127,6 +127,19 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      when the `DNSName` would make `NodeConfig.IsLocal()` true while the peer's IPs are not
      `Self`'s: AXIS surfaces use `IsLocal()`, and its first-label match would collect this machine's
      facts under the new node's name. Such entries are flagged;
+   - redirect check: transport dials the `HostName` that `ssh -G` returns, not the name written
+     (`resolvedDialHost`, `internal/transport/ssh.go`), so a name whose DNS answer is the peer's IP
+     can still be sent to another machine by an SSH `Host` block. Every candidate `hostname`, the
+     `DNSName` first and then the first tailnet IP, is therefore resolved exactly as configured
+     nodes are in Design 2: `ssh -G` with the proposal's `ssh_user` and the effective port (22,
+     since no `ssh_port` is proposed), then DNS on the resulting `HostName`. This is resolution
+     only; no SSH connection is made. A candidate is accepted only when every resolved address is
+     one of that peer's own tailnet IPs. Redirected candidates are withheld, never written as
+     acceptable: when only the `DNSName` is redirected, it is withheld and the tailnet IP is used
+     if that resolves cleanly, with the reason "DNSName redirected by SSH config to <host>"; when
+     the tailnet IP is also redirected, the proposal is flagged unsafe ("redirected by SSH
+     config"), has no usable `hostname`, and gets no YAML block. These lookups share the same limit
+     and budget; a candidate that times out counts as not accepted;
    - `ssh_user`: `--ssh-user`, checked with the wizard's `validateSSHUser` (an invalid value exits
      1), else the first configured node's `ssh_user` (the wizard's `defaultNodeUser`), else the
      current user;
@@ -200,6 +213,11 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
   `stable_id` (the wizard's local entry) are not listed;
 - a configured name that resolves past the overall budget is listed as unresolved;
 - a proposal's `DNSName` that resolves to an IP other than the peer's is not used as `hostname`;
+- a proposal whose `DNSName` the stubbed DNS resolves to the peer's tailnet IP but whose stubbed
+  `ssh -G` returns a `HostName` resolving elsewhere: the `DNSName` is withheld with the redirect
+  reason and `hostname` is the peer's tailnet IP (stubbed resolution only, no SSH connection);
+- a proposal whose `DNSName` and tailnet IP are both redirected by the stubbed `ssh -G`: the
+  proposal is flagged unsafe, has no `hostname` and no YAML block, and exit is still 0;
 - an expanded IPv6 literal in `nodes.yaml` matches the peer's canonical tailnet IPv6;
 - an invalid `--ssh-user` exits 1; a valid one appears in each YAML block as written;
 - a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an empty
@@ -555,3 +573,18 @@ Questions:
 - Are IPv6 literals compared canonically? Became Design 3: as parsed addresses; fixture.
 
 Note: code starts; every finding is resolved.
+
+Kind: spec
+Reviewer: copilot-pull-request-reviewer (PR #596 review thread)
+Model: not reported by the reviewer
+Base: 8cf9d74b
+Head: 4ebe7155
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Major: a proposal's `DNSName` could resolve to the peer's IP while an SSH `HostName` override
+   sends AXIS to another machine, since transport dials the rewritten host (`resolvedDialHost`).
+   Fixed: every candidate `hostname` goes through Design 2's `ssh -G` plus DNS resolution with the
+   proposal's user and effective port and is accepted only on the peer's own tailnet IPs; a
+   redirected `DNSName` is withheld for the tailnet IP, and a proposal whose tailnet IP is also
+   redirected is flagged unsafe with no `hostname` (Design 5); fixtures for both (Tests).
