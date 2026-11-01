@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 func TestProbeSelectsReachableAddress(t *testing.T) {
@@ -311,7 +312,7 @@ func TestIsTailscaleAddr(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.address, func(t *testing.T) {
 			address := netip.MustParseAddr(tt.address)
-			if got := isTailscaleAddr(address); got != tt.want {
+			if got := netutil.IsTailscaleAddr(address); got != tt.want {
 				t.Fatalf("isTailscaleAddr(%q) = %t, want %t", tt.address, got, tt.want)
 			}
 		})

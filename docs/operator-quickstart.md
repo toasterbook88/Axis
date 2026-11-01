@@ -78,6 +78,27 @@ This will:
 3. Configure SSH connectivity
 4. Optionally enable UDP discovery beacons
 
+### Find machines to add (Tailscale)
+
+`axis init --generate` compares `tailscale status --json` with your `nodes.yaml` and reports, without
+writing anything:
+
+- tailnet machines that are not configured, each with a YAML block you can paste under `nodes:`;
+- offline and skipped peers (shared-in machines, exit nodes outside your tailnet);
+- configured nodes this machine does not see in Tailscale (offline, not in its netmap, or
+  unresolved), and nodes Tailscale cannot observe (LAN-only).
+
+```bash
+axis init --generate                   # text report
+axis init --generate --format json     # the same data for scripts and agents
+axis init --generate --ssh-user deploy # ssh_user for the proposed entries
+```
+
+A proposed `hostname` is checked the way AXIS dials it (`ssh -G`, then DNS); a name your SSH config
+redirects elsewhere is withheld for the tailnet IP or flagged unsafe with no YAML. It exits 1 when
+Tailscale is not running or this machine is not connected to its control plane, and 2 when
+`nodes.yaml` cannot be loaded.
+
 ### Manual Configuration (Alternative)
 
 Edit `~/.axis/nodes.yaml`:

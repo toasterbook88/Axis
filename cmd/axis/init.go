@@ -36,10 +36,21 @@ func initCmd() *cobra.Command {
 			"All input is validated before an atomic write.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if generate, _ := cmd.Flags().GetBool("generate"); generate {
+				return runInitGenerate(cmd, defaultGenerateDependencies(), currentSSHUser)
+			}
+			for _, flag := range []string{"ssh-user", "format"} {
+				if cmd.Flags().Changed(flag) {
+					return ExitCodeError{Code: ExitErrGeneric, Message: "--" + flag + " requires --generate"}
+				}
+			}
 			return runInitWizard(cmd)
 		},
 	}
 	cmd.Flags().String("config", "", "configuration path (default: ~/.axis/nodes.yaml)")
+	cmd.Flags().Bool("generate", false, "report nodes.yaml additions from Tailscale without writing anything")
+	cmd.Flags().String("ssh-user", "", "ssh_user for proposed entries (with --generate)")
+	cmd.Flags().String("format", "text", "output format with --generate: text or json")
 	return cmd
 }
 
