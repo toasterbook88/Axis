@@ -56,8 +56,12 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      counts as false. In all these cases the report says why, the exit code is 1
      (`ExitErrGeneric`), and no node is called offline or missing.
    - The tailnet suffix is `CurrentTailnet.MagicDNSSuffix`, else the deprecated top-level
-     `MagicDNSSuffix`. When both are empty (older daemons, some self-hosted control servers), no
-     peer is skipped for its suffix and names are never judged by suffix.
+     `MagicDNSSuffix`. When both are empty (older daemons, some self-hosted control servers),
+     tailnet membership cannot be established: `AltSharerUserID` is zero when the sharer is the
+     node's own owner, so an owner-shared node carries no shared-in marker, and only the suffix
+     separates it from this tailnet's machines. In that case no peer is proposed; every online,
+     unmatched peer is listed as "not proposed: tailnet membership not established (no MagicDNS
+     suffix)". Matching and the not-seen report still run, and names are never judged by suffix.
    - For every `Peer`, online or offline, keep `HostName`, `DNSName` (trailing dot removed), every
      entry of `TailscaleIPs`, and the IPs of its endpoints (`Addrs`, `CurAddr`). Endpoints include
      NAT public addresses and LAN addresses that peers at other sites can share, so they are never
@@ -65,9 +69,8 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    - Some peers are never proposed and are listed as skipped with the reason: `ShareeNode` peers
      (owned by a user this tailnet shared a node to, who may connect to us); peers with a non-zero
      `AltSharerUserID` (shared into this tailnet by another user); peers with a non-empty
-     `DNSName` outside the tailnet suffix, which covers Mullvad exit nodes; when the suffix is
-     unknown, peers with `ExitNodeOption` (this covers Mullvad without naming its domain, which
-     this repo's public-boundary gate rejects in tracked files); and peers with no
+     `DNSName` outside the tailnet suffix, which covers Mullvad exit nodes and machines shared in
+     from another tailnet (reachable only under the sharing tailnet's name); and peers with no
      `TailscaleIPs`. Skipped peers still take part in matching (Design 3).
    - `Self`'s tailnet IPs and `DNSName` are kept to recognise the local node (Design 4); its
      endpoints are not, since they include a NAT address other machines share. Tailscale reports
@@ -77,11 +80,16 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    before dialing (so an SSH alias yields its `HostName` and `Port`); that step is exported from
    transport (`resolveSSHConfigForHost`, `resolvedDialHost`, `resolvedPort` behind one function).
    The resulting host then gets a 2-second DNS lookup, which is new code here (transport leaves DNS
-   to its dialer). The set holds the names and every IP they resolve to; a lookup that fails
-   leaves just the names. Resolution runs at most 8 at a time within a 10-second overall budget; a
-   name not resolved by then keeps just its names and is reported as unresolved.
+   to its dialer; it uses Go's resolver, the one that dialer uses, not `getent` or libc). The
+   effective host is what decides: when its lookup succeeds, the set holds only the IPs it
+   resolved to (or the `HostName` itself when that is an IP literal), not the configured name or
+   the `HostName` string, so a configured `alpha.<suffix>` that resolves to beta's tailnet IP
+   matches beta, the machine AXIS would dial, and not alpha. Only when the lookup fails or does
+   not finish does the set hold the effective `HostName` string, compared exactly; that node is
+   reported as unresolved. Resolution runs at most 8 at a time within a 10-second overall budget.
 3. **Match.** Every parsed peer, skipped or not, is matched. A peer matches a configured node when
-   its `DNSName` or one of its tailnet IPs is in the node's address set. Names are compared
+   one of its tailnet IPs is in the node's address set, or, for a node whose lookup is unresolved,
+   when its `DNSName` equals the node's effective `HostName`. Names are compared
    case-insensitively and IPs as parsed `netip.Addr` values, so an expanded IPv6 literal matches
    its canonical form. A configured short MagicDNS name matches through its DNS lookup, not by
    comparing labels. A peer's unknown port is compatible with any configured port.
@@ -122,8 +130,11 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    - `hostname`: the `DNSName` when present, `CurrentTailnet.MagicDNSEnabled` is true (the suffix is
      reported even with MagicDNS off), and the name resolves from this machine to one of that peer's
      tailnet IPs within 2 seconds (it does not with `--accept-dns=false`, and split DNS can send it
-     elsewhere); else the first tailnet IP. These lookups share Design 2's limit of 8 at a time and
-     its overall budget; one that times out falls back to the tailnet IP. Also the first tailnet IP
+     elsewhere); else the first tailnet IP. These lookups, and the redirect check below, share
+     Design 2's limit of 8 at a time and its overall budget. A candidate is used only when its
+     whole check (`ssh -G` plus DNS) passes within that budget; a timeout never counts as a pass,
+     so a timed-out `DNSName` falls back to the tailnet IP only if the tailnet IP's own check then
+     passes in time. Also the first tailnet IP
      when the `DNSName` would make `NodeConfig.IsLocal()` true while the peer's IPs are not
      `Self`'s: AXIS surfaces use `IsLocal()`, and its first-label match would collect this machine's
      facts under the new node's name. Such entries are flagged;
@@ -135,8 +146,8 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      (`-p 22`, since no `ssh_port` is proposed), then DNS on the resulting `HostName`. This is
      resolution only; no SSH connection is made. A candidate is accepted only when the resulting
      dial host is, or resolves only to, one of that peer's own tailnet IPs, and none of the rewrite
-     vectors below applies. A candidate that fails this, or times out within the shared limit and
-     budget, is "redirected".
+     vectors below applies. A candidate whose check completes and fails is "redirected"; one whose
+     check does not complete within the shared limit and budget is "unresolved".
      - `HostName` (including a `Match` block's): checked as above.
      - `CanonicalizeHostname`: `ssh -G` prints the canonicalized name as `hostname`, so it is
        checked as above with no extra rule.
@@ -157,10 +168,15 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      `flags` gets `hostname-withheld: DNSName redirected by SSH config (<field>)`. When the tailnet
      IP is also redirected, the proposal is unsafe: `hostname` is empty, `unsafe` is true, `flags`
      gets `unsafe: redirected by SSH config (<field>)`, the text report lists it under proposed
-     entries with no YAML block, and `--format json` has `yaml` empty. The exit code is unchanged:
-     0, as for any observed run (Design 7). The JSON proposal fields `flags`, `unsafe` and `yaml`
-     and the two flag prefixes are new in this spec; no generate code exists yet to reuse names
-     from;
+     entries with no YAML block, and `--format json` has `yaml` empty. When the `DNSName`'s check
+     did not complete, the tailnet IP is tried in the remaining budget, and a used IP gets
+     `hostname-withheld: DNSName check did not finish within the budget`. When no candidate
+     passes, the proposal is unsafe (as above) if any candidate was redirected, and otherwise
+     unresolved: `hostname` is empty, `unresolved` is true, `flags` gets `unresolved: SSH-config
+     and DNS check did not finish within the budget`, and, as for an unsafe proposal, there is no
+     YAML block and `yaml` is empty. The exit code is unchanged: 0, as for any observed run
+     (Design 7). The JSON proposal fields `flags`, `unsafe`, `unresolved` and `yaml` and the three
+     flag prefixes are new in this spec; no generate code exists yet to reuse names from;
    - `ssh_user`: `--ssh-user`, checked with the wizard's `validateSSHUser` (an invalid value exits
      1), else the first configured node's `ssh_user` (the wizard's `defaultNodeUser`), else the
      current user;
@@ -216,12 +232,14 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
 - `Self.Online` true and every peer offline: exit 0, and the configured nodes they match are
   "offline";
 - skipped with their reason and never proposed: a `ShareeNode` peer, a peer with a non-zero
-  `AltSharerUserID`, a peer outside the tailnet suffix, a peer with `ExitNodeOption` when the
-  suffix fields are empty, and a peer with no `TailscaleIPs`; a configured node at a skipped peer's
-  IP is seen;
-- the suffix comes from `CurrentTailnet.MagicDNSSuffix`, else the top-level field; with both empty,
-  no peer is skipped for its suffix, and a configured `web1.example.com` that no peer matches is
-  "not observable by Tailscale", never "not in this machine's netmap";
+  `AltSharerUserID`, a peer outside the tailnet suffix, and a peer with no `TailscaleIPs`; a
+  configured node at a skipped peer's IP is seen;
+- the suffix comes from `CurrentTailnet.MagicDNSSuffix`, else the top-level field; with both empty:
+  no peer is proposed, an owner-shared peer (`ShareeNode` false, `AltSharerUserID` zero) and an
+  ordinary peer are both listed as "not proposed: tailnet membership not established", matching
+  still runs (a configured node at a peer's tailnet IP is seen), and a configured
+  `web1.example.com` that no peer matches is "not observable by Tailscale", never "not in this
+  machine's netmap";
 - a configured node at this machine's NAT public IP is not treated as local;
 - with MagicDNS disabled, or a `DNSName` that does not resolve from this machine, a proposal's
   `hostname` is its tailnet IP;
@@ -250,7 +268,15 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
 - `ssh_user` precedence: `--ssh-user`, then the first configured node's user, then the current user;
 - each proposal's YAML block, appended under a fixture's `nodes:`, loads with `config.Load`;
 - resolution of many unresolvable configured names and proposal `DNSName`s finishes within the
-  overall budget, and timed-out proposals use their tailnet IP;
+  overall budget (stubbed resolver that hangs). A proposal whose `DNSName` check times out but
+  whose tailnet IP passes its `ssh -G` and DNS check in the remaining budget uses the IP, flagged
+  `hostname-withheld`; a proposal whose checks all time out is unresolved, with no `hostname`, no
+  YAML block, `unresolved: true` in JSON, and exit 0; one whose `DNSName` is redirected and whose
+  tailnet IP check times out is unsafe, not unresolved;
+- a configured `alpha.<suffix>` whose effective host resolves to beta's tailnet IP matches beta
+  only: alpha's peer is proposed; the same with an `ssh -G` `HostName` rewrite to beta's IP; a
+  configured name whose lookup is unresolved matches a peer whose `DNSName` equals its effective
+  `HostName`;
 - `--ssh-user` or `--format` without `--generate` exits 1; an unloadable `nodes.yaml` exits 2 even
   when Tailscale is also not observed; with no `nodes.yaml`, peers are proposed and nothing is
   called missing;
@@ -615,3 +641,25 @@ Verdict: approve-with-changes
    redirected `DNSName` is withheld for the tailnet IP; when the tailnet IP is also redirected the
    proposal is unsafe (`unsafe: true`, empty `hostname`, no YAML, exit 0) (Design 5); fixtures for
    both (Tests).
+
+Kind: spec
+Reviewer: copilot-pull-request-reviewer (PR #596, second review)
+Model: not reported by the reviewer
+Base: 8cf9d74b
+Head: 00854cfb
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: a timed-out redirect check let the tailnet IP be used without its own check, and the
+   timeout test expected a hostname after the budget had run out. Fixed: a timeout never counts as
+   a pass; the IP is used only if its own check passes in the remaining budget, else the proposal
+   is unresolved with no hostname or YAML (Design 5); the test asserts both outcomes.
+2. Minor: with the suffix unknown, an owner-shared node (`ShareeNode` false, `AltSharerUserID`
+   zero) would be proposed. Fixed: without a suffix, tailnet membership cannot be established and
+   no peer is proposed (Design 1); fixture with an owner-shared peer.
+3. Minor: a configured name could match one peer by `DNSName` while its effective host resolved
+   to another peer's IP. Fixed: a successful effective-host lookup decides alone, and the name is
+   compared only when the lookup is unresolved (Design 2 and 3); fixtures for contradictory DNS and
+   an `ssh -G` rewrite.
+
+Note: the `ExitNodeOption` rule is removed; with no suffix nothing is proposed, which covers it.
