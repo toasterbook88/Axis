@@ -92,9 +92,14 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    one of its tailnet IPs is in the node's address set, or, for a node whose lookup is unresolved,
    when its `DNSName` equals the node's effective `HostName`. Names are compared after removing
    one trailing dot from both sides (a fully qualified `alpha.example.com.` is the same name as
-   `alpha.example.com`) and case-insensitively, and IPs as parsed `netip.Addr` values, so an
-   expanded IPv6 literal matches its canonical form. A configured short MagicDNS name matches
-   through its DNS lookup, not by comparing labels. A peer's unknown port is compatible with any
+   `alpha.example.com`) and case-insensitively, and IPs as parsed `netip.Addr` values after
+   `Unmap()`, so an expanded IPv6 literal matches its canonical form and an IPv4-mapped address
+   (`::ffff:100.64.0.7`, from a configured literal or a resolver answer) matches its IPv4 form.
+   Every address is unmapped before any comparison or range check here, in Design 2 and 4, and
+   in the redirect check: `netip.Prefix.Contains` returns false when the address and prefix differ
+   in bit length, so a mapped address checked as is would also make a tailnet node "not
+   observable". A configured short MagicDNS name matches through its DNS lookup, not by comparing
+   labels. A peer's unknown port is compatible with any
    configured port.
    - Names never match on their own: two machines can share an OS hostname, and a LAN alias can
      share a first label with an unrelated tailnet peer.
@@ -265,6 +270,9 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
   and `HostKeyAlias`, and a `Port 2222` answer is only flagged. Both fixtures stub the `ssh -G`
   runner and resolver only: no SSH connection and no network;
 - an expanded IPv6 literal in `nodes.yaml` matches the peer's canonical tailnet IPv6;
+- a configured `::ffff:100.64.0.7` and a stubbed resolver answer in IPv4-mapped form each match
+  the peer at `100.64.0.7`, count as tailnet addresses for the not-seen report, and pass the
+  redirect check; neither yields a duplicate proposal;
 - an invalid `--ssh-user` exits 1; a valid one appears in each YAML block as written;
 - a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an empty
   `DNSName` from its IP;
@@ -680,3 +688,18 @@ Verdict: approve-with-changes
    against an effective `HostName` kept as written, so a configured FQDN with a trailing dot was
    proposed again. Fixed: both sides lose one trailing dot and are compared case-insensitively
    (Design 2 and 3); fixture with an unresolved `Alpha.Example.com.`.
+
+Kind: spec
+Reviewer: copilot-pull-request-reviewer (PR #596, fourth review)
+Model: not reported by the reviewer
+Base: 8cf9d74b
+Head: faabea22
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: IPv4-mapped addresses compared unequal to their IPv4 form and failed IPv4 prefix checks,
+   which could duplicate proposals or report configured nodes as missing. Fixed: every address is
+   unmapped before comparison and range checks (Design 3); fixture with a mapped literal and a
+   mapped resolver answer.
+
+Note: raised in the review summary as needing a closer look, with no inline thread.
