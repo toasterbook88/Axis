@@ -36,29 +36,40 @@ key-trust hole. The fast path (`ResolvedDialTarget`) dials the same way.
    }
    ```
 
-   Its message names the directive and the host, says Axis did not dial, and gives the remediation:
-   point the node's `hostname` (or an endpoint) at an address Axis can reach directly, with no
-   proxy directive in that host's SSH config. `ProxyJump` is checked before `ProxyCommand`. A value
-   of `none` is no directive (already handled by the parser).
+   Its message names the directive and the host, says Axis did not dial, and gives both ways out:
+   point the node's `hostname` (or an endpoint) at an address Axis can reach directly, or, when the
+   directive comes from a wildcard `Host` block, add `ProxyJump none` (or `ProxyCommand none`) in a
+   more specific `Host` block placed before it. An address alone is not enough in the wildcard case,
+   because `ssh -G` applies `Host *` and `Host 192.0.2.*` rules to IP literals too. `ProxyJump` is
+   checked before `ProxyCommand`. A value of `none` is no directive (`ssh -G` omits it, and the
+   parser also maps it to empty).
 
 2. `Connect` checks each candidate's resolved config before any dial:
    - Fast path: if the primary host's config has a directive, `ResolvedDialTarget` is not dialed.
    - Primary host and each `DialFallbacks` entry: a candidate with a directive is skipped without a
      TCP dial; the loop moves to the next candidate. A fallback whose own config has no directive is
      dialed as today, so an operator can keep a jump alias and a direct tailnet fallback.
-   - If no candidate connects, the returned error matches `errors.As(err,
-     *UnsupportedSSHDirectiveError)` whenever any candidate was refused. When the last failure was a
-     dial error on another candidate, the error carries both (`%w` twice), dial error first.
+   - If no candidate connects and any candidate was refused, the returned error matches `errors.As(err,
+     *UnsupportedSSHDirectiveError)` for the first refusal. If any candidate also failed to dial, in
+     either order, the error wraps the most recent dial error too (`%w` twice, dial error first),
+     so a primary's timeout or host-key remediation is not hidden behind a fallback's refusal.
 
-3. Callers need no change: discovery, `doctor`, and execution already surface `Connect` errors as
-   text, so a refused node shows as unreachable with this message.
+3. Discovery and execution already surface `Connect` errors as text, so a refused node shows as
+   unreachable with this message. `axis doctor` attaches a fixed `Fix:` hint about keys and
+   `known_hosts` to every SSH failure; when the error matches `*UnsupportedSSHDirectiveError` it
+   uses the directive remediation instead.
 
 4. `axis init --generate`: the flag for these two directives becomes `unsafe: redirected by SSH
    config (ProxyJump); Axis transport refuses it` (same for `ProxyCommand`), so the report says
-   what would happen if the YAML were added. Other redirect flags are unchanged. The #598 spec's
+   what would happen if the YAML were added. The same reason feeds `hostname-withheld: DNSName
+   <reason>` when only the DNS name is redirected, so that flag carries the wording too. Other
+   redirect flags are unchanged. The #598 spec's
    Design 5 gets a one-line pointer to this policy. The `SSHTarget` doc comment says the same.
 
-5. `docs/current-state.md` and `CHANGELOG.md` state the policy.
+5. `docs/current-state.md` and `CHANGELOG.md` state the policy. The CHANGELOG entry is marked as a
+   behaviour change: a setup that applies a proxy directive to hosts Axis could reach directly
+   (for example `Host *` with `ProxyJump`) worked by accident and now fails with this error until
+   those hosts get `ProxyJump none` or `ProxyCommand none`.
 
 ## Tests
 
@@ -72,15 +83,22 @@ All offline, using the existing `runSSHConfigCommand` stub and the in-process SS
 - No dial: a counting TCP listener as `hostname` and as `ResolvedDialTarget` sees zero accepts.
 - Fallback: the primary alias has a directive, the fallback resolves without one to the live
   server; `Connect` succeeds and `ConnectedHost()` is the fallback.
-- Mixed failure: primary refused, fallback dial fails; the error matches both the typed error and
-  the dial error.
-- `ssh -G` failure: dials with defaults as today (existing test covers it; asserted unchanged).
-- `axis init --generate`: the ProxyJump and ProxyCommand flags carry the new wording.
+- Mixed failure, both orders: primary refused then fallback dial fails, and primary dial fails then
+  fallback refused; in each the error matches the typed error and the dial error, dial error first.
+- Message: `Error()` contains the host, the directive, "did not dial", and both remediations.
+- Wildcard: a stub output that a `Host *` rule would produce is refused; the same host with
+  `proxyjump none` connects.
+- `ssh -G` failure: a `Connect`-level test with a failing stub and default key paths connects to
+  the live server, so a refusal on unknown config fails the suite.
+- `axis doctor`: a refused node's check carries the directive remediation as `Fix`.
+- `axis init --generate`: the ProxyJump and ProxyCommand `unsafe:` and `hostname-withheld:` flags
+  carry the new wording.
 
 ## Alternatives
 
 - Support `ProxyJump` now: `golang.org/x/crypto/ssh` can tunnel with `Client.Dial`, but each hop
-  needs its own config resolution and host-key check, and no configured node uses a jump today.
+  needs its own config resolution and host-key check, and no configured node on the author's
+  workstation resolves to a proxy directive today (0 of 18 hostnames and endpoints).
   Deferred, not ruled out.
 - Shell out to the system `ssh` for proxied hosts: two transports with different auth, host-key and
   timeout behaviour; rejected.
@@ -101,3 +119,29 @@ All offline, using the existing `runSSHConfigCommand` stub and the in-process SS
   network call.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (the designated second-family reviewer was unavailable:
+usage limit)
+Base: e82447db
+Head: 9d3eaf9a
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: no listed test failed if `Connect` refused on an `ssh -G` failure, and none checked the
+   message. Fixed: a `Connect`-level `ssh -G` failure test and a message test (Tests).
+2. Minor: `axis doctor` would print its keys-and-`known_hosts` hint next to a refusal. Fixed: doctor
+   uses the directive remediation for this error, with a test (Design 3).
+3. Minor: with a wildcard proxy rule, pointing the hostname at an IP is still refused, and the
+   message did not name `ProxyJump none`; such setups go dark on upgrade without notice. Fixed: the
+   message names both remediations, the CHANGELOG marks the behaviour change, and a wildcard test
+   is listed (Design 1 and 5).
+4. Minor: a primary dial failure followed by a refused fallback kept only the refusal. Fixed: the
+   most recent dial error is wrapped in either order; both orders are tested (Design 2).
+
+Questions:
+- Should `hostname-withheld:` carry the new wording? Verified: it reuses the same reason, so it
+  does; Design 4 says so and a test pins it.
+- Is "no configured node uses a jump" true fleet-wide? Open: only this workstation's 18 hostnames
+  and endpoints were probed; the claim is narrowed to that, and the design does not depend on it.
