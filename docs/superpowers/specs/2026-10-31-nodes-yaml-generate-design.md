@@ -2,7 +2,7 @@
 
 Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: after seven `revise` spec reviews, v1 is
 narrowed to a read-only report at the maintainer's direction; writing the file is a second spec.
-Revised after the eighth review; awaiting a ninth.
+The ninth review approved with changes, applied; code may start.
 
 ## Problem
 
@@ -13,7 +13,7 @@ The pieces to automate it exist but are only reachable interactively:
   `tailscale status --json`), but only inside a TTY wizard, one menu choice at a time, and it
   drops offline peers (`init.go:943`) and every tailnet address but the first (`init.go:950`).
 - Nothing tells an operator which tailnet machines are not configured, or which configured
-  tailnet nodes have left the tailnet, short of reading both lists by hand.
+  tailnet nodes this machine no longer sees in Tailscale, short of reading both lists by hand.
 
 ## Non-goals
 
@@ -81,8 +81,9 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    leaves just the names. Resolution runs at most 8 at a time within a 10-second overall budget; a
    name not resolved by then keeps just its names and is reported as unresolved.
 3. **Match.** Every parsed peer, skipped or not, is matched. A peer matches a configured node when
-   its `DNSName` or one of its tailnet IPs is in the node's address set, compared
-   case-insensitively. A configured short MagicDNS name matches through its DNS lookup, not by
+   its `DNSName` or one of its tailnet IPs is in the node's address set. Names are compared
+   case-insensitively and IPs as parsed `netip.Addr` values, so an expanded IPv6 literal matches
+   its canonical form. A configured short MagicDNS name matches through its DNS lookup, not by
    comparing labels. A peer's unknown port is compatible with any configured port.
    - Names never match on their own: two machines can share an OS hostname, and a LAN alias can
      share a first label with an unrelated tailnet peer.
@@ -100,7 +101,10 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    `internal/multipath` (which has a copy) and `cmd/axis` share one definition within the import
    tiers.
    - Such a node that no online peer matches is "offline" if an offline peer matches it, else "not
-     in the tailnet". Other nodes are "not observable by Tailscale" and are not called missing.
+     in this machine's netmap". It is not called absent from the tailnet: Tailscale trims each
+     device's netmap to the devices its ACLs make relevant, so a device can exist and still be
+     missing here (<https://tailscale.com/kb/1087/device-visibility>). Other nodes are "not
+     observable by Tailscale" and are not called missing.
    - The local node is never listed. Here a configured node is local when its `stable_id` is this
      machine's, when its address set meets `Self`'s tailnet IPs or `DNSName`, or when one of its
      names passes
@@ -116,26 +120,31 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      on a case-insensitive collision with a configured or proposed name, suffixed `-2`, `-3` ...
      and flagged "possible duplicate of <name>";
    - `hostname`: the `DNSName` when present, `CurrentTailnet.MagicDNSEnabled` is true (the suffix is
-     reported even with MagicDNS off), and the name resolves from this machine within 2 seconds
-     (it does not with `--accept-dns=false`); else the first tailnet IP. Also the first tailnet IP
+     reported even with MagicDNS off), and the name resolves from this machine to one of that peer's
+     tailnet IPs within 2 seconds (it does not with `--accept-dns=false`, and split DNS can send it
+     elsewhere); else the first tailnet IP. These lookups share Design 2's limit of 8 at a time and
+     its overall budget; one that times out falls back to the tailnet IP. Also the first tailnet IP
      when the `DNSName` would make `NodeConfig.IsLocal()` true while the peer's IPs are not
-     `Self`'s: AXIS surfaces use `IsLocal()`, and its first-label match would collect this
-     machine's facts under the new node's name. Such entries are flagged;
-   - `ssh_user`: `--ssh-user`, else the first configured node's `ssh_user` (the wizard's
-     `defaultNodeUser`), else the current user;
+     `Self`'s: AXIS surfaces use `IsLocal()`, and its first-label match would collect this machine's
+     facts under the new node's name. Such entries are flagged;
+   - `ssh_user`: `--ssh-user`, checked with the wizard's `validateSSHUser` (an invalid value exits
+     1), else the first configured node's `ssh_user` (the wizard's `defaultNodeUser`), else the
+     current user;
    - no `ssh_port`, `role` or resource fields.
 
    Offline peers are listed for information and never proposed.
 6. **Report.** Text output has sections for proposed entries (each with its tailnet IP and any
-   flags, then a YAML block indented as a `nodes:` item and preceded by a comment naming the source
-   and date), offline peers, skipped peers with reasons, configured nodes not seen (offline, not in
-   the tailnet, unresolved) and nodes not observable by Tailscale. `--format json` gives the same
-   data for agents, with each proposal's YAML as a string. Nothing is written; the command does
-   not open `nodes.yaml` for writing.
-7. **Exit codes.** Checked in this order: 1 for `--ssh-user` or `--format` without `--generate`;
-   2 (`ExitErrConfigLoad`) when an existing `nodes.yaml` cannot be loaded (before Tailscale runs);
-   1 when Tailscale was not observed; otherwise 0, with or without proposals. With no `nodes.yaml`, every unskipped online peer is proposed and
-   nothing is judged as missing.
+   flags, then a YAML block, produced by the yaml.v3 encoder rather than string formatting, indented
+   as a `nodes:` item and preceded by a comment naming the source and date), offline peers, skipped
+   peers with reasons, configured nodes not seen (offline, not in this machine's netmap, unresolved)
+   and nodes not observable by Tailscale. `--format json` gives the same data for agents, with each
+   proposal's YAML as a string. Nothing is written; the command does not open `nodes.yaml` for
+   writing.
+7. **Exit codes.** Checked in this order: 1 for `--ssh-user` or `--format` without `--generate`, and
+   for an invalid `--ssh-user`; 2 (`ExitErrConfigLoad`) when an existing `nodes.yaml` cannot be
+   loaded (before Tailscale runs); 1 when Tailscale was not observed; otherwise 0, with or without
+   proposals. With no `nodes.yaml`, every unskipped online peer is proposed and nothing is judged as
+   missing.
 8. **Docs.** `docs/current-state.md` lists the mode, `docs/operator-quickstart.md` shows it next
    to the wizard, and the CHANGELOG records it. The command count is unchanged.
 
@@ -157,13 +166,14 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
 - two peers sharing a public endpoint IP and a configured dynamic-DNS node at that IP: both peers
   are proposed unflagged and the node is not counted as seen; two peers at different sites sharing
   a LAN endpoint IP: no flag;
-- a departed tailnet node whose `endpoints[]` LAN IP belongs to another online peer is "not in the
-  tailnet";
+- a departed tailnet node whose `endpoints[]` LAN IP belongs to another online peer is "not in
+  this machine's netmap";
 - three unmatched peers with the same `HostName` and no `DNSName`, at tailnet IPs whose string and
   numeric orders agree (100.64.0.7, 100.64.0.8, 100.64.0.9), listed in the JSON in another order:
   the lowest IP gets the bare name, the next `-2`, the last `-3`, on every run;
 - an offline unmatched peer is listed and not proposed; a configured node matched only by an
-  offline peer is "offline"; a configured tailnet node with no peer is "not in the tailnet"; a LAN
+  offline peer is "offline"; a configured tailnet node with no peer is "not in this machine's
+  netmap"; a LAN
   node, including one at an IPv6 ULA address outside Tailscale's /48, is "not observable";
 - when `tailscale` fails, hangs (stubbed, bounded by the timeout), prints invalid JSON, reports
   `BackendState` `Stopped` or `NeedsLogin` (with and without peers), or reports `Self.Online`
@@ -177,19 +187,27 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
   IP is seen;
 - the suffix comes from `CurrentTailnet.MagicDNSSuffix`, else the top-level field; with both empty,
   no peer is skipped for its suffix, and a configured `web1.example.com` that no peer matches is
-  "not observable by Tailscale", never "not in the tailnet";
+  "not observable by Tailscale", never "not in this machine's netmap";
 - a configured node at this machine's NAT public IP is not treated as local;
 - with MagicDNS disabled, or a `DNSName` that does not resolve from this machine, a proposal's
   `hostname` is its tailnet IP;
 - a configured alias that resolves to `Self`'s tailnet IP is local and not listed; on a machine
   whose short hostname is `hub`, a configured `hub.<suffix>` at another IP is judged, not local;
-- on a machine called `hub`, a peer `hub.<suffix>` at another IP is proposed as `hub-2` with its
-  tailnet IP as `hostname`, flagged, and `IsLocal()` is false for that proposed entry;
+- on a machine called `hub` whose `nodes.yaml` has a node named `hub`, a peer `hub.<suffix>` at
+  another IP is proposed as `hub-2` with its tailnet IP as `hostname`, flagged, and `IsLocal()` is
+  false for that proposed entry;
+- a configured `hostname: localhost` entry and an entry at a LAN name carrying this machine's
+  `stable_id` (the wizard's local entry) are not listed;
+- a configured name that resolves past the overall budget is listed as unresolved;
+- a proposal's `DNSName` that resolves to an IP other than the peer's is not used as `hostname`;
+- an expanded IPv6 literal in `nodes.yaml` matches the peer's canonical tailnet IPv6;
+- an invalid `--ssh-user` exits 1; a valid one appears in each YAML block as written;
 - a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an empty
   `DNSName` from its IP;
 - `ssh_user` precedence: `--ssh-user`, then the first configured node's user, then the current user;
 - each proposal's YAML block, appended under a fixture's `nodes:`, loads with `config.Load`;
-- resolution of many unresolvable names finishes within the overall budget;
+- resolution of many unresolvable configured names and proposal `DNSName`s finishes within the
+  overall budget, and timed-out proposals use their tailnet IP;
 - `--ssh-user` or `--format` without `--generate` exits 1; an unloadable `nodes.yaml` exits 2 even
   when Tailscale is also not observed; with no `nodes.yaml`, peers are proposed and nothing is
   called missing;
@@ -512,3 +530,28 @@ Questions:
 - Which exit code wins when the file is unloadable and Tailscale is not observed? Became Design 7:
   the file is checked first, so 2; fixture.
 - Do idle peers report endpoints? Open: not observed here; Design 3 calls the flag best effort.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 8cf9d74b
+Head: 7259a613
+Date: 2026-10-31
+Verdict: approve-with-changes
+
+1. Minor: "not in the tailnet" claimed more than this machine observed, because Tailscale trims
+   each device's netmap. Fixed: the label is "not in this machine's netmap", with the reason
+   (Problem, Design 4, Tests).
+2. Minor: proposal hostname lookups had no budget. Fixed: they share Design 2's limit and budget,
+   falling back to the tailnet IP (Design 5); test extended.
+3. Minor: two locality rules and the unresolved list had no test. Fixed: fixtures for a
+   `localhost` entry, a `stable_id` entry and a name past the budget (Tests).
+
+Questions:
+- Is `--ssh-user` validated, and are YAML blocks encoded? Became Design 5 to 7: `validateSSHUser`
+  and the yaml.v3 encoder; fixture.
+- Did the `hub-2` test state its fixture? Became Tests: the file configures a node named `hub`.
+- Must a `DNSName` resolve to that peer's IP? Became Design 5: yes; fixture.
+- Are IPv6 literals compared canonically? Became Design 3: as parsed addresses; fixture.
+
+Note: code starts; every finding is resolved.
