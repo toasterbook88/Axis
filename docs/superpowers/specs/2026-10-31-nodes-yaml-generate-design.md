@@ -2,7 +2,7 @@
 
 Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: after seven `revise` spec reviews, v1 is
 narrowed to a read-only report at the maintainer's direction; writing the file is a second spec.
-Awaiting an eighth review.
+Revised after the eighth review; awaiting a ninth.
 
 ## Problem
 
@@ -48,13 +48,13 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
 
 1. **Collect.** Run `tailscale status --json` through the existing seam
    (`discoverTailscalePeersFn`, extended), with a 5-second timeout.
-   - The tailnet is observed only when the command succeeds, its output parses, and
-     `BackendState` is `Running`. The CLI prints JSON and exits 0 in every backend state
-     (`Stopped`, `NeedsLogin` ...), so the state is checked here. `Online` is each peer's
-     connection to the control plane as this machine last heard it, so peers present and none
-     online means this machine has probably lost its own control connection. In all these cases
-     the report says why, the exit code is 1 (`ExitErrGeneric`), and no node is called offline or
-     missing.
+   - The tailnet is observed only when the command succeeds, its output parses, `BackendState` is
+     `Running`, and `Self.Online` is true. The CLI prints JSON and exits 0 in every backend state
+     (`Stopped`, `NeedsLogin` ...), so the state is checked here. `Self.Online` is this machine's
+     live control connection; each peer's `Online` comes from the last netmap and stays as it was
+     when that connection drops, so peers cannot show it. A missing `Self.Online` (an older daemon)
+     counts as false. In all these cases the report says why, the exit code is 1
+     (`ExitErrGeneric`), and no node is called offline or missing.
    - The tailnet suffix is `CurrentTailnet.MagicDNSSuffix`, else the deprecated top-level
      `MagicDNSSuffix`. When both are empty (older daemons, some self-hosted control servers), no
      peer is skipped for its suffix and names are never judged by suffix.
@@ -69,8 +69,9 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      unknown, peers with `ExitNodeOption` (this covers Mullvad without naming its domain, which
      this repo's public-boundary gate rejects in tracked files); and peers with no
      `TailscaleIPs`. Skipped peers still take part in matching (Design 3).
-   - `Self`'s addresses are kept to recognise the local node (Design 4). Tailscale reports no SSH
-     port, so a peer's port is unknown.
+   - `Self`'s tailnet IPs and `DNSName` are kept to recognise the local node (Design 4); its
+     endpoints are not, since they include a NAT address other machines share. Tailscale reports
+     no SSH port, so a peer's port is unknown.
 2. **Resolve configured nodes.** Each configured node's address set is built from its `hostname`
    and each `endpoints[].hostname`. Each name goes through `ssh -G`, as `internal/transport` does
    before dialing (so an SSH alias yields its `HostName` and `Port`); that step is exported from
@@ -85,10 +86,13 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    comparing labels. A peer's unknown port is compatible with any configured port.
    - Names never match on their own: two machines can share an OS hostname, and a LAN alias can
      share a first label with an unrelated tailnet peer.
-   - Endpoint IPs never match either. A private endpoint IP that exactly one peer carries and that
-     is in a configured node's address set only flags that peer "possible duplicate of <node> (by
+   - Endpoint IPs never match either. A private endpoint IP (RFC 1918 IPv4 or IPv6 ULA, as
+     `netip.Addr.IsPrivate` defines it, excluding Tailscale's own ranges; not CGNAT, loopback or
+     link-local) that exactly one peer carries and that is in a configured node's address set only
+     flags that peer "possible duplicate of <node> (by
      LAN endpoint)", so a node configured by its LAN address is shown next to its own peer. An
-     endpoint flag never makes a configured node count as seen.
+     endpoint flag never makes a configured node count as seen. The flag is best effort: an idle
+     peer may report no endpoints.
 4. **Report what was not seen.** A configured node is judged only if its address set contains a
    tailnet address: an IP in the ranges `isTailscaleAddr` in `internal/snapshot` already tests
    (Tailscale's IPv4 CGNAT range and its own IPv6 /48, not all of IPv6 ULA), or a name under the
@@ -98,7 +102,8 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    - Such a node that no online peer matches is "offline" if an offline peer matches it, else "not
      in the tailnet". Other nodes are "not observable by Tailscale" and are not called missing.
    - The local node is never listed. Here a configured node is local when its `stable_id` is this
-     machine's, when its address set meets `Self`'s addresses, or when one of its names passes
+     machine's, when its address set meets `Self`'s tailnet IPs or `DNSName`, or when one of its
+     names passes
      `models.IsLocalHost` (exact hostname, loopback or a local interface address).
      `NodeConfig.IsLocal()` is not used: it accepts any name whose first label is this machine's
      short hostname (`internal/models/locality.go`), which would hide a remote `hub.<suffix>` on a
@@ -127,9 +132,9 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    the tailnet, unresolved) and nodes not observable by Tailscale. `--format json` gives the same
    data for agents, with each proposal's YAML as a string. Nothing is written; the command does
    not open `nodes.yaml` for writing.
-7. **Exit codes.** 0 when Tailscale was observed, with or without proposals; 1 when it was not, and
-   for `--ssh-user` or `--format` without `--generate`; 2 (`ExitErrConfigLoad`) when an existing
-   `nodes.yaml` cannot be loaded. With no `nodes.yaml`, every unskipped online peer is proposed and
+7. **Exit codes.** Checked in this order: 1 for `--ssh-user` or `--format` without `--generate`;
+   2 (`ExitErrConfigLoad`) when an existing `nodes.yaml` cannot be loaded (before Tailscale runs);
+   1 when Tailscale was not observed; otherwise 0, with or without proposals. With no `nodes.yaml`, every unskipped online peer is proposed and
    nothing is judged as missing.
 8. **Docs.** `docs/current-state.md` lists the mode, `docs/operator-quickstart.md` shows it next
    to the wizard, and the CHANGELOG records it. The command count is unchanged.
@@ -154,20 +159,26 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
   a LAN endpoint IP: no flag;
 - a departed tailnet node whose `endpoints[]` LAN IP belongs to another online peer is "not in the
   tailnet";
-- three unmatched peers with the same `HostName` and no `DNSName`: two runs give the same
-  name-to-IP mapping;
+- three unmatched peers with the same `HostName` and no `DNSName`, at tailnet IPs whose string and
+  numeric orders agree (100.64.0.7, 100.64.0.8, 100.64.0.9), listed in the JSON in another order:
+  the lowest IP gets the bare name, the next `-2`, the last `-3`, on every run;
 - an offline unmatched peer is listed and not proposed; a configured node matched only by an
   offline peer is "offline"; a configured tailnet node with no peer is "not in the tailnet"; a LAN
   node, including one at an IPv6 ULA address outside Tailscale's /48, is "not observable";
 - when `tailscale` fails, hangs (stubbed, bounded by the timeout), prints invalid JSON, reports
-  `BackendState` `Stopped` or `NeedsLogin` (with and without peers), or lists peers none of which
-  is online: exit 1, "not observed", and no node listed as offline or missing;
+  `BackendState` `Stopped` or `NeedsLogin` (with and without peers), or reports `Self.Online`
+  false or missing while peers read online: exit 1, "not observed", and no node listed as offline
+  or missing;
+- `Self.Online` true and every peer offline: exit 0, and the configured nodes they match are
+  "offline";
 - skipped with their reason and never proposed: a `ShareeNode` peer, a peer with a non-zero
   `AltSharerUserID`, a peer outside the tailnet suffix, a peer with `ExitNodeOption` when the
   suffix fields are empty, and a peer with no `TailscaleIPs`; a configured node at a skipped peer's
   IP is seen;
 - the suffix comes from `CurrentTailnet.MagicDNSSuffix`, else the top-level field; with both empty,
-  no peer is skipped for its suffix;
+  no peer is skipped for its suffix, and a configured `web1.example.com` that no peer matches is
+  "not observable by Tailscale", never "not in the tailnet";
+- a configured node at this machine's NAT public IP is not treated as local;
 - with MagicDNS disabled, or a `DNSName` that does not resolve from this machine, a proposal's
   `hostname` is its tailnet IP;
 - a configured alias that resolves to `Self`'s tailnet IP is local and not listed; on a machine
@@ -179,8 +190,9 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
 - `ssh_user` precedence: `--ssh-user`, then the first configured node's user, then the current user;
 - each proposal's YAML block, appended under a fixture's `nodes:`, loads with `config.Load`;
 - resolution of many unresolvable names finishes within the overall budget;
-- `--ssh-user` or `--format` without `--generate` exits 1; an unloadable `nodes.yaml` exits 2; with
-  no `nodes.yaml`, peers are proposed and nothing is called missing;
+- `--ssh-user` or `--format` without `--generate` exits 1; an unloadable `nodes.yaml` exits 2 even
+  when Tailscale is also not observed; with no `nodes.yaml`, peers are proposed and nothing is
+  called missing;
 - the command never writes: `nodes.yaml`'s bytes and modification time are unchanged after a run;
 - `--format json` carries the same lists.
 
@@ -473,3 +485,30 @@ Questions:
   peer.
 - Can `internal/multipath` share `isTailscaleAddr`? Became Design 4: it moves to `internal/netutil`
   (Support), importable from every tier.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 8cf9d74b
+Head: 9949e95d
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: the "not observed" guard used peer `Online`, which keeps its last netmap value when this
+   machine loses its control connection. Fixed: the tailnet is observed only when `Self.Online` is
+   true, and the none-online rule is gone (Design 1); fixtures for `Self.Online` false with peers
+   online, and true with every peer offline.
+2. Minor: the determinism and empty-suffix tests could pass against broken code. Fixed: the naming
+   test asserts the exact mapping from IPs listed out of order, and an empty-suffix fixture checks
+   a LAN node is "not observable" (Tests).
+
+Questions:
+- Does an older daemon report `Self.Online`? Became Design 1: a missing value counts as false, so
+  the run fails closed.
+- Do `Self`'s addresses include its endpoints? Became Design 1 and 4: only its tailnet IPs and
+  `DNSName`; fixture with this machine's NAT IP.
+- What is a "private endpoint IP"? Became Design 3: `netip.Addr.IsPrivate`, excluding Tailscale's
+  ranges.
+- Which exit code wins when the file is unloadable and Tailscale is not observed? Became Design 7:
+  the file is checked first, so 2; fixture.
+- Do idle peers report endpoints? Open: not observed here; Design 3 calls the flag best effort.
