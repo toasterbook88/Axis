@@ -176,7 +176,9 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      `flags` gets `hostname-withheld: DNSName redirected by SSH config (<field>)`. When the tailnet
      IP is also redirected, the proposal is unsafe: `hostname` is empty, `unsafe` is true, `flags`
      gets `unsafe: redirected by SSH config (<field>)`, the text report lists it under proposed
-     entries with no YAML block, and `--format json` has `yaml` empty. When the `DNSName`'s check
+     entries with no YAML block, and `--format json` has `yaml` empty. For `ProxyJump` and
+     `ProxyCommand`, `(<field>)` is followed by `; Axis transport refuses it`, because transport
+     refuses those hosts (`2026-11-01-ssh-proxy-directives-design.md`). When the `DNSName`'s check
      did not complete, the tailnet IP is tried in the remaining budget, and a used IP gets
      `hostname-withheld: DNSName check did not finish within the budget`. When no candidate
      passes, the proposal is unsafe (as above) if any candidate was redirected, and otherwise

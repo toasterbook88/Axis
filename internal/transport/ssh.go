@@ -284,7 +284,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	var err error
 
 	// 1. Try the dynamic fast-path (ResolvedDialTarget) first
-	if e.ResolvedDialTarget != "" {
+	if e.ResolvedDialTarget != "" && unsupportedDirective(resolved, e.Host) == nil {
 		dialAddr := net.JoinHostPort(e.ResolvedDialTarget, strconv.Itoa(resolvedPort(resolved, e.Port)))
 		sshConn, chans, reqs, handshakeLatencyMs, err = tryDialWithConfig(
 			dialAddr, resolved, hostKeyAddr,
@@ -303,7 +303,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	if sshConn == nil {
 		candidates := []string{e.Host}
 		candidates = append(candidates, e.DialFallbacks...)
-		var lastErr error
+		var lastErr, lastDialErr, refusal error
 		for i, hostCand := range candidates {
 			hostCand = strings.TrimSpace(hostCand)
 			if hostCand == "" {
@@ -315,6 +315,13 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 				if hostCand != e.Host {
 					candResolved = e.resolveSSHConfigForHost(ctx, hostCand)
 				}
+			}
+			if err := unsupportedDirective(candResolved, hostCand); err != nil {
+				if refusal == nil {
+					refusal = err
+				}
+				lastErr = err
+				continue
 			}
 			dialHost := resolvedDialHost(candResolved, hostCand)
 			logicalAddr := net.JoinHostPort(dialHost, strconv.Itoa(resolvedPort(candResolved, e.Port)))
@@ -330,9 +337,16 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 				break
 			}
 			lastErr = err
+			lastDialErr = err
 			sshConn = nil
 		}
 		if sshConn == nil {
+			if refusal != nil && lastDialErr != nil {
+				return fmt.Errorf("%w; %w", lastDialErr, refusal)
+			}
+			if refusal != nil {
+				return refusal
+			}
 			if lastErr != nil {
 				return lastErr
 			}
@@ -902,8 +916,10 @@ func unlessNone(value string) string {
 
 // SSHTarget is what `ssh -G` resolves a host to. Transport dials Hostname and
 // Port as User, and checks known_hosts under HostKeyAlias when it is set. It
-// does not honor ProxyJump or ProxyCommand; they are reported so callers can
-// tell when the operator's ssh would reach a different machine.
+// refuses a host whose config sets ProxyJump or ProxyCommand
+// (UnsupportedSSHDirectiveError); they are reported so callers can tell when
+// the operator's ssh would reach a different machine. Like transport, it skips
+// the system-wide ssh_config when ~/.ssh/config exists.
 type SSHTarget struct {
 	Hostname     string
 	Port         int
@@ -930,6 +946,33 @@ func ResolveSSHTarget(ctx context.Context, host string, port int, user string) (
 		ProxyJump:    resolved.ProxyJump,
 		ProxyCommand: resolved.ProxyCommand,
 	}, nil
+}
+
+// UnsupportedSSHDirectiveError reports that the operator's SSH config routes
+// Host through a directive the in-process client does not implement. Connect
+// returns it without dialing, so the node is never reached around that route.
+// Only directives ssh -G reports are seen; runSSHConfigCommand passes
+// -F ~/.ssh/config when it exists, which skips the system-wide ssh_config.
+type UnsupportedSSHDirectiveError struct {
+	Host      string
+	Directive string
+}
+
+func (e *UnsupportedSSHDirectiveError) Error() string {
+	return fmt.Sprintf("ssh %s: SSH config sets %s, which Axis transport does not support, so Axis did not dial it; "+
+		"point the node's hostname or an endpoint at an address Axis can reach directly, and if the directive "+
+		"comes from a wildcard Host block, add \"%s none\" in a more specific Host block placed before it",
+		e.Host, e.Directive, e.Directive)
+}
+
+func unsupportedDirective(resolved resolvedSSHConfig, host string) error {
+	switch {
+	case resolved.ProxyJump != "":
+		return &UnsupportedSSHDirectiveError{Host: host, Directive: "ProxyJump"}
+	case resolved.ProxyCommand != "":
+		return &UnsupportedSSHDirectiveError{Host: host, Directive: "ProxyCommand"}
+	}
+	return nil
 }
 
 func resolvedDialHost(resolved resolvedSSHConfig, fallback string) string {
