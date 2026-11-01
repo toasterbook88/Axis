@@ -1,7 +1,7 @@
 # `axis init --generate`: propose `nodes.yaml` additions from Tailscale
 
-Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after three `revise` spec
-reviews; narrowed to Tailscale for v1; awaiting a fourth review.
+Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after four `revise` spec
+reviews; narrowed to Tailscale for v1; awaiting a fifth review.
 
 ## Problem
 
@@ -60,9 +60,12 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    - The tailnet suffix is `CurrentTailnet.MagicDNSSuffix`, else the deprecated top-level
      `MagicDNSSuffix`.
    - For every `Peer`, online or offline, keep `HostName`, `DNSName` (trailing dot removed) and
-     every entry of `TailscaleIPs`. Peers marked `ShareeNode` (shared in from another tailnet) and
-     peers whose `DNSName` is not under the tailnet suffix (for example Mullvad exit nodes) are
-     listed as skipped with that reason and go no further.
+     every entry of `TailscaleIPs`.
+   - Some peers are never proposed, and are listed as skipped with the reason: `ShareeNode` peers
+     (owned by a user this tailnet shared a node to, who may connect to us), and peers with a
+     non-empty `DNSName` outside the tailnet suffix (machines shared in from another tailnet, whose
+     names are under that tailnet's suffix, and Mullvad exit nodes). Skipped peers still take part
+     in matching (Design 3), so a configured node at a skipped peer's address is seen.
    - `Self`'s addresses are kept to recognise the local node (Design 4). Tailscale reports no SSH
      port, so a candidate's port is unknown.
 2. **Resolve configured nodes.** Each configured node's address set is built from its `hostname`
@@ -72,14 +75,16 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    The resulting host then gets a 2-second DNS lookup, which is new generator code (transport
    leaves DNS to its dialer). The set holds the names and every IP they resolve to; a lookup that
    fails leaves just the names.
-3. **Match.** A candidate matches a configured node when its `DNSName` or one of its tailnet IPs
-   is in the node's address set, compared case-insensitively. A configured short MagicDNS name
-   matches through its DNS lookup, not by comparing labels. A candidate's unknown port is
+3. **Match.** Every parsed peer, skipped or not, is matched. A peer matches a configured node when
+   its `DNSName` or one of its tailnet IPs is in the node's address set, compared
+   case-insensitively. A configured short MagicDNS name matches through its DNS lookup, not by
+   comparing labels. A candidate's unknown port is
    compatible with any configured port. Names never match on their own: two machines can share an
    OS hostname, and a LAN alias can share a first label with an unrelated tailnet peer.
 4. **Report what was not seen.** A configured node is judged only if its address set contains a
-   tailnet address (an IP in Tailscale's IPv4 CGNAT range or its IPv6 ULA prefix, or a name
-   under the tailnet's MagicDNS suffix from `MagicDNSSuffix` in the status output). Such a node that no online peer
+   tailnet address: an IP in the ranges `isTailscaleAddr` in `internal/snapshot` already tests
+   (Tailscale's IPv4 CGNAT range and its own IPv6 /48, not all of IPv6 ULA; the function is
+   exported and shared), or a name under the tailnet suffix. Such a node that no online peer
    matches is "offline" if an offline peer matches it, else "not in the tailnet". Other nodes are
    "not observable by Tailscale" and are not called missing. The local node is never listed: a
    configured node is local when `IsLocal()` says so or when its address set meets `Self`'s
@@ -90,7 +95,8 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
      first dot, so an IP must not reach it unchanged); on a case-insensitive collision with a
      configured or proposed name, suffixed `-2`, `-3` ..., and flagged "possible duplicate of
      <name>";
-   - `hostname`: the `DNSName` when present, else the first tailnet IP;
+   - `hostname`: the `DNSName` when present and `CurrentTailnet.MagicDNSEnabled` is true (the
+     suffix is reported even with MagicDNS off), else the first tailnet IP;
    - `ssh_user`: `--ssh-user`, else the first configured node's `ssh_user` (the wizard's
      `defaultNodeUser`), else the current user;
    - no `ssh_port`, `role` or resource fields.
@@ -98,9 +104,11 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    Offline peers are listed for information and never proposed.
 6. **Verify (optional).** With `--verify-ssh`, each proposed entry is checked through the
    `verifySSH` seam, changed to return a reason: `unknown-host-key`, `host-key-mismatch`, `auth`,
-   `network`. Failed entries are marked with the reason and its remediation; for an unknown key
-   that is to connect once with `ssh` and check the key out of band, never to scan keys in
-   automatically. Without `--verify-ssh`, entries are marked unverified.
+   `network`. A missing `known_hosts` file is `unknown-host-key`. Failed entries are marked with
+   the reason and its remediation; for an unknown key that is to connect once with `ssh` and check
+   the key out of band, never to scan keys in automatically. In this mode transport's own hint
+   (`ssh-keyscan ... >> known_hosts`, `internal/transport/ssh.go:847`) is replaced by that text.
+   Without `--verify-ssh`, entries are marked unverified.
 7. **Report.** Text output lists proposed entries (with verification and duplicate flags), offline
    peers, and the not-seen and not-observable nodes, then a unified diff of the file for the
    entries `--write` would add. `--format json` gives the same data for agents. Nothing is written.
@@ -109,27 +117,40 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    that failed verification are not written even under `--all`.
    - Existing bytes are never re-encoded. The chosen entries alone are encoded with yaml.v3 at
      the indent the file's `nodes:` items use (the column of their `-`, zero included), each
-     preceded by a comment naming the source and date, and inserted right after the last item:
-     after the last line of its last value (from the yaml.Node line numbers) and any comment lines
-     that follow it at a column greater than the items' `-` column. A comment at or left of that
-     column, or a blank line, belongs to what follows. The file's newline style (LF or CRLF) is
-     kept, and a final newline is added only where the file lacked one before the insertion point.
+     preceded by a comment naming the source and date.
+   - The insertion point is found from the next thing after the sequence, whose line yaml.v3
+     reports reliably: the line of the next top-level key, or the end of the file. From there it
+     steps back over blank lines and over comment lines at or left of the items' `-` column, which
+     belong to what follows. yaml.v3 gives the line where a value starts, not where it ends (a
+     block scalar or a multi-line flow collection continues past it), so the last item's own lines
+     are never used.
+   - A flow-style `nodes: [...]` list has no `-` column; the command refuses to write and points to
+     the wizard.
+   - The file's newline style (LF or CRLF) is kept, and a final newline is added only where the
+     file lacked one before the insertion point.
+   - Meaning check: the result is decoded, and the write is refused unless it equals the original
+     config with exactly the chosen entries appended to `nodes`, everything else unchanged. Any
+     splice mistake therefore fails closed.
    - A new exported `config.SaveBytesAtomic(path, data, original)` decodes the result strictly,
      runs `MigrateProviders` and `Validate`, and refuses if the file's current bytes differ from
      `original` (another writer changed it since it was read). Only then does it back up the old
-     file and replace it atomically with mode 0600 and a directory fsync, as `SaveAtomic` does.
-     `SaveAtomic` keeps its behaviour and shares those helpers.
-   - With no `nodes.yaml`, the result is a new file holding a `nodes:` list of the chosen entries,
-     written without a backup. With nothing chosen, nothing is written.
+     file and replace it atomically with mode 0600 and a directory fsync, as `SaveAtomic` does. It
+     returns typed errors: `ErrInvalidConfig`, `ErrConfigChanged`, and anything else as an I/O
+     error. `SaveAtomic` keeps its behaviour and shares those helpers.
+   - With no `nodes.yaml` (`original` nil), the result is a new file. Like the wizard, it lists this
+     machine first (`hostname: localhost`, named from the OS hostname) and then the chosen entries.
+     It is created with an exclusive create, so a file that appears mid-run is not overwritten, and
+     without a backup. With nothing chosen, nothing is written.
 9. **Exit codes.**
    - 0: Tailscale was observed, with or without proposals, and any requested write succeeded or
      had nothing to write.
    - 1 (`ExitErrGeneric`): Tailscale was not observed; `--write` without `--only` or `--all`, or
      with both; an `--only` name that is not proposed or failed `--verify-ssh`; `--ssh-user`,
      `--verify-ssh`, `--only`, `--all` or `--write` without `--generate`; a result that fails
-     `Validate`; the file changed during the run. Nothing is written in any of these cases.
+     `Validate` or the meaning check (`ErrInvalidConfig`); a flow-style `nodes:` list; the file
+     changed during the run (`ErrConfigChanged`). Nothing is written in any of these cases.
    - 2 (`ExitErrConfigLoad`): an existing file cannot be loaded.
-   - 6 (`ExitErrIO`): the write itself fails.
+   - 6 (`ExitErrIO`): the write itself fails (any other `SaveBytesAtomic` error).
 10. **Docs.** `docs/current-state.md` lists the mode, `docs/operator-quickstart.md` shows it next
     to the wizard, and the CHANGELOG records it. The command count is unchanged.
 
@@ -138,7 +159,8 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
 `cmd/axis/init_generate_test.go`, with the Tailscale, resolver and SSH seams stubbed and fixtures
 using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only:
 
-- matching: a configured node by tailnet IP, by `DNSName`, by its first label, by an SSH alias
+- matching: a configured node by tailnet IP, by `DNSName`, by a short name that the stubbed DNS
+  resolves to the peer's IP, by an SSH alias
   whose `ssh -G` HostName resolves to the peer's IP, and by an `endpoints[]` hostname each proposes
   nothing; a configured `ssh_port: 2222` node at a peer's IP proposes nothing;
 - two configured machines and two peers with the same OS hostname but different addresses: the
@@ -148,26 +170,36 @@ using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only
   node is "not observable"; the local node is not listed;
 - when `tailscale` fails, prints invalid JSON, or reports `BackendState` `Stopped` or
   `NeedsLogin` (with and without peers): exit 1, "not observed", and no node listed as not seen;
-- a `ShareeNode` peer and a peer outside the tailnet suffix (a Mullvad exit node) are skipped with
-  their reason and never proposed, even under `--write --all`;
+- a `ShareeNode` peer, a machine shared in from another tailnet and a Mullvad exit node are
+  skipped with their reason and never proposed, even under `--write --all`; a configured node at a
+  skipped peer's IP is seen, not "not in the tailnet";
+- with MagicDNS disabled, a proposal's `hostname` is its tailnet IP;
+- a LAN node at an IPv6 ULA address outside Tailscale's /48 is "not observable", not judged;
 - the suffix comes from `CurrentTailnet.MagicDNSSuffix`, else the top-level field;
 - a configured alias that resolves to `Self`'s tailnet IP is local and not listed;
 - a configured LAN alias `web1` and a peer `web1.<suffix>` at a different IP: the peer is proposed
   (suffixed, flagged), not matched;
-- a peer with an empty `HostName` is named from its `DNSName`, and one with neither from its IP;
+- a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an
+  empty `DNSName` (not skipped) from its IP;
 - `ssh_user` precedence: `--ssh-user`, then the first configured node's user, then the current user;
-- `--verify-ssh` marks an unknown host key and an auth failure with their reasons, and `--write
-  --all` leaves them out;
+- `--verify-ssh` marks an unknown host key, a missing `known_hosts` file and an auth failure with
+  their reasons, never prints `ssh-keyscan`, and `--write --all` leaves them out;
 - each exit-1 case in Design 9 exits 1 and writes nothing: `--write` without `--only`/`--all`,
   with both, `--only` with an unknown or failed-verification name, a generate flag without
   `--generate`, an invalid result, and a file edited between the read and the write;
 - without `--write`, the file's bytes are unchanged;
+- with `--write --only`, on fixtures whose last item ends in a block scalar (`>-`, `|`) and in a
+  multi-line flow mapping, the new entry lands after the whole value and the meaning check passes;
+  a splice placed inside the value (an injected offset) is refused by the meaning check;
+- a flow-style `nodes: [...]` file is refused with exit 1;
+- exit 2 for an existing file that fails to load; exit 6 for an injected write failure;
 - with `--write --only`, on fixtures with 0-, 2- and 4-space item indent, blank lines between
   entries, aligned inline comments, a comment block above a following top-level key, CRLF line
   endings, and no final newline: every original byte is preserved, the new entries follow the last
   item at the file's indent, the following key keeps its comment, a backup exists, and
   `config.Load` accepts the result;
-- with no file, `--write --all` creates one without a backup;
+- with no file, `--write --all` creates one that lists this machine first, without a backup; a
+  file created between the read and the write is not overwritten;
 - a proposal that would fail `Validate` is not written and the file is unchanged;
 - `--format json` carries the same lists.
 
@@ -204,8 +236,10 @@ touching the file, and on success leaves mode 0600 and a backup.
   comment into a `yaml.Node` and encoding it back gave 4-space indent, no blank line and one space
   before the comment. Hence splicing encoded new entries into the original bytes.
 - Tailscale's CLI prints `status --json` before checking the backend state, and the JSON includes
-  peers the text view hides (`ShareeNode`, Mullvad exit nodes); `MagicDNSSuffix` at the top level
-  is deprecated in favour of `CurrentTailnet.MagicDNSSuffix`
+  peers the text view hides (`ShareeNode`, documented as a node owned by a shared-to user that
+  might connect to us, and Mullvad exit nodes); `MagicDNSSuffix` at the top level is deprecated in
+  favour of `CurrentTailnet.MagicDNSSuffix`, which is reported even when `MagicDNSEnabled` is
+  false
   (<https://github.com/tailscale/tailscale/blob/main/cmd/tailscale/cli/status.go>,
   <https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go>).
 
@@ -322,3 +356,41 @@ Questions:
 - Is yaml.v3's loss of blank lines observed? Verified: by the author's round-trip probe (Research).
 - Can a concurrent edit be lost? Became Design 8: `SaveBytesAtomic` refuses when the file changed
   since it was read; fixture.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 8cf9d74b
+Head: 0d1ff69f
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: the splice point used each value's start line, so a last item ending in a block scalar
+   was split and the file still loaded with changed meaning. Fixed: the point is found from the
+   next top-level key or the end of the file, and a meaning check refuses any result that is not
+   the original plus the chosen entries (Design 8); fixtures with block scalars, a flow mapping and
+   an injected bad offset.
+2. Major: skipped peers were left out of matching, so nodes at their addresses were reported
+   missing. Fixed: every peer is matched; skipped only means never proposed (Design 1 and 3);
+   fixture.
+3. Minor: the proposed `hostname` was the MagicDNS name even with MagicDNS off. Fixed: only when
+   `MagicDNSEnabled` (Design 5); fixture.
+4. Minor: a peer with no `DNSName` was both skipped and named. Fixed: only a non-empty `DNSName`
+   outside the suffix is skipped (Design 1).
+5. Minor: the IPv6 range was not pinned. Fixed: the ranges of `isTailscaleAddr`, exported and
+   shared (Design 4); fixture with a non-Tailscale ULA LAN node.
+6. Minor: exit codes 2 and 6 were untested and errors had no mapping. Fixed: typed errors from
+   `SaveBytesAtomic` (Design 8 and 9); tests for both codes.
+7. Minor: a missing `known_hosts` file printed the `ssh-keyscan` hint. Fixed: it is
+   `unknown-host-key` with out-of-band remediation (Design 6); fixture.
+8. Minor: the research described `ShareeNode` wrongly. Fixed: corrected, and machines shared in
+   from another tailnet are skipped by the suffix rule (Design 1, Research); fixture.
+
+Questions:
+- Did the first-label test rely on stubbed DNS? Became Tests: the fixture resolves a short name
+  through the stubbed DNS.
+- How is a flow-style `nodes: [...]` handled? Became Design 8: refused; fixture.
+- How is "no file" told apart from "empty file"? Became Design 8: `original` nil and an exclusive
+  create; fixture.
+- Does a new file without the local node break other surfaces? Became Design 8: a new file lists
+  this machine first, as the wizard does.
