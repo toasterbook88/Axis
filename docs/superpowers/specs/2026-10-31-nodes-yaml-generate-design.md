@@ -1,7 +1,7 @@
-# `axis init --generate`: propose `nodes.yaml` from discovery
+# `axis init --generate`: propose `nodes.yaml` additions from Tailscale
 
-Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after its first spec review
-(`revise`); awaiting a second.
+Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after two `revise` spec reviews;
+narrowed to Tailscale for v1; awaiting a third review.
 
 ## Problem
 
@@ -9,30 +9,33 @@ Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after its first 
 The pieces to automate it exist but are only reachable interactively:
 
 - `axis init` (`cmd/axis/init.go`) can list Tailscale peers (`discoverTailscalePeers`, from
-  `tailscale status --json`) and AXIS beacons (`discoverMeshPeers`, a three-second UDP scan),
-  but only inside a TTY wizard, one menu choice at a time.
+  `tailscale status --json`), but only inside a TTY wizard, one menu choice at a time, and it
+  drops offline peers (`init.go:943`) and every tailnet address but the first (`init.go:950`).
 - Its write path, `config.SaveAtomic` (`internal/config/save.go:47`), re-marshals the `Config`
   struct, so every save drops the file's comments and blank lines. Operators record why a value is
   set in those comments (for example why a node has a large `system_reserve_mb`); one wizard run
   erases them.
-- The wizard's beacon scan passes no discovery secret (`init.go:962`), so in a cluster where
-  `axis init` enabled discovery (it always stores a generated secret, `init.go:543-551`) every
-  signed beacon is rejected (`internal/discovery/udp.go:77-78`) and the scan finds nothing. It also
-  discards the listener error that `udp.go:101-102` says must not be read as "no peers".
-- Nothing reports drift: a node that has left the tailnet, or a beacon from a machine that is not
-  in the file, is visible only if someone runs the wizard and reads the lists.
+- Nothing tells an operator which tailnet machines are not configured, or which configured
+  tailnet nodes have left the tailnet, short of reading both lists by hand.
 
 ## Non-goals
 
-- Writing without review. The command proposes; the operator applies. No daemon, timer or agent
-  edits `nodes.yaml` on its own.
-- Removing nodes. A configured node that no source sees is reported, never deleted.
-- Changing any field of a configured node. `docs/authority-config.md` §3 lists `name`,
-  `hostname`, `stable_id`, `ssh_user`, `ssh_port` and `role` as identity-sensitive; the generator
-  only appends.
+- Writing without review. The command proposes; the operator chooses entries and applies them. No
+  daemon, timer or agent edits `nodes.yaml` on its own.
+- Removing nodes, or changing any field of a configured node (`docs/authority-config.md` §3 lists
+  `name`, `hostname`, `stable_id`, `ssh_user`, `ssh_port` and `role` as identity-sensitive). The
+  generator only appends.
+- Drift detection (a configured node now at another address). Without a `stable_id` from the
+  source there is no identity to compare across addresses; v1 reports only "not seen".
+- AXIS beacons as a source in v1. A CLI scan shares the beacon port with the daemon through
+  `SO_REUSEPORT`, which spreads datagrams across sockets (`internal/discovery/udp.go:170-178`), so
+  a scan beside a running daemon can miss peers; and a beacon's address is the sender's first
+  non-loopback IPv4 (`udp.go:331-344`), not necessarily a reachable one. A beacon source needs
+  the daemon to publish its registry first. The wizard's beacon scan also passes no discovery
+  secret (`init.go:962`, so signed beacons are rejected, `udp.go:77-78`) and discards the listener
+  error; that is fixed separately as a bug.
 - Setting `system_reserve_mb` or any other resource field. AXIS cannot observe a resident service's
   cap (`docs/runbooks/resident-memory-services.md`), so a generated value would be a guess.
-- New discovery sources (cloud APIs, mDNS, `~/.ssh/config`). Tailscale and beacons only.
 - Changing host-key policy. `internal/transport` keeps host-key verification on (AGENTS.md §4);
   the generator never adds keys to `known_hosts`.
 - The interactive wizard's own saves. Moving them to the comment-preserving writer is a follow-up.
@@ -43,105 +46,102 @@ The pieces to automate it exist but are only reachable interactively:
 A non-interactive mode of `axis init`, which already owns validation and writes:
 
 ```text
-axis init --generate [--source tailscale,beacons] [--ssh-user USER] [--verify-ssh] [--write]
-          [--config PATH] [--format text|json]
+axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--config PATH]
+                     [--write (--only NAME,... | --all)]
 ```
 
-1. **Collect.** Run the selected sources (default both); each returns candidates with every
-   address it knows and fails loudly.
-   - Tailscale: parse `Peer` entries, online and offline, with `HostName`, `DNSName` and every
-     entry of `TailscaleIPs`. Offline peers are kept and flagged offline.
-   - Beacons: a new listen-only `discovery.ScanBeacons(ctx, cfg.Discovery, d)` uses the loaded
-     config's secret and `udp_port` (defaults when `discovery` is absent), sends no beacon of its
-     own, and returns the listener error. The wizard's scan switches to it, which also fixes the
-     problem above.
-   - A source that fails (no `tailscale` binary, the UDP port cannot be bound) is reported as
-     failed with its error and skipped; the other source still runs.
-2. **Drop this machine.** Candidates whose addresses or `stable_id` identify the machine running
-   the command (`models.IsLocalHost`, `models.CurrentLocalStableID`) are ignored: the local node is
-   configured as `localhost` and is never "seen" by its own scan.
-3. **Match.** A candidate matches a configured node when:
-   - their `stable_id` values are equal; or
-   - any candidate address equals, case-insensitively, one of the node's addresses (`hostname`,
-     each `endpoints[].hostname`, and the IPs those resolve to with a 2-second lookup), and the
-     SSH port agrees (candidate port, default 22, against `EffectiveSSHPort`); or
-   - the candidate's suggested name equals the node's `name`, case-insensitively.
-
-   A matched node is not a change. Drift is reported only for a `stable_id` match whose addresses
-   share nothing with the node's. Configured nodes that no candidate matched are reported as
-   "not seen" (or "offline" when the match was to an offline Tailscale peer, or "address not
-   resolvable" when the node's hostname resolved to nothing, as an SSH alias does). The local node
-   is never reported.
-4. **Propose.** Unmatched candidates are merged when they share an address or `stable_id` (a
-   machine seen by both sources), then become new entries:
-   - `name`: `normalizeSuggestedName` of the Tailscale `HostName`, else the beacon's name; on a
-     case-insensitive collision with a configured or proposed name, suffixed `-2`, `-3` ...;
-   - `hostname`: the Tailscale `DNSName` without its trailing dot when present, else the first
-     address;
-   - `stable_id` when a beacon reported one; `ssh_port` when it is not 22;
+1. **Collect.** Run `tailscale status --json` through the existing seam
+   (`discoverTailscalePeersFn`, extended). For every `Peer`, online or offline, keep `HostName`,
+   `DNSName` (trailing dot removed), its first label, and every entry of `TailscaleIPs`. Tailscale
+   reports no SSH port, so a candidate's port is unknown. `Self` is not a peer and is never a
+   candidate. If the command fails or its output does not parse, nothing was observed: the report
+   says so and the exit code is 1 (`ExitErrGeneric`); no node is reported as not seen.
+2. **Resolve configured nodes.** Each configured node's address set is built from its `hostname`
+   and each `endpoints[].hostname`, resolved the way `internal/transport` dials them: `ssh -G`
+   (so an SSH alias yields its `HostName` and `Port`), then a 2-second DNS lookup of that host.
+   The resolution is exported from `internal/transport` as one function so both use the same code.
+   The set holds the names and every IP they resolve to; a lookup that fails leaves just the names.
+3. **Match.** A candidate matches a configured node when any candidate address (its `DNSName`,
+   that name's first label, or a tailnet IP) is in the node's address set, compared
+   case-insensitively. A candidate's unknown port is compatible with any configured port.
+   Suggested names alone never match: two machines can share an OS hostname.
+4. **Report what was not seen.** A configured node is judged only if its address set contains a
+   tailnet address (an IP in Tailscale's IPv4 CGNAT range or its IPv6 ULA prefix, or a name
+   under the tailnet's MagicDNS suffix from `MagicDNSSuffix` in the status output). Such a node that no online peer
+   matches is "offline" if an offline peer matches it, else "not in the tailnet". Other nodes are
+   "not observable by Tailscale" and are not called missing. The local node (`IsLocal()`) is never
+   listed.
+5. **Propose.** Each online, unmatched peer becomes a proposed entry:
+   - `name`: `normalizeSuggestedName(HostName)`; on a case-insensitive collision with a configured
+     or proposed name, suffixed `-2`, `-3` ..., and flagged "possible duplicate of <name>";
+   - `hostname`: the `DNSName` when present, else the first tailnet IP;
    - `ssh_user`: `--ssh-user`, else the first configured node's `ssh_user` (the wizard's
-     `defaultNodeUser`), else the current user. Beacons carry no user.
-5. **Verify (optional).** With `--verify-ssh`, each proposed entry is checked through the
+     `defaultNodeUser`), else the current user;
+   - no `ssh_port`, `role` or resource fields.
+
+   Offline peers are listed for information and never proposed.
+6. **Verify (optional).** With `--verify-ssh`, each proposed entry is checked through the
    `verifySSH` seam, changed to return a reason: `unknown-host-key`, `host-key-mismatch`, `auth`,
-   `network`. Entries that fail are listed under "not added" with the reason and its remediation.
-   For an unknown key the remediation is to connect once with `ssh` and check the key out of
-   band, never to scan keys in automatically. Without `--verify-ssh`, proposed entries are marked
-   unverified.
-6. **Report.** Text output lists entries to add, drift, configured nodes not seen (with the reason
-   above) and failed sources, then a unified diff of the file. `--format json` gives the same data
-   for agents. Nothing is written.
-7. **Write (`--write`).** Existing bytes are never re-encoded. The new entries alone are encoded
-   with yaml.v3 at the indent the file's `nodes:` items use, each preceded by a comment naming its
-   source and date. Their bytes are inserted after the last line of the `nodes:` sequence: the line
-   before the next top-level key (from its `yaml.Node` line), or the end of the file. A new
-   exported `config.SaveBytesAtomic(path, data)` then decodes the result strictly, runs
-   `MigrateProviders` and `Validate`, and only then backs up the old file and replaces it atomically
-   with mode 0600 and a directory fsync, as `SaveAtomic` does. `SaveAtomic` keeps its behaviour and
-   shares those helpers.
-   - With no `nodes.yaml`, the proposal is a new file: a `nodes:` list of the new entries, written
-     without a backup.
-   - `--write` with nothing to add writes nothing and makes no backup.
-8. **Exit codes.** 0 when the run completes, with or without changes or failed sources;
+   `network`. Failed entries are marked with the reason and its remediation; for an unknown key
+   that is to connect once with `ssh` and check the key out of band, never to scan keys in
+   automatically. Without `--verify-ssh`, entries are marked unverified.
+7. **Report.** Text output lists proposed entries (with verification and duplicate flags), offline
+   peers, and the not-seen and not-observable nodes, then a unified diff of the file for the
+   entries `--write` would add. `--format json` gives the same data for agents. Nothing is written.
+8. **Write.** `--write` requires `--only NAME,...` (proposed names) or `--all`, so devices on the
+   tailnet that are not cluster nodes are never added by accident. With `--verify-ssh`, entries
+   that failed verification are not written even under `--all`.
+   - Existing bytes are never re-encoded. The chosen entries alone are encoded with yaml.v3 at
+     the indent the file's `nodes:` items use, each preceded by a comment naming the source and
+     date, and inserted right after the last line of the last `nodes:` item: the end of its last
+     value plus any comment lines indented inside it, before any blank line or comment that
+     precedes the next top-level key. The file's newline style (LF or CRLF) is kept, and a final
+     newline is added only where the file lacked one before the insertion point.
+   - A new exported `config.SaveBytesAtomic(path, data)` decodes the result strictly, runs
+     `MigrateProviders` and `Validate`, and only then backs up the old file and replaces it
+     atomically with mode 0600 and a directory fsync, as `SaveAtomic` does. `SaveAtomic` keeps its
+     behaviour and shares those helpers.
+   - With no `nodes.yaml`, the result is a new file holding a `nodes:` list of the chosen entries,
+     written without a backup. With nothing chosen, nothing is written.
+9. **Exit codes.** 0 when Tailscale was observed, with or without proposals; 1 when it was not;
    `ExitErrConfigLoad` (2) when an existing file cannot be loaded; `ExitErrIO` (6) when the write
-   fails.
-9. **Docs.** `docs/current-state.md` lists the mode, `docs/operator-quickstart.md` shows it next
-   to the wizard, and the CHANGELOG records it and the wizard's beacon-secret fix. The command
-   count is unchanged (a flag on `axis init`).
+   fails; 1 for `--write` without `--only` or `--all`, or with an `--only` name that is not
+   proposed.
+10. **Docs.** `docs/current-state.md` lists the mode, `docs/operator-quickstart.md` shows it next
+    to the wizard, and the CHANGELOG records it. The command count is unchanged.
 
 ## Tests
 
-`cmd/axis/init_generate_test.go`, with the source and SSH seams stubbed and fixtures using
-RFC 5737 and RFC 2606 addresses only:
+`cmd/axis/init_generate_test.go`, with the Tailscale, resolver and SSH seams stubbed and fixtures
+using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only:
 
-- matching: a candidate matching by `stable_id`, by an `endpoints[]` address, by a configured DNS
-  name that resolves (stubbed resolver) to the candidate's IP, and by `name` case-insensitively
-  each proposes nothing;
-- a machine seen by Tailscale (tailnet IP and `DNSName`) and by a beacon (LAN IP, `stable_id`)
-  becomes one proposed entry with the `DNSName` as `hostname` and the `stable_id`;
-- two candidates on one address with different SSH ports stay two entries, and a non-22 port is
-  written as `ssh_port`;
-- a `stable_id` match at unrelated addresses is drift and the file is unchanged;
-- a configured node that nothing matches is "not seen"; one matched only by an offline peer is
-  "offline"; one with an unresolvable hostname says so; the local node is never listed;
-- a candidate that is this machine (by address or `stable_id`) is not proposed;
-- `ssh_user`: `--ssh-user` wins; else the first configured node's user; else the current user;
-- a name collision, including one that differs only in case, gets a numeric suffix;
-- `--verify-ssh` lists an unknown host key and an auth failure with their reasons and leaves both
-  out;
-- a failing source is reported and the other source still runs;
+- matching: a configured node by tailnet IP, by `DNSName`, by its first label, by an SSH alias
+  whose `ssh -G` HostName resolves to the peer's IP, and by an `endpoints[]` hostname each proposes
+  nothing; a configured `ssh_port: 2222` node at a peer's IP proposes nothing;
+- two configured machines and two peers with the same OS hostname but different addresses: the
+  unmatched peer is proposed with a suffix and a "possible duplicate" flag;
+- an offline unmatched peer is listed and not proposed; a configured node matched only by an
+  offline peer is "offline"; a configured tailnet node with no peer is "not in the tailnet"; a LAN
+  node is "not observable"; the local node is not listed;
+- when `tailscale` fails or prints invalid JSON: exit 1, "not observed", and no node listed as
+  not seen;
+- `ssh_user` precedence: `--ssh-user`, then the first configured node's user, then the current user;
+- `--verify-ssh` marks an unknown host key and an auth failure with their reasons, and `--write
+  --all` leaves them out;
+- `--write` without `--only` or `--all`, and `--only` with an unknown name, exit 1 and write nothing;
 - without `--write`, the file's bytes are unchanged;
-- with `--write` on a fixture with 2-space indentation, blank lines between entries, aligned
-  inline comments and a top-level key after `nodes:`, every original byte is preserved, the new
-  entries sit at the end of `nodes:` at the file's indent, a backup exists, and `config.Load`
-  accepts the result;
-- with no file, `--write` creates one and makes no backup; with no additions, it writes nothing;
+- with `--write --only`, on fixtures with 2-space and 4-space item indent, blank lines between
+  entries, aligned inline comments, a comment block above a following top-level key, CRLF line
+  endings, and no final newline: every original byte is preserved, the new entries follow the last
+  item at the file's indent, the following key keeps its comment, a backup exists, and
+  `config.Load` accepts the result;
+- with no file, `--write --all` creates one without a backup;
 - a proposal that would fail `Validate` is not written and the file is unchanged;
 - `--format json` carries the same lists.
 
-`internal/discovery`: `ScanBeacons` collects a signed beacon with the configured secret, rejects an
-unsigned one when a secret is set, sends nothing, and returns a bind error.
-`internal/config`: `SaveBytesAtomic` rejects unknown keys and invalid configs without touching the
-file, and on success leaves mode 0600 and a backup.
+`internal/transport`: the exported resolver returns the alias's HostName and Port from a stubbed
+`ssh -G`. `internal/config`: `SaveBytesAtomic` rejects unknown keys and invalid configs without
+touching the file, and on success leaves mode 0600 and a backup.
 
 ## Alternatives
 
@@ -150,6 +150,7 @@ file, and on success leaves mode 0600 and a backup.
 | The daemon registers nodes as beacons arrive (self-registration, like kubelet) | Puts a network signal in charge of operator-authored config; AXIS keeps discovery suggestions advisory. |
 | A runtime inventory that replaces `nodes.yaml` (Ansible-style dynamic inventory) | Placement and reservations key on a stable, reviewed node list; a list that changes with each probe would orphan ledger entries keyed by name. |
 | A second file, `nodes.generated.yaml`, merged at load time | Two sources of truth for one list, and conflicts would be resolved silently at load. |
+| Include AXIS beacons in v1 | A CLI scan competes with the daemon for beacon datagrams and reports a sender-chosen address (Non-goals); it needs the daemon to publish its registry first. |
 | Re-encode the whole YAML node tree | yaml.v3 keeps comments but not blank lines, indentation or comment alignment (one global indent; one space before a line comment), so every write would rewrite the file. |
 | Re-marshal the struct (reuse `SaveAtomic`) | Drops every comment in the file, which is the second problem above. |
 
@@ -169,9 +170,9 @@ file, and on success leaves mode 0600 and a backup.
   (<https://pkg.go.dev/gopkg.in/yaml.v3>; `encode.go:61`, `emitterc.go:1151-1155` in the module).
   Hence splicing encoded new entries into the original bytes rather than re-encoding the file.
 
-Optimization chosen: reuse the wizard's sources, naming, user default and validation; read the
-file's structure with yaml.v3 but write by splicing bytes, so the only new code is the matcher, the
-report, the listen-only scan and the byte writer.
+Optimization chosen: one source in v1, reuse the wizard's Tailscale parsing, naming, user default
+and validation and transport's resolution, and write by splicing bytes, so the new code is the
+matcher, the report and the byte writer.
 
 ## Review
 
@@ -183,33 +184,69 @@ Head: de55d59b
 Date: 2026-10-31
 Verdict: revise
 
-1. Major: the beacon source passed no secret and discarded the listener error, so in a secured
-   cluster it found nothing and called that success. Fixed: a listen-only `ScanBeacons` uses the
-   configured secret and port and returns the error (Design 1); tests in `internal/discovery`.
-2. Major: matching compared one discovered IP with unresolved configured names, so DNS-named or
-   endpoints-only nodes were "not seen", drift fired every run, one machine seen by both sources
-   became two entries, and the local node and offline peers were misreported. Fixed: matching on
-   address sets with resolved names and ports, drift only on a `stable_id` match, the local machine
-   dropped, offline and unresolvable reported as such (Design 2 and 3); fixtures for each.
-3. Major: re-encoding the yaml.v3 tree cannot keep the file byte-identical. Fixed: new entries are
-   encoded alone and spliced into the original bytes (Design 7); a fixture with 2-space indent,
-   blank lines and aligned comments.
-4. Major: beacons carry no SSH user, so "the beacon's user" was a constant. Fixed: `--ssh-user`,
-   else the first configured node's user, else the current user (Design 4).
-5. Minor: `ssh_port` was dropped and matching ignored it. Fixed: written when not 22, and part of
-   matching and merging (Design 3 and 4); fixture.
+1. Major: the beacon source passed no secret and discarded the listener error. Fixed: beacons are
+   out of v1 (Non-goals), and the wizard's secret bug is a separate bug fix.
+2. Major: matching compared one discovered IP with unresolved configured names. Fixed: configured
+   names are resolved as transport dials them, and candidates carry every tailnet address
+   (Design 1 to 3); fixtures for aliases, DNS names and endpoints.
+3. Major: re-encoding the yaml.v3 tree cannot keep the file byte-identical. Fixed: chosen entries
+   are encoded alone and spliced into the original bytes (Design 8); fixtures for indent, blank
+   lines and aligned comments.
+4. Major: beacons carry no SSH user. Fixed: `--ssh-user`, else the first configured node's user,
+   else the current user (Design 5).
+5. Minor: `ssh_port` was dropped and matching ignored it. Fixed: Tailscale reports no port, so it
+   is unknown and compatible, and no `ssh_port` is written (Design 3 and 5); fixture.
 6. Minor: the writer named helpers `cmd/axis` cannot call. Fixed: a new exported
-   `config.SaveBytesAtomic` with the same guarantees (Design 7); tests in `internal/config`.
+   `config.SaveBytesAtomic` with the same guarantees (Design 8); tests in `internal/config`.
 7. Minor: `--verify-ssh` would drop new machines for unknown host keys with no reason. Fixed: the
-   seam returns a reason and the report gives remediation that keeps host-key checks on (Design 5,
+   seam returns a reason and the report gives remediation that keeps host-key checks on (Design 6,
    Non-goals); fixture.
 
 Questions:
-- Does the scan hear its own beacon? Became Design 1 and 2: the scan is listen-only and this
-  machine is dropped.
-- Is broadcasting during a propose-only run acceptable? Became Design 1: it sends nothing.
-- Are names compared case-insensitively? Became Design 3 and 4: yes, for matching and collisions.
-- What happens with no `nodes.yaml`? Became Design 7: a new file, no backup.
-- Doc updates? Became Design 9.
+- Does the scan hear its own beacon? Became a non-goal: no beacon scan in v1.
+- Is broadcasting during a propose-only run acceptable? Became a non-goal: no beacon scan in v1.
+- Are names compared case-insensitively? Became Design 5: yes, for collisions; names never match.
+- What happens with no `nodes.yaml`? Became Design 8: a new file, no backup.
+- Doc updates? Became Design 10.
 - The research URLs were not fetched by the reviewer. Verified: by the author, all four returned
   HTTP 200 and the Kubernetes page has both cited sections.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 8cf9d74b
+Head: 7d515a64
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: drift fired every run for a machine both sources saw, because matching ran before
+   merging. Fixed: drift detection is a v1 non-goal, and with one source there is nothing to merge.
+2. Major: SSH-alias nodes never matched by address and were proposed again. Fixed: configured
+   names are resolved with `ssh -G`, then DNS, through transport's own resolver (Design 2);
+   fixture.
+3. Major: a Tailscale candidate's implied port 22 broke matches for non-22 nodes. Fixed: the port
+   is unknown and compatible with any configured port (Design 3); fixture with `ssh_port: 2222`.
+4. Major: "not seen" was reported when a source had failed or could not see the node. Fixed: a
+   failed source means "not observed" and exit 1, and only nodes with a tailnet address are judged
+   (Design 1, 4, 9); fixtures.
+5. Major: offline and non-server devices were proposed, and `--write` was all-or-nothing. Fixed:
+   offline peers are never proposed, `--write` needs `--only` or `--all`, and failed verification
+   is never written (Design 5 and 8); fixtures.
+6. Major: a beacon's address is its sender's first interface, which drove the hostname and the
+   self-drop. Fixed: beacons are out of v1 (Non-goals).
+7. Minor: the splice point put new entries under the next key's head comment. Fixed: they go after
+   the last item, before any comment or blank line above the next key (Design 8); fixture with a
+   comment above the following key.
+8. Minor: the scan duration was unspecified. Fixed: no beacon scan in v1; `tailscale status` is a
+   single call.
+
+Questions:
+- Does `ScanBeacons` listen when `discovery.enabled` is false? Became a non-goal: no beacon scan.
+- Does a name-only match hide a second machine with the same OS hostname? Became Design 3 and 5:
+  names never match; a collision is proposed with a suffix and a "possible duplicate" flag.
+- Does a listen-only scan share beacons with the daemon under `SO_REUSEPORT`? Verified: the code's
+  own comment (`udp.go:176-178`) says datagrams are spread across sharing sockets; that is why
+  beacons are out of v1.
+- CRLF and a missing final newline at the splice point? Became Design 8; fixtures for both.
+- The Consul and Tailscale URLs were not fetched by the reviewer. Verified: by the author, both
+  returned HTTP 200.
