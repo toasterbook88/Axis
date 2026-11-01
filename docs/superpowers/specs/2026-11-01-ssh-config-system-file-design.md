@@ -171,7 +171,8 @@ def dump(host, port, user, with_f):
     return d
 diff, failed, n = collections.Counter(), collections.Counter(), 0
 for node in cfg.get("nodes", []):
-    hosts = [node["hostname"]] + [e["hostname"] for e in node.get("endpoints") or [] if e.get("hostname")]
+    hosts = ([node["hostname"]] if node.get("hostname") else []) + \
+        [e["hostname"] for e in node.get("endpoints") or [] if e.get("hostname")]
     for h in hosts:
         n += 1
         port = node.get("ssh_port") or 22
