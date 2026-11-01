@@ -85,14 +85,17 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
    resolved to (or the `HostName` itself when that is an IP literal), not the configured name or
    the `HostName` string, so a configured `alpha.<suffix>` that resolves to beta's tailnet IP
    matches beta, the machine AXIS would dial, and not alpha. Only when the lookup fails or does
-   not finish does the set hold the effective `HostName` string, compared exactly; that node is
-   reported as unresolved. Resolution runs at most 8 at a time within a 10-second overall budget.
+   not finish does the set hold the effective `HostName` string, normalized as names are in
+   Design 3; that node is reported as unresolved. Resolution runs at most 8 at a time within a
+   10-second overall budget.
 3. **Match.** Every parsed peer, skipped or not, is matched. A peer matches a configured node when
    one of its tailnet IPs is in the node's address set, or, for a node whose lookup is unresolved,
-   when its `DNSName` equals the node's effective `HostName`. Names are compared
-   case-insensitively and IPs as parsed `netip.Addr` values, so an expanded IPv6 literal matches
-   its canonical form. A configured short MagicDNS name matches through its DNS lookup, not by
-   comparing labels. A peer's unknown port is compatible with any configured port.
+   when its `DNSName` equals the node's effective `HostName`. Names are compared after removing
+   one trailing dot from both sides (a fully qualified `alpha.example.com.` is the same name as
+   `alpha.example.com`) and case-insensitively, and IPs as parsed `netip.Addr` values, so an
+   expanded IPv6 literal matches its canonical form. A configured short MagicDNS name matches
+   through its DNS lookup, not by comparing labels. A peer's unknown port is compatible with any
+   configured port.
    - Names never match on their own: two machines can share an OS hostname, and a LAN alias can
      share a first label with an unrelated tailnet peer.
    - Endpoint IPs never match either. A private endpoint IP (RFC 1918 IPv4 or IPv6 ULA, as
@@ -276,7 +279,8 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
 - a configured `alpha.<suffix>` whose effective host resolves to beta's tailnet IP matches beta
   only: alpha's peer is proposed; the same with an `ssh -G` `HostName` rewrite to beta's IP; a
   configured name whose lookup is unresolved matches a peer whose `DNSName` equals its effective
-  `HostName`;
+  `HostName`; an unresolved configured `Alpha.Example.com.` (trailing dot, mixed case) matches a
+  peer reported as `alpha.example.com.` and is not proposed again;
 - `--ssh-user` or `--format` without `--generate` exits 1; an unloadable `nodes.yaml` exits 2 even
   when Tailscale is also not observed; with no `nodes.yaml`, peers are proposed and nothing is
   called missing;
@@ -663,3 +667,16 @@ Verdict: approve-with-changes
    an `ssh -G` rewrite.
 
 Note: the `ExitNodeOption` rule is removed; with no suffix nothing is proposed, which covers it.
+
+Kind: spec
+Reviewer: copilot-pull-request-reviewer (PR #596, third review)
+Model: not reported by the reviewer
+Base: 8cf9d74b
+Head: fe5b8a5a
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: the unresolved-name fallback compared a peer `DNSName` with its trailing dot removed
+   against an effective `HostName` kept as written, so a configured FQDN with a trailing dot was
+   proposed again. Fixed: both sides lose one trailing dot and are compared case-insensitively
+   (Design 2 and 3); fixture with an unresolved `Alpha.Example.com.`.
