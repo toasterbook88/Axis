@@ -58,6 +58,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep
 
+      # The sandbox test skips without bwrap and unprivileged user namespaces;
+      # this step must fail rather than let it skip, so CI covers real ssh -G.
+      - name: Real ssh -G sandbox test
+        shell: bash
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          ./hack/hermetic-go-test.sh -count=1 -v -run 'TestSSHConfigCommandWithRealSSHInASandbox' ./internal/transport/ | tee /tmp/sandbox-test.log
+          if grep -q -- '--- SKIP' /tmp/sandbox-test.log || ! grep -q -- '--- PASS: TestSSHConfigCommandWithRealSSHInASandbox' /tmp/sandbox-test.log; then
+            echo "TestSSHConfigCommandWithRealSSHInASandbox did not run and pass" >&2
+            exit 1
+          fi
+
       - name: Public boundary gate regression tests
         run: ./hack/verify-public-boundary-tests.sh
 
