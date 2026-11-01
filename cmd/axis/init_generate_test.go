@@ -72,6 +72,7 @@ type genFixture struct {
 	dns      map[string][]string
 	hang     map[string]bool
 	sshHang  map[string]bool
+	sshFail  map[string]bool
 	local    map[string]bool
 	localCfg string // first-label hostname that NodeConfig.IsLocal() would accept
 }
@@ -83,6 +84,9 @@ func (f *genFixture) deps() generateDependencies {
 			if f.sshHang[host] {
 				<-ctx.Done()
 				return transport.SSHTarget{}, ctx.Err()
+			}
+			if f.sshFail[host] {
+				return transport.SSHTarget{}, errors.New("ssh -G: bad configuration option")
 			}
 			if t, ok := f.ssh[host]; ok {
 				return t, nil
@@ -103,7 +107,8 @@ func (f *genFixture) deps() generateDependencies {
 			}
 			return out, nil
 		},
-		isLocalHost: func(name string) bool { return f.local[normalizeGenerateName(name)] },
+		// Like models.IsLocalHost: case-insensitive, but a trailing dot is not removed.
+		isLocalHost: func(name string) bool { return f.local[strings.ToLower(strings.TrimSpace(name))] },
 		isLocalConfig: func(n config.NodeConfig) bool {
 			label, _, _ := strings.Cut(normalizeGenerateName(n.Hostname), ".")
 			return f.localCfg != "" && label == f.localCfg
@@ -647,5 +652,45 @@ func TestRunInitGenerateNeverWrites(t *testing.T) {
 	var r generateReport
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil || !r.Observed || len(r.Proposed) != 1 {
 		t.Fatalf("json report: %v %+v", err, r)
+	}
+}
+
+// A failed ssh -G leaves the redirect fields unchecked, so the candidate fails
+// instead of passing as written.
+func TestGenerateSSHConfigErrorWithholdsTheHostname(t *testing.T) {
+	f := fixture(onlineTailnet(alpha()))
+	f.dns = map[string][]string{"alpha." + genSuffix: {"100.64.0.10"}}
+	f.sshFail = map[string]bool{"alpha." + genSuffix: true, "100.64.0.10": true}
+	p := proposal(t, run(t, f, nil), "alpha")
+	if p.Hostname != "" || !p.Unsafe || p.YAML != "" || !hasFlag(p, "unsafe: SSH config could not be checked") {
+		t.Fatalf("ssh -G failed for every candidate: %+v, want unsafe with no YAML", p)
+	}
+	// A configured node keeps transport's fallback: it is still matched by its name.
+	f = fixture(onlineTailnet(alpha()))
+	f.dns = map[string][]string{"alpha." + genSuffix: {"100.64.0.10"}}
+	f.sshFail = map[string]bool{"alpha." + genSuffix: true}
+	if r := run(t, f, genCfg(node("a", "alpha."+genSuffix))); len(r.Proposed) != 0 || notSeen(r, "a") != "" {
+		t.Fatalf("configured node with a failing ssh -G was not matched: %v %q", proposalNames(r), notSeen(r, "a"))
+	}
+}
+
+func TestGenerateLocalHostnameWithTrailingDot(t *testing.T) {
+	f := fixture(onlineTailnet())
+	f.local["box.example.com"] = true
+	r := run(t, f, genCfg(node("me", "box.example.com.")))
+	if s := notSeen(r, "me"); s != "" {
+		t.Fatalf("this machine's FQDN with a trailing dot was listed as %q", s)
+	}
+}
+
+// A redirect seen in ssh -G stays a redirect when the DNS lookup after it times out.
+func TestGenerateObservedRedirectSurvivesALookupTimeout(t *testing.T) {
+	f := fixture(onlineTailnet(alpha()))
+	f.ssh = map[string]transport.SSHTarget{"alpha." + genSuffix: {Hostname: "slow.example.com", ProxyJump: "jump.example.com"}}
+	f.hang = map[string]bool{"slow.example.com": true}
+	f.sshHang = map[string]bool{"100.64.0.10": true}
+	p := proposal(t, run(t, f, nil), "alpha")
+	if !p.Unsafe || p.Unresolved || !hasFlag(p, "unsafe: redirected by SSH config (ProxyJump)") {
+		t.Fatalf("redirect then timeout: %+v, want unsafe (ProxyJump)", p)
 	}
 }

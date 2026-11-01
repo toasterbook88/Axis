@@ -196,6 +196,7 @@ type lookupResult struct {
 	resolved      bool
 	timedOut      bool
 	target        transport.SSHTarget
+	sshErr        error // ssh -G failed (not by timeout); target is empty
 }
 
 // resolveEffective resolves a name the way transport dials it: `ssh -G`, then
@@ -207,15 +208,18 @@ func resolveEffective(ctx context.Context, deps generateDependencies, name strin
 		res.timedOut = true
 		return res
 	}
-	if target, err := deps.resolveSSH(ctx, name, port, user); err == nil {
+	target, err := deps.resolveSSH(ctx, name, port, user)
+	if ctx.Err() != nil {
+		res.timedOut = true
+		return res
+	}
+	if err != nil {
+		res.sshErr = err
+	} else {
 		res.target = target
 		if h := strings.TrimSpace(target.Hostname); h != "" {
 			res.effectiveHost = h
 		}
-	}
-	if ctx.Err() != nil {
-		res.timedOut = true
-		return res
 	}
 	if ip, ok := parseUnmapped(res.effectiveHost); ok {
 		res.ips, res.resolved = []netip.Addr{ip}, true
@@ -497,7 +501,7 @@ func nodeIsLocal(n *generateNode, deps generateDependencies, localStable string,
 		return true
 	}
 	for _, name := range append(n.cfg.DialHostnames(), n.effectiveHosts...) {
-		if deps.isLocalHost(name) {
+		if deps.isLocalHost(normalizeGenerateName(name)) {
 			return true
 		}
 	}
@@ -554,13 +558,16 @@ type hostnameCheck struct {
 // tailnet IPs and no ssh_config rewrite sends transport elsewhere.
 func checkProposalHostname(ctx context.Context, deps generateDependencies, cand string, user string, peer *generatePeer) hostnameCheck {
 	res := resolveEffective(ctx, deps, cand, generateDefaultPort, user)
-	if res.timedOut {
-		return hostnameCheck{timedOut: true}
-	}
 	check := hostnameCheck{}
+	if res.sshErr != nil {
+		check.reason = "SSH config could not be checked (ssh -G failed: " + res.sshErr.Error() + ")"
+		return check
+	}
 	if res.target.Port != 0 && res.target.Port != generateDefaultPort {
 		check.port = res.target.Port
 	}
+	// Redirect fields come from ssh -G, so they hold even when the DNS lookup
+	// after it timed out.
 	t := res.target
 	switch {
 	case t.ProxyJump != "":
@@ -575,6 +582,9 @@ func checkProposalHostname(ctx context.Context, deps generateDependencies, cand 
 	case t.HostKeyAlias != "":
 		check.reason = "redirected by SSH config (HostKeyAlias)"
 		return check
+	}
+	if res.timedOut {
+		return hostnameCheck{timedOut: true, port: check.port}
 	}
 	rewritten := normalizeGenerateName(res.effectiveHost) != normalizeGenerateName(cand)
 	if !res.resolved {
