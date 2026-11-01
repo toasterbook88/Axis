@@ -131,15 +131,36 @@ axis init --generate [--ssh-user USER] [--format text|json] [--config PATH]
      (`resolvedDialHost`, `internal/transport/ssh.go`), so a name whose DNS answer is the peer's IP
      can still be sent to another machine by an SSH `Host` block. Every candidate `hostname`, the
      `DNSName` first and then the first tailnet IP, is therefore resolved exactly as configured
-     nodes are in Design 2: `ssh -G` with the proposal's `ssh_user` and the effective port (22,
-     since no `ssh_port` is proposed), then DNS on the resulting `HostName`. This is resolution
-     only; no SSH connection is made. A candidate is accepted only when every resolved address is
-     one of that peer's own tailnet IPs. Redirected candidates are withheld, never written as
-     acceptable: when only the `DNSName` is redirected, it is withheld and the tailnet IP is used
-     if that resolves cleanly, with the reason "DNSName redirected by SSH config to <host>"; when
-     the tailnet IP is also redirected, the proposal is flagged unsafe ("redirected by SSH
-     config"), has no usable `hostname`, and gets no YAML block. These lookups share the same limit
-     and budget; a candidate that times out counts as not accepted;
+     nodes are in Design 2: `ssh -G` with the proposal's `ssh_user` (`-l`) and the effective port
+     (`-p 22`, since no `ssh_port` is proposed), then DNS on the resulting `HostName`. This is
+     resolution only; no SSH connection is made. A candidate is accepted only when the resulting
+     dial host is, or resolves only to, one of that peer's own tailnet IPs, and none of the rewrite
+     vectors below applies. A candidate that fails this, or times out within the shared limit and
+     budget, is "redirected".
+     - `HostName` (including a `Match` block's): checked as above.
+     - `CanonicalizeHostname`: `ssh -G` prints the canonicalized name as `hostname`, so it is
+       checked as above with no extra rule.
+     - `Match` blocks: `ssh -G` evaluates them with the same `-l` and `-p` that transport passes,
+       so their effect shows in the printed fields and each field is checked by its rule here.
+     - `ProxyJump` or `ProxyCommand` other than `none`: redirected. Transport ignores both and
+       dials `HostName` directly, while the operator's `ssh` goes through the proxy, so the two
+       would reach different machines; the design does not try to resolve a proxy to the peer.
+     - `User` different from the proposal's `ssh_user`: redirected, because transport logs in as
+       the resolved user, not the one the YAML block shows.
+     - `HostKeyAlias`: redirected when set, because transport then checks `known_hosts` under the
+       alias (`resolvedHostKeyName`) rather than the peer's name or IP.
+     - `Port` other than 22: not a redirect (Tailscale reports no port and any port is compatible,
+       Design 3), but shown in the proposal's `flags`.
+
+     Redirected candidates are withheld, never written as acceptable. When only the `DNSName` is
+     redirected, it is withheld, the tailnet IP is used if it is accepted, and the proposal's
+     `flags` gets `hostname-withheld: DNSName redirected by SSH config (<field>)`. When the tailnet
+     IP is also redirected, the proposal is unsafe: `hostname` is empty, `unsafe` is true, `flags`
+     gets `unsafe: redirected by SSH config (<field>)`, the text report lists it under proposed
+     entries with no YAML block, and `--format json` has `yaml` empty. The exit code is unchanged:
+     0, as for any observed run (Design 7). The JSON proposal fields `flags`, `unsafe` and `yaml`
+     and the two flag prefixes are new in this spec; no generate code exists yet to reuse names
+     from;
    - `ssh_user`: `--ssh-user`, checked with the wizard's `validateSSHUser` (an invalid value exits
      1), else the first configured node's `ssh_user` (the wizard's `defaultNodeUser`), else the
      current user;
@@ -213,11 +234,15 @@ RFC 5737 and RFC 2606 addresses and tailnet IPs within the public-boundary allow
   `stable_id` (the wizard's local entry) are not listed;
 - a configured name that resolves past the overall budget is listed as unresolved;
 - a proposal's `DNSName` that resolves to an IP other than the peer's is not used as `hostname`;
-- a proposal whose `DNSName` the stubbed DNS resolves to the peer's tailnet IP but whose stubbed
-  `ssh -G` returns a `HostName` resolving elsewhere: the `DNSName` is withheld with the redirect
-  reason and `hostname` is the peer's tailnet IP (stubbed resolution only, no SSH connection);
-- a proposal whose `DNSName` and tailnet IP are both redirected by the stubbed `ssh -G`: the
-  proposal is flagged unsafe, has no `hostname` and no YAML block, and exit is still 0;
+- (redirect 1) a proposal whose `DNSName` the stubbed DNS resolves to the peer's tailnet IP but
+  whose stubbed `ssh -G` returns a `HostName` resolving to an RFC 5737 address: `hostname` is the
+  peer's tailnet IP, `unsafe` is false, `flags` has `hostname-withheld: ...`, the YAML block is
+  present, and exit is 0;
+- (redirect 2) the same with the tailnet IP also redirected by the stubbed `ssh -G`: `hostname` is
+  empty, `unsafe` is true, `flags` has `unsafe: ...`, `yaml` is empty in JSON and no block is
+  printed, and exit is 0; table cases repeat it for `ProxyJump`, `ProxyCommand`, a `User` override
+  and `HostKeyAlias`, and a `Port 2222` answer is only flagged. Both fixtures stub the `ssh -G`
+  runner and resolver only: no SSH connection and no network;
 - an expanded IPv6 literal in `nodes.yaml` matches the peer's canonical tailnet IPv6;
 - an invalid `--ssh-user` exits 1; a valid one appears in each YAML block as written;
 - a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an empty
@@ -585,6 +610,8 @@ Verdict: approve-with-changes
 1. Major: a proposal's `DNSName` could resolve to the peer's IP while an SSH `HostName` override
    sends AXIS to another machine, since transport dials the rewritten host (`resolvedDialHost`).
    Fixed: every candidate `hostname` goes through Design 2's `ssh -G` plus DNS resolution with the
-   proposal's user and effective port and is accepted only on the peer's own tailnet IPs; a
-   redirected `DNSName` is withheld for the tailnet IP, and a proposal whose tailnet IP is also
-   redirected is flagged unsafe with no `hostname` (Design 5); fixtures for both (Tests).
+   proposal's user and effective port and is accepted only on the peer's own tailnet IPs;
+   `ProxyJump`, `ProxyCommand`, a `User` override and `HostKeyAlias` also count as redirects. A
+   redirected `DNSName` is withheld for the tailnet IP; when the tailnet IP is also redirected the
+   proposal is unsafe (`unsafe: true`, empty `hostname`, no YAML, exit 0) (Design 5); fixtures for
+   both (Tests).
