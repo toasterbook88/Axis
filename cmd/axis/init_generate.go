@@ -48,7 +48,7 @@ type generateDependencies struct {
 
 func defaultGenerateDependencies() generateDependencies {
 	return generateDependencies{
-		tailscaleStatus: tailscaleStatusJSON,
+		tailscaleStatus: func(ctx context.Context) ([]byte, error) { return tailscaleStatusJSONFn(ctx) },
 		resolveSSH:      transport.ResolveSSHTarget,
 		lookup: func(ctx context.Context, host string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
@@ -59,6 +59,10 @@ func defaultGenerateDependencies() generateDependencies {
 		now:           time.Now,
 	}
 }
+
+// tailscaleStatusJSONFn runs `tailscale status --json`; the wizard's scan and
+// --generate both read Tailscale through it.
+var tailscaleStatusJSONFn = tailscaleStatusJSON
 
 func tailscaleStatusJSON(ctx context.Context) ([]byte, error) {
 	return exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
@@ -537,7 +541,7 @@ func endpointDuplicateFlags(p *generatePeer, nodes []*generateNode, endpointPeer
 			continue
 		}
 		for _, n := range nodes {
-			if n.ips[ep] && !seen[n.cfg.Name] {
+			if !n.local && n.ips[ep] && !seen[n.cfg.Name] {
 				seen[n.cfg.Name] = true
 				flags = append(flags, "possible duplicate of "+n.cfg.Name+" (by LAN endpoint)")
 			}
@@ -550,6 +554,7 @@ type hostnameCheck struct {
 	ok       bool
 	timedOut bool
 	reason   string // why a completed check failed
+	sshCause bool   // the failure came from SSH config, which makes the proposal unsafe
 	port     int
 }
 
@@ -561,6 +566,7 @@ func checkProposalHostname(ctx context.Context, deps generateDependencies, cand 
 	check := hostnameCheck{}
 	if res.sshErr != nil {
 		check.reason = "SSH config could not be checked (ssh -G failed: " + res.sshErr.Error() + ")"
+		check.sshCause = true
 		return check
 	}
 	if res.target.Port != 0 && res.target.Port != generateDefaultPort {
@@ -569,6 +575,7 @@ func checkProposalHostname(ctx context.Context, deps generateDependencies, cand 
 	// Redirect fields come from ssh -G, so they hold even when the DNS lookup
 	// after it timed out.
 	t := res.target
+	check.sshCause = true
 	switch {
 	case t.ProxyJump != "":
 		check.reason = "redirected by SSH config (ProxyJump)"
@@ -587,6 +594,7 @@ func checkProposalHostname(ctx context.Context, deps generateDependencies, cand 
 		return hostnameCheck{timedOut: true, port: check.port}
 	}
 	rewritten := normalizeGenerateName(res.effectiveHost) != normalizeGenerateName(cand)
+	check.sshCause = rewritten
 	if !res.resolved {
 		if rewritten {
 			check.reason = "redirected by SSH config (HostName)"
@@ -647,7 +655,7 @@ func chooseProposalHostname(ctx context.Context, deps generateDependencies, prop
 			}
 			continue
 		}
-		if redirect == "" {
+		if redirect == "" && check.sshCause {
 			redirect = check.reason
 		}
 		if !last {

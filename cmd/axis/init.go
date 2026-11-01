@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -935,23 +934,17 @@ func verifySSHConnection(ctx context.Context, host string, port int, user string
 var discoverTailscalePeersFn = discoverTailscalePeers
 
 func discoverTailscalePeers(ctx context.Context) ([]config.NodeConfig, error) {
-	output, err := exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
+	output, err := tailscaleStatusJSONFn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var status struct {
-		Peer map[string]struct {
-			HostName     string   `json:"HostName"`
-			TailscaleIPs []string `json:"TailscaleIPs"`
-			Online       bool     `json:"Online"`
-		} `json:"Peer"`
-	}
+	var status tailscaleStatus
 	if err := json.Unmarshal(output, &status); err != nil {
 		return nil, fmt.Errorf("parse tailscale status: %w", err)
 	}
 	peers := make([]config.NodeConfig, 0, len(status.Peer))
 	for _, peer := range status.Peer {
-		if !peer.Online || len(peer.TailscaleIPs) == 0 {
+		if peer == nil || peer.Online == nil || !*peer.Online || len(peer.TailscaleIPs) == 0 {
 			continue
 		}
 		name := normalizeSuggestedName(peer.HostName)

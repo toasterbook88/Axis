@@ -240,11 +240,11 @@ func TestGenerateLANEndpointFlagsButDoesNotMatch(t *testing.T) {
 }
 
 func TestGenerateSharedEndpointsNeverFlag(t *testing.T) {
-	a := fakePeer{HostName: "a", IPs: []string{"100.64.0.31"}, Online: true, Addrs: []string{"203.0.113.9:1", "192.168.1.10:1"}}
-	b := fakePeer{HostName: "b", IPs: []string{"100.64.0.32"}, Online: true, Addrs: []string{"203.0.113.9:2", "192.168.1.10:2"}}
+	a := fakePeer{HostName: "a", IPs: []string{"100.64.0.31"}, Online: true, Addrs: []string{"203.0.113.9:1", "10.0.0.10:1"}}
+	b := fakePeer{HostName: "b", IPs: []string{"100.64.0.32"}, Online: true, Addrs: []string{"203.0.113.9:2", "10.0.0.10:2"}}
 	f := fixture(onlineTailnet(a, b))
 	f.dns = map[string][]string{"dyn.example.com": {"203.0.113.9"}}
-	r := run(t, f, genCfg(node("dyn", "dyn.example.com"), node("lan", "192.168.1.10")))
+	r := run(t, f, genCfg(node("dyn", "dyn.example.com"), node("lan", "10.0.0.10")))
 	for _, p := range r.Proposed {
 		if len(p.Flags) != 0 {
 			t.Fatalf("proposal %+v flagged by a shared endpoint", p)
@@ -256,9 +256,9 @@ func TestGenerateSharedEndpointsNeverFlag(t *testing.T) {
 }
 
 func TestGenerateDepartedNodeIsNotSeenEvenIfItsLANIPIsAnotherPeers(t *testing.T) {
-	other := fakePeer{HostName: "other", IPs: []string{"100.64.0.40"}, Online: true, Addrs: []string{"192.168.1.10:1"}}
+	other := fakePeer{HostName: "other", IPs: []string{"100.64.0.40"}, Online: true, Addrs: []string{"10.0.0.10:1"}}
 	f := fixture(onlineTailnet(other))
-	gone := config.NodeConfig{Name: "gone", Hostname: "100.64.0.99", SSHUser: "operator", Endpoints: []config.NodeEndpoint{{Hostname: "192.168.1.10"}}}
+	gone := config.NodeConfig{Name: "gone", Hostname: "100.64.0.99", SSHUser: "operator", Endpoints: []config.NodeEndpoint{{Hostname: "10.0.0.10"}}}
 	r := run(t, f, genCfg(gone))
 	if notSeen(r, "gone") != notSeenNotInMap {
 		t.Fatalf("gone status %q, want %q", notSeen(r, "gone"), notSeenNotInMap)
@@ -310,11 +310,12 @@ func TestGenerateNotObserved(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}},
-		"invalid json":  {status: func(context.Context) ([]byte, error) { return []byte("{"), nil }},
-		"stopped":       fixture(fakeTailnet{backend: "Stopped", selfOnline: &on, peers: peers}),
-		"needs login":   fixture(fakeTailnet{backend: "NeedsLogin", selfOnline: &on}),
-		"self offline":  fixture(fakeTailnet{backend: "Running", selfOnline: &off, peers: peers}),
-		"self.online ?": fixture(fakeTailnet{backend: "Running", peers: peers}),
+		"invalid json":       {status: func(context.Context) ([]byte, error) { return []byte("{"), nil }},
+		"stopped":            fixture(fakeTailnet{backend: "Stopped", selfOnline: &on, peers: peers}),
+		"needs login":        fixture(fakeTailnet{backend: "NeedsLogin", selfOnline: &on}),
+		"needs login, peers": fixture(fakeTailnet{backend: "NeedsLogin", selfOnline: &on, peers: peers}),
+		"self offline":       fixture(fakeTailnet{backend: "Running", selfOnline: &off, peers: peers}),
+		"self.online ?":      fixture(fakeTailnet{backend: "Running", peers: peers}),
 	}
 	for name, f := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -692,5 +693,97 @@ func TestGenerateObservedRedirectSurvivesALookupTimeout(t *testing.T) {
 	p := proposal(t, run(t, f, nil), "alpha")
 	if !p.Unsafe || p.Unresolved || !hasFlag(p, "unsafe: redirected by SSH config (ProxyJump)") {
 		t.Fatalf("redirect then timeout: %+v, want unsafe (ProxyJump)", p)
+	}
+}
+
+// Only an SSH-config cause makes a proposal unsafe; a DNSName that does not
+// resolve plus a timed-out IP check is unresolved.
+func TestGenerateUnresolvableDNSNameThenTimeoutIsUnresolved(t *testing.T) {
+	f := fixture(onlineTailnet(alpha()))
+	f.sshHang = map[string]bool{"100.64.0.10": true}
+	p := proposal(t, run(t, f, nil), "alpha")
+	if p.Unsafe || !p.Unresolved || p.YAML != "" {
+		t.Fatalf("NXDOMAIN then timeout: %+v, want unresolved", p)
+	}
+}
+
+func TestGenerateNoEndpointFlagForThisMachinesNode(t *testing.T) {
+	remote := fakePeer{HostName: "remote", IPs: []string{"100.64.0.33"}, Online: true, Addrs: []string{"10.0.0.10:41641"}}
+	f := fixture(onlineTailnet(remote))
+	f.local["10.0.0.10"] = true
+	r := run(t, f, genCfg(node("me", "10.0.0.10")))
+	if p := proposal(t, r, "remote"); len(p.Flags) != 0 {
+		t.Fatalf("remote peer flagged against this machine's own node: %+v", p)
+	}
+}
+
+// generateCmd runs axis init --generate's handler with stubbed dependencies.
+func generateCmd(t *testing.T, f *genFixture, defaultUser string, args map[string]string) (string, error) {
+	t.Helper()
+	cmd := initCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetContext(context.Background())
+	for k, v := range args {
+		if err := cmd.Flags().Set(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := runInitGenerate(cmd, f.deps(), func() string { return defaultUser })
+	return out.String(), err
+}
+
+func TestGenerateCommandOutputAndUser(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "none.yaml")
+	withUser := filepath.Join(dir, "nodes.yaml")
+	if err := os.WriteFile(withUser, []byte("nodes:\n  - name: a\n    hostname: localhost\n    ssh_user: fromconfig\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	safe := fakePeer{HostName: "ok", IPs: []string{"100.64.0.10"}, Online: true}
+	bad := fakePeer{HostName: "bad", IPs: []string{"100.64.0.11"}, Online: true}
+	f := fixture(onlineTailnet(safe, bad))
+	f.ssh = map[string]transport.SSHTarget{"100.64.0.11": {Hostname: "100.64.0.11", ProxyJump: "jump.example.com"}}
+
+	text, err := generateCmd(t, f, "fallback", map[string]string{"config": missing})
+	if err != nil {
+		t.Fatalf("no nodes.yaml: %v", err)
+	}
+	if !strings.Contains(text, "  - name: ok") || !strings.Contains(text, "ssh_user: fallback") ||
+		!strings.Contains(text, "(no YAML: no hostname passed the checks)") || !strings.Contains(text, "unsafe: redirected by SSH config (ProxyJump)") {
+		t.Fatalf("text report:\n%s", text)
+	}
+	if strings.Count(text, "  - name:") != 1 {
+		t.Fatalf("an unsafe proposal printed a YAML block:\n%s", text)
+	}
+	for args, want := range map[[2]string]string{
+		{withUser, ""}:       "ssh_user: fromconfig",
+		{withUser, "deploy"}: "ssh_user: deploy",
+	} {
+		flags := map[string]string{"config": args[0]}
+		if args[1] != "" {
+			flags["ssh-user"] = args[1]
+		}
+		if text, err := generateCmd(t, f, "fallback", flags); err != nil || !strings.Contains(text, want) {
+			t.Fatalf("user precedence %v: err %v, want %q in\n%s", args, err, want, text)
+		}
+	}
+
+	down := &genFixture{status: func(context.Context) ([]byte, error) { return nil, errors.New("not running") }, local: map[string]bool{}}
+	text, err = generateCmd(t, down, "fallback", map[string]string{"config": missing})
+	if ExitCode(err) != ExitErrGeneric || !strings.Contains(text, "Tailscale not observed") {
+		t.Fatalf("not observed: exit %d, text %q", ExitCode(err), text)
+	}
+}
+
+// The wizard's Tailscale scan reads the same status through the same seam.
+func TestDiscoverTailscalePeersUsesTheSharedStatus(t *testing.T) {
+	tn := onlineTailnet(alpha(), fakePeer{HostName: "off", IPs: []string{"100.64.0.12"}, Online: false})
+	prev := tailscaleStatusJSONFn
+	tailscaleStatusJSONFn = func(context.Context) ([]byte, error) { return tn.json(), nil }
+	t.Cleanup(func() { tailscaleStatusJSONFn = prev })
+	peers, err := discoverTailscalePeers(context.Background())
+	if err != nil || len(peers) != 1 || peers[0].Name != "alpha" || peers[0].Hostname != "100.64.0.10" {
+		t.Fatalf("discoverTailscalePeers = %+v, %v; want only the online peer at its first tailnet IP", peers, err)
 	}
 }
