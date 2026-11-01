@@ -959,20 +959,27 @@ var watchBeaconChangesFn = discovery.WatchBeaconChanges
 
 // discoverMeshPeers listens for beacons with the discovery settings being
 // edited: without the secret, signed beacons are rejected (open mode accepts
-// only unsigned ones). The scan runs even when discovery is disabled.
+// only unsigned ones). The scan runs even when discovery is disabled. The
+// watcher also broadcasts this machine's beacon from cfg.Nodes, so the edited
+// nodes are passed too; otherwise it would sign OS-hostname defaults.
 func discoverMeshPeers(ctx context.Context, cfg *config.Config) ([]config.NodeConfig, error) {
 	scanCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	scanCfg := config.Config{}
+	if cfg != nil {
+		scanCfg = *cfg
+	}
 	scan := config.DiscoveryConfig{UDPPort: 42424}
-	if cfg != nil && cfg.Discovery != nil {
-		scan = *cfg.Discovery
+	if scanCfg.Discovery != nil {
+		scan = *scanCfg.Discovery
 		if scan.UDPPort <= 0 {
 			scan.UDPPort = 42424
 		}
 	}
 	scan.Enabled = true
+	scanCfg.Discovery = &scan
 	registry := discovery.NewBeaconRegistry()
-	if err := watchBeaconChangesFn(scanCtx, &config.Config{Discovery: &scan}, registry, nil); err != nil {
+	if err := watchBeaconChangesFn(scanCtx, &scanCfg, registry, nil); err != nil {
 		return nil, fmt.Errorf("beacon listener did not start: %w", err)
 	}
 	<-scanCtx.Done()

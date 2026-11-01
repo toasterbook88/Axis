@@ -425,19 +425,29 @@ func twoNodeConfig() *config.Config {
 	}
 }
 
-// stubWatchBeacons records the discovery config the wizard's scan passes.
+// stubWatchBeacons records the config the wizard's scan passes.
 func stubWatchBeacons(t *testing.T, err error) *config.DiscoveryConfig {
 	t.Helper()
+	got, _ := stubWatchBeaconsConfig(t, err)
+	return got
+}
+
+func stubWatchBeaconsConfig(t *testing.T, err error) (*config.DiscoveryConfig, *[]config.NodeConfig) {
+	t.Helper()
 	got := &config.DiscoveryConfig{}
+	nodes := &[]config.NodeConfig{}
 	prev := watchBeaconChangesFn
 	watchBeaconChangesFn = func(_ context.Context, cfg *config.Config, _ *discovery.BeaconRegistry, _ func()) error {
 		if cfg != nil && cfg.Discovery != nil {
 			*got = *cfg.Discovery
 		}
+		if cfg != nil {
+			*nodes = cfg.Nodes
+		}
 		return err
 	}
 	t.Cleanup(func() { watchBeaconChangesFn = prev })
-	return got
+	return got, nodes
 }
 
 // The scan must use the configured secret and port: with no secret it accepts
@@ -470,5 +480,23 @@ func TestDiscoverMeshPeersReturnsListenerError(t *testing.T) {
 	peers, err := discoverMeshPeers(context.Background(), &config.Config{})
 	if err == nil || !strings.Contains(err.Error(), "address already in use") {
 		t.Fatalf("discoverMeshPeers = %v, %v; want the listener error", peers, err)
+	}
+}
+
+// WatchBeaconChanges also broadcasts, deriving this machine's name, role and
+// SSH port from cfg.Nodes. With the secret now applied that beacon is signed,
+// so it must carry the configured local node, not OS-hostname defaults.
+func TestDiscoverMeshPeersKeepsConfiguredNodesForItsBeacon(t *testing.T) {
+	_, nodes := stubWatchBeaconsConfig(t, nil)
+	cfg := twoNodeConfig()
+	cfg.Discovery = &config.DiscoveryConfig{Enabled: true, Secret: "s3cret-for-test"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = discoverMeshPeers(ctx, cfg)
+	if len(*nodes) != len(cfg.Nodes) || (*nodes)[0].Name != "local" || (*nodes)[0].Role != "primary" {
+		t.Fatalf("scan passed nodes %+v, want the configured nodes %+v", *nodes, cfg.Nodes)
+	}
+	if !cfg.Discovery.Enabled || cfg.Discovery.Secret != "s3cret-for-test" {
+		t.Fatalf("scan changed the edited config's discovery block: %+v", *cfg.Discovery)
 	}
 }
