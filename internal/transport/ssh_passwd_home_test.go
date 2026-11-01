@@ -83,9 +83,9 @@ func usePasswdFile(t *testing.T, contents string) {
 
 func TestPasswdHome(t *testing.T) {
 	uid := os.Getuid()
-	usePasswdFile(t, fmt.Sprintf("root:x:0:0::/root:/bin/sh\naxis:x:%d:%d::/home/axis:/bin/sh\n", uid, uid))
-	if got, err := passwdHome(uid); err != nil || got != "/home/axis" {
-		t.Fatalf("passwdHome = %q, %v; want /home/axis", got, err)
+	usePasswdFile(t, fmt.Sprintf("root:x:0:0::/root:/bin/sh\naxis:x:%d:%d::/home/operator:/bin/sh\n", uid, uid))
+	if got, err := passwdHome(uid); err != nil || got != "/home/operator" {
+		t.Fatalf("passwdHome = %q, %v; want /home/operator", got, err)
 	}
 	if _, err := passwdHome(uid + 1); err == nil {
 		t.Fatal("missing uid: want an error")
@@ -253,5 +253,7 @@ func TestSSHConfigCommandWithRealSSHInASandbox(t *testing.T) {
 		if got := parseSSHConfigDump(out).ProxyJump; got != "user.example.com" {
 			t.Fatalf("ProxyJump = %q, want the user file's value from the -F retry", got)
 		}
+		exec := NewSSHExecutor("node.example.com", 22, "axis", 1)
+		wantDirectiveError(t, exec.Connect(context.Background()), "node.example.com", "ProxyJump")
 	})
 }

@@ -378,3 +378,23 @@ Questions:
 - The bwrap test needs a self-owned `/etc/ssh` tree. Became part of the Tests entry.
 - NSS home overrides and crypto-policies `HostKeyAlgorithms` on a served node. Open: they need the
   second-node measurement, which runs before the implementation PR merges.
+
+Kind: diff
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (one diff review: about 120 non-test `.go` lines, all in
+`internal/transport`, below the §8 larger-feature threshold)
+Base: cee6b354
+Head: 5fc89feb
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: the sandboxed world-writable user-config subtest checked only the parsed `ProxyJump`, not
+   that `Connect` refuses the host. Fixed: it now asserts `*UnsupportedSSHDirectiveError` from
+   `Connect`, as the system-only subtest does.
+
+Questions:
+- Does CI run the bwrap sandbox test? Open: CI installs no bwrap, so it is expected to skip there;
+  the PR's CI log is checked and the result recorded in the PR body.
+- The second-node measurement was not rerun by the reviewer. Verified: the author ran the spec's
+  script on that node in this cycle, as the `axis serve` unit's user; the counts are under
+  Measurement.
