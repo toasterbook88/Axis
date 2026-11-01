@@ -48,8 +48,22 @@
   hosts get `ProxyJump none` or `ProxyCommand none` in a more specific `Host`
   block. `axis doctor` gives that remediation, and `axis init --generate` flags
   such proposals `...; Axis transport refuses it`. A directive set only in the
-  system-wide `ssh_config` is not seen while `~/.ssh/config` exists. Design:
+  system-wide `ssh_config` is not seen when `$HOME` differs from the
+  `/etc/passwd` home, when there is no `/etc/passwd` entry, or when OpenSSH
+  rejects a config file's permissions. Design:
   `docs/superpowers/specs/2026-11-01-ssh-proxy-directives-design.md`.
+
+* **Behaviour change:** `ssh -G` now reads the system-wide `ssh_config` when
+  `$HOME` is this user's `/etc/passwd` home, as the operator's own `ssh`
+  does. Before, AXIS passed `-F ~/.ssh/config` whenever that file existed,
+  which hid the system file. So hosts matched by a `ProxyJump` or
+  `ProxyCommand` in the system-wide `ssh_config` are now refused; they worked
+  by accident and now fail until a more specific `Host` block in
+  `~/.ssh/config` sets `ProxyJump none` or `ProxyCommand none`. With `$HOME`
+  overridden, or when OpenSSH rejects a config file's permissions (a run
+  without `-F` checks them), AXIS uses `-F ~/.ssh/config` as before and logs a
+  warning for the second case. Design:
+  `docs/superpowers/specs/2026-11-01-ssh-config-system-file-design.md`.
 
 * `axis init`'s "Scan AXIS beacons" now listens with the discovery secret and
   UDP port of the configuration being edited. It used no secret and port 42424,

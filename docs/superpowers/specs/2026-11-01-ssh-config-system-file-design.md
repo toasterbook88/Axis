@@ -184,6 +184,15 @@ print("targets:", n, "ssh -G failed:", dict(failed) or "none", "keys differing:"
 EOF
 ```
 
+Result on a second node (a different Linux distribution, OpenSSH 9.9p2, run as the `axis serve`
+unit's user, 16 targets):
+no `ssh -G` run failed; one key differed on all 16, `globalknownhostsfile`, because that
+distribution's system file sets `GlobalKnownHostsFile /etc/ssh/ssh_known_hosts` where the built-in default adds
+`/etc/ssh/ssh_known_hosts2`. That file does not exist there and `existingKnownHostsPaths` keeps only
+files that exist, so the known-hosts files transport reads are the same either way.
+`hostkeyalgorithms` did not differ; `getent passwd` matched `/etc/passwd` for that uid; the system
+file has no `Match exec` lines.
+
 A run that fails only without `-F` is a permission rejection, which Design 3's retry covers; the PR
 records the count. If any key differs there, the implementation PR lists which, and whether the system-file value is
 what the operator's own `ssh` uses (it is, by construction), before merging.

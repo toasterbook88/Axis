@@ -25,29 +25,56 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// runSSHConfigCommand passes -F $HOME/.ssh/config only when $HOME is not the
+// passwd home: ssh finds its user config through the passwd entry, and -F
+// keeps config and keys from the same home but hides the system-wide
+// ssh_config. Without -F, OpenSSH also permission-checks the config files, so
+// a failed run is retried once with -F to keep today's result.
 var runSSHConfigCommand = func(ctx context.Context, host string, port int, user string) (string, error) {
-	args := []string{"-G"}
+	base := []string{"-G"}
 	if port > 0 {
-		args = append(args, "-p", strconv.Itoa(port))
+		base = append(base, "-p", strconv.Itoa(port))
 	}
 	if user != "" {
-		args = append(args, "-l", user)
+		base = append(base, "-l", user)
 	}
 	home, _ := os.UserHomeDir()
+	configPath := ""
 	if home != "" {
-		configPath := filepath.Join(home, ".ssh", "config")
-		if _, err := os.Stat(configPath); err == nil {
-			args = append(args, "-F", configPath)
+		if p := filepath.Join(home, ".ssh", "config"); fileExists(p) {
+			configPath = p
 		}
 	}
-	args = append(args, host)
-
-	cmd := exec.CommandContext(ctx, "ssh", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
+	run := func(withF bool) (string, error) {
+		args := append([]string(nil), base...)
+		if withF {
+			args = append(args, "-F", configPath)
+		}
+		out, err := exec.CommandContext(ctx, "ssh", append(args, host)...).Output()
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
 	}
-	return string(out), nil
+
+	if configPath == "" {
+		return run(false)
+	}
+	if !homeIsPasswdHome(home) {
+		return run(true)
+	}
+	out, err := run(false)
+	if err == nil {
+		return out, nil
+	}
+	slog.Warn("transport: ssh -G without -F failed; retrying with -F, so the system-wide ssh_config is not read",
+		"host", host, "error", err)
+	return run(true)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 type resolvedSSHConfig struct {
@@ -918,8 +945,9 @@ func unlessNone(value string) string {
 // Port as User, and checks known_hosts under HostKeyAlias when it is set. It
 // refuses a host whose config sets ProxyJump or ProxyCommand
 // (UnsupportedSSHDirectiveError); they are reported so callers can tell when
-// the operator's ssh would reach a different machine. Like transport, it skips
-// the system-wide ssh_config when ~/.ssh/config exists.
+// the operator's ssh would reach a different machine. It resolves through
+// runSSHConfigCommand, so it reads the system-wide ssh_config exactly when
+// transport does.
 type SSHTarget struct {
 	Hostname     string
 	Port         int
@@ -951,8 +979,10 @@ func ResolveSSHTarget(ctx context.Context, host string, port int, user string) (
 // UnsupportedSSHDirectiveError reports that the operator's SSH config routes
 // Host through a directive the in-process client does not implement. Connect
 // returns it without dialing, so the node is never reached around that route.
-// Only directives ssh -G reports are seen; runSSHConfigCommand passes
-// -F ~/.ssh/config when it exists, which skips the system-wide ssh_config.
+// Only directives ssh -G reports are seen. The system-wide ssh_config is not
+// read when $HOME differs from the /etc/passwd home, when the uid has no
+// /etc/passwd entry, or when OpenSSH rejects a config file's permissions
+// (runSSHConfigCommand then uses -F ~/.ssh/config).
 type UnsupportedSSHDirectiveError struct {
 	Host      string
 	Directive string
