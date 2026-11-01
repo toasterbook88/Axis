@@ -93,13 +93,18 @@ handles that.
    rerun once with `-F $HOME/.ssh/config` when that file exists, and that result is used. So no
    config that resolves today stops resolving: a permission-rejected user config still yields its
    `ProxyJump` and is refused, as today, instead of falling back to defaults and dialing directly.
-   The retry logs at debug level. `ResolveSSHTarget` (`axis init --generate`) gets the same
+   The retry logs at Warn, like the existing `ssh -G` failure warning (`ssh.go:776`), because it
+   is the remaining path where a system-file directive goes unseen. `ResolveSSHTarget` (`axis init --generate`) gets the same
    behaviour because it calls the same function.
 
 4. The CHANGELOG limit sentence becomes: a directive set only in the system-wide `ssh_config` is not
    seen when `$HOME` differs from the `/etc/passwd` home, when there is no `/etc/passwd` entry, or
    when OpenSSH rejects a config file's permissions. The `UnsupportedSSHDirectiveError` and
-   `SSHTarget` comments and `docs/current-state.md` say the same.
+   `SSHTarget` comments and `docs/current-state.md` say the same. A second CHANGELOG sentence, marked
+   as a behaviour change in the style of the #599 entry: when `$HOME` is the passwd home, hosts
+   matched by a `ProxyJump` or `ProxyCommand` in the system-wide `ssh_config` (which the operator's
+   own `ssh` already honours) are now refused; they worked by accident and now fail until a more
+   specific `Host` block in `~/.ssh/config` sets `ProxyJump none` or `ProxyCommand none`.
 
 ### Parse surface
 
@@ -120,6 +125,10 @@ run. Dropping `-F` changes the input to all of them, not only the two the refusa
 | `userknownhostsfile` | `sshConfig` (`existingKnownHostsPaths`) |
 | `globalknownhostsfile` | `sshConfig` (`existingKnownHostsPaths`) |
 
+Without `-F`, `ssh -G` also evaluates the system file's `Match exec` commands on every resolution
+(reviewer probe: a `Match exec "touch <file>"` ran). The operator's own `ssh` does the same; the
+measurement step greps for it so the cost is known before merge.
+
 ### Measurement
 
 On the author's workstation (OpenSSH 9.6p1; the system file sets only `SendEnv`, `HashKnownHosts`,
@@ -133,7 +142,9 @@ preferring one whose OS differs from the workstation's (system includes such as 
 can set `HostKeyAlgorithms`, which transport uses verbatim). Run it as the user the `axis serve`
 unit runs as, since that user's home and includes are the ones that apply. Record the node's OS
 family, OpenSSH version and the counts (no hostnames) in that PR. Also compare `getent passwd
-$(id -u)` with the `/etc/passwd` line for that uid (home field only; equal or not). The script
+$(id -u)` with the `/etc/passwd` line for that uid (home field only; equal or not), and count
+`Match exec` lines in `/etc/ssh/ssh_config` and its includes. On a node without `~/.ssh/config` the
+change has no effect (Base already omits `-F`), and the script says so instead of comparing. The script
 needs PyYAML; if it is missing, list the targets from `nodes.yaml` by hand and run the same `ssh -G`
 pair per target:
 
@@ -145,33 +156,45 @@ KEYS = {"hostname", "user", "port", "hostkeyalias", "proxyjump", "proxycommand",
         "globalknownhostsfile"}
 cfg = yaml.safe_load(open(os.path.expanduser("~/.axis/nodes.yaml")))
 uc = os.path.expanduser("~/.ssh/config")
+if not os.path.exists(uc):
+    raise SystemExit("n/a: no ~/.ssh/config; ssh -G already runs without -F here")
 def dump(host, port, user, with_f):
     args = ["ssh", "-G", "-p", str(port), "-l", user] + (["-F", uc] if with_f else []) + [host]
-    out = subprocess.run(args, capture_output=True, text=True, timeout=10).stdout
+    r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        return None
     d = collections.defaultdict(list)
-    for line in out.splitlines():
+    for line in r.stdout.splitlines():
         f = line.split()
         if len(f) >= 2 and f[0].lower() in KEYS:
             d[f[0].lower()].append(" ".join(f[1:]))
     return d
-diff, n = collections.Counter(), 0
+diff, failed, n = collections.Counter(), collections.Counter(), 0
 for node in cfg.get("nodes", []):
     hosts = [node["hostname"]] + [e["hostname"] for e in node.get("endpoints") or [] if e.get("hostname")]
     for h in hosts:
         n += 1
-        a, b = dump(h, node.get("ssh_port") or 22, node["ssh_user"], True), dump(h, node.get("ssh_port") or 22, node["ssh_user"], False)
+        port = node.get("ssh_port") or 22
+        a, b = dump(h, port, node["ssh_user"], True), dump(h, port, node["ssh_user"], False)
+        if a is None or b is None:
+            failed["with -F" if a is None else "without -F"] += 1
+            continue
         diff.update(k for k in KEYS if a.get(k) != b.get(k))
-print("targets:", n, "keys differing:", dict(diff) or "none")
+print("targets:", n, "ssh -G failed:", dict(failed) or "none", "keys differing:", dict(diff) or "none")
 EOF
 ```
 
-If any key differs there, the implementation PR lists which, and whether the system-file value is
+A run that fails only without `-F` is a permission rejection, which Design 3's retry covers; the PR
+records the count. If any key differs there, the implementation PR lists which, and whether the system-file value is
 what the operator's own `ssh` uses (it is, by construction), before merging.
 
 ## Tests
 
 The red test, written before the code. It runs the real `runSSHConfigCommand` against a fake `ssh`
-on `PATH` that records its arguments, with `HOME` a temp directory holding `.ssh/config`:
+on `PATH` that records each invocation and prints `proxyjump sys.example.com` only when `-F` is
+absent, standing in for a system-file directive that `-F` hides. `HOME` is a temp directory holding
+`.ssh/config`. The test asserts on the returned output, not only on the arguments, so an
+implementation that runs without `-F` but returns the `-F` output fails:
 
 ```go
 func TestSSHConfigCommandOmitsFOnlyWhenHomeIsThePasswdHome(t *testing.T) {
@@ -183,8 +206,10 @@ func TestSSHConfigCommandOmitsFOnlyWhenHomeIsThePasswdHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	argvFile := filepath.Join(bin, "argv")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argvFile + "'\necho 'hostname node.example.com'\n"
+	runsFile := filepath.Join(bin, "runs")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + runsFile + "'\n" +
+		"echo 'hostname node.example.com'\n" +
+		"case \" $* \" in *\" -F \"*) ;; *) echo 'proxyjump sys.example.com' ;; esac\n"
 	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -194,13 +219,13 @@ func TestSSHConfigCommandOmitsFOnlyWhenHomeIsThePasswdHome(t *testing.T) {
 
 	uid := os.Getuid()
 	for _, tc := range []struct {
-		name   string
-		passwd string
-		wantF  bool
+		name          string
+		passwd        string
+		wantProxyJump string
 	}{
-		{"home is the passwd home", fmt.Sprintf("axis:x:%d:%d::%s:/bin/sh\n", uid, uid, home), false},
-		{"home differs", fmt.Sprintf("axis:x:%d:%d::%s:/bin/sh\n", uid, uid, t.TempDir()), true},
-		{"uid not in passwd", fmt.Sprintf("other:x:%d:%d::%s:/bin/sh\n", uid+1, uid+1, home), true},
+		{"home is the passwd home", fmt.Sprintf("axis:x:%d:%d::%s:/bin/sh\n", uid, uid, home), "sys.example.com"},
+		{"home differs", fmt.Sprintf("axis:x:%d:%d::%s:/bin/sh\n", uid, uid, t.TempDir()), ""},
+		{"uid not in passwd", fmt.Sprintf("other:x:%d:%d::%s:/bin/sh\n", uid+1, uid+1, home), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			passwd := filepath.Join(t.TempDir(), "passwd")
@@ -210,16 +235,22 @@ func TestSSHConfigCommandOmitsFOnlyWhenHomeIsThePasswdHome(t *testing.T) {
 			prev := sshPasswdFile
 			sshPasswdFile = passwd
 			t.Cleanup(func() { sshPasswdFile = prev })
-			if _, err := runSSHConfigCommand(context.Background(), "node.example.com", 22, "axis"); err != nil {
+			if err := os.WriteFile(runsFile, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := runSSHConfigCommand(context.Background(), "node.example.com", 22, "axis")
+			if err != nil {
 				t.Fatalf("runSSHConfigCommand: %v", err)
 			}
-			raw, err := os.ReadFile(argvFile)
+			if got := parseSSHConfigDump(out).ProxyJump; got != tc.wantProxyJump {
+				t.Fatalf("ProxyJump = %q, want %q", got, tc.wantProxyJump)
+			}
+			raw, err := os.ReadFile(runsFile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			argv := strings.Split(strings.TrimSpace(string(raw)), "\n")
-			if got := slices.Contains(argv, "-F"); got != tc.wantF {
-				t.Fatalf("ssh %q: -F present = %v, want %v", argv, got, tc.wantF)
+			if runs := strings.Count(string(raw), "\n"); runs != 1 {
+				t.Fatalf("ssh -G ran %d times, want 1:\n%s", runs, raw)
 			}
 		})
 	}
@@ -227,7 +258,7 @@ func TestSSHConfigCommandOmitsFOnlyWhenHomeIsThePasswdHome(t *testing.T) {
 ```
 
 With only the `sshPasswdFile` variable added and `runSSHConfigCommand` unchanged, "home is the
-passwd home" fails (`-F` is passed) and the other two pass. "uid not in passwd" sets `HOME` and
+passwd home" fails (`-F` is passed, so the system value is hidden) and the other two pass. "uid not in passwd" sets `HOME` and
 `USER`, the conditions under which `os/user` would have reported `$HOME` as the passwd home.
 
 Also:
@@ -236,13 +267,18 @@ Also:
   error; a missing file returns an error; an entry with an empty home field returns an error.
 - Retry: a fake `ssh` that exits 255 when `-F` is absent and prints `proxyjump jump.example.com`
   when it is present, with `HOME` equal to the fake passwd home: `runSSHConfigCommand` returns the
-  `-F` output, and `Connect` returns `*UnsupportedSSHDirectiveError` without dialing.
+  `-F` output after exactly two runs (the second with `-F`), and `Connect` returns
+  `*UnsupportedSSHDirectiveError` without dialing.
+- Both runs fail: `runSSHConfigCommand` returns the second error, and transport falls back to
+  defaults as it does today when `ssh -G` fails (`TestConnectDialsWithDefaultsWhenSSHConfigFails`).
 - A symlinked `HOME` pointing at the passwd home omits `-F`.
 - `TestConnectReportsTheFirstRefusal` and the rest of `ssh_proxy_directive_test.go` stay green; they
   stub `runSSHConfigCommand`, so the rule cannot affect them.
 - Optional integration test, skipped when `bwrap` or unprivileged user namespaces are unavailable
   (so CI may skip it): real `ssh -G` through the real `runSSHConfigCommand`, with a fake
-  `/etc/passwd` and `/etc/ssh/ssh_config` bound in a sandbox. A system-only `ProxyJump` is refused
+  `/etc/passwd` and a self-owned `/etc/ssh` tree bound in a sandbox. The whole tree is bound, not
+  only `ssh_config`: inside an unprivileged user namespace root-owned files appear owned by the
+  overflow uid, so a distro `Include` would fail OpenSSH's permission check. A system-only `ProxyJump` is refused
   by `Connect`; a 0666 user config with `ProxyJump` is refused, not dialed directly.
 
 ## Alternatives
@@ -271,7 +307,8 @@ Also:
   with `-F` (readconf `SSHCONF_CHECKPERM`; observed in the reviewer's sandbox). Design 3's retry
   keeps today's results when that check rejects a file.
 - Optimization: the passwd read is cached once per process. A second `ssh -G` runs only when the
-  first fails.
+  first fails. Without `-F`, system-file `Match exec` commands run on each resolution, as they do
+  for the operator's `ssh`; the measurement counts them.
 
 ## Review
 
@@ -299,9 +336,36 @@ Verdict: revise
    marked inferred.
 
 Questions:
-- `axis serve` may run as another user. Fixed: the measurement runs as the unit's user.
-- Non-Debian system includes may set `HostKeyAlgorithms`. Fixed: the measurement prefers a node
-  with a different OS and records the OS family.
-- An NSS module may override the home of a user in `/etc/passwd`. Fixed as a non-goal with a stop
-  condition; the measurement compares `getent passwd` with `/etc/passwd`.
-- PyYAML may be missing on the node. Fixed: the step says how to run it by hand.
+- `axis serve` may run as another user. Became a measurement rule: run as the unit's user.
+- Non-Debian system includes may set `HostKeyAlgorithms`. Became a measurement rule: prefer a
+  node with a different OS and record the OS family.
+- An NSS module may override the home of a user in `/etc/passwd`. Became a non-goal with a
+  stop condition; the measurement compares `getent passwd` with `/etc/passwd`.
+- PyYAML may be missing on the node. Became a note in the step on running it by hand.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author (the designated second-family reviewer was unavailable:
+usage limit)
+Base: cee6b354
+Head: 23fb3992
+Date: 2026-11-01
+Verdict: approve-with-changes
+
+1. Minor: the red test checked only the arguments of the last `ssh` run, so an implementation that
+   returned the `-F` output after a discarded run without `-F` passed. Fixed: the fake `ssh` prints a
+   `proxyjump` only without `-F`; the test asserts on the parsed output and on exactly one run; the
+   retry test asserts exactly two.
+2. Minor: the measurement script reported every key as differing on a node without
+   `~/.ssh/config` and ignored exit codes. Fixed: it stops with "n/a" when the file is missing and
+   counts failed runs separately.
+3. Minor: no CHANGELOG entry for hosts that start being refused. Fixed: Design 4 adds a
+   behaviour-change sentence with the `ProxyJump none` remedy.
+
+Questions:
+- Should the retry warn? Became Design 3: it logs at Warn.
+- `Match exec` runs without `-F`. Became a note under Parse surface and Optimization, and the
+  measurement counts `Match exec` lines.
+- The bwrap test needs a self-owned `/etc/ssh` tree. Became part of the Tests entry.
+- NSS home overrides and crypto-policies `HostKeyAlgorithms` on a served node. Open: they need the
+  second-node measurement, which runs before the implementation PR merges.
