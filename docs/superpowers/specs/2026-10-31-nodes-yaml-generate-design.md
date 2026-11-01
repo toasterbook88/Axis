@@ -1,7 +1,7 @@
 # `axis init --generate`: propose `nodes.yaml` additions from Tailscale
 
-Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after six `revise` spec
-reviews; narrowed to Tailscale for v1; awaiting a seventh review.
+Date: 2026-10-31. Base: `origin/main` 8cf9d74b. Status: revised after seven `revise` spec
+reviews; narrowed to Tailscale for v1; awaiting an eighth review.
 
 ## Problem
 
@@ -54,24 +54,31 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
 
 1. **Collect.** Run `tailscale status --json` through the existing seam
    (`discoverTailscalePeersFn`, extended).
-   - The tailnet is observed only when the command succeeds, its output parses, and
-     `BackendState` is `Running`. The CLI prints JSON and exits 0 in every backend state
-     (`Stopped`, `NeedsLogin` ...), so the state is checked here. Otherwise nothing was observed:
+   - The command runs with a 5-second timeout. The tailnet is observed only when the command
+     succeeds, its output parses, and `BackendState` is `Running`. The CLI prints JSON and exits
+     0 in every backend state (`Stopped`, `NeedsLogin` ...), so the state is checked here. Otherwise nothing was observed:
      the report says so with the state or error, the exit code is 1 (`ExitErrGeneric`), and no node
      is reported as not seen.
    - The tailnet suffix is `CurrentTailnet.MagicDNSSuffix`, else the deprecated top-level
      `MagicDNSSuffix`. When both are empty (older daemons, some self-hosted control servers), no
      peer is skipped for its suffix and names are never judged by suffix; only the IP ranges count.
+   - `Online` is each peer's connection to the control plane as this machine last heard it. If
+     there are peers and none is online, this machine has probably lost its own control
+     connection: the report says so and treats the tailnet as not observed (exit 1, nobody called
+     offline or missing).
    - For every `Peer`, online or offline, keep `HostName`, `DNSName` (trailing dot removed), every
      entry of `TailscaleIPs`, and the IPs of its direct endpoints (`Addrs` and `CurAddr`, which are
-     `ip:port` strings), which are usually its LAN addresses.
+     `ip:port` strings). Endpoints include NAT public addresses and LAN addresses that peers at
+     other sites can share, so they are never treated as identity (Design 3).
    - Some peers are never proposed, and are listed as skipped with the reason: `ShareeNode` peers
      (owned by a user this tailnet shared a node to, who may connect to us); peers with a non-zero
-     `AltSharerUserID` (shared into this tailnet by another user); peers whose `DNSName` is under
-     Mullvad's exit-node suffix (the constant `mullvadTCD` that the CLI filters on in
-     `cmd/tailscale/cli/status.go`); and peers with a non-empty `DNSName` outside the tailnet
-     suffix. Skipped peers still take part
-     in matching (Design 3), so a configured node at a skipped peer's address is seen.
+     `AltSharerUserID` (shared into this tailnet by another user); and peers with a non-empty
+     `DNSName` outside the tailnet suffix, which covers Mullvad exit nodes. When the suffix is
+     unknown (both fields empty), peers with `ExitNodeOption` are skipped instead, which also covers
+     Mullvad without naming its domain (this repo's public-boundary gate rejects that domain in
+     tracked files); a cluster node that is an exit node is then added by hand. Skipped peers
+     still take part in matching (Design 3), so a configured node at a skipped peer's address is
+     seen.
    - A peer with no `TailscaleIPs` is skipped too ("no tailnet address"), and still takes part in
      matching by its `DNSName`.
    - `Self`'s addresses are kept to recognise the local node (Design 4). Tailscale reports no SSH
@@ -85,17 +92,21 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    fails leaves just the names. Resolution runs at most 8 at a time within a 10-second overall
    budget; a name not resolved by then keeps just its names and is reported as unresolved.
 3. **Match.** Every parsed peer, skipped or not, is matched. A peer matches a configured node when
-   its `DNSName`, one of its tailnet IPs or one of its endpoint IPs is in the node's address set,
-   compared case-insensitively. A configured short MagicDNS name matches through its DNS lookup,
+   its `DNSName` or one of its tailnet IPs is in the node's address set, compared
+   case-insensitively. A configured short MagicDNS name matches through its DNS lookup,
    not by comparing labels. A candidate's unknown port is compatible with any configured port.
    Names never match on their own: two machines can share an OS hostname, and a LAN alias can
-   share a first label with an unrelated tailnet peer. Endpoint
-   IPs make a node configured by its LAN address or by an alias for it match its own peer, so it
-   is not proposed a second time.
+   share a first label with an unrelated tailnet peer. Endpoint IPs never match either. A private
+   endpoint IP that exactly one peer carries and that is in a configured node's address set only
+   flags that peer "possible duplicate of <node> (by LAN endpoint)": a node configured by its LAN
+   address is then shown next to its own peer, and `--all` leaves the peer out (Design 8). An
+   endpoint flag never makes a configured node count as seen.
 4. **Report what was not seen.** A configured node is judged only if its address set contains a
    tailnet address: an IP in the ranges `isTailscaleAddr` in `internal/snapshot` already tests
-   (Tailscale's IPv4 CGNAT range and its own IPv6 /48, not all of IPv6 ULA; the function is
-   exported and shared), or a name under the tailnet suffix. Such a node that no online peer
+   (Tailscale's IPv4 CGNAT range and its own IPv6 /48, not all of IPv6 ULA), or a name under the
+   tailnet suffix. The function moves to `internal/netutil` (Support tier), so `internal/snapshot`,
+   `internal/multipath` (which has a copy) and `cmd/axis` share one definition within the import
+   tiers. Such a node that no online peer
    matches is "offline" if an offline peer matches it, else "not in the tailnet". Other nodes are
    "not observable by Tailscale" and are not called missing. The local node is never listed. Here
    a configured node is local when its `stable_id` is this machine's, when its address set meets
@@ -130,18 +141,23 @@ axis init --generate [--ssh-user USER] [--verify-ssh] [--format text|json] [--co
    `ssh/client_auth.go`; the string is pinned by a test against the vendored version); anything
    else to `network`. Transport gains sentinel errors, wrapped with `%w`, for the
    local cases it reports today as plain text: `ErrKnownHostsMissing` (no `known_hosts` file,
-   `internal/transport/ssh.go:847`), `ErrKnownHostsUnreadable` (`:734`) and `ErrNoSigners` (no keys
-   or agent, `:715`). `ErrKnownHostsMissing` is `unknown-host-key`; the other two are
-   `local-ssh-config`, with remediation to fix the local SSH setup. Failed entries are marked with
+   `internal/transport/ssh.go:847`), `ErrNoKnownHostsPaths` (both known-hosts settings are `none`,
+   `:844`), `ErrKnownHostsUnreadable` (`:734`) and `ErrNoSigners` (no keys or agent, `:715`).
+   `ErrKnownHostsMissing` is `unknown-host-key`; the other three are `local-ssh-config`, with
+   remediation to fix the local SSH setup. Failed entries are marked with
    the reason and its remediation; for an unknown key that is to connect once with `ssh` and check
    the key out of band, never to scan keys in automatically. In this mode transport's own hint
    (`ssh-keyscan ... >> known_hosts`, `internal/transport/ssh.go:847`) is replaced by that text.
-   Without `--verify-ssh`, entries are marked unverified.
+   Checks run 4 at a time, 10 seconds each, within a 60-second overall budget; an entry not
+   checked in time is marked unverified. Without `--verify-ssh`, entries are marked unverified.
 7. **Report.** Text output lists proposed entries (with verification and duplicate flags), offline
    peers, and the not-seen and not-observable nodes, then a unified diff of the file for the
    entries `--write` would add. `--format json` gives the same data for agents. Nothing is written.
-8. **Write.** `--write` requires `--only NAME,...` (proposed names, or their tailnet IPs) or
-   `--all`, so devices on the tailnet that are not cluster nodes are never added by accident.
+8. **Write.** `--write` requires `--only NAME,...` or `--all`, so devices on the tailnet that are
+   not cluster nodes are never added by accident. `--only` takes unsuffixed proposed names or
+   tailnet IPs. A suffixed name (`pi-2`) is refused there: suffixes follow tailnet-IP order and can
+   shift between the review run and the write run if another same-named peer comes online, so the
+   report prints each entry's tailnet IP for use instead.
    `--all` leaves out entries that failed `--verify-ssh` and entries flagged "possible duplicate";
    those need `--only`.
    - Existing bytes are never re-encoded. The chosen entries alone are encoded with yaml.v3 at
@@ -223,12 +239,20 @@ using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only
 - a peer with no `TailscaleIPs` is skipped, and `--write --all` still writes the rest;
 - a configured LAN alias `web1` and a peer `web1.<suffix>` at a different IP and different
   endpoints: the peer is proposed (suffixed, flagged), not matched;
-- a node configured by its LAN IP, under another name, matches its peer through the peer's
-  endpoint IPs and is not proposed again;
+- a node configured by its LAN IP, under another name: its peer is proposed but flagged "possible
+  duplicate (by LAN endpoint)" and left out of `--all`;
+- two peers sharing a public endpoint IP, a configured dynamic-DNS node at that IP: both peers
+  are proposed unflagged and the node is not counted as seen;
+- two peers at different sites sharing a LAN endpoint IP: no flag (not unique);
+- a departed tailnet node whose `endpoints[]` LAN IP belongs to another online peer is "not in
+  the tailnet";
+- every peer offline while `BackendState` is `Running`: exit 1, not observed;
+- `--only pi-2` is refused; `--only <its tailnet IP>` writes it;
+- a hung `tailscale status` (stubbed) times out within the budget and exits 1;
 - three unmatched peers with the same `HostName` and no `DNSName`: two runs give the same
   name-to-IP mapping, and `--only` by tailnet IP selects the reviewed machine;
-- a peer with a non-zero `AltSharerUserID` and a peer under Mullvad's suffix (with the suffix
-  fields empty too) are skipped;
+- a peer with a non-zero `AltSharerUserID` is skipped; with the suffix fields empty, a peer with
+  `ExitNodeOption` is skipped; fixtures use tailnet IPs within the public-boundary allowlist;
 - `--write --all` leaves out an entry flagged "possible duplicate";
 - a peer with an empty `HostName` is named from its `DNSName`'s first label, and one with an
   empty `DNSName` (not skipped) from its IP;
@@ -261,7 +285,8 @@ using RFC 5737, RFC 2606 and the tailnet ranges' documentation-style values only
 - `--format json` carries the same lists.
 
 `internal/transport`: the exported resolver returns the alias's HostName and Port from a stubbed
-`ssh -G`; a missing `known_hosts`, an unreadable one and no signers return their sentinel errors.
+`ssh -G`; a missing `known_hosts`, no known-hosts paths, an unreadable file and no signers return
+their sentinel errors.
 The reason classifier is table-tested with real errors (a wrapped `*knownhosts.KeyError` with and
 without `Want`, each sentinel, x/crypto's authentication error, a dial error), not stubbed.
 `internal/config`: `SaveBytesAtomic` rejects unknown keys and invalid configs without touching the
@@ -524,3 +549,33 @@ Questions:
 - Can Mullvad exit nodes be proposed when the suffix is empty? Became Design 1: Mullvad's suffix
   is skipped regardless of the tailnet suffix; fixture.
 - A file ending in `...`? Became Design 8: refused with a pointer to the wizard; fixture.
+
+Kind: spec
+Reviewer: fresh-context subagent (Cursor)
+Model: same vendor family as the author
+Base: 8cf9d74b
+Head: bd1bb486
+Date: 2026-10-31
+Verdict: revise
+
+1. Major: endpoint IPs were treated as identity, but peers behind one NAT or at sites with the
+   same LAN range share them. Fixed: endpoints never match or count as seen; a private endpoint
+   unique to one peer only flags it as a possible duplicate (Design 1 and 3); fixtures for a
+   shared public endpoint, a shared LAN endpoint and a departed node.
+2. Major: the Mullvad domain literal fails the public-boundary gate. Fixed: the suffix rule covers
+   Mullvad when the suffix is known, and `ExitNodeOption` peers are skipped when it is not, with no
+   literal (Design 1); fixture.
+3. Minor: a fourth local SSH error would read as `network`. Fixed: `ErrNoKnownHostsPaths` maps to
+   `local-ssh-config` (Design 6); in the sentinel and classifier tests.
+
+Questions:
+- Does losing the control connection mark every peer offline? Became Design 1: peers present and
+  none online means not observed; fixture.
+- Can suffixes shift between the review and write runs? Became Design 8: suffixed names are
+  refused in `--only`; the tailnet IP is used instead; fixture.
+- Are `tailscale status` and `--verify-ssh` bounded? Became Design 1 and 6: 5 seconds, and 4 at a
+  time within 60 seconds; fixture for a hung command.
+- Docker bridge endpoints? Became Design 3: endpoints are never identity, so they cannot hide a
+  peer.
+- Can `internal/multipath` share `isTailscaleAddr`? Became Design 4: it moves to `internal/netutil`
+  (Support), importable from every tier.
