@@ -201,6 +201,26 @@ func TestGenerateMatchingProposesNothingForConfiguredPeers(t *testing.T) {
 	}
 }
 
+func TestGenerateStaleLANAddressIsFlaggedUntilATailnetEndpointIsAdded(t *testing.T) {
+	box := fakePeer{HostName: "box", DNSName: "box." + genSuffix, IPs: []string{"100.64.0.40"}, Online: true}
+	f := fixture(onlineTailnet(box))
+	f.dns = map[string][]string{"box." + genSuffix: {"100.64.0.40"}}
+
+	r := run(t, f, genCfg(node("box", "192.0.2.40")))
+	if p := proposal(t, r, "box-2"); !hasFlag(p, "possible duplicate of box") {
+		t.Fatalf("LAN-only node: proposal %+v, want box-2 flagged as a possible duplicate", p)
+	}
+
+	repaired := config.NodeConfig{Name: "box", Hostname: "192.0.2.41", SSHUser: "operator", Endpoints: []config.NodeEndpoint{
+		{Name: "lan", Hostname: "192.0.2.41"},
+		{Name: "tailscale", Hostname: "100.64.0.40"},
+	}}
+	r = run(t, f, genCfg(repaired))
+	if len(r.Proposed) != 0 || notSeen(r, "box") != "" {
+		t.Fatalf("with a Tailscale endpoint: proposed %v, not seen %q; want box matched", proposalNames(r), notSeen(r, "box"))
+	}
+}
+
 func TestGenerateSameHostNameDifferentMachinesIsSuffixedAndFlagged(t *testing.T) {
 	p1 := fakePeer{HostName: "box", IPs: []string{"100.64.0.11"}, Online: true}
 	p2 := fakePeer{HostName: "box", IPs: []string{"100.64.0.12"}, Online: true}

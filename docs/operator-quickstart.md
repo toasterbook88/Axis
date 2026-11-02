@@ -97,7 +97,9 @@ axis init --generate --ssh-user deploy # ssh_user for the proposed entries
 A proposed `hostname` is checked the way AXIS dials it (`ssh -G`, then DNS); a name your SSH config
 redirects elsewhere is withheld for the tailnet IP or flagged unsafe with no YAML. It exits 1 when
 Tailscale is not running or this machine is not connected to its control plane, and 2 when
-`nodes.yaml` cannot be loaded.
+`nodes.yaml` cannot be loaded. A proposal flagged `possible duplicate of <node>` usually means that
+node is configured only by a LAN address or its address is stale; see
+[Node addresses and SSH config](runbooks/node-addresses-and-ssh.md).
 
 ### Manual Configuration (Alternative)
 
@@ -141,6 +143,8 @@ If any node fails:
 - Check SSH key permissions (`chmod 600 ~/.ssh/id_ed25519`)
 - Verify hostname resolves correctly
 - Ensure SSH agent is running (`ssh-add -l`)
+- If the node's address changed, or its SSH config routes it through `ProxyJump` or `ProxyCommand`,
+  follow [Node addresses and SSH config](runbooks/node-addresses-and-ssh.md)
 
 ---
 
