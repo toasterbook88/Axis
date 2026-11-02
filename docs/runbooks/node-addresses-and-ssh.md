@@ -5,9 +5,13 @@ SSH config, what it refuses, and how to repair a node whose address has drifted.
 
 ## How AXIS picks an address
 
-A node has a `hostname` and optional `endpoints`. AXIS tries the endpoints in the order listed, then
-`hostname` (`DialHostnames`, `internal/config/config.go`). The first endpoint is the primary dial
-target, even when `hostname` differs from it.
+A node has a `hostname` and optional `endpoints`. The configured dial plan tries the endpoints in the
+order listed, then `hostname` (`DialHostnames`, `internal/config/config.go`). The first endpoint is
+the primary dial target, even when `hostname` differs from it.
+
+One exception: guarded execution can pass the address the last snapshot measured as fastest
+(`ResolvedDialTarget`), and SSH tries that first, before the configured dial plan. Endpoint order
+therefore sets the preferred path; it does not pin all traffic to the LAN.
 
 To keep the LAN as the primary path with a Tailscale fallback, list the LAN endpoint first:
 
@@ -26,10 +30,17 @@ Adding only a Tailscale endpoint makes Tailscale the primary path, because endpo
 `hostname`.
 
 For each candidate, AXIS runs `ssh -G` with the node's port and `ssh_user` and dials the resolved
-`HostName` and `Port`, with the resolved identities and known-hosts files. It reads the
-system-wide `ssh_config` when `$HOME` is your `/etc/passwd` home, as your own `ssh` does. When
-`$HOME` is overridden, or when a run without `-F` fails (OpenSSH checks config file permissions only
-then), it uses `-F ~/.ssh/config` and logs a warning for the failure case.
+`HostName` and `Port`, with the resolved identities and known-hosts files. Which config files it
+reads depends on whether `$HOME/.ssh/config` exists:
+
+- If it does not exist, `ssh -G` runs without `-F`, so OpenSSH reads its usual files: the user
+  config in your `/etc/passwd` home and the system-wide `ssh_config`. Overriding `$HOME` does not
+  isolate SSH config in this case.
+- If it exists and `$HOME` is your `/etc/passwd` home, `ssh -G` runs without `-F` and reads both
+  files, as your own `ssh` does. If that run fails (OpenSSH checks config file permissions only
+  without `-F`), AXIS retries with `-F ~/.ssh/config` and logs a warning.
+- If it exists and `$HOME` is not your `/etc/passwd` home, AXIS passes `-F ~/.ssh/config`, which
+  reads only that file.
 
 `axis serve` watches `nodes.yaml` and refreshes when its contents change, so an edit takes effect
 without a restart.
@@ -51,15 +62,17 @@ none" in a more specific Host block before the wildcard that sets it".
 - `axis init --generate` proposes a tailnet machine with the node's name and flags it
   `possible duplicate of <node>` (or `... (by LAN endpoint)`). AXIS matches a configured node to a
   tailnet machine only by an address it would dial, never by name or LAN endpoint alone, because two
-  sites can share one private subnet. The flag means the node is configured only by a LAN address,
-  or its address is stale.
+  sites can share one private subnet. The flag is a hint, not proof: the node may be configured only
+  by a LAN address or have a stale address, or the proposal may be a different machine that happens
+  to share the name. Confirm which before changing the node's entry.
 - Ask the machine itself, over any path that still works (its Tailscale address, a new LAN address,
   or the console): `ip -br addr` or `ifconfig` for LAN addresses, `tailscale ip -4` for the tailnet
-  address.
+  address. The node is the flagged machine only if its own `tailscale ip -4` matches the proposal's
+  tailnet address.
 
 ## Repairing a node
 
-1. Back up `~/.axis/nodes.yaml` and `~/.ssh/config`.
+1. Confirm the machine's identity as above, then back up `~/.axis/nodes.yaml` and `~/.ssh/config`.
 2. In `nodes.yaml`, set `hostname` to the address the machine reports, and list endpoints LAN first,
    then any other LAN interface, then Tailscale.
 3. If `~/.ssh/config` has a `Host` alias for the node, update its `HostName`. Check that
