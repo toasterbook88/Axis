@@ -344,6 +344,30 @@ func TestPrimaryHostnameAndDialHostnames(t *testing.T) {
 	}
 }
 
+func TestEndpointsAreDialedBeforeHostname(t *testing.T) {
+	lanFirst := &NodeConfig{
+		Hostname: "192.0.2.10",
+		Endpoints: []NodeEndpoint{
+			{Name: "lan", Hostname: "192.0.2.10"},
+			{Name: "tailscale", Hostname: "100.64.0.10"},
+		},
+	}
+	if got := strings.Join(lanFirst.DialHostnames(), ","); got != "192.0.2.10,100.64.0.10" {
+		t.Fatalf("LAN endpoint first: dial order %q, want LAN then Tailscale", got)
+	}
+
+	tailscaleOnly := &NodeConfig{
+		Hostname:  "192.0.2.10",
+		Endpoints: []NodeEndpoint{{Name: "tailscale", Hostname: "100.64.0.10"}},
+	}
+	if got := tailscaleOnly.PrimaryHostname(); got != "100.64.0.10" {
+		t.Fatalf("only a Tailscale endpoint: primary %q, want the endpoint over hostname", got)
+	}
+	if got := strings.Join(tailscaleOnly.DialHostnames(), ","); got != "100.64.0.10,192.0.2.10" {
+		t.Fatalf("only a Tailscale endpoint: dial order %q, want the endpoint then hostname", got)
+	}
+}
+
 func TestNormalize_DoesNotSynthesizeHostname(t *testing.T) {
 	cfg := &Config{Nodes: []NodeConfig{{
 		Name:    "edge",

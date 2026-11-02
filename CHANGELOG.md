@@ -126,6 +126,12 @@
 
 ### Documentation
 
+* `docs/runbooks/node-addresses-and-ssh.md`: how AXIS picks a node's dial
+  address (endpoints in order, then `hostname`), what it reads from and
+  refuses in SSH config, how `axis doctor` and `axis init --generate` show
+  address drift, and how to repair a node (LAN endpoint first, then
+  Tailscale). Linked from the operator quickstart.
+
 * `docs/runbooks/resident-memory-services.md` explains how to keep a resident
   cache or scratch store's RAM cap out of placement with a node's
   `system_reserve_mb`, which was undocumented. The reserve is a ceiling on
