@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -265,6 +266,12 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		}
 		if req.RAMMB <= 0 {
 			return nil, fmt.Errorf("reservation: RAM must be > 0")
+		}
+		// Parent credit and unlimited overcommit do not change the stored sum.
+		// Check the cluster total before any per-node addition or mutation.
+		if l.totalReserved < 0 || req.RAMMB > math.MaxInt64-l.totalReserved {
+			l.reserveFailures++
+			return nil, fmt.Errorf("reservation: RAM accounting overflow")
 		}
 		totalRAM, ok := l.nodeRAM[req.Node]
 		if !ok || totalRAM <= 0 {
