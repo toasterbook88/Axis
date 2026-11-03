@@ -112,7 +112,7 @@ func TestApplyMeshConfigKeepsPeersWhenRestartIsRequired(t *testing.T) {
 		if err := os.WriteFile(path, []byte(version), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := d.applyMeshConfig(path); err == nil || !strings.Contains(err.Error(), "restart required") {
+		if err := d.applyMeshConfig([]byte(version)); err == nil || !strings.Contains(err.Error(), "restart required") {
 			t.Errorf("runtime change error=%v, want restart required", err)
 		}
 		if got := d.Mesh().Peers(); !reflect.DeepEqual(before, got) {

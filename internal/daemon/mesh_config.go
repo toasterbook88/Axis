@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/toasterbook88/axis/internal/config"
@@ -42,8 +44,8 @@ func meshSettings(cfg *config.Config) meshRuntimeSettings {
 	return s
 }
 
-func (d *Daemon) applyMeshConfig(path string) error {
-	cfg, err := config.Load(path)
+func (d *Daemon) applyMeshConfig(data []byte) error {
+	cfg, err := config.Parse(data)
 	if err != nil {
 		return err
 	}
@@ -51,7 +53,11 @@ func (d *Daemon) applyMeshConfig(path string) error {
 	if settings != d.meshSettings {
 		return fmt.Errorf("mesh transport, enablement or local identity changed: restart required")
 	}
-	if cfg.Discovery != nil && cfg.Discovery.UDPPort == settings.port {
+	beaconPort := 42424
+	if cfg.Discovery != nil && cfg.Discovery.UDPPort > 0 {
+		beaconPort = cfg.Discovery.UDPPort
+	}
+	if beaconPort == settings.port {
 		return fmt.Errorf("mesh and beacon ports conflict: restart required")
 	}
 	seeds := make([]mesh.Peer, 0, len(cfg.Nodes))
@@ -67,18 +73,35 @@ func (d *Daemon) watchMeshConfig(ctx context.Context, path string) {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		var applied configFingerprint
+		var observed, applied configFingerprint
+		var observedSet, appliedSet, unreadable bool
 		ticker := time.NewTicker(watchConfigPollInterval)
 		defer ticker.Stop()
 		for {
-			fingerprint, err := fingerprintFile(path)
-			if err == nil && fingerprint != applied {
-				err = d.applyMeshConfig(path)
-				if err == nil {
-					applied = fingerprint
-					d.Invalidate()
-					_ = d.refreshWithTrigger(ctx, RefreshTriggerConfigChange)
+			// Hash and parse the same bytes: a second read can apply version B
+			// under A's fingerprint and then incorrectly skip a later return to A.
+			data, err := os.ReadFile(path)
+			fingerprint := configFingerprint{exists: err == nil, sum: sha256.Sum256(data)}
+			refresh := false
+			if err != nil {
+				refresh = !unreadable
+				unreadable = true
+			} else {
+				refresh = unreadable || !observedSet || fingerprint != observed
+				observed, observedSet, unreadable = fingerprint, true, false
+				if !appliedSet || fingerprint != applied {
+					err = d.applyMeshConfig(data)
+					if err == nil {
+						applied, appliedSet = fingerprint, true
+						refresh = true
+					}
 				}
+			}
+			// Rejected versions still invalidate snapshot truth once per change;
+			// retrying mesh reconciliation must not repeatedly refresh that cache.
+			if refresh {
+				d.Invalidate()
+				_ = d.refreshWithTrigger(ctx, RefreshTriggerConfigChange)
 			}
 			if err != nil {
 				reportWatchFingerprintError(path, RefreshTriggerConfigChange, fmt.Errorf("mesh config not applied; keeping last valid peers: %w", err))
