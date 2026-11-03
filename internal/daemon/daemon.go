@@ -123,6 +123,7 @@ type Daemon struct {
 	beaconRegistry *discovery.BeaconRegistry
 	ledger         *reservation.Ledger
 	mesh           *mesh.Mesh
+	meshSettings   meshRuntimeSettings
 
 	snapshot         *models.ClusterSnapshot
 	collectedAt      time.Time
@@ -226,6 +227,7 @@ func NewDefault(interval time.Duration) *Daemon {
 	d.beaconRegistry = registry
 
 	cfg, _ := config.Load(config.DefaultConfigPath())
+	d.meshSettings = meshSettings(cfg)
 	if cfg == nil || cfg.IsMeshEnabled() {
 		var selfPeer mesh.Peer
 		var seedPeers []mesh.Peer
@@ -408,6 +410,10 @@ func (d *Daemon) Start(ctx context.Context) {
 // file contents appear or change, or when the file disappears. Runs until ctx
 // is cancelled. This is the primary config-driven cache trigger.
 func (d *Daemon) WatchConfig(ctx context.Context, configPath string) {
+	if d.mesh != nil {
+		d.watchMeshConfig(ctx, configPath)
+		return
+	}
 	d.watchFile(ctx, configPath, RefreshTriggerConfigChange)
 }
 

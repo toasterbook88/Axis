@@ -42,8 +42,13 @@ reads depends on whether `$HOME/.ssh/config` exists:
 - If it exists and `$HOME` is not your `/etc/passwd` home, AXIS passes `-F ~/.ssh/config`, which
   reads only that file.
 
-`axis serve` watches `nodes.yaml` and refreshes when its contents change, so an edit takes effect
-without a restart.
+`axis serve` watches `nodes.yaml`. Valid peer additions, address/identity updates, and removals
+refresh discovery and atomically reconcile configured mesh peers without a restart. Unchanged
+peers retain their observations; changed endpoints start with fresh reachability state. Unrelated
+learned peers remain. Invalid, missing, or conflicting configuration retains the last valid mesh
+membership and is retried. Replace the file atomically to avoid exposing partially written YAML.
+Changes to mesh enablement, gossip port/interval, shared secret, or local identity require a daemon
+restart; the watcher reports this and keeps the running mesh unchanged.
 
 ## What AXIS refuses
 

@@ -448,7 +448,7 @@ func (m *Mesh) mergePeer(p Peer, now time.Time) {
 	}
 
 	// Update existing peer — never demote trusted
-	if existing.State == PeerTrusted {
+	if existing.Source == "config" || existing.State == PeerTrusted {
 		existing.LastSeen = now
 		existing.MissedPings = 0
 		return
