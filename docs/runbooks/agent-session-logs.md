@@ -34,6 +34,8 @@ its per-request resolved model through this logger.
   come from an autonomy policy rather than the operator), approval skips, shell commands, success/failure,
   result size, timing, and a separate `output` event with result content.
   Nonempty partial output is retained with `ok: false` when a tool returns an error.
+  A `shell` event records execution starting with `ok: false`; completion is
+  recorded separately as `succeeded` or `failed`.
 * `turn.finished`: the final answer once, elapsed time, token deltas from backend
   usage reports, and `answer`, `max_turns`, `error`, `canceled` or `timeout` outcome.
   `usage_reported` is always present on this record: `false` means no nonzero
@@ -46,6 +48,10 @@ logger never recopies the entire conversation or system prompt. Token counts
 are backend reports; omitted/zero usage is not an independent measurement of
 zero cost. Stream failures record the error/outcome; the current backend
 interface does not return partially streamed answer text on failure.
+
+If the first inference fails after conversation compaction, its prompt is
+removed from the working conversation. The log retains the original
+`turn.started` record and an error outcome without reusing an older answer.
 
 Credential-shaped assignments (including dotted/underscored names and nested
 JSON string fields, decoded recursively before masking), authorization/API-key/cookie headers, URL userinfo and PEM
