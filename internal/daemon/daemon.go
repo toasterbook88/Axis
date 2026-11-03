@@ -123,6 +123,10 @@ type Daemon struct {
 	beaconRegistry *discovery.BeaconRegistry
 	ledger         *reservation.Ledger
 	mesh           *mesh.Mesh
+	meshSettings   meshRuntimeSettings
+
+	writeSnapshotCache func(string, *models.ClusterSnapshot) error
+	snapshotGeneration uint64 // protected by mu; invalidation fences older collections
 
 	snapshot         *models.ClusterSnapshot
 	collectedAt      time.Time
@@ -226,6 +230,7 @@ func NewDefault(interval time.Duration) *Daemon {
 	d.beaconRegistry = registry
 
 	cfg, _ := config.Load(config.DefaultConfigPath())
+	d.meshSettings = meshSettings(cfg)
 	if cfg == nil || cfg.IsMeshEnabled() {
 		var selfPeer mesh.Peer
 		var seedPeers []mesh.Peer
@@ -313,6 +318,8 @@ func New(interval time.Duration, collector Collector) *Daemon {
 		pendingTriggers: make(map[string]bool),
 		snapshotHooks:   make(map[string]*snapshotHook),
 		startedAt:       time.Now(),
+
+		writeSnapshotCache: persistSnapshot,
 	}
 	if exe, err := os.Executable(); err == nil {
 		d.executable = exe
@@ -408,6 +415,10 @@ func (d *Daemon) Start(ctx context.Context) {
 // file contents appear or change, or when the file disappears. Runs until ctx
 // is cancelled. This is the primary config-driven cache trigger.
 func (d *Daemon) WatchConfig(ctx context.Context, configPath string) {
+	if d.mesh != nil {
+		d.watchMeshConfig(ctx, configPath)
+		return
+	}
 	d.watchFile(ctx, configPath, RefreshTriggerConfigChange)
 }
 
@@ -475,10 +486,10 @@ func (d *Daemon) WatchDiscovery(ctx context.Context, configPath string) {
 					d.snapshotPublished.Store(snapCopy)
 				}
 				d.publishMetadataLocked()
-				d.mu.Unlock()
 				if snapCopy != nil && snapshotPath != "" {
-					_ = persistSnapshot(snapshotPath, snapCopy)
+					_ = d.writeSnapshotCache(snapshotPath, snapCopy)
 				}
+				d.mu.Unlock()
 				return
 			}
 
@@ -502,10 +513,10 @@ func (d *Daemon) WatchDiscovery(ctx context.Context, configPath string) {
 					d.snapshotPublished.Store(snapCopy)
 				}
 				d.publishMetadataLocked()
-				d.mu.Unlock()
 				if snapCopy != nil && snapshotPath != "" {
-					_ = persistSnapshot(snapshotPath, snapCopy)
+					_ = d.writeSnapshotCache(snapshotPath, snapCopy)
 				}
+				d.mu.Unlock()
 				return
 			}
 			d.mu.Lock()
@@ -527,10 +538,10 @@ func (d *Daemon) WatchDiscovery(ctx context.Context, configPath string) {
 				d.snapshotPublished.Store(snapCopy)
 			}
 			d.publishMetadataLocked()
-			d.mu.Unlock()
 			if snapCopy != nil && snapshotPath != "" {
-				_ = persistSnapshot(snapshotPath, snapCopy)
+				_ = d.writeSnapshotCache(snapshotPath, snapCopy)
 			}
+			d.mu.Unlock()
 		}
 
 		lastFingerprint, _ = fingerprintFile(configPath)
@@ -737,6 +748,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	})
 
 	start := time.Now()
+	d.mu.RLock()
+	generation := d.snapshotGeneration
+	d.mu.RUnlock()
 	snap, err := d.collector(ctx)
 	now := time.Now().UTC()
 
@@ -794,6 +808,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	d.refreshCount++
 	d.lastRefreshDuration = time.Since(start)
 
+	if err == nil && generation != d.snapshotGeneration {
+		err = errors.New("snapshot invalidated during refresh")
+	}
 	if err != nil {
 		d.lastError = err.Error()
 		d.publishMetadataLocked()
@@ -878,6 +895,16 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	snapshotPath := d.snapshotPath
 	d.snapshotPublished.Store(snapCopy)
 	d.publishMetadataLocked()
+	// Serialize disk writes with invalidation too, so a late write cannot
+	// recreate the removed cache. Snapshot and Meta readers remain lock-free.
+	if snapshotPath != "" {
+		if err := d.writeSnapshotCache(snapshotPath, snapCopy); err != nil {
+			d.lastError = err.Error()
+			d.publishMetadataLocked()
+			d.mu.Unlock()
+			return err
+		}
+	}
 	d.mu.Unlock()
 
 	// Emit advisory post-refresh event for external observers (MCP agents, hooks, etc.)
@@ -887,19 +914,6 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		"nodes":                  len(snapCopy.Nodes),
 	})
 
-	if snapshotPath == "" {
-		// No persistence configured, but still need to fire hooks if content
-		// changed (test paths and in-process consumers rely on this).
-		d.dispatchSnapshotHooks(snapCopy, trigger)
-		return nil
-	}
-	if err := persistSnapshot(snapshotPath, snapCopy); err != nil {
-		d.mu.Lock()
-		d.lastError = err.Error()
-		d.publishMetadataLocked()
-		d.mu.Unlock()
-		return err
-	}
 	d.dispatchSnapshotHooks(snapCopy, trigger)
 	return nil
 }
@@ -1049,6 +1063,7 @@ func (d *Daemon) Snapshot() (*models.ClusterSnapshot, bool) {
 
 func (d *Daemon) Invalidate() {
 	d.mu.Lock()
+	d.snapshotGeneration++
 	path := d.snapshotPath
 	d.snapshot = nil
 	d.collectedAt = time.Time{}
@@ -1059,11 +1074,10 @@ func (d *Daemon) Invalidate() {
 	}
 	d.snapshotPublished.Store(nil)
 	d.publishMetadataLocked()
-	d.mu.Unlock()
-
 	if path != "" {
 		_ = os.Remove(path)
 	}
+	d.mu.Unlock()
 }
 
 func (d *Daemon) Meta() Metadata {

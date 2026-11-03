@@ -381,6 +381,11 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
+	return Parse(data)
+}
+
+// Parse validates one coherent configuration version using the same rules as Load.
+func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := decodeStrict(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)

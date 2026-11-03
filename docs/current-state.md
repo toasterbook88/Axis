@@ -48,6 +48,8 @@ The live repo currently contains:
 - Explicit cache refresh via `axis daemon refresh`
 - Explicit cache invalidation via `axis daemon invalidate`
 - Content-aware `nodes.yaml`, semantic `state.json`, and `skills.json` watch refreshes in the daemon cache, plus explicit execution-state and long-lived UDP beacon refresh triggers, with refresh-trigger metadata surfaced through daemon health/status
+- Validated `nodes.yaml` reloads atomically add, update, and remove configured mesh peers while preserving unrelated learned peers. Invalid or unreadable versions retain the last valid mesh membership and are retried. Mesh transport, enablement, shared-secret, and local-identity changes require a daemon restart.
+- Cache invalidation fences collections already in flight and serializes persisted snapshot writes, so an older collection cannot restore invalidated memory or disk cache state. A subsequent collection may publish normally; snapshot and metadata reads remain lock-free.
 - Typed discovery freshness metadata on live and cached snapshots (`source`, expected/observed window, additive beacon count, completion state, warning)
 - Publication evidence on live and daemon-cached snapshots: unique publication ID, assembly source/time, projected cache age, facts observation time/discovery digest, ledger digest/count, and state digest/schema/update time
 - A CLI task execution path (`axis task run`)
