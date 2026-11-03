@@ -870,7 +870,7 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 		if skillStore == nil {
 			d.lastError = skillErr.Error()
 			d.collectedAt = now
-			d.snapshotPublished.Store(d.snapshot)
+			d.snapshotPublished.Store(snapshotview.Clone(d.snapshot))
 			d.publishMetadataLocked()
 			d.mu.Unlock()
 			return skillErr
@@ -891,7 +891,9 @@ func (d *Daemon) doRefresh(ctx context.Context, trigger string) error {
 	}
 	d.collectedAt = now
 
-	snapCopy := d.snapshot
+	// The mutable working snapshot must never alias a lock-free publication.
+	// Discovery can update its warnings after this refresh releases d.mu.
+	snapCopy := snapshotview.Clone(d.snapshot)
 	snapshotPath := d.snapshotPath
 	d.snapshotPublished.Store(snapCopy)
 	d.publishMetadataLocked()
