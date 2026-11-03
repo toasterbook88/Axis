@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -35,11 +36,16 @@ func TestRunPreparedDoesNotExecuteWhenReservationCannotPersist(t *testing.T) {
 	}
 	called := false
 	previous := RunLocalShell
+	previousStream := StreamLocalShell
 	RunLocalShell = func(context.Context, string, []string) ([]byte, int64, error) {
 		called = true
 		return nil, 0, nil
 	}
-	defer func() { RunLocalShell = previous }()
+	StreamLocalShell = func(context.Context, string, []string, io.Writer, io.Writer) (int64, error) {
+		called = true
+		return 0, nil
+	}
+	defer func() { RunLocalShell = previous; StreamLocalShell = previousStream }()
 	result, err := RunPreparedExecution(context.Background(), prepared)
 	if err == nil || !strings.Contains(result.Error, "persist ledger") {
 		t.Errorf("result=%+v error=%v, want ledger persistence failure", result, err)
@@ -52,5 +58,10 @@ func TestRunPreparedDoesNotExecuteWhenReservationCannotPersist(t *testing.T) {
 	}
 	if total := rt.Ledger.Summary().TotalReservedMB; total != 0 {
 		t.Errorf("reserved total=%d, want zero", total)
+	}
+	// Positive control: the writers used by task logging reach the streaming
+	// stub, so the assertion above observes the actual local execution seam.
+	if _, _, err := runLocalWithOutput(context.Background(), "echo ok", nil, io.Discard, io.Discard); err != nil || !called {
+		t.Errorf("streaming execution control: called=%v error=%v", called, err)
 	}
 }

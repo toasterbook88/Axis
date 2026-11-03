@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestReserveRejectsAccountingOverflowWithoutMutation(t *testing.T) {
@@ -62,6 +63,64 @@ func TestReserveRejectsAccountingOverflowWithoutMutation(t *testing.T) {
 			}
 			if !bytes.Equal(before, after) {
 				t.Error("rejected request changed persisted accounting")
+			}
+		})
+	}
+}
+
+func TestReserveRejectsOverflowFromAnotherLedger(t *testing.T) {
+	a, b := sharedLedgers(t)
+	if _, err := a.Reserve(lease("first", 1024)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, err := b.Reserve(lease("overflow", math.MaxInt64)); err == nil || entry != nil {
+		t.Errorf("overflow accepted after reload: entry=%v error=%v", entry, err)
+	}
+	if total := b.Summary().TotalReservedMB; total != 1024 {
+		t.Errorf("reserved total=%d, want 1024", total)
+	}
+	after, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("rejection changed persisted accounting")
+	}
+}
+
+func TestReserveUsesCurrentEntriesAfterReleaseOrReclaim(t *testing.T) {
+	for _, reclaim := range []bool{false, true} {
+		t.Run(map[bool]string{false: "release", true: "reclaim"}[reclaim], func(t *testing.T) {
+			limits := DefaultLimits()
+			limits.MaxOvercommitRatio = 0
+			l := setupTestLedger(t, limits)
+			l.SetNodeCapacity("node-a", 16384)
+			e := Entry{ID: "first", Node: "node-a", RAMMB: math.MaxInt64}
+			if reclaim {
+				e.ExpiresAt = time.Now().Add(-time.Minute)
+			}
+			if _, err := l.Reserve(e); err != nil {
+				t.Fatal(err)
+			}
+			if reclaim {
+				if n := l.Reclaim(); n != 1 {
+					t.Fatalf("reclaimed=%d, want 1", n)
+				}
+			} else if err := l.Release(e.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := l.Reserve(Entry{ID: "next", Node: "node-a", RAMMB: 1}); err != nil {
+				t.Fatalf("empty ledger rejected valid allocation: %v", err)
+			}
+			if total := l.Summary().TotalReservedMB; total != 1 {
+				t.Errorf("reserved total=%d, want 1", total)
+			}
+			if metric := l.Metrics().TotalReservedMB; metric != math.MaxInt64 {
+				t.Errorf("lifetime metric=%d, want saturated MaxInt64", metric)
 			}
 		})
 	}

@@ -254,6 +254,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	}
 
 	var snap []*Entry
+	var reservedMetricBefore int64
 	result, err := func() (*Entry, error) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -266,12 +267,6 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		}
 		if req.RAMMB <= 0 {
 			return nil, fmt.Errorf("reservation: RAM must be > 0")
-		}
-		// Parent credit and unlimited overcommit do not change the stored sum.
-		// Check the cluster total before any per-node addition or mutation.
-		if l.totalReserved < 0 || req.RAMMB > math.MaxInt64-l.totalReserved {
-			l.reserveFailures++
-			return nil, fmt.Errorf("reservation: RAM accounting overflow")
 		}
 		totalRAM, ok := l.nodeRAM[req.Node]
 		if !ok || totalRAM <= 0 {
@@ -286,9 +281,17 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		// Check per-node cap
 		nodeCount := 0
 		var nodeReserved int64
+		var clusterReserved int64
 		var parentEntry *Entry
 		parentID := os.Getenv("AXIS_EXECUTION_PARENT_ID")
 		for _, e := range l.entries {
+			// Capacity uses the current entries, including another process's
+			// leases reloaded under the file lock, not cumulative metrics.
+			if e.RAMMB < 0 || e.RAMMB > math.MaxInt64-clusterReserved {
+				l.reserveFailures++
+				return nil, fmt.Errorf("reservation: RAM accounting overflow")
+			}
+			clusterReserved += e.RAMMB
 			if e.Node == req.Node {
 				nodeCount++
 				nodeReserved += e.RAMMB
@@ -296,6 +299,11 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 					parentEntry = e
 				}
 			}
+		}
+		// Parent credit and unlimited overcommit do not change the stored sum.
+		if req.RAMMB > math.MaxInt64-clusterReserved {
+			l.reserveFailures++
+			return nil, fmt.Errorf("reservation: RAM accounting overflow")
 		}
 		if parentEntry != nil {
 			nodeReserved -= parentEntry.RAMMB
@@ -326,7 +334,13 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 		req.CreatedAt = now
 		req.LastHeartbeat = now
 		l.entries[req.ID] = &req
-		l.totalReserved += req.RAMMB
+		reservedMetricBefore = l.totalReserved
+		// The cumulative grant metric saturates; it cannot limit current capacity.
+		if l.totalReserved < 0 || req.RAMMB > math.MaxInt64-l.totalReserved {
+			l.totalReserved = math.MaxInt64
+		} else {
+			l.totalReserved += req.RAMMB
+		}
 		snap = l.snapshotEntriesLocked()
 		return &req, nil
 	}()
@@ -338,7 +352,7 @@ func (l *Ledger) Reserve(req Entry) (*Entry, error) {
 	if err := l.writeSnapshot(snap); err != nil {
 		l.mu.Lock()
 		delete(l.entries, req.ID)
-		l.totalReserved -= req.RAMMB
+		l.totalReserved = reservedMetricBefore
 		l.reserveFailures++
 		l.mu.Unlock()
 		l.logger.Error("failed to persist ledger; reservation not granted", "id", req.ID, "error", err)
