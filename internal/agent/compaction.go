@@ -26,6 +26,11 @@ const minSummarizable = 4
 // summarizer, keeping the summarization prompt itself bounded.
 const maxSummarizeContentChars = 2000
 
+// compactedSummaryPrefix marks the user-role message left in place of deleted
+// turns. The daily session log uses it to find a tail after the original
+// prompt is gone. A rolled-back prompt has no such marker.
+const compactedSummaryPrefix = "[Compacted earlier conversation — summary]\n"
+
 // compactContext summarizes older conversation turns into a single compressed
 // user message when the conversation approaches the token budget. It is
 // advisory: on any backend failure it silently falls back to the existing
@@ -70,7 +75,7 @@ func (a *Agent) compactContext(ctx context.Context, backend ChatBackend) error {
 		return nil
 	}
 	a.conv.ReplaceRange(start, end, []chat.Message{
-		{Role: chat.RoleUser, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
+		{Role: chat.RoleUser, Content: compactedSummaryPrefix + strings.TrimSpace(summary)},
 	})
 
 	if a.verbose {
@@ -141,7 +146,7 @@ func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens 
 	}
 
 	a.conv.ReplaceRange(start, end, []chat.Message{
-		{Role: chat.RoleUser, Content: "[Compacted earlier conversation — summary]\n" + strings.TrimSpace(summary)},
+		{Role: chat.RoleUser, Content: compactedSummaryPrefix + strings.TrimSpace(summary)},
 	})
 
 	afterTokens = a.conv.EstimateTokens()

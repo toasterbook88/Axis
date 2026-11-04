@@ -220,7 +220,7 @@ func agentCmd() *cobra.Command {
 				endpoint = chat.DefaultEndpoint
 			}
 
-			sessionLog := openAgentSessionLog(activeTarget, resume, func(msg string) {
+			sessionLog := openAgentSessionLog(activeTarget, func(msg string) {
 				fmt.Fprintf(errW, "warning: %s\n", msg)
 			})
 
@@ -253,24 +253,26 @@ func agentCmd() *cobra.Command {
 			// Resume previous conversation if requested.
 			historyPath := chat.PersistPath("agent")
 			if resume {
-				if err := a.Conversation().LoadFromFile(historyPath); err != nil {
+				if n, err := resumeConversation(a, historyPath, sessionLog); err != nil {
 					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
-				} else if n := a.Conversation().HistoryCount(); n > 0 {
+				} else if n > 0 {
 					fmt.Fprintf(errW, "Resumed %d messages from previous session.\n", n)
 				}
 			}
 
 			// Single-shot mode. -p selects the piped output contract:
 			// assistant text on stdout, tool badges on stderr, no banner,
-			// fail-closed confirm. Positional without -p keeps the legacy
-			// behavior byte-for-byte.
+			// fail-closed confirm. Positional without -p keeps that legacy
+			// output contract. Neither one-shot path rewrites the resume file.
 			if printMode && len(args) == 0 {
 				return ExitCodeError{Code: ExitErrGeneric, Message: "-p/--print requires a prompt argument"}
 			}
 			if len(args) > 0 {
 				instruction := strings.Join(args, " ")
+				// One-shot runs append to the daily session log. They do not
+				// replace agent-history.json, which is the interactive resume file.
 				if printMode {
-					return runOneShotPiped(ctx, a, instruction, errW, timeout, historyPath)
+					return runOneShotPiped(ctx, a, instruction, errW, timeout, "")
 				}
 				legacyOneShotBanner(errW, activeTarget.Model, maxTurns)
 
@@ -281,9 +283,6 @@ func agentCmd() *cobra.Command {
 					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 				}
 				fmt.Fprintln(w)
-				if historyPath != "" {
-					_ = saveAgentConversation(a.Conversation(), historyPath, errW)
-				}
 				return nil
 			}
 

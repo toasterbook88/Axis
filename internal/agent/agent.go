@@ -437,9 +437,10 @@ func (a *Agent) RunWithSinks(ctx context.Context, userPrompt string, obs Observe
 	return a.runLocked(ctx, userPrompt)
 }
 
-// dropLatestPrompt removes this run's failed prompt after compaction has
-// potentially changed its index. Earlier matching prompts remain history.
 func (a *Agent) dropLatestPrompt(prompt string) {
+	if a == nil || a.conv == nil {
+		return
+	}
 	msgs := a.conv.Messages()
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role == chat.RoleUser && msgs[i].Content == prompt {

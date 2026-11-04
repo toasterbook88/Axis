@@ -219,7 +219,8 @@ func (l *DailySessionLog) noteShell(id, node, cwd, command string) {
 	} else if cwd != "" {
 		summary = "cwd=" + cwd
 	}
-	// This event records execution starting; the result arrives separately.
+	// This is the start of the command, not its result. ok stays false; the
+	// later succeeded or failed record carries the outcome.
 	l.noteLive(sessionTool{ID: id, Name: "shell", Event: "shell", Args: command, Summary: summary})
 }
 
