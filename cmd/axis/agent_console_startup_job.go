@@ -337,7 +337,7 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 	if endpoint == "" {
 		endpoint = chat.DefaultEndpoint
 	}
-	sessionLog := openAgentSessionLog(target, j.in.resume, func(msg string) {
+	sessionLog := openAgentSessionLog(target, func(msg string) {
 		j.note(console.StatusFailed, msg)
 	})
 	a := agent.New(buildAgentSessionConfig(agentSessionParams{
@@ -362,9 +362,9 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 		SessionLog:              sessionLog,
 	}))
 	if j.in.resume {
-		if err := a.Conversation().LoadFromFile(j.historyPath); err != nil {
+		if n, err := resumeConversation(a, j.historyPath, sessionLog); err != nil {
 			j.note(console.StatusFailed, fmt.Sprintf("could not resume conversation: %v", err))
-		} else if n := a.Conversation().HistoryCount(); n > 0 {
+		} else if n > 0 {
 			j.note(console.StatusInfo, fmt.Sprintf("Resumed %d messages from previous session.", n))
 		}
 	}

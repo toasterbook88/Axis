@@ -220,7 +220,7 @@ func agentCmd() *cobra.Command {
 				endpoint = chat.DefaultEndpoint
 			}
 
-			sessionLog := openAgentSessionLog(activeTarget, resume, func(msg string) {
+			sessionLog := openAgentSessionLog(activeTarget, func(msg string) {
 				fmt.Fprintf(errW, "warning: %s\n", msg)
 			})
 
@@ -253,9 +253,9 @@ func agentCmd() *cobra.Command {
 			// Resume previous conversation if requested.
 			historyPath := chat.PersistPath("agent")
 			if resume {
-				if err := a.Conversation().LoadFromFile(historyPath); err != nil {
+				if n, err := resumeConversation(a, historyPath, sessionLog); err != nil {
 					fmt.Fprintf(errW, "warning: could not resume conversation: %v\n", err)
-				} else if n := a.Conversation().HistoryCount(); n > 0 {
+				} else if n > 0 {
 					fmt.Fprintf(errW, "Resumed %d messages from previous session.\n", n)
 				}
 			}
