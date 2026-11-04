@@ -88,6 +88,7 @@ The live repo currently contains:
 - `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
 - Unified MCP client (`axis mcp client`) with per-server connection caching, retry, batch execution, interactive REPL, placement-aware auto-routing, and progress notifications
 - `axis agent` asks before every external MCP tool call unless `nodes.yaml` lists that tool by exact name under `mcp_servers.<server>.auto_approve_tools`; a server's tool names, descriptions and annotations never grant auto-approval
+- `axis agent` appends a private daily session log, `~/.axis/logs/agent-YYYY-MM-DD.jsonl` (dir `0700`, file `0600`), for interactive and one-shot runs: `turn.started`, one `tool` line per tool event, and `turn.finished` with prompt, answer, transcript, tool results (capped at 4 KB each), token deltas and stop reason (`answer`, `max_turns`, `error`). Text goes through the same redaction as the UI surfaces and the system prompt is not stored. Log write failures warn once and never fail a turn. One-shot runs (positional or `-p`) no longer overwrite `agent-history.json`; only the interactive REPL/console saves the resume file
 
 The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 

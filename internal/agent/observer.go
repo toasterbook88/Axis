@@ -127,6 +127,7 @@ func (a *Agent) emitCompactionSkipped(err error) {
 
 func (a *Agent) emitToolCalled(id, name, args string) {
 	args = redactForSurface(args)
+	a.sessionLog.noteCalled(id, name, args)
 	if a.observer != nil {
 		a.observer.ToolCalled(id, name, args)
 		return
@@ -139,6 +140,7 @@ func (a *Agent) emitToolCalled(id, name, args string) {
 
 func (a *Agent) emitToolSkipped(id, name, reason string) {
 	reason = redactForSurface(reason)
+	a.sessionLog.noteSkipped(id, name, reason)
 	if a.observer != nil {
 		a.observer.ToolSkipped(id, name, reason)
 		return
@@ -148,6 +150,7 @@ func (a *Agent) emitToolSkipped(id, name, reason string) {
 
 func (a *Agent) emitToolSucceeded(id, name, summary string, resultLen int, elapsed time.Duration) {
 	summary = redactForSurface(summary)
+	a.sessionLog.noteSucceeded(id, name, summary, resultLen, elapsed)
 	if a.observer != nil {
 		a.observer.ToolSucceeded(id, name, summary, resultLen, elapsed)
 		return
@@ -170,6 +173,7 @@ func (a *Agent) emitToolSucceeded(id, name, summary string, resultLen int, elaps
 
 func (a *Agent) emitToolFailed(id, name string, err error, elapsed time.Duration) {
 	err = redactErrorForSurface(err)
+	a.sessionLog.noteFailed(id, name, err, elapsed)
 	if a.observer != nil {
 		a.observer.ToolFailed(id, name, err, elapsed)
 		return
@@ -180,6 +184,7 @@ func (a *Agent) emitToolFailed(id, name string, err error, elapsed time.Duration
 
 func (a *Agent) emitShellExecuting(id, node, cwd, command string) {
 	command = redactForSurface(command)
+	a.sessionLog.noteShell(id, node, cwd, command)
 	if a.observer != nil {
 		a.observer.ShellExecuting(id, node, cwd, command)
 		return
@@ -195,6 +200,7 @@ func (a *Agent) emitShellExecuting(id, node, cwd, command string) {
 }
 
 func (a *Agent) emitMaxTurnsReached(max int) {
+	a.sessionLog.markMaxTurns()
 	if a.observer != nil {
 		a.observer.MaxTurnsReached(max)
 		return

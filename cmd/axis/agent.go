@@ -246,6 +246,16 @@ func agentCmd() *cobra.Command {
 				endpoint = chat.DefaultEndpoint
 			}
 
+			sessionLog, logErr := agent.OpenDailySessionLog(persist.AxisPath("logs"))
+			if logErr != nil {
+				fmt.Fprintf(errW, "warning: session log disabled: %v\n", logErr)
+			} else {
+				sessionLog.SetWarn(func(msg string) {
+					fmt.Fprintf(errW, "warning: %s\n", msg)
+				})
+				sessionLog.SetResumed(resume)
+			}
+
 			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
 				Model:                   activeTarget.Model,
@@ -267,6 +277,7 @@ func agentCmd() *cobra.Command {
 				Output:                  w,
 				MCPRegistry:             mcpReg,
 				RuntimeLoader:           loader,
+				SessionLog:              sessionLog,
 			})
 
 			a = agent.New(cfg)
@@ -283,15 +294,17 @@ func agentCmd() *cobra.Command {
 
 			// Single-shot mode. -p selects the piped output contract:
 			// assistant text on stdout, tool badges on stderr, no banner,
-			// fail-closed confirm. Positional without -p keeps the legacy
-			// behavior byte-for-byte.
+			// fail-closed confirm. Positional without -p keeps that legacy
+			// output contract. Neither one-shot path rewrites the resume file.
 			if printMode && len(args) == 0 {
 				return ExitCodeError{Code: ExitErrGeneric, Message: "-p/--print requires a prompt argument"}
 			}
 			if len(args) > 0 {
 				instruction := strings.Join(args, " ")
+				// One-shot runs append to the daily session log. They do not
+				// replace agent-history.json, which is the interactive resume file.
 				if printMode {
-					return runOneShotPiped(ctx, a, instruction, errW, timeout, historyPath)
+					return runOneShotPiped(ctx, a, instruction, errW, timeout, "")
 				}
 				legacyOneShotBanner(errW, activeTarget.Model, maxTurns)
 
@@ -302,9 +315,6 @@ func agentCmd() *cobra.Command {
 					return ExitCodeError{Code: ExitErrCommandFail, Message: fmt.Sprintf("agent failed: %v", err)}
 				}
 				fmt.Fprintln(w)
-				if historyPath != "" {
-					_ = saveAgentConversation(a.Conversation(), historyPath, errW)
-				}
 				return nil
 			}
 
@@ -548,6 +558,7 @@ type agentSessionParams struct {
 	Confirm                 agent.ConfirmFunc
 	MCPRegistry             *mcpclient.Registry
 	RuntimeLoader           func(context.Context) (*runtimectx.Context, error)
+	SessionLog              *agent.DailySessionLog
 }
 
 // buildAgentSessionConfig assembles agent.Config for axis agent sessions.
@@ -583,6 +594,7 @@ func buildAgentSessionConfig(p agentSessionParams) agent.Config {
 		},
 		RunTask:     guardedAgentTaskRunner(),
 		MCPRegistry: p.MCPRegistry,
+		SessionLog:  p.SessionLog,
 	}
 }
 
