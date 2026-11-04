@@ -38,28 +38,44 @@ Verified at the base of this spec:
 1. **Whole-request overhead.** Build the turn context and tool definitions before the compaction
    check (moving the existing `agent.go:478` and `:489` lines above `:474`). Their size, as
    characters / 4, is passed to `compactContext`, which triggers on
-   `conversation estimate + overhead ≥ maxTokens × 0.70`.
-2. **Pre-send trim.** After compaction, if `conversation estimate + overhead > maxTokens`, run the
-   existing tool-result shortening (`Conversation.compact`) against `maxTokens × 4 − overhead
-   characters` instead of the full budget. The request is then sent, as today.
-3. **Cap every tool result on entry.** `Conversation.Append` shortens a `tool` message longer than
-   the cap to the cap, with a marker:
-   `… [truncated: tool output was N chars; the first M are kept]`. Cap = 32,000 characters
-   (`read_file`'s own limit, so its results never change), lowered to `maxTokens` characters
-   when that is smaller, never below 2,000. It applies to every tool, built-ins and MCP alike,
-   and also when truncation is otherwise disabled (`maxTokens` 0).
+   `conversation estimate + overhead ≥ maxTokens × 0.70`. To avoid summarizing every round when
+   the fixed overhead alone is near the threshold, the trigger also requires the conversation
+   part to exceed `maxTokens × 0.25`; the existing `minSummarizable` check still applies.
+2. **Pre-send trim**, after compaction, toward a target of `maxTokens × 0.85` (headroom for the
+   reply and chars/4 error):
+   a. shorten older tool results with the existing `Conversation.compact`, against the target
+      minus overhead instead of the full budget;
+   b. if still over, shorten the tool results in the protected recent messages, largest first,
+      until the request reaches the target or each is at the 2,048-byte floor. This bounds a round
+      that returned several large results, which a per-result cap alone does not.
+   The request is then sent, as today; nothing is refused.
+3. **Cap every tool result on entry**, in bytes: `cap = min(32 KiB, maxTokens) bytes`, never below
+   2,048. `read_file`'s own output (at most 32,000 bytes plus its 37-byte marker) always fits at the
+   default budget. A longer result keeps its first `cap` bytes, cut at a UTF-8 rune boundary, plus
+   a marker: `… [truncated: tool output was N bytes; the first M are kept]`. One helper applies the
+   cap in `Conversation.Append` and when history is loaded (`LoadFromFile`, `RestoreAll`), so a
+   resumed session, including one resumed with a smaller `--max-tokens`, is capped too.
 
 The session log keeps recording each raw result before it enters the conversation, with its
-own 4 KB clip and `truncated_bytes`, as today.
+own 16 KB clip (`sessionLogToolCap`) and `truncated_bytes`, as today.
 
 ## Tests
 
 - Trigger: a conversation under today's threshold but over it once tool definitions and turn
-  context are counted is compacted (fails today).
+  context are counted is compacted (fails today). A second case uses a large session summary in
+  the turn context, so the test fails if only tool definitions are counted.
+- No thrash: overhead alone above 70% with a short conversation does not summarize every round
+  (count summarizer calls over 10 rounds).
 - Pre-send trim: with overhead taking most of the budget, older tool results are shortened so
-  conversation + overhead fits; the request is still sent.
-- Entry cap: a 10 MB `grep_search`-sized result is stored at the cap with the marker; a
-  20,000-char result and a 32,000-char `read_file` result are unchanged at the default budget.
+  the request reaches the 85% target; the request is still sent.
+- Parallel round: 4 and 6 results of 40,000 bytes in one round, at `maxTokens` 32768 and 8192 —
+  the next request estimate is at or below the target (fails with a per-result cap alone).
+- Entry cap: a 10 MB `grep_search`-sized result is stored at the cap with the marker;
+  `read_file`'s real output on a 40,000-byte file is unchanged at the default budget; at
+  `maxTokens` 8192 the cap is 8,192 bytes; below 2,048 the floor applies; a multi-byte UTF-8
+  result is cut on a rune boundary.
+- Resume: a saved history whose newest tool result is 10 MB is capped on load; a history saved
+  at 32768 and resumed at 8192 is re-capped.
 - No wedge: after an oversized newest tool result, the next turn's request estimate is below the
   budget (fails today: the result sits whole in the protected tail).
 - Characterization: a short conversation produces the same request as before.
@@ -68,17 +84,48 @@ own 4 KB clip and `truncated_bytes`, as today.
 
 - **Cap each unbounded tool separately** (`grep_search`, `git_log`, MCP). Misses the next tool
   added without a cap; one cap at the conversation boundary covers all of them.
-- **Compact the protected tail.** Changes what the model sees of its most recent work; capping on
-  entry keeps the tail intact and bounded.
+- **Split the cap across a round's results** (`cap / N` each). Also bounds a round, but cuts every
+  result of a large round up front even when older history could have been shortened instead;
+  the trim shortens the recent tail only as a last step.
 - **The full budget design** (window discovery, calibration, refusal, retry). Parked for separate
   specs; this step fixes the measured wedge and most of the trigger gap without them.
 
 ## Research
 
-- OpenCode compacts before the limit with a reserve, and counts the full request
-  (https://opencode.ai/v2/docs/compaction/). Here the reserve is the existing 30% headroom below
-  `maxTokens`; this change makes that headroom measure the whole request.
+- OpenCode compacts before the limit with a reserve, counts the full request, and shortens long
+  tool output in the recent conversation it keeps (https://opencode.ai/v2/docs/compaction/). Here
+  compaction triggers at 70% of `maxTokens` on the whole request, and the trim targets 85%, leaving
+  15% for the reply and estimate error.
 - Optimization: none beyond counting what is sent. Measurement: the trigger and wedge tests above,
   and over the next 14 days of logs, fewer context-overflow errors with no rise in non-answer turns.
 
 ## Review
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: 6cc8d3f8fe2de1d5269239d3179180910124796c
+Head: 1bf888f5a088adb91ec52d1fdbff3399378d4545
+Date: 2026-11-04
+Verdict: revise
+
+1. Major: a per-result cap plus the protected tail does not bound a round with several large
+   results (4 x 40,000 chars reached 105% of budget). Fixed: pre-send trim step b shortens tool
+   results in the protected tail, largest first, to the 85% target; parallel-round tests at
+   32768 and 8192 (Design 2, Tests).
+2. Major: resuming a session skips the entry cap. Fixed: one helper caps in `Append`,
+   `LoadFromFile` and `RestoreAll`; resume tests for a 10 MB result and a smaller budget.
+3. Minor: the cap's unit was unstated and `read_file`'s real output exceeds 32,000. Fixed: the cap
+   is bytes, 32 KiB, rune-boundary cut, floor 2,048; the unreachable `maxTokens` 0 clause is
+   removed; tests use real `read_file` output, 8192 and the floor.
+4. Minor: the session log clips tool output at 16 KB, not 4 KB. Fixed: wording corrected.
+
+Questions:
+- Does a request trimmed to exactly the budget leave room for the reply? Became Design 2: the trim
+  targets 85% of `maxTokens`.
+- Does overhead alone above 70% make compaction run every round? Became Design 1: the trigger also
+  requires the conversation part above 25%, with a no-thrash test.
+- Were the logged failures one oversized result or several per round? Open: the session log is
+  private; the design covers both cases.
+- Can a trigger test pass when only tool definitions are counted? Became a test: a second trigger
+  case uses a large session summary.
