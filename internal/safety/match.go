@@ -1,10 +1,15 @@
 package safety
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
-// nullRedirect is a redirect that discards output. It never writes a device,
-// so it is not evidence for any deny rule ("> /dev" would otherwise match it).
-const nullRedirect = "> /dev/null"
+// nullRedirect matches a redirect whose whole target is /dev/null. It never
+// writes a device, so it is not evidence for any deny rule ("> /dev" would
+// otherwise match it). The target must end there: "/dev/nullb0" is a block
+// device and stays a raw device write.
+var nullRedirect = regexp.MustCompile(`> /dev/null(\s|$)`)
 
 // ruleMatches reports whether rule applies to one command segment. lowerCmd
 // is the lowercased raw segment. A deny rule's raw patterns are matched with
@@ -17,7 +22,7 @@ func ruleMatches(rule Rule, surface, program, joinedArgs, lowerCmd string) bool 
 	if len(rule.RawPatterns) > 0 {
 		raw := lowerCmd
 		if rule.Verdict == VerdictDeny {
-			raw = strings.ReplaceAll(raw, nullRedirect, "")
+			raw = nullRedirect.ReplaceAllString(raw, " ")
 		}
 		if !containsAnyFold(raw, rule.RawPatterns) {
 			return false

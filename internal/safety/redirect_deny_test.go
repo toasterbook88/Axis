@@ -22,6 +22,14 @@ func TestNullRedirectDoesNotHideDeny(t *testing.T) {
 		// A raw device write stays denied, even next to a null redirect.
 		{"echo hi > /dev/sda", VerdictDeny},
 		{"echo hi > /dev/null > /dev/sda", VerdictDeny},
+		// Only a target of exactly /dev/null is exempt; /dev/nullb0 is a
+		// Linux null block device and a raw device write.
+		{"echo hi > /dev/nullb0", VerdictDeny},
+		{"echo hi > /dev/null > /dev/nullb0", VerdictDeny},
+		// Unchanged by this fix: the "> /dev" rules match only with a space,
+		// so no-space redirects keep their program's verdict (a known gap).
+		{"echo hi >/dev/nullb0", VerdictAllow},
+		{"make build 2>/dev/null", VerdictAllow},
 		// A null redirect on its own keeps today's verdict: it asks, not denies.
 		{"make build > /dev/null", VerdictPrompt},
 		{"ls > /dev/null", VerdictPrompt},
