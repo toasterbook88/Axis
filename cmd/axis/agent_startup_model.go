@@ -123,6 +123,11 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	}
 
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
+	mode := strings.ToLower(strings.TrimSpace(provider))
+	if explicitTarget == nil && p.Model != "" && strings.TrimSpace(cloudModel) == "" &&
+		(mode == "" || mode == "auto" || mode == "local") {
+		choices = appendExplicitAIModelChoice(p.Ctx, p.Model, p.RT, choices)
+	}
 	activeTarget, cloudOpts, readiness, err := resolveReadyStartupModelTarget(p.Ctx, p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
 	if err != nil {
 		return agentStartupBackendResult{}, ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
