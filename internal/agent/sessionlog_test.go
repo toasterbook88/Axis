@@ -261,6 +261,148 @@ func TestDailySessionLogCapsToolResults(t *testing.T) {
 
 }
 
+func TestChatStreamErrorAfterCompactionDropsThePrompt(t *testing.T) {
+	const prompt = "fresh prompt must be removed"
+	a := New(Config{
+		Model:     "test-model",
+		Backend:   compactionThenFailBackend{},
+		MaxTurns:  2,
+		MaxTokens: 200,
+		Output:    io.Discard,
+		Confirm:   func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
+		Autonomy:  AutonomyDefault,
+	})
+	for i := 0; i < 6; i++ {
+		a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "older request"})
+		a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "older answer"})
+		a.conv.Append(chat.Message{Role: chat.RoleTool, ToolCallID: "call", Content: strings.Repeat("tool output ", 40)})
+	}
+
+	if err := a.Run(context.Background(), prompt); err == nil {
+		t.Fatal("run succeeded; model failure was not exercised")
+	}
+	var sawSummary, sawPrompt bool
+	for _, message := range a.conv.Messages() {
+		if message.Role == chat.RoleUser && strings.HasPrefix(message.Content, compactedSummaryPrefix) {
+			sawSummary = true
+		}
+		if message.Role == chat.RoleUser && message.Content == prompt {
+			sawPrompt = true
+		}
+	}
+	if !sawSummary {
+		t.Fatal("compaction did not run; the prompt index was not shifted")
+	}
+	if sawPrompt {
+		t.Fatal("failed model call left the prompt in the conversation")
+	}
+}
+
+type compactionThenFailBackend struct{}
+
+func (compactionThenFailBackend) ChatStream(ctx context.Context, msgs []chat.Message, tools []chat.ToolDef, w io.Writer) (chat.Message, error) {
+	if tools == nil {
+		return chat.Message{Role: chat.RoleAssistant, Content: "older turns summarized"}, nil
+	}
+	return chat.Message{}, errors.New("model unavailable")
+}
+
+// Each emit hook must write one session-log line per event. A second call
+// after surface redaction doubled every tool record.
+func TestDailySessionLogWritesEachToolEventOnce(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenDailySessionLog(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	log.now = func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) }
+	a := newSessionLogAgent(t, log, nil, &scriptedBackend{responses: []chat.Message{
+		{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("once1", "echo_once", `{}`)}},
+		{Role: chat.RoleAssistant, Content: "done"},
+	}})
+	a.tools.allowExtra("echo_once")
+	a.tools.add("echo_once", "echo", json.RawMessage(`{"type":"object"}`), func(ctx context.Context, args json.RawMessage) (string, error) {
+		return "ok", nil
+	})
+	if err := a.Run(context.Background(), "call it once"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "agent-2026-10-21.jsonl"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	counts := map[string]int{}
+	for _, rec := range recordsOfKind(t, raw, "tool") {
+		if rec.Tool != nil && rec.Tool.ID == "once1" {
+			counts[rec.Tool.Event]++
+		}
+	}
+	for _, event := range []string{"called", "succeeded"} {
+		if counts[event] != 1 {
+			t.Fatalf("%s records = %d, want 1 (all: %v)", event, counts[event], counts)
+		}
+	}
+}
+
+// A shell start is not a result. Recording it ok=true makes a command that
+// later fails look like it already succeeded.
+func TestDailySessionLogShellStartIsNotSuccess(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenDailySessionLog(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	log.now = func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) }
+	ran := false
+	a := New(Config{
+		Model: "test-model",
+		Backend: &scriptedBackend{responses: []chat.Message{
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{
+				toolCall("sh1", "run_shell", `{"command":"echo session-log-shell-fail"}`),
+			}},
+			{Role: chat.RoleAssistant, Content: "shell failed"},
+		}},
+		MaxTurns:   4,
+		MaxTokens:  8192,
+		Output:     io.Discard,
+		Confirm:    func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
+		Autonomy:   AutonomyFull,
+		SessionLog: log,
+		RunShell: func(context.Context, string) (string, error) {
+			ran = true
+			return "", errors.New("shell exited 1")
+		},
+	})
+	if err := a.Run(context.Background(), "run the check"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !ran {
+		t.Fatal("shell runner was not called")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "agent-2026-10-21.jsonl"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var sawStart, sawFail bool
+	for _, rec := range recordsOfKind(t, raw, "tool") {
+		if rec.Tool == nil {
+			continue
+		}
+		if rec.Tool.Event == "shell" {
+			sawStart = true
+			if rec.Tool.OK {
+				t.Fatalf("shell start recorded ok before the command finished: %+v", rec.Tool)
+			}
+		}
+		if rec.Tool.Name == "run_shell" && rec.Tool.Event == "failed" {
+			sawFail = true
+		}
+	}
+	if !sawStart || !sawFail {
+		t.Fatalf("shell start=%v fail=%v", sawStart, sawFail)
+	}
+}
+
 func newSessionLogAgent(t *testing.T, log *DailySessionLog, obs Observer, backend ChatBackend) *Agent {
 	t.Helper()
 	return New(Config{

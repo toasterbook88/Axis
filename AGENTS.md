@@ -146,8 +146,8 @@ Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrC
   `stable_id`, `discovery.*`. Unknown keys are rejected.
 - `~/.axis/ai.yaml`: optional inference backends and roles (`docs/runbooks/ai-config.md`).
 - State under `~/.axis/` (owner-only `0700`/`0600`): `state.json`, `skills.json`, `snapshot.json`,
-  `ledger.json`, `events*.jsonl`, `logs/task-*.log`, `*-history.json`. Corrupt files are quarantined
-  to `.corrupt-*` and surfaced as warnings, never crashes.
+  `ledger.json`, `events*.jsonl`, `logs/task-*.log`, `logs/agent-*.jsonl`, `*-history.json`.
+  Corrupt files are quarantined to `.corrupt-*` and surfaced as warnings, never crashes.
 
 ## 7. Working style
 

@@ -219,7 +219,9 @@ func (l *DailySessionLog) noteShell(id, node, cwd, command string) {
 	} else if cwd != "" {
 		summary = "cwd=" + cwd
 	}
-	l.noteLive(sessionTool{ID: id, Name: "shell", Event: "shell", OK: true, Args: command, Summary: summary})
+	// This is the start of the command, not its result. ok stays false; the
+	// later succeeded or failed record carries the outcome.
+	l.noteLive(sessionTool{ID: id, Name: "shell", Event: "shell", Args: command, Summary: summary})
 }
 
 func (l *DailySessionLog) markMaxTurns() {
