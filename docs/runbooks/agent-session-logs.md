@@ -33,6 +33,10 @@ its per-request resolved model through this logger.
   tool-call `id` and `decision` approved, approved_for_session, denied or blocked; the result may
   come from an autonomy policy rather than the operator), approval skips, shell commands, success/failure,
   result size, timing, and a separate `output` event with result content.
+  `latency_ms` is execution time only. Time spent waiting for an approval, including
+  time queued behind other prompts, is excluded; an unanswered prompt denies after
+  600 s and that call is logged `failed` with near-zero latency, after its `denied`
+  approval record.
   Nonempty partial output is retained with `ok: false` when a tool returns an error.
   A `shell` event records execution starting with `ok: false`; completion is
   recorded separately as `succeeded` or `failed`.

@@ -341,9 +341,7 @@ func (a *Agent) askConfirm(ctx context.Context, tool, desc string, score int) Co
 	if fn == nil {
 		return ConfirmNo
 	}
-	a.confirmGate.Lock()
-	defer a.confirmGate.Unlock()
-	result := fn(tool, desc, score)
+	result := a.gatedConfirm(ctx, fn, tool, desc, score)
 	a.sessionLog.noteApproval(toolCallIDFrom(ctx), tool, result)
 	return result
 }
@@ -570,9 +568,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 					defer wg.Done()
 					sem <- struct{}{}
 					defer func() { <-sem }()
-					start := time.Now()
-					result, err := a.dispatchToolCall(ctx, tc)
-					elapsed := time.Since(start)
+					result, elapsed, err := a.timedDispatch(ctx, tc)
 					if result != "" {
 						a.sessionLog.noteToolOutput(tc.ID, tc.Function.Name, result, err == nil)
 					}
