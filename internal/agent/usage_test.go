@@ -72,7 +72,7 @@ func TestAgentUsageStatsSkipsFailedTurns(t *testing.T) {
 	// A turn that errors mid-stream must not contribute usage.
 	server := mockOllamaChat(t, [][]mockStreamChunk{
 		usageResponse(10, 5, "ok answer"),
-		[]mockStreamChunk{{Message: mockChunkMessage{Role: "assistant", Content: "partial"}, Done: false}},
+		{{Message: mockChunkMessage{Role: "assistant", Content: "partial"}, Done: false}},
 	})
 	defer server.Close()
 

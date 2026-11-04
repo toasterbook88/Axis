@@ -166,7 +166,8 @@ func localCPU(ctx context.Context) (int, string, error) {
 				}
 			}
 			if cores > 0 || model != "" {
-				return cores, model, nil
+				// Profiler reports physical cores; Go observes logical CPUs.
+				return runtime.NumCPU(), model, nil
 			}
 		}
 

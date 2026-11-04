@@ -1629,9 +1629,10 @@ func shellStopTarget(target modellife.StopTarget) string {
 	supervisorCmd := ""
 	if strings.TrimSpace(target.SupervisorUnit) != "" {
 		unit := strings.TrimSpace(target.SupervisorUnit)
-		if target.SupervisorType == "systemd-user" {
+		switch target.SupervisorType {
+		case "systemd-user":
 			supervisorCmd = fmt.Sprintf("systemctl --user stop %s 2>/dev/null || true; ", shellQuote(unit))
-		} else if target.SupervisorType == "systemd-system" {
+		case "systemd-system":
 			supervisorCmd = fmt.Sprintf("systemctl stop %s 2>/dev/null || true; ", shellQuote(unit))
 		}
 	}

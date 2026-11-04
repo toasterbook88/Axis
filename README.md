@@ -23,7 +23,7 @@ Install to `~/.local/bin` (no `sudo`), then check the binary. macOS and Linux on
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.19.6 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.20.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -101,11 +101,19 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 | Platforms | macOS and Linux, amd64 and arm64. **Windows is not supported.** |
 | Installer | `bash`, `curl`, and `sha256sum` or `shasum` |
 | Cluster | Key-based SSH from this machine to every node in `nodes.yaml` |
-| Source builds | Go 1.26.9 or newer and `make`. Go 1.21+ downloads 1.26.9 itself unless `GOTOOLCHAIN=local` is set. |
+| Source builds | Go 1.26.10 or newer and `make`. Go 1.21+ downloads 1.26.10 itself unless `GOTOOLCHAIN=local` is set. |
 
 ## Install
 
 > [!IMPORTANT]
+For v0.20.0's terminal entry point, private logging policy and
+compatibility changes, see the [v0.20.0 upgrade guide](docs/release-notes.md#v0200-upgrade-guide).
+The [v0.21.0 upgrade guide](docs/release-notes.md#v0210-upgrade-guide) covers
+Cortex endpoint selection, tool approval scope and streamed usage reporting.
+The [v0.22.0 candidate guide](docs/release-notes.md#v0220-upgrade-guide) covers
+MCP approval in every mode, route upstream checks and the cluster agent mode;
+consult GitHub Releases for published downloads.
+
 > Use v0.19.6 or later. Git history was rewritten on 2026-10-12, and v0.9.0 through v0.19.5 are retracted in `go.mod`.
 
 The [Quick start](#quick-start) command is the recommended install. Other options:
@@ -115,7 +123,7 @@ The [Quick start](#quick-start) command is the recommended install. Other option
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.19.6 AXIS_REQUIRE_PINNED=1 bash
+  | AXIS_VERSION=v0.20.0 AXIS_REQUIRE_PINNED=1 bash
 ```
 
 A system install may remove verified user-local AXIS copies so only one `axis` is on `PATH`. Set `AXIS_KEEP_LEGACY=1` to keep them.
@@ -163,7 +171,7 @@ Preview an install without writing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.19.6 bash
+  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.20.0 bash
 ```
 
 </details>
@@ -174,7 +182,7 @@ curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh 
 The installer already checks `checksums.txt`. Release archives also carry GitHub build-provenance attestations. With GitHub CLI 2.49 or newer:
 
 ```bash
-gh attestation verify axis_0.19.6_linux_amd64.tar.gz --repo toasterbook88/Axis
+gh attestation verify axis_0.20.0_linux_amd64.tar.gz --repo toasterbook88/Axis
 ```
 
 </details>
@@ -239,8 +247,10 @@ axis daemon status
 | `axis daemon` | `status`, `refresh`, `invalidate`, `restart`, `service install\|status\|uninstall` |
 | `axis serve` | Local HTTP API (foreground; Unix socket by default) |
 | `axis mesh` | Gossip mesh diagnostics: `status`, `peers` |
-| `axis tui` | Full-screen cluster dashboard (also bare `axis` on a TTY) |
+| `axis tui` | Full-screen workspace: agent conversation, live cluster sidebar, dashboard on F2 |
 | `axis update` | Self-update from GitHub Releases |
+
+On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, it prints help.
 
 </details>
 
@@ -293,7 +303,7 @@ To roll back, re-run the installer with the tag you want. It replaces an existin
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.19.6 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.20.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -329,8 +339,8 @@ For a system-wide install, remove `/usr/local/bin/axis` with `sudo` instead.
 
 | Item | Value |
 | --- | --- |
-| Latest release | [**v0.19.6**](https://github.com/toasterbook88/axis/releases/tag/v0.19.6) (tag commit `990a836`) |
-| Supported security line | `v0.19.x` (see [`SECURITY.md`](SECURITY.md)) |
+| Latest release | [**v0.20.0**](https://github.com/toasterbook88/axis/releases/tag/v0.20.0) (tag commit `951550e`) |
+| Supported security line | `v0.20.x` (see [`SECURITY.md`](SECURITY.md)) |
 | Release builds | darwin and linux × amd64 and arm64 (reproducible GoReleaser builds) |
 
 ## Build and test

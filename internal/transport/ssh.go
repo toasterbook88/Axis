@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -24,29 +25,56 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// runSSHConfigCommand passes -F $HOME/.ssh/config only when $HOME is not the
+// passwd home: ssh finds its user config through the passwd entry, and -F
+// keeps config and keys from the same home but hides the system-wide
+// ssh_config. Without -F, OpenSSH also permission-checks the config files, so
+// a failed run is retried once with -F to keep today's result.
 var runSSHConfigCommand = func(ctx context.Context, host string, port int, user string) (string, error) {
-	args := []string{"-G"}
+	base := []string{"-G"}
 	if port > 0 {
-		args = append(args, "-p", strconv.Itoa(port))
+		base = append(base, "-p", strconv.Itoa(port))
 	}
 	if user != "" {
-		args = append(args, "-l", user)
+		base = append(base, "-l", user)
 	}
 	home, _ := os.UserHomeDir()
+	configPath := ""
 	if home != "" {
-		configPath := filepath.Join(home, ".ssh", "config")
-		if _, err := os.Stat(configPath); err == nil {
-			args = append(args, "-F", configPath)
+		if p := filepath.Join(home, ".ssh", "config"); fileExists(p) {
+			configPath = p
 		}
 	}
-	args = append(args, host)
-
-	cmd := exec.CommandContext(ctx, "ssh", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
+	run := func(withF bool) (string, error) {
+		args := append([]string(nil), base...)
+		if withF {
+			args = append(args, "-F", configPath)
+		}
+		out, err := exec.CommandContext(ctx, "ssh", append(args, host)...).Output()
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
 	}
-	return string(out), nil
+
+	if configPath == "" {
+		return run(false)
+	}
+	if !homeIsPasswdHome(home) {
+		return run(true)
+	}
+	out, err := run(false)
+	if err == nil {
+		return out, nil
+	}
+	slog.Warn("transport: ssh -G without -F failed; retrying with -F, so the system-wide ssh_config is not read",
+		"host", host, "error", err)
+	return run(true)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 type resolvedSSHConfig struct {
@@ -59,6 +87,8 @@ type resolvedSSHConfig struct {
 	HostKeyAlias         string
 	HostKeyAlgorithms    []string
 	Port                 int
+	ProxyJump            string
+	ProxyCommand         string
 }
 
 // sshConfigLease owns the short-lived resources needed to authenticate one
@@ -281,7 +311,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	var err error
 
 	// 1. Try the dynamic fast-path (ResolvedDialTarget) first
-	if e.ResolvedDialTarget != "" {
+	if e.ResolvedDialTarget != "" && unsupportedDirective(resolved, e.Host) == nil {
 		dialAddr := net.JoinHostPort(e.ResolvedDialTarget, strconv.Itoa(resolvedPort(resolved, e.Port)))
 		sshConn, chans, reqs, handshakeLatencyMs, err = tryDialWithConfig(
 			dialAddr, resolved, hostKeyAddr,
@@ -300,7 +330,7 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 	if sshConn == nil {
 		candidates := []string{e.Host}
 		candidates = append(candidates, e.DialFallbacks...)
-		var lastErr error
+		var lastErr, lastDialErr, refusal error
 		for i, hostCand := range candidates {
 			hostCand = strings.TrimSpace(hostCand)
 			if hostCand == "" {
@@ -312,6 +342,13 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 				if hostCand != e.Host {
 					candResolved = e.resolveSSHConfigForHost(ctx, hostCand)
 				}
+			}
+			if err := unsupportedDirective(candResolved, hostCand); err != nil {
+				if refusal == nil {
+					refusal = err
+				}
+				lastErr = err
+				continue
 			}
 			dialHost := resolvedDialHost(candResolved, hostCand)
 			logicalAddr := net.JoinHostPort(dialHost, strconv.Itoa(resolvedPort(candResolved, e.Port)))
@@ -327,9 +364,16 @@ func (e *SSHExecutor) Connect(ctx context.Context) error {
 				break
 			}
 			lastErr = err
+			lastDialErr = err
 			sshConn = nil
 		}
 		if sshConn == nil {
+			if refusal != nil && lastDialErr != nil {
+				return fmt.Errorf("%w; %w", lastDialErr, refusal)
+			}
+			if refusal != nil {
+				return refusal
+			}
 			if lastErr != nil {
 				return lastErr
 			}
@@ -756,6 +800,7 @@ func (e *SSHExecutor) resolveSSHConfig(ctx context.Context) resolvedSSHConfig {
 func (e *SSHExecutor) resolveSSHConfigForHost(ctx context.Context, host string) resolvedSSHConfig {
 	output, err := runSSHConfigCommand(ctx, host, e.Port, e.User)
 	if err != nil {
+		slog.Warn("transport: ssh -G failed; using built-in defaults", "host", host, "error", err)
 		return resolvedSSHConfig{}
 	}
 	return parseSSHConfigDump(output)
@@ -784,6 +829,10 @@ func parseSSHConfigDump(output string) resolvedSSHConfig {
 			}
 		case "hostkeyalias":
 			resolved.HostKeyAlias = values[0]
+		case "proxyjump":
+			resolved.ProxyJump = unlessNone(strings.Join(values, " "))
+		case "proxycommand":
+			resolved.ProxyCommand = unlessNone(strings.Join(values, " "))
 		case "hostkeyalgorithms":
 			resolved.HostKeyAlgorithms = appendAlgorithmValues(resolved.HostKeyAlgorithms, values...)
 		case "identityfile":
@@ -883,6 +932,77 @@ func appendAlgorithmValues(existing []string, values ...string) []string {
 		}
 	}
 	return existing
+}
+
+func unlessNone(value string) string {
+	if strings.EqualFold(value, "none") {
+		return ""
+	}
+	return value
+}
+
+// SSHTarget is what `ssh -G` resolves a host to. Transport dials Hostname and
+// Port as User, and checks known_hosts under HostKeyAlias when it is set. It
+// refuses a host whose config sets ProxyJump or ProxyCommand
+// (UnsupportedSSHDirectiveError); they are reported so callers can tell when
+// the operator's ssh would reach a different machine. It resolves through
+// runSSHConfigCommand, so it reads the system-wide ssh_config exactly when
+// transport does.
+type SSHTarget struct {
+	Hostname     string
+	Port         int
+	User         string
+	HostKeyAlias string
+	ProxyJump    string
+	ProxyCommand string
+}
+
+// ResolveSSHTarget runs `ssh -G` for host with port and user, as transport does
+// before dialing. Unlike transport, it returns the command's error instead of
+// falling back to defaults.
+func ResolveSSHTarget(ctx context.Context, host string, port int, user string) (SSHTarget, error) {
+	output, err := runSSHConfigCommand(ctx, host, port, user)
+	if err != nil {
+		return SSHTarget{}, err
+	}
+	resolved := parseSSHConfigDump(output)
+	return SSHTarget{
+		Hostname:     resolved.Hostname,
+		Port:         resolved.Port,
+		User:         resolved.User,
+		HostKeyAlias: resolved.HostKeyAlias,
+		ProxyJump:    resolved.ProxyJump,
+		ProxyCommand: resolved.ProxyCommand,
+	}, nil
+}
+
+// UnsupportedSSHDirectiveError reports that the operator's SSH config routes
+// Host through a directive the in-process client does not implement. Connect
+// returns it without dialing, so the node is never reached around that route.
+// Only directives ssh -G reports are seen. The system-wide ssh_config is not
+// read when $HOME differs from the /etc/passwd home, when the uid has no
+// /etc/passwd entry, or when OpenSSH rejects a config file's permissions
+// (runSSHConfigCommand then uses -F ~/.ssh/config).
+type UnsupportedSSHDirectiveError struct {
+	Host      string
+	Directive string
+}
+
+func (e *UnsupportedSSHDirectiveError) Error() string {
+	return fmt.Sprintf("ssh %s: SSH config sets %s, which Axis transport does not support, so Axis did not dial it; "+
+		"point the node's hostname or an endpoint at an address Axis can reach directly, and if the directive "+
+		"comes from a wildcard Host block, add \"%s none\" in a more specific Host block placed before it",
+		e.Host, e.Directive, e.Directive)
+}
+
+func unsupportedDirective(resolved resolvedSSHConfig, host string) error {
+	switch {
+	case resolved.ProxyJump != "":
+		return &UnsupportedSSHDirectiveError{Host: host, Directive: "ProxyJump"}
+	case resolved.ProxyCommand != "":
+		return &UnsupportedSSHDirectiveError{Host: host, Directive: "ProxyCommand"}
+	}
+	return nil
 }
 
 func resolvedDialHost(resolved resolvedSSHConfig, fallback string) string {

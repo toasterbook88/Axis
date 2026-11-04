@@ -259,6 +259,78 @@ func TestMeshPortCheck(t *testing.T) {
 	}
 }
 
+// A daemon on another address does not own this socket, but it still binds
+// the host-wide gossip port, so the mesh check must count it.
+func TestDaemonOwnershipMeshCountsDaemonsOnOtherAddresses(t *testing.T) {
+	procs := []doctorDaemonProc{
+		{PID: 2265, Exe: "/usr/local/bin/axis", Addr: testSock},
+		{PID: 9001, Exe: "/usr/local/bin/axis", Addr: "/root/.axis/axis.sock"},
+	}
+	bound := doctorMeshPortState{Port: 42426, Enabled: true, Bound: true}
+	checks := daemonOwnershipChecks(procs, nil, ownedSocket(), bound)
+
+	if got := findCheck(t, checks, "Daemon processes").Status; got != "pass" {
+		t.Fatalf("socket ownership is still single: status = %q", got)
+	}
+	mesh := findCheck(t, checks, "Mesh UDP port")
+	if mesh.Status != "warn" {
+		t.Fatalf("status = %q, want warn (%s)", mesh.Status, mesh.Message)
+	}
+	for _, want := range []string{"pid 2265 on " + testSock, "pid 9001 on /root/.axis/axis.sock"} {
+		if !strings.Contains(mesh.Message, want) {
+			t.Errorf("message %q missing %q", mesh.Message, want)
+		}
+	}
+}
+
+func TestListSystemDaemonUnits(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"legacy-axis.service":       "[Service]\nExecStart=/usr/local/bin/axis serve --addr /home/op/.axis/axis.sock\n",
+		"prefixed.service":          "[Service]\nExecStart=-/usr/local/bin/axis daemon start\n",
+		"managed.service":           "# Managed by AXIS.\n[Service]\nExecStart=/usr/local/bin/axis daemon start\n",
+		"mcp.service":               "[Service]\nExecStart=/usr/local/bin/axis mcp serve\n",
+		"unrelated.service":         "[Service]\nExecStart=/usr/bin/dockerd\n",
+		"retired.service.disabled":  "[Service]\nExecStart=/usr/local/bin/axis serve\n",
+		"axis-dashboard.service":    "[Service]\nExecStart=/usr/bin/python3 -m http.server\n",
+		"empty-execstart.service":   "[Service]\n",
+		"quoted-path-axis.service":  "[Service]\nExecStart=\"/opt/my apps/axis\" serve\n",
+		"not-axis-binary.service":   "[Service]\nExecStart=/usr/local/bin/axisd serve\n",
+		"masked-or-unreadable.conf": "[Service]\nExecStart=/usr/local/bin/axis serve\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := listSystemDaemonUnits(dir)
+	want := []string{
+		filepath.Join(dir, "legacy-axis.service"),
+		filepath.Join(dir, "prefixed.service"),
+		filepath.Join(dir, "quoted-path-axis.service"),
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestSystemDaemonUnitCheck(t *testing.T) {
+	units := []string{"/etc/systemd/system/legacy-axis.service"}
+	if got := systemDaemonUnitCheck(nil, true); got != nil {
+		t.Fatalf("no units: expected no check, got %+v", got)
+	}
+	if got := systemDaemonUnitCheck(units, false); got != nil {
+		t.Fatalf("no managed user service to race: expected no check, got %+v", got)
+	}
+	got := systemDaemonUnitCheck(units, true)
+	if len(got) != 1 || got[0].Status != "warn" {
+		t.Fatalf("expected one warn check, got %+v", got)
+	}
+	if !strings.Contains(got[0].Message, units[0]) || got[0].Fix != "keep one owner: sudo systemctl disable --now legacy-axis.service" {
+		t.Fatalf("unexpected check %+v", got[0])
+	}
+}
+
 func TestDaemonServeAddr(t *testing.T) {
 	tests := []struct {
 		name     string

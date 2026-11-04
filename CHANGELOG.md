@@ -1,15 +1,459 @@
 ## Unreleased
 
+### Features
+
+* `axis init --generate` reports `nodes.yaml` additions from Tailscale without
+  writing anything. It proposes tailnet machines that are not configured, each
+  with a YAML block to paste under `nodes:`, and lists offline and skipped peers
+  and configured nodes this machine does not see. Matching uses the addresses
+  AXIS would dial (`ssh -G`, then DNS), never names or LAN endpoints alone; a
+  proposed hostname that SSH config would redirect is withheld or flagged
+  unsafe; a stopped or disconnected Tailscale exits 1 without calling any node
+  missing. `--format json` gives the same report for agents. Design:
+  `docs/superpowers/specs/2026-10-31-nodes-yaml-generate-design.md`.
+* `axis tui` is now a full-screen workspace in the style of OpenCode: the
+  `axis agent` conversation fills the main pane and a sidebar shows cluster
+  health, every node's RAM use and the snapshot's alerts. The conversation is
+  the same in-process agent and startup path as `axis agent` (streaming, tool
+  cards, approvals, `/model`, `/skills`, `/mcp`, `@node` completion), hosted
+  by a new embedded console mode that draws the transcript in-frame
+  (`pgup`/`pgdown` scroll; colored bars mark operator, tool, reasoning,
+  approval and error entries). `ctrl+o` opens a command palette and `ctrl+x`
+  is a leader key (`d` dashboard, `p` place, `m` model, `b` sidebar, `q`
+  quit). `F2` toggles the dashboard; `a` there returns to the conversation
+  with `@node` prefilled. `--model` and `--autonomy` pass through to the
+  agent; `axis tui --dashboard` opens only the dashboard.
+  User guide: `docs/runbooks/tui.md`; design record:
+  `docs/decisions/tui-agent-workspace.md` (supersedes the "`axis tui` stays
+  observational" part of `agent-surface-transcript-model.md`).
+* `axis tui` dashboard redesign. Every frame fits the terminal exactly at any size: the
+  node table drops low-priority columns on narrow terminals and scrolls when
+  there are more nodes than rows, and the inspector fills the remaining height.
+  The header shows reachable/total nodes, the snapshot's age (colored as it
+  goes stale), its source and the version. A summary strip shows cluster
+  memory and the warning count. Gauges show percentages. `?` opens a help
+  overlay. `g`/`G`, `tab`/`shift+tab` and page keys move faster. The placement
+  wizard is centered. Terminals without Unicode (`TERM=linux`, a C locale) get
+  a pure-ASCII frame.
+
 ### Fixes
 
-* Placement excludes nodes that cannot cover guarded execution's reservation
-  request before ranking. Placement and explanation output share exclusion
-  reasons; execution retains its dispatch-time checks and ledger authority.
-* The llama.cpp probe no longer sends keyed requests to servers that require
-  an API key. A server started with `--api-key` or `--api-key-file`, or one
-  that answers `/props` with 401/403, is reported from `/health` alone, with
-  an `auth` provenance entry instead of a context window or served name.
-  Previously every fact sweep produced two rejected requests per keyed server.
+* **Behaviour change:** SSH transport refuses a host whose SSH config sets
+  `ProxyJump` or `ProxyCommand`, instead of silently dialing its `HostName`
+  directly. `Connect` returns `transport.UnsupportedSSHDirectiveError`, naming
+  the directive and the host, before any TCP dial, and moves on to the next
+  dial fallback; a fallback with no directive still connects. A setup that
+  applies a proxy directive to hosts AXIS could reach directly (for example
+  `Host *` with `ProxyJump`) worked by accident and now fails until those
+  hosts get `ProxyJump none` or `ProxyCommand none` in a more specific `Host`
+  block. `axis doctor` gives that remediation, and `axis init --generate` flags
+  such proposals `...; Axis transport refuses it`. A directive set only in the
+  system-wide `ssh_config` is not seen when `$HOME` differs from the
+  `/etc/passwd` home, when there is no `/etc/passwd` entry, or when OpenSSH
+  rejects a config file's permissions. Design:
+  `docs/superpowers/specs/2026-11-01-ssh-proxy-directives-design.md`.
+
+* **Behaviour change:** `ssh -G` now reads the system-wide `ssh_config` when
+  `$HOME` is this user's `/etc/passwd` home, as the operator's own `ssh`
+  does. Before, AXIS passed `-F ~/.ssh/config` whenever that file existed,
+  which hid the system file. So hosts matched by a `ProxyJump` or
+  `ProxyCommand` in the system-wide `ssh_config` are now refused; they worked
+  by accident and now fail until a more specific `Host` block in
+  `~/.ssh/config` sets `ProxyJump none` or `ProxyCommand none`. With `$HOME`
+  overridden, or when OpenSSH rejects a config file's permissions (a run
+  without `-F` checks them), AXIS uses `-F ~/.ssh/config` as before and logs a
+  warning for the second case. Design:
+  `docs/superpowers/specs/2026-11-01-ssh-config-system-file-design.md`.
+
+* `axis init`'s "Scan AXIS beacons" now listens with the discovery secret and
+  UDP port of the configuration being edited. It used no secret and port 42424,
+  so in a cluster where discovery is secured (the wizard always generates a
+  secret) every signed beacon was rejected and the scan found nothing. A
+  listener that cannot bind is now reported as "Beacon scan unavailable"
+  instead of an empty result.
+* Two AXIS processes granting or releasing leases at the same time no longer
+  lose or overcount each other's reservations. Each ledger admitted against
+  the entries it had loaded earlier (`axis task run` at start, the daemon at
+  its last refresh) and then wrote its whole copy back, so a concurrent lease
+  could be admitted over the node's ceiling, and a write could erase another
+  process's lease or bring back one it had released. `Reserve`, `Release`,
+  `Heartbeat` and `Reclaim` now re-read the ledger file under the file lock
+  before changing it. Releasing a lease that another process already removed
+  is no longer an error, even after a heartbeat in between. A lease whose
+  write to disk fails is now refused and rolled back instead of being
+  reported as granted. A ledger file with a null entry is rejected by every
+  reader instead of panicking with the ledger locked.
+* Leases granted outside the daemon now respect each node's
+  `system_reserve_mb`. `axis task run`, the agent's execution path and the MCP
+  lease tool built their reservation ledgers with node capacities only, so they
+  held back the default 1024 MB instead of the configured reserve and could
+  grant leases over the node's ceiling; only the daemon's ledger applied it.
+  All four now share `Ledger.SetNodeLimits`. Found by Copilot's review of the
+  resident memory services runbook.
+* The dead-upstream check behind a LiteLLM hub (`axis ai route`, MCP
+  `inference_route_explain`) no longer misjudges four shapes:
+  * MCP now resolves a backend's `node:` through `nodes.yaml` as the CLI does,
+    so a hub bound by its logical name is checked instead of reported healthy.
+  * A hub without `node:` at a private address is no longer assumed to be on
+    this machine; its upstreams are left unchecked unless the URL names this
+    machine (loopback, a local address, or the exact hostname: a qualified
+    name sharing only a first label does not count).
+  * An `api_base` with an API prefix other than `/v1` (such as `/api`) is
+    listed at `<api_base>/models` after a 404 at `/v1/models`.
+  * A model with a deployment that has no `api_base` (a provider default) is
+    no longer rejected because its custom deployment is down; the check
+    reports "not checked" instead.
+* `axis tui` no longer shows cluster state the snapshot does not contain. The
+  link column names the observed network class (`relayed`, `vpn`, `unknown`,
+  `not observed`) instead of calling every non-Tailscale path `LAN`. The
+  Reservations tab shows the snapshot's reserved RAM instead of a hard-coded
+  "No active reservations". Unreachable nodes show their error instead of
+  empty gauges, and snapshot warnings and partial-probe reasons appear on the
+  node they concern.
+* `axis tui` no longer starts an extra 30 s refresh timer each time `r` is
+  pressed. Refresh ticks from a superseded cycle are dropped.
+* `axis tui` keys typed quickly (delivered as one multi-rune message, such as
+  `jjG`) now each act as their own key instead of being ignored.
+* `hack/verify-public-boundary.sh` no longer passes when it cannot list
+  tracked files. Run outside a git work tree (for example in a `git archive`
+  extract) it scanned nothing and printed "passed"; it now fails, as it does
+  when git tracks no files. Regression tests cover both.
+* Model matching in routing no longer treats two different tags of one model
+  as the same model: a role asking for `coder:small` is no longer satisfied
+  by a hub that lists only `coder:large`. A name without a tag still matches
+  any tag of that name, and a registry port is not a tag. Found by the Copilot
+  review of #577 after it merged (#590).
+
+### Documentation
+
+* `docs/runbooks/node-addresses-and-ssh.md`: how AXIS picks a node's dial
+  address (endpoints in order, then `hostname`), what it reads from and
+  refuses in SSH config, how `axis doctor` and `axis init --generate` show
+  address drift, and how to repair a node (LAN endpoint first, then
+  Tailscale). Linked from the operator quickstart.
+
+* `docs/runbooks/resident-memory-services.md` explains how to keep a resident
+  cache or scratch store's RAM cap out of placement with a node's
+  `system_reserve_mb`, which was undocumented. The reserve is a ceiling on
+  AXIS's reservations, so it must cover all non-AXIS use at its peak (other use
+  plus the service's cap plus a margin), not only OS headroom. New tests pin
+  that the largest accepted task leaves room for the cap, that the reserve is
+  not subtracted from free RAM, that ranking ignores the reported eviction
+  floor, and that `nodes.yaml`'s value reaches the facts.
+
+### Dependencies and CI
+
+* `go run hack/verify-import-tiers.go` fails CI when an `internal/` package
+  imports a package in a higher tier of the `AGENTS.md` §4 layout. The layout
+  is read from `AGENTS.md` itself, so it has one home; exceptions need a
+  rationale in `hack/import-tiers-allowlist.txt`, and stale ones fail. The
+  layout now matches the code: `knowledge` is Layer 5, `reservation` and
+  `skills` are Layer 2, leaving three allowlisted exceptions. It replaces the
+  package-inventory check in `verify-doc-facts.sh` (#585).
+* `go run hack/verify-specs.go` fails CI when a feature spec in
+  `docs/superpowers/specs/` does not record its reviews as `AGENTS.md` §8
+  requires: required sections, one `Kind:` block per review with every field,
+  findings numbered without a restart, a status on every finding and question,
+  and no `revise` as the last spec or diff review. Prose reviews outside a block
+  fail. Three specs written before the format are named exceptions.
+  `verified: <how>` is now a question status in §8, the review prompt and the
+  PR template.
+
+### Dependencies and CI
+
+* `hack/pr-review-cycle.sh` waits for requested reviews instead of only
+  sleeping a fixed 2 minutes: after the 120 s floor it polls until no requested
+  reviewer is pending, up to `--wait-reviews` (default 20 minutes), and exits 3
+  with the pending list if one still is. A reviewer counts as pending while it
+  is requested or its latest request has no later review. A failed or
+  malformed read fails closed. `--allow-pending LOGIN` waives a reviewer that
+  will not answer (#588). On #577 Copilot's review arrived 6.7 minutes after CI and 9
+  seconds after the merge.
+
+## v0.22.0 (2026-10-28)
+
+A cluster-only agent mode, an explicit spread placement objective, model
+routing that checks the server behind a listed model, restart-loop reporting in
+`axis doctor`, and approval fixes for external MCP tools. See the
+[upgrade guide](docs/release-notes.md#v0220-upgrade-guide) for behavior that
+changes for existing setups. Publication and available downloads are tracked
+on GitHub Releases.
+
+### Features
+
+* `axis agent --autonomy cluster` (and `/autonomy cluster`) limits the agent to
+  the AXIS cluster tools: `axis_status`, `axis_facts`, `axis_models`,
+  `axis_place` and `axis_reservations`. Workspace, git, MCP and `todo` tools,
+  and dynamically granted extras, are hidden and refused if called. It uses the
+  existing scope path; there is no new flag or second gate (#566). The session
+  banner names the mode (#570).
+* Placement accepts an explicit `spread` objective: `axis task place` and
+  `axis placement explain` take `--objective capacity|spread`, HTTP
+  `/v2/placement/dry-run` and `/v2/batch/place` take an `objective` field, and
+  the MCP `placement_decision` / `simulate_workload_plan` tools and agent
+  `axis_place` take an optional `objective`. Spread ranks feasible nodes by the
+  resulting cluster reservation-share spread (`reservation_skew`, lower wins).
+  The default `capacity` objective is unchanged (#567).
+* `axis doctor` adds a Linux **Service restart loops** check. It reads restart
+  counters for every loaded system and user service (read-only, 5 s per scope)
+  and warns about units with more than 20 restarts that are looping now:
+  restarting, failed, or active for less than five minutes. Such units are never
+  `failed`, so other checks miss them. A unit that looped once and has run
+  cleanly since is not flagged (#573, #575).
+
+### Fixes
+
+* `axis ai route` (and the MCP `inference_route_explain` tool) no longer calls a
+  model healthy only because the hub lists it. For a LiteLLM-style hub on the
+  same machine, it reads the model's upstream servers from the hub's
+  `/model/info` and asks each for its model list (2 s, no prompt). When none
+  answers, the hub is skipped like an unhealthy backend, the reasoning names the
+  upstream and its error, and strict mode fails with
+  "(listed, but no upstream answers)". Checks appear in the new `upstreams`
+  field. Hubs on another node, or without `/model/info`, are not checked and
+  say so (#577).
+* External MCP tools that are not on `mcp_servers.<server>.auto_approve_tools`
+  ask the operator in every autonomy mode. AXIS cannot rate them, and a score of
+  zero let them run without a prompt under `edit`, `full` and `--auto-approve`
+  (#560).
+* `--auto-approve` stays in effect after the console installs its approval
+  prompt. It was dropped at startup, so default mode asked about every tool
+  (#574).
+* The `run_shell` tool description no longer tells the model that destructive
+  commands are blocked; it states what the safety gate does and names its known
+  gaps. Wording only; the gate is unchanged (#565).
+* The HTTP API refuses to start on a TCP address without an API token. A Unix
+  socket is unchanged, and `axis serve` always has a token (#576).
+* Task history and execution observations record task-attributed VRAM: only GPU
+  memory used by processes in the task's process tree, from
+  `nvidia-smi --query-compute-apps`. VRAM was stored as 0 because of an ordering
+  bug, and device-wide memory would have charged resident models to every task.
+  With no per-process accounting the value stays 0, meaning not observed (#561).
+* `axis agent` startup keeps a probed hub role instead of taking another node's
+  Ollama model when the startup model name is not a usable catalog choice; a
+  notice names any remaining borrow (#558). Unnamed local startup takes the
+  first usable local catalog row, in catalog order (#559).
+* `sudo axis update` restarts the invoking user's AXIS-managed service (systemd
+  user unit or launchd agent) instead of spawning `axis serve` as root on
+  root's socket. That root daemon was unsupervised, outlived the update and
+  contended with the user's daemon for the mesh gossip port. With no active
+  service for the invoking user, the update now prints how to restart as that
+  user and never starts a root daemon. Readiness is read from `/health`, since
+  root does not hold the owner's API token (#571).
+* `axis doctor` counts every axis daemon on the host for the mesh UDP port
+  check, not only those on the configured socket, and lists each daemon's pid
+  and address when more than one is running (#571).
+* `axis doctor` and `axis daemon service install` warn about system units that
+  start an axis daemon outside the AXIS-managed user service. At boot such a
+  unit races the user service for the socket and mesh port, and the loser
+  restarts forever (#571).
+
+### Observability
+
+* The daemon logs a warning with the trigger, duration and error when a
+  snapshot refresh fails; success is logged at debug level (#562).
+* The HTTP API accepts or generates an `X-Request-ID`, echoes it on every
+  response and logs one line per request (method, path without query, status,
+  duration); 5xx responses log at warning level (#563).
+* Fact collection logs a warning when `ssh -G` fails and built-in SSH defaults
+  are used (#564).
+
+### Dependencies and CI
+
+* `github.com/mark3labs/mcp-go` 1.4.0 (#568); GitHub Actions minor updates
+  (#569). Restart-path tests no longer reach the real service manager (#572).
+* `make lint` pins staticcheck 2026.2.2, the first release that reads the
+  export data Go 1.27.2 writes. With 2025.1.1, lint failed on any machine with
+  Go 1.27.2 while CI, on go.mod's Go 1.26.10, passed (#578).
+* `TestA2ASlice2E2E` writes its artifact to a temporary directory; the tracked
+  `artifacts/` copies are written only with `AXIS_A2A_E2E_ARTIFACTS=1`, which
+  `hack/a2a-slice2-e2e.sh` sets. Running the tests no longer dirties the tree
+  (#579).
+* govulncheck is pinned at v1.9.0 in CI, the release workflow and
+  `hack/release-preflight.sh`. v1.1.4 crashed parsing Go 1.27 source on any
+  machine whose local Go is newer than go.mod's (#580).
+
+## v0.21.0 (2026-10-23)
+
+Explicit Cortex service addressing, tighter agent approvals, more complete
+streaming usage reports and cache-friendly request context. See the
+[upgrade guide](docs/release-notes.md#v0210-upgrade-guide) for configuration
+and log-reader compatibility. Publication and available downloads are tracked
+on GitHub Releases.
+
+### Features
+
+* `axis cortex` accepts `AXIS_CORTEX_URL` to address an HTTP(S) MCP service
+  independently of the node's SSH identity. A URL with no path gets `/mcp`;
+  invalid nonempty overrides fail instead of falling back. Embedded credentials,
+  query strings and fragments are rejected. Existing authentication, TLS trust,
+  timeouts and cancellation still apply (#554).
+* Optional `AXIS_CORTEX_QDRANT_URL` provides a REST base URL for memory counts
+  with an explicit MCP endpoint. Status prints the probed endpoint and reports
+  `memories_unknown: true` when a count cannot be observed, including failure
+  on the legacy node-derived path. A missing or null count is no longer
+  presented as a measured zero (#554).
+* Private `turn.finished` session-log records explicitly include
+  `usage_reported`. False means no nonzero usage reached the agent; absent
+  counters are unknown cost. An explicit zero/zero report also maps to false
+  through the current count-based interface; older records omit the field
+  (#555).
+
+### Fixes
+
+* `axis agent` asks OpenAI-style servers for token usage in streamed replies
+  (`stream_options.include_usage`). Without it, OpenAI and LiteLLM send no
+  usage, so session stats and the private session log had no token counts. A
+  server that rejects the option is retried once without it, and the backend
+  stops sending it.
+* `axis agent` also reads token usage sent on a stream chunk that still
+  carries a choice (`choices: [{"delta": {}}]`), as some OpenAI-compatible
+  servers do, instead of only on a chunk with an empty `choices` list. That
+  usage was dropped, so the session log still had no token counts and the
+  session summary showed an estimate. Usage is now counted once per reply,
+  from the last report.
+* `axis agent` "always" approval now covers only the tool it was given for.
+  It used to approve every tool for the rest of the session, so approving one
+  read-only MCP query also let later MCP writes and shell, node, fleet and
+  background commands run without asking (safety-blocked commands still asked).
+  Sub-agents inherit the same per-tool approvals. "Never" still blocks every
+  tool, including ones approved "always" earlier.
+* The console approval prompt marks external MCP tools `[NOT RATED]` and says
+  AXIS cannot rate them, instead of a green `[LOW RISK]` badge with
+  "no gate finding" for a tool that may change shared state.
+* Approval decisions are written to the private session log (`approval`
+  events with the tool-call ID), so a review can tell what was approved.
+* `axis agent` no longer gets stuck after a tool returns no output. An empty
+  tool result was sent as an empty message; servers that reject those (LiteLLM:
+  "All non-assistant messages must contain 'content'") failed the request, the
+  empty message stayed in history, and every later prompt failed. Empty tool
+  results are now stored as `(tool returned no output)`, and empty tool or user
+  messages already in history (including resumed sessions) are filled when a
+  request is built.
+* `axis agent` sends today's local date with each prompt, so the model does not
+  guess dates for date arguments. It goes with the user message, not the system
+  prompt, so prompt-cache reuse is unchanged.
+
+### Performance
+
+* `axis agent` sends the session-start cluster summary (node count, free RAM)
+  with the newest user message instead of in the system prompt. Free RAM differs
+  every session, so the stable prefix from #539 still missed the cache between
+  separate runs. Measured with a 27B local model: a short run after the first
+  took 3.6 s instead of 20 s (about 1.1k prompt tokens re-read instead of 12.4k).
+* `axis agent` also sends the session-start git context (branch, HEAD commit,
+  clean or dirty file count) with the user message instead of in the system
+  prompt. Editing one file or committing between runs changed it, so the
+  system prompt still missed the cache while working in a repository.
+  These measurements describe a particular backend and workload; this release
+  does not guarantee cache reuse or a fixed speedup. The cluster and Git fields
+  are captured at session startup, rather than refreshed by these changes.
+
+### Maintenance
+
+* The model-eviction freeze regression asserts the exact `800 MiB` rendering,
+  preventing an unrelated `800` in the output from hiding a failure (#556).
+* Installation and support documentation were aligned with the published
+  v0.20.0 baseline; a source version bump does not make new downloads available
+  before publication (#548).
+
+## v0.20.0 (2026-10-22)
+
+Twenty-one feature, fix, documentation and dependency PRs merged since v0.19.6,
+plus release preparation. See [upgrade notes](docs/release-notes.md#v0200-upgrade-guide)
+for the changed terminal entry point, private session logging and JSON contracts.
+
+### Features
+
+* **Agent front door and responsive start screen:** bare `axis` on an interactive
+  terminal opens the agent console with a responsive logo, tips and startup
+  status. With default flags, model probes and MCP connections run after first
+  paint; the console can open with no model available. `axis tui` explicitly
+  opens the dashboard; non-TTY bare invocations still print help (#537).
+* **Private bounded session trajectories:** `axis agent` records prompts,
+  assistant answers, tool calls/results, outcomes, reported usage and build/model
+  attribution locally. Owner-only files, credential masking, bounded records,
+  8 MiB rotation, 30-day/1 GiB retention and explicit omission warnings protect
+  the corpus. No transcript is published to Cortex or lifecycle events. See
+  [logging policy and limits](docs/runbooks/agent-session-logs.md) (#544).
+* **Organized hardware facts:** `axis facts --hardware` / `-hw` and
+  `axis node facts --hardware` report Linux/macOS component specifications and
+  sampled load with source, time, units and explicit unavailable reasons.
+  Text, JSON and YAML output and `--watch --interval` are supported; `-h` and
+  `--help` remain help. The collector is read-only, never invokes sudo and
+  excludes unique device identifiers (#541).
+
+### Fixes
+
+* **Console exit:** `/exit` and `/quit` close the session both before startup
+  finishes and after readiness, rather than leaving the console open (#545).
+* **Backend switching:** a model round snapshots the backend and its security
+  class together, keeping evidence selection, compaction and streaming consistent
+  during concurrent model changes (#540).
+* **External MCP approval:** external tools require confirmation unless explicitly
+  allowlisted by exact name; provider read-only annotations do not grant approval
+  (#527).
+* **Owner-only persistence:** AXIS-created runtime directories use `0700` and
+  files use `0600`; reused legacy append/lock files and replaced atomic stores
+  have permissions tightened (#526).
+* **Guarded execution:** an unavailable, unconfigured or no-longer-live placed
+  node fails closed instead of silently dispatching elsewhere. Local Ollama and
+  llama.cpp inference endpoints receive a bounded pre-dispatch liveness check
+  (#523).
+* **Reservable placement:** nodes unable to cover the guarded reservation request
+  are excluded before ranking; placement/explanation share reasons and execution
+  retains its live checks and ledger authority (#532).
+* **Bounded discovery:** per-node collection has a default 12-second budget and
+  SSH dialing a default 5-second budget, with explicit configured overrides;
+  canceled work stops queued and follow-up probes and cannot claim completeness
+  (#524).
+* **Endpoint sweep safety and cost:** reserved non-HTTP ports are skipped;
+  default discovery is scoped to model-related listeners/configured ports, with
+  whole-sweep caching and explicit broad/disabled modes. Candidate and cached
+  evidence stay distinct from a confirmed loaded model (#528, #529).
+* **Resident model truth:** Ollama residents come from `/api/ps`, including
+  runtime-reported processor/memory/context fields, rather than parsing the
+  human-oriented CLI table (#530).
+* **Keyed llama.cpp probes:** an explicit API-key argument or `/props` 401/403
+  suppresses keyed metadata requests; public health and auth provenance remain,
+  without inventing a served name or context window (#535).
+* **Hardware truth and robustness:** SMART permission/device-open stub JSON cannot
+  become observed failing health; AMD-only sysfs probes run only for AMD GPUs;
+  empty macOS BSD/interface names retain distinct IDs. Malformed/non-finite
+  telemetry is rejected, counter precision and sampling windows retained,
+  live links refreshed, missing devices/permission failures surfaced, and
+  subprocess output/inherited-pipe waits bounded. Logical CPU labeling and
+  duplicate Ollama tool output are corrected (#541).
+* **macOS storage relationships:** captured provider descriptions retain selected
+  metadata and meaningful names. `profiler parent` describes JSON containment;
+  a volume's `parent` is unavailable unless an explicit backing identity supports
+  it. Profiler nesting alone cannot establish a physical drive relationship;
+  non-storage parent behavior is unchanged (#541).
+* **Empty JSON collections:** list-valued CLI results serialize as `[]` instead
+  of `null` (#525).
+
+### Performance
+
+* **Prompt-cache reuse:** per-turn evidence and snapshot context are injected
+  into the newest outgoing user message rather than changing the system prompt.
+  The unchanged system/tool prefix is eligible for backend cache reuse while
+  request context refreshes. This does not force a live discovery sweep, guarantee
+  cache residency or promise a fixed speedup (#539).
+
+### Documentation, dependencies and release tooling
+
+* README onboarding and theme-aware banners refreshed (#531); `AGENTS.md` is the
+  canonical repository instruction file with a thin Copilot entry point (#536).
+* AXIS builds use Go **1.26.10**, fixing `crypto/x509` GO-2026-6809 (#538).
+  Local release preflight runs only the pinned GoReleaser validator with its
+  separate Go 1.27.0 toolchain; application gates and vulnerability analysis keep
+  the caller's AXIS compiler. Regression tests cover isolation and failure stops.
+* `mcp-go` updated from 1.2.1 to 1.3.0 (#533); pinned GitHub Actions updated for
+  Claude Code, agent-workflow setup and GoReleaser (#534).
+* Hardware regressions include the fuller sanitized macOS storage capture,
+  empty/colliding device IDs, partial SMART output and native-parser fuzz seeds.
+  Session-log tests cover concurrency, retention, masking, permissions and
+  failure recovery; console tests cover startup, switching, cancellation and exit.
 
 ## v0.19.6 (2026-10-15)
 

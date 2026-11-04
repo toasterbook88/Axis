@@ -36,7 +36,9 @@ func (h *updateRestartHarness) install(t *testing.T) {
 	t.Helper()
 	prevDetect, prevDeps, prevFetch := detectSupervisor, restartServiceDeps, restartFetchMeta
 	prevPoll, prevDeadline := restartPollInterval, restartReadyDeadline
+	prevLookup := lookupSudoInvoker
 
+	lookupSudoInvoker = func() (sudoInvoker, bool, error) { return sudoInvoker{}, false, nil }
 	detectSupervisor = func(context.Context, daemonServiceDependencies) (supervisorType, supervisedService, error) {
 		return h.supervisor, h.service, nil
 	}
@@ -69,6 +71,7 @@ func (h *updateRestartHarness) install(t *testing.T) {
 	t.Cleanup(func() {
 		detectSupervisor, restartServiceDeps, restartFetchMeta = prevDetect, prevDeps, prevFetch
 		restartPollInterval, restartReadyDeadline = prevPoll, prevDeadline
+		lookupSudoInvoker = prevLookup
 	})
 }
 

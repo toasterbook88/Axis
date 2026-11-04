@@ -39,6 +39,48 @@ func TestSetAutonomyPreservesInstalledConfirm(t *testing.T) {
 	}
 }
 
+// The console installs its confirm after New (agent_console.go). That
+// replacement must keep --auto-approve on the surface callback: low-score
+// built-ins stay quiet, unlisted MCP tools still reach the operator, and a
+// later mode switch back to default does not drop the flag.
+func TestAutoApproveSurvivesSetConfirmAndModeSwitch(t *testing.T) {
+	var asked []string
+	op := func(tool, _ string, _ int) ConfirmResult {
+		asked = append(asked, tool)
+		return ConfirmNo
+	}
+	a := New(Config{
+		Output:      io.Discard,
+		AutoApprove: true,
+		Autonomy:    AutonomyDefault,
+		Confirm:     op,
+	})
+	if got := a.confirm("write_file", "edit", 10); got != ConfirmYes || len(asked) != 0 {
+		t.Fatalf("construction: write_file score 10 = %v, asked %v; want auto-approved", got, asked)
+	}
+
+	a.SetConfirm(op) // console surface path
+	if got := a.confirm("write_file", "edit", 10); got != ConfirmYes || len(asked) != 0 {
+		t.Fatalf("after SetConfirm: write_file score 10 = %v, asked %v; --auto-approve was dropped", got, asked)
+	}
+	if got := a.confirm("mcp_gadget_forget_memory", "wipe", 0); got != ConfirmNo || len(asked) != 1 || asked[0] != "mcp_gadget_forget_memory" {
+		t.Fatalf("after SetConfirm: unlisted MCP = %v, asked %v; want one operator deny", got, asked)
+	}
+
+	a.SetAutonomy(AutonomyFull)
+	a.SetAutonomy(AutonomyDefault)
+	asked = nil
+	if got := a.confirm("run_shell", "echo hi", 10); got != ConfirmYes || len(asked) != 0 {
+		t.Fatalf("after SetAutonomy(default): run_shell score 10 = %v, asked %v", got, asked)
+	}
+	if got := a.confirm("run_shell", "rm -rf /", 95); got != ConfirmNo || len(asked) != 1 {
+		t.Fatalf("after SetAutonomy(default): high-score shell = %v, asked %v", got, asked)
+	}
+	if got := a.confirm("mcp_gadget_forget_memory", "wipe", 0); got != ConfirmNo {
+		t.Fatalf("after SetAutonomy(default): unlisted MCP = %v, want operator deny", got)
+	}
+}
+
 func TestWrapConfirmDefaultMode(t *testing.T) {
 	a := New(Config{Output: io.Discard})
 	base := func(_, _ string, _ int) ConfirmResult { return ConfirmNever }

@@ -505,6 +505,12 @@ type TaskRequirements struct {
 	// (ALL pairs must match exactly) to be placement-eligible. Semantics
 	// follow SAM's X-Sam-Required-Labels: one check, all predicates ANDed.
 	RequiredLabels map[string]string `json:"required_labels,omitempty" yaml:"required_labels,omitempty"`
+
+	// Objective is the operator-selected ranking policy for feasible nodes.
+	// Empty means the default capacity objective (placement-selection-contract).
+	// This is a placement-request preference carried with requirements through
+	// the existing pipeline; it is not a property of the task workload itself.
+	Objective PlacementObjective `json:"objective,omitempty" yaml:"objective,omitempty"`
 }
 
 // SatisfiesRequiredLabels reports whether node labels satisfy the
@@ -542,6 +548,7 @@ type PlacementObjective string
 
 const (
 	PlacementObjectiveCapacity PlacementObjective = "capacity"
+	PlacementObjectiveSpread   PlacementObjective = "spread"
 )
 
 type ObjectiveSource string
@@ -576,6 +583,7 @@ const (
 	RankingCriterionModelWarmth             RankingCriterion = "model_warmth"
 	RankingCriterionReservationRatio        RankingCriterion = "reservation_ratio"
 	RankingCriterionClusterReservationShare RankingCriterion = "cluster_reservation_share"
+	RankingCriterionReservationSkew         RankingCriterion = "reservation_skew"
 	RankingCriterionNodeName                RankingCriterion = "node_name"
 )
 
@@ -689,8 +697,9 @@ type ExecutionObservation struct {
 	WallTimeMS  int64            `json:"wall_time_ms" yaml:"wall_time_ms"`
 	// ObservedRSSMB and ObservedVRAMMB are what the producer measured, in MB.
 	// A guarded task run records the process max RSS (rusage) and the highest
-	// device-wide VRAM seen while sampling nvidia-smi; a llama-server start
-	// records one RSS sample and device-wide VRAM. VRAM is never per-model.
+	// VRAM attributed to its process tree by nvidia-smi per-process accounting;
+	// an unrelated GPU process is not task VRAM. A llama-server start records
+	// one RSS sample and device-wide VRAM, which is not per-model attribution.
 	// The ledger aggregate keeps the largest value across recorded runs, so
 	// ObservedAt (the latest run) need not be when that value was measured.
 	// Older state files spell these peak_ram_mb / peak_vram_mb; decoding

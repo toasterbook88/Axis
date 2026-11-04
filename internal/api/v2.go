@@ -359,6 +359,7 @@ func (h *v2Handlers) handleMesh(w http.ResponseWriter, r *http.Request) {
 
 type V2DryRunRequest struct {
 	Description string `json:"description"`
+	Objective   string `json:"objective,omitempty"`
 }
 
 func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
@@ -367,16 +368,27 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	desc := r.URL.Query().Get("description")
-	if desc == "" && r.Method == http.MethodPost {
+	objectiveRaw := r.URL.Query().Get("objective")
+	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 		var req V2DryRunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
-			desc = req.Description
+			if desc == "" {
+				desc = req.Description
+			}
+			if objectiveRaw == "" {
+				objectiveRaw = req.Objective
+			}
 		}
 	}
 	desc = strings.TrimSpace(desc)
 	if desc == "" {
 		writeError(w, http.StatusBadRequest, "description required")
+		return
+	}
+	obj, err := placement.ParseObjective(objectiveRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireCache(w) {
@@ -394,6 +406,7 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reqs := placement.InferRequirements(desc)
+	reqs.Objective = obj
 	decision := placement.SelectBestNode(reqs, snap.Nodes, rc.State)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -404,9 +417,11 @@ func (h *v2Handlers) handleDryRun(w http.ResponseWriter, r *http.Request) {
 }
 
 type V2BatchPlaceRequest struct {
-	Tasks []struct {
+	Objective string `json:"objective,omitempty"`
+	Tasks     []struct {
 		ID          string `json:"id"`
 		Description string `json:"description"`
+		Objective   string `json:"objective,omitempty"`
 	} `json:"tasks"`
 }
 
@@ -444,12 +459,17 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 	results := make([]V2BatchPlaceResult, 0, len(req.Tasks))
 
 	workingState := &state.ClusterState{Nodes: make(map[string]state.NodeState)}
-	if rc.State != nil && rc.State.Nodes != nil {
+	if rc.State != nil {
+		// Ranking reads failure penalties and empirical observations; only Nodes is mutated per batch.
+		workingState.Failures = rc.State.Failures
+		workingState.Observations = rc.State.Observations
 		for k, v := range rc.State.Nodes {
 			workingState.Nodes[k] = v
 		}
 	}
 
+	// Per-batch copy so later tasks see earlier placements without mutating the cache.
+	batchNodes := append([]models.NodeFacts(nil), snap.Nodes...)
 	for _, task := range req.Tasks {
 		desc := strings.TrimSpace(task.Description)
 		if desc == "" {
@@ -464,12 +484,25 @@ func (h *v2Handlers) handleBatchPlace(w http.ResponseWriter, r *http.Request) {
 		}
 
 		reqs := placement.InferRequirements(desc)
-		decision := placement.SelectBestNode(reqs, snap.Nodes, workingState)
-
+		taskObjective := task.Objective
+		if taskObjective == "" {
+			taskObjective = req.Objective
+		}
+		obj, objErr := placement.ParseObjective(taskObjective)
+		if objErr != nil {
+			results = append(results, V2BatchPlaceResult{
+				ID: task.ID,
+				Decision: models.PlacementDecision{
+					OK:        false,
+					Reasoning: []string{objErr.Error()},
+				},
+			})
+			continue
+		}
+		reqs.Objective = obj
+		decision := placement.SelectBestNode(reqs, batchNodes, workingState)
 		if decision.OK && decision.Node != "" {
-			ns := workingState.Nodes[decision.Node]
-			ns.ReservedMB += reqs.MemoryRequestMB
-			workingState.Nodes[decision.Node] = ns
+			applyBatchReservation(batchNodes, workingState, decision.Node, placement.ReservationMBForRequirements(reqs))
 		}
 
 		results = append(results, V2BatchPlaceResult{
@@ -620,4 +653,23 @@ func (h *v2Handlers) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		"checks":     checks,
 		"checked_at": time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// applyBatchReservation records an in-batch placement on the working copies
+// (node facts and state) so the next SelectBestNode call sees it.
+func applyBatchReservation(nodes []models.NodeFacts, st *state.ClusterState, name string, mb int64) {
+	for i := range nodes {
+		if nodes[i].Name != name {
+			continue
+		}
+		// Mirror snapshotview's overlay: top-level allocatable = reservable - reserved.
+		// Resources (shared with the cache) is capacity and stays untouched.
+		nodes[i].RAMReservedMB += mb
+		if nodes[i].RAMAllocatableMB > 0 {
+			nodes[i].RAMAllocatableMB = max(nodes[i].RAMAllocatableMB-mb, 0)
+		}
+	}
+	ns := st.Nodes[name]
+	ns.ReservedMB += mb
+	st.Nodes[name] = ns
 }

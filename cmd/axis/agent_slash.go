@@ -82,7 +82,7 @@ func slashHelp(session *agentREPLSession, _ []string) (bool, bool, error) {
 	fmt.Fprintln(errW, "  /diff          Show git working tree changes")
 	fmt.Fprintln(errW, "  /undo          Undo the most recent file edit")
 	fmt.Fprintln(errW, "  /compact       Compress older conversation history")
-	fmt.Fprintln(errW, "  /autonomy [m]  View or set autonomy mode (default, edit, full)")
+	fmt.Fprintln(errW, "  /autonomy [m]  View or set autonomy mode (cluster, default, edit, full)")
 	fmt.Fprintln(errW, "  /export [path] Export session worklog to Markdown")
 	fmt.Fprintln(errW, "  /fleet         Show cluster fleet status table")
 	fmt.Fprintln(errW, "  /facts         Show local node facts and resident models")
@@ -159,7 +159,7 @@ func slashAutonomy(session *agentREPLSession, parts []string) (bool, bool, error
 		a.SetAutonomy(mode)
 		fmt.Fprintf(w, "Switched autonomy mode to %s\n", ui.Bold(string(mode)))
 	} else {
-		fmt.Fprintf(w, "Current autonomy mode: %s (available: default, edit, full)\n", ui.Bold(string(a.Autonomy())))
+		fmt.Fprintf(w, "Current autonomy mode: %s (available: cluster, default, edit, full)\n", ui.Bold(string(a.Autonomy())))
 	}
 	return true, false, nil
 }

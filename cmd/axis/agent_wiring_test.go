@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
@@ -310,5 +311,21 @@ func TestConsoleSlashRunnerHonorsInjectedRuntimeLoader(t *testing.T) {
 	}
 	if !strings.Contains(out, "local-node") {
 		t.Fatalf("expected out to contain local-node, got: %q", out)
+	}
+}
+
+// The same config builder serves print, positional, plain and console runs.
+// A nil logger keeps embedded/non-CLI callers quiet.
+func TestBuildAgentSessionConfigPreservesDailyLogger(t *testing.T) {
+	log, err := agent.OpenDailySessionLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := buildAgentSessionConfig(agentSessionParams{SessionLog: log})
+	if cfg.SessionLog != log {
+		t.Fatal("CLI dropped daily logger")
+	}
+	if cfg = buildAgentSessionConfig(agentSessionParams{}); cfg.SessionLog != nil {
+		t.Fatal("implicit logger for non-CLI caller")
 	}
 }

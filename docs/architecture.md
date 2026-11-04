@@ -49,7 +49,7 @@ The fact plane collects hardware and software facts from cluster nodes.
 
 ### Layer 2: Snapshot Plane
 
-**Packages:** `internal/snapshot`, `internal/daemon`, `internal/snapshotview`
+**Packages:** `internal/snapshot`, `internal/daemon`, `internal/snapshotview`, `internal/reservation`, `internal/skills`
 
 Assembles individual NodeFacts into a `ClusterSnapshot` — the canonical
 representation of cluster state at a point in time.
@@ -111,7 +111,7 @@ TaskRequirements
 
 ### Layer 4: Execution Plane
 
-**Packages:** `internal/execution`, `internal/safety`, `internal/reservation`, `internal/scripts`, `internal/skills`
+**Packages:** `internal/execution`, `internal/safety`, `internal/scripts`
 
 Guarded task execution with pre-flight safety checks and resource reservation.
 

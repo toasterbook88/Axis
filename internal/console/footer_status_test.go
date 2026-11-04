@@ -3,7 +3,6 @@ package console
 import (
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func TestStatusFooterResponsiveWidths(t *testing.T) {
@@ -17,7 +16,7 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 	footer := NewStatusFooter(cfg)
 
 	// Wide screen: >= 80 cols
-	lines80 := footer.Render(100)
+	lines80 := footer.Render(100, FooterState{})
 	if len(lines80) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines80))
 	}
@@ -29,12 +28,12 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 		strings.Contains(text80, "fleet:") {
 		t.Fatalf("wide footer missing segments: %s", text80)
 	}
-	if utf8.RuneCountInString(text80) != 100 {
-		t.Fatalf("wide footer rune count = %d; want 100", utf8.RuneCountInString(text80))
+	if visibleWidth(text80) != 99 {
+		t.Fatalf("wide footer width = %d; want 99", visibleWidth(text80))
 	}
 
 	// Medium screen: 70 cols (mode dropped, compact context)
-	lines70 := footer.Render(70)
+	lines70 := footer.Render(70, FooterState{})
 	text70 := lines70[0].Text
 	if !strings.Contains(text70, "model: mid-9b") ||
 		!strings.Contains(text70, "snap pub-1") ||
@@ -42,19 +41,19 @@ func TestStatusFooterResponsiveWidths(t *testing.T) {
 		strings.Contains(text70, "mode: observe") {
 		t.Fatalf("medium footer unexpected segments: %s", text70)
 	}
-	if utf8.RuneCountInString(text70) != 70 {
-		t.Fatalf("medium footer rune count = %d; want 70", utf8.RuneCountInString(text70))
+	if visibleWidth(text70) != 69 {
+		t.Fatalf("medium footer width = %d; want 69", visibleWidth(text70))
 	}
 
 	// Narrow screen: 45 cols
-	lines45 := footer.Render(45)
+	lines45 := footer.Render(45, FooterState{})
 	text45 := lines45[0].Text
 	if !strings.Contains(text45, "model: mid-9b") ||
 		strings.Contains(text45, "fleet:") {
 		t.Fatalf("narrow footer unexpected segments: %s", text45)
 	}
-	if utf8.RuneCountInString(text45) != 45 {
-		t.Fatalf("narrow footer rune count = %d; want 45", utf8.RuneCountInString(text45))
+	if visibleWidth(text45) != 44 {
+		t.Fatalf("narrow footer width = %d; want 44", visibleWidth(text45))
 	}
 }
 
@@ -70,7 +69,7 @@ func TestStatusFooterShowsRealUsageWithoutHijackingContextBar(t *testing.T) {
 		Mode:       func() string { return "default" },
 		Snapshot:   func() string { return "" },
 	}
-	text := NewStatusFooter(cfg).Render(120)[0].Text
+	text := NewStatusFooter(cfg).Render(120, FooterState{})[0].Text
 	if !strings.Contains(text, "context: [") || !strings.Contains(text, "(9.2k/32k)") {
 		t.Fatalf("context occupancy missing from footer: %s", text)
 	}
@@ -103,7 +102,7 @@ func TestStatusFooterOmitsUsageWhenBackendReportedNone(t *testing.T) {
 		UsageStats: func() (int, int, int) { return 0, 0, 0 },
 		Mode:       func() string { return "edit" },
 	}
-	text := NewStatusFooter(cfg).Render(100)[0].Text
+	text := NewStatusFooter(cfg).Render(100, FooterState{})[0].Text
 	if strings.Contains(text, "usage:") {
 		t.Fatalf("usage segment fabricated from zero turns: %s", text)
 	}
@@ -123,7 +122,7 @@ func TestStatusFooterHidesUsageOnMediumWidth(t *testing.T) {
 		UsageStats: func() (int, int, int) { return 1200, 340, 2 },
 		Snapshot:   func() string { return "snap pub-1" },
 	}
-	text := NewStatusFooter(cfg).Render(70)[0].Text
+	text := NewStatusFooter(cfg).Render(70, FooterState{})[0].Text
 	if strings.Contains(text, "usage:") {
 		t.Fatalf("usage segment should wait for >=80 cols: %s", text)
 	}
@@ -149,5 +148,99 @@ func TestFormatTokensAndBar(t *testing.T) {
 	}
 	if !strings.HasPrefix(bar, "██") {
 		t.Fatalf("bar prefix unexpected: %s", bar)
+	}
+}
+
+func tierFooter(model string) *StatusFooter {
+	return NewStatusFooter(StatusFooterConfig{
+		Model:      func() string { return model },
+		UsedTokens: func() int { return 9200 },
+		MaxTokens:  func() int { return 32768 },
+	})
+}
+
+func TestStatusFooter_Tiers(t *testing.T) {
+	f := tierFooter("example-model")
+	for _, w := range []int{30, 43, 44, 71, 72, 120} {
+		text := f.Render(w, FooterState{})[0].Text
+		if got := visibleWidth(text); got != w-1 {
+			t.Errorf("width %d: visible width %d, want %d: %q", w, got, w-1, text)
+		}
+		switch {
+		case w >= 72:
+			if !strings.Contains(text, "context: [") {
+				t.Errorf("width %d: want full context bar: %q", w, text)
+			}
+		case w >= 44:
+			// At 44 the snap segment is clipped away by design; it only
+			// fits once the line is wide enough to hold it whole.
+			if !strings.Contains(text, "context: ") || strings.Contains(text, "[") {
+				t.Errorf("width %d: want compact context, no bar: %q", w, text)
+			}
+			if w == 71 && !strings.Contains(text, "no snapshot") {
+				t.Errorf("width %d: want snap segment: %q", w, text)
+			}
+		default:
+			if !strings.Contains(text, "model: example-model") || strings.Contains(text, "context") {
+				t.Errorf("width %d: want model only: %q", w, text)
+			}
+		}
+	}
+}
+
+func TestStatusFooter_ModelStates(t *testing.T) {
+	f := tierFooter("example-model")
+	pending := f.Render(120, FooterState{Frame: "╲", Model: ModelPending})[0].Text
+	if !strings.Contains(pending, "model: ╲") || strings.Contains(pending, "example-model") {
+		t.Errorf("pending: %q", pending)
+	}
+	none := f.Render(120, FooterState{Model: ModelNone})[0].Text
+	if !strings.Contains(none, "no model · /model or axis model start") {
+		t.Errorf("none: %q", none)
+	}
+}
+
+func TestStatusFooter_WideRunesNeverOverflow(t *testing.T) {
+	f := tierFooter("模型-example")
+	for w := 20; w <= 120; w++ {
+		for _, st := range []ModelState{ModelReady, ModelPending, ModelNone} {
+			text := f.Render(w, FooterState{Frame: "─", Model: st})[0].Text
+			if got := visibleWidth(text); got > w-1 {
+				t.Fatalf("width %d state %d: visible width %d > %d: %q", w, st, got, w-1, text)
+			}
+		}
+	}
+}
+
+func TestStatusFooter_MediumTierSnapAtBoundary(t *testing.T) {
+	// A short model and explicit snapshot make the medium tier's snap segment
+	// observable at its lower bound (44).
+	f := NewStatusFooter(StatusFooterConfig{
+		Model:      func() string { return "m" },
+		UsedTokens: func() int { return 9200 },
+		MaxTokens:  func() int { return 32768 },
+		Snapshot:   func() string { return "snap 1" },
+	})
+	text := f.Render(44, FooterState{})[0].Text
+	if !strings.Contains(text, "snap 1") || visibleWidth(text) != 43 {
+		t.Fatalf("width 44: want whole snap segment at width 43: %q", text)
+	}
+}
+
+func TestStatusFooter_DropsWholeSegments(t *testing.T) {
+	f := tierFooter("example-model")
+	// Content "── model: example-model ── context: 28% ── no snapshot ──" is 56
+	// columns; width 50 cannot hold snap whole but can hold model + context.
+	text := f.Render(50, FooterState{})[0].Text
+	if strings.Contains(text, "no sn") || strings.Contains(text, "snap") || !strings.Contains(text, "context: 28%") {
+		t.Errorf("width 50: want snap dropped whole, context kept: %q", text)
+	}
+	if visibleWidth(text) != 49 {
+		t.Errorf("width 50: visible width %d want 49", visibleWidth(text))
+	}
+	// Width 40 cannot hold context either.
+	text = f.Render(40, FooterState{})[0].Text
+	if strings.Contains(text, "cont") || !strings.Contains(text, "model: example-model") || visibleWidth(text) != 39 {
+		t.Errorf("width 40: want model only at 39 cols: %q", text)
 	}
 }

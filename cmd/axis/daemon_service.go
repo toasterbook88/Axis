@@ -99,8 +99,18 @@ func runDaemonServiceInstall(ctx context.Context, out io.Writer, addr, refresh s
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "AXIS daemon user service installed: %s\nVerify: axis daemon status\n", path)
-	return err
+	if _, err := fmt.Fprintf(out, "AXIS daemon user service installed: %s\nVerify: axis daemon status\n", path); err != nil {
+		return err
+	}
+	if deps.goos != "linux" {
+		return nil
+	}
+	for _, unit := range listSystemDaemonUnits(systemDaemonUnitDir) {
+		if _, err := fmt.Fprintf(out, "Warning: %s also starts an axis daemon and will race this service at boot.\nKeep one owner: sudo systemctl disable --now %s\n", unit, filepath.Base(unit)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runDaemonServiceStatus(ctx context.Context, out io.Writer, deps daemonServiceDependencies) error {

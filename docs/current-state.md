@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Repo version: `0.19.6`
+- Repo version: `0.22.0`
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -20,9 +20,23 @@ AXIS is no longer just a read-only Phase 1 fact collector.
 
 The live repo currently contains:
 
+- A `cluster` agent autonomy mode (`--autonomy cluster`, `/autonomy cluster`) that exposes only `axis_status`, `axis_facts`, `axis_models`, `axis_place` and `axis_reservations`; workspace, git, MCP, `todo` and granted extra tools are hidden and refused at dispatch
+- `axis ai route` / MCP `inference_route_explain` upstream checks: for a LiteLLM-style hub on this machine, a listed model must also have an upstream (`/model/info` `api_base`) that answers `GET <api_base>/models` within 2 s, or the hub is skipped; checks are reported in `upstreams`, and peer hubs or hubs without `/model/info` are reported as not checked
+- `axis doctor` Linux service restart-loop check (read-only `systemctl show`, more than 20 restarts and looping now), host-wide daemon counting for the mesh port check, and warnings for system units that start an axis daemon outside the user service; `sudo axis update` restarts the invoking user's service and never starts a root daemon
+- Task-attributed VRAM in task history and execution observations (GPU processes in the task's process tree only; 0 means not observed)
+- HTTP API request IDs (`X-Request-ID`, accepted or generated, echoed and logged per request), daemon refresh-failure warnings, and a warning when `ssh -G` fails; the API refuses a TCP listener without a token
+- Explicit Cortex service addressing through `AXIS_CORTEX_URL`, independent of SSH node identity, with optional `AXIS_CORTEX_QDRANT_URL` for counts. Status exposes the probed endpoint and marks unobserved memory counts with `memories_unknown`; invalid nonempty overrides fail closed. An unset override preserves legacy node-derived addressing
+- Session-scoped per-tool agent approvals, inherited by sub-agents; external MCP tools display NOT RATED. Private approval events carry the tool-call ID and decision, which can come from the configured autonomy policy
+- Streamed OpenAI-style usage requests with a compatibility retry for rejected stream options; usage on choice-bearing chunks is retained and counted once per reply. Private `turn.finished` records include `usage_reported`, with absent counts remaining unknown
+- Cache-friendly agent request context: session-start cluster/Git observations accompany the newest user message, today's local date is refreshed per request, and empty user/tool content is normalized for servers that reject it. These changes neither refresh the session-start observations nor guarantee backend cache reuse
+
+- Private bounded `axis agent` session logs: prompts, answers, tool trajectories, reported token usage and outcomes remain local with credential masking, 30-day/1 GiB retention and explicit truncation/omission evidence (`docs/runbooks/agent-session-logs.md`).
 - Cluster fact collection for local and remote nodes, including a bounded on-disk weight inventory (`DiskWeights`) distinct from resident/loaded models; Core AI (`.aimodel`) and Core ML (`.mlpackage`, `.mlmodelc`) bundles are recorded whole with kind `unknown` and are never treated as runnable weights by model planning, model resolution, or task context
+- Local hardware reports through `axis facts --hardware` (shortcut `-hw`, also under `axis node facts`) on Linux and macOS: component specifications, sampled CPU/disk/network activity, memory and sensor readings, source/time/unit metadata, and explicit unavailable readings. `--watch` retains inventory and refreshes load; JSON emits one report per line and YAML emits separate documents. Hardware collection skips cluster configuration and inference discovery, excludes unique device identifiers, and never invokes sudo. Linux uses procfs/sysfs plus optional hardware utilities; macOS uses native profiler, sysctl, top, and I/O Registry sources. Coverage depends on permissions and device support
+- macOS hardware storage reports distinguish `profiler parent` containment from a volume's backing `parent`; backing remains unavailable without explicit captured device identity, and nested provider descriptions keep meaningful names and selected metadata
 - Cluster snapshot assembly and advisory placement
-- A full-screen `axis tui` dashboard whose placement wizard uses the exact displayed snapshot, exposes source/freshness, inferred requirements, deterministic rank order, and an explicit advisory/no-execution boundary; missing snapshots render operator-controlled setup and retry steps
+- A full-screen `axis tui` workspace that hosts the `axis agent` console in embedded mode (same in-process agent, startup path, approvals and slash commands; transcript drawn in-frame and scrollable) beside a cluster sidebar read from the cached snapshot, with a `ctrl+o` command palette and `ctrl+x` leader keys; `axis tui --dashboard` opens only the dashboard
+- The `axis tui` dashboard fits any terminal size (responsive columns, scrolling table, help overlay, ASCII fallback), badges snapshot source and age, shows only observed values (link class, reserved RAM, warnings, partial-probe reasons, node errors), and whose placement wizard uses the exact displayed snapshot, exposes source/freshness, inferred requirements, deterministic rank order, and an explicit advisory/no-execution boundary; missing snapshots render operator-controlled setup and retry steps
 - An agentic tool-calling assistant (`axis agent`) that consumes the fact plane (`axis chat` was removed). Default cluster context is the local daemon/disk cache (`LoadCached`); `--live` is an explicit discovery sweep. Cache reads are badged (age, stale, vantage). The transcript console is the default interactive surface on a TTY (approval overlay: `y` yes, `n` no; Enter does not approve); use `--plain` for the legacy line reader, or `--console` to force the console
 - A local HTTP API with task execution
 - A daemon-backed cached snapshot seam (`axis daemon start` / `axis daemon restart`; `axis serve` remains an alias-style entry for the HTTP API with background refresh)
@@ -34,6 +48,9 @@ The live repo currently contains:
 - Explicit cache refresh via `axis daemon refresh`
 - Explicit cache invalidation via `axis daemon invalidate`
 - Content-aware `nodes.yaml`, semantic `state.json`, and `skills.json` watch refreshes in the daemon cache, plus explicit execution-state and long-lived UDP beacon refresh triggers, with refresh-trigger metadata surfaced through daemon health/status
+- Validated `nodes.yaml` reloads atomically add, update, and remove configured mesh peers while preserving unrelated learned peers. Invalid or unreadable versions retain the last valid mesh membership and are retried. Mesh transport, enablement, shared-secret, and local-identity changes require a daemon restart.
+- Lock-free snapshot publications remain immutable when discovery adds or clears warnings; mutable daemon state uses a separate snapshot copy.
+- Cache invalidation fences collections already in flight and serializes persisted snapshot writes, so an older collection cannot restore invalidated memory or disk cache state. A subsequent collection may publish normally; snapshot and metadata reads remain lock-free.
 - Typed discovery freshness metadata on live and cached snapshots (`source`, expected/observed window, additive beacon count, completion state, warning)
 - Publication evidence on live and daemon-cached snapshots: unique publication ID, assembly source/time, projected cache age, facts observation time/discovery digest, ledger digest/count, and state digest/schema/update time
 - A CLI task execution path (`axis task run`)
@@ -55,13 +72,14 @@ The live repo currently contains:
   live-memory, liveness, configuration, and ledger checks.
 - Observed stable node identity when the host exposes it (`machine-id` on Linux, platform UUID on macOS), with locality preferring explicit identity before hostname/address fallback
 - `axis init` automatically seeds that observed local stable identity into new configurations
+- `axis init --generate`: a read-only report that proposes `nodes.yaml` additions from `tailscale status --json` (ready-to-paste YAML, offline, skipped and not-seen lists; proposed hostnames checked through `ssh -G` and DNS); it never writes `nodes.yaml` (`docs/superpowers/specs/2026-10-31-nodes-yaml-generate-design.md`)
 - Optional `nodes.yaml` `stable_id` seeds and identity-aware UDP beacon dedupe so configured nodes survive hostname/IP drift without overriding observed truth
 - Real load-average data in facts, snapshots, and execution context
 - TurboQuant-aware backend grading (`mlx`, `llama.cpp`) with detected vs probe-verified states and long-context placement hints
 - TurboQuant-aware execution hints: `task run` and `/run` now export `AXIS_TURBOQUANT_*` env vars, with additive `llama.cpp` flag injection only after probe-visible `--ctx-size` support
 - Probe-verified Apple Foundation Models capability on eligible local and remote Apple Silicon hosts running macOS 26 or later, read without generating (`SystemLanguageModel` availability with its reason, `contextSize`, and on macOS 27 the variant and capabilities, plus Private Cloud Compute availability, `contextSize`, capabilities, and quota; a probe timeout is unknown, not unavailable), surfaced in node facts/snapshots and as an `apple-foundation-models` tool, with actual model execution available only through the explicit guarded execution path
 - Additive unified-memory and runtime-pressure metadata in facts (`memory_topology`, `memory_class`, `pressure_source`, `pressure_stall_10`) when the host exposes it
-- Resident-model truth in node facts via `resident_models`, populated from `ollama ps`, `llama-server` `/v1/models`, and `mlx_lm.server` `/v1/models`
+- Resident-model truth in node facts via `resident_models`, populated from Ollama `/api/ps` and process/endpoint observations for llama.cpp and MLX; a keyed llama.cpp server can expose public health without model-name or context metadata
 - Model catalog through `axis model catalog`, `GET /v2/models`, and the MCP `model_catalog` tool: one entry per model per node, residents merged with installed Ollama models, each with state (`loaded` from a load signal: Ollama `/api/ps`, a llama.cpp process's `-m` plus a 200 from its public `/health`, or Apple `SystemLanguageModel.availability == .available`; for compatibility, an Ollama or llama.cpp resident with no collector state — from an older collector, or a llama.cpp host without `curl` — is also shown as `loaded` from the running process alone; `loading` on llama.cpp `/health` 503; `listed` when a server names a model without a load signal, including the MLX server's command-line model; `down` when the process is seen but its endpoint is silent; `installed` otherwise), the served context where the runtime states it (llama.cpp `/props` `n_ctx`, Apple `contextSize`), locality (on-node, cloud-proxy, or unknown), and capabilities as the node itself reported them; nodes the snapshot could not observe are listed with their reason. Model servers the dedicated probes do not cover (vLLM, LM Studio, a proxy, a second Ollama) come from a bounded loopback-listener sweep (`local_endpoints` in node facts: default allowlist of model ports/processes plus ports declared in the swept node's `ai.yaml`, at most 32 ports and 8 s, Ollama `/api/tags` or OpenAI-compatible `/v1/models`; port 3000 is denied unless explicitly included, and `AXIS_ENDPOINT_SWEEP=full|off` selects broad or disabled mode; reserved non-HTTP service ports such as SSH, SMB and databases are never dialed and are listed as `skipped_reserved`, OS ephemeral-range listeners without a model-server process name are counted in `skipped_ephemeral`, non-allowlisted listeners are counted without listing port numbers, and explicitly excluded ports are reported; a whole-sweep result is cached on the swept node for 15 minutes by default and invalidated when its port/inode set changes, while negative per-port results remain cached for up to 24 h): an endpoint that names models is confirmed and its models are `listed`, never `loaded`, with locality unknown unless the listener's process name matches the engine it claims; listeners that need auth, name no model, or mirror the node's own Ollama stay candidates that the catalog never reads. `axis agent` `/models` and startup selection read the same catalog, resolve a route only for the model selected (listed address, node name, then an SSH tunnel), and check that an implicit startup default answers before using it
 - Canonical read-only model-instance inventory through `axis model list` and `axis model inspect <instance-id>`. These commands read the bound daemon publication by default and require `--live` for a fresh cluster collection; output preserves source, publication ID, snapshot/node observation times, node status, and warnings rather than inventing process ownership or endpoint data
 - Resident memory facts preserve their measurement domains: llama.cpp model-file stat is `weight_size_mb`, MLX process RSS is `size_ram_mb`, and `size_vram_mb` is populated only from runtime-reported accelerator memory. A supervised `llama-server` remains discoverable from its running process even when its absolute executable path is outside the collector's login `PATH`
@@ -87,8 +105,8 @@ The live repo currently contains:
 - `internal/api/v2.go` serves active read, reservation, and mesh routes alongside explicit 501 stubs for endpoints that remain unimplemented
 - `IMPROVEMENTS.md` and `STRUCTURE.md` document the scaffolding scope
 - Unified MCP client (`axis mcp client`) with per-server connection caching, retry, batch execution, interactive REPL, placement-aware auto-routing, and progress notifications
-- `axis agent` asks before every external MCP tool call unless `nodes.yaml` lists that tool by exact name under `mcp_servers.<server>.auto_approve_tools`; a server's tool names, descriptions and annotations never grant auto-approval
-- `axis agent` appends a private daily session log, `~/.axis/logs/agent-YYYY-MM-DD.jsonl` (dir `0700`, file `0600`), for interactive and one-shot runs: `turn.started`, one `tool` line per tool event, and `turn.finished` with prompt, answer, transcript, tool results (capped at 4 KB each), token deltas and stop reason (`answer`, `max_turns`, `error`). Text goes through the same redaction as the UI surfaces and the system prompt is not stored. Log write failures warn once and never fail a turn. One-shot runs (positional or `-p`) no longer overwrite `agent-history.json`; only the interactive REPL/console saves the resume file
+- `axis agent` asks before every external MCP tool call, in every autonomy mode and with `--auto-approve`, unless `nodes.yaml` lists that tool by exact name under `mcp_servers.<server>.auto_approve_tools`; a server's tool names, descriptions and annotations never grant auto-approval
+- `axis agent` appends private, bounded daily JSONL session logs beneath `~/.axis/logs` for interactive and one-shot runs. Logging failures do not fail a turn, and one-shot runs do not overwrite `agent-history.json`; only the interactive REPL/console saves the resume file. See `docs/runbooks/agent-session-logs.md` for captured fields, redaction, retention and storage limits.
 
 The core observation pipeline is reasonably clean. The execution and chat surfaces are where most of the risk now lives.
 
@@ -98,15 +116,16 @@ Top-level commands currently registered in the binary:
 
 | Command | Purpose | Notes |
 | --- | --- | --- |
+| `axis` (no arguments) | Open the agent on an interactive terminal | Uses the start screen and bounded background startup with default flags; piped and non-TTY invocations print help. `axis tui` opens the full-screen workspace |
 | `axis version` | Print version | Shows the compiled AXIS version plus commit, build date, go version, and platform |
 | `axis facts` | Collect local facts | Human text by default; `--format json\|yaml` for machines |
 | `axis status` | Collect cluster snapshot | Cache-first inside the 5-minute daemon publication window; prints source and age; `--live` sweeps; `--format json\|yaml` includes source and age; `--cached-only` fails closed when missing or stale |
-| `axis task place` | Advisory placement | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; flat `PlacementDecision` JSON includes source and age |
-| `axis placement explain` | Detailed placement breakdown | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; JSON wraps in `explanation` and includes source and age |
+| `axis task place` | Advisory placement | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; `--objective capacity\|spread` (default capacity); flat `PlacementDecision` JSON includes source and age |
+| `axis placement explain` | Detailed placement breakdown | Cache-first inside the 5-minute window; prints source and age; `--live` sweeps; `--objective capacity\|spread` (default capacity); JSON wraps in `explanation` and includes source and age |
 | `axis profile match` | Workload class inference | Shows which workload class and requirements an intent maps to; no cluster snapshot needed; `--format text\|json\|yaml` |
 | `axis task context` | Emit compact context block | Helper for external agents; `--cached` uses the local daemon cache |
 | `axis task run` | Execute on selected node | TTY-aware confirmation prompt; safety-blocked shows `SAFETY BLOCKED`; `--script` or `--exec` required |
-| `axis tui` | Interactive cluster dashboard | Daemon-cache-first snapshot with source/freshness badges; placement preview scores the displayed snapshot and remains advisory |
+| `axis tui` | Full-screen agent workspace and cluster dashboard | Agent is the `axis agent` console embedded (advisory); sidebar and dashboard read the daemon-cache-first snapshot with source and age badges; values the snapshot lacks render as "not observed"; placement preview scores the displayed snapshot and remains advisory |
 | `axis daemon start` | Start daemon HTTP API | Alias for `axis serve`; `--addr` and `--refresh` flags |
 | `axis daemon invalidate` | Clear local daemon cache | Explicit operator-controlled cache invalidation |
 | `axis daemon refresh` | Refresh local daemon cache now | Explicit operator-controlled cache refresh |
@@ -149,14 +168,14 @@ Top-level commands currently registered in the binary:
 | `internal/daemon` | Background snapshot refresh and cache metadata | Small, explicit seam; now powers cached reads, invalidate, reservation-aware snapshot views, trigger-aware refresh metadata, and cached discovery-freshness exposure for config/state/skills, execution events, and long-lived discovery beacons |
 | `internal/models` | Shared types and locality helpers | Types are fine; locality now prefers observed stable identity, then hostname/address matches, over logical names |
 | `internal/modelinventory` | Canonical resident-model inventory projection | Internal-only deterministic projection of snapshot resident facts; preserves authority metadata and makes no process-ownership or endpoint claims |
-| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; allocatable-RAM-first ranking, fresh exact-scope empirical preferences (keyed per model name), hard `ObservedRSSMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and verified Apple Foundation Models qualification across local and remote nodes (with local node preference) are now live |
+| `internal/placement` | Requirement inference, filter, rank, select | High unit coverage; default `capacity` ranking (allocatable-RAM-first) plus explicit `spread` objective (resulting reservation-share stddev), fresh exact-scope empirical preferences (keyed per model name), hard `ObservedRSSMB` pre-filter, resident-model locality, reservations, GPU preference, multi-tool requirements, TurboQuant-aware long-context hints, unified-memory bonuses, critical-pressure heavy-task filtering, and verified Apple Foundation Models qualification across local and remote nodes (with local node preference) are now live |
 | `internal/state` | Persist placement memory | Explicit acquire/release is live and tested; state now also stores exact-scope execution observations separately from failure memory |
 | `internal/knowledge` | Build execution context blob | Load-aware, nil-safe, and now heavily covered |
 | `internal/scripts` | Built-in task scripts | Useful; `jq` prerequisites are now modeled explicitly, but broader shell assumptions are still under-modeled |
 | Git-oriented execution surfaces | Repo analysis, status, and review helpers | Promising lane; useful already, but should become more explicit and first-class |
 | `internal/skills` | Learned skills/failures | Persists state, now recovers from corrupt JSON, but semantic validation is still light |
 | `internal/safety` | Execution blocker + structured command analysis | Heuristic blocker and structured evaluator are both live on the guarded-execution path (`safety.Check` → `NewEvaluator`/`Evaluate`); learned approvals remain disabled |
-| `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; successful multipath routes are revalidated from a bounded process cache, with aggregate reuse/fan-out/failure counters exposed in daemon metadata |
+| `internal/transport` | SSH execution layer | Respects OpenSSH-resolved identities and known_hosts paths; refuses hosts whose SSH config sets `ProxyJump` or `ProxyCommand` (typed error, no dial; `docs/superpowers/specs/2026-11-01-ssh-proxy-directives-design.md`); reads the system-wide `ssh_config` when `$HOME` is the `/etc/passwd` home and passes `-F ~/.ssh/config` otherwise or after a failed run (`docs/superpowers/specs/2026-11-01-ssh-config-system-file-design.md`); `ProxyCommand` is refused because it would run a command to carry the connection, while `Match exec` is not refused: `ssh -G` runs those commands while resolving, as the operator's own `ssh` does, from the user file with or without `-F` and from the system file whenever it is read (since `dda57670`; observed with OpenSSH 9.6p1); successful multipath routes are revalidated from a bounded process cache, with aggregate reuse/fan-out/failure counters exposed in daemon metadata |
 | `internal/api` | Local HTTP API and execution surface | High-risk surface, now above the v1 coverage gate with injectable execution seams |
 | `internal/mcp` | MCP diagnostics and advisory leases | 18 read-only diagnostics share the live runtime path; 3 advisory lease primitives remain subordinate to observed state |
 | `internal/mcpclient` | Unified MCP client library | Connection pooling, per-server caching (60s TTL), retry with exponential backoff, progress notifications, placement-aware routing, batch execution, and metrics collection; powers `axis mcp client` |
@@ -182,10 +201,10 @@ Refresh this section with `./hack/refresh-current-state.sh`.
   - Coverage gates:
     - `./hack/coverage-check.sh`
     - `coverage gate passed: internal/knowledge 100.0% >= 90.0%`
-    - `coverage gate passed: internal/api 71.6% >= 65.0%`
-    - `coverage gate passed: internal/mcp 86.2% >= 70.0%`
-    - `coverage gate passed: internal/ui 90.1% >= 80.0%`
-    - `coverage gate passed: total 73.9% >= 65.0%`
+    - `coverage gate passed: internal/api 72.8% >= 65.0%`
+    - `coverage gate passed: internal/mcp 85.9% >= 70.0%`
+    - `coverage gate passed: internal/ui 91.5% >= 80.0%`
+    - `coverage gate passed: total 76.4% >= 65.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
@@ -246,6 +265,10 @@ In practical terms:
   the shared cluster memory pool
 - late placement ties now break toward the node holding a smaller share of the
   current cluster reservation pool
+- explicit placement objective `spread` ranks feasible nodes by resulting
+  cluster reservation-share stddev (`reservation_skew`); default remains
+  `capacity` (`allocatable_ram`); spread deliberately ignores locality, model
+  warmth and pressure ranking; `/v2/batch/place` reserves each placement before the next
 - placement should use those soft claims to spread memory pressure across the
   cluster instead of repeatedly selecting the same node
 
@@ -282,7 +305,7 @@ V1 hardening is now mostly about durability, not feature growth:
 2. Keep Dependabot and `govulncheck` green so the protected-merge path stays actionable instead of noisy.
 3. Finish the remaining truth-integrity containment: correct Ollama running-state detection (A1/C4), then stop reporting confidence for unknown classifications (C2). Pairwise topology rendering (C1) is replaced by vantage-labeled reachability.
 4. Darwin CIDR collection (A2) is unblocked now that subnet equality is not rendered as an edge; it remains an independent fact-plane correctness fix.
-5. Implement the placement feasibility/objective contract (B2/B3/B4) before expanding workload taxonomy.
+5. Continue the placement feasibility/objective contract (B2/B3/B4): `spread` is live; remaining work includes OS/Arch feasibility filters and further objectives (`headroom`, `fastest`, `local`, `preserve`) before expanding workload taxonomy.
 6. Push resident-model VRAM peak probes where truth-backed process metrics are available; the multi-runtime resident-model view (Ollama + llama-server + MLX) is now live.
 7. Refine reservation accounting into a clearer cluster RAM balancing model.
 8. Add more SSH/integration coverage around the transport layer and end-to-end execution paths.

@@ -11,6 +11,12 @@ cd "$repo_root"
 
 fail() { printf 'verify-public-boundary: %s\n' "$1" >&2; exit 1; }
 
+# Every check below scans `git ls-files`. Outside a work tree, or with nothing
+# tracked, that list is empty and the checks would pass having scanned nothing.
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || fail "cannot list tracked files: $repo_root is not a git work tree (use a clone, not an archive)"
+[[ -n "$(git ls-files | head -n 1)" ]] || fail "git lists no tracked files; refusing to pass an empty scan"
+
 allowed_ip() {
   case "$1" in
     # RFC 5737

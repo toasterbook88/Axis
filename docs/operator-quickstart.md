@@ -78,6 +78,29 @@ This will:
 3. Configure SSH connectivity
 4. Optionally enable UDP discovery beacons
 
+### Find machines to add (Tailscale)
+
+`axis init --generate` compares `tailscale status --json` with your `nodes.yaml` and reports, without
+writing anything:
+
+- tailnet machines that are not configured, each with a YAML block you can paste under `nodes:`;
+- offline and skipped peers (shared-in machines, exit nodes outside your tailnet);
+- configured nodes this machine does not see in Tailscale (offline, not in its netmap, or
+  unresolved), and nodes Tailscale cannot observe (LAN-only).
+
+```bash
+axis init --generate                   # text report
+axis init --generate --format json     # the same data for scripts and agents
+axis init --generate --ssh-user deploy # ssh_user for the proposed entries
+```
+
+A proposed `hostname` is checked the way AXIS dials it (`ssh -G`, then DNS); a name your SSH config
+redirects elsewhere is withheld for the tailnet IP or flagged unsafe with no YAML. It exits 1 when
+Tailscale is not running or this machine is not connected to its control plane, and 2 when
+`nodes.yaml` cannot be loaded. A proposal flagged `possible duplicate of <node>` usually means that
+node is configured only by a LAN address or its address is stale; see
+[Node addresses and SSH config](runbooks/node-addresses-and-ssh.md).
+
 ### Manual Configuration (Alternative)
 
 Edit `~/.axis/nodes.yaml`:
@@ -120,6 +143,8 @@ If any node fails:
 - Check SSH key permissions (`chmod 600 ~/.ssh/id_ed25519`)
 - Verify hostname resolves correctly
 - Ensure SSH agent is running (`ssh-add -l`)
+- If the node's address changed, or its SSH config routes it through `ProxyJump` or `ProxyCommand`,
+  follow [Node addresses and SSH config](runbooks/node-addresses-and-ssh.md)
 
 ---
 
@@ -137,6 +162,39 @@ This shows:
 - Network interfaces
 - Installed tools (Ollama, llama.cpp, etc.)
 - Thermal and battery status (if applicable)
+
+For a hardware-only report on Linux or macOS:
+
+```bash
+axis facts --hardware
+axis facts -hw
+axis node facts --hardware --format json
+axis facts --hardware --watch --interval 2s
+axis facts --help
+```
+
+Hardware reports group specifications and live measurements by CPU, memory,
+GPU, storage, network, system, sensors, and attached devices. Each reading carries
+its source, units, observation time, and availability status. Counter-derived
+readings also include source-specific sample start/end times and duration;
+large counters retain integer precision until subtraction. Inventory is retained
+in watch mode; load, negotiated link speed, duplex, and MTU are refreshed. `--interval` sets the counter sampling window
+(default 2s, range 100ms–1m); probe overhead adds to the time between reports.
+macOS CPU utilization uses a separate one-second `top` sample. JSON watch output
+is one report per line; YAML watch output uses document separators. Ctrl-C stops
+watch mode. Normal facts JSON/YAML keeps its existing node-facts schema;
+hardware reports use `axis.hardware/v1`.
+
+Hardware collection does not read cluster configuration, scan inference endpoints,
+or invoke sudo. Serial numbers, UUIDs, and MAC addresses are excluded. Linux
+uses `/proc`, `/sys`, and optional utilities (`lscpu`, `lsblk`, `dmidecode`,
+`smartctl`, `nvidia-smi`). macOS uses native `system_profiler`, `sysctl`, `top`,
+`vm_stat`, `netstat`, `ioreg`, and `pmset`. Missing tools, permissions, unsupported
+sensors, and failed probes are reported explicitly. Apple Silicon memory is
+identified as unified; GPU driver memory counters are not dedicated VRAM.
+macOS drive activity is scoped to I/O Registry storage drivers, rather than
+attributed to APFS volumes. Temperature, fan, frequency, and power coverage
+varies by platform and device; a missing reading never means zero load.
 
 ### View Full Cluster
 

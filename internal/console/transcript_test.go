@@ -46,7 +46,7 @@ func TestFooterOmitsFleetFraction(t *testing.T) {
 	text := NewStatusFooter(StatusFooterConfig{
 		Model: func() string { return "qwen" },
 		Mode:  func() string { return "default" },
-	}).Render(100)[0].Text
+	}).Render(100, FooterState{})[0].Text
 	if strings.Contains(text, "fleet:") || strings.Contains(text, "10/10") {
 		t.Fatalf("footer leaked a fleet fraction: %s", text)
 	}

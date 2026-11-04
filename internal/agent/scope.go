@@ -3,23 +3,27 @@ package agent
 import "strings"
 
 // ToolScope is the set of tools the model may see and call.
-// Observe is the default. Edit adds workspace writes and review tools.
-// Exec is the guarded-exec grant: edit plus run_shell and axis_run_task.
-// Tools in the never set stay registered for safety routes but are
-// never advertised and never dispatched.
+// Cluster is the narrowest: AXIS cluster reads only. Observe is the default
+// and adds workspace and git reads. Edit adds workspace writes and review
+// tools. Exec is the guarded-exec grant: edit plus run_shell and
+// axis_run_task. Tools in the never set stay registered for safety routes
+// but are never advertised and never dispatched.
 type ToolScope string
 
 const (
+	ScopeCluster ToolScope = "cluster"
 	ScopeObserve ToolScope = "observe"
 	ScopeEdit    ToolScope = "edit"
 	ScopeExec    ToolScope = "exec"
 )
 
 // ScopeFor maps an autonomy mode onto a tool scope.
-// default is observe. edit is the explicit edit grant.
-// full is the guarded-exec grant.
+// cluster is the cluster-only grant. default is observe. edit is the
+// explicit edit grant. full is the guarded-exec grant.
 func ScopeFor(mode AutonomyMode) ToolScope {
 	switch mode {
+	case AutonomyCluster:
+		return ScopeCluster
 	case AutonomyEdit:
 		return ScopeEdit
 	case AutonomyFull:
@@ -29,16 +33,29 @@ func ScopeFor(mode AutonomyMode) ToolScope {
 	}
 }
 
-// DisplayScope is the footer name for a mode. It is observe, edit, or exec,
-// never a raw autonomy string and never a fleet fraction.
+// DisplayScope is the footer name for a mode. It is cluster, observe, edit,
+// or exec, never a raw autonomy string and never a fleet fraction.
 func DisplayScope(mode AutonomyMode) string {
 	switch ScopeFor(mode) {
+	case ScopeCluster:
+		return "cluster"
 	case ScopeEdit:
 		return "edit"
 	case ScopeExec:
 		return "exec"
 	default:
 		return "observe"
+	}
+}
+
+// clusterTool is the cluster grant: reads of the AXIS fact plane and
+// placement, with no workspace, git, or MCP access.
+func clusterTool(name string) bool {
+	switch name {
+	case "axis_status", "axis_facts", "axis_models", "axis_place", "axis_reservations":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -109,6 +126,9 @@ func toolVisible(name string, scope ToolScope) bool {
 	if name == "" || neverTool(name) || name == "axis_summary" {
 		return false
 	}
+	if scope == ScopeCluster {
+		return clusterTool(name)
+	}
 	if strings.HasPrefix(name, "mcp_") || observeTool(name) {
 		return true
 	}
@@ -152,6 +172,8 @@ func VisibleToolPrompt(names []string, optScope ...ToolScope) string {
 	}
 
 	switch currScope {
+	case ScopeCluster:
+		b.WriteString("Current autonomy scope: cluster (AXIS cluster reads only; no workspace files, git, or MCP tools). Workspace reads require 'default' autonomy (/autonomy default). When a user request needs files or commands, tell the operator which mode it needs.\n")
 	case ScopeObserve:
 		b.WriteString("Current autonomy scope: observe (read-only inspection). Workspace file modifications require 'edit' autonomy (/autonomy edit). Shell commands and task runs require 'full' autonomy (/autonomy full). When a user request requires making changes or executing commands, inform the operator to elevate autonomy.\n")
 	case ScopeEdit:

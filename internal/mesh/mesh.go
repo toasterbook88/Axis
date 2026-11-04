@@ -1,5 +1,5 @@
-// Package mesh is SCAFFOLDED — gossip-based peer discovery scaffolding.
-// Not wired into the stable operator path.
+// Package mesh provides the daemon's gossip-based peer discovery and trusted
+// configuration membership.
 package mesh
 
 import (
@@ -448,7 +448,7 @@ func (m *Mesh) mergePeer(p Peer, now time.Time) {
 	}
 
 	// Update existing peer — never demote trusted
-	if existing.State == PeerTrusted {
+	if existing.Source == "config" || existing.State == PeerTrusted {
 		existing.LastSeen = now
 		existing.MissedPings = 0
 		return

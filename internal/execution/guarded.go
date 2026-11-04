@@ -159,13 +159,14 @@ func recordExecutionOutcome(st *state.ClusterState, reqs models.TaskRequirements
 	}
 	scope := placement.ObservationScopeForRequirements(resp.Node, reqs, resp.Tool)
 	observation := models.ExecutionObservation{
-		Scope:         scope,
-		ObservedAt:    time.Now().UTC(),
-		SampleCount:   1,
-		LastSuccess:   runErr == nil,
-		WallTimeMS:    durationMilliseconds(elapsed),
-		ObservedRSSMB: peakRAMMB,
-		ModelName:     scope.ModelName,
+		Scope:          scope,
+		ObservedAt:     time.Now().UTC(),
+		SampleCount:    1,
+		LastSuccess:    runErr == nil,
+		WallTimeMS:     durationMilliseconds(elapsed),
+		ObservedRSSMB:  peakRAMMB,
+		ObservedVRAMMB: resp.ObservedVRAMMB,
+		ModelName:      scope.ModelName,
 	}
 
 	rec := state.TaskExecutionRecord{

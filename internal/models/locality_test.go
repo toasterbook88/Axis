@@ -165,3 +165,42 @@ func TestParseDarwinPlatformUUID(t *testing.T) {
 		t.Fatalf("ParseDarwinPlatformUUID(system_profiler) = %q", got)
 	}
 }
+
+// IsLocalHost must not equate two qualified names that share a first label:
+// hub.lab.example is another machine when this one is hub.office.example.
+func TestIsLocalHostIsStrictAboutQualifiedNames(t *testing.T) {
+	stubCurrentLocalIdentity(t, "hub.office.example", []string{"192.0.2.7"}, "")
+	for _, tc := range []struct {
+		host string
+		want bool
+	}{
+		{"localhost", true},
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"192.0.2.7", true},
+		{"hub.office.example", true},
+		{"HUB.office.example", true},
+		{"hub", true},
+		{"hub.lab.example", false},
+		{"192.0.2.8", false},
+		{"other", false},
+		{"", false},
+	} {
+		if got := IsLocalHost(tc.host); got != tc.want {
+			t.Errorf("IsLocalHost(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+	// IsLocalConfig keeps its first-label match for nodes.yaml entries.
+	if !IsLocalConfig("", "hub.lab.example", "") {
+		t.Fatal("IsLocalConfig changed: it matched by first label before")
+	}
+}
+
+// A machine whose hostname is bare cannot tell which domain a qualified name
+// is in, so only the bare name matches.
+func TestIsLocalHostWithBareHostname(t *testing.T) {
+	stubCurrentLocalIdentity(t, "hub", nil, "")
+	if !IsLocalHost("hub") || IsLocalHost("hub.lab.example") {
+		t.Fatalf("bare hostname: hub=%v hub.lab.example=%v", IsLocalHost("hub"), IsLocalHost("hub.lab.example"))
+	}
+}

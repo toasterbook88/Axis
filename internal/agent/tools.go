@@ -144,7 +144,7 @@ func (r *ToolRegistry) visible(name string) bool {
 	if execTool(name) && r.scope != ScopeExec {
 		return false
 	}
-	if r.extraVisible(name) {
+	if r.scope != ScopeCluster && r.extraVisible(name) {
 		return true
 	}
 	return toolVisible(name, r.scope)
@@ -293,12 +293,13 @@ type placeArgs struct {
 	RequiredTools []string `json:"required_tools,omitempty"`
 	RequireGPU    bool     `json:"require_gpu,omitempty"`
 	PreferLocal   bool     `json:"prefer_local,omitempty"`
+	Objective     string   `json:"objective,omitempty"`
 }
 
 func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 	r.add("axis_place",
-		"Select the best node for a task description and optional explicit constraints (min_ram_mb, required_tools, require_gpu, prefer_local). Returns a human-readable placement decision with winning node, fit score, decisive criteria, runner-up candidate nodes, and excluded node reasons.",
-		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"},"min_ram_mb":{"type":"integer","description":"Optional minimum free RAM in MB required for the task"},"required_tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names required on the node (e.g. ['docker', 'go'])"},"require_gpu":{"type":"boolean","description":"Optional requirement that the node must have a dedicated GPU"},"prefer_local":{"type":"boolean","description":"Optional preference to keep execution on the local node if eligible"}},"required":["description"]}`),
+		"Select the best node for a task description and optional explicit constraints (min_ram_mb, required_tools, require_gpu, prefer_local, objective). Returns a human-readable placement decision with winning node, fit score, decisive criteria, runner-up candidate nodes, and excluded node reasons. objective is capacity (default) or spread.",
+		json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","description":"What the task needs to do"},"min_ram_mb":{"type":"integer","description":"Optional minimum free RAM in MB required for the task"},"required_tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names required on the node (e.g. ['docker', 'go'])"},"require_gpu":{"type":"boolean","description":"Optional requirement that the node must have a dedicated GPU"},"prefer_local":{"type":"boolean","description":"Optional preference to keep execution on the local node if eligible"},"objective":{"type":"string","description":"Placement ranking objective: capacity (default) or spread"}},"required":["description"]}`),
 		func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a placeArgs
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -311,7 +312,12 @@ func (r *ToolRegistry) registerPlace(tc *ToolContext) {
 			if view == nil || view.Snapshot == nil || len(view.Snapshot.Nodes) == 0 {
 				return "Placement: no nodes available in snapshot.", nil
 			}
+			obj, err := placement.ParseObjective(a.Objective)
+			if err != nil {
+				return "", err
+			}
 			reqs := placement.InferRequirements(a.Description)
+			reqs.Objective = obj
 			if a.MinRAMMB > 0 {
 				reqs.MinFreeRAMMB = a.MinRAMMB
 			}
@@ -489,16 +495,21 @@ func (r *ToolRegistry) registerListDirectory() {
 						}
 						count++
 						if !e.IsDir() {
-							b.WriteString(prefix + name + "\n")
+							b.WriteString(prefix)
+							b.WriteString(name)
+							b.WriteString("\n")
 							continue
 						}
-						b.WriteString(prefix + name + "/\n")
+						b.WriteString(prefix)
+						b.WriteString(name)
+						b.WriteString("/\n")
 						if currentDepth >= depth || strings.HasPrefix(name, ".") {
 							continue
 						}
 						sub, err := os.ReadDir(filepath.Join(dirPath, name))
 						if err != nil {
-							b.WriteString(prefix + "  [unreadable]\n")
+							b.WriteString(prefix)
+							b.WriteString("  [unreadable]\n")
 							continue
 						}
 						walk(sub, filepath.Join(dirPath, name), currentDepth+1, prefix+"  ")
@@ -536,7 +547,8 @@ func (r *ToolRegistry) registerListDirectory() {
 						fmt.Fprintf(&b, "... and %d more directories\n", dirCount-listed)
 						break
 					}
-					b.WriteString(e.Name() + "/\n")
+					b.WriteString(e.Name())
+					b.WriteString("/\n")
 					listed++
 				}
 				return b.String(), nil
@@ -646,7 +658,7 @@ func DefaultSafetyGate(tc *ToolContext) ShellSafetyGate {
 
 func (r *ToolRegistry) registerShell() {
 	r.add("run_shell",
-		"Execute a shell command through the agent execution gate. CLI callers may route this through guarded AXIS execution with placement and reservation protection; destructive commands will still be blocked.",
+		"Execute a shell command through the agent execution gate. CLI callers may route this through guarded AXIS execution with placement and reservation protection. A rule-based safety check denies a few destructive patterns, which the operator must then explicitly override, and misses many others (for example find -delete, writes to ~/.ssh/authorized_keys, curl -T uploads). Once the operator approves run_shell for the session, every command the check does not deny runs without a prompt. Do not rely on the check: avoid destructive or data-exfiltrating commands unless the user asked for them.",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -799,10 +811,12 @@ func diffFragment(oldContent, newContent string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d removed, %d added", len(removed), len(added))
 	if len(removed) > 0 {
-		b.WriteString("\n- " + clipRunesForTool(removed[0], 60))
+		b.WriteString("\n- ")
+		b.WriteString(clipRunesForTool(removed[0], 60))
 	}
 	if len(added) > 0 {
-		b.WriteString("\n+ " + clipRunesForTool(added[0], 60))
+		b.WriteString("\n+ ")
+		b.WriteString(clipRunesForTool(added[0], 60))
 	}
 	return b.String()
 }

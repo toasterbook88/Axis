@@ -1,0 +1,91 @@
+{
+  "SPNetworkDataType": [
+    {
+      "_name": "USB 10/100/1G/2.5G LAN",
+      "hardware": "Ethernet",
+      "interface": "en9",
+      "type": "Ethernet"
+    },
+    {
+      "_name": "Wi-Fi",
+      "hardware": "AirPort",
+      "interface": "en0",
+      "type": "AirPort"
+    },
+    {
+      "_name": "Thunderbolt Bridge",
+      "hardware": "Ethernet",
+      "interface": "bridge0",
+      "type": "Ethernet"
+    },
+    {
+      "_name": "Tailscale",
+      "type": "VPN (io.tailscale.ipn.macsys)"
+    }
+  ],
+  "SPStorageDataType": [
+    {
+      "_name": "Macintosh HD - Data",
+      "bsd_name": "disk3s1",
+      "file_system": "APFS",
+      "mount_point": "/System/Volumes/Data",
+      "physical_drive": {
+        "device_name": "APPLE SSD AP0256Q",
+        "is_internal_disk": "yes",
+        "media_name": "AppleAPFSMedia",
+        "medium_type": "ssd",
+        "partition_map_type": "unknown_partition_map_type",
+        "protocol": "Apple Fabric",
+        "smart_status": "Verified"
+      },
+      "size_in_bytes": 245107195904
+    },
+    {
+      "_name": "Macintosh HD",
+      "bsd_name": "disk3s3",
+      "file_system": "APFS",
+      "mount_point": "/System/Volumes/Update/mnt1",
+      "physical_drive": {
+        "device_name": "APPLE SSD AP0256Q",
+        "is_internal_disk": "yes",
+        "media_name": "AppleAPFSMedia",
+        "medium_type": "ssd",
+        "partition_map_type": "unknown_partition_map_type",
+        "protocol": "Apple Fabric",
+        "smart_status": "Verified"
+      },
+      "size_in_bytes": 245107195904
+    },
+    {
+      "_name": "iOS 27.0 Simulator",
+      "bsd_name": "disk5s1",
+      "file_system": "APFS",
+      "mount_point": "/Library/Developer/CoreSimulator/Volumes/iOS_24A434",
+      "physical_drive": {
+        "device_name": "Disk Image",
+        "is_internal_disk": "no",
+        "media_name": "AppleAPFSMedia",
+        "medium_type": "ssd",
+        "partition_map_type": "unknown_partition_map_type",
+        "protocol": "Disk Image"
+      },
+      "size_in_bytes": 18559795200
+    },
+    {
+      "_name": "Macintosh HD",
+      "bsd_name": "disk3s3s1",
+      "file_system": "APFS",
+      "mount_point": "/",
+      "physical_drive": {
+        "device_name": "APPLE SSD AP0256Q",
+        "is_internal_disk": "yes",
+        "media_name": "AppleAPFSMedia",
+        "medium_type": "ssd",
+        "partition_map_type": "unknown_partition_map_type",
+        "protocol": "Apple Fabric",
+        "smart_status": "Verified"
+      },
+      "size_in_bytes": 245107195904
+    }
+  ]
+}

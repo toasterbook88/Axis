@@ -121,6 +121,24 @@ func agentCmd() *cobra.Command {
 				}
 			}()
 
+			// Console path: paint first, finish startup in the background.
+			// Print mode, positional prompts, --plain, and non-TTY keep the
+			// synchronous path below unchanged (a --console routing error
+			// also falls through, to fail exactly where it always has).
+			if !printMode && len(args) == 0 {
+				if routeConsole, rerr := routeAgentInteractive(useConsole, plain, consoleTTY()); rerr == nil && routeConsole {
+					var err error
+					a, err = runAgentConsoleStartup(ctx, agentStartupInputs{
+						model: model, role: roleFlag, provider: provider, cloudModel: cloudModel, cheapModel: cheapModel,
+						systemMsg: systemMsg, maxTurns: maxTurns, maxTokens: maxTokens, timeout: timeout,
+						autoApprove: autoApprove, autonomy: autonomy, verbose: verbose, dryRun: dryRun,
+						allowRawCommandEvidence: allowRawCommandEvidence, resume: resume, selectModel: selectModel,
+						live: live, out: cmd.OutOrStdout(),
+					}, cmd.ErrOrStderr())
+					return err
+				}
+			}
+
 			loader := loadAgentShellRuntime
 			if live {
 				loader = runtimectx.LoadLive
@@ -160,51 +178,7 @@ func agentCmd() *cobra.Command {
 			fmt.Fprintln(errW, ui.Dim("advisory: agent output is not cluster truth — it uses tools to read the fact plane"))
 
 			// Load runtime context for tools and safety.
-			var cluster *chat.ClusterSummaryForPrompt
-			var k *knowledge.ClusterKnowledge
-			var initialView *agent.RuntimeView
-
-			if rt != nil {
-				if rt.Snapshot != nil {
-					cluster = chat.BuildClusterSummary(rt.Snapshot)
-					bestNode := ""
-					if len(rt.Snapshot.Nodes) > 0 {
-						bestNode = rt.Snapshot.Nodes[0].Name
-					}
-					k = knowledge.Build(rt.Snapshot, rt.State, bestNode)
-				}
-				initialView = &agent.RuntimeView{
-					Config:    rt.Config,
-					Snapshot:  rt.Snapshot,
-					State:     rt.State,
-					Ledger:    rt.Ledger,
-					Skills:    rt.Skills,
-					Knowledge: k,
-				}
-			}
-
-			tc := agent.NewToolContext(initialView, func(ctx context.Context) (*agent.RuntimeView, error) {
-				newRt, err := loader(ctx)
-				if err != nil {
-					return nil, err
-				}
-				if newRt == nil {
-					return nil, fmt.Errorf("loaded runtime context is nil")
-				}
-				bestNode := ""
-				if newRt.Snapshot != nil && len(newRt.Snapshot.Nodes) > 0 {
-					bestNode = newRt.Snapshot.Nodes[0].Name
-				}
-				newK := knowledge.Build(newRt.Snapshot, newRt.State, bestNode)
-				return &agent.RuntimeView{
-					Config:    newRt.Config,
-					Snapshot:  newRt.Snapshot,
-					State:     newRt.State,
-					Ledger:    newRt.Ledger,
-					Skills:    newRt.Skills,
-					Knowledge: newK,
-				}, nil
-			})
+			cluster, k, tc := agentToolRuntime(rt, loader)
 
 			// Load MCP servers and connect.
 			var mcpReg *mcpclient.Registry
@@ -246,15 +220,9 @@ func agentCmd() *cobra.Command {
 				endpoint = chat.DefaultEndpoint
 			}
 
-			sessionLog, logErr := agent.OpenDailySessionLog(persist.AxisPath("logs"))
-			if logErr != nil {
-				fmt.Fprintf(errW, "warning: session log disabled: %v\n", logErr)
-			} else {
-				sessionLog.SetWarn(func(msg string) {
-					fmt.Fprintf(errW, "warning: %s\n", msg)
-				})
-				sessionLog.SetResumed(resume)
-			}
+			sessionLog := openAgentSessionLog(activeTarget, resume, func(msg string) {
+				fmt.Fprintf(errW, "warning: %s\n", msg)
+			})
 
 			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
@@ -346,7 +314,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 32768, "Conversation token budget")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 25, "Maximum agent loop iterations per query")
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "Auto-approve safe commands (safety score < 70)")
-	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but safety-blocked)")
+	cmd.Flags().StringVar(&autonomy, "autonomy", "default", "Autonomy mode: cluster (AXIS cluster reads only), default (prompt for mutations), edit (auto-approve file edits, prompt commands), full (auto-approve all but safety-blocked and unlisted MCP tools)")
 	cmd.Flags().StringVar(&systemMsg, "system", "", "Extra text appended to system prompt")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Resume previous conversation from history")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Emit trace output for tool calls and turns")
@@ -805,16 +773,7 @@ func sanitizeDiagnosticsText(s string) string {
 }
 
 func printAgentSessionDetails(w io.Writer, target ModelChoice, autoApprove bool, autonomy string, mcpCount int, maxTurns int) {
-	safetyStr := "Strict Operator Approval"
-	if autoApprove {
-		safetyStr = "Auto-Approve safe (<70)"
-	}
-	switch agent.AutonomyMode(autonomy) {
-	case agent.AutonomyEdit:
-		safetyStr = "Autonomy: edit (auto-approve edits)"
-	case agent.AutonomyFull:
-		safetyStr = "Autonomy: full (auto-approve all but safety-blocked)"
-	}
+	safetyStr := agentSafetyLabel(autoApprove, autonomy)
 	mcpStr := "None connected"
 	if mcpCount > 0 {
 		mcpStr = fmt.Sprintf("%d connected", mcpCount)

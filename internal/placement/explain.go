@@ -177,7 +177,7 @@ func matchedRequiredTools(n models.NodeFacts, requiredTools []string) []string {
 	return matched
 }
 
-func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, clusterReserved int64) models.PlacementCandidateExplanation {
+func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState, clusterReserved int64, eligible []models.NodeFacts) models.PlacementCandidateExplanation {
 	reasoning := make([]string, 0, 4)
 
 	if reason := empiricalReason(empiricalObservation(n, reqs, st)); reason != "" {
@@ -290,12 +290,18 @@ func explainEligibleCandidate(n models.NodeFacts, reqs models.TaskRequirements, 
 		headroom = adjusted - minNeeded
 	}
 
+	obj, _ := ResolveObjective(reqs)
+	metric := CapacityMetric(n)
+	if obj == models.PlacementObjectiveSpread {
+		metric = SpreadMetric(n, eligible, reqs)
+	}
+
 	return models.PlacementCandidateExplanation{
 		Node:       n.Name,
 		FitScore:   ComputeTaskFitScore(n, models.IsLocalNode(n), st, reqs), // diagnostic only
 		IsLocal:    models.IsLocalNode(n),
 		HeadroomMB: headroom,
-		Metric:     CapacityMetric(n),
+		Metric:     metric,
 		Reasoning:  reasoning,
 	}
 }
@@ -319,7 +325,7 @@ func ExplainPlacement(reqs models.TaskRequirements, nodes []models.NodeFacts, st
 	clusterReserved := totalReservedFromNodes(nodes)
 	eligible := make([]models.PlacementCandidateExplanation, 0, len(ranked))
 	for _, node := range ranked {
-		eligible = append(eligible, explainEligibleCandidate(node, reqs, st, clusterReserved))
+		eligible = append(eligible, explainEligibleCandidate(node, reqs, st, clusterReserved, ranked))
 	}
 
 	return models.PlacementExplanation{

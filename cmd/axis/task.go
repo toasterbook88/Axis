@@ -56,7 +56,7 @@ func rankingHeadlineValue(d models.PlacementDecision) string {
 	if d.Ranking == nil {
 		return ""
 	}
-	return fmt.Sprintf("%.0f%s", d.Ranking.Metric.Value, d.Ranking.Metric.Unit)
+	return placement.FormatRankingMetricValue(d.Ranking.Metric)
 }
 
 // printExecutionRanking renders the structured ranking for task run / dry-run.
@@ -66,12 +66,11 @@ func printExecutionRanking(w io.Writer, ranking *models.PlacementRanking) {
 		fmt.Fprintln(w, "  Ranking: unavailable")
 		return
 	}
-	fmt.Fprintf(w, "  Ranking: objective=%s (%s), %s=%.0f%s, provenance=%s, decisive=%s\n",
+	fmt.Fprintf(w, "  Ranking: objective=%s (%s), %s=%s, provenance=%s, decisive=%s\n",
 		ranking.Objective,
 		ranking.Source,
 		ranking.Metric.Name,
-		ranking.Metric.Value,
-		ranking.Metric.Unit,
+		placement.FormatRankingMetricValue(ranking.Metric),
 		ranking.Metric.Provenance,
 		ranking.DecisiveBy)
 	if tie := ranking.TieBreak; tie != nil {
@@ -115,6 +114,7 @@ func taskPlaceCmd() *cobra.Command {
 	var live bool
 	var cacheAddr string
 	var requireLabels []string
+	var objective string
 
 	cmd := &cobra.Command{
 		Use:   "place [description]",
@@ -129,6 +129,10 @@ func taskPlaceCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			desc := args[0]
 			labelReq, err := parseRequireLabels(requireLabels)
+			if err != nil {
+				return err
+			}
+			obj, err := placement.ParseObjective(objective)
 			if err != nil {
 				return err
 			}
@@ -147,6 +151,7 @@ func taskPlaceCmd() *cobra.Command {
 				},
 				loadTaskLiveSnapshot,
 				labelReq,
+				obj,
 			)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
@@ -225,6 +230,7 @@ func taskPlaceCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading the daemon publication")
 	cmd.Flags().StringVar(&cacheAddr, "cache-addr", api.DefaultAddr(), "Address of the local AXIS API daemon cache (Unix socket or TCP host:port)")
 	cmd.Flags().StringArrayVar(&requireLabels, "require-label", nil, "required node label k=v (repeatable; ALL must match — conjunction)")
+	cmd.Flags().StringVar(&objective, "objective", "", "Placement ranking objective: capacity (default) or spread")
 	return cmd
 }
 

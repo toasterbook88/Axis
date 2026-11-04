@@ -235,7 +235,7 @@ func TestCompactContextSummarizesOldTurns(t *testing.T) {
 	// The summarization call passes nil tools; return a fixed summary.
 	bk.responses = []chat.Message{{Role: chat.RoleAssistant, Content: "SUMMARY: did things a-f, tool returned data."}}
 
-	if err := a.compactContext(context.Background()); err != nil {
+	if err := a.compactContext(context.Background(), a.Backend()); err != nil {
 		t.Fatalf("compactContext failed: %v", err)
 	}
 	after := a.conv.EstimateTokens()
@@ -280,7 +280,7 @@ func TestCompactContextNoopBelowThreshold(t *testing.T) {
 	a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "hello"})
 
 	before := a.conv.Len()
-	if err := a.compactContext(context.Background()); err != nil {
+	if err := a.compactContext(context.Background(), a.Backend()); err != nil {
 		t.Fatalf("compactContext failed: %v", err)
 	}
 	if a.conv.Len() != before {
@@ -313,7 +313,7 @@ func TestCompactContextKeepsUserMessageOnWire(t *testing.T) {
 	}
 	bk.responses = []chat.Message{{Role: chat.RoleAssistant, Content: "SUMMARY: did things."}}
 
-	if err := a.compactContext(context.Background()); err != nil {
+	if err := a.compactContext(context.Background(), a.Backend()); err != nil {
 		t.Fatalf("compactContext failed: %v", err)
 	}
 	// The compacted summary itself must carry the user role.

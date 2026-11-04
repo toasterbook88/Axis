@@ -54,8 +54,10 @@ func isBlockingFailure(class models.FailureClass) bool {
 }
 
 const (
-	RankingMetricAllocRAM = "allocatable_ram"
-	RankingMetricUnitMB   = "MB"
+	RankingMetricAllocRAM        = "allocatable_ram"
+	RankingMetricReservationSkew = "reservation_skew"
+	RankingMetricUnitMB          = "MB"
+	RankingMetricUnitStddev      = "stddev"
 )
 
 func CapacityMetric(n models.NodeFacts) models.RankingMetric {
@@ -64,6 +66,95 @@ func CapacityMetric(n models.NodeFacts) models.RankingMetric {
 		Value:      float64(allocatableRAM(n)),
 		Unit:       RankingMetricUnitMB,
 		Provenance: models.MetricProvenanceDerived,
+	}
+}
+
+// SpreadMetric is the spread-objective ranking metric: population stddev of
+// cluster reservation shares after placing ReservationMBForRequirements on n.
+func SpreadMetric(n models.NodeFacts, nodes []models.NodeFacts, reqs models.TaskRequirements) models.RankingMetric {
+	idx := -1
+	for i := range nodes {
+		if nodes[i].Name == n.Name {
+			idx = i
+			break
+		}
+	}
+	skew := 0.0
+	if idx >= 0 {
+		skew = resultingReservationSkew(idx, nodes, ReservationMBForRequirements(reqs))
+	}
+	return models.RankingMetric{
+		Name:       RankingMetricReservationSkew,
+		Value:      skew,
+		Unit:       RankingMetricUnitStddev,
+		Provenance: models.MetricProvenanceDerived,
+	}
+}
+
+// resultingReservationSkew returns the population stddev of reservation shares
+// across nodes after adding requestMB to the candidate at targetIdx.
+func resultingReservationSkew(targetIdx int, nodes []models.NodeFacts, requestMB int64) float64 {
+	n := len(nodes)
+	if n == 0 || targetIdx < 0 || targetIdx >= n {
+		return 0
+	}
+	if requestMB < 0 {
+		requestMB = 0
+	}
+	reserved := make([]float64, n)
+	var sum float64
+	for i, node := range nodes {
+		r := float64(reservedRAM(node))
+		if i == targetIdx {
+			r += float64(requestMB)
+		}
+		if r < 0 {
+			r = 0
+		}
+		reserved[i] = r
+		sum += r
+	}
+	if sum <= 0 {
+		return 0
+	}
+	mean := 1.0 / float64(n)
+	var variance float64
+	for _, r := range reserved {
+		d := (r / sum) - mean
+		variance += d * d
+	}
+	return math.Sqrt(variance / float64(n))
+}
+
+// ResolveObjective returns the effective placement objective and whether it was
+// the default or an explicit operator selection. Unknown values fall back to
+// capacity as default so ranking stays deterministic; CLI/API validation rejects
+// unknowns before they reach this helper.
+func ResolveObjective(reqs models.TaskRequirements) (models.PlacementObjective, models.ObjectiveSource) {
+	switch reqs.Objective {
+	case "":
+		return models.PlacementObjectiveCapacity, models.ObjectiveSourceDefault
+	case models.PlacementObjectiveCapacity:
+		return models.PlacementObjectiveCapacity, models.ObjectiveSourceExplicit
+	case models.PlacementObjectiveSpread:
+		return models.PlacementObjectiveSpread, models.ObjectiveSourceExplicit
+	default:
+		return models.PlacementObjectiveCapacity, models.ObjectiveSourceDefault
+	}
+}
+
+// ParseObjective validates an operator-supplied objective string.
+func ParseObjective(raw string) (models.PlacementObjective, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", string(models.PlacementObjectiveCapacity):
+		if strings.TrimSpace(raw) == "" {
+			return "", nil
+		}
+		return models.PlacementObjectiveCapacity, nil
+	case string(models.PlacementObjectiveSpread):
+		return models.PlacementObjectiveSpread, nil
+	default:
+		return "", fmt.Errorf("unknown placement objective %q (want capacity or spread)", raw)
 	}
 }
 
@@ -81,10 +172,11 @@ type rankKey struct {
 	modelWarmthRank         int
 	reservationRatio        float64
 	clusterReservationShare float64
+	reservationSkew         float64
 }
 
-// buildRankKeys captures the deterministic comparator inputs for the default
-// capacity objective. Priority order:
+// buildRankKeys captures the deterministic comparator inputs for ranking.
+// Capacity priority order:
 //  1. Highest allocatable RAM (ranking metric / headline)
 //  2. Best exact-scope empirical observation (fresh only)
 //  3. Resident model locality for the requested runtime
@@ -99,11 +191,18 @@ type rankKey struct {
 //  12. Lowest cluster reservation share
 //  13. Node name ascending (stable tiebreak)
 //
+// Spread priority order:
+//  1. Lowest resulting reservation-share stddev (ranking metric / headline)
+//  2. Highest allocatable RAM
+//  3. Lowest cluster reservation share
+//  4. Node name ascending (stable tiebreak)
+//
 // FitScore is intentionally not used as a sort key (placement-selection-contract §2).
 func buildRankKeys(candidates []models.NodeFacts, reqs models.TaskRequirements, st *state.ClusterState) []rankKey {
 	// Precompute cluster-level constants once to avoid O(N) scans inside
 	// the per-node loop and the comparator.
 	clusterReserved := totalReservedFromNodes(candidates)
+	requestMB := ReservationMBForRequirements(reqs)
 
 	keys := make([]rankKey, len(candidates))
 	for i, n := range candidates {
@@ -155,6 +254,7 @@ func buildRankKeys(candidates []models.NodeFacts, reqs models.TaskRequirements, 
 			modelWarmthRank:         modelWarmthRank(n, reqs),
 			reservationRatio:        reservationRatio(n),
 			clusterReservationShare: share,
+			reservationSkew:         resultingReservationSkew(i, candidates, requestMB),
 		}
 	}
 	return keys
@@ -177,22 +277,53 @@ type comparisonStep struct {
 	render func(k rankKey) string
 }
 
-// headlineStep is the ranking-metric step: it decides by allocatable RAM and
-// reports the criterion with no tie-break value (the metric is already in
-// PlacementRanking.Metric).
-var headlineStep = comparisonStep{
+// capacityHeadlineStep is the capacity ranking-metric step: allocatable RAM,
+// reported with no tie-break value (already in PlacementRanking.Metric).
+var capacityHeadlineStep = comparisonStep{
 	criterion: models.RankingCriterionAllocatableCapacity,
 	compare:   func(a, b rankKey) int { return cmpInt64(a.allocatableRAM, b.allocatableRAM) },
 	render:    nil,
 }
 
-// rankComparisonSteps returns the ordered comparison pipeline for the default
-// capacity objective. The TurboQuant step is included only when the request
+// spreadHeadlineStep is the spread ranking-metric step: resulting reservation
+// share stddev (lower wins), reported with no tie-break value.
+var spreadHeadlineStep = comparisonStep{
+	criterion: models.RankingCriterionReservationSkew,
+	compare:   func(a, b rankKey) int { return -cmpFloat64(a.reservationSkew, b.reservationSkew) }, // lower wins
+	render:    nil,
+}
+
+// rankComparisonSteps returns the ordered comparison pipeline for the active
+// objective. The TurboQuant step is included only for capacity when the request
 // prefers TurboQuant, so a gated step can never be reported as decisive (or
 // affect ordering) when it was not part of the sort.
 func rankComparisonSteps(reqs models.TaskRequirements) []comparisonStep {
+	obj, _ := ResolveObjective(reqs)
+	if obj == models.PlacementObjectiveSpread {
+		return spreadComparisonSteps()
+	}
+	return capacityComparisonSteps(reqs)
+}
+
+func spreadComparisonSteps() []comparisonStep {
+	return []comparisonStep{
+		spreadHeadlineStep,
+		comparisonStep{
+			criterion: models.RankingCriterionAllocatableCapacity,
+			compare:   func(a, b rankKey) int { return cmpInt64(a.allocatableRAM, b.allocatableRAM) },
+			render:    func(k rankKey) string { return fmt.Sprintf("%dMB", k.allocatableRAM) },
+		},
+		comparisonStep{
+			criterion: models.RankingCriterionClusterReservationShare,
+			compare:   func(a, b rankKey) int { return -cmpFloat64(a.clusterReservationShare, b.clusterReservationShare) }, // lower wins
+			render:    func(k rankKey) string { return fmt.Sprintf("%.6f", k.clusterReservationShare) },
+		},
+	}
+}
+
+func capacityComparisonSteps(reqs models.TaskRequirements) []comparisonStep {
 	steps := make([]comparisonStep, 0, 13)
-	steps = append(steps, headlineStep)
+	steps = append(steps, capacityHeadlineStep)
 	steps = append(steps,
 		comparisonStep{
 			criterion: models.RankingCriterionEmpiricalHistory,

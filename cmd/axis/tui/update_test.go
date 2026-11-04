@@ -194,12 +194,14 @@ func TestRefreshErrorKeepsPreviousSnapshotVisible(t *testing.T) {
 	}
 }
 
+// A tick that lands while a load is in flight is dropped: the load's own
+// result schedules the next tick, so rescheduling here would stack chains.
 func TestUpdateTickSkipsWhenLoading(t *testing.T) {
 	m := NewModel()
 	m.loading = true
-	next, cmd := UpdateWithRefresh(m, tickMsg{})
-	if cmd == nil {
-		t.Fatal("tick while loading should reschedule itself")
+	next, cmd := UpdateWithRefresh(m, tickMsg{gen: m.refreshGen})
+	if cmd != nil {
+		t.Fatal("tick while loading must not start a load or another chain")
 	}
 	if next.(Model).loading != true {
 		t.Fatal("tick while loading must not trigger a concurrent load")
@@ -334,10 +336,10 @@ func TestSnapshotRecoveryExplainsExplicitSetupAndRetry(t *testing.T) {
 func TestHelpListsPlacementAndRefreshKeys(t *testing.T) {
 	m := modelWithNodes(1)
 	next, _ := UpdateWithRefresh(m, keyMsg("?"))
-	status := next.(Model).statusMsg
-	for _, want := range []string{"p place", "r refresh", "? help"} {
-		if !strings.Contains(status, want) {
-			t.Errorf("help status missing %q in %q", want, status)
+	out := stripANSI(ViewWithLogo(next.(Model)))
+	for _, want := range []string{"placement preview", "refresh now", "close this help"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help overlay missing %q in:\n%s", want, out)
 		}
 	}
 }

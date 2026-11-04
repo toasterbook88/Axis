@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -77,6 +78,7 @@ var (
 	doctorProbeDaemonProcs = listDaemonProcs
 	doctorProbeSocket      = probeDaemonSocket
 	doctorProbeMeshPort    = probeMeshUDPPort
+	doctorProbeSystemUnits = probeSystemDaemonUnits
 )
 
 // listDaemonProcs enumerates axis processes serving an HTTP API address.
@@ -196,6 +198,76 @@ func daemonServeAddr(argv []string) (string, bool) {
 	return addr, true
 }
 
+// systemDaemonUnitDir is where administrator-written system units live. It is
+// a var so tests can point it at a fixture directory.
+var systemDaemonUnitDir = "/etc/systemd/system"
+
+// listSystemDaemonUnits returns the system units in dir whose ExecStart runs
+// an axis daemon and that AXIS did not write. Next to the AXIS-managed user
+// service such a unit races it for the socket and the mesh port at boot, and
+// whichever loses restarts forever.
+func listSystemDaemonUnits(dir string) []string {
+	paths, _ := filepath.Glob(filepath.Join(dir, "*.service"))
+	var units []string
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil || bytes.Contains(data, []byte(daemonServiceMarker)) {
+			continue
+		}
+		argv := systemdExecStartArgs(string(data))
+		if len(argv) > 0 {
+			// systemd ExecStart prefixes: ignore-failure, argv0, privilege flags.
+			argv[0] = strings.TrimLeft(argv[0], "-@+!:")
+		}
+		if _, ok := daemonServeAddr(argv); ok {
+			units = append(units, p)
+		}
+	}
+	return units
+}
+
+// probeSystemDaemonUnits reports foreign system daemon units and whether this
+// user has the AXIS-managed user service they would contend with.
+func probeSystemDaemonUnits() (units []string, userServiceManaged bool) {
+	if runtime.GOOS != "linux" {
+		return nil, false
+	}
+	units = listSystemDaemonUnits(systemDaemonUnitDir)
+	if len(units) == 0 {
+		return nil, false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return units, false
+	}
+	path, err := daemonServicePath("linux", home)
+	if err != nil {
+		return units, false
+	}
+	data, err := os.ReadFile(path)
+	return units, err == nil && bytes.Contains(data, []byte(daemonServiceMarker))
+}
+
+// systemDaemonUnitCheck reports system units that would be a second daemon
+// owner next to the AXIS-managed user service. With no such unit, or no
+// managed user service to contend with, there is nothing to report.
+func systemDaemonUnitCheck(units []string, userServiceManaged bool) []DoctorCheck {
+	if len(units) == 0 || !userServiceManaged {
+		return nil
+	}
+	names := make([]string, 0, len(units))
+	for _, u := range units {
+		names = append(names, filepath.Base(u))
+	}
+	return []DoctorCheck{{
+		Name:   "System daemon units",
+		Status: "warn",
+		Message: fmt.Sprintf("%s also start an axis daemon outside the AXIS user service; at boot they race it for the socket and mesh port, and the loser restarts forever",
+			strings.Join(units, ", ")),
+		Fix: "keep one owner: sudo systemctl disable --now " + strings.Join(names, " "),
+	}}
+}
+
 // probeDaemonSocket inspects the daemon address without taking it over.
 func probeDaemonSocket(addr string) doctorSocketState {
 	st := doctorSocketState{Path: addr, Unix: strings.HasPrefix(addr, "/")}
@@ -311,7 +383,9 @@ func daemonOwnershipChecks(procs []doctorDaemonProc, procErr error, sock doctorS
 	}
 
 	checks = append(checks, daemonSocketCheck(sock, owners, procsKnown))
-	checks = append(checks, meshPortCheck(meshState, owners, procsKnown))
+	// The gossip port is host-wide, so every daemon contends for it, not just
+	// those on this address (e.g. a root daemon on root's socket).
+	checks = append(checks, meshPortCheck(meshState, procs, procsKnown))
 	return checks
 }
 
@@ -433,8 +507,9 @@ func daemonSocketCheck(sock doctorSocketState, owners []doctorDaemonProc, procsK
 	}
 }
 
-// meshPortCheck reports contention on the gossip UDP port.
-func meshPortCheck(st doctorMeshPortState, owners []doctorDaemonProc, procsKnown bool) DoctorCheck {
+// meshPortCheck reports contention on the gossip UDP port among all observed
+// daemons, whatever address each serves.
+func meshPortCheck(st doctorMeshPortState, daemons []doctorDaemonProc, procsKnown bool) DoctorCheck {
 	switch {
 	case !st.Enabled:
 		return DoctorCheck{
@@ -454,20 +529,20 @@ func meshPortCheck(st doctorMeshPortState, owners []doctorDaemonProc, procsKnown
 			Status:  "pass",
 			Message: fmt.Sprintf(":%d is free", st.Port),
 		}
-	case procsKnown && len(owners) == 0:
+	case procsKnown && len(daemons) == 0:
 		return DoctorCheck{
 			Name:    "Mesh UDP port",
 			Status:  "warn",
 			Message: fmt.Sprintf(":%d is bound but no axis daemon is running; another process holds the gossip port", st.Port),
 			Fix:     "identify the holder (ss -lunp) or move the mesh with discovery.udp_port in nodes.yaml",
 		}
-	case len(owners) > 1:
+	case len(daemons) > 1:
 		return DoctorCheck{
 			Name:   "Mesh UDP port",
 			Status: "warn",
-			Message: fmt.Sprintf(":%d is bound and %d axis daemons are running; gossip attribution is ambiguous",
-				st.Port, len(owners)),
-			Fix: "stop the extra daemons first, then re-run axis doctor",
+			Message: fmt.Sprintf(":%d is bound and %d axis daemons are running (%s); gossip attribution is ambiguous",
+				st.Port, len(daemons), formatDaemonAddrs(daemons)),
+			Fix: "stop the daemons no service manager owns (a root daemon on root's socket is usually left by an older `sudo axis update`), then re-run axis doctor",
 		}
 	default:
 		return DoctorCheck{
@@ -482,6 +557,14 @@ func formatPIDs(procs []doctorDaemonProc) string {
 	parts := make([]string, 0, len(procs))
 	for _, p := range procs {
 		parts = append(parts, strconv.Itoa(p.PID))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatDaemonAddrs(procs []doctorDaemonProc) string {
+	parts := make([]string, 0, len(procs))
+	for _, p := range procs {
+		parts = append(parts, fmt.Sprintf("pid %d on %s", p.PID, p.Addr))
 	}
 	return strings.Join(parts, ", ")
 }

@@ -69,6 +69,9 @@ type Line struct {
 	// model knows it exactly, and guessing from the flattened string is
 	// wrong whenever the token is not preceded by a space.
 	GhostStart int
+
+	// Painted, when non-empty, is the final SGR string; Paint returns it verbatim. Text stays plain for width math.
+	Painted string
 }
 
 // Width returns the terminal cells the line occupies.
@@ -81,6 +84,9 @@ func (l Line) Plain() string { return l.Gutter + l.Text }
 // Paint renders a line for a terminal, applying its style to the body and
 // muting the gutter. This is the only place escape sequences enter output.
 func Paint(l Line) string {
+	if l.Painted != "" {
+		return l.Painted
+	}
 	gutter := l.Gutter
 	if strings.TrimSpace(gutter) != "" {
 		gutter = ui.Dim(gutter)

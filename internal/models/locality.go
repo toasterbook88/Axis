@@ -83,6 +83,29 @@ func IsLocalConfig(name, configHostname, configStableID string) bool {
 	return identity.matches(configHostname)
 }
 
+// IsLocalHost reports whether a URL host names the machine running axis:
+// localhost, a loopback or local interface address, the full hostname, or
+// the bare short hostname. Unlike IsLocalConfig, a qualified name must equal
+// the full hostname, since hub.lab.example and hub.office.example share only
+// a first label.
+func IsLocalHost(host string) bool {
+	identity, ok := currentLocalIdentity()
+	if !ok {
+		return false
+	}
+	t := normalizeLocalTarget(host)
+	if t == "" {
+		return false
+	}
+	if t == "localhost" || net.ParseIP(t) != nil {
+		return identity.matches(t)
+	}
+	if strings.Contains(t, ".") {
+		return t == identity.hostname
+	}
+	return t == identity.shortHostname
+}
+
 // CurrentLocalStableID returns the observed stable identity for the machine
 // running axis, if one is available.
 func CurrentLocalStableID() string {

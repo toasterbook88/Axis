@@ -1,0 +1,22 @@
+{
+  "id": "0000:01:00.0",
+  "vendor": "0x10de",
+  "class": "0x030000",
+  "files": {
+    "gpu_busy_percent": {
+      "errno": 2
+    },
+    "mem_info_vram_total": {
+      "errno": 2
+    },
+    "mem_info_vram_used": {
+      "errno": 2
+    },
+    "current_link_speed": {
+      "value": "2.5 GT/s PCIe"
+    },
+    "current_link_width": {
+      "value": "16"
+    }
+  }
+}

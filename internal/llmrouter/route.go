@@ -53,6 +53,10 @@ type RoleRouteDecision struct {
 
 	// Probes holds per-backend probe snapshots used for this decision.
 	Probes []BackendProbe `json:"probes,omitempty" yaml:"probes,omitempty"`
+
+	// Upstreams holds the checks of the servers behind a hub's listed model
+	// (see checkModelUpstreams). Empty when no check ran.
+	Upstreams []UpstreamCheck `json:"upstreams,omitempty" yaml:"upstreams,omitempty"`
 }
 
 // ResolveRoleOptions controls route resolution.
@@ -155,6 +159,8 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 	}
 
 	var fallbacks []string
+	var upstreams []UpstreamCheck
+	upstreamDead := false
 	for i, name := range prefer {
 		b, ok := cfg.FindBackend(name)
 		if !ok {
@@ -192,6 +198,19 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 		}
 
 		modelPresent := ModelListed(p.Models, model)
+		if modelPresent {
+			checks, checked, note := checkModelUpstreams(ctx, b, opts.HTTPClient, opts.NodeConfig, model)
+			upstreams = append(upstreams, checks...)
+			if note != "" {
+				reasoning = append(reasoning, fmt.Sprintf("backend %q: %s", name, note))
+			}
+			if checked && !anyUpstreamOK(checks) {
+				reasoning = append(reasoning, fmt.Sprintf("skip %q: model %q listed, but no upstream answers (%s: %s)",
+					name, model, checks[0].APIBase, checks[0].Message))
+				upstreamDead = true
+				continue
+			}
+		}
 		conf := 0.75
 		if modelPresent {
 			conf = 0.95
@@ -224,6 +243,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			Reasoning:    reasoning,
 			Fallbacks:    fallbacks,
 			Probes:       probes,
+			Upstreams:    upstreams,
 		}, nil
 	}
 
@@ -241,9 +261,10 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 				Role:      roleName,
 				Model:     model,
 				Probed:    true,
-				Reasoning: append(reasoning, fmt.Sprintf("no healthy backend lists model %q", model)),
+				Reasoning: append(reasoning, fmt.Sprintf("no healthy backend lists model %q%s", model, upstreamSuffix(upstreamDead))),
 				Probes:    probes,
-			}, fmt.Errorf("%w: %q", ErrModelUnlisted, model)
+				Upstreams: upstreams,
+			}, fmt.Errorf("%w: %q%s", ErrModelUnlisted, model, upstreamSuffix(upstreamDead))
 		}
 	}
 
@@ -256,6 +277,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			Probed:    true,
 			Reasoning: append(reasoning, "no healthy backend available under require_model_listed"),
 			Probes:    probes,
+			Upstreams: upstreams,
 		}, fmt.Errorf("%w: %q (no healthy backend)", ErrModelUnlisted, model)
 	}
 
@@ -278,6 +300,7 @@ func ResolveRole(ctx context.Context, cfg *config.AIConfig, opts ResolveRoleOpti
 			Reasoning:  reasoning,
 			Fallbacks:  remainingNames(prefer, b.Name),
 			Probes:     probes,
+			Upstreams:  upstreams,
 		}, nil
 	}
 
@@ -299,4 +322,12 @@ func remainingNames(prefer []string, selected string) []string {
 		}
 	}
 	return out
+}
+
+// upstreamSuffix explains a strict-mode failure caused by a dead upstream.
+func upstreamSuffix(dead bool) string {
+	if dead {
+		return " (listed, but no upstream answers)"
+	}
+	return ""
 }

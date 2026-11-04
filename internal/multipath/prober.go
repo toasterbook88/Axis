@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/models"
+	"github.com/toasterbook88/axis/internal/netutil"
 )
 
 // ProbeResult holds the ephemeral result of probing a single address. It is not
@@ -302,7 +303,7 @@ func overlayPenalty(candidate models.NetworkAddress) time.Duration {
 	case "tailscale", "zerotier", "vpn", "wireguard", "netbird":
 		return 50 * time.Millisecond
 	}
-	if ip, err := netip.ParseAddr(candidate.Address); err == nil && isTailscaleAddr(ip) {
+	if ip, err := netip.ParseAddr(candidate.Address); err == nil && netutil.IsTailscaleAddr(ip) {
 		return 50 * time.Millisecond
 	}
 	return 0
@@ -417,16 +418,4 @@ func readSSHIdentification(conn net.Conn) error {
 		return fmt.Errorf("unsupported SSH identification %q", identification)
 	}
 	return fmt.Errorf("SSH identification not found within %d pre-banner lines", maxPreBannerLines)
-}
-
-func isTailscaleAddr(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if ip.Is4() {
-		b := ip.As4()
-		// Tailscale IPv4 CGNAT: 100.64.0.0/10
-		return b[0] == 100 && b[1] >= 64 && b[1] <= 127
-	}
-	// Tailscale IPv6: fd7a:115c:a1e0::/48
-	b := ip.As16()
-	return b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 && b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
 }

@@ -214,21 +214,23 @@ func runLocal(
 	}
 
 	startedAt := time.Now().UTC()
-	vramStop := samplePeakVRAM(ctx, 500*time.Millisecond)
+	runCtx, shellPID := withLocalPIDSink(ctx)
+	vramStop := startTaskVRAMSampler(ctx, 500*time.Millisecond, shellPID.PID)
 	out, peakRAMMB, runErr := runWithReservationHeartbeat(ledger, execID, func() (string, int64, error) {
-		return runLocalWithOutput(ctx, command, env, stdoutWriter, stderrWriter)
+		return runLocalWithOutput(runCtx, command, env, stdoutWriter, stderrWriter)
 	})
 	peakVRAMMB := vramStop()
 	elapsed := time.Since(startedAt)
 	resp.Output = out
 	resp.ExitCode = exitCode(runErr)
+	// Set before recordExecutionOutcome, which takes resp by value.
+	resp.ObservedVRAMMB = peakVRAMMB
 	if runErr != nil {
 		resp.Error = runErr.Error()
 		recordFailure(skillStore, req.Description, resp.ExitCode)
 		runtimeChanged = true
 		recordExecutionOutcome(st, reqs, resp, runErr, elapsed, peakRAMMB)
 		resp.ObservedRSSMB = peakRAMMB
-		resp.ObservedVRAMMB = peakVRAMMB
 		resp.WallTimeMS = durationMilliseconds(elapsed)
 		return resp, runErr
 	}
@@ -238,7 +240,6 @@ func runLocal(
 	recordExecutionOutcome(st, reqs, resp, nil, elapsed, peakRAMMB)
 	resp.OK = true
 	resp.ObservedRSSMB = peakRAMMB
-	resp.ObservedVRAMMB = peakVRAMMB
 	resp.WallTimeMS = durationMilliseconds(elapsed)
 	return resp, nil
 }

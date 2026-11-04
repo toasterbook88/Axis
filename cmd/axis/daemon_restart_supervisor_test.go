@@ -124,6 +124,44 @@ func TestDaemonRestartUsesLaunchctlKickstartWhenAgentLoaded(t *testing.T) {
 	}
 }
 
+// TestDefaultRestartDepsCannotReachRealServiceManager guards the TestMain
+// default: with a developer's managed unit under HOME, restart paths that do
+// not install their own deps must neither detect it nor run the manager.
+func TestDefaultRestartDepsCannotReachRealServiceManager(t *testing.T) {
+	home := t.TempDir()
+	writeUnit := func(dir, name, body string) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeUnit(filepath.Join(home, ".config", "systemd", "user"), daemonSystemdUnit,
+		"# Managed by AXIS.\n[Service]\nExecStart=/usr/local/bin/axis daemon start\n")
+	writeUnit(filepath.Join(home, "Library", "LaunchAgents"), daemonLaunchdLabel+".plist",
+		"<!-- Managed by AXIS. -->\n<key>ProgramArguments</key><array><string>/usr/local/bin/axis</string></array>\n")
+	t.Setenv("HOME", home)
+
+	deps := restartServiceDeps()
+	if got, _ := deps.homeDir(); got == home {
+		t.Fatal("restart deps resolve the developer's HOME")
+	}
+	// Assert the guard's own refusal: on hosts without a user session bus a
+	// real systemctl call would also fail, which must not count as safe.
+	for _, argv := range [][]string{
+		{"systemctl", "--user", "restart", daemonSystemdUnit},
+		{"launchctl", "kickstart", "-k", "gui/501/" + daemonLaunchdLabel},
+	} {
+		if _, err := deps.run(context.Background(), argv[0], argv[1:]...); err == nil || !strings.Contains(err.Error(), "disabled in tests") {
+			t.Fatalf("%v was not refused by the test guard: %v", argv, err)
+		}
+	}
+	if sup, _, err := detectSupervisor(context.Background(), deps); err != nil || sup != supervisorNone {
+		t.Fatalf("detected supervisor %v (err %v) from the developer's HOME", sup, err)
+	}
+}
+
 // TestDaemonRestartStandaloneStillSpawnsDetached verifies that when no
 // supervisor is active, restartDaemon falls back to the standalone path.
 func TestDaemonRestartStandaloneStillSpawnsDetached(t *testing.T) {

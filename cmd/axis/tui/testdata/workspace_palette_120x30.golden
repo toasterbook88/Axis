@@ -1,0 +1,30 @@
+CHAT-PANE                                                                             │ AXIS  vX.Y.Z
+                                                                                      │
+                                                                                      │ CLUSTER
+                                                                                      │ ▲ 3/4 reachable
+                                                                                      │ 2m ago · daemon-cache
+                                                                                      │ mem ━━━━━━━━━━━━━━━━━━━━━━  63%
+                                ╭──────────────────────────────────────────────────────╮
+                                │ Commands                                             │
+                                │ ▌ type to filter                                     │
+                                │ ──────────────────────────────────────────────────── │
+                                │ Cluster dashboard                           ctrl+x d │
+                                │ Placement preview                           ctrl+x p │
+                                │ Refresh cluster snapshot                    ctrl+x r │
+                                │ Toggle sidebar                              ctrl+x b │
+                                │ Switch model                                ctrl+x m │
+                                │ Run a learned skill                         ctrl+x s │
+                                │ MCP servers                                 ctrl+x c │
+                                │ Fleet summary in chat                       ctrl+x f │
+                                │ Token usage                                 ctrl+x u │
+                                │ Clear conversation                          ctrl+x n │
+                                │ Keyboard help                               ctrl+x h │
+                                │ Quit                                        ctrl+x q │
+                                ╰──────────────────────────────────────────────────────╯
+                                                                                      │
+                                                                                      │
+                                                                                      │ KEYS
+                                                                                      │ ctrl+o commands
+                                                                                      │ ctrl+x d dashboard
+                                                                                      │ ctrl+x h help
+ AXIS agent                                                   ctrl+o commands  ctrl+x leader  f2 dashboard  ctrl+c quit

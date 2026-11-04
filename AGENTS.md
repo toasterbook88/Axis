@@ -44,14 +44,19 @@ make install-system        # /usr/local/bin (cluster nodes); then: axis daemon r
 make install-user          # ~/.local/bin (workstation development)
 ```
 
-- Go: `go.mod` is authoritative (currently `go 1.26.9`). If `go vet` or staticcheck fails with an
-  export-data error under a newer toolchain, run gates with `GOTOOLCHAIN=go1.26.9`.
-- CI also runs: coverage gates (`hack/coverage-check.sh`), deadcode gate, public boundary,
+- Go: `go.mod` is authoritative (currently `go 1.26.10`); a newer local Go still runs the gates. If
+  staticcheck fails with an export-data error, bump `STATICCHECK_VERSION` (Makefile) to a release that
+  reads that Go's export data; `GOTOOLCHAIN=go1.26.10` reproduces CI's toolchain meanwhile.
+- CI also runs: coverage gates (`hack/coverage-check.sh`), deadcode gate, import tiers, public boundary,
   repo truth, doc facts, actionlint, workflow action pins, install tests,
-  `hack/lifecycle-check.go` and `hack/claude-workflow-tests.py`.
+  `hack/lifecycle-check.go`, `hack/verify-specs.go` (spec review records, §8) and
+  `hack/claude-workflow-tests.py`.
 - `./hack/verify-doc-facts.sh` checks this file against the code (exit codes, command count,
-  MCP tool count, package inventory, 30 KB budget) — update both together.
-- PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN).
+  MCP tool count, 30 KB budget) — update both together.
+- `go run hack/verify-import-tiers.go` checks the §4 tier layout against every `internal/` import and
+  the package inventory; exceptions go in `hack/import-tiers-allowlist.txt`, each with a rationale.
+- PR review loop: `./hack/pr-review-cycle.sh <PR>` (renders review state; fails closed unless CLEAN;
+  waits for requested reviews and exits 3 while one is still pending).
 - Bare `go test` outside `make` can touch real `~/.axis` state; prefer `make test` or `hack/hermetic-go-test.sh`.
 - `axis version` must print `commit:`; it distinguishes tip-of-main from a release with the same semver.
 - NixOS: `/usr/local/bin` is not on PATH by default (use `environment.sessionVariables.PATH`);
@@ -63,17 +68,17 @@ Five trust tiers. Higher tiers consume lower-tier authority; advisory surfaces n
 
 ```text
 Layer 5  Advisory    internal/chat internal/agent internal/console internal/mcp internal/api
-                     internal/cortex internal/mcpclient internal/a2a
-Layer 4  Execution   internal/execution internal/safety internal/reservation internal/scripts
-                     internal/skills internal/modellife internal/modelinventory
+                     internal/cortex internal/mcpclient internal/a2a internal/knowledge
+Layer 4  Execution   internal/execution internal/safety internal/scripts internal/modellife
+                     internal/modelinventory
 Layer 3  Placement   internal/placement internal/workload internal/modelplan internal/llmrouter
 Layer 2  Snapshot    internal/snapshot internal/daemon internal/snapshotview internal/runtimectx
-                     internal/publication
+                     internal/publication internal/reservation internal/skills
 Layer 1  Fact Plane  internal/facts internal/discovery internal/mesh internal/transport internal/multipath
 Support              internal/config internal/models internal/buildinfo internal/ui internal/persist
                      internal/repairs internal/turboexec internal/auth internal/failures internal/fleettest
                      internal/git internal/lockutil internal/netutil internal/secrets internal/versioncmp
-                     internal/state internal/knowledge internal/events
+                     internal/state internal/events
 ```
 
 `cmd/axis/` — Cobra CLI, one file per subcommand (29 commands).
@@ -92,8 +97,9 @@ ranking, diagnostic FitScore), `NodeStatus` = `complete | partial | unreachable 
 
 **Placement** first filters (`FilterCandidates`, `internal/placement/explain.go`): ineligible nodes drop out
 before ranking — e.g. `RequiredLabels` (all pairs must match) and the reservation budget (`CanReserveRAM`).
-It then ranks by capacity; headline metric `allocatable_ram` (MB, derived). FitScore (0–100) is
-diagnostic only, never the sort key (`docs/decisions/placement-selection-contract.md`). Order:
+Default objective is `capacity` (headline `allocatable_ram`, MB, derived); explicit `--objective spread`
+ranks by resulting cluster reservation-share stddev (`reservation_skew`, lower wins). FitScore (0–100) is
+diagnostic only, never the sort key (`docs/decisions/placement-selection-contract.md`). Capacity order:
 allocatable RAM → empirical observation → resident model locality → preferred backend → GPU score →
 effective headroom → TurboQuant → unified memory → pressure → model warmth → reservation ratio/share → node name.
 
@@ -103,7 +109,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | --- | --- |
 | `axis update` | Self-update from GitHub Releases, SHA-256 verified |
 | `axis version` | Version, commit, date, go, platform |
-| `axis facts` | Local node facts (alias of `axis node facts`) |
+| `axis facts` | Local node facts (alias of `axis node facts`); `--hardware` / `-hw` adds detailed hardware specifications and live load |
 | `axis status` | Cluster snapshot; cache-first, prints source and age; `--live`, `--cached-only` |
 | `axis task` | `place`, `context`, `run` |
 | `axis placement explain` | Per-node placement breakdown |
@@ -129,7 +135,7 @@ effective headroom → TurboQuant → unified memory → pressure → model warm
 | `axis init` | Configuration wizard |
 | `axis mesh` | `status`, `peers` |
 | `axis observations` | Execution observations |
-| `axis tui` | Full-screen dashboard |
+| `axis tui` | Full-screen workspace: embedded agent console, cluster sidebar, dashboard (`--dashboard` alone) |
 
 Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrConfigLoad` ·
 3 `ExitErrNoNodesFit` · 4 `ExitErrCommandFail` · 5 `ExitErrContextWrite` · 6 `ExitErrIO` · 7 `ExitErrModelUnlisted`.
@@ -153,3 +159,34 @@ Exit codes (`cmd/axis/exit.go`): 0 `ExitOK` · 1 `ExitErrGeneric` · 2 `ExitErrC
   (15 direct dependencies; `go.mod` is authoritative).
 - When wiring changes, update `docs/current-state.md` and pass `verify-repo-truth.sh` / `verify-doc-facts.sh`.
 - Say "suspect" until a test or probe confirms a cause.
+
+## 8. New features need a reviewed spec
+
+A feature is any new command, subcommand, flag, MCP tool, HTTP route, config key, state file or
+output-schema change, or any change to documented behavior. Bug fixes that restore documented
+behavior, refactors, tests, dependency bumps and docs are exempt. If unsure, treat it as a feature.
+Only the maintainer can waive this, in writing on the PR.
+
+1. Before feature code, commit `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`: problem,
+   non-goals, design, alternatives, and `## Research` (prior art with links; the optimization chosen
+   and its measurement, or why none applies). Size it to the change: one flag can be 20 lines.
+   Throwaway spikes for measurement are fine; do not merge them.
+2. Review the spec with a fresh-context agent: a new session or subagent given only
+   `docs/superpowers/review-prompt.md` and its five inputs (repo, base, head, spec path, ask). A
+   different model family is optional; that file cites the evidence.
+3. Record each review in the spec's `## Review` section as a block of `Kind:` (`spec` or `diff`),
+   `Reviewer:`, `Model:` (vendor family, not a cluster model), `Base:`, `Head:`, `Date:` and
+   `Verdict:` (`approve`, `approve-with-changes` or `revise`) lines, then its findings and questions.
+   Code starts after a spec review that approves, or approves with changes and every finding
+   resolved. A substantial spec change needs a new spec review.
+4. When the code is done, review the full diff against the spec the same way (`Kind: diff`). A larger
+   feature (at least 150 changed lines in non-test `.go` files, or changes in 3 or more of `cmd/axis`
+   and the `internal/<pkg>` directories) gets two independent diff reviews. Merge only when every
+   diff review approves, or approves with changes and every finding is resolved.
+5. Link the spec in the PR body. If the code departs from the spec, update the spec in that PR.
+
+Every PR, feature or exempt: resolve each review finding, review-bot findings included, as `fixed in
+<commit>` or `declined: <reason>, <the run that supports it>`; close each reviewer question as a
+finding, `verified: <how>` or `open: <why not probed>`; list declines and open questions in the PR
+body. Do not merge while a requested review is pending: `hack/pr-review-cycle.sh` waits for requested
+reviews and exits 3 while one is still pending. An empty `reviewRequests` list alone is not proof.

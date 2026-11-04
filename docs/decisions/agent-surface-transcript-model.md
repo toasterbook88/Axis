@@ -2,6 +2,10 @@
 
 **Date:** 2026-08-24
 **Scope:** `cmd/axis/tui`, `cmd/axis/agent.go`, `internal/agent`, `internal/llmrouter`, docs
+**Superseded in part (2026-10-30):** §2.1's "`axis tui` stays observational"
+is replaced by [`tui-agent-workspace.md`](tui-agent-workspace.md): `axis tui`
+now hosts this console beside a cluster sidebar; the observational dashboard
+is `axis tui --dashboard`. The agent surface below is unchanged.
 **Decision:** Two surfaces. `axis tui` stays observational (panes, alt-screen).
 The agent command center is transcript-first with dim footer chrome and
 transient overlays. Both render over the same fact plane; neither becomes a
@@ -286,14 +290,18 @@ state and is named as such.
 Truncation is layered and explicit, matching the footer's existing behavior:
 
 1. Below 100 columns, drop the provider prefix from the model label.
-2. Below 80, drop cache/cost usage parts; keep context percent and model.
-3. Below 60, the status line keeps `fleet` and `snap` and drops other keys.
-4. Below 40, the footer collapses to the model label alone.
+2. Below 72, drop cache/cost usage parts and the context bar; keep the compact
+   context percent, snapshot, and model.
+3. Below 44, the footer collapses to the model label alone.
+
+The footer line is always exactly `width-1` display columns (wide runes
+counted by their display width), so a full-width write never auto-wraps.
 
 Overlays take a `visible(width, height)` predicate evaluated per frame; the
 model picker drops the `TARGET` column before the `HEALTH` column.
 
-Non-TTY continues to error, as `runTUI` already does.
+Non-TTY continues to error, as `runTUI` already does. Bare `axis` on an
+interactive terminal opens `axis agent`; piped or scripted, it prints help.
 
 ## 11. Data-source contract
 

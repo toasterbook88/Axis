@@ -40,9 +40,14 @@ type Agent struct {
 	tools   *ToolRegistry
 	confirm ConfirmFunc
 	// baseConfirm is the surface-installed confirm without autonomy
-	// wrapping. SetAutonomy re-wraps this instead of StdinConfirm so a
-	// raw-mode surface's confirm survives mode changes.
+	// wrapping. It still carries --auto-approve when that flag was set:
+	// SetConfirm re-applies the flag, and SetAutonomy re-wraps this instead
+	// of StdinConfirm so a raw-mode surface's confirm survives mode changes.
 	baseConfirm ConfirmFunc
+	// autoApprove is the construction-time --auto-approve flag. It has to
+	// live on the agent because the console replaces the surface callback
+	// via SetConfirm after New.
+	autoApprove bool
 	runShell    ShellRunner
 	runOnNode   NodeShellRunner
 	runTask     TaskRunner
@@ -57,6 +62,15 @@ type Agent struct {
 	dryRun      bool
 	toolContext *ToolContext
 	model       string
+	// sessionSummary is the cluster summary taken when the agent was built.
+	// It is sent with each user message, not in the system prompt.
+	sessionSummary string
+	// sessionGit is the git repository context taken when the agent was
+	// built. Like sessionSummary, it is sent with each user message.
+	sessionGit string
+	// now returns the local time for the per-turn date line. Nil means
+	// time.Now; tests set it.
+	now func() time.Time
 	// usageMu guards the session usage accumulator. Responses report real
 	// token counts on the returned Message (Ollama final chunk, cloud usage
 	// block); accumulateUsage totals them. Stats() reads it from the tea
@@ -71,13 +85,22 @@ type Agent struct {
 	// read the field inside the agent's own serialized turn loop.)
 	modelMu                 sync.RWMutex
 	allowRawCommandEvidence bool
-	securityClass           BackendSecurityClass
-	// autoApproveAll is toggled when the operator selects "always" in confirmation.
-	autoApproveAll bool
+	// clientMu guards client and securityClass, which SetBackend swaps while
+	// the console startup goroutine finishes model resolution and other
+	// goroutines (slash commands, subagents, evidence) read them. Never hold
+	// it across ChatStream or any callback: read the backend into a local
+	// via Backend/backendAndClass and use the local. It is a leaf lock; no
+	// other Agent mutex is acquired while it is held.
+	clientMu      sync.RWMutex
+	securityClass BackendSecurityClass
+	// sessionApproved lists the tools the operator approved for the rest of
+	// the session ("always"). It is per tool: approving one tool, such as a
+	// read-only MCP query, must not approve shell commands or MCP writes.
+	sessionApproved map[string]bool
 	// blockAll is toggled when the operator selects "never" in confirmation.
 	blockAll    bool
 	mcpRegistry *mcpclient.Registry
-	// dispatchMu guards autoApproveAll, blockAll, and the confirm func.
+	// dispatchMu guards sessionApproved, blockAll, and the confirm func.
 	// It must not be held across a blocking confirm: the console footer
 	// calls Autonomy() on the UI goroutine, and that takes this lock.
 	// Holding it while the UI paints deadlocks the approval overlay, so
@@ -110,7 +133,7 @@ type Config struct {
 	MaxTurns                int                  // Maximum agent loop iterations (default: 10)
 	MaxTokens               int                  // Conversation token budget (default: 4096)
 	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
-	Autonomy                AutonomyMode         // Autonomy mode: default, edit, or full (controls auto-approval breadth)
+	Autonomy                AutonomyMode         // Autonomy mode: cluster, default, edit, or full (controls tool scope and auto-approval)
 	SystemExtra             string               // Extra text appended to system prompt
 	Verbose                 bool                 // Emit trace output for tool calls and turns
 	DryRun                  bool                 // Plan tool calls without executing them
@@ -184,16 +207,16 @@ func New(cfg Config) *Agent {
 	conv := chat.NewConversation(cfg.MaxTokens)
 
 	// Build system prompt.
-	sysPrompt := chat.BuildSystemPrompt(cfg.Cluster, cfg.SystemExtra)
+	// The session-start cluster summary (free RAM changes every session) goes
+	// with the user message, not here, so separate runs share one cacheable
+	// system prompt. See turn_context.go.
+	sysPrompt := chat.BuildSystemPrompt(nil, cfg.SystemExtra)
 
-	// Inject Git context if available
+	// Git context (HEAD, dirty count) changes whenever the operator commits
+	// or edits a file between runs, so it goes with the user message too.
+	gitContext := ""
 	if repoState, err := git.GetRepoState("."); err == nil && repoState.IsRepo {
-		sysPrompt += fmt.Sprintf("\n\nGit Repository Context:\n- Branch: %s\n- HEAD Commit: %s (Subject: %s)\n", repoState.Branch, repoState.Commit, repoState.Subject)
-		if repoState.IsDirty {
-			sysPrompt += fmt.Sprintf("- Status: Dirty (%d files changed)\n", repoState.DirtyCount)
-		} else {
-			sysPrompt += "- Status: Clean\n"
-		}
+		gitContext = formatGitContext(repoState)
 	}
 
 	// Inject nearest AGENTS.md (project rules) when present — truthful workspace
@@ -252,11 +275,14 @@ func New(cfg Config) *Agent {
 	}
 
 	return &Agent{
+		sessionSummary:          chat.FormatClusterSummary(cfg.Cluster),
+		sessionGit:              gitContext,
 		client:                  client,
 		conv:                    conv,
 		tools:                   tools,
 		confirm:                 confirm,
 		baseConfirm:             baseConfirm,
+		autoApprove:             cfg.AutoApprove,
 		runShell:                runShell,
 		runOnNode:               cfg.RunOnNode,
 		runTask:                 cfg.RunTask,
@@ -292,6 +318,12 @@ func (a *Agent) SetConfirm(fn ConfirmFunc) {
 	if fn == nil {
 		return
 	}
+	// Re-apply --auto-approve before storing the surface callback. New
+	// wraps it once; the console calls SetConfirm afterwards and must not
+	// discard that wrap. Autonomy stays outside, applied by wrapConfirm.
+	if a.autoApprove {
+		fn = AutoApproveConfirm(70, fn)
+	}
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 	a.dispatchMu.Lock()
@@ -302,7 +334,7 @@ func (a *Agent) SetConfirm(fn ConfirmFunc) {
 
 // askConfirm runs the operator prompt without holding dispatchMu.
 // confirmGate keeps concurrent prompts from drawing on top of each other.
-func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
+func (a *Agent) askConfirm(ctx context.Context, tool, desc string, score int) ConfirmResult {
 	a.dispatchMu.Lock()
 	fn := a.confirm
 	a.dispatchMu.Unlock()
@@ -311,7 +343,9 @@ func (a *Agent) askConfirm(tool, desc string, score int) ConfirmResult {
 	}
 	a.confirmGate.Lock()
 	defer a.confirmGate.Unlock()
-	return fn(tool, desc, score)
+	result := fn(tool, desc, score)
+	a.sessionLog.noteApproval(toolCallIDFrom(ctx), tool, result)
+	return result
 }
 
 // wrapConfirm applies the active autonomy policy to a base confirm.
@@ -347,7 +381,9 @@ func (a *Agent) SetAutonomy(mode AutonomyMode) {
 	if base == nil {
 		base = StdinConfirm()
 	}
-	a.confirm = autonomyConfirm(mode, base)
+	// Same composition as New: default mode is the surface callback
+	// (including --auto-approve); every other mode wraps it.
+	a.confirm = a.wrapConfirm(base)
 }
 
 func visibleToolsMessage(r *ToolRegistry) string {
@@ -401,8 +437,6 @@ func (a *Agent) RunWithSinks(ctx context.Context, userPrompt string, obs Observe
 	return a.runLocked(ctx, userPrompt)
 }
 
-// dropLatestPrompt removes the user message appended for this run. Compaction
-// can move it, so the index taken before that rewrite is not used.
 func (a *Agent) dropLatestPrompt(prompt string) {
 	if a == nil || a.conv == nil {
 		return
@@ -418,11 +452,11 @@ func (a *Agent) dropLatestPrompt(prompt string) {
 
 func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: userPrompt})
-	startIn, startOut, _ := a.UsageStats()
+	startIn, startOut, startUsageTurns := a.UsageStats()
 	if a.sessionLog != nil {
 		a.sessionLog.beginTurn(a, userPrompt)
 		defer func() {
-			a.sessionLog.finishTurn(a, userPrompt, err, startIn, startOut)
+			a.sessionLog.finishTurn(a, userPrompt, err, startIn, startOut, startUsageTurns)
 		}()
 	}
 
@@ -430,58 +464,31 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		if a.verbose {
 			a.emitTurnStarted(turn+1, a.maxTurns)
 		}
+		// Snapshot backend and trust class once per model round so
+		// compaction, evidence selection and the stream all use the same
+		// pair even if SetBackend swaps mid-round. A swap applies from the
+		// next round, which may be inside the same operator prompt. Re-reading
+		// would let local-only evidence (chosen for a local class) be streamed
+		// to a newly installed remote backend.
+		backend, class := a.backendAndClass()
 		// Proactively compress older conversation turns before sending context
 		// to the model, so long sessions stay within the token budget.
-		if err := a.compactContext(ctx); err != nil && a.verbose {
+		if err := a.compactContext(ctx, backend); err != nil && a.verbose {
 			a.emitCompactionSkipped(err)
 		}
 		msgs := a.conv.Messages()
 		toolDefs := a.tools.Defs()
 
-		// Clone msgs list and dynamically merge evidence into the first system message.
 		clonedMsgs := make([]chat.Message, len(msgs))
 		copy(clonedMsgs, msgs)
 
-		evidence := a.retrieveEvidence(userPrompt)
-		if evidence != "" {
-			systemMsgIdx := -1
-			for i, m := range clonedMsgs {
-				if m.Role == chat.RoleSystem {
-					systemMsgIdx = i
-					break
-				}
-			}
-			if systemMsgIdx >= 0 {
-				if clonedMsgs[systemMsgIdx].Content != "" {
-					clonedMsgs[systemMsgIdx].Content += "\n\n" + evidence
-				} else {
-					clonedMsgs[systemMsgIdx].Content = evidence
-				}
-			} else {
-				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: evidence}}, clonedMsgs...)
-			}
-		}
-		// Inject a live cluster snapshot so the agent continuously knows node
-		// health, free memory, and resident models — and can adapt placement
-		// mid-task (e.g. reroute when a node hits memory pressure).
-		if clusterCtx := a.clusterContextSnippet(); clusterCtx != "" {
-			systemMsgIdx := -1
-			for i, m := range clonedMsgs {
-				if m.Role == chat.RoleSystem {
-					systemMsgIdx = i
-					break
-				}
-			}
-			if systemMsgIdx >= 0 {
-				if clonedMsgs[systemMsgIdx].Content != "" {
-					clonedMsgs[systemMsgIdx].Content += "\n\n" + clusterCtx
-				} else {
-					clonedMsgs[systemMsgIdx].Content = clusterCtx
-				}
-			} else {
-				clonedMsgs = append([]chat.Message{{Role: chat.RoleSystem, Content: clusterCtx}}, clonedMsgs...)
-			}
-		}
+		// Per-turn context: the session-start cluster summary, the session-start
+		// git context, today's date, prompt evidence and a live cluster
+		// snapshot (node health, free memory, resident models) so the agent
+		// can adapt placement mid-task. All of them change between runs, so
+		// they are placed with the newest user message, not in the system
+		// prompt. See turn_context.go for why.
+		turnContext := []string{a.sessionSummary, a.sessionGit, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
 
 		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
 
@@ -499,19 +506,24 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 			clonedMsgs = append(clonedMsgs[:insert], append([]chat.Message{{Role: chat.RoleUser, Content: userPrompt}}, clonedMsgs[insert:]...)...)
 		}
 
+		clonedMsgs = injectTurnContext(clonedMsgs, turnContext...)
+		// Some servers (LiteLLM) reject a request with any empty non-assistant
+		// message. Fill them on the way out so a history that already holds
+		// one (an older session, a resumed file) still works.
+		clonedMsgs = fillEmptyContent(clonedMsgs)
+
 		// Stream the model response with code block highlighting.
 		cw := NewColorWriter(a.output)
-		resp, err := a.client.ChatStream(ctx, clonedMsgs, toolDefs, cw)
+		resp, err := backend.ChatStream(ctx, clonedMsgs, toolDefs, cw)
 		cw.Close()
 		if err != nil {
 			if turn == 0 {
-				// Compaction may already have shifted the prompt off its old index.
 				a.dropLatestPrompt(userPrompt)
-				a.sessionLog.omitTranscript()
 			}
 			return fmt.Errorf("chat stream (turn %d): %w", turn, err)
 		}
 
+		a.sessionLog.noteResponse(resp)
 		a.accumulateUsage(resp.UsageTokensIn, resp.UsageTokensOut)
 		a.conv.Append(resp)
 
@@ -561,6 +573,9 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 					start := time.Now()
 					result, err := a.dispatchToolCall(ctx, tc)
 					elapsed := time.Since(start)
+					if result != "" {
+						a.sessionLog.noteToolOutput(tc.ID, tc.Function.Name, result, err == nil)
+					}
 					outMu.Lock()
 					if err != nil {
 						a.emitToolFailed(tc.ID, tc.Function.Name, err, elapsed)
@@ -587,7 +602,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 				a.conv.Append(chat.Message{
 					Role:       chat.RoleTool,
 					ToolCallID: tc.ID,
-					Content:    results[i].result,
+					Content:    toolResultContent(results[i].result),
 				})
 			}
 		}
@@ -637,14 +652,28 @@ func (a *Agent) MCPRegistry() *mcpclient.Registry {
 }
 
 // SetBackend changes the active LLM backend and its trust classification.
+// Both fields change under one write lock so readers never observe a backend
+// paired with the previous backend's classification.
 func (a *Agent) SetBackend(client ChatBackend, securityClass BackendSecurityClass) {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
 	a.client = client
 	a.securityClass = securityClass
 }
 
 // Backend returns the active LLM backend.
 func (a *Agent) Backend() ChatBackend {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
 	return a.client
+}
+
+// backendAndClass returns the backend and its classification as one
+// consistent pair, for callers that need both (subagent construction).
+func (a *Agent) backendAndClass() (ChatBackend, BackendSecurityClass) {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.client, a.securityClass
 }
 
 // Model returns the current active model name.
@@ -753,7 +782,7 @@ func (a *Agent) UsageStats() (in, out, turns int) {
 
 // Stats returns the accumulated statistics from the underlying client, if supported.
 func (a *Agent) Stats() AgentStats {
-	if sp, ok := a.client.(interface {
+	if sp, ok := a.Backend().(interface {
 		Stats() (int, int, float64)
 	}); ok {
 		in, out, cost := sp.Stats()

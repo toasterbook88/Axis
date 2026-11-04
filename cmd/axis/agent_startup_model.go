@@ -40,6 +40,10 @@ type agentStartupBackendParams struct {
 	In                    *os.File
 	Out                   io.Writer
 	ErrOut                io.Writer
+	// HideRoutingTrace keeps per-call routing traces off ErrOut. The console
+	// reads ErrOut once at startup, so a session-long trace writer there would
+	// be a buffer nobody reads, written by concurrent subagent calls.
+	HideRoutingTrace bool
 }
 
 // agentStartupBackendResult returns the resolved active target, backend, and choices catalog.
@@ -47,6 +51,8 @@ type agentStartupBackendResult struct {
 	ActiveTarget ModelChoice
 	Backend      agent.ChatBackend
 	Choices      []ModelChoice
+	// Readiness is the startup probe's verdict on ActiveTarget.
+	Readiness modelReadiness
 }
 
 // setupAgentStartupBackend handles interactive model selection (if requested or needed),
@@ -117,7 +123,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 	}
 
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
-	activeTarget, cloudOpts, err := resolveReadyStartupModelTarget(p.Ctx, p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
+	activeTarget, cloudOpts, readiness, err := resolveReadyStartupModelTarget(p.Ctx, p.StartupRequestedModel, provider, cloudModel, explicitTarget, p.RT, choices, p.Model != "", p.ErrOut)
 	if err != nil {
 		return agentStartupBackendResult{}, ExitCodeError{Code: ExitErrConfigLoad, Message: err.Error()}
 	}
@@ -135,7 +141,11 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 			if berr == nil {
 				rb := agent.NewRoutingBackend(backend, cheapBackend, nil)
 				if p.Verbose {
-					rb.SetVerbose(p.ErrOut)
+					if p.HideRoutingTrace {
+						fmt.Fprintln(p.ErrOut, "Routing traces are not shown in the console; use --plain to see them.")
+					} else {
+						rb.SetVerbose(p.ErrOut)
+					}
 					fmt.Fprintf(p.ErrOut, "Multi-model routing: primary=%q cheap=%q\n", activeTarget.Model, cheapTarget.Model)
 				}
 				backend = rb
@@ -151,6 +161,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 		ActiveTarget: activeTarget,
 		Backend:      backend,
 		Choices:      choices,
+		Readiness:    readiness,
 	}, nil
 }
 
@@ -228,14 +239,9 @@ func applyModelChoice(session *agentREPLSession, choice ModelChoice) error {
 	if err != nil {
 		return err
 	}
-	session.Agent.SetBackend(backend, choice.SecurityClass)
-	session.Agent.SetModel(choice.Model)
-	// Refresh guarded runners so OwnerLabel provenance tracks the live model
-	// after /model (Layer 4 contract — not the startup-captured name).
-	session.Agent.SetRunShell(guardedAgentShellRunner(choice.Model, session.Runtime))
-	session.Agent.SetRunOnNode(func(ctx context.Context, node, command string) (string, error) {
-		return guardedAgentCommandRunner(choice.Model, node, session.Runtime)(ctx, command)
-	})
+	// Also refreshes guarded runners so OwnerLabel provenance tracks the live
+	// model after /model (Layer 4 contract — not the startup-captured name).
+	bindAgentModelChoice(session.Agent, choice, backend, session.Runtime)
 	session.ActiveTarget = choice
 	errW := session.ErrOut
 	switch choice.Protocol {
@@ -672,8 +678,8 @@ func findModelTargetByRef(choices []ModelChoice, ref string) (ModelChoice, error
 // requestedModel should be the effective operator request (explicit --model,
 // chat.default_model, or warm preferred) — not only the raw flag.
 //
-// Policy for provider=auto: prefer reachable local/remote ollama (or openai-local)
-// over cloud; cloud only when no usable local target exists. Explicit --provider
+// Policy for provider=auto: prefer usable local targets in catalog order
+// over cloud, regardless of protocol. Explicit --provider
 // local/cloud and interactive selection are never overridden by auto-cloud.
 // Explicit --cloud-model always requires a credentialed configured match (no silent fallback).
 func resolveStartupModelTarget(
@@ -696,11 +702,6 @@ func resolveStartupModelTarget(
 	usable := func(c ModelChoice) bool { return !c.Disabled && c.Model != "" }
 	firstLocal := func() (ModelChoice, bool) {
 		for _, c := range choices {
-			if usable(c) && c.ProviderKind == "local" && c.Protocol == agent.ProtocolOllama {
-				return c, true
-			}
-		}
-		for _, c := range choices {
 			if usable(c) && c.ProviderKind == "local" {
 				return c, true
 			}
@@ -714,16 +715,7 @@ func resolveStartupModelTarget(
 				matches = append(matches, c)
 			}
 		}
-		if len(matches) == 1 {
-			return matches[0], true
-		}
-		if len(matches) > 1 {
-			// Prefer local node ollama
-			for _, c := range matches {
-				if c.Node == "" && c.Protocol == agent.ProtocolOllama {
-					return c, true
-				}
-			}
+		if len(matches) > 0 {
 			return matches[0], true
 		}
 		return ModelChoice{}, false
@@ -756,8 +748,7 @@ func resolveStartupModelTarget(
 			return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 		}
 		if t, ok := firstLocal(); ok {
-			opts, err := optsForChoice(t)
-			return t, opts, err
+			return pickLocalStartup(choices, t, optsForChoice)
 		}
 		// Fallback local default name
 		name := resolveAgentModel("", rt)
@@ -781,10 +772,9 @@ func resolveStartupModelTarget(
 				return syntheticLocalOllamaTarget(reqModel), agent.CloudBackendOptions{}, nil
 			}
 		}
-		// Prefer any usable local target from the catalog
+		// Prefer a usable local target. A probed hub role beats foreign Ollama.
 		if t, ok := firstLocal(); ok {
-			opts, err := optsForChoice(t)
-			return t, opts, err
+			return pickLocalStartup(choices, t, optsForChoice)
 		}
 		// Explicit default explicitly absent from disk AND catalog: keep the
 		// legacy last-resort behavior so the operator sees the real error.

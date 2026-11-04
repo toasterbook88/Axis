@@ -2,7 +2,10 @@ package axismcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/toasterbook88/axis/internal/config"
@@ -160,5 +163,51 @@ func TestInferenceRouteExplain_AllowUnlistedDisablesStrict(t *testing.T) {
 	}
 	if sawRequire {
 		t.Fatal("RequireModelListed should be false when allow_unlisted=true")
+	}
+}
+
+// MCP resolves a backend's node through nodes.yaml, as the CLI does, so a hub
+// bound to this machine by its logical name gets its upstreams checked.
+func TestInferenceRouteExplain_UsesNodeConfig(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadURL := dead.URL + "/v1"
+	dead.Close()
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+		case "/model/info":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"model_name": "m", "litellm_params": map[string]any{"api_base": deadURL}},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(hub.Close)
+
+	prevLoad, prevPath, prevNodes := loadAIConfigForMCP, aiConfigPathForMCP, loadNodesForMCP
+	t.Cleanup(func() {
+		loadAIConfigForMCP, aiConfigPathForMCP, loadNodesForMCP = prevLoad, prevPath, prevNodes
+	})
+	aiConfigPathForMCP = func() string { return "test-ai.yaml" }
+	loadAIConfigForMCP = func(string) (*config.AIConfig, error) {
+		return &config.AIConfig{
+			Backends: []config.AIBackendConfig{
+				{Name: "hub", Kind: config.AIBackendOpenAICompatible, BaseURL: hub.URL + "/v1", Node: "node-a"},
+			},
+			Roles: map[string]config.AIRoleConfig{"default": {Prefer: []string{"hub"}, Model: "m"}},
+		}, nil
+	}
+	loadNodesForMCP = func() (*config.Config, error) {
+		return &config.Config{Nodes: []config.NodeConfig{{Name: "node-a", Hostname: "127.0.0.1", SSHUser: "axis"}}}, nil
+	}
+
+	result, err := inferenceRouteExplainTool(context.Background(), toolRequest(map[string]any{"role": "default"}))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("dead upstream behind a local hub reported as a route: %s", toolResultText(t, result))
 	}
 }

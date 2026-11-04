@@ -168,6 +168,33 @@ func TestDaemonServiceInstallPropagatesWriterFailureAfterInstalling(t *testing.T
 	}
 }
 
+func TestDaemonServiceInstallWarnsAboutRacingSystemUnit(t *testing.T) {
+	home, unitDir := t.TempDir(), t.TempDir()
+	legacy := filepath.Join(unitDir, "legacy-axis.service")
+	if err := os.WriteFile(legacy, []byte("[Service]\nExecStart=/usr/local/bin/axis serve\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prevDir := systemDaemonUnitDir
+	systemDaemonUnitDir = unitDir
+	t.Cleanup(func() { systemDaemonUnitDir = prevDir })
+	deps := daemonServiceDependencies{
+		goos:       "linux",
+		homeDir:    func() (string, error) { return home, nil },
+		executable: func() (string, error) { return "/opt/axis/bin/axis", nil },
+		run:        func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	}
+
+	var out strings.Builder
+	if err := runDaemonServiceInstall(context.Background(), &out, "/tmp/axis.sock", "1m", deps); err != nil {
+		t.Fatalf("runDaemonServiceInstall: %v", err)
+	}
+	for _, want := range []string{"Warning: " + legacy + " also starts an axis daemon", "sudo systemctl disable --now legacy-axis.service"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestDaemonServiceStatusPreservesManagerAndWriterFailures(t *testing.T) {
 	managerErr := errors.New("manager unavailable")
 	writerErr := errors.New("writer unavailable")

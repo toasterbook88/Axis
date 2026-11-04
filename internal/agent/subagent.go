@@ -62,6 +62,14 @@ func (r *ToolRegistry) registerSubAgent() {
 // focused conversation and a toolset biased toward the target node. It runs
 // to completion (or its turn budget) and returns the child's final answer.
 func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (string, error) {
+	// After "never", a child must not run either: it would start unblocked
+	// with the parent's earlier "always" approvals.
+	a.dispatchMu.Lock()
+	blocked := a.blockAll
+	a.dispatchMu.Unlock()
+	if blocked {
+		return "", fmt.Errorf("operator has blocked all tool execution for this session")
+	}
 	var sa subAgentArgs
 	if err := json.Unmarshal(args, &sa); err != nil {
 		return "", fmt.Errorf("invalid arguments for spawn_subagent: %w", err)
@@ -108,7 +116,7 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 				task.appendOutput([]byte(answer))
 			}
 			if err != nil {
-				task.appendOutput([]byte(fmt.Sprintf("\n[subagent error: %s]\n", err.Error())))
+				task.appendOutput(fmt.Appendf(nil, "\n[subagent error: %s]\n", err.Error()))
 			}
 			task.mu.Lock()
 			task.done = true
@@ -151,10 +159,10 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 	}
 	childTools := NewToolRegistry(tc)
 
-	confirm := a.confirm
-	if a.autoApproveAll {
-		confirm = func(toolName, description string, score int) ConfirmResult { return ConfirmYes }
-	}
+	// The child inherits the parent's confirm func, per-tool session
+	// approvals and session block, read together under dispatchMu. It does
+	// not get a blanket yes.
+	confirm, approvals, blocked := a.approvalSnapshot()
 
 	// Snapshot parent runners under lock so child construction does not race
 	// with a concurrent /model runner refresh on the parent.
@@ -163,8 +171,12 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 	parentOnNode := a.runOnNode
 	a.runnerMu.RUnlock()
 
+	// One read lock for the pair so a concurrent SetBackend cannot hand the
+	// child a backend with the previous backend's trust classification.
+	parentClient, parentClass := a.backendAndClass()
+
 	child := &Agent{
-		client:                  a.client,
+		client:                  parentClient,
 		conv:                    chat.NewConversation(a.maxTokens),
 		tools:                   childTools,
 		confirm:                 confirm,
@@ -178,11 +190,12 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 		verbose:                 a.verbose,
 		dryRun:                  a.dryRun, // cascade --dry-run so children do not execute for real
 		toolContext:             tc,
-		model:                   a.model,
+		model:                   a.Model(),
 		allowRawCommandEvidence: a.allowRawCommandEvidence,
-		securityClass:           a.securityClass,
+		securityClass:           parentClass,
 		mcpRegistry:             a.mcpRegistry,
-		autoApproveAll:          a.autoApproveAll,
+		sessionApproved:         approvals,
+		blockAll:                blocked,
 		subAgentDepth:           a.subAgentDepth + 1,
 		// Own store: child registry exposes run_background/check_task/list_*.
 		// Sharing the parent's store would mix IDs across agent scopes.

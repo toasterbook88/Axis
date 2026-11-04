@@ -534,6 +534,7 @@ func pidAlive(pid int) bool {
 // tested without spawning real daemons or signalling real processes.
 var (
 	restartFetchMeta     = daemon.FetchMeta
+	restartFetchHealth   = versionQueryDaemon
 	restartFindPID       = findDaemonPID
 	restartTerminate     = terminatePID
 	restartSpawnDaemon   = spawnFreshDaemon

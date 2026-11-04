@@ -1,80 +1,69 @@
 package agent
 
 import (
-	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
+	"runtime"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/toasterbook88/axis/internal/buildinfo"
 	"github.com/toasterbook88/axis/internal/chat"
-	"github.com/toasterbook88/axis/internal/persist"
 )
 
 // sessionLogToolCap bounds a tool result copied into the daily log.
-// User and assistant text are kept whole. Tool output is capped because a
-// single read can be larger than the conversation it came from.
-const sessionLogToolCap = 4096
+// Tool output is capped because a single read can be larger than the
+// conversation it came from. Prompt and answer text have their own larger cap.
+const sessionLogToolCap = 16 << 10
 
-// chatCompactedToolSuffix is the ending Conversation.compactOldest writes
-// onto an older tool result. It is shorter than sessionLogToolCap, so the
-// logger cap alone does not see the cut.
-const chatCompactedToolSuffix = "... [truncated]"
-
-// DailySessionLog appends one private JSONL file per local day under dir:
-//
-//	<dir>/agent-YYYY-MM-DD.jsonl
-//
-// mode 0600. The CLI passes ~/.axis/logs. The file is the evaluation corpus.
-// Lines are one of:
-//
-//	turn.started   the prompt, written before the model runs
-//	tool           one redacted tool event, written as it happens
-//	turn.finished  prompt, answer, redacted messages, tool results, tokens
-//
-// A later day is a new file. A second turn appends. Nothing here rewrites
-// agent-history.json. Writes are best-effort: a log failure does not fail
-// the turn. The first write error is reported through SetWarn.
-//
-// This is not an Observer. The UI observer keeps receiving loop events.
-// Assistant text never enters Observer, so the finished record is written
-// from the runner after Run returns.
+// DailySessionLog writes private, bounded local JSONL segments. Prompts are
+// stored once at turn.started, tool events as they happen, and answers, tool
+// outputs and usage at turn.finished. It never publishes to events or Cortex.
+// Logging is best effort and never changes a Run result. See docs/runbooks/agent-session-logs.md.
 type DailySessionLog struct {
+	dirInfo   os.FileInfo
+	answer    string
 	dir       string
 	sessionID string
 	resumed   bool
 	warn      func(string)
 	now       func() time.Time
 
-	mu        sync.Mutex
-	turn      int
-	turnStart time.Time
-	model     string
-	autonomy  string
-	day       string
-	tools     []sessionTool
-	maxTurns  bool
-	warned    bool
-	omitBody  bool
+	mu         sync.Mutex
+	turn       int
+	turnStart  time.Time
+	model      string
+	autonomy   string
+	day        string
+	policy     sessionLogPolicy
+	provenance SessionLogProvenance
+	dropped    int
+	maxTurns   bool
+	warned     bool
 }
 
 // OpenDailySessionLog creates dir at mode 0700 and returns a logger that
 // appends agent-YYYY-MM-DD.jsonl inside it. dir is the logs directory, not
 // the JSONL path.
 func OpenDailySessionLog(dir string) (*DailySessionLog, error) {
-	if err := persist.EnsurePrivateDir(dir); err != nil {
+	resolved, err := ensureSessionLogDir(dir)
+	if err != nil {
 		return nil, fmt.Errorf("session log dir: %w", err)
 	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("session log directory identity: %w", err)
+	}
 	return &DailySessionLog{
-		dir:       dir,
+		dir:       resolved,
+		dirInfo:   info,
 		sessionID: newSessionID(),
+		policy:    defaultSessionLogPolicy(),
 	}, nil
 }
 
@@ -107,24 +96,23 @@ func (l *DailySessionLog) beginTurn(a *Agent, prompt string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.turn++
-	l.omitBody = false
 	l.turnStart = l.clock()
 	l.day = l.turnStart.Format("2006-01-02")
 	l.model = a.Model()
 	l.autonomy = string(a.Autonomy())
-	l.tools = nil
 	l.maxTurns = false
+	l.answer = ""
 	l.writeLocked(sessionRecord{
 		Kind:     "turn.started",
 		Turn:     l.turn,
 		Model:    l.model,
 		Autonomy: l.autonomy,
-		Prompt:   redactForSurface(prompt),
+		Prompt:   prompt,
 		Resumed:  l.resumed,
 	})
 }
 
-func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, startIn, startOut int) {
+func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, startIn, startOut, startUsageTurns int) {
 	if l == nil || a == nil {
 		return
 	}
@@ -132,34 +120,34 @@ func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, star
 	turn := l.turn
 	started := l.turnStart
 	hitMax := l.maxTurns
-	tools := append([]sessionTool(nil), l.tools...)
 	resumed := l.resumed
-	omit := l.omitBody
-	l.omitBody = false
+	answer := l.answer
 	l.mu.Unlock()
 
 	stop := "answer"
 	errText := ""
 	if runErr != nil {
 		stop = "error"
-		errText, _ = clipSessionText(redactForSurface(runErr.Error()), 1024)
+		if errors.Is(runErr, context.Canceled) {
+			stop = "canceled"
+		}
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			stop = "timeout"
+		}
+		errText = runErr.Error()
 	} else if hitMax {
 		stop = "max_turns"
 	}
-	in, out, _ := a.UsageStats()
+	in, out, usageTurns := a.UsageStats()
 	dIn, dOut := in-startIn, out-startOut
+	// Missing usage and zero usage both leave tokens_* absent (omitempty), so
+	// record explicitly whether the backend reported usage during this turn.
+	usageReported := usageTurns > startUsageTurns
 	if dIn < 0 {
 		dIn = 0
 	}
 	if dOut < 0 {
 		dOut = 0
-	}
-	var msgs []sessionMessage
-	var answer string
-	// A turn-0 model failure rolls the prompt back. The summary then belongs
-	// to older turns, so this record keeps the prompt and the error only.
-	if !omit {
-		msgs, answer = turnTranscript(a, prompt)
 	}
 	l.append(sessionRecord{
 		Kind:      "turn.finished",
@@ -171,10 +159,8 @@ func (l *DailySessionLog) finishTurn(a *Agent, prompt string, runErr error, star
 		Error:     errText,
 		TokensIn:  dIn,
 		TokensOut: dOut,
-		Prompt:    redactForSurface(prompt),
-		Answer:    redactForSurface(answer),
-		Messages:  msgs,
-		Tools:     tools,
+		Usage:     &usageReported,
+		Answer:    answer,
 		Resumed:   resumed,
 	})
 }
@@ -183,12 +169,25 @@ func (l *DailySessionLog) noteCalled(id, name, args string) {
 	l.noteLive(sessionTool{ID: id, Name: name, Event: "called", Args: args})
 }
 
+func (l *DailySessionLog) noteApproval(id, name string, result ConfirmResult) {
+	decision := "denied"
+	switch result {
+	case ConfirmYes:
+		decision = "approved"
+	case ConfirmAlways:
+		decision = "approved_for_session"
+	case ConfirmNever:
+		decision = "blocked"
+	}
+	l.noteLive(sessionTool{ID: id, Name: name, Event: "approval", OK: result == ConfirmYes || result == ConfirmAlways, Decision: decision})
+}
+
 func (l *DailySessionLog) noteSkipped(id, name, reason string) {
-	l.noteResult(sessionTool{ID: id, Name: name, Event: "skipped", Error: reason})
+	l.noteLive(sessionTool{ID: id, Name: name, Event: "skipped", Error: reason})
 }
 
 func (l *DailySessionLog) noteSucceeded(id, name, summary string, resultLen int, elapsed time.Duration) {
-	l.noteResult(sessionTool{
+	l.noteLive(sessionTool{
 		ID:          id,
 		Name:        name,
 		Event:       "succeeded",
@@ -202,9 +201,9 @@ func (l *DailySessionLog) noteSucceeded(id, name, summary string, resultLen int,
 func (l *DailySessionLog) noteFailed(id, name string, err error, elapsed time.Duration) {
 	msg := ""
 	if err != nil {
-		msg, _ = clipSessionText(redactForSurface(err.Error()), 1024)
+		msg = err.Error()
 	}
-	l.noteResult(sessionTool{
+	l.noteLive(sessionTool{
 		ID:        id,
 		Name:      name,
 		Event:     "failed",
@@ -220,20 +219,7 @@ func (l *DailySessionLog) noteShell(id, node, cwd, command string) {
 	} else if cwd != "" {
 		summary = "cwd=" + cwd
 	}
-	// OK stays false: this event is the start, not the result. Success and
-	// failure are later noteSucceeded / noteFailed records.
-	l.noteResult(sessionTool{ID: id, Name: "shell", Event: "shell", Args: command, Summary: summary})
-}
-
-// omitTranscript drops the copied conversation from the finished record.
-// The prompt and the error are still stored. A nil logger ignores the call.
-func (l *DailySessionLog) omitTranscript() {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	l.omitBody = true
-	l.mu.Unlock()
+	l.noteLive(sessionTool{ID: id, Name: "shell", Event: "shell", OK: true, Args: command, Summary: summary})
 }
 
 func (l *DailySessionLog) markMaxTurns() {
@@ -251,19 +237,6 @@ func (l *DailySessionLog) noteLive(tool sessionTool) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	rec := l.baseLocked()
-	rec.Kind = "tool"
-	rec.Tool = &tool
-	l.writeLocked(rec)
-}
-
-func (l *DailySessionLog) noteResult(tool sessionTool) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.tools = append(l.tools, tool)
 	rec := l.baseLocked()
 	rec.Kind = "tool"
 	rec.Tool = &tool
@@ -292,7 +265,8 @@ func (l *DailySessionLog) writeLocked(rec sessionRecord) {
 	now := l.clock()
 	rec.SessionID = l.sessionID
 	rec.TS = now.Format(time.RFC3339)
-	// A turn that crosses midnight stays in the file it started in.
+	// A turn that crosses midnight keeps its start day in the record; the
+	// segment file is still chosen from the write time.
 	if l.day != "" {
 		rec.Day = l.day
 	} else {
@@ -303,33 +277,20 @@ func (l *DailySessionLog) writeLocked(rec sessionRecord) {
 		rec.Turn = l.turn
 	}
 	rec.Resumed = l.resumed
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(rec); err != nil {
-		l.warnOnce("session log encode failed: %v", err)
-		return
+	rec.Commit = buildinfo.ResolvedCommit()
+	rec.BuildDate = buildinfo.ResolvedDate()
+	rec.Platform = runtime.GOOS + "/" + runtime.GOARCH
+	rec.Provenance = &l.provenance
+	rec.Dropped = l.dropped
+	payload, err := encodeSessionRecord(rec)
+	if err == nil {
+		err = l.storeRecord(payload, now)
 	}
-	path := filepath.Join(l.dir, "agent-"+rec.Day+".jsonl")
-	f, err := persist.OpenPrivateFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
-		l.warnOnce("session log open failed: %v", err)
-		return
+		l.dropped++
+		l.warnOnce("session log record omitted (logging is best effort): %v", err)
 	}
-	_, werr := f.Write(buf.Bytes())
-	serr := f.Sync()
-	cerr := f.Close()
-	if werr != nil {
-		l.warnOnce("session log write failed: %v", werr)
-		return
-	}
-	if serr != nil {
-		l.warnOnce("session log sync failed: %v", serr)
-		return
-	}
-	if cerr != nil {
-		l.warnOnce("session log close failed: %v", cerr)
-	}
+
 }
 
 func (l *DailySessionLog) warnOnce(format string, args ...any) {
@@ -357,59 +318,26 @@ func newSessionID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func turnTranscript(a *Agent, prompt string) ([]sessionMessage, string) {
-	if a == nil || a.conv == nil {
-		return nil, ""
+func (l *DailySessionLog) noteResponse(m chat.Message) {
+	if l == nil {
+		return
 	}
-	all := a.conv.Messages()
-	start := -1
-	for i := len(all) - 1; i >= 0; i-- {
-		if all[i].Role == chat.RoleUser && all[i].Content == prompt {
-			start = i
-			break
-		}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(m.ToolCalls) == 0 {
+		l.answer = m.Content
+		return
 	}
-	// Compaction can delete the original prompt and leave its summary plus the
-	// protected tail. A model failure rolls the prompt back with no summary,
-	// and that miss must not reuse an older turn.
-	if start < 0 {
-		for i := len(all) - 1; i >= 0; i-- {
-			if all[i].Role == chat.RoleUser && strings.HasPrefix(all[i].Content, compactedSummaryPrefix) {
-				start = i
-				break
-			}
-		}
+	if m.Content != "" {
+		rec := l.baseLocked()
+		rec.Kind = "assistant"
+		rec.Answer = m.Content
+		l.writeLocked(rec)
 	}
-	if start < 0 {
-		return nil, ""
-	}
-	var out []sessionMessage
-	answer := ""
-	for _, m := range all[start:] {
-		if m.Role == chat.RoleSystem {
-			continue
-		}
-		content := redactForSurface(m.Content)
-		sm := sessionMessage{Role: m.Role, ToolCallID: m.ToolCallID}
-		if m.Role == chat.RoleTool {
-			clipped, truncated := clipSessionText(content, sessionLogToolCap)
-			content = clipped
-			sm.Truncated = truncated || strings.HasSuffix(content, chatCompactedToolSuffix)
-		}
-		sm.Content = content
-		for _, tc := range m.ToolCalls {
-			sm.ToolCalls = append(sm.ToolCalls, sessionToolCall{
-				ID:   tc.ID,
-				Name: tc.Function.Name,
-				Args: redactForSurface(string(tc.Function.Arguments)),
-			})
-		}
-		if m.Role == chat.RoleAssistant && len(m.ToolCalls) == 0 && content != "" {
-			answer = content
-		}
-		out = append(out, sm)
-	}
-	return out, answer
+}
+
+func (l *DailySessionLog) noteToolOutput(id, name, output string, ok bool) {
+	l.noteLive(sessionTool{ID: id, Name: name, Event: "output", Output: output, ResultBytes: len(output), OK: ok})
 }
 
 func clipSessionText(s string, max int) (string, bool) {
@@ -427,39 +355,35 @@ func clipSessionText(s string, max int) (string, bool) {
 }
 
 type sessionRecord struct {
-	Kind      string           `json:"kind"`
-	SessionID string           `json:"session_id"`
-	Turn      int              `json:"turn,omitempty"`
-	TS        string           `json:"ts"`
-	Day       string           `json:"day"`
-	Version   string           `json:"version,omitempty"`
-	Model     string           `json:"model,omitempty"`
-	Autonomy  string           `json:"autonomy,omitempty"`
-	ElapsedMS int64            `json:"elapsed_ms,omitempty"`
-	Stop      string           `json:"stop,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	TokensIn  int              `json:"tokens_in,omitempty"`
-	TokensOut int              `json:"tokens_out,omitempty"`
-	Prompt    string           `json:"prompt,omitempty"`
-	Answer    string           `json:"answer,omitempty"`
-	Resumed   bool             `json:"resumed"`
-	Messages  []sessionMessage `json:"messages,omitempty"`
-	Tools     []sessionTool    `json:"tools,omitempty"`
-	Tool      *sessionTool     `json:"tool,omitempty"`
-}
+	Commit         string                `json:"build_commit,omitempty"`
+	BuildDate      string                `json:"build_date,omitempty"`
+	Platform       string                `json:"platform"`
+	Provenance     *SessionLogProvenance `json:"provenance,omitempty"`
+	Dropped        int                   `json:"previous_records_omitted,omitempty"`
+	TruncatedBytes map[string]int        `json:"truncated_bytes,omitempty"`
 
-type sessionMessage struct {
-	Role       string            `json:"role"`
-	Content    string            `json:"content,omitempty"`
-	ToolCallID string            `json:"tool_call_id,omitempty"`
-	Truncated  bool              `json:"truncated,omitempty"`
-	ToolCalls  []sessionToolCall `json:"tool_calls,omitempty"`
-}
-
-type sessionToolCall struct {
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name"`
-	Args string `json:"args,omitempty"`
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	Turn      int    `json:"turn,omitempty"`
+	TS        string `json:"ts"`
+	Day       string `json:"day"`
+	Version   string `json:"version,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Autonomy  string `json:"autonomy,omitempty"`
+	ElapsedMS int64  `json:"elapsed_ms,omitempty"`
+	Stop      string `json:"stop,omitempty"`
+	Error     string `json:"error,omitempty"`
+	TokensIn  int    `json:"tokens_in,omitempty"`
+	TokensOut int    `json:"tokens_out,omitempty"`
+	// Usage is set only on turn.finished: false means no nonzero usage was
+	// reported for the turn, so token counts are unknown rather than zero.
+	// chat.Message carries usage as plain ints where zero means "not
+	// reported", so an explicit 0/0 report is also recorded as false.
+	Usage   *bool        `json:"usage_reported,omitempty"`
+	Prompt  string       `json:"prompt,omitempty"`
+	Answer  string       `json:"answer,omitempty"`
+	Resumed bool         `json:"resumed"`
+	Tool    *sessionTool `json:"tool,omitempty"`
 }
 
 type sessionTool struct {
@@ -469,7 +393,12 @@ type sessionTool struct {
 	OK          bool   `json:"ok"`
 	LatencyMS   int64  `json:"latency_ms,omitempty"`
 	ResultBytes int    `json:"result_bytes,omitempty"`
+	Output      string `json:"output,omitempty"`
 	Summary     string `json:"summary,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Args        string `json:"args,omitempty"`
+	// Decision is set on "approval" events: approved, approved_for_session,
+	// denied or blocked. It records the confirm result, which may come from an
+	// autonomy policy rather than the operator.
+	Decision string `json:"decision,omitempty"`
 }

@@ -513,3 +513,26 @@ func TestCloneIsolatesPrivateCloudCompute(t *testing.T) {
 		t.Fatalf("clone mutated the source PCC: %+v", p)
 	}
 }
+
+// The ranking figure placement uses is reservable RAM minus reservations. The
+// eviction floor appears only in the reported resources fields, which
+// docs/runbooks/resident-memory-services.md tells operators not to rely on.
+func TestApplyReservationEntriesRankingFigureIgnoresEvictionFloor(t *testing.T) {
+	node := models.NodeFacts{
+		Name:            "node-a",
+		Resources:       &models.Resources{RAMTotalMB: 16384, RAMFreeMB: 14000},
+		SystemReserveMB: 5968,
+	}
+	node.PopulateMemoryMetrics()
+	snap := &models.ClusterSnapshot{Nodes: []models.NodeFacts{node}}
+
+	snapshotview.ApplyReservationEntries(snap, nil, []reservation.Entry{{Node: "node-a", RAMMB: 2000}}, true)
+
+	got := snap.Nodes[0]
+	if want := int64(16384 - 5968 - 2000); got.RAMAllocatableMB != want {
+		t.Fatalf("ranking figure = %d, want total - system_reserve_mb - reserved = %d", got.RAMAllocatableMB, want)
+	}
+	if want := int64(16384 - 5968 - 16384/20); got.Resources.RAMAllocatableMB != want {
+		t.Fatalf("reported resources figure = %d, want total - reserve - eviction floor = %d", got.Resources.RAMAllocatableMB, want)
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,10 +35,21 @@ func initCmd() *cobra.Command {
 			"All input is validated before an atomic write.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if generate, _ := cmd.Flags().GetBool("generate"); generate {
+				return runInitGenerate(cmd, defaultGenerateDependencies(), currentSSHUser)
+			}
+			for _, flag := range []string{"ssh-user", "format"} {
+				if cmd.Flags().Changed(flag) {
+					return ExitCodeError{Code: ExitErrGeneric, Message: "--" + flag + " requires --generate"}
+				}
+			}
 			return runInitWizard(cmd)
 		},
 	}
 	cmd.Flags().String("config", "", "configuration path (default: ~/.axis/nodes.yaml)")
+	cmd.Flags().Bool("generate", false, "report nodes.yaml additions from Tailscale without writing anything")
+	cmd.Flags().String("ssh-user", "", "ssh_user for proposed entries (with --generate)")
+	cmd.Flags().String("format", "text", "output format with --generate: text or json")
 	return cmd
 }
 
@@ -51,7 +61,7 @@ type initDependencies struct {
 	saveConfig        func(string, *config.Config) (config.SaveResult, error)
 	verifySSH         func(context.Context, string, int, string, int, io.Writer) bool
 	discoverTailscale func(context.Context) ([]config.NodeConfig, error)
-	discoverMesh      func(context.Context) ([]config.NodeConfig, error)
+	discoverMesh      func(context.Context, *config.Config) ([]config.NodeConfig, error)
 }
 
 func defaultInitDependencies() initDependencies {
@@ -323,7 +333,7 @@ func remoteNodeMenu(ctx context.Context, prompt *initPrompter, cfg *config.Confi
 			}
 		case "mesh":
 			fmt.Fprintln(prompt.out, "Listening for AXIS beacons for 3 seconds...")
-			candidates, err := deps.discoverMesh(ctx)
+			candidates, err := deps.discoverMesh(ctx, cfg)
 			if err != nil {
 				fmt.Fprintf(prompt.out, "%s %v\n", ui.Red("Beacon scan unavailable:"), err)
 				continue
@@ -924,23 +934,17 @@ func verifySSHConnection(ctx context.Context, host string, port int, user string
 var discoverTailscalePeersFn = discoverTailscalePeers
 
 func discoverTailscalePeers(ctx context.Context) ([]config.NodeConfig, error) {
-	output, err := exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
+	output, err := tailscaleStatusJSONFn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var status struct {
-		Peer map[string]struct {
-			HostName     string   `json:"HostName"`
-			TailscaleIPs []string `json:"TailscaleIPs"`
-			Online       bool     `json:"Online"`
-		} `json:"Peer"`
-	}
+	var status tailscaleStatus
 	if err := json.Unmarshal(output, &status); err != nil {
 		return nil, fmt.Errorf("parse tailscale status: %w", err)
 	}
 	peers := make([]config.NodeConfig, 0, len(status.Peer))
 	for _, peer := range status.Peer {
-		if !peer.Online || len(peer.TailscaleIPs) == 0 {
+		if peer == nil || peer.Online == nil || !*peer.Online || len(peer.TailscaleIPs) == 0 {
 			continue
 		}
 		name := normalizeSuggestedName(peer.HostName)
@@ -955,11 +959,33 @@ func discoverTailscalePeers(ctx context.Context) ([]config.NodeConfig, error) {
 
 var discoverMeshPeersFn = discoverMeshPeers
 
-func discoverMeshPeers(ctx context.Context) ([]config.NodeConfig, error) {
+var watchBeaconChangesFn = discovery.WatchBeaconChanges
+
+// discoverMeshPeers listens for beacons with the discovery settings being
+// edited: without the secret, signed beacons are rejected (open mode accepts
+// only unsigned ones). The scan runs even when discovery is disabled. The
+// watcher also broadcasts this machine's beacon from cfg.Nodes, so the edited
+// nodes are passed too; otherwise it would sign OS-hostname defaults.
+func discoverMeshPeers(ctx context.Context, cfg *config.Config) ([]config.NodeConfig, error) {
 	scanCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	scanCfg := config.Config{}
+	if cfg != nil {
+		scanCfg = *cfg
+	}
+	scan := config.DiscoveryConfig{UDPPort: 42424}
+	if scanCfg.Discovery != nil {
+		scan = *scanCfg.Discovery
+		if scan.UDPPort <= 0 {
+			scan.UDPPort = 42424
+		}
+	}
+	scan.Enabled = true
+	scanCfg.Discovery = &scan
 	registry := discovery.NewBeaconRegistry()
-	discovery.WatchBeaconChanges(scanCtx, &config.Config{Discovery: &config.DiscoveryConfig{Enabled: true, UDPPort: 42424}}, registry, nil)
+	if err := watchBeaconChangesFn(scanCtx, &scanCfg, registry, nil); err != nil {
+		return nil, fmt.Errorf("beacon listener did not start: %w", err)
+	}
 	<-scanCtx.Done()
 	if err := ctx.Err(); err != nil {
 		return nil, err

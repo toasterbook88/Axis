@@ -89,12 +89,17 @@ type rpcResponse struct {
 // HealthResponse is returned by Status.
 type HealthResponse struct {
 	// Status is "healthy" when the MCP server is reachable. Qdrant failures are
-	// degraded and reflected by Memories=0 rather than changing Status.
+	// degraded and reflected by MemoriesUnknown rather than changing Status.
 	Status string `json:"status"`
 	// MCPTools is the number of tools registered on the Cortex MCP server.
 	MCPTools int `json:"mcp_tools"`
 	// Memories is the number of vector points in the cortex_memories collection.
 	Memories int `json:"memories"`
+	// MemoriesUnknown is true when the count could not be read (Qdrant failed
+	// or no Qdrant URL is configured). Memories is then 0 and means nothing.
+	MemoriesUnknown bool `json:"memories_unknown,omitempty"`
+	// Endpoint is the MCP URL that was probed. Callers fill it for display.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // MemoryHit is a single result from a Recall query.
@@ -123,7 +128,7 @@ type LockResult struct {
 
 // Status probes the Cortex MCP server and Qdrant, returning an aggregated health view.
 // It lists MCP tools to verify the server is live, then queries Qdrant for the
-// memory point count. Qdrant failures are surfaced as Memories=0, not as errors,
+// memory point count. Qdrant failures are surfaced as MemoriesUnknown, not as errors,
 // since the MCP server being up is the primary health signal.
 func (c *Client) Status(ctx context.Context) (*HealthResponse, error) {
 	raw, err := c.listTools(ctx)
@@ -140,13 +145,18 @@ func (c *Client) Status(ctx context.Context) (*HealthResponse, error) {
 		return nil, fmt.Errorf("cortex MCP at %s returned unexpected tools/list response: %w", c.mcpURL, err)
 	}
 
-	memories, _ := c.qdrantPointCount(ctx)
-
-	return &HealthResponse{
-		Status:   "healthy",
-		MCPTools: len(toolsList.Tools),
-		Memories: memories,
-	}, nil
+	resp := &HealthResponse{Status: "healthy", MCPTools: len(toolsList.Tools)}
+	if c.qdrantURL == "" {
+		resp.MemoriesUnknown = true
+		return resp, nil
+	}
+	memories, err := c.qdrantPointCount(ctx)
+	if err != nil {
+		resp.MemoriesUnknown = true
+		return resp, nil
+	}
+	resp.Memories = memories
+	return resp, nil
 }
 
 // Recall performs a semantic memory search via the Cortex MCP recall tool.
@@ -350,11 +360,15 @@ func (c *Client) qdrantPointCount(ctx context.Context) (int, error) {
 
 	var data struct {
 		Result struct {
-			PointsCount int `json:"points_count"`
+			PointsCount *int `json:"points_count"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return 0, err
 	}
-	return data.Result.PointsCount, nil
+	// A missing or null count is unknown, not zero.
+	if data.Result.PointsCount == nil {
+		return 0, fmt.Errorf("qdrant response has no points_count")
+	}
+	return *data.Result.PointsCount, nil
 }

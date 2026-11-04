@@ -921,3 +921,40 @@ func sendBeacon(t *testing.T, port int, beacon Beacon) {
 		t.Fatalf("Write beacon: %v", err)
 	}
 }
+
+// system_reserve_mb in nodes.yaml is how an operator holds a resident memory
+// service's cap out of placement (docs/runbooks/resident-memory-services.md),
+// so it must reach the collected facts and their reservable RAM.
+func TestDiscoverCopiesSystemReserveIntoFacts(t *testing.T) {
+	restoreMatch := stubDiscoveryIsLocalConfig(t, func(config.NodeConfig) bool { return false })
+	defer restoreMatch()
+	restoreRemote := stubRemoteDiscoveryCollector(t, func(nc config.NodeConfig) facts.Collector {
+		return collectorFunc(func(context.Context) (*models.NodeFacts, error) {
+			return &models.NodeFacts{
+				Name:      nc.Name,
+				Status:    models.StatusComplete,
+				Resources: &models.Resources{RAMTotalMB: 16384, RAMFreeMB: 14000},
+			}, nil
+		})
+	})
+	defer restoreRemote()
+	restoreUDP := stubDiscoveryStartUDP(t, func(context.Context, *config.Config, map[string]config.NodeConfig, *sync.Mutex) {})
+	defer restoreUDP()
+	restoreWait := stubDiscoveryBeaconWait(t, func(context.Context, time.Duration) bool { return true })
+	defer restoreWait()
+
+	nodes := Discover(context.Background(), &config.Config{
+		Nodes: []config.NodeConfig{{Name: "worker", Hostname: "10.0.0.2", SSHUser: "axis", SystemReserveMB: 4096}},
+	})
+
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.SystemReserveMB != 4096 || n.Resources.RAMSystemReservedMB != 4096 {
+		t.Fatalf("system reserve not copied: facts=%d resources=%d, want 4096", n.SystemReserveMB, n.Resources.RAMSystemReservedMB)
+	}
+	if got := n.ReservableRAM(); got != 16384-4096 {
+		t.Fatalf("ReservableRAM() = %d, want total - system_reserve_mb = %d", got, 16384-4096)
+	}
+}
