@@ -61,7 +61,7 @@ func (c *Conversation) LoadFromFile(path string) error {
 		if m.Role == RoleSystem {
 			continue
 		}
-		c.messages = append(c.messages, m)
+		c.messages = append(c.messages, c.capToolMessage(m))
 	}
 	// Compact if needed.
 	if c.maxChars > 0 {
