@@ -97,7 +97,8 @@ func TestAppendCapsToolResult(t *testing.T) {
 
 func TestAppendCapCutsOnRuneBoundary(t *testing.T) {
 	c := NewConversation(8192)
-	original := strings.Repeat("é", 20000) // 40,000 bytes
+	// The leading byte puts the cut inside a two-byte rune unless it backs off.
+	original := "x" + strings.Repeat("é", 20000) // 40,001 bytes
 	c.Append(Message{Role: RoleTool, ToolCallID: "t1", Content: original})
 	requireCapped(t, lastTool(t, c), original, 8192)
 }
@@ -217,4 +218,13 @@ func TestRestoreAllCapsToolResults(t *testing.T) {
 	c := NewConversation(32768)
 	c.RestoreAll([]Message{{Role: RoleTool, ToolCallID: "t1", Content: huge}})
 	requireCapped(t, lastTool(t, c), huge, 32<<10)
+}
+
+// A result over maxTokens bytes is cut at every budget, including
+// multi-byte shell output that fits by runes at the default budget.
+func TestMultiByteOutputOverCapIsCutAtDefault(t *testing.T) {
+	c := NewConversation(32768)
+	original := strings.Repeat("中文", 8000) // 48,000 bytes, 16,000 runes
+	c.Append(Message{Role: RoleTool, ToolCallID: "t1", Content: original})
+	requireCapped(t, lastTool(t, c), original, 32768)
 }

@@ -1,6 +1,7 @@
 # Cap every tool result when it enters the conversation
 
-Date: 2026-11-04. Status: design, not approved. Nothing built.
+Date: 2026-11-04. Status: implemented in PR #614; spec review 4 and the diff review approved with
+changes, findings resolved.
 
 A narrow first step. Counting the whole request (tool definitions, turn context) in the compaction
 trigger, window discovery, calibration and full-autonomy rules are separate, later specs.
@@ -34,8 +35,9 @@ session.
   unchanged (reviews 1 and 2).
 - Results that fit today are newly cut at budgets below the default: at `--max-tokens` 16384,
   `read_file` output over 16,384 bytes is cut, and `read_file` has no offset to read the rest.
-  That is the quarter-of-budget rule. Above the default only results over `maxTokens` bytes are
-  cut.
+  That is the quarter-of-budget rule. At every budget a result over `maxTokens` bytes is cut,
+  including multi-byte shell output that fits shell's 16,000-rune limit (16,000 CJK runes are
+  48,000 bytes, cut to 32,768 at the default).
 - Nothing beyond the cap is kept: the session log keeps the first 16 KiB and the raw size
   (`result_bytes`), as today.
 - No guarantee at small budgets: at `--max-tokens` 8192 in full scope the fixed prompt alone is
@@ -47,8 +49,9 @@ session.
 
 One helper, `capToolResult(content string, cap int) string`, in `internal/chat`.
 
-- `cap = maxTokens` bytes, never below 2,048: about a quarter of the budget at chars / 4, so the
-  protected tail cannot be filled by one result at any budget. `chat.NewConversation(0)` disables
+- `cap = maxTokens` bytes, never below 2,048: about a quarter of the budget at chars / 4 for
+  budgets of 2,048 tokens or more. Below that the floor is more than a quarter, and at 512 tokens
+  or fewer one result fills the budget. `chat.NewConversation(0)` disables
   truncation and has no budget to take a quarter of, so it uses 32 KiB, the default budget's cap.
 - The result is measured as it will be sent: invalid UTF-8 bytes are first replaced with U+FFFD,
   as `encoding/json` does when the request is built (`strings.Map` with an identity mapping, not
@@ -56,6 +59,8 @@ One helper, `capToolResult(content string, cap int) string`, in `internal/chat`.
   and resume.
 - A result of at most `cap` bytes is unchanged. ASCII `read_file` output (32,037 bytes at most)
   fits at the default budget and above.
+- The marker's N is the size as sent, so for invalid UTF-8 it is up to three times the raw size
+  the session log records as `result_bytes`.
 - A longer result becomes its first bytes, cut at a UTF-8 rune boundary, then `\n` and the marker
   `… [truncated: tool output was N bytes; the first M are kept]`. The whole result, marker
   included, is at most `cap` bytes.
@@ -75,8 +80,9 @@ All in `internal/chat`. Regression guards (they pass today and must keep passing
 - Entry cap: a 10 MB result (the `grep_search` probe size, and `web_fetch` with a large
   `max_chars`) is stored within the cap with the marker; at `maxTokens` 8192 the cap is 8,192
   bytes; at 16384, 32,037 bytes of `read_file` output are cut to 16,384; at 65536 a 10 MB result
-  is cut to 65,536; below 2,048 the floor applies; `maxTokens` 0 caps at 32 KiB; a 40,000-byte
-  multi-byte UTF-8 result is cut on a rune boundary.
+  is cut to 65,536; below 2,048 the floor applies; `maxTokens` 0 caps at 32 KiB; a multi-byte
+  UTF-8 result offset by one byte is cut on a rune boundary; 48,000 bytes of CJK text (16,000
+  runes, within shell's limit) is cut to 32,768 at the default.
 - Guards: 20,000 bytes and 32,037 bytes of `read_file` output are unchanged at the default
   budget; 60,000 bytes are unchanged at 65536; system, user and assistant messages over the cap
   are unchanged.
@@ -243,3 +249,25 @@ Questions:
   the served model, a shared service; calibration is the later budget spec.
 - Should `ReplaceRange` cap tool content? Verified: no caller inserts tool messages
   (`internal/agent/compaction.go:77`, `:148`; `agent.go:407`, `:445`), so nothing reaches it.
+
+Kind: diff
+Reviewer: fresh-context subagent (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: 6cc8d3f8fe2de1d5269239d3179180910124796c
+Head: 249aff933e1edcc6e16bec1df76d8cd0f18af4ff
+Date: 2026-11-05
+Verdict: approve-with-changes
+
+1. Minor: the rune-boundary test could not fail; its cut landed on a rune start, so removing the
+   backoff left every test passing. Fixed: the input starts with one ASCII byte, so the cut falls
+   inside a rune unless the helper backs off.
+2. Minor: the Non-goals said only results below the default are newly cut, but multi-byte shell
+   output within shell's 16,000-rune limit is cut at the default too. Fixed: Non-goals state it,
+   and a 48,000-byte CJK test pins it.
+3. Minor: the Status line said nothing was built, and "cannot be filled at any budget" is false
+   below 2,048 tokens. Fixed: Status updated; Design states the floor case.
+
+Questions:
+- Should the marker's N for invalid UTF-8 be the size as sent, three times the session log's
+  `result_bytes`? Verified: kept as sent, matching "measured as it will be sent"; Design now
+  says so.
