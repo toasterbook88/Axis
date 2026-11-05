@@ -1,5 +1,14 @@
 ## Unreleased
 
+## v0.23.0 (2026-11-05)
+
+`axis init --generate`, an OpenCode-style `axis tui` workspace, stricter SSH
+transport rules, and fixes to reservations, daemon snapshots and mesh reloads,
+the agent's session log, safety scoring and tool-result size. See the
+[upgrade guide](docs/release-notes.md#v0230-upgrade-guide) for behavior that
+changes for existing setups. Publication and available downloads are tracked
+on GitHub Releases.
+
 ### Features
 
 * `axis init --generate` reports `nodes.yaml` additions from Tailscale without
@@ -46,7 +55,8 @@
   applies a proxy directive to hosts AXIS could reach directly (for example
   `Host *` with `ProxyJump`) worked by accident and now fails until those
   hosts get `ProxyJump none` or `ProxyCommand none` in a more specific `Host`
-  block. `axis doctor` gives that remediation, and `axis init --generate` flags
+  block placed before the wildcard one (OpenSSH uses the first value it finds).
+  `axis doctor` gives that remediation, and `axis init --generate` flags
   such proposals `...; Axis transport refuses it`. A directive set only in the
   system-wide `ssh_config` is not seen when `$HOME` differs from the
   `/etc/passwd` home, when there is no `/etc/passwd` entry, or when OpenSSH
@@ -123,6 +133,46 @@
   by a hub that lists only `coder:large`. A name without a tag still matches
   any tag of that name, and a registry port is not a tag. Found by the Copilot
   review of #577 after it merged (#590).
+* A RAM reservation large enough to wrap the ledger's total is rejected before
+  any entry changes, so it can no longer slip past the per-node capacity check.
+  A failed ledger write rolls the lease back and the shell does not start
+  (#607).
+* `nodes.yaml` edits now reach the running mesh: configured peers are added,
+  updated and removed atomically while learned peers stay. An invalid or
+  unreadable version keeps the last valid membership and invalidates the
+  snapshot. A collection that started before an invalidation can no longer
+  publish a stale snapshot or recreate the cache file (#608).
+* A published snapshot is never changed afterwards: discovery warning updates
+  no longer race a reader holding an older snapshot (#609).
+* Agent session log: each tool event is written once, a `shell` start record no
+  longer claims success before the command runs, and a failed first model call
+  after compaction drops the right prompt (#611, #610).
+* **Behaviour change:** one-shot agent runs (a positional prompt or `-p`) no
+  longer overwrite `agent-history.json`; they go to the daily session log. Only
+  the interactive REPL and console save the resume file (#611).
+* Agent tool latency in the session log no longer includes time spent waiting
+  for an approval prompt, including nested subagent calls; the 600 s waits in
+  the log were unanswered approval prompts, not hung MCP calls. No change to
+  approval behaviour, the 600 s fail-closed deadline, or the log schema (#612).
+* **Behaviour change:** a denied command stays denied when `> /dev/null` is
+  appended. The null-redirect prompt rule outranked every deny rule, so under
+  `--autonomy full` commands such as a recursive `rm` or a `sudo` command
+  followed by `> /dev/null` ran without asking. A later deny rule that matches
+  now wins; a plain null redirect still prompts. Known gap: no-space device
+  redirects (`>/dev/<device>`) never matched the device rules and are unchanged
+  (#613).
+* **Behaviour change:** every tool result is capped when it enters the agent
+  conversation, on resume (`--resume`) and on rollback, at `--max-tokens` bytes
+  (about a quarter of the budget; floor 2,048; 32 KiB with no budget). One
+  oversized result (e.g. `grep_search`, `git_log`, MCP, or `web_fetch` with a
+  large `max_chars`) could sit in the protected recent messages and fill every
+  later request. The cut keeps a UTF-8-safe prefix and ends with
+  `… [truncated: tool output was N bytes; the first M are kept]`. Results that
+  fit today can now be cut: below the default budget (`read_file` output over
+  16,384 bytes at `--max-tokens 16384`) and, at the default, multi-byte output
+  over 32,768 bytes (16,000 CJK runes of shell output). This does not address
+  the logged "request exceeds the available context size" failures; that is
+  later work (#614).
 
 ### Documentation
 
@@ -158,9 +208,6 @@
   fail. Three specs written before the format are named exceptions.
   `verified: <how>` is now a question status in §8, the review prompt and the
   PR template.
-
-### Dependencies and CI
-
 * `hack/pr-review-cycle.sh` waits for requested reviews instead of only
   sleeping a fixed 2 minutes: after the 120 s floor it polls until no requested
   reviewer is pending, up to `--wait-reviews` (default 20 minutes), and exits 3
@@ -169,6 +216,9 @@
   malformed read fails closed. `--allow-pending LOGIN` waives a reviewer that
   will not answer (#588). On #577 Copilot's review arrived 6.7 minutes after CI and 9
   seconds after the merge.
+* `github.com/mark3labs/mcp-go` 1.4.0 → 1.5.0 (#604). CI action pins updated
+  (#605, #606), and the `ssh -G` sandbox test runs under bubblewrap and fails if
+  it skips (#602).
 
 ## v0.22.0 (2026-10-28)
 

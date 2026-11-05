@@ -110,8 +110,10 @@ For v0.20.0's terminal entry point, private logging policy and
 compatibility changes, see the [v0.20.0 upgrade guide](docs/release-notes.md#v0200-upgrade-guide).
 The [v0.21.0 upgrade guide](docs/release-notes.md#v0210-upgrade-guide) covers
 Cortex endpoint selection, tool approval scope and streamed usage reporting.
-The [v0.22.0 candidate guide](docs/release-notes.md#v0220-upgrade-guide) covers
-MCP approval in every mode, route upstream checks and the cluster agent mode;
+The [v0.22.0 upgrade guide](docs/release-notes.md#v0220-upgrade-guide) covers
+MCP approval in every mode, route upstream checks and the cluster agent mode.
+The [v0.23.0 candidate guide](docs/release-notes.md#v0230-upgrade-guide) covers
+refused SSH proxy directives, live mesh reloads and the agent's tool-result cap;
 consult GitHub Releases for published downloads.
 
 > Use v0.19.6 or later. Git history was rewritten on 2026-10-12, and v0.9.0 through v0.19.5 are retracted in `go.mod`.

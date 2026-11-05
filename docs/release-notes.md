@@ -8,6 +8,69 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.23.0 upgrade guide
+
+This section describes the v0.23.0 source candidate. Consult
+[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
+and downloads; a versioned changelog is not proof of publication. Changes since
+v0.22.0 are listed in the [changelog](../CHANGELOG.md#v0230-2026-11-05).
+There is no required YAML migration. These changes can alter what an existing
+setup sees.
+
+### SSH proxy directives are refused
+
+AXIS no longer dials a host directly when its SSH config sets `ProxyJump` or
+`ProxyCommand`; it refuses that host and tries the next dial fallback.
+`ssh -G` now also reads the system-wide `ssh_config` when `$HOME` is your
+`/etc/passwd` home. A rule such as `Host *` with `ProxyJump` that used to be
+ignored now blocks every node it matches. Add `ProxyJump none` (or
+`ProxyCommand none`) in a more specific `Host` block for nodes AXIS should
+reach directly, placed before the wildcard block: OpenSSH uses the first value
+it finds, so an override after `Host *` has no effect. `axis doctor` names the
+directive and the fix.
+
+### Leases follow `system_reserve_mb` everywhere
+
+`axis task run`, the agent's execution path and the MCP lease tool now hold
+back each node's configured `system_reserve_mb`, as the daemon already did.
+A node with a reserve above the 1024 MB default can admit less than before.
+
+### `nodes.yaml` edits reach the running mesh
+
+The daemon now adds, updates and removes configured mesh peers when
+`nodes.yaml` changes, without a restart. An invalid or unreadable file keeps
+the last valid membership and invalidates the cached snapshot until a fresh
+collection succeeds, so `axis status --cached-only` can report "snapshot cache
+not ready" briefly after a rejected edit.
+
+### Agent changes
+
+- One-shot runs (`axis agent "…"` or `-p`) no longer overwrite
+  `agent-history.json`. They are recorded in the daily session log; only the
+  interactive REPL and console save the resume file.
+- Denied commands stay denied with `> /dev/null`. Under `--autonomy full`, a
+  recursive `rm` or a `sudo` command followed by `> /dev/null` used to run
+  without asking; it is now denied. A plain null redirect still prompts.
+- Tool results over `--max-tokens` bytes are truncated in the agent
+  conversation (floor 2,048; 32 KiB with no budget), including on resume and
+  rollback. Output that fit before can now be cut, for example `read_file`
+  output over 16,384 bytes at `--max-tokens 16384`. A cut result says how many
+  bytes it had.
+- `latency_ms` for tools excludes time spent waiting for approval.
+
+### `axis tui` opens the agent workspace
+
+`axis tui` now opens the `axis agent` conversation with a cluster sidebar.
+`axis tui --dashboard` opens only the dashboard; `F2` switches between them.
+See `docs/runbooks/tui.md`.
+
+### New, opt-in
+
+- `axis init --generate` reports `nodes.yaml` additions from Tailscale without
+  writing anything; `--format json` gives the same report for agents.
+
+---
+
 ## v0.22.0 upgrade guide
 
 This section describes the v0.22.0 source candidate. Consult
