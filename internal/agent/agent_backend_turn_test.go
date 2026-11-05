@@ -94,7 +94,7 @@ func TestTurnUsesOneBackendWhenSwappedMidTurn(t *testing.T) {
 		defer close(swapped)
 		select {
 		case <-compacting:
-			a.SetBackend(remote, BackendRemote)
+			a.SetBackend(remote, BackendRemote, 0)
 		case <-ctx.Done():
 		}
 	}()
@@ -158,7 +158,7 @@ func TestModelRoundSwitchAppliesWithinPrompt(t *testing.T) {
 		defer close(swapped)
 		select {
 		case <-streaming:
-			a.SetBackend(remote, BackendRemote)
+			a.SetBackend(remote, BackendRemote, 0)
 		case <-ctx.Done():
 		}
 	}()

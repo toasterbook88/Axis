@@ -33,7 +33,7 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			a.SetBackend(backends[i%2], classes[i%2])
+			a.SetBackend(backends[i%2], classes[i%2], 0)
 		}
 	}()
 	go func() {

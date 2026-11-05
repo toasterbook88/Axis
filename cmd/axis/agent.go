@@ -223,13 +223,13 @@ func agentCmd() *cobra.Command {
 			sessionLog := openAgentSessionLog(activeTarget, func(msg string) {
 				fmt.Fprintf(errW, "warning: %s\n", msg)
 			})
-
 			cfg := buildAgentSessionConfig(agentSessionParams{
 				Endpoint:                endpoint,
 				Model:                   activeTarget.Model,
 				Backend:                 backend,
 				MaxTurns:                maxTurns,
 				MaxTokens:               maxTokens,
+				ContextWindow:           activeTarget.ContextWindow,
 				Observer:                observerForPipedMode(printMode, errW, verbose),
 				Confirm:                 confirmForPipedMode(printMode, errW),
 				AutoApprove:             autoApprove,
@@ -500,70 +500,6 @@ func agentRequestContext(parent context.Context, timeout time.Duration) (context
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, timeout)
-}
-
-// agentSessionParams holds the live operator inputs used to construct agent.Config.
-// Extracted so tests can prove RunShell/RunOnNode/SystemExtra wiring without
-// driving the full Cobra RunE path.
-type agentSessionParams struct {
-	Endpoint                string
-	Model                   string
-	Backend                 agent.ChatBackend
-	MaxTurns                int
-	MaxTokens               int
-	AutoApprove             bool
-	Autonomy                agent.AutonomyMode
-	SystemExtra             string
-	Verbose                 bool
-	DryRun                  bool
-	AllowRawCommandEvidence bool
-	BackendSecurityClass    agent.BackendSecurityClass
-	Cluster                 *chat.ClusterSummaryForPrompt
-	Knowledge               *knowledge.ClusterKnowledge
-	ToolContext             *agent.ToolContext
-	Output                  io.Writer
-	Observer                agent.Observer
-	Confirm                 agent.ConfirmFunc
-	MCPRegistry             *mcpclient.Registry
-	RuntimeLoader           func(context.Context) (*runtimectx.Context, error)
-	SessionLog              *agent.DailySessionLog
-}
-
-// buildAgentSessionConfig assembles agent.Config for axis agent sessions.
-// Always injects guarded shell runners so Layer 4 cannot be accidentally dropped.
-func buildAgentSessionConfig(p agentSessionParams) agent.Config {
-	model := p.Model
-	loader := p.RuntimeLoader
-	if loader == nil {
-		loader = loadAgentShellRuntime
-	}
-	return agent.Config{
-		Endpoint:                p.Endpoint,
-		Model:                   p.Model,
-		Backend:                 p.Backend,
-		MaxTurns:                p.MaxTurns,
-		MaxTokens:               p.MaxTokens,
-		AutoApprove:             p.AutoApprove,
-		Autonomy:                p.Autonomy,
-		SystemExtra:             p.SystemExtra,
-		Verbose:                 p.Verbose,
-		DryRun:                  p.DryRun,
-		AllowRawCommandEvidence: p.AllowRawCommandEvidence,
-		BackendSecurityClass:    p.BackendSecurityClass,
-		Cluster:                 p.Cluster,
-		Knowledge:               p.Knowledge,
-		ToolContext:             p.ToolContext,
-		Output:                  p.Output,
-		Observer:                p.Observer,
-		Confirm:                 p.Confirm,
-		RunShell:                guardedAgentShellRunner(model, loader),
-		RunOnNode: func(ctx context.Context, node, command string) (string, error) {
-			return guardedAgentCommandRunner(model, node, loader)(ctx, command)
-		},
-		RunTask:     guardedAgentTaskRunner(),
-		MCPRegistry: p.MCPRegistry,
-		SessionLog:  p.SessionLog,
-	}
 }
 
 // guardedAgentShellRunner runs local shell via guarded execution (local node pin).
