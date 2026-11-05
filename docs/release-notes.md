@@ -46,11 +46,14 @@ not ready" briefly after a rejected edit.
 - One-shot runs (`axis agent "…"` or `-p`) no longer overwrite
   `agent-history.json`. They are recorded in the daily session log; only the
   interactive REPL and console save the resume file.
-- A command with a null redirect is scored as without it: `rm -rf /tmp/x >
-  /dev/null` is denied instead of prompting.
-- Tool results are capped when they enter the conversation (about a quarter of
-  the context budget, at least 2,048 bytes; 32 KiB without a budget), including
-  on resume and rollback. A cut result says how many bytes it had.
+- Denied commands stay denied with `> /dev/null`. Under `--autonomy full`, a
+  recursive `rm` or a `sudo` command followed by `> /dev/null` used to run
+  without asking; it is now denied. A plain null redirect still prompts.
+- Tool results over `--max-tokens` bytes are truncated in the agent
+  conversation (floor 2,048; 32 KiB with no budget), including on resume and
+  rollback. Output that fit before can now be cut, for example `read_file`
+  output over 16,384 bytes at `--max-tokens 16384`. A cut result says how many
+  bytes it had.
 - `latency_ms` for tools excludes time spent waiting for approval.
 
 ### `axis tui` opens the agent workspace

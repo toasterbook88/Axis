@@ -149,16 +149,29 @@ on GitHub Releases.
 * **Behaviour change:** one-shot agent runs (a positional prompt or `-p`) no
   longer overwrite `agent-history.json`; they go to the daily session log. Only
   the interactive REPL and console save the resume file (#611).
-* Tool `latency_ms` in the session log and observer is execution time only;
-  time waiting for an approval prompt is excluded. A prompt that went
-  unanswered for 600 s is no longer reported as a 600 s tool timeout (#612).
-* **Behaviour change:** a null redirect (`> /dev/null`) no longer turns a denied
-  command into a prompt. `rm -rf /tmp/x > /dev/null` is now denied, as it is
-  without the redirect (#613).
-* **Behaviour change:** every tool result is capped when it enters the
-  conversation (about a quarter of the context budget, at least 2,048 bytes;
-  32 KiB without a budget), and on resume or rollback. A cut result ends in
-  `… [truncated: tool output was N bytes; the first M are kept]` (#614).
+* Agent tool latency in the session log no longer includes time spent waiting
+  for an approval prompt, including nested subagent calls; the 600 s waits in
+  the log were unanswered approval prompts, not hung MCP calls. No change to
+  approval behaviour, the 600 s fail-closed deadline, or the log schema (#612).
+* **Behaviour change:** a denied command stays denied when `> /dev/null` is
+  appended. The null-redirect prompt rule outranked every deny rule, so under
+  `--autonomy full` commands such as a recursive `rm` or a `sudo` command
+  followed by `> /dev/null` ran without asking. A later deny rule that matches
+  now wins; a plain null redirect still prompts. Known gap: no-space device
+  redirects (`>/dev/<device>`) never matched the device rules and are unchanged
+  (#613).
+* **Behaviour change:** every tool result is capped when it enters the agent
+  conversation, on resume (`--resume`) and on rollback, at `--max-tokens` bytes
+  (about a quarter of the budget; floor 2,048; 32 KiB with no budget). One
+  oversized result (e.g. `grep_search`, `git_log`, MCP, or `web_fetch` with a
+  large `max_chars`) could sit in the protected recent messages and fill every
+  later request. The cut keeps a UTF-8-safe prefix and ends with
+  `… [truncated: tool output was N bytes; the first M are kept]`. Results that
+  fit today can now be cut: below the default budget (`read_file` output over
+  16,384 bytes at `--max-tokens 16384`) and, at the default, multi-byte output
+  over 32,768 bytes (16,000 CJK runes of shell output). This does not address
+  the logged "request exceeds the available context size" failures; that is
+  later work (#614).
 
 ### Documentation
 
