@@ -69,7 +69,7 @@ func TestTurnUsesOneBackendWhenSwappedMidTurn(t *testing.T) {
 		Backend:              local,
 		BackendSecurityClass: BackendLocal,
 		MaxTurns:             1,
-		MaxTokens:            200,
+		MaxTokens:            9000, // the fixed prompt fits, so compaction can make room and runs
 		Output:               io.Discard,
 		// allowRawCommandEvidence stays false; decisions still go out in
 		// local evidence, which is what a remote backend must not see.
@@ -94,12 +94,12 @@ func TestTurnUsesOneBackendWhenSwappedMidTurn(t *testing.T) {
 		defer close(swapped)
 		select {
 		case <-compacting:
-			a.SetBackend(remote, BackendRemote)
+			a.SetBackend(remote, BackendRemote, 0)
 		case <-ctx.Done():
 		}
 	}()
 
-	big := strings.Repeat("tool output content ", 40)
+	big := strings.Repeat("tool output content ", 120)
 	for i := 0; i < 6; i++ {
 		a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "do thing " + string(rune('a'+i))})
 		a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "ok"})
@@ -158,7 +158,7 @@ func TestModelRoundSwitchAppliesWithinPrompt(t *testing.T) {
 		defer close(swapped)
 		select {
 		case <-streaming:
-			a.SetBackend(remote, BackendRemote)
+			a.SetBackend(remote, BackendRemote, 0)
 		case <-ctx.Done():
 		}
 	}()

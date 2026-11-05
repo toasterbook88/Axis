@@ -346,6 +346,7 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 		Backend:                 backend,
 		MaxTurns:                j.in.maxTurns,
 		MaxTokens:               j.in.maxTokens,
+		ContextWindow:           target.ContextWindow,
 		AutoApprove:             j.in.autoApprove,
 		Autonomy:                agent.AutonomyMode(j.in.autonomy),
 		SystemExtra:             j.in.systemMsg,

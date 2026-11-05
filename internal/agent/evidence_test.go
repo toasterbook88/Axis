@@ -183,7 +183,7 @@ func TestSetBackendUpdatesSecurityClass(t *testing.T) {
 		ToolContext:          NewToolContext(&RuntimeView{}, nil),
 		Output:               io.Discard,
 	})
-	a.SetBackend(chat.NewClient("http://localhost:11434", "test"), BackendLocal)
+	a.SetBackend(chat.NewClient("http://localhost:11434", "test"), BackendLocal, 0)
 	if a.securityClass != BackendLocal {
 		t.Fatalf("expected BackendLocal after SetBackend, got %v", a.securityClass)
 	}

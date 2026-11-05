@@ -13,7 +13,6 @@ import (
 	"github.com/toasterbook88/axis/internal/chat"
 	"github.com/toasterbook88/axis/internal/execution"
 	"github.com/toasterbook88/axis/internal/git"
-	"github.com/toasterbook88/axis/internal/knowledge"
 	"github.com/toasterbook88/axis/internal/mcpclient"
 )
 
@@ -85,14 +84,14 @@ type Agent struct {
 	// read the field inside the agent's own serialized turn loop.)
 	modelMu                 sync.RWMutex
 	allowRawCommandEvidence bool
-	// clientMu guards client and securityClass, which SetBackend swaps while
-	// the console startup goroutine finishes model resolution and other
-	// goroutines (slash commands, subagents, evidence) read them. Never hold
-	// it across ChatStream or any callback: read the backend into a local
-	// via Backend/backendAndClass and use the local. It is a leaf lock; no
-	// other Agent mutex is acquired while it is held.
+	// clientMu guards client, securityClass and bud, which SetBackend swaps while the console
+	// startup goroutine finishes model resolution and other goroutines (slash commands,
+	// subagents, evidence) read them. Never hold it across ChatStream or any callback: read
+	// the backend into a local via Backend/backendState and use the local. It is a leaf
+	// lock; no other Agent mutex is acquired while it is held.
 	clientMu      sync.RWMutex
 	securityClass BackendSecurityClass
+	bud           budgetState // context budget tied to the backend (budget.go)
 	// sessionApproved lists the tools the operator approved for the rest of
 	// the session ("always"). It is per tool: approving one tool, such as a
 	// read-only MCP query, must not approve shell commands or MCP writes.
@@ -124,66 +123,6 @@ type Agent struct {
 	// autonomy tracks the active autonomy policy for the session.
 	autonomy AutonomyMode
 }
-
-// Config configures an Agent.
-type Config struct {
-	Endpoint                string               // Ollama endpoint (default: chat.DefaultEndpoint)
-	Model                   string               // Ollama model name
-	Backend                 ChatBackend          // Optional custom backend override
-	MaxTurns                int                  // Maximum agent loop iterations (default: 10)
-	MaxTokens               int                  // Conversation token budget (default: 4096)
-	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
-	Autonomy                AutonomyMode         // Autonomy mode: cluster, default, edit, or full (controls tool scope and auto-approval)
-	SystemExtra             string               // Extra text appended to system prompt
-	Verbose                 bool                 // Emit trace output for tool calls and turns
-	DryRun                  bool                 // Plan tool calls without executing them
-	ShellTimeout            time.Duration        // Timeout for run_shell commands (default: 5m)
-	AllowRawCommandEvidence bool                 // Include raw command text in local evidence
-	BackendSecurityClass    BackendSecurityClass // Local or remote backend trust classification
-	// Cluster is optional. If non-nil, the agent injects a cluster summary
-	// into the system prompt and uses it for safety checks.
-	Cluster *chat.ClusterSummaryForPrompt
-
-	// Knowledge is optional. Used for safety gating shell commands.
-	Knowledge *knowledge.ClusterKnowledge
-
-	// Snapshot and State are used to initialize tools.
-	ToolContext *ToolContext
-
-	// Output is where the agent writes assistant text and traces.
-	Output io.Writer
-
-	// Observer, when non-nil, receives structured loop events (tool calls,
-	// results, turns, shell execs) instead of having them formatted to
-	// Output. Surfaces that render their own transcript set this; the plain
-	// CLI leaves it nil. See observer.go.
-	Observer Observer
-
-	// SessionLog, when non-nil, appends a private daily JSONL record for
-	// each Run. The CLI sets this. Nil leaves tests and other callers
-	// quiet. The logger is not an Observer and does not replace one.
-	SessionLog *DailySessionLog
-
-	// Confirm is the confirmation function. If nil, StdinConfirm() is used.
-	Confirm ConfirmFunc
-
-	// RunShell executes an approved shell command. If nil, the agent falls back
-	// to a direct local shell helper.
-	RunShell ShellRunner
-
-	// RunOnNode executes an approved shell command on a named cluster node.
-	// If nil, run_on_node fails with a configuration error (no raw SSH bypass).
-	RunOnNode NodeShellRunner
-
-	// RunTask executes an approved remote/cluster task.
-	RunTask TaskRunner
-
-	// MCPRegistry is a connected registry of external MCP servers (optional).
-	MCPRegistry *mcpclient.Registry
-}
-
-// NodeShellRunner runs an approved command on a named cluster node.
-type NodeShellRunner func(ctx context.Context, node, command string) (string, error)
 
 // New creates an Agent from the given configuration.
 func New(cfg Config) *Agent {
@@ -273,8 +212,8 @@ func New(cfg Config) *Agent {
 	if runShell == nil {
 		runShell = ExecuteShellWithTimeout(cfg.ShellTimeout)
 	}
-
 	return &Agent{
+		bud:                     budgetState{targetWindow: max(0, cfg.ContextWindow)},
 		sessionSummary:          chat.FormatClusterSummary(cfg.Cluster),
 		sessionGit:              gitContext,
 		client:                  client,
@@ -468,52 +407,16 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		// next round, which may be inside the same operator prompt. Re-reading
 		// would let local-only evidence (chosen for a local class) be streamed
 		// to a newly installed remote backend.
-		backend, class := a.backendAndClass()
-		// Proactively compress older conversation turns before sending context
-		// to the model, so long sessions stay within the token budget.
-		if err := a.compactContext(ctx, backend); err != nil && a.verbose {
-			a.emitCompactionSkipped(err)
-		}
-		msgs := a.conv.Messages()
-		toolDefs := a.tools.Defs()
-
-		clonedMsgs := make([]chat.Message, len(msgs))
-		copy(clonedMsgs, msgs)
-
+		backend, class, bud := a.backendState()
 		// Per-turn context: the session-start cluster summary, the session-start
 		// git context, today's date, prompt evidence and a live cluster
 		// snapshot (node health, free memory, resident models) so the agent
 		// can adapt placement mid-task. All of them change between runs, so
 		// they are placed with the newest user message, not in the system
-		// prompt. See turn_context.go for why.
+		// prompt (turn_context.go). It is built before compaction so the
+		// budget counts it; sendRound (request.go) fits and sends the request.
 		turnContext := []string{a.sessionSummary, a.sessionGit, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
-
-		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
-
-		// Wire invariant: model chat templates behind tool calling (notably
-		// Qwen Jinja templates via LiteLLM) reject payloads with no user-role
-		// message. Compaction can delete every original user turn, so if none
-		// survived, re-inject this turn's prompt after the leading system
-		// messages rather than sending a user-less payload into a template
-		// guard.
-		if !hasUserRole(clonedMsgs) {
-			insert := firstNonSystemIndexIn(clonedMsgs)
-			if insert < 0 {
-				insert = len(clonedMsgs)
-			}
-			clonedMsgs = append(clonedMsgs[:insert], append([]chat.Message{{Role: chat.RoleUser, Content: userPrompt}}, clonedMsgs[insert:]...)...)
-		}
-
-		clonedMsgs = injectTurnContext(clonedMsgs, turnContext...)
-		// Some servers (LiteLLM) reject a request with any empty non-assistant
-		// message. Fill them on the way out so a history that already holds
-		// one (an older session, a resumed file) still works.
-		clonedMsgs = fillEmptyContent(clonedMsgs)
-
-		// Stream the model response with code block highlighting.
-		cw := NewColorWriter(a.output)
-		resp, err := backend.ChatStream(ctx, clonedMsgs, toolDefs, cw)
-		cw.Close()
+		resp, err := a.sendRound(ctx, backend, bud, userPrompt, turnContext)
 		if err != nil {
 			if turn == 0 {
 				a.dropLatestPrompt(userPrompt)
@@ -622,61 +525,6 @@ func (a *Agent) ToolDefs() []chat.ToolDef {
 		return nil
 	}
 	return a.tools.Defs()
-}
-
-// Conversation returns the underlying conversation for inspection/testing.
-func (a *Agent) Conversation() *chat.Conversation {
-	return a.conv
-}
-
-// ContextTokens returns the current estimated conversation tokens.
-func (a *Agent) ContextTokens() int {
-	if a == nil || a.conv == nil {
-		return 0
-	}
-	return a.conv.EstimateTokens()
-}
-
-// MaxTokens returns the session token limit.
-func (a *Agent) MaxTokens() int {
-	return a.maxTokens
-}
-
-// MCPRegistry returns the connected MCP client registry.
-func (a *Agent) MCPRegistry() *mcpclient.Registry {
-	return a.mcpRegistry
-}
-
-// SetBackend changes the active LLM backend and its trust classification.
-// Both fields change under one write lock so readers never observe a backend
-// paired with the previous backend's classification.
-func (a *Agent) SetBackend(client ChatBackend, securityClass BackendSecurityClass) {
-	a.clientMu.Lock()
-	defer a.clientMu.Unlock()
-	a.client = client
-	a.securityClass = securityClass
-}
-
-// Backend returns the active LLM backend.
-func (a *Agent) Backend() ChatBackend {
-	a.clientMu.RLock()
-	defer a.clientMu.RUnlock()
-	return a.client
-}
-
-// backendAndClass returns the backend and its classification as one
-// consistent pair, for callers that need both (subagent construction).
-func (a *Agent) backendAndClass() (ChatBackend, BackendSecurityClass) {
-	a.clientMu.RLock()
-	defer a.clientMu.RUnlock()
-	return a.client, a.securityClass
-}
-
-// Model returns the current active model name.
-func (a *Agent) Model() string {
-	a.modelMu.RLock()
-	defer a.modelMu.RUnlock()
-	return a.model
 }
 
 // Autonomy returns the current autonomy mode.

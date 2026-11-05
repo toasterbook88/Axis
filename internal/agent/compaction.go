@@ -32,10 +32,10 @@ const maxSummarizeContentChars = 2000
 const compactedSummaryPrefix = "[Compacted earlier conversation — summary]\n"
 
 // compactContext summarizes older conversation turns into a single compressed
-// user message when the conversation approaches the token budget. It is
-// advisory: on any backend failure it silently falls back to the existing
-// truncation policy in chat.Conversation, so the agent never breaks because
-// compaction failed.
+// user message. The caller decides when (shouldCompact in request.go, against
+// the whole request's budget). It is advisory: on any backend failure it
+// silently falls back to the truncation in fitRequest and chat.Conversation,
+// so the agent never breaks because compaction failed.
 //
 // The summary is inserted as a user-role message (not system): compaction can
 // delete every original user turn, and model chat templates behind tool
@@ -43,15 +43,8 @@ const compactedSummaryPrefix = "[Compacted earlier conversation — summary]\n"
 // user-role message ("No user query found in messages"). A user-role summary
 // keeps the wire invariant intact regardless of what was compacted.
 func (a *Agent) compactContext(ctx context.Context, backend ChatBackend) error {
-	if a.maxTokens <= 0 {
-		return nil
-	}
-	if a.conv.EstimateTokens() < int(float64(a.maxTokens)*compactionThreshold) {
-		return nil
-	}
-
-	candidates := a.conv.SummarizableMessages(protectLastTurns)
-	if len(candidates) < minSummarizable {
+	start, end, candidates := a.compactionRange()
+	if len(candidates) == 0 {
 		return nil
 	}
 
@@ -66,14 +59,6 @@ func (a *Agent) compactContext(ctx context.Context, backend ChatBackend) error {
 	// single compacted summary message, preserving the system prompt and the
 	// recent working context. The summary carries the user role so a
 	// user-role message always survives compaction (see above).
-	start := a.conv.FirstNonSystemIndex()
-	if start < 0 {
-		return nil
-	}
-	end := a.conv.Len() - protectLastTurns
-	if end <= start {
-		return nil
-	}
 	a.conv.ReplaceRange(start, end, []chat.Message{
 		{Role: chat.RoleUser, Content: compactedSummaryPrefix + strings.TrimSpace(summary)},
 	})
@@ -122,7 +107,7 @@ func buildSummarizationPrompt(msgs []chat.Message) string {
 // CompactManually triggers compaction on demand, returning before/after token counts and the number of messages compacted.
 func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens int, compactedCount int, err error) {
 	beforeTokens = a.conv.EstimateTokens()
-	candidates := a.conv.SummarizableMessages(protectLastTurns)
+	start, end, candidates := a.compactionRange()
 	if len(candidates) < 2 {
 		return beforeTokens, beforeTokens, 0, fmt.Errorf("not enough older messages to compact (need at least 2 candidate messages)")
 	}
@@ -136,21 +121,46 @@ func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens 
 		return beforeTokens, beforeTokens, 0, fmt.Errorf("compaction summarizer returned empty summary")
 	}
 
-	start := a.conv.FirstNonSystemIndex()
-	if start < 0 {
-		return beforeTokens, beforeTokens, 0, fmt.Errorf("no non-system messages to compact")
-	}
-	end := a.conv.Len() - protectLastTurns
-	if end <= start {
-		return beforeTokens, beforeTokens, 0, fmt.Errorf("active working turn range overlaps candidate range")
-	}
-
 	a.conv.ReplaceRange(start, end, []chat.Message{
 		{Role: chat.RoleUser, Content: compactedSummaryPrefix + strings.TrimSpace(summary)},
 	})
 
 	afterTokens = a.conv.EstimateTokens()
 	return beforeTokens, afterTokens, len(candidates), nil
+}
+
+// compactionRange returns what compaction replaces: the range [start, end)
+// from the first non-system message up to the protected tail, with the cut
+// moved back off a tool result (pairSafeCut), and the non-system messages in
+// it. The guard, the summarization prompt and the replacement all use it, so
+// compaction never counts or summarizes messages it then keeps.
+func (a *Agent) compactionRange() (start, end int, cands []chat.Message) {
+	msgs := a.conv.Messages()
+	start = firstNonSystemIndexIn(msgs)
+	if start < 0 {
+		return 0, 0, nil
+	}
+	end = pairSafeCut(msgs, start, len(msgs)-protectLastTurns)
+	if end <= start {
+		return start, start, nil
+	}
+	for _, m := range msgs[start:end] {
+		if m.Role != chat.RoleSystem {
+			cands = append(cands, m)
+		}
+	}
+	return start, end, cands
+}
+
+// pairSafeCut moves a compaction cut back while it falls on a tool result,
+// so an assistant tool call stays in the same part as its results. A cut
+// between them would leave a tool result with no call before it, which
+// strict servers and chat templates reject.
+func pairSafeCut(msgs []chat.Message, start, end int) int {
+	for end > start && end < len(msgs) && msgs[end].Role == chat.RoleTool {
+		end--
+	}
+	return end
 }
 
 // hasUserRole reports whether any message in the sequence carries the user

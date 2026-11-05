@@ -39,6 +39,7 @@ type ModelTarget struct {
 	UnknownLocality bool
 	Capabilities    []string // as the engine reported them; empty = unknown
 	Port            int      // runtime port on Node, for route resolution
+	ContextWindow   int      // served context in tokens, as the runtime stated it; 0 = unknown
 }
 
 // CloudBackendOptions supplies cloud-only credentials when ProtocolCloud.

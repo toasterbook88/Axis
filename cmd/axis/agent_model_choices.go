@@ -85,6 +85,7 @@ func catalogModelChoices(snap *models.ClusterSnapshot) []ModelChoice {
 			UnknownLocality: e.Locality == models.ModelLocalityUnknown,
 			Capabilities:    append([]string(nil), e.Capabilities...),
 			Port:            e.Port,
+			ContextWindow:   e.ContextWindow,
 		}
 		if e.Engine == "ollama" {
 			choice.Protocol = agent.ProtocolOllama
