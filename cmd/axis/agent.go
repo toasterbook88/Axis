@@ -160,6 +160,7 @@ func agentCmd() *cobra.Command {
 			if strings.TrimSpace(model) != "" && strings.TrimSpace(roleFlag) != "" {
 				return fmt.Errorf("use either --model or --role, not both")
 			}
+			explicitModel := strings.TrimSpace(model) != ""
 			// --role fills model from ai.yaml when --model is empty.
 			if strings.TrimSpace(model) == "" && strings.TrimSpace(roleFlag) != "" {
 				if fromRole := modelFromAIRoleFn(roleFlag); fromRole != "" {
@@ -204,6 +205,7 @@ func agentCmd() *cobra.Command {
 			// Determine and configure backend via extracted setupAgentStartupBackend.
 			startupBackend, err := setupAgentStartupBackend(agentStartupBackendParams{
 				Model:                 model,
+				ExplicitModel:         explicitModel,
 				StartupRequestedModel: startupRequestedModel,
 				Provider:              provider,
 				CloudModel:            cloudModel,

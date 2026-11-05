@@ -29,6 +29,7 @@ type ModelChoice = agent.ModelTarget
 // agentStartupBackendParams carries inputs needed to select the model and configure the backend.
 type agentStartupBackendParams struct {
 	Model                 string
+	ExplicitModel         bool // operator supplied --model, before role expansion
 	StartupRequestedModel string
 	Provider              string
 	CloudModel            string
@@ -124,7 +125,7 @@ func setupAgentStartupBackend(p agentStartupBackendParams) (agentStartupBackendR
 
 	// Pass the effective requested model (flag / default_model / preferred), not the raw flag alone.
 	mode := strings.ToLower(strings.TrimSpace(provider))
-	if explicitTarget == nil && p.Model != "" && strings.TrimSpace(cloudModel) == "" &&
+	if explicitTarget == nil && p.ExplicitModel && p.Model != "" && strings.TrimSpace(cloudModel) == "" &&
 		(mode == "" || mode == "auto" || mode == "local") {
 		choices = appendExplicitAIModelChoice(p.Ctx, p.Model, p.RT, choices)
 	}

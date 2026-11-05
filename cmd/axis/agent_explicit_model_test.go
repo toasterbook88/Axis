@@ -25,7 +25,7 @@ func TestExplicitGatewayModelWithoutRoleReachesStartup(t *testing.T) {
 			Probed: true, Healthy: true, ModelPresent: true, Probes: []llmrouter.BackendProbe{{Backend: "gateway", OK: true, Models: []string{"review-model"}}}}, nil
 	}
 	stubStartupReady(t, nil)
-	got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", StartupRequestedModel: "review-model",
+	got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
 		Provider: "local", RT: readyRuntime(), Out: io.Discard, ErrOut: io.Discard})
 	if err != nil {
 		t.Fatalf("explicit configured gateway model failed: %v", err)
@@ -224,7 +224,7 @@ func TestExplicitCloudStartupKeepsPrecedence(t *testing.T) {
 			rt := readyRuntime()
 			rt.Config.AIProviders = map[string]config.AIProviderConfig{"cloud-test": {Type: "cloud", Kind: "openrouter", Enabled: true,
 				Endpoint: "https://cloud.example/v1", APIKeyEnv: "AXIS_EXPLICIT_CLOUD_KEY", Models: []config.AIModelConfig{{Name: "cloud-model"}}}}
-			got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", StartupRequestedModel: "review-model",
+			got, err := setupAgentStartupBackend(agentStartupBackendParams{Ctx: context.Background(), Model: "review-model", ExplicitModel: true, StartupRequestedModel: "review-model",
 				Provider: provider, CloudModel: "cloud-model", RT: rt, Out: io.Discard, ErrOut: io.Discard})
 			if err != nil || got.ActiveTarget.Protocol != agent.ProtocolCloud || got.ActiveTarget.Model != "cloud-model" || len(*seen) != 0 {
 				t.Fatalf("cloud precedence changed: %+v err=%v probes=%v", got, err, *seen)

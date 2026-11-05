@@ -51,6 +51,9 @@ func appendExplicitAIModelChoice(ctx context.Context, requested string, rt *runt
 			continue
 		}
 		endpoint := chooseAICatalogEndpoint(backend, nodes)
+		if protocol == agent.ProtocolOllama {
+			endpoint = strings.TrimSuffix(strings.TrimRight(endpoint, "/"), "/v1")
+		}
 		if endpoint == "" {
 			continue
 		}
