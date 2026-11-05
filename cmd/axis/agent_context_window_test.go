@@ -40,7 +40,7 @@ func TestPlainAgentPathUsesTargetWindow(t *testing.T) {
 		ToolContext:   agent.NewToolContext(&agent.RuntimeView{}, nil),
 	})
 	a := agent.New(cfg)
-	if b, u := a.ContextBudget(); b != 16384 || u != 14336 {
-		t.Fatalf("budget = (%d, %d), want (16384, 14336)", b, u)
+	if u := a.MaxTokens(); u != 14336 {
+		t.Fatalf("usable budget = %d, want 14336 (16,384 window minus the reply reserve)", u)
 	}
 }

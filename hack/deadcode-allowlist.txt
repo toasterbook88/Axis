@@ -2,7 +2,7 @@
 # Format: <path fragment> <func-name>  (path must be a prefix of deadcode path)
 # Keep: build-tagged fleettest, intentional API surface, test-only helpers.
 #
-internal/agent/agent.go MCPRegistry
+internal/agent/agent_accessors.go MCPRegistry
 internal/agent/tools.go ExecuteShell
 internal/agent/tools.go allowExtra
 internal/api/server.go Serve

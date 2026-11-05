@@ -32,13 +32,6 @@ func (a *Agent) MaxTokens() int {
 	return u
 }
 
-// ContextBudget returns the request budget B (the smallest of --max-tokens,
-// the served window and a window learned from an overflow error) and the
-// usable part U after the reply reserve.
-func (a *Agent) ContextBudget() (b, u int) {
-	return a.budget()
-}
-
 // MCPRegistry returns the connected MCP client registry.
 func (a *Agent) MCPRegistry() *mcpclient.Registry {
 	return a.mcpRegistry
