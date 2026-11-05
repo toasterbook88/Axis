@@ -57,14 +57,6 @@ func (a *Agent) Backend() ChatBackend {
 	return a.client
 }
 
-// backendAndClass returns the backend and its classification as one
-// consistent pair, for callers that need both.
-func (a *Agent) backendAndClass() (ChatBackend, BackendSecurityClass) {
-	a.clientMu.RLock()
-	defer a.clientMu.RUnlock()
-	return a.client, a.securityClass
-}
-
 // backendState returns the backend, its classification and its budget state
 // from one read, so a model round or a subagent never pairs one backend with
 // another's generation or learned window.

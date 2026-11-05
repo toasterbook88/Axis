@@ -40,7 +40,7 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			_ = a.Backend()
-			backend, class := a.backendAndClass()
+			backend, class, _ := a.backendState()
 			if backend == backends[0] && class != BackendLocal || backend == backends[1] && class != BackendRemote {
 				t.Error("backend and trust class were read from different swaps")
 				return
@@ -63,6 +63,6 @@ func TestSetBackendConcurrentWithReads(t *testing.T) {
 // securityClassOf reads the active backend's classification through the
 // same consistent pair production code uses.
 func securityClassOf(a *Agent) BackendSecurityClass {
-	_, sc := a.backendAndClass()
+	_, sc, _ := a.backendState()
 	return sc
 }

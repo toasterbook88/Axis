@@ -87,7 +87,7 @@ type Agent struct {
 	// clientMu guards client, securityClass and bud, which SetBackend swaps while the console
 	// startup goroutine finishes model resolution and other goroutines (slash commands,
 	// subagents, evidence) read them. Never hold it across ChatStream or any callback: read
-	// the backend into a local via Backend/backendAndClass and use the local. It is a leaf
+	// the backend into a local via Backend/backendState and use the local. It is a leaf
 	// lock; no other Agent mutex is acquired while it is held.
 	clientMu      sync.RWMutex
 	securityClass BackendSecurityClass
