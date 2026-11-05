@@ -21,32 +21,24 @@ type budgetState struct {
 	learnedWindow int     // window stated by an overflow error; 0 = none
 	factor        float64 // estimate factor k; below 1 means 1
 	gen           uint64  // bumped by SetBackend
-	lastE, lastU  int     // estimate and usable budget of the last request sent; 0 = none yet
+	lastE         int     // estimate of the last request sent; 0 = none yet
 	warned        bool    // the over-budget warning was shown; kept across SetBackend
 }
 
-// budgetSnapshot copies the budget state for a subagent, which starts from
-// the parent's values and keeps what it learns to itself.
-func (a *Agent) budgetSnapshot() budgetState {
-	a.clientMu.RLock()
-	defer a.clientMu.RUnlock()
-	return a.bud
-}
-
-// noteRequest caches the estimate and usable budget of the request being
-// sent, for /context and the footer, which must not build a request.
-func (a *Agent) noteRequest(e, u int) {
+// noteRequest caches the estimate of the request being sent, for /context
+// and the footer, which must not build a request.
+func (a *Agent) noteRequest(e int) {
 	a.clientMu.Lock()
 	defer a.clientMu.Unlock()
-	a.bud.lastE, a.bud.lastU = e, u
+	a.bud.lastE = e
 }
 
-// lastRequest returns the cached estimate and usable budget of the last
-// request sent; zeros before the first.
-func (a *Agent) lastRequest() (e, u int) {
+// lastRequest returns the cached estimate of the last request sent; 0
+// before the first.
+func (a *Agent) lastRequest() int {
 	a.clientMu.RLock()
 	defer a.clientMu.RUnlock()
-	return a.bud.lastE, a.bud.lastU
+	return a.bud.lastE
 }
 
 // warnOnce reports whether the over-budget warning still needs showing and

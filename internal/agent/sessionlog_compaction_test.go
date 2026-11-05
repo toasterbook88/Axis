@@ -28,11 +28,12 @@ func TestFailedTurnAfterCompactionRemovesPromptAndKeepsLogEvidence(t *testing.T)
 		t.Fatal(err)
 	}
 	backend := &compactionThenFailureBackend{}
-	a := New(Config{Backend: backend, Model: "test-model", MaxTurns: 2, MaxTokens: 200, Output: io.Discard, SessionLog: log})
+	// A budget the fixed prompt fits in, so compaction can make room and runs.
+	a := New(Config{Backend: backend, Model: "test-model", MaxTurns: 2, MaxTokens: 8000, Output: io.Discard, SessionLog: log})
 	for i := 0; i < 6; i++ {
 		a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "older prompt"})
 		a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "older answer"})
-		a.conv.Append(chat.Message{Role: chat.RoleTool, ToolCallID: "old", Content: strings.Repeat("old tool output ", 40)})
+		a.conv.Append(chat.Message{Role: chat.RoleTool, ToolCallID: "old", Content: strings.Repeat("old tool output ", 120)})
 	}
 	const prompt = "current prompt that must be rolled back"
 	if err := a.Run(context.Background(), prompt); err == nil {

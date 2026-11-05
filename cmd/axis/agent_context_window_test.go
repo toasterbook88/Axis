@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/toasterbook88/axis/internal/agent"
 	"github.com/toasterbook88/axis/internal/models"
@@ -24,6 +28,29 @@ func TestCatalogChoiceCarriesContextWindow(t *testing.T) {
 	}
 	if got["windowed"] != 16384 || got["plain"] != 0 {
 		t.Fatalf("windows = %v, want windowed 16384, plain 0", got)
+	}
+}
+
+type discardProgram struct{}
+
+func (discardProgram) Send(tea.Msg) {}
+
+// The console path with a model already resolved builds the agent once,
+// before any /model switch, so the window must reach it there too.
+func TestConsoleStartupAgentUsesTargetWindow(t *testing.T) {
+	j := &consoleStartupJob{
+		in:       agentStartupInputs{maxTurns: 1, maxTokens: 32768},
+		out:      io.Discard,
+		prog:     discardProgram{},
+		launcher: newConsoleLauncher(nil, time.Second, time.Now),
+		prelude: &consolePrelude{result: agentStartupBackendResult{
+			ActiveTarget: ModelChoice{Model: "m", ContextWindow: 16384},
+			Backend:      resumeTestBackend{},
+		}},
+	}
+	a := j.buildAgent(context.Background(), nil, nil)
+	if u := a.MaxTokens(); u != 14336 {
+		t.Fatalf("usable budget = %d, want 14336 (16,384 window minus the reply reserve)", u)
 	}
 }
 

@@ -24,8 +24,8 @@ var overflowMarkers = []string{
 }
 
 var (
-	overflowWindowRe = regexp.MustCompile(`context size \((\d+) tokens\)|maximum context length is (\d+)`)
-	overflowTotalRe  = regexp.MustCompile(`request \((\d+) tokens\)|resulted in (\d+) tokens`)
+	overflowWindowRe = regexp.MustCompile(`context size \((\d+) tokens\)|maximum context length is (\d+)|tokens > (\d+) maximum`)
+	overflowTotalRe  = regexp.MustCompile(`request \((\d+) tokens\)|resulted in (\d+) tokens|too long: (\d+) tokens`)
 )
 
 // parseContextOverflow reports whether err is an HTTP 400 context-overflow

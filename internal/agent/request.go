@@ -85,22 +85,53 @@ func (a *Agent) estimate(r roundRequest) int {
 // runs at 70% of the usable budget, when at least minSummarizable messages
 // lie outside the protected tail and they hold at least compactionGuard of
 // the budget, not counting an earlier summary. force (overflow recovery)
-// needs only one summarizable message.
+// needs only one summarizable message other than an earlier summary, so a
+// retry never re-summarizes its own summary into an equal-size request.
 func (a *Agent) shouldCompact(e, u int, force bool) bool {
 	cands := a.conv.SummarizableMessages(protectLastTurns)
 	if force {
-		return len(cands) > 0
+		for _, m := range cands {
+			if !strings.HasPrefix(m.Content, compactedSummaryPrefix) {
+				return true
+			}
+		}
+		return false
 	}
 	if float64(e) < compactionThreshold*float64(u) || len(cands) < minSummarizable {
 		return false
 	}
-	freeable := 0
+	all, freeable := 0, 0
 	for _, m := range cands {
+		all += messageBytes(m)
 		if !strings.HasPrefix(m.Content, compactedSummaryPrefix) {
 			freeable += messageBytes(m)
 		}
 	}
-	return a.estimateFactor()*float64(freeable/4) >= compactionGuard*float64(u)
+	k := a.estimateFactor()
+	// When the request would not fit even with every summarizable message
+	// gone, a summary cannot help and each attempt is a wasted round trip.
+	if float64(e)-k*float64(all/4) > float64(u) {
+		return false
+	}
+	return k*float64(freeable/4) >= compactionGuard*float64(u)
+}
+
+// fixedTokens is the part of req that no compaction or trimming can shorten:
+// system messages, tool definitions and the turn context.
+func (a *Agent) fixedTokens(req roundRequest, turnContext []string) int {
+	n := 0
+	for _, m := range req.msgs {
+		if m.Role == chat.RoleSystem {
+			n += messageBytes(m)
+		}
+	}
+	if b, err := json.Marshal(req.defs); err == nil {
+		n += len(b)
+	}
+	for _, c := range turnContext {
+		n += len(c)
+	}
+	return int(math.Ceil(a.estimateFactor() * float64(n/4)))
 }
 
 // fitRequest builds this round's request and makes it fit the usable budget:
@@ -125,7 +156,7 @@ func (a *Agent) fitRequest(ctx context.Context, backend ChatBackend, userPrompt 
 		e = a.estimate(req)
 	}
 	if e > u && a.warnOnce() {
-		a.emitCompactionSkipped(fmt.Errorf("request is about %d tokens, over the usable budget of %d: the system prompt, tool definitions, turn context and newest messages cannot be shortened further; sending it anyway", e, u))
+		a.emitCompactionSkipped(fmt.Errorf("request is about %d tokens, over the usable budget of %d, after compaction and trimming; the system prompt, tool definitions and turn context hold about %d of it; sending it anyway", e, u, a.fixedTokens(req, turnContext)))
 	}
 	return req, e
 }
@@ -134,9 +165,9 @@ func (a *Agent) fitRequest(ctx context.Context, backend ChatBackend, userPrompt 
 // longer than its context window, it learns the stated window and size,
 // compacts, and retries once, only when the rebuilt request is predicted to
 // fit. Any other error, a second overflow, or a request that cannot shrink
-// returns the error as before.
-func (a *Agent) sendRound(ctx context.Context, backend ChatBackend, userPrompt string, turnContext []string) (chat.Message, error) {
-	gen := a.backendGeneration()
+// returns the error as before. gen is the generation read together with
+// backend (backendState), so a model switch in between teaches nothing.
+func (a *Agent) sendRound(ctx context.Context, backend ChatBackend, gen uint64, userPrompt string, turnContext []string) (chat.Message, error) {
 	req, e := a.fitRequest(ctx, backend, userPrompt, turnContext, false)
 	resp, err := a.stream(ctx, backend, req, e)
 	o, overflow := parseContextOverflow(err)
@@ -176,8 +207,7 @@ func (a *Agent) learnOverflow(gen uint64, o contextOverflow, sent roundRequest) 
 
 // stream sends req and records its size for the footer.
 func (a *Agent) stream(ctx context.Context, backend ChatBackend, req roundRequest, e int) (chat.Message, error) {
-	_, u := a.budget()
-	a.noteRequest(e, u)
+	a.noteRequest(e)
 	cw := NewColorWriter(a.output)
 	defer cw.Close()
 	return backend.ChatStream(ctx, req.msgs, req.defs, cw)

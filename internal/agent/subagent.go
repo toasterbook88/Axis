@@ -173,7 +173,7 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 
 	// One read lock for the pair so a concurrent SetBackend cannot hand the
 	// child a backend with the previous backend's trust classification.
-	parentClient, parentClass := a.backendAndClass()
+	parentClient, parentClass, parentBud := a.backendState()
 
 	child := &Agent{
 		client:                  parentClient,
@@ -187,7 +187,7 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 		output:                  a.output,
 		maxTurns:                maxTurns,
 		maxTokens:               a.maxTokens,
-		bud:                     a.budgetSnapshot(), // starts from the parent's; learns on its own
+		bud:                     parentBud, // starts from the parent's; learns on its own
 		verbose:                 a.verbose,
 		dryRun:                  a.dryRun, // cascade --dry-run so children do not execute for real
 		toolContext:             tc,

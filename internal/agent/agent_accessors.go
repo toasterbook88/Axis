@@ -18,7 +18,7 @@ func (a *Agent) ContextTokens() int {
 	if a == nil || a.conv == nil {
 		return 0
 	}
-	if e, _ := a.lastRequest(); e > 0 {
+	if e := a.lastRequest(); e > 0 {
 		return e
 	}
 	return a.conv.EstimateTokens()
@@ -58,11 +58,20 @@ func (a *Agent) Backend() ChatBackend {
 }
 
 // backendAndClass returns the backend and its classification as one
-// consistent pair, for callers that need both (subagent construction).
+// consistent pair, for callers that need both.
 func (a *Agent) backendAndClass() (ChatBackend, BackendSecurityClass) {
 	a.clientMu.RLock()
 	defer a.clientMu.RUnlock()
 	return a.client, a.securityClass
+}
+
+// backendState returns the backend, its classification and its budget state
+// from one read, so a model round or a subagent never pairs one backend with
+// another's generation or learned window.
+func (a *Agent) backendState() (ChatBackend, BackendSecurityClass, budgetState) {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.client, a.securityClass, a.bud
 }
 
 // Model returns the current active model name.

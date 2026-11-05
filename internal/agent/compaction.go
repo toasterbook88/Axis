@@ -63,7 +63,7 @@ func (a *Agent) compactContext(ctx context.Context, backend ChatBackend) error {
 	if start < 0 {
 		return nil
 	}
-	end := a.conv.Len() - protectLastTurns
+	end := pairSafeCut(a.conv.Messages(), start, a.conv.Len()-protectLastTurns)
 	if end <= start {
 		return nil
 	}
@@ -133,7 +133,7 @@ func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens 
 	if start < 0 {
 		return beforeTokens, beforeTokens, 0, fmt.Errorf("no non-system messages to compact")
 	}
-	end := a.conv.Len() - protectLastTurns
+	end := pairSafeCut(a.conv.Messages(), start, a.conv.Len()-protectLastTurns)
 	if end <= start {
 		return beforeTokens, beforeTokens, 0, fmt.Errorf("active working turn range overlaps candidate range")
 	}
@@ -144,6 +144,17 @@ func (a *Agent) CompactManually(ctx context.Context) (beforeTokens, afterTokens 
 
 	afterTokens = a.conv.EstimateTokens()
 	return beforeTokens, afterTokens, len(candidates), nil
+}
+
+// pairSafeCut moves a compaction cut back while it falls on a tool result,
+// so an assistant tool call stays in the same part as its results. A cut
+// between them would leave a tool result with no call before it, which
+// strict servers and chat templates reject.
+func pairSafeCut(msgs []chat.Message, start, end int) int {
+	for end > start && end < len(msgs) && msgs[end].Role == chat.RoleTool {
+		end--
+	}
+	return end
 }
 
 // hasUserRole reports whether any message in the sequence carries the user

@@ -407,7 +407,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		// next round, which may be inside the same operator prompt. Re-reading
 		// would let local-only evidence (chosen for a local class) be streamed
 		// to a newly installed remote backend.
-		backend, class := a.backendAndClass()
+		backend, class, bud := a.backendState()
 		// Per-turn context: the session-start cluster summary, the session-start
 		// git context, today's date, prompt evidence and a live cluster
 		// snapshot (node health, free memory, resident models) so the agent
@@ -416,7 +416,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		// prompt (turn_context.go). It is built before compaction so the
 		// budget counts it; sendRound (request.go) fits and sends the request.
 		turnContext := []string{a.sessionSummary, a.sessionGit, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
-		resp, err := a.sendRound(ctx, backend, userPrompt, turnContext)
+		resp, err := a.sendRound(ctx, backend, bud.gen, userPrompt, turnContext)
 		if err != nil {
 			if turn == 0 {
 				a.dropLatestPrompt(userPrompt)
