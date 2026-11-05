@@ -1,5 +1,14 @@
 ## Unreleased
 
+## v0.23.0 (2026-11-05)
+
+`axis init --generate`, an OpenCode-style `axis tui` workspace, stricter SSH
+transport rules, and fixes to reservations, daemon snapshots and mesh reloads,
+the agent's session log, safety scoring and tool-result size. See the
+[upgrade guide](docs/release-notes.md#v0230-upgrade-guide) for behavior that
+changes for existing setups. Publication and available downloads are tracked
+on GitHub Releases.
+
 ### Features
 
 * `axis init --generate` reports `nodes.yaml` additions from Tailscale without
@@ -123,6 +132,33 @@
   by a hub that lists only `coder:large`. A name without a tag still matches
   any tag of that name, and a registry port is not a tag. Found by the Copilot
   review of #577 after it merged (#590).
+* A RAM reservation large enough to wrap the ledger's total is rejected before
+  any entry changes, so it can no longer slip past the per-node capacity check.
+  A failed ledger write rolls the lease back and the shell does not start
+  (#607).
+* `nodes.yaml` edits now reach the running mesh: configured peers are added,
+  updated and removed atomically while learned peers stay. An invalid or
+  unreadable version keeps the last valid membership and invalidates the
+  snapshot. A collection that started before an invalidation can no longer
+  publish a stale snapshot or recreate the cache file (#608).
+* A published snapshot is never changed afterwards: discovery warning updates
+  no longer race a reader holding an older snapshot (#609).
+* Agent session log: each tool event is written once, a `shell` start record no
+  longer claims success before the command runs, and a failed first model call
+  after compaction drops the right prompt (#611, #610).
+* **Behaviour change:** one-shot agent runs (a positional prompt or `-p`) no
+  longer overwrite `agent-history.json`; they go to the daily session log. Only
+  the interactive REPL and console save the resume file (#611).
+* Tool `latency_ms` in the session log and observer is execution time only;
+  time waiting for an approval prompt is excluded. A prompt that went
+  unanswered for 600 s is no longer reported as a 600 s tool timeout (#612).
+* **Behaviour change:** a null redirect (`> /dev/null`) no longer turns a denied
+  command into a prompt. `rm -rf /tmp/x > /dev/null` is now denied, as it is
+  without the redirect (#613).
+* **Behaviour change:** every tool result is capped when it enters the
+  conversation (about a quarter of the context budget, at least 2,048 bytes;
+  32 KiB without a budget), and on resume or rollback. A cut result ends in
+  `… [truncated: tool output was N bytes; the first M are kept]` (#614).
 
 ### Documentation
 
@@ -158,9 +194,6 @@
   fail. Three specs written before the format are named exceptions.
   `verified: <how>` is now a question status in §8, the review prompt and the
   PR template.
-
-### Dependencies and CI
-
 * `hack/pr-review-cycle.sh` waits for requested reviews instead of only
   sleeping a fixed 2 minutes: after the 120 s floor it polls until no requested
   reviewer is pending, up to `--wait-reviews` (default 20 minutes), and exits 3
@@ -169,6 +202,9 @@
   malformed read fails closed. `--allow-pending LOGIN` waives a reviewer that
   will not answer (#588). On #577 Copilot's review arrived 6.7 minutes after CI and 9
   seconds after the merge.
+* `github.com/mark3labs/mcp-go` 1.4.0 → 1.5.0 (#604). CI action pins updated
+  (#605, #606), and the `ssh -G` sandbox test runs under bubblewrap and fails if
+  it skips (#602).
 
 ## v0.22.0 (2026-10-28)
 
