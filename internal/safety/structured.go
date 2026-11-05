@@ -208,42 +208,14 @@ func (e *Evaluator) evaluateSegment(rawCmd string, surface string) Decision {
 	joinedArgs := strings.Join(args, " ")
 	lowerCmd := strings.ToLower(rawCmd)
 
-	for _, rule := range e.rules {
-		// If rule has surface restriction, check it
-		if len(rule.Surfaces) > 0 && !containsString(rule.Surfaces, surface) {
+	for i, rule := range e.rules {
+		if !ruleMatches(rule, surface, program, joinedArgs, lowerCmd) {
 			continue
 		}
-
-		if len(rule.RawPatterns) > 0 {
-			matched := false
-			for _, pattern := range rule.RawPatterns {
-				if strings.Contains(lowerCmd, strings.ToLower(pattern)) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-
-		if len(rule.Programs) > 0 {
-			if !matchesProgram(program, rule.Programs) {
-				continue
-			}
-		}
-
-		// If rule has arg patterns, at least one must match
-		if len(rule.ArgPatterns) > 0 {
-			matched := false
-			for _, pattern := range rule.ArgPatterns {
-				if globMatch(joinedArgs, pattern) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
+		// A lower-priority deny still wins over an allow or prompt match.
+		if rule.Verdict != VerdictDeny {
+			if deny, ok := firstDeny(e.rules[i+1:], surface, program, joinedArgs, lowerCmd); ok {
+				rule = deny
 			}
 		}
 
