@@ -8,8 +8,10 @@ trigger, window discovery, calibration and full-autonomy rules are separate, lat
 ## Problem
 
 Over 14 days of the private agent session log, 10 turns failed with the model server's
-"request exceeds the available context size" error. One cause is verified at the base of this
-spec: some tool results have no size limit.
+"request exceeds the available context size" error. None of them held a tool result over 32 KiB
+(see Review 4, questions); they are the later budget spec's problem. This spec fixes a separate,
+reproduced failure: some tool results have no size limit, and one oversized result wedges the
+session.
 
 - `read_file` (32,000 chars) and shell (16,000 runes) cap themselves. `web_fetch` caps at its
   `max_chars` argument, which the model chooses and which has no upper bound
@@ -30,6 +32,12 @@ spec: some tool results have no size limit.
 - No new flag, default, config key or state file; `--max-tokens` keeps its meaning.
 - Not bounding a round that returns several large results; the 4-message protect window is
   unchanged (reviews 1 and 2).
+- Results that fit today are newly cut at budgets below the default: at `--max-tokens` 16384,
+  `read_file` output over 16,384 bytes is cut, and `read_file` has no offset to read the rest.
+  That is the quarter-of-budget rule. Above the default only results over `maxTokens` bytes are
+  cut.
+- Nothing beyond the cap is kept: the session log keeps the first 16 KiB and the raw size
+  (`result_bytes`), as today.
 - No guarantee at small budgets: at `--max-tokens` 8192 in full scope the fixed prompt alone is
   about 81% of the budget (review 3 F3), so a capped result can still overflow. The claim is for
   the default 32768.
@@ -39,10 +47,15 @@ spec: some tool results have no size limit.
 
 One helper, `capToolResult(content string, cap int) string`, in `internal/chat`.
 
-- `cap = min(32 KiB, maxTokens)` bytes, never below 2,048. A conversation built with
-  `maxTokens` 0 (truncation disabled) uses 32 KiB.
-- A result of at most `cap` bytes is unchanged. Valid UTF-8 `read_file` output (at most 32,000
-  runes, about 32,037 bytes for ASCII) fits at the default budget.
+- `cap = maxTokens` bytes, never below 2,048: about a quarter of the budget at chars / 4, so the
+  protected tail cannot be filled by one result at any budget. `chat.NewConversation(0)` disables
+  truncation and has no budget to take a quarter of, so it uses 32 KiB, the default budget's cap.
+- The result is measured as it will be sent: invalid UTF-8 bytes are first replaced with U+FFFD,
+  as `encoding/json` does when the request is built (`strings.Map` with an identity mapping, not
+  `strings.ToValidUTF8`, which collapses runs). A capped result is therefore unchanged by a save
+  and resume.
+- A result of at most `cap` bytes is unchanged. ASCII `read_file` output (32,037 bytes at most)
+  fits at the default budget and above.
 - A longer result becomes its first bytes, cut at a UTF-8 rune boundary, then `\n` and the marker
   `… [truncated: tool output was N bytes; the first M are kept]`. The whole result, marker
   included, is at most `cap` bytes.
@@ -57,15 +70,20 @@ The session log keeps recording each raw result before it enters the conversatio
 
 ## Tests
 
-All in `internal/chat`; each fails today.
+All in `internal/chat`. Regression guards (they pass today and must keep passing) are marked.
 
 - Entry cap: a 10 MB result (the `grep_search` probe size, and `web_fetch` with a large
-  `max_chars`) is stored within the cap with the marker; 20,000 bytes and ASCII `read_file`
-  output of 32,037 bytes are unchanged at the default budget; at `maxTokens` 8192 the cap is
-  8,192 bytes; below 2,048 the floor applies; a multi-byte UTF-8 result is cut on a rune
-  boundary; assistant messages are not capped.
-- Idempotent: capping a capped result returns it unchanged; re-capping at a smaller cap keeps
-  the original N.
+  `max_chars`) is stored within the cap with the marker; at `maxTokens` 8192 the cap is 8,192
+  bytes; at 16384, 32,037 bytes of `read_file` output are cut to 16,384; at 65536 a 10 MB result
+  is cut to 65,536; below 2,048 the floor applies; `maxTokens` 0 caps at 32 KiB; a 40,000-byte
+  multi-byte UTF-8 result is cut on a rune boundary.
+- Guards: 20,000 bytes and 32,037 bytes of `read_file` output are unchanged at the default
+  budget; 60,000 bytes are unchanged at 65536; system, user and assistant messages over the cap
+  are unchanged.
+- Invalid UTF-8: 10 MB of Latin-1 bytes is stored with the marker, and its JSON-encoded,
+  decoded form is identical and at most the cap.
+- Idempotent: capping a capped result returns it unchanged (guard); re-capping at a smaller cap
+  gives at most the smaller cap and keeps the original N.
 - Resume and rollback: a saved history whose newest tool result is 10 MB is capped on load, a
   history resumed at a smaller budget is re-capped, and `RestoreAll` caps.
 - No wedge at the default budget: after a 10 MB newest tool result, the conversation estimate is
@@ -75,6 +93,8 @@ All in `internal/chat`; each fails today.
 
 - **Cap each unbounded tool separately** (`grep_search`, `git_log`, MCP, `web_fetch`). Misses the
   next tool added without a cap; one cap at the conversation boundary covers all of them.
+- **A 32 KiB ceiling on the cap** (revision 4). It only ever cut results at budgets above the
+  default, where they fit today (review 4 F4); `maxTokens` bytes is identical at and below it.
 - **Also count the whole request in the trigger and add a pre-send check** (revisions 1-3).
   Reviews 2 and 3 showed its guard can block compactions that work today, its pre-send budget
   mixed units, and it cannot help when the fixed prompt fills most of a small budget. Moved to
@@ -87,10 +107,11 @@ All in `internal/chat`; each fails today.
 - OpenCode shortens long tool output in the recent conversation it keeps after compaction, and
   keeps earlier messages stored even when they are no longer sent
   (https://opencode.ai/v2/docs/compaction/). This step shortens a long result earlier, when it
-  enters the conversation, so the protected tail never holds it whole; the session log keeps the
-  raw output, as OpenCode keeps stored messages.
+  enters the conversation, so the protected tail never holds it whole. Unlike OpenCode, nothing
+  past the cap is stored: the session log keeps only the first 16 KiB and the raw size.
 - Optimization: none beyond bounding each result. Measurement: the no-wedge and resume tests
-  above, and over the next 14 days of logs, fewer context-overflow errors at the default budget.
+  above, and over the next 14 days of logs, no turn whose request holds a tool result over the
+  cap. None of the 10 logged failures had one, so they remain for the later budget spec.
 
 ## Review
 
@@ -111,7 +132,8 @@ Verdict: revise
    `LoadFromFile` and `RestoreAll`; resume tests for a 10 MB result and a smaller budget.
 3. Minor: the cap's unit was unstated and `read_file`'s real output exceeds 32,000. Fixed: the cap
    is bytes, 32 KiB, rune-boundary cut, floor 2,048; the unreachable `maxTokens` 0 clause is
-   removed; tests use real `read_file` output, 8192 and the floor.
+   removed; tests use real `read_file` output, 8192 and the floor. (Revision 5 restores a
+   `maxTokens` 0 rule, because the cap is now `maxTokens` bytes and needs a value there; tested.)
 4. Minor: the session log clips tool output at 16 KB, not 4 KB. Fixed: wording corrected.
 
 Questions:
@@ -144,7 +166,8 @@ Verdict: revise
 4. Minor: the 8192 parallel-round assertion could not be met with the real prompt. Fixed: that
    test is removed with step b.
 5. Minor: "read_file always fits" is false for Latin-1 and binary files. Fixed: reworded to valid
-   UTF-8, with a Latin-1 test that expects the entry-cap marker.
+   UTF-8, with a Latin-1 test that expects the entry-cap marker. (Revision 4 dropped that test;
+   revision 5 restores it, measured as sent, per review 4 F1.)
 6. Minor: the footer and `/context` keep the conversation-only estimate. Declined: listed as a
    non-goal for this step; reviewer's static reading at `agent.go:633-637` supports it.
 7. Minor: the cited research does not back a 15% reserve. Fixed: the reserve claim is removed and
@@ -187,3 +210,36 @@ Questions:
   discovery is the later spec.
 - Can the session summary alone exceed the guard? Open: the guard is removed in revision 4.
 - How large is the fixed prompt with MCP tools loaded? Open: measured in the later budget spec.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: 6cc8d3f8fe2de1d5269239d3179180910124796c
+Head: db0812eb9c0a899f0b6262d058989b1a7eb03e7d
+Date: 2026-11-05
+Verdict: approve-with-changes
+
+1. Minor: the cap counts raw bytes, but invalid UTF-8 is sent as U+FFFD at about three times the
+   size, so a Latin-1 or binary result can still wedge the session and changes after a resume.
+   Fixed: the result is normalized as `encoding/json` would before it is measured; Latin-1 test
+   asserts the sent form equals the stored form and fits the cap.
+2. Minor: the tests missed the other-roles and `maxTokens` 0 rules, and "each fails today" was
+   false. Fixed: system, user and assistant guards, a `maxTokens` 0 test, a re-cap length check,
+   and guards are labelled.
+3. Minor: review 1 item 3 and review 2 item 5 described fixes revision 4 had undone. Fixed: both
+   entries note what revision 5 changed; the Latin-1 test is back.
+4. Minor: the 32 KiB ceiling newly cut results at budgets above the default, and results below it
+   were cut silently. Fixed: the ceiling is dropped (cap is `maxTokens` bytes); the cut below the
+   default is a stated non-goal; tests at 16384 and 65536.
+5. Minor: Research said the session log keeps the raw output; it keeps 16 KiB. Fixed: reworded,
+   and "nothing beyond the cap is kept" is a non-goal.
+
+Questions:
+- How many of the logged overflows had a tool result over 32 KiB? Verified: counted from the
+  private log's per-tool sizes, 0 of the 10 failed turns had one (2 of 39 turns under a broader
+  context-error match). The 10 come from many mid-sized results and fixed overhead, the later
+  budget spec; this step removes the unbounded-result wedge the review reproduced, not them.
+- How many tokens does 32 KiB of U+FFFD or CJK text make with the served tokenizer? Open: needs
+  the served model, a shared service; calibration is the later budget spec.
+- Should `ReplaceRange` cap tool content? Verified: no caller inserts tool messages
+  (`internal/agent/compaction.go:77`, `:148`; `agent.go:407`, `:445`), so nothing reaches it.

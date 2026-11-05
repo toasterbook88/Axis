@@ -64,7 +64,7 @@ func NewConversation(maxTokens int) *Conversation {
 func (c *Conversation) Append(m Message) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.messages = append(c.messages, m)
+	c.messages = append(c.messages, c.capToolMessage(m))
 	if c.maxChars > 0 {
 		c.compact()
 	}
@@ -99,7 +99,10 @@ func (c *Conversation) Clear() {
 func (c *Conversation) RestoreAll(msgs []Message) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.messages = append([]Message(nil), msgs...)
+	c.messages = make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		c.messages = append(c.messages, c.capToolMessage(m))
+	}
 }
 
 // Len returns the number of messages.
