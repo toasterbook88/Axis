@@ -1,6 +1,7 @@
 # Fit every agent request to the model's context window
 
-Date: 2026-11-05. Status: revision 2, after spec review 1 (revise); awaiting spec review 2.
+Date: 2026-11-05. Status: revision 3; spec review 2 approved with changes, all findings resolved
+here.
 
 Follows PR #614 (tool-result entry cap), which bounded single results and left the logged
 overflows to this spec.
@@ -73,9 +74,12 @@ states both the window and the request size.
 1. **Window.** `agent.ModelTarget` gains `ContextWindow int`, copied from the catalog entry in
    `catalogModelChoices` (0 = unknown). The agent holds, under `clientMu` beside the backend:
    the active target's window, a **learned window** (0 = none) and an **estimate factor**
-   `k` (starts at 1.0, never below 1.0). `SetBackend` sets the target window and resets the
-   learned window and `k`, and bumps a backend generation. A synchronous subagent shares the
-   parent's values; an async subagent copies them at start and its updates stay its own.
+   `k` (starts at 1.0, never below 1.0, at most 2.0). `agent.Config` gains `ContextWindow`,
+   filled from the active target by `buildAgentSessionConfig`, so the plain `axis agent` path
+   (built by `agent.New`, never `SetBackend`) has the window too. `SetBackend` gains the
+   target's window; it sets it, resets the learned window and `k`, and bumps a backend
+   generation. A synchronous subagent shares the parent's values; an async subagent copies them
+   at start and its updates stay its own.
 2. **Budget.** `B = min(maxTokens, target window if > 0, learned window if > 0)`. Usable
    `U = B − R`, with the reply reserve `R = min(4096, B / 8)` (4,096 at 32,768; 1,024 at
    8,192). The conversation's own character cap stays `maxTokens × 4`.
@@ -87,9 +91,11 @@ states both the window and the request size.
    All terms are bytes and divided once, so the units match (#614 spec review 3, F2).
    Compaction and truncation change the conversation; the round then rebuilds the final list
    and measures it again.
-4. **Trigger.** LLM compaction runs when `E ≥ 0.70 × U`, and only when the summarizable
-   messages hold at least `0.10 × U` tokens. Below that, summarizing frees too little, and with
-   a large fixed part it would run every round (#614 spec review 2 question).
+4. **Trigger.** LLM compaction runs when `E ≥ 0.70 × U`, and only when what it would free
+   holds at least `0.10 × U` tokens: the summarizable messages **excluding an earlier compacted
+   summary** (the message starting with `compactedSummaryPrefix`). Below that, summarizing frees
+   too little, and with a large fixed part it would run every round, re-summarizing its own
+   summary (#614 spec review 2 question). `minSummarizable` (4) still applies here.
 5. **Pre-send check.** After compaction, if `E > U`, the existing tool-result truncation
    (`compactOldest`, the newest 4 messages protected) runs until `E ≤ U` or nothing is left to
    truncate. It changes the stored conversation, as compaction already does. If `E > U`
@@ -102,13 +108,18 @@ states both the window and the request size.
      and nothing is learned.
    - The stated window `N` (`context size (N tokens)`, `maximum context length is N`) sets the
      learned window when `N ≤ B`. The stated request size `M` (`request (M tokens)`,
-     `resulted in M tokens`) sets `k = max(k, M / E_sent)` when `M > N`.
+     `resulted in M tokens`) is compared with the uncorrected estimate
+     `raw_sent = E_sent / k_old`: `k = max(k, M / raw_sent)` when `M > N`, so a later, larger
+     ratio raises `k`. A ratio above 2.0 is not learned (the window still is) and the skip is
+     logged as an event, so one badly tokenizing request cannot shrink the budget for the
+     session.
    - Recovery then forces one compaction: it ignores the 70% trigger and the 0.10 guard, and
      needs only 1 summarizable message outside the protected 8. The pre-send check follows,
      against the new `U` and `k`.
-   - It retries once, only if the rebuilt request is predicted to fit: when `M` and `N` are
-     known, `E_new ≤ (N − R) × E_sent / M`; otherwise `E_new ≤ E_sent − (E_sent / 10)`. If not,
-     the overflow error is returned without a second request.
+   - It retries once, only if the rebuilt request is predicted to fit. `E_new` uses the new
+     `k`. When `N` is known, the condition is `E_new ≤ N − R`, the same as the pre-send success
+     condition; otherwise `E_new ≤ 0.9 × E_sent`. If not, the overflow error is returned without
+     a second request.
    - A second overflow, or any other error, fails the turn as today. The first-request prompt
      is dropped only then. The retry does not use a `maxTurns` round, emit a second
      `TurnStarted`, or add a session-log event. The 400 is checked before streaming, so the
@@ -122,6 +133,8 @@ states both the window and the request size.
 ## Tests
 
 - `ModelTarget` copies `ContextWindow` from a catalog entry with `n_ctx`, and is 0 without one.
+- The plain path: `buildAgentSessionConfig` with a catalog window of 16,384 gives an agent with
+  `U` = 14,336, without `SetBackend`.
 - Budget: `--max-tokens` 32768 with a 16,384 target window gives `U` = 14,336; with no window,
   28,672. A learned window of 20,000 lowers `B` even when the target window is 32,768, and a
   later error stating 40,000 does not raise it.
@@ -133,18 +146,25 @@ states both the window and the request size.
   across 30 rounds of 6 KB tool results. At Base, the conversation-only estimate stays under its
   limit while some requests exceed `U`; after the change, none does.
 - Overflow recovery at `--max-tokens` 65536, with a fake backend that returns the logged error
-  text (`request (34870 tokens) … context size (32768 tokens)`). Chat calls (tools present) and
+  text (`request (34870 tokens) … context size (32768 tokens)`) and a conversation whose raw
+  estimate is about 30,000 tokens, consistent with `M`. Chat calls (tools present) and
   summarizer calls are counted separately:
   - one overflow, then success: 2 chat calls, the turn succeeds, the learned window is 32,768,
-    `k` > 1;
+    `k` ≈ 1.16;
+  - only truncation (summarizer fails) brings `E` under `N − R`: the retry is still sent;
   - two overflows: the turn fails after exactly 2 chat calls;
   - a rebuilt request that cannot shrink (only the newest round, no summarizable messages):
-    1 chat call, and the overflow error is returned;
-  - a non-overflow 400: 1 chat call.
+    1 chat call, the overflow error is returned, the learned window is 32,768 and `k` changed,
+    so the test shows the fit rule was reached;
+  - a non-overflow 400: 1 chat call, learned window 0;
+  - `k` ratchets: overflows in separate prompts with ratios 1.3 then 1.4 leave `k` = 1.4;
+  - an absurd ratio (`M` / `raw_sent` = 7) is not learned, the window is, and a skip event is
+    logged.
 - A model switch during a round: an overflow from the old backend does not set the learned
   window of the new one.
 - No thrash: at `--max-tokens` 8192 in exec scope, the summarizer is not called while the
-  summarizable part is under `0.10 × U`, and the warning event fires once per session.
+  summarizable part is under `0.10 × U`, and the warning event fires once per session. With a
+  summarizer that returns a 3,000-char summary, it is called at most once over 10 rounds.
 - The footer reads the cached `E`/`U` and does not call the turn-context builders.
 
 ## Alternatives
@@ -229,3 +249,40 @@ Questions:
   learned window corrects a too-large value after one error.
 - How large is the fixed prompt with MCP tools loaded? Open: depends on configured servers; to
   be measured from the cached `E` after install.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: 3abc2798c6344032754b596875e6367f8f3f074e
+Head: 654115f47a363422832031963815b0593f2e0ae8
+Date: 2026-11-05
+Verdict: approve-with-changes
+
+1. Major: `k` and the retry-fit rule mixed corrected and uncorrected units (`k` stuck at 1.3
+   when the true ratio rose to 1.4; a retry refused for a request that fits `U`). Fixed: `k`
+   learns from `raw_sent = E_sent / k_old`, and with `N` known the retry condition is
+   `E_new ≤ N − R` under the new `k` (Design 6); ratchet and truncation-only tests added.
+2. Major: compaction thrash when the fixed part is at or above `0.70 × U`, because the previous
+   summary passed the 0.10 guard alone. Fixed: the guard excludes an earlier compacted summary,
+   and `minSummarizable` stays at 4 for the trigger (Design 4); 3,000-char-summary test added.
+3. Minor: `k` had no upper bound, and the recovery fixture's size was unspecified. Fixed: `k` is
+   at most 2.0 and a larger ratio is not learned, with an event logged (Design 1, 6); the
+   fixture's raw size is about 30,000; an absurd-ratio test added.
+4. Minor: the window reached only the `/model` path. Fixed: `agent.Config.ContextWindow` is
+   filled by `buildAgentSessionConfig`, and `SetBackend` takes the window (Design 1); plain-path
+   test added.
+5. Minor: the no-shrink and non-overflow tests could pass at Base. Fixed: no-shrink also asserts
+   the learned window and the changed `k`; non-overflow asserts no learned window (Tests).
+
+Questions:
+- Can forced compaction with 1 summarizable message cut between an assistant tool-call message
+  and its tool results? Open: exists at Base; the implementation adds a test with the tool-call
+  message at index len − 9 and keeps the pair together if it fails.
+- Is the generation check atomic for a synchronous subagent, which has its own `clientMu`?
+  Open: the implementation adds a race test (parent `SetBackend` during a child overflow) under
+  `-race`.
+- Is the overflow always a non-200 status before streaming? Open: the logged errors start with
+  `http status 400`, so the logged path is covered; a mid-stream overflow behind a proxy would go
+  undetected, as at Base.
+
+Note: review 1's nine fixes are all present; findings 1 and 4 are defects inside the fixes for review-1 findings 2 and 7, and review 1's question 1 ("k covers it after the first error") holds only with finding 1 fixed. Code starts; every finding is resolved.
