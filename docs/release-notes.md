@@ -25,7 +25,9 @@ AXIS no longer dials a host directly when its SSH config sets `ProxyJump` or
 `/etc/passwd` home. A rule such as `Host *` with `ProxyJump` that used to be
 ignored now blocks every node it matches. Add `ProxyJump none` (or
 `ProxyCommand none`) in a more specific `Host` block for nodes AXIS should
-reach directly. `axis doctor` names the directive and the fix.
+reach directly, placed before the wildcard block: OpenSSH uses the first value
+it finds, so an override after `Host *` has no effect. `axis doctor` names the
+directive and the fix.
 
 ### Leases follow `system_reserve_mb` everywhere
 

@@ -55,7 +55,8 @@ on GitHub Releases.
   applies a proxy directive to hosts AXIS could reach directly (for example
   `Host *` with `ProxyJump`) worked by accident and now fails until those
   hosts get `ProxyJump none` or `ProxyCommand none` in a more specific `Host`
-  block. `axis doctor` gives that remediation, and `axis init --generate` flags
+  block placed before the wildcard one (OpenSSH uses the first value it finds).
+  `axis doctor` gives that remediation, and `axis init --generate` flags
   such proposals `...; Axis transport refuses it`. A directive set only in the
   system-wide `ssh_config` is not seen when `$HOME` differs from the
   `/etc/passwd` home, when there is no `/etc/passwd` entry, or when OpenSSH
