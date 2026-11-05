@@ -187,6 +187,7 @@ func (a *Agent) buildChildAgent(maxTurns int, targetNode, sysExtra string) *Agen
 		output:                  a.output,
 		maxTurns:                maxTurns,
 		maxTokens:               a.maxTokens,
+		bud:                     a.budgetSnapshot(), // starts from the parent's; learns on its own
 		verbose:                 a.verbose,
 		dryRun:                  a.dryRun, // cascade --dry-run so children do not execute for real
 		toolContext:             tc,

@@ -10,17 +10,26 @@ func (a *Agent) Conversation() *chat.Conversation {
 	return a.conv
 }
 
-// ContextTokens returns the current estimated conversation tokens.
+// ContextTokens returns the estimated size of the last request sent: the
+// conversation, tool definitions and turn context. Before the first request
+// it is the conversation estimate. It reads a cached value and never builds
+// a request, so the console's UI loop can call it.
 func (a *Agent) ContextTokens() int {
 	if a == nil || a.conv == nil {
 		return 0
 	}
+	if e, _ := a.lastRequest(); e > 0 {
+		return e
+	}
 	return a.conv.EstimateTokens()
 }
 
-// MaxTokens returns the session token limit.
+// MaxTokens returns the usable request budget: the smallest of --max-tokens,
+// the served window and a window learned from an overflow error, minus the
+// reply reserve.
 func (a *Agent) MaxTokens() int {
-	return a.maxTokens
+	_, u := a.budget()
+	return u
 }
 
 // ContextBudget returns the request budget B (the smallest of --max-tokens,
@@ -45,7 +54,7 @@ func (a *Agent) SetBackend(client ChatBackend, securityClass BackendSecurityClas
 	defer a.clientMu.Unlock()
 	a.client = client
 	a.securityClass = securityClass
-	a.bud = budgetState{targetWindow: max(0, contextWindow), gen: a.bud.gen + 1}
+	a.bud = budgetState{targetWindow: max(0, contextWindow), gen: a.bud.gen + 1, warned: a.bud.warned}
 }
 
 // Backend returns the active LLM backend.

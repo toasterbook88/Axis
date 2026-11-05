@@ -16,7 +16,7 @@ type Config struct {
 	Model                   string               // Ollama model name
 	Backend                 ChatBackend          // Optional custom backend override
 	MaxTurns                int                  // Maximum agent loop iterations (default: 10)
-	MaxTokens               int                  // Conversation token budget (default: 4096)
+	MaxTokens               int                  // Conversation token budget (default: 32768)
 	ContextWindow           int                  // Served context of the active model in tokens; 0 = unknown
 	AutoApprove             bool                 // Auto-approve safe commands (score < 70)
 	Autonomy                AutonomyMode         // Autonomy mode: cluster, default, edit, or full (controls tool scope and auto-approval)

@@ -32,10 +32,10 @@ const maxSummarizeContentChars = 2000
 const compactedSummaryPrefix = "[Compacted earlier conversation — summary]\n"
 
 // compactContext summarizes older conversation turns into a single compressed
-// user message when the conversation approaches the token budget. It is
-// advisory: on any backend failure it silently falls back to the existing
-// truncation policy in chat.Conversation, so the agent never breaks because
-// compaction failed.
+// user message. The caller decides when (shouldCompact in request.go, against
+// the whole request's budget). It is advisory: on any backend failure it
+// silently falls back to the truncation in fitRequest and chat.Conversation,
+// so the agent never breaks because compaction failed.
 //
 // The summary is inserted as a user-role message (not system): compaction can
 // delete every original user turn, and model chat templates behind tool
@@ -43,15 +43,8 @@ const compactedSummaryPrefix = "[Compacted earlier conversation — summary]\n"
 // user-role message ("No user query found in messages"). A user-role summary
 // keeps the wire invariant intact regardless of what was compacted.
 func (a *Agent) compactContext(ctx context.Context, backend ChatBackend) error {
-	if a.maxTokens <= 0 {
-		return nil
-	}
-	if a.conv.EstimateTokens() < int(float64(a.maxTokens)*compactionThreshold) {
-		return nil
-	}
-
 	candidates := a.conv.SummarizableMessages(protectLastTurns)
-	if len(candidates) < minSummarizable {
+	if len(candidates) == 0 {
 		return nil
 	}
 

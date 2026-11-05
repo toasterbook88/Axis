@@ -408,51 +408,15 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		// would let local-only evidence (chosen for a local class) be streamed
 		// to a newly installed remote backend.
 		backend, class := a.backendAndClass()
-		// Proactively compress older conversation turns before sending context
-		// to the model, so long sessions stay within the token budget.
-		if err := a.compactContext(ctx, backend); err != nil && a.verbose {
-			a.emitCompactionSkipped(err)
-		}
-		msgs := a.conv.Messages()
-		toolDefs := a.tools.Defs()
-
-		clonedMsgs := make([]chat.Message, len(msgs))
-		copy(clonedMsgs, msgs)
-
 		// Per-turn context: the session-start cluster summary, the session-start
 		// git context, today's date, prompt evidence and a live cluster
 		// snapshot (node health, free memory, resident models) so the agent
 		// can adapt placement mid-task. All of them change between runs, so
 		// they are placed with the newest user message, not in the system
-		// prompt. See turn_context.go for why.
+		// prompt (turn_context.go). It is built before compaction so the
+		// budget counts it; sendRound (request.go) fits and sends the request.
 		turnContext := []string{a.sessionSummary, a.sessionGit, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
-
-		clonedMsgs = chat.ConsolidateMessages(clonedMsgs)
-
-		// Wire invariant: model chat templates behind tool calling (notably
-		// Qwen Jinja templates via LiteLLM) reject payloads with no user-role
-		// message. Compaction can delete every original user turn, so if none
-		// survived, re-inject this turn's prompt after the leading system
-		// messages rather than sending a user-less payload into a template
-		// guard.
-		if !hasUserRole(clonedMsgs) {
-			insert := firstNonSystemIndexIn(clonedMsgs)
-			if insert < 0 {
-				insert = len(clonedMsgs)
-			}
-			clonedMsgs = append(clonedMsgs[:insert], append([]chat.Message{{Role: chat.RoleUser, Content: userPrompt}}, clonedMsgs[insert:]...)...)
-		}
-
-		clonedMsgs = injectTurnContext(clonedMsgs, turnContext...)
-		// Some servers (LiteLLM) reject a request with any empty non-assistant
-		// message. Fill them on the way out so a history that already holds
-		// one (an older session, a resumed file) still works.
-		clonedMsgs = fillEmptyContent(clonedMsgs)
-
-		// Stream the model response with code block highlighting.
-		cw := NewColorWriter(a.output)
-		resp, err := backend.ChatStream(ctx, clonedMsgs, toolDefs, cw)
-		cw.Close()
+		resp, err := a.sendRound(ctx, backend, userPrompt, turnContext)
 		if err != nil {
 			if turn == 0 {
 				a.dropLatestPrompt(userPrompt)

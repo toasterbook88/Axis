@@ -7,7 +7,7 @@ const (
 	// replyReserveMax is the most room kept free for the model's reply.
 	// The longest logged answer was about 1,700 tokens; tool-call arguments
 	// need room too, and the cloud backend asks for 4,096.
-	replyReserveMax = 4096
+	replyReserveMax = 4096 // interlinked: defer ubs_magic_number_no_const -- this line is the named constant
 	// estimateFactorMax bounds the learned estimate factor k. A larger
 	// ratio comes from content the chars/4 estimate cannot model (a badly
 	// tokenizing result, a proxy-added prompt) and is not learned.
@@ -21,6 +21,44 @@ type budgetState struct {
 	learnedWindow int     // window stated by an overflow error; 0 = none
 	factor        float64 // estimate factor k; below 1 means 1
 	gen           uint64  // bumped by SetBackend
+	lastE, lastU  int     // estimate and usable budget of the last request sent; 0 = none yet
+	warned        bool    // the over-budget warning was shown; kept across SetBackend
+}
+
+// budgetSnapshot copies the budget state for a subagent, which starts from
+// the parent's values and keeps what it learns to itself.
+func (a *Agent) budgetSnapshot() budgetState {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.bud
+}
+
+// noteRequest caches the estimate and usable budget of the request being
+// sent, for /context and the footer, which must not build a request.
+func (a *Agent) noteRequest(e, u int) {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	a.bud.lastE, a.bud.lastU = e, u
+}
+
+// lastRequest returns the cached estimate and usable budget of the last
+// request sent; zeros before the first.
+func (a *Agent) lastRequest() (e, u int) {
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.bud.lastE, a.bud.lastU
+}
+
+// warnOnce reports whether the over-budget warning still needs showing and
+// marks it shown.
+func (a *Agent) warnOnce() bool {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	if a.bud.warned {
+		return false
+	}
+	a.bud.warned = true
+	return true
 }
 
 // replyReserve is the room kept free for the reply in a budget of b tokens.

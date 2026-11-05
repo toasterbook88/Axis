@@ -78,8 +78,9 @@ states both the window and the request size.
    filled from the active target by `buildAgentSessionConfig`, so the plain `axis agent` path
    (built by `agent.New`, never `SetBackend`) has the window too. `SetBackend` gains the
    target's window; it sets it, resets the learned window and `k`, and bumps a backend
-   generation. A synchronous subagent shares the parent's values; an async subagent copies them
-   at start and its updates stay its own.
+   generation. Every subagent copies the parent's values at start, and what it learns stays its
+   own. (Revision 4, in the code PR: a synchronous subagent copied instead of sharing, because
+   it is a separate Agent with its own `clientMu`; sharing would need a lock across both.)
 2. **Budget.** `B = min(maxTokens, target window if > 0, learned window if > 0)`. Usable
    `U = B − R`, with the reply reserve `R = min(4096, B / 8)` (4,096 at 32,768; 1,024 at
    8,192). The conversation's own character cap stays `maxTokens × 4`.
@@ -279,8 +280,8 @@ Questions:
   and its tool results? Open: exists at Base; the implementation adds a test with the tool-call
   message at index len − 9 and keeps the pair together if it fails.
 - Is the generation check atomic for a synchronous subagent, which has its own `clientMu`?
-  Open: the implementation adds a race test (parent `SetBackend` during a child overflow) under
-  `-race`.
+  Became Design 1 (revision 4): every subagent copies the budget state, so the check runs under
+  the child's own lock and never spans two agents.
 - Is the overflow always a non-200 status before streaming? Open: the logged errors start with
   `http status 400`, so the logged path is covered; a mid-stream overflow behind a proxy would go
   undetected, as at Base.
