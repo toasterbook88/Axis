@@ -1,6 +1,6 @@
 # Fit every agent request to the model's context window
 
-Date: 2026-11-05. Status: revision 4, implemented on this branch; spec review 2 and diff reviews A
+Date: 2026-11-05. Status: revision 5, implemented on this branch; spec review 2 and diff reviews A
 and B approved with changes, all findings resolved.
 
 Follows PR #614 (tool-result entry cap), which bounded single results and left the logged
@@ -100,6 +100,8 @@ states both the window and the request size.
    skipped when the request would exceed `U` even with every summarizable message removed: a
    summary cannot help then (revision 4, diff review B F5). Every compaction cut moves back off
    a tool result, so an assistant tool call stays with its results (diff reviews A F2, B F2).
+   The guard, the summarization prompt and the replacement all use that one pair-safe range
+   (revision 5, PR #616 review).
 5. **Pre-send check.** After compaction, if `E > U`, the existing tool-result truncation
    (`compactOldest`, the newest 4 messages protected) runs until `E ≤ U` or nothing is left to
    truncate. It changes the stored conversation, as compaction already does. If `E > U`
@@ -129,7 +131,10 @@ states both the window and the request size.
      returned without a second request.
    - The generation is read together with the backend (one locked read at the start of the
      round), so a model switch while the turn context is built teaches nothing (diff review A
-     F3).
+     F3). The round also fits its request to the budget state read with its backend, not the
+     current one (revision 5, PR #616 review).
+   - The retry also requires the rebuilt request's raw size to fall, so an unlearned ratio
+     cannot resend an unchanged request (revision 5, PR #616 review).
    - A second overflow, or any other error, fails the turn as today. The first-request prompt
      is dropped only then. The retry does not use a `maxTurns` round, emit a second
      `TurnStarted`, or add a session-log event. The 400 is checked before streaming, so the

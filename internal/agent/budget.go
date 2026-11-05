@@ -58,26 +58,31 @@ func replyReserve(b int) int {
 	return min(replyReserveMax, b/8)
 }
 
-// budget returns the request budget B (the smallest known limit) and the
-// usable part U = B minus the reply reserve.
+// budget returns the current backend's request budget B and usable part U.
 func (a *Agent) budget() (b, u int) {
 	a.clientMu.RLock()
 	defer a.clientMu.RUnlock()
+	return a.limitsOf(a.bud)
+}
+
+// limitsOf returns the request budget B (the smallest known limit) and the
+// usable part U = B minus the reply reserve, for budget state bud. A model
+// round passes the state it captured with its backend, so a model switch
+// mid-round does not change the limits its request is fitted to.
+func (a *Agent) limitsOf(bud budgetState) (b, u int) {
 	b = a.maxTokens
-	if a.bud.targetWindow > 0 {
-		b = min(b, a.bud.targetWindow)
+	if bud.targetWindow > 0 {
+		b = min(b, bud.targetWindow)
 	}
-	if a.bud.learnedWindow > 0 {
-		b = min(b, a.bud.learnedWindow)
+	if bud.learnedWindow > 0 {
+		b = min(b, bud.learnedWindow)
 	}
 	return b, b - replyReserve(b)
 }
 
-// estimateFactor returns k, the learned correction to the chars/4 estimate.
-func (a *Agent) estimateFactor() float64 {
-	a.clientMu.RLock()
-	defer a.clientMu.RUnlock()
-	return max(1, a.bud.factor)
+// factorOf returns k, the learned correction to the chars/4 estimate.
+func factorOf(bud budgetState) float64 {
+	return max(1, bud.factor)
 }
 
 // backendGeneration identifies the current backend. A round records it so

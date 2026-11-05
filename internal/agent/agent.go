@@ -416,7 +416,7 @@ func (a *Agent) runLocked(ctx context.Context, userPrompt string) (err error) {
 		// prompt (turn_context.go). It is built before compaction so the
 		// budget counts it; sendRound (request.go) fits and sends the request.
 		turnContext := []string{a.sessionSummary, a.sessionGit, currentDateLine(a.clock()), a.retrieveEvidence(userPrompt, class), a.clusterContextSnippet()}
-		resp, err := a.sendRound(ctx, backend, bud.gen, userPrompt, turnContext)
+		resp, err := a.sendRound(ctx, backend, bud, userPrompt, turnContext)
 		if err != nil {
 			if turn == 0 {
 				a.dropLatestPrompt(userPrompt)

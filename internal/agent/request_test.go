@@ -112,7 +112,7 @@ func TestNoRequestExceedsBudgetAtDefault(t *testing.T) {
 	_, u := a.budget()
 	for i := 0; i < 30; i++ {
 		addRound(a, "t", 6000)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "search everything", turnCtx); err != nil {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "search everything", turnCtx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -151,7 +151,7 @@ func TestOverflowRecovery(t *testing.T) {
 	t.Run("one overflow then success", func(t *testing.T) {
 		b := &budgetBackend{summary: "summary of earlier work", fail: loggedOverflowOnce}
 		a := recoveryAgent(b, io.Discard)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err != nil {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err != nil {
 			t.Fatal(err)
 		}
 		if b.chatCalls != 2 || a.bud.learnedWindow != 32768 {
@@ -167,7 +167,7 @@ func TestOverflowRecovery(t *testing.T) {
 	t.Run("truncation alone makes it fit", func(t *testing.T) {
 		b := &budgetBackend{sumErr: errSummarizer, fail: loggedOverflowOnce}
 		a := recoveryAgent(b, io.Discard)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err != nil {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err != nil {
 			t.Fatal(err)
 		}
 		_, u := a.budget()
@@ -178,7 +178,7 @@ func TestOverflowRecovery(t *testing.T) {
 	t.Run("two overflows", func(t *testing.T) {
 		b := &budgetBackend{summary: "s", fail: alwaysOverflow}
 		a := recoveryAgent(b, io.Discard)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err == nil || b.chatCalls != 2 {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err == nil || b.chatCalls != 2 {
 			t.Fatalf("err %v after %d chat calls; want the overflow after exactly 2", err, b.chatCalls)
 		}
 	})
@@ -189,7 +189,7 @@ func TestOverflowRecovery(t *testing.T) {
 		// consistent with the error's 34,870.
 		big := strings.Repeat("u", 100000)
 		a.conv.Append(chat.Message{Role: chat.RoleUser, Content: big})
-		_, err := a.sendRound(context.Background(), b, a.backendGeneration(), big, nil)
+		_, err := a.sendRound(context.Background(), b, curBudget(a), big, nil)
 		if err == nil || b.chatCalls != 1 || b.sumCalls != 0 {
 			t.Fatalf("err %v, chat %d, summarizer %d; want the error after 1 chat call and no summary", err, b.chatCalls, b.sumCalls)
 		}
@@ -200,7 +200,7 @@ func TestOverflowRecovery(t *testing.T) {
 	t.Run("other 400", func(t *testing.T) {
 		b := &budgetBackend{fail: func(int) error { return errors.New(`http status 400: {"error":"bad tool schema"}`) }}
 		a := recoveryAgent(b, io.Discard)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err == nil || b.chatCalls != 1 || a.bud.learnedWindow != 0 {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err == nil || b.chatCalls != 1 || a.bud.learnedWindow != 0 {
 			t.Fatalf("err %v, chat %d, learned %d; want the error after 1 call and nothing learned", err, b.chatCalls, a.bud.learnedWindow)
 		}
 	})
@@ -209,9 +209,13 @@ func TestOverflowRecovery(t *testing.T) {
 		b := &budgetBackend{summary: "s", fail: loggedOverflowOnce}
 		a := newRoundAgent(65536, AutonomyDefault, b, &out)
 		a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "short"})
-		_, _ = a.sendRound(context.Background(), b, a.backendGeneration(), "short", nil)
+		_, _ = a.sendRound(context.Background(), b, curBudget(a), "short", nil)
 		if a.estimateFactor() != 1 || a.bud.learnedWindow != 32768 || !strings.Contains(out.String(), "not learned") {
 			t.Fatalf("k %.2f, window %d, output %q; want k 1, window 32768 and a skip event", a.estimateFactor(), a.bud.learnedWindow, out.String())
+		}
+		// Nothing can be removed, so a retry would resend the same request.
+		if b.chatCalls != 1 {
+			t.Fatalf("chat calls %d, want 1: the request did not shrink", b.chatCalls)
 		}
 	})
 }
@@ -233,7 +237,7 @@ func TestOverflowFromSwitchedBackendIsNotLearned(t *testing.T) {
 	a := newRoundAgent(65536, AutonomyDefault, noopChatBackend{}, io.Discard)
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "go"})
 	s := &switchingBackend{a: a}
-	if _, err := a.sendRound(context.Background(), s, a.backendGeneration(), "go", nil); err == nil {
+	if _, err := a.sendRound(context.Background(), s, curBudget(a), "go", nil); err == nil {
 		t.Fatal("overflow not returned")
 	}
 	if s.calls != 1 || a.bud.learnedWindow != 0 {
@@ -249,11 +253,58 @@ func TestOverflowAfterSwitchBeforeSendIsNotLearned(t *testing.T) {
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "go"})
 	backend, _, bud := a.backendState()
 	a.SetBackend(noopChatBackend{}, BackendLocal, 0)
-	if _, err := a.sendRound(context.Background(), backend, bud.gen, "go", nil); err == nil {
+	if _, err := a.sendRound(context.Background(), backend, bud, "go", nil); err == nil {
 		t.Fatal("overflow not returned")
 	}
 	if b, _ := a.budget(); a.bud.learnedWindow != 0 || b != 65536 {
 		t.Fatalf("learned window %d, B %d; the old backend's overflow reached the new one", a.bud.learnedWindow, b)
+	}
+}
+
+// A round fits its request to the budget of the backend it captured, not one
+// installed while its turn context was built.
+func TestRoundUsesCapturedBackendBudget(t *testing.T) {
+	old := &budgetBackend{}
+	a := newRoundAgent(65536, AutonomyDefault, old, io.Discard)
+	a.SetBackend(old, BackendRemote, 16384)
+	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "go"})
+	// About 15,000 tokens of results plus the fixed prompt: over 16K, under
+	// 64K, and trimmable to fit 16K outside the newest 4 messages.
+	for i := 0; i < 10; i++ {
+		addRound(a, fmt.Sprintf("t%d", i), 6000)
+	}
+	backend, _, bud := a.backendState()
+	a.SetBackend(noopChatBackend{}, BackendLocal, 65536)
+	if _, err := a.sendRound(context.Background(), backend, bud, "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	if old.sent[0] > 14336 {
+		t.Fatalf("sent %d tokens to the 16K backend, over its usable 14,336", old.sent[0])
+	}
+}
+
+// The compaction guard, prompt and replacement share one range: a tool call
+// block the pair-safe cut keeps is not counted as freeable, so a lone earlier
+// summary in front of it does not trigger a summary that frees nothing.
+func TestCompactionCountsOnlyWhatItReplaces(t *testing.T) {
+	a := newRoundAgent(65536, AutonomyDefault, noopChatBackend{}, io.Discard)
+	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: compactedSummaryPrefix + "earlier work"})
+	var calls []chat.ToolCall
+	for i := 0; i < 4; i++ {
+		calls = append(calls, chat.ToolCall{ID: fmt.Sprintf("c%d", i), Function: chat.ToolCallFunction{Name: "grep_search", Arguments: json.RawMessage(`{}`)}})
+	}
+	a.conv.Append(chat.Message{Role: chat.RoleAssistant, ToolCalls: calls})
+	for i := 0; i < 4; i++ {
+		a.conv.Append(chat.Message{Role: chat.RoleTool, ToolCallID: fmt.Sprintf("c%d", i), Content: strings.Repeat("r", 3000)})
+	}
+	for i := 0; i < 5; i++ {
+		a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "step"})
+	}
+	if msgs := a.conv.Messages(); msgs[len(msgs)-protectLastTurns].Role != chat.RoleTool {
+		t.Fatal("fixture: the cut must fall inside the tool results")
+	}
+	if a.shouldCompact(1<<20, 1000, 1, true) {
+		t.Fatal("compaction would run though it can replace only the earlier summary")
 	}
 }
 
@@ -266,11 +317,11 @@ func TestForcedCompactionSkipsLoneSummary(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		addRound(a, fmt.Sprintf("t%d", i), 100)
 	}
-	if a.shouldCompact(1<<20, 1000, true) {
+	if a.shouldCompact(1<<20, 1000, 1, true) {
 		t.Fatal("forced compaction would summarize only the earlier summary")
 	}
 	addRound(a, "t4", 100)
-	if !a.shouldCompact(1<<20, 1000, true) {
+	if !a.shouldCompact(1<<20, 1000, 1, true) {
 		t.Fatal("forced compaction skipped with a new message to summarize")
 	}
 }
@@ -288,7 +339,7 @@ func TestNoCompactionThrashAtSmallBudget(t *testing.T) {
 	// so counting it would compact again on every later round.
 	for i := 0; i < 20; i++ {
 		addRound(a, "t", 400)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err != nil {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -309,7 +360,7 @@ func TestNoCompactionWhenFixedPartExceedsBudget(t *testing.T) {
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "go"})
 	for i := 0; i < 10; i++ {
 		addRound(a, "t", 300)
-		if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err != nil {
+		if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -317,7 +368,7 @@ func TestNoCompactionWhenFixedPartExceedsBudget(t *testing.T) {
 		t.Fatalf("summarizer called %d times; the fixed part alone exceeds U", b.sumCalls)
 	}
 	req := a.buildRequest("go", nil)
-	if fixed := a.fixedTokens(req, nil); !strings.Contains(out.String(), fmt.Sprintf("hold about %d", fixed)) {
+	if fixed := fixedTokens(req, nil, 1); !strings.Contains(out.String(), fmt.Sprintf("hold about %d", fixed)) {
 		t.Fatalf("warning %q does not state the fixed part (%d tokens)", out.String(), fixed)
 	}
 }
@@ -380,7 +431,7 @@ func TestContextTokensReportsLastRequest(t *testing.T) {
 	a := newRoundAgent(32768, AutonomyFull, b, io.Discard)
 	a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "go"})
 	convOnly := a.ContextTokens()
-	if _, err := a.sendRound(context.Background(), b, a.backendGeneration(), "go", nil); err != nil {
+	if _, err := a.sendRound(context.Background(), b, curBudget(a), "go", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := a.ContextTokens(); got != b.sent[0] || got <= convOnly {

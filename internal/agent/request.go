@@ -76,9 +76,9 @@ func (r roundRequest) rawTokens() int {
 	return n / 4
 }
 
-// estimate is the request size in tokens, corrected by the learned factor k.
-func (a *Agent) estimate(r roundRequest) int {
-	return int(math.Ceil(a.estimateFactor() * float64(r.rawTokens())))
+// estimateWith is the request size in tokens, corrected by the factor k.
+func estimateWith(r roundRequest, k float64) int {
+	return int(math.Ceil(k * float64(r.rawTokens())))
 }
 
 // shouldCompact reports whether LLM compaction runs before this request. It
@@ -86,9 +86,10 @@ func (a *Agent) estimate(r roundRequest) int {
 // lie outside the protected tail and they hold at least compactionGuard of
 // the budget, not counting an earlier summary. force (overflow recovery)
 // needs only one summarizable message other than an earlier summary, so a
-// retry never re-summarizes its own summary into an equal-size request.
-func (a *Agent) shouldCompact(e, u int, force bool) bool {
-	cands := a.conv.SummarizableMessages(protectLastTurns)
+// retry never re-summarizes its own summary into an equal-size request. It
+// counts only the messages compaction would replace (compactionRange).
+func (a *Agent) shouldCompact(e, u int, k float64, force bool) bool {
+	_, _, cands := a.compactionRange()
 	if force {
 		for _, m := range cands {
 			if !strings.HasPrefix(m.Content, compactedSummaryPrefix) {
@@ -107,7 +108,6 @@ func (a *Agent) shouldCompact(e, u int, force bool) bool {
 			freeable += messageBytes(m)
 		}
 	}
-	k := a.estimateFactor()
 	// When the request would not fit even with every summarizable message
 	// gone, a summary cannot help and each attempt is a wasted round trip.
 	if float64(e)-k*float64(all/4) > float64(u) {
@@ -118,7 +118,7 @@ func (a *Agent) shouldCompact(e, u int, force bool) bool {
 
 // fixedTokens is the part of req that no compaction or trimming can shorten:
 // system messages, tool definitions and the turn context.
-func (a *Agent) fixedTokens(req roundRequest, turnContext []string) int {
+func fixedTokens(req roundRequest, turnContext []string, k float64) int {
 	n := 0
 	for _, m := range req.msgs {
 		if m.Role == chat.RoleSystem {
@@ -131,7 +131,7 @@ func (a *Agent) fixedTokens(req roundRequest, turnContext []string) int {
 	for _, c := range turnContext {
 		n += len(c)
 	}
-	return int(math.Ceil(a.estimateFactor() * float64(n/4)))
+	return int(math.Ceil(k * float64(n/4)))
 }
 
 // fitRequest builds this round's request and makes it fit the usable budget:
@@ -139,47 +139,55 @@ func (a *Agent) fixedTokens(req roundRequest, turnContext []string) int {
 // results outside the newest 4 messages. Both change the stored
 // conversation, so the request is rebuilt and measured again after each.
 // What cannot be made to fit is sent anyway, with a one-time warning; the
-// server is the authority.
-func (a *Agent) fitRequest(ctx context.Context, backend ChatBackend, userPrompt string, turnContext []string, force bool) (roundRequest, int) {
-	_, u := a.budget()
+// server is the authority. bud is the budget state captured with backend.
+func (a *Agent) fitRequest(ctx context.Context, backend ChatBackend, bud budgetState, userPrompt string, turnContext []string, force bool) (roundRequest, int) {
+	_, u := a.limitsOf(bud)
+	k := factorOf(bud)
 	req := a.buildRequest(userPrompt, turnContext)
-	e := a.estimate(req)
-	if a.shouldCompact(e, u, force) {
+	e := estimateWith(req, k)
+	if a.shouldCompact(e, u, k, force) {
 		if err := a.compactContext(ctx, backend); err != nil && a.verbose {
 			a.emitCompactionSkipped(err)
 		}
 		req = a.buildRequest(userPrompt, turnContext)
-		e = a.estimate(req)
+		e = estimateWith(req, k)
 	}
 	for e > u && a.conv.TruncateOldestToolResult() {
 		req = a.buildRequest(userPrompt, turnContext)
-		e = a.estimate(req)
+		e = estimateWith(req, k)
 	}
 	if e > u && a.warnOnce() {
-		a.emitCompactionSkipped(fmt.Errorf("request is about %d tokens, over the usable budget of %d, after compaction and trimming; the system prompt, tool definitions and turn context hold about %d of it; sending it anyway", e, u, a.fixedTokens(req, turnContext)))
+		a.emitCompactionSkipped(fmt.Errorf("request is about %d tokens, over the usable budget of %d, after compaction and trimming; the system prompt, tool definitions and turn context hold about %d of it; sending it anyway", e, u, fixedTokens(req, turnContext, k)))
 	}
 	return req, e
 }
 
 // sendRound fits and sends one model request. If the server rejects it as
 // longer than its context window, it learns the stated window and size,
-// compacts, and retries once, only when the rebuilt request is predicted to
-// fit. Any other error, a second overflow, or a request that cannot shrink
-// returns the error as before. gen is the generation read together with
-// backend (backendState), so a model switch in between teaches nothing.
-func (a *Agent) sendRound(ctx context.Context, backend ChatBackend, gen uint64, userPrompt string, turnContext []string) (chat.Message, error) {
-	req, e := a.fitRequest(ctx, backend, userPrompt, turnContext, false)
+// compacts, and retries once, only when the rebuilt request is smaller and
+// predicted to fit. Any other error, a second overflow, or a request that
+// cannot shrink returns the error as before. bud is the budget state read
+// together with backend (backendState): the request is fitted to that
+// backend's limits, and a model switch in between teaches nothing.
+func (a *Agent) sendRound(ctx context.Context, backend ChatBackend, bud budgetState, userPrompt string, turnContext []string) (chat.Message, error) {
+	req, e := a.fitRequest(ctx, backend, bud, userPrompt, turnContext, false)
 	resp, err := a.stream(ctx, backend, req, e)
 	o, overflow := parseContextOverflow(err)
-	if !overflow || !a.learnOverflow(gen, o, req) {
+	if !overflow || !a.learnOverflow(bud.gen, o, req) {
 		return resp, err
 	}
-	retry, eNew := a.fitRequest(ctx, backend, userPrompt, turnContext, true)
+	_, _, learned := a.backendState()
+	if learned.gen != bud.gen {
+		return resp, err
+	}
+	retry, eNew := a.fitRequest(ctx, backend, learned, userPrompt, turnContext, true)
 	limit := int(retryShrink * float64(e))
 	if o.window > 0 {
-		_, limit = a.budget()
+		_, limit = a.limitsOf(learned)
 	}
-	if eNew > limit {
+	// The raw size must fall too: with an unlearned ratio, an unchanged
+	// request can pass the fit check and would be resent as it was.
+	if eNew > limit || retry.rawTokens() >= req.rawTokens() {
 		return resp, err
 	}
 	return a.stream(ctx, backend, retry, eNew)

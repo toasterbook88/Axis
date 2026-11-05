@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+// Test helpers that read the current backend's budget state; production
+// code passes the state a round captured with its backend instead.
+
+func curBudget(a *Agent) budgetState {
+	_, _, bud := a.backendState()
+	return bud
+}
+
+func (a *Agent) estimateFactor() float64 { return factorOf(curBudget(a)) }
+
+func (a *Agent) estimate(r roundRequest) int { return estimateWith(r, a.estimateFactor()) }
+
 func newBudgetAgent(maxTokens, window int) *Agent {
 	return New(Config{
 		Backend:       noopChatBackend{},

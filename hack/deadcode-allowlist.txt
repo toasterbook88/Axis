@@ -3,6 +3,7 @@
 # Keep: build-tagged fleettest, intentional API surface, test-only helpers.
 #
 internal/agent/agent_accessors.go MCPRegistry
+internal/chat/message.go Len
 internal/agent/tools.go ExecuteShell
 internal/agent/tools.go allowExtra
 internal/api/server.go Serve
