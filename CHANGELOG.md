@@ -1,5 +1,22 @@
 ## Unreleased
 
+### Fixes
+
+* **Behaviour change:** `axis agent` fits every request to the model's context
+  window. The budget is the smallest of `--max-tokens`, the served window the
+  model catalog reports (llama.cpp `n_ctx`) and a window learned from an
+  overflow error, minus a reply reserve of up to 4,096 tokens. The estimate
+  now counts the tool definitions and per-turn context sent with the
+  conversation, which were uncounted and pushed requests up to about 3,000
+  tokens over a 32K window. Before sending, compaction runs and old tool
+  results are trimmed until the request fits; one that cannot fit is sent with
+  a one-time warning. When a server still rejects a request as too long, the
+  agent learns the stated window and size, compacts, and retries once, only if
+  the rebuilt request is predicted to fit. `/context` and the footer show the
+  last request's size against the usable budget, so the limit shown is lower
+  than `--max-tokens`. The native Ollama client cannot detect an overflow and
+  gets only the proactive budget.
+
 ## v0.23.0 (2026-11-05)
 
 `axis init --generate`, an OpenCode-style `axis tui` workspace, stricter SSH

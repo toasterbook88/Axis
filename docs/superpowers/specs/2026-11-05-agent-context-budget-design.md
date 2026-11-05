@@ -1,7 +1,7 @@
 # Fit every agent request to the model's context window
 
-Date: 2026-11-05. Status: revision 3; spec review 2 approved with changes, all findings resolved
-here.
+Date: 2026-11-05. Status: revision 4, implemented on this branch; spec review 2 and diff reviews A
+and B approved with changes, all findings resolved.
 
 Follows PR #614 (tool-result entry cap), which bounded single results and left the logged
 overflows to this spec.
@@ -96,12 +96,16 @@ states both the window and the request size.
    holds at least `0.10 × U` tokens: the summarizable messages **excluding an earlier compacted
    summary** (the message starting with `compactedSummaryPrefix`). Below that, summarizing frees
    too little, and with a large fixed part it would run every round, re-summarizing its own
-   summary (#614 spec review 2 question). `minSummarizable` (4) still applies here.
+   summary (#614 spec review 2 question). `minSummarizable` (4) still applies here. It is also
+   skipped when the request would exceed `U` even with every summarizable message removed: a
+   summary cannot help then (revision 4, diff review B F5). Every compaction cut moves back off
+   a tool result, so an assistant tool call stays with its results (diff reviews A F2, B F2).
 5. **Pre-send check.** After compaction, if `E > U`, the existing tool-result truncation
    (`compactOldest`, the newest 4 messages protected) runs until `E ≤ U` or nothing is left to
    truncate. It changes the stored conversation, as compaction already does. If `E > U`
    remains, the request is sent unchanged, and a one-time `compaction skipped` event states
-   the fixed part, the protected newest messages and `U`.
+   `E`, `U` and the fixed part (system prompt, tool definitions, turn context); the rest is
+   the protected newest messages and truncated older results.
 6. **Overflow recovery.** When `ChatStream` fails with HTTP 400 and a known context-overflow
    message (`exceeds the available context size`, `context_length_exceeded`,
    `maximum context length`, `ContextWindowExceededError`, `prompt is too long`):
@@ -115,12 +119,17 @@ states both the window and the request size.
      logged as an event, so one badly tokenizing request cannot shrink the budget for the
      session.
    - Recovery then forces one compaction: it ignores the 70% trigger and the 0.10 guard, and
-     needs only 1 summarizable message outside the protected 8. The pre-send check follows,
-     against the new `U` and `k`.
+     needs only 1 summarizable message outside the protected 8 other than an earlier summary
+     (revision 4, diff review A question). The pre-send check follows, against the new `U`
+     and `k`.
    - It retries once, only if the rebuilt request is predicted to fit. `E_new` uses the new
-     `k`. When `N` is known, the condition is `E_new ≤ N − R`, the same as the pre-send success
-     condition; otherwise `E_new ≤ 0.9 × E_sent`. If not, the overflow error is returned without
-     a second request.
+     `k`. When `N` is known, the condition is `E_new ≤ U` after learning, the pre-send success
+     condition; this equals `N − R` when `N ≤ B` and is stricter otherwise (revision 4, diff
+     review A F5e). Without `N` it is `E_new ≤ 0.9 × E_sent`. If not, the overflow error is
+     returned without a second request.
+   - The generation is read together with the backend (one locked read at the start of the
+     round), so a model switch while the turn context is built teaches nothing (diff review A
+     F3).
    - A second overflow, or any other error, fails the turn as today. The first-request prompt
      is dropped only then. The retry does not use a `maxTurns` round, emit a second
      `TurnStarted`, or add a session-log event. The 400 is checked before streaming, so the
@@ -128,8 +137,9 @@ states both the window and the request size.
 
    The learned window and `k` apply to the whole backend. Behind `RoutingBackend` they are
    learned from whichever model overflowed and lower the budget for both; this is conservative.
-7. **Display.** `/context` and the footer show the `E` and `U` of the last request sent,
-   cached when it is sent. The UI loop never builds the turn context (which reads state files).
+7. **Display.** `/context` and the footer show the `E` of the last request sent, cached when it
+   is sent, against the current `U` (so a model switch shows the new budget at once; revision
+   4, diff review A F5b). The UI loop never builds the turn context (which reads state files).
 
 ## Tests
 
@@ -166,7 +176,13 @@ states both the window and the request size.
 - No thrash: at `--max-tokens` 8192 in exec scope, the summarizer is not called while the
   summarizable part is under `0.10 × U`, and the warning event fires once per session. With a
   summarizer that returns a 3,000-char summary, it is called at most once over 10 rounds.
-- The footer reads the cached `E`/`U` and does not call the turn-context builders.
+- `ContextTokens` reports the cached `E` of the last request and `MaxTokens` the current `U`.
+  (Revision 4: that they build nothing is checked by reading the code; they read two fields
+  under `clientMu`, and there is no seam to count builder calls.)
+- Compaction keeps a tool call with its results when the cut falls on a result; it is skipped
+  when the fixed part alone exceeds `U`; forced compaction skips a lone earlier summary; an
+  overflow after a switch made before sending teaches the new backend nothing; the console
+  startup path passes the window.
 
 ## Alternatives
 
@@ -287,3 +303,73 @@ Questions:
   undetected, as at Base.
 
 Note: review 1's nine fixes are all present; findings 1 and 4 are defects inside the fixes for review-1 findings 2 and 7, and review 1's question 1 ("k covers it after the first error") holds only with finding 1 fixed. Code starts; every finding is resolved.
+
+Kind: diff
+Reviewer: fresh-context subagent A (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: 3abc2798c6344032754b596875e6367f8f3f074e
+Head: d04703a9478f018ebde12668871ddd096ecebe5a
+Date: 2026-11-05
+Verdict: approve-with-changes
+
+1. Major: the deadcode gate fails at Head (`ContextBudget` used only by a test; the
+   `MCPRegistry` allowlist entry still names `agent.go`). Fixed in bcf4a2fa: accessor removed,
+   entry repointed; `./hack/verify-deadcode.sh` passes there.
+2. Major: forced compaction can split an assistant tool call from its results, and the retry
+   sends an orphaned tool result; the promised len − 9 test was missing. Fixed in 5cd2b28d:
+   `pairSafeCut` in both compaction paths; `TestCompactionKeepsToolCallWithResults` fails
+   without it.
+3. Minor: the backend generation was read after the backend, so a switch in between taught the
+   new backend the old one's window; subagents read backend and budget under separate locks.
+   Fixed in 5cd2b28d: `backendState` returns all three in one read, passed to `sendRound` and
+   to the child; `TestOverflowAfterSwitchBeforeSendIsNotLearned`.
+4. Minor: the thrash test passed without running the summarizer or the warning. Fixed in
+   5cd2b28d: 20 rounds, exactly 1 summary and 1 warning; counting the summary as freeable makes
+   it fail (2 calls), checked by mutation.
+5. Minor: spec departures. (a) warning wording: fixed in 5cd2b28d, states the fixed part. (b)
+   live `U` vs cached: declined, the live `U` shows a model switch at once; recorded in Design 7
+   and `lastU` removed. (c) footer builders: declined, no seam to count calls; the accessors read
+   two fields under `clientMu` (static), test line reworded. (d) `k` ratchet through
+   `sendRound`: declined, covered by `TestEstimateFactorRatchetsAndIsCapped` and diff review B's
+   probe through real overflows (1.3 then 1.4). (e) retry limit is the current `U`: recorded in
+   Design 6. (f) `Config.MaxTokens` comment: a correct fix, no change.
+
+Questions:
+- Should forced compaction exclude an earlier summary, so the no-shrink rule refuses an
+  equal-size retry? Became Design 6 (revision 4): it needs a message other than the summary;
+  `TestForcedCompactionSkipsLoneSummary`.
+- After `/clear`, `ContextTokens` shows the last request's size until the next request. Open:
+  matches Design 7; the next request corrects it, not probed in the UI.
+
+Kind: diff
+Reviewer: fresh-context subagent B (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: 3abc2798c6344032754b596875e6367f8f3f074e
+Head: d04703a9478f018ebde12668871ddd096ecebe5a
+Date: 2026-11-05
+Verdict: approve-with-changes
+
+1. Major: the deadcode gate fails at Head. Fixed in bcf4a2fa (as A F1).
+2. Major: forced compaction can leave an orphaned tool result that the retry sends. Fixed in
+   5cd2b28d (as A F2).
+3. Minor: the console/TUI startup path with a resolved model never passes the served window.
+   Fixed in 5cd2b28d: `ContextWindow` in `buildAgent`; `TestConsoleStartupAgentUsesTargetWindow`.
+4. Minor: the over-budget warning blamed the fixed part, which can be false. Fixed in 5cd2b28d:
+   it states `E`, `U` and the measured fixed part; `TestNoCompactionWhenFixedPartExceedsBudget`
+   checks the number.
+5. Minor: at `--max-tokens` 1000 compaction runs repeatedly though it can never fit. Fixed in
+   5cd2b28d: skipped when the request exceeds `U` with every summarizable message removed;
+   `TestNoCompactionWhenFixedPartExceedsBudget` (0 summarizer calls). Two older tests that used
+   a 200-token budget only to force compaction now use 8,000 and 9,000.
+6. Minor: the footer test does not show the builders are skipped. Declined: no seam to count
+   builder calls; the accessors read two fields under `clientMu` (static, as A F5c).
+
+Questions:
+- With a failing summarizer and a session past about 600 tool rounds, truncated stubs alone can
+  exceed `U`. Open: same as Base and within the non-goal; dropping old messages is later work.
+- Should the summarizer request be capped to `U`? Open: in B's resume probe truncation still made
+  the turn fit; one wasted call per such prompt, later work.
+- Anthropic's "prompt is too long: N tokens > M maximum" did not match the regexes. Became
+  Design 6 (revision 4): both numbers are parsed; `TestParseContextOverflow`.
+
+Note: every diff-review finding is resolved; merge needs the maintainer's go.
