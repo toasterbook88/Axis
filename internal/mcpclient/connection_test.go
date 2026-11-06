@@ -59,6 +59,25 @@ func TestMCPHTTPClientRejectsSchemeChangeRedirects(t *testing.T) {
 	}
 }
 
+// A same-origin redirect loop stops at Go's default limit of ten redirects
+// instead of running until the context expires.
+func TestMCPHTTPClientStopsSameOriginRedirectLoop(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, "/loop", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+
+	_, err := newMCPHTTPClient().Get(server.URL + "/loop")
+	if err == nil {
+		t.Fatal("redirect loop returned no error")
+	}
+	if got := hits.Load(); got != 10 {
+		t.Fatalf("server saw %d requests, want 10 (the first and 9 redirects before the limit)", got)
+	}
+}
+
 func TestMCPHTTPClientAllowsSameOriginRedirects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/start" {

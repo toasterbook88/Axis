@@ -196,6 +196,9 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 	return handshake(ctx, name, "http", cfg, client)
 }
 
+// maxMCPRedirects is Go's default redirect limit, kept by newMCPHTTPClient.
+const maxMCPRedirects = 10
+
 // newMCPHTTPClient is the HTTP client for streamable MCP connections. It
 // follows a redirect only to the origin (scheme and host) of the first
 // request; any other redirect is returned to the caller unfollowed.
@@ -204,6 +207,12 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 func newMCPHTTPClient() *http.Client {
 	return &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Setting CheckRedirect replaces Go's default policy, so keep its
+			// limit of ten redirects; a same-origin loop would otherwise run
+			// until the context expires.
+			if len(via) >= maxMCPRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxMCPRedirects)
+			}
 			// Go calls this only for a redirect, so via holds at least the
 			// original request.
 			origin := via[0].URL
