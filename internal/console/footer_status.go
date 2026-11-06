@@ -63,13 +63,8 @@ func FormatTokens(n int) string {
 	return fmt.Sprintf("%dk", n/1000)
 }
 
-// FormatContextBar generates a Unicode block progress bar and percentage.
-// ASCII terminals use formatContextBar with "=" and "-" instead.
-func FormatContextBar(used, max, barWidth int) (bar string, percent int) {
-	return formatContextBar(used, max, barWidth, "█", "░")
-}
-
 // formatContextBar fills barWidth cells. fill and empty are one column each.
+// The footer passes "█" and "░", or "=" and "-" when ASCII is on.
 func formatContextBar(used, max, barWidth int, fill, empty string) (bar string, percent int) {
 	if barWidth <= 0 {
 		barWidth = 10

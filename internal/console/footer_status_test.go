@@ -175,7 +175,7 @@ func TestFormatTokensAndBar(t *testing.T) {
 		t.Fatalf("FormatTokens(32768) = %q; want '32k'", got)
 	}
 
-	bar, pct := FormatContextBar(25, 100, 10)
+	bar, pct := formatContextBar(25, 100, 10, "█", "░")
 	if pct != 25 {
 		t.Fatalf("pct = %d; want 25", pct)
 	}
