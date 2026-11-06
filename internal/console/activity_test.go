@@ -61,6 +61,47 @@ func TestLiveTurnNamesThinking(t *testing.T) {
 	}
 }
 
+// A closed thought with no answer says "thinking" only when nothing else
+// describes the turn: not beside a pending tool, an approval overlay, or the
+// cancelling phase.
+func TestClosedThoughtYieldsToOtherPhases(t *testing.T) {
+	newClosed := func() Model {
+		m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+		m = startTurnFor(t, m)
+		return apply(m, StreamChunkMsg{Turn: 1, Text: "<think>plan</think>"})
+	}
+
+	withTool := apply(newClosed(), ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_facts"})
+	if view := withTool.View(); strings.Contains(view, "thinking") || !strings.Contains(view, "axis_facts") {
+		t.Fatalf("pending tool should replace thinking:\n%s", view)
+	}
+
+	withOverlay := newClosed()
+	withOverlay.overlay = NewApprovalOverlay("run_shell", "echo hi", 22, nil)
+	if lines := withOverlay.liveActivity(); len(lines) != 0 {
+		t.Fatalf("overlay open: live activity %v, want none", lines)
+	}
+
+	cancelling := apply(newClosed(), tea.KeyMsg{Type: tea.KeyEsc})
+	if view := cancelling.View(); strings.Contains(view, "thinking") || !strings.Contains(view, "cancelling") {
+		t.Fatalf("cancelling should replace thinking:\n%s", view)
+	}
+}
+
+// At a two-column terminal the budget is one column; a wide streamed rune
+// is dropped rather than drawn across the edge into scrollback.
+func TestStreamedWideRunesStayWithinATinyBudget(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m.width = 2
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "世界"})
+	for _, l := range m.liveActivity() {
+		if got := visibleWidth(l.Text); got > m.ephemeralBudget() {
+			t.Fatalf("row %q is %d columns, budget %d", l.Text, got, m.ephemeralBudget())
+		}
+	}
+}
+
 func TestLiveTurnCancellingIsThePhase(t *testing.T) {
 	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
 	m = startTurnFor(t, m)

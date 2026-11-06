@@ -30,14 +30,20 @@ func (m Model) liveActivity() []Line {
 
 	if text := m.stream.String(); text != "" {
 		_, answer, inThought := parseStreamThought(text)
-		// A closed thought with no answer tokens yet is still the thinking
-		// phase. The thought body stays out of this region either way.
+		// A thought with no answer tokens yet is the thinking phase, unless
+		// a pending tool, an open overlay or the cancelling phase already
+		// says what the turn is doing. The thought body never shows here.
 		if inThought || strings.TrimSpace(answer) == "" {
-			lines = append(lines, clipLine(frame+" thinking", budget, StyleMuted))
-			showing = true
+			if len(m.pendingTools) == 0 && m.overlay == nil && m.state != turnCancelling {
+				lines = append(lines, clipLine(frame+" thinking", budget, StyleMuted))
+				showing = true
+			}
 		} else {
+			// wrap emits a rune wider than the budget whole, so clip each
+			// row too: at a one-column budget a wide rune is dropped rather
+			// than drawn across the edge into scrollback.
 			for _, l := range wrap(answer, budget) {
-				lines = append(lines, Line{Text: l})
+				lines = append(lines, clipLine(l, budget, StylePlain))
 			}
 			showing = true
 		}
