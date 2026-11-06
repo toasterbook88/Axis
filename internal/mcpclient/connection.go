@@ -196,12 +196,16 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 	return handshake(ctx, name, "http", cfg, client)
 }
 
+// newMCPHTTPClient is the HTTP client for streamable MCP connections. It
+// follows a redirect only to the origin (scheme and host) of the first
+// request; any other redirect is returned to the caller unfollowed.
+// mcp-go's default client follows redirects anywhere and carries the
+// configured headers and OAuth bearer token along (GO-2026-6911).
 func newMCPHTTPClient() *http.Client {
 	return &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) == 0 {
-				return http.ErrUseLastResponse
-			}
+			// Go calls this only for a redirect, so via holds at least the
+			// original request.
 			origin := via[0].URL
 			if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
 				return http.ErrUseLastResponse

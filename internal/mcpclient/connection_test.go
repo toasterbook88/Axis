@@ -35,6 +35,30 @@ func TestMCPHTTPClientRejectsCrossOriginRedirects(t *testing.T) {
 	}
 }
 
+// A redirect to the same host on another scheme (an https to http
+// downgrade) is not followed either: the origin is scheme and host.
+func TestMCPHTTPClientRejectsSchemeChangeRedirects(t *testing.T) {
+	// Same host and port, http instead of https. Followed, the plain request
+	// would reach this TLS server and get a 400; unfollowed, the caller sees
+	// the redirect itself.
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://"+r.Host+"/downgraded", http.StatusTemporaryRedirect)
+	}))
+	defer secure.Close()
+
+	client := newMCPHTTPClient()
+	client.Transport = secure.Client().Transport // trust the test certificate
+	resp, err := client.Get(secure.URL)
+	if err != nil {
+		t.Fatalf("GET secure: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d: the https to http redirect was followed", resp.StatusCode, http.StatusTemporaryRedirect)
+	}
+}
+
 func TestMCPHTTPClientAllowsSameOriginRedirects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/start" {
