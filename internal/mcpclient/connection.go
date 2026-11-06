@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -180,7 +181,9 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 		return nil, fmt.Errorf("mcp server %q: %w", name, err)
 	}
 
-	var opts []transport.StreamableHTTPCOption
+	opts := []transport.StreamableHTTPCOption{
+		transport.WithHTTPBasicClient(newMCPHTTPClient()),
+	}
 	if len(cfg.Headers) > 0 {
 		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
 	}
@@ -191,6 +194,21 @@ func connectHTTP(ctx context.Context, name string, cfg config.MCPServerConfig) (
 	}
 
 	return handshake(ctx, name, "http", cfg, client)
+}
+
+func newMCPHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return http.ErrUseLastResponse
+			}
+			origin := via[0].URL
+			if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 }
 
 // handshake performs the MCP initialize exchange and capability discovery.
