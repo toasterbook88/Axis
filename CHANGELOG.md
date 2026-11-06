@@ -16,6 +16,18 @@
   last request's size against the usable budget, so the limit shown is lower
   than `--max-tokens`. The native Ollama client cannot detect an overflow and
   gets only the proactive budget.
+* **Behaviour change:** `--autonomy full` asks before commands a specific
+  safety rule flags, instead of approving every "ask" verdict. Such rules
+  (git push, curl/wget uploads, service start/stop, `ollama run`/`pull`, and
+  two new ones: SSH with host-key checking off, and git or file changes inside
+  `node_modules`) now score 75, and full autonomy asks at 75, for `run_shell`,
+  `run_on_node`, `fleet_exec`, `run_background` and `axis_run_task`. Commands
+  no rule recognizes, and `> /dev/null` redirects, still auto-approve. A
+  specific rule now wins over the unknown-command rule across `&&` segments and
+  over the null-redirect rule within one, so `git push > /dev/null` asks too.
+  The two new rules also make those commands ask in default and edit modes.
+  `dumb_score` in guarded-execution results is 75 for these commands, and a
+  `-p` run reports them as needing an interactive approval.
 
 ## v0.23.0 (2026-11-05)
 

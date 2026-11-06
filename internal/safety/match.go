@@ -24,6 +24,9 @@ func ruleMatches(rule Rule, surface, program, joinedArgs, lowerCmd string) bool 
 		if rule.Verdict == VerdictDeny {
 			raw = nullRedirect.ReplaceAllString(raw, " ")
 		}
+		if rule.AskAlways {
+			raw = optionText(raw)
+		}
 		if !containsAnyFold(raw, rule.RawPatterns) {
 			return false
 		}
@@ -53,6 +56,55 @@ func firstDeny(rules []Rule, surface, program, joinedArgs, lowerCmd string) (Rul
 		}
 	}
 	return Rule{}, false
+}
+
+// firstAskAlways returns the first AskAlways prompt rule in rules that
+// matches the segment. A higher-priority prompt that flags no specific risk
+// (the null-redirect rule) must not hide one: "git push > /dev/null" would
+// otherwise auto-run under full autonomy.
+func firstAskAlways(rules []Rule, surface, program, joinedArgs, lowerCmd string) (Rule, bool) {
+	for _, rule := range rules {
+		if rule.Verdict == VerdictPrompt && rule.AskAlways && ruleMatches(rule, surface, program, joinedArgs, lowerCmd) {
+			return rule, true
+		}
+	}
+	return Rule{}, false
+}
+
+var (
+	optionSpaces = regexp.MustCompile(`\s+`)
+	optionEquals = regexp.MustCompile(`\s*=\s*`)
+)
+
+// optionText normalizes a lowercased segment for AskAlways raw patterns:
+// quotes removed, whitespace runs collapsed, and spaces around "=" dropped,
+// so `StrictHostKeyChecking='no'`, `"StrictHostKeyChecking  no"` and
+// `StrictHostKeyChecking = no` read the same as the plain spellings.
+func optionText(lower string) string {
+	s := strings.NewReplacer(`'`, "", `"`, "").Replace(lower)
+	s = optionSpaces.ReplaceAllString(s, " ")
+	return optionEquals.ReplaceAllString(s, "=")
+}
+
+// wildcardMatch reports whether s matches pattern, where "*" matches any run
+// of characters (including spaces and "/") and everything else is literal.
+func wildcardMatch(s, pattern string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return s == pattern
+	}
+	if !strings.HasPrefix(s, parts[0]) {
+		return false
+	}
+	s = s[len(parts[0]):]
+	for _, p := range parts[1 : len(parts)-1] {
+		i := strings.Index(s, p)
+		if i < 0 {
+			return false
+		}
+		s = s[i+len(p):]
+	}
+	return strings.HasSuffix(s, parts[len(parts)-1])
 }
 
 func containsAnyFold(lower string, patterns []string) bool {

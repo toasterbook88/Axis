@@ -1,6 +1,10 @@
 package agent
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/toasterbook88/axis/internal/safety"
+)
 
 // AutonomyMode controls how much the agent does without operator prompts.
 type AutonomyMode string
@@ -16,9 +20,10 @@ const (
 	// you trust the edits but want to vet commands.
 	AutonomyEdit AutonomyMode = "edit"
 	// AutonomyFull auto-approves everything except safety-gate-blocked commands
-	// (score >= 80) and external MCP tools missing from the exact
-	// auto_approve_tools allowlist. Use for unattended / long-running
-	// autonomous work.
+	// (score >= 80), commands a specific safety rule flags (an AskAlways
+	// prompt, score 75), and external MCP tools missing from the exact
+	// auto_approve_tools allowlist. Unknown commands keep auto-approving. Use
+	// for unattended / long-running autonomous work.
 	AutonomyFull AutonomyMode = "full"
 	// AutonomyCluster is narrower than default: the model sees only the AXIS
 	// cluster read tools, not workspace files, git, or MCP servers. Use it to
@@ -26,9 +31,11 @@ const (
 	AutonomyCluster AutonomyMode = "cluster"
 )
 
-// autonomySafetyThreshold is the score at and above which a command is
-// considered safety-blocked and always prompts, even in full autonomy.
-const autonomySafetyThreshold = 80
+// autonomyAskThreshold is the score at and above which full autonomy asks
+// the operator: a specific safety rule's prompt (safety.ScoreAskAlways, 75)
+// and safety-blocked commands (80 and above). A prompt that flags no specific
+// risk scores 70 and is auto-approved.
+const autonomyAskThreshold = safety.ScoreAskAlways
 
 // autonomyLowRiskThreshold is the score below which a command is low-risk and
 // auto-approved in edit autonomy (for shell/remote tools).
@@ -74,8 +81,8 @@ func autonomyConfirm(mode AutonomyMode, fallback ConfirmFunc) ConfirmFunc {
 		}
 		switch mode {
 		case AutonomyFull:
-			// Auto-approve everything except safety-blocked commands.
-			if safetyScore < autonomySafetyThreshold {
+			// Auto-approve everything except specific risks and safety-blocked commands.
+			if safetyScore < autonomyAskThreshold {
 				return ConfirmYes
 			}
 			return fallback(toolName, description, safetyScore)

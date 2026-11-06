@@ -107,12 +107,13 @@ keep auto-approving so unattended runs keep working.
    return the first other prompt. Deny still wins over both.
 5. **Three new rules, shaped to the logged cases** (spec review 1, F3 and F5; spec review 2,
    F3). All are prompt verdicts with `AskAlways`.
-   - `ssh-host-key-off`: any program; raw patterns `stricthostkeychecking=no`, `=off`,
-     `=false` and `userknownhostsfile=/dev/null`. Category network-mutating, priority 160.
-     `AskAlways` raw patterns are matched against the lowercased segment with quote characters
-     removed, whitespace runs collapsed, and spaces on either side of `=` and between an option
-     name and its value turned into `=`. So `StrictHostKeyChecking no`, `='no'`, `="no"`, `= no`
-     and `'StrictHostKeyChecking  no'` all match (spec review 2, F2). It covers `ssh`, `scp`,
+   - `ssh-host-key-off`: any program; raw patterns `stricthostkeychecking` followed by `=` or a
+     space and then `no`, `off` or `false`, and `userknownhostsfile` followed by `=` or a space
+     and then `/dev/null` (eight patterns). Category network-mutating, priority 160. `AskAlways`
+     raw patterns are matched against the lowercased segment with quote characters removed,
+     whitespace runs collapsed, and spaces around `=` dropped. So `StrictHostKeyChecking no`,
+     `='no'`, `="no"`, `= no` and `'StrictHostKeyChecking  no'` all match (spec review 2, F2;
+     revision 4: the space form is a pattern, not rewritten to `=`). It covers `ssh`, `scp`,
      `rsync -e`, `GIT_SSH_COMMAND` and writing the option into an SSH config. A `grep` for the
      option also asks; accepted.
    - `dependency-tree`: programs `cd`, `pushd`, `cp`, `mv`, `tee`, `patch`, `ln`; raw pattern

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/ui"
 )
 
@@ -86,9 +87,14 @@ func (o *pipedToolObserver) MaxTurnsReached(max int) {
 // layer is denied with a notice pointing at the flags that suppress the
 // question (--auto-approve or --autonomy full). Those wrappers sit ABOVE
 // this base in the agent's confirm chain, so safe commands under
-// --auto-approve never reach it.
+// --auto-approve never reach it. A specific safety rule's ask (score 75 to
+// 79) reaches it even under --autonomy full, so its notice says so instead.
 func pipedConfirm(w io.Writer) agent.ConfirmFunc {
 	return func(tool, desc string, score int) agent.ConfirmResult {
+		if score >= safety.ScoreAskAlways && score < 80 {
+			fmt.Fprintf(w, "✗ %s denied: not an interactive session, and a specific safety rule flagged it (run interactively to approve)\n", tool)
+			return agent.ConfirmNo
+		}
 		fmt.Fprintf(w, "✗ %s denied: not an interactive session (pass --autonomy full; --auto-approve only clears low-risk tools)\n", tool)
 		return agent.ConfirmNo
 	}

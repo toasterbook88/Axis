@@ -11,7 +11,7 @@ func agentSafetyLabel(autoApprove bool, autonomy string) string {
 	case agent.AutonomyEdit:
 		return "Autonomy: edit (auto-approve edits)"
 	case agent.AutonomyFull:
-		return "Autonomy: full (auto-approve all but safety-blocked and unlisted MCP)"
+		return "Autonomy: full (auto-approve all but specific safety risks, safety-blocked and unlisted MCP)"
 	}
 	if autoApprove {
 		return "Auto-Approve safe (<70)"
