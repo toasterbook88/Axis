@@ -1,5 +1,14 @@
 ## Unreleased
 
+### Security
+
+* MCP servers configured over HTTP can no longer redirect `axis` to another
+  host or scheme. mcp-go's default HTTP client follows a 3xx redirect anywhere
+  and attaches the configured headers and OAuth token to the new request,
+  enabling SSRF and credential disclosure (GO-2026-6911; no fixed mcp-go
+  release yet). `axis` now gives the streamable HTTP transport its own client
+  that follows a redirect only within the server's scheme and host.
+
 ### Fixes
 
 * **Behaviour change:** `axis agent` fits every request to the model's context
