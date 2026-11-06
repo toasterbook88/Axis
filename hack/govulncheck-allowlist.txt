@@ -1,0 +1,10 @@
+# Reviewed, called vulnerabilities the govulncheck gate accepts
+# (hack/govulncheck_gate.py). One per line:
+#
+#   <OSV id> <recheck-by YYYY-MM-DD> <reason: why it is not exploitable here>
+#
+# Add an entry only when the code AXIS calls is mitigated and no fixed
+# version exists. Past its date an entry fails the gate, so someone checks
+# again for an upstream fix. Remove it once a fixed version is in go.mod.
+
+GO-2026-6911 2026-12-07 mcp-go has no fixed version; internal/mcpclient passes newMCPHTTPClient (WithHTTPBasicClient), whose CheckRedirect follows only same-origin redirects, the mitigation the advisory names. The examples/ trace is stdio-only.
