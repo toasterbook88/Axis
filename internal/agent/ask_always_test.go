@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -145,6 +147,40 @@ func TestEditAndDefaultModesAskAtSeventy(t *testing.T) {
 		if got := autonomyConfirm(mode, rec.confirm)("run_shell", "x", 70); got != ConfirmNo || !rec.called {
 			t.Errorf("%s mode at score 70: %v (fallback %v), want the fallback", mode, got, rec.called)
 		}
+	}
+}
+
+// The working directory is part of the safety check: git run inside
+// node_modules through run_shell's cwd asks, while an ordinary cwd does not
+// change a command's score (PR #619 review).
+func TestFullAutonomyShellChecksCwd(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "example"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	rec := &askRecorder{answer: ConfirmNo}
+	a, ran := fullAutonomyShellAgent(t, rec)
+	args, _ := json.Marshal(shellArgs{Command: "git checkout .", Cwd: "node_modules/example"})
+	if _, err := a.dispatchShell(context.Background(), args); err == nil || len(rec.asked) != 1 || len(*ran) != 0 {
+		t.Fatalf("cwd inside node_modules: err %v, asked %d, ran %d; want one ask and no run", err, len(rec.asked), len(*ran))
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plain := &askRecorder{answer: ConfirmNo}
+	b, plainRan := fullAutonomyShellAgent(t, plain)
+	args, _ = json.Marshal(shellArgs{Command: "ls", Cwd: "src"})
+	if _, err := b.dispatchShell(context.Background(), args); err != nil || len(plain.asked) != 0 || len(*plainRan) != 1 {
+		t.Fatalf("ordinary cwd: err %v, asked %d, ran %d; want it to run without asking", err, len(plain.asked), len(*plainRan))
+	}
+	if _, _, score := b.safety("ls"); score != 0 {
+		t.Fatalf("ls scores %d", score)
+	}
+	if _, _, score, _, _ := b.shellSafety("ls", "src"); score != 0 {
+		t.Fatalf("ls with an ordinary cwd scores %d, want 0 like ls alone", score)
 	}
 }
 

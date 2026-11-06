@@ -26,8 +26,11 @@
   specific rule now wins over the unknown-command rule across `&&` segments and
   over the null-redirect rule within one, so `git push > /dev/null` asks too.
   Git rules look past git's global options (`git -C <repo> push` asks; `git -C
-  <repo> status` is now allowed like `git status` in edit mode), and curl/wget
-  upload options match anywhere in the command. Command wrappers (`env`,
+  <repo> status` is now allowed like `git status` in edit mode), curl and wget
+  upload options match anywhere in the command (as separate rules, so a wget
+  `-T` timeout is not an upload), service managers match from the verb
+  (`systemctl --host h restart x`), and `run_shell`'s `cwd` is checked, so git
+  in a `node_modules` working directory asks. Command wrappers (`env`,
   `sh -c`, `xargs`, …), globs, variables and tab separators are not looked
   through. The two new rules also make those commands ask in default and edit
   modes.

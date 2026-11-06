@@ -23,12 +23,29 @@ func newSegment(raw, program string, args []string) segment {
 		args, s.workDirs = gitSubcommand(args)
 		s.workDirs = append(s.workDirs, gitEnvDirs(raw)...)
 	case "systemctl", "launchctl", "service":
-		for len(args) > 0 && strings.HasPrefix(args[0], "-") {
-			args = args[1:]
-		}
+		args = fromServiceVerb(args)
 	}
 	s.joinedArgs = strings.Join(args, " ")
 	return s
+}
+
+// serviceVerbs are the operations service-mgmt asks about.
+var serviceVerbs = map[string]bool{
+	"start": true, "stop": true, "restart": true, "enable": true,
+	"disable": true, "install": true, "uninstall": true,
+}
+
+// fromServiceVerb returns args from the first service verb on. Options and
+// their values ("--host x", "-H x") and a "service <name> start" unit name
+// come before it, so matching from the verb covers every form. With no verb
+// the arguments are returned unchanged.
+func fromServiceVerb(args []string) []string {
+	for i, a := range args {
+		if serviceVerbs[a] {
+			return args[i:]
+		}
+	}
+	return args
 }
 
 // gitSubcommand skips git's global options and returns the subcommand with
@@ -40,6 +57,10 @@ func gitSubcommand(args []string) ([]string, []string) {
 	for i < len(args) {
 		tok := args[i]
 		switch {
+		case tok == "--version" || tok == "-v" || tok == "--help" || tok == "-h":
+			// A query option ends the global options and is what the
+			// version rule matches, as for plain "git --version".
+			return args[i:], dirs
 		case tok == "-C" || tok == "--git-dir" || tok == "--work-tree":
 			if i+1 < len(args) {
 				dirs = append(dirs, strings.ToLower(args[i+1]))

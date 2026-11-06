@@ -92,7 +92,7 @@ func TestAskAlwaysRulesMatchAlternateSpellings(t *testing.T) {
 		`curl http://example.com -X POST`:             "curl-post",
 		`curl -F f=@x http://example.com`:             "curl-post",
 		`curl -T file http://example.com`:             "curl-post",
-		`wget --post-data=x http://example.com`:       "curl-post",
+		`wget --post-data=x http://example.com`:       "wget-post",
 		`systemctl restart foo`:                       "service-mgmt",
 		`systemctl --user restart foo`:                "service-mgmt",
 		`brew services start foo`:                     "service-mgmt",
@@ -107,6 +107,37 @@ func TestAskAlwaysRulesMatchAlternateSpellings(t *testing.T) {
 	}
 	for cmd, rule := range match {
 		if d := e.Evaluate(cmd, "agent-run-shell"); d.MatchedRule != rule || !d.AskAlways {
+			t.Errorf("%q: %s/%s ask_always=%v, want %s", cmd, d.Verdict, d.MatchedRule, d.AskAlways, rule)
+		}
+	}
+}
+
+// PR #619 review: attached curl values, wget's own upload options, service
+// managers with option values, and git's terminating query options.
+func TestUploadServiceAndGitQueryForms(t *testing.T) {
+	e := NewEvaluator(DefaultRuleSet())
+	for cmd, rule := range map[string]string{
+		`curl -dpayload http://example.com`:              "curl-post",
+		`curl -Fupload=@payload.json http://example.com`: "curl-post",
+		`curl -Tpayload.json http://example.com`:         "curl-post",
+		`wget --post-file=x http://example.com`:          "wget-post",
+		`wget --method=PUT http://example.com`:           "wget-post",
+		`systemctl --host remote.example restart x`:      "service-mgmt",
+		`systemctl -H remote.example stop x`:             "service-mgmt",
+		`service foo start`:                              "service-mgmt",
+	} {
+		if d := e.Evaluate(cmd, "agent-run-shell"); d.MatchedRule != rule || !d.AskAlways {
+			t.Errorf("%q: %s/%s ask_always=%v, want %s", cmd, d.Verdict, d.MatchedRule, d.AskAlways, rule)
+		}
+	}
+	for cmd, rule := range map[string]string{
+		`wget -T 30 http://example.com/file`: "curl-get",
+		`wget -d http://example.com/file`:    "curl-get",
+		`git --version`:                      "version-commands",
+		`git -v`:                             "version-commands",
+		`systemctl status startup.service`:   "unknown-fallback",
+	} {
+		if d := e.Evaluate(cmd, "agent-run-shell"); d.MatchedRule != rule || d.AskAlways {
 			t.Errorf("%q: %s/%s ask_always=%v, want %s", cmd, d.Verdict, d.MatchedRule, d.AskAlways, rule)
 		}
 	}

@@ -1,6 +1,6 @@
 # Full autonomy asks before commands a named rule flags
 
-Date: 2026-11-05. Status: revision 4, implemented on this branch; spec review 2 and diff reviews A
+Date: 2026-11-05. Status: revision 5 (PR #619 review), implemented on this branch; spec review 2 and diff reviews A
 and B approved with changes, all findings resolved.
 
 ## Problem
@@ -119,6 +119,10 @@ keep auto-approving so unattended runs keep working.
      prompts (spec review 2, question 2).
    - `run_shell`, `run_on_node`, `fleet_exec` and `run_background` all take their score from
      `safety.Check`, so all four inherit the ask (spec review 2, question 4).
+   - `run_shell`'s `cwd` is validated and checked as `cd <cwd>` before confirmation. Its score
+     replaces the command's only when it is a deny or an `AskAlways` prompt, so `git checkout .`
+     with `cwd: node_modules/x` asks, and an ordinary `cwd` (an unknown `cd`, score 70) does not
+     raise a command's score (revision 5, PR #619 review).
    - Edit mode already asks at 70; for `axis_run_task` it now also asks on an `AskAlways`
      prompt, where it used to see score 0.
 4. **An `AskAlways` prompt beats other prompts across segments.** `Evaluate` returns the first
@@ -147,14 +151,20 @@ keep auto-approving so unattended runs keep working.
    - **Spellings** (revision 4, diff review B F1):
      - For git, argument patterns see the subcommand after git's global options (`-C`, `-c`,
        `--git-dir`, `--work-tree`, `--no-pager` and other value-less flags), so
-       `git -C /repo push` matches `git-push`.
-     - For `systemctl`, `launchctl` and `service`, leading options are skipped, so
-       `systemctl --user restart x` matches `service-mgmt`, which also covers
-       `brew services start|stop|restart|run`.
-     - `curl-post` matches its upload and method options anywhere in the arguments:
+       `git -C /repo push` matches `git-push`. `--version`, `-v`, `--help` and `-h` end the
+       scan, so `git --version` keeps `version-commands` (revision 5, PR #619 review).
+     - For `systemctl`, `launchctl` and `service`, argument patterns see the arguments from the
+       first service verb (start, stop, restart, enable, disable, install, uninstall). Options
+       and their values come before it, so `systemctl --user restart x`,
+       `systemctl --host h restart x` and `service foo start` match `service-mgmt`, which also
+       covers `brew services start|stop|restart|run` (revision 5, PR #619 review).
+     - Uploads are two rules, because curl and wget options differ (wget's `-T` is a timeout,
+       `-d` debug and `-F` force-html; revision 5, PR #619 review). `curl-post` matches curl's
+       upload and method options anywhere and attached or separate:
        `-X`/`-XPOST`/`--request` with POST, PUT, DELETE or PATCH, `--data`, `-d`, `-F`/`--form`,
-       `-T`/`--upload-file`, and wget's `--post-data`, `--post-file`, `--method`, `--body-*`.
-       A GET request keeps `curl-get`.
+       `-T`/`--upload-file`. `wget-post` (also `AskAlways`) matches wget's `--post-data`,
+       `--post-file`, `--method` with a mutating method, and `--body-*`. A GET request, and a
+       wget download with `-T`, keep `curl-get`.
      - `AskAlways` raw patterns also drop backslashes, so `StrictHostKeyChecking\=no` and
        `cd node\_modules` match.
      - The five existing `AskAlways` rules gain a description, so the confirm shows a reason
