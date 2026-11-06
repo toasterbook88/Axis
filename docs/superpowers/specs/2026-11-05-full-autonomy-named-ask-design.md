@@ -1,6 +1,7 @@
 # Full autonomy asks before commands a named rule flags
 
-Date: 2026-11-05. Status: revision 2, after spec review 1 (revise); awaiting spec review 2.
+Date: 2026-11-05. Status: revision 3; spec review 2 approved with changes, all findings resolved
+here.
 
 ## Problem
 
@@ -52,56 +53,83 @@ keep auto-approving so unattended runs keep working.
   keep score 70 and stay auto-approved under full autonomy. Making every prompt ask is the
   stricter alternative the operator declined.
 - No change to deny rules or to `--autonomy cluster`.
-- Default, edit and `--auto-approve` modes already ask at 70, and they keep asking. The two new
-  rules turn some commands that were allowed (score 0) into asks in every mode: `git` inside
-  `node_modules`, and any command with a disabled SSH host-key check. Both are the logged
-  risks, so this is accepted (spec review 1, F2).
+- Default, edit and `--auto-approve` modes already ask at 70, and they keep asking. The new
+  rules turn some commands that were allowed (score 0) into asks in every mode: `git -C`,
+  `--git-dir` or `--work-tree` into `node_modules`, and any command with a disabled SSH host-key
+  check (for example `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" git fetch`). Both are
+  the logged risks, so this is accepted (spec review 1, F2). A `git` command that only mentions
+  `node_modules` (a pathspec exclusion such as `git diff -- . ':!node_modules'`) is unchanged
+  (spec review 2, F3).
+- `dumb_score` in guarded-execution results becomes 75 for an `AskAlways` prompt where it was
+  absent (0, omitted). That reaches the `/v2` run response, A2A results, `axis task run` JSON
+  and the agent's run payload. It is a value change in an existing optional field, listed here
+  and in `docs/current-state.md` (spec review 2, F5). The MCP `verify_execution_safety` output
+  does not gain `AskAlways`.
 - No new flag, config key, state file or session-log field.
-- No complete list of risky commands. The two new rules cover the logged cases; other unknown
+- No complete list of risky commands. The three new rules cover the logged cases; other unknown
   risky commands still auto-run under full autonomy, as today.
 
 ## Design
 
 1. **Mark the rules that always ask.** `safety.Rule` gains `AskAlways bool`, and
    `safety.Decision` carries it from the matched rule. It is set on `git-push`,
-   `git-force-push`, `curl-post`, `service-mgmt`, `ollama-run` and the two new rules. It is not
+   `git-force-push`, `curl-post`, `service-mgmt`, `ollama-run` and the three new rules. It is not
    set on `unknown-fallback` or `legacy-hardblock-dev-null`, so a null redirect alone never
    asks (spec review 1, F4). An explicit flag, not a rule-name comparison, so renaming a rule
-   cannot change the scoring (spec review 1, question 2).
+   cannot change the scoring (spec review 1, question 2). It carries the tags
+   `yaml:"ask_always" json:"ask_always,omitempty"` like the other fields; rules are not loaded
+   from config today, so an absent field is `false`.
+   - **Within a segment**, when the highest-priority match is a prompt without `AskAlways`, the
+     evaluator also searches the lower-priority rules for a matching `AskAlways` prompt and
+     returns it, the way `firstDeny` searches for a deny (#613). Deny still wins. So
+     `git push origin main > /dev/null` returns `git-push`, not the null-redirect rule (spec
+     review 2, F1).
 2. **Two scores for a prompt verdict.**
    - `safety.Check` gives an `AskAlways` prompt score 75 (`safety.ScoreAskAlways`); any other
      prompt keeps 70. Scores of 80 and above still mean safety-blocked.
-   - Guarded execution sets `DumbScore` to 75 for an `AskAlways` prompt and leaves it
-     unchanged otherwise, so `axis_run_task` carries the same signal (spec review 1, F1).
+   - Guarded execution sets `DumbScore` to 75 and `BlockReason` to the rule's reason, with
+     `Blocked` false, for an `AskAlways` prompt, and leaves both unchanged otherwise. So
+     `axis_run_task` carries the same signal, and its confirm shows the reason instead of an
+     empty one (spec review 1, F1; spec review 2, F5).
 3. **Full autonomy asks at 75.** `autonomyConfirm` in full mode auto-approves only scores below
    75 (`autonomyAskThreshold`) and sends 75 to 79 to the operator, the same fallback 80 and
    above use. This applies to `axis_run_task` too.
    - The other scores in that band (75 "no GPU node", 78 "best node low on RAM") come with
-     `Blocked: true` and are refused before confirmation, so the threshold moves only
-     `AskAlways` prompts.
+     `Blocked: true`. The shell gates send a blocked result to an override confirm with the score
+     raised to 80, so it already reaches the operator, and the threshold moves only `AskAlways`
+     prompts (spec review 2, question 2).
+   - `run_shell`, `run_on_node`, `fleet_exec` and `run_background` all take their score from
+     `safety.Check`, so all four inherit the ask (spec review 2, question 4).
    - Edit mode already asks at 70; for `axis_run_task` it now also asks on an `AskAlways`
      prompt, where it used to see score 0.
 4. **An `AskAlways` prompt beats other prompts across segments.** `Evaluate` returns the first
    segment (in command order) whose prompt is `AskAlways`. Only when no segment has one does it
    return the first other prompt. Deny still wins over both.
-5. **Two new rules, shaped to the logged cases** (spec review 1, F3 and F5). Both are prompt
-   verdicts with `AskAlways`.
-   - `ssh-host-key-off`: any program, raw patterns (case-insensitive, as all raw patterns are)
-     `stricthostkeychecking=no`, `stricthostkeychecking no`, `stricthostkeychecking=off`,
-     `stricthostkeychecking off`, `stricthostkeychecking=false`, `stricthostkeychecking false`,
-     `userknownhostsfile=/dev/null` and `userknownhostsfile /dev/null`. Category
-     network-mutating, priority 160. It covers `ssh`, `scp`, `rsync -e`, `GIT_SSH_COMMAND` and
-     writing the option into an SSH config. A `grep` for the option also asks; accepted.
-   - `dependency-tree`: programs `cd`, `pushd`, `git`, `cp`, `mv`, `tee`, `patch`, `ln`, raw
-     pattern `node_modules`. Category modify, priority 90, which is above `git-safe` (85) and
-     `git-modify` (80), so `git` inside the tree asks. Other programs are unchanged, so
-     `./node_modules/.bin/eslint .`, `grep -rn foo node_modules/`, `npm test`, `ls` and `cat`
-     keep their current verdicts. `vendor/`, `.venv/` and `site-packages/` are not covered: no
-     logged case needs them, and Go and PHP `vendor/` is checked-in source.
-6. **Session "always".** An operator who answers "always" to a confirmation approves that tool
-   for the rest of the session (`dispatch.go`), and later `AskAlways` prompts for that tool run
-   without asking. That is the operator's explicit choice and is kept (spec review 1,
-   question 1).
+5. **Three new rules, shaped to the logged cases** (spec review 1, F3 and F5; spec review 2,
+   F3). All are prompt verdicts with `AskAlways`.
+   - `ssh-host-key-off`: any program; raw patterns `stricthostkeychecking=no`, `=off`,
+     `=false` and `userknownhostsfile=/dev/null`. Category network-mutating, priority 160.
+     `AskAlways` raw patterns are matched against the lowercased segment with quote characters
+     removed, whitespace runs collapsed, and spaces on either side of `=` and between an option
+     name and its value turned into `=`. So `StrictHostKeyChecking no`, `='no'`, `="no"`, `= no`
+     and `'StrictHostKeyChecking  no'` all match (spec review 2, F2). It covers `ssh`, `scp`,
+     `rsync -e`, `GIT_SSH_COMMAND` and writing the option into an SSH config. A `grep` for the
+     option also asks; accepted.
+   - `dependency-tree`: programs `cd`, `pushd`, `cp`, `mv`, `tee`, `patch`, `ln`; raw pattern
+     `node_modules`. Category modify, priority 90.
+   - `dependency-tree-git`: program `git`, argument patterns `*-C *node_modules*`,
+     `*--git-dir*node_modules*` and `*--work-tree*node_modules*`. Category modify, priority 90,
+     above `git-safe` (85) and `git-modify` (80). So git run inside the tree asks, and a git
+     command that only names `node_modules` as a pathspec does not (spec review 2, F3).
+   - Other programs are unchanged, so `./node_modules/.bin/eslint .`, `grep -rn foo
+     node_modules/`, `npm test`, `ls` and `cat` keep their current verdicts. `vendor/`, `.venv/`
+     and `site-packages/` are not covered: no logged case needs them, and Go and PHP `vendor/`
+     is checked-in source.
+6. **Session "always".** For `run_shell`, `run_on_node`, `fleet_exec` and `run_background`, an
+   operator who answers "always" approves that tool for the rest of the session
+   (`dispatch.go`, `async_tasks.go`), and later `AskAlways` prompts for it run without asking.
+   That is the operator's explicit choice and is kept (spec review 1, question 1).
+   `axis_run_task` has no session approval and asks every time (spec review 2, F4).
 7. **Text.** These places say full autonomy auto-approves everything except safety-blocked
    commands, commands a specific safety rule flags, and unlisted MCP tools:
    - the `--autonomy` flag help;
@@ -109,9 +137,13 @@ keep auto-approving so unattended runs keep working.
    - the agent banner (`cmd/axis/agent_banner.go`);
    - the CHANGELOG (Unreleased) and `docs/current-state.md`.
 
-   The `-p` denial notice (`cmd/axis/agent_oneshot.go`) says that a specific safety rule
-   flagged the command and that it needs an interactive approval, instead of pointing at
-   `--autonomy full` (spec review 1, F8). Earlier release notes stay as they were.
+   The `-p` denial notice (`cmd/axis/agent_oneshot.go`) branches on the score (spec review 2,
+   F6):
+   - from 75 to 79, it says a specific safety rule flagged the command and that it needs an
+     interactive approval;
+   - every other score keeps today's text, including the `--autonomy full` hint.
+
+   Earlier release notes stay as they were (spec review 1, F8).
 
 ## Tests
 
@@ -122,28 +154,42 @@ so.
   scores 100. `ls` scores 0.
 - `Evaluate`:
   - `cd /tmp && git push` returns `git-push` (change).
-  - `cd /tmp && foo` returns `unknown-fallback`, and `git push && rm -rf /` is denied
-    (regression guards).
+  - `git push origin main > /dev/null`, `curl -X POST http://example.com > /dev/null` and the
+    ssh form with `> /dev/null` return `git-push`, `curl-post` and `ssh-host-key-off`, and
+    `git push origin main > /dev/null` scores 75 (change, spec review 2 F1).
+  - `cd /tmp && foo` returns `unknown-fallback`, and `git push && rm -rf /` and
+    `git push > /dev/null && rm -rf /` are denied (regression guards).
 - New rules:
-  - `ssh -o StrictHostKeyChecking=no h true`, `ssh -o "StrictHostKeyChecking no" h true`,
-    `ssh -o StrictHostKeyChecking=off h true`, `rsync -e "ssh -o UserKnownHostsFile=/dev/null" a
-    b:`, `cd node_modules/x && git checkout v1`, `cd node_modules && git -C x checkout v1` and
-    `git -C node_modules/x checkout v1` all match their new rule (change).
-  - `ls node_modules/x`, `cat vendor/a.go`, `grep -rn foo node_modules/`,
-    `./node_modules/.bin/eslint .`, `.venv/bin/python -m pytest` and `git add vendor/ go.mod`
-    keep their current verdict and rule (regression guards against false positives).
+  - Match their new rule (change):
+    - `ssh -o StrictHostKeyChecking=no h true`, `ssh -o "StrictHostKeyChecking no" h true`,
+      `ssh -o StrictHostKeyChecking='no' h true`, `ssh -o StrictHostKeyChecking="no" h true`,
+      `ssh -o 'StrictHostKeyChecking  no' h true` and `ssh -o StrictHostKeyChecking=off h true`;
+    - `rsync -e "ssh -o UserKnownHostsFile=/dev/null" a b:`;
+    - `cd node_modules/x && git checkout v1` and `cd -- node_modules/x`;
+    - `cd node_modules && git -C x checkout v1`, `git -C node_modules/x checkout v1` and
+      `FOO=1 git -C node_modules/x checkout v1`.
+  - Keep their current verdict and rule (regression guards against false positives):
+    `ls node_modules/x`, `cat vendor/a.go`, `grep -rn foo node_modules/`,
+    `./node_modules/.bin/eslint .`, `.venv/bin/python -m pytest`, `git add vendor/ go.mod` and
+    `git diff -- . ':!node_modules'`.
 - `autonomyConfirm`, full mode:
-  - Score 70 is approved without the fallback; 75 and 80 call the fallback.
+  - Score 70 is approved without the fallback; 75, 79 and 80 call the fallback.
+    `TestAutonomyFullAutoApprovesAllButSafetyBlocked` (`autonomy_test.go`), which pins 79 as
+    approved, is updated and renamed, because this change reverses it (spec review 2, F7).
   - `axis_run_task` at 75 calls the fallback, and at 0 it is approved (change).
   - Edit and default modes are unchanged at 70.
-- Guarded execution: `git push` gets `DumbScore` 75, and an unknown command keeps 0.
+- Guarded execution: `git push` gets `DumbScore` 75 and its rule reason in `BlockReason`, and an
+  unknown command keeps 0; the `axis_run_task` confirm text shows the reason.
 - End to end under `AutonomyFull`:
   - `git push` and the two logged shapes reach the fallback confirm, through `run_shell` and
     through `axis_run_task`.
   - `foo --bar`, `ls > /dev/null` and `ls` do not.
-- Session "always": after "always" on one `git push`, a second `git push` in the same session
-  runs without asking (documents Design 6).
-- The `-p` notice names the safety rule; the banner text matches the new wording.
+- Session "always":
+  - after "always" on one `run_shell` `git push`, a second one in the same session runs without
+    asking;
+  - a second `AskAlways` `axis_run_task` still calls the fallback (Design 6).
+- The `-p` notice: score 75 gives the safety-rule text, score 0 keeps today's text. The banner
+  text matches the new wording.
 
 ## Alternatives
 
@@ -214,3 +260,44 @@ Questions:
   order.
 - Do any of the 4 allowed logged commands now ask? Verified: replayed against the new rules;
   none contains `node_modules` or a host-key option.
+
+Kind: spec
+Reviewer: fresh-context subagent (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: b80fcb5b3925b49621e914c35080826e9cceb527
+Head: 76fc0917a8ad178eaac73943ab03d20def267c92
+Date: 2026-11-05
+Verdict: approve-with-changes
+
+1. Major: a null-redirect prompt in the same segment hides an `AskAlways` rule, so
+   `git push origin main > /dev/null` still auto-runs. Fixed: within a segment the evaluator
+   searches below a non-`AskAlways` prompt for an `AskAlways` one, as `firstDeny` does (Design
+   1); tests added.
+2. Minor: quoted values and repeated spaces in the ssh option are missed. Fixed: `AskAlways` raw
+   patterns are matched with quotes removed, whitespace collapsed and option values joined by
+   `=` (Design 5); the three spellings added to the tests.
+3. Minor: the dependency rule matched any git command mentioning `node_modules`, including
+   pathspec exclusions. Fixed: git is a separate rule matching only `-C`, `--git-dir` and
+   `--work-tree` into the tree; `git diff -- . ':!node_modules'` added as a guard; Non-goals
+   updated.
+4. Minor: Design 6 was wrong for `axis_run_task`, which has no session approval. Fixed: Design 6
+   limited to the four session-approvable tools; test added that a second `axis_run_task` asks.
+5. Minor: the `axis_run_task` score 75 had no reason, and the `dumb_score` output change was not
+   listed. Fixed: `BlockReason` carries the rule reason with `Blocked` false (Design 2); the output
+   change is listed in Non-goals and current-state; confirm-text test added.
+6. Minor: the new `-p` notice would be wrong for most denials. Fixed: it branches on score, and
+   only 75 to 79 get the safety-rule text (Design 7); both branches tested.
+7. Minor: `TestAutonomyFullAutoApprovesAllButSafetyBlocked` pins 79 as approved and contradicts
+   Design 3. Fixed: listed under Tests as updated and renamed.
+
+Questions:
+- The 14-day replay and the 4 allowed commands. Open: they need the private session log; the
+  author ran the replay at `b80fcb5b` (Problem).
+- Are the other 75-79 scores refused before confirmation? Became Design 3: they go to an
+  override confirm at score 80 on the shell paths; only `AskAlways` prompts move.
+- Should `AskAlways` get yaml/json tags, and should `verify_execution_safety` expose it? Became
+  Design 1 (tags added) and Non-goals (not exposed).
+- Do `fleet_exec` and `run_background` inherit the ask? Became Design 3: yes, all four shell
+  gates take their score from `safety.Check`.
+
+Note: every spec-review finding is resolved; code starts.
