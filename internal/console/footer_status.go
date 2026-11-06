@@ -63,13 +63,25 @@ func FormatTokens(n int) string {
 	return fmt.Sprintf("%dk", n/1000)
 }
 
-// FormatContextBar generates a block progress bar and percentage.
+// FormatContextBar generates a Unicode block progress bar and percentage.
+// ASCII terminals use formatContextBar with "=" and "-" instead.
 func FormatContextBar(used, max, barWidth int) (bar string, percent int) {
+	return formatContextBar(used, max, barWidth, "█", "░")
+}
+
+// formatContextBar fills barWidth cells. fill and empty are one column each.
+func formatContextBar(used, max, barWidth int, fill, empty string) (bar string, percent int) {
 	if barWidth <= 0 {
 		barWidth = 10
 	}
+	if fill == "" {
+		fill = "█"
+	}
+	if empty == "" {
+		empty = "░"
+	}
 	if max <= 0 {
-		return strings.Repeat("░", barWidth), 0
+		return strings.Repeat(empty, barWidth), 0
 	}
 	if used < 0 {
 		used = 0
@@ -83,7 +95,7 @@ func FormatContextBar(used, max, barWidth int) (bar string, percent int) {
 	if filled > barWidth {
 		filled = barWidth
 	}
-	bar = strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	bar = strings.Repeat(fill, filled) + strings.Repeat(empty, barWidth-filled)
 	return bar, percent
 }
 
@@ -156,9 +168,26 @@ func (f *StatusFooter) Render(width int, st FooterState) []Line {
 	}
 	hasUsage := usageTurns > 0
 
-	bar, pct := FormatContextBar(used, max, 10)
+	// Unicode box-drawing and the middle dot are one column each, and so are
+	// their ASCII stand-ins, so the tier math does not change with the glyph.
+	fill, empty, rule, sep := "█", "░", "─", "──"
+	if st.ASCII {
+		fill, empty, rule, sep = "=", "-", "-", "--"
+	}
+	bar, pct := formatContextBar(used, max, 10, fill, empty)
 	ctxFull := fmt.Sprintf("context: [%s] %d%% (%s/%s)", bar, pct, FormatTokens(used), FormatTokens(max))
 	ctxCompact := fmt.Sprintf("context: %d%%", pct)
+
+	// Fold prose only. The bar is already the right glyph; running the ASCII
+	// mapper over it would turn a block into a question mark.
+	fold := func(s string) string {
+		if st.ASCII {
+			return asciiFallback(s)
+		}
+		return s
+	}
+	modelSeg = fold(modelSeg)
+	snap = fold(snap)
 
 	var segments []string
 
@@ -168,10 +197,10 @@ func (f *StatusFooter) Render(width int, st FooterState) []Line {
 			// Real spend is not occupancy: keep the context bar on UsedTokens
 			// and surface in/out separately. Mode rides the same segment so
 			// autonomy stays visible after turn 1 without a third column.
-			usageText := fmt.Sprintf("usage: %s/%s · %s", FormatTokens(usageIn), FormatTokens(usageOut), mode)
+			usageText := fold(fmt.Sprintf("usage: %s/%s · %s", FormatTokens(usageIn), FormatTokens(usageOut), mode))
 			segments = append(segments, usageText)
 		} else if mode != "" {
-			segments = append(segments, "mode: "+mode)
+			segments = append(segments, fold("mode: "+mode))
 		}
 		segments = append(segments, snap)
 	} else if width >= footerMediumMin {
@@ -182,7 +211,9 @@ func (f *StatusFooter) Render(width int, st FooterState) []Line {
 
 	// Drop whole trailing segments (snap first, then the rest, keeping the
 	// model) until the line fits, so we never show a fragment like "no sn".
-	join := func(segs []string) string { return "── " + strings.Join(segs, " ── ") + " ──" }
+	join := func(segs []string) string {
+		return sep + " " + strings.Join(segs, " "+sep+" ") + " " + sep
+	}
 	content := join(segments)
 	for len(segments) > 1 && visibleWidth(content) > limit {
 		segments = segments[:len(segments)-1]
@@ -193,7 +224,7 @@ func (f *StatusFooter) Render(width int, st FooterState) []Line {
 	// width, not runes: wide runes take two columns.
 	content = clipWidth(content, limit)
 	if pad := limit - visibleWidth(content); pad > 0 {
-		content += strings.Repeat("─", pad)
+		content += strings.Repeat(rule, pad)
 	}
 
 	return []Line{{

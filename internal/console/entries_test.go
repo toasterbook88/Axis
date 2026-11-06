@@ -282,6 +282,9 @@ func TestToolEntrySuccessReceipt(t *testing.T) {
 	if !strings.Contains(got, "(124ms elapsed)") {
 		t.Fatalf("timing receipt missing:\n%s", got)
 	}
+	if strings.Count(got, "124ms") != 1 {
+		t.Fatalf("duration shown %d times, want once:\n%s", strings.Count(got, "124ms"), got)
+	}
 }
 
 func TestToolEntryNoReceiptForPendingOnly(t *testing.T) {

@@ -131,6 +131,39 @@ func TestStatusFooterHidesUsageOnMediumWidth(t *testing.T) {
 	}
 }
 
+func TestStatusFooterASCIIHasNoBlockGlyphs(t *testing.T) {
+	f := NewStatusFooter(StatusFooterConfig{
+		Model:      func() string { return "模型" },
+		UsedTokens: func() int { return 2500 },
+		MaxTokens:  func() int { return 10000 },
+		UsageStats: func() (int, int, int) { return 100, 50, 1 },
+		Mode:       func() string { return "full" },
+		Snapshot:   func() string { return "snap" },
+	})
+	for _, w := range []int{30, 50, 80, 120} {
+		text := f.Render(w, FooterState{ASCII: true, Frame: "-"})[0].Text
+		if got := visibleWidth(text); got != w-1 {
+			t.Fatalf("width %d: visible %d: %q", w, got, text)
+		}
+		for _, glyph := range []string{"█", "░", "─", "·", "—"} {
+			if strings.Contains(text, glyph) {
+				t.Fatalf("width %d contains %q: %q", w, glyph, text)
+			}
+		}
+	}
+	wide := f.Render(100, FooterState{ASCII: true})[0].Text
+	if !strings.Contains(wide, "context: [") || !strings.Contains(wide, "=") || !strings.Contains(wide, "?") {
+		t.Fatalf("ascii bar or folded model name missing: %s", wide)
+	}
+}
+
+func TestStatusFooterZeroValueKeepsUnicodeBar(t *testing.T) {
+	text := tierFooter("m").Render(100, FooterState{})[0].Text
+	if !strings.Contains(text, "█") || !strings.Contains(text, "─") {
+		t.Fatalf("zero-value footer dropped unicode: %s", text)
+	}
+}
+
 func TestFormatTokensAndBar(t *testing.T) {
 	if got := FormatTokens(500); got != "500" {
 		t.Fatalf("FormatTokens(500) = %q; want '500'", got)
