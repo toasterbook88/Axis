@@ -671,7 +671,7 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 
 	// Risk scores (0 < score < 80) add stronger warning text.
 	if prepared.Result.DumbScore > 0 {
-		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d) - REASON: %s]\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
+		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d)] safety why: %s\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
 	}
 
 	// Confirm without holding dispatchMu: the operator overlay is the only thing

@@ -76,6 +76,63 @@ func TestNewAskAlwaysRules(t *testing.T) {
 	}
 }
 
+// Alternate spellings of the specific risks still ask (diff reviews A F1, B
+// F1-F3): git global options and env, curl/wget upload options anywhere,
+// service options, brew services, backslash escapes.
+func TestAskAlwaysRulesMatchAlternateSpellings(t *testing.T) {
+	e := NewEvaluator(DefaultRuleSet())
+	match := map[string]string{
+		`git -C /repo push origin main`:               "git-push",
+		`git -C /repo push --force`:                   "git-force-push",
+		`git -c user.name=x push`:                     "git-push",
+		`git --no-pager push`:                         "git-push",
+		`git push --force`:                            "git-force-push",
+		`curl -XPOST http://example.com`:              "curl-post",
+		`curl --request POST http://example.com`:      "curl-post",
+		`curl http://example.com -X POST`:             "curl-post",
+		`curl -F f=@x http://example.com`:             "curl-post",
+		`curl -T file http://example.com`:             "curl-post",
+		`wget --post-data=x http://example.com`:       "curl-post",
+		`systemctl restart foo`:                       "service-mgmt",
+		`systemctl --user restart foo`:                "service-mgmt",
+		`brew services start foo`:                     "service-mgmt",
+		`ollama run m`:                                "ollama-run",
+		`ssh -o StrictHostKeyChecking\=no h true`:     "ssh-host-key-off",
+		`cd node\_modules/x`:                          "dependency-tree",
+		`GIT_DIR=node_modules/x/.git git checkout v1`: "dependency-tree-git",
+		`GIT_WORK_TREE=node_modules/x git checkout .`: "dependency-tree-git",
+		`git --work-tree=node_modules/x checkout v1`:  "dependency-tree-git",
+		`git --git-dir node_modules/x/.git log`:       "dependency-tree-git",
+		`git -Cnode_modules/x status`:                 "dependency-tree-git",
+	}
+	for cmd, rule := range match {
+		if d := e.Evaluate(cmd, "agent-run-shell"); d.MatchedRule != rule || !d.AskAlways {
+			t.Errorf("%q: %s/%s ask_always=%v, want %s", cmd, d.Verdict, d.MatchedRule, d.AskAlways, rule)
+		}
+	}
+}
+
+// A git command that only names node_modules as a pathspec, a message or a
+// copy-detection flag keeps its git rule (diff reviews A F1, B F2).
+func TestDependencyTreeGitIgnoresPathspecs(t *testing.T) {
+	e := NewEvaluator(DefaultRuleSet())
+	keep := map[string]string{
+		`git -C /repo diff -- . ':!node_modules'`:       "git-safe",
+		`git -C /repo status -- node_modules`:           "unknown-fallback", // git-safe matches bare "status" only, as at Base
+		`git log -C -- node_modules/x`:                  "git-safe",
+		`git log --grep='-C node_modules'`:              "git-safe",
+		`git -C ../app commit -m "ignore node_modules"`: "git-modify",
+		`curl --request=GET http://example.com`:         "curl-get",
+		`wget --method=GET http://example.com`:          "curl-get",
+		`systemctl --user status foo`:                   "unknown-fallback",
+	}
+	for cmd, rule := range keep {
+		if d := e.Evaluate(cmd, "agent-run-shell"); d.MatchedRule != rule || d.AskAlways {
+			t.Errorf("%q: %s/%s ask_always=%v, want %s", cmd, d.Verdict, d.MatchedRule, d.AskAlways, rule)
+		}
+	}
+}
+
 // Commands near the new rules keep the verdict and rule they have today.
 func TestNewRulesLeaveNeighboursAlone(t *testing.T) {
 	e := NewEvaluator(DefaultRuleSet())

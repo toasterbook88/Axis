@@ -1,7 +1,7 @@
 # Full autonomy asks before commands a named rule flags
 
-Date: 2026-11-05. Status: revision 3; spec review 2 approved with changes, all findings resolved
-here.
+Date: 2026-11-05. Status: revision 4, implemented on this branch; spec review 2 and diff reviews A
+and B approved with changes, all findings resolved.
 
 ## Problem
 
@@ -61,10 +61,29 @@ keep auto-approving so unattended runs keep working.
   `node_modules` (a pathspec exclusion such as `git diff -- . ':!node_modules'`) is unchanged
   (spec review 2, F3).
 - `dumb_score` in guarded-execution results becomes 75 for an `AskAlways` prompt where it was
-  absent (0, omitted). That reaches the `/v2` run response, A2A results, `axis task run` JSON
-  and the agent's run payload. It is a value change in an existing optional field, listed here
-  and in `docs/current-state.md` (spec review 2, F5). The MCP `verify_execution_safety` output
-  does not gain `AskAlways`.
+  absent (0, omitted), and `block_reason` carries the rule's reason on a result that is not
+  blocked. Both reach the `/v2` run response, A2A results, `axis task run` JSON and the agent's
+  run payload. The MCP `verify_execution_safety` output does not gain `AskAlways`, but its
+  `matched_rule` now names the `AskAlways` rule where it used to name the fallback or the
+  null-redirect rule (`cd /tmp && git push`, `git push > /dev/null`). These value changes in
+  existing optional fields are listed here and in `docs/current-state.md` (spec review 2, F5;
+  diff review A, F4).
+- Only these spellings are matched (revision 4, diff review B F1). The safety parser does not
+  look through:
+  - command wrappers (`env`, `command`, `exec`, `nice`, `timeout`, `xargs`);
+  - `sh -c` / `bash -c` strings;
+  - globs and shell variables;
+  - an uppercase program name;
+  - tab separators;
+  - an SSH config file written with `write_file` and used with `ssh -F`.
+
+  These still auto-run under full autonomy when spelled that way. Tab separators also bypass
+  every program and argument rule, deny rules included; that predates this change (diff
+  review B, F5). Fixing them changes how every command is parsed, which is follow-up work.
+- Skipping git's global options lets `git -C <repo> status` and `git -C <repo> commit` match
+  `git-safe` and `git-modify` like their plain forms. Edit mode and `--auto-approve` now
+  auto-approve them, as they already do the plain forms, where they used to ask as unknown
+  commands.
 - No new flag, config key, state file or session-log field.
 - No complete list of risky commands. The three new rules cover the logged cases; other unknown
   risky commands still auto-run under full autonomy, as today.
@@ -118,10 +137,28 @@ keep auto-approving so unattended runs keep working.
      option also asks; accepted.
    - `dependency-tree`: programs `cd`, `pushd`, `cp`, `mv`, `tee`, `patch`, `ln`; raw pattern
      `node_modules`. Category modify, priority 90.
-   - `dependency-tree-git`: program `git`, argument patterns `*-C *node_modules*`,
-     `*--git-dir*node_modules*` and `*--work-tree*node_modules*`. Category modify, priority 90,
-     above `git-safe` (85) and `git-modify` (80). So git run inside the tree asks, and a git
-     command that only names `node_modules` as a pathspec does not (spec review 2, F3).
+   - `dependency-tree-git`: program `git`, and a directory git runs in contains
+     `node_modules`. The directories are the values of `-C` (separate or attached),
+     `--git-dir` and `--work-tree` (separate or `=`), and the `GIT_DIR` and `GIT_WORK_TREE`
+     environment prefixes (`Rule.WorkDirPatterns`). Category modify, priority 90, above
+     `git-safe` (85) and `git-modify` (80). So git run inside the tree asks. A git command that
+     only names `node_modules` as a pathspec, in a message or after `git log -C` (copy
+     detection) does not (spec review 2, F3; revision 4, diff reviews A F1 and B F2).
+   - **Spellings** (revision 4, diff review B F1):
+     - For git, argument patterns see the subcommand after git's global options (`-C`, `-c`,
+       `--git-dir`, `--work-tree`, `--no-pager` and other value-less flags), so
+       `git -C /repo push` matches `git-push`.
+     - For `systemctl`, `launchctl` and `service`, leading options are skipped, so
+       `systemctl --user restart x` matches `service-mgmt`, which also covers
+       `brew services start|stop|restart|run`.
+     - `curl-post` matches its upload and method options anywhere in the arguments:
+       `-X`/`-XPOST`/`--request` with POST, PUT, DELETE or PATCH, `--data`, `-d`, `-F`/`--form`,
+       `-T`/`--upload-file`, and wget's `--post-data`, `--post-file`, `--method`, `--body-*`.
+       A GET request keeps `curl-get`.
+     - `AskAlways` raw patterns also drop backslashes, so `StrictHostKeyChecking\=no` and
+       `cd node\_modules` match.
+     - The five existing `AskAlways` rules gain a description, so the confirm shows a reason
+       (diff review A, F3).
    - Other programs are unchanged, so `./node_modules/.bin/eslint .`, `grep -rn foo
      node_modules/`, `npm test`, `ls` and `cat` keep their current verdicts. `vendor/`, `.venv/`
      and `site-packages/` are not covered: no logged case needs them, and Go and PHP `vendor/`
@@ -275,8 +312,9 @@ Verdict: approve-with-changes
    searches below a non-`AskAlways` prompt for an `AskAlways` one, as `firstDeny` does (Design
    1); tests added.
 2. Minor: quoted values and repeated spaces in the ssh option are missed. Fixed: `AskAlways` raw
-   patterns are matched with quotes removed, whitespace collapsed and option values joined by
-   `=` (Design 5); the three spellings added to the tests.
+   patterns are matched with quotes removed, whitespace collapsed and spaces around `=` dropped,
+   and the space form is its own pattern (Design 5, revision 4); the three spellings added to
+   the tests.
 3. Minor: the dependency rule matched any git command mentioning `node_modules`, including
    pathspec exclusions. Fixed: git is a separate rule matching only `-C`, `--git-dir` and
    `--work-tree` into the tree; `git diff -- . ':!node_modules'` added as a guard; Non-goals
@@ -302,3 +340,67 @@ Questions:
   gates take their score from `safety.Check`.
 
 Note: every spec-review finding is resolved; code starts.
+
+Kind: diff
+Reviewer: fresh-context subagent A (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: b80fcb5b3925b49621e914c35080826e9cceb527
+Head: 6fe1a988857e39af694306fc3895c8348a02686b
+Date: 2026-11-06
+Verdict: approve-with-changes
+
+1. Minor: `dependency-tree-git` matched any git command with `-C` and a later `node_modules`
+   (`git -C /repo diff -- . ':!node_modules'`, `git log -C -- node_modules/x`). Fixed: the
+   rule matches the directories git runs in (`WorkDirPatterns`), not the joined arguments; both
+   commands are regression guards.
+2. Minor: spec-listed tests were missing (the two logged shapes and `ls` through
+   `axis_run_task`; edit and default at 70). Fixed: added to
+   `TestFullAutonomyRunTaskAsksForSpecificRisks` and `TestEditAndDefaultModesAskAtSeventy`.
+3. Minor: the `axis_run_task` confirm showed an empty reason, twice. Fixed: the five existing
+   `AskAlways` rules have descriptions, and the score warning carries the `safety why:` label
+   so the reason appears once; the test checks the count.
+4. Minor: `block_reason` on non-blocked results and the MCP `matched_rule` changes were not
+   listed. Fixed: both are in Non-goals and `docs/current-state.md`.
+
+Questions:
+- Is the attached `git -Cnode_modules/x` form worth covering? Became Design 5: attached `-C`
+  values are read; tested.
+- Do the change tests fail without their change? Verified: diff review B's mutation harness
+  found every change test failing under its mutation, except the three `AskAlways` flags with
+  no test, which review B F3 fixed.
+
+Kind: diff
+Reviewer: fresh-context subagent B (Claude Code)
+Model: Anthropic Claude (same family as the author; fresh session)
+Base: b80fcb5b3925b49621e914c35080826e9cceb527
+Head: 6fe1a988857e39af694306fc3895c8348a02686b
+Date: 2026-11-06
+Verdict: approve-with-changes
+
+1. Major: other spellings of the `AskAlways` rules still auto-run (`git -C /repo push`,
+   `curl -XPOST`, `systemctl --user restart`, `GIT_DIR=node_modules/...`, backslash escapes).
+   Fixed for the matcher-level forms: git global options and env, curl/wget options anywhere,
+   service options, `brew services`, backslashes (Design 5, revision 4); each tested. Declined
+   for wrappers (`env`, `command`, `nice`, `xargs`), `sh -c`, globs, variables, uppercase names
+   and `ssh -F`: they need a change to how every command is parsed, so they are listed in
+   Non-goals as not matched, per review B's own alternative.
+2. Minor: `dependency-tree-git` asked for read-only git commands that only name `node_modules`.
+   Fixed with A F1: work-directory matching; pathspec, message and `log -C` guards added.
+3. Minor: three `AskAlways` flags and two end-to-end cases had no test. Fixed: `systemctl
+   restart`, `ollama run`, `git push --force` assert their rule and `AskAlways`; the two shapes
+   run through `axis_run_task`.
+4. Minor: the spec status was stale. Fixed: revision 4, and the review-2 F2 resolution text
+   corrected.
+5. Major (pre-existing): tab-separated words bypass every program and argument rule, deny
+   rules included. Declined: the same at Base and outside this spec; listed in Non-goals as
+   follow-up parser work and in the PR body.
+
+Questions:
+- Edit autonomy approves `axis_run_task` at score 0 even with `--auto-approve`. Open:
+  predates this change and is outside it; the spec keeps edit mode unchanged at 0.
+- `persistA2ARun` falls back to `BlockReason` when `Error` is empty, so a failed `AskAlways` run
+  could report the rule as its failure reason. Open: needs a guarded-execution failure fixture;
+  noted in the PR body.
+- Should `write_file` of an SSH config followed by `ssh -F` count? Became Non-goals: not matched.
+
+Note: every diff-review finding is resolved or declined with a reason; merge needs the maintainer's go.

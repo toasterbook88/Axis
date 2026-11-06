@@ -66,6 +66,8 @@ type Rule struct {
 	// AskAlways marks a prompt rule that flags a specific risk: full
 	// autonomy asks the operator for it instead of auto-approving.
 	AskAlways bool `yaml:"ask_always" json:"ask_always,omitempty"`
+	// WorkDirPatterns match the directories git runs in (segment.workDirs).
+	WorkDirPatterns []string `yaml:"work_dir_patterns" json:"work_dir_patterns,omitempty"`
 }
 
 // RuleSet is an ordered collection of safety rules.
@@ -91,7 +93,7 @@ func DefaultRuleSet() RuleSet {
 
 			// AI/ML runtime commands
 			{Name: "ollama-safe", Programs: []string{"ollama"}, ArgPatterns: []string{"list", "show *", "ps"}, Category: CategoryReadOnly, Verdict: VerdictAllow, Priority: 85},
-			{Name: "ollama-run", Programs: []string{"ollama"}, ArgPatterns: []string{"run *", "pull *", "serve"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 80, AskAlways: true},
+			{Name: "ollama-run", Programs: []string{"ollama"}, ArgPatterns: []string{"run *", "pull *", "serve"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 80, AskAlways: true, Description: "runs, pulls or serves a model"},
 
 			// Build/dev commands — generally safe
 			{Name: "build-commands", Programs: []string{"make", "go", "cargo", "npm", "yarn", "swift", "xcodebuild"}, ArgPatterns: []string{"build*", "test*", "check*", "fmt*", "lint*", "vet*"}, Category: CategoryModify, Verdict: VerdictAllow, Priority: 80},
@@ -107,22 +109,22 @@ func DefaultRuleSet() RuleSet {
 			{Name: "chmod-dangerous", Programs: []string{"chmod"}, ArgPatterns: []string{"777 *", "+s *", "u+s *"}, Category: CategoryPrivilegeEscalate, Verdict: VerdictDeny, Priority: 185},
 
 			// Network-mutating — prompt
-			{Name: "curl-post", Programs: []string{"curl", "wget"}, ArgPatterns: []string{"-X POST*", "-X PUT*", "-X DELETE*", "--data*", "-d *"}, Category: CategoryNetworkMutating, Verdict: VerdictPrompt, Priority: 70, AskAlways: true},
+			{Name: "curl-post", Programs: []string{"curl", "wget"}, ArgPatterns: anywhere("-X POST", "-X PUT", "-X DELETE", "-X PATCH", "-XPOST", "-XPUT", "-XDELETE", "-XPATCH", "--request POST", "--request PUT", "--request DELETE", "--request PATCH", "--request=POST", "--request=PUT", "--request=DELETE", "--request=PATCH", "--data", "-d ", "-F ", "--form", "-T ", "--upload-file", "--post-data", "--post-file", "--method=POST", "--method=PUT", "--method=DELETE", "--method=PATCH", "--method POST", "--method PUT", "--method DELETE", "--method PATCH", "--body-data", "--body-file"), Category: CategoryNetworkMutating, Verdict: VerdictPrompt, Priority: 70, AskAlways: true, Description: "sends data or changes a remote resource"},
 			{Name: "curl-get", Programs: []string{"curl", "wget"}, Category: CategoryReadOnly, Verdict: VerdictAllow, Priority: 60},
 
 			// Service management — prompt
-			{Name: "service-mgmt", Programs: []string{"systemctl", "launchctl", "service", "brew"}, ArgPatterns: []string{"start*", "stop*", "restart*", "enable*", "disable*", "install*", "uninstall*"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 75, AskAlways: true},
+			{Name: "service-mgmt", Programs: []string{"systemctl", "launchctl", "service", "brew"}, ArgPatterns: []string{"start*", "stop*", "restart*", "enable*", "disable*", "install*", "uninstall*", "services start*", "services stop*", "services restart*", "services run*"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 75, AskAlways: true, Description: "starts, stops or installs a service"},
 
 			// Git — mostly safe except force push
 			{Name: "git-safe", Programs: []string{"git"}, ArgPatterns: []string{"status", "log*", "diff*", "branch*", "show*", "remote*", "fetch*", "stash*"}, Category: CategoryReadOnly, Verdict: VerdictAllow, Priority: 85},
 			{Name: "git-modify", Programs: []string{"git"}, ArgPatterns: []string{"add*", "commit*", "pull*", "merge*", "rebase*", "checkout*", "switch*"}, Category: CategoryModify, Verdict: VerdictAllow, Priority: 80},
-			{Name: "git-force-push", Programs: []string{"git"}, ArgPatterns: []string{"push --force*", "push -f*"}, Category: CategoryDestructive, Verdict: VerdictPrompt, Priority: 150, AskAlways: true},
-			{Name: "git-push", Programs: []string{"git"}, ArgPatterns: []string{"push*"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 75, AskAlways: true},
+			{Name: "git-force-push", Programs: []string{"git"}, ArgPatterns: []string{"push --force*", "push -f*"}, Category: CategoryDestructive, Verdict: VerdictPrompt, Priority: 150, AskAlways: true, Description: "force-pushes to a git remote"},
+			{Name: "git-push", Programs: []string{"git"}, ArgPatterns: []string{"push*"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 75, AskAlways: true, Description: "pushes to a git remote"},
 
 			// Specific risks found in the agent session log; they ask even under full autonomy.
 			{Name: "ssh-host-key-off", RawPatterns: []string{"stricthostkeychecking=no", "stricthostkeychecking no", "stricthostkeychecking=off", "stricthostkeychecking off", "stricthostkeychecking=false", "stricthostkeychecking false", "userknownhostsfile=/dev/null", "userknownhostsfile /dev/null"}, Category: CategoryNetworkMutating, Verdict: VerdictPrompt, Priority: 160, AskAlways: true, Description: "SSH host-key checking turned off"},
 			{Name: "dependency-tree", Programs: []string{"cd", "pushd", "cp", "mv", "tee", "patch", "ln"}, RawPatterns: []string{"node_modules"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 90, AskAlways: true, Description: "working inside node_modules"},
-			{Name: "dependency-tree-git", Programs: []string{"git"}, ArgPatterns: []string{"*-C *node_modules*", "*--git-dir*node_modules*", "*--work-tree*node_modules*"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 90, AskAlways: true, Description: "git run inside node_modules"},
+			{Name: "dependency-tree-git", Programs: []string{"git"}, WorkDirPatterns: []string{"node_modules"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 90, AskAlways: true, Description: "git run inside node_modules"},
 
 			// Legacy hardblocks migrated from blocker.go
 			{Name: "legacy-hardblock-dev-null", RawPatterns: []string{"> /dev/null"}, Category: CategoryModify, Verdict: VerdictPrompt, Priority: 220, Description: "redirecting output to null"},
@@ -216,20 +218,19 @@ func (e *Evaluator) evaluateSegment(rawCmd string, surface string) Decision {
 		EvalAt:  time.Now(),
 	}
 
-	joinedArgs := strings.Join(args, " ")
-	lowerCmd := strings.ToLower(rawCmd)
+	seg := newSegment(rawCmd, program, args)
 
 	for i, rule := range e.rules {
-		if !ruleMatches(rule, surface, program, joinedArgs, lowerCmd) {
+		if !ruleMatches(rule, surface, seg) {
 			continue
 		}
 		// A lower-priority deny still wins over an allow or prompt match, and a
 		// lower-priority AskAlways prompt over a prompt that flags no specific risk.
 		if rule.Verdict != VerdictDeny {
-			if deny, ok := firstDeny(e.rules[i+1:], surface, program, joinedArgs, lowerCmd); ok {
+			if deny, ok := firstDeny(e.rules[i+1:], surface, seg); ok {
 				rule = deny
 			} else if rule.Verdict == VerdictPrompt && !rule.AskAlways {
-				if ask, ok := firstAskAlways(e.rules[i+1:], surface, program, joinedArgs, lowerCmd); ok {
+				if ask, ok := firstAskAlways(e.rules[i+1:], surface, seg); ok {
 					rule = ask
 				}
 			}

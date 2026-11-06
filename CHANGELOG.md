@@ -25,7 +25,12 @@
   no rule recognizes, and `> /dev/null` redirects, still auto-approve. A
   specific rule now wins over the unknown-command rule across `&&` segments and
   over the null-redirect rule within one, so `git push > /dev/null` asks too.
-  The two new rules also make those commands ask in default and edit modes.
+  Git rules look past git's global options (`git -C <repo> push` asks; `git -C
+  <repo> status` is now allowed like `git status` in edit mode), and curl/wget
+  upload options match anywhere in the command. Command wrappers (`env`,
+  `sh -c`, `xargs`, …), globs, variables and tab separators are not looked
+  through. The two new rules also make those commands ask in default and edit
+  modes.
   `dumb_score` in guarded-execution results is 75 for these commands, and a
   `-p` run reports them as needing an interactive approval.
 

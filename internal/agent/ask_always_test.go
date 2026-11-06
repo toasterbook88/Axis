@@ -116,14 +116,35 @@ func TestFullAutonomyRunTaskAsksForSpecificRisks(t *testing.T) {
 	if len(rec.asked) != 2 || *runs != 2 {
 		t.Fatalf("asked %d, ran %d; want an ask before each of two runs", len(rec.asked), *runs)
 	}
-	if !strings.Contains(rec.asked[0], "git-push") {
-		t.Fatalf("confirm text %q does not show the rule's reason", rec.asked[0])
+	if strings.Count(rec.asked[0], "git-push") != 1 || !strings.Contains(rec.asked[0], "pushes") {
+		t.Fatalf("confirm text %q should show the rule and its description once", rec.asked[0])
 	}
 
-	plain := &askRecorder{answer: ConfirmNo}
-	b, plainRuns := runTaskAgent(plain)
-	if _, err := b.dispatchRunTask(context.Background(), json.RawMessage(`{"description":"foo --bar"}`)); err != nil || len(plain.asked) != 0 || *plainRuns != 1 {
-		t.Fatalf("unknown command: err %v, asked %d, ran %d; want run without asking", err, len(plain.asked), *plainRuns)
+	// The two logged shapes ask; ls with or without a null redirect does not.
+	for _, cmd := range []string{"ssh -o StrictHostKeyChecking=no h true", "cd node_modules/x && git checkout v1"} {
+		r := &askRecorder{answer: ConfirmNo}
+		c, _ := runTaskAgent(r)
+		_, _ = c.dispatchRunTask(context.Background(), json.RawMessage(mustJSON(t, map[string]any{"description": cmd})))
+		if len(r.asked) != 1 {
+			t.Errorf("%q through axis_run_task asked %d times, want 1", cmd, len(r.asked))
+		}
+	}
+	for _, cmd := range []string{"foo --bar", "ls", "ls > /dev/null"} {
+		plain := &askRecorder{answer: ConfirmNo}
+		b, plainRuns := runTaskAgent(plain)
+		if _, err := b.dispatchRunTask(context.Background(), json.RawMessage(mustJSON(t, map[string]any{"description": cmd}))); err != nil || len(plain.asked) != 0 || *plainRuns != 1 {
+			t.Errorf("%q: err %v, asked %d, ran %d; want run without asking", cmd, err, len(plain.asked), *plainRuns)
+		}
+	}
+}
+
+// Edit and default modes keep asking at 70, as before.
+func TestEditAndDefaultModesAskAtSeventy(t *testing.T) {
+	for _, mode := range []AutonomyMode{AutonomyEdit, AutonomyDefault} {
+		rec := &recorderConfirm{}
+		if got := autonomyConfirm(mode, rec.confirm)("run_shell", "x", 70); got != ConfirmNo || !rec.called {
+			t.Errorf("%s mode at score 70: %v (fallback %v), want the fallback", mode, got, rec.called)
+		}
 	}
 }
 
