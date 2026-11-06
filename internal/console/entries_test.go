@@ -287,6 +287,27 @@ func TestToolEntrySuccessReceipt(t *testing.T) {
 	}
 }
 
+func TestToolEntryDurationIsOnlyOnTheReceipt(t *testing.T) {
+	e := NewToolEntry(fixedToolTime, "call-1", "axis_facts", "5 nodes ok")
+	e.Elapsed = 124 * time.Millisecond
+	e.Badge = "cached"
+
+	lines := e.Render(80)
+	if len(lines) < 2 {
+		t.Fatalf("want a title and a receipt, got %d lines", len(lines))
+	}
+	head := lines[0].Plain()
+	if strings.Contains(head, "elapsed") || strings.Contains(head, "124ms") {
+		t.Fatalf("title repeats the duration: %q", head)
+	}
+	if !strings.Contains(head, "axis_facts") || !strings.Contains(head, "5 nodes ok") || !strings.Contains(head, "cached") {
+		t.Fatalf("title lost the outcome: %q", head)
+	}
+	if !strings.Contains(lines[1].Plain(), "(124ms elapsed)") {
+		t.Fatalf("receipt: %q", lines[1].Plain())
+	}
+}
+
 func TestToolEntryNoReceiptForPendingOnly(t *testing.T) {
 	e := NewToolEntry(fixedToolTime, "call-1", "axis_facts", "")
 

@@ -95,3 +95,87 @@ func TestPendingToolRowStopsBeforeTheEdge(t *testing.T) {
 		t.Fatalf("in-flight tool style = %v, want accent", lines[0].Style)
 	}
 }
+
+func TestLiveTurnAnswerReplacesThinking(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>secret plan</think>Cluster is operational."})
+
+	view := m.View()
+	if strings.Contains(view, "secret") || strings.Contains(view, "thinking") || strings.Contains(view, "working") {
+		t.Fatalf("answer phase:\n%s", view)
+	}
+	if !strings.Contains(view, "Cluster is operational.") {
+		t.Fatalf("answer missing:\n%s", view)
+	}
+}
+
+func TestLiveTurnListsEachTool(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m = apply(m,
+		ToolPendingMsg{Turn: 1, ID: "a", Name: "axis_facts"},
+		ToolPendingMsg{Turn: 1, ID: "b", Name: "remote_grep"},
+	)
+
+	lines := m.liveActivity()
+	if len(lines) != 2 {
+		t.Fatalf("want one row per tool, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0].Text, "axis_facts") || !strings.Contains(lines[1].Text, "remote_grep") {
+		t.Fatalf("tool order: %q / %q", lines[0].Text, lines[1].Text)
+	}
+	if strings.Contains(m.View(), "working") {
+		t.Fatalf("two tools also say working:\n%s", m.View())
+	}
+}
+
+func TestStreamedAnswerStopsBeforeTheEdge(t *testing.T) {
+	m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	m = startTurnFor(t, m)
+	m.width = 20
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: strings.Repeat("alpha ", 30)})
+
+	sawAnswer := false
+	for _, line := range strings.Split(stripANSI(m.View()), "\n") {
+		if got := visibleWidth(line); got > m.ephemeralBudget() {
+			t.Fatalf("line width %d > budget %d: %q", got, m.ephemeralBudget(), line)
+		}
+		if strings.Contains(line, "alpha") {
+			sawAnswer = true
+		}
+	}
+	if !sawAnswer {
+		t.Fatal("streamed answer was not drawn")
+	}
+	if strings.Contains(m.View(), "working") {
+		t.Fatalf("streamed answer also says working:\n%s", m.View())
+	}
+}
+
+func TestViewFooterMatchesUnicodeGate(t *testing.T) {
+	footer := NewStatusFooter(StatusFooterConfig{
+		Model:      func() string { return "mid" },
+		UsedTokens: func() int { return 2500 },
+		MaxTokens:  func() int { return 10000 },
+	})
+
+	ascii := NewModel(Options{Footer: footer, Unicode: false})
+	ascii.width = 100
+	asciiText := stripANSI(ascii.View())
+	for _, glyph := range []string{"█", "░", "─", "·"} {
+		if strings.Contains(asciiText, glyph) {
+			t.Fatalf("ascii view contains %q:\n%s", glyph, asciiText)
+		}
+	}
+	if !strings.Contains(asciiText, "context: [") || !strings.Contains(asciiText, "=") {
+		t.Fatalf("ascii context bar missing:\n%s", asciiText)
+	}
+
+	uni := NewModel(Options{Footer: footer, Unicode: true})
+	uni.width = 100
+	uniText := stripANSI(uni.View())
+	if !strings.Contains(uniText, "█") || !strings.Contains(uniText, "─") {
+		t.Fatalf("unicode view dropped the block bar:\n%s", uniText)
+	}
+}
