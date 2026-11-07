@@ -15,10 +15,11 @@ type segment struct {
 // "git -C /repo push" matches the git-push rule; the directories those
 // options name are kept for WorkDirPatterns. For service managers, leading
 // options are skipped, so "systemctl --user restart x" matches. Other
-// programs keep their arguments as parsed.
+// programs keep their arguments as parsed. Dispatch is case-insensitive
+// because a case-insensitive filesystem (macOS) runs "Git" as git.
 func newSegment(raw, program string, args []string) segment {
 	s := segment{program: program, lowerCmd: strings.ToLower(raw)}
-	switch program {
+	switch strings.ToLower(program) {
 	case "git":
 		args, s.workDirs = gitSubcommand(args)
 		s.workDirs = append(s.workDirs, gitEnvDirs(raw)...)

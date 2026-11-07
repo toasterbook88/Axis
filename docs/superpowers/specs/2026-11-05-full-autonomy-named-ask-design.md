@@ -73,13 +73,14 @@ keep auto-approving so unattended runs keep working.
   - command wrappers (`env`, `command`, `exec`, `nice`, `timeout`, `xargs`);
   - `sh -c` / `bash -c` strings;
   - globs and shell variables;
-  - an uppercase program name;
-  - tab separators;
   - an SSH config file written with `write_file` and used with `ssh -F`.
 
-  These still auto-run under full autonomy when spelled that way. Tab separators also bypass
-  every program and argument rule, deny rules included; that predates this change (diff
-  review B, F5). Fixing them changes how every command is parsed, which is follow-up work.
+  These still auto-run under full autonomy when spelled that way. Tab separators and uppercase
+  program names, which bypassed every program and argument rule, deny rules included (diff
+  review B, F5), are fixed in the follow-up `fix(safety): split on shell blanks and match
+  program names case-insensitively`. The parser splits words on space and tab as a shell does
+  (other Unicode spaces stay inside the word), and compares program names case-insensitively,
+  including the program-specific handling for git and service managers.
 - Skipping git's global options lets `git -C <repo> status` and `git -C <repo> commit` match
   `git-safe` and `git-modify` like their plain forms. Edit mode and `--auto-approve` now
   auto-approve them, as they already do the plain forms, where they used to ask as unknown
