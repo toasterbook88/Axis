@@ -11,12 +11,15 @@
 
 ### Fixes
 
-* **Behaviour change:** the safety evaluator splits command words on any
-  whitespace and matches program names case-insensitively. A tab between
-  words (`rm<TAB>-rf<TAB>dir`) or an uppercase program name (`Rm -rf dir`,
+* **Behaviour change:** the safety evaluator splits command words on shell
+  blanks (space and tab) and matches program names case-insensitively,
+  including program-specific handling (git global options, `GIT_DIR` /
+  `GIT_WORK_TREE`, service-manager options). A tab between words
+  (`rm<TAB>-rf<TAB>dir`) or an uppercase program name (`Rm -rf dir`,
   which a case-insensitive filesystem runs as `rm`) used to miss every
   program and argument rule, deny rules included, and fall to the
   unknown-command rule. They now get the same verdict as the plain spelling.
+  Other Unicode spaces stay part of the word, as in a shell.
 
 * **Behaviour change:** `axis agent` fits every request to the model's context
   window. The budget is the smallest of `--max-tokens`, the served window the

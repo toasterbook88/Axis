@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // Category classifies the risk level of a command.
@@ -412,6 +411,9 @@ func parseCommand(raw string) (string, []string) {
 
 // shellSplit does basic shell-style word splitting.
 // Handles single and double quotes but not full POSIX parsing.
+// Only shell blanks (space, tab) split words. Other Unicode spaces such as
+// U+00A0 are ordinary characters in a shell, so
+// "git -C /tmp/repo\u00a0log push" keeps that directory as one word.
 func shellSplit(s string) []string {
 	parts := make([]string, 0, 8)
 	var current strings.Builder
@@ -438,7 +440,7 @@ func shellSplit(s string) []string {
 		case r == '"' && !inSingle:
 			inDouble = !inDouble
 			wordStarted = true
-		case unicode.IsSpace(r) && !inSingle && !inDouble: // tabs split words too, as in a shell
+		case (r == ' ' || r == '	') && !inSingle && !inDouble: // shell blanks only, as in a shell
 			if wordStarted {
 				parts = append(parts, current.String())
 				current.Reset()
