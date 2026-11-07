@@ -189,6 +189,13 @@ func (m Model) embeddedFrame(live []Line) string {
 	return PaintAll(append(view, live...))
 }
 
+// ScrollMsg moves the embedded transcript by Lines. Positive lifts the view
+// toward older lines, the same direction as pgup. The standalone console has
+// no in-frame transcript and ignores it. A host sends this for the mouse
+// wheel so the wheel does not walk the input history. While an overlay is
+// open, one message becomes one up or down key for that overlay.
+type ScrollMsg struct{ Lines int }
+
 // SetInputMsg replaces the composer's draft, cursor at the end. A host uses it
 // to hand the operator a prefilled question; nothing is submitted.
 type SetInputMsg struct{ Text string }

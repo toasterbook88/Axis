@@ -9,7 +9,7 @@ CHAT-PANE                                                                       
                               │   Conversation                                          │
                               │   enter           send                                  │
                               │   esc             cancel a running turn                 │
-                              │   pgup  pgdown    scroll the conversation               │
+                              │   pgup  wheel     scroll the conversation               │
                               │   @node           complete a node name                  │
                               │   /  !            slash command  ·  shell command       │
                               │   ctrl+c ctrl+c   quit                                  │

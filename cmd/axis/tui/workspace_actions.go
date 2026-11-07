@@ -159,7 +159,7 @@ func renderWorkspaceHelp(g glyphSet) string {
 		styleBold.Render("Conversation"),
 		row("enter", "send"),
 		row("esc", "cancel a running turn"),
-		row("pgup  pgdown", "scroll the conversation"),
+		row("pgup  wheel", "scroll the conversation"),
 		row("@node", "complete a node name"),
 		row("/  !", "slash command  ·  shell command"),
 		row("ctrl+c ctrl+c", "quit"),

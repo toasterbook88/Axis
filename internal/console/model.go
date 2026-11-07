@@ -413,7 +413,20 @@ func (m Model) stale(turn TurnID) bool {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// An overlay owns the keyboard, but not the whole message stream: work
 	// started before it opened must keep flowing into the transcript.
+	// The wheel is a ScrollMsg. Overlays only read keys, so one notch
+	// becomes one up or down key and is not also a transcript scroll.
+	// The sign matches pgup: positive lifts toward older lines.
 	if m.overlay != nil {
+		if scroll, ok := msg.(ScrollMsg); ok {
+			switch {
+			case scroll.Lines > 0:
+				msg = tea.KeyMsg{Type: tea.KeyUp}
+			case scroll.Lines < 0:
+				msg = tea.KeyMsg{Type: tea.KeyDown}
+			default:
+				return m, nil
+			}
+		}
 		updated, cmd := m.overlay.Update(msg)
 		if updated == nil || updated.Done() {
 			m.overlay = nil
@@ -452,6 +465,10 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 
 	case SetInputMsg:
 		return m.setInput(msg.Text), nil
+
+	case ScrollMsg:
+		m.scrollBy(msg.Lines)
+		return m, nil
 
 	case EntryMsg:
 		if m.stale(msg.Turn) {
