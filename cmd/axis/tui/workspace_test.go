@@ -77,6 +77,57 @@ func TestWorkspaceSizesChatBesideSidebar(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWheelScrollsChatNotHistory(t *testing.T) {
+	ws, chat := newTestWorkspace(t, 120, 30)
+	chat.got = nil
+	next, _ := ws.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	ws = next.(Workspace)
+	if len(chat.got) != 1 {
+		t.Fatalf("wheel delivered %#v", chat.got)
+	}
+	scroll, ok := chat.got[0].(console.ScrollMsg)
+	if !ok || scroll.Lines != wheelScrollLines {
+		t.Fatalf("wheel delivered %#v, want ScrollMsg{%d}", chat.got[0], wheelScrollLines)
+	}
+	chat.got = nil
+	next, _ = ws.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	ws = next.(Workspace)
+	scroll, ok = chat.got[0].(console.ScrollMsg)
+	if !ok || scroll.Lines != -wheelScrollLines {
+		t.Fatalf("wheel down delivered %#v", chat.got)
+	}
+	_ = wsKeys(t, ws, tea.KeyMsg{Type: tea.KeyUp})
+	if _, ok := chat.got[len(chat.got)-1].(tea.KeyMsg); !ok {
+		t.Fatalf("up key was not forwarded to the conversation: %#v", chat.got)
+	}
+}
+
+func TestWorkspaceWheelMovesDashboardCursor(t *testing.T) {
+	ws, chat := newTestWorkspace(t, 120, 40)
+	ws = wsKeys(t, ws, keyF2)
+	chat.got = nil
+	next, _ := ws.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	ws = next.(Workspace)
+	if ws.view != viewDashboard || ws.dash.cursor != 1 {
+		t.Fatalf("view %d cursor %d, want dashboard cursor 1", ws.view, ws.dash.cursor)
+	}
+	for _, msg := range chat.got {
+		switch msg.(type) {
+		case tea.KeyMsg, console.ScrollMsg:
+			t.Fatalf("dashboard wheel reached the conversation: %#v", msg)
+		}
+	}
+}
+
+func TestWorkspaceWheelDoesNotClearLeader(t *testing.T) {
+	ws, _ := newTestWorkspace(t, 120, 30)
+	ws = wsKeys(t, ws, keyCtrlX)
+	next, _ := ws.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if !next.(Workspace).leader {
+		t.Fatal("wheel cleared the leader")
+	}
+}
+
 func TestWorkspaceRoutesKeysToChat(t *testing.T) {
 	ws, chat := newTestWorkspace(t, 140, 40)
 	wsKeys(t, ws, runes("h"), runes("i"))
