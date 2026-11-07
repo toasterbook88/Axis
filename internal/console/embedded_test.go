@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,56 @@ func TestScrollMsgMovesTranscriptNotHistory(t *testing.T) {
 	m = feed(t, m, tea.KeyMsg{Type: tea.KeyUp})
 	if m.Input() != "previous prompt" {
 		t.Fatalf("up recalls %q, want the previous prompt", m.Input())
+	}
+}
+
+// An open picker or pager owns the wheel. One ScrollMsg is one up or down
+// key for that overlay. The transcript behind it stays put. A positive
+// line count lifts, matching pgup, so it is an up key.
+func TestScrollMsgMovesOpenOverlayNotTranscript(t *testing.T) {
+	m := embeddedModel(t, 60, 8)
+	for i := 0; i < 30; i++ {
+		m = feed(t, m, EntryMsg{Entry: NewNoticeEntry(m.now(), "entry-"+string(rune('A'+i%26))+string(rune('a'+i/26)))})
+	}
+	m = feed(t, m, ScrollMsg{Lines: 3})
+	if m.log.scroll != 3 {
+		t.Fatalf("setup scroll = %d, want 3", m.log.scroll)
+	}
+	picker := NewModelPickerOverlay("pick", []PickerItem{
+		{ID: "a", Label: "a"},
+		{ID: "b", Label: "b"},
+		{ID: "c", Label: "c"},
+	}, nil)
+	m = m.SetOverlay(picker)
+	m = feed(t, m, ScrollMsg{Lines: -3})
+	if m.log.scroll != 3 {
+		t.Fatalf("picker wheel moved the transcript to scroll %d", m.log.scroll)
+	}
+	got, ok := m.overlay.(*ModelPickerOverlay)
+	if !ok || got.Cursor() != 1 {
+		t.Fatalf("picker after wheel down = %#v", m.overlay)
+	}
+	m = feed(t, m, ScrollMsg{Lines: 3})
+	got, ok = m.overlay.(*ModelPickerOverlay)
+	if !ok || got.Cursor() != 0 {
+		t.Fatalf("picker after wheel up = %#v", m.overlay)
+	}
+	if m.log.scroll != 3 {
+		t.Fatalf("wheel up moved the transcript to scroll %d", m.log.scroll)
+	}
+
+	var body strings.Builder
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&body, "row-%02d\n", i)
+	}
+	m = m.SetOverlay(NewPagerOverlay("tool", body.String()))
+	m = feed(t, m, ScrollMsg{Lines: -3})
+	pager, ok := m.overlay.(*PagerOverlay)
+	if !ok || pager.top != 1 {
+		t.Fatalf("pager after wheel down = %#v", m.overlay)
+	}
+	if m.log.scroll != 3 {
+		t.Fatalf("pager wheel moved the transcript to scroll %d", m.log.scroll)
 	}
 }
 
