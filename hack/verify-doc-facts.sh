@@ -76,7 +76,7 @@ lease_doc="$(grep -oE '[0-9]+ advisory lease' AGENTS.md | grep -oE '^[0-9]+' || 
 [[ $((ro_doc + lease_doc)) == "$total_doc" ]] \
   || fail "AGENTS.md MCP counts don't add up: $ro_doc read-only + $lease_doc lease != $total_doc total"
 
-for doc in docs/architecture.md docs/current-state.md docs/lifecycle.md; do
+for doc in README.md docs/architecture.md docs/current-state.md docs/lifecycle.md; do
   grep -qF "$ro_code read-only" "$doc" \
     || fail "$doc missing current MCP read-only tool count ($ro_code)"
   grep -qF "$lease_code advisory" "$doc" \
