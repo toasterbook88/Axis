@@ -67,7 +67,9 @@ Each transcript entry has a colored bar on its left edge:
 | yellow `┃` | an approval record |
 | red `┃` | an error |
 
-`pgup` / `pgdown` scroll half a pane and `shift+↑` / `shift+↓` one line. New
+`pgup` / `pgdown` scroll half a pane and `shift+↑` / `shift+↓` one line. The
+mouse wheel scrolls the conversation three lines at a time. It does not walk
+the input history; `↑` / `↓` still do that. Shift-drag selects text. New
 output follows the bottom unless you have scrolled up; a `↓ N more line(s)
 below` marker says how far. The transcript re-wraps when the window resizes.
 It keeps the most recent 5,000 entries; older ones are dropped from the view.

@@ -69,9 +69,21 @@ func TestConsoleUsesTheMainScreen(t *testing.T) {
 		t.Errorf("teaOptions() returned %d options, want 1 (context only)", got)
 	}
 
+	if opts.Mouse {
+		t.Fatal("standalone console enabled the mouse; the terminal scrollback would be captured")
+	}
+
 	alt := consoleProgramOptions{AltScreen: true, Context: context.Background()}
 	if got := len(alt.teaOptions()); got != 2 {
 		t.Errorf("alt-screen config produced %d options, want 2", got)
+	}
+
+	ws := workspaceProgramOptions(context.Background())
+	if !ws.AltScreen || !ws.Mouse {
+		t.Fatalf("workspace options = %+v, want alternate screen and mouse", ws)
+	}
+	if got := len(ws.teaOptions()); got != 3 {
+		t.Errorf("workspace teaOptions() returned %d options, want 3", got)
 	}
 }
 

@@ -67,6 +67,32 @@ func TestEmbeddedFrameIsExactlyPaneHeight(t *testing.T) {
 	}
 }
 
+// The wheel is a ScrollMsg, not an up key, so the transcript moves and the
+// prompt history stays put until an actual up key.
+func TestScrollMsgMovesTranscriptNotHistory(t *testing.T) {
+	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	m := NewModel(Options{
+		Embedded: true,
+		History:  []string{"previous prompt"},
+		Now:      func() time.Time { return fixed },
+	})
+	m = feed(t, m, tea.WindowSizeMsg{Width: 60, Height: 8})
+	for i := 0; i < 30; i++ {
+		m = feed(t, m, EntryMsg{Entry: NewNoticeEntry(m.now(), "entry-"+string(rune('A'+i%26))+string(rune('a'+i/26)))})
+	}
+	m = feed(t, m, ScrollMsg{Lines: 3})
+	if m.Input() != "" {
+		t.Fatalf("scroll changed the prompt to %q", m.Input())
+	}
+	if m.log.scroll != 3 || !strings.Contains(m.View(), "more line(s) below") {
+		t.Fatalf("scroll = %d, transcript did not lift:\n%s", m.log.scroll, m.View())
+	}
+	m = feed(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.Input() != "previous prompt" {
+		t.Fatalf("up recalls %q, want the previous prompt", m.Input())
+	}
+}
+
 // pgup lifts the view to older entries; pgdown returns to the newest.
 func TestEmbeddedScroll(t *testing.T) {
 	m := embeddedModel(t, 60, 8)

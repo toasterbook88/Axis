@@ -832,9 +832,14 @@ func (refusingSelector) Select(context.Context, string, []ui.SelectOption) (ui.S
 // alternate screen is active, and tea.Println is the only path by which
 // transcript content reaches scrollback.
 type consoleProgramOptions struct {
-	// AltScreen must stay false. See above.
+	// AltScreen must stay false for the standalone console. See above.
+	// The workspace sets it because the transcript is drawn in-frame.
 	AltScreen bool
-	Context   context.Context
+	// Mouse enables wheel and click events. The workspace sets it so the
+	// wheel scrolls the conversation. The standalone console leaves it off
+	// so the terminal keeps its own scrollback and text selection.
+	Mouse   bool
+	Context context.Context
 }
 
 func consoleOptions(ctx context.Context) consoleProgramOptions {
@@ -847,7 +852,17 @@ func (o consoleProgramOptions) teaOptions() []tea.ProgramOption {
 	if o.AltScreen {
 		opts = append(opts, tea.WithAltScreen())
 	}
+	if o.Mouse {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
 	return opts
+}
+
+// workspaceProgramOptions is the full-screen workspace: alternate screen,
+// because the transcript is drawn in-frame, and mouse tracking, so the wheel
+// is a mouse event instead of an up or down key.
+func workspaceProgramOptions(ctx context.Context) consoleProgramOptions {
+	return consoleProgramOptions{AltScreen: true, Mouse: true, Context: ctx}
 }
 
 // runAgentConsole starts the transcript console. It returns when the operator

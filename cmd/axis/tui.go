@@ -84,7 +84,7 @@ Examples:
 func newWorkspaceProgram(ctx context.Context, opts console.Options) consoleProgram {
 	opts.Embedded = true
 	ws := tui.NewWorkspace(console.NewModel(opts))
-	return tea.NewProgram(ws, append(consoleOptions(ctx).teaOptions(), tea.WithAltScreen())...)
+	return tea.NewProgram(ws, workspaceProgramOptions(ctx).teaOptions()...)
 }
 
 func runDashboard() error {

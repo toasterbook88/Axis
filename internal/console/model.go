@@ -453,6 +453,10 @@ func (m Model) route(msg tea.Msg) (Model, tea.Cmd) {
 	case SetInputMsg:
 		return m.setInput(msg.Text), nil
 
+	case ScrollMsg:
+		m.scrollBy(msg.Lines)
+		return m, nil
+
 	case EntryMsg:
 		if m.stale(msg.Turn) {
 			return m, nil
