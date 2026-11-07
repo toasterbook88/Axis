@@ -10,9 +10,9 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ## v0.23.0 upgrade guide
 
-This section describes the v0.23.0 source candidate. Consult
-[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
-and downloads; a versioned changelog is not proof of publication. Changes since
+[v0.23.0](https://github.com/toasterbook88/axis/releases/tag/v0.23.0) was published
+from commit `3abc279`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
 v0.22.0 are listed in the [changelog](../CHANGELOG.md#v0230-2026-11-05).
 There is no required YAML migration. These changes can alter what an existing
 setup sees.
@@ -73,9 +73,9 @@ See `docs/runbooks/tui.md`.
 
 ## v0.22.0 upgrade guide
 
-This section describes the v0.22.0 source candidate. Consult
-[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
-and downloads; a versioned changelog is not proof of publication. Changes since
+[v0.22.0](https://github.com/toasterbook88/axis/releases/tag/v0.22.0) was published
+from commit `1493da2`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
 v0.21.0 are listed in the [changelog](../CHANGELOG.md#v0220-2026-10-28).
 There is no required YAML migration. These changes can alter what an existing
 setup sees.
@@ -140,9 +140,9 @@ unavailable.
 
 ## v0.21.0 upgrade guide
 
-This section describes the v0.21.0 source candidate. Consult
-[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
-and downloads; a versioned changelog is not proof of publication. Changes since
+[v0.21.0](https://github.com/toasterbook88/axis/releases/tag/v0.21.0) was published
+from commit `b15785c`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
 v0.20.0 are listed in the [changelog](../CHANGELOG.md#v0210-2026-10-23).
 There is no required YAML migration.
 
