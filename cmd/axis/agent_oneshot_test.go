@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/agent"
+	"github.com/toasterbook88/axis/internal/safety"
 )
 
 func TestPipedObserverBadges(t *testing.T) {
@@ -115,6 +116,27 @@ func TestPipedConfirmDeniesWithNotice(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "--auto-approve") || !strings.Contains(buf.String(), "--autonomy full") {
 		t.Fatalf("notice must point at the escape hatches:\n%s", buf.String())
+	}
+}
+
+// A specific safety rule's ask (score 75-79) cannot be cleared by a flag, so
+// its notice says an interactive approval is needed instead of pointing at
+// --autonomy full; other scores keep the flag hint.
+func TestPipedConfirmNamesSpecificSafetyRule(t *testing.T) {
+	var ask, other bytes.Buffer
+	pipedConfirm(&ask)("run_shell", "git push", safety.ScoreAskAlways)
+	pipedConfirm(&other)("run_shell", "make", 0)
+	if !strings.Contains(ask.String(), "safety rule") || strings.Contains(ask.String(), "--autonomy full") {
+		t.Fatalf("score 75 notice should name the safety rule and not the flag:\n%s", ask.String())
+	}
+	if !strings.Contains(other.String(), "--autonomy full") {
+		t.Fatalf("score 0 notice must keep the flag hint:\n%s", other.String())
+	}
+}
+
+func TestAgentSafetyLabelFullNamesSpecificRisks(t *testing.T) {
+	if got := agentSafetyLabel(false, "full"); !strings.Contains(got, "specific safety risks") {
+		t.Fatalf("full-autonomy banner %q does not mention specific safety risks", got)
 	}
 }
 

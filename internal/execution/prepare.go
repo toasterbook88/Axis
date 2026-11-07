@@ -18,7 +18,6 @@ import (
 	"github.com/toasterbook88/axis/internal/placement"
 	"github.com/toasterbook88/axis/internal/reservation"
 	"github.com/toasterbook88/axis/internal/runtimectx"
-	"github.com/toasterbook88/axis/internal/safety"
 	"github.com/toasterbook88/axis/internal/scripts"
 	"github.com/toasterbook88/axis/internal/skills"
 	"github.com/toasterbook88/axis/internal/state"
@@ -416,12 +415,7 @@ func PrepareGuardedExecution(ctx context.Context, rt *runtimectx.Context, req Gu
 	prepared.Result.Reasoning = append(prepared.Result.Reasoning, turboPlan.Notes...)
 	commandToRun := turboPlan.Command
 
-	safetyDecision := sharedSafetyEvaluator.Evaluate(commandToRun, req.OwnerSurface)
-	if safetyDecision.Verdict == safety.VerdictDeny {
-		prepared.Result.Blocked = true
-		prepared.Result.BlockReason = strings.Join(safetyDecision.Reasons, "; ")
-		prepared.Result.DumbScore = 100
-		prepared.Result.Error = prepared.Result.BlockReason
+	if applySafetyVerdict(&prepared.Result, sharedSafetyEvaluator.Evaluate(commandToRun, req.OwnerSurface)) {
 		return prepared, nil
 	}
 

@@ -14,6 +14,16 @@ type BlockResult struct {
 	Score   int    `json:"dumb_score"` // 0-100
 }
 
+const (
+	// scorePrompt is the score of a prompt verdict that flags no specific
+	// risk (an unknown command, a null redirect).
+	scorePrompt = 70
+	// ScoreAskAlways is the score of a prompt verdict from an AskAlways rule.
+	// It is below the block threshold (80) and at the full-autonomy ask
+	// threshold, so full autonomy asks the operator instead of approving.
+	ScoreAskAlways = 75
+)
+
 var defaultEvaluator = NewEvaluator(DefaultRuleSet())
 
 // Check is the single gatekeeper. Call this first, always.
@@ -35,7 +45,10 @@ func Check(snap *models.ClusterSnapshot, desc string, isKnownBad func(string) bo
 			Score:   100,
 		}
 	} else if decision.Verdict == VerdictPrompt {
-		r.Score = 70
+		r.Score = scorePrompt
+		if decision.AskAlways {
+			r.Score = ScoreAskAlways
+		}
 		r.Reason = strings.Join(decision.Reasons, "; ")
 	}
 

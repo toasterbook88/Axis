@@ -294,8 +294,10 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 	}
 	a.dispatchMu.Unlock()
 
-	// Safety gate.
-	allowed, reason, safetyScore := a.safety(sa.Command)
+	allowed, reason, safetyScore, cmdToRun, err := a.shellSafety(sa.Command, sa.Cwd) // command and cwd, before confirmation
+	if err != nil {
+		return "", err
+	}
 	forceConfirm := false
 	if !allowed {
 		forceConfirm = true
@@ -303,9 +305,7 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 			safetyScore = 80
 		}
 	}
-
-	// Confirmation (unless auto-approved or session-level always, and not safety-blocked).
-	// Serialized across concurrent dispatches.
+	// Confirmation (unless auto-approved or session-level always, and not safety-blocked), serialized across dispatches.
 	a.dispatchMu.Lock()
 	needsConfirm := !a.sessionApproved["run_shell"] || forceConfirm
 	a.dispatchMu.Unlock()
@@ -339,15 +339,6 @@ func (a *Agent) dispatchShell(ctx context.Context, args json.RawMessage) (string
 			a.dispatchMu.Unlock()
 			// proceed
 		}
-	}
-
-	cmdToRun := sa.Command
-	if sa.Cwd != "" {
-		cleanCwd, err := validateToolPath(sa.Cwd)
-		if err != nil {
-			return "", err
-		}
-		cmdToRun = fmt.Sprintf("cd %s && %s", shellQuote(cleanCwd), sa.Command)
 	}
 
 	if sa.Cwd != "" {
@@ -671,7 +662,7 @@ func (a *Agent) dispatchRunTask(ctx context.Context, args json.RawMessage) (stri
 
 	// Risk scores (0 < score < 80) add stronger warning text.
 	if prepared.Result.DumbScore > 0 {
-		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d) - REASON: %s]\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
+		promptDesc = fmt.Sprintf("[WARNING: TASK RISKS DETECTED (Score: %d)] safety why: %s\n%s", prepared.Result.DumbScore, prepared.Result.BlockReason, promptDesc)
 	}
 
 	// Confirm without holding dispatchMu: the operator overlay is the only thing

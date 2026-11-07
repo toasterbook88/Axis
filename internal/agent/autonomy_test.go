@@ -120,7 +120,7 @@ func TestAutonomyEditAutoApprovesFileEdits(t *testing.T) {
 	}
 }
 
-func TestAutonomyFullAutoApprovesAllButSafetyBlocked(t *testing.T) {
+func TestAutonomyFullAsksForSpecificRisksAndSafetyBlocked(t *testing.T) {
 	rec := &recorderConfirm{}
 	fn := autonomyConfirm(AutonomyFull, rec.confirm)
 	// file edit auto-approved
@@ -135,10 +135,26 @@ func TestAutonomyFullAutoApprovesAllButSafetyBlocked(t *testing.T) {
 	if rec.called {
 		t.Fatalf("full mode low-risk shell should not hit fallback")
 	}
-	// shell just under safety threshold auto-approved
+	// A prompt that flags no specific risk (unknown command, score 70) is
+	// auto-approved; an AskAlways prompt (75) up to 79 asks the operator.
 	rec.called = false
-	if got := fn("run_shell", "x", 79); got != ConfirmYes {
-		t.Fatalf("full mode score<80 shell should auto-approve, got %v", got)
+	if got := fn("run_shell", "x", 70); got != ConfirmYes || rec.called {
+		t.Fatalf("full mode score 70 shell should auto-approve without the fallback, got %v (fallback %v)", got, rec.called)
+	}
+	for _, score := range []int{75, 79} {
+		rec.called = false
+		if got := fn("run_shell", "x", score); got != ConfirmNo || !rec.called {
+			t.Fatalf("full mode score %d shell should ask the fallback, got %v (fallback %v)", score, got, rec.called)
+		}
+	}
+	// axis_run_task carries the same signal: 0 is approved, 75 asks.
+	rec.called = false
+	if got := fn("axis_run_task", "x", 0); got != ConfirmYes || rec.called {
+		t.Fatalf("full mode axis_run_task at 0 should auto-approve, got %v (fallback %v)", got, rec.called)
+	}
+	rec.called = false
+	if got := fn("axis_run_task", "x", 75); got != ConfirmNo || !rec.called {
+		t.Fatalf("full mode axis_run_task at 75 should ask the fallback, got %v (fallback %v)", got, rec.called)
 	}
 	// shell safety-blocked (>=80) delegates to fallback
 	rec.called = false
