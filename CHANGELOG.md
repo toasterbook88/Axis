@@ -46,6 +46,16 @@
   `dumb_score` in guarded-execution results is 75 for these commands, and a
   `-p` run reports them as needing an interactive approval.
 
+* **Console live turn and ASCII footer.** While a turn runs, the ephemeral
+  region shows one phase: the answer as it streams, each in-flight tool (its
+  name and arguments, clipped by display column to one short of the terminal
+  width), or a single `thinking`, `working`, or `cancelling` line. An open
+  overlay keeps the tool rows and does not add a phase word. A finished tool
+  prints its duration once, under the title. Terminals where Unicode is off
+  (`TERM=linux`, `TERM=dumb`, or an `LC_ALL` / `LC_CTYPE` / `LANG` of `C` or
+  `POSIX`) draw the footer rule and context bar in ASCII. A Unicode terminal
+  keeps the block bar.
+
 ## v0.23.0 (2026-11-05)
 
 `axis init --generate`, an OpenCode-style `axis tui` workspace, stricter SSH

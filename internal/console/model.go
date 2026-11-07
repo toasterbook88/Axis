@@ -109,11 +109,11 @@ type Footer interface {
 	Render(width int, st FooterState) []Line
 }
 
-// FooterState is the live, console-owned state a footer cannot derive from its
-// own providers: the current spinner frame and the model's startup state.
+// FooterState: frame, model startup, ASCII (zero value keeps Unicode glyphs).
 type FooterState struct {
 	Frame string
 	Model ModelState
+	ASCII bool
 }
 
 // turnState tracks the lifecycle of the active turn. Without it, a cancel
@@ -1083,37 +1083,8 @@ func (m Model) View() string {
 		return ""
 	}
 
-	var lines []Line
-
-	// An in-progress response lives here until the turn ends, so scrollback
-	// never receives a partial line.
-	if text := m.stream.String(); text != "" {
-		_, answer, inThought := parseStreamThought(text)
-		if inThought {
-			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " thinking...", Style: StyleMuted})
-		} else if answer != "" {
-			for _, l := range wrap(answer, effectiveWidth(m.width)) {
-				lines = append(lines, Line{Text: l})
-			}
-		}
-	}
-
-	for _, pt := range m.pendingTools {
-		row := spinnerFrame(m.spinner, m.unicode) + " " + pt.name
-		if pt.args != "" {
-			row += " " + pt.args
-		}
-		lines = append(lines, Line{Text: clipRunes(row, effectiveWidth(m.width)), Style: StyleMuted})
-	}
-
-	if m.overlay == nil {
-		switch m.state {
-		case turnRunning:
-			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " working", Style: StyleMuted})
-		case turnCancelling:
-			lines = append(lines, Line{Text: spinnerFrame(m.spinner, m.unicode) + " cancelling", Style: StyleMuted})
-		}
-	}
+	// Stream, pending tools, and the one phase word live in liveActivity.
+	lines := m.liveActivity()
 
 	if m.overlay != nil {
 		lines = append(lines, m.overlay.Render(m.width)...)
@@ -1134,7 +1105,7 @@ func (m Model) View() string {
 	})
 
 	if m.footer != nil {
-		lines = append(lines, m.footer.Render(m.footerWidth(), FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: m.modelState})...)
+		lines = append(lines, m.footer.Render(m.footerWidth(), FooterState{Frame: spinnerFrame(m.spinner, m.unicode), Model: m.modelState, ASCII: !m.unicode})...)
 	}
 
 	if m.log != nil {

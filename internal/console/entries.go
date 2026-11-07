@@ -475,9 +475,6 @@ func (e *ToolEntry) Render(width int) []Line {
 	if e.Summary != "" {
 		head += " " + e.Summary
 	}
-	if e.Elapsed > 0 {
-		head += " " + e.Elapsed.Truncate(time.Millisecond).String()
-	}
 	if e.Badge != "" {
 		head += " " + e.Badge
 	}
@@ -485,14 +482,15 @@ func (e *ToolEntry) Render(width int) []Line {
 	if e.Err != nil {
 		style = StyleBad
 	} else if e.Elapsed > 0 {
-		// A completed call: the head is the success receipt.
+		// A completed call: the head is the outcome. The duration is the
+		// muted receipt below, not a second copy in the title.
 		style = StyleGood
 	}
 	out := renderBody(e.base, width, head, style)
 
 	// Timing receipt: the agent measures execution wall time and the
 	// completion events carry it; a call-only entry (no completion) shows
-	// none.
+	// none. The duration is printed on this line only.
 	if e.Elapsed > 0 {
 		out = append(out, renderContinuation(e.base, width,
 			fmt.Sprintf("(%s elapsed)", e.Elapsed.Truncate(time.Millisecond)), StyleMuted)...)

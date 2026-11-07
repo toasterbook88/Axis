@@ -43,6 +43,9 @@ This is the `axis agent` console, the same in-process agent and startup path,
 hosted inside the workspace. Everything `axis agent` does works here:
 
 - streaming answers, tool cards, reasoning summaries
+- one live phase while a turn runs: the answer as it streams, each in-flight
+  tool, or a single `thinking`, `working`, or `cancelling` line. A finished
+  tool prints its duration once, under the title
 - approval prompts for guarded actions (`y` approves; Enter does not)
 - `/model`, `/skills`, `/mcp`, `/fleet`, `/usage`, `/clear` and the other
   slash commands; `!cmd` runs a shell command through guarded execution
@@ -127,8 +130,9 @@ tools and is not cluster truth.
 
 ## Terminals
 
-- **No Unicode** (`TERM=linux`, a `C`/`POSIX` locale): the dashboard and
-  sidebar draw in pure ASCII.
+- **No Unicode** (`TERM=linux`, `TERM=dumb`, or a `C`/`POSIX` locale): the
+  dashboard, the sidebar, and the agent footer draw in pure ASCII. The footer
+  context bar uses `=` and `-`. A Unicode terminal keeps the block bar.
 - **`NO_COLOR`** or `--no-color`: no color.
 - **Small windows:** every frame fits the terminal exactly; panels shrink or
   drop rather than wrap.
