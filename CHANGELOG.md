@@ -11,6 +11,13 @@
 
 ### Fixes
 
+* **Behaviour change:** the safety evaluator splits command words on any
+  whitespace and matches program names case-insensitively. A tab between
+  words (`rm<TAB>-rf<TAB>dir`) or an uppercase program name (`Rm -rf dir`,
+  which a case-insensitive filesystem runs as `rm`) used to miss every
+  program and argument rule, deny rules included, and fall to the
+  unknown-command rule. They now get the same verdict as the plain spelling.
+
 * **Behaviour change:** `axis agent` fits every request to the model's context
   window. The budget is the smallest of `--max-tokens`, the served window the
   model catalog reports (llama.cpp `n_ctx`) and a window learned from an
@@ -40,7 +47,7 @@
   `-T` timeout is not an upload), service managers match from the verb
   (`systemctl --host h restart x`), and `run_shell`'s `cwd` is checked, so git
   in a `node_modules` working directory asks. Command wrappers (`env`,
-  `sh -c`, `xargs`, …), globs, variables and tab separators are not looked
+  `sh -c`, `xargs`, …), globs and variables are not looked
   through. The two new rules also make those commands ask in default and edit
   modes.
   `dumb_score` in guarded-execution results is 75 for these commands, and a

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Category classifies the risk level of a command.
@@ -437,7 +438,7 @@ func shellSplit(s string) []string {
 		case r == '"' && !inSingle:
 			inDouble = !inDouble
 			wordStarted = true
-		case r == ' ' && !inSingle && !inDouble:
+		case unicode.IsSpace(r) && !inSingle && !inDouble: // tabs split words too, as in a shell
 			if wordStarted {
 				parts = append(parts, current.String())
 				current.Reset()
@@ -456,6 +457,7 @@ func shellSplit(s string) []string {
 
 // matchesProgram checks if a program name matches any glob pattern.
 func matchesProgram(program string, patterns []string) bool {
+	program = strings.ToLower(program) // a case-insensitive filesystem runs "Rm" as rm
 	for _, pattern := range patterns {
 		if matched, _ := filepath.Match(pattern, program); matched {
 			return true
