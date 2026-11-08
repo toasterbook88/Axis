@@ -27,6 +27,10 @@ printf 'test-commit\n'
 STUB
 cat >"$test_root/bin/python3" <<'STUB'
 #!/usr/bin/env bash
+if [[ "${PYTHONDONTWRITEBYTECODE:-}" != 1 ]]; then
+  printf 'python3 bytecode not disabled\n' >&2
+  exit 4
+fi
 printf 'python3|%s\n' "$*" >>"$AXIS_TEST_LOG"
 exit 0
 STUB

@@ -86,7 +86,8 @@ on GitHub Releases.
 ### Maintenance
 
 * `hack/release-preflight.sh` runs the same pinned govulncheck allow-list
-  gate as the Release workflow. Plain text mode still exits 3 for
+  gate as the Release workflow, with Python bytecode writes disabled so
+  the check leaves a clean tree. Plain text mode still exits 3 for
   GO-2026-6911; the gate accepts that advisory until 2026-12-07 because
   MCP HTTP redirects stay on the same origin, and it fails on any other
   called advisory.

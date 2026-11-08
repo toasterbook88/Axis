@@ -18,8 +18,10 @@ printf '\n==> govulncheck ./...\n'
 # any other called advisory.
 govuln_bin="$(mktemp -d)"
 GOBIN="$govuln_bin" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-PATH="$govuln_bin:$PATH" python3 hack/govulncheck-gate-tests.py
-PATH="$govuln_bin:$PATH" python3 hack/govulncheck_gate.py
+# The gate imports its module. Without this, CPython writes hack/__pycache__
+# and the next --require-clean run fails on a tree this script just checked.
+PYTHONDONTWRITEBYTECODE=1 PATH="$govuln_bin:$PATH" python3 hack/govulncheck-gate-tests.py
+PYTHONDONTWRITEBYTECODE=1 PATH="$govuln_bin:$PATH" python3 hack/govulncheck_gate.py
 rm -rf "$govuln_bin"
 
 printf '\nrelease preflight passed for %s\n' "$(git rev-parse HEAD)"
