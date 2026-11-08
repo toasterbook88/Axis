@@ -83,6 +83,14 @@ on GitHub Releases.
   `POSIX`) draw the footer rule and context bar in ASCII. A Unicode terminal
   keeps the block bar.
 
+### Maintenance
+
+* `hack/release-preflight.sh` runs the same pinned govulncheck allow-list
+  gate as the Release workflow. Plain text mode still exits 3 for
+  GO-2026-6911; the gate accepts that advisory until 2026-12-07 because
+  MCP HTTP redirects stay on the same origin, and it fails on any other
+  called advisory.
+
 ## v0.23.0 (2026-11-05)
 
 `axis init --generate`, an OpenCode-style `axis tui` workspace, stricter SSH
