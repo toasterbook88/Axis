@@ -11,6 +11,12 @@
 
 ### Fixes
 
+* **Behaviour change:** in `axis tui`, the mouse wheel scrolls the conversation
+  three lines at a time. The wheel used to arrive as up and down keys and walk
+  the input history, and the in-frame transcript had no mouse scroll. `↑` / `↓`
+  still recall history. While the dashboard, the command palette, a model
+  picker, or a pager is open, the wheel moves that list instead.
+
 * **Behaviour change:** the safety evaluator splits command words on shell
   blanks (space and tab) and matches program names case-insensitively,
   including program-specific handling (git global options, `GIT_DIR` /

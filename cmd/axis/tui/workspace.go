@@ -102,6 +102,9 @@ func (w Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return w.handleKey(msg)
+
+	case tea.MouseMsg:
+		return w.handleMouse(msg)
 	}
 
 	if isDashboardMsg(msg) {
@@ -122,6 +125,37 @@ func (w Workspace) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, dcmd)
 	}
 	return w, tea.Batch(cmds...)
+}
+
+// wheelScrollLines is how far one wheel notch moves the conversation.
+const wheelScrollLines = 3
+
+// handleMouse sends the wheel to the pane that is on screen. In the
+// conversation that is the transcript, not the input history. Up and down
+// keys still recall history.
+func (w Workspace) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if !tea.MouseEvent(msg).IsWheel() || w.leader || w.showHelp {
+		return w, nil
+	}
+	var key tea.KeyMsg
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		key = tea.KeyMsg{Type: tea.KeyUp}
+	case tea.MouseButtonWheelDown:
+		key = tea.KeyMsg{Type: tea.KeyDown}
+	default:
+		return w, nil
+	}
+	if w.palette != nil || w.view == viewDashboard || w.dash.modalActive {
+		return w.handleKey(key)
+	}
+	lines := wheelScrollLines
+	if key.Type == tea.KeyDown {
+		lines = -wheelScrollLines
+	}
+	var cmd tea.Cmd
+	w.chat, cmd = w.chat.Update(console.ScrollMsg{Lines: lines})
+	return w, cmd
 }
 
 func (w Workspace) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
