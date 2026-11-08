@@ -10,9 +10,9 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ## v0.24.0 upgrade guide
 
-This section describes the v0.24.0 source candidate. Consult
-[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
-and downloads; a versioned changelog is not proof of publication. Changes since
+[v0.24.0](https://github.com/toasterbook88/axis/releases/tag/v0.24.0) was published
+from commit `16eeb3b`. [GitHub Releases](https://github.com/toasterbook88/axis/releases)
+is the authority for available downloads. Changes since
 v0.23.0 are listed in the [changelog](../CHANGELOG.md#v0240-2026-11-08).
 There is no required YAML migration. These changes can alter what an existing
 setup sees.

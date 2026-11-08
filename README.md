@@ -23,7 +23,7 @@ Install to `~/.local/bin` (no `sudo`), then check the binary. macOS and Linux on
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.23.0 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.24.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -106,13 +106,11 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 ## Install
 
 > [!IMPORTANT]
-For v0.23.0's refused SSH proxy directives, `system_reserve_mb` lease enforcement,
-live mesh reloads, `axis tui` workspace and the agent's tool-result cap, see the
-[v0.23.0 upgrade guide](docs/release-notes.md#v0230-upgrade-guide).
-The [v0.24.0 candidate guide](docs/release-notes.md#v0240-upgrade-guide) covers
-the mouse wheel in `axis tui`, context-window fitting, and full-autonomy asks
-for flagged commands; consult GitHub Releases for published downloads.
+For v0.24.0's mouse wheel in `axis tui`, context-window fitting, and
+full-autonomy asks for flagged commands, see the
+[v0.24.0 upgrade guide](docs/release-notes.md#v0240-upgrade-guide).
 Upgrading from an older release? See the
+[v0.23.0](docs/release-notes.md#v0230-upgrade-guide),
 [v0.22.0](docs/release-notes.md#v0220-upgrade-guide),
 [v0.21.0](docs/release-notes.md#v0210-upgrade-guide) and
 [v0.20.0](docs/release-notes.md#v0200-upgrade-guide) upgrade guides in
@@ -127,7 +125,7 @@ The [Quick start](#quick-start) command is the recommended workstation install. 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.23.0 AXIS_REQUIRE_PINNED=1 bash
+  | AXIS_VERSION=v0.24.0 AXIS_REQUIRE_PINNED=1 bash
 ```
 
 A system install may remove verified user-local AXIS copies so only one `axis` is on `PATH`. Set `AXIS_KEEP_LEGACY=1` to keep them.
@@ -175,7 +173,7 @@ Preview an install without writing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.23.0 bash
+  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.24.0 bash
 ```
 
 </details>
@@ -186,7 +184,7 @@ curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh 
 The installer already checks `checksums.txt`. Release archives also carry GitHub build-provenance attestations. With GitHub CLI 2.49 or newer:
 
 ```bash
-gh attestation verify axis_0.23.0_linux_amd64.tar.gz --repo toasterbook88/Axis
+gh attestation verify axis_0.24.0_linux_amd64.tar.gz --repo toasterbook88/Axis
 ```
 
 </details>
@@ -308,7 +306,7 @@ To roll back to a previous release, re-run the installer with the tag you want. 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.22.0 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.23.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -344,8 +342,8 @@ For a system-wide install, remove `/usr/local/bin/axis` with `sudo` instead.
 
 | Item | Value |
 | --- | --- |
-| Latest release | [**v0.23.0**](https://github.com/toasterbook88/axis/releases/tag/v0.23.0) (tag commit `3abc279`) |
-| Supported security line | `v0.23.x` (see [`SECURITY.md`](SECURITY.md)) |
+| Latest release | [**v0.24.0**](https://github.com/toasterbook88/axis/releases/tag/v0.24.0) (tag commit `16eeb3b`) |
+| Supported security line | `v0.24.x` (see [`SECURITY.md`](SECURITY.md)) |
 | Release builds | darwin and linux × amd64 and arm64 (reproducible GoReleaser builds) |
 
 ## Build and test
