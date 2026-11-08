@@ -1,5 +1,16 @@
 ## Unreleased
 
+## v0.24.0 (2026-11-08)
+
+The mouse wheel in `axis tui` scrolls the conversation, `axis agent` fits
+each request to the model's context window, and `--autonomy full` asks before
+commands a specific safety rule flags. Safety matching is case-insensitive
+and splits on tabs. The console shows one live phase. MCP HTTP redirects stay
+on the same origin. See the
+[upgrade guide](docs/release-notes.md#v0240-upgrade-guide) for behavior that
+changes for existing setups. Publication and available downloads are tracked
+on GitHub Releases.
+
 ### Security
 
 * MCP servers configured over HTTP can no longer redirect `axis` to another
@@ -71,6 +82,15 @@
   (`TERM=linux`, `TERM=dumb`, or an `LC_ALL` / `LC_CTYPE` / `LANG` of `C` or
   `POSIX`) draw the footer rule and context bar in ASCII. A Unicode terminal
   keeps the block bar.
+
+### Maintenance
+
+* `hack/release-preflight.sh` runs the same pinned govulncheck allow-list
+  gate as the Release workflow, with Python bytecode writes disabled so
+  the check leaves a clean tree. Plain text mode still exits 3 for
+  GO-2026-6911; the gate accepts that advisory until 2026-12-07 because
+  MCP HTTP redirects stay on the same origin, and it fails on any other
+  called advisory.
 
 ## v0.23.0 (2026-11-05)
 

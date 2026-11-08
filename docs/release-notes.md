@@ -8,6 +8,73 @@ This document provides user-friendly summaries of recent AXIS releases, highligh
 
 ---
 
+## v0.24.0 upgrade guide
+
+This section describes the v0.24.0 source candidate. Consult
+[GitHub Releases](https://github.com/toasterbook88/axis/releases) for publication
+and downloads; a versioned changelog is not proof of publication. Changes since
+v0.23.0 are listed in the [changelog](../CHANGELOG.md#v0240-2026-11-08).
+There is no required YAML migration. These changes can alter what an existing
+setup sees.
+
+### The mouse wheel scrolls the conversation
+
+In `axis tui`, the mouse wheel scrolls the in-frame chat three lines at a
+time. It used to arrive as up and down keys and walk the input history.
+`↑` / `↓` still recall history. While the dashboard, command palette, model
+picker, or pager is open, the wheel moves that list instead. `axis agent`
+on its own and `axis tui --dashboard` do not enable the mouse, so the
+terminal's own scrollback is unchanged there.
+
+### Requests fit the model's context window
+
+`axis agent` sizes every request to the smallest of `--max-tokens`, the
+served window the catalog reports, and a window learned from an overflow
+error, minus a reply reserve of up to 4,096 tokens. Tool definitions and
+per-turn context now count, so the usable budget shown by `/context` and
+the footer is lower than `--max-tokens`. Before sending, compaction runs
+and old tool results are trimmed. A request that still cannot fit is sent
+with a one-time warning. If a server rejects it as too long, the agent
+learns that window and retries once when the rebuilt request should fit.
+The native Ollama client cannot detect an overflow and only gets the
+proactive budget.
+
+### Full autonomy asks when a specific rule matches
+
+`--autonomy full` used to approve every "ask" verdict. Commands a specific
+safety rule flags now score 75, and full autonomy asks at 75, for
+`run_shell`, `run_on_node`, `fleet_exec`, `run_background`, and
+`axis_run_task`. That includes git push, curl and wget uploads, service
+start and stop, `ollama run` and `ollama pull`, SSH with host-key checking
+off, and git or file changes inside `node_modules`. Commands no rule
+recognizes still auto-approve. A specific rule wins over the
+unknown-command rule across `&&` segments, so `git push > /dev/null` asks
+too. Wrappers (`env`, `sh -c`, `xargs`), globs, and variables are still
+not inspected. Default and edit modes also ask for the two new rules.
+
+### Safety matches tabs and any letter case
+
+The safety evaluator splits command words on spaces and tabs, and matches
+program names without regard to case. A tab between words, or `Rm -rf dir`,
+used to miss every program and argument rule. Those commands now get the
+same verdict as the plain spelling. Other Unicode spaces stay part of the
+word.
+
+### MCP HTTP redirects stay on the same origin
+
+An MCP server configured over HTTP can no longer redirect `axis` to
+another host or scheme. A redirect is followed only when the scheme and
+host stay the same. A server that depended on a cross-origin redirect
+will fail that call instead of sending its token to the new target.
+
+### The console shows one live phase
+
+While a turn runs, the ephemeral region shows the streaming answer, one
+in-flight tool, or a single `thinking`, `working`, or `cancelling` line.
+Terminals with Unicode off draw the footer in ASCII.
+
+---
+
 ## v0.23.0 upgrade guide
 
 [v0.23.0](https://github.com/toasterbook88/axis/releases/tag/v0.23.0) was published

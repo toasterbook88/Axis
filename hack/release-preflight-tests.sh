@@ -25,6 +25,15 @@ cat >"$test_root/bin/git" <<'STUB'
 #!/usr/bin/env bash
 printf 'test-commit\n'
 STUB
+cat >"$test_root/bin/python3" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${PYTHONDONTWRITEBYTECODE:-}" != 1 ]]; then
+  printf 'python3 bytecode not disabled\n' >&2
+  exit 4
+fi
+printf 'python3|%s\n' "$*" >>"$AXIS_TEST_LOG"
+exit 0
+STUB
 chmod +x "$test_root/hack/ci-preflight.sh" "$test_root/bin/"*
 
 export PATH="$test_root/bin:$PATH"
@@ -38,7 +47,9 @@ run_preflight || fail 'successful validation failed'
 cat >"$test_root/expected" <<'EXPECTED'
 ci|go1.26.10|--require-clean
 go|go1.27.0|run github.com/goreleaser/goreleaser/v2@v2.18.0 check
-go|go1.26.10|run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+go|go1.26.10|install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+python3|hack/govulncheck-gate-tests.py
+python3|hack/govulncheck_gate.py
 EXPECTED
 diff -u "$test_root/expected" "$AXIS_TEST_LOG" || fail 'validator compiler leaked into application gates or scan'
 

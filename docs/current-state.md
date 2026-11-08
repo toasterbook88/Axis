@@ -11,7 +11,7 @@ Truth rule: no generated output may present itself as cluster truth unless it is
 Refresh this section with `./hack/refresh-current-state.sh`.
 
 <!-- BEGIN GENERATED CURRENT STATE FACTS -->
-- Repo version: `0.23.0`
+- Repo version: `0.24.0`
 <!-- END GENERATED CURRENT STATE FACTS -->
 
 ## Executive Summary
@@ -205,7 +205,7 @@ Refresh this section with `./hack/refresh-current-state.sh`.
     - `coverage gate passed: internal/api 72.8% >= 65.0%`
     - `coverage gate passed: internal/mcp 85.9% >= 70.0%`
     - `coverage gate passed: internal/ui 91.5% >= 80.0%`
-    - `coverage gate passed: total 77.6% >= 65.0%`
+    - `coverage gate passed: total 78.0% >= 65.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
