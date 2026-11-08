@@ -1,5 +1,16 @@
 ## Unreleased
 
+## v0.24.0 (2026-11-08)
+
+The mouse wheel in `axis tui` scrolls the conversation, `axis agent` fits
+each request to the model's context window, and `--autonomy full` asks before
+commands a specific safety rule flags. Safety matching is case-insensitive
+and splits on tabs. The console shows one live phase. MCP HTTP redirects stay
+on the same origin. See the
+[upgrade guide](docs/release-notes.md#v0240-upgrade-guide) for behavior that
+changes for existing setups. Publication and available downloads are tracked
+on GitHub Releases.
+
 ### Security
 
 * MCP servers configured over HTTP can no longer redirect `axis` to another

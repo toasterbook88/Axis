@@ -109,6 +109,9 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 For v0.23.0's refused SSH proxy directives, `system_reserve_mb` lease enforcement,
 live mesh reloads, `axis tui` workspace and the agent's tool-result cap, see the
 [v0.23.0 upgrade guide](docs/release-notes.md#v0230-upgrade-guide).
+The [v0.24.0 candidate guide](docs/release-notes.md#v0240-upgrade-guide) covers
+the mouse wheel in `axis tui`, context-window fitting, and full-autonomy asks
+for flagged commands; consult GitHub Releases for published downloads.
 Upgrading from an older release? See the
 [v0.22.0](docs/release-notes.md#v0220-upgrade-guide),
 [v0.21.0](docs/release-notes.md#v0210-upgrade-guide) and
