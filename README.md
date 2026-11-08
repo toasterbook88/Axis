@@ -23,7 +23,7 @@ Install to `~/.local/bin` (no `sudo`), then check the binary. macOS and Linux on
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.20.0 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.23.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -32,7 +32,7 @@ export PATH="$HOME/.local/bin:$PATH"
 axis version
 ```
 
-Describe your machines. `axis init` is interactive, so run it on its own and answer the prompts. It writes `~/.axis/nodes.yaml`.
+Describe your machines. `axis init` is interactive, so run it on its own and answer the prompts. It writes `~/.axis/nodes.yaml` (`axis init --generate` inspects Tailscale and prints proposed entries without writing).
 
 ```bash
 axis init
@@ -106,26 +106,25 @@ Each layer is subordinate to the one below it. Advisory surfaces never override 
 ## Install
 
 > [!IMPORTANT]
-For v0.20.0's terminal entry point, private logging policy and
-compatibility changes, see the [v0.20.0 upgrade guide](docs/release-notes.md#v0200-upgrade-guide).
-The [v0.21.0 upgrade guide](docs/release-notes.md#v0210-upgrade-guide) covers
-Cortex endpoint selection, tool approval scope and streamed usage reporting.
-The [v0.22.0 upgrade guide](docs/release-notes.md#v0220-upgrade-guide) covers
-MCP approval in every mode, route upstream checks and the cluster agent mode.
-The [v0.23.0 candidate guide](docs/release-notes.md#v0230-upgrade-guide) covers
-refused SSH proxy directives, live mesh reloads and the agent's tool-result cap;
-consult GitHub Releases for published downloads.
+For v0.23.0's refused SSH proxy directives, `system_reserve_mb` lease enforcement,
+live mesh reloads, `axis tui` workspace and the agent's tool-result cap, see the
+[v0.23.0 upgrade guide](docs/release-notes.md#v0230-upgrade-guide).
+Upgrading from an older release? See the
+[v0.22.0](docs/release-notes.md#v0220-upgrade-guide),
+[v0.21.0](docs/release-notes.md#v0210-upgrade-guide) and
+[v0.20.0](docs/release-notes.md#v0200-upgrade-guide) upgrade guides in
+[`docs/release-notes.md`](docs/release-notes.md).
 
 > Use v0.19.6 or later. Git history was rewritten on 2026-10-12, and v0.9.0 through v0.19.5 are retracted in `go.mod`.
 
-The [Quick start](#quick-start) command is the recommended install. Other options:
+The [Quick start](#quick-start) command is the recommended workstation install. For multi-node SSH clusters, prefer the system-wide `/usr/local/bin` install below so every node resolves the same `PATH` across user accounts:
 
 <details>
 <summary>System-wide install to <code>/usr/local/bin</code> (uses <code>sudo</code>)</summary>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.20.0 AXIS_REQUIRE_PINNED=1 bash
+  | AXIS_VERSION=v0.23.0 AXIS_REQUIRE_PINNED=1 bash
 ```
 
 A system install may remove verified user-local AXIS copies so only one `axis` is on `PATH`. Set `AXIS_KEEP_LEGACY=1` to keep them.
@@ -173,7 +172,7 @@ Preview an install without writing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.20.0 bash
+  | AXIS_DRY_RUN=1 AXIS_VERSION=v0.23.0 bash
 ```
 
 </details>
@@ -184,7 +183,7 @@ curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh 
 The installer already checks `checksums.txt`. Release archives also carry GitHub build-provenance attestations. With GitHub CLI 2.49 or newer:
 
 ```bash
-gh attestation verify axis_0.20.0_linux_amd64.tar.gz --repo toasterbook88/Axis
+gh attestation verify axis_0.23.0_linux_amd64.tar.gz --repo toasterbook88/Axis
 ```
 
 </details>
@@ -195,6 +194,7 @@ gh attestation verify axis_0.20.0_linux_amd64.tar.gz --repo toasterbook88/Axis
 
 ```bash
 axis node facts
+axis node facts --hardware
 axis doctor
 axis cluster status --live
 axis placement explain "run ollama inference on a 7b model"
@@ -210,7 +210,7 @@ axis placement explain "run ollama inference on a 7b model"
 axis serve
 ```
 
-In a second terminal. `/health` and the agent card need no token; `localhost` here is only a placeholder curl needs for `--unix-socket`:
+In a second terminal, `/health` and the agent card need no token; `localhost` here is only a placeholder curl needs for `--unix-socket`:
 
 ```bash
 curl -fsS --unix-socket "$HOME/.axis/axis.sock" \
@@ -236,8 +236,8 @@ axis daemon status
 | Command | Purpose |
 | --- | --- |
 | `axis version` | Build version, commit, Go version |
-| `axis init` | Interactive cluster configuration (`--config` overrides `~/.axis/nodes.yaml`) |
-| `axis node facts` | This machine (`axis facts` is the same command) |
+| `axis init` | Interactive cluster configuration (`--config` overrides `~/.axis/nodes.yaml`; `--generate` proposes nodes from Tailscale read-only) |
+| `axis node facts` | This machine (`axis facts` is the same command; `--hardware` / `-hw` adds detailed specs and live load) |
 | `axis cluster status` | Cached snapshot under 5 minutes old; `--live` sweeps; `--cached-only` fails closed |
 | `axis task place` | Advisory placement (`--format text\|json`) |
 | `axis placement explain` | Per-node ranking explanation |
@@ -249,7 +249,7 @@ axis daemon status
 | `axis daemon` | `status`, `refresh`, `invalidate`, `restart`, `service install\|status\|uninstall` |
 | `axis serve` | Local HTTP API (foreground; Unix socket by default) |
 | `axis mesh` | Gossip mesh diagnostics: `status`, `peers` |
-| `axis tui` | Full-screen workspace: agent conversation, live cluster sidebar, dashboard on F2 |
+| `axis tui` | Full-screen workspace: agent conversation, live cluster sidebar, dashboard on F2 (`--dashboard` opens the dashboard alone; `ctrl+o` command palette) |
 | `axis update` | Self-update from GitHub Releases |
 
 On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, it prints help.
@@ -261,16 +261,16 @@ On an interactive terminal, bare `axis` opens `axis agent`; piped or scripted, i
 
 | Command | Purpose |
 | --- | --- |
-| `axis mcp serve` | Read-only MCP server over stdio |
+| `axis mcp serve` | MCP server over stdio (18 read-only diagnostics + 3 advisory lease primitives) |
 | `axis mcp client` | MCP client (`list`, `tools`, `call`, …) |
-| `axis agent` | Tool-calling agent loop, subordinate to observed facts |
+| `axis agent` | Tool-calling agent loop, subordinate to observed facts (`--autonomy cluster\|default\|edit\|full`, `-p` one-shot) |
 | `axis ai` / `axis cortex` | Inference routing and vector-memory helpers |
 
 `axis chat` and `axis llm` were removed. Use `axis agent` and `axis ai route`.
 
 </details>
 
-Full command notes: [`docs/current-state.md`](docs/current-state.md).
+Full command notes (including `summary`, `observations`, `profile`, `context`, `skills`, `scripts`, `completion`): [`docs/current-state.md`](docs/current-state.md).
 
 ## Security
 
@@ -301,11 +301,11 @@ axis update
 
 `axis update --all` also updates other validated AXIS copies on `PATH` and in common install locations.
 
-To roll back, re-run the installer with the tag you want. It replaces an existing AXIS binary in place:
+To roll back to a previous release, re-run the installer with the tag you want. It replaces an existing AXIS binary in place:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/toasterbook88/axis/main/install.sh \
-  | AXIS_VERSION=v0.20.0 AXIS_REQUIRE_PINNED=1 \
+  | AXIS_VERSION=v0.22.0 AXIS_REQUIRE_PINNED=1 \
     AXIS_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -341,8 +341,8 @@ For a system-wide install, remove `/usr/local/bin/axis` with `sudo` instead.
 
 | Item | Value |
 | --- | --- |
-| Latest release | [**v0.20.0**](https://github.com/toasterbook88/axis/releases/tag/v0.20.0) (tag commit `951550e`) |
-| Supported security line | `v0.20.x` (see [`SECURITY.md`](SECURITY.md)) |
+| Latest release | [**v0.23.0**](https://github.com/toasterbook88/axis/releases/tag/v0.23.0) (tag commit `3abc279`) |
+| Supported security line | `v0.23.x` (see [`SECURITY.md`](SECURITY.md)) |
 | Release builds | darwin and linux × amd64 and arm64 (reproducible GoReleaser builds) |
 
 ## Build and test
@@ -354,13 +354,15 @@ make test
 
 | Target | What it does |
 | --- | --- |
-| `make build` | `CGO_ENABLED=0 go build -trimpath -o axis ./cmd/axis/` |
+| `make build` | `CGO_ENABLED=0 go build -trimpath -ldflags ... -o axis ./cmd/axis/` |
 | `make install-user` | Installs to `~/.local/bin/axis` |
 | `make install-system` | Installs to `/usr/local/bin/axis` (needs `sudo`) |
 | `make test` | Hermetic `go test ./...` plus docs tool tests |
 | `make test-race` | Tests with the race detector |
+| `make test-install` | `hack/install-tests.sh` (hermetic `install.sh` regression suite) |
 | `make lint` | gofmt, go vet, staticcheck |
 | `make coverage` | `hack/coverage-check.sh` |
+| `make ci-preflight` | `hack/ci-preflight.sh` (full local mirror of required PR checks) |
 
 ## Contributing
 
