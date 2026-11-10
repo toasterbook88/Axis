@@ -135,6 +135,10 @@ func doctorCmd() *cobra.Command {
 // Overridable in tests to avoid real SSH.
 var doctorProbeRemoteShell = doctorProbeRemoteShellImpl
 
+var doctorProbeBootStart = func(ctx context.Context) *DoctorCheck {
+	return daemonBootStartCheck(ctx, defaultDaemonServiceDependencies())
+}
+
 func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (string, bool) {
 	exec := newDoctorSSHExecutor(node)
 	defer exec.Close()
@@ -425,6 +429,9 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		doctorProbeMeshPort(cfg),
 	)...)
 	checks = append(checks, systemDaemonUnitCheck(doctorProbeSystemUnits())...)
+	if check := doctorProbeBootStart(cmd.Context()); check != nil {
+		checks = append(checks, *check)
+	}
 
 	// 4. Local AI backend health
 	for _, b := range []struct {

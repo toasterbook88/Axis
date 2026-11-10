@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Features
+
+* `axis doctor` and `axis daemon service install` report whether the AXIS user
+  service starts at boot or only at login: Linux checks lingering for the user
+  (and prints `loginctl enable-linger $USER` when it is off), macOS checks that
+  automatic login is set for this user. The check only reads state.
+
 ### Fixes
 
 * **Behaviour change:** after `axis update`, the restart check now expects the

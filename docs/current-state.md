@@ -22,7 +22,7 @@ The live repo currently contains:
 
 - A `cluster` agent autonomy mode (`--autonomy cluster`, `/autonomy cluster`) that exposes only `axis_status`, `axis_facts`, `axis_models`, `axis_place` and `axis_reservations`; workspace, git, MCP, `todo` and granted extra tools are hidden and refused at dispatch
 - `axis ai route` / MCP `inference_route_explain` upstream checks: for a LiteLLM-style hub on this machine, a listed model must also have an upstream (`/model/info` `api_base`) that answers `GET <api_base>/models` within 2 s, or the hub is skipped; checks are reported in `upstreams`, and peer hubs or hubs without `/model/info` are reported as not checked
-- `axis doctor` Linux service restart-loop check (read-only `systemctl show`, more than 20 restarts and looping now), host-wide daemon counting for the mesh port check, and warnings for system units that start an axis daemon outside the user service; `sudo axis update` restarts the invoking user's service and never starts a root daemon
+- `axis doctor` Linux service restart-loop check (read-only `systemctl show`, more than 20 restarts and looping now), host-wide daemon counting for the mesh port check, warnings for system units that start an axis daemon outside the user service, and a read-only boot-start check for the installed user service (Linux lingering, macOS automatic login), also printed by `axis daemon service install`; `sudo axis update` restarts the invoking user's service and never starts a root daemon
 - Task-attributed VRAM in task history and execution observations (GPU processes in the task's process tree only; 0 means not observed)
 - HTTP API request IDs (`X-Request-ID`, accepted or generated, echoed and logged per request), daemon refresh-failure warnings, and a warning when `ssh -G` fails; the API refuses a TCP listener without a token
 - Explicit Cortex service addressing through `AXIS_CORTEX_URL`, independent of SSH node identity, with optional `AXIS_CORTEX_QDRANT_URL` for counts. Status exposes the probed endpoint and marks unobserved memory counts with `memories_unknown`; invalid nonempty overrides fail closed. An unset override preserves legacy node-derived addressing
@@ -150,7 +150,7 @@ Top-level commands currently registered in the binary:
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
-| `axis doctor` | Validate config, SSH, daemon health/ownership, and local AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, socket ownership, and mesh UDP contention; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
+| `axis doctor` | Validate config, SSH, daemon health/ownership, and local AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, socket ownership, mesh UDP contention, and whether the user service starts at boot or only at login; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
 | `axis completion` | Generate shell completions | bash/zsh/fish/powershell |
 
 ## Package Map
