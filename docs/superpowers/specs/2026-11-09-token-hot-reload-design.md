@@ -62,10 +62,11 @@ The daemon reads its API token once and never again, so a rotated token is ignor
 
 ### 1. Read-only reader in `internal/auth`
 
-`func ReadTokenFile(path string) (string, error)` reads the file, trims whitespace and validates
-that it hex-decodes to 32 bytes (the same check as `auth.go:56-59`). It never creates, regenerates,
-writes or locks. It returns distinct errors for missing, empty and invalid content, so the log
-line can say which.
+`func readTokenFile(path string) ([]byte, string, error)` (unexported; its only caller is the
+poller) reads the file, trims whitespace and validates that it hex-decodes to 32 bytes (the same
+check as `auth.go:56-59`). It returns the raw bytes too, for the change fingerprint. It never
+creates, regenerates, writes or locks. It returns distinct errors for missing, empty and invalid
+content, so the log line can say which.
 
 The reloader must never call `LoadOrGenerateToken`: on an empty or corrupt file that function
 generates a new token and overwrites the file (`auth.go:61-75`). A daemon doing that on a poll would
@@ -137,13 +138,15 @@ In `internal/auth`:
   pprof fail open.
 - The F9 empty-token pass-through (`server.go:197`) applies only when the source is
   `StaticToken("")`. The TCP refusal at `:137` checks `src.Current()` at startup.
-- To keep the diff and test churn small (61 test call sites use these signatures),
-  `withAuth(next, token string)` and `ServeWithContext(..., token string, ...)` stay as thin
-  wrappers that build `StaticToken(token)`. A new `ServeWithTokenSource` is the production entry
-  used by `serve.go`. The internal plumbing (`registerRoutes`, `registerV2Routes`,
+- To keep test churn small (about 60 test call sites use the string signatures), the string-token
+  forms `ServeWithContext`, `withAuth`, `withRequiredAuth`, `registerRoutes` and
+  `registerPprofRoutes` move to `internal/api/token_compat_test.go` as thin wrappers that build
+  `StaticToken(token)`. Production code has only the `TokenSource` forms, so the deadcode gate
+  (`hack/verify-deadcode.sh`) stays clean. `ServeWithTokenSource` is the production entry used by
+  `serve.go`; the allowlisted `Serve` calls it with `StaticToken`. `cmd/axis/mesh_route_test.go`
+  switches to `ServeWithTokenSource`. The internal plumbing (`registerRoutes`, `registerV2Routes`,
   `registerV2CoreRoutes`, `registerA2AApprovalRoutes`, `registerPprofRoutes`, the A2A wrapper at
-  `:235-237`) takes a `TokenSource`; `registerRoutes` and `registerPprofRoutes` keep their string
-  signatures as wrappers over `registerRoutesSource` and `registerPprofRoutesSource`.
+  `:235-237`) takes a `TokenSource` (`registerRoutesSource`, `registerPprofRoutesSource`).
 - `cmd/axis/serve.go`: the `serveHTTPAPI` test seam takes an `auth.TokenSource` instead of a
   string (three test stubs in `command_surface_test.go` change type only). A new
   `serveTokenSource(ctx, token)` returns `StaticToken` when `AXIS_API_TOKEN` is set, otherwise a
@@ -166,11 +169,14 @@ In `internal/auth`:
 
 ## Tests
 
-All new tests are deterministic. The poll interval is a package var shortened in tests, and tests
-use temp `HOME`/`AXIS_DIR` directories.
+`tokenPollInterval` is a const copied into each `FileToken` at construction. `internal/auth` tests
+shorten one instance's unexported `interval` field before `Run` starts, which is race-free. The
+cross-package tests in `internal/api` and `cmd/axis` can't reach that field; they use the real
+500 ms poll and wait for the swap with a 3 s deadline (about 0.5 s each). Tests use temp
+`AXIS_HOME` directories.
 
 `internal/auth`:
-- `ReadTokenFile`: valid file returns the token; missing, empty, whitespace-only, 63-char,
+- `readTokenFile`: valid file returns the token; missing, empty, whitespace-only, 63-char,
   non-hex and 65-char content each return the matching error. The file is byte-identical and its
   mtime unchanged afterwards (it never writes).
 - `FileToken`:
@@ -218,6 +224,11 @@ use temp `HOME`/`AXIS_DIR` directories.
   within about 500 ms instead of at the next restart. Any operator habit or script that edits the
   file and expects the running daemon to keep the old token changes behavior. I don't know of any
   such script; I didn't audit the fleet.
+- A2A tasks are bound to `sha256("a2a-principal:" + bearer)` (`internal/a2a/handler.go:199-208`,
+  `store.go:64`). After a rotation, `GET /a2a/v1/tasks/{id}` returns 404 for a task created with
+  the old token, while approve and reject (no principal check, `internal/api/server.go:605,681`)
+  still work. That is the strict-mode contract applied to task ownership; it is documented in
+  `docs/authority-secrets.md`, not changed here. Tasks live at most 30 min (`store.go:11`).
 - Cost: one goroutine and one small file read plus sha256 every 500 ms per daemon. Not measured;
   the existing watchers do the same work.
 - Under §8.4 this is likely a larger feature (changes in `cmd/axis`, `internal/auth` and
@@ -268,3 +279,24 @@ needed. The docs row reverts with the PR.
   correctness measure.
 
 ## Review
+
+Kind: spec
+Reviewer: new session (Antigravity CLI, plan mode)
+Model: Google Gemini (Gemini 4 Argon high)
+Base: 01d97335
+Head: 125ff4d1
+Date: 2026-11-09
+Verdict: approve-with-changes
+
+1. Minor: Tests said the poll interval is a package var shortened in tests while Design said it
+   is a const copied per instance, and the cross-package tests can't shorten it. Fixed: Tests now
+   say `internal/auth` tests set the per-instance field before `Run`, and the `internal/api` and
+   `cmd/axis` tests use the real 500 ms poll with a 3 s deadline.
+
+Questions:
+- After a rotation, A2A tasks created with the old token return 404 on GET because tasks are
+  bound to the bearer hash; is that intended? Verified: `internal/a2a/handler.go:199-208` and
+  `store.go:64` bind the task; it is the strict-mode contract, now listed under Blast radius and
+  in `docs/authority-secrets.md`. The reviewer also assumed `GET /a2a/v1/tasks/pending` lists such
+  tasks; no such route is registered (`handler.go:66`, `approval.go:126-134`), which is a
+  separate runbook issue.
