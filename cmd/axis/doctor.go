@@ -431,12 +431,14 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 				Message: fmt.Sprintf("Reachable, %d node(s) cached", len(snap.Nodes)),
 			})
 		}
-		metaCtx, metaCancel := context.WithTimeout(cmd.Context(), 3*time.Second)
-		meta, metaErr := doctorFetchDaemonMeta(metaCtx, daemonAddr)
-		metaCancel()
-		if check := meshRestartDoctorCheck(meta, metaErr); check != nil {
-			checks = append(checks, *check)
-		}
+	}
+	// Metadata is independent of the snapshot: a daemon can be reachable with
+	// a pending mesh restart while its snapshot is unavailable or refreshing.
+	metaCtx, metaCancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+	meta, metaErr := doctorFetchDaemonMeta(metaCtx, daemonAddr)
+	metaCancel()
+	if check := meshRestartDoctorCheck(meta, metaErr); check != nil {
+		checks = append(checks, *check)
 	}
 
 	// 3.5 Daemon ownership: who holds the address, and is that one process

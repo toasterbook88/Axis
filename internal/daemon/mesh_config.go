@@ -56,15 +56,20 @@ func (d *Daemon) applyMeshConfig(data []byte) (mesh.ReconcileCounts, error) {
 		return mesh.ReconcileCounts{}, err
 	}
 	settings := meshSettings(cfg)
-	if settings != d.meshSettings {
-		return mesh.ReconcileCounts{}, fmt.Errorf("mesh transport, enablement or local identity changed: %w", errMeshRestartRequired)
-	}
+	// A port collision is a config error, not a pending restart: a daemon
+	// started on this config disables the mesh (NewDefault), so it must not
+	// carry errMeshRestartRequired or status/doctor would advise a restart.
+	// Check it first so a transport change that also collides reports the
+	// collision.
 	beaconPort := 42424
 	if cfg.Discovery != nil && cfg.Discovery.UDPPort > 0 {
 		beaconPort = cfg.Discovery.UDPPort
 	}
 	if beaconPort == settings.port {
-		return mesh.ReconcileCounts{}, fmt.Errorf("mesh and beacon ports conflict: %w", errMeshRestartRequired)
+		return mesh.ReconcileCounts{}, fmt.Errorf("mesh and beacon ports conflict on %d; set distinct discovery.gossip_port and discovery.udp_port", beaconPort)
+	}
+	if settings != d.meshSettings {
+		return mesh.ReconcileCounts{}, fmt.Errorf("mesh transport, enablement or local identity changed: %w", errMeshRestartRequired)
 	}
 	seeds := make([]mesh.Peer, 0, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {

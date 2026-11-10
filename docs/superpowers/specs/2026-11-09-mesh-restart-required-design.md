@@ -28,8 +28,11 @@ the secret, mesh enablement or the local identity, and asks for a restart
 
 ## Design
 
-1. `applyMeshConfig` returns errors wrapping a new sentinel `errMeshRestartRequired` for the two
-   restart cases (message text unchanged, so the existing `restart required` assertions hold).
+1. `applyMeshConfig` returns errors wrapping a new sentinel `errMeshRestartRequired` only when
+   mesh transport, enablement or local identity changed (message text unchanged, so the existing
+   `restart required` assertions hold). A beacon/gossip port collision is checked first and is a
+   plain config error without the sentinel: a daemon restarted on that config disables the mesh,
+   so status and doctor must not advise a restart for it.
 2. `watchMeshConfig` remembers the fingerprint it last reported. An error is reported only when
    the fingerprint differs from the last reported one; a successful apply, or a return to the
    applied fingerprint, clears it, so returning to the same bad version later reports again. The

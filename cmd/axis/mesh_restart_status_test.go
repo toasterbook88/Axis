@@ -58,8 +58,8 @@ func TestMeshRestartDoctorCheck(t *testing.T) {
 	if got := meshRestartDoctorCheck(daemon.Metadata{MeshRestartRequired: true}, errors.New("unreachable")); got != nil {
 		t.Fatalf("fetch error: got %+v, want nil", got)
 	}
-	got := meshRestartDoctorCheck(daemon.Metadata{MeshRestartRequired: true, MeshRestartReason: "mesh and beacon ports conflict: restart required"}, nil)
-	if got == nil || got.Name != "Mesh config" || got.Status != "warn" || got.Fix != "axis daemon restart" || !strings.Contains(got.Message, "ports conflict") {
+	got := meshRestartDoctorCheck(daemon.Metadata{MeshRestartRequired: true, MeshRestartReason: "mesh transport, enablement or local identity changed: restart required"}, nil)
+	if got == nil || got.Name != "Mesh config" || got.Status != "warn" || got.Fix != "axis daemon restart" || !strings.Contains(got.Message, "transport") {
 		t.Fatalf("restart pending: got %+v", got)
 	}
 }
@@ -77,7 +77,7 @@ func TestDoctorWarnsWhenMeshRestartRequired(t *testing.T) {
 	})()
 	prevMeta := doctorFetchDaemonMeta
 	doctorFetchDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
-		return daemon.Metadata{MeshRestartRequired: true, MeshRestartReason: "mesh and beacon ports conflict: restart required"}, nil
+		return daemon.Metadata{MeshRestartRequired: true, MeshRestartReason: "mesh transport, enablement or local identity changed: restart required"}, nil
 	}
 	defer func() { doctorFetchDaemonMeta = prevMeta }()
 
@@ -89,7 +89,7 @@ func TestDoctorWarnsWhenMeshRestartRequired(t *testing.T) {
 		return cmd.Execute()
 	})
 	stdout = stripANSI(stdout)
-	if !strings.Contains(stdout, "Mesh config") || !strings.Contains(stdout, "ports conflict") || !strings.Contains(stdout, "axis daemon restart") {
+	if !strings.Contains(stdout, "Mesh config") || !strings.Contains(stdout, "transport") || !strings.Contains(stdout, "axis daemon restart") {
 		t.Fatalf("doctor output lacks the mesh restart warning:\n%s", stdout)
 	}
 }
@@ -98,7 +98,7 @@ func TestDoctorWarnsWhenMeshRestartRequired(t *testing.T) {
 // otherwise serving must be restarted, not reported "already fresh".
 func TestDaemonRestartRestartsWhenMeshRestartRequired(t *testing.T) {
 	pending := serving()
-	pending.MeshRestartRequired, pending.MeshRestartReason = true, "mesh and beacon ports conflict: restart required"
+	pending.MeshRestartRequired, pending.MeshRestartReason = true, "mesh transport, enablement or local identity changed: restart required"
 	h := &restartHarness{metas: []daemon.Metadata{pending, serving()}, pid: 111}
 	h.install(t)
 
@@ -108,5 +108,36 @@ func TestDaemonRestartRestartsWhenMeshRestartRequired(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "already fresh") || h.terminates != 1 || h.spawns != 1 {
 		t.Fatalf("expected terminate+spawn, got out=%q terminates=%d spawns=%d", out.String(), h.terminates, h.spawns)
+	}
+}
+
+// The metadata check must not depend on the snapshot fetch succeeding.
+func TestDoctorWarnsWhenMeshRestartRequiredWithoutSnapshot(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "nodes.yaml")
+	defer stubDoctorConfigPath(t, func() string { return tmpFile })()
+	defer stubDoctorOwnershipHealthy(t)()
+	defer stubDoctorConfigLoader(t, func(string) (*config.Config, error) {
+		return &config.Config{Nodes: []config.NodeConfig{{Name: "alpha", Hostname: "10.0.0.1", SSHUser: "axis"}}}, nil
+	})()
+	defer stubDoctorSSHChecker(t, func(context.Context, config.NodeConfig) error { return nil })()
+	defer stubStatusCachedLoader(t, func(context.Context, string) (*models.ClusterSnapshot, string, error) {
+		return nil, "", errors.New("snapshot not ready")
+	})()
+	prevMeta := doctorFetchDaemonMeta
+	doctorFetchDaemonMeta = func(context.Context, string) (daemon.Metadata, error) {
+		return daemon.Metadata{MeshRestartRequired: true, MeshRestartReason: "mesh transport, enablement or local identity changed: restart required"}, nil
+	}
+	defer func() { doctorFetchDaemonMeta = prevMeta }()
+
+	stdout, _, _ := captureProcessOutput(t, func() error {
+		cmd := doctorCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		cmd.SetArgs(nil)
+		return cmd.Execute()
+	})
+	stdout = stripANSI(stdout)
+	if !strings.Contains(stdout, "Mesh config") || !strings.Contains(stdout, "axis daemon restart") {
+		t.Fatalf("doctor output lacks the mesh restart warning without a snapshot:\n%s", stdout)
 	}
 }
