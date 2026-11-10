@@ -61,7 +61,7 @@ func (d daemonServiceDependencies) forSudoInvoker(inv sudoInvoker) daemonService
 // after `sudo axis update`. It never falls back to the standalone path: that
 // would spawn `axis serve` as root on root's socket, leaving a second,
 // unsupervised daemon contending with the user's for the mesh port.
-func restartSudoInvokerDaemon(ctx context.Context, deps daemonServiceDependencies, inv sudoInvoker, replacedPaths []string, out io.Writer) error {
+func restartSudoInvokerDaemon(ctx context.Context, deps daemonServiceDependencies, inv sudoInvoker, replacedPaths []string, wantVersion string, out io.Writer) error {
 	deps = deps.forSudoInvoker(inv)
 	sup, svc, err := detectSupervisor(ctx, deps)
 	if err != nil {
@@ -74,5 +74,5 @@ func restartSudoInvokerDaemon(ctx context.Context, deps daemonServiceDependencie
 	// The poll runs as root, which holds root's API token rather than the
 	// owner's, so readiness is read from the unauthenticated /health.
 	addr := filepath.Join(persist.AxisDirIn(inv.home), "axis.sock")
-	return restartThroughSupervisor(ctx, deps, sup, svc, addr, replacedPaths, pollDaemonHealthVersion, out)
+	return restartThroughSupervisor(ctx, deps, sup, svc, addr, replacedPaths, wantVersion, pollDaemonHealthVersion, out)
 }

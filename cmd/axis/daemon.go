@@ -333,7 +333,16 @@ func doDaemonActionWithClient(client *http.Client, req *http.Request, prefix str
 	return fmt.Errorf("%s: %s: %s", prefix, resp.Status, msg)
 }
 
+// restartDaemon restarts the daemon and expects it to report this binary's
+// own version (axis daemon restart).
 func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
+	return restartDaemonExpecting(ctx, addr, daemon.Version, out)
+}
+
+// restartDaemonExpecting restarts the daemon unless it already serves
+// wantVersion, then waits for it to report wantVersion. After an update,
+// wantVersion is the installed release, not this (old) binary's version.
+func restartDaemonExpecting(ctx context.Context, addr, wantVersion string, out io.Writer) error {
 	// Check if a supervisor is active; if so, restart through it.
 	deps := restartServiceDeps()
 	sup, _, err := detectSupervisor(ctx, deps)
@@ -341,7 +350,7 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 		return err
 	}
 	if sup != supervisorNone {
-		return restartSupervisedDaemon(ctx, deps, addr, nil, out)
+		return restartSupervisedDaemon(ctx, deps, addr, nil, wantVersion, out)
 	}
 
 	listenAddr, err := daemonListenAddr(addr)
@@ -356,7 +365,7 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 	meta, metaErr := restartFetchMeta(metaCtx, listenAddr)
 	cancel()
 	if metaErr == nil {
-		if daemonIsServingCurrent(meta) {
+		if daemonIsServing(meta, wantVersion) {
 			fmt.Fprintf(out, "AXIS daemon already fresh on %s\n", listenAddr)
 			return nil
 		}
@@ -365,8 +374,8 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 		// any terminate/start cycle, so repeated restarts cannot churn a
 		// daemon that was about to come up on its own. Wrong-version or stale
 		// daemons get no grace (GUD-004): they must be replaced, not waited on.
-		if daemonIsStartingUp(meta) {
-			ready, waitErr := awaitDaemonServing(ctx, listenAddr, restartGraceWindow)
+		if daemonIsStartingUp(meta, wantVersion) {
+			ready, waitErr := awaitDaemonServing(ctx, listenAddr, restartGraceWindow, wantVersion)
 			if waitErr != nil {
 				return waitErr
 			}
@@ -411,7 +420,7 @@ func restartDaemon(ctx context.Context, addr string, out io.Writer) error {
 			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			meta, err := restartFetchMeta(pollCtx, listenAddr)
 			cancel()
-			if err == nil && daemonIsServingCurrent(meta) {
+			if err == nil && daemonIsServing(meta, wantVersion) {
 				fmt.Fprintln(out, "AXIS daemon is fresh and serving current snapshot")
 				return nil
 			}
@@ -533,19 +542,21 @@ func pidAlive(pid int) bool {
 // Seams for daemon restart, so readiness and restart-cycle behavior can be
 // tested without spawning real daemons or signalling real processes.
 var (
-	restartFetchMeta     = daemon.FetchMeta
-	restartFetchHealth   = versionQueryDaemon
-	restartFindPID       = findDaemonPID
-	restartTerminate     = terminatePID
-	restartSpawnDaemon   = spawnFreshDaemon
-	restartGraceWindow   = 3 * time.Second
-	restartPollInterval  = 300 * time.Millisecond
-	restartReadyDeadline = 10 * time.Second
+	restartFetchMeta   = daemon.FetchMeta
+	restartFetchHealth = versionQueryDaemon
+	restartFindPID     = findDaemonPID
+	restartTerminate   = terminatePID
+	restartSpawnDaemon = spawnFreshDaemon
+	// restartSpawnExecutable is the binary spawnFreshDaemon starts.
+	restartSpawnExecutable = os.Executable
+	restartGraceWindow     = 3 * time.Second
+	restartPollInterval    = 300 * time.Millisecond
+	restartReadyDeadline   = 10 * time.Second
 )
 
 // spawnFreshDaemon starts a detached `axis serve` on addr and returns its PID.
 func spawnFreshDaemon(listenAddr string) (int, error) {
-	exe, err := os.Executable()
+	exe, err := restartSpawnExecutable()
 	if err != nil {
 		return 0, fmt.Errorf("cannot resolve current binary: %w", err)
 	}
@@ -566,8 +577,8 @@ func spawnFreshDaemon(listenAddr string) (int, error) {
 	return serveCmd.Process.Pid, nil
 }
 
-// daemonIsServingCurrent reports whether metadata describes a daemon that is
-// safe to leave running: the exact current binary version, ready, not stale,
+// daemonIsServing reports whether metadata describes a daemon that is
+// safe to leave running: exactly wantVersion, ready, not stale,
 // and with no last refresh error. This is the single readiness predicate used
 // by both the restart short-circuit and the post-restart readiness poll, so
 // the two can never disagree about what "fresh" means.
@@ -576,22 +587,22 @@ func spawnFreshDaemon(listenAddr string) (int, error) {
 // and the supervised daemon execute different filesystem paths, a merely
 // "ready" daemon may be running an older binary; accepting it would let the two
 // silently desynchronize.
-func daemonIsServingCurrent(meta daemon.Metadata) bool {
-	return meta.Version == daemon.Version && meta.Ready && !meta.Stale && meta.LastError == ""
+func daemonIsServing(meta daemon.Metadata, wantVersion string) bool {
+	return meta.Version == wantVersion && meta.Ready && !meta.Stale && meta.LastError == ""
 }
 
-// daemonIsStartingUp reports whether metadata describes the current binary in a
+// daemonIsStartingUp reports whether metadata describes wantVersion in a
 // transient not-yet-ready state, as opposed to a daemon that is wrong-version,
 // stale, or reporting an error. Only this state earns a grace period.
-func daemonIsStartingUp(meta daemon.Metadata) bool {
-	return meta.Version == daemon.Version && !meta.Ready && !meta.Stale && meta.LastError == ""
+func daemonIsStartingUp(meta daemon.Metadata, wantVersion string) bool {
+	return meta.Version == wantVersion && !meta.Ready && !meta.Stale && meta.LastError == ""
 }
 
 // awaitDaemonServing polls until the daemon reports it is serving current, the
 // window expires, or ctx is cancelled. It reports whether the daemon became
 // ready; a cancelled context is returned as an error so the caller aborts
 // instead of restarting.
-func awaitDaemonServing(ctx context.Context, listenAddr string, window time.Duration) (bool, error) {
+func awaitDaemonServing(ctx context.Context, listenAddr string, window time.Duration, wantVersion string) (bool, error) {
 	deadline := time.Now().Add(window)
 	for time.Now().Before(deadline) {
 		select {
@@ -601,7 +612,7 @@ func awaitDaemonServing(ctx context.Context, listenAddr string, window time.Dura
 			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			meta, err := restartFetchMeta(pollCtx, listenAddr)
 			cancel()
-			if err == nil && daemonIsServingCurrent(meta) {
+			if err == nil && daemonIsServing(meta, wantVersion) {
 				return true, nil
 			}
 		}
