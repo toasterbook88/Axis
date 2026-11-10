@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -47,29 +46,15 @@ var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, tokens 
 	return api.ServeWithTokenSource(ctx, addr, d, tokens, pprof, cardFn)
 }
 
-// serveTokenSource picks the daemon's token source. AXIS_API_TOKEN, when set,
-// is fixed for the daemon's lifetime. Otherwise ~/.axis/token is hot-reloaded:
-// the daemon swaps to a rewritten token within one poll and rejects the old
-// one from then on.
-func serveTokenSource(ctx context.Context, token string) (auth.TokenSource, error) {
-	if os.Getenv(auth.TokenEnvVar) != "" {
-		return auth.StaticToken(token), nil
-	}
-	ft, err := auth.NewFileToken(auth.TokenPath(), token)
-	if err != nil {
-		return nil, err
-	}
-	go ft.Run(ctx)
-	return ft, nil
-}
-
 func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, pprof bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	token, err := auth.LoadOrGenerateToken()
+	// The token source owns AXIS_API_TOKEN vs ~/.axis/token precedence and
+	// the file poller; set it up before anything listens.
+	tokens, err := auth.NewDaemonTokenSource(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load/generate API token: %w", err)
+		return fmt.Errorf("failed to set up API token: %w", err)
 	}
 
 	d := newServeDaemon(refreshInterval)
@@ -79,6 +64,7 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
 		defer cancel()
 		d.WaitStopped(drainCtx)
+		tokens.WaitStopped(drainCtx)
 	}()
 
 	d.WatchConfig(ctx, config.DefaultConfigPath())
@@ -129,10 +115,6 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 			opts.URL = "http://" + addr
 		}
 		return a2a.Card(opts)
-	}
-	tokens, err := serveTokenSource(ctx, token)
-	if err != nil {
-		return fmt.Errorf("failed to set up API token source: %w", err)
 	}
 	return serveHTTPAPI(ctx, addr, d, tokens, pprof, cardFn)
 }

@@ -207,15 +207,20 @@ func requestToken(r *http.Request) string {
 // unauthenticated — identical to /run. ServeWithTokenSource only allows that on
 // a Unix socket and refuses a TCP listener without a token.
 //
-// It reads src once per request, uses that value for the bearer
-// compare and stores it in the request context so later checks in the same
-// request (forwarded-origin HMAC) use the same snapshot.
+// It reads src once per request, uses that value for the bearer compare and
+// stores it in the request context so later checks in the same request
+// (forwarded-origin HMAC) use the same snapshot.
+//
+// On a mismatch it asks src to Refresh once (rate-limited by the source) and
+// compares again, so a client that already read a rotated token file is not
+// refused until the next poll. The refreshed value becomes the request's
+// snapshot only if it matches; an empty refreshed value never matches, so the
+// retry cannot open the route.
 func withAuthSource(next http.HandlerFunc, src auth.TokenSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := src.Current()
-		r = r.WithContext(context.WithValue(r.Context(), requestTokenKey{}, token))
 		if token == "" {
-			next(w, r)
+			next(w, withRequestToken(r, token))
 			return
 		}
 
@@ -231,13 +236,24 @@ func withAuthSource(next http.HandlerFunc, src auth.TokenSource) http.HandlerFun
 			return
 		}
 
-		if subtle.ConstantTimeCompare([]byte(parts[1]), []byte(token)) != 1 {
-			writeError(w, http.StatusUnauthorized, "invalid api token")
-			return
+		if !bearerMatches(parts[1], token) {
+			token = src.Refresh()
+			if token == "" || !bearerMatches(parts[1], token) {
+				writeError(w, http.StatusUnauthorized, "invalid api token")
+				return
+			}
 		}
 
-		next(w, r)
+		next(w, withRequestToken(r, token))
 	}
+}
+
+func bearerMatches(presented, token string) bool {
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
+}
+
+func withRequestToken(r *http.Request, token string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), requestTokenKey{}, token))
 }
 
 func registerRoutesSource(mux *http.ServeMux, cache snapshotCache, src auth.TokenSource) {
@@ -496,19 +512,14 @@ func registerPprofRoutesSource(mux *http.ServeMux, src auth.TokenSource) {
 	mux.HandleFunc("/debug/pprof/trace", withRequiredAuthSource(pprof.Trace, src))
 }
 
-// withRequiredAuthSource refuses every request when no token is configured,
-// decided at registration from the startup value and re-checked per request
-// so a source can never fail open.
+// withRequiredAuthSource refuses every request when no token is configured.
+// The check is per request (on the snapshot withAuthSource took), so a source
+// can never fail open; ServeWithTokenSource already refuses an empty token on
+// TCP at startup.
 func withRequiredAuthSource(next http.HandlerFunc, src auth.TokenSource) http.HandlerFunc {
-	notConfigured := func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusUnauthorized, "api token is not configured")
-	}
-	if src.Current() == "" {
-		return notConfigured
-	}
 	return withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if requestToken(r) == "" {
-			notConfigured(w, r)
+			writeError(w, http.StatusUnauthorized, "api token is not configured")
 			return
 		}
 		next(w, r)

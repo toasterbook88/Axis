@@ -25,13 +25,20 @@ func TokenPath() string {
 	return persist.AxisPath("token")
 }
 
-// LoadOrGenerateToken attempts to load the token from environment or file,
-// generating a new one if necessary.
+// LoadOrGenerateToken returns AXIS_API_TOKEN when set, else the token in
+// ~/.axis/token, generating and saving a new one if the file is missing or
+// does not hold a valid token (see parseToken).
 func LoadOrGenerateToken() (string, error) {
 	if token := os.Getenv(TokenEnvVar); token != "" {
 		return token, nil
 	}
+	return loadOrGenerateTokenFile()
+}
 
+// loadOrGenerateTokenFile is the file half of LoadOrGenerateToken: it ignores
+// AXIS_API_TOKEN. Generation happens under a lock file so concurrent first
+// calls agree on one token.
+func loadOrGenerateTokenFile() (string, error) {
 	path := TokenPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", fmt.Errorf("creating config directory: %w", err)
@@ -52,9 +59,7 @@ func LoadOrGenerateToken() (string, error) {
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		token := strings.TrimSpace(string(data))
-		// Validate: token must be non-empty and the expected 64-char hex length.
-		if decoded, decodeErr := hex.DecodeString(token); decodeErr == nil && len(decoded) == 32 {
+		if token, parseErr := parseToken(data); parseErr == nil {
 			return token, nil
 		}
 		// Token file is corrupted or empty; regenerate under the lock.

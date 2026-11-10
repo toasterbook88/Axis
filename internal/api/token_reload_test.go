@@ -113,6 +113,9 @@ func (f *flipSource) Current() string {
 	return f.second
 }
 
+// Refresh reports the same sequence as Current.
+func (f *flipSource) Refresh() string { return f.Current() }
+
 func serveSignedRun(t *testing.T, src auth.TokenSource, bearer, signKey string) int {
 	t.Helper()
 	restoreRuntime := stubLiveRuntime(t, &runtimectx.Context{}, nil)
@@ -180,8 +183,61 @@ func TestTokenSourceEmptyTokenRulesUnchanged(t *testing.T) {
 // after startup must not open pprof.
 func TestRequiredAuthFailsClosedIfSourceBecomesEmpty(t *testing.T) {
 	src := &flipSource{first: reloadTokOld, second: ""}
+	src.Current() // ServeWithTokenSource's startup check sees a token
 	h := withRequiredAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
 	if got := doAuthed(t, h, http.MethodGet, "/debug/pprof/", ""); got != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", got)
+	}
+}
+
+// A client that re-read a rotated token file is accepted on its first request,
+// without waiting for a poll (no Run loop here at all). The old token is
+// rejected afterwards, and a wrong bearer never gets in through the refresh.
+func TestRotatedTokenAcceptedBeforeNextPoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	writeAtomic(t, path, reloadTokOld)
+	src, err := auth.NewFileToken(path, reloadTokOld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+
+	writeAtomic(t, path, reloadTokNew)
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusOK {
+		t.Fatalf("rotated token = %d, want 200 without waiting for a poll", got)
+	}
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokOld); got != http.StatusUnauthorized {
+		t.Fatalf("old token after swap = %d, want 401", got)
+	}
+	bogus := strings.Repeat("9", 64)
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", bogus); got != http.StatusUnauthorized {
+		t.Fatalf("wrong token = %d, want 401", got)
+	}
+	if got := src.Current(); got != reloadTokNew {
+		t.Fatalf("Current() = %q, want the rotated token", got)
+	}
+}
+
+// The refreshed token becomes the request's snapshot, so the forwarded-origin
+// HMAC on /run verifies against the token that authenticated the request.
+func TestRefreshedTokenIsTheRequestSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	writeAtomic(t, path, reloadTokOld)
+	src, err := auth.NewFileToken(path, reloadTokOld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAtomic(t, path, reloadTokNew)
+	if got := serveSignedRun(t, src, reloadTokNew, reloadTokNew); got != http.StatusOK {
+		t.Fatalf("bearer + origin signed with the rotated token = %d, want 200", got)
+	}
+}
+
+// A source whose refresh yields "" never lets a mismatched bearer through.
+func TestRefreshToEmptyFailsClosed(t *testing.T) {
+	src := &flipSource{first: reloadTokOld, second: ""}
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401", got)
 	}
 }
