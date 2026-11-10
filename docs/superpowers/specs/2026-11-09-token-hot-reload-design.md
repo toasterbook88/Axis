@@ -50,8 +50,8 @@ The daemon reads its API token once and never again, so a rotated token is ignor
   it is never reloaded.
 - No change to token format (64 hex chars, 32 bytes), generation, file mode or location.
 - No hardening: no permission or ownership checks on the file and no new 401 cases. (The reader
-  does bound its own reads, §1, and rate-limits its on-demand refresh, §4; neither is an access
-  check.)
+  bounds its reads, §1, and re-reads on demand only when the file's stat changed, §4; neither is
+  an access check.)
   The empty-token rules (F9 pass-through on a Unix socket, `server.go:197`; TCP refusal, `:137`;
   `withRequiredAuth` refusal, `:480`) keep today's behavior.
 - No SIGHUP handler and no fsnotify dependency.
@@ -65,14 +65,18 @@ The daemon reads its API token once and never again, so a rotated token is ignor
 ### 1. Read-only reader in `internal/auth`
 
 `func readTokenFile(path string) ([]byte, string, error)` (unexported; its only caller is the
-poller) reads the file, trims whitespace and validates that it hex-decodes to 32 bytes. That rule
+reloader) reads the file through `readTokenBytes`, trims whitespace and validates that it
+hex-decodes to 32 bytes. That rule
 lives in one function, `parseToken`, which `LoadOrGenerateToken` also uses (Review 2, finding 1),
 so the daemon and its clients cannot disagree about which files are usable. It returns the raw
 bytes too, for the change fingerprint. It never creates, regenerates, writes or locks. It returns
 distinct errors for missing, empty, invalid, not-a-regular-file and too-large, so the log line can
 say which.
 
-The read is bounded, because it runs every 500 ms (Review 2, finding 3):
+`readTokenBytes` is the one bounded reader, shared by the reloader and the startup loader
+`LoadOrGenerateToken` (Review 3, S1), so the two can never disagree about a file, including one
+whose valid token is followed by more than 4 KiB of whitespace. The read is bounded (Review 2,
+finding 3):
 - Symlinks are followed (an operator may point `~/.axis/token` at a managed secret file), but the
   target must be a regular file. A directory, FIFO, socket or device (for example a symlink to
   `/dev/zero`) is `ErrTokenFileNotRegular`.
@@ -80,7 +84,13 @@ The read is bounded, because it runs every 500 ms (Review 2, finding 3):
   `fstat` on the opened descriptor, so a path swapped between check and read is still caught.
 - Content is read through `io.LimitReader` with a 4096-byte cap (`maxTokenFileSize`); a longer
   file is `ErrTokenFileTooLarge`. A valid file is 64 bytes plus whitespace.
-- Both map to the unusable-file case in §3: keep the last good token and log once.
+- In the reloader, both map to the unusable-file case in §3: keep the last good token and log once.
+- In the loader, both (and any other open or read error) are returned as an error, under the token
+  lock, without blocking. They are never regenerated: regenerating would replace what the operator
+  put at the path (a symlink, directory or device) with a new file. Only ENOENT generates a token,
+  and a regular file with empty or corrupt content is regenerated, both as before. So a FIFO,
+  device or oversized file at `~/.axis/token` now makes `axis serve` and clients fail with an error
+  where they used to hang, exhaust memory, or (oversized) accept the trimmed token.
 
 The reloader must never call `LoadOrGenerateToken`: on an empty or corrupt file that function
 generates a new token and overwrites the file (`auth.go:61-75`). A daemon doing that on a poll would
@@ -96,7 +106,7 @@ In `internal/auth`:
 
     type TokenSource interface {
         Current() string
-        Refresh() string // re-check the backing store (rate-limited), return the token now in effect
+        Refresh() string // re-check the backing store (cheap if unchanged), return the token now in effect
     }
 
 - `StaticToken(string)` returns a fixed value (`Refresh` returns it too). It is used when
@@ -123,15 +133,27 @@ In `internal/auth`:
   - `NewFileToken` refuses an empty initial token, so a file source is never empty. The zero
     `FileToken` is not usable (documented); `Current` deliberately does not return "" for it,
     because "" would turn `withAuthSource` into a pass-through.
-  - `Refresh()` re-reads the file at most once per 250 ms (`tokenRefreshMinInterval`, its own
-    clock, independent of the poll) under the same mutex, and returns `Current()` afterwards. Like a
+  - Every read (poll or refresh) first records a `fileStamp` of the path: `stat(2)` following
+    symlinks, giving device, inode, size and mtime in ns, or "missing" or "stat error". It is
+    stored in an `atomic.Pointer`. The stamp is taken before the read, so a change between the two
+    leaves the older stamp and causes one extra read later, never a missed change.
+  - `Refresh()` (Review 3, S2) stats the path and compares with that stamp without taking the
+    mutex. Unchanged: it returns `Current()` at once, with no read and no lock. Changed: it takes
+    the mutex, re-checks the stamp (another caller may have just read), and only then reads. So a
+    flood of wrong bearers against an unchanged file costs one `stat` each and never re-reads or
+    queues behind a slow read (N1), and concurrent refreshes after one change read once. There is
+    no time-based rate limit, so no caller can use up a slot that delays a real rotation. Like a
     poll, it only installs a token that passed `parseToken`.
 
 Choosing the source is `auth.NewDaemonTokenSource(ctx)` (Review 2, finding 2). It owns the whole
 decision: `StaticToken` if `AXIS_API_TOKEN` is set (the env var is read once, here), otherwise it
 loads or creates `~/.axis/token`, builds a `FileToken` on `auth.TokenPath()` and starts its poller
-on ctx. It returns a `*DaemonTokenSource` that embeds the `TokenSource` and adds
-`WaitStopped(ctx)`, so `serve.go` drains the poller alongside the daemon's other goroutines.
+on ctx. It returns a `*DaemonTokenSource` that wraps the source in an unexported field, forwards
+`Current` and `Refresh`, and adds `WaitStopped(ctx)`, so `serve.go` drains the poller alongside the
+daemon's other goroutines. `WaitStopped` returns at once when no poller was started (env var or
+zero value); the zero value's `Current` panics, failing closed (Review 3, N2). The env token is
+used as given, as `LoadOrGenerateToken` does; it is not run through `parseToken`, so existing
+non-hex `AXIS_API_TOKEN` values keep working (Review 3, N3).
 `serve.go` calls it where it used to call `LoadOrGenerateToken`, before the daemon starts and
 before the "listening" banner, so a failure is reported before the daemon says it is up.
 
@@ -161,9 +183,16 @@ before the "listening" banner, so a failure is reported before the daemon says i
   token before the daemon's next poll; without the retry it would get 401 for up to 500 ms. If the
   retry matches, the refreshed token becomes the request's snapshot (so the forwarded-origin HMAC
   uses the token that authenticated the request). An empty refreshed value never matches, so the
-  retry cannot open a route. A missing or malformed header does not trigger a refresh. The 250 ms
-  rate limit bounds the file reads a client sending wrong tokens can cause to 4 per second, each
-  capped at 4 KiB. A remaining window exists only when two rotations land inside 250 ms.
+  retry cannot open a route. A missing or malformed header does not trigger a refresh.
+- The remaining 401 window after a rotation, stated exactly (Review 3, S2): `Refresh` sees any
+  change to the device, inode, size or mtime of the file the path resolves to. Every atomic
+  replace (temp file plus rename: `SaveToken`, the documented rotation, a regenerated file) gets a
+  new inode, and a symlink retargeted to another file has a different inode, so these are accepted
+  on the client's first request. The one case left to the poll (up to 500 ms) is an in-place
+  rewrite of the same inode that keeps the size and lands within the filesystem's mtime
+  granularity of the previous read (for example within the same second on a coarse-timestamp
+  filesystem). Wrong bearers from other clients do not widen the window. A client that presents a
+  token the file no longer holds (a stale client) gets 401, which is the strict contract.
 - `server.go:397` reads the token from the request context (helper `requestToken(r)`) instead of
   the closed-over string. Bearer auth and forwarded-origin HMAC verification in one request
   therefore always use the same snapshot, even when a swap lands between them.
@@ -209,8 +238,8 @@ before the "listening" banner, so a failure is reported before the daemon says i
 shorten one instance's unexported `interval` field before `Run` starts, which is race-free, and
 `NewDaemonTokenSource`'s tests use the unexported `newDaemonTokenSource(ctx, interval)`, so no
 test sleeps on the real 500 ms poll. The `internal/api` strict-swap test still waits on the real
-poll with a 3 s deadline. The refresh rate-limit test injects the `FileToken` clock. Tests use
-temp `AXIS_HOME` directories.
+poll with a 3 s deadline. The refresh tests count file reads through the `FileToken`'s
+unexported `read` field. Tests use temp `AXIS_HOME` directories.
 
 `internal/auth`:
 - `readTokenFile`: valid file returns the token; missing, empty, whitespace-only, 63-char,
@@ -229,12 +258,19 @@ temp `AXIS_HOME` directories.
 - Bounded read: a directory, a FIFO (linux), a symlink to `/dev/zero` and a 4097-byte file each
   return the mapped error within 2 s with no data, keep the last good token and log one warning; a
   symlink to a regular file with a valid token is accepted; a file of exactly 4096 bytes is read.
-- Refresh: picks up a rotation without a poll; a second call inside 250 ms does not read; an
-  unusable file keeps the last good token.
+- Refresh: picks up a rotation without a poll; 1000 refreshes against an unchanged file cause no
+  re-read; a refresh just before a rotation does not stop the next one from reading the new token;
+  64 concurrent refreshes after one change read the file once; an unusable file keeps the last
+  good token.
+- Loader (`LoadOrGenerateToken`): a directory, FIFO (linux), symlink to `/dev/zero`, and a valid
+  token followed by 4096 spaces each return the mapped error within 2 s and leave the path exactly
+  as it was (same file, same mode); missing generates, a corrupt regular file regenerates, and a
+  symlink to a regular file with a valid token is returned.
 - `NewDaemonTokenSource`: with `AXIS_API_TOKEN` set it returns a `StaticToken`, does not touch the
   file, and `WaitStopped` returns at once; without it, it creates the file on first start, serves
   that token, reloads a rewrite, and `WaitStopped` returns after cancel; an invalid file at start
-  is regenerated by the loader.
+  is regenerated by the loader (and its poller is drained); a directory at the path is an error;
+  the zero value's `WaitStopped` returns at once.
 
 `internal/api`:
 - Strict swap: with a `FileToken` on a temp file, the old token gets 200, then the file is
@@ -277,9 +313,9 @@ temp `AXIS_HOME` directories.
   the old token, while approve and reject (no principal check, `internal/api/server.go:605,681`)
   still work. That is the strict-mode contract applied to task ownership; it is documented in
   `docs/authority-secrets.md`, not changed here. Tasks live at most 30 min (`store.go:11`).
-- Cost: one goroutine and one small file read plus sha256 every 500 ms per daemon, plus at most 4
-  refresh reads per second while clients present mismatched tokens. Not measured; the existing
-  watchers do the same work.
+- Cost: one goroutine and one small file read plus sha256 every 500 ms per daemon, plus one
+  `stat` per request with a mismatched bearer (a read only when the file changed). Not measured;
+  the existing watchers do the same work.
 - Under §8.4 this is likely a larger feature (changes in `cmd/axis`, `internal/auth` and
   `internal/api`, three directories), so it needs two independent diff reviews.
 - Rolling a build to nodes is a fleet roll and needs the maintainer's explicit go.
@@ -398,3 +434,41 @@ Verdict: approve-with-changes
    `NewFileToken` and why `Current` must not return "" instead.
 
 Note: the reviewer found no must-fix and no fail-open path. The fixes are in the commits after 696254f9 on this branch.
+
+Kind: diff
+Reviewer: new session (Claude Code in a herdr pane on cranium, read-only; Review 3, 2026-11-10)
+Model: Anthropic Claude (exact model not reported by the reviewer)
+Base: 3a2fe9cf
+Head: ac356ced
+Date: 2026-11-10
+Verdict: approve-with-changes
+
+1. Should-fix (S1): the startup loader still used unbounded `os.ReadFile` with no regular-file
+   check while holding the token lock, so a FIFO hung serve and every client, `/dev/zero` grew
+   memory, and a valid token plus over 4 KiB of whitespace passed the loader but failed the
+   reloader. Fixed: `readTokenBytes` is the one bounded reader for both; non-regular, oversized
+   and unreadable files are errors and are never regenerated or replaced; only ENOENT generates
+   (§1, loader tests).
+2. Should-fix (S2): the docs claimed no 401 window, but any wrong bearer used up the 250 ms refresh
+   slot, so a stale client or an attacker could hold the window at up to 500 ms. Fixed: the time
+   slot is gone; `Refresh` compares a stat stamp (device, inode, size, mtime) and re-reads only
+   when it changed, so wrong bearers cost one stat and cannot delay a rotation; the exact remaining
+   window (same-inode, same-size rewrite inside mtime granularity) is stated in §4, the code
+   comments and `docs/authority-secrets.md`, with tests for a wrong bearer before a rotation and a
+   flood against an unchanged file.
+3. Nit (N1): bad-bearer requests could queue on the mutex behind a slow read. Fixed: the
+   unchanged-file path never takes the mutex.
+4. Nit (N2): `DaemonTokenSource` exported its embedded `TokenSource`, and the zero value's
+   `WaitStopped` blocked until ctx ended. Fixed: unexported field with forwarding methods,
+   `WaitStopped` returns at once with no poller, and the zero value is documented.
+5. Nit (N3): the `Refresh` contract said it never returns an unvalidated value, which
+   `AXIS_API_TOKEN` is. Fixed: the comment says it never returns a value its backing store did not
+   supply; the env token stays unvalidated so existing non-hex values keep working.
+6. Nit (N4): the `ServeWithTokenSource` comment said the daemon passes an `auth.FileToken`. Fixed:
+   it names `*auth.DaemonTokenSource`.
+7. Nit (N5): the invalid-file daemon test cancelled the poller without waiting. Fixed: it calls
+   `WaitStopped`.
+8. Nit (N6): no test covered concurrent `Refresh` calls. Fixed: 64 concurrent refreshes after one
+   change read the file exactly once (counted reads).
+
+Note: the reviewer resolved all eight Review 2 items (the `FileToken` zero-value panic is kept as the fail-closed choice) and found no fail-open path. Review 2 item 4 above describes the 250 ms rate limit that Review 3 replaced.

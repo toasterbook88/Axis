@@ -9,9 +9,14 @@
 
 * **Behaviour change:** the daemon now reloads `~/.axis/token` without a
   restart. A rewritten token takes effect within 500 ms, or at once when a
-  client presents it, and the old token is rejected from then on (no grace
-  window). A missing, empty, invalid, non-regular or oversized (over 4 KiB)
-  file keeps the last good token and logs one warning. `AXIS_API_TOKEN` is still
+  client presents it after an atomic replace, and the old token is rejected
+  from then on (no grace window). A missing, empty, invalid, non-regular or
+  oversized (over 4 KiB) file keeps the last good token and logs one warning.
+* **Behaviour change:** if `~/.axis/token` is not a regular file (after
+  following symlinks), is over 4 KiB, or cannot be read, `axis serve` and
+  clients now fail with an error instead of hanging (FIFO), exhausting memory
+  (`/dev/zero`) or trimming an oversized file. The path is never regenerated
+  or replaced in that case. `AXIS_API_TOKEN` is still
   read once at startup.
 
 ### Fixes
