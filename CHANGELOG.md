@@ -1,20 +1,11 @@
 ## Unreleased
 
-## v0.24.1 (2026-11-09)
+## v0.24.2 (2026-11-10)
 
-`axis doctor` and `axis daemon service install` say whether the AXIS user
-service starts at boot or only at login. After `axis update`, the restart check
-expects the release that was just installed. A `nodes.yaml` edit that needs a
-daemon restart is logged once and shown in `axis daemon status` and
-`axis doctor`. Publication and available downloads are tracked on GitHub
-Releases.
+The daemon reloads `~/.axis/token` without a restart, and a broken token file
+is now an error instead of a hang.
 
 ### Features
-
-* `axis doctor` and `axis daemon service install` report whether the AXIS user
-  service starts at boot or only at login: Linux checks lingering for the user
-  (and prints `loginctl enable-linger $USER` when it is off), macOS checks that
-  automatic login is set for this user. The check only reads state.
 
 * **Behaviour change:** the daemon now reloads `~/.axis/token` without a
   restart. A rewritten token takes effect within 500 ms, or at once when a
@@ -31,6 +22,22 @@ Releases.
   (unchanged). Any other empty token, including a token source that turns
   empty after startup, gets 401. `AXIS_API_TOKEN` is still
   read once at startup.
+
+## v0.24.1 (2026-11-09)
+
+`axis doctor` and `axis daemon service install` say whether the AXIS user
+service starts at boot or only at login. After `axis update`, the restart check
+expects the release that was just installed. A `nodes.yaml` edit that needs a
+daemon restart is logged once and shown in `axis daemon status` and
+`axis doctor`. Publication and available downloads are tracked on GitHub
+Releases.
+
+### Features
+
+* `axis doctor` and `axis daemon service install` report whether the AXIS user
+  service starts at boot or only at login: Linux checks lingering for the user
+  (and prints `loginctl enable-linger $USER` when it is off), macOS checks that
+  automatic login is set for this user. The check only reads state.
 
 ### Fixes
 
