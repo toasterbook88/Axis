@@ -25,8 +25,11 @@ type TokenSource interface {
 	// Refresh re-checks the backing store (if any) and returns the token in
 	// effect afterwards. The API calls it once when a presented bearer does
 	// not match Current, so a client that already re-read a rotated token
-	// file is not refused until the next poll. It must never return a value
-	// that failed validation; implementations rate-limit their own reads.
+	// file is accepted before the next poll. It never returns a value its
+	// backing store did not supply (FileToken only installs values that pass
+	// parseToken; StaticToken returns what it was built with). Implementations
+	// must keep it cheap when nothing changed, because any caller presenting a
+	// wrong bearer triggers it.
 	Refresh() string
 }
 
@@ -74,59 +77,94 @@ func parseToken(data []byte) (string, error) {
 	return token, nil
 }
 
-// readTokenFile reads and validates a token file, returning the raw bytes for
-// change detection. Unlike LoadOrGenerateToken it never creates, regenerates,
-// locks or writes anything: a daemon polling with LoadOrGenerateToken would
-// silently rotate the token under every client when the file is empty or
-// corrupt. No lock is needed: SaveToken writes via temp file plus rename.
+// readTokenBytes is the one bounded reader for the token file, shared by the
+// loader (LoadOrGenerateToken) and the reloader (FileToken), so they can never
+// disagree about which files are usable. It never creates, locks or writes.
 //
-// The read is bounded so a poll can never block or allocate without limit.
 // Symlinks are followed (operators may point ~/.axis/token at a managed
 // secret file), but the target must be a regular file. The file is opened
 // with O_NONBLOCK so a FIFO cannot block the open, and the type check uses
 // the opened descriptor (fstat), so a path swapped between check and read is
-// still caught. A non-regular file returns ErrTokenFileNotRegular and a file
-// over maxTokenFileSize returns ErrTokenFileTooLarge, both with nil data.
-func readTokenFile(path string) ([]byte, string, error) {
+// still caught. Errors: ErrTokenFileMissing (ENOENT), ErrTokenFileNotRegular,
+// ErrTokenFileTooLarge (over maxTokenFileSize), or a wrapped open/read error.
+// Data is nil on every error.
+func readTokenBytes(path string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, "", ErrTokenFileMissing
+			return nil, ErrTokenFileMissing
 		}
-		return nil, "", fmt.Errorf("opening token file: %w", err)
+		return nil, fmt.Errorf("opening token file: %w", err)
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return nil, "", fmt.Errorf("stat token file: %w", err)
+		return nil, fmt.Errorf("stat token file: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, "", ErrTokenFileNotRegular
+		return nil, ErrTokenFileNotRegular
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxTokenFileSize+1))
 	if err != nil {
-		return nil, "", fmt.Errorf("reading token file: %w", err)
+		return nil, fmt.Errorf("reading token file: %w", err)
 	}
 	if len(data) > maxTokenFileSize {
-		return nil, "", ErrTokenFileTooLarge
+		return nil, ErrTokenFileTooLarge
+	}
+	return data, nil
+}
+
+// readTokenFile reads (readTokenBytes) and validates (parseToken) a token
+// file, returning the raw bytes for change detection. Unlike
+// LoadOrGenerateToken it never regenerates: a daemon polling with
+// LoadOrGenerateToken would silently rotate the token under every client when
+// the file is empty or corrupt. No lock is needed: SaveToken writes via temp
+// file plus rename.
+func readTokenFile(path string) ([]byte, string, error) {
+	data, err := readTokenBytes(path)
+	if err != nil {
+		return nil, "", err
 	}
 	token, err := parseToken(data)
 	return data, token, err
+}
+
+// fileStamp is the cheap identity of the file the token path resolves to at
+// one moment: device, inode, size and mtime (ns) from stat(2), following
+// symlinks. Any atomic replace (temp file plus rename, as SaveToken and the
+// documented rotation do) yields a new inode, so it always changes the stamp.
+type fileStamp struct {
+	dev, ino uint64
+	size     int64
+	mtimeNs  int64
+	mode     os.FileMode
+	state    string // "ok", "missing" or "stat-error"
+}
+
+func statTokenFile(path string) fileStamp {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return fileStamp{state: "missing"}
+	case err != nil:
+		return fileStamp{state: "stat-error"}
+	}
+	st := fileStamp{state: "ok", size: info.Size(), mtimeNs: info.ModTime().UnixNano(), mode: info.Mode()}
+	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+		st.dev, st.ino = uint64(sys.Dev), uint64(sys.Ino) // Dev is int32 on darwin
+	}
+	return st
 }
 
 const (
 	// tokenPollInterval matches the daemon's config/state/skills watchers
 	// (internal/daemon watchConfigPollInterval).
 	tokenPollInterval = 500 * time.Millisecond
-	// tokenRefreshMinInterval bounds on-demand re-reads triggered by a
-	// mismatched bearer, so a client sending bad tokens cannot turn every
-	// request into a file read.
-	tokenRefreshMinInterval = 250 * time.Millisecond
 )
 
 // FileToken serves the last good token read from a file and swaps to a new
-// valid token at the first poll (or refresh) after the file changes (strict:
+// valid token at the first poll or refresh after the file changes (strict:
 // the old token is not accepted after the swap). An unusable file (missing,
 // empty, invalid, not a regular file, too large, unreadable) keeps the last
 // good token and logs one warning per distinct state. It never writes the file
@@ -136,17 +174,19 @@ const (
 // dereference a nil token. That is deliberate; returning "" instead would turn
 // withAuthSource into an unauthenticated pass-through.
 type FileToken struct {
-	path         string
-	interval     time.Duration
-	refreshEvery time.Duration
-	now          func() time.Time
-	cur          atomic.Pointer[string]
-	logger       *slog.Logger
+	path     string
+	interval time.Duration
+	read     func(string) ([]byte, string, error) // readTokenFile; tests count calls
+	cur      atomic.Pointer[string]
+	logger   *slog.Logger
 
-	mu          sync.Mutex // serializes reads; guards the fields below
-	lastKey     string     // fingerprint of the last observed file state
-	bad         bool       // the last observed state was unusable
-	lastRefresh time.Time  // when Refresh last read the file
+	// readStamp is the stamp taken just before the last read. Refresh
+	// compares against it without taking mu.
+	readStamp atomic.Pointer[fileStamp]
+
+	mu      sync.Mutex // serializes reads; guards the fields below
+	lastKey string     // fingerprint of the last observed file state
+	bad     bool       // the last observed state was unusable
 }
 
 // NewFileToken builds a FileToken seeded with the token already loaded at
@@ -156,12 +196,7 @@ func NewFileToken(path, initial string) (*FileToken, error) {
 	if initial == "" {
 		return nil, errors.New("file token source needs a non-empty initial token")
 	}
-	ft := &FileToken{
-		path:         path,
-		interval:     tokenPollInterval,
-		refreshEvery: tokenRefreshMinInterval,
-		now:          time.Now,
-	}
+	ft := &FileToken{path: path, interval: tokenPollInterval, read: readTokenFile}
 	ft.cur.Store(&initial)
 	return ft, nil
 }
@@ -169,19 +204,36 @@ func NewFileToken(path, initial string) (*FileToken, error) {
 // Current returns the token in effect now.
 func (f *FileToken) Current() string { return *f.cur.Load() }
 
-// Refresh re-reads the file at most once per refresh interval (250 ms) and
-// returns the token in effect afterwards. Calls inside the interval return
-// Current without touching the file. Like a poll, it only ever installs a
-// token that passed parseToken.
+// Refresh re-reads the file only if it changed since the last read, and
+// returns the token in effect afterwards.
+//
+// "Changed" is a stat(2) of the path (fileStamp: device, inode, size, mtime)
+// compared with the stamp taken before the last read. The common case, a
+// wrong or stale bearer against an unchanged file, costs one stat and never
+// takes mu, so it cannot queue behind a slow read or force re-reads. When the
+// stamp did change, callers serialize on mu and re-check, so concurrent
+// callers cause one read. Like a poll, it only installs a token that passed
+// parseToken.
+//
+// What it misses (the poll still catches it within one interval): an
+// in-place rewrite that keeps the size and lands within the filesystem's
+// mtime granularity of the previous read on the same inode.
 func (f *FileToken) Refresh() string {
+	if f.unchangedSinceRead() {
+		return f.Current()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	now := f.now()
-	if f.lastRefresh.IsZero() || now.Sub(f.lastRefresh) >= f.refreshEvery {
-		f.lastRefresh = now
-		f.pollLocked()
+	if f.unchangedSinceRead() { // another caller read it while we waited
+		return f.Current()
 	}
+	f.pollLocked()
 	return f.Current()
+}
+
+func (f *FileToken) unchangedSinceRead() bool {
+	last := f.readStamp.Load()
+	return last != nil && *last == statTokenFile(f.path)
 }
 
 func (f *FileToken) log() *slog.Logger {
@@ -216,7 +268,12 @@ func (f *FileToken) poll() {
 // sha256 fingerprint of the raw bytes (not mtime, which misses same-second
 // rewrites).
 func (f *FileToken) pollLocked() {
-	data, token, err := readTokenFile(f.path)
+	// Stamp before reading: if the file changes between the two, the stored
+	// stamp is the older one and the next Refresh reads again (never the
+	// reverse, which could hide a change).
+	stamp := statTokenFile(f.path)
+	data, token, err := f.read(f.path)
+	f.readStamp.Store(&stamp)
 	var key, reason string
 	switch {
 	case errors.Is(err, ErrTokenFileMissing):

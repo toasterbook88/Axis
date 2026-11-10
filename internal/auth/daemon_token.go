@@ -16,10 +16,20 @@ import (
 //
 // WaitStopped lets the caller drain the poller alongside the daemon's other
 // background goroutines.
+//
+// Build it with NewDaemonTokenSource. The zero value has no source: Current
+// and Refresh panic (failing closed; returning "" would make withAuthSource a
+// pass-through), and WaitStopped returns at once because there is no poller.
 type DaemonTokenSource struct {
-	TokenSource
-	stopped chan struct{}
+	src     TokenSource
+	stopped chan struct{} // nil: no poller was started
 }
+
+// Current returns the token in effect now.
+func (s *DaemonTokenSource) Current() string { return s.src.Current() }
+
+// Refresh re-checks the backing store and returns the token in effect now.
+func (s *DaemonTokenSource) Refresh() string { return s.src.Refresh() }
 
 // NewDaemonTokenSource builds the daemon's token source and, for the file
 // case, starts its poller. Call it before the API starts listening so a
@@ -30,10 +40,10 @@ func NewDaemonTokenSource(ctx context.Context) (*DaemonTokenSource, error) {
 }
 
 func newDaemonTokenSource(ctx context.Context, interval time.Duration) (*DaemonTokenSource, error) {
-	stopped := make(chan struct{})
 	if v := os.Getenv(TokenEnvVar); v != "" {
-		close(stopped) // nothing to run
-		return &DaemonTokenSource{TokenSource: StaticToken(v), stopped: stopped}, nil
+		// Used as given, exactly like LoadOrGenerateToken; not run through
+		// parseToken, so existing non-hex AXIS_API_TOKEN values keep working.
+		return &DaemonTokenSource{src: StaticToken(v)}, nil
 	}
 	token, err := loadOrGenerateTokenFile()
 	if err != nil {
@@ -44,16 +54,20 @@ func newDaemonTokenSource(ctx context.Context, interval time.Duration) (*DaemonT
 		return nil, err
 	}
 	ft.interval = interval
+	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		ft.Run(ctx)
 	}()
-	return &DaemonTokenSource{TokenSource: ft, stopped: stopped}, nil
+	return &DaemonTokenSource{src: ft, stopped: stopped}, nil
 }
 
-// WaitStopped blocks until the poller has exited (immediately for the
-// env-var case) or ctx is done.
+// WaitStopped blocks until the poller has exited or ctx is done. It returns
+// at once when no poller was started (the env-var case, or the zero value).
 func (s *DaemonTokenSource) WaitStopped(ctx context.Context) {
+	if s.stopped == nil {
+		return
+	}
 	select {
 	case <-s.stopped:
 	case <-ctx.Done():

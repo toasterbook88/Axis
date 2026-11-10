@@ -132,9 +132,10 @@ func newHTTPServer(handler http.Handler) *http.Server {
 // Authenticated A2A task send/get routes are always registered in
 // registerRoutesSource.
 //
-// src supplies the API token. The daemon passes an auth.FileToken so a
-// rewritten ~/.axis/token takes effect without a restart; each request takes
-// one snapshot of src and uses it for bearer auth and forwarded-origin checks.
+// src supplies the API token. The daemon passes the *auth.DaemonTokenSource
+// from auth.NewDaemonTokenSource: a fixed AXIS_API_TOKEN, or ~/.axis/token
+// hot-reloaded without a restart. Each request takes one snapshot of src and
+// uses it for bearer auth and forwarded-origin checks.
 func ServeWithTokenSource(ctx context.Context, addr string, cache snapshotCache, src auth.TokenSource, pprof bool, cardFn func() a2a.AgentCard) error {
 	// F9: withAuth passes requests through when token is empty. That is only
 	// acceptable on a Unix socket, whose file mode is the access control; a
@@ -211,11 +212,12 @@ func requestToken(r *http.Request) string {
 // stores it in the request context so later checks in the same request
 // (forwarded-origin HMAC) use the same snapshot.
 //
-// On a mismatch it asks src to Refresh once (rate-limited by the source) and
-// compares again, so a client that already read a rotated token file is not
-// refused until the next poll. The refreshed value becomes the request's
-// snapshot only if it matches; an empty refreshed value never matches, so the
-// retry cannot open the route.
+// On a mismatch it asks src to Refresh once and compares again, so a client
+// that already read a rotated token file is accepted before the next poll
+// (auth.FileToken.Refresh re-reads only when the file's stat changed; see it
+// for the one case left to the poll). The refreshed value becomes the
+// request's snapshot only if it matches; an empty refreshed value never
+// matches, so the retry cannot open the route.
 func withAuthSource(next http.HandlerFunc, src auth.TokenSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := src.Current()

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,8 +20,8 @@ func TestDaemonTokenSourceEnvVarIsFixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := src.TokenSource.(StaticToken); !ok {
-		t.Fatalf("with %s set, source = %T, want StaticToken", TokenEnvVar, src.TokenSource)
+	if _, ok := src.src.(StaticToken); !ok {
+		t.Fatalf("with %s set, source = %T, want StaticToken", TokenEnvVar, src.src)
 	}
 	if got := src.Current(); got != tokA {
 		t.Fatalf("Current() = %q, want the env token", got)
@@ -49,8 +50,8 @@ func TestDaemonTokenSourceCreatesThenReloadsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := src.TokenSource.(*FileToken); !ok {
-		t.Fatalf("without %s, source = %T, want *FileToken", TokenEnvVar, src.TokenSource)
+	if _, ok := src.src.(*FileToken); !ok {
+		t.Fatalf("without %s, source = %T, want *FileToken", TokenEnvVar, src.src)
 	}
 	// First start creates the file, and the source serves what it wrote.
 	data, err := os.ReadFile(path)
@@ -96,5 +97,36 @@ func TestDaemonTokenSourceIgnoresInvalidFileOnStart(t *testing.T) {
 	}
 	if _, err := parseToken([]byte(src.Current())); err != nil {
 		t.Fatalf("source started with an invalid token: %v", err)
+	}
+	cancel()
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	src.WaitStopped(waitCtx)
+	if waitCtx.Err() != nil {
+		t.Fatal("poller did not stop after ctx cancel")
+	}
+}
+
+func TestDaemonTokenSourceZeroValueWaitStoppedReturns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var zero DaemonTokenSource
+	zero.WaitStopped(ctx)
+	if ctx.Err() != nil {
+		t.Fatal("WaitStopped blocked on the zero value")
+	}
+}
+
+// A FIFO at the token path is an error at startup, not a hang and not a
+// regenerated file.
+func TestDaemonTokenSourceRefusesNonRegularFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(persist.AxisHomeEnv, home)
+	t.Setenv(TokenEnvVar, "")
+	if err := os.Mkdir(filepath.Join(home, "token"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newDaemonTokenSource(context.Background(), time.Hour); !errors.Is(err, ErrTokenFileNotRegular) {
+		t.Fatalf("err = %v, want ErrTokenFileNotRegular", err)
 	}
 }

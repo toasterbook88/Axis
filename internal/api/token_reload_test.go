@@ -241,3 +241,26 @@ func TestRefreshToEmptyFailsClosed(t *testing.T) {
 		t.Fatalf("got %d, want 401", got)
 	}
 }
+
+// A wrong bearer (a stale client or an attacker) just before a rotation does
+// not delay the new token: there is no refresh slot to use up.
+func TestWrongBearerBeforeRotationDoesNotBlockNewToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	writeAtomic(t, path, reloadTokOld)
+	src, err := auth.NewFileToken(path, reloadTokOld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+
+	bogus := strings.Repeat("9", 64)
+	for i := 0; i < 50; i++ {
+		if got := doAuthed(t, h, http.MethodGet, "/snapshot", bogus); got != http.StatusUnauthorized {
+			t.Fatalf("wrong token = %d, want 401", got)
+		}
+	}
+	writeAtomic(t, path, reloadTokNew)
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusOK {
+		t.Fatalf("rotated token right after wrong bearers = %d, want 200", got)
+	}
+}

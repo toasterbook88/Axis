@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,8 +27,10 @@ func TokenPath() string {
 }
 
 // LoadOrGenerateToken returns AXIS_API_TOKEN when set, else the token in
-// ~/.axis/token, generating and saving a new one if the file is missing or
-// does not hold a valid token (see parseToken).
+// ~/.axis/token. It generates and saves a new token only when the file is
+// missing or is a regular file without a valid token (see parseToken). A
+// path that is not a regular file (after following symlinks), a file over
+// maxTokenFileSize, or an unreadable file is an error and is left untouched.
 func LoadOrGenerateToken() (string, error) {
 	if token := os.Getenv(TokenEnvVar); token != "" {
 		return token, nil
@@ -57,14 +60,23 @@ func loadOrGenerateTokenFile() (string, error) {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	data, err := os.ReadFile(path)
-	if err == nil {
+	// Same bounded reader as the daemon's reloader (readTokenBytes), so a
+	// FIFO cannot hang this call while it holds the lock, and both sides
+	// agree on which files are usable.
+	data, err := readTokenBytes(path)
+	switch {
+	case err == nil:
 		if token, parseErr := parseToken(data); parseErr == nil {
 			return token, nil
 		}
-		// Token file is corrupted or empty; regenerate under the lock.
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("reading token file: %w", err)
+		// Regular file with empty or corrupt content; regenerate under the lock.
+	case errors.Is(err, ErrTokenFileMissing):
+		// First run; generate below.
+	default:
+		// Not a regular file, too large, or unreadable. Never regenerate:
+		// that would replace something the operator put there (a symlink,
+		// a directory, a device) with a new file.
+		return "", fmt.Errorf("token file %s unusable: %w", path, err)
 	}
 
 	// Generate new token

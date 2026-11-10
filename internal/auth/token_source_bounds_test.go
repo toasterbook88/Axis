@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -139,25 +141,77 @@ func TestFileTokenRefreshPicksUpRotation(t *testing.T) {
 	assertNoTokenInLogs(t, logs.String())
 }
 
-// Refresh reads the file at most once per refresh interval.
-func TestFileTokenRefreshIsRateLimited(t *testing.T) {
+// countReads wraps ft's reader and returns a counter of file reads.
+func countReads(ft *FileToken) *atomic.Int32 {
+	var n atomic.Int32
+	ft.read = func(path string) ([]byte, string, error) {
+		n.Add(1)
+		return readTokenFile(path)
+	}
+	return &n
+}
+
+// A flood of mismatches against an unchanged file costs no re-reads.
+func TestFileTokenRefreshDoesNotRereadUnchangedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	writeTokenFile(t, path, tokA)
 	ft, _ := newTestFileToken(t, path, tokA)
-	clock := time.Unix(1_700_000_000, 0)
-	ft.now = func() time.Time { return clock }
+	reads := countReads(ft)
 
-	if got := ft.Refresh(); got != tokA {
-		t.Fatalf("first Refresh() = %q, want A", got)
+	ft.Refresh() // first call has no stamp yet and reads once
+	for i := 0; i < 1000; i++ {
+		if got := ft.Refresh(); got != tokA {
+			t.Fatalf("Refresh() = %q, want A", got)
+		}
 	}
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("reads = %d, want 1 for an unchanged file", n)
+	}
+}
+
+// A wrong bearer just before a rotation must not delay the new token: the
+// next Refresh sees the changed stamp and reads, with no time slot to wait for.
+func TestFileTokenRefreshAfterWrongBearerStillSeesRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	writeTokenFile(t, path, tokA)
+	ft, _ := newTestFileToken(t, path, tokA)
+	reads := countReads(ft)
+
+	ft.Refresh() // a wrong bearer at T-ε
 	writeTokenFile(t, path, tokB)
-	clock = clock.Add(tokenRefreshMinInterval - time.Millisecond)
-	if got := ft.Refresh(); got != tokA {
-		t.Fatalf("Refresh() inside the interval = %q, want A (no read)", got)
-	}
-	clock = clock.Add(time.Millisecond)
 	if got := ft.Refresh(); got != tokB {
-		t.Fatalf("Refresh() after the interval = %q, want B", got)
+		t.Fatalf("Refresh() right after rotation = %q, want B", got)
+	}
+	if n := reads.Load(); n != 2 {
+		t.Fatalf("reads = %d, want 2", n)
+	}
+}
+
+// Concurrent Refresh calls after one change read the file once.
+func TestFileTokenConcurrentRefreshReadsOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	writeTokenFile(t, path, tokA)
+	ft, _ := newTestFileToken(t, path, tokA)
+	ft.poll() // establish the stamp
+	reads := countReads(ft)
+
+	writeTokenFile(t, path, tokB)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if got := ft.Refresh(); got != tokB {
+				t.Errorf("Refresh() = %q, want B", got)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("reads = %d, want 1 for 64 concurrent refreshes of one change", n)
 	}
 }
 
