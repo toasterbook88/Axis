@@ -20,6 +20,13 @@
   restart is skipped with a warning instead of respawning the old binary.
   `axis daemon restart` is unchanged.
 
+* A `nodes.yaml` edit that needs a daemon restart (gossip port, secret, mesh
+  enablement or local identity) is logged once per version instead of every
+  500 ms, and `axis daemon status` and `axis doctor` show it as
+  `mesh_restart_required` with the reason. `axis daemon restart` now restarts
+  a daemon in that state instead of reporting it "already fresh". A reload
+  that applies logs how many configured peers it added, updated and removed.
+
 ## v0.24.0 (2026-11-08)
 
 The mouse wheel in `axis tui` scrolls the conversation, `axis agent` fits

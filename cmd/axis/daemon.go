@@ -80,6 +80,9 @@ func daemonCmd() *cobra.Command {
 					Message: meta.LastError,
 				})
 			}
+			if meta.MeshRestartRequired {
+				warnings = append(warnings, meshRestartWarning(meta))
+			}
 			// The envelope is the diagnostic. Emit it first; a write failure
 			// outranks the health disposition because the caller has no
 			// payload to act on (GUD-002).
@@ -587,15 +590,18 @@ func spawnFreshDaemon(listenAddr string) (int, error) {
 // and the supervised daemon execute different filesystem paths, a merely
 // "ready" daemon may be running an older binary; accepting it would let the two
 // silently desynchronize.
+//
+// A daemon waiting for a restart to apply nodes.yaml mesh settings is never
+// "current": axis daemon restart is the fix those warnings print.
 func daemonIsServing(meta daemon.Metadata, wantVersion string) bool {
-	return meta.Version == wantVersion && meta.Ready && !meta.Stale && meta.LastError == ""
+	return meta.Version == wantVersion && meta.Ready && !meta.Stale && meta.LastError == "" && !meta.MeshRestartRequired
 }
 
 // daemonIsStartingUp reports whether metadata describes wantVersion in a
 // transient not-yet-ready state, as opposed to a daemon that is wrong-version,
 // stale, or reporting an error. Only this state earns a grace period.
 func daemonIsStartingUp(meta daemon.Metadata, wantVersion string) bool {
-	return meta.Version == wantVersion && !meta.Ready && !meta.Stale && meta.LastError == ""
+	return meta.Version == wantVersion && !meta.Ready && !meta.Stale && meta.LastError == "" && !meta.MeshRestartRequired
 }
 
 // awaitDaemonServing polls until the daemon reports it is serving current, the
@@ -618,4 +624,13 @@ func awaitDaemonServing(ctx context.Context, listenAddr string, window time.Dura
 		}
 	}
 	return false, nil
+}
+
+// meshRestartWarning reports nodes.yaml mesh settings that wait for a daemon
+// restart. It is advisory: the running mesh keeps its last valid settings.
+func meshRestartWarning(meta daemon.Metadata) machineWarning {
+	return machineWarning{
+		Kind:    "mesh_restart_required",
+		Message: "nodes.yaml mesh settings are not applied until the daemon restarts (" + meta.MeshRestartReason + "); run axis daemon restart",
+	}
 }

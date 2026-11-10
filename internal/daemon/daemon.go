@@ -75,7 +75,11 @@ type Metadata struct {
 	CacheAgeSec        int       `json:"cache_age_sec,omitempty"`
 	Stale              bool      `json:"stale,omitempty"`
 	MeshPeers          int       `json:"mesh_peers,omitempty"`
-	StaleThresholdSec  int       `json:"stale_threshold_sec,omitempty"`
+	// MeshRestartRequired is set while nodes.yaml holds mesh settings that
+	// apply only after a daemon restart; MeshRestartReason says which.
+	MeshRestartRequired bool   `json:"mesh_restart_required,omitempty"`
+	MeshRestartReason   string `json:"mesh_restart_reason,omitempty"`
+	StaleThresholdSec   int    `json:"stale_threshold_sec,omitempty"`
 	// Phase 3: refresh metrics
 	RefreshCount        int64                      `json:"refresh_count"`
 	LastRefreshMs       int64                      `json:"last_refresh_duration_ms,omitempty"`
@@ -124,6 +128,9 @@ type Daemon struct {
 	ledger         *reservation.Ledger
 	mesh           *mesh.Mesh
 	meshSettings   meshRuntimeSettings
+	// meshRestartReason is non-nil while the current nodes.yaml needs a
+	// daemon restart before its mesh settings can apply.
+	meshRestartReason atomic.Pointer[string]
 
 	writeSnapshotCache func(string, *models.ClusterSnapshot) error
 	snapshotGeneration uint64 // protected by mu; invalidation fences older collections
@@ -1118,6 +1125,9 @@ func (d *Daemon) Meta() Metadata {
 	mesh := d.mesh
 	if mesh != nil {
 		meta.MeshPeers = len(mesh.ActivePeers())
+	}
+	if reason := d.meshRestartReason.Load(); reason != nil {
+		meta.MeshRestartRequired, meta.MeshRestartReason = true, *reason
 	}
 	meta.RefreshCount = metaState.refreshCount
 	meta.LastRefreshMs = metaState.lastRefreshDuration.Milliseconds()

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/facts"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -137,6 +138,23 @@ var doctorProbeRemoteShell = doctorProbeRemoteShellImpl
 
 var doctorProbeBootStart = func(ctx context.Context) *DoctorCheck {
 	return daemonBootStartCheck(ctx, defaultDaemonServiceDependencies())
+}
+
+var doctorFetchDaemonMeta = daemon.FetchMeta
+
+// meshRestartDoctorCheck warns while the daemon holds nodes.yaml mesh settings
+// it can apply only after a restart. A metadata fetch error adds nothing: the
+// Daemon Cache check already reports reachability.
+func meshRestartDoctorCheck(meta daemon.Metadata, err error) *DoctorCheck {
+	if err != nil || !meta.MeshRestartRequired {
+		return nil
+	}
+	return &DoctorCheck{
+		Name:    "Mesh config",
+		Status:  "warn",
+		Message: "nodes.yaml mesh settings wait for a daemon restart: " + meta.MeshRestartReason,
+		Fix:     "axis daemon restart",
+	}
 }
 
 func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (string, bool) {
@@ -417,6 +435,14 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 				Message: fmt.Sprintf("Reachable, %d node(s) cached", len(snap.Nodes)),
 			})
 		}
+	}
+	// Metadata is independent of the snapshot: a daemon can be reachable with
+	// a pending mesh restart while its snapshot is unavailable or refreshing.
+	metaCtx, metaCancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+	meta, metaErr := doctorFetchDaemonMeta(metaCtx, daemonAddr)
+	metaCancel()
+	if check := meshRestartDoctorCheck(meta, metaErr); check != nil {
+		checks = append(checks, *check)
 	}
 
 	// 3.5 Daemon ownership: who holds the address, and is that one process
