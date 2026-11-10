@@ -17,18 +17,10 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	return ServeWithTokenSource(ctx, addr, cache, auth.StaticToken(token), pprof, cardFn)
 }
 
-func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
-	return withAuthSource(next, auth.StaticToken(token))
-}
-
 func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	registerRoutesSource(mux, cache, auth.StaticToken(token))
 }
 
 func registerPprofRoutes(mux *http.ServeMux, token string) {
 	registerPprofRoutesSource(mux, auth.StaticToken(token))
-}
-
-func withRequiredAuth(next http.HandlerFunc, token string) http.HandlerFunc {
-	return withRequiredAuthSource(next, auth.StaticToken(token))
 }

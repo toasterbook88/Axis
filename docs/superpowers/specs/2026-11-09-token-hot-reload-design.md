@@ -139,10 +139,11 @@ In `internal/auth`:
 - The F9 empty-token pass-through (`server.go:197`) applies only when the source is
   `StaticToken("")`. The TCP refusal at `:137` checks `src.Current()` at startup.
 - To keep test churn small (about 60 test call sites use the string signatures), the string-token
-  forms `ServeWithContext`, `withAuth`, `withRequiredAuth`, `registerRoutes` and
-  `registerPprofRoutes` move to `internal/api/token_compat_test.go` as thin wrappers that build
-  `StaticToken(token)`. Production code has only the `TokenSource` forms, so the deadcode gate
-  (`hack/verify-deadcode.sh`) stays clean. `ServeWithTokenSource` is the production entry used by
+  forms `ServeWithContext`, `registerRoutes` and `registerPprofRoutes` move to
+  `internal/api/token_compat_test.go` as thin wrappers that build
+  `StaticToken(token)`. `withAuth` and `withRequiredAuth` had no test callers and are removed.
+  Production code has only the `TokenSource` forms, so the deadcode gate
+  (`hack/verify-deadcode.sh`) and staticcheck U1000 stay clean. `ServeWithTokenSource` is the production entry used by
   `serve.go`; the allowlisted `Serve` calls it with `StaticToken`. `cmd/axis/mesh_route_test.go`
   switches to `ServeWithTokenSource`. The internal plumbing (`registerRoutes`, `registerV2Routes`,
   `registerV2CoreRoutes`, `registerA2AApprovalRoutes`, `registerPprofRoutes`, the A2A wrapper at
