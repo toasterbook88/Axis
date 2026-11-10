@@ -39,6 +39,9 @@ func (h *updateRestartHarness) install(t *testing.T) {
 	prevLookup := lookupSudoInvoker
 
 	lookupSudoInvoker = func() (sudoInvoker, bool, error) { return sudoInvoker{}, false, nil }
+	// Standalone respawns run this binary; default it to the path the
+	// tests replace so only tests that override it see a skipped restart.
+	stubSpawnExecutable(t, "/usr/local/bin/axis")
 	detectSupervisor = func(context.Context, daemonServiceDependencies) (supervisorType, supervisedService, error) {
 		return h.supervisor, h.service, nil
 	}
@@ -752,5 +755,35 @@ func TestDaemonRestartStillShortCircuitsOnOwnVersion(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "already fresh") || rh.terminates != 0 || rh.spawns != 0 {
 		t.Fatalf("expected short-circuit, got out=%q terminates=%d spawns=%d", out.String(), rh.terminates, rh.spawns)
+	}
+}
+
+func stubSpawnExecutable(t *testing.T, path string) {
+	t.Helper()
+	prev := restartSpawnExecutable
+	restartSpawnExecutable = func() (string, error) { return path, nil }
+	t.Cleanup(func() { restartSpawnExecutable = prev })
+}
+
+// TestUpdateSkipsStandaloneRestartWhenThisBinaryWasNotReplaced: with --path
+// (or --all skipping this install) the standalone respawn would start the
+// unchanged old binary, so the restart is skipped and the daemon left alone.
+func TestUpdateSkipsStandaloneRestartWhenThisBinaryWasNotReplaced(t *testing.T) {
+	const installed = "99.0.0"
+	h := &updateRestartHarness{supervisor: supervisorNone}
+	h.install(t)
+	rh := &restartHarness{metas: []daemon.Metadata{{Version: daemon.Version, Ready: true}}, pid: 111}
+	rh.install(t)
+	stubSpawnExecutable(t, "/opt/old/axis")
+
+	var out bytes.Buffer
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, installed, &out); err != nil {
+		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
+	}
+	if rh.terminates != 0 || rh.spawns != 0 {
+		t.Fatalf("expected no terminate/spawn, got terminates=%d spawns=%d\n%s", rh.terminates, rh.spawns, out.String())
+	}
+	if !strings.Contains(out.String(), "was not updated") {
+		t.Fatalf("expected skip warning, got:\n%s", out.String())
 	}
 }

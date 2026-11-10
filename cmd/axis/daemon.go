@@ -542,19 +542,21 @@ func pidAlive(pid int) bool {
 // Seams for daemon restart, so readiness and restart-cycle behavior can be
 // tested without spawning real daemons or signalling real processes.
 var (
-	restartFetchMeta     = daemon.FetchMeta
-	restartFetchHealth   = versionQueryDaemon
-	restartFindPID       = findDaemonPID
-	restartTerminate     = terminatePID
-	restartSpawnDaemon   = spawnFreshDaemon
-	restartGraceWindow   = 3 * time.Second
-	restartPollInterval  = 300 * time.Millisecond
-	restartReadyDeadline = 10 * time.Second
+	restartFetchMeta   = daemon.FetchMeta
+	restartFetchHealth = versionQueryDaemon
+	restartFindPID     = findDaemonPID
+	restartTerminate   = terminatePID
+	restartSpawnDaemon = spawnFreshDaemon
+	// restartSpawnExecutable is the binary spawnFreshDaemon starts.
+	restartSpawnExecutable = os.Executable
+	restartGraceWindow     = 3 * time.Second
+	restartPollInterval    = 300 * time.Millisecond
+	restartReadyDeadline   = 10 * time.Second
 )
 
 // spawnFreshDaemon starts a detached `axis serve` on addr and returns its PID.
 func spawnFreshDaemon(listenAddr string) (int, error) {
-	exe, err := os.Executable()
+	exe, err := restartSpawnExecutable()
 	if err != nil {
 		return 0, fmt.Errorf("cannot resolve current binary: %w", err)
 	}

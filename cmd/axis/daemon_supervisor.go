@@ -214,6 +214,17 @@ func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies
 		return err
 	}
 	if sup == supervisorNone {
+		// The standalone path respawns this binary. After an update that
+		// did not replace it (--path, or --all with this install skipped),
+		// the respawned daemon would still be the old version: skip the
+		// restart rather than kill a working daemon and time out.
+		if len(replacedPaths) > 0 {
+			exe, exeErr := restartSpawnExecutable()
+			if exeErr != nil || !pathAmong(exe, replacedPaths) {
+				fmt.Fprintf(out, "Warning: this binary (%s) was not updated; skipping standalone daemon restart. Restart the daemon from an updated install.\n", orDefault(exe, "unknown path"))
+				return nil
+			}
+		}
 		return restartDaemonExpecting(ctx, addr, wantVersion, out)
 	}
 	return restartThroughSupervisor(ctx, deps, sup, svc, addr, replacedPaths, wantVersion, pollDaemonVersion, out)
@@ -224,14 +235,7 @@ func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies
 func restartThroughSupervisor(ctx context.Context, deps daemonServiceDependencies, sup supervisorType, svc supervisedService, addr string, replacedPaths []string, wantVersion string, poll func(context.Context, string, string, io.Writer) error, out io.Writer) error {
 	// For update: verify the service exec path was among the replaced paths.
 	if len(replacedPaths) > 0 && svc.execPath != "" {
-		found := false
-		for _, p := range replacedPaths {
-			if sameFile(p, svc.execPath) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !pathAmong(svc.execPath, replacedPaths) {
 			fmt.Fprintf(out, "Warning: service exec path %s was not updated; skipping daemon restart\n", svc.execPath)
 			return nil
 		}
@@ -331,4 +335,14 @@ func versionQueryDaemon(ctx context.Context, addr string) (daemonIdentity, error
 		return daemonIdentity{}, err
 	}
 	return id, nil
+}
+
+// pathAmong reports whether path names the same file as any of paths.
+func pathAmong(path string, paths []string) bool {
+	for _, p := range paths {
+		if sameFile(p, path) {
+			return true
+		}
+	}
+	return false
 }

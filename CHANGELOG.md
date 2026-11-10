@@ -8,7 +8,10 @@
   correctly waited 10 s and exited non-zero with "update succeeded but daemon
   restart failed", and an unsupervised update left the old daemon running and
   reported it "already fresh". Scripts that relied on that non-zero exit now
-  see 0. `axis daemon restart` is unchanged.
+  see 0. When the daemon is not run by a service manager and this binary was
+  not among the replaced installs (`--path`, or `--all` skipping it), the
+  restart is skipped with a warning instead of respawning the old binary.
+  `axis daemon restart` is unchanged.
 
 ## v0.24.0 (2026-11-08)
 
