@@ -23,16 +23,97 @@ type backgroundTask struct {
 	startedAt time.Time
 	mu        sync.Mutex
 	output    bytes.Buffer
-	done      bool
-	failed    bool
+	state     bgTaskState // guarded by mu; changed only via finish
 	cancel    context.CancelFunc
 }
 
-// status returns a snapshot of the task's state for the check_task tool.
-func (t *backgroundTask) status() (running bool, finished bool, errored bool, output string) {
+// bgTaskState is the explicit lifecycle of a background task. It replaces the
+// former done/failed bool pair, which could represent the illegal combination
+// failed-but-not-done.
+//
+//	running --(runner returns nil)--> succeeded
+//	running --(runner returns err)--> failed
+//
+// succeeded and failed are terminal.
+type bgTaskState int
+
+const (
+	bgTaskRunning bgTaskState = iota
+	bgTaskSucceeded
+	bgTaskFailed
+)
+
+// bgTaskTransitions is the single source of truth for legal state changes.
+// A state with no entry is terminal.
+var bgTaskTransitions = map[bgTaskState][]bgTaskState{
+	bgTaskRunning: {bgTaskSucceeded, bgTaskFailed},
+}
+
+// canTransition reports whether from -> to is a legal lifecycle change.
+func (s bgTaskState) canTransition(to bgTaskState) bool {
+	for _, next := range bgTaskTransitions[s] {
+		if next == to {
+			return true
+		}
+	}
+	return false
+}
+
+// checkLabel is the state word check_task reports. The wording is an
+// agent-facing compat surface: it differs from listLabel ("completed" vs
+// "done") and both are kept as they were.
+func (s bgTaskState) checkLabel() string {
+	switch s {
+	case bgTaskSucceeded:
+		return "completed"
+	case bgTaskFailed:
+		return "failed"
+	default:
+		return "running"
+	}
+}
+
+// listLabel is the state word list_background_tasks reports.
+func (s bgTaskState) listLabel() string {
+	switch s {
+	case bgTaskSucceeded:
+		return "done"
+	case bgTaskFailed:
+		return "failed"
+	default:
+		return "running"
+	}
+}
+
+// snapshot returns the task's current state and captured output.
+func (t *backgroundTask) snapshot() (bgTaskState, string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return !t.done, t.done, t.failed && t.done, t.output.String()
+	return t.state, t.output.String()
+}
+
+// currentState returns the task's current state.
+func (t *backgroundTask) currentState() bgTaskState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state
+}
+
+// finish moves a running task to its terminal state from the runner's error.
+// It reports false, leaving the state unchanged, when the task has already
+// finished: the first outcome wins.
+func (t *backgroundTask) finish(runErr error) bool {
+	to := bgTaskSucceeded
+	if runErr != nil {
+		to = bgTaskFailed
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.state.canTransition(to) {
+		return false
+	}
+	t.state = to
+	return true
 }
 
 // appendOutput appends command output under the lock.
@@ -146,10 +227,7 @@ func (a *Agent) runBackgroundTask(ctx context.Context, args runBackgroundArgs) (
 		if runErr != nil {
 			task.appendOutput(fmt.Appendf(nil, "\n[error: %s]\n", runErr.Error()))
 		}
-		task.mu.Lock()
-		task.done = true
-		task.failed = runErr != nil
-		task.mu.Unlock()
+		task.finish(runErr)
 	}()
 
 	// Use trimmed node for display so whitespace-only "node" reports local
@@ -187,8 +265,7 @@ func (a *Agent) checkBackgroundTask(ctx context.Context, args checkTaskArgs) (st
 		waitFor = parsed
 	}
 
-	running, _, _, _ := task.status()
-	if running && waitFor > 0 {
+	if task.currentState() == bgTaskRunning && waitFor > 0 {
 		deadline := time.Now().Add(waitFor)
 		// Use a ticker instead of time.After to avoid accumulating leaked
 		// timers across loop iterations.
@@ -200,8 +277,7 @@ func (a *Agent) checkBackgroundTask(ctx context.Context, args checkTaskArgs) (st
 				return formatTaskStatus(task), nil
 			case <-ticker.C:
 			}
-			running, _, _, _ = task.status()
-			if !running {
+			if task.currentState() != bgTaskRunning {
 				break
 			}
 		}
@@ -210,15 +286,8 @@ func (a *Agent) checkBackgroundTask(ctx context.Context, args checkTaskArgs) (st
 }
 
 func formatTaskStatus(t *backgroundTask) string {
-	running, _, errored, output := t.status()
-	state := "running"
-	if !running {
-		if errored {
-			state = "failed"
-		} else {
-			state = "completed"
-		}
-	}
+	st, output := t.snapshot()
+	state := st.checkLabel()
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s: %s\n", t.id, state)
 	if t.node != "" {
@@ -248,15 +317,7 @@ func (a *Agent) listBackgroundTasks() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Background tasks (%d):\n", len(tasks))
 	for _, t := range tasks {
-		running, _, errored, _ := t.status()
-		state := "running"
-		if !running {
-			if errored {
-				state = "failed"
-			} else {
-				state = "done"
-			}
-		}
+		state := t.currentState().listLabel()
 		where := "local"
 		if t.node != "" {
 			where = t.node
