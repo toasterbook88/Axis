@@ -8,9 +8,10 @@
   automatic login is set for this user. The check only reads state.
 
 * **Behaviour change:** the daemon now reloads `~/.axis/token` without a
-  restart. A rewritten token takes effect within 500 ms and the old token is
-  rejected from then on (no grace window). A missing, empty or invalid file
-  keeps the last good token and logs one warning. `AXIS_API_TOKEN` is still
+  restart. A rewritten token takes effect within 500 ms, or at once when a
+  client presents it, and the old token is rejected from then on (no grace
+  window). A missing, empty, invalid, non-regular or oversized (over 4 KiB)
+  file keeps the last good token and logs one warning. `AXIS_API_TOKEN` is still
   read once at startup.
 
 ### Fixes
