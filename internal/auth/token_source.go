@@ -271,9 +271,15 @@ func (f *FileToken) pollLocked() {
 	// Stamp before reading: if the file changes between the two, the stored
 	// stamp is the older one and the next Refresh reads again (never the
 	// reverse, which could hide a change).
+	//
+	// Publish the stamp only after the token it describes is installed
+	// (deferred, so it runs after f.cur.Store below). Refresh's lock-free fast
+	// path trusts Current() whenever the stamp matches the file; storing the
+	// stamp first let a concurrent Refresh return the previous token for a
+	// file that had already been read.
 	stamp := statTokenFile(f.path)
+	defer f.readStamp.Store(&stamp)
 	data, token, err := f.read(f.path)
-	f.readStamp.Store(&stamp)
 	var key, reason string
 	switch {
 	case errors.Is(err, ErrTokenFileMissing):
