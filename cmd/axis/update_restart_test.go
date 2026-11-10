@@ -39,6 +39,9 @@ func (h *updateRestartHarness) install(t *testing.T) {
 	prevLookup := lookupSudoInvoker
 
 	lookupSudoInvoker = func() (sudoInvoker, bool, error) { return sudoInvoker{}, false, nil }
+	// Standalone respawns run this binary; default it to the path the
+	// tests replace so only tests that override it see a skipped restart.
+	stubSpawnExecutable(t, "/usr/local/bin/axis")
 	detectSupervisor = func(context.Context, daemonServiceDependencies) (supervisorType, supervisedService, error) {
 		return h.supervisor, h.service, nil
 	}
@@ -143,6 +146,8 @@ func TestUpdateRestartsActiveSystemdUserUnitAfterReplace(t *testing.T) {
 	h := &updateRestartHarness{
 		supervisor: supervisorSystemd,
 		service:    supervisedService{execPath: target, addr: "/tmp/custom-axis.sock"},
+		// The restarted daemon runs the installed release, not this binary.
+		daemonVersion: "1.0.0",
 	}
 	h.install(t)
 
@@ -180,7 +185,7 @@ func TestUpdateKickstartsLoadedLaunchdAgentAfterReplace(t *testing.T) {
 	h.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "127.0.0.1:7777", []string{"/opt/homebrew/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:7777", []string{"/opt/homebrew/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("restartAfterUpdate: %v", err)
 	}
 	want := "launchctl kickstart -k gui/501/" + daemonLaunchdLabel
@@ -201,7 +206,7 @@ func TestUpdateRestartsStandaloneDaemonAfterReplace(t *testing.T) {
 	rh.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
 	}
 	if rh.terminates != 1 || rh.spawns != 1 {
@@ -322,7 +327,7 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 
 	// Call restartSupervisedDaemon with a path that doesn't match the service exec.
 	var out bytes.Buffer
-	err := restartSupervisedDaemon(context.Background(), deps, "127.0.0.1:1", []string{"/other/path/axis"}, &out)
+	err := restartSupervisedDaemon(context.Background(), deps, "127.0.0.1:1", []string{"/other/path/axis"}, daemon.Version, &out)
 	if err != nil {
 		t.Fatalf("restartSupervisedDaemon: %v", err)
 	}
@@ -345,7 +350,7 @@ func TestUpdateFailsWhenDaemonVersionMismatchAfterRestart(t *testing.T) {
 	h.install(t)
 
 	var out bytes.Buffer
-	err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out)
+	err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, daemon.Version, &out)
 	if err == nil {
 		t.Fatal("expected error when daemon version mismatch after restart")
 	}
@@ -368,7 +373,7 @@ func TestUpdateNoDaemonRunningIsNotAnError(t *testing.T) {
 	rh.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("no running daemon must not fail the update: %v\n%s", err, out.String())
 	}
 	if rh.terminates != 0 || rh.spawns != 1 || !strings.Contains(out.String(), "No daemon responding") {
@@ -637,7 +642,7 @@ func TestPollDaemonVersionSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := pollDaemonVersion(context.Background(), "127.0.0.1:1", &out)
+	err := pollDaemonVersion(context.Background(), "127.0.0.1:1", daemon.Version, &out)
 	if err != nil {
 		t.Fatalf("pollDaemonVersion: %v", err)
 	}
@@ -662,8 +667,123 @@ func TestPollDaemonVersionTimeout(t *testing.T) {
 	restartReadyDeadline = 10 * time.Millisecond
 
 	var out bytes.Buffer
-	err := pollDaemonVersion(context.Background(), "127.0.0.1:1", &out)
+	err := pollDaemonVersion(context.Background(), "127.0.0.1:1", daemon.Version, &out)
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+// TestUpdateRestartExpectsInstalledReleaseVersion is the regression test for
+// the post-update freshness check. The updating binary is the old release, so
+// its own version (daemon.Version) is the wrong expectation: a supervised
+// daemon that restarted onto the installed release must count as ready, and
+// one still reporting the updater's version must not.
+func TestUpdateRestartExpectsInstalledReleaseVersion(t *testing.T) {
+	const installed = "99.0.0"
+	if installed == daemon.Version {
+		t.Fatal("test needs a release version different from this binary's")
+	}
+	for _, tc := range []struct {
+		name          string
+		daemonVersion string
+		wantErr       bool
+	}{
+		{name: "daemon serves the installed release", daemonVersion: installed},
+		{name: "daemon still on the updater's version", daemonVersion: daemon.Version, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := writeOldBinary(t, t.TempDir(), "axis")
+			h := &updateRestartHarness{
+				supervisor:    supervisorSystemd,
+				service:       supervisedService{execPath: target},
+				daemonVersion: tc.daemonVersion,
+			}
+			h.install(t)
+			out, errOut, err := runInstallRelease(t, []string{target}, daemon.Version, installed, false)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "v"+installed) {
+					t.Fatalf("installRelease error = %v, want restart failure naming v%s\nout=%s", err, installed, out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("installRelease: %v\nout=%s\nerr=%s", err, out, errOut)
+			}
+			if !strings.Contains(out, "serving current version (v"+installed+")") {
+				t.Fatalf("expected ready message for v%s, got %q", installed, out)
+			}
+		})
+	}
+}
+
+// TestUpdateRestartsStandaloneDaemonThatMatchesTheUpdater: without a
+// supervisor, a ready daemon on the updater's own version is the OLD daemon
+// after an update. It must be replaced, not reported "already fresh".
+func TestUpdateRestartsStandaloneDaemonThatMatchesTheUpdater(t *testing.T) {
+	const installed = "99.0.0"
+	h := &updateRestartHarness{supervisor: supervisorNone}
+	h.install(t)
+	rh := &restartHarness{metas: []daemon.Metadata{
+		{Version: daemon.Version, Ready: true},
+		{Version: installed, Ready: true},
+	}, pid: 111}
+	rh.install(t)
+
+	var out bytes.Buffer
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, installed, &out); err != nil {
+		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "already fresh") {
+		t.Fatalf("old daemon was treated as fresh:\n%s", out.String())
+	}
+	if rh.terminates != 1 || rh.spawns != 1 {
+		t.Fatalf("expected terminate+spawn, got terminates=%d spawns=%d", rh.terminates, rh.spawns)
+	}
+}
+
+// TestDaemonRestartStillShortCircuitsOnOwnVersion: plain axis daemon restart
+// keeps its meaning; a ready daemon on this binary's version is left alone.
+func TestDaemonRestartStillShortCircuitsOnOwnVersion(t *testing.T) {
+	h := &updateRestartHarness{supervisor: supervisorNone}
+	h.install(t)
+	rh := &restartHarness{metas: []daemon.Metadata{{Version: daemon.Version, Ready: true}}, pid: 111}
+	rh.install(t)
+
+	var out bytes.Buffer
+	if err := restartDaemon(context.Background(), "127.0.0.1:1", &out); err != nil {
+		t.Fatalf("restartDaemon: %v", err)
+	}
+	if !strings.Contains(out.String(), "already fresh") || rh.terminates != 0 || rh.spawns != 0 {
+		t.Fatalf("expected short-circuit, got out=%q terminates=%d spawns=%d", out.String(), rh.terminates, rh.spawns)
+	}
+}
+
+func stubSpawnExecutable(t *testing.T, path string) {
+	t.Helper()
+	prev := restartSpawnExecutable
+	restartSpawnExecutable = func() (string, error) { return path, nil }
+	t.Cleanup(func() { restartSpawnExecutable = prev })
+}
+
+// TestUpdateSkipsStandaloneRestartWhenThisBinaryWasNotReplaced: with --path
+// (or --all skipping this install) the standalone respawn would start the
+// unchanged old binary, so the restart is skipped and the daemon left alone.
+func TestUpdateSkipsStandaloneRestartWhenThisBinaryWasNotReplaced(t *testing.T) {
+	const installed = "99.0.0"
+	h := &updateRestartHarness{supervisor: supervisorNone}
+	h.install(t)
+	rh := &restartHarness{metas: []daemon.Metadata{{Version: daemon.Version, Ready: true}}, pid: 111}
+	rh.install(t)
+	stubSpawnExecutable(t, "/opt/old/axis")
+
+	var out bytes.Buffer
+	if err := restartAfterUpdate(context.Background(), "127.0.0.1:1", []string{"/usr/local/bin/axis"}, installed, &out); err != nil {
+		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
+	}
+	if rh.terminates != 0 || rh.spawns != 0 {
+		t.Fatalf("expected no terminate/spawn, got terminates=%d spawns=%d\n%s", rh.terminates, rh.spawns, out.String())
+	}
+	if !strings.Contains(out.String(), "was not updated") {
+		t.Fatalf("expected skip warning, got:\n%s", out.String())
 	}
 }

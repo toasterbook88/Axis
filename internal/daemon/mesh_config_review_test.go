@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,8 +31,19 @@ func TestMeshReloadRejectsDefaultBeaconPortCollision(t *testing.T) {
 	if err := os.WriteFile(path, []byte(updated), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.applyMeshConfig([]byte(updated)); err == nil || !strings.Contains(err.Error(), "ports conflict") {
+	_, err := d.applyMeshConfig([]byte(updated))
+	if err == nil || !strings.Contains(err.Error(), "ports conflict") {
 		t.Errorf("error=%v, want listener collision", err)
+	}
+	// Restarting on a colliding config disables the mesh, so the collision
+	// must not be reported as a pending restart.
+	if errors.Is(err, errMeshRestartRequired) {
+		t.Errorf("port collision carries errMeshRestartRequired: %v", err)
+	}
+	// A transport change that also collides reports the collision too.
+	moved := strings.Replace(nodes, "old.example", "new.example", 1) + "discovery: {enabled: true, gossip_port: 12345, udp_port: 12345}\n"
+	if _, err := d.applyMeshConfig([]byte(moved)); err == nil || !strings.Contains(err.Error(), "ports conflict") || errors.Is(err, errMeshRestartRequired) {
+		t.Errorf("moved colliding config: error=%v, want plain listener collision", err)
 	}
 	if got := d.Mesh().Peers(); !reflect.DeepEqual(got, before) {
 		t.Errorf("conflicting configuration changed peers: %+v", got)
@@ -120,12 +132,16 @@ func TestMeshReloadInvalidatesSnapshotForRejectedVersion(t *testing.T) {
 				t.Error("rejected config changed mesh peers")
 			}
 			beforeRetry := calls.Load()
-			for i := 0; i < 3; i++ {
-				select {
-				case <-retries:
-				case <-time.After(3 * time.Second):
-					t.Fatal("rejected mesh version was not retried")
-				}
+			select {
+			case <-retries:
+			case <-time.After(3 * time.Second):
+				t.Fatal("rejected mesh version was not reported")
+			}
+			// Later ticks see the same rejected bytes: no second report and
+			// no second refresh.
+			time.Sleep(3 * watchConfigPollInterval)
+			if n := len(retries); n != 0 {
+				t.Errorf("unchanged rejected version reported %d more times", n)
 			}
 			if n := calls.Load(); n != beforeRetry {
 				t.Errorf("unchanged rejected version refreshed %d more times", n-beforeRetry)

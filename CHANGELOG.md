@@ -1,5 +1,32 @@
 ## Unreleased
 
+### Features
+
+* `axis doctor` and `axis daemon service install` report whether the AXIS user
+  service starts at boot or only at login: Linux checks lingering for the user
+  (and prints `loginctl enable-linger $USER` when it is off), macOS checks that
+  automatic login is set for this user. The check only reads state.
+
+### Fixes
+
+* **Behaviour change:** after `axis update`, the restart check now expects the
+  daemon to report the release that was just installed. It compared against the
+  updating binary's own (old) version, so a supervised update that restarted
+  correctly waited 10 s and exited non-zero with "update succeeded but daemon
+  restart failed", and an unsupervised update left the old daemon running and
+  reported it "already fresh". Scripts that relied on that non-zero exit now
+  see 0. When the daemon is not run by a service manager and this binary was
+  not among the replaced installs (`--path`, or `--all` skipping it), the
+  restart is skipped with a warning instead of respawning the old binary.
+  `axis daemon restart` is unchanged.
+
+* A `nodes.yaml` edit that needs a daemon restart (gossip port, secret, mesh
+  enablement or local identity) is logged once per version instead of every
+  500 ms, and `axis daemon status` and `axis doctor` show it as
+  `mesh_restart_required` with the reason. `axis daemon restart` now restarts
+  a daemon in that state instead of reporting it "already fresh". A reload
+  that applies logs how many configured peers it added, updated and removed.
+
 ## v0.24.0 (2026-11-08)
 
 The mouse wheel in `axis tui` scrolls the conversation, `axis agent` fits

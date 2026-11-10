@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -44,21 +46,30 @@ func meshSettings(cfg *config.Config) meshRuntimeSettings {
 	return s
 }
 
-func (d *Daemon) applyMeshConfig(data []byte) error {
+// errMeshRestartRequired marks a config version that can only take effect
+// after the daemon restarts.
+var errMeshRestartRequired = errors.New("restart required")
+
+func (d *Daemon) applyMeshConfig(data []byte) (mesh.ReconcileCounts, error) {
 	cfg, err := config.Parse(data)
 	if err != nil {
-		return err
+		return mesh.ReconcileCounts{}, err
 	}
 	settings := meshSettings(cfg)
-	if settings != d.meshSettings {
-		return fmt.Errorf("mesh transport, enablement or local identity changed: restart required")
-	}
+	// A port collision is a config error, not a pending restart: a daemon
+	// started on this config disables the mesh (NewDefault), so it must not
+	// carry errMeshRestartRequired or status/doctor would advise a restart.
+	// Check it first so a transport change that also collides reports the
+	// collision.
 	beaconPort := 42424
 	if cfg.Discovery != nil && cfg.Discovery.UDPPort > 0 {
 		beaconPort = cfg.Discovery.UDPPort
 	}
 	if beaconPort == settings.port {
-		return fmt.Errorf("mesh and beacon ports conflict: restart required")
+		return mesh.ReconcileCounts{}, fmt.Errorf("mesh and beacon ports conflict on %d; set distinct discovery.gossip_port and discovery.udp_port", beaconPort)
+	}
+	if settings != d.meshSettings {
+		return mesh.ReconcileCounts{}, fmt.Errorf("mesh transport, enablement or local identity changed: %w", errMeshRestartRequired)
 	}
 	seeds := make([]mesh.Peer, 0, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
@@ -69,12 +80,23 @@ func (d *Daemon) applyMeshConfig(data []byte) error {
 	return d.mesh.ReconcileSeeds(seeds)
 }
 
+// setMeshRestartRequired records whether the last evaluated readable config
+// version was refused because it needs a restart; any other outcome clears it.
+func (d *Daemon) setMeshRestartRequired(err error) {
+	if errors.Is(err, errMeshRestartRequired) {
+		reason := err.Error()
+		d.meshRestartReason.Store(&reason)
+		return
+	}
+	d.meshRestartReason.Store(nil)
+}
+
 func (d *Daemon) watchMeshConfig(ctx context.Context, path string) {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		var observed, applied configFingerprint
-		var observedSet, appliedSet, unreadable bool
+		var observed, applied, reported configFingerprint
+		var observedSet, appliedSet, reportedSet, unreadable bool
 		ticker := time.NewTicker(watchConfigPollInterval)
 		defer ticker.Stop()
 		for {
@@ -90,12 +112,19 @@ func (d *Daemon) watchMeshConfig(ctx context.Context, path string) {
 				refresh = unreadable || !observedSet || fingerprint != observed
 				observed, observedSet, unreadable = fingerprint, true, false
 				if !appliedSet || fingerprint != applied {
-					err = d.applyMeshConfig(data)
+					var counts mesh.ReconcileCounts
+					counts, err = d.applyMeshConfig(data)
 					if err == nil {
+						// The first apply at watcher start usually repeats the
+						// startup seeds; log it only when it changed something.
+						if appliedSet || counts != (mesh.ReconcileCounts{}) {
+							slog.Info("daemon: mesh config applied", "path", path, "added", counts.Added, "updated", counts.Updated, "removed", counts.Removed)
+						}
 						applied, appliedSet = fingerprint, true
 						refresh = true
 					}
 				}
+				d.setMeshRestartRequired(err)
 			}
 			// Rejected versions still invalidate snapshot truth once per change;
 			// retrying mesh reconciliation must not repeatedly refresh that cache.
@@ -103,7 +132,12 @@ func (d *Daemon) watchMeshConfig(ctx context.Context, path string) {
 				d.Invalidate()
 				_ = d.refreshWithTrigger(ctx, RefreshTriggerConfigChange)
 			}
-			if err != nil {
+			// The apply is retried every tick, but a version is reported once:
+			// the same bytes fail the same way until the file changes.
+			if err == nil {
+				reportedSet = false
+			} else if !reportedSet || fingerprint != reported {
+				reported, reportedSet = fingerprint, true
 				reportWatchFingerprintError(path, RefreshTriggerConfigChange, fmt.Errorf("mesh config not applied; keeping last valid peers: %w", err))
 			}
 			select {
