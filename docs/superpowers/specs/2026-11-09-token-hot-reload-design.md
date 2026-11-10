@@ -300,3 +300,5 @@ Questions:
   in `docs/authority-secrets.md`. The reviewer also assumed `GET /a2a/v1/tasks/pending` lists such
   tasks; no such route is registered (`handler.go:66`, `approval.go:126-134`), which is a
   separate runbook issue.
+
+Note: the branch was rebased onto 3a2fe9c (#629, `internal/agent` only) after this review; the spec file is byte-identical at the rebased spec commit 8b6cbc8.
