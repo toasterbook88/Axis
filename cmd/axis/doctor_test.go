@@ -11,6 +11,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/models"
 	"github.com/toasterbook88/axis/internal/transport"
 )
@@ -555,11 +556,14 @@ func stubDoctorOwnershipHealthy(t *testing.T) func() {
 	}
 	prevUnits := doctorProbeSystemUnits
 	doctorProbeSystemUnits = func() ([]string, bool) { return nil, false }
+	prevMeta := doctorFetchDaemonMeta
+	doctorFetchDaemonMeta = func(context.Context, string) (daemon.Metadata, error) { return daemon.Metadata{}, nil }
 	return func() {
 		restoreProcs()
 		doctorProbeSocket = prevSocket
 		doctorProbeMeshPort = prevMesh
 		doctorProbeSystemUnits = prevUnits
+		doctorFetchDaemonMeta = prevMeta
 	}
 }
 

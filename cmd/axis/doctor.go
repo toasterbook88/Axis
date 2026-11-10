@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	"github.com/toasterbook88/axis/internal/config"
+	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/facts"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -134,6 +135,23 @@ func doctorCmd() *cobra.Command {
 // Returns a human message and whether it should be a warning.
 // Overridable in tests to avoid real SSH.
 var doctorProbeRemoteShell = doctorProbeRemoteShellImpl
+
+var doctorFetchDaemonMeta = daemon.FetchMeta
+
+// meshRestartDoctorCheck warns while the daemon holds nodes.yaml mesh settings
+// it can apply only after a restart. A metadata fetch error adds nothing: the
+// Daemon Cache check already reports reachability.
+func meshRestartDoctorCheck(meta daemon.Metadata, err error) *DoctorCheck {
+	if err != nil || !meta.MeshRestartRequired {
+		return nil
+	}
+	return &DoctorCheck{
+		Name:    "Mesh config",
+		Status:  "warn",
+		Message: "nodes.yaml mesh settings wait for a daemon restart: " + meta.MeshRestartReason,
+		Fix:     "axis daemon restart",
+	}
+}
 
 func doctorProbeRemoteShellImpl(ctx context.Context, node config.NodeConfig) (string, bool) {
 	exec := newDoctorSSHExecutor(node)
@@ -412,6 +430,12 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 				Status:  "pass",
 				Message: fmt.Sprintf("Reachable, %d node(s) cached", len(snap.Nodes)),
 			})
+		}
+		metaCtx, metaCancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+		meta, metaErr := doctorFetchDaemonMeta(metaCtx, daemonAddr)
+		metaCancel()
+		if check := meshRestartDoctorCheck(meta, metaErr); check != nil {
+			checks = append(checks, *check)
 		}
 	}
 
