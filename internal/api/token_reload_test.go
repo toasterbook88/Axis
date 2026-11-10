@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,11 +61,12 @@ func TestTokenFileRotationIsStrictAcrossRoutes(t *testing.T) {
 	go src.Run(ctx)
 
 	mux := http.NewServeMux()
+	authn := tcpAuth(t, src)
 	registerRoutesSource(mux, &fakeCache{
 		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
 		meta: daemon.Metadata{Ready: true},
-	}, src)
-	registerPprofRoutesSource(mux, src)
+	}, authn)
+	registerPprofRoutesSource(mux, authn)
 
 	routes := []struct {
 		method, path string
@@ -127,7 +130,9 @@ func serveSignedRun(t *testing.T, src auth.TokenSource, bearer, signKey string) 
 	}
 
 	mux := http.NewServeMux()
-	registerRoutesSource(mux, nil, src)
+	// The policy a TCP listener gets with a non-empty startup token, built
+	// directly so the startup check does not consume flipSource's first value.
+	registerRoutesSource(mux, nil, apiAuth{src: src})
 	body := `{"description":"echo ok","mode":"exec","confirm":"YES"}`
 	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -173,7 +178,7 @@ func TestTokenSourceEmptyTokenRulesUnchanged(t *testing.T) {
 		t.Fatalf("expected TCP refusal, got %v", err)
 	}
 	mux := http.NewServeMux()
-	registerPprofRoutesSource(mux, auth.StaticToken(""))
+	registerPprofRoutesSource(mux, unixAuth(auth.StaticToken("")))
 	if got := doAuthed(t, mux, http.MethodGet, "/debug/pprof/", ""); got != http.StatusUnauthorized {
 		t.Fatalf("pprof with no token configured = %d, want 401", got)
 	}
@@ -183,8 +188,7 @@ func TestTokenSourceEmptyTokenRulesUnchanged(t *testing.T) {
 // after startup must not open pprof.
 func TestRequiredAuthFailsClosedIfSourceBecomesEmpty(t *testing.T) {
 	src := &flipSource{first: reloadTokOld, second: ""}
-	src.Current() // ServeWithTokenSource's startup check sees a token
-	h := withRequiredAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+	h := withRequiredAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, unixAuth(src)) // startup sees a token
 	if got := doAuthed(t, h, http.MethodGet, "/debug/pprof/", ""); got != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401", got)
 	}
@@ -200,7 +204,7 @@ func TestRotatedTokenAcceptedBeforeNextPoll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, tcpAuth(t, src))
 
 	writeAtomic(t, path, reloadTokNew)
 	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusOK {
@@ -234,9 +238,29 @@ func TestRefreshedTokenIsTheRequestSnapshot(t *testing.T) {
 }
 
 // A source whose refresh yields "" never lets a mismatched bearer through.
+// refreshEmptySource has a token but returns "" from Refresh.
+type refreshEmptySource struct{}
+
+func (refreshEmptySource) Current() string { return reloadTokOld }
+func (refreshEmptySource) Refresh() string { return "" }
+
 func TestRefreshToEmptyFailsClosed(t *testing.T) {
+	for name, a := range map[string]apiAuth{
+		"tcp":  tcpAuth(t, refreshEmptySource{}),
+		"unix": unixAuth(refreshEmptySource{}),
+	} {
+		h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, a)
+		if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusUnauthorized {
+			t.Fatalf("%s: got %d, want 401", name, got)
+		}
+	}
+}
+
+// A source that turns empty between the first read and the refresh in one
+// request also fails closed.
+func TestRefreshToEmptyFailsClosedLegacyFlip(t *testing.T) {
 	src := &flipSource{first: reloadTokOld, second: ""}
-	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, apiAuth{src: src})
 	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401", got)
 	}
@@ -251,7 +275,7 @@ func TestWrongBearerBeforeRotationDoesNotBlockNewToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, src)
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, tcpAuth(t, src))
 
 	bogus := strings.Repeat("9", 64)
 	for i := 0; i < 50; i++ {
@@ -262,5 +286,95 @@ func TestWrongBearerBeforeRotationDoesNotBlockNewToken(t *testing.T) {
 	writeAtomic(t, path, reloadTokNew)
 	if got := doAuthed(t, h, http.MethodGet, "/snapshot", reloadTokNew); got != http.StatusOK {
 		t.Fatalf("rotated token right after wrong bearers = %d, want 200", got)
+	}
+}
+
+// Copilot review (Review 4): a TCP server whose source returns "" after
+// startup must not open protected routes. The empty snapshot gets 401 on /run
+// and on a normal route, with or without a bearer.
+func TestTCPSourceTurningEmptyAfterStartupFailsClosed(t *testing.T) {
+	src := &flipSource{first: reloadTokOld, second: ""}
+	mux := http.NewServeMux()
+	registerRoutesSource(mux, &fakeCache{
+		snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+		meta: daemon.Metadata{Ready: true},
+	}, tcpAuth(t, src)) // startup check consumes the non-empty first value
+
+	for _, tc := range []struct{ method, path, bearer string }{
+		{http.MethodPost, "/run", ""},
+		{http.MethodPost, "/run", reloadTokOld},
+		{http.MethodGet, "/snapshot", ""},
+		{http.MethodGet, "/v2/cluster", reloadTokOld},
+	} {
+		if got := doAuthed(t, mux, tc.method, tc.path, tc.bearer); got != http.StatusUnauthorized {
+			t.Fatalf("%s %s (bearer=%t) with an empty snapshot = %d, want 401", tc.method, tc.path, tc.bearer != "", got)
+		}
+	}
+}
+
+// The same holds on a Unix socket whose token was non-empty at startup: F9
+// pass-through is only for a socket started without a token.
+func TestUnixSourceTurningEmptyAfterStartupFailsClosed(t *testing.T) {
+	src := &flipSource{first: reloadTokOld, second: ""}
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, unixAuth(src))
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", ""); got != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", got)
+	}
+}
+
+// F9 is unchanged: a Unix socket started with an empty static token passes
+// requests through, and a TCP listener with an empty token is refused.
+func TestEmptyStartupTokenPolicy(t *testing.T) {
+	a, err := newAPIAuth(auth.StaticToken(""), true)
+	if err != nil || !a.allowEmpty {
+		t.Fatalf("unix + empty: allowEmpty=%v err=%v, want true, nil", a.allowEmpty, err)
+	}
+	h := withAuthSource(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, a)
+	if got := doAuthed(t, h, http.MethodGet, "/snapshot", ""); got != http.StatusOK {
+		t.Fatalf("unix + empty static token = %d, want 200 (F9)", got)
+	}
+	if _, err := newAPIAuth(auth.StaticToken(""), false); !errors.Is(err, errNoTokenOnTCP) {
+		t.Fatalf("tcp + empty: err=%v, want errNoTokenOnTCP", err)
+	}
+	if a, err := newAPIAuth(auth.StaticToken(reloadTokOld), true); err != nil || a.allowEmpty {
+		t.Fatalf("unix + token: allowEmpty=%v err=%v, want false, nil", a.allowEmpty, err)
+	}
+}
+
+// Serve end to end on a Unix socket with an empty token still serves
+// protected routes without auth (F9), through ServeWithTokenSource's policy.
+func TestServeUnixSocketEmptyTokenStillPassesThrough(t *testing.T) {
+	sock := filepath.Join(shortSocketDir(t), "a.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeWithTokenSource(ctx, sock, &fakeCache{
+			snap: &models.ClusterSnapshot{Status: models.SnapshotHealthy},
+			meta: daemon.Metadata{Ready: true},
+		}, auth.StaticToken(""), false, nil)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", sock)
+	}}}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		resp, err := client.Get("http://unix/snapshot")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET /snapshot = %d, want 200 (F9)", resp.StatusCode)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not come up: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

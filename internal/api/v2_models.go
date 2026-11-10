@@ -3,16 +3,15 @@ package api
 import (
 	"net/http"
 
-	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/modelinventory"
 )
 
 // registerV2Routes mounts the v2 API: the core cluster routes plus the model
 // catalog.
-func registerV2Routes(mux *http.ServeMux, cache snapshotCache, src auth.TokenSource) {
-	registerV2CoreRoutes(mux, cache, src)
+func registerV2Routes(mux *http.ServeMux, cache snapshotCache, authn apiAuth) {
+	registerV2CoreRoutes(mux, cache, authn)
 	h := &v2Handlers{cache: cache}
-	mux.HandleFunc("/v2/models", withAuthSource(h.handleModels, src))
+	mux.HandleFunc("/v2/models", withAuthSource(h.handleModels, authn))
 }
 
 // handleModels serves GET /v2/models: the model catalog derived from the

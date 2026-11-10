@@ -25,7 +25,11 @@ Releases.
   following symlinks), is over 4 KiB, or cannot be read, `axis serve` and
   clients now fail with an error instead of hanging (FIFO), exhausting memory
   (`/dev/zero`) or trimming an oversized file. The path is never regenerated
-  or replaced in that case. `AXIS_API_TOKEN` is still
+  or replaced in that case.
+* The API's empty-token rule is decided once at startup: requests pass
+  through without a token only on a Unix socket that was started without one
+  (unchanged). Any other empty token, including a token source that turns
+  empty after startup, gets 401. `AXIS_API_TOKEN` is still
   read once at startup.
 
 ### Fixes

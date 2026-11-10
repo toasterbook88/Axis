@@ -53,7 +53,9 @@ The daemon reads its API token once and never again, so a rotated token is ignor
   bounds its reads, §1, and re-reads on demand only when the file's stat changed, §4; neither is
   an access check.)
   The empty-token rules (F9 pass-through on a Unix socket, `server.go:197`; TCP refusal, `:137`;
-  `withRequiredAuth` refusal, `:480`) keep today's behavior.
+  `withRequiredAuth` refusal, `:480`) keep today's behavior for every token that is empty at
+  startup. The one new 401 is a source that turns empty after startup (Review 4, §4), which today's
+  string token cannot do.
 - No SIGHUP handler and no fsnotify dependency.
 - Clients are not changed. Long-lived processes that cached the old token (an `AXIS_API_TOKEN`
   holder pointed at a daemon that reads the file, or a request signed just before the swap) get 401
@@ -201,8 +203,16 @@ before the "listening" banner, so a failure is reported before the daemon says i
   registration (Review 2, nit 5): the per-request check covers it, and `ServeWithTokenSource`
   already refuses an empty token on TCP at startup. The file source can never become empty,
   because empty content is rejected in §3.
-- The F9 empty-token pass-through (`server.go:197`) applies only when the source is
-  `StaticToken("")`. The TCP refusal at `:137` checks `src.Current()` at startup.
+- The empty-token policy is decided once, at startup, by `ServeWithTokenSource` (Review 4):
+  `newAPIAuth(src, unixSocket)` (`internal/api/auth_policy.go`) refuses an empty startup token on
+  TCP and otherwise returns an `apiAuth{src, allowEmpty}`, where `allowEmpty` is true only for a
+  Unix socket whose token was empty at startup (F9). That value is passed explicitly into
+  `registerRoutesSource`, the v2, A2A and pprof registrations, and every `withAuthSource`. Per
+  request, an empty snapshot passes through only if `allowEmpty`; otherwise it is 401. So a
+  `TokenSource` that returns "" after startup cannot open any route, on TCP or on a socket
+  started with a token. `withRequiredAuthSource` (pprof) still refuses an empty snapshot always.
+  `Serve` and the string-token test wrappers go through the same policy (the route wrappers use
+  the Unix-socket policy, as their tests always assumed).
 - To keep test churn small (about 60 test call sites use the string signatures), the string-token
   forms `ServeWithContext`, `registerRoutes` and `registerPprofRoutes` move to
   `internal/api/token_compat_test.go` as thin wrappers that build
@@ -288,6 +298,12 @@ unexported `read` field. Tests use temp `AXIS_HOME` directories.
   yields "" never lets a mismatched bearer through.
 - Fail-closed: `withRequiredAuthSource` with a source that turns empty after startup still returns
   401; `NewFileToken` with an empty initial token returns an error.
+- Empty-snapshot policy (Review 4): on a TCP policy, a source that is non-empty at startup and ""
+  afterwards gets 401 on `/run` (with and without a bearer), `/snapshot` and `/v2/cluster`; the
+  same on a Unix socket started with a token; a Unix socket started with `StaticToken("")` still
+  passes through, both through `newAPIAuth` and end to end through `ServeWithTokenSource` on a real
+  socket; TCP with an empty token is refused; a `Refresh` that returns "" fails closed under both
+  policies.
 - Regression guards (must pass unchanged): `TestServeWithContextRefusesTCPWithoutToken`
   (`internal/api/serve_auth_test.go:13`), `TestAuthentication` (`server_test.go:1284`),
   `TestPprofEndpointsRequireAuthWhenTokenSet` (`:1541`), `TestV2MetricsRequiresAuth` (`:913`), and
@@ -472,3 +488,22 @@ Verdict: approve-with-changes
    change read the file exactly once (counted reads).
 
 Note: the reviewer resolved all eight Review 2 items (the `FileToken` zero-value panic is kept as the fail-closed choice) and found no fail-open path. Review 2 item 4 above describes the 250 ms rate limit that Review 3 replaced.
+
+Kind: diff
+Reviewer: copilot-pull-request-reviewer (GitHub PR review thread PRRT_kwDORrX4Ws61hfOq; Review 4)
+Model: GitHub Copilot (model not reported by the reviewer)
+Base: 3a2fe9cf
+Head: 85503a36
+Date: 2026-11-10
+Verdict: approve-with-changes
+
+1. Should-fix: `withAuthSource` passed requests through whenever `src.Current()` was "", and
+   `ServeWithTokenSource` checked for an empty token only at startup, so a `TokenSource` that
+   returned "" later would open every protected TCP route, including `/run`. The shipped sources
+   never do that, but the API accepts any source. Fixed: `ServeWithTokenSource` decides the policy
+   once (`newAPIAuth`), F9 pass-through is allowed only for a Unix socket whose token was empty at
+   startup, the policy is passed explicitly to every handler, and any other empty snapshot gets
+   401 (§4, Tests). The reviewer's suggestion was to special-case `auth.StaticToken("")`; the
+   startup policy gives the same protection without a type check on the source.
+
+Note: Copilot's review produced no verdict field; approve-with-changes records that its one finding had to be fixed before merge.
