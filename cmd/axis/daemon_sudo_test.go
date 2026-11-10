@@ -102,7 +102,7 @@ func TestUpdateUnderSudoRestartsInvokerUserUnit(t *testing.T) {
 	h.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
 	}
 	want := []string{
@@ -132,7 +132,7 @@ func TestUpdateUnderSudoPollsInvokerDefaultSocket(t *testing.T) {
 	h.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
 	}
 	if want := filepath.Join(home, ".axis", "axis.sock"); len(h.healthAddrs) == 0 || h.healthAddrs[0] != want {
@@ -148,7 +148,7 @@ func TestUpdateUnderSudoWithoutInvokerServiceNeverSpawnsRootDaemon(t *testing.T)
 	h.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("a skipped restart must not fail the update: %v", err)
 	}
 	if h.spawns != 0 || h.metaFetches != 0 {
@@ -164,7 +164,7 @@ func TestUpdateUnderSudoLookupFailureNeverSpawnsRootDaemon(t *testing.T) {
 	h.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("a skipped restart must not fail the update: %v", err)
 	}
 	if h.spawns != 0 || len(h.calls) != 0 {
@@ -193,7 +193,7 @@ func TestUpdateUnderSudoKickstartsInvokerLaunchdAgent(t *testing.T) {
 	h.install(t)
 
 	var out bytes.Buffer
-	if err := restartAfterUpdate(context.Background(), "/var/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, &out); err != nil {
+	if err := restartAfterUpdate(context.Background(), "/var/root/.axis/axis.sock", []string{"/usr/local/bin/axis"}, daemon.Version, &out); err != nil {
 		t.Fatalf("restartAfterUpdate: %v\n%s", err, out.String())
 	}
 	want := "launchctl kickstart -k gui/501/" + daemonLaunchdLabel

@@ -327,7 +327,7 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 
 	// Call with a path that doesn't match the service exec.
 	var out bytes.Buffer
-	err := restartSupervisedDaemon(context.Background(), deps, "127.0.0.1:1", []string{"/other/path/axis"}, &out)
+	err := restartSupervisedDaemon(context.Background(), deps, "127.0.0.1:1", []string{"/other/path/axis"}, daemon.Version, &out)
 	if err != nil {
 		t.Fatalf("restartSupervisedDaemon: %v", err)
 	}
@@ -380,7 +380,7 @@ ExecStart=/usr/local/bin/axis daemon start --addr /tmp/axis.sock --refresh 1m
 
 	// Call with the matching path.
 	var out bytes.Buffer
-	err := restartSupervisedDaemon(context.Background(), deps, "127.0.0.1:1", []string{"/usr/local/bin/axis"}, &out)
+	err := restartSupervisedDaemon(context.Background(), deps, "127.0.0.1:1", []string{"/usr/local/bin/axis"}, daemon.Version, &out)
 	if err != nil {
 		t.Fatalf("restartSupervisedDaemon: %v", err)
 	}

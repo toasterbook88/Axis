@@ -556,6 +556,8 @@ func stubDoctorOwnershipHealthy(t *testing.T) func() {
 	}
 	prevUnits := doctorProbeSystemUnits
 	doctorProbeSystemUnits = func() ([]string, bool) { return nil, false }
+	prevBoot := doctorProbeBootStart
+	doctorProbeBootStart = func(context.Context) *DoctorCheck { return nil }
 	prevMeta := doctorFetchDaemonMeta
 	doctorFetchDaemonMeta = func(context.Context, string) (daemon.Metadata, error) { return daemon.Metadata{}, nil }
 	return func() {
@@ -563,6 +565,7 @@ func stubDoctorOwnershipHealthy(t *testing.T) func() {
 		doctorProbeSocket = prevSocket
 		doctorProbeMeshPort = prevMesh
 		doctorProbeSystemUnits = prevUnits
+		doctorProbeBootStart = prevBoot
 		doctorFetchDaemonMeta = prevMeta
 	}
 }
