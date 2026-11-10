@@ -873,7 +873,7 @@ func installRelease(cmd *cobra.Command, rel *ghRelease, latest string, targets [
 		fmt.Fprintf(out, "Restarting daemon...\n")
 		// Only paths that were actually replaced: a failed service binary
 		// must not be restarted as if it were new.
-		if err := restartAfterUpdate(cmd.Context(), api.DefaultAddr(), replacedPaths, out); err != nil {
+		if err := restartAfterUpdate(cmd.Context(), api.DefaultAddr(), replacedPaths, latest, out); err != nil {
 			return fmt.Errorf("update succeeded but daemon restart failed: %w", err)
 		}
 	}
