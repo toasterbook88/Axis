@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -25,13 +26,22 @@ func TokenPath() string {
 	return persist.AxisPath("token")
 }
 
-// LoadOrGenerateToken attempts to load the token from environment or file,
-// generating a new one if necessary.
+// LoadOrGenerateToken returns AXIS_API_TOKEN when set, else the token in
+// ~/.axis/token. It generates and saves a new token only when the file is
+// missing or is a regular file without a valid token (see parseToken). A
+// path that is not a regular file (after following symlinks), a file over
+// maxTokenFileSize, or an unreadable file is an error and is left untouched.
 func LoadOrGenerateToken() (string, error) {
 	if token := os.Getenv(TokenEnvVar); token != "" {
 		return token, nil
 	}
+	return loadOrGenerateTokenFile()
+}
 
+// loadOrGenerateTokenFile is the file half of LoadOrGenerateToken: it ignores
+// AXIS_API_TOKEN. Generation happens under a lock file so concurrent first
+// calls agree on one token.
+func loadOrGenerateTokenFile() (string, error) {
 	path := TokenPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", fmt.Errorf("creating config directory: %w", err)
@@ -50,16 +60,23 @@ func LoadOrGenerateToken() (string, error) {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	data, err := os.ReadFile(path)
-	if err == nil {
-		token := strings.TrimSpace(string(data))
-		// Validate: token must be non-empty and the expected 64-char hex length.
-		if decoded, decodeErr := hex.DecodeString(token); decodeErr == nil && len(decoded) == 32 {
+	// Same bounded reader as the daemon's reloader (readTokenBytes), so a
+	// FIFO cannot hang this call while it holds the lock, and both sides
+	// agree on which files are usable.
+	data, err := readTokenBytes(path)
+	switch {
+	case err == nil:
+		if token, parseErr := parseToken(data); parseErr == nil {
 			return token, nil
 		}
-		// Token file is corrupted or empty; regenerate under the lock.
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("reading token file: %w", err)
+		// Regular file with empty or corrupt content; regenerate under the lock.
+	case errors.Is(err, ErrTokenFileMissing):
+		// First run; generate below.
+	default:
+		// Not a regular file, too large, or unreadable. Never regenerate:
+		// that would replace something the operator put there (a symlink,
+		// a directory, a device) with a new file.
+		return "", fmt.Errorf("token file %s unusable: %w", path, err)
 	}
 
 	// Generate new token

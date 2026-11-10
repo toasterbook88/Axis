@@ -8,10 +8,10 @@ import (
 
 // registerV2Routes mounts the v2 API: the core cluster routes plus the model
 // catalog.
-func registerV2Routes(mux *http.ServeMux, cache snapshotCache, token string) {
-	registerV2CoreRoutes(mux, cache, token)
+func registerV2Routes(mux *http.ServeMux, cache snapshotCache, authn apiAuth) {
+	registerV2CoreRoutes(mux, cache, authn)
 	h := &v2Handlers{cache: cache}
-	mux.HandleFunc("/v2/models", withAuth(h.handleModels, token))
+	mux.HandleFunc("/v2/models", withAuthSource(h.handleModels, authn))
 }
 
 // handleModels serves GET /v2/models: the model catalog derived from the

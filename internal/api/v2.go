@@ -15,25 +15,25 @@ import (
 	"github.com/toasterbook88/axis/internal/state"
 )
 
-func registerV2CoreRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
+func registerV2CoreRoutes(mux *http.ServeMux, cache snapshotCache, authn apiAuth) {
 	h := &v2Handlers{cache: cache}
 
-	mux.HandleFunc("/v2/cluster", withAuth(h.handleCluster, token))
-	mux.HandleFunc("/v2/nodes", withAuth(h.handleNodes, token))
-	mux.HandleFunc("/v2/nodes/", withAuth(h.handleNodes, token))
-	mux.HandleFunc("/v2/reservations", withAuth(h.handleReservations, token))
-	mux.HandleFunc("/v2/reservations/", withAuth(h.handleReservations, token))
-	mux.HandleFunc("/v2/mesh", withAuth(h.handleMesh, token))
+	mux.HandleFunc("/v2/cluster", withAuthSource(h.handleCluster, authn))
+	mux.HandleFunc("/v2/nodes", withAuthSource(h.handleNodes, authn))
+	mux.HandleFunc("/v2/nodes/", withAuthSource(h.handleNodes, authn))
+	mux.HandleFunc("/v2/reservations", withAuthSource(h.handleReservations, authn))
+	mux.HandleFunc("/v2/reservations/", withAuthSource(h.handleReservations, authn))
+	mux.HandleFunc("/v2/mesh", withAuthSource(h.handleMesh, authn))
 	// Legacy alias. Clients shipped before v0.15.1 request /mesh, which only
 	// the unused internal/daemon route twin ever registered -- against the
 	// production mux they got 404. Delegate to the same handler here instead
 	// of keeping a second registration path alive.
-	mux.HandleFunc("/mesh", withAuth(h.handleMesh, token))
-	mux.HandleFunc("/v2/placement/dry-run", withAuth(h.handleDryRun, token))
-	mux.HandleFunc("/v2/metrics", withAuth(h.handleMetrics, token))
-	mux.HandleFunc("/v2/history", withAuth(h.handleHistory, token))
-	mux.HandleFunc("/v2/batch/place", withAuth(h.handleBatchPlace, token))
-	mux.HandleFunc("/v2/doctor", withAuth(h.handleDoctor, token))
+	mux.HandleFunc("/mesh", withAuthSource(h.handleMesh, authn))
+	mux.HandleFunc("/v2/placement/dry-run", withAuthSource(h.handleDryRun, authn))
+	mux.HandleFunc("/v2/metrics", withAuthSource(h.handleMetrics, authn))
+	mux.HandleFunc("/v2/history", withAuthSource(h.handleHistory, authn))
+	mux.HandleFunc("/v2/batch/place", withAuthSource(h.handleBatchPlace, authn))
+	mux.HandleFunc("/v2/doctor", withAuthSource(h.handleDoctor, authn))
 }
 
 type v2Handlers struct {

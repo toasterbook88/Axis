@@ -42,17 +42,19 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 	return daemon.NewDefault(refreshInterval)
 }
 
-var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string, pprof bool, cardFn func() a2a.AgentCard) error {
-	return api.ServeWithContext(ctx, addr, d, token, pprof, cardFn)
+var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, tokens auth.TokenSource, pprof bool, cardFn func() a2a.AgentCard) error {
+	return api.ServeWithTokenSource(ctx, addr, d, tokens, pprof, cardFn)
 }
 
 func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, pprof bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	token, err := auth.LoadOrGenerateToken()
+	// The token source owns AXIS_API_TOKEN vs ~/.axis/token precedence and
+	// the file poller; set it up before anything listens.
+	tokens, err := auth.NewDaemonTokenSource(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load/generate API token: %w", err)
+		return fmt.Errorf("failed to set up API token: %w", err)
 	}
 
 	d := newServeDaemon(refreshInterval)
@@ -62,6 +64,7 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		drainCtx, cancel := context.WithTimeout(context.Background(), daemon.ShutdownDrainTimeout)
 		defer cancel()
 		d.WaitStopped(drainCtx)
+		tokens.WaitStopped(drainCtx)
 	}()
 
 	d.WatchConfig(ctx, config.DefaultConfigPath())
@@ -83,7 +86,7 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		return err
 	}
 
-	// ServeWithContext blocks until ctx is cancelled or a listen error.
+	// ServeWithTokenSource blocks until ctx is cancelled or a listen error.
 	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then the deferred
 	// cleanup waits for background goroutines to finish.
 	// A2A agent card: advertise this node's identity and scope-derived skills
@@ -113,7 +116,7 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		}
 		return a2a.Card(opts)
 	}
-	return serveHTTPAPI(ctx, addr, d, token, pprof, cardFn)
+	return serveHTTPAPI(ctx, addr, d, tokens, pprof, cardFn)
 }
 
 func serveCmd() *cobra.Command {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/mesh"
 	"github.com/toasterbook88/axis/internal/models"
@@ -30,7 +31,7 @@ func (c *meshOnlyCache) Invalidate()                               {}
 func (c *meshOnlyCache) RefreshNow(context.Context) error          { return nil }
 
 // TestFetchDaemonMeshAgainstProductionServer exercises the CLI's mesh path
-// against api.ServeWithContext -- the same mux the daemon runs. The previous
+// against api.ServeWithTokenSource -- the same mux the daemon runs. The previous
 // test served /mesh from an httptest handler the daemon never registered, so it
 // passed while the live daemon answered 404.
 func TestFetchDaemonMeshAgainstProductionServer(t *testing.T) {
@@ -54,7 +55,9 @@ func TestFetchDaemonMeshAgainstProductionServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	served := make(chan error, 1)
-	go func() { served <- api.ServeWithContext(ctx, socketPath, cache, token, false, nil) }()
+	go func() {
+		served <- api.ServeWithTokenSource(ctx, socketPath, cache, auth.StaticToken(token), false, nil)
+	}()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

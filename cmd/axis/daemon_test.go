@@ -19,7 +19,7 @@ import (
 
 // These stub the HTTP response to exercise decoding and table rendering. The
 // route contract itself is covered by TestFetchDaemonMeshAgainstProductionServer,
-// which runs api.ServeWithContext -- a stub cannot prove the daemon registers
+// which runs api.ServeWithTokenSource -- a stub cannot prove the daemon registers
 // the path the CLI requests.
 func TestFetchDaemonMeshReturnsPeers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

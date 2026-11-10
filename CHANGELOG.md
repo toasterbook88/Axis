@@ -16,6 +16,22 @@ Releases.
   (and prints `loginctl enable-linger $USER` when it is off), macOS checks that
   automatic login is set for this user. The check only reads state.
 
+* **Behaviour change:** the daemon now reloads `~/.axis/token` without a
+  restart. A rewritten token takes effect within 500 ms, or at once when a
+  client presents it after an atomic replace, and the old token is rejected
+  from then on (no grace window). A missing, empty, invalid, non-regular or
+  oversized (over 4 KiB) file keeps the last good token and logs one warning.
+* **Behaviour change:** if `~/.axis/token` is not a regular file (after
+  following symlinks), is over 4 KiB, or cannot be read, `axis serve` and
+  clients now fail with an error instead of hanging (FIFO), exhausting memory
+  (`/dev/zero`) or trimming an oversized file. The path is never regenerated
+  or replaced in that case.
+* The API's empty-token rule is decided once at startup: requests pass
+  through without a token only on a Unix socket that was started without one
+  (unchanged). Any other empty token, including a token source that turns
+  empty after startup, gets 401. `AXIS_API_TOKEN` is still
+  read once at startup.
+
 ### Fixes
 
 * **Behaviour change:** after `axis update`, the restart check now expects the
