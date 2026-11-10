@@ -555,11 +555,14 @@ func stubDoctorOwnershipHealthy(t *testing.T) func() {
 	}
 	prevUnits := doctorProbeSystemUnits
 	doctorProbeSystemUnits = func() ([]string, bool) { return nil, false }
+	prevBoot := doctorProbeBootStart
+	doctorProbeBootStart = func(context.Context) *DoctorCheck { return nil }
 	return func() {
 		restoreProcs()
 		doctorProbeSocket = prevSocket
 		doctorProbeMeshPort = prevMesh
 		doctorProbeSystemUnits = prevUnits
+		doctorProbeBootStart = prevBoot
 	}
 }
 

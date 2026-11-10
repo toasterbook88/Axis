@@ -22,6 +22,20 @@ ownership check, stops the job, removes its service file, and reloads the user
 manager. It does not remove configuration, state, logs, tokens, or the AXIS
 binary.
 
+## Boot start versus login start
+
+Both services belong to the user, so whether they start at boot depends on the
+host. `axis daemon service install` and `axis doctor` report it (check
+"Daemon boot start"). The check only reads state; it never changes it.
+
+| Platform | Starts at boot when | Otherwise | Remedy (run it yourself) |
+| --- | --- | --- | --- |
+| Linux | lingering is on for the user (`loginctl show-user <uid> --property=Linger` is `yes`) | starts at the user's first login | `loginctl enable-linger $USER` |
+| macOS | automatic login is set for this user (`autoLoginUser` in `/Library/Preferences/com.apple.loginwindow`) | starts when the user logs in to the GUI | enable automatic login for this user, or run the daemon as a LaunchDaemon (both need an administrator) |
+
+On Linux the check runs only when `axis.service` is enabled. If it cannot read
+the state, it warns "could not read" rather than guessing.
+
 Install does not terminate a listener owned by an unknown process. If service
 startup reports that the address is already in use, verify and stop that
 process explicitly, then rerun install.

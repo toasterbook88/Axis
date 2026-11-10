@@ -31,6 +31,7 @@ type daemonServiceDependencies struct {
 	homeDir    func() (string, error)
 	executable func() (string, error)
 	uid        func() int
+	userName   func() (string, error)
 	run        func(context.Context, string, ...string) ([]byte, error)
 }
 
@@ -40,6 +41,7 @@ func defaultDaemonServiceDependencies() daemonServiceDependencies {
 		homeDir:    os.UserHomeDir,
 		executable: os.Executable,
 		uid:        os.Getuid,
+		userName:   currentUserName,
 		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return exec.CommandContext(ctx, name, args...).CombinedOutput()
 		},
@@ -101,6 +103,17 @@ func runDaemonServiceInstall(ctx context.Context, out io.Writer, addr, refresh s
 	}
 	if _, err := fmt.Fprintf(out, "AXIS daemon user service installed: %s\nVerify: axis daemon status\n", path); err != nil {
 		return err
+	}
+	// Advisory only: a check that warns or cannot read state never fails install.
+	if check := daemonBootStartCheck(ctx, deps); check != nil && check.Status == "warn" {
+		if _, err := fmt.Fprintf(out, "Warning: %s\n", check.Message); err != nil {
+			return err
+		}
+		if check.Fix != "" {
+			if _, err := fmt.Fprintf(out, "Fix: %s\n", check.Fix); err != nil {
+				return err
+			}
+		}
 	}
 	if deps.goos != "linux" {
 		return nil
