@@ -116,7 +116,7 @@ API-key files should also be `0600`.
 | SSH known_hosts | Update file manually or via `ssh-keyscan`. AXIS reads it on next connection. | Yes (per-connection) |
 | UDP beacon secret | Edit `nodes.yaml` `discovery.secret`. Daemon restarts listener on next poll. | Yes |
 | Mesh gossip secret | Edit `nodes.yaml` `discovery.secret`, then restart the daemon. | No |
-| API token (`~/.axis/token`) | **Restart required.** Stop the daemon, delete the file or set `AXIS_API_TOKEN`, restart the daemon, then restart any long-lived process that read the old value. `auth.LoadOrGenerateToken()` regenerates on next read, but `withAuth` (`internal/api/server.go:187`) captures the token **by value in a handler closure at route-registration time** (`registerRoutes` ← `cmd/axis/serve.go:53`), so a live daemon compares the old string for its whole lifetime while clients read fresh per call (`internal/daemon/client.go:35,133,151`) — deleting the file alone yields 401 across the API. See also: `docs/evaluations/2026-07-25-truth-integrity-audit.md` ("Deleting a token is not a cleanup; it invalidates live sessions."). | No (daemon restart) |
+| API token (`~/.axis/token`) | Hot-reloaded. Write a new 64-hex token to `~/.axis/token` atomically (or delete it; the next client call regenerates it). The daemon swaps to it within one 500 ms poll (`auth.FileToken`, `internal/auth/token_source.go`), and the old token is rejected from then on (no grace window). An unusable file (missing, empty, invalid) leaves the last good token active and logs one warning. `AXIS_API_TOKEN`, when set, is fixed for the daemon's lifetime and needs a restart. Long-lived processes that cached the old value must re-read it. A2A tasks are bound to the bearer that created them (`internal/a2a/handler.go` `PrincipalHashFromRequest`), so `GET /a2a/v1/tasks/{id}` returns 404 for tasks created before a rotation. | Yes (file); No (`AXIS_API_TOKEN`) |
 | Cloud provider API keys | Rotate env var or file contents outside AXIS. | Yes (per-request) |
 
 ## Summary Table
@@ -127,5 +127,5 @@ API-key files should also be `0600`.
 | SSH host keys | `~/.ssh/known_hosts` | Per-connection | No | Yes |
 | UDP beacon secret | `nodes.yaml` | Daemon lifetime (listener restart on change) | No | Yes |
 | Mesh gossip secret | `nodes.yaml` → `mesh.Config` | Daemon lifetime | No | Yes (restart required) |
-| API token | `~/.axis/token` or `AXIS_API_TOKEN` | Daemon lifetime | No | Yes |
+| API token | `~/.axis/token` or `AXIS_API_TOKEN` | Until the file changes (file); daemon lifetime (env var) | No | Yes |
 | Cloud API keys | Env var / file (external) | Per-request | No | Yes |

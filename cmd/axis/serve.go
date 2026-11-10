@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -42,8 +43,24 @@ var newServeDaemon = func(refreshInterval time.Duration) serveDaemon {
 	return daemon.NewDefault(refreshInterval)
 }
 
-var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, token string, pprof bool, cardFn func() a2a.AgentCard) error {
-	return api.ServeWithContext(ctx, addr, d, token, pprof, cardFn)
+var serveHTTPAPI = func(ctx context.Context, addr string, d serveDaemon, tokens auth.TokenSource, pprof bool, cardFn func() a2a.AgentCard) error {
+	return api.ServeWithTokenSource(ctx, addr, d, tokens, pprof, cardFn)
+}
+
+// serveTokenSource picks the daemon's token source. AXIS_API_TOKEN, when set,
+// is fixed for the daemon's lifetime. Otherwise ~/.axis/token is hot-reloaded:
+// the daemon swaps to a rewritten token within one poll and rejects the old
+// one from then on.
+func serveTokenSource(ctx context.Context, token string) (auth.TokenSource, error) {
+	if os.Getenv(auth.TokenEnvVar) != "" {
+		return auth.StaticToken(token), nil
+	}
+	ft, err := auth.NewFileToken(auth.TokenPath(), token)
+	if err != nil {
+		return nil, err
+	}
+	go ft.Run(ctx)
+	return ft, nil
 }
 
 func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, pprof bool) error {
@@ -83,7 +100,7 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		return err
 	}
 
-	// ServeWithContext blocks until ctx is cancelled or a listen error.
+	// ServeWithTokenSource blocks until ctx is cancelled or a listen error.
 	// On SIGTERM/SIGINT, ctx is cancelled, HTTP drains, then the deferred
 	// cleanup waits for background goroutines to finish.
 	// A2A agent card: advertise this node's identity and scope-derived skills
@@ -113,7 +130,11 @@ func runServeCommand(out io.Writer, addr string, refreshInterval time.Duration, 
 		}
 		return a2a.Card(opts)
 	}
-	return serveHTTPAPI(ctx, addr, d, token, pprof, cardFn)
+	tokens, err := serveTokenSource(ctx, token)
+	if err != nil {
+		return fmt.Errorf("failed to set up API token source: %w", err)
+	}
+	return serveHTTPAPI(ctx, addr, d, tokens, pprof, cardFn)
 }
 
 func serveCmd() *cobra.Command {

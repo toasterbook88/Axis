@@ -19,7 +19,7 @@ import (
 
 // Daemon ownership diagnostics.
 //
-// api.ServeWithContext refuses to become a second owner of the daemon address,
+// api.ServeWithTokenSource refuses to become a second owner of the daemon address,
 // but a refusal at startup is invisible afterwards: the operator still has to
 // read `ps` to learn that two daemons are alive, that the running one executes
 // an inode that no longer exists on disk, or that a socket file is a leftover

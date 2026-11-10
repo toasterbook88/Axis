@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
+	"github.com/toasterbook88/axis/internal/auth"
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/execution"
@@ -180,7 +181,7 @@ func TestServeCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string, pprof bool, _ func() a2a.AgentCard) error {
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, _ auth.TokenSource, pprof bool, _ func() a2a.AgentCard) error {
 		if addr != "127.0.0.1:5151" {
 			t.Fatalf("addr = %q, want 127.0.0.1:5151", addr)
 		}
@@ -222,7 +223,7 @@ func TestDaemonStartCmdStartsDaemonAndCallsServeAPI(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string, pprof bool, _ func() a2a.AgentCard) error {
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, _ auth.TokenSource, pprof bool, _ func() a2a.AgentCard) error {
 		if addr != "127.0.0.1:6262" {
 			t.Fatalf("addr = %q, want 127.0.0.1:6262", addr)
 		}
@@ -264,7 +265,7 @@ func TestServeCmdPassesPprofFlag(t *testing.T) {
 		return fake
 	})
 	defer restoreDaemon()
-	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, token string, pprof bool, _ func() a2a.AgentCard) error {
+	restoreServe := stubServeHTTPAPI(t, func(_ context.Context, addr string, d serveDaemon, _ auth.TokenSource, pprof bool, _ func() a2a.AgentCard) error {
 		if !pprof {
 			t.Fatal("expected pprof=true when flag is set")
 		}
@@ -814,7 +815,7 @@ func stubServeDaemonFactory(t *testing.T, fn func(time.Duration) serveDaemon) fu
 	}
 }
 
-func stubServeHTTPAPI(t *testing.T, fn func(context.Context, string, serveDaemon, string, bool, func() a2a.AgentCard) error) func() {
+func stubServeHTTPAPI(t *testing.T, fn func(context.Context, string, serveDaemon, auth.TokenSource, bool, func() a2a.AgentCard) error) func() {
 	t.Helper()
 	prev := serveHTTPAPI
 	serveHTTPAPI = fn

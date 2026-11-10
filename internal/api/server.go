@@ -109,7 +109,7 @@ const (
 var runLiveGuarded = execution.RunGuarded
 
 func Serve(addr string, cache snapshotCache, token string, pprof bool) error {
-	return ServeWithContext(context.Background(), addr, cache, token, pprof, nil)
+	return ServeWithTokenSource(context.Background(), addr, cache, auth.StaticToken(token), pprof, nil)
 }
 
 func newHTTPServer(handler http.Handler) *http.Server {
@@ -124,26 +124,31 @@ func newHTTPServer(handler http.Handler) *http.Server {
 	}
 }
 
-// ServeWithContext starts the HTTP/Unix API server and blocks until ctx is
+// ServeWithTokenSource starts the HTTP/Unix API server and blocks until ctx is
 // cancelled or a fatal listen error occurs. On cancellation it performs a
 // graceful shutdown with a 10-second drain before returning nil. When
 // cardFn is non-nil, the standard A2A well-known route
 // (/.well-known/agent-card.json) is served alongside the API routes.
-// Authenticated A2A task send/get routes are always registered in registerRoutes.
-func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, token string, pprof bool, cardFn func() a2a.AgentCard) error {
+// Authenticated A2A task send/get routes are always registered in
+// registerRoutesSource.
+//
+// src supplies the API token. The daemon passes an auth.FileToken so a
+// rewritten ~/.axis/token takes effect without a restart; each request takes
+// one snapshot of src and uses it for bearer auth and forwarded-origin checks.
+func ServeWithTokenSource(ctx context.Context, addr string, cache snapshotCache, src auth.TokenSource, pprof bool, cardFn func() a2a.AgentCard) error {
 	// F9: withAuth passes requests through when token is empty. That is only
 	// acceptable on a Unix socket, whose file mode is the access control; a
 	// TCP listener without a token would serve every route unauthenticated.
-	if token == "" && !auth.IsUnixAddr(addr) {
+	if src.Current() == "" && !auth.IsUnixAddr(addr) {
 		return fmt.Errorf("refusing to listen on TCP address %q without an api token", addr)
 	}
 	mux := http.NewServeMux()
-	registerRoutes(mux, cache, token)
+	registerRoutesSource(mux, cache, src)
 	if cardFn != nil {
 		a2a.ServeCard(mux, cardFn)
 	}
 	if pprof {
-		registerPprofRoutes(mux, token)
+		registerPprofRoutesSource(mux, src)
 	}
 
 	srv := newHTTPServer(withRequestID(mux))
@@ -188,12 +193,27 @@ func ServeWithContext(ctx context.Context, addr string, cache snapshotCache, tok
 	}
 }
 
-// withAuth enforces the shared API bearer token (same policy as /run).
-// F9: when token == "", this is a no-op and the next handler runs unauthenticated —
-// identical to /run. ServeWithContext only allows that on a Unix socket and
-// refuses a TCP listener without a token.
-func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
+type requestTokenKey struct{}
+
+// requestToken returns the token snapshot withAuthSource took for this
+// request ("" when the route is not behind withAuthSource or no token is set).
+func requestToken(r *http.Request) string {
+	tok, _ := r.Context().Value(requestTokenKey{}).(string)
+	return tok
+}
+
+// withAuthSource enforces the shared API bearer token (same policy as /run).
+// F9: when the token is "", this is a no-op and the next handler runs
+// unauthenticated — identical to /run. ServeWithTokenSource only allows that on
+// a Unix socket and refuses a TCP listener without a token.
+//
+// It reads src once per request, uses that value for the bearer
+// compare and stores it in the request context so later checks in the same
+// request (forwarded-origin HMAC) use the same snapshot.
+func withAuthSource(next http.HandlerFunc, src auth.TokenSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		token := src.Current()
+		r = r.WithContext(context.WithValue(r.Context(), requestTokenKey{}, token))
 		if token == "" {
 			next(w, r)
 			return
@@ -220,9 +240,9 @@ func withAuth(next http.HandlerFunc, token string) http.HandlerFunc {
 	}
 }
 
-func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
+func registerRoutesSource(mux *http.ServeMux, cache snapshotCache, src auth.TokenSource) {
 	// A2A slice 2v1: authenticated task send/get on the same mux as /run.
-	// Public agent card is mounted separately in ServeWithContext (outside withAuth).
+	// Public agent card is mounted separately in ServeWithTokenSource (outside withAuthSource).
 	// F9: task routes inherit /run token policy — withAuth no-ops when token=="";
 	// E2E and any TCP expose should use a non-empty token.
 	a2aQueue := a2a.NewApprovalQueue()
@@ -233,19 +253,19 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		Queue:   a2aQueue,
 	}
 	a2a.ServeTasks(mux, a2aHandler, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAuth(next, token)
+		return withAuthSource(next, src)
 	})
 	// Slice 3: the only approve/reject routes. Approve requires confirm=YES
 	// and then runs the guarded pipeline, same contract as /run.
-	registerA2AApprovalRoutes(mux, a2aHandler, token, cache)
+	registerA2AApprovalRoutes(mux, a2aHandler, src, cache)
 	// Operator board view: list pending approval tasks.
-	mux.HandleFunc("/a2a/v1/tasks/pending", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/a2a/v1/tasks/pending", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		writeJSON(w, http.StatusOK, a2aTaskList{Tasks: a2aQueue.Pending()})
-	}, token))
+	}, src))
 
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -262,7 +282,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/healthz", healthHandler)
 
-	mux.HandleFunc("/snapshot", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/snapshot", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -277,9 +297,9 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			return
 		}
 		writeJSON(w, http.StatusOK, snap)
-	}, token))
+	}, src))
 
-	mux.HandleFunc("/snapshot/meta", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/snapshot/meta", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -289,9 +309,9 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			return
 		}
 		writeJSON(w, http.StatusOK, cache.Meta())
-	}, token))
+	}, src))
 
-	mux.HandleFunc("/invalidate", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/invalidate", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -302,9 +322,9 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		}
 		cache.Invalidate()
 		w.WriteHeader(http.StatusNoContent)
-	}, token))
+	}, src))
 
-	mux.HandleFunc("/refresh", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/refresh", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -323,7 +343,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}, token))
+	}, src))
 
 	toolsHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -332,10 +352,10 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		}
 		writeJSON(w, http.StatusOK, ToolsResponse{Tools: daemon.ToolDefinitions()})
 	}
-	mux.HandleFunc("/tools", withAuth(toolsHandler, token))
-	mux.HandleFunc("/mcp/tools", withAuth(toolsHandler, token))
+	mux.HandleFunc("/tools", withAuthSource(toolsHandler, src))
+	mux.HandleFunc("/mcp/tools", withAuthSource(toolsHandler, src))
 
-	mux.HandleFunc("/knowledge", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/knowledge", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -353,9 +373,9 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Failures:  rc.skillStore.Failures,
 		}
 		writeJSON(w, http.StatusOK, payload)
-	}, token))
+	}, src))
 
-	mux.HandleFunc("/run", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/run", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -394,7 +414,7 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 			Mode:        req.Mode,
 		}
 
-		forwardedOrigin, hasForwardedOrigin, err := auth.ForwardedExecutionOriginFromRequest(r, token, time.Now())
+		forwardedOrigin, hasForwardedOrigin, err := auth.ForwardedExecutionOriginFromRequest(r, requestToken(r), time.Now())
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -458,31 +478,41 @@ func registerRoutes(mux *http.ServeMux, cache snapshotCache, token string) {
 		resp = RunResponse(res)
 
 		writeJSON(w, http.StatusOK, resp)
-	}, token))
+	}, src))
 
-	registerV2Routes(mux, cache, token)
+	registerV2Routes(mux, cache, src)
 }
 
-// registerPprofRoutes wires the profiling handlers behind the same bearer-token
-// auth as every other non-health route. These endpoints expose the process
-// command line (which can leak flags/tokens) and allow profile/trace-driven
-// resource exhaustion, so they must never be reachable unauthenticated when the
-// API is bound to a TCP address.
-func registerPprofRoutes(mux *http.ServeMux, token string) {
-	mux.HandleFunc("/debug/pprof/", withRequiredAuth(pprof.Index, token))
-	mux.HandleFunc("/debug/pprof/cmdline", withRequiredAuth(pprof.Cmdline, token))
-	mux.HandleFunc("/debug/pprof/profile", withRequiredAuth(pprof.Profile, token))
-	mux.HandleFunc("/debug/pprof/symbol", withRequiredAuth(pprof.Symbol, token))
-	mux.HandleFunc("/debug/pprof/trace", withRequiredAuth(pprof.Trace, token))
+// registerPprofRoutesSource wires the profiling handlers behind the same
+// bearer-token auth as every other non-health route. These endpoints expose the
+// process command line (which can leak flags/tokens) and allow
+// profile/trace-driven resource exhaustion, so they must never be reachable
+// unauthenticated when the API is bound to a TCP address.
+func registerPprofRoutesSource(mux *http.ServeMux, src auth.TokenSource) {
+	mux.HandleFunc("/debug/pprof/", withRequiredAuthSource(pprof.Index, src))
+	mux.HandleFunc("/debug/pprof/cmdline", withRequiredAuthSource(pprof.Cmdline, src))
+	mux.HandleFunc("/debug/pprof/profile", withRequiredAuthSource(pprof.Profile, src))
+	mux.HandleFunc("/debug/pprof/symbol", withRequiredAuthSource(pprof.Symbol, src))
+	mux.HandleFunc("/debug/pprof/trace", withRequiredAuthSource(pprof.Trace, src))
 }
 
-func withRequiredAuth(next http.HandlerFunc, token string) http.HandlerFunc {
-	if token == "" {
-		return func(w http.ResponseWriter, _ *http.Request) {
-			writeError(w, http.StatusUnauthorized, "api token is not configured")
-		}
+// withRequiredAuthSource refuses every request when no token is configured,
+// decided at registration from the startup value and re-checked per request
+// so a source can never fail open.
+func withRequiredAuthSource(next http.HandlerFunc, src auth.TokenSource) http.HandlerFunc {
+	notConfigured := func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusUnauthorized, "api token is not configured")
 	}
-	return withAuth(next, token)
+	if src.Current() == "" {
+		return notConfigured
+	}
+	return withAuthSource(func(w http.ResponseWriter, r *http.Request) {
+		if requestToken(r) == "" {
+			notConfigured(w, r)
+			return
+		}
+		next(w, r)
+	}, src)
 }
 
 var loadLiveRuntime = runtimectx.Load
@@ -556,13 +586,13 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // routes. Both use the same bearer policy as /run. Approve requires the
 // caller to send confirm=YES and an explicit mode, then dispatches through
 // the guarded runner. Neither route is the /tasks/approve/{id} shape.
-func registerA2AApprovalRoutes(mux *http.ServeMux, h *a2a.Handler, token string, cache snapshotCache) {
-	mux.HandleFunc("/a2a/v1/tasks/{id}/approve", withAuth(func(w http.ResponseWriter, r *http.Request) {
+func registerA2AApprovalRoutes(mux *http.ServeMux, h *a2a.Handler, src auth.TokenSource, cache snapshotCache) {
+	mux.HandleFunc("/a2a/v1/tasks/{id}/approve", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		approveA2ATask(w, r, h, cache)
-	}, token))
-	mux.HandleFunc("/a2a/v1/tasks/{id}/reject", withAuth(func(w http.ResponseWriter, r *http.Request) {
+	}, src))
+	mux.HandleFunc("/a2a/v1/tasks/{id}/reject", withAuthSource(func(w http.ResponseWriter, r *http.Request) {
 		rejectA2ATask(w, r, h)
-	}, token))
+	}, src))
 }
 
 func approveA2ATask(w http.ResponseWriter, r *http.Request, h *a2a.Handler, cache snapshotCache) {
