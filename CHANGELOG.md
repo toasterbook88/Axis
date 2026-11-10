@@ -1,5 +1,14 @@
 ## Unreleased
 
+## v0.24.1 (2026-11-09)
+
+`axis doctor` and `axis daemon service install` say whether the AXIS user
+service starts at boot or only at login. After `axis update`, the restart check
+expects the release that was just installed. A `nodes.yaml` edit that needs a
+daemon restart is logged once and shown in `axis daemon status` and
+`axis doctor`. Publication and available downloads are tracked on GitHub
+Releases.
+
 ### Features
 
 * `axis doctor` and `axis daemon service install` report whether the AXIS user
@@ -26,6 +35,13 @@
   `mesh_restart_required` with the reason. `axis daemon restart` now restarts
   a daemon in that state instead of reporting it "already fresh". A reload
   that applies logs how many configured peers it added, updated and removed.
+
+### Maintenance
+
+* The agent's background tasks (`run_background`, async sub-agents) track one
+  explicit state (running, succeeded or failed) instead of two flags, so a task
+  can no longer be failed but not finished. What `check_task` and
+  `list_background_tasks` print is unchanged.
 
 ## v0.24.0 (2026-11-08)
 
