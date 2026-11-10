@@ -1,5 +1,15 @@
 ## Unreleased
 
+### Fixes
+
+* **Behaviour change:** after `axis update`, the restart check now expects the
+  daemon to report the release that was just installed. It compared against the
+  updating binary's own (old) version, so a supervised update that restarted
+  correctly waited 10 s and exited non-zero with "update succeeded but daemon
+  restart failed", and an unsupervised update left the old daemon running and
+  reported it "already fresh". Scripts that relied on that non-zero exit now
+  see 0. `axis daemon restart` is unchanged.
+
 ## v0.24.0 (2026-11-08)
 
 The mouse wheel in `axis tui` scrolls the conversation, `axis agent` fits

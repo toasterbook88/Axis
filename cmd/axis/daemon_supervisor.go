@@ -205,20 +205,23 @@ func restartViaSupervisor(ctx context.Context, deps daemonServiceDependencies, s
 // service ExecStart must be among them or the restart is skipped with a
 // warning. This prevents restarting a daemon that would bring back an old
 // binary.
-func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies, addr string, replacedPaths []string, out io.Writer) error {
+//
+// wantVersion is the version the restarted daemon must report: the installed
+// release after an update, or this binary's own version for a plain restart.
+func restartSupervisedDaemon(ctx context.Context, deps daemonServiceDependencies, addr string, replacedPaths []string, wantVersion string, out io.Writer) error {
 	sup, svc, err := detectSupervisor(ctx, deps)
 	if err != nil {
 		return err
 	}
 	if sup == supervisorNone {
-		return restartDaemon(ctx, addr, out)
+		return restartDaemonExpecting(ctx, addr, wantVersion, out)
 	}
-	return restartThroughSupervisor(ctx, deps, sup, svc, addr, replacedPaths, pollDaemonVersion, out)
+	return restartThroughSupervisor(ctx, deps, sup, svc, addr, replacedPaths, wantVersion, pollDaemonVersion, out)
 }
 
 // restartThroughSupervisor restarts a detected supervised daemon and waits
-// for it to report the current version through poll.
-func restartThroughSupervisor(ctx context.Context, deps daemonServiceDependencies, sup supervisorType, svc supervisedService, addr string, replacedPaths []string, poll func(context.Context, string, io.Writer) error, out io.Writer) error {
+// for it to report wantVersion through poll.
+func restartThroughSupervisor(ctx context.Context, deps daemonServiceDependencies, sup supervisorType, svc supervisedService, addr string, replacedPaths []string, wantVersion string, poll func(context.Context, string, string, io.Writer) error, out io.Writer) error {
 	// For update: verify the service exec path was among the replaced paths.
 	if len(replacedPaths) > 0 && svc.execPath != "" {
 		found := false
@@ -241,13 +244,13 @@ func restartThroughSupervisor(ctx context.Context, deps daemonServiceDependencie
 	if svc.addr != "" {
 		addr = svc.addr
 	}
-	return poll(ctx, addr, out)
+	return poll(ctx, addr, wantVersion, out)
 }
 
-// pollDaemonVersion polls daemon.FetchMeta until the daemon reports the
-// expected version, the deadline expires, or ctx is cancelled.
-func pollDaemonVersion(ctx context.Context, addr string, out io.Writer) error {
-	return pollForDaemonVersion(ctx, addr, out, func(ctx context.Context, addr string) (string, error) {
+// pollDaemonVersion polls daemon.FetchMeta until the daemon reports
+// wantVersion, the deadline expires, or ctx is cancelled.
+func pollDaemonVersion(ctx context.Context, addr, wantVersion string, out io.Writer) error {
+	return pollForDaemonVersion(ctx, addr, wantVersion, out, func(ctx context.Context, addr string) (string, error) {
 		meta, err := restartFetchMeta(ctx, addr)
 		return meta.Version, err
 	})
@@ -255,14 +258,14 @@ func pollDaemonVersion(ctx context.Context, addr string, out io.Writer) error {
 
 // pollDaemonHealthVersion is pollDaemonVersion over the unauthenticated
 // /health endpoint, for callers that do not hold the daemon owner's API token.
-func pollDaemonHealthVersion(ctx context.Context, addr string, out io.Writer) error {
-	return pollForDaemonVersion(ctx, addr, out, func(ctx context.Context, addr string) (string, error) {
+func pollDaemonHealthVersion(ctx context.Context, addr, wantVersion string, out io.Writer) error {
+	return pollForDaemonVersion(ctx, addr, wantVersion, out, func(ctx context.Context, addr string) (string, error) {
 		id, err := restartFetchHealth(ctx, addr)
 		return id.Version, err
 	})
 }
 
-func pollForDaemonVersion(ctx context.Context, addr string, out io.Writer, fetchVersion func(context.Context, string) (string, error)) error {
+func pollForDaemonVersion(ctx context.Context, addr, wantVersion string, out io.Writer, fetchVersion func(context.Context, string) (string, error)) error {
 	deadline := time.Now().Add(restartReadyDeadline)
 	for time.Now().Before(deadline) {
 		select {
@@ -272,21 +275,22 @@ func pollForDaemonVersion(ctx context.Context, addr string, out io.Writer, fetch
 			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			version, err := fetchVersion(pollCtx, addr)
 			cancel()
-			if err == nil && version == daemon.Version {
-				fmt.Fprintln(out, "AXIS daemon restarted and serving current version")
+			if err == nil && version == wantVersion {
+				fmt.Fprintf(out, "AXIS daemon restarted and serving current version (v%s)\n", wantVersion)
 				return nil
 			}
 		}
 	}
-	return fmt.Errorf("daemon did not report expected version after restart on %s", addr)
+	return fmt.Errorf("daemon did not report expected version v%s after restart on %s", wantVersion, addr)
 }
 
 // restartAfterUpdate restarts the daemon after a successful update.
 // It checks that the service exec path was among the replaced paths,
 // then delegates to restartSupervisedDaemon. Under sudo it restarts the
-// invoking user's service instead of root's.
+// invoking user's service instead of root's. wantVersion is the release just
+// installed; the updating binary's own version is the old one.
 // It is a var so tests can override it.
-var restartAfterUpdate = func(ctx context.Context, addr string, replacedPaths []string, out io.Writer) error {
+var restartAfterUpdate = func(ctx context.Context, addr string, replacedPaths []string, wantVersion string, out io.Writer) error {
 	deps := restartServiceDeps()
 	inv, underSudo, err := lookupSudoInvoker()
 	if err != nil {
@@ -294,9 +298,9 @@ var restartAfterUpdate = func(ctx context.Context, addr string, replacedPaths []
 		return nil
 	}
 	if !underSudo {
-		return restartSupervisedDaemon(ctx, deps, addr, replacedPaths, out)
+		return restartSupervisedDaemon(ctx, deps, addr, replacedPaths, wantVersion, out)
 	}
-	return restartSudoInvokerDaemon(ctx, deps, inv, replacedPaths, out)
+	return restartSudoInvokerDaemon(ctx, deps, inv, replacedPaths, wantVersion, out)
 }
 
 // daemonIdentity is the build identity a running daemon reports on /health.
