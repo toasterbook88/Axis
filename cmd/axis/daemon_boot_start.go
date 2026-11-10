@@ -45,9 +45,16 @@ func daemonBootStartCheck(ctx context.Context, deps daemonServiceDependencies) *
 	}
 	const name = "Daemon boot start"
 	if deps.goos == "linux" {
-		// is-enabled exits non-zero for "disabled", so read the output.
-		if state, _ := probe("systemctl", "--user", "is-enabled", daemonSystemdUnit); state != "enabled" {
+		// is-enabled exits non-zero for "disabled", so read the output: a
+		// recognized non-enabled state means nothing starts at boot, but an
+		// unrecognized answer (bus error, timeout) is unknown, not disabled.
+		state, enabledErr := probe("systemctl", "--user", "is-enabled", daemonSystemdUnit)
+		switch {
+		case state == "enabled":
+		case systemdNotEnabledStates[state]:
 			return nil
+		default:
+			return &DoctorCheck{Name: name, Status: "warn", Message: "could not read user service enable state: " + probeDetail(state, enabledErr)}
 		}
 		linger, err := probe("loginctl", "show-user", strconv.Itoa(deps.uid()), "--property=Linger", "--value")
 		switch {
@@ -77,11 +84,14 @@ func daemonBootStartCheck(ctx context.Context, deps daemonServiceDependencies) *
 	case err != nil:
 		return &DoctorCheck{Name: name, Status: "warn", Message: "could not read automatic-login state: " + probeDetail(autoLogin, err)}
 	}
-	me := ""
-	if deps.userName != nil {
-		me, _ = deps.userName()
+	if deps.userName == nil {
+		return &DoctorCheck{Name: name, Status: "warn", Message: "could not determine the current user to compare with automatic login"}
 	}
-	if me == "" || autoLogin != me {
+	me, userErr := deps.userName()
+	if userErr != nil || me == "" {
+		return &DoctorCheck{Name: name, Status: "warn", Message: "could not determine the current user to compare with automatic login: " + probeDetail(me, userErr)}
+	}
+	if autoLogin != me {
 		return &DoctorCheck{
 			Name:    name,
 			Status:  "warn",
@@ -90,6 +100,15 @@ func daemonBootStartCheck(ctx context.Context, deps daemonServiceDependencies) *
 		}
 	}
 	return &DoctorCheck{Name: name, Status: "pass", Message: "automatic login is set for this user; the LaunchAgent starts when it logs in at boot"}
+}
+
+// systemdNotEnabledStates are `systemctl is-enabled` answers under which the
+// unit is not started by default.target at boot.
+var systemdNotEnabledStates = map[string]bool{
+	"disabled": true, "static": true, "masked": true, "masked-runtime": true,
+	"linked": true, "linked-runtime": true, "indirect": true, "generated": true,
+	"transient": true, "enabled-runtime": true, "alias": true, "not-found": true,
+	"bad": true,
 }
 
 func probeDetail(out string, err error) string {

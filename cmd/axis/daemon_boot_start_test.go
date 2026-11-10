@@ -70,6 +70,7 @@ func TestDaemonBootStartCheck(t *testing.T) {
 		name        string
 		goos        string
 		managed     bool
+		userErr     error
 		replies     map[string]bootStartReply
 		wantNil     bool
 		wantStatus  string
@@ -92,6 +93,12 @@ func TestDaemonBootStartCheck(t *testing.T) {
 			replies:    map[string]bootStartReply{isEnabledCmd: {out: "enabled\n"}, lingerCmd: {out: "maybe\n"}},
 			wantStatus: "warn", wantMessage: "could not read lingering state"},
 		{name: "linux unmanaged file", goos: "linux", managed: false, wantNil: true},
+		{name: "linux is-enabled bus error", goos: "linux", managed: true,
+			replies:    map[string]bootStartReply{isEnabledCmd: {out: "Failed to connect to bus: No medium found", err: errExit1}},
+			wantStatus: "warn", wantMessage: "could not read user service enable state"},
+		{name: "linux unit masked", goos: "linux", managed: true,
+			replies: map[string]bootStartReply{isEnabledCmd: {out: "masked\n", err: errExit1}},
+			wantNil: true},
 		{name: "darwin auto-login for this user", goos: "darwin", managed: true,
 			replies:    map[string]bootStartReply{autoLoginCmd: {out: "operator\n"}},
 			wantStatus: "pass", wantMessage: "automatic login is set for this user"},
@@ -101,6 +108,9 @@ func TestDaemonBootStartCheck(t *testing.T) {
 		{name: "darwin no auto-login", goos: "darwin", managed: true,
 			replies:    map[string]bootStartReply{autoLoginCmd: {out: "The domain/default pair of (/Library/Preferences/com.apple.loginwindow, autoLoginUser) does not exist\n", err: errExit1}},
 			wantStatus: "warn", wantMessage: "starts at login only", wantFix: "LaunchDaemon"},
+		{name: "darwin user lookup fails", goos: "darwin", managed: true, userErr: errors.New("user: unknown userid 501"),
+			replies:    map[string]bootStartReply{autoLoginCmd: {out: "operator\n"}},
+			wantStatus: "warn", wantMessage: "could not determine the current user"},
 		{name: "darwin defaults other error", goos: "darwin", managed: true,
 			replies:    map[string]bootStartReply{autoLoginCmd: {err: errors.New("exec: \"defaults\": executable file not found")}},
 			wantStatus: "warn", wantMessage: "could not read automatic-login state"},
@@ -108,6 +118,9 @@ func TestDaemonBootStartCheck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, calls := bootStartDeps(t, tc.goos, tc.managed, tc.replies)
+			if tc.userErr != nil {
+				deps.userName = func() (string, error) { return "", tc.userErr }
+			}
 			got := daemonBootStartCheck(context.Background(), deps)
 			if !tc.managed && len(*calls) != 0 {
 				t.Fatalf("unmanaged service ran commands: %q", *calls)
@@ -229,5 +242,20 @@ func TestDoctorShowsBootStartCheck(t *testing.T) {
 	stdout = stripANSI(stdout)
 	if !strings.Contains(stdout, "Daemon boot start") || !strings.Contains(stdout, "loginctl enable-linger $USER") {
 		t.Fatalf("doctor output lacks the boot-start check:\n%s", stdout)
+	}
+}
+
+func TestDaemonBootStartCheckIsEnabledTimeoutWarns(t *testing.T) {
+	prev := bootStartProbeTimeout
+	bootStartProbeTimeout = 20 * time.Millisecond
+	defer func() { bootStartProbeTimeout = prev }()
+	deps, _ := bootStartDeps(t, "linux", true, nil)
+	deps.run = func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	got := daemonBootStartCheck(context.Background(), deps)
+	if got == nil || got.Status != "warn" || !strings.Contains(got.Message, "could not read user service enable state") {
+		t.Fatalf("got %+v, want could-not-read warning", got)
 	}
 }
