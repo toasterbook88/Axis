@@ -16,6 +16,19 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// shortSocketDir returns a directory with a short path. A unix socket path is
+// capped at 107 bytes on Linux and 104 on macOS, and t.TempDir() embeds the
+// test name, which can exceed that when TMPDIR is long.
+func shortSocketDir(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ax")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 type testSSHAgent struct {
 	listener net.Listener
 	done     chan struct{}
@@ -34,7 +47,7 @@ func startTestSSHAgent(t testing.TB, privateKey any) *testSSHAgent {
 		t.Fatalf("add agent key: %v", err)
 	}
 
-	listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "agent.sock"))
+	listener, err := net.Listen("unix", filepath.Join(shortSocketDir(t), "agent.sock"))
 	if err != nil {
 		t.Fatalf("listen on agent socket: %v", err)
 	}
