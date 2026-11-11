@@ -20,7 +20,9 @@ a real snapshot or live probe.
 
 - **Public repo.** No real hostnames, tailnet or LAN IPs, node inventories, live
   ports, model/unit names or secrets — in code, tests, fixtures, docs, commits or PRs.
-  Use RFC 2606 domains and documentation IP ranges. `./hack/verify-public-boundary.sh` enforces it.
+  Use RFC 2606 domains and documentation IP ranges. `./hack/verify-public-boundary.sh`
+  checks tracked files for private domain/hostname patterns and unauthorized IPv4 literals;
+  it does not scan for secrets or enforce the other policy items.
 - **Merging needs the maintainer.** Review is read-only. Never merge a PR unless the maintainer explicitly asks to merge that PR.
 - **Releases** go through the tag workflow (GoReleaser). Never `gh release create`. Never claim a release
   version from memory: repo state is `docs/current-state.md`, publication state is GitHub Releases.
