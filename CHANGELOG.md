@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixes
+
+* Builds use Go 1.26.11, which fixes the `net/http` standard-library
+  vulnerability GO-2026-6859 (CVE-2026-97054). Affected: Go 1.26.0-1.26.10
+  and 1.27.0-1.27.3, as reported by govulncheck.
+
 ## v0.24.2 (2026-11-10)
 
 The daemon reloads `~/.axis/token` without a restart, and a broken token file

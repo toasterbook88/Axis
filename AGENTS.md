@@ -44,9 +44,9 @@ make install-system        # /usr/local/bin (cluster nodes); then: axis daemon r
 make install-user          # ~/.local/bin (workstation development)
 ```
 
-- Go: `go.mod` is authoritative (currently `go 1.26.10`); a newer local Go still runs the gates. If
-  staticcheck fails with an export-data error, bump `STATICCHECK_VERSION` (Makefile) to a release that
-  reads that Go's export data; `GOTOOLCHAIN=go1.26.10` reproduces CI's toolchain meanwhile.
+- Go: `go.mod` is authoritative (currently `go 1.26.11`); a newer local Go still
+  runs the gates. If staticcheck fails with an export-data error, bump `STATICCHECK_VERSION` (Makefile)
+  to a release that reads that Go's export data; `GOTOOLCHAIN=go1.26.11` reproduces CI's toolchain meanwhile.
 - CI also runs: coverage gates (`hack/coverage-check.sh`), deadcode gate, import tiers, public boundary,
   repo truth, doc facts, actionlint, workflow action pins, install tests,
   `hack/lifecycle-check.go`, `hack/verify-specs.go` (spec review records, §8) and
