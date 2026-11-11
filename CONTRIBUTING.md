@@ -13,7 +13,7 @@ make install-user          # ~/.local/bin/axis
 # make install              # $GOPATH/bin/axis (legacy; often not on PATH)
 ```
 
-Requires Go 1.26.1+ (`go.mod` is authoritative).
+Requires Go 1.26.11+ (`go.mod` is authoritative).
 
 Prove which binary you are running:
 
