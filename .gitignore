@@ -25,17 +25,22 @@ Thumbs.db
 # Build artifacts
 /dist/
 /bin/
+node_modules/
+__pycache__/
+*.pyc
 
 # AI assistant instruction files: CLAUDE.md and GEMINI.md are tracked pointers to
 # AGENTS.md; personal / machine-specific overrides stay local.
 CLAUDE.local.md
 AGENTS.override.md
 
-# AI agent config directories (auto-generated, contain only Render deploy skills)
+# Local AI agent config. Share only .claude/settings.json; skills, backups and
+# runtime state stay per-user.
 .adal/
 .augment/
 .agents/
-.claude/
+/.claude/*
+!/.claude/settings.json
 .gemini/
 .cline/
 .codebuddy/
