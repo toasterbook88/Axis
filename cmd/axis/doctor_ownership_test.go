@@ -15,6 +15,19 @@ import (
 
 const testSock = "/tmp/axis-test/axis.sock"
 
+// shortSocketDir returns a directory with a short path. A unix socket path is
+// capped at 107 bytes on Linux and 104 on macOS, and t.TempDir() embeds the
+// test name, which can exceed that when TMPDIR is long.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ax")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func ownedSocket() doctorSocketState {
 	return doctorSocketState{
 		Path:       testSock,
@@ -388,7 +401,7 @@ func TestSplitCmdline(t *testing.T) {
 // probeDaemonSocket must distinguish a live listener, a leftover socket file,
 // a non-socket squatter, and a missing path — against real files.
 func TestProbeDaemonSocketAgainstRealPaths(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 
 	missing := filepath.Join(dir, "missing.sock")
 	if st := doctorProbeSocket(missing); st.Exists || st.Live || !st.Unix {

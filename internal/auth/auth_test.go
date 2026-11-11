@@ -115,9 +115,21 @@ func TestIsUnixAddr(t *testing.T) {
 	}
 }
 
+// shortSocketDir returns a directory with a short path. A unix socket path is
+// capped at 107 bytes on Linux and 104 on macOS, and t.TempDir() embeds the
+// test name, which can exceed that when TMPDIR is long.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ax")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestHttpClientForAddrWithTimeout_UnixSchemeAndDisableKeepAlives(t *testing.T) {
-	tmpDir := t.TempDir()
-	sockPath := filepath.Join(tmpDir, "test.sock")
+	sockPath := filepath.Join(shortSocketDir(t), "test.sock")
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
