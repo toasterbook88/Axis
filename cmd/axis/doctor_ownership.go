@@ -45,6 +45,9 @@ type doctorDaemonProc struct {
 	Deleted bool
 	// Addr is the API address the process was asked to serve.
 	Addr string
+	// Cgroup is the process's systemd cgroup path (see parseSystemdCgroup).
+	// Empty when /proc/<pid>/cgroup could not be read.
+	Cgroup string
 }
 
 // doctorSocketState describes who, if anyone, owns a unix daemon address.
@@ -120,6 +123,9 @@ func listDaemonProcs() ([]doctorDaemonProc, error) {
 		proc := doctorDaemonProc{PID: pid, Addr: addr}
 		if target, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil {
 			proc.Exe, proc.Deleted = splitDeletedExe(target)
+		}
+		if raw, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cgroup")); err == nil {
+			proc.Cgroup = parseSystemdCgroup(string(raw))
 		}
 		procs = append(procs, proc)
 	}
@@ -380,6 +386,9 @@ func daemonOwnershipChecks(procs []doctorDaemonProc, procErr error, sock doctorS
 
 	if procsKnown && len(owners) > 0 {
 		checks = append(checks, daemonExecutableCheck(owners))
+		if check, ok := daemonSupervisionCheck(owners); ok {
+			checks = append(checks, check)
+		}
 	}
 
 	checks = append(checks, daemonSocketCheck(sock, owners, procsKnown))

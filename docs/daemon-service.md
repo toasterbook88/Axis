@@ -36,6 +36,17 @@ host. `axis daemon service install` and `axis doctor` report it (check
 On Linux the check runs only when `axis.service` is enabled. If it cannot read
 the state, it warns "could not read" rather than guessing.
 
+A daemon started by hand (`axis daemon start` from a shell, `nohup`, tmux) has
+no service to restart it after a crash or start it after a reboot. On Linux,
+`axis doctor` reads each serving daemon's systemd cgroup from
+`/proc/<pid>/cgroup` (check "Daemon supervision"). It passes when the daemon
+runs in its own service whose name contains `axis` (the user service or a
+system unit), and warns when the daemon runs in a login session or another
+scope, or inside an unrelated service such as `ssh.service`. It reports
+nothing when the cgroup cannot be read or is hidden by a container's cgroup
+namespace. To fix it, stop that daemon, then run `axis daemon service install`
+(a running hand-started daemon would hold the address the service needs).
+
 Install does not terminate a listener owned by an unknown process. If service
 startup reports that the address is already in use, verify and stop that
 process explicitly, then rerun install.
