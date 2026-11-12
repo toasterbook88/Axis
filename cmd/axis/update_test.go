@@ -240,6 +240,83 @@ func TestUpdateInstall(t *testing.T) {
 	}
 }
 
+// TestReplaceExecutableWritesDurably is the regression for a non-durable
+// self-update: replaceExecutable renamed an unsynced temp file over the
+// binary, so a power loss right after an update could leave a truncated
+// executable. It must delegate to persist.WriteFileAtomic (fsync of the file
+// and of its directory, covered by persist's own tests) with mode 0755.
+func TestReplaceExecutableWritesDurably(t *testing.T) {
+	prev := writeExecutableAtomic
+	t.Cleanup(func() { writeExecutableAtomic = prev })
+	var gotPath string
+	var gotData []byte
+	var gotPerm os.FileMode
+	writeExecutableAtomic = func(path string, data []byte, perm os.FileMode) error {
+		gotPath, gotData, gotPerm = path, data, perm
+		return nil
+	}
+	if err := replaceExecutable("/opt/axis/bin/axis", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/opt/axis/bin/axis" || string(gotData) != "new" || gotPerm != 0o755 {
+		t.Fatalf("write = (%q, %q, %o), want (/opt/axis/bin/axis, new, 755)", gotPath, gotData, gotPerm)
+	}
+}
+
+func TestReplaceExecutableLeavesOnlyTheExecutable(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "axis")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceExecutable(target, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("mode = %o, want 755", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "axis" {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("directory holds %v, want only axis (no temp file left)", names)
+	}
+}
+
+func TestReplaceExecutableFailureKeepsOldBinary(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permission")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "axis")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := replaceExecutable(target, []byte("new")); err == nil {
+		t.Fatal("replaceExecutable into a read-only directory must fail")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old" {
+		t.Fatalf("target = %q after a failed update, want the old binary", got)
+	}
+}
+
 func TestSelectUpdateTargetsDefaultIsSelfOnly(t *testing.T) {
 	self := "/tmp/fake-axis-self"
 	got, err := selectUpdateTargets("", false, self)

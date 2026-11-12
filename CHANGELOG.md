@@ -5,6 +5,12 @@
 * Builds use Go 1.26.11, which fixes the `net/http` standard-library
   vulnerability GO-2026-6859 (CVE-2026-97054). Affected: Go 1.26.0-1.26.10
   and 1.27.0-1.27.3, as reported by govulncheck.
+* `axis update` now writes the new binary durably: it fsyncs the file before
+  renaming it over the old one and fsyncs the directory after, so a crash or
+  power loss right after an update leaves the old binary or the complete new
+  one, never a truncated file. It uses the same atomic write as AXIS state
+  files; an interrupted update's temp file is now named `axis.tmp-*` instead
+  of `.axis-update-*`.
 
 ## v0.24.2 (2026-11-10)
 

@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/toasterbook88/axis/internal/api"
 	axisbuildinfo "github.com/toasterbook88/axis/internal/buildinfo"
+	"github.com/toasterbook88/axis/internal/persist"
 	"github.com/toasterbook88/axis/internal/versioncmp"
 )
 
@@ -1026,35 +1027,14 @@ func elevationHint(target string) string {
 // installRelease. It is a var so tests can fail one target.
 var installReplaceExecutable = replaceExecutable
 
+// writeExecutableAtomic is the durable write replaceExecutable delegates to.
+// It is a var so tests can confirm the delegation.
+var writeExecutableAtomic = persist.WriteFileAtomic
+
+// replaceExecutable replaces target with data, mode 0755. persist.WriteFileAtomic
+// writes a temp file in the same directory, fsyncs it, renames it over target
+// and fsyncs the directory, so a crash or power loss right after an update
+// leaves either the old binary or the complete new one, never a truncated file.
 func replaceExecutable(target string, data []byte) error {
-	dir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(dir, ".axis-update-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		tmp.Close()
-		if cleanup {
-			os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0755); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-
-	cleanup = false
-	if err := os.Rename(tmpName, target); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return nil
+	return writeExecutableAtomic(target, data, 0o755)
 }
