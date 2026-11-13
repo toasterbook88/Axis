@@ -100,9 +100,9 @@ Head: 530cec1d7e9cee4fa65bc0048682bd8de07e18be
 Date: 2026-11-12
 Verdict: approve-with-changes
 
-1. Minor: Research cited Control Group APIs and Delegation as support for leaf parsing, while that page says the mapping is not a public API and to use GetUnitByControlGroup(). Fixed in 1e3ac88abafa8f49dab92d647f034beff8d0a2fc.
+1. Minor: Research cited Control Group APIs and Delegation as support for leaf parsing, while that page says the mapping is not a public API and to use GetUnitByControlGroup(). Fixed in 2c75e11eaf8c8e09eda118af12ed92d342e22a27.
 
-2. Minor: the listed tests did not fail a case-sensitive axis match. Fixed in 1e3ac88abafa8f49dab92d647f034beff8d0a2fc.
+2. Minor: the listed tests did not fail a case-sensitive axis match. Fixed in 2c75e11eaf8c8e09eda118af12ed92d342e22a27.
 
 Questions:
 - Hybrid "v2 wins" is locked by a fixture where 0:: is already the service path. Open: no hybrid host was probed where 0:: is not the unit while name=systemd names it.
