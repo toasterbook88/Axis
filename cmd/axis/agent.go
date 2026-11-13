@@ -59,6 +59,7 @@ func agentCmd() *cobra.Command {
 		plain                   bool
 		printMode               bool
 		live                    bool
+		deskLeasePath           string
 	)
 
 	cmd := &cobra.Command{
@@ -76,6 +77,10 @@ func agentCmd() *cobra.Command {
 			defer stop()
 			if _, err := agent.ParseAutonomyMode(autonomy); err != nil {
 				return err
+			}
+			// A desk lease is a private job. Decide it before any cluster lookup.
+			if deskLeasePath != "" {
+				return runDeskLease(cmd.OutOrStdout(), deskLeasePath, strings.Join(args, " "), time.Now())
 			}
 
 			var a *agent.Agent
@@ -327,6 +332,7 @@ func agentCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&useConsole, "console", false, "Force the transcript console (deprecated: the console is now the default on an interactive terminal; use --plain for the legacy REPL). Approvals: y yes, n no; Enter does not approve")
 	cmd.Flags().BoolVar(&plain, "plain", false, "Run the legacy line-at-a-time REPL instead of the transcript console (takes precedence over --console)")
 	cmd.Flags().BoolVarP(&printMode, "print", "p", false, "One-shot piped execution: assistant text on stdout, tool badges and summary on stderr, no banner")
+	cmd.Flags().StringVar(&deskLeasePath, "desk-lease", "", "Private job: read a seat lease file and send one completion only when that lease is usable")
 	cmd.Flags().BoolVar(&live, "live", false, "Perform a live cluster discovery sweep instead of reading cached state")
 	return cmd
 }
