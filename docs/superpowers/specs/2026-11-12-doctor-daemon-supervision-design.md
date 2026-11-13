@@ -1,7 +1,7 @@
 # Warn when a running daemon has no service to restart it
 
 Date: 2026-11-12. Base: `origin/main` dec1d544 (rebased from f8c258d). Status: implemented in this
-draft PR. Spec review recorded below; a diff review is still required before merge.
+draft PR. Spec review and diff review are recorded below. The diff review approved.
 
 ## Problem
 
@@ -110,3 +110,14 @@ Questions:
 - "Backlog item (c)" is not in the repo or in GitHub issues. Open: the citation was not found; the code gap does not depend on it.
 
 Note: a diff review is still required before merge.
+
+Kind: diff
+Reviewer: fresh-context subagent
+Model: grok
+Base: dec1d544082a793c85de3837cecb9d1d831f19c3
+Head: be11ba4c9ba9386b6d187a826644002dc7ac69fd
+Date: 2026-11-13
+Verdict: approve
+
+Questions:
+- Hybrid input with name=systemd naming a unit and 0::/ parses as / and skips the check. Open: this host is unified, and no hybrid dump was found where 0:: is / while name=systemd names the unit.
