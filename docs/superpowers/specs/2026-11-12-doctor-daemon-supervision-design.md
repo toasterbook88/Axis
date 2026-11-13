@@ -92,4 +92,21 @@ unsupervised daemon warns (regression), no cgroup adds no check.
 
 ## Review
 
-None yet. A fresh-context spec review and a diff review are required (AGENTS.md §8) before merge.
+Kind: spec
+Reviewer: fresh-context subagent
+Model: grok
+Base: f8c258d696c78f363ac7bc23ea82a16ecd1e0289
+Head: 530cec1d7e9cee4fa65bc0048682bd8de07e18be
+Date: 2026-11-12
+Verdict: approve-with-changes
+
+1. Minor: Research cited Control Group APIs and Delegation as support for leaf parsing, while that page says the mapping is not a public API and to use GetUnitByControlGroup(). Fixed in 1e3ac88abafa8f49dab92d647f034beff8d0a2fc.
+
+2. Minor: the listed tests did not fail a case-sensitive axis match. Fixed in 1e3ac88abafa8f49dab92d647f034beff8d0a2fc.
+
+Questions:
+- Hybrid "v2 wins" is locked by a fixture where 0:: is already the service path. Open: no hybrid host was probed where 0:: is not the unit while name=systemd names it.
+- A delegated child cgroup (axis.service/supervisor) would fail the leaf-is-service rule. Open: the managed unit has Delegate=no and its live leaf is the unit; a Delegate=yes nest was not probed.
+- "Backlog item (c)" is not in the repo or in GitHub issues. Open: the citation was not found; the code gap does not depend on it.
+
+Note: a diff review is still required before merge.
