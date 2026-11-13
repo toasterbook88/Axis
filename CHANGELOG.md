@@ -5,6 +5,13 @@
 * Builds use Go 1.26.11, which fixes the `net/http` standard-library
   vulnerability GO-2026-6859 (CVE-2026-97054). Affected: Go 1.26.0-1.26.10
   and 1.27.0-1.27.3, as reported by govulncheck.
+* The off-box address refusal now names the token it protects: the local API
+  token (`~/.axis/token`, or `AXIS_API_TOKEN` when set), not a "cluster token".
+  `axis task delegate --addr` uses the same shared check as the other
+  daemon-facing commands, so its refusal now starts with
+  `--addr: refusing off-box daemon address`. Behaviour is unchanged. The A2A
+  runbook's `axis version` and `axis update` paragraph now matches the current
+  commands (daemon line, restart after update).
 * `axis update` now writes the new binary durably: it fsyncs the file before
   renaming it over the old one and fsyncs the directory after, so a crash or
   power loss right after an update leaves the old binary or the complete new

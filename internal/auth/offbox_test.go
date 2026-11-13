@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRefuseOffBoxBearer(t *testing.T) {
 	t.Setenv(AllowOffBoxBearerEnv, "")
@@ -34,6 +37,26 @@ func TestRefuseOffBoxBearer(t *testing.T) {
 	t.Setenv(AllowOffBoxBearerEnv, "1")
 	if err := RefuseOffBoxBearer("http://192.0.2.5:42425"); err != nil {
 		t.Errorf("break-glass env must allow off-box, got %v", err)
+	}
+}
+
+// TestRefuseOffBoxBearer_NamesLocalToken pins the refusal wording: the token
+// at stake is this machine's own API token, not a shared cluster secret, and
+// the error must say which file (or env var) it is.
+func TestRefuseOffBoxBearer_NamesLocalToken(t *testing.T) {
+	t.Setenv(AllowOffBoxBearerEnv, "")
+	err := RefuseOffBoxBearer("http://192.0.2.5:42425")
+	if err == nil {
+		t.Fatal("off-box addr must be refused")
+	}
+	msg := err.Error()
+	for _, want := range []string{"local API token", "~/.axis/token", "AXIS_API_TOKEN", AllowOffBoxBearerEnv} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q must mention %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "cluster") {
+		t.Errorf("refusal %q must not call the local token a cluster token", msg)
 	}
 }
 

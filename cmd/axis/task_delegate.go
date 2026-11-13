@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -41,18 +40,14 @@ func formatHostPort(host, defaultPort string) string {
 	return fmt.Sprintf("%s:%s", host, defaultPort)
 }
 
-// allowOffboxBearerEnv aliases the shared break-glass switch (internal/auth):
-// off-box daemon addresses refuse the cluster bearer unless explicitly set.
-const allowOffboxBearerEnv = auth.AllowOffBoxBearerEnv
-
 func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2a.Client, error) {
 	nodeName = strings.TrimSpace(nodeName)
 	addrOverride = strings.TrimSpace(addrOverride)
 
 	// Classify --addr before reading the token. LoadOrGenerateToken can create
 	// ~/.axis/token, and a refused dial must not touch that file or attach it.
-	if addrOverride != "" && !auth.AddrKeepsClusterBearer(addrOverride) && os.Getenv(allowOffboxBearerEnv) != "1" {
-		return nil, fmt.Errorf("refusing off-box --addr %q: it would attach the cluster token (set %s=1 to allow)", addrOverride, allowOffboxBearerEnv)
+	if err := auth.RefuseOffBoxBearer(addrOverride); err != nil {
+		return nil, fmt.Errorf("--addr: %w", err)
 	}
 
 	token, err := loadAPIToken()
@@ -87,10 +82,10 @@ func resolveA2AClient(nodeName, addrOverride string, timeout time.Duration) (*a2
 				return a2a.NewClient(baseURL, token, httpClient), nil
 			}
 		} else if !isLocal {
-			return nil, fmt.Errorf("node %q not found in %s (specify --addr to dial an unlisted endpoint; off-box --addr is refused unless %s=1)", nodeName, config.DefaultConfigPath(), allowOffboxBearerEnv)
+			return nil, fmt.Errorf("node %q not found in %s (specify --addr to dial an unlisted endpoint; off-box --addr is refused unless %s=1)", nodeName, config.DefaultConfigPath(), auth.AllowOffBoxBearerEnv)
 		}
 	} else if !isLocal {
-		return nil, fmt.Errorf("loading cluster configuration: %w (specify --addr to dial an unlisted endpoint; off-box --addr is refused unless %s=1)", err, allowOffboxBearerEnv)
+		return nil, fmt.Errorf("loading cluster configuration: %w (specify --addr to dial an unlisted endpoint; off-box --addr is refused unless %s=1)", err, auth.AllowOffBoxBearerEnv)
 	}
 
 	// Local node fallback: connect via default local unix socket
