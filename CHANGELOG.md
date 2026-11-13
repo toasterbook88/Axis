@@ -12,6 +12,12 @@
   `--addr: refusing off-box daemon address`. Behaviour is unchanged. The A2A
   runbook's `axis version` and `axis update` paragraph now matches the current
   commands (daemon line, restart after update).
+* `axis update` now writes the new binary durably: it fsyncs the file before
+  renaming it over the old one and fsyncs the directory after, so a crash or
+  power loss right after an update leaves the old binary or the complete new
+  one, never a truncated file. It uses the same atomic write as AXIS state
+  files; an interrupted update's temp file is now named `axis.tmp-*` instead
+  of `.axis-update-*`.
 
 ## v0.24.2 (2026-11-10)
 
