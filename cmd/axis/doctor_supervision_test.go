@@ -51,6 +51,7 @@ func TestDaemonSupervisionCheck(t *testing.T) {
 	}{
 		{"user service", []doctorDaemonProc{{PID: 10, Cgroup: userUnit}}, true, "pass", []string{"pid 10", "axis.service"}},
 		{"system service", []doctorDaemonProc{{PID: 11, Cgroup: "/system.slice/axis-daemon.service"}}, true, "pass", []string{"axis-daemon.service"}},
+		{"uppercase unit name", []doctorDaemonProc{{PID: 18, Cgroup: "/system.slice/AXIS.service"}}, true, "pass", []string{"AXIS.service"}},
 		{"hand-started in a login session", []doctorDaemonProc{{PID: 12, Cgroup: "/user.slice/user-1000.slice/session-5.scope"}},
 			true, "warn", []string{"pid 12", "session-5.scope", "reboot"}},
 		{"inside an unrelated service", []doctorDaemonProc{{PID: 13, Cgroup: "/system.slice/ssh.service"}},

@@ -1,7 +1,7 @@
 # Warn when a running daemon has no service to restart it
 
-Date: 2026-11-12. Base: `origin/main` f8c258d. Status: implemented in this draft PR; spec review
-pending (none run yet).
+Date: 2026-11-12. Base: `origin/main` dec1d544 (rebased from f8c258d). Status: implemented in this
+draft PR. Spec review recorded below; a diff review is still required before merge.
 
 ## Problem
 
@@ -9,7 +9,7 @@ pending (none run yet).
 (`daemonBootStartCheck`, `cmd/axis/daemon_boot_start.go:21-36`), but that check returns nil when
 no AXIS-managed service file exists (`:33-36`). A daemon started by hand (`axis daemon start` from
 a shell, `nohup`, tmux, a terminal multiplexer pane) therefore gets no warning: the ownership checks
-report it as one healthy daemon (`cmd/axis/doctor_ownership.go:363-368`, "one daemon serving ...").
+report it as one healthy daemon (`cmd/axis/doctor_ownership.go:369`, "one daemon serving ...").
 Nothing restarts that daemon after a crash, and nothing starts it after a reboot. This was the open
 part of backlog item (c), "reboot survival for daemons run outside systemd/launchd"; #626 covered
 the installed-service half.
@@ -54,9 +54,10 @@ axis processes started from a terminal multiplexer sit in that multiplexer's own
 
 - Parent PID is 1 or `systemd --user`. Rejected: a `nohup`ed daemon whose shell exited is
   reparented to PID 1 or the user manager (subreaper) and would look supervised.
-- Ask systemd (`systemctl status <pid>`, `systemctl --user whoami`-style lookups). Rejected: an
-  extra process per daemon and a dependency on a running bus; the cgroup file is the source those
-  commands read.
+- Ask systemd (`GetUnitByControlGroup`, `systemctl status <pid>`). Rejected: a bus dependency.
+  The user manager cannot see a system unit's cgroup, and the system manager cannot see a user
+  unit. One procfs read covers both, and it still works when the bus is down. Research records
+  why the leaf parse stays despite the mapping not being a public API.
 - Treat any `.service` leaf as supervised. Rejected by the measurement above: axis processes
   started from a multiplexer live in the multiplexer's service and would pass.
 - Match only the AXIS-managed unit name `axis.service`. Rejected: system units and distribution
@@ -70,14 +71,24 @@ axis processes started from a terminal multiplexer sit in that multiplexer's own
   `session-N.scope`: [systemd.unit(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html),
   [systemd.scope(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.scope.html),
   [Control Group APIs and Delegation](https://systemd.io/CGROUP_DELEGATION/).
+  That page also says the slice/scope/service-to-cgroup mapping is not a public API and may
+  change, and that programs should call `GetUnitByControlGroup()` instead of translating the
+  path locally. This check still reads the leaf. Measured 2026-11-13 on systemd 255 with the
+  unified hierarchy: the managed user unit has `Delegate=no`, its cgroup leaf is the unit name,
+  and `GetUnitByControlGroup` on the user bus returns that unit. The same call on the user bus
+  rejects a system-unit path (`systemd-journald.service` is not managed by that instance); the
+  system bus accepts it. A bus lookup would need both managers and would fail when the bus is
+  down. The leaf is the unit name in the layout that page documents (`.../quux.service/`). A
+  later layout that nests the main PID under the unit would mislabel supervision. That limit is
+  accepted because the non-goal is no bus dependency.
 No optimization applies: one small procfs read per axis process doctor already enumerates.
 
 Tests (`cmd/axis/doctor_supervision_test.go`): parse cgroup v2, v1, hybrid (v2 wins), container
 `/`, no systemd hierarchy, empty; unit leaf for user service, system service, session scope,
 `init.scope`, `/`, ""; check results: user service pass, system `axis-daemon.service` pass, login
-session warn, `ssh.service` warn "inside", one of two unsupervised warn, `/` and unread skip, no
-owners skip; through `daemonOwnershipChecks`: unsupervised daemon warns (regression), no cgroup
-adds no check.
+session warn, `ssh.service` warn "inside", `AXIS.service` pass (case-insensitive), one of two
+unsupervised warn, `/` and unread skip, no owners skip; through `daemonOwnershipChecks`:
+unsupervised daemon warns (regression), no cgroup adds no check.
 
 ## Review
 
