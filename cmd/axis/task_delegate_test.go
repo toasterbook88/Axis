@@ -507,7 +507,7 @@ func TestTaskRejectCmd(t *testing.T) {
 }
 
 func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
-	t.Setenv(allowOffboxBearerEnv, "")
+	t.Setenv(auth.AllowOffBoxBearerEnv, "")
 	origToken := loadAPIToken
 	defer func() { loadAPIToken = origToken }()
 	var tokenLoads atomic.Int32
@@ -530,8 +530,11 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 		if err == nil || client != nil {
 			t.Fatalf("addr %q: expected refusal, client=%v err=%v", addr, client, err)
 		}
-		if !strings.Contains(err.Error(), allowOffboxBearerEnv) {
-			t.Errorf("addr %q: expected refusal to name %s, got %v", addr, allowOffboxBearerEnv, err)
+		if !strings.Contains(err.Error(), auth.AllowOffBoxBearerEnv) {
+			t.Errorf("addr %q: expected refusal to name %s, got %v", addr, auth.AllowOffBoxBearerEnv, err)
+		}
+		if !strings.Contains(err.Error(), "local API token") || strings.Contains(err.Error(), "cluster token") {
+			t.Errorf("addr %q: refusal must name the local API token, got %v", addr, err)
 		}
 		if strings.Contains(err.Error(), "test-token") {
 			t.Errorf("addr %q: refusal contains the cluster token: %v", addr, err)
@@ -581,7 +584,7 @@ func TestResolveA2AClient_LocalityAndAddr(t *testing.T) {
 	}
 
 	// 5. Break-glass attaches the token to an off-box --addr.
-	t.Setenv(allowOffboxBearerEnv, "1")
+	t.Setenv(auth.AllowOffBoxBearerEnv, "1")
 	c5, err := resolveA2AClient("unlisted-node", "http://192.0.2.5:8080", 5*time.Second)
 	if err != nil {
 		t.Fatalf("break-glass off-box --addr failed: %v", err)

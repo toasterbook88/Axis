@@ -10,9 +10,10 @@ import (
 
 // AllowOffBoxBearerEnv is the break-glass switch for aiming a daemon-facing
 // request at a non-loopback TCP host. Without it, every consumer that attaches
-// the cluster bearer token (~/.axis/token) to a user-supplied address refuses
-// the dial: the token authenticates the whole cluster API, and handing it to an
-// arbitrary host is a credential disclosure, not a routing choice.
+// the local API token (~/.axis/token, or AXIS_API_TOKEN when set) to a
+// user-supplied address refuses the dial: the token authenticates this
+// machine's daemon API, and handing it to an arbitrary host is a credential
+// disclosure, not a routing choice.
 const AllowOffBoxBearerEnv = "AXIS_ALLOW_OFFBOX_BEARER"
 
 // RequestBaseURL is the URL the daemon client and the A2A client request.
@@ -44,7 +45,7 @@ func AddrKeepsClusterBearer(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// RefuseOffBoxBearer refuses addr when a cluster bearer token would be
+// RefuseOffBoxBearer refuses addr when the local API token would be
 // attached to a non-local host without the explicit break-glass env set.
 // The error names the env switch so an operator who really means it can
 // opt in explicitly.
@@ -55,7 +56,7 @@ func RefuseOffBoxBearer(addr string) error {
 	if os.Getenv(AllowOffBoxBearerEnv) == "1" {
 		return nil
 	}
-	return fmt.Errorf("refusing off-box daemon address %q: it would attach the cluster bearer token (set %s=1 to allow)", addr, AllowOffBoxBearerEnv)
+	return fmt.Errorf("refusing off-box daemon address %q: it would attach the local API token (~/.axis/token or AXIS_API_TOKEN) (set %s=1 to allow)", addr, AllowOffBoxBearerEnv)
 }
 
 // DialHost extracts the host part of addr, stripping scheme, port, and

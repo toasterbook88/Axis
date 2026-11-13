@@ -17,22 +17,22 @@ The bytes attached as `Authorization: Bearer` are the local `~/.axis/token` (or
 **that daemon's own token** and answers `401 invalid api token` on mismatch.
 There is no shared cluster secret on this path.
 
-## The off-box `--addr` gate (the error says "cluster token")
+## The off-box `--addr` gate
 
 An explicit `--addr` aimed at a **non-loopback TCP host** is refused by default:
 
 ```console
 $ axis task delegate some-node --addr http://192.0.2.5:8080
-error: refusing off-box --addr "http://192.0.2.5:8080": it would attach the
-cluster token (set AXIS_ALLOW_OFFBOX_BEARER=1 to allow)
+error: --addr: refusing off-box daemon address "http://192.0.2.5:8080": it would
+attach the local API token (~/.axis/token or AXIS_API_TOKEN) (set
+AXIS_ALLOW_OFFBOX_BEARER=1 to allow)
 ```
 
 `--addr` to a unix socket, `localhost`, or a loopback IP (`127.0.0.0/8`, `::1`) is
 allowed, because that is the local daemon. Anything else would put the local
 token on a host the operator did not name in `nodes.yaml`, so it fails closed.
 
-The refusal text says "cluster token". That string means the local token above.
-A listed `nodes.yaml` peer still receives that same token on `:42425` with **no**
+The token named in the refusal is the local token above. A listed `nodes.yaml` peer still receives that same token on `:42425` with **no**
 `AXIS_ALLOW_OFFBOX_BEARER` check.
 
 ### The break-glass switch
@@ -110,7 +110,11 @@ curl -s -H "Authorization: Bearer $T" --unix-socket "$S" \
 value is set (`cmd/axis/main.go`, `internal/buildinfo.ResolvedCommit`). A plain
 build whose commit ldflag is empty prints `vcs.revision` and appends `-dirty`
 when `vcs.modified` is true. `built:` is only the ldflag build time.
-`vcs.time` is the revision time and is not a build time. The command does not
-ask the running daemon who it is. **`axis update` replaces the binary but does
-not restart a supervised daemon** — check the process start time, or the API
-response, not `axis version`.
+`vcs.time` is the revision time and is not a build time. Those lines describe
+the binary you ran. Unless you pass `--local`, `axis version` also asks the
+running daemon and prints a `daemon:` line with its version and commit, or
+`daemon: not responding on <addr>`, and warns when the daemon's version or
+commit differs from the CLI's. `axis update` restarts the daemon after a
+successful update (through systemd or launchd when an AXIS-managed service is
+installed) and waits for it to report the installed version; `--no-restart`
+skips that step.
