@@ -49,7 +49,7 @@ run go run hack/verify-specs.go
 run ./hack/verify-repo-truth.sh
 run ./hack/verify-doc-facts.sh
 run python3 hack/claude-workflow-tests.py
-run PYTHONDONTWRITEBYTECODE=1 python3 hack/claude-pretool-secret-scan_test.py
+run env PYTHONDONTWRITEBYTECODE=1 python3 hack/claude-pretool-secret-scan_test.py
 run python3 hack/workflow-action-pins.py
 run go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 run go run hack/lifecycle-check.go
