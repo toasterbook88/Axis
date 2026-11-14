@@ -158,14 +158,15 @@ Verdict: approve-with-changes
 1. Major: the spec failed its own gate, which requires a `## Alternatives` heading and a
    `## Review` section. `go run hack/verify-specs.go` reported "missing section ##
    Alternatives" and "missing section ## Review". Fixed: heading renamed and this block
-   added; the verifier is green.
+   added; the verifier is green; fixed in 99e0a9b0.
 2. Minor: Research cited prior art without links, which AGENTS.md section 8 requires.
-   Fixed: git-rev-parse, git-config core.abbrev and GoReleaser template links added.
+   Fixed: git-rev-parse, git-config core.abbrev and GoReleaser template links added;
+   fixed in 99e0a9b0.
 3. Minor: the research said git will not abbreviate below 7 characters; `git rev-parse
    --short=4` returns four. Fixed: the floor is now stated as a policy choice with its
-   collision reason and the accepted sub-7 residual.
+   collision reason and the accepted sub-7 residual; fixed in 99e0a9b0.
 4. Minor: no listed test row could fail if rule 1's trim clause were dropped. Fixed:
-   padded-input row added, plus a `-dirty` row with a differing length.
+   padded-input row added, plus a `-dirty` row with a differing length; fixed in 99e0a9b0.
 
 Questions:
 
@@ -186,11 +187,11 @@ Verdict: approve-with-changes
 1. Major: the implementation contradicted rule 4 — every non-hex or sub-7 value returned
    false, so a tarball build printed "daemon commit unknown differs from CLI commit unknown".
    Fixed: rule 4 is now equality of the normalised strings, and a daemon test covers both
-   sides reporting `unknown`.
+   sides reporting `unknown`; fixed in b25cc111.
 2. Minor: the spec's `Status:` line still said the spec review was pending. Fixed: the line
-   now reflects the recorded reviews.
+   now reflects the recorded reviews; fixed in b25cc111.
 3. Minor: the test table had no equal-full-hash row although the spec listed one. Fixed: row
-   added, plus identical-below-floor and repeated-`-dirty` rows.
+   added, plus identical-below-floor and repeated-`-dirty` rows; fixed in b25cc111.
 
 Questions:
 
