@@ -267,6 +267,17 @@ func TestVersionAcceptsTheSameCommitAbbreviatedDifferently(t *testing.T) {
 	}
 }
 
+// TestVersionDoesNotWarnWhenBothCommitsAreUnreported covers a source-tarball
+// build: Makefile falls back to "unknown" when git metadata is absent, and two
+// identical values must not be reported as different commits.
+func TestVersionDoesNotWarnWhenBothCommitsAreUnreported(t *testing.T) {
+	addr, _ := healthServer(t, Version, "unknown")
+	out := runVersion(t, "unknown", "--cache-addr", addr)
+	if strings.Contains(out, "warning:") {
+		t.Fatalf("two identical unreported commits must not warn:\n%s", out)
+	}
+}
+
 // TestVersionReportsDaemonNotResponding verifies that a non-responding
 // daemon is reported.
 func TestVersionReportsDaemonNotResponding(t *testing.T) {

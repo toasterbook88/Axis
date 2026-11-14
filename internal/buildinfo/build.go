@@ -47,31 +47,39 @@ func ResolvedCommit() string {
 // warning. A value that is not a hex hash of at least that length must match
 // exactly, so "unknown" never matches a real revision.
 func SameCommit(a, b string) bool {
-	x, y := commitHash(a), commitHash(b)
+	x, y := normalisedCommit(a), normalisedCommit(b)
 	if x == "" || y == "" {
 		return false
+	}
+	if !isHexHash(x) || !isHexHash(y) || len(x) < 7 || len(y) < 7 {
+		// Values this build cannot read as abbreviated hashes ("unknown" from a
+		// tarball build, or a hand-injected short prefix) must still match
+		// exactly, or the change would invent a warning where two identical
+		// strings previously agreed.
+		return x == y
 	}
 	short, long := x, y
 	if len(short) > len(long) {
 		short, long = long, short
 	}
-	return len(short) >= 7 && strings.HasPrefix(long, short)
+	return strings.HasPrefix(long, short)
 }
 
-// commitHash normalises a commit string to its lower-case hex hash, or "" when
-// it is not one: not every build injects a revision (the Makefile falls back to
-// "unknown" without git metadata).
-func commitHash(value string) string {
-	hash := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), "-dirty")
-	if hash == "" {
-		return ""
-	}
-	for _, r := range hash {
+// normalisedCommit lower-cases a commit string and drops the build marker, so
+// two spellings of one revision compare equal. It returns "" only for empty
+// input: "unknown" is a value, not an absence.
+func normalisedCommit(value string) string {
+	commit := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), "-dirty")
+	return strings.TrimSpace(commit)
+}
+
+func isHexHash(value string) bool {
+	for _, r := range value {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return ""
+			return false
 		}
 	}
-	return hash
+	return value != ""
 }
 
 func commitFromSettings(settings []debug.BuildSetting) string {

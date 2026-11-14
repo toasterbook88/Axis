@@ -1,7 +1,7 @@
 # `axis version`: stop reporting one commit as two
 
 Date: 2026-11-13
-Status: spec review pending
+Status: spec and diff reviews recorded; PR open, not merged
 Owning area: `internal/buildinfo`, `cmd/axis/main.go` (version command)
 
 ## Problem
@@ -63,8 +63,10 @@ Rules, in order:
 2. If either side is empty, return false (the caller keeps its own empty guards).
 3. If both are hex and at least 7 characters, return true when one is a prefix of the other
    (equal strings are prefixes of each other).
-4. Otherwise return exact string equality, so an unrecognised value such as `unknown` never
-   matches a real hash by accident.
+4. Otherwise return equality of the normalised strings. An unrecognised value such as
+   `unknown` therefore matches only itself, never a real hash: `unknown` vs `unknown` must
+   stay silent (a tarball build reports it on both sides), while `unknown` vs `abc1234`
+   stays a warning.
 
 7 is a deliberate policy floor, not a git guarantee: `git rev-parse --short=4` will hand
 back four characters if asked. The floor exists because a short prefix can collide across a
@@ -95,16 +97,20 @@ real mismatches behind a substring check.
 - `internal/buildinfo/build_test.go`: table test for `SameCommit` — equal full hashes;
   7-vs-8 prefix in both directions; full-40-vs-7 prefix; unrelated commits; equal-length
   different commits; empty side; `unknown`; non-hex; 6-character prefix below the floor;
-  case difference; `-dirty` on one side and on both; padded input (`"  abc1234  "` vs
-  `"abc1234"`) so the trim clause in rule 1 cannot regress untested; and `-dirty` combined
-  with a differing length (`"abc1234-dirty"` vs `"abc1234a"`).
+  case difference; equal full 40-character revisions; `-dirty` on one side and on both;
+  padded input (`"  abc1234  "` vs `"abc1234"`) so the trim clause in rule 1 cannot regress
+  untested; `-dirty` combined with a differing length (`"abc1234-dirty"` vs `"abc1234a"`);
+  identical values below the floor (`"abc123"` vs `"abc123"`); and two identical `unknown`
+  values.
 - `cmd/axis/daemon_restart_supervisor_test.go`: alongside the existing different-commit
   case (`def5678` vs `abc1234`), a case where the daemon reports `def5678` and the CLI
-  `def5678a`, asserting **no** warning line. The existing assertions must keep passing
-  unchanged.
+  `def5678a`, asserting **no** warning line, and a case where both report `unknown`,
+  asserting no warning either. The existing assertions must keep passing unchanged.
 
-Failing-then-passing check: with `SameCommit` reverted to `a != b`, the new daemon test
-fails; with the prefix rule removed but the helper kept, the 7-vs-8 table rows fail.
+Failing-then-passing check: with `SameCommit` reverted to `a != b`, the abbreviated-commit
+daemon test fails; with the prefix rule removed but the helper kept, the 7-vs-8 table rows
+fail; with rule 4 returning false instead of equality, the `unknown`-on-both daemon test
+fails.
 
 ## Alternatives
 
@@ -168,3 +174,25 @@ Questions:
   answers no, with the reason recorded under Design.
 - Residual risk for a build that injects fewer than 7 characters by hand. open: documented
   as accepted, because no default build path in this repository emits one.
+
+Kind: diff
+Reviewer: fresh-context subagent, five inputs only (repo, base, head, spec, ask)
+Model: DeepSeek (same vendor family as the author; cross-family review not available)
+Base: dec1d544
+Head: f1d1c64a
+Date: 2026-11-13
+Verdict: approve-with-changes
+
+1. Major: the implementation contradicted rule 4 — every non-hex or sub-7 value returned
+   false, so a tarball build printed "daemon commit unknown differs from CLI commit unknown".
+   Fixed: rule 4 is now equality of the normalised strings, and a daemon test covers both
+   sides reporting `unknown`.
+2. Minor: the spec's `Status:` line still said the spec review was pending. Fixed: the line
+   now reflects the recorded reviews.
+3. Minor: the test table had no equal-full-hash row although the spec listed one. Fixed: row
+   added, plus identical-below-floor and repeated-`-dirty` rows.
+
+Questions:
+
+- Whether the two identical `unknown` values were meant to match. verified: yes — finding 1
+  made the fallback compare them for equality, and a daemon test now covers that state.

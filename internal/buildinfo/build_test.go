@@ -105,9 +105,12 @@ func TestSameCommitComparesAbbreviations(t *testing.T) {
 		{"case difference", "ABC1234", "abc1234", true},
 		{"empty side", "", "abc1234", false},
 		{"unknown is not a hash", "unknown", "abc1234", false},
-		{"unknown on both", "unknown", "unknown", false},
+		{"equal full hashes", "b59faba1f523d06d382302bef063fe7532c83b60", "b59faba1f523d06d382302bef063fe7532c83b60", true},
+		{"unknown on both", "unknown", "unknown", true},
 		{"non hex", "abc1234z", "abc1234", false},
 		{"below the seven character floor", "abc123", "abc1234", false},
+		{"identical below the floor", "abc123", "abc123", true},
+		{"repeated dirty marker", "abc1234-dirty-dirty", "abc1234-dirty-dirty", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
