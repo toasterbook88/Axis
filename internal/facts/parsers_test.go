@@ -295,7 +295,9 @@ func TestParseVersionString(t *testing.T) {
 		{"python version", "Python 3.11.0", "3.11.0"},
 		{"git version", "git version 2.39.3 (Apple Git-145)", "2.39.3"},
 		{"node version", "v20.11.0", "20.11.0"},
-		{"docker version", "Docker version 24.0.7, build afdd53b", "24.0.7"}, // Note: we can later improve to strip commas
+		{"docker version", "Docker version 24.0.7, build afdd53b", "24.0.7"},
+		{"gcc trailing paren", "gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0", "11.4.0"},
+		{"paren only token", "gcc 13.2.0)", "13.2.0"},
 		{"ollama version", "ollama version is 0.1.28", "0.1.28"},
 		{"no version", "command not found", "command not found"},
 		{"multiline", "git version 2.39.3\nsome other line\n", "2.39.3"},
