@@ -2,6 +2,9 @@
 
 ### Fixes
 
+* Tool version parsing no longer keeps a trailing `)` or a distro package
+  suffix when a clean version is also on the line. `gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
+  now reports `11.4.0`, not `11.4.0-1ubuntu1~22.04)`.
 * Builds use Go 1.26.11, which fixes the `net/http` standard-library
   vulnerability GO-2026-6859 (CVE-2026-97054). Affected: Go 1.26.0-1.26.10
   and 1.27.0-1.27.3, as reported by govulncheck.

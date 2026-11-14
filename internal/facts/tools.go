@@ -480,6 +480,9 @@ func DiscoverTools(ctx context.Context) []models.ToolInfo {
 // parseVersionString extracts a clean version from command output.
 // Handles formats like "go version go1.24.1 darwin/arm64", "Python 3.11.0",
 // "git version 2.39.5", "v20.11.0", etc.
+// A token that still carries a package suffix after punctuation is stripped
+// is not a version. GCC prints that suffix before the real version
+// ("11.4.0-1ubuntu1~22.04) 11.4.0"), so the first digit token is not enough.
 func parseVersionString(raw string) string {
 	line := raw
 	if idx := strings.IndexByte(raw, '\n'); idx != -1 {
@@ -487,13 +490,49 @@ func parseVersionString(raw string) string {
 	}
 	line = strings.TrimSpace(line)
 
-	// Try to find a version-like token (starts with digit or v+digit)
+	var first string
 	for _, field := range strings.Fields(line) {
-		clean := strings.TrimPrefix(field, "v")
-		clean = strings.TrimPrefix(clean, "go")
-		if len(clean) > 0 && clean[0] >= '0' && clean[0] <= '9' {
-			return strings.TrimRight(clean, ",;")
+		clean, ok := versionToken(field)
+		if !ok {
+			continue
+		}
+		if first == "" {
+			first = clean
+		}
+		if cleanVersion(clean) {
+			return clean
 		}
 	}
+	if first != "" {
+		return first
+	}
 	return line
+}
+
+func versionToken(field string) (string, bool) {
+	clean := strings.TrimPrefix(field, "v")
+	clean = strings.TrimPrefix(clean, "go")
+	clean = strings.Trim(clean, "()[],;")
+	if len(clean) == 0 || clean[0] < '0' || clean[0] > '9' {
+		return "", false
+	}
+	return clean, true
+}
+
+func cleanVersion(s string) bool {
+	dot := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+		case c == '.':
+			if i == 0 || i == len(s)-1 || s[i-1] == '.' {
+				return false
+			}
+			dot = true
+		default:
+			return false
+		}
+	}
+	return dot
 }
