@@ -257,7 +257,7 @@ func versionCmd() *cobra.Command {
 					switch {
 					case daemonID.Version != Version:
 						fmt.Fprintf(out, "  warning:  daemon version %s differs from CLI version %s\n", daemonID.Version, Version)
-					case daemonID.Commit != "" && cliCommit != "" && daemonID.Commit != cliCommit:
+					case daemonID.Commit != "" && cliCommit != "" && !buildinfo.SameCommit(daemonID.Commit, cliCommit):
 						fmt.Fprintf(out, "  warning:  daemon commit %s differs from CLI commit %s (same version %s)\n", daemonID.Commit, cliCommit, Version)
 					}
 				}
