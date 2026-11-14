@@ -252,6 +252,32 @@ func TestVersionWarnsOnDaemonVersionMismatch(t *testing.T) {
 	}
 }
 
+// TestVersionAcceptsTheSameCommitAbbreviatedDifferently verifies that a release
+// build (seven characters) and a make build (eight) of one commit are not
+// reported as two commits. The warning is reserved for a daemon left from a
+// different commit.
+func TestVersionAcceptsTheSameCommitAbbreviatedDifferently(t *testing.T) {
+	addr, _ := healthServer(t, Version, "b59faba")
+	out := runVersion(t, "b59faba1", "--cache-addr", addr)
+	if want := fmt.Sprintf("daemon:   v%s (commit b59faba) on %s", Version, addr); !strings.Contains(out, want) {
+		t.Fatalf("missing %q in:\n%s", want, out)
+	}
+	if strings.Contains(out, "warning:") {
+		t.Fatalf("one commit abbreviated differently must not warn:\n%s", out)
+	}
+}
+
+// TestVersionDoesNotWarnWhenBothCommitsAreUnreported covers a source-tarball
+// build: Makefile falls back to "unknown" when git metadata is absent, and two
+// identical values must not be reported as different commits.
+func TestVersionDoesNotWarnWhenBothCommitsAreUnreported(t *testing.T) {
+	addr, _ := healthServer(t, Version, "unknown")
+	out := runVersion(t, "unknown", "--cache-addr", addr)
+	if strings.Contains(out, "warning:") {
+		t.Fatalf("two identical unreported commits must not warn:\n%s", out)
+	}
+}
+
 // TestVersionReportsDaemonNotResponding verifies that a non-responding
 // daemon is reported.
 func TestVersionReportsDaemonNotResponding(t *testing.T) {
