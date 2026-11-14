@@ -74,6 +74,7 @@ Layer 5  Advisory    internal/chat internal/agent internal/console internal/mcp 
 Layer 4  Execution   internal/execution internal/safety internal/scripts internal/modellife
                      internal/modelinventory
 Layer 3  Placement   internal/placement internal/workload internal/modelplan internal/llmrouter
+                     internal/seatlease
 Layer 2  Snapshot    internal/snapshot internal/daemon internal/snapshotview internal/runtimectx
                      internal/publication internal/reservation internal/skills
 Layer 1  Fact Plane  internal/facts internal/discovery internal/mesh internal/transport internal/multipath
