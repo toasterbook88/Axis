@@ -66,9 +66,13 @@ Rules, in order:
 4. Otherwise return exact string equality, so an unrecognised value such as `unknown` never
    matches a real hash by accident.
 
-7 is the floor because `git` itself will not abbreviate below it: shorter prefixes can
-collide across a large repository, and a collision here would silently suppress a real
-"stale daemon" warning.
+7 is a deliberate policy floor, not a git guarantee: `git rev-parse --short=4` will hand
+back four characters if asked. The floor exists because a short prefix can collide across a
+large repository, and a collision here would silently suppress a real "stale daemon"
+warning. Accepted residual: a build that injects fewer than 7 characters by hand
+(`-X …Commit=$(git rev-parse --short=6 HEAD)`, or a low `core.abbrev`) is compared by exact
+equality and can still produce the false warning. No default build path in this repository
+does that, so the residual is documented rather than engineered around.
 
 Then `cmd/axis/main.go:260` uses it:
 
@@ -80,12 +84,20 @@ Nothing else changes: the printed texts keep their current wording, and a genuin
 different commit, a version mismatch, a missing commit, or a non-responding daemon all
 behave exactly as they do at base.
 
+Unrecognised values stay warnings on purpose. `Makefile:2` falls back to `unknown` when git
+metadata is absent, so a tarball build prints `daemon commit abc1234 differs from CLI commit
+unknown`. That is accurate — an unversioned CLI against a versioned daemon is a state worth
+seeing — so the spec keeps it rather than adding a second suppression rule that would hide
+real mismatches behind a substring check.
+
 ## Tests
 
 - `internal/buildinfo/build_test.go`: table test for `SameCommit` — equal full hashes;
   7-vs-8 prefix in both directions; full-40-vs-7 prefix; unrelated commits; equal-length
   different commits; empty side; `unknown`; non-hex; 6-character prefix below the floor;
-  case difference; `-dirty` on one side and on both.
+  case difference; `-dirty` on one side and on both; padded input (`"  abc1234  "` vs
+  `"abc1234"`) so the trim clause in rule 1 cannot regress untested; and `-dirty` combined
+  with a differing length (`"abc1234-dirty"` vs `"abc1234a"`).
 - `cmd/axis/daemon_restart_supervisor_test.go`: alongside the existing different-commit
   case (`def5678` vs `abc1234`), a case where the daemon reports `def5678` and the CLI
   `def5678a`, asserting **no** warning line. The existing assertions must keep passing
@@ -94,7 +106,7 @@ behave exactly as they do at base.
 Failing-then-passing check: with `SameCommit` reverted to `a != b`, the new daemon test
 fails; with the prefix rule removed but the helper kept, the 7-vs-8 table rows fail.
 
-## Alternatives considered
+## Alternatives
 
 1. **Make every build path emit the same length.** Set `--short=8` in the Makefile and
    `{{ .ShortCommit }}`-equivalent 8 in goreleaser. Rejected: binaries already installed on
@@ -117,8 +129,42 @@ fails; with the prefix rule removed but the helper kept, the 7-vs-8 table rows f
   abbreviation as object counts grow.
 - `cmd/axis/main.go:260` at base compares the two with `!=`; `cmd/axis/daemon_restart_supervisor_test.go:250`
   pins the exact-string behaviour with `def5678` vs `abc1234`.
-- Prior art: comparing abbreviated commit ids by prefix with a minimum length is the rule
-  git itself applies when it lengthens abbreviations to stay unique.
+- Prior art: comparing abbreviated commit ids by prefix, with a minimum length, is the rule
+  git applies when it lengthens abbreviations to stay unique
+  (<https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---shortlength>,
+  <https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreabbrev>); GoReleaser
+  documents `.ShortCommit` as the abbreviated revision
+  (<https://goreleaser.com/customization/templates/>).
 - Measurement: the change is two string comparisons per `axis version` call; no performance
   claim is made because none is measurable at this scale. The observable claim is the
   difference in output, which the tests above pin.
+
+## Review
+
+Kind: spec
+Reviewer: fresh-context subagent, five inputs only (repo, base, head, spec, ask)
+Model: DeepSeek (same vendor family as the author; cross-family review not available)
+Base: dec1d544
+Head: 1638c5ac
+Date: 2026-11-13
+Verdict: approve-with-changes
+
+1. Major: the spec failed its own gate, which requires a `## Alternatives` heading and a
+   `## Review` section. `go run hack/verify-specs.go` reported "missing section ##
+   Alternatives" and "missing section ## Review". Fixed: heading renamed and this block
+   added; the verifier is green.
+2. Minor: Research cited prior art without links, which AGENTS.md section 8 requires.
+   Fixed: git-rev-parse, git-config core.abbrev and GoReleaser template links added.
+3. Minor: the research said git will not abbreviate below 7 characters; `git rev-parse
+   --short=4` returns four. Fixed: the floor is now stated as a policy choice with its
+   collision reason and the accepted sub-7 residual.
+4. Minor: no listed test row could fail if rule 1's trim clause were dropped. Fixed:
+   padded-input row added, plus a `-dirty` row with a differing length.
+
+Questions:
+
+- Whether a tarball build's `commit: unknown` should suppress the daemon warning, since
+  that fallback also produces a warning operators may learn to ignore. open: the design now
+  answers no, with the reason recorded under Design.
+- Residual risk for a build that injects fewer than 7 characters by hand. open: documented
+  as accepted, because no default build path in this repository emits one.
