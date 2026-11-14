@@ -22,6 +22,15 @@
   files; an interrupted update's temp file is now named `axis.tmp-*` instead
   of `.axis-update-*`.
 
+### Features
+
+* `axis doctor` warns when a running daemon was not started by its own
+  service (check "Daemon supervision", Linux). It reads the daemon's systemd
+  cgroup: a daemon in a login session, another scope or an unrelated service
+  will not restart after a crash or start after a reboot. It passes for a
+  daemon in a service whose name contains `axis`, and reports nothing when the
+  cgroup is unreadable or hidden by a container. Read-only.
+
 ## v0.24.2 (2026-11-10)
 
 The daemon reloads `~/.axis/token` without a restart, and a broken token file
