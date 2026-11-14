@@ -85,3 +85,35 @@ func TestSettingFrom(t *testing.T) {
 		t.Fatalf("nil settings = %q, want empty", got)
 	}
 }
+
+func TestSameCommitComparesAbbreviations(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"equal short hashes", "abc1234", "abc1234", true},
+		{"release seven against make eight", "b59faba", "b59faba1", true},
+		{"make eight against release seven", "b59faba1", "b59faba", true},
+		{"full revision against seven", "b59faba1f523d06d382302bef063fe7532c83b60", "b59faba", true},
+		{"unrelated commits", "def5678", "abc1234", false},
+		{"same length different", "abc1234", "abc1235", false},
+		{"dirty against clean", "abc1234-dirty", "abc1234", true},
+		{"dirty on both", "abc1234-dirty", "abc1234-dirty", true},
+		{"dirty against longer clean", "abc1234-dirty", "abc1234a", true},
+		{"padded input", "  abc1234  ", "abc1234", true},
+		{"case difference", "ABC1234", "abc1234", true},
+		{"empty side", "", "abc1234", false},
+		{"unknown is not a hash", "unknown", "abc1234", false},
+		{"unknown on both", "unknown", "unknown", false},
+		{"non hex", "abc1234z", "abc1234", false},
+		{"below the seven character floor", "abc123", "abc1234", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SameCommit(tc.a, tc.b); got != tc.want {
+				t.Fatalf("SameCommit(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}

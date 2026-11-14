@@ -1,6 +1,9 @@
 package buildinfo
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strings"
+)
 
 // Commit, Date, and GoVersion are set at build time via -ldflags.
 // Example:
@@ -29,6 +32,46 @@ func ResolvedCommit() string {
 		return ""
 	}
 	return commitFromSettings(info.Settings)
+}
+
+// SameCommit reports whether two commit strings name the same revision.
+//
+// Build paths abbreviate differently: a release build injects {{ .ShortCommit }}
+// (seven characters) and `make build` injects `git rev-parse --short HEAD`, which
+// grows with the repository. Comparing the strings for equality therefore reports
+// one commit as two. Abbreviated hashes compare by prefix instead; the "-dirty"
+// marker belongs to the build, not the revision, so it is ignored.
+//
+// Seven is a policy floor: git will abbreviate further on request, but a shorter
+// prefix can collide and a collision here would suppress a real "stale daemon"
+// warning. A value that is not a hex hash of at least that length must match
+// exactly, so "unknown" never matches a real revision.
+func SameCommit(a, b string) bool {
+	x, y := commitHash(a), commitHash(b)
+	if x == "" || y == "" {
+		return false
+	}
+	short, long := x, y
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	return len(short) >= 7 && strings.HasPrefix(long, short)
+}
+
+// commitHash normalises a commit string to its lower-case hex hash, or "" when
+// it is not one: not every build injects a revision (the Makefile falls back to
+// "unknown" without git metadata).
+func commitHash(value string) string {
+	hash := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), "-dirty")
+	if hash == "" {
+		return ""
+	}
+	for _, r := range hash {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return ""
+		}
+	}
+	return hash
 }
 
 func commitFromSettings(settings []debug.BuildSetting) string {
