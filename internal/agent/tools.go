@@ -40,6 +40,9 @@ type ToolRegistry struct {
 	// in mcp_servers.<server>.auto_approve_tools. Only these external tools
 	// skip confirmation.
 	mcpAutoApproved map[string]bool
+	// consultResolver resolves consult_model's seat argument. Nil means the
+	// tool returns an error and does not call a backend.
+	consultResolver ConsultResolver
 }
 
 // mcpAutoApprovedTool reports whether name is an external MCP tool the
@@ -89,6 +92,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerSymbolSearch()
 	r.registerBackgroundTools()
 	r.registerSessionBranchTools()
+	r.registerConsultModel()
 	return r
 }
 
@@ -139,6 +143,12 @@ func (r *ToolRegistry) Defs() []chat.ToolDef {
 // before any dynamic extra grant applies.
 func (r *ToolRegistry) visible(name string) bool {
 	if name == "" || neverTool(name) || name == "axis_summary" {
+		return false
+	}
+	// A registry with no resolver cannot reach a seat. Advertise the tool
+	// only where the command wired one, so a child or library caller never
+	// sees a tool whose every call would fail.
+	if name == consultModelTool && r.consultResolver == nil {
 		return false
 	}
 	if execTool(name) && r.scope != ScopeExec {

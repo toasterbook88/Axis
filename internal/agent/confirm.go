@@ -75,15 +75,16 @@ func DefaultConfirm(r io.Reader, w io.Writer) ConfirmFunc {
 
 // AutoApproveConfirm returns a ConfirmFunc that auto-approves read-only tools
 // and tools with safety score below the threshold, but still prompts for
-// anything risky.
+// anything risky. consult_model always reaches the fallback.
 func AutoApproveConfirm(threshold int, fallback ConfirmFunc) ConfirmFunc {
 	return func(toolName, description string, safetyScore int) ConfirmResult {
 		if toolName == "axis_run_task" {
 			return fallback(toolName, description, safetyScore)
 		}
 		// Unlisted external MCP tools are unrated; their zero score is not
-		// low risk.
-		if isExternalMCPTool(toolName) {
+		// low risk. consult_model asks another model, so score 0 is not a
+		// reason to skip the operator.
+		if isExternalMCPTool(toolName) || consultAsksOperator(toolName) {
 			return fallback(toolName, description, safetyScore)
 		}
 		// Read-only AXIS tools never need confirmation.
