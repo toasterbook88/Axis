@@ -593,6 +593,139 @@ func TestCloudBackend_ThinkingThenToolCallsClosesThought(t *testing.T) {
 	}
 }
 
+func TestCloudBackend_HeaderResetExtendsFirstChunkBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(28 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(28 * time.Millisecond)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "header-slow", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	// Header arrives at 28ms (<40ms) and resets idle timer; first chunk arrives 28ms
+	// later (total 56ms > 40ms idle window). Succeeds only if header arrival resets.
+	b.streamIdleTimeout = 40 * time.Millisecond
+
+	resp, err := b.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("ChatStream with header reset failed: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("content = %q, want %q", resp.Content, "ok")
+	}
+}
+
+func TestCloudBackend_Anthropic_IgnoresThinkingOverrides(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+	}))
+	defer server.Close()
+
+	tVal := true
+	b, err := BuildBackend(ModelTarget{
+		Model:        "test-model",
+		Protocol:     ProtocolCloud,
+		ProviderName: "anthropic",
+		Endpoint:     server.URL,
+	}, CloudBackendOptions{APIKey: "k", Thinking: &tVal})
+	if err != nil {
+		t.Fatalf("BuildBackend: %v", err)
+	}
+	if _, err := b.ChatStream(WithDisableThinking(context.Background()), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard); err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if _, has := body["chat_template_kwargs"]; has {
+		t.Fatalf("Anthropic request unexpectedly contained chat_template_kwargs: %v", body)
+	}
+}
+
+func TestIdleGuardTouchDoesNotExpireRightAfterReset(t *testing.T) {
+	// Part 1: Deterministic check that an already-dispatched timer callback
+	// arriving right after touch() sees the extended deadline and does not cancel.
+	for i := 0; i < 20; i++ {
+		g := newStreamIdleGuard(context.Background(), 50*time.Millisecond)
+		g.touch()
+		g.onTimer()
+		if g.ctx.Err() != nil {
+			g.Close()
+			t.Fatalf("iter %d: stale onTimer canceled active guard right after touch(): %v", i, g.ctx.Err())
+		}
+		g.Close()
+	}
+
+	// Part 2: Concurrent -race stress test where touch() keeps a 30ms guard alive past 90ms.
+	const (
+		idle  = 30 * time.Millisecond
+		total = 90 * time.Millisecond
+	)
+	g := newStreamIdleGuard(context.Background(), idle)
+	stopTouch := make(chan struct{})
+	doneTouch := make(chan struct{})
+	go func() {
+		defer close(doneTouch)
+		ticker := time.NewTicker(3 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopTouch:
+				return
+			case <-ticker.C:
+				g.touch()
+			}
+		}
+	}()
+	timer := time.NewTimer(total)
+	select {
+	case <-g.ctx.Done():
+		close(stopTouch)
+		<-doneTouch
+		timer.Stop()
+		g.Close()
+		t.Fatalf("guard expired while touch() was actively keeping it alive")
+	case <-timer.C:
+	}
+	close(stopTouch)
+	<-doneTouch
+	g.Close()
+
+	// Part 3: Post-expiry touch() must not re-arm timer or clear expired state.
+	gExp := newStreamIdleGuard(context.Background(), 5*time.Millisecond)
+	select {
+	case <-gExp.ctx.Done():
+	case <-time.After(time.Second):
+		gExp.Close()
+		t.Fatalf("timed out waiting for guard expiry")
+	}
+	gExp.mu.Lock()
+	expiredDeadline := gExp.deadline
+	gExp.mu.Unlock()
+	gExp.touch()
+	gExp.mu.Lock()
+	afterTouchDeadline := gExp.deadline
+	gExp.mu.Unlock()
+	if !afterTouchDeadline.Equal(expiredDeadline) {
+		gExp.Close()
+		t.Fatalf("post-expiry touch() modified deadline from %v to %v", expiredDeadline, afterTouchDeadline)
+	}
+	if !errors.Is(gExp.wrapErr("read", context.Background(), gExp.ctx.Err()), context.DeadlineExceeded) {
+		gExp.Close()
+		t.Fatalf("expected DeadlineExceeded from expired wrapErr after post-expiry touch()")
+	}
+	gExp.Close()
+}
+
 func TestCloudBackend_ParentCancelDoesNotReportIdleTimeout(t *testing.T) {
 	done := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

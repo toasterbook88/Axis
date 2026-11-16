@@ -59,11 +59,13 @@ func TestLiveTurnNamesThinking(t *testing.T) {
 	if strings.Contains(view, "secret") || strings.Contains(view, "working") || !strings.Contains(view, "thinking") {
 		t.Fatalf("closed thought with no answer yet:\n%s", view)
 	}
+}
 
+func TestLiveTurnNamesOutOfBandThinking(t *testing.T) {
 	oob := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
 	oob = startTurnFor(t, oob)
 	oob = apply(oob, ThoughtChunkMsg{Turn: 1, Text: "secret plan"})
-	view = oob.View()
+	view := oob.View()
 	if strings.Contains(view, "secret") || strings.Contains(view, "working") || !strings.Contains(view, "thinking") {
 		t.Fatalf("out-of-band thought:\n%s", view)
 	}

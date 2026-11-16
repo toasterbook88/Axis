@@ -742,9 +742,10 @@ type streamIdleGuard struct {
 	cancel  context.CancelFunc
 	expired atomic.Bool
 
-	mu      sync.Mutex
-	stopped bool
-	timer   *time.Timer
+	mu       sync.Mutex
+	stopped  bool
+	deadline time.Time
+	timer    *time.Timer
 }
 
 func newStreamIdleGuard(parent context.Context, timeout time.Duration) *streamIdleGuard {
@@ -758,19 +759,30 @@ func newStreamIdleGuard(parent context.Context, timeout time.Duration) *streamId
 		cancel:  cancel,
 	}
 	if timeout > 0 {
-		g.timer = time.AfterFunc(timeout, func() {
-			g.mu.Lock()
-			stopped := g.stopped
-			if !stopped {
-				g.expired.Store(true)
-			}
-			g.mu.Unlock()
-			if !stopped {
-				cancel()
-			}
-		})
+		g.mu.Lock()
+		g.deadline = time.Now().Add(timeout)
+		g.timer = time.AfterFunc(timeout, g.onTimer)
+		g.mu.Unlock()
 	}
 	return g
+}
+
+func (g *streamIdleGuard) onTimer() {
+	g.mu.Lock()
+	if g.stopped || g.expired.Load() {
+		g.mu.Unlock()
+		return
+	}
+	if rem := time.Until(g.deadline); rem > 0 {
+		if g.timer != nil {
+			g.timer.Reset(rem)
+		}
+		g.mu.Unlock()
+		return
+	}
+	g.expired.Store(true)
+	g.mu.Unlock()
+	g.cancel()
 }
 
 func (g *streamIdleGuard) touch() {
@@ -778,7 +790,8 @@ func (g *streamIdleGuard) touch() {
 		return
 	}
 	g.mu.Lock()
-	if !g.stopped && g.timer != nil {
+	if !g.stopped && !g.expired.Load() && g.timer != nil {
+		g.deadline = time.Now().Add(g.timeout)
 		g.timer.Reset(g.timeout)
 	}
 	g.mu.Unlock()

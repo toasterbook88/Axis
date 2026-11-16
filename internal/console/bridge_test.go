@@ -497,4 +497,33 @@ func TestStreamWriterWriteThoughtEmitsOutOfBandThoughtChunks(t *testing.T) {
 	if t2.String() != "only thinking\n\nsecond round" || a2.String() != "done" || done2 != 2 {
 		t.Fatalf("round2 got thought=%q ans=%q done=%d", t2.String(), a2.String(), done2)
 	}
+
+	// Buffered answer bytes written before WriteThought must flush before ThoughtChunkMsg.
+	rec3 := &concurrentSender{}
+	w3 := NewStreamWriter(rec3, 3)
+	tw3 := w3.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	if _, err := w3.Write([]byte("before ")); err != nil {
+		t.Fatalf("Write returned %v", err)
+	}
+	tw3.WriteThought("reasoning")
+	if err := w3.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+	var order []string
+	for _, msg := range rec3.msgs {
+		switch m := msg.(type) {
+		case StreamChunkMsg:
+			order = append(order, "stream:"+m.Text)
+		case ThoughtChunkMsg:
+			if m.Text != "" {
+				order = append(order, "thought:"+m.Text)
+			}
+		}
+	}
+	if len(order) < 2 || order[0] != "stream:before " || order[1] != "thought:reasoning" {
+		t.Fatalf("ordering after buffered write = %v, want [stream:before , thought:reasoning, ...]", order)
+	}
 }
