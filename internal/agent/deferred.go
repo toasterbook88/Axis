@@ -747,6 +747,7 @@ func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page in
 }
 
 func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []string, capBytes int) string {
+	const minChunkBytes = 128
 	buildFooter := func(p, total int) string {
 		msg := fmt.Sprintf("Schema part %d/%d for %s.", p, total, name)
 		if p < total {
@@ -754,7 +755,7 @@ func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []strin
 		}
 		return msg
 	}
-	maxChunkDigits := max(999, len(fullLine)/128+1)
+	maxChunkDigits := max(999, len(fullLine)/minChunkBytes+1)
 	worstHeader := fmt.Sprintf("<function-part name=%q page=\"%d\" total_pages=\"%d\">\n", name, maxChunkDigits, maxChunkDigits)
 	const closeTag = "\n</function-part>"
 	// Use p < total so worstFooter reserves the non-final continuation hint bytes.
@@ -763,9 +764,13 @@ func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []strin
 	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/4))
 	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)
 	chunkCap := capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2 - notesSectionLen(fittedNotes, true)
-	if chunkCap < 128 {
+	if chunkCap < minChunkBytes {
 		fittedNotes = nil
-		chunkCap = max(128, capBytes-len(worstHeader)-len(closeTag)-len(worstFooter)-2)
+		chunkCap = capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2
+	}
+	if chunkCap < minChunkBytes {
+		const notice = "Tool schema metadata exceeds the output size limit; shorten the MCP server or tool name before retrying."
+		return truncateUTF8WithSuffix(notice, capBytes, "…")
 	}
 
 	chunks := splitUTF8ByMaxBytes(fullLine, chunkCap)
@@ -929,6 +934,20 @@ func formatDeferredCatalog(entries []ToolCatalogEntry) string {
 				compactBuf.WriteString("- ")
 				compactBuf.WriteString(e.Def.Function.Name)
 				compactBuf.WriteByte('\n')
+			}
+			if compactBuf.Len() <= deferredCatalogSummaryLimit {
+				return compactBuf.String()
+			}
+			compactBuf.Reset()
+			compactBuf.WriteString(header)
+			for i, e := range entries {
+				line := "- " + e.Def.Function.Name + "\n"
+				notice := fmt.Sprintf("%d deferred tools omitted from this catalog; use tool_search to search all deferred tools.\n", len(entries)-i)
+				if compactBuf.Len()+len(line)+len(notice) > deferredCatalogSummaryLimit {
+					compactBuf.WriteString(notice)
+					break
+				}
+				compactBuf.WriteString(line)
 			}
 			return compactBuf.String()
 		}
