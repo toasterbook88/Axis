@@ -22,7 +22,6 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/facts"
-	"github.com/toasterbook88/axis/internal/llmrouter"
 	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
@@ -79,17 +78,6 @@ var doctorProbeOllama = func(ctx context.Context) doctorBackendStatus {
 }
 
 var doctorProbeHTTP = probeDoctorHTTPEndpoint
-
-var doctorProbeAIBackends = func(ctx context.Context, nodes *config.Config) ([]llmrouter.BackendProbe, error) {
-	aiCfg, err := config.LoadAIOrEmpty(config.DefaultAIConfigPath())
-	if err != nil {
-		return nil, err
-	}
-	if aiCfg == nil || len(aiCfg.Backends) == 0 {
-		return nil, nil
-	}
-	return llmrouter.ProbeAllBackendsForNodes(ctx, aiCfg, nil, nodes), nil
-}
 
 const maxDoctorHTTPRedirects = 10
 
@@ -602,44 +590,7 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 	}
 
 	// 4.5 Configured ai.yaml HTTP backends (only emitted when configured or unreadable).
-	aiCtx, aiCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
-	aiProbes, aiErr := doctorProbeAIBackends(aiCtx, cfg)
-	aiCancel()
-	if aiErr != nil {
-		checks = append(checks, DoctorCheck{
-			Name:    "AI Config",
-			Status:  "warn",
-			Message: fmt.Sprintf("Failed to load ai.yaml: %v", aiErr),
-		})
-	} else {
-		for _, p := range aiProbes {
-			targetURL := p.ProbedURL
-			if targetURL == "" {
-				targetURL = p.BaseURL
-			}
-			switch {
-			case !p.Enabled:
-				checks = append(checks, DoctorCheck{
-					Name:    fmt.Sprintf("AI Config: %s", p.Backend),
-					Status:  "pass",
-					Message: "disabled",
-				})
-			case p.OK:
-				checks = append(checks, DoctorCheck{
-					Name:    fmt.Sprintf("AI Config: %s", p.Backend),
-					Status:  "pass",
-					Message: fmt.Sprintf("%s (%s)", targetURL, p.Message),
-				})
-			default:
-				checks = append(checks, DoctorCheck{
-					Name:    fmt.Sprintf("AI Config: %s", p.Backend),
-					Status:  "warn",
-					Message: fmt.Sprintf("%s (%s)", targetURL, p.Message),
-					Fix:     "verify backend service, DNS/Tailscale reachability, and ~/.axis/ai.yaml",
-				})
-			}
-		}
-	}
+	checks = append(checks, doctorAIConfigChecks(cmd.Context(), cfg)...)
 
 	// 5. Services stuck in a restart loop are "activating", never "failed",
 	// so only their restart counters show them.

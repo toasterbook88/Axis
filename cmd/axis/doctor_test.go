@@ -782,6 +782,12 @@ func TestDoctorChecksConfiguredAIBackends(t *testing.T) {
 				ProbedURL: "https://down.example.com/v1/models",
 				Message:   "HTTP 502",
 			},
+			{
+				Backend: "hub-skipped",
+				Enabled: true,
+				Skipped: true,
+				Message: "probe skipped: context deadline exceeded",
+			},
 		}, nil
 	}
 	t.Cleanup(func() { doctorProbeAIBackends = prevAI })
@@ -798,5 +804,22 @@ func TestDoctorChecksConfiguredAIBackends(t *testing.T) {
 	}
 	if !strings.Contains(out, "AI Config: hub-down") || !strings.Contains(out, "HTTP 502") {
 		t.Fatalf("expected hub-down warn check, got:\n%s", out)
+	}
+	if !strings.Contains(out, "AI Config: hub-skipped") || !strings.Contains(out, "probe skipped") {
+		t.Fatalf("expected hub-skipped warn without probe, got:\n%s", out)
+	}
+	// Skipped rows must not recommend repairing an unobserved backend.
+	if strings.Contains(out, "hub-skipped") && strings.Contains(out, "verify backend service") {
+		// Only fail if the Fix appears on the skipped row's section. The down
+		// backend legitimately carries that Fix; require skipped message without
+		// the Fix appearing immediately after the skipped label.
+		idx := strings.Index(out, "AI Config: hub-skipped")
+		slice := out[idx:]
+		if next := strings.Index(slice[1:], "AI Config:"); next > 0 {
+			slice = slice[:next+1]
+		}
+		if strings.Contains(slice, "verify backend service") {
+			t.Fatalf("skipped backend must not carry repair Fix, got:\n%s", slice)
+		}
 	}
 }

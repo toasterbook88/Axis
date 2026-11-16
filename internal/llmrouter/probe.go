@@ -26,6 +26,10 @@ type BackendProbe struct {
 	BaseURL   string        `json:"base_url" yaml:"base_url"`
 	ProbedURL string        `json:"probed_url,omitempty" yaml:"probed_url,omitempty"`
 	OK        bool          `json:"ok" yaml:"ok"`
+	// Skipped is true when this backend was not probed because the caller's
+	// overall context was already done. OK is false and Message explains why;
+	// callers must not treat Skipped as an observed backend failure.
+	Skipped   bool          `json:"skipped,omitempty" yaml:"skipped,omitempty"`
 	Latency   time.Duration `json:"latency" yaml:"latency"`
 	Message   string        `json:"message,omitempty" yaml:"message,omitempty"`
 	Models    []string      `json:"models,omitempty" yaml:"models,omitempty"`
@@ -118,15 +122,46 @@ func ProbeAllBackends(ctx context.Context, cfg *config.AIConfig, client *http.Cl
 
 // ProbeAllBackendsForNodes probes each backend sequentially, resolving
 // backend node bindings against nodes.yaml when available.
+//
+// Each enabled backend gets its own defaultProbeTimeout budget derived with
+// context.WithoutCancel so a slow earlier backend cannot cancel later probes
+// via a shared parent deadline. When the caller's context is already done
+// before a backend starts, that backend is recorded as Skipped instead of
+// probed, and remaining backends are skipped the same way.
 func ProbeAllBackendsForNodes(ctx context.Context, cfg *config.AIConfig, client *http.Client, nodes *config.Config) []BackendProbe {
 	if cfg == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	out := make([]BackendProbe, 0, len(cfg.Backends))
 	for _, b := range cfg.Backends {
-		out = append(out, ProbeBackendForNodes(ctx, b, client, nodes))
+		if err := ctx.Err(); err != nil {
+			out = append(out, skippedBackendProbe(b, err))
+			continue
+		}
+		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultProbeTimeout)
+		out = append(out, ProbeBackendForNodes(probeCtx, b, client, nodes))
+		cancel()
 	}
 	return out
+}
+
+func skippedBackendProbe(b config.AIBackendConfig, err error) BackendProbe {
+	msg := "probe skipped"
+	if err != nil {
+		msg = "probe skipped: " + err.Error()
+	}
+	return BackendProbe{
+		Backend: b.Name,
+		Kind:    b.Kind,
+		BaseURL: b.BaseURL,
+		Node:    b.Node,
+		Enabled: b.IsEnabled(),
+		Skipped: true,
+		Message: msg,
+	}
 }
 
 func resolveBackendAPIKey(b config.AIBackendConfig) string {
