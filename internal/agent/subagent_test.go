@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/toasterbook88/axis/internal/chat"
 )
@@ -72,6 +73,73 @@ func TestSpawnSubagentAsync(t *testing.T) {
 	}
 	if !strings.Contains(out, "started in background") || !strings.Contains(out, "bg-1") {
 		t.Fatalf("expected async task response, got: %q", out)
+	}
+}
+
+func TestSpawnSubagentSilenceIsNotCompletion(t *testing.T) {
+	for _, answer := range []string{"", "   ", "\n\t"} {
+		parent := New(Config{
+			Backend:     &subAgentBackend{answer: answer},
+			MaxTurns:    2,
+			MaxTokens:   4096,
+			Output:      io.Discard,
+			Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
+			ToolContext: NewToolContext(&RuntimeView{}, nil),
+		})
+		out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+			"prompt":      "report the result",
+			"target_node": "lab-5",
+		})))
+		if err == nil || !strings.Contains(err.Error(), "no final answer") {
+			t.Fatalf("answer %q: got %v", answer, err)
+		}
+		if out != "" {
+			t.Fatalf("answer %q: parent invented %q", answer, out)
+		}
+	}
+}
+
+func TestSpawnSubagentAsyncSilenceFailsTheTask(t *testing.T) {
+	parent := New(Config{
+		Backend:     &subAgentBackend{answer: "  "},
+		MaxTurns:    2,
+		MaxTokens:   4096,
+		Output:      io.Discard,
+		Confirm:     func(_, _ string, _ int) ConfirmResult { return ConfirmYes },
+		ToolContext: NewToolContext(&RuntimeView{}, nil),
+	})
+	out, err := parent.dispatchSubagent(context.Background(), json.RawMessage(mustJSON(t, map[string]any{
+		"prompt": "report the result",
+		"async":  true,
+	})))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(out, "started in background") {
+		t.Fatalf("expected start notice, got %q", out)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	var state bgTaskState
+	for {
+		task, ok := parent.backgroundTasks.get("bg-1")
+		if ok {
+			state = task.currentState()
+			if state != bgTaskRunning {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background task did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if state != bgTaskFailed {
+		t.Fatalf("state = %v, want failed", state)
+	}
+	task, _ := parent.backgroundTasks.get("bg-1")
+	_, output := task.snapshot()
+	if !strings.Contains(output, "no final answer") {
+		t.Fatalf("output = %q", output)
 	}
 }
 
