@@ -527,3 +527,76 @@ func TestStreamWriterWriteThoughtEmitsOutOfBandThoughtChunks(t *testing.T) {
 		t.Fatalf("ordering after buffered write = %v, want [stream:before , thought:reasoning, ...]", order)
 	}
 }
+
+func TestStreamWriterThoughtEdgeCases(t *testing.T) {
+	// Nil sender must be tolerated across thought and close lifecycle calls.
+	nilW := NewStreamWriter(nil, 1)
+	nilTW := nilW.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	nilTW.WriteThought("ignored")
+	nilTW.CloseThought()
+	_ = nilW.Close()
+
+	// Empty WriteThought, redundant CloseThought outside thought, and post-Close calls emit nothing extra.
+	rec := &concurrentSender{}
+	w := NewStreamWriter(rec, 1)
+	tw := w.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	tw.CloseThought()
+	tw.WriteThought("")
+	if len(rec.msgs) != 0 {
+		t.Fatalf("empty/redundant thought calls emitted %v", rec.msgs)
+	}
+	tw.WriteThought("step")
+	_ = w.Close()
+	tw.WriteThought("after close")
+	tw.CloseThought()
+	if err := w.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	var doneCount int
+	for _, msg := range rec.msgs {
+		if tc, ok := msg.(ThoughtChunkMsg); ok {
+			if tc.Text == "after close" {
+				t.Fatalf("post-Close WriteThought leaked: %+v", tc)
+			}
+			if tc.Done {
+				doneCount++
+			}
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("doneCount = %d, want 1", doneCount)
+	}
+
+	// Trailing incomplete UTF-8 sequence written before WriteThought must not split mid-rune.
+	recUTF := &concurrentSender{}
+	wUTF := NewStreamWriter(recUTF, 2)
+	twUTF := wUTF.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	// "ok" + first 2 bytes of 4-byte emoji U+1F680 (F0 9F 9A 80)
+	if _, err := wUTF.Write([]byte{'o', 'k', 0xF0, 0x9F}); err != nil {
+		t.Fatalf("Write prefix: %v", err)
+	}
+	twUTF.WriteThought("think")
+	if _, err := wUTF.Write([]byte{0x9A, 0x80}); err != nil {
+		t.Fatalf("Write suffix: %v", err)
+	}
+	_ = wUTF.Close()
+
+	var streamed strings.Builder
+	for _, msg := range recUTF.msgs {
+		if sc, ok := msg.(StreamChunkMsg); ok {
+			streamed.WriteString(sc.Text)
+		}
+	}
+	if streamed.String() != "ok🚀" {
+		t.Fatalf("reassembled UTF-8 stream = %q, want %q", streamed.String(), "ok🚀")
+	}
+}

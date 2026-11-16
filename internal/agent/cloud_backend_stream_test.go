@@ -824,3 +824,156 @@ func TestCloudBackend_Anthropic_ThinkingDeltaStreamsToThoughtWriterOnly(t *testi
 		t.Fatal("expected CloseThought to be called")
 	}
 }
+
+func TestCloudBackend_OpenAI_UnrecognizedNonField4xxDoesNotRetry(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Error(w, `{"error":{"message":"invalid api key or model quota exceeded"}}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "strict", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+
+	_, err = b.ChatStream(WithDisableThinking(context.Background()), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "http status 400") {
+		t.Fatalf("err = %v, want http status 400", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (unrecognized 400 must not retry)", calls)
+	}
+	if b.noStreamUsage.Load() || b.noChatTemplateKwargs.Load() {
+		t.Fatalf("sticky flags mutated unexpectedly: noStreamUsage=%v noChatTemplateKwargs=%v",
+			b.noStreamUsage.Load(), b.noChatTemplateKwargs.Load())
+	}
+}
+
+func TestCloudBackend_OpenAI_StickyFallbacksPersistAcrossCalls(t *testing.T) {
+	var callBodies []map[string]any
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		callBodies = append(callBodies, body)
+		mu.Unlock()
+
+		if _, has := body["stream_options"]; has {
+			http.Error(w, `{"error":{"message":"unknown parameter stream_options"}}`, http.StatusBadRequest)
+			return
+		}
+		if _, has := body["chat_template_kwargs"]; has {
+			http.Error(w, `{"error":{"message":"unsupported enable_thinking"}}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "strict", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+
+	ctx := WithDisableThinking(context.Background())
+	if _, err := b.ChatStream(ctx, []chat.Message{{Role: chat.RoleUser, Content: "first"}}, nil, io.Discard); err != nil {
+		t.Fatalf("first ChatStream: %v", err)
+	}
+	if _, err := b.ChatStream(ctx, []chat.Message{{Role: chat.RoleUser, Content: "second"}}, nil, io.Discard); err != nil {
+		t.Fatalf("second ChatStream: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(callBodies) != 4 {
+		t.Fatalf("total HTTP calls = %d, want 4 (3 on first call, 1 on second)", len(callBodies))
+	}
+	secondCallBody := callBodies[3]
+	if _, has := secondCallBody["stream_options"]; has {
+		t.Fatalf("second ChatStream unexpectedly re-sent stream_options: %v", secondCallBody)
+	}
+	if _, has := secondCallBody["chat_template_kwargs"]; has {
+		t.Fatalf("second ChatStream unexpectedly re-sent chat_template_kwargs: %v", secondCallBody)
+	}
+}
+
+func TestCloudBackend_OpenAI_EmptyReasoningContentFallsBackToReasoning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// ReasoningContent takes precedence when non-empty; when empty string "", fall back to Reasoning.
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"primary \",\"reasoning\":\"ignored\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"reasoning\":\"secondary\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ans\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	b, err := NewOpenAICompatibleBackend(server.URL, "test-reasoning-model", "")
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	sink := &recordingThoughtSink{}
+	resp, err := b.ChatStream(context.Background(), []chat.Message{{Role: chat.RoleUser, Content: "hi"}}, nil, sink)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.Content != "ans" || sink.buf.String() != "ans" {
+		t.Fatalf("resp=%q visible=%q, want ans", resp.Content, sink.buf.String())
+	}
+	if got := strings.Join(sink.thoughts, ""); got != "primary secondary" {
+		t.Fatalf("thoughts = %q, want %q", got, "primary secondary")
+	}
+}
+
+func TestIdleGuardEdgeCases_DisabledNilParentAndIdempotentClose(t *testing.T) {
+	// Zero and negative timeouts leave timer nil and never trip an idle deadline.
+	var nilCtx context.Context
+	if !thinkingDisabledFromContext(WithDisableThinking(nilCtx)) {
+		t.Fatal("WithDisableThinking(nil) should return a disabled context")
+	}
+	for _, d := range []time.Duration{0, -10 * time.Millisecond} {
+		g := newStreamIdleGuard(nilCtx, d)
+		if g.timer != nil {
+			g.Close()
+			t.Fatalf("timeout=%s unexpectedly armed timer", d)
+		}
+		g.touch()
+		time.Sleep(10 * time.Millisecond)
+		if g.ctx.Err() != nil {
+			g.Close()
+			t.Fatalf("disabled guard timeout=%s canceled: %v", d, g.ctx.Err())
+		}
+		g.Close()
+		g.Close() // idempotent
+	}
+
+	// Nil guard helpers must not panic.
+	var nilGuard *streamIdleGuard
+	nilGuard.touch()
+	nilGuard.Close()
+	if err := nilGuard.wrapErr("prefix", context.Background(), errors.New("boom")); err == nil || !strings.Contains(err.Error(), "prefix: boom") {
+		t.Fatalf("nilGuard wrapErr = %v, want prefix: boom", err)
+	}
+
+	// Even if expired is set, if parent context was canceled, wrapErr must preserve caller cancel rather than misreporting idle timeout.
+	parent, cancelParent := context.WithCancel(context.Background())
+	g := newStreamIdleGuard(parent, 5*time.Millisecond)
+	select {
+	case <-g.ctx.Done():
+	case <-time.After(time.Second):
+		g.Close()
+		cancelParent()
+		t.Fatal("timed out waiting for idle expiry")
+	}
+	cancelParent()
+	wrapped := g.wrapErr("stream read", parent, context.Canceled)
+	g.Close()
+	if strings.Contains(wrapped.Error(), "stream idle timeout") || !errors.Is(wrapped, context.Canceled) {
+		t.Fatalf("wrapErr with canceled parent = %v, want context.Canceled without idle timeout", wrapped)
+	}
+}
