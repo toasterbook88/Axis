@@ -83,6 +83,16 @@ func (h *Handler) HandleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "skillId is required")
 		return
 	}
+	// A client may describe a non-terminal annotation. It may not assert the
+	// assignee's terminal state. Silence is not completion, and a working
+	// annotation must not hide a nested completed claim. Refuse before the
+	// task is stored.
+	if st, ok := clientAssertedState(req); ok {
+		if err := AllowTerminalReport(ActorClient, st); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	principal := PrincipalHashFromRequest(r)
 	now := h.Now()
@@ -152,6 +162,10 @@ func (h *Handler) HandleSend(w http.ResponseWriter, r *http.Request) {
 		Name:  name,
 		Parts: []Part{{Type: "text", Text: text}},
 	}}
+	if err := AllowTerminalReport(ActorAssignee, TaskStateCompleted); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	task.Status = TaskStatus{
 		State:     TaskStateCompleted,
 		Timestamp: h.Now(),

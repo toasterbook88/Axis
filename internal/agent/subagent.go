@@ -112,7 +112,10 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 			defer cancel()
 			err := child.Run(taskCtx, sa.Prompt)
 			answer := finalAssistantText(child.conv)
-			if answer != "" {
+			if err == nil && strings.TrimSpace(answer) == "" {
+				err = subAgentNoAnswerError()
+			}
+			if strings.TrimSpace(answer) != "" {
 				task.appendOutput([]byte(answer))
 			}
 			if err != nil {
@@ -138,12 +141,19 @@ func (a *Agent) dispatchSubagent(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("sub-agent failed: %w", err)
 	}
 
-	// Extract the child's final assistant text answer.
+	// Extract the child's final assistant text answer. Empty text is not
+	// completion: the parent must not invent an answer the child did not give.
 	answer := finalAssistantText(child.conv)
 	if strings.TrimSpace(answer) == "" {
-		return "(sub-agent completed without a final text answer)", nil
+		return "", subAgentNoAnswerError()
 	}
 	return answer, nil
+}
+
+// subAgentNoAnswerError is the failure used when a child run ends with no
+// final assistant text. Callers must not replace it with a synthesized answer.
+func subAgentNoAnswerError() error {
+	return fmt.Errorf("sub-agent returned no final answer; the parent must not invent one")
 }
 
 // buildChildAgent constructs a scoped child Agent for spawn_subagent.
