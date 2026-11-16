@@ -66,7 +66,7 @@ func agentCmd() *cobra.Command {
 		Use:   "agent [instruction...]",
 		Short: "Agentic tool-calling assistant",
 		Long: "Run an AI agent that can call AXIS tools to answer cluster questions.\n\n" +
-			"The agent uses the Ollama /api/chat endpoint with tool calling.\n" +
+			"The agent uses local Ollama (/api/chat) or configured cloud providers (--provider, --cloud-model) with tool calling.\n" +
 			"It can run read-only cluster queries (status, facts, placement) and\n" +
 			"execute shell commands through guarded AXIS execution with operator confirmation.\n\n" +
 			"Agent output is advisory only — it is a consumer of the fact plane,\n" +

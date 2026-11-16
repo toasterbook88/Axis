@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -703,34 +704,28 @@ func runModelStart(ctx context.Context, cmd *cobra.Command, nodeName, weights st
 
 	for _, res := range nf.ResidentModels {
 		if res.Port == profile.Port {
-			receipt := models.ModelOperationReceipt{
-				Schema:         "axis.model-operation/v1",
-				ID:             models.GenerateID("mo"),
-				Action:         models.ModelOperationStart,
-				Status:         models.ModelOperationRejected,
-				Disposition:    "port_occupied",
-				Node:           nf.Name,
-				Engine:         profile.Engine,
-				Port:           profile.Port,
-				SnapshotSource: source,
-				SnapshotAt:     snap.Timestamp,
-				StartedAt:      startedAt,
-				CompletedAt:    time.Now().UTC(),
-				Error:          fmt.Sprintf("port %d already occupied by resident model %q (%s)", profile.Port, res.Name, res.Runtime),
-			}
-			if snap.Publication != nil {
-				receipt.PublicationID = snap.Publication.ID
-			}
-			_ = writeModelStartReceipt(cmd, receipt, format)
-			return ExitCodeError{
-				Code:    ExitErrCommandFail,
-				Message: fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, profile.Port, receipt.Error),
-			}
+			errMsg := fmt.Sprintf("port %d already occupied by resident model %q (%s)", profile.Port, res.Name, res.Runtime)
+			exitMsg := fmt.Sprintf("refusing to start model on %s:%d: %s", nf.Name, profile.Port, errMsg)
+			return rejectModelStart(cmd, snap, source, nf, profile, nil, startedAt, "port_occupied", errMsg, exitMsg, format)
 		}
 	}
 
 	if profile.Engine == models.EngineMLX {
 		return placeMLXModel(ctx, cmd, nf, cfgNode, profile, source, snap, startedAt, format)
+	}
+
+	if gpuIdx, res, freeGPU, occupied := findResidentGPUConflict(nf, profile); occupied {
+		portDetail := ""
+		if res.Port > 0 {
+			portDetail = fmt.Sprintf(" on port %d", res.Port)
+		}
+		hint := ""
+		if freeGPU != nil {
+			hint = fmt.Sprintf("; pass --main-gpu %d to target a free GPU", *freeGPU)
+		}
+		errMsg := fmt.Sprintf("GPU %d already occupied by resident model %q (%s%s)%s", gpuIdx, res.Name, res.Runtime, portDetail, hint)
+		exitMsg := fmt.Sprintf("refusing to start model on %s GPU %d: %s", nf.Name, gpuIdx, errMsg)
+		return rejectModelStart(cmd, snap, source, nf, profile, &gpuIdx, startedAt, "gpu_occupied", errMsg, exitMsg, format)
 	}
 
 	plan, err := modellife.PlanStartProfile(nf, profile)
@@ -2248,4 +2243,116 @@ func classifyModelStop(out string, err error) (modelStopDisposition, error) {
 		return "", err
 	}
 	return "", fmt.Errorf("model stop produced no recognizable result marker")
+}
+
+func rejectModelStart(
+	cmd *cobra.Command,
+	snap *models.ClusterSnapshot,
+	source string,
+	nf models.NodeFacts,
+	profile models.ModelRunProfile,
+	deviceIdx *int,
+	startedAt time.Time,
+	disposition, errMsg, exitMsg, format string,
+) error {
+	receipt := models.ModelOperationReceipt{
+		Schema:         "axis.model-operation/v1",
+		ID:             models.GenerateID("mo"),
+		Action:         models.ModelOperationStart,
+		Status:         models.ModelOperationRejected,
+		Disposition:    disposition,
+		Node:           nf.Name,
+		Engine:         profile.Engine,
+		Port:           profile.Port,
+		DeviceIndex:    deviceIdx,
+		SnapshotSource: source,
+		SnapshotAt:     snap.Timestamp,
+		StartedAt:      startedAt,
+		CompletedAt:    time.Now().UTC(),
+		Error:          errMsg,
+	}
+	if snap.Publication != nil {
+		receipt.PublicationID = snap.Publication.ID
+	}
+	_ = writeModelStartReceipt(cmd, receipt, format)
+	return ExitCodeError{
+		Code:    ExitErrCommandFail,
+		Message: exitMsg,
+	}
+}
+
+func findResidentGPUConflict(nf models.NodeFacts, profile models.ModelRunProfile) (int, models.ResidentModel, *int, bool) {
+	var targetGPU int
+	if profile.DeviceIndex != nil {
+		targetGPU = *profile.DeviceIndex
+	} else {
+		dev := models.ObserveLaunchDevice(nf)
+		if dev.Kind != models.DeviceKindDiscrete {
+			return 0, models.ResidentModel{}, nil, false
+		}
+		targetGPU = defaultDiscreteGPUIndex(nf)
+	}
+
+	for _, res := range nf.ResidentModels {
+		if !slices.Contains(res.GPUIndices, targetGPU) {
+			continue
+		}
+		var free *int
+		if profile.DeviceIndex == nil {
+			free = firstFreeDiscreteGPUIndex(nf)
+		}
+		return targetGPU, res, free, true
+	}
+	return 0, models.ResidentModel{}, nil, false
+}
+
+func isDiscreteGPU(gpu models.GPUInfo) bool {
+	return gpu.HasCapability("cuda") || gpu.HasCapability("rocm") ||
+		strings.EqualFold(gpu.Vendor, "nvidia") || strings.EqualFold(gpu.Vendor, "amd")
+}
+
+func defaultDiscreteGPUIndex(nf models.NodeFacts) int {
+	if nf.Resources == nil {
+		return 0
+	}
+	var firstObserved *int
+	for _, gpu := range nf.Resources.GPUs {
+		if !isDiscreteGPU(gpu) || gpu.Index == nil {
+			continue
+		}
+		if *gpu.Index == 0 {
+			return 0
+		}
+		if firstObserved == nil {
+			idx := *gpu.Index
+			firstObserved = &idx
+		}
+	}
+	if firstObserved != nil {
+		return *firstObserved
+	}
+	return 0
+}
+
+func firstFreeDiscreteGPUIndex(nf models.NodeFacts) *int {
+	if nf.Resources == nil {
+		return nil
+	}
+	for _, gpu := range nf.Resources.GPUs {
+		if !isDiscreteGPU(gpu) || gpu.Index == nil {
+			continue
+		}
+		occupied := false
+		for _, res := range nf.ResidentModels {
+			if slices.Contains(res.GPUIndices, *gpu.Index) {
+				occupied = true
+				break
+			}
+		}
+		if !occupied {
+			idx := *gpu.Index
+			return &idx
+		}
+	}
+	return nil
 }

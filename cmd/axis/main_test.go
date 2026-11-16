@@ -9,6 +9,7 @@ import (
 
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/git"
+	"github.com/toasterbook88/axis/internal/llmrouter"
 )
 
 func TestMain(m *testing.M) {
@@ -38,6 +39,10 @@ func TestMain(m *testing.M) {
 	notInstalled := func(context.Context) doctorBackendStatus { return doctorBackendStatus{Installed: false} }
 	doctorProbeOllama = notInstalled
 	doctorProbeLlamaServer = notInstalled
+	prevAI := doctorProbeAIBackends
+	doctorProbeAIBackends = func(context.Context, *config.Config) ([]llmrouter.BackendProbe, error) {
+		return nil, nil
+	}
 	// A2A task delegate loads or generates tokens; stub globally so unit tests
 	// do not mutate ~/.axis or fail in hermetic/read-only test environments.
 	prevToken := loadAPIToken
@@ -67,6 +72,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	doctorProbeRestartLoops = prevLoops
+	doctorProbeAIBackends = prevAI
 	restartServiceDeps = prevServiceDeps
 	_ = os.RemoveAll(serviceHome)
 	loadAPIToken = prevToken

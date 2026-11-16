@@ -91,7 +91,7 @@ The live repo currently contains:
 - Exact-scope execution observations in persisted local state, separate from failure memory, with mandatory wall time and best-effort RAM/VRAM peaks when directly observed; when a non-empty model name is known, observation scopes are keyed per model so different models on the same node accumulate independent empirical histories, and when no model name is known they intentionally fall back to the legacy non-model key for backward compatibility
 - Hard empirical filter in placement: nodes whose freshly-observed `ObservedRSSMB` exceeds current allocatable RAM are excluded from `FilterCandidates` before ranking begins
 - `axis status` renders a RESIDENT MODELS table showing which models are live on each node, grouped by runtime (ollama, llama.cpp, mlx, apple-foundation-models), with stable canonical ordering and `+N more` truncation for wide lists
-- `axis doctor` probes local AI backends (llama-server and MLX) and reports installed/running/port/model-count state as advisory checks; probe errors surface stderr for actionability without blocking core SSH/config checks
+- `axis doctor` probes local AI backends (llama-server and MLX) and configured `~/.axis/ai.yaml` HTTP backends as advisory checks; skipped ai.yaml probes (overall budget spent) warn without a repair Fix; probe errors surface stderr for actionability without blocking core SSH/config checks
 - `axis doctor` reports daemon ownership observationally: duplicate daemons serving one address (`fail`), a daemon running a deleted executable inode (`fail`), a daemon not started by its own systemd service, judged from its cgroup (`warn`, Linux), socket state at `api.DefaultAddr()` — live, stale file, non-socket squatter, missing, and whether the `<addr>.lock` guard is held — and mesh UDP port contention (`warn`). Doctor never kills a process, unlinks a socket, or takes the ownership lock
 - Tombstone immune system: task+node crash history with exponential back-off (24h–7d), automatic placement exclusion, and manual override via ClearTombstone
 - Real Git-aware task routing via tool inference, built-in scripts, and repo-analysis workflows
@@ -151,7 +151,7 @@ Top-level commands currently registered in the binary:
 | `axis context show\|clear` | Inspect or clear placement memory | Uses persisted state |
 | `axis scripts list` | List built-in scripts | Registry includes destructive scripts |
 | `axis skills` | Show learned skills | Uses persisted skill store |
-| `axis doctor` | Validate config, SSH, daemon health/ownership, and local AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, whether a service supervises the daemon, socket ownership, mesh UDP contention, and whether the user service starts at boot or only at login; probes llama-server and MLX as advisory checks; `--strict` promotes daemon failure to core |
+| `axis doctor` | Validate config, SSH, daemon health/ownership, and AI backends | Checks config, TCP probes per node, daemon status; reports daemon process count, executable liveness, whether a service supervises the daemon, socket ownership, mesh UDP contention, and whether the user service starts at boot or only at login; probes llama-server, MLX, and configured ai.yaml HTTP backends as advisory checks; `--strict` promotes daemon failure to core |
 | `axis completion` | Generate shell completions | bash/zsh/fish/powershell |
 
 ## Package Map

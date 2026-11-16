@@ -83,3 +83,28 @@ func TestParseStreamThought(t *testing.T) {
 		t.Fatalf("multi completed stream: inThought=%t, thought=%q, answer=%q", inThought, thought, answer)
 	}
 }
+
+func TestThoughtParsingEdgeCases(t *testing.T) {
+	// Whitespace-only <think> span yields empty thought while preserving trimmed answer.
+	thought, answer := extractThought("<think>   \n\t </think>Answer")
+	if thought != "" || answer != "Answer" {
+		t.Fatalf("whitespace-only extract: thought=%q, answer=%q", thought, answer)
+	}
+
+	// Empty span followed by populated span keeps only non-empty span.
+	thought, answer, inThought := parseStreamThought("<think></think>  <think>Real</think>Done")
+	if inThought || thought != "Real" || answer != "Done" {
+		t.Fatalf("empty+real stream: inThought=%t, thought=%q, answer=%q", inThought, thought, answer)
+	}
+
+	// Trailing unclosed span after visible text marks inThought true and suppresses partial answer.
+	thought, answer, inThought = parseStreamThought("Mid <think>still thinking")
+	if !inThought || thought != "still thinking" || answer != "" {
+		t.Fatalf("mid+unclosed stream: inThought=%t, thought=%q, answer=%q", inThought, thought, answer)
+	}
+
+	// joinNonEmptyThoughts trims parts and omits empty/blank entries.
+	if got := joinNonEmptyThoughts("", "  \n ", " first ", "  ", "\tsecond\t", ""); got != "first\n\nsecond" {
+		t.Fatalf("joinNonEmptyThoughts = %q, want %q", got, "first\n\nsecond")
+	}
+}

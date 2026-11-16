@@ -62,6 +62,8 @@ func closeThought(w io.Writer) {
 	}
 }
 
+// Write formats markdown backtick spans and streams answer bytes to the
+// underlying io.Writer without altering out-of-band ThoughtWriter routing.
 func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 	cw.buf += string(p)
 
@@ -121,7 +123,8 @@ func (cw *ColorWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// Close flushes any remaining buffered text and resets styles.
+// Close closes any active out-of-band thought span, flushes remaining buffered
+// answer bytes, and resets terminal color styles.
 func (cw *ColorWriter) Close() error {
 	cw.CloseThought()
 	if len(cw.buf) > 0 {
