@@ -28,8 +28,9 @@ func TestFailedTurnAfterCompactionRemovesPromptAndKeepsLogEvidence(t *testing.T)
 		t.Fatal(err)
 	}
 	backend := &compactionThenFailureBackend{}
-	// A budget the fixed prompt fits in, so compaction can make room and runs.
-	a := New(Config{Backend: backend, Model: "test-model", MaxTurns: 2, MaxTokens: 8000, Output: io.Discard, SessionLog: log})
+	// Tool definitions are part of the fixed prompt. 9000 leaves room for
+	// them, so compaction can make room and runs.
+	a := New(Config{Backend: backend, Model: "test-model", MaxTurns: 2, MaxTokens: 9000, Output: io.Discard, SessionLog: log})
 	for i := 0; i < 6; i++ {
 		a.conv.Append(chat.Message{Role: chat.RoleUser, Content: "older prompt"})
 		a.conv.Append(chat.Message{Role: chat.RoleAssistant, Content: "older answer"})
