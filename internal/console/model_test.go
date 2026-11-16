@@ -984,6 +984,69 @@ func TestModelThinkingSpanMeasured(t *testing.T) {
 	}
 }
 
+func TestModelMultiRoundThinkingSpanAccumulates(t *testing.T) {
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	now := base
+	m := NewModel(Options{
+		Submit: func(TurnID, string) tea.Cmd { return nil },
+		Now:    func() time.Time { return now },
+	})
+	m = startTurnFor(t, m)
+
+	now = base.Add(1 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>round 1"})
+	now = base.Add(4 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "</think>"}) // +3s
+	now = base.Add(6 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "<think>round 2"})
+	now = base.Add(7 * time.Second)
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "</think>answer"}) // +1s
+
+	if got := m.thinkingElapsed(); got != 4*time.Second {
+		t.Fatalf("multi-round thinkingElapsed() = %s, want 4s (3s + 1s)", got)
+	}
+
+	m = apply(m, TurnDoneMsg{Turn: 1})
+	if m.lastThought != "round 1\n\nround 2" {
+		t.Fatalf("retained thought = %q, want %q", m.lastThought, "round 1\n\nround 2")
+	}
+	if m.thinkingElapsed() != 0 {
+		t.Fatal("finished turn must reset accumulated thinking elapsed")
+	}
+}
+
+func TestModelOutOfBandThoughtWithLiteralCloseTagStaysOutOfAnswer(t *testing.T) {
+	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	now := base
+	m := NewModel(Options{
+		Submit: func(TurnID, string) tea.Cmd { return nil },
+		Now:    func() time.Time { return now },
+	})
+	m = startTurnFor(t, m)
+
+	now = base.Add(1 * time.Second)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Text: "inspect </think> handling"})
+	now = base.Add(3 * time.Second)
+	m = apply(m, ThoughtChunkMsg{Turn: 1, Done: true})
+	m = apply(m, StreamChunkMsg{Turn: 1, Text: "All clear."})
+
+	updated, out := m.Update(TurnDoneMsg{Turn: 1})
+	done := updated.(Model)
+	if done.lastThought != "inspect </think> handling" {
+		t.Fatalf("lastThought = %q, want verbatim thought including </think>", done.lastThought)
+	}
+	rendered := strings.Join(printed(out), "\n")
+	if !strings.Contains(rendered, "Thought for 2s") {
+		t.Fatalf("missing accumulated duration header:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "~ inspect </think> handling") {
+		t.Fatalf("thought entry missing verbatim literal </think> text:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "* All clear.") || strings.Contains(rendered, "* inspect") {
+		t.Fatalf("unexpected agent answer output:\n%s", rendered)
+	}
+}
+
 func TestThinkingEntryRendersDuration(t *testing.T) {
 	e := NewThinkingEntry(fixedNow(), "deep reasoning\nspanning\nlines")
 	e.Elapsed = 3100 * time.Millisecond
