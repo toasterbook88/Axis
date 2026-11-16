@@ -168,8 +168,4 @@ Head: 05c6d42ed20a4bff046b0f2cf780b7bbb208d89b
 Date: 2026-11-16
 Verdict: approve
 
-No findings or questions. Reviewed the complete diff and specification. The
-hermetic race suites for internal/agent, internal/console and cmd/axis passed
-with Go 1.26.11. Public-boundary, repository-truth, documentation-facts,
-import-tier and specification gates passed. External publication state was not
-verified by the offline repository-truth invocation.
+Note: No findings or questions. Reviewed the complete diff and specification. The hermetic race suites for internal/agent, internal/console and cmd/axis passed with Go 1.26.11. Public-boundary, repository-truth, documentation-facts, import-tier and specification gates passed. External publication state was not verified by the offline repository-truth invocation.
