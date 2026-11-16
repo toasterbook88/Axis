@@ -71,6 +71,35 @@ func TestLiveTurnNamesOutOfBandThinking(t *testing.T) {
 	}
 }
 
+func TestOutOfBandThoughtYieldsToOtherPhases(t *testing.T) {
+	newOOB := func() Model {
+		m := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+		m = startTurnFor(t, m)
+		return apply(m, ThoughtChunkMsg{Turn: 1, Text: "inspecting cluster"})
+	}
+
+	withTool := apply(newOOB(), ToolPendingMsg{Turn: 1, ID: "c1", Name: "axis_status"})
+	if view := withTool.View(); strings.Contains(view, "thinking") || !strings.Contains(view, "axis_status") {
+		t.Fatalf("pending tool should replace out-of-band thinking:\n%s", view)
+	}
+
+	withOverlay := newOOB()
+	withOverlay.overlay = NewApprovalOverlay("run_shell", "echo hi", 22, nil)
+	if lines := withOverlay.liveActivity(); len(lines) != 0 {
+		t.Fatalf("overlay open: live activity %v, want none", lines)
+	}
+
+	cancelling := apply(newOOB(), tea.KeyMsg{Type: tea.KeyEsc})
+	if view := cancelling.View(); strings.Contains(view, "thinking") || !strings.Contains(view, "cancelling") {
+		t.Fatalf("cancelling should replace out-of-band thinking:\n%s", view)
+	}
+
+	doneThinking := apply(newOOB(), ThoughtChunkMsg{Turn: 1, Done: true}, StreamChunkMsg{Turn: 1, Text: "Visible answer"})
+	if view := doneThinking.View(); strings.Contains(view, "thinking") || !strings.Contains(view, "Visible answer") {
+		t.Fatalf("done thinking should yield to visible answer:\n%s", view)
+	}
+}
+
 // A closed thought with no answer says "thinking" only when nothing else
 // describes the turn: not beside a pending tool, an approval overlay, or the
 // cancelling phase.
