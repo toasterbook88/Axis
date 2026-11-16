@@ -303,6 +303,13 @@ func (r *ToolRegistry) formatToolSearchOutput(matched []ToolCatalogEntry, eagerA
 	firstBlock := wrapFunctionsBlock([]string{validLines[0]})
 	notesCap := max(256, capBytes/4)
 	boundedNotes := fitToolSearchNotes(baseNotes, notesCap)
+	if len(fullBlock)+notesSectionLen(boundedNotes, true) <= capBytes {
+		if page <= 1 {
+			return joinToolSearchSections(fullBlock, boundedNotes, capBytes)
+		}
+		notice := fmt.Sprintf("All %d matched schema(s) fit on page 1 (requested page %d has no further results).", len(validEntries), page)
+		return joinToolSearchSections(notice, boundedNotes, capBytes)
+	}
 
 	if len(validEntries) == 1 || len(firstBlock)+oversizedSingleOverhead(validEntries[0].Def.Function.Name)+notesSectionLen(boundedNotes, true) > capBytes {
 		extraNotes := append([]string(nil), boundedNotes...)
@@ -566,17 +573,17 @@ func formatPaginatedToolList(entries []ToolCatalogEntry, lines []string, page in
 	}
 
 	sel := pages[page-1]
+	var primary string
 	if sel.oversizedIdx >= 0 {
 		name := entries[sel.oversizedIdx].Def.Function.Name
-		msg := fmt.Sprintf("Schema for %s exceeds multi-tool page limit (page %d/%d). Query tool_search(query=\"select:%s\", page=1) to page through its full schema.", name, page, len(pages), name)
-		return joinToolSearchSections(msg, baseNotes, capBytes)
+		primary = fmt.Sprintf("Schema for %s exceeds multi-tool page limit (page %d/%d). Query tool_search(query=\"select:%s\", page=1) to page through its full schema.", name, page, len(pages), name)
+	} else {
+		selLines := make([]string, len(sel.indices))
+		for k, idx := range sel.indices {
+			selLines[k] = lines[idx]
+		}
+		primary = wrapFunctionsBlock(selLines)
 	}
-
-	selLines := make([]string, len(sel.indices))
-	for k, idx := range sel.indices {
-		selLines[k] = lines[idx]
-	}
-	block := wrapFunctionsBlock(selLines)
 
 	var remaining []string
 	for pIdx := page; pIdx < len(pages); pIdx++ {
@@ -597,7 +604,7 @@ func formatPaginatedToolList(entries []ToolCatalogEntry, lines []string, page in
 		footer += " " + formatToolListNotice("Remaining matches (or use select:<name>): ", remaining, 140)
 	}
 	notes := append([]string{footer}, baseNotes...)
-	return joinToolSearchSections(block, notes, capBytes)
+	return joinToolSearchSections(primary, notes, capBytes)
 }
 
 func oversizedSingleOverhead(name string) int {
@@ -650,7 +657,8 @@ func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page in
 	}
 
 	maxDigits := max(99, len(propKeys))
-	worstFooter := buildFooter(maxDigits, maxDigits)
+	// Use p < total so worstFooter reserves the non-final continuation hint bytes.
+	worstFooter := buildFooter(maxDigits-1, maxDigits)
 	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/3))
 	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)
 	bodyBudget := capBytes - len(worstFooter) - 2 - notesSectionLen(fittedNotes, true)
@@ -746,9 +754,11 @@ func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []strin
 		}
 		return msg
 	}
-	worstHeader := fmt.Sprintf("<function-part name=%q page=\"999\" total_pages=\"999\">\n", name)
+	maxChunkDigits := max(999, len(fullLine)/128+1)
+	worstHeader := fmt.Sprintf("<function-part name=%q page=\"%d\" total_pages=\"%d\">\n", name, maxChunkDigits, maxChunkDigits)
 	const closeTag = "\n</function-part>"
-	worstFooter := buildFooter(999, 999)
+	// Use p < total so worstFooter reserves the non-final continuation hint bytes.
+	worstFooter := buildFooter(maxChunkDigits-1, maxChunkDigits)
 
 	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/4))
 	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)

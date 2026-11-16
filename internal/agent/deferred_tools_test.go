@@ -752,8 +752,8 @@ func TestToolSearch_OversizedSingleSchemaPaginationEndToEnd(t *testing.T) {
 		t.Fatalf("expected union of all 40 properties across page 1 and 2, got %d", len(seenProps))
 	}
 	p1Out := latestToolMessage(backend.rounds[1].msgs, "ts-1")
-	if !strings.Contains(p1Out, `page=2`) {
-		t.Fatalf("page 1 missing next-page hint: %q", p1Out)
+	if !strings.Contains(p1Out, `Call tool_search(query="select:mcp_example_configure", page=2) for remaining properties before calling tool_call.`) {
+		t.Fatalf("page 1 missing full untruncated next-page hint: %q", p1Out)
 	}
 	p3Out := latestToolMessage(backend.rounds[3].msgs, "ts-3")
 	if !strings.Contains(p3Out, "spans 2 page(s)") {
@@ -880,6 +880,14 @@ func TestToolSearch_ChunkFallbackUTF8EndToEnd(t *testing.T) {
 			bodyEnd := strings.Index(out[bodyStart:], "\n</function-part>") + bodyStart
 			assembled.WriteString(out[bodyStart:bodyEnd])
 			partsSeen++
+			if !strings.Contains(out, fmt.Sprintf("Schema part %d/", partsSeen)) {
+				t.Fatalf("%s missing schema part header: %q", id, out)
+			}
+			// Non-final chunks must keep the complete untruncated page=<next> hint.
+			if strings.Contains(out, fmt.Sprintf(`total_pages="%d"`, partsSeen)) == false &&
+				!strings.Contains(out, fmt.Sprintf(`Call tool_search(query="select:mcp_huge_blob", page=%d) for next part before calling tool_call.`, partsSeen+1)) {
+				t.Fatalf("%s truncated non-final continuation hint: %q", id, out)
+			}
 		}
 	}
 	if partsSeen < 3 {
@@ -888,5 +896,86 @@ func TestToolSearch_ChunkFallbackUTF8EndToEnd(t *testing.T) {
 	fns := extractFunctionPayloads(t, assembled.String())
 	if len(fns) != 1 || fns[0].Description != desc {
 		t.Fatalf("reassembled UTF-8 <function-part> chunks did not reconstruct exact description (parts=%d len=%d want=%d)", partsSeen, len(assembled.String()), len(desc))
+	}
+}
+
+func TestToolSearch_BoundaryContinuationAndNoteIsolation(t *testing.T) {
+	// R2-B F1 tight-pack boundary: 20 properties (~110 B pad) at capBytes=2048
+	// must keep the complete page=2 continuation instruction on page 1.
+	props := make(map[string]any, 20)
+	for i := 1; i <= 20; i++ {
+		props[fmt.Sprintf("p_%02d", i)] = map[string]any{
+			"type":        "string",
+			"description": strings.Repeat("a", 110),
+		}
+	}
+	regProps := mcpclient.NewRegistry()
+	regProps.Add(&mcpclient.ServerConnection{
+		Name:       "prop",
+		InitResult: &mcp.InitializeResult{},
+		Tools: []mcp.Tool{{
+			Name:        "srv_long_tool_name_here",
+			Description: "Tight property boundary probe",
+			InputSchema: mcp.ToolInputSchema{Type: "object", Properties: props, Required: []string{"p_01", "p_20"}},
+		}},
+	})
+	rProps := NewToolRegistry(nil)
+	rProps.RegisterMCPTools(regProps)
+	rProps.SetResultCapBytes(2048)
+	p1PropOut, err := rProps.Execute(context.Background(), toolSearchName, json.RawMessage(`{"query":"select:mcp_prop_srv_long_tool_name_here","page":1}`))
+	if err != nil {
+		t.Fatalf("prop probe failed: %v", err)
+	}
+	if len(p1PropOut) > 2048 || !strings.Contains(p1PropOut, `Call tool_search(query="select:mcp_prop_srv_long_tool_name_here", page=2) for remaining properties before calling tool_call.`) {
+		t.Fatalf("tight-packed property page 1 exceeded cap or truncated next-page hint (len=%d): %q", len(p1PropOut), p1PropOut)
+	}
+
+	// R2-B F2: single tiny tool + 80 missing names under capBytes=2048 keeps normal <functions> output.
+	regSmall := mcpclient.NewRegistry()
+	regSmall.Add(&mcpclient.ServerConnection{
+		Name:       "s",
+		InitResult: &mcp.InitializeResult{},
+		Tools: []mcp.Tool{{
+			Name:        "tiny",
+			Description: "Tiny tool",
+			InputSchema: mcp.ToolInputSchema{Type: "object"},
+		}},
+	})
+	rSmall := NewToolRegistry(nil)
+	rSmall.RegisterMCPTools(regSmall)
+	rSmall.SetResultCapBytes(2048)
+	var misses []string
+	for i := 0; i < 80; i++ {
+		misses = append(misses, fmt.Sprintf("missing_%02d", i))
+	}
+	smallQuery := fmt.Sprintf(`{"query":"select:mcp_s_tiny,%s"}`, strings.Join(misses, ","))
+	smallOut, err := rSmall.Execute(context.Background(), toolSearchName, json.RawMessage(smallQuery))
+	if err != nil {
+		t.Fatalf("small+misses failed: %v", err)
+	}
+	if len(smallOut) > 2048 || strings.Contains(smallOut, "<function-part") || !strings.Contains(smallOut, "<functions>\n<function>") {
+		t.Fatalf("tiny tool with large baseNotes should emit normal <functions> block within 2048 B, got (len=%d): %q", len(smallOut), smallOut)
+	}
+
+	// R2-B F3: multi-tool query hitting an oversized entry preserves page=2 + Remaining matches footer.
+	regMulti := mcpclient.NewRegistry()
+	regMulti.Add(&mcpclient.ServerConnection{
+		Name:       "p",
+		InitResult: &mcp.InitializeResult{},
+		Tools: []mcp.Tool{
+			{Name: "t0", Description: "first", InputSchema: mcp.ToolInputSchema{Type: "object"}},
+			{Name: "t1", Description: strings.Repeat("b", 1800), InputSchema: mcp.ToolInputSchema{Type: "object"}},
+			{Name: "t2", Description: "third", InputSchema: mcp.ToolInputSchema{Type: "object"}},
+		},
+	})
+	rMulti := NewToolRegistry(nil)
+	rMulti.RegisterMCPTools(regMulti)
+	rMulti.SetResultCapBytes(2048)
+	multiOutP2, err := rMulti.Execute(context.Background(), toolSearchName, json.RawMessage(`{"query":"select:mcp_p_t0,mcp_p_t1,mcp_p_t2","page":2}`))
+	if err != nil {
+		t.Fatalf("multi oversizedIdx page 2 failed: %v", err)
+	}
+	if len(multiOutP2) > 2048 || !strings.Contains(multiOutP2, `page=3`) || !strings.Contains(multiOutP2, `mcp_p_t2`) {
+		t.Fatalf("oversizedIdx page 2 missing page=3 or remaining mcp_p_t2 notice (len=%d): %q", len(multiOutP2), multiOutP2)
 	}
 }
