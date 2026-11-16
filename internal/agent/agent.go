@@ -178,6 +178,7 @@ func New(cfg Config) *Agent {
 	tools.SetScope(ScopeFor(cfg.Autonomy))
 	tools.SetEagerTools(cfg.EagerTools)
 	tools.SetDisableDeferral(cfg.DisableToolDeferral)
+	tools.SetResultCapBytes(chat.ToolResultCap(cfg.MaxTokens))
 	if cfg.MCPRegistry != nil {
 		tools.RegisterMCPTools(cfg.MCPRegistry)
 	}

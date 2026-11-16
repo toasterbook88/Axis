@@ -50,6 +50,9 @@ type ToolRegistry struct {
 	// disableDeferral forces all permitted non-bridge tools into Defs() and omits
 	// the tool_search/tool_call bridge, taking precedence over eagerAllowlist.
 	disableDeferral bool
+	// resultCapBytes mirrors Conversation's RoleTool byte cap so tool_search
+	// returns complete or cleanly paginated schemas without mid-JSON truncation.
+	resultCapBytes int
 }
 
 // mcpAutoApprovedTool reports whether name is an external MCP tool the
@@ -129,6 +132,23 @@ func (r *ToolRegistry) SetDisableDeferral(disable bool) {
 		return
 	}
 	r.disableDeferral = disable
+}
+
+// SetResultCapBytes sets the output byte budget used by tool_search to keep
+// returned schemas within Conversation's tool-result cap. Non-positive values
+// use chat.ToolResultCap(0).
+func (r *ToolRegistry) SetResultCapBytes(limit int) {
+	if r == nil {
+		return
+	}
+	r.resultCapBytes = limit
+}
+
+func (r *ToolRegistry) toolSearchCapBytes() int {
+	if r != nil && r.resultCapBytes > 0 {
+		return r.resultCapBytes
+	}
+	return chat.ToolResultCap(0)
 }
 
 // allowExtra grants visibility for a dynamically registered tool that is

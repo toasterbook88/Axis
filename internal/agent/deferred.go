@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/toasterbook88/axis/internal/chat"
 )
@@ -84,13 +85,14 @@ func (r *ToolRegistry) registerDeferredBridgeTools() {
 	r.add(toolSearchName,
 		"Search deferred tools and return their full JSON schemas without changing the active tool declarations. "+
 			"Use \"select:ToolA,ToolB\" for exact tools listed under Deferred tools, or space-separated keywords "+
-			"(prefix a term with + to require it in the tool name). Inspect the returned <functions> schema, then "+
-			"invoke deferred tools via tool_call.",
+			"(prefix a term with + to require it in the tool name). Pass page to continue paginated results or "+
+			"oversized schemas. Inspect the returned schema, then invoke deferred tools via tool_call.",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{
 				"query":{"type":"string","description":"Query string: \"select:<tool_name>[,<tool_name>...]\" or space-separated keywords (+word required in name)."},
-				"max_results":{"type":"integer","description":"Maximum number of matched schemas to return (1-20, default 5).","minimum":1,"maximum":20}
+				"max_results":{"type":"integer","description":"Maximum number of matched schemas to return (1-20, default 5).","minimum":1,"maximum":20},
+				"page":{"type":"integer","description":"1-indexed page when results or an oversized schema span multiple pages (default 1).","minimum":1}
 			},
 			"required":["query"]
 		}`),
@@ -121,6 +123,7 @@ func (r *ToolRegistry) registerDeferredBridgeTools() {
 type toolSearchArgs struct {
 	Query      string `json:"query"`
 	MaxResults int    `json:"max_results,omitempty"`
+	Page       int    `json:"page,omitempty"`
 }
 
 type toolSearchFunction struct {
@@ -129,6 +132,8 @@ type toolSearchFunction struct {
 	Parameters  json.RawMessage `json:"parameters"`
 	Deferred    bool            `json:"deferred"`
 	Server      string          `json:"server,omitempty"`
+	SchemaPage  int             `json:"schema_page,omitempty"`
+	SchemaPages int             `json:"schema_pages,omitempty"`
 }
 
 var toolSearchStopWords = map[string]bool{
@@ -164,9 +169,10 @@ func (r *ToolRegistry) execToolSearch(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("tool_search requires a non-empty \"query\" argument")
 	}
 	maxResults := clampToolSearchResults(sa.MaxResults)
+	page := max(1, sa.Page)
 
 	if strings.HasPrefix(strings.ToLower(query), "select:") {
-		return r.execToolSearchSelect(query[len("select:"):], maxResults)
+		return r.execToolSearchSelect(query[len("select:"):], maxResults, page)
 	}
 
 	requiredTerms, searchTerms := tokenizeToolSearchQuery(query)
@@ -204,10 +210,10 @@ func (r *ToolRegistry) execToolSearch(args json.RawMessage) (string, error) {
 	for _, h := range hits {
 		matched = append(matched, h.entry)
 	}
-	return r.formatToolSearchOutput(matched, nil, nil, nil, nil), nil
+	return r.formatToolSearchOutput(matched, nil, nil, nil, nil, page), nil
 }
 
-func (r *ToolRegistry) execToolSearchSelect(rawList string, maxResults int) (string, error) {
+func (r *ToolRegistry) execToolSearchSelect(rawList string, maxResults, page int) (string, error) {
 	callableNames := r.callableNonBridgeNames()
 	entryMap := r.callableEntryMap()
 
@@ -261,44 +267,507 @@ func (r *ToolRegistry) execToolSearchSelect(rawList string, maxResults int) (str
 	if len(matched) == 0 && len(eagerAlready) == 0 && len(missing) == 0 && len(ambiguous) == 0 {
 		return "", fmt.Errorf("tool_search select: requires at least one tool name")
 	}
-	return r.formatToolSearchOutput(matched, eagerAlready, missing, ambiguous, truncated), nil
+	return r.formatToolSearchOutput(matched, eagerAlready, missing, ambiguous, truncated, page), nil
 }
 
-func (r *ToolRegistry) formatToolSearchOutput(matched []ToolCatalogEntry, eagerAlready, missing, ambiguous, truncated []string) string {
-	var sections []string
-	if len(matched) > 0 {
-		var fnLines []string
-		for _, entry := range matched {
-			payload := toolSearchFunction{
-				Name:        entry.Def.Function.Name,
-				Description: entry.Def.Function.Description,
-				Parameters:  normalizeRawParams(entry.Def.Function.Parameters),
-				Deferred:    true,
-				Server:      r.mcpServers[entry.Def.Function.Name],
-			}
-			b, err := json.Marshal(payload)
-			if err != nil {
-				continue
-			}
-			fnLines = append(fnLines, "<function>"+string(b)+"</function>")
-		}
-		if len(fnLines) > 0 {
-			sections = append(sections, "<functions>\n"+strings.Join(fnLines, "\n")+"\n</functions>")
+func (r *ToolRegistry) formatToolSearchOutput(matched []ToolCatalogEntry, eagerAlready, missing, ambiguous, truncated []string, page int) string {
+	capBytes := r.toolSearchCapBytes()
+	baseNotes := buildToolSearchNotes(eagerAlready, missing, ambiguous, truncated)
+	if len(matched) == 0 {
+		return joinToolSearchSections("", baseNotes, capBytes)
+	}
+
+	lines := make([]string, len(matched))
+	validEntries := make([]ToolCatalogEntry, 0, len(matched))
+	validLines := make([]string, 0, len(matched))
+	for i, entry := range matched {
+		if line, ok := marshalToolSearchLine(entry, r.mcpServers[entry.Def.Function.Name], 0, 0); ok {
+			lines[i] = line
+			validEntries = append(validEntries, entry)
+			validLines = append(validLines, line)
 		}
 	}
-	if len(eagerAlready) > 0 {
-		sections = append(sections, "Already directly callable (call without tool_call): "+strings.Join(eagerAlready, ", "))
+	if len(validEntries) == 0 {
+		return joinToolSearchSections("", baseNotes, capBytes)
 	}
-	if len(missing) > 0 {
-		sections = append(sections, "Not found or unavailable in current scope: "+strings.Join(missing, ", "))
+
+	fullBlock := wrapFunctionsBlock(validLines)
+	if capBytes <= 0 || len(fullBlock)+notesSectionLen(baseNotes, true) <= capBytes {
+		if page <= 1 {
+			return joinToolSearchSections(fullBlock, baseNotes, capBytes)
+		}
+		notice := fmt.Sprintf("All %d matched schema(s) fit on page 1 (requested page %d has no further results).", len(validEntries), page)
+		return joinToolSearchSections(notice, baseNotes, capBytes)
 	}
-	if len(ambiguous) > 0 {
-		sections = append(sections, "Ambiguous: "+strings.Join(ambiguous, "; "))
+
+	firstBlock := wrapFunctionsBlock([]string{validLines[0]})
+	notesCap := max(256, capBytes/4)
+	boundedNotes := fitToolSearchNotes(baseNotes, notesCap)
+
+	if len(validEntries) == 1 || len(firstBlock)+oversizedSingleOverhead(validEntries[0].Def.Function.Name)+notesSectionLen(boundedNotes, true) > capBytes {
+		extraNotes := append([]string(nil), boundedNotes...)
+		if len(validEntries) > 1 {
+			omitted := formatToolListNotice("Omitted due to output size limit (narrow with select:<name>): ", catalogEntryNames(validEntries[1:]), min(256, notesCap))
+			extraNotes = append([]string{omitted}, extraNotes...)
+		}
+		return formatOversizedToolSchema(validEntries[0], r.mcpServers[validEntries[0].Def.Function.Name], validLines[0], page, extraNotes, capBytes)
 	}
-	if len(truncated) > 0 {
-		sections = append(sections, "Truncated by max_results: "+strings.Join(truncated, ", "))
+
+	return formatPaginatedToolList(validEntries, validLines, page, boundedNotes, capBytes)
+}
+
+func buildToolSearchNotes(eagerAlready, missing, ambiguous, truncated []string) []string {
+	specs := []struct {
+		prefix string
+		sep    string
+		items  []string
+	}{
+		{"Already directly callable (call without tool_call): ", ", ", eagerAlready},
+		{"Not found or unavailable in current scope: ", ", ", missing},
+		{"Ambiguous: ", "; ", ambiguous},
+		{"Truncated by max_results: ", ", ", truncated},
 	}
-	return strings.Join(sections, "\n\n")
+	var notes []string
+	for _, s := range specs {
+		if len(s.items) > 0 {
+			notes = append(notes, s.prefix+strings.Join(s.items, s.sep))
+		}
+	}
+	return notes
+}
+
+func marshalToolSearchLine(entry ToolCatalogEntry, server string, schemaPage, schemaPages int) (string, bool) {
+	payload := toolSearchFunction{
+		Name:        entry.Def.Function.Name,
+		Description: entry.Def.Function.Description,
+		Parameters:  normalizeRawParams(entry.Def.Function.Parameters),
+		Deferred:    true,
+		Server:      server,
+		SchemaPage:  schemaPage,
+		SchemaPages: schemaPages,
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	return "<function>" + string(b) + "</function>", true
+}
+
+func wrapFunctionsBlock(lines []string) string {
+	return "<functions>\n" + strings.Join(lines, "\n") + "\n</functions>"
+}
+
+func catalogEntryNames(entries []ToolCatalogEntry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Def.Function.Name
+	}
+	return out
+}
+
+func notesSectionLen(notes []string, withPrimary bool) int {
+	if len(notes) == 0 {
+		return 0
+	}
+	n := len(strings.Join(notes, "\n\n"))
+	if withPrimary {
+		n += 2
+	}
+	return n
+}
+
+func fitToolSearchNotes(notes []string, budget int) []string {
+	if budget <= 0 || len(notes) == 0 {
+		return nil
+	}
+	var kept []string
+	used := 0
+	for _, note := range notes {
+		need := len(note)
+		if len(kept) > 0 {
+			need += 2
+		}
+		if used+need <= budget {
+			kept = append(kept, note)
+			used += need
+			continue
+		}
+		rem := budget - used
+		if len(kept) > 0 {
+			rem -= 2
+		}
+		if rem > 24 {
+			kept = append(kept, truncateUTF8WithSuffix(note, rem, "…"))
+		}
+		break
+	}
+	return kept
+}
+
+func formatToolListNotice(prefix string, names []string, maxBytes int) string {
+	if len(names) == 0 {
+		return ""
+	}
+	full := prefix + strings.Join(names, ", ")
+	if maxBytes <= 0 || len(full) <= maxBytes {
+		return full
+	}
+	var buf strings.Builder
+	buf.WriteString(prefix)
+	shown := 0
+	for i, name := range names {
+		sep := ""
+		if i > 0 {
+			sep = ", "
+		}
+		suffix := ""
+		if rem := len(names) - (i + 1); rem > 0 {
+			suffix = fmt.Sprintf(" (+%d more)", rem)
+		}
+		if buf.Len()+len(sep)+len(name)+len(suffix) > maxBytes {
+			break
+		}
+		buf.WriteString(sep)
+		buf.WriteString(name)
+		shown++
+	}
+	if shown < len(names) {
+		if shown == 0 {
+			return truncateUTF8WithSuffix(full, maxBytes, "…")
+		}
+		buf.WriteString(fmt.Sprintf(" (+%d more)", len(names)-shown))
+	}
+	return buf.String()
+}
+
+func joinToolSearchSections(primary string, notes []string, capBytes int) string {
+	var parts []string
+	if primary != "" {
+		parts = append(parts, primary)
+	}
+	for _, n := range notes {
+		if n != "" {
+			parts = append(parts, n)
+		}
+	}
+	out := strings.Join(parts, "\n\n")
+	if capBytes <= 0 || len(out) <= capBytes {
+		return out
+	}
+	if primary == "" {
+		return truncateUTF8WithSuffix(out, capBytes, "…")
+	}
+	if len(primary) >= capBytes {
+		return primary
+	}
+	rem := capBytes - len(primary) - 2
+	if rem <= 0 {
+		return primary
+	}
+	trimmedNotes := fitToolSearchNotes(notes, rem)
+	if len(trimmedNotes) == 0 {
+		return primary
+	}
+	return primary + "\n\n" + strings.Join(trimmedNotes, "\n\n")
+}
+
+func truncateUTF8WithSuffix(s string, maxBytes int, suffix string) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	if maxBytes <= len(suffix) {
+		return truncateUTF8Bytes(suffix, maxBytes)
+	}
+	return truncateUTF8Bytes(s, maxBytes-len(suffix)) + suffix
+}
+
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
+func splitUTF8ByMaxBytes(s string, maxBytes int) []string {
+	if maxBytes <= 0 {
+		return []string{s}
+	}
+	var chunks []string
+	for len(s) > 0 {
+		if len(s) <= maxBytes {
+			chunks = append(chunks, s)
+			break
+		}
+		cut := maxBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		if cut == 0 {
+			_, w := utf8.DecodeRuneInString(s)
+			cut = w
+		}
+		chunks = append(chunks, s[:cut])
+		s = s[cut:]
+	}
+	return chunks
+}
+
+func formatPaginatedToolList(entries []ToolCatalogEntry, lines []string, page int, baseNotes []string, capBytes int) string {
+	type pageSlice struct {
+		indices      []int
+		oversizedIdx int
+	}
+	const footerReserve = 240
+	notesCost := notesSectionLen(baseNotes, true)
+	bodyBudget := capBytes - footerReserve - notesCost
+	if bodyBudget < 512 {
+		baseNotes = nil
+		bodyBudget = max(256, capBytes-footerReserve)
+	}
+
+	var pages []pageSlice
+	var cur []int
+	for i, line := range lines {
+		singleBlockLen := len(wrapFunctionsBlock([]string{line}))
+		if singleBlockLen > bodyBudget {
+			if len(cur) > 0 {
+				pages = append(pages, pageSlice{indices: cur, oversizedIdx: -1})
+				cur = nil
+			}
+			pages = append(pages, pageSlice{oversizedIdx: i})
+			continue
+		}
+		trial := append(append([]int(nil), cur...), i)
+		trialLines := make([]string, len(trial))
+		for k, idx := range trial {
+			trialLines[k] = lines[idx]
+		}
+		if len(cur) > 0 && len(wrapFunctionsBlock(trialLines)) > bodyBudget {
+			pages = append(pages, pageSlice{indices: cur, oversizedIdx: -1})
+			cur = []int{i}
+			continue
+		}
+		cur = trial
+	}
+	if len(cur) > 0 {
+		pages = append(pages, pageSlice{indices: cur, oversizedIdx: -1})
+	}
+
+	if page > len(pages) {
+		notice := fmt.Sprintf("Matched %d schema(s) across %d page(s); requested page %d has no remaining entries.", len(entries), len(pages), page)
+		return joinToolSearchSections(notice, baseNotes, capBytes)
+	}
+
+	sel := pages[page-1]
+	if sel.oversizedIdx >= 0 {
+		name := entries[sel.oversizedIdx].Def.Function.Name
+		msg := fmt.Sprintf("Schema for %s exceeds multi-tool page limit (page %d/%d). Query tool_search(query=\"select:%s\", page=1) to page through its full schema.", name, page, len(pages), name)
+		return joinToolSearchSections(msg, baseNotes, capBytes)
+	}
+
+	selLines := make([]string, len(sel.indices))
+	for k, idx := range sel.indices {
+		selLines[k] = lines[idx]
+	}
+	block := wrapFunctionsBlock(selLines)
+
+	var remaining []string
+	for pIdx := page; pIdx < len(pages); pIdx++ {
+		if pages[pIdx].oversizedIdx >= 0 {
+			remaining = append(remaining, entries[pages[pIdx].oversizedIdx].Def.Function.Name)
+			continue
+		}
+		for _, idx := range pages[pIdx].indices {
+			remaining = append(remaining, entries[idx].Def.Function.Name)
+		}
+	}
+
+	footer := fmt.Sprintf("Showing page %d/%d.", page, len(pages))
+	if page < len(pages) {
+		footer += fmt.Sprintf(" Call tool_search with page=%d for remaining schemas.", page+1)
+	}
+	if len(remaining) > 0 {
+		footer += " " + formatToolListNotice("Remaining matches (or use select:<name>): ", remaining, 140)
+	}
+	notes := append([]string{footer}, baseNotes...)
+	return joinToolSearchSections(block, notes, capBytes)
+}
+
+func oversizedSingleOverhead(name string) int {
+	return len(fmt.Sprintf("Schema page 99/99 for %s. Call tool_search(query=\"select:%s\", page=99) for remaining properties before calling tool_call.", name, name)) + 4
+}
+
+func formatOversizedToolSchema(entry ToolCatalogEntry, server, fullLine string, page int, extraNotes []string, capBytes int) string {
+	if out, ok := trySplitToolSchemaProperties(entry, server, page, extraNotes, capBytes); ok {
+		return out
+	}
+	return splitToolSchemaByChunks(entry.Def.Function.Name, fullLine, page, extraNotes, capBytes)
+}
+
+func trySplitToolSchemaProperties(entry ToolCatalogEntry, server string, page int, extraNotes []string, capBytes int) (string, bool) {
+	var rawSchema map[string]any
+	if err := json.Unmarshal(normalizeRawParams(entry.Def.Function.Parameters), &rawSchema); err != nil {
+		return "", false
+	}
+	rawProps, ok := rawSchema["properties"].(map[string]any)
+	if !ok || len(rawProps) < 2 {
+		return "", false
+	}
+
+	propKeys := make([]string, 0, len(rawProps))
+	for k := range rawProps {
+		propKeys = append(propKeys, k)
+	}
+	sort.Strings(propKeys)
+
+	var allRequired []string
+	if reqRaw, hasReq := rawSchema["required"].([]any); hasReq {
+		for _, item := range reqRaw {
+			if s, ok := item.(string); ok && s != "" {
+				allRequired = append(allRequired, s)
+			}
+		}
+	}
+
+	name := entry.Def.Function.Name
+	reqNote := ""
+	if len(allRequired) > 0 {
+		reqNote = " " + formatToolListNotice("All required parameters: ", allRequired, 140)
+	}
+	buildFooter := func(p, total int) string {
+		msg := fmt.Sprintf("Schema page %d/%d for %s.", p, total, name) + reqNote
+		if p < total {
+			msg += fmt.Sprintf(" Call tool_search(query=\"select:%s\", page=%d) for remaining properties before calling tool_call.", name, p+1)
+		}
+		return msg
+	}
+
+	maxDigits := max(99, len(propKeys))
+	worstFooter := buildFooter(maxDigits, maxDigits)
+	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/3))
+	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)
+	bodyBudget := capBytes - len(worstFooter) - 2 - notesSectionLen(fittedNotes, true)
+	if bodyBudget < 256 {
+		fittedNotes = nil
+		bodyBudget = capBytes - len(worstFooter) - 2
+	}
+	if bodyBudget < 256 {
+		return "", false
+	}
+
+	marshalBatch := func(batchKeys []string, p, total int) (string, bool) {
+		cloned := make(map[string]any, len(rawSchema))
+		for k, v := range rawSchema {
+			cloned[k] = v
+		}
+		batchProps := make(map[string]any, len(batchKeys))
+		batchSet := make(map[string]bool, len(batchKeys))
+		for _, k := range batchKeys {
+			batchProps[k] = rawProps[k]
+			batchSet[k] = true
+		}
+		cloned["properties"] = batchProps
+		if len(allRequired) > 0 {
+			var batchReq []string
+			for _, rName := range allRequired {
+				if batchSet[rName] {
+					batchReq = append(batchReq, rName)
+				}
+			}
+			if len(batchReq) > 0 {
+				cloned["required"] = batchReq
+			} else {
+				delete(cloned, "required")
+			}
+		}
+		paramBytes, err := json.Marshal(cloned)
+		if err != nil {
+			return "", false
+		}
+		subEntry := entry
+		subEntry.Def.Function.Parameters = paramBytes
+		line, ok := marshalToolSearchLine(subEntry, server, p, total)
+		if !ok {
+			return "", false
+		}
+		return wrapFunctionsBlock([]string{line}), true
+	}
+
+	var batches [][]string
+	var cur []string
+	for _, k := range propKeys {
+		singleBlock, ok := marshalBatch([]string{k}, maxDigits, maxDigits)
+		if !ok || len(singleBlock) > bodyBudget {
+			return "", false
+		}
+		trial := append(append([]string(nil), cur...), k)
+		trialBlock, ok := marshalBatch(trial, maxDigits, maxDigits)
+		if !ok {
+			return "", false
+		}
+		if len(cur) > 0 && len(trialBlock) > bodyBudget {
+			batches = append(batches, cur)
+			cur = []string{k}
+			continue
+		}
+		cur = trial
+	}
+	if len(cur) > 0 {
+		batches = append(batches, cur)
+	}
+	if len(batches) == 0 {
+		return "", false
+	}
+	if page > len(batches) {
+		msg := fmt.Sprintf("Schema for %s spans %d page(s); requested page %d has no remaining properties.", name, len(batches), page)
+		return joinToolSearchSections(msg, fittedNotes, capBytes), true
+	}
+
+	block, ok := marshalBatch(batches[page-1], page, len(batches))
+	if !ok {
+		return "", false
+	}
+	notes := append([]string{buildFooter(page, len(batches))}, fittedNotes...)
+	return joinToolSearchSections(block, notes, capBytes), true
+}
+
+func splitToolSchemaByChunks(name, fullLine string, page int, extraNotes []string, capBytes int) string {
+	buildFooter := func(p, total int) string {
+		msg := fmt.Sprintf("Schema part %d/%d for %s.", p, total, name)
+		if p < total {
+			msg += fmt.Sprintf(" Call tool_search(query=\"select:%s\", page=%d) for next part before calling tool_call.", name, p+1)
+		}
+		return msg
+	}
+	worstHeader := fmt.Sprintf("<function-part name=%q page=\"999\" total_pages=\"999\">\n", name)
+	const closeTag = "\n</function-part>"
+	worstFooter := buildFooter(999, 999)
+
+	notesBudget := min(notesSectionLen(extraNotes, true), max(0, capBytes/4))
+	fittedNotes := fitToolSearchNotes(extraNotes, notesBudget)
+	chunkCap := capBytes - len(worstHeader) - len(closeTag) - len(worstFooter) - 2 - notesSectionLen(fittedNotes, true)
+	if chunkCap < 128 {
+		fittedNotes = nil
+		chunkCap = max(128, capBytes-len(worstHeader)-len(closeTag)-len(worstFooter)-2)
+	}
+
+	chunks := splitUTF8ByMaxBytes(fullLine, chunkCap)
+	if page > len(chunks) {
+		msg := fmt.Sprintf("Schema for %s spans %d part(s); requested page %d has no remaining data.", name, len(chunks), page)
+		return joinToolSearchSections(msg, fittedNotes, capBytes)
+	}
+
+	partHeader := fmt.Sprintf("<function-part name=%q page=\"%d\" total_pages=\"%d\">\n", name, page, len(chunks))
+	block := partHeader + chunks[page-1] + closeTag
+	notes := append([]string{buildFooter(page, len(chunks))}, fittedNotes...)
+	return joinToolSearchSections(block, notes, capBytes)
 }
 
 func normalizeRawParams(raw json.RawMessage) json.RawMessage {

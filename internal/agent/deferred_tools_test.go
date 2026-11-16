@@ -25,6 +25,7 @@ import (
 type recordingChatRound struct {
 	sysPrefix string
 	defsJSON  string
+	msgs      []chat.Message
 }
 
 type kvCacheProbeBackend struct {
@@ -41,10 +42,13 @@ func (b *kvCacheProbeBackend) ChatStream(_ context.Context, msgs []chat.Message,
 	if len(msgs) > 0 && msgs[0].Role == chat.RoleSystem {
 		sysPrefix = msgs[0].Content
 	}
+	msgsCopy := make([]chat.Message, len(msgs))
+	copy(msgsCopy, msgs)
 	defsBytes, _ := json.Marshal(tools)
 	b.rounds = append(b.rounds, recordingChatRound{
 		sysPrefix: sysPrefix,
 		defsJSON:  string(defsBytes),
+		msgs:      msgsCopy,
 	})
 	if b.idx >= len(b.responses) {
 		return chat.Message{Role: chat.RoleAssistant, Content: "done"}, nil
@@ -615,5 +619,274 @@ func TestToolCall_SafetyApprovalIsolationAndRefusals(t *testing.T) {
 	}
 	if _, err := aTask.dispatchToolCall(context.Background(), toolCall("c-blk2", toolCallName, `{"name":"edit_file","arguments":{"path":"x","target_content":"a","replacement_content":"b"}}`)); err == nil || !strings.Contains(err.Error(), "blocked all") {
 		t.Fatalf("expected subsequent deferred call blocked by blockAll, got %v", err)
+	}
+}
+
+func extractFunctionPayloads(t *testing.T, out string) []toolSearchFunction {
+	t.Helper()
+	var results []toolSearchFunction
+	rest := out
+	for {
+		start := strings.Index(rest, "<function>")
+		if start < 0 {
+			break
+		}
+		rest = rest[start+len("<function>"):]
+		end := strings.Index(rest, "</function>")
+		if end < 0 {
+			t.Fatalf("unterminated <function> tag in tool_search output: %q", out)
+		}
+		var fn toolSearchFunction
+		if err := json.Unmarshal([]byte(rest[:end]), &fn); err != nil {
+			t.Fatalf("invalid <function> JSON %q: %v", rest[:end], err)
+		}
+		results = append(results, fn)
+		rest = rest[end+len("</function>"):]
+	}
+	return results
+}
+
+func latestToolMessage(msgs []chat.Message, id string) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == chat.RoleTool && msgs[i].ToolCallID == id {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+func TestToolSearch_OversizedSingleSchemaPaginationEndToEnd(t *testing.T) {
+	props := make(map[string]any, 40)
+	for i := 1; i <= 40; i++ {
+		props[fmt.Sprintf("opt_%02d", i)] = map[string]any{
+			"type":        "string",
+			"description": fmt.Sprintf("Detailed option %02d configuration string for service tuning across nodes: %s", i, strings.Repeat("x", 150)),
+		}
+	}
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{
+		Name:       "example",
+		InitResult: &mcp.InitializeResult{},
+		Tools: []mcp.Tool{{
+			Name:        "configure",
+			Description: "Configure example service with many options.",
+			InputSchema: mcp.ToolInputSchema{
+				Type:       "object",
+				Properties: props,
+				Required:   []string{"opt_01", "opt_40"},
+			},
+		}},
+	})
+
+	backend := &kvCacheProbeBackend{
+		responses: []chat.Message{
+			{
+				Role: chat.RoleAssistant,
+				ToolCalls: []chat.ToolCall{
+					toolCall("ts-1", toolSearchName, `{"query":"select:mcp_example_configure"}`),
+				},
+			},
+			{
+				Role: chat.RoleAssistant,
+				ToolCalls: []chat.ToolCall{
+					toolCall("ts-2", toolSearchName, `{"query":"select:mcp_example_configure","page":2}`),
+				},
+			},
+			{
+				Role: chat.RoleAssistant,
+				ToolCalls: []chat.ToolCall{
+					toolCall("ts-3", toolSearchName, `{"query":"select:mcp_example_configure","page":3}`),
+				},
+			},
+			{Role: chat.RoleAssistant, Content: "schema read across pages"},
+		},
+	}
+
+	a := New(Config{
+		Backend:     backend,
+		MaxTokens:   8192, // cap = 8,192 B while full 40-prop schema > 10 KB
+		Autonomy:    AutonomyDefault,
+		MCPRegistry: reg,
+		Output:      io.Discard,
+	})
+
+	if err := a.Run(context.Background(), "inspect configure schema"); err != nil {
+		t.Fatalf("Agent.Run failed: %v", err)
+	}
+	if len(backend.rounds) != 4 {
+		t.Fatalf("expected 4 rounds, got %d", len(backend.rounds))
+	}
+
+	seenProps := make(map[string]bool)
+	for roundIdx, callID := range []string{"ts-1", "ts-2"} {
+		toolOut := latestToolMessage(backend.rounds[roundIdx+1].msgs, callID)
+		if len(toolOut) > 8192 {
+			t.Fatalf("%s exceeded Conversation cap 8192: %d", callID, len(toolOut))
+		}
+		if strings.Contains(toolOut, "… [truncated:") {
+			t.Fatalf("%s hit Conversation mid-JSON truncation marker: %q", callID, toolOut)
+		}
+		fns := extractFunctionPayloads(t, toolOut)
+		if len(fns) != 1 {
+			t.Fatalf("%s expected 1 parsed function payload, got %d (%q)", callID, len(fns), toolOut)
+		}
+		if fns[0].SchemaPage != roundIdx+1 || fns[0].SchemaPages != 2 {
+			t.Fatalf("%s expected schema_page=%d/2, got %d/%d", callID, roundIdx+1, fns[0].SchemaPage, fns[0].SchemaPages)
+		}
+		if !strings.Contains(toolOut, "All required parameters: opt_01, opt_40") {
+			t.Fatalf("%s missing required parameter summary: %q", callID, toolOut)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(fns[0].Parameters, &schema); err != nil {
+			t.Fatalf("%s invalid schema JSON: %v", callID, err)
+		}
+		batchProps, _ := schema["properties"].(map[string]any)
+		for k := range batchProps {
+			if seenProps[k] {
+				t.Fatalf("duplicate property %q across schema pages", k)
+			}
+			seenProps[k] = true
+		}
+	}
+	if len(seenProps) != 40 {
+		t.Fatalf("expected union of all 40 properties across page 1 and 2, got %d", len(seenProps))
+	}
+	p1Out := latestToolMessage(backend.rounds[1].msgs, "ts-1")
+	if !strings.Contains(p1Out, `page=2`) {
+		t.Fatalf("page 1 missing next-page hint: %q", p1Out)
+	}
+	p3Out := latestToolMessage(backend.rounds[3].msgs, "ts-3")
+	if !strings.Contains(p3Out, "spans 2 page(s)") {
+		t.Fatalf("expected out-of-range page 3 notice, got %q", p3Out)
+	}
+}
+
+func TestToolSearch_MultiToolCapPaginationEndToEnd(t *testing.T) {
+	reg := mcpclient.NewRegistry()
+	var tools []mcp.Tool
+	for i := 0; i < 5; i++ {
+		tools = append(tools, mcp.Tool{
+			Name:        fmt.Sprintf("item_%02d", i),
+			Description: fmt.Sprintf("Tool %d description padded: %s", i, strings.Repeat("d", 1400)),
+			InputSchema: mcp.ToolInputSchema{Type: "object"},
+		})
+	}
+	reg.Add(&mcpclient.ServerConnection{
+		Name:       "multi",
+		InitResult: &mcp.InitializeResult{},
+		Tools:      tools,
+	})
+
+	backend := &kvCacheProbeBackend{
+		responses: []chat.Message{
+			{
+				Role: chat.RoleAssistant,
+				ToolCalls: []chat.ToolCall{
+					toolCall("m-1", toolSearchName, `{"query":"select:mcp_multi_item_00,mcp_multi_item_01,mcp_multi_item_02,mcp_multi_item_03,mcp_multi_item_04","page":1}`),
+				},
+			},
+			{
+				Role: chat.RoleAssistant,
+				ToolCalls: []chat.ToolCall{
+					toolCall("m-2", toolSearchName, `{"query":"select:mcp_multi_item_00,mcp_multi_item_01,mcp_multi_item_02,mcp_multi_item_03,mcp_multi_item_04","page":2}`),
+				},
+			},
+			{
+				Role: chat.RoleAssistant,
+				ToolCalls: []chat.ToolCall{
+					toolCall("m-3", toolSearchName, `{"query":"select:mcp_multi_item_00,mcp_multi_item_01,mcp_multi_item_02,mcp_multi_item_03,mcp_multi_item_04","page":3}`),
+				},
+			},
+			{Role: chat.RoleAssistant, Content: "multi done"},
+		},
+	}
+
+	a := New(Config{
+		Backend:     backend,
+		MaxTokens:   4096, // 4,096 B cap: ~2 tools fit per page
+		Autonomy:    AutonomyDefault,
+		MCPRegistry: reg,
+		Output:      io.Discard,
+	})
+	if err := a.Run(context.Background(), "page through multi tools"); err != nil {
+		t.Fatalf("Agent.Run failed: %v", err)
+	}
+
+	gotTools := make(map[string]bool)
+	for roundIdx, id := range []string{"m-1", "m-2", "m-3"} {
+		out := latestToolMessage(backend.rounds[roundIdx+1].msgs, id)
+		if len(out) > 4096 {
+			t.Fatalf("%s exceeded 4096 B cap: %d", id, len(out))
+		}
+		if strings.Contains(out, "… [truncated:") {
+			t.Fatalf("%s unexpectedly truncated by Conversation: %q", id, out)
+		}
+		for _, fn := range extractFunctionPayloads(t, out) {
+			gotTools[fn.Name] = true
+		}
+	}
+	if len(gotTools) != 5 {
+		t.Fatalf("expected all 5 tools recovered without mid-JSON cuts across pages, got %v", gotTools)
+	}
+}
+
+func TestToolSearch_ChunkFallbackUTF8EndToEnd(t *testing.T) {
+	// Single non-splittable 4.5 KB multi-byte description under 2048 B floor cap.
+	desc := strings.Repeat("α", 2250) // 4,500 bytes, valid UTF-8 runes
+	reg := mcpclient.NewRegistry()
+	reg.Add(&mcpclient.ServerConnection{
+		Name:       "huge",
+		InitResult: &mcp.InitializeResult{},
+		Tools: []mcp.Tool{{
+			Name:        "blob",
+			Description: desc,
+			InputSchema: mcp.ToolInputSchema{Type: "object"},
+		}},
+	})
+
+	backend := &kvCacheProbeBackend{
+		responses: []chat.Message{
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("p1", toolSearchName, `{"query":"select:mcp_huge_blob","page":1}`)}},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("p2", toolSearchName, `{"query":"select:mcp_huge_blob","page":2}`)}},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("p3", toolSearchName, `{"query":"select:mcp_huge_blob","page":3}`)}},
+			{Role: chat.RoleAssistant, ToolCalls: []chat.ToolCall{toolCall("p4", toolSearchName, `{"query":"select:mcp_huge_blob","page":4}`)}},
+			{Role: chat.RoleAssistant, Content: "chunks ok"},
+		},
+	}
+
+	a := New(Config{
+		Backend:     backend,
+		MaxTokens:   1024, // clamped to toolResultCapFloor = 2,048 B
+		Autonomy:    AutonomyDefault,
+		MCPRegistry: reg,
+		Output:      io.Discard,
+	})
+	if err := a.Run(context.Background(), "fetch huge single description"); err != nil {
+		t.Fatalf("Agent.Run failed: %v", err)
+	}
+
+	var assembled strings.Builder
+	partsSeen := 0
+	for roundIdx, id := range []string{"p1", "p2", "p3", "p4"} {
+		out := latestToolMessage(backend.rounds[roundIdx+1].msgs, id)
+		if len(out) > 2048 {
+			t.Fatalf("%s exceeded 2048 B floor cap: %d", id, len(out))
+		}
+		if strings.Contains(out, "… [truncated:") {
+			t.Fatalf("%s hit Conversation truncation marker: %q", id, out)
+		}
+		if start := strings.Index(out, "<function-part "); start >= 0 {
+			bodyStart := strings.Index(out[start:], ">\n") + start + 2
+			bodyEnd := strings.Index(out[bodyStart:], "\n</function-part>") + bodyStart
+			assembled.WriteString(out[bodyStart:bodyEnd])
+			partsSeen++
+		}
+	}
+	if partsSeen < 3 {
+		t.Fatalf("expected multiple <function-part> chunks under 2048 cap, got %d", partsSeen)
+	}
+	fns := extractFunctionPayloads(t, assembled.String())
+	if len(fns) != 1 || fns[0].Description != desc {
+		t.Fatalf("reassembled UTF-8 <function-part> chunks did not reconstruct exact description (parts=%d len=%d want=%d)", partsSeen, len(assembled.String()), len(desc))
 	}
 }
