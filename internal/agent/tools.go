@@ -40,6 +40,9 @@ type ToolRegistry struct {
 	// in mcp_servers.<server>.auto_approve_tools. Only these external tools
 	// skip confirmation.
 	mcpAutoApproved map[string]bool
+	// consultResolver resolves consult_model's seat argument. Nil means the
+	// tool returns an error and does not call a backend.
+	consultResolver ConsultResolver
 }
 
 // mcpAutoApprovedTool reports whether name is an external MCP tool the
@@ -89,6 +92,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerSymbolSearch()
 	r.registerBackgroundTools()
 	r.registerSessionBranchTools()
+	r.registerConsultModel()
 	return r
 }
 

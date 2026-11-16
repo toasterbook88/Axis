@@ -135,6 +135,7 @@ func TestToolRegistryHasAllDefaultTools(t *testing.T) {
 		"spawn_subagent", "run_on_node", "remote_read_file", "remote_grep", "remote_list",
 		"fleet_exec", "remote_write_file", "remote_tail_logs",
 		"todo", "undo_last", "review_changes", "web_fetch", "web_search",
+		"consult_model",
 		"run_background", "check_task", "list_background_tasks",
 		"branch_session", "rollback_session",
 	}
@@ -1681,7 +1682,7 @@ func TestIsReadOnlyTool(t *testing.T) {
 			t.Errorf("expected %q to be read-only", name)
 		}
 	}
-	notReadOnly := []string{"run_shell", "unknown", ""}
+	notReadOnly := []string{"run_shell", "unknown", "", "consult_model"}
 	for _, name := range notReadOnly {
 		if isReadOnlyTool(name) {
 			t.Errorf("expected %q to NOT be read-only", name)

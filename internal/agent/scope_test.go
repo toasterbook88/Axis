@@ -32,7 +32,7 @@ func containsName(names []string, want string) bool {
 func TestObserveDefsHideProhibitedTools(t *testing.T) {
 	r := NewToolRegistry(NewToolContext(&RuntimeView{}, nil))
 	names := defNames(r)
-	for _, want := range []string{"read_file", "todo", "axis_status", "axis_facts", "axis_place"} {
+	for _, want := range []string{"read_file", "todo", "axis_status", "axis_facts", "axis_place", "consult_model"} {
 		if !containsName(names, want) {
 			t.Errorf("observe defs missing %s", want)
 		}

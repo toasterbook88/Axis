@@ -35,7 +35,7 @@ func TestClusterScopeAdvertisesOnlyClusterReads(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("cluster scope advertises %v, want %v", got, want)
 	}
-	for _, name := range []string{"read_file", "list_directory", "grep_search", "symbol_search", "git_status", "git_diff", "git_log", "todo", "write_file", "run_shell"} {
+	for _, name := range []string{"read_file", "list_directory", "grep_search", "symbol_search", "git_status", "git_diff", "git_log", "todo", "write_file", "run_shell", "consult_model"} {
 		if r.Visible(name) {
 			t.Errorf("cluster scope must hide %s", name)
 		}

@@ -34,6 +34,9 @@ type Client struct {
 	Endpoint string
 	Model    string
 	http     *http.Client
+	// autoStart is true for the driver. A consult seat turns it off so a
+	// second model does not launch ollama serve.
+	autoStart bool
 }
 
 // NewClient creates a Client for the given Ollama endpoint and model.
@@ -43,8 +46,23 @@ func NewClient(endpoint, model string) *Client {
 		Model:    model,
 		// Streaming duration is governed by the request context; a client-level
 		// timeout would terminate otherwise healthy long-running responses.
-		http: &http.Client{Timeout: 0},
+		http:      &http.Client{Timeout: 0},
+		autoStart: true,
 	}
+}
+
+// DisableAutoStart stops this client from launching ollama serve.
+// The driver client keeps the default.
+func (c *Client) DisableAutoStart() {
+	if c == nil {
+		return
+	}
+	c.autoStart = false
+}
+
+// AutoStartEnabled reports whether a down daemon is launched.
+func (c *Client) AutoStartEnabled() bool {
+	return c != nil && c.autoStart
 }
 
 // chatRequest is the JSON body for POST /api/chat.
@@ -187,7 +205,7 @@ func (c *Client) EnsureRunning(ctx context.Context, w io.Writer) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !isDefaultLocalOllama(c.Endpoint) {
+		if !isDefaultLocalOllama(c.Endpoint) || !c.autoStart {
 			return fmt.Errorf("ollama at %s is not reachable: %w", c.Endpoint, err)
 		}
 		if w != nil {
