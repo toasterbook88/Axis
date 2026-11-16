@@ -413,3 +413,58 @@ func TestProducersCaptureTheirTurnAndNeverRereadIt(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamWriterWriteThoughtWrapsAndClosesThinkTags(t *testing.T) {
+	rec := &concurrentSender{}
+	w := NewStreamWriter(rec, 1)
+
+	tw, ok := w.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	if !ok {
+		t.Fatalf("streamWriter %T does not implement WriteThought/CloseThought", w)
+	}
+
+	tw.WriteThought("step 1")
+	tw.WriteThought(" step 2")
+	if _, err := w.Write([]byte("final answer")); err != nil {
+		t.Fatalf("Write returned %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+
+	var raw strings.Builder
+	for _, msg := range rec.msgs {
+		if chunk, ok := msg.(StreamChunkMsg); ok {
+			raw.WriteString(chunk.Text)
+		}
+	}
+	thought, answer := extractThought(raw.String())
+	if thought != "step 1 step 2" || answer != "final answer" {
+		t.Fatalf("extractThought(%q) = (%q, %q), want (%q, %q)", raw.String(), thought, answer, "step 1 step 2", "final answer")
+	}
+
+	// CloseThought without any trailing content must still close the <think> tag.
+	rec2 := &concurrentSender{}
+	w2 := NewStreamWriter(rec2, 2)
+	tw2 := w2.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	tw2.WriteThought("only thinking")
+	tw2.CloseThought()
+	if err := w2.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+	var raw2 strings.Builder
+	for _, msg := range rec2.msgs {
+		if chunk, ok := msg.(StreamChunkMsg); ok {
+			raw2.WriteString(chunk.Text)
+		}
+	}
+	if raw2.String() != "<think>only thinking</think>" {
+		t.Fatalf("raw2 = %q, want %q", raw2.String(), "<think>only thinking</think>")
+	}
+}
