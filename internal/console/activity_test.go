@@ -61,6 +61,16 @@ func TestLiveTurnNamesThinking(t *testing.T) {
 	}
 }
 
+func TestLiveTurnNamesOutOfBandThinking(t *testing.T) {
+	oob := NewModel(Options{Submit: func(TurnID, string) tea.Cmd { return nil }})
+	oob = startTurnFor(t, oob)
+	oob = apply(oob, ThoughtChunkMsg{Turn: 1, Text: "secret plan"})
+	view := oob.View()
+	if strings.Contains(view, "secret") || strings.Contains(view, "working") || !strings.Contains(view, "thinking") {
+		t.Fatalf("out-of-band thought:\n%s", view)
+	}
+}
+
 // A closed thought with no answer says "thinking" only when nothing else
 // describes the turn: not beside a pending tool, an approval overlay, or the
 // cancelling phase.
