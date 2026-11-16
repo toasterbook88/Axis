@@ -206,7 +206,7 @@ Refresh this section with `./hack/refresh-current-state.sh`.
     - `coverage gate passed: internal/api 73.3% >= 65.0%`
     - `coverage gate passed: internal/mcp 85.9% >= 70.0%`
     - `coverage gate passed: internal/ui 91.5% >= 80.0%`
-    - `coverage gate passed: total 78.6% >= 65.0%`
+    - `coverage gate passed: total 78.8% >= 65.0%`
 <!-- END GENERATED CURRENT STATE VERIFICATION -->
 
 ## Degraded-State Matrix
