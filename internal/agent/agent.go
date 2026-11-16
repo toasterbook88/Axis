@@ -176,6 +176,8 @@ func New(cfg Config) *Agent {
 	}
 	tools := NewToolRegistry(tc)
 	tools.SetScope(ScopeFor(cfg.Autonomy))
+	tools.SetEagerTools(cfg.EagerTools)
+	tools.SetDisableDeferral(cfg.DisableToolDeferral)
 	if cfg.MCPRegistry != nil {
 		tools.RegisterMCPTools(cfg.MCPRegistry)
 	}
@@ -332,7 +334,11 @@ func visibleToolsMessage(r *ToolRegistry) string {
 	for _, def := range defs {
 		names = append(names, def.Function.Name)
 	}
-	return VisibleToolPrompt(names, r.scope)
+	prompt := VisibleToolPrompt(names, r.scope)
+	if cat := formatDeferredCatalog(r.DeferredCatalogEntries()); cat != "" {
+		prompt += "\n" + cat
+	}
+	return prompt
 }
 
 func (a *Agent) refreshVisibleTools() {
@@ -520,11 +526,13 @@ func (a *Agent) ToolNames() string {
 	return a.tools.visibleNames()
 }
 
-func (a *Agent) ToolDefs() []chat.ToolDef {
+// ToolCatalog returns all visible tool definitions (eager and deferred) for
+// operator surfaces such as /tools.
+func (a *Agent) ToolCatalog() []ToolCatalogEntry {
 	if a.tools == nil {
 		return nil
 	}
-	return a.tools.Defs()
+	return a.tools.CatalogEntries()
 }
 
 // Autonomy returns the current autonomy mode.

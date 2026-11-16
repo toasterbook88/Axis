@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,15 @@ type ToolRegistry struct {
 	// in mcp_servers.<server>.auto_approve_tools. Only these external tools
 	// skip confirmation.
 	mcpAutoApproved map[string]bool
+	// mcpServers maps registered mcp_<server>_<tool> names back to their source
+	// server key without ambiguous underscore splitting.
+	mcpServers map[string]string
+	// eagerAllowlist holds normalized non-empty tool names that remain eager in
+	// Defs() when set. nil means default deferral (mcp_* deferred; built-ins eager).
+	eagerAllowlist map[string]bool
+	// disableDeferral forces all permitted non-bridge tools into Defs() and omits
+	// the tool_search/tool_call bridge, taking precedence over eagerAllowlist.
+	disableDeferral bool
 }
 
 // mcpAutoApprovedTool reports whether name is an external MCP tool the
@@ -89,6 +99,7 @@ func NewToolRegistry(tc *ToolContext) *ToolRegistry {
 	r.registerSymbolSearch()
 	r.registerBackgroundTools()
 	r.registerSessionBranchTools()
+	r.registerDeferredBridgeTools()
 	return r
 }
 
@@ -99,6 +110,25 @@ func (r *ToolRegistry) SetScope(scope ToolScope) {
 		scope = ScopeObserve
 	}
 	r.scope = scope
+}
+
+// SetEagerTools sets an allowlist of tool names kept eager in Defs(). Trims
+// whitespace and drops empty names so blank input preserves default MCP-only
+// deferral mode. Fails closed: unlisted scope-prohibited tools remain hidden.
+func (r *ToolRegistry) SetEagerTools(names []string) {
+	if r == nil {
+		return
+	}
+	r.eagerAllowlist = normalizeToolNames(names)
+}
+
+// SetDisableDeferral toggles whether all permitted non-bridge tools remain
+// eager in Defs() (taking precedence over SetEagerTools).
+func (r *ToolRegistry) SetDisableDeferral(disable bool) {
+	if r == nil {
+		return
+	}
+	r.disableDeferral = disable
 }
 
 // allowExtra grants visibility for a dynamically registered tool that is
@@ -120,25 +150,8 @@ func (r *ToolRegistry) extraVisible(name string) bool {
 	return r.extraAllowed[name] && registered
 }
 
-// Defs returns the tool definitions the model may see in the current scope.
-func (r *ToolRegistry) Defs() []chat.ToolDef {
-	if r == nil {
-		return nil
-	}
-	out := make([]chat.ToolDef, 0, len(r.defs))
-	for _, def := range r.defs {
-		if r.visible(def.Function.Name) {
-			out = append(out, def)
-		}
-	}
-	return out
-}
-
-// visible reports whether the model may call name in the current scope.
-// Never-set, dropped names, and exec-tier tools outside ScopeExec deny
-// before any dynamic extra grant applies.
-func (r *ToolRegistry) visible(name string) bool {
-	if name == "" || neverTool(name) || name == "axis_summary" {
+func (r *ToolRegistry) callableNonBridge(name string) bool {
+	if r == nil || name == "" || neverTool(name) || name == "axis_summary" || isBridgeTool(name) {
 		return false
 	}
 	if execTool(name) && r.scope != ScopeExec {
@@ -148,6 +161,153 @@ func (r *ToolRegistry) visible(name string) bool {
 		return true
 	}
 	return toolVisible(name, r.scope)
+}
+
+func (r *ToolRegistry) eager(name string) bool {
+	if r == nil || r.scope == ScopeCluster || r.disableDeferral {
+		return true
+	}
+	if len(r.eagerAllowlist) > 0 {
+		return r.eagerAllowlist[name]
+	}
+	return !isExternalMCPTool(name)
+}
+
+func (r *ToolRegistry) hasDeferredTools() bool {
+	if r == nil || r.scope == ScopeCluster || r.disableDeferral {
+		return false
+	}
+	for _, def := range r.defs {
+		name := def.Function.Name
+		if r.callableNonBridge(name) && !r.eager(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDeferred reports whether name is callable in the current scope and
+// currently withheld from Defs() behind the tool_search/tool_call bridge.
+func (r *ToolRegistry) IsDeferred(name string) bool {
+	return r != nil && r.callableNonBridge(name) && !r.eager(name)
+}
+
+func (r *ToolRegistry) registeredNames() []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.defs))
+	for _, def := range r.defs {
+		out = append(out, def.Function.Name)
+	}
+	return out
+}
+
+func (r *ToolRegistry) callableNonBridgeNames() []string {
+	if r == nil {
+		return nil
+	}
+	var out []string
+	for _, def := range r.defs {
+		if r.callableNonBridge(def.Function.Name) {
+			out = append(out, def.Function.Name)
+		}
+	}
+	return out
+}
+
+func (r *ToolRegistry) callableEntryMap() map[string]ToolCatalogEntry {
+	out := make(map[string]ToolCatalogEntry)
+	if r == nil {
+		return out
+	}
+	for _, def := range r.defs {
+		name := def.Function.Name
+		if r.callableNonBridge(name) {
+			out[name] = ToolCatalogEntry{Def: def, Deferred: !r.eager(name)}
+		}
+	}
+	return out
+}
+
+// CatalogEntries returns every visible tool definition (both eager and
+// deferred, plus the bridge pair when active) in deterministic order.
+func (r *ToolRegistry) CatalogEntries() []ToolCatalogEntry {
+	if r == nil {
+		return nil
+	}
+	bridgeActive := r.hasDeferredTools()
+	out := make([]ToolCatalogEntry, 0, len(r.defs))
+	var bridges []chat.ToolDef
+	for _, def := range r.defs {
+		name := def.Function.Name
+		if isBridgeTool(name) {
+			if bridgeActive {
+				bridges = append(bridges, def)
+			}
+			continue
+		}
+		if r.callableNonBridge(name) {
+			out = append(out, ToolCatalogEntry{Def: def, Deferred: !r.eager(name)})
+		}
+	}
+	for _, b := range bridges {
+		out = append(out, ToolCatalogEntry{Def: b, Deferred: false})
+	}
+	return out
+}
+
+// DeferredCatalogEntries returns sorted catalog entries for all permitted tools
+// withheld behind the deferred bridge in the current scope.
+func (r *ToolRegistry) DeferredCatalogEntries() []ToolCatalogEntry {
+	if r == nil || r.scope == ScopeCluster || r.disableDeferral {
+		return nil
+	}
+	var out []ToolCatalogEntry
+	for _, def := range r.defs {
+		name := def.Function.Name
+		if r.callableNonBridge(name) && !r.eager(name) {
+			out = append(out, ToolCatalogEntry{Def: def, Deferred: true})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Def.Function.Name < out[j].Def.Function.Name
+	})
+	return out
+}
+
+// Defs returns the eager tool definitions sent on model requests in the current scope.
+func (r *ToolRegistry) Defs() []chat.ToolDef {
+	if r == nil {
+		return nil
+	}
+	bridgeActive := r.hasDeferredTools()
+	out := make([]chat.ToolDef, 0, len(r.defs))
+	var bridges []chat.ToolDef
+	for _, def := range r.defs {
+		name := def.Function.Name
+		if isBridgeTool(name) {
+			if bridgeActive {
+				bridges = append(bridges, def)
+			}
+			continue
+		}
+		if r.callableNonBridge(name) && r.eager(name) {
+			out = append(out, def)
+		}
+	}
+	out = append(out, bridges...)
+	return out
+}
+
+// visible reports whether the model may call name in the current scope.
+// Never-set, dropped names, and exec-tier tools outside ScopeExec deny
+// before any dynamic extra grant applies.
+func (r *ToolRegistry) visible(name string) bool {
+	if isBridgeTool(name) {
+		return r.hasDeferredTools()
+	}
+	return r.callableNonBridge(name)
 }
 
 // Visible reports whether the model may call name in the current scope.

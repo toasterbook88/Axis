@@ -107,7 +107,7 @@ func isReadOnlyTool(name string) bool {
 		"todo", "symbol_search", "web_fetch", "web_search", "review_changes",
 		"remote_read_file", "remote_grep", "remote_list", "remote_tail_logs",
 		"check_task", "list_background_tasks",
-		"branch_session", "rollback_session":
+		"branch_session", "rollback_session", "tool_search":
 		return true
 	}
 	// External MCP tools are never read-only by name: a server can call a

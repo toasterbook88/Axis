@@ -148,7 +148,10 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 		}
 	}
 
-	// 3. Special handling for shell commands.
+	// 3. Special handling for shell commands and bridged deferred tools.
+	if name == toolCallName {
+		return a.dispatchDeferredToolCall(ctx, tc, args)
+	}
 	if name == "run_shell" {
 		return a.dispatchShell(ctx, args)
 	}
@@ -274,6 +277,62 @@ func (a *Agent) dispatchToolCall(ctx context.Context, tc chat.ToolCall) (string,
 
 	// 4. Execute tool.
 	return a.tools.Execute(ctx, name, args)
+}
+
+func (a *Agent) dispatchDeferredToolCall(ctx context.Context, tc chat.ToolCall, args json.RawMessage) (string, error) {
+	var req struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &req); err != nil {
+			return "", fmt.Errorf("invalid arguments for tool_call: %w", err)
+		}
+	}
+	requested := strings.TrimSpace(req.Name)
+	if requested == "" {
+		return "", fmt.Errorf("tool_call requires a non-empty \"name\" argument")
+	}
+
+	rawArgs := strings.TrimSpace(string(req.Arguments))
+	var normArgs json.RawMessage
+	switch {
+	case rawArgs == "", rawArgs == "null":
+		normArgs = json.RawMessage(`{}`)
+	case !strings.HasPrefix(rawArgs, "{") || !json.Valid([]byte(rawArgs)):
+		return "", fmt.Errorf("tool_call arguments for %q must be a JSON object", requested)
+	default:
+		normArgs = json.RawMessage(rawArgs)
+	}
+
+	target, ambiguous := resolveRegisteredToolName(requested, a.tools.registeredNames())
+	if len(ambiguous) > 0 {
+		return "", fmt.Errorf("tool_call name %q is ambiguous (%s); use exact tool name", requested, strings.Join(ambiguous, ", "))
+	}
+	if target == "" {
+		return "", fmt.Errorf("unknown tool %q — available tools: %s", requested, a.ToolNames())
+	}
+	if isBridgeTool(target) {
+		return "", fmt.Errorf("tool_call cannot invoke bridge tool %q", target)
+	}
+	if !a.tools.HasTool(target) {
+		return "", fmt.Errorf("unknown tool %q — available tools: %s", target, a.ToolNames())
+	}
+	if !a.tools.Visible(target) {
+		return "", fmt.Errorf("tool %q is not available in this mode", target)
+	}
+	if !a.tools.IsDeferred(target) {
+		return "", fmt.Errorf("tool %q is already directly callable; invoke %q directly instead of tool_call", target, target)
+	}
+
+	return a.dispatchToolCall(ctx, chat.ToolCall{
+		ID:   tc.ID,
+		Type: tc.Type,
+		Function: chat.ToolCallFunction{
+			Name:      target,
+			Arguments: normArgs,
+		},
+	})
 }
 
 // dispatchShell handles the run_shell tool with safety gating and confirmation.

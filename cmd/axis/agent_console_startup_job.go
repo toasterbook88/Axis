@@ -349,6 +349,8 @@ func (j *consoleStartupJob) buildAgent(ctx context.Context, rt *runtimectx.Conte
 		ContextWindow:           target.ContextWindow,
 		AutoApprove:             j.in.autoApprove,
 		Autonomy:                agent.AutonomyMode(j.in.autonomy),
+		EagerTools:              j.in.eagerTools,
+		DisableToolDeferral:     j.in.disableToolDeferral,
 		SystemExtra:             j.in.systemMsg,
 		Verbose:                 j.in.verbose,
 		DryRun:                  j.in.dryRun,
