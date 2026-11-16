@@ -413,3 +413,117 @@ func TestProducersCaptureTheirTurnAndNeverRereadIt(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamWriterWriteThoughtEmitsOutOfBandThoughtChunks(t *testing.T) {
+	rec := &concurrentSender{}
+	w := NewStreamWriter(rec, 1)
+
+	tw, ok := w.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	if !ok {
+		t.Fatalf("streamWriter %T does not implement WriteThought/CloseThought", w)
+	}
+
+	// Literal </think> inside out-of-band reasoning must stay in ThoughtChunkMsg
+	// and never close a synthetic tag or spill into StreamChunkMsg.
+	tw.WriteThought("step 1 ")
+	tw.WriteThought("</think> step 2")
+	if _, err := w.Write([]byte("final answer")); err != nil {
+		t.Fatalf("Write returned %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+
+	var thoughts, answers strings.Builder
+	var doneCount int
+	for _, msg := range rec.msgs {
+		switch m := msg.(type) {
+		case ThoughtChunkMsg:
+			thoughts.WriteString(m.Text)
+			if m.Done {
+				doneCount++
+			}
+		case StreamChunkMsg:
+			answers.WriteString(m.Text)
+		}
+	}
+	if thoughts.String() != "step 1 </think> step 2" {
+		t.Fatalf("thoughts = %q, want %q", thoughts.String(), "step 1 </think> step 2")
+	}
+	if answers.String() != "final answer" {
+		t.Fatalf("answers = %q, want %q", answers.String(), "final answer")
+	}
+	if doneCount != 1 {
+		t.Fatalf("doneCount = %d, want 1", doneCount)
+	}
+
+	// CloseThought without trailing answer still sends a Done signal cleanly.
+	rec2 := &concurrentSender{}
+	w2 := NewStreamWriter(rec2, 2)
+	tw2 := w2.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	tw2.WriteThought("only thinking")
+	tw2.CloseThought()
+	tw2.WriteThought("second round")
+	if _, err := w2.Write([]byte("done")); err != nil {
+		t.Fatalf("Write returned %v", err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+	var t2, a2 strings.Builder
+	var done2 int
+	for _, msg := range rec2.msgs {
+		switch m := msg.(type) {
+		case ThoughtChunkMsg:
+			if m.Text != "" {
+				if t2.Len() > 0 && done2 > 0 {
+					t2.WriteString("\n\n")
+				}
+				t2.WriteString(m.Text)
+			}
+			if m.Done {
+				done2++
+			}
+		case StreamChunkMsg:
+			a2.WriteString(m.Text)
+		}
+	}
+	if t2.String() != "only thinking\n\nsecond round" || a2.String() != "done" || done2 != 2 {
+		t.Fatalf("round2 got thought=%q ans=%q done=%d", t2.String(), a2.String(), done2)
+	}
+
+	// Buffered answer bytes written before WriteThought must flush before ThoughtChunkMsg.
+	rec3 := &concurrentSender{}
+	w3 := NewStreamWriter(rec3, 3)
+	tw3 := w3.(interface {
+		WriteThought(string)
+		CloseThought()
+	})
+	if _, err := w3.Write([]byte("before ")); err != nil {
+		t.Fatalf("Write returned %v", err)
+	}
+	tw3.WriteThought("reasoning")
+	if err := w3.Close(); err != nil {
+		t.Fatalf("Close returned %v", err)
+	}
+	var order []string
+	for _, msg := range rec3.msgs {
+		switch m := msg.(type) {
+		case StreamChunkMsg:
+			order = append(order, "stream:"+m.Text)
+		case ThoughtChunkMsg:
+			if m.Text != "" {
+				order = append(order, "thought:"+m.Text)
+			}
+		}
+	}
+	if len(order) < 2 || order[0] != "stream:before " || order[1] != "thought:reasoning" {
+		t.Fatalf("ordering after buffered write = %v, want [stream:before , thought:reasoning, ...]", order)
+	}
+}

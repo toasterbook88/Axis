@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,15 +18,41 @@ import (
 	"github.com/toasterbook88/axis/internal/llmrouter"
 )
 
-// CloudBackend implements ChatBackend for cloud providers (OpenAI-compatible and Anthropic).
+// defaultStreamIdleTimeout bounds how long an HTTP stream may stay silent between
+// response headers or SSE reads before aborting as stalled.
+const defaultStreamIdleTimeout = 120 * time.Second
+
+type disableThinkingKey struct{}
+
+// WithDisableThinking returns a context requesting non-thinking output on
+// compatible chat-template backends (e.g. Qwen3/3.5/3.6 servers). Backends that
+// reject chat_template_kwargs automatically retry without it.
+func WithDisableThinking(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, disableThinkingKey{}, true)
+}
+
+func thinkingDisabledFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	disabled, _ := ctx.Value(disableThinkingKey{}).(bool)
+	return disabled
+}
+
+// CloudBackend implements ChatBackend for cloud and local OpenAI-compatible/Anthropic servers.
 type CloudBackend struct {
-	providerName string
-	providerKind string
-	endpoint     string
-	apiKey       string
-	model        string
-	costPer1K    float64
-	client       *http.Client
+	providerName      string
+	providerKind      string
+	endpoint          string
+	apiKey            string
+	model             string
+	costPer1K         float64
+	client            *http.Client
+	streamIdleTimeout time.Duration
+	thinking          *bool
 
 	mu        sync.RWMutex
 	tokensIn  int
@@ -36,6 +63,9 @@ type CloudBackend struct {
 	// requests skip it. Without stream_options.include_usage, OpenAI-style
 	// servers (LiteLLM, OpenAI) send no usage in a streamed reply.
 	noStreamUsage atomic.Bool
+	// noChatTemplateKwargs is set once a server rejects chat_template_kwargs,
+	// so later requests skip it instead of tripping strict parameter validators.
+	noChatTemplateKwargs atomic.Bool
 }
 
 // NewCloudBackendWithKey creates a new CloudBackend with a pre-resolved API key.
@@ -45,13 +75,14 @@ func NewCloudBackendWithKey(providerKind, providerName, endpoint, apiKey, model 
 		return nil, err
 	}
 	return &CloudBackend{
-		providerName: providerName,
-		providerKind: providerKind,
-		endpoint:     resolved,
-		apiKey:       apiKey,
-		model:        model,
-		costPer1K:    costPer1K,
-		client:       &http.Client{Timeout: 120 * time.Second}, // longer timeout for agent loops
+		providerName:      providerName,
+		providerKind:      providerKind,
+		endpoint:          resolved,
+		apiKey:            apiKey,
+		model:             model,
+		costPer1K:         costPer1K,
+		client:            &http.Client{Timeout: 0}, // overall deadline comes from ctx + streamIdleTimeout
+		streamIdleTimeout: defaultStreamIdleTimeout,
 	}, nil
 }
 
@@ -70,13 +101,34 @@ func NewOpenAICompatibleBackend(endpoint, model, apiKey string) (*CloudBackend, 
 		base = base + "/v1"
 	}
 	return &CloudBackend{
-		providerName: "openai-compatible",
-		providerKind: "openai",
-		endpoint:     base,
-		apiKey:       apiKey,
-		model:        model,
-		client:       &http.Client{Timeout: 120 * time.Second},
+		providerName:      "openai-compatible",
+		providerKind:      "openai",
+		endpoint:          base,
+		apiKey:            apiKey,
+		model:             model,
+		client:            &http.Client{Timeout: 0},
+		streamIdleTimeout: defaultStreamIdleTimeout,
 	}, nil
+}
+
+func (b *CloudBackend) applyOptions(opts CloudBackendOptions) {
+	if opts.StreamIdleTimeout < 0 {
+		b.streamIdleTimeout = 0
+	} else if opts.StreamIdleTimeout > 0 {
+		b.streamIdleTimeout = opts.StreamIdleTimeout
+	}
+	if opts.Thinking != nil {
+		v := *opts.Thinking
+		b.thinking = &v
+	}
+}
+
+func (b *CloudBackend) resolveThinking(ctx context.Context) *bool {
+	if thinkingDisabledFromContext(ctx) {
+		v := false
+		return &v
+	}
+	return b.thinking
 }
 
 // Stats returns the accumulated prompt tokens, completion tokens, and cost.
@@ -132,7 +184,7 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		}
 	}
 
-	// 2. Prepare request payload.
+	// 2. Prepare request payload and send with compatibility fallbacks + idle stream guard.
 	reqBody := map[string]any{
 		"model":    b.model,
 		"messages": formattedMsgs,
@@ -142,54 +194,12 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		reqBody["tools"] = tools
 	}
 
-	send := func(includeUsage bool) (*http.Response, error) {
-		if includeUsage {
-			reqBody["stream_options"] = map[string]any{"include_usage": true}
-		} else {
-			delete(reqBody, "stream_options")
-		}
-		reqBytes, err := json.Marshal(reqBody)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request: %w", err)
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.endpoint+"/chat/completions", bytes.NewReader(reqBytes))
-		if err != nil {
-			return nil, fmt.Errorf("create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if strings.TrimSpace(b.apiKey) != "" {
-			req.Header.Set("Authorization", "Bearer "+b.apiKey)
-		}
-		resp, err := b.client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("http request: %w", err)
-		}
-		return resp, nil
-	}
-
-	includeUsage := !b.noStreamUsage.Load()
-	resp, err := send(includeUsage)
+	thinking := b.resolveThinking(ctx)
+	resp, guard, err := b.openOpenAIStream(ctx, reqBody, thinking)
 	if err != nil {
 		return chat.Message{}, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
-		// A server that does not know stream_options rejects the request.
-		// Retry once without it and stop asking for this backend.
-		if !includeUsage || !rejectsStreamOptions(resp.StatusCode, respBytes) {
-			return chat.Message{}, fmt.Errorf("http status %d: %s", resp.StatusCode, string(respBytes))
-		}
-		b.noStreamUsage.Store(true)
-		if resp, err = send(false); err != nil {
-			return chat.Message{}, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			return chat.Message{}, fmt.Errorf("http status %d: %s", resp.StatusCode, string(respBytes))
-		}
-	}
+	defer guard.Close()
 	defer resp.Body.Close()
 
 	// 3. Process SSE stream.
@@ -203,6 +213,7 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	usageReported := false
+	thinkingActive := false
 	// Content chunks that begin a possible whole-message JSON tool call are
 	// held back: some backends (LiteLLM-routed ollama Qwen under streaming)
 	// emit the tool call as an unfenced JSON object in delta.content with
@@ -240,6 +251,18 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 		}
 
 		delta := chunk.Choices[0].Delta
+		thoughtDelta := delta.ReasoningContent
+		if thoughtDelta == "" {
+			thoughtDelta = delta.Reasoning
+		}
+		if thoughtDelta != "" {
+			thinkingActive = true
+			writeThought(w, thoughtDelta)
+		}
+		if (delta.Content != "" || len(delta.ToolCalls) > 0) && thinkingActive {
+			thinkingActive = false
+			closeThought(w)
+		}
 		if delta.Content != "" {
 			if !deferredJSON && jsonBuf.Len() == 0 && len(result.Content) == 0 && strings.HasPrefix(strings.TrimLeft(delta.Content, " \t\r\n"), "{") {
 				deferredJSON = true
@@ -281,9 +304,12 @@ func (b *CloudBackend) streamOpenAI(ctx context.Context, msgs []chat.Message, to
 			}
 		}
 	}
+	if thinkingActive {
+		closeThought(w)
+	}
 
 	if err := scanner.Err(); err != nil {
-		return result, fmt.Errorf("stream read: %w", err)
+		return result, guard.wrapErr("stream read", ctx, err)
 	}
 
 	result.ToolCalls = accumulatedTools
@@ -455,18 +481,20 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		return chat.Message{}, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.endpoint+"/messages", bytes.NewReader(reqBytes))
+	resp, guard, err := b.doStreamRequest(ctx, func(reqCtx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, b.endpoint+"/messages", bytes.NewReader(reqBytes))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", b.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		return req, nil
+	})
 	if err != nil {
-		return chat.Message{}, fmt.Errorf("create request: %w", err)
+		return chat.Message{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", b.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return chat.Message{}, fmt.Errorf("http request: %w", err)
-	}
+	defer guard.Close()
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -486,6 +514,7 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	usageReported := false
+	thinkingActive := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -504,6 +533,10 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 		switch event.Type {
 		case "content_block_start":
 			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+				if thinkingActive {
+					thinkingActive = false
+					closeThought(w)
+				}
 				tc := chat.ToolCall{
 					ID:   event.ContentBlock.ID,
 					Type: "function",
@@ -517,12 +550,23 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 			}
 		case "content_block_delta":
 			if event.Delta != nil {
-				if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
+				if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+					thinkingActive = true
+					writeThought(w, event.Delta.Thinking)
+				} else if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
+					if thinkingActive {
+						thinkingActive = false
+						closeThought(w)
+					}
 					if w != nil {
 						fmt.Fprint(w, event.Delta.Text)
 					}
 					result.Content += event.Delta.Text
 				} else if event.Delta.Type == "input_json_delta" && event.Delta.PartialJSON != "" {
+					if thinkingActive {
+						thinkingActive = false
+						closeThought(w)
+					}
 					if tcID, ok := blockToToolID[event.Index]; ok {
 						if buf, ok := toolInputBufs[tcID]; ok {
 							buf.WriteString(event.Delta.PartialJSON)
@@ -550,9 +594,12 @@ func (b *CloudBackend) streamAnthropic(ctx context.Context, msgs []chat.Message,
 			}
 		}
 	}
+	if thinkingActive {
+		closeThought(w)
+	}
 
 	if err := scanner.Err(); err != nil {
-		return result, fmt.Errorf("stream read: %w", err)
+		return result, guard.wrapErr("stream read", ctx, err)
 	}
 
 	// Finalize tool inputs.
@@ -613,6 +660,176 @@ func (b *CloudBackend) accumulateTokens(prompt, completion int) {
 	b.totalCost = (float64(total) / 1000.0) * b.costPer1K
 }
 
+// openOpenAIStream sends an OpenAI /chat/completions request under the idle
+// watchdog and strips unsupported optional request fields (stream_options,
+// chat_template_kwargs) once per backend when a 4xx rejects them.
+func (b *CloudBackend) openOpenAIStream(ctx context.Context, reqBody map[string]any, thinking *bool) (*http.Response, *streamIdleGuard, error) {
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		includeUsage := !b.noStreamUsage.Load()
+		if includeUsage {
+			reqBody["stream_options"] = map[string]any{"include_usage": true}
+		} else {
+			delete(reqBody, "stream_options")
+		}
+		includeThinkingKwargs := thinking != nil && !b.noChatTemplateKwargs.Load()
+		if includeThinkingKwargs {
+			reqBody["chat_template_kwargs"] = map[string]any{"enable_thinking": *thinking}
+		} else {
+			delete(reqBody, "chat_template_kwargs")
+		}
+
+		reqBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal request: %w", err)
+		}
+
+		resp, guard, err := b.doStreamRequest(ctx, func(reqCtx context.Context) (*http.Request, error) {
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, b.endpoint+"/chat/completions", bytes.NewReader(reqBytes))
+			if err != nil {
+				return nil, fmt.Errorf("create request: %w", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if strings.TrimSpace(b.apiKey) != "" {
+				req.Header.Set("Authorization", "Bearer "+b.apiKey)
+			}
+			return req, nil
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			return resp, guard, nil
+		}
+
+		respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		guard.Close()
+
+		if includeUsage && rejectsRequestField(resp.StatusCode, respBytes, "stream_options") {
+			b.noStreamUsage.Store(true)
+			continue
+		}
+		if includeThinkingKwargs && (rejectsRequestField(resp.StatusCode, respBytes, "chat_template_kwargs") || rejectsRequestField(resp.StatusCode, respBytes, "enable_thinking")) {
+			b.noChatTemplateKwargs.Store(true)
+			continue
+		}
+		return nil, nil, fmt.Errorf("http status %d: %s", resp.StatusCode, string(respBytes))
+	}
+	return nil, nil, fmt.Errorf("openAI stream failed after exhausting fallback attempts")
+}
+
+func (b *CloudBackend) doStreamRequest(ctx context.Context, buildReq func(context.Context) (*http.Request, error)) (*http.Response, *streamIdleGuard, error) {
+	guard := newStreamIdleGuard(ctx, b.streamIdleTimeout)
+	req, err := buildReq(guard.ctx)
+	if err != nil {
+		guard.Close()
+		return nil, nil, err
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		guard.Close()
+		return nil, nil, guard.wrapErr("http request", ctx, err)
+	}
+	guard.touch()
+	resp.Body = &idleReadCloser{ReadCloser: resp.Body, touch: guard.touch}
+	return resp, guard, nil
+}
+
+type streamIdleGuard struct {
+	timeout time.Duration
+	ctx     context.Context
+	cancel  context.CancelFunc
+	expired atomic.Bool
+
+	mu       sync.Mutex
+	stopped  bool
+	deadline time.Time
+	timer    *time.Timer
+}
+
+func newStreamIdleGuard(parent context.Context, timeout time.Duration) *streamIdleGuard {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	g := &streamIdleGuard{
+		timeout: timeout,
+		ctx:     ctx,
+		cancel:  cancel,
+	}
+	if timeout > 0 {
+		g.mu.Lock()
+		g.deadline = time.Now().Add(timeout)
+		g.timer = time.AfterFunc(timeout, g.onTimer)
+		g.mu.Unlock()
+	}
+	return g
+}
+
+func (g *streamIdleGuard) onTimer() {
+	g.mu.Lock()
+	if g.stopped || g.expired.Load() {
+		g.mu.Unlock()
+		return
+	}
+	if rem := time.Until(g.deadline); rem > 0 {
+		if g.timer != nil {
+			g.timer.Reset(rem)
+		}
+		g.mu.Unlock()
+		return
+	}
+	g.expired.Store(true)
+	g.mu.Unlock()
+	g.cancel()
+}
+
+func (g *streamIdleGuard) touch() {
+	if g == nil || g.timeout <= 0 {
+		return
+	}
+	g.mu.Lock()
+	if !g.stopped && !g.expired.Load() && g.timer != nil {
+		g.deadline = time.Now().Add(g.timeout)
+		g.timer.Reset(g.timeout)
+	}
+	g.mu.Unlock()
+}
+
+func (g *streamIdleGuard) Close() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.stopped = true
+	if g.timer != nil {
+		g.timer.Stop()
+	}
+	g.mu.Unlock()
+	g.cancel()
+}
+
+func (g *streamIdleGuard) wrapErr(prefix string, parent context.Context, err error) error {
+	if g != nil && g.expired.Load() && errors.Is(err, context.Canceled) && (parent == nil || parent.Err() == nil) {
+		return fmt.Errorf("stream idle timeout after %s: %w", g.timeout, context.DeadlineExceeded)
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
+}
+
+type idleReadCloser struct {
+	io.ReadCloser
+	touch func()
+}
+
+func (r *idleReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && r.touch != nil {
+		r.touch()
+	}
+	return n, err
+}
+
 // --- Helper types for OpenAI compatibility ---
 
 type openAIToolCall struct {
@@ -626,17 +843,19 @@ type openAIFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-// rejectsStreamOptions reports whether an error reply is a server refusing
-// the stream_options field (4xx naming it), not some other failure.
-func rejectsStreamOptions(status int, body []byte) bool {
-	return status >= 400 && status < 500 && strings.Contains(strings.ToLower(string(body)), "stream_options")
+// rejectsRequestField reports whether an error reply is a 4xx refusal naming
+// field (such as stream_options or chat_template_kwargs).
+func rejectsRequestField(status int, body []byte, field string) bool {
+	return status >= 400 && status < 500 && strings.Contains(strings.ToLower(string(body)), field)
 }
 
 type openAIChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string            `json:"content"`
-			ToolCalls []openAIDeltaCall `json:"tool_calls"`
+			Content          string            `json:"content"`
+			ReasoningContent string            `json:"reasoning_content"`
+			Reasoning        string            `json:"reasoning"`
+			ToolCalls        []openAIDeltaCall `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
@@ -675,6 +894,7 @@ type anthropicContentBlock struct {
 type anthropicDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 }
 
