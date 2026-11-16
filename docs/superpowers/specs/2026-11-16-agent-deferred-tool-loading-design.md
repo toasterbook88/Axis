@@ -148,3 +148,28 @@ Verdict: approve-with-changes
 1. [minor] Marshaled bridge schemas (tool_search and tool_call) measured 1,344 B vs `< 1.2` KB in Research; fixed in c083cd18 (updated spec Research bridge schema size to `1,344` B).
 
 Note: Full ci-preflight and adversarial runtime probes passed on isolated clone of 552ccc08; F1 updated only line 85 of this spec and left all code unchanged.
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent Diff R2-A)
+Model: gemini
+Base: 03e06095a9fdb9edb9172358fbc936259a295f09
+Head: 52f5d0739c405ef93e58378a521753a77d4c800a
+Date: 2026-11-16
+Verdict: approve
+
+Note: Post-Devin-Review diff review after e625141e (cap-aware tool_search pagination) and 52f5d073 (spec update); full ci-preflight and adversarial 2048 B UTF-8/property pagination probes passed with no findings.
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent Diff R2-B)
+Model: gemini
+Base: 03e06095a9fdb9edb9172358fbc936259a295f09
+Head: 52f5d0739c405ef93e58378a521753a77d4c800a
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. [major] worstFooter passed p == total in trySplitToolSchemaProperties and splitToolSchemaByChunks, omitting non-final continuation hint bytes and truncating the page hint under tight caps; fixed in fd8a31ce (pass p < total when sizing worstFooter and add maxChunkDigits headroom + boundary regression tests).
+2. [minor] Single small tool with large baseNotes entered formatOversizedToolSchema instead of re-checking cap fit after bounding notes; fixed in fd8a31ce (check fullBlock fit against boundedNotes before entering formatOversizedToolSchema + tiny-tool regression test).
+3. [minor] formatPaginatedToolList returned early on oversizedIdx pages before emitting page=N+1 and Remaining matches footer; fixed in fd8a31ce (unify remaining-tools footer across normal and oversizedIdx pages + multi-tool regression test).
+
+Questions:
+- Does live llama.cpp / vLLM prefix KV-cache reuse hold across real multi-round tool_search -> tool_call runs with axis agent? open: shared cluster and inference servers are out of scope for offline preflight (TestDeferredTools_KVCacheDefsAndSystemPrefixByteStable proves byte-identical tools[] JSON and msgs[0]; live server timing probe would confirm backend cache hits).
