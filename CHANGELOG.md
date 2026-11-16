@@ -3,6 +3,14 @@
 `axis agent` can consult a second model and cloud streams fail fast when idle;
 desk leases fail closed, and A2A refuses synthesized terminal reports.
 
+### Documentation
+
+* Clarify that `axis cortex` / `internal/cortex` is an optional MCP *client*
+  only: Axis does not ship or run a Cortex server. Help text and package docs
+  no longer describe the service as living on a particular host.
+  `hack/verify-public-boundary.sh` fails on phrasing that reclaims a host-bound
+  Cortex server in the public tree.
+
 ### Fixes
 
 * `axis version` compares the daemon and CLI commits by prefix, so a release

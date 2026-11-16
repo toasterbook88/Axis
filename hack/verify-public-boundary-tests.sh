@@ -70,6 +70,13 @@ new_case git
 track README.md "node at ${private_ip}"
 expect 'private LAN address' 1 "$private_ip"
 
+# Assemble the banished ownership phrase at run time so this test file itself
+# does not trip the real gate.
+ownership_phrase="$(printf 'running on %s' Foundry)"
+new_case git
+track README.md "Cortex is an optional layer ${ownership_phrase}."
+expect 'cortex host-bound ownership wording' 1 'Cortex ownership-wording'
+
 grep -qF './hack/verify-public-boundary-tests.sh' hack/ci-preflight.sh \
   || fail 'ci-preflight.sh does not run ./hack/verify-public-boundary-tests.sh'
 grep -qF './hack/verify-public-boundary-tests.sh' .github/workflows/ci.yml \
