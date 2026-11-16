@@ -2,7 +2,11 @@ package chat
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +55,58 @@ func TestEnsureRunningDoesNotAutoStartWhenCanceled(t *testing.T) {
 	}
 	if *calls != 0 {
 		t.Fatalf("started local ollama %d time(s) after cancellation", *calls)
+	}
+}
+
+// failNThenOK refuses the first n requests and answers 200 after that.
+// The test uses it so a default-local endpoint string is never dialed.
+type failNThenOK struct {
+	left int
+}
+
+func (f *failNThenOK) RoundTrip(req *http.Request) (*http.Response, error) {
+	if f.left > 0 {
+		f.left--
+		return nil, errors.New("not reachable")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Body:       io.NopCloser(strings.NewReader(`{}`)),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
+func TestEnsureRunningDisableAutoStartDoesNotLaunch(t *testing.T) {
+	calls := stubStartLocalOllama(t)
+	c := NewClient("http://127.0.0.1:11434", "m")
+	c.http = &http.Client{Transport: &failNThenOK{left: 1}}
+	c.DisableAutoStart()
+	err := c.EnsureRunning(context.Background(), nil)
+	if err == nil {
+		t.Fatal("want an error when the daemon is down")
+	}
+	if *calls != 0 {
+		t.Fatalf("start calls = %d, want 0", *calls)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "pull") || strings.Contains(err.Error(), "ollama serve") {
+		t.Fatalf("down consult path names a start or a pull: %v", err)
+	}
+}
+
+func TestEnsureRunningDefaultClientStillStartsLocalOllama(t *testing.T) {
+	calls := stubStartLocalOllama(t)
+	c := NewClient("http://127.0.0.1:11434", "m")
+	if !c.AutoStartEnabled() {
+		t.Fatal("a new client auto-starts")
+	}
+	c.http = &http.Client{Transport: &failNThenOK{left: 1}}
+	if err := c.EnsureRunning(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 {
+		t.Fatalf("start calls = %d, want 1", *calls)
 	}
 }
 
