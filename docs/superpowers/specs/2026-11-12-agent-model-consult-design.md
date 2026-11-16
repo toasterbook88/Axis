@@ -1,6 +1,6 @@
 # Agent model consult tool
 
-Date: 2026-11-12. Base: f8c258d6 on `docs/agent-model-consult`. Status: `consult_model` is registered. A spec review on 2026-11-13 approved the Ollama auto-start text with changes, and both findings are resolved in this file.
+Date: 2026-11-12. Base: b20ab7b0 (the design was written against f8c258d6). Status: `consult_model` is registered. A spec review on 2026-11-13 approved the Ollama auto-start text with changes, and both findings are resolved in this file.
 
 The contract the tool has to keep is `docs/decisions/agent-model-consult.md`.
 
@@ -21,7 +21,7 @@ A driver that can use a second model needs one advertised tool. The tool asks on
 
 ## Design
 
-Register `consult_model` on the agent tool registry. Add it to `observeTool` in `internal/agent/scope.go`. It is then visible in observe, edit, and exec. It stays off `clusterTool`, so cluster scope does not advertise it and does not dispatch it. `VisibleToolPrompt` for observe keeps the write and shell limits. It also says that `consult_model`, when that name is in the offered list, sends the prompt to one other configured model.
+Register `consult_model` on the agent tool registry. Add it to `observeTool` in `internal/agent/scope.go`. When the command installed a resolver it is visible in observe, edit, and exec; a registry with no resolver does not advertise it, because every call would fail. It stays off `clusterTool`, so cluster scope does not advertise it and does not dispatch it. `VisibleToolPrompt` for observe keeps the write and shell limits. It also says that `consult_model`, when that name is in the offered list, sends the prompt to one other configured model.
 
 Arguments are a JSON object with two required strings, `seat` and `prompt`. `seat` is a model id or model name from the same choice list `/model` already uses (`collectModelChoices` in `cmd/axis/agent_model_choices.go`). The tool does not accept a URL, a key, or a host. The agent command injects a resolver into the tool registry. The resolver calls `findModelTargetByRef` (`cmd/axis/agent_startup_model.go`) and does not return that function's error unchanged. An empty ref, a disabled choice, a name that is not in the list, or an ambiguous name becomes a consult error that quotes the caller's seat string, does not contain `pull`, and does not call `BuildBackend`. An ambiguous ref may list the matching ids. The error does not tell the driver to pull a model, and it does not change the driver. A `cmd/axis` test drives the real resolver. A stub cannot lock this.
 
@@ -29,7 +29,7 @@ The resolver builds the seat with `cloudOptsForTarget` and `BuildBackend` (`inte
 
 The tool result is the seat's trimmed visible text, or the error `consult` already returns (`is not answering`, the wrapped seat error, `returned no visible text`, or `context.Canceled`). A seat error whose text contains `pull` or `ollama serve` is returned as `is not answering` and does not contain that text. The driver surfaces that string as the tool result.
 
-`consult_model` is not in `isReadOnlyTool`. `autonomyConfirm` and `AutoApproveConfirm` send it to the fallback even when the safety score is 0, the same way an unlisted external MCP tool skips the score-0 auto-approve. Dispatch asks with score 0 (`internal/agent/dispatch.go`). Edit auto-approves a non-file tool below 70, full auto-approves below the ask threshold, and `AutoApproveConfirm` auto-approves below its threshold, so leaving `consult_model` on that path would skip the prompt. The fallthrough covers default, edit, full, and `--auto-approve`. The first call prompts. An "always" answer uses `approveForSession`. Later calls in that session do not ask again. `axis agent -p` denies `consult_model`. Its notice says the tool still asks under `--autonomy full` and `--auto-approve`, and it tells the operator to run interactively. It does not offer those flags as a way through.
+`consult_model` is not in `isReadOnlyTool`. `autonomyConfirm` and `AutoApproveConfirm` send it to the fallback even when the safety score is 0, the same way an unlisted external MCP tool skips the score-0 auto-approve. Dispatch asks with score 0 (`internal/agent/dispatch.go`). Edit auto-approves a non-file tool below 70, full auto-approves below the ask threshold, and `AutoApproveConfirm` auto-approves below its threshold, so leaving `consult_model` on that path would skip the prompt. The fallthrough covers default, edit, full, and `--auto-approve`. The first call prompts. An "always" answer uses `approveForSession`, and a later call that sees the stored answer does not ask again. Two calls dispatched together can both pass the check before either answer is stored, so both may prompt. `axis agent -p` denies `consult_model`. Its notice says the tool still asks under `--autonomy full` and `--auto-approve`, and it tells the operator to run interactively. It does not offer those flags as a way through.
 
 `TestConsultModelIsVisibleOutsideCluster` locks that `consult_model` is visible in observe, edit, and exec, and stays hidden in cluster.
 
@@ -41,9 +41,9 @@ Tests, beside the existing `TestConsult*` contracts:
 | Unknown seat | A `cmd/axis` test uses the real resolver. The error quotes the seat, does not contain `pull`, and does not call `BuildBackend`. No `ChatStream` runs. The driver is unchanged. |
 | Seat error and blank text | The tool result is the `consult` error and names the seat. A seat error whose text contains `pull` or `ollama serve` is `is not answering` and does not contain that text. |
 | Ollama consult does not start the daemon | `DisableAutoStart` on the default local endpoint, with a transport that fails and is never dialed, leaves the start stub at 0. A new client still starts once. `consultResolver` with `BuildBackend` returns a client whose auto-start is off. The endpoint in that resolver test is `http://127.0.0.1:9` and is not dialed. |
-| Same seat is single-slot | Two refs that resolve to one choice id do not sit inside `ChatStream` together. Two refs that resolve to different ids may. |
-| Scope | Visible in observe, edit, and exec. Hidden in cluster. The observe prompt says `consult_model` sends the prompt to one other configured model. Cluster dispatch does not run the seat. |
-| Confirmation | Score 0 prompts under edit, full, and `AutoApproveConfirm`. A session "always" skips later confirms. |
+| Same seat is single-slot | Two refs that resolve to one choice id do not sit inside `ChatStream` together. Two refs that resolve to different ids may. A call that is waiting for the slot returns `context.Canceled` when its context ends, without taking the token or reaching the seat. |
+| Scope | Visible in observe, edit, and exec when a resolver is installed. A registry with no resolver does not advertise it. Hidden in cluster. The observe prompt says `consult_model` sends the prompt to one other configured model. Cluster dispatch does not run the seat. A child agent registry advertises no `consult_model`. |
+| Confirmation | Score 0 prompts under edit, full, and `AutoApproveConfirm`. A session "always" skips later confirms that see the stored answer. |
 | Piped denial | `axis agent -p` denies `consult_model`. `TestPipedConfirmConsultStillAsks` checks that the notice says the tool still asks under `--autonomy full` and `--auto-approve`, says to run interactively, and does not contain `pass --autonomy full`. |
 
 ## Alternatives
@@ -143,3 +143,38 @@ Verdict: approve-with-changes
 2. Minor: piped denial was outside the design and the test table. Fixed by stating that axis agent -p denies consult_model and does not offer --autonomy full or --auto-approve as a way through, and by adding TestPipedConfirmConsultStillAsks to the test table.
 
 Note: this review read the untracked working tree, including the Ollama auto-start sentences. Head is the branch tip. There is no review commit. The two findings above are resolved in this file. No questions.
+
+Kind: diff
+Reviewer: fresh-context subagent (delegated session, no prior context)
+Model: DeepSeek (vendor family)
+Base: b20ab7b0657d62a4f8ed07e50875a5534fb54dea
+Head: 23b75dff0563ffc475f0e5e1a507408eb4063626
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. Minor: a registry built without a resolver still advertised consult_model, including the child registry built by buildChildAgent, so every call there failed as "seat is not answering". Fixed in 923cecd3.
+2. Minor: the tool description promised a seat "other than the current one", and the resolver accepted the driver's own model. Fixed in 923cecd3 by describing the behaviour the code has.
+3. Minor: a consult waiting for the single slot ignored context cancellation until the holder released the token. Fixed in 923cecd3.
+
+Questions:
+- Whether the Ollama auto-start code needed its own diff record. Verified: the two diff reviews in this section record Base b20ab7b0 and Head 23b75dff, which read that code.
+- Whether two concurrent consults can both prompt. Verified: the concurrent case is stated in Design, the Confirmation test row, and docs/current-state.md.
+- Whether the seat answer should be clipped. Open: the spec sets no size cap and clipping is not decided.
+
+Kind: diff
+Reviewer: fresh-context subagent (delegated session, independent of the review above)
+Model: DeepSeek (vendor family)
+Base: b20ab7b0657d62a4f8ed07e50875a5534fb54dea
+Head: 23b75dff0563ffc475f0e5e1a507408eb4063626
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. Major: subagents advertised consult_model with no resolver, so a child call prompted the operator and then failed. Fixed in 923cecd3: the registry hides the tool when the resolver is nil, and TestBuildChildAgentHidesConsultModel locks it.
+2. Minor: the description promised a seat "other than the current one" with nothing enforcing it. Fixed in 923cecd3.
+3. Minor: two concurrent consult_model calls both prompt, while the spec said later calls do not ask again. Fixed by stating the concurrent case in Design, the decision record, and docs/current-state.md; the approval path is unchanged.
+4. Major: no recorded diff review covered the committed diff; all five earlier records used f8c258d6, nine commits behind the base. Fixed by the two Kind: diff records at Base b20ab7b0 and Head 23b75dff and the updated Base line; the earlier records stay as history.
+
+Questions:
+- Whether consultDetail should strip ollama serve as well as pull. Verified: seat errors strip both through consultHidesSeat, resolver errors strip pull as the decision record states, and no resolver error path contains ollama serve.
+- Whether a slow seat should show progress. Open: the seat streams to io.Discard and the spec asks for no progress output.
+- Whether subagents should consult at all. Became finding 1 of this review: they cannot, because the registry hides the tool.

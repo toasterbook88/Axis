@@ -24,7 +24,7 @@ A substrate that uses more than one model needs a call that asks a second backen
    - the seat returns blank visible text (`returned no visible text`)
    - the context is already cancelled when the seat would be called
 4. `SingleSlot` takes one process-local token for that `SeatID` and holds it across the seat call. A different `SeatID` is not blocked. The token map lock is not held during the wait or the call. Two OS processes are not coordinated.
-5. `consult_model` is registered. It is visible in observe, edit, and exec, and hidden in cluster. The executor calls `consult` with `SingleSlot` true and the resolved choice id as `SeatID`. `consult` still does not take `*Agent`. The first call asks the operator, including under edit, full, and auto-approve. An always answer covers later calls in that session.
+5. `consult_model` is registered. It is visible in observe, edit, and exec when the command installed a resolver; a registry with no resolver does not advertise it, and a child agent registry has none. It is hidden in cluster. The executor calls `consult` with `SingleSlot` true and the resolved choice id as `SeatID`. `consult` still does not take `*Agent`. The first call asks the operator, including under edit, full, and auto-approve. An always answer covers later calls that see it; two calls dispatched together can both ask before either answer is stored. A call waiting for the slot returns `context.Canceled` when its context ends.
 
 The caller chooses the seat and whether it is single-slot. This package does not name operators, hosts, or model ids.
 
