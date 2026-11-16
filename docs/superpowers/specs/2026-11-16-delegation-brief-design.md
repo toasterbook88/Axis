@@ -40,8 +40,9 @@ remains prohibited by the existing public scope charter; validation does not ena
 ## Research
 
 Repository prior art is `dispatchSubagent` and `buildChildAgent` in
-`internal/agent/subagent.go`, the `neverTool` scope check, and the already enforced
-empty-final-answer rule. JSON Schema `required` alone does not reject whitespace,
+[`internal/agent/subagent.go`](../../../internal/agent/subagent.go), the
+[`neverTool` scope check](../../../internal/agent/scope.go), and the already
+enforced empty-final-answer rule. JSON Schema `required` alone does not reject whitespace,
 so validation must also run in the dispatcher. No performance optimization applies;
 four string checks are bounded by the input already decoded for one tool call.
 
@@ -53,9 +54,11 @@ four string checks are bounded by the input already decoded for one tool call.
 - Existing scope/recursion/blocked-session tests remain green.
 - Run the hermetic agent package tests and the full repository preflight.
 
-## Review
+## Review sequencing
 
 The implementation in `ff7fc45a89651c69f6912dfdc860b37cedccdcd9` predates this
 specification. Reviews recorded here use their actual dates and hashes. They do
 not claim a pre-implementation review; the maintainer must explicitly waive that
 missed sequence in PR #648 before merge.
+
+## Review
