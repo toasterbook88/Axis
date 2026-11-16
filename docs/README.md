@@ -14,6 +14,7 @@
 - [Future Roadmap](future-roadmap.md) — strategic options, phased direction, and feature guardrails
 - [Apple Foundation Models Roadmap](plans/apple-foundation-models-roadmap.md) — planning only: AFM probe rigor, remote placement, guarded helper exec, ai.yaml cascade. Not shipped behavior.
 - [Emergency GPU Eviction & Observability Proposal](plans/emergency-gpu-eviction-and-observability-proposal.md) — proposal. Evict and resume on the eviction branch include an observed VRAM delta and a generation and owner guard. `--drain-timeout`, Cortex, journald, and zero-bloat log rotation are not shipped.
+- [Agent model consult](decisions/agent-model-consult.md) — decision. A driver keeps its tools; `consult_model` asks one other configured model for text. The tool spec is [2026-11-12-agent-model-consult-design.md](superpowers/specs/2026-11-12-agent-model-consult-design.md). A second spec review on 2026-11-13 approved the revised text. The tool is registered.
 
 ## Runbooks
 

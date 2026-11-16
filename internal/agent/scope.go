@@ -63,7 +63,7 @@ func observeTool(name string) bool {
 	switch name {
 	case "read_file", "list_directory", "grep_search", "symbol_search", "todo",
 		"axis_status", "axis_facts", "axis_models", "axis_place", "axis_reservations",
-		"git_status", "git_diff", "git_log":
+		"git_status", "git_diff", "git_log", consultModelTool:
 		return true
 	default:
 		return false
@@ -175,7 +175,11 @@ func VisibleToolPrompt(names []string, optScope ...ToolScope) string {
 	case ScopeCluster:
 		b.WriteString("Current autonomy scope: cluster (AXIS cluster reads only; no workspace files, git, or MCP tools). Workspace reads require 'default' autonomy (/autonomy default). When a user request needs files or commands, tell the operator which mode it needs.\n")
 	case ScopeObserve:
-		b.WriteString("Current autonomy scope: observe (read-only inspection). Workspace file modifications require 'edit' autonomy (/autonomy edit). Shell commands and task runs require 'full' autonomy (/autonomy full). When a user request requires making changes or executing commands, inform the operator to elevate autonomy.\n")
+		b.WriteString("Current autonomy scope: observe (read-only inspection). Workspace file modifications require 'edit' autonomy (/autonomy edit). Shell commands and task runs require 'full' autonomy (/autonomy full). When a user request requires making changes or executing commands, inform the operator to elevate autonomy.")
+		if offeredTool(names, consultModelTool) {
+			b.WriteString(" `consult_model` sends the prompt to one other configured model.")
+		}
+		b.WriteString("\n")
 	case ScopeEdit:
 		b.WriteString("Current autonomy scope: edit (workspace file modifications permitted). Shell commands and task runs require 'full' autonomy (/autonomy full).\n")
 	case ScopeExec:
@@ -183,4 +187,13 @@ func VisibleToolPrompt(names []string, optScope ...ToolScope) string {
 	}
 
 	return b.String()
+}
+
+func offeredTool(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
