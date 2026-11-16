@@ -275,3 +275,177 @@ func TestRunModelStartFailsWhenProbeFails(t *testing.T) {
 		t.Fatalf("expected failure output, got: %q", buf.String())
 	}
 }
+
+func twoGPUDiscreteSnap() *models.ClusterSnapshot {
+	zero, one := 0, 1
+	snap := testSnap()
+	snap.Publication = &models.PublicationEnvelope{ID: "pub-gpu-check"}
+	snap.Nodes[0].Resources.CPUCores = 8
+	snap.Nodes[0].Resources.GPUs = []models.GPUInfo{
+		{
+			Vendor: "nvidia", Model: "GPU-0", Index: &zero, IndexSource: models.IndexSourceNvidiaSMI,
+			VRAMMB: 11264, VRAMFreeMB: 9000, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+		},
+		{
+			Vendor: "nvidia", Model: "GPU-1", Index: &one, IndexSource: models.IndexSourceNvidiaSMI,
+			VRAMMB: 8192, VRAMFreeMB: 7800, VRAMFreeMeasured: true, Capabilities: []string{"cuda"},
+		},
+	}
+	snap.Nodes[0].ResidentModels = []models.ResidentModel{
+		{
+			Name:       "existing.gguf",
+			Runtime:    "llama.cpp",
+			Port:       8081,
+			GPUIndices: []int{0},
+		},
+	}
+	return snap
+}
+
+func TestRunModelStartRejectsOccupiedGPU(t *testing.T) {
+	snap := twoGPUDiscreteSnap()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prevRunner })
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{
+		"--node", "storage",
+		"--weights", "/mnt/models/b.gguf",
+		"--port", "8082",
+		"--main-gpu", "0",
+		"--format", "json",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for occupied GPU")
+	}
+	if got := ExitCode(err); got != ExitErrCommandFail {
+		t.Fatalf("ExitCode = %d, want %d", got, ExitErrCommandFail)
+	}
+
+	var receipt models.ModelOperationReceipt
+	if parseErr := json.Unmarshal(buf.Bytes(), &receipt); parseErr != nil {
+		t.Fatalf("json parse receipt: %v\noutput=%s", parseErr, buf.String())
+	}
+	if receipt.Status != models.ModelOperationRejected {
+		t.Errorf("receipt.Status = %q, want %q", receipt.Status, models.ModelOperationRejected)
+	}
+	if receipt.Disposition != "gpu_occupied" {
+		t.Errorf("receipt.Disposition = %q, want gpu_occupied", receipt.Disposition)
+	}
+	if !strings.Contains(receipt.Error, "GPU 0 already occupied") {
+		t.Errorf("receipt.Error = %q", receipt.Error)
+	}
+	if len(runner.started) != 0 || len(runner.probed) != 0 {
+		t.Fatalf("runner should not have been called: %+v", runner)
+	}
+}
+
+func TestRunModelStartRejectsDefaultGPUConflictWithFreeGPUHint(t *testing.T) {
+	snap := twoGPUDiscreteSnap()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prevRunner })
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{
+		"--node", "storage",
+		"--weights", "/mnt/models/b.gguf",
+		"--port", "8082",
+		"--format", "json",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when default GPU 0 is occupied and --main-gpu omitted")
+	}
+	var receipt models.ModelOperationReceipt
+	if parseErr := json.Unmarshal(buf.Bytes(), &receipt); parseErr != nil {
+		t.Fatalf("json parse receipt: %v\noutput=%s", parseErr, buf.String())
+	}
+	if receipt.Disposition != "gpu_occupied" {
+		t.Errorf("receipt.Disposition = %q, want gpu_occupied", receipt.Disposition)
+	}
+	if !strings.Contains(receipt.Error, "--main-gpu 1") {
+		t.Errorf("expected free GPU hint in error, got %q", receipt.Error)
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("runner should not have been called: %+v", runner)
+	}
+}
+
+func TestRunModelStartAllowsFreeGPUOnMultiGPUHost(t *testing.T) {
+	snap := twoGPUDiscreteSnap()
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prevRunner })
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{
+		"--node", "storage",
+		"--weights", "/mnt/models/b.gguf",
+		"--port", "8082",
+		"--main-gpu", "1",
+		"--format", "json",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected free GPU 1 to succeed, got %v", err)
+	}
+	if len(runner.started) != 1 {
+		t.Fatalf("started = %d, want 1", len(runner.started))
+	}
+}
+
+func TestRunModelStartAllowsMultipleCPUModelsOnDistinctPorts(t *testing.T) {
+	snap := testSnap()
+	snap.Nodes[0].ResidentModels = []models.ResidentModel{
+		{
+			Name:      "existing-cpu.gguf",
+			Runtime:   "llama.cpp",
+			Processor: "cpu",
+			Port:      8081,
+		},
+	}
+	stubModelSnapshot(t, snap)
+	stubModelConfig(t, &config.Config{Nodes: []config.NodeConfig{{Name: "storage"}}})
+
+	runner := &fakeModelRunner{}
+	prevRunner := defaultModelRunner
+	defaultModelRunner = runner
+	t.Cleanup(func() { defaultModelRunner = prevRunner })
+
+	cmd := modelStartCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{
+		"--node", "storage",
+		"--weights", "/mnt/models/b.gguf",
+		"--port", "8082",
+		"--format", "json",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected CPU model on distinct port to succeed, got %v", err)
+	}
+}

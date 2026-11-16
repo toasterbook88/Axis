@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +22,7 @@ import (
 	"github.com/toasterbook88/axis/internal/config"
 	"github.com/toasterbook88/axis/internal/daemon"
 	"github.com/toasterbook88/axis/internal/facts"
+	"github.com/toasterbook88/axis/internal/netutil"
 	"github.com/toasterbook88/axis/internal/transport"
 	"github.com/toasterbook88/axis/internal/ui"
 )
@@ -69,6 +75,67 @@ var doctorProbeMLX = func(ctx context.Context) doctorBackendStatus {
 
 var doctorProbeOllama = func(ctx context.Context) doctorBackendStatus {
 	return runBackendProbeScript(ctx, facts.OllamaDiscoveryScript)
+}
+
+var doctorProbeHTTP = probeDoctorHTTPEndpoint
+
+const maxDoctorHTTPRedirects = 10
+
+func probeDoctorHTTPEndpoint(ctx context.Context, rawURL string, headers map[string]string, allowedHosts []string) (int, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return 0, fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return 0, fmt.Errorf("URL must use http or https scheme")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return 0, fmt.Errorf("URL must include a host")
+	}
+	if !slices.Contains(allowedHosts, host) {
+		if err := netutil.ValidateOutboundURL(rawURL); err != nil {
+			return 0, err
+		}
+	}
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxDoctorHTTPRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxDoctorHTTPRedirects)
+			}
+			origin := via[0].URL
+			if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+
+	// Streamable HTTP MCP endpoints commonly return 405/406/400 on a bare GET,
+	// which still proves DNS, TLS, and listener routing succeeded.
+	if (resp.StatusCode >= 200 && resp.StatusCode < 300) ||
+		resp.StatusCode == http.StatusBadRequest ||
+		resp.StatusCode == http.StatusMethodNotAllowed ||
+		resp.StatusCode == http.StatusNotAcceptable {
+		return resp.StatusCode, nil
+	}
+	return resp.StatusCode, fmt.Errorf("HTTP %d", resp.StatusCode)
 }
 
 // formatResidentModelCount returns a human-readable model count suffix.
@@ -281,7 +348,13 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 		}
 
 		// 1.5 MCP server config validation
-		for name, mcpCfg := range cfg.MCPServers {
+		mcpNames := make([]string, 0, len(cfg.MCPServers))
+		for name := range cfg.MCPServers {
+			mcpNames = append(mcpNames, name)
+		}
+		sort.Strings(mcpNames)
+		for _, name := range mcpNames {
+			mcpCfg := cfg.MCPServers[name]
 			switch strings.ToLower(mcpCfg.Transport) {
 			case "stdio":
 				if len(mcpCfg.Command) == 0 {
@@ -322,11 +395,23 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 						Message: "missing url",
 					})
 				} else {
-					checks = append(checks, DoctorCheck{
-						Name:    fmt.Sprintf("MCP Server %q URL", name),
-						Status:  "pass",
-						Message: mcpCfg.URL,
-					})
+					httpCtx, httpCancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+					status, probeErr := doctorProbeHTTP(httpCtx, mcpCfg.URL, mcpCfg.Headers, cfg.AllowedInternalHosts)
+					httpCancel()
+					if probeErr != nil {
+						checks = append(checks, DoctorCheck{
+							Name:    fmt.Sprintf("MCP Server %q URL", name),
+							Status:  "warn",
+							Message: fmt.Sprintf("%s (%v)", mcpCfg.URL, probeErr),
+							Fix:     "verify URL reachability, DNS/Tailscale routing, auth headers, and nodes.yaml allowed_internal_hosts",
+						})
+					} else {
+						checks = append(checks, DoctorCheck{
+							Name:    fmt.Sprintf("MCP Server %q URL", name),
+							Status:  "pass",
+							Message: fmt.Sprintf("%s (HTTP %d)", mcpCfg.URL, status),
+						})
+					}
 				}
 			default:
 				checks = append(checks, DoctorCheck{
@@ -503,6 +588,9 @@ func runDoctor(cmd *cobra.Command, strict bool) error {
 			})
 		}
 	}
+
+	// 4.5 Configured ai.yaml HTTP backends (only emitted when configured or unreadable).
+	checks = append(checks, doctorAIConfigChecks(cmd.Context(), cfg)...)
 
 	// 5. Services stuck in a restart loop are "activating", never "failed",
 	// so only their restart counters show them.
