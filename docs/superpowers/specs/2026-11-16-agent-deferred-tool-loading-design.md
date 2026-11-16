@@ -123,3 +123,25 @@ Questions:
 - Does TestDeferredTools_EagerAllowlistAndDisableDeferral assert refreshVisibleTools() updates a.conv across SetAutonomy transitions? verified: Tests now assert Deferred tools hiding/restoration in a.conv across ScopeCluster <-> ScopeObserve transitions.
 
 Note: Spec review R1/R2 used same-model-family (gemini) fresh-context subagents (to be noted in PR body).
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent Diff B)
+Model: gemini
+Base: 03e06095a9fdb9edb9172358fbc936259a295f09
+Head: 552ccc08d1beccfd2a64dadd2629a11b1aac08e5
+Date: 2026-11-16
+Verdict: approve
+
+Note: Full ci-preflight passed in isolated clone of 552ccc08; no findings or open questions raised.
+
+Kind: diff
+Reviewer: fresh-context subagent (Antigravity CLI self subagent Diff A)
+Model: gemini
+Base: 03e06095a9fdb9edb9172358fbc936259a295f09
+Head: 552ccc08d1beccfd2a64dadd2629a11b1aac08e5
+Date: 2026-11-16
+Verdict: approve-with-changes
+
+1. [minor] Marshaled bridge schemas (tool_search and tool_call) measured 1,344 B vs `< 1.2` KB in Research; fixed in c083cd18 (updated spec Research bridge schema size to `1,344` B).
+
+Note: Full ci-preflight and adversarial runtime probes passed on isolated clone of 552ccc08; F1 updated only line 85 of this spec and left all code unchanged.
