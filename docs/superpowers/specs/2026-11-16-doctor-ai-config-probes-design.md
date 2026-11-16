@@ -17,11 +17,15 @@ deadline.
 - Changing routing, catalog, or placement.
 - Writing `ai.yaml` or inventing new config keys.
 - Concurrent probing (stable sequential order stays).
+- MCP HTTP URL reachability in doctor (separate slice on the same PR branch).
 
 ## Design
 
 - `doctorAIConfigChecks` loads `ai.yaml` (empty = no rows) and probes via
-  `llmrouter.ProbeAllBackendsForNodes` under a five-second overall budget.
+  `llmrouter.ProbeAllBackendsForNodes` under a five-second overall budget that
+  gates when the next backend *starts*. An in-flight probe may still run up to
+  `defaultProbeTimeout` (3s) after that parent expires because each probe uses
+  `context.WithoutCancel`.
 - Each backend gets an independent `defaultProbeTimeout` via
   `context.WithoutCancel` so earlier hangs cannot cancel later probes.
 - When the overall context is already done before a backend starts, that row is
@@ -36,17 +40,30 @@ deadline.
 
 ## Research
 
-- Prior art: `axis ai` / `inference_hint` already call the same probe helpers.
-- Measurement: hang-then-healthy httptest fixture proves the third backend stays OK
-  under a short parent deadline (`TestProbeAllBackends_IndependentBudgets`).
+- Prior art: `cmd/axis/ai.go` and `cmd/axis/inference_hint.go` already call
+  `llmrouter.ProbeAllBackendsForNodes` / `ProbeBackendForNodes`; this change
+  reuses those helpers from doctor rather than inventing a second probe path.
+- Measurement: `TestProbeAllBackends_IndependentBudgets` proves later backends
+  are `Skipped` (not false observed failures) when the parent budget is spent;
+  `TestProbeAllBackends_HealthyAfterHangsWhenBudgetRemains` proves a healthy
+  backend after hangs is still OK when budget remains.
 
 ## Review
 
 Kind: spec
-Reviewer: cursor (same-session author; fresh-context peer review pending on PR)
+Reviewer: fresh-context subagent
 Model: composer
-Base: origin/main
-Head: fix/practical-hardening
+Base: 757880319c7ef304728b3cb3bcc2900c704cf6fa
+Head: 66ef65c3502e3087cb19064b6d8a80b25687e2d6
 Date: 2026-11-16
 Verdict: approve-with-changes
-Findings: record an independent Kind:spec review from another session before merge; Devin finding on false warnings addressed in code+test.
+
+1. Research Measurement mis-cites the test. Fixed in this file: IndependentBudgets asserts Skipped; HealthyAfterHangsWhenBudgetRemains asserts OK.
+
+2. Research prior art lacks §8 links. Fixed in this file: cites `cmd/axis/ai.go` and `cmd/axis/inference_hint.go`.
+
+3. Five-second overall budget is ambiguous. Fixed in this file: budget gates starts; in-flight probes may overrun via WithoutCancel.
+
+Questions:
+
+- MCP HTTP URL reachability on the same branch is out of this spec's scope. Verified: Non-goals now name that separate slice.
