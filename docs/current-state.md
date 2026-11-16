@@ -143,7 +143,7 @@ Top-level commands currently registered in the binary:
 | `axis cluster` | Fleet snapshot | `status` (cache-first for 5 minutes; `--live` sweeps), `summary` |
 | `axis node` | This machine | `facts` (localhost). Root `axis facts` still works |
 
-| `axis cortex` | Distributed vector memory | Subcommands: `events`, `recall`, `status` |
+| `axis cortex` | Optional MCP client for a coordination service | Subcommands: `events`, `recall`, `status`; dials `AXIS_CORTEX_URL` or a role: cortex node |
 | `axis mcp serve` | Start MCP server (read-only diagnostics + advisory leases) | `stdio` transport only |
 | `axis mcp client` | Unified MCP client | Subcommands: `list`, `tools`, `call`, `resources`, `read`, `prompts`, `get-prompt`, `search`, `batch`, `interactive`. Per-connection caching (60s TTL), retry with exponential backoff, placement-aware `--auto-route`, progress notifications, and REPL with 10 commands |
 | `axis serve` | Start local HTTP API | Includes execution surface |
@@ -189,7 +189,7 @@ Top-level commands currently registered in the binary:
 | `internal/reservation` | Double-entry reservation ledger | Live authority for guarded execution reserve/release, snapshot overlays, `axis reservations` list/inspect/release/doctor, and the `/v2/reservations` CRUD/heartbeat API |
 | `internal/workload` | Workload profile matching | Powers `axis profile match`; deterministic class inference for 8 workload classes |
 | `internal/llmrouter` | Hybrid AI model routing | Powers `axis ai backends|roles|route`; local/cloud provider registry with semantic reflex classification |
-| `internal/cortex` | MCP client for cluster brain | Powers `axis cortex`; FastMCP 3.x Streamable HTTP protocol |
+| `internal/cortex` | Optional MCP client for a coordination service | Powers `axis cortex`; FastMCP 3.x Streamable HTTP; no server in-tree |
 
 ## Verification Snapshot
 

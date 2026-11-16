@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Documentation
+
+* Clarify that `axis cortex` / `internal/cortex` is an optional MCP *client*
+  only: Axis does not ship or run a Cortex server. Help text and package docs
+  no longer describe the service as living on a particular host.
+  `hack/verify-public-boundary.sh` fails on phrasing that reclaims a host-bound
+  Cortex server in the public tree.
+
 ### Fixes
 
 * `ProbeAllBackendsForNodes` gives each backend its own probe timeout and marks

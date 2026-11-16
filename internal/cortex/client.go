@@ -1,11 +1,13 @@
-// Package cortex is EXPERIMENTAL — distributed vector memory and event bus client.
+// Package cortex is EXPERIMENTAL — MCP client for an optional coordination service.
 //
-// Cortex is an optional cluster coordination layer that exposes:
+// This package is a dialer only. It does not embed or start a Cortex server.
+// A compatible MCP service may expose:
 //   - Distributed vector memory via Qdrant (semantic recall)
 //   - A CI/CD event bus (test failures, deployment events)
 //   - Cross-agent distributed locking (acquire_lock / release_lock)
 //
-// The Cortex MCP server speaks JSON-RPC 2.0 over HTTP on Foundry:8200.
+// Wire protocol: JSON-RPC 2.0 over HTTP(S) at an operator-configured MCP URL
+// (default path /mcp, default port 8200 when resolving from a hostname).
 // Authentication uses a Bearer token resolved from AXIS_CORTEX_SECRET or
 // ~/.axis/cortex.token via internal/secrets.
 package cortex
@@ -27,7 +29,7 @@ const (
 	mcpPath           = "/mcp"
 )
 
-// Client talks to the Cortex MCP server running on Foundry.
+// Client talks to a Cortex-shaped MCP service at a configured URL.
 // All methods are safe for concurrent use.
 type Client struct {
 	mcpURL    string
@@ -36,9 +38,10 @@ type Client struct {
 	http      *http.Client
 }
 
-// NewClient creates a Cortex client targeting the given Foundry hostname.
+// NewClient creates a Cortex client targeting the given hostname (port 8200/mcp).
 // token may be empty for unauthenticated access (if the server permits it).
-// Prefer NewClientWithTimeout or NewClientWithOptions when you need to override timeouts.
+// Prefer NewClientWithTimeout, NewClientWithOptions, or NewClientForEndpoint
+// when you need to override timeouts or supply an explicit MCP URL.
 func NewClient(cortexHost, token string) *Client {
 	return NewClientWithOptions(cortexHost, token, defaultMCPPort, defaultQdrantPort, defaultTimeout)
 }
