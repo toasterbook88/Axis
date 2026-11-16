@@ -71,15 +71,10 @@ Head: b53d90bcbaa7d7642f56a0b3832a51e26401af83
 Date: 2026-11-16
 Verdict: approve-with-changes
 
-F1 (major): prose before the first Kind block failed the specification gate.
-Fixed in bfabda815f9453f073d0dbf4188b81e0e354bd2f by moving it into Review sequencing.
-F2 (minor): repository prior art lacked links. Fixed in
-bfabda815f9453f073d0dbf4188b81e0e354bd2f with links to the implementation and scope check.
+1. [major] Prose before the first Kind block failed the specification gate; fixed in bfabda815f9453f073d0dbf4188b81e0e354bd2f by moving it into Review sequencing.
+2. [minor] Repository prior art lacked links; fixed in bfabda815f9453f073d0dbf4188b81e0e354bd2f with links to the implementation and scope check.
 
-Question: has the maintainer waived the missed pre-implementation sequence?
-Open: this requires the maintainer's written answer on PR #648 before merge.
+Questions:
+- Has the maintainer waived the missed pre-implementation sequence? Open: this requires the maintainer's written answer on PR #648 before merge.
 
-Verification: focused hermetic child-agent, recursion, empty-answer and
-blocked-session tests passed with Go 1.26.11. The review's broader scope-test
-attempt encountered sandbox listener restrictions; the release preflight runs
-those tests with explicitly permitted temporary localhost listeners.
+Note: Focused hermetic child-agent, recursion, empty-answer and blocked-session tests passed with Go 1.26.11. The review's broader scope-test attempt encountered sandbox listener restrictions; the release preflight runs those tests with explicitly permitted temporary localhost listeners.
