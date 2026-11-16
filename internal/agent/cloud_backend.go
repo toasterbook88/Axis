@@ -69,6 +69,10 @@ type CloudBackend struct {
 }
 
 // NewCloudBackendWithKey creates a new CloudBackend with a pre-resolved API key.
+// It uses http.Client{Timeout: 0} so total duration is governed by the caller
+// context while inactivity between headers or SSE reads is bounded by
+// defaultStreamIdleTimeout (120s). Use BuildBackend with CloudBackendOptions to
+// customize StreamIdleTimeout or Thinking defaults.
 func NewCloudBackendWithKey(providerKind, providerName, endpoint, apiKey, model string, costPer1K float64) (*CloudBackend, error) {
 	resolved, err := llmrouter.ResolveEndpoint(providerKind, endpoint)
 	if err != nil {
@@ -138,7 +142,15 @@ func (b *CloudBackend) Stats() (int, int, float64) {
 	return b.tokensIn, b.tokensOut, b.totalCost
 }
 
-// ChatStream satisfies the ChatBackend interface.
+// ChatStream satisfies ChatBackend.
+//
+// Both OpenAI-compatible and Anthropic streams enforce streamIdleTimeout per
+// inactivity gap (returning an error wrapping context.DeadlineExceeded when the
+// watchdog trips while the parent context remains active). Out-of-band reasoning
+// deltas (delta.reasoning_content / delta.reasoning or Anthropic thinking_delta)
+// are forwarded exclusively via ThoughtWriter and omitted from resp.Content.
+// Pass WithDisableThinking(ctx) on OpenAI-compatible requests to request
+// chat_template_kwargs.enable_thinking: false with automatic 4xx fallback.
 func (b *CloudBackend) ChatStream(ctx context.Context, msgs []chat.Message, tools []chat.ToolDef, w io.Writer) (chat.Message, error) {
 	isAnthropic := strings.EqualFold(b.providerKind, "anthropic")
 
